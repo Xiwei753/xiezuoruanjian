@@ -215,6 +215,12 @@ class AndroidVisualPlanner {
             animatedSlices
         }
 
+        val finalBlockShifts = if (rebaseSnapshot != null && rebaseSnapshot.blockShiftStates.isNotEmpty()) {
+            applyRebaseToBlockShifts(blockShifts, rebaseSnapshot)
+        } else {
+            blockShifts
+        }
+
         val referencedSnapshotIds = mutableSetOf<Long>()
         for (slice in finalSlices) {
             val sid = slice.snapshot?.snapshotId
@@ -238,7 +244,7 @@ class AndroidVisualPlanner {
             preeditDecoration = buildPreeditDecoration(newRev),
             cursorTransition = cursorTransition,
             durationMs = durationMs,
-            blockShifts = blockShifts
+            blockShifts = finalBlockShifts
         )
     }
 
@@ -1348,30 +1354,63 @@ class AndroidVisualPlanner {
 
             val editParagraphId = oldRev.lineRanges.getOrNull(oldEditLine)?.paragraphId ?: 0
 
-            val oldLinesByParagraph = oldRev.lineRanges.withIndex()
-                .groupBy { it.value.paragraphId }
-            val newLinesByParagraph = newRev.lineRanges.withIndex()
-                .groupBy { it.value.paragraphId }
-
             val offsetMapper = buildOffsetMapper(visualIntent, oldRev, newRev)
-
-            val editParaLines = oldLinesByParagraph[editParagraphId] ?: emptyList()
-            for (oldEntry in editParaLines) {
-                affectedOldLines.add(oldEntry.index)
-            }
-            val newEditParaLines = newLinesByParagraph.getOrDefault(
-                newRev.lineRanges.getOrNull(newEditLine)?.paragraphId ?: 0, emptyList()
-            )
-            for (newEntry in newEditParaLines) {
-                affectedNewLines.add(newEntry.index)
-            }
 
             val oldParagraphs = buildParagraphRanges(oldRev)
             val newParagraphs = buildParagraphRanges(newRev)
 
-            val matchedNewParagraphs = mutableSetOf<Int>()
-            for ((oldParaIdx, oldPara) in oldParagraphs.withIndex()) {
+            val structurallyAffectedOldParaIds = mutableSetOf<Int>()
+            val structurallyAffectedNewParaIds = mutableSetOf<Int>()
+            structurallyAffectedOldParaIds.add(editParagraphId)
+            newRev.lineRanges.getOrNull(newEditLine)?.paragraphId?.let { structurallyAffectedNewParaIds.add(it) }
+
+            for (oldPara in oldParagraphs) {
                 if (oldPara.paragraphId == editParagraphId) continue
+                val mappedEnd = offsetMapper(oldPara.endUtf8Exclusive)
+                if (mappedEnd == null) {
+                    structurallyAffectedOldParaIds.add(oldPara.paragraphId)
+                    continue
+                }
+                for (newPara in newParagraphs) {
+                    if (newPara.endUtf8Exclusive == mappedEnd) {
+                        if (newPara.startUtf8 != offsetMapper(oldPara.startUtf8)) {
+                            structurallyAffectedOldParaIds.add(oldPara.paragraphId)
+                            structurallyAffectedNewParaIds.add(newPara.paragraphId)
+                        }
+                        break
+                    }
+                }
+            }
+            for (newPara in newParagraphs) {
+                if (newPara.paragraphId in structurallyAffectedNewParaIds) continue
+                val reverseMappedStart = reverseMapOffset(newPara.startUtf8, visualIntent, oldRev, newRev)
+                if (reverseMappedStart == null) {
+                    structurallyAffectedNewParaIds.add(newPara.paragraphId)
+                    for (oldPara in oldParagraphs) {
+                        val ms = offsetMapper(oldPara.startUtf8)
+                        if (ms != null && ms < newPara.endUtf8Exclusive && newPara.startUtf8 < oldPara.endUtf8Exclusive + (newPara.endUtf8Exclusive - newPara.startUtf8)) {
+                            structurallyAffectedOldParaIds.add(oldPara.paragraphId)
+                        }
+                    }
+                }
+            }
+
+            for (pid in structurallyAffectedOldParaIds) {
+                for (entry in oldRev.lineRanges.withIndex()) {
+                    if (entry.value.paragraphId == pid) affectedOldLines.add(entry.index)
+                }
+            }
+            for (pid in structurallyAffectedNewParaIds) {
+                for (entry in newRev.lineRanges.withIndex()) {
+                    if (entry.value.paragraphId == pid) affectedNewLines.add(entry.index)
+                }
+            }
+
+            val matchedNewParagraphs = mutableSetOf<Int>()
+            val rawBlockShifts = mutableListOf<PreparedVisualTransaction.BlockShift>()
+
+            for ((oldParaIdx, oldPara) in oldParagraphs.withIndex()) {
+                if (oldPara.paragraphId in structurallyAffectedOldParaIds) continue
 
                 var bestNewParaIdx: Int? = null
                 val mappedStart = offsetMapper(oldPara.startUtf8)
@@ -1413,13 +1452,25 @@ class AndroidVisualPlanner {
                 val newTop = newPara.top
                 val deltaY = newTop - oldTop
                 if (kotlin.math.abs(deltaY) > STABLE_SUFFIX_GEOMETRY_TOLERANCE) {
-                    blockShifts.add(PreparedVisualTransaction.BlockShift(
-                        paragraphStartUtf8 = newPara.startUtf8,
-                        paragraphEndUtf8 = newPara.endUtf8Exclusive,
-                        deltaY = deltaY
-                    ))
+                    val newParaLines = newRev.lineRanges.withIndex()
+                        .filter { it.value.paragraphId == newPara.paragraphId }
+                    if (newParaLines.isNotEmpty()) {
+                        val firstLine = newParaLines.first()
+                        val lastLine = newParaLines.last()
+                        rawBlockShifts.add(PreparedVisualTransaction.BlockShift(
+                            startLineIndex = firstLine.index,
+                            endLineIndexExclusive = lastLine.index + 1,
+                            top = firstLine.value.top,
+                            bottom = lastLine.value.bottom,
+                            left = newParaLines.map { it.value.left }.minOrNull() ?: 0f,
+                            right = newParaLines.map { it.value.right }.maxOrNull() ?: 0f,
+                            deltaY = deltaY
+                        ))
+                    }
                 }
             }
+
+            blockShifts.addAll(mergeAdjacentBlockShifts(rawBlockShifts))
         }
 
         val affectedLines = affectedOldLines + affectedNewLines
@@ -1429,6 +1480,63 @@ class AndroidVisualPlanner {
             newLineIndices = affectedNewLines,
             blockShifts = blockShifts
         )
+    }
+
+    private fun reverseMapOffset(
+        newOffset: Int,
+        visualIntent: VisualIntent,
+        oldRev: AndroidLayoutRevision,
+        newRev: AndroidLayoutRevision
+    ): Int? {
+        val oldRanges = visualIntent.oldAffectedByteRanges
+        val newRanges = visualIntent.newAffectedByteRanges
+        if (oldRanges.isEmpty() && newRanges.isEmpty()) return newOffset
+        if (oldRanges.isEmpty()) {
+            val insertStart = newRanges.first().first
+            val insertLen = newRanges.sumOf { (s, e) -> e - s }
+            return if (newOffset < insertStart) newOffset
+            else if (newOffset < insertStart + insertLen) null
+            else newOffset - insertLen
+        }
+        if (newRanges.isEmpty()) {
+            val deleteStart = oldRanges.first().first
+            val deleteLen = oldRanges.sumOf { (s, e) -> e - s }
+            return if (newOffset < deleteStart) newOffset
+            else newOffset + deleteLen
+        }
+        val newAffectedStart = newRanges.first().first
+        val newAffectedEnd = newRanges.last().second
+        if (newOffset < newAffectedStart) return newOffset
+        if (newOffset >= newAffectedEnd) {
+            val shift = newRanges.sumOf { (s, e) -> e - s } - oldRanges.sumOf { (s, e) -> e - s }
+            return newOffset - shift
+        }
+        return null
+    }
+
+    private fun mergeAdjacentBlockShifts(
+        shifts: List<PreparedVisualTransaction.BlockShift>
+    ): List<PreparedVisualTransaction.BlockShift> {
+        if (shifts.size <= 1) return shifts
+        val sorted = shifts.sortedBy { it.startLineIndex }
+        val merged = mutableListOf<PreparedVisualTransaction.BlockShift>()
+        var current = sorted[0]
+        for (i in 1 until sorted.size) {
+            val next = sorted[i]
+            if (next.startLineIndex == current.endLineIndexExclusive && next.deltaY == current.deltaY) {
+                current = current.copy(
+                    endLineIndexExclusive = next.endLineIndexExclusive,
+                    bottom = next.bottom,
+                    left = minOf(current.left, next.left),
+                    right = maxOf(current.right, next.right)
+                )
+            } else {
+                merged.add(current)
+                current = next
+            }
+        }
+        merged.add(current)
+        return merged
     }
 
     private data class ParagraphRange(
@@ -1690,6 +1798,32 @@ class AndroidVisualPlanner {
                 val dx = kotlin.math.abs(rebaseSnapshot.sliceVisualStates[i].currentLeft - sliceLeft)
                 dy + dx
             }
+    }
+
+    private fun applyRebaseToBlockShifts(
+        newBlockShifts: List<PreparedVisualTransaction.BlockShift>,
+        rebaseSnapshot: VisualFrameSnapshot
+    ): List<PreparedVisualTransaction.BlockShift> {
+        if (rebaseSnapshot.blockShiftStates.isEmpty() || newBlockShifts.isEmpty()) return newBlockShifts
+        return newBlockShifts.map { shift ->
+            val matchingOld = rebaseSnapshot.blockShiftStates.firstOrNull { oldState ->
+                oldState.startLineIndex == shift.startLineIndex &&
+                    oldState.endLineIndexExclusive == shift.endLineIndexExclusive
+            }
+            if (matchingOld != null) {
+                shift.copy(deltaY = shift.deltaY + matchingOld.currentTranslateY)
+            } else {
+                val overlappingOld = rebaseSnapshot.blockShiftStates.firstOrNull { oldState ->
+                    oldState.startLineIndex < shift.endLineIndexExclusive &&
+                        oldState.endLineIndexExclusive > shift.startLineIndex
+                }
+                if (overlappingOld != null) {
+                    shift.copy(deltaY = shift.deltaY + overlappingOld.currentTranslateY)
+                } else {
+                    shift
+                }
+            }
+        }
     }
 
     private fun applyRebaseState(

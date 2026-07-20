@@ -97,14 +97,19 @@ data class VisualFrameSnapshot(
     /** Current cursor rect at [progress]. Used by rebase to set the next transaction's
      *  [CursorTransition.fromX/fromY/fromHeight] from the on-screen position rather than
      *  the old logical endpoint — preventing cursor jumps during rapid consecutive input. */
-    val cursorRect: android.graphics.RectF? = null
-    // NOTE: BlockShift current displacement is NOT captured here. When a new transaction
-    // arrives while the previous transaction's BlockShift is still animating, the new
-    // transaction recomputes BlockShifts from scratch using the new layout geometry.
-    // This means the shifted suffix paragraphs jump back to their old position and then
-    // re-animate to the new position. To fix this, VisualFrameSnapshot would need to
-    // capture each active BlockShift's current translateY and final deltaY, and the new
-    // transaction's rebase would interpolate from the current displacement.
+    val cursorRect: android.graphics.RectF? = null,
+    /** Current visual state of block shifts at [progress]. Used by rebase so that the next
+     *  transaction's BlockShift starts from the on-screen translateY rather than the full
+     *  -deltaY — preventing suffix blocks from jumping back to the old position during
+     *  rapid consecutive input. */
+    val blockShiftStates: List<BlockShiftVisualState> = emptyList()
+)
+
+data class BlockShiftVisualState(
+    val startLineIndex: Int,
+    val endLineIndexExclusive: Int,
+    val currentTranslateY: Float,
+    val targetTranslateY: Float
 )
 
 data class SliceVisualState(

@@ -212,21 +212,25 @@ class AndroidTextAnimationEngine(
         if (state == TransactionState.Pending) {
             val sliceStates = computeSliceVisualStates(transaction, 0f)
             val cursorRect = computeCurrentCursorRect(transaction, 0f)
+            val blockStates = computeBlockShiftVisualStates(transaction, 0f)
             return VisualFrameSnapshot(
                 progress = 0f,
                 state = TransactionState.Pending,
                 sliceVisualStates = sliceStates,
-                cursorRect = cursorRect
+                cursorRect = cursorRect,
+                blockShiftStates = blockStates
             )
         }
         val p = tl.progress(frameTimeMs)
         val sliceStates = computeSliceVisualStates(transaction, p)
         val cursorRect = computeCurrentCursorRect(transaction, p)
+        val blockStates = computeBlockShiftVisualStates(transaction, p)
         return VisualFrameSnapshot(
             progress = p,
             state = state,
             sliceVisualStates = sliceStates,
-            cursorRect = cursorRect
+            cursorRect = cursorRect,
+            blockShiftStates = blockStates
         )
     }
 
@@ -362,6 +366,21 @@ class AndroidTextAnimationEngine(
         val currentY = ct.fromY + (ct.toY - ct.fromY) * progress
         val currentHeight = ct.fromHeight + (ct.toHeight - ct.fromHeight) * progress
         return android.graphics.RectF(currentX, currentY, currentX + 2f, currentY + currentHeight)
+    }
+
+    private fun computeBlockShiftVisualStates(
+        transaction: PreparedVisualTransaction,
+        progress: Float
+    ): List<BlockShiftVisualState> {
+        return transaction.blockShifts.map { shift ->
+            val currentTranslateY = shift.deltaY * (progress - 1f)
+            BlockShiftVisualState(
+                startLineIndex = shift.startLineIndex,
+                endLineIndexExclusive = shift.endLineIndexExclusive,
+                currentTranslateY = currentTranslateY,
+                targetTranslateY = 0f
+            )
+        }
     }
 }
 

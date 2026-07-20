@@ -97,84 +97,29 @@ class AndroidTextRenderer {
             layout.draw(canvas)
             return
         }
-        val text = layout.text?.toString() ?: ""
-        val textUtf8Length = if (blockShifts.isNotEmpty()) {
-            var len = 0
-            var i = 0
-            while (i < text.length) {
-                val cp = text.codePointAt(i)
-                len += when {
-                    cp <= 0x7F -> 1
-                    cp <= 0x7FF -> 2
-                    cp <= 0xFFFF -> 3
-                    else -> 4
-                }
-                i += Character.charCount(cp)
-            }
-            len
-        } else 0
-        val shiftLineRanges = if (blockShifts.isNotEmpty()) {
-            blockShifts.map { shift ->
-                val startUtf16 = utf8ToUtf16(text, shift.paragraphStartUtf8)
-                val endUtf16 = utf8ToUtf16(text, shift.paragraphEndUtf8.coerceAtMost(textUtf8Length))
-                val startLine = layout.getLineForOffset(startUtf16.coerceIn(0, text.length))
-                val endLine = layout.getLineForOffset(endUtf16.coerceIn(0, text.length))
-                Triple(startLine, endLine, shift.deltaY)
-            }
-        } else emptyList()
         canvas.save()
         for (region in holes) {
             canvas.clipOutRect(region.left, region.top, region.right, region.bottom)
         }
-        if (shiftLineRanges.isNotEmpty()) {
-            for ((startLine, endLine, _) in shiftLineRanges) {
-                canvas.clipOutRect(
-                    layout.getLineLeft(startLine), layout.getLineTop(startLine).toFloat(),
-                    layout.getLineRight(endLine), layout.getLineBottom(endLine).toFloat()
-                )
-            }
+        for (shift in blockShifts) {
+            canvas.clipOutRect(
+                shift.left, shift.top,
+                shift.right, shift.bottom
+            )
         }
         layout.draw(canvas)
         canvas.restore()
-        if (shiftLineRanges.isNotEmpty()) {
-            for ((startLine, endLine, deltaY) in shiftLineRanges) {
-                // Interpolation: at progress=0 the text is at its old position (offset by
-                // -deltaY from the new layout), at progress=1 it rests at the new layout
-                // position (no offset). The base static draw already rendered the text at
-                // the new position (clipped out above), so we translate by deltaY*(progress-1)
-                // to gradually reveal it moving from old→new.
-                val currentDeltaY = deltaY * (progress - 1f)
-                canvas.save()
-                canvas.translate(0f, currentDeltaY)
-                canvas.clipRect(
-                    layout.getLineLeft(startLine), layout.getLineTop(startLine).toFloat(),
-                    layout.getLineRight(endLine), layout.getLineBottom(endLine).toFloat()
-                )
-                layout.draw(canvas)
-                canvas.restore()
-            }
+        for (shift in blockShifts) {
+            val currentDeltaY = shift.deltaY * (progress - 1f)
+            canvas.save()
+            canvas.translate(0f, currentDeltaY)
+            canvas.clipRect(
+                shift.left, shift.top,
+                shift.right, shift.bottom
+            )
+            layout.draw(canvas)
+            canvas.restore()
         }
-    }
-
-    private fun utf8ToUtf16(text: String, utf8Offset: Int): Int {
-        var utf8Count = 0
-        var utf16Count = 0
-        val len = text.length
-        var i = 0
-        while (i < len && utf8Count < utf8Offset) {
-            val cp = text.codePointAt(i)
-            val charCount = Character.charCount(cp)
-            val byteCount = when {
-                cp <= 0x7F -> 1
-                cp <= 0x7FF -> 2
-                cp <= 0xFFFF -> 3
-                else -> 4
-            }
-            utf8Count += byteCount
-            utf16Count += charCount
-            i += charCount
-        }
-        return utf16Count
     }
 
     fun drawPreeditUnderline(canvas: Canvas, layout: android.text.Layout, compStart: Int, compEnd: Int) {

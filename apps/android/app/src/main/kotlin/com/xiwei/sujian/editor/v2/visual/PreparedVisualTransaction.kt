@@ -99,8 +99,12 @@ data class PreparedVisualTransaction(
      * re-drawn with a Y translation.
      */
     data class BlockShift(
-        val paragraphStartUtf8: Int,
-        val paragraphEndUtf8: Int,
+        val startLineIndex: Int,
+        val endLineIndexExclusive: Int,
+        val top: Float,
+        val bottom: Float,
+        val left: Float,
+        val right: Float,
         val deltaY: Float
     )
 }
