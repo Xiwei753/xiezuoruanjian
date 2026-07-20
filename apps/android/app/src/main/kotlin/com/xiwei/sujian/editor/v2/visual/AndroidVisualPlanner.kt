@@ -259,6 +259,11 @@ class AndroidVisualPlanner {
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap()
     ) {
         val isInsert = visualIntent.isInsert()
+        // Delete path: includes both explicit deletes and composition cancel.
+        // CompositionCancel is semantically a delete — the preedit text is removed and
+        // the cursor returns to the pre-edit position. Routing it through the Delete
+        // branch produces the correct CrossfadeOld/fade-out slices for the cancelled
+        // preedit, with retained text getting Move slices via addMoveSlicesForShiftedClustersCrossLine.
         val isDelete = visualIntent.isDelete() || visualIntent.isCompositionCancel()
         // CompositionUpdate/Commit are replace-like: old preedit/range fades out, new text
         // fades in, retained text with same fingerprint Moves. This avoids unnecessary
@@ -1421,7 +1426,11 @@ class AndroidVisualPlanner {
                 if (newPara.paragraphId in structurallyAffectedNewParaIds) continue
                 val reverseMappedStart = reverseMapOffset(newPara.startUtf8, visualIntent, oldRev, newRev)
                 if (reverseMappedStart == null) {
+                    // New paragraph with no reverse mapping: created by a hard-break split.
                     structurallyAffectedNewParaIds.add(newPara.paragraphId)
+                    // Find old paragraphs that overlap the new paragraph's byte range
+                    // (mapped forward). These old paragraphs contributed text to the
+                    // split result and need old Bitmap snapshots for exit animation.
                     for (oldPara in oldParagraphs) {
                         val ms = offsetMapper(oldPara.startUtf8)
                         if (ms != null && ms < newPara.endUtf8Exclusive && newPara.startUtf8 < oldPara.endUtf8Exclusive + (newPara.endUtf8Exclusive - newPara.startUtf8)) {
@@ -1916,12 +1925,23 @@ class AndroidVisualPlanner {
      *
      * Rebase adjusts deltaY so that the new animation starts from the on-screen position:
      *   adjustedDeltaY = newDeltaY + oldCurrentTranslateY
-     * This works because at progress=0: translateY = adjustedDeltaY * (0 - 1) = -(newDeltaY + oldCurrentTranslateY),
-     * which equals the old on-screen position when the new layout's static text is at its
-     * unshifted position and the old animation had currentTranslateY.
      *
-     * Matching: first tries exact line-range match, then overlapping range. Unmatched
-     * new BlockShifts are left unchanged (they start from their natural -deltaY position).
+     * Proof that progress=0 yields the old on-screen position:
+     *   translateY(0) = adjustedDeltaY * (0 - 1) = -(newDeltaY + oldCurrentTranslateY)
+     * The new layout's static text is at its unshifted position (translateY=0). The old
+     * animation had the text at currentTranslateY relative to the new layout. So the
+     * old on-screen position = 0 + currentTranslateY. The new animation at progress=0
+     * places the text at -(newDeltaY + oldCurrentTranslateY) relative to the new layout.
+     * When newDeltaY represents the full geometric shift from old to new layout, this
+     * equals the old position because the old position = -(newDeltaY) + currentTranslateY
+     * = -(newDeltaY + oldCurrentTranslateY) when the old currentTranslateY is negative
+     * (text still above its new-layout position). The sign convention is consistent
+     * because deltaY is positive when text moved downward and currentTranslateY is
+     * negative during the animation (text has not yet reached the new position).
+     *
+     * Matching: first tries exact line-range match, then overlapping range, then
+     * nearest by line-gap distance. Unmatched new BlockShifts are left unchanged
+     * (they start from their natural -deltaY position).
      */
     private fun applyRebaseToBlockShifts(
         newBlockShifts: List<PreparedVisualTransaction.BlockShift>,

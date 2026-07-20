@@ -167,6 +167,9 @@ class AndroidTextAnimationEngine(
         val rebaseSnapshot = captureRebaseSnapshot(frameTimeMs)
 
         val oldRevision = layoutEngine.captureImmutableRevision()
+        // First call: compute old affected lines using only the old revision (newRevision=null).
+        // This identifies which lines need Bitmap snapshots BEFORE the mirror update, without
+        // being influenced by the new layout's line indices (which may differ due to reflow).
         val preliminaryResult = visualPlanner.computeAffectedLineIndicesFromBothRevisions(visualIntent, oldRevision, null)
         val affectedOldLineIndices = preliminaryResult.oldLineIndices
         val oldSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedOldLineIndices)
@@ -174,6 +177,9 @@ class AndroidTextAnimationEngine(
         mirrorUpdate?.invoke()
         layoutEngine.requestLayout()
         val newRevision = layoutEngine.getCurrentRevision()
+        // Second call: compute new affected lines and BlockShifts using both revisions.
+        // BlockShifts can only be determined when both old and new revisions are available,
+        // because they require comparing paragraph Y positions across revisions.
         val affectedResult = visualPlanner.computeAffectedLineIndicesFromBothRevisions(visualIntent, oldRevision, newRevision)
         val affectedNewLineIndices = affectedResult.newLineIndices
         val newSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedNewLineIndices)
@@ -378,6 +384,13 @@ class AndroidTextAnimationEngine(
      * [targetTranslateY] is always 0 because the animation's final state is the new layout
      * with no translation. The rebase consumer uses [currentTranslateY] to adjust the next
      * transaction's deltaY so that consecutive inputs continue from the on-screen position.
+     *
+     * Rebase invariant: after [AndroidVisualPlanner.applyRebaseToBlockShifts] adjusts
+     * deltaY to (newDeltaY + oldCurrentTranslateY), the formula still produces the correct
+     * on-screen position at progress=0: translateY = -(newDeltaY + oldCurrentTranslateY).
+     * Since the new layout's static text is at its unshifted position and the old animation
+     * had currentTranslateY, this equals the old on-screen position. At progress=1 the
+     * text reaches the new layout position (translateY = 0) regardless of rebase.
      */
     private fun computeBlockShiftVisualStates(
         transaction: PreparedVisualTransaction,

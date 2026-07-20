@@ -10,12 +10,11 @@ import com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction
  * Rendering pipeline (animation-active path, see [AndroidEditorPipeline.renderComposedFrame]
  * for the full layer order including background, search, selection, and preedit):
  * 1. [AndroidTextRenderer.drawStaticTextWithHoles] — base pass: draws the static new-layout
- *    text, clipping out animated-slice holes and block-shift regions.
- * 2. [AndroidTextRenderer.drawStaticTextWithHoles] — block-shift pass: re-draws each
+ *    text, clipping out animated-slice holes and block-shift regions; then re-draws each
  *    block-shifted region with interpolated Y translation (merged adjacent paragraphs
- *    share one draw call).
- * 3. [AndroidTextAnimationRenderer.drawAnimatedSlices] — draws animated slices on top.
- * 4. [AndroidTextAnimationRenderer.drawAnimatedCursor] — draws the animated cursor.
+ *    share one draw call). Both passes occur within a single method call.
+ * 2. [AndroidTextAnimationRenderer.drawAnimatedSlices] — draws animated slices on top.
+ * 3. [AndroidTextAnimationRenderer.drawAnimatedCursor] — draws the animated cursor.
  *
  * [blockShifts] originate from [AndroidVisualPlanner.computeAffectedLines] — they
  * represent paragraphs after the edit paragraph whose Y geometry shifted but whose
