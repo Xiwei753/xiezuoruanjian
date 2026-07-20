@@ -10,6 +10,7 @@ data class PreparedVisualTransaction(
     val staticPatches: List<StaticPatch>,
     val animatedSlices: List<AnimatedSlice>,
     val ownedSnapshotIds: Set<Long>,
+    val referencedSnapshotIds: Set<Long>,
     val selectionDecoration: SelectionDecoration?,
     val preeditDecoration: PreeditDecoration?,
     val cursorTransition: CursorTransition?,

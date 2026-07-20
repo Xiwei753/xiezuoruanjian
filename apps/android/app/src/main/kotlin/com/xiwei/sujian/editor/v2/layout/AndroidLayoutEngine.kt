@@ -109,6 +109,7 @@ class AndroidLayoutEngine(
 
     private fun buildRevision(l: Layout): AndroidLayoutRevision {
         val indexMap = AndroidTextIndexMap(mirror)
+        val text = mirror.getText()
         val lineRanges = mutableListOf<AndroidLayoutRevision.LineRange>()
         for (i in 0 until l.lineCount) {
             val lineStartUtf16 = l.getLineStart(i)
@@ -122,6 +123,9 @@ class AndroidLayoutEngine(
             val startUtf8 = indexMap.utf16ToUtf8(lineStartUtf16)
             val endUtf8 = indexMap.utf16ToUtf8(lineEndUtf16)
 
+            val endsWithHardBreak = lineEndUtf16 > 0 && lineEndUtf16 <= text.length &&
+                text[lineEndUtf16 - 1] == '\n'
+
             lineRanges.add(AndroidLayoutRevision.LineRange(
                 startUtf8 = startUtf8,
                 endUtf8 = endUtf8,
@@ -131,7 +135,8 @@ class AndroidLayoutEngine(
                 bottom = bottom,
                 baseline = baseline,
                 left = left,
-                right = right
+                right = right,
+                endsWithHardBreak = endsWithHardBreak
             ))
         }
 

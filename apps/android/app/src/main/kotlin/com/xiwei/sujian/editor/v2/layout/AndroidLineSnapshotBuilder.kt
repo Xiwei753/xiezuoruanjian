@@ -179,9 +179,62 @@ class AndroidLineSnapshotBuilder {
 
     private fun buildShapingFingerprint(clusterText: String, layout: Layout, lineIndex: Int, clusterStartUtf16: Int): String {
         if (clusterText.isEmpty()) return ""
+        if (android.os.Build.VERSION.SDK_INT >= 31) {
+            return buildShapingFingerprintApi31(clusterText, layout, lineIndex, clusterStartUtf16)
+        }
         val codePoints = clusterText.codePoints().toArray()
         val typeSummary = codePoints.map { Character.getType(it) }.distinct().sorted().joinToString(",")
         val paintHash = layout.paint?.hashCode() ?: 0
-        return "${codePoints.joinToString(",")}_${typeSummary}_${paintHash}"
+        val bidiDir = if (clusterStartUtf16 < layout.getLineEnd(lineIndex)) {
+            layout.getParagraphDirection(lineIndex)
+        } else {
+            Layout.DIR_LEFT_TO_RIGHT
+        }
+        return "${codePoints.joinToString(",")}_${typeSummary}_${paintHash}_${bidiDir}"
+    }
+
+    private fun buildShapingFingerprintApi31(clusterText: String, layout: Layout, lineIndex: Int, clusterStartUtf16: Int): String {
+        try {
+            val paint = layout.paint ?: return clusterText.hashCode().toString()
+            val shaperClass = Class.forName("android.text.TextRunShaper")
+            val shapeMethod = shaperClass.getMethod(
+                "shapeText",
+                CharSequence::class.java,
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
+                android.text.TextPaint::class.java
+            )
+            val positionedGlyphs = shapeMethod.invoke(
+                null,
+                clusterText, 0, clusterText.length,
+                layout.getParagraphDirection(lineIndex),
+                paint
+            ) ?: return clusterText.hashCode().toString()
+
+            val glyphCountMethod = positionedGlyphs.javaClass.getMethod("getGlyphCount")
+            val glyphCount = glyphCountMethod.invoke(positionedGlyphs) as Int
+
+            val getFontMethod = positionedGlyphs.javaClass.getMethod("getFont", Int::class.javaPrimitiveType)
+            val getGlyphIdMethod = positionedGlyphs.javaClass.getMethod("getGlyphId", Int::class.javaPrimitiveType)
+            val getXMethod = positionedGlyphs.javaClass.getMethod("getX", Int::class.javaPrimitiveType)
+            val getYMethod = positionedGlyphs.javaClass.getMethod("getY", Int::class.javaPrimitiveType)
+
+            val sb = StringBuilder()
+            for (i in 0 until glyphCount) {
+                if (i > 0) sb.append("|")
+                val font = getFontMethod.invoke(positionedGlyphs, i)
+                sb.append(font?.hashCode()?.toString() ?: "null")
+                sb.append("_")
+                sb.append(getGlyphIdMethod.invoke(positionedGlyphs, i))
+                sb.append("_")
+                sb.append((getXMethod.invoke(positionedGlyphs, i) as Float).toInt())
+                sb.append("_")
+                sb.append((getYMethod.invoke(positionedGlyphs, i) as Float).toInt())
+            }
+            return sb.toString()
+        } catch (_: Exception) {
+            return clusterText.hashCode().toString()
+        }
     }
 }

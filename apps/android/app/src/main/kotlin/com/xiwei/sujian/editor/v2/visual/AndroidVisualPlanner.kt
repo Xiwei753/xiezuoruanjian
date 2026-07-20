@@ -53,9 +53,7 @@ class AndroidVisualPlanner {
 
     private fun isParagraphBoundary(revision: AndroidLayoutRevision, lineIndex: Int): Boolean {
         if (lineIndex <= 0 || lineIndex >= revision.lineRanges.size) return false
-        val prev = revision.lineRanges[lineIndex - 1]
-        val curr = revision.lineRanges[lineIndex]
-        return curr.startUtf8 > prev.endUtf8
+        return revision.lineRanges[lineIndex - 1].endsWithHardBreak
     }
 
     fun computeAffectedLineIndicesFromBothRevisions(
@@ -193,6 +191,17 @@ class AndroidVisualPlanner {
             animatedSlices
         }
 
+        val referencedSnapshotIds = mutableSetOf<Long>()
+        for (slice in finalSlices) {
+            val sid = slice.snapshot?.snapshotId
+            if (sid != null && sid > 0) {
+                referencedSnapshotIds.add(sid)
+            }
+        }
+        for (patch in staticPatches) {
+            referencedSnapshotIds.add(patch.newSnapshotId)
+        }
+
         return PreparedVisualTransaction(
             transactionId = transactionKey,
             oldRevision = oldRev,
@@ -200,6 +209,7 @@ class AndroidVisualPlanner {
             staticPatches = staticPatches,
             animatedSlices = finalSlices,
             ownedSnapshotIds = ownedSnapshotIds,
+            referencedSnapshotIds = referencedSnapshotIds,
             selectionDecoration = buildSelectionDecoration(newRev),
             preeditDecoration = buildPreeditDecoration(newRev),
             cursorTransition = cursorTransition,

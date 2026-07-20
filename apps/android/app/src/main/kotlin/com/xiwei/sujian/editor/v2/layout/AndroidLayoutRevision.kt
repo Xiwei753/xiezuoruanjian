@@ -34,6 +34,7 @@ data class AndroidLayoutRevision(
         val bottom: Float,
         val baseline: Float,
         val left: Float,
-        val right: Float
+        val right: Float,
+        val endsWithHardBreak: Boolean = false
     )
 }
