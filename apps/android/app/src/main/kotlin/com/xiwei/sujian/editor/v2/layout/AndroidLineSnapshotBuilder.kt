@@ -137,8 +137,7 @@ class AndroidLineSnapshotBuilder {
             val localStart = start.coerceIn(0, lineText.length)
             val localEnd = end.coerceIn(0, lineText.length)
             val clusterText = lineText.substring(localStart, localEnd)
-            val shapingFp = buildShapingFingerprint(clusterText, layout, lineIndex, clusterStartUtf16)
-            val isConfident = android.os.Build.VERSION.SDK_INT >= 31
+            val shapingResult = buildShapingFingerprint(clusterText, layout, lineIndex, clusterStartUtf16)
 
             clusters.add(LineClusterSnapshot(
                 clusterId = clusterIdCounter++,
@@ -148,8 +147,8 @@ class AndroidLineSnapshotBuilder {
                 documentUtf16EndExclusive = clusterEndUtf16,
                 sourceRectInLineImage = android.graphics.Rect(sourceLeft.toInt(), sourceTop.toInt(), sourceRight.toInt(), sourceBottom.toInt()),
                 visualRectInDocument = android.graphics.RectF(x0, top, x1, bottom),
-                shapingFingerprint = shapingFp,
-                shapingIdentityConfident = isConfident
+                shapingFingerprint = shapingResult.first,
+                shapingIdentityConfident = shapingResult.second
             ))
         }
 
@@ -182,23 +181,27 @@ class AndroidLineSnapshotBuilder {
     /**
      * Build a shaping fingerprint for a grapheme cluster.
      *
+     * Returns a pair of (fingerprint string, confident boolean).
+     *
      * API 31+: Uses TextRunShaper.shapeText → PositionedGlyphs (glyph IDs, fonts, positions).
      * This is reliable for Move vs Crossfade decisions because PositionedGlyphs captures
      * the actual glyph output including contextual shaping, ligatures, and font fallback.
+     * [confident] is true only when the full-line-context shaping path succeeds and extracts
+     * matching glyphs. The isolated-shaping fallback and hash fallback both return
+     * [confident] = false because they cannot guarantee visual identity — isolated shaping
+     * misses contextual forms (Arabic, Indic, ligatures), and the hash fallback is too coarse.
      *
      * API < 31: Falls back to codepoint Unicode categories + paint hash + bidi direction
      * + adjacent codepoint context hash. This is a conservative approximation — different
-     * shapings may produce the same fingerprint (e.g. Arabic contextual forms, Indic
-     * conjuncts, ligatures that depend on surrounding characters). Therefore
-     * [shapingIdentityConfident] is set to false, and the animation planner will use
-     * Crossfade instead of Move to avoid visual glitches from false positive matches.
+     * shapings may produce the same fingerprint. [confident] is always false, and the
+     * animation planner will use Crossfade instead of Move to avoid visual glitches.
      *
      * When either the old or new cluster has [shapingIdentityConfident] == false, the
      * planner must not assume visual identity even if fingerprints match — Crossfade is
      * the only safe choice.
      */
-    private fun buildShapingFingerprint(clusterText: String, layout: Layout, lineIndex: Int, clusterStartUtf16: Int): String {
-        if (clusterText.isEmpty()) return ""
+    private fun buildShapingFingerprint(clusterText: String, layout: Layout, lineIndex: Int, clusterStartUtf16: Int): Pair<String, Boolean> {
+        if (clusterText.isEmpty()) return Pair("", true)
         val contextHash = computeContextHash(layout, lineIndex, clusterStartUtf16)
         if (android.os.Build.VERSION.SDK_INT >= 31) {
             return buildShapingFingerprintApi31(clusterText, layout, lineIndex, clusterStartUtf16, contextHash)
@@ -206,7 +209,7 @@ class AndroidLineSnapshotBuilder {
         val codePoints = clusterText.codePoints().toArray()
         val typeSummary = codePoints.map { Character.getType(it) }.distinct().sorted().joinToString(",")
         val paintHash = layout.paint.hashCode()
-        return "${codePoints.joinToString(",")}_${typeSummary}_${paintHash}_${contextHash}"
+        return Pair("${codePoints.joinToString(",")}_${typeSummary}_${paintHash}_${contextHash}", false)
     }
 
     private fun computeContextHash(layout: Layout, lineIndex: Int, clusterStartUtf16: Int): Int {
@@ -242,7 +245,7 @@ class AndroidLineSnapshotBuilder {
      * context hash — this is still better than nothing because the context hash captures
      * adjacent codepoints and bidi direction.
      */
-    private fun buildShapingFingerprintApi31(clusterText: String, layout: Layout, lineIndex: Int, clusterStartUtf16: Int, contextHash: Int): String {
+    private fun buildShapingFingerprintApi31(clusterText: String, layout: Layout, lineIndex: Int, clusterStartUtf16: Int, contextHash: Int): Pair<String, Boolean> {
         try {
             val paint = layout.paint
             val shaperClass = Class.forName("android.text.TextRunShaper")
@@ -305,9 +308,9 @@ class AndroidLineSnapshotBuilder {
 
             sb.append("_ctx_")
             sb.append(contextHash)
-            return sb.toString()
+            return Pair(sb.toString(), true)
         } catch (_: Exception) {
-            return "${clusterText.hashCode()}_${contextHash}"
+            return Pair("${clusterText.hashCode()}_${contextHash}", false)
         }
     }
 
@@ -318,14 +321,14 @@ class AndroidLineSnapshotBuilder {
         contextHash: Int,
         shapeMethod: java.lang.reflect.Method,
         paint: android.text.TextPaint
-    ): String {
+    ): Pair<String, Boolean> {
         try {
             val positionedGlyphs = shapeMethod.invoke(
                 null,
                 clusterText, 0, clusterText.length,
                 layout.getParagraphDirection(lineIndex),
                 paint
-            ) ?: return "${clusterText.hashCode()}_${contextHash}"
+            ) ?: return Pair("${clusterText.hashCode()}_${contextHash}", false)
 
             val glyphCountMethod = positionedGlyphs.javaClass.getMethod("getGlyphCount")
             val glyphCount = glyphCountMethod.invoke(positionedGlyphs) as Int
@@ -349,9 +352,9 @@ class AndroidLineSnapshotBuilder {
             }
             sb.append("_isolated_ctx_")
             sb.append(contextHash)
-            return sb.toString()
+            return Pair(sb.toString(), false)
         } catch (_: Exception) {
-            return "${clusterText.hashCode()}_${contextHash}"
+            return Pair("${clusterText.hashCode()}_${contextHash}", false)
         }
     }
 }
