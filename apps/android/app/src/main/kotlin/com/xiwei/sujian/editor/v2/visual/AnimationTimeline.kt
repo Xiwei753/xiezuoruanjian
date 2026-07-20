@@ -83,6 +83,20 @@ class AnimationTimeline(
 
     fun getState(): TransactionState = state
 
+    /**
+     * Minimal frame snapshot containing only progress and state — no slice/cursor/block data.
+     *
+     * This is the timeline's own view of the animation: it tracks *when* the animation is
+     * but not *what* is being animated. The full visual frame (with interpolated slice
+     * positions, cursor rect, and block-shift translations) is assembled by
+     * [com.xiwei.sujian.editor.v2.visual.AndroidTextAnimationEngine.captureFrame], which
+     * combines this timeline's progress with the active transaction's visual data.
+     *
+     * Separation of concerns: [AnimationTimeline] is a pure temporal controller; the engine
+     * is the visual state owner. This ensures the timeline can be tested independently and
+     * that visual state computation is centralized in one place rather than split across
+     * timeline progress and per-slice interpolation.
+     */
     fun currentVisualFrame(frameTimeMs: Long): VisualFrameSnapshot? {
         if (state == TransactionState.Completed || state == TransactionState.Cancelled) return null
         val p = progress(frameTimeMs)

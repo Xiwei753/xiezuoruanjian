@@ -30,6 +30,12 @@ data class PreparedVisualTransaction(
         val newSnapshotId: Long,
         val lineIndex: Int,
         val destinationRect: android.graphics.RectF,
+        /** Sub-regions of the line Bitmap that should be drawn as static (non-animated)
+         *  content. Used when the animation's hole-punching removed regions that are not
+         *  covered by any animated slice but still need to be visible — e.g. a line where
+         *  only some clusters are animated and the rest must be redrawn from the snapshot
+         *  because the base static draw was clipped out. Each rect is in Bitmap pixel
+         *  coordinates relative to the snapshot's [sourceRect] origin. */
         val visibleSourceRects: List<android.graphics.Rect>
     )
 

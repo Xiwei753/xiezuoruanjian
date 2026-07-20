@@ -28,6 +28,13 @@ data class AndroidLineSnapshot(
     val snapshotId: Long,
     val bitmap: Bitmap?,
     val lineIndex: Int,
+    /** Whole-line crop region inside [bitmap]: always (0, 0, bitmapWidth, bitmapHeight).
+     *  Used for whole-line CrossfadeOld/CrossfadeNew slices when no per-cluster matching
+     *  is available (e.g. LineReflow mode when a line has no cluster matches). For
+     *  per-cluster animation, [LineClusterSnapshot.sourceRectInLineImage] provides the
+     *  sub-region crop for each grapheme cluster within the same Bitmap. Both rects are in
+     *  Bitmap pixel coordinates; the corresponding document-coordinate destination is
+     *  [destinationRect] (whole-line) or [LineClusterSnapshot.visualRectInDocument] (per-cluster). */
     val sourceRect: android.graphics.Rect,
     val destinationRect: android.graphics.RectF,
     val clusters: List<LineClusterSnapshot> = emptyList(),

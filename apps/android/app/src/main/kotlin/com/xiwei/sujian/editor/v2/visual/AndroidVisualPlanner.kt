@@ -2070,6 +2070,15 @@ class AndroidVisualPlanner {
      * new edit), this tier finds the closest rebase state on the same line with a
      * compatible role, using byte-start distance as the tiebreaker.
      *
+     * Byte-start distance is preferred over visual-position distance because:
+     * (a) byte offsets are deterministic and independent of layout (visual position
+     *     changes due to reflow even when the text hasn't moved semantically);
+     * (b) for same-line clusters with identical roles, byte order is a stable proxy
+     *     for visual order in LTR text and is at least consistent in RTL;
+     * (c) visual-position distance requires computing screen coordinates from the
+     *     rebase snapshot's SliceVisualState, which adds complexity without improving
+     *     accuracy for the common case of rapid consecutive input on the same line.
+     *
      * One-to-one invariant: [usedRebaseIndices] prevents multiple new slices from
      * matching the same old state. Without this, two Insert slices on the same line
      * could both inherit the same rebase position/alpha, causing them to start from
