@@ -384,6 +384,20 @@ class AndroidEditorPipeline private constructor(
         )
     }
 
+    /**
+     * Apply a composition cancel with platform-constructed VisualIntent.
+     *
+     * CompositionCancel is semantically a delete: the preedit text is removed and the
+     * cursor returns to the pre-edit position. The VisualIntent uses empty
+     * [newAffectedByteRanges] (no new text inserted) and [oldAffectedByteRanges] covering
+     * the preedit span, which routes through the planner's Delete path to produce
+     * CrossfadeOld/fade-out slices for the cancelled preedit. Retained text after the
+     * preedit gets Move slices via [addMoveSlicesForShiftedClustersCrossLine].
+     *
+     * Animation mode is fixed at CLUSTER_ANIMATION (not glyph or run) because composition
+     * cancel typically involves short preedit spans where per-cluster fade-out provides
+     * the best visual granularity without the overhead of per-glypheme slices.
+     */
     fun applyCompositionCancelAnimated(
         replaceStartUtf8: Int,
         replaceEndUtf8: Int,
@@ -478,6 +492,11 @@ class AndroidEditorPipeline private constructor(
 
         textRenderer.drawBackground(canvas)
 
+        // Animation-active path: used when there are animated slices OR block shifts.
+        // BlockShifts alone (no slices) still require drawStaticTextWithHoles because the
+        // shifted region must be clipped from the base draw and re-drawn with Y translation.
+        // Without this condition, a pure BlockShift (e.g. inserting a line that pushes all
+        // subsequent paragraphs down) would render without the translation animation.
         if (transaction != null && (transaction.animatedSlices.isNotEmpty() || transaction.blockShifts.isNotEmpty())) {
             textRenderer.drawSearchHighlights(canvas, layout, frame.searchHighlightsUtf16)
             textRenderer.drawSelectionHighlight(canvas, layout, frame.selectionStartUtf16, frame.selectionEndUtf16)

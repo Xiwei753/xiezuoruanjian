@@ -55,6 +55,8 @@ class AndroidLayoutEngine(
         return currentRevision?.copy()
     }
 
+    /** Capture line snapshots WITHOUT per-cluster data. Used for non-animated or
+     *  whole-line animation paths where cluster-level source rects are not needed. */
     fun captureLineBitmapSnapshots(lineIndices: Set<Int>): Map<Int, AndroidLineSnapshot> {
         val l = layout ?: return emptyMap()
         val rev = currentRevision ?: return emptyMap()
@@ -68,6 +70,9 @@ class AndroidLayoutEngine(
         return result
     }
 
+    /** Capture line snapshots WITH per-cluster data (source rects, shaping fingerprints).
+     *  This is the primary path used by [AndroidTextAnimationEngine.prepareAndSubmit] —
+     *  cluster data is required for Insert/Delete/Move/Crossfade slice generation. */
     fun captureLineBitmapSnapshotsWithClusters(lineIndices: Set<Int>): Map<Int, AndroidLineSnapshot> {
         val l = layout ?: return emptyMap()
         val rev = currentRevision ?: return emptyMap()

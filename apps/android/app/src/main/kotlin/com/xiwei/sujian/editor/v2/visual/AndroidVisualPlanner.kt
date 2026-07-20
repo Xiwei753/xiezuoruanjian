@@ -34,6 +34,14 @@ class AndroidVisualPlanner {
      * the top of a long document.
      *
      * Expansion stops at the first hard break after the edit point (paragraph boundary).
+     *
+     * [useNewRanges]: when true, uses [VisualIntent.newAffectedByteRanges] as the primary
+     * overlap filter; when false (default), uses [VisualIntent.oldAffectedByteRanges].
+     * This matters when only one revision is available (the other is null): for the old
+     * revision we filter by old ranges, for the new revision we filter by new ranges,
+     * ensuring the captured lines actually overlap the edit in that revision's coordinate
+     * space. When both revisions are available, use [computeAffectedLineIndicesFromBothRevisions]
+     * instead, which produces the full two-level result including BlockShifts.
      */
     fun computeAffectedLineIndices(
         visualIntent: VisualIntent,
@@ -71,6 +79,21 @@ class AndroidVisualPlanner {
         val blockShifts: List<PreparedVisualTransaction.BlockShift>
     )
 
+    /**
+     * Compute affected line indices using both old and new revisions.
+     *
+     * When only one revision is available (the other is null), delegates to
+     * [computeAffectedLineIndices] with the appropriate range filter. BlockShifts cannot
+     * be computed without both revisions (they require comparing paragraph Y positions
+     * across old/new), so an empty list is returned.
+     *
+     * When both revisions are available, delegates to [computeAffectedLines] which
+     * produces the full two-level result: per-cluster Bitmap lines + BlockShift entries.
+     * This is the primary entry point used by [AndroidTextAnimationEngine.prepareAndSubmit],
+     * which calls it twice — once with newRevision=null (to determine old snapshot lines
+     * before the mirror update) and once with both revisions (to determine new snapshot
+     * lines and BlockShifts after the mirror update).
+     */
     fun computeAffectedLineIndicesFromBothRevisions(
         visualIntent: VisualIntent,
         oldRevision: AndroidLayoutRevision?,
@@ -1181,6 +1204,12 @@ class AndroidVisualPlanner {
      * Primary cluster matching: map old byte offsets to new via [buildOffsetMapper],
      * then find new clusters at the mapped positions. Falls back to [matchClustersByFingerprint]
      * if no offset-mapped pairs are found (e.g. when offset mapper returns null for all clusters).
+     *
+     * Partial match semantics: when [mappedEnd] is null (the old cluster's end falls inside
+     * a deleted/replaced range), the match is still attempted by [mappedStart] alone — a new
+     * cluster at the mapped start position is accepted regardless of its end. This handles
+     * boundary clusters that straddle the edit: their start maps correctly but their end does
+     * not, yet they still represent the same visual content and should be paired for Move/Crossfade.
      */
     private fun matchClustersByOffsetMap(
         oldSnapshot: AndroidLineSnapshot,
@@ -2053,6 +2082,12 @@ class AndroidVisualPlanner {
                 )
             }
             SliceRole.Insert -> {
+                // When rebasing onto a Move slice, the new Insert inherits the Move's
+                // current position as its starting point. Without fromDestinationRect,
+                // the Insert would appear at its destination immediately rather than
+                // sliding in from the Move's current on-screen position — causing a
+                // visual jump during rapid consecutive input where an old Move becomes
+                // a new Insert (e.g. text that was moving is now fully inserted).
                 if (rebaseState.role == SliceRole.Move) {
                     slice.copy(
                         startAlpha = rebaseState.currentAlpha,
@@ -2073,6 +2108,9 @@ class AndroidVisualPlanner {
                 slice.copy(startAlpha = rebaseState.currentAlpha, endAlpha = 0f)
             }
             SliceRole.CrossfadeNew -> {
+                // Same fromDestinationRect inheritance as Insert when rebasing onto Move:
+                // the new CrossfadeNew starts from the old Move's current position rather
+                // than appearing at its destination instantly.
                 if (rebaseState.role == SliceRole.Move) {
                     slice.copy(
                         startAlpha = rebaseState.currentAlpha,
