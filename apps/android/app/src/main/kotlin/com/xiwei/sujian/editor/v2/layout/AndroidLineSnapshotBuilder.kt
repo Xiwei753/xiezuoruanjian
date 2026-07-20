@@ -186,7 +186,7 @@ class AndroidLineSnapshotBuilder {
      *
      * Returns a pair of (fingerprint string, confident boolean).
      *
-     * API 31+: Uses TextRunShaper.shapeText → PositionedGlyphs (glyph IDs, fonts, positions).
+     * API 31+: Uses TextRunShaper.shapeTextRun → PositionedGlyphs (glyph IDs, fonts).
      * This is reliable for Move vs Crossfade decisions because PositionedGlyphs captures
      * the actual glyph output including contextual shaping, ligatures, and font fallback.
      * [confident] is true only when the full-line-context shaping path succeeds and extracts
