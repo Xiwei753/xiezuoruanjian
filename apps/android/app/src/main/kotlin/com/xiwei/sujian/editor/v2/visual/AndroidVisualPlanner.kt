@@ -1434,25 +1434,32 @@ class AndroidVisualPlanner {
      * without creating per-line Bitmaps. This prevents unbounded Bitmap allocation when
      * editing near the top of a long document.
      *
+     * BlockShift lifecycle invariants (#541 comment 7):
+     * 1. Merged into contiguous blocks: [mergeAdjacentBlockShifts] combines adjacent paragraphs
+     *    with approximately equal deltaY into a single [BlockShift] entry. The renderer draws
+     *    each merged block with one [layout.draw] call per frame (grouped by deltaY), not one
+     *    per paragraph — critical for long documents where many paragraphs shift by the same
+     *    amount after a single insert/delete.
+     * 2. Rebase continuity: [applyRebaseToBlockShifts] adjusts deltaY to
+     *    (newDeltaY - oldCurrentTranslateY) so that consecutive inputs continue the suffix
+     *    block's animation from its on-screen position rather than jumping back. The rebase
+     *    snapshot includes [BlockShiftVisualState] via [computeBlockShiftVisualStates].
+     * 3. Structurally affected paragraphs: hard-break insertion/deletion splits or merges
+     *    paragraphs. Both the old and new "edit paragraph groups" are fully included in the
+     *    affected line set via [structurallyAffectedOldParaIds]/[structurallyAffectedNewParaIds],
+     *    so the snapshot capture covers all structurally affected paragraphs. BlockShifts start
+     *    only after the last paragraph in the combined edit group.
+     * 4. Pre-computed geometry: each [BlockShift] stores [startLineIndex]/[endLineIndexExclusive]
+     *    and pre-computed [top]/[bottom]/[left]/[right] geometry. The renderer uses these
+     *    directly rather than converting from UTF-8 exclusive-end offsets at draw time, avoiding
+     *    [getLineForOffset] on an exclusive boundary that could land on the next paragraph's
+     *    first line. [startUtf8] is stored only for rebase matching, not for line lookup.
+     *
      * Paragraph alignment: old/new paragraphs are matched by their UTF-8 byte range via
      * [buildOffsetMapper], NOT by [paragraphId]. Inserting or deleting a hard break changes
      * all subsequent paragraphIds (they are sequential integers), so ID-based matching would
      * pair different paragraphs. Offset-map matching ensures the same text paragraph is
      * aligned even after hard-break insertion/deletion.
-     *
-     * Hard-break insertion/deletion splits or merges paragraphs. The edit paragraph in the
-     * old revision may correspond to two paragraphs in the new revision (split), or two old
-     * paragraphs may merge into one new paragraph. Both the old and new "edit paragraph
-     * groups" are fully included in the affected line set, so the snapshot capture covers
-     * all structurally affected paragraphs. Specifically:
-     * - Split (insert hard break): the old edit paragraph's lines + the new edit paragraph's
-     *   lines (which span both resulting paragraphs, since [newEditParaLines] includes all
-     *   lines sharing the new edit line's [paragraphId]) are all captured.
-     * - Merge (delete hard break): the old edit paragraph's lines + the new merged paragraph's
-     *   lines are all captured, ensuring the merged-in text has an old snapshot for its
-     *   CrossfadeOld/Move exit animation.
-     * BlockShifts start only after the last paragraph in the edit group, preventing the same
-     * paragraph from appearing both as a Bitmap snapshot target and as a BlockShift target.
      */
     private fun computeAffectedLines(
         visualIntent: VisualIntent,
