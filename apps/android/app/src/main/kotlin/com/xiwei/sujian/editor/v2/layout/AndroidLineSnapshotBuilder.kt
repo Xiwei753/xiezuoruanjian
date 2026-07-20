@@ -277,6 +277,8 @@ class AndroidLineSnapshotBuilder {
             } else {
                 layout.getParagraphDirection(lineIndex) == Layout.DIR_RIGHT_TO_LEFT
             }
+            val paragraphIsRtl = layout.getParagraphDirection(lineIndex) == Layout.DIR_RIGHT_TO_LEFT
+            val mixedBidiLine = isRtl != paragraphIsRtl
 
             val positionedGlyphs = android.graphics.text.TextRunShaper.shapeTextRun(
                 lineText,
@@ -306,7 +308,8 @@ class AndroidLineSnapshotBuilder {
 
             sb.append("_ctx_")
             sb.append(contextHash)
-            return Pair(sb.toString(), true)
+            val confident = !mixedBidiLine
+            return Pair(sb.toString(), confident)
         } catch (_: Exception) {
             return Pair("${clusterText.hashCode()}_${contextHash}", false)
         }

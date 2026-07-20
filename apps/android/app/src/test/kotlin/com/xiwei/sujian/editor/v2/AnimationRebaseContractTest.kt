@@ -1248,6 +1248,152 @@ class AnimationRebaseContractTest {
     }
 
     @Test
+    fun mixedBidiLineShapingReturnsConfidentFalse() {
+        val isRtl = true
+        val paragraphIsRtl = false
+        val mixedBidiLine = isRtl != paragraphIsRtl
+        assertTrue("Mixed bidi line must be detected", mixedBidiLine)
+        val confident = !mixedBidiLine
+        assertFalse("Shaping in mixed bidi line must return confident=false", confident)
+    }
+
+    @Test
+    fun sameDirectionBidiShapingReturnsConfidentTrue() {
+        val isRtl = true
+        val paragraphIsRtl = true
+        val mixedBidiLine = isRtl != paragraphIsRtl
+        assertFalse("Same direction must not be mixed bidi", mixedBidiLine)
+        val confident = !mixedBidiLine
+        assertTrue("Shaping in same-direction line can return confident=true", confident)
+    }
+
+    @Test
+    fun computeAffectedLineIndicesExpandsToDocumentEnd() {
+        val revision = AndroidLayoutRevision(
+            revisionId = 1L, editorRevision = 1L,
+            widthFingerprint = 800f, fontFingerprint = "48",
+            lineCount = 4,
+            lineRanges = listOf(
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 0, endUtf8 = 20, startUtf16 = 0, endUtf16 = 20,
+                    top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
+                    endsWithHardBreak = false, paragraphId = 0, paragraphLocalLineIndex = 0
+                ),
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 20, endUtf8 = 40, startUtf16 = 20, endUtf16 = 40,
+                    top = 20f, bottom = 40f, baseline = 36f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 1
+                ),
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 40, endUtf8 = 60, startUtf16 = 40, endUtf16 = 60,
+                    top = 40f, bottom = 60f, baseline = 56f, left = 0f, right = 800f,
+                    endsWithHardBreak = false, paragraphId = 1, paragraphLocalLineIndex = 0
+                ),
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 60, endUtf8 = 80, startUtf16 = 60, endUtf16 = 80,
+                    top = 60f, bottom = 80f, baseline = 76f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 1, paragraphLocalLineIndex = 1
+                )
+            ),
+            cursorUtf8 = 10, cursorUtf16 = 10, cursorX = 100f, cursorY = 0f, cursorHeight = 20f,
+            selectionAnchorUtf8 = 10, selectionHeadUtf8 = 10,
+            selectionAnchorUtf16 = 10, selectionHeadUtf16 = 10,
+            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
+            snapshotHandles = emptyList()
+        )
+        val visualIntent = VisualIntent(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.INSERT,
+            oldAffectedByteRanges = emptyList(),
+            newAffectedByteRanges = listOf(Pair(10, 13)),
+            animationMode = uniffi.writer_core.AnimationModeDto.GLYPH_ANIMATION,
+            durationMs = 160L,
+            coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(10, 10, true)
+        )
+        val planner = AndroidVisualPlanner()
+        val affected = planner.computeAffectedLineIndices(visualIntent, revision, useNewRanges = false)
+        assertTrue("Line 0 must be included", affected.contains(0))
+        assertTrue("Line 1 must be included", affected.contains(1))
+        assertTrue("Line 2 (next paragraph) must be included for Y-geometry Move",
+            affected.contains(2))
+        assertTrue("Line 3 must be included", affected.contains(3))
+    }
+
+    @Test
+    fun runAnimationMergedFingerprintCombinesAllClusters() {
+        val clusters = listOf(
+            LineClusterSnapshot(
+                clusterId = 0,
+                documentByteStart = 0, documentByteEndExclusive = 3,
+                documentUtf16Start = 0, documentUtf16EndExclusive = 3,
+                sourceRectInLineImage = android.graphics.Rect(0, 0, 30, 20),
+                visualRectInDocument = android.graphics.RectF(0f, 0f, 30f, 20f),
+                shapingFingerprint = "fp_a", shapingIdentityConfident = true
+            ),
+            LineClusterSnapshot(
+                clusterId = 1,
+                documentByteStart = 3, documentByteEndExclusive = 6,
+                documentUtf16Start = 3, documentUtf16EndExclusive = 6,
+                sourceRectInLineImage = android.graphics.Rect(30, 0, 60, 20),
+                visualRectInDocument = android.graphics.RectF(30f, 0f, 60f, 20f),
+                shapingFingerprint = "fp_b", shapingIdentityConfident = true
+            )
+        )
+        val affectedRanges = listOf(Pair(0, 6))
+        val planner = AndroidVisualPlanner()
+        val method = planner.javaClass.getDeclaredMethod(
+            "groupClustersIntoRuns",
+            List::class.java,
+            List::class.java
+        )
+        method.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val runs = method.invoke(planner, clusters, affectedRanges) as List<*>
+        assertEquals("Adjacent clusters must merge into one run", 1, runs.size)
+        val run = runs[0] as LineClusterSnapshot
+        assertEquals("Merged fingerprint must combine all cluster fingerprints",
+            "fp_a|fp_b", run.shapingFingerprint)
+        assertTrue("Merged run must be confident when all clusters are confident",
+            run.shapingIdentityConfident)
+    }
+
+    @Test
+    fun runAnimationMergedConfidentFalseWhenAnyClusterNotConfident() {
+        val clusters = listOf(
+            LineClusterSnapshot(
+                clusterId = 0,
+                documentByteStart = 0, documentByteEndExclusive = 3,
+                documentUtf16Start = 0, documentUtf16EndExclusive = 3,
+                sourceRectInLineImage = android.graphics.Rect(0, 0, 30, 20),
+                visualRectInDocument = android.graphics.RectF(0f, 0f, 30f, 20f),
+                shapingFingerprint = "fp_a", shapingIdentityConfident = true
+            ),
+            LineClusterSnapshot(
+                clusterId = 1,
+                documentByteStart = 3, documentByteEndExclusive = 6,
+                documentUtf16Start = 3, documentUtf16EndExclusive = 6,
+                sourceRectInLineImage = android.graphics.Rect(30, 0, 60, 20),
+                visualRectInDocument = android.graphics.RectF(30f, 0f, 60f, 20f),
+                shapingFingerprint = "fp_b", shapingIdentityConfident = false
+            )
+        )
+        val affectedRanges = listOf(Pair(0, 6))
+        val planner = AndroidVisualPlanner()
+        val method = planner.javaClass.getDeclaredMethod(
+            "groupClustersIntoRuns",
+            List::class.java,
+            List::class.java
+        )
+        method.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val runs = method.invoke(planner, clusters, affectedRanges) as List<*>
+        assertEquals(1, runs.size)
+        val run = runs[0] as LineClusterSnapshot
+        assertFalse("Merged run must not be confident when any cluster is not confident",
+            run.shapingIdentityConfident)
+    }
+
+    @Test
     fun paragraphLocalLineIndexResetsAfterHardBreak() {
         val line0 = AndroidLayoutRevision.LineRange(
             startUtf8 = 0, endUtf8 = 20, startUtf16 = 0, endUtf16 = 20,

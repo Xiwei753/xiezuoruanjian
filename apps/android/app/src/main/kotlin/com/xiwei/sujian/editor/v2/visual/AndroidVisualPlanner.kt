@@ -44,7 +44,6 @@ class AndroidVisualPlanner {
         for ((start, end) in primaryRanges) {
             for (i in revision.lineRanges.indices) {
                 val lineRange = revision.lineRanges[i]
-                // Half-open overlap: [start, end) ∩ [lineRange.startUtf8, lineRange.endUtf8)
                 if (start < lineRange.endUtf8 && end > lineRange.startUtf8) {
                     affectedLines.add(i)
                 }
@@ -56,28 +55,9 @@ class AndroidVisualPlanner {
             val editLine = findLineForUtf8(revision, editByteStart)
             for (i in editLine until revision.lineRanges.size) {
                 affectedLines.add(i)
-                if (i > editLine && isParagraphBoundary(revision, i)) {
-                    break
-                }
             }
         }
         return affectedLines
-    }
-
-    /**
-     * Detect whether [lineIndex] is the first visual line of a new paragraph
-     * (i.e. the previous visual line ended with a hard break).
-     *
-     * This relies on [AndroidLayoutRevision.LineRange.endsWithHardBreak], which is set
-     * during revision construction by inspecting the source text — not by detecting byte
-     * gaps between adjacent visual lines. Android Layout's visual line endUtf8 is the
-     * position after the last character, and the next line's startUtf8 is normally
-     * contiguous; a `\n` character belongs to the text range and does not create a byte
-     * gap, so byte-gap-based detection would never match.
-     */
-    private fun isParagraphBoundary(revision: AndroidLayoutRevision, lineIndex: Int): Boolean {
-        if (lineIndex <= 0 || lineIndex >= revision.lineRanges.size) return false
-        return revision.lineRanges[lineIndex - 1].endsWithHardBreak
     }
 
     fun computeAffectedLineIndicesFromBothRevisions(
@@ -936,6 +916,8 @@ class AndroidVisualPlanner {
                         last.visualRectInDocument.right,
                         last.visualRectInDocument.bottom
                     )
+                    val allConfident = runClusters.all { it.shapingIdentityConfident }
+                    val mergedFingerprint = runClusters.joinToString("|") { it.shapingFingerprint }
                     runs.add(LineClusterSnapshot(
                         clusterId = first.clusterId,
                         documentByteStart = first.documentByteStart,
@@ -944,8 +926,8 @@ class AndroidVisualPlanner {
                         documentUtf16EndExclusive = last.documentUtf16EndExclusive,
                         sourceRectInLineImage = mergedSourceRect,
                         visualRectInDocument = mergedVisualRect,
-                        shapingFingerprint = first.shapingFingerprint,
-                        shapingIdentityConfident = first.shapingIdentityConfident
+                        shapingFingerprint = mergedFingerprint,
+                        shapingIdentityConfident = allConfident
                     ))
                 }
                 runStart = i
