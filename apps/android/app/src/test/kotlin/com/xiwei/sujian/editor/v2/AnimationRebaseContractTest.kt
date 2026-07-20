@@ -227,8 +227,6 @@ class AnimationRebaseContractTest {
             pgClass.getMethod("glyphCount")
             pgClass.getMethod("getFont", Int::class.javaPrimitiveType)
             pgClass.getMethod("getGlyphId", Int::class.javaPrimitiveType)
-            pgClass.getMethod("getGlyphX", Int::class.javaPrimitiveType)
-            pgClass.getMethod("getGlyphY", Int::class.javaPrimitiveType)
         } catch (_: ClassNotFoundException) {
         } catch (e: NoSuchMethodException) {
             fail("PositionedGlyphs method not found: ${e.message}")
@@ -397,5 +395,232 @@ class AnimationRebaseContractTest {
         assertEquals("Fingerprints without glyph positions must match", fp1, fp2)
         assertFalse("Fingerprint must not contain glyph X/Y separator pattern _x_y",
             fp1.contains(Regex("_\\d+_\\d+_\\d+")))
+    }
+
+    @Test
+    fun pendingRebaseFrameIncludesCursorRect() {
+        val engine = AndroidTextAnimationEngine(
+            AndroidVisualPlanner(),
+            VisualResourceStore()
+        )
+        val snapshot = makeSnapshot(1, 0, 0, 10)
+        val cursor = PreparedVisualTransaction.CursorTransition(
+            fromX = 5f, fromY = 0f, fromHeight = 20f,
+            toX = 50f, toY = 0f, toHeight = 20f,
+            shouldAnimate = true
+        )
+        val transaction = makeTransaction(
+            transactionId = 1L,
+            slices = listOf(
+                PreparedVisualTransaction.AnimatedSlice(
+                    role = SliceRole.Insert,
+                    snapshot = snapshot,
+                    sourceRect = android.graphics.Rect(0, 0, 100, 20),
+                    destinationRect = android.graphics.RectF(10f, 0f, 50f, 20f),
+                    startAlpha = 0f,
+                    endAlpha = 1f,
+                    clusterByteStart = 0,
+                    clusterByteEndExclusive = 10
+                )
+            ),
+            cursorTransition = cursor,
+            ownedSnapshotIds = setOf(1L),
+            referencedSnapshotIds = setOf(1L)
+        )
+        engine.registerSnapshots(mapOf(0 to snapshot), SnapshotOwner.OwnedByTransaction(1L))
+        engine.submit(transaction)
+
+        val rebaseFrame = engine.captureRebaseSnapshot(0)
+        assertNotNull("Rebase snapshot must not be null for Pending transaction", rebaseFrame)
+        assertNotNull("Rebase snapshot must include cursor rect from Pending transaction",
+            rebaseFrame!!.cursorRect)
+        assertEquals("Cursor rect must start at fromX of cursor transition",
+            5f, rebaseFrame.cursorRect!!.left, 0.01f)
+    }
+
+    @Test
+    fun referencedSnapshotIdsIsSubsetOfOwnedAfterSubmit() {
+        val store = VisualResourceStore()
+        val planner = AndroidVisualPlanner()
+        val engine = AndroidTextAnimationEngine(planner, store)
+
+        val snapshot1 = makeSnapshot(1, 0, 0, 10)
+        val snapshot2 = makeSnapshot(2, 0, 10, 20)
+
+        val transaction = makeTransaction(
+            transactionId = 100L,
+            slices = listOf(
+                PreparedVisualTransaction.AnimatedSlice(
+                    role = SliceRole.Insert,
+                    snapshot = snapshot1,
+                    sourceRect = android.graphics.Rect(0, 0, 100, 20),
+                    destinationRect = android.graphics.RectF(0f, 0f, 100f, 20f),
+                    startAlpha = 0f,
+                    endAlpha = 1f,
+                    clusterByteStart = 0,
+                    clusterByteEndExclusive = 10
+                )
+            ),
+            ownedSnapshotIds = setOf(1L, 2L),
+            referencedSnapshotIds = setOf(1L)
+        )
+
+        engine.registerSnapshots(mapOf(0 to snapshot1, 1 to snapshot2),
+            SnapshotOwner.OwnedByTransaction(100L))
+        engine.submit(transaction)
+
+        val active = engine.getActiveTransaction()
+        assertNotNull(active)
+        assertTrue("ownedSnapshotIds must be a superset of referencedSnapshotIds",
+            active!!.ownedSnapshotIds.containsAll(active.referencedSnapshotIds))
+        assertFalse("Unreferenced snapshot must be removed from ownedSnapshotIds",
+            active.ownedSnapshotIds.contains(2L))
+    }
+
+    @Test
+    fun deleteRebaseContinuesFromCurrentAlphaToZero() {
+        val rebaseState = SliceVisualState(
+            snapshotId = 1L,
+            role = SliceRole.Delete,
+            lineIndex = 0,
+            clusterByteStart = 0,
+            clusterByteEndExclusive = 10,
+            currentLeft = 10f, currentTop = 0f, currentRight = 50f, currentBottom = 20f,
+            currentAlpha = 0.3f
+        )
+        val planner = AndroidVisualPlanner()
+        val method = planner.javaClass.getDeclaredMethod(
+            "applyRebaseState",
+            PreparedVisualTransaction.AnimatedSlice::class.java,
+            SliceVisualState::class.java
+        )
+        method.isAccessible = true
+
+        val newSlice = PreparedVisualTransaction.AnimatedSlice(
+            role = SliceRole.Delete,
+            snapshot = makeSnapshot(1, 0, 0, 10),
+            sourceRect = android.graphics.Rect(0, 0, 100, 20),
+            destinationRect = android.graphics.RectF(10f, 0f, 50f, 20f),
+            startAlpha = 1f,
+            endAlpha = 0f,
+            clusterByteStart = 0,
+            clusterByteEndExclusive = 10
+        )
+
+        val rebased = method.invoke(planner, newSlice, rebaseState)
+            as PreparedVisualTransaction.AnimatedSlice
+
+        assertEquals("Delete rebase startAlpha must be current alpha",
+            0.3f, rebased.startAlpha, 0.01f)
+        assertEquals("Delete rebase endAlpha must be 0",
+            0f, rebased.endAlpha, 0.01f)
+    }
+
+    @Test
+    fun crossfadeOldRebaseContinuesFromCurrentAlphaToZero() {
+        val rebaseState = SliceVisualState(
+            snapshotId = 1L,
+            role = SliceRole.CrossfadeOld,
+            lineIndex = 0,
+            clusterByteStart = 0,
+            clusterByteEndExclusive = 10,
+            currentLeft = 10f, currentTop = 0f, currentRight = 50f, currentBottom = 20f,
+            currentAlpha = 0.4f
+        )
+
+        val planner = AndroidVisualPlanner()
+        val method = planner.javaClass.getDeclaredMethod(
+            "applyRebaseState",
+            PreparedVisualTransaction.AnimatedSlice::class.java,
+            SliceVisualState::class.java
+        )
+        method.isAccessible = true
+
+        val newSlice = PreparedVisualTransaction.AnimatedSlice(
+            role = SliceRole.CrossfadeOld,
+            snapshot = makeSnapshot(1, 0, 0, 10),
+            sourceRect = android.graphics.Rect(0, 0, 100, 20),
+            destinationRect = android.graphics.RectF(10f, 0f, 50f, 20f),
+            startAlpha = 1f,
+            endAlpha = 0f,
+            clusterByteStart = 0,
+            clusterByteEndExclusive = 10
+        )
+
+        val rebased = method.invoke(planner, newSlice, rebaseState)
+            as PreparedVisualTransaction.AnimatedSlice
+
+        assertEquals("CrossfadeOld rebase startAlpha must be current alpha",
+            0.4f, rebased.startAlpha, 0.01f)
+        assertEquals("CrossfadeOld rebase endAlpha must be 0",
+            0f, rebased.endAlpha, 0.01f)
+    }
+
+    @Test
+    fun rebaseOneToOnePreventsDuplicateAcrossThreeSlices() {
+        val rebaseSnapshot = VisualFrameSnapshot(
+            progress = 0.5f,
+            state = TransactionState.Rendering,
+            sliceVisualStates = listOf(
+                SliceVisualState(
+                    snapshotId = 1L, role = SliceRole.Insert, lineIndex = 0,
+                    clusterByteStart = 0, clusterByteEndExclusive = 3,
+                    currentLeft = 0f, currentTop = 0f, currentRight = 20f, currentBottom = 20f,
+                    currentAlpha = 0.5f
+                ),
+                SliceVisualState(
+                    snapshotId = 2L, role = SliceRole.Insert, lineIndex = 0,
+                    clusterByteStart = 3, clusterByteEndExclusive = 6,
+                    currentLeft = 20f, currentTop = 0f, currentRight = 40f, currentBottom = 20f,
+                    currentAlpha = 0.5f
+                )
+            ),
+            cursorRect = null
+        )
+
+        val usedRebaseIndices = mutableSetOf<Int>()
+        val matches = mutableListOf<Int?>()
+
+        for (queryIdx in 0 until 3) {
+            val match = rebaseSnapshot.sliceVisualStates.indices.firstOrNull { i ->
+                i !in usedRebaseIndices && rebaseSnapshot.sliceVisualStates[i].role == SliceRole.Insert
+            }
+            matches.add(match)
+            if (match != null) usedRebaseIndices.add(match)
+        }
+
+        val nonNullMatches = matches.filterNotNull()
+        assertEquals("Only 2 matches available for 2 rebase states", 2, nonNullMatches.size)
+        assertEquals("Each match must be unique", nonNullMatches.toSet().size, nonNullMatches.size)
+        assertNull("Third query must return null (no more rebase states)", matches[2])
+    }
+
+    @Test
+    fun shapeTextRunSignatureMatchesPublicApi() {
+        val shaperClassName = "android.graphics.text.TextRunShaper"
+        try {
+            val shaperClass = Class.forName(shaperClassName)
+            val shapeMethod = shaperClass.getMethod(
+                "shapeTextRun",
+                CharSequence::class.java,
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
+                Float::class.javaPrimitiveType,
+                Float::class.javaPrimitiveType,
+                Boolean::class.javaPrimitiveType,
+                android.graphics.Paint::class.java
+            )
+            assertNotNull("shapeTextRun must exist with correct signature", shapeMethod)
+            assertTrue("shapeTextRun must be static",
+                java.lang.reflect.Modifier.isStatic(shapeMethod.modifiers))
+            val returnType = shapeMethod.returnType
+            assertEquals("shapeTextRun must return PositionedGlyphs",
+                "android.graphics.text.PositionedGlyphs", returnType.name)
+        } catch (_: ClassNotFoundException) {
+        } catch (_: NoSuchMethodException) {
+            fail("TextRunShaper.shapeTextRun not found with expected public API signature")
+        }
     }
 }
