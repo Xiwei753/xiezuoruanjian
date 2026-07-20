@@ -7,6 +7,16 @@ import uniffi.writer_core.EditorSessionSnapshotDto
 import uniffi.writer_core.EditorTransactionCauseDto
 import uniffi.writer_core.EditorVisualIntentDto
 
+/**
+ * Session-scoped [EditorKernelBridge] that routes all commands through
+ * [AppServiceBridge.textEditSession*] with an explicit [sessionId].
+ *
+ * Boundary convention: Kotlin Int/Long ↔ Rust u64. The Rust TextEditSessionId is a u64;
+ * at the FFI boundary it becomes ULong. Byte offsets (Int in Kotlin) are widened to UInt
+ * for the FFI call. This bridge performs the widening; callers work in signed Int/Long
+ * throughout the platform code. Negative values must not reach this bridge — they indicate
+ * invalid offsets and must be caught at the pipeline level.
+ */
 class TextEditSessionBridge(
     private val appServiceBridge: AppServiceBridge,
     private val sessionId: ULong

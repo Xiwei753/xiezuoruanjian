@@ -11,6 +11,26 @@ import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import com.xiwei.sujian.editor.v2.host.TextEditSessionBridge
 
+/**
+ * Window-level coordinator that manages a single shared [SujianEditorView] and dispatches
+ * it among registered [EditableTextTarget]s.
+ *
+ * Session lifecycle model (per #541):
+ * - **Persistent content sessions** (chapter body, starmap node body): the session is
+ *   created on first [beginEdit] and kept alive across multiple edit/commit cycles.
+ *   [commitActiveEdit] performs a soft reset (cancels animation + invalidates composition)
+ *   without closing the Rust session, so the Undo/Redo stack and revision history survive.
+ *   The session is closed only on [unregisterTarget] or [releaseHost].
+ * - **Draft sessions** (project title, search query, short labels): the session is created
+ *   on [beginEdit] and closed on every [commitActiveEdit] or [cancelActiveEdit].
+ *   The final text is committed to the domain model in one shot; there is no Undo/Redo
+ *   across edits. This prevents draft Undo stacks from leaking between targets.
+ *
+ * Rebind: when [beginEdit] is called while another target is active, the coordinator
+ * commits or cancels the old target, then binds the shared host to the new target.
+ * The shared [SujianEditorView] is reused (not recreated) — only the kernel bridge and
+ * profile are swapped via [SujianEditorView.bindSession].
+ */
 class AnimatedTextEditorCoordinator(
     private val context: Context,
     private val appServiceBridge: AppServiceBridge

@@ -319,7 +319,10 @@ class AndroidEditorPipeline private constructor(
      *   only the changed preedit region animates.
      *
      * When [isVisualSame] is true, animation is suppressed (SYSTEM_SUPPRESSED) and only
-     * the cursor animates — the preedit text has not visually changed.
+     * the cursor animates — the preedit text has not visually changed. However, the
+     * [mirrorUpdate] lambda is still invoked (via [AndroidTextAnimationEngine.prepareAndSubmit])
+     * to keep the mirror's composition overlay in sync with the IME state, even when
+     * no text animation runs.
      */
     fun applyCompositionUpdateAnimated(
         replaceStartUtf8: Int,

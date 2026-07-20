@@ -2,6 +2,19 @@ package com.xiwei.sujian.editor.v2.input
 
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 
+/**
+ * Bidirectional UTF-8 ↔ UTF-16 offset mapping for a fixed text snapshot.
+ *
+ * Alignment guarantee: all conversions operate at code-point boundaries, not arbitrary
+ * byte offsets. UTF-8 byte offsets that fall inside a multi-byte sequence are snapped
+ * to the nearest code-point boundary via binary search. This is essential because the
+ * Rust EditorKernel uses UTF-8 byte offsets exclusively, while Android's Layout and
+ * InputConnection APIs use UTF-16 offsets — every cross-boundary call must go through
+ * this mapping to avoid misaligned offsets that would produce invalid edits.
+ *
+ * Thread constraint: not thread-safe; each instance is bound to a single text snapshot
+ * and must not be shared across threads. Rebuild after any text mutation.
+ */
 class AndroidTextIndexMap private constructor(
     private val text: String
 ) {

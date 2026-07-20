@@ -207,6 +207,13 @@ class AndroidInputAdapter(
         return true
     }
 
+    // Composition session state — tracks the Rust-side composition session lifecycle.
+    // sessionId: unique ID returned by EditorKernel on beginComposition; 0 means no session.
+    // baseRevision: the editor revision at which this composition session was started.
+    //   Used to detect stale composition operations (kernel rejects mismatched revisions).
+    // generation: monotonic counter incremented on each updateComposition call; the kernel
+    //   uses this to ensure updates arrive in order and match the expected generation.
+    //   All three are cleared atomically in [clearCompositionState] on commit/cancel/failure.
     private var compositionSessionId: Long = 0L
     private var compositionBaseRevision: Long = 0L
     private var compositionGeneration: UInt = 0u
@@ -239,6 +246,21 @@ class AndroidInputAdapter(
         return Triple(compositionSessionId, compositionBaseRevision, compositionGeneration.toLong())
     }
 
+    /**
+     * Handle an IME composition update (preedit text changed).
+     *
+     * Ordering invariant: the Rust kernel is updated first (sendUpdateCompositionToKernel),
+     * then the platform mirror is updated (via the mirrorUpdate lambda passed to
+     * applyCompositionUpdateAnimated). If the kernel rejects the update, the composition
+     * is cleared and the pipeline reloads — the mirror must not be left in a state where
+     * it shows preedit text that the kernel doesn't know about.
+     *
+     * Animation path: uses [AndroidEditorPipeline.applyCompositionUpdateAnimated] which
+     * constructs a platform-side VisualIntent (not Rust's), because the platform knows
+     * the exact old/new preedit text and can detect visual-same (old == new) to suppress
+     * unnecessary animation, and can select animation mode by grapheme characteristics
+     * rather than Rust's generic byte-count heuristic.
+     */
     fun handleCompositionUpdate(preeditText: String, newCursorPosition: Int) {
         if (currentProfile.newlinePolicy == NewlinePolicy.FORBID && preeditText.contains('\n')) {
             return
@@ -340,6 +362,15 @@ class AndroidInputAdapter(
         sendFinishCompositionToKernel()
     }
 
+    /**
+     * Cancel the active composition.
+     *
+     * Ordering invariant: the platform animation (fade-out of the preedit) is submitted
+     * *before* the kernel cancel call completes — the visual transition starts immediately
+     * while the kernel state is being reconciled. If the kernel cancel fails, the pipeline
+     * reloads from the kernel snapshot to restore consistency, but the visual cancel has
+     * already been initiated and cannot be revoked.
+     */
     fun handleCompositionCancel() {
         if (!isComposing) return
 

@@ -22,6 +22,11 @@ impl TextEditSessionId {
 }
 
 /// 文字编辑会话 — 独立持有 EditorKernel、revision、选区、Undo/Redo 和 composition 状态。
+///
+/// [generation] 在每次 [reset_session] 时单调递增，用于使过期的 composition session
+/// 失效——平台端持有的 composition generation 必须与会话当前 generation 匹配，
+/// 否则 updateComposition/finishComposition/cancelComposition 会被内核拒绝。
+/// 这防止了异步 composition 操作写入已被 reset 的会话。
 pub struct TextEditSession {
     pub kernel: EditorKernel,
     pub session_id: TextEditSessionId,

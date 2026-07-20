@@ -57,6 +57,13 @@ class AndroidInputConnection(
         return true
     }
 
+    /**
+     * Delete text around the cursor. [beforeLength]/[afterLength] are in UTF-16 code units
+     * (Android InputConnection convention), not UTF-8 bytes. They must be converted to
+     * UTF-8 byte ranges before sending to the Rust kernel, which operates exclusively in
+     * UTF-8 half-open intervals. The conversion goes through [AndroidTextIndexMap] which
+     * snaps to code-point boundaries.
+     */
     override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
         if (beforeLength == 0 && afterLength == 0) return true
         if (adapter.isComposing()) {
