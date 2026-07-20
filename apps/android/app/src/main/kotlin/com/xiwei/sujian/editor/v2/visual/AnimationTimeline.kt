@@ -94,6 +94,9 @@ data class VisualFrameSnapshot(
     val progress: Float,
     val state: TransactionState,
     val sliceVisualStates: List<SliceVisualState> = emptyList(),
+    /** Current cursor rect at [progress]. Used by rebase to set the next transaction's
+     *  [CursorTransition.fromX/fromY/fromHeight] from the on-screen position rather than
+     *  the old logical endpoint — preventing cursor jumps during rapid consecutive input. */
     val cursorRect: android.graphics.RectF? = null
 )
 

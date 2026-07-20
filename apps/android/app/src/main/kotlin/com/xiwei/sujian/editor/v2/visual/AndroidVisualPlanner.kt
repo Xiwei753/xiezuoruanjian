@@ -1366,6 +1366,19 @@ class AndroidVisualPlanner {
                 if (idx >= 0) matchedRebaseIndices.add(idx)
             }
         }
+        // Surviving old slices: old-transaction slices that were NOT matched to any new slice.
+        // These must continue their animation independently to avoid visual discontinuity.
+        //
+        // Three categories:
+        // 1. Fading-out (Delete/CrossfadeOld) with alpha > 0.01: continue fading from current
+        //    alpha to 0. Below 0.01 the visual difference is negligible, so the slice is dropped.
+        // 2. Move with incomplete position or alpha: continue moving/fading to final position.
+        // 3. Fading-in (Insert/CrossfadeNew) with alpha < 0.99: continue fading from current
+        //    alpha toward 1. Fully opaque Insert/CrossfadeNew (alpha >= 0.99) that no new slice
+        //    references are *implicitly* dropped — they become static text rendered by the normal
+        //    layout, so no surviving slice is needed. This is intentional: an old Insert that
+        //    reached near-full opacity and is not referenced by the new transaction has already
+        //    been "absorbed" into the static new-layout text.
         val survivingOldSlices = mutableListOf<PreparedVisualTransaction.AnimatedSlice>()
         for ((stateIdx, state) in rebaseSnapshot.sliceVisualStates.withIndex()) {
             if (stateIdx in matchedRebaseIndices) continue
