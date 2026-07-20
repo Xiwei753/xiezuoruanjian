@@ -978,6 +978,10 @@ class AndroidVisualPlanner {
                             }
                         }
                     } else {
+                        // Fallback: when no per-cluster matches exist (e.g. empty cluster
+                        // list or offset mapper returns null for all clusters), animate the
+                        // entire line as a single Move unit. This preserves visual continuity
+                        // for line-level geometry changes where cluster data is unavailable.
                         animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                             role = SliceRole.Move,
                             snapshot = newSnapshot,
@@ -1260,9 +1264,11 @@ class AndroidVisualPlanner {
                     }
                 }
                 // Safety fallback: hard break stops reflow at paragraph boundary.
-                // This is logically redundant with the earlier checks inside both the
-                // geometryChanged and !geometryChanged branches, but serves as a guard
-                // in case the branching logic is restructured.
+                // The two branches above already check endsWithHardBreak before breaking,
+                // but this loop-level guard ensures the scan cannot continue past a paragraph
+                // boundary even if the branching logic is restructured or a new branch is
+                // added that omits the check. All three checks are logically redundant but
+                // serve as independent safety nets.
                 if (i > scanStart && (oldLine.endsWithHardBreak || newLine.endsWithHardBreak)) {
                     break
                 }

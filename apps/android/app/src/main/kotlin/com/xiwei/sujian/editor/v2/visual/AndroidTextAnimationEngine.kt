@@ -99,8 +99,12 @@ class AndroidTextAnimationEngine(
         if (oldTransaction != null) {
             val oldOwner = SnapshotOwner.OwnedByTransaction(oldTransaction.transactionId)
 
-            // Snapshots referenced by the new transaction that were owned by the old transaction
-            // but not newly captured: transfer ownership so they survive the old transaction's release.
+            // Inherit old-transaction snapshots that the new transaction actually references.
+            // These were captured by the old transaction but are still needed by the new one
+            // (e.g. a surviving Delete slice that continues fading out an old snapshot).
+            // Ownership is transferred so they survive the old transaction's release.
+            // Only snapshots in referencedSnapshotIds are transferred — unreferenced old
+            // snapshots are released below, preventing unbounded accumulation during rapid input.
             val referencedIds = preparedAnimation.referencedSnapshotIds
             val inheritedIds = oldTransaction.ownedSnapshotIds
                 .intersect(referencedIds)

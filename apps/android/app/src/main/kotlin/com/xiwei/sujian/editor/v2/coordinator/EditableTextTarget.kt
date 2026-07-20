@@ -5,6 +5,19 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 
+/**
+ * Registration descriptor for an editable text region within the window.
+ *
+ * Per #541: each target represents a UI/business object (project title, chapter body,
+ * search query, starmap node, etc.) that can be activated for editing via
+ * [AnimatedTextEditorCoordinator.beginEdit]. The [targetId] is a namespaced string
+ * (e.g. "chapter-title:{chapterId}") that identifies the business object; it is
+ * separate from the Rust TextEditSessionId which represents an editing transaction.
+ *
+ * [isPersistent] determines the session lifecycle: persistent targets (chapter body)
+ * keep their session across edits; draft targets (project title) close on every commit.
+ * [commitPolicy] controls when the coordinator commits text to the domain model.
+ */
 class EditableTextTarget(
     val targetId: String,
     profile: TextEditorProfile = TextEditorProfile(),

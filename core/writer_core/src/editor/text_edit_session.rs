@@ -117,6 +117,13 @@ impl TextEditSessionRegistry {
         self.sessions.remove(&session_id.0).is_some()
     }
 
+    /// Reset a session's text and cursor, incrementing generation first.
+    ///
+    /// Note: the FFI entry point (`app_service::text_edit_session_reset`) performs its own
+    /// generation increment via `with_session_in_registry` and does NOT call this method.
+    /// This method exists for direct registry usage (e.g. tests). Both paths follow the
+    /// same invariant: generation is incremented before load_text so in-flight composition
+    /// operations with the old generation are rejected.
     pub fn reset_session(
         &mut self,
         session_id: TextEditSessionId,

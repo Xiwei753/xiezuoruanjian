@@ -215,6 +215,14 @@ class SujianEditorView @JvmOverloads constructor(
         invalidate()
     }
 
+    /**
+     * Main rendering loop: draw one frame and request the next if animation is still active.
+     *
+     * The invalidate() at the end triggers a new onDraw on the next vsync, creating a
+     * self-sustaining frame loop as long as [hasActiveAnimation] is true. When the
+     * animation completes (checked in [AndroidEditorPipeline.drawFrame] via
+     * [AndroidTextAnimationEngine.completeIfFinished]), the loop stops naturally.
+     */
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         canvas.save()
@@ -342,6 +350,14 @@ class SujianEditorView @JvmOverloads constructor(
         }
     }
 
+    /**
+     * Cancel active animation when the window loses focus.
+     *
+     * Animation Bitmaps hold references to the View's Canvas; continuing to render after
+     * window focus loss can produce stale frames or leak hardware resources. Cancelling
+     * here is safe because the user cannot observe the animation while the window is not
+     * focused — the next focus gain will render the final static state from the mirror.
+     */
     override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
         super.onWindowFocusChanged(hasWindowFocus)
         if (!hasWindowFocus) {

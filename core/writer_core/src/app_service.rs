@@ -1266,6 +1266,9 @@ impl WriterAppService {
         .unwrap_or_else(|| crate::api::EditorEditResultDto::stale_fallback())
     }
 
+    /// Load text into a session, replacing all content. Generation is incremented before
+    /// load_text so that any in-flight composition operations with the old generation are
+    /// rejected — same invariant as text_edit_session_reset.
     pub fn text_edit_session_load_text(
         &self,
         session_id: u64,

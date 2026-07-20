@@ -210,6 +210,12 @@ class AndroidEditorPipeline private constructor(
                 newAffected.sumOf { it.second - it.first },
                 oldAffected.sumOf { it.second - it.first }
             )
+            // Animation mode selection for composition: uses grapheme cluster count (not byte
+            // count like Rust's generic heuristic) because the platform knows the exact preedit
+            // text and can account for grapheme characteristics. Newlines force LineReflow
+            // (multi-line preedit); complex graphemes (combining marks, surrogates) force
+            // ClusterAnimation for correct visual matching; short preedit uses GlyphAnimation
+            // for per-character fade-in/out; longer preedit uses RunAnimation for efficiency.
             val animationMode = when {
                 byteCount == 0 -> uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED
                 byteCount <= 24 -> uniffi.writer_core.AnimationModeDto.GLYPH_ANIMATION
