@@ -30,6 +30,13 @@ import uniffi.writer_core.EditorTransactionCauseDto
  *
  * Both normal text edits and IME composition update/commit/cancel go through the same
  * [AndroidTextAnimationEngine] — composition animations are not a separate code path.
+ *
+ * Two-level visual transaction architecture: edits produce a [PreparedVisualTransaction] with
+ * (1) per-cluster Bitmap slices for the edit paragraph (Insert/Delete/Move/Crossfade) and
+ * (2) [PreparedVisualTransaction.BlockShift] entries for subsequent paragraphs that only shifted
+ * vertically. BlockShifts apply a uniform Y translation to the static new-layout text without
+ * creating per-line Bitmaps, preventing unbounded memory allocation when editing near the top
+ * of a long document.
  */
 class AndroidEditorPipeline private constructor(
     val mirror: DisplayTextMirror,
@@ -301,6 +308,15 @@ class AndroidEditorPipeline private constructor(
         return PipelineOutput.Edited(result)
     }
 
+    /**
+     * Apply a composition update using a caller-constructed [VisualIntent].
+     *
+     * This is the low-level entry point used when the caller (typically the input adapter)
+     * has already constructed the appropriate [VisualIntent] — e.g. when Rust provides the
+     * visual intent directly. For the common case where the platform constructs its own
+     * [VisualIntent] based on old/new preedit text, use [applyCompositionUpdateAnimated]
+     * instead, which handles visual-same suppression and animation mode selection.
+     */
     fun applyCompositionUpdate(
         visualIntent: VisualIntent,
         mirrorUpdate: (() -> Unit)? = null
@@ -429,6 +445,15 @@ class AndroidEditorPipeline private constructor(
         )
     }
 
+    /**
+     * Request a layout rebuild after composition state changes.
+     *
+     * Composition overlay changes (preedit text, underline) are applied to the mirror's
+     * Spannable but do not automatically trigger a layout rebuild. This method must be
+     * called after composition updates so that [AndroidLayoutEngine] produces a new
+     * [AndroidLayoutRevision] reflecting the updated composition overlay — without it,
+     * the renderer would draw the old composition state.
+     */
     fun onCompositionUpdated() {
         layoutEngine.requestLayout()
     }
@@ -442,6 +467,11 @@ class AndroidEditorPipeline private constructor(
      * → preedit underline → static cursor.
      */
     fun drawFrame(canvas: android.graphics.Canvas, searchHighlightsUtf16: List<Pair<Int, Int>>, viewportWidth: Int, viewportHeight: Int, scrollX: Float, scrollY: Float) {
+        // System.nanoTime() / 1_000_000 provides a monotonic millisecond clock consistent
+        // with AnimationTimeline's internal time base. Must use System.nanoTime rather than
+        // System.currentTimeMillis: the latter can jump backwards on NTP adjustments, which
+        // would cause AnimationTimeline.progress to return values < 0 or regress from a
+        // previously returned value, breaking the monotonic progress invariant.
         val frameTimeMs = System.nanoTime() / 1_000_000
         val layout = layoutEngine.getLayout()
         if (layout != null) {
@@ -525,10 +555,17 @@ class AndroidEditorPipeline private constructor(
         }
     }
 
+    /** Cancel the active animation transaction and release its snapshots.
+     *  Used when the host loses focus or the window is backgrounded — the active
+     *  animation is abandoned and the display reverts to the static new-layout text. */
     fun cancelActiveTransaction() {
         animationEngine.cancel()
     }
 
+    /** Release all animation resources (active transaction + all session-owned Bitmaps).
+     *  Called when the host is permanently destroyed — unlike [resetForReuse], this uses
+     *  [AndroidTextAnimationEngine.release] which calls [VisualResourceStore.releaseAll]
+     *  to ensure no Bitmaps survive after the host is removed from the composition tree. */
     fun releaseAllResources() {
         animationEngine.release()
     }
@@ -701,6 +738,14 @@ class AndroidEditorPipeline private constructor(
      * ResourceStore, InputAdapter) so the shared host can be rebound without recreating
      * the full pipeline. Per #541, this corresponds to the resetForReuse lifecycle step
      * when the AnimatedTextEditorCoordinator switches between EditableTextTargets.
+     *
+     * Uses [AndroidTextAnimationEngine.cancel] (not [resetForSession]) because the
+     * ResourceStore is shared across targets — [cancel] releases only the active
+     * transaction's snapshots, while [resetForSession] would release ALL snapshots
+     * including those from completed transactions that may still be referenced by
+     * the renderer. The mirror is immediately reloaded with the new target's content,
+     * so stale Bitmaps from the old target are harmless (they will be replaced by new
+     * captures on the next edit).
      */
     fun resetForReuse() {
         animationEngine.cancel()
