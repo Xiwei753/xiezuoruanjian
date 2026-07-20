@@ -251,13 +251,15 @@ class AndroidLineSnapshotBuilder {
      * API 31+ shaping fingerprint using PositionedGlyphs.
      *
      * Calls the public API [android.graphics.text.TextRunShaper.shapeTextRun] directly
-     * (no reflection) with full line context. The target range is the cluster within the
-     * line text; the context range is the entire line text. This natively supports
-     * "target range + full context" shaping, so contextual forms (Arabic, Indic, ligatures)
-     * are correctly captured.
+     * with context limited to the cluster's bidi run. The target range is the cluster;
+     * the context range is the contiguous bidi run that contains the cluster (scanned via
+     * [Layout.isRtlCharAt]). This ensures correct contextual shaping for mixed-direction
+     * lines (e.g. LTR paragraph with embedded Arabic) — shaping with full-line context
+     * but the wrong direction would produce incorrect glyphs.
      *
-     * Returns [confident] = true ONLY when the shaping path succeeds and produces at least
-     * one glyph. Falls back to hash-based fingerprint (confident = false) on any failure.
+     * Returns [confident] = true when the shaping path succeeds and produces at least
+     * one glyph AND the context is correctly bounded to the bidi run. Falls back to
+     * hash-based fingerprint (confident = false) on any failure.
      */
     private fun buildShapingFingerprintApi31(clusterText: String, layout: Layout, lineIndex: Int, clusterStartUtf16: Int, contextHash: Int): Pair<String, Boolean> {
         if (android.os.Build.VERSION.SDK_INT < 31) {
@@ -277,15 +279,17 @@ class AndroidLineSnapshotBuilder {
             } else {
                 layout.getParagraphDirection(lineIndex) == Layout.DIR_RIGHT_TO_LEFT
             }
-            val paragraphIsRtl = layout.getParagraphDirection(lineIndex) == Layout.DIR_RIGHT_TO_LEFT
-            val mixedBidiLine = isRtl != paragraphIsRtl
+
+            val (bidiRunLocalStart, bidiRunLocalEnd) = findBidiRunBounds(
+                layout, lineIndex, clusterStartUtf16, lineStart, lineEnd
+            )
 
             val positionedGlyphs = android.graphics.text.TextRunShaper.shapeTextRun(
                 lineText,
                 clusterLocalStart,
                 clusterCount,
-                0,
-                lineText.length,
+                bidiRunLocalStart,
+                bidiRunLocalEnd - bidiRunLocalStart,
                 0f,
                 0f,
                 isRtl,
@@ -308,10 +312,47 @@ class AndroidLineSnapshotBuilder {
 
             sb.append("_ctx_")
             sb.append(contextHash)
-            val confident = !mixedBidiLine
-            return Pair(sb.toString(), confident)
+            return Pair(sb.toString(), true)
         } catch (_: Exception) {
             return Pair("${clusterText.hashCode()}_${contextHash}", false)
         }
+    }
+
+    /**
+     * Find the UTF-16 bounds of the bidi run containing [clusterStartUtf16] within the
+     * given visual line. Scans forward and backward from the cluster using
+     * [Layout.isRtlCharAt] to find where the text direction changes. Returns local
+     * offsets relative to [lineStart].
+     *
+     * This limits the shaping context to the actual bidi run, so that clusters in a
+     * mixed-direction line (e.g. LTR paragraph with embedded Arabic) are shaped with
+     * the correct context and direction, enabling [shapingIdentityConfident] = true
+     * even in mixed bidi lines.
+     */
+    private fun findBidiRunBounds(
+        layout: Layout,
+        lineIndex: Int,
+        clusterStartUtf16: Int,
+        lineStart: Int,
+        lineEnd: Int
+    ): Pair<Int, Int> {
+        val text = layout.text
+        val isRtl = if (clusterStartUtf16 < text.length) {
+            layout.isRtlCharAt(clusterStartUtf16)
+        } else {
+            layout.getParagraphDirection(lineIndex) == Layout.DIR_RIGHT_TO_LEFT
+        }
+        var runStart = clusterStartUtf16
+        while (runStart > lineStart) {
+            val prev = runStart - 1
+            if (prev < text.length && layout.isRtlCharAt(prev) != isRtl) break
+            runStart = prev
+        }
+        var runEnd = clusterStartUtf16 + 1
+        while (runEnd < lineEnd && runEnd < text.length) {
+            if (layout.isRtlCharAt(runEnd) != isRtl) break
+            runEnd++
+        }
+        return Pair(runStart - lineStart, runEnd - lineStart)
     }
 }

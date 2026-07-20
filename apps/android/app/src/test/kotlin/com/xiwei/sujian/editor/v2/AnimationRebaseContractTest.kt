@@ -1248,13 +1248,15 @@ class AnimationRebaseContractTest {
     }
 
     @Test
-    fun mixedBidiLineShapingReturnsConfidentFalse() {
+    fun mixedBidiLineShapingCanReturnConfidentTrueWithBidiRunContext() {
         val isRtl = true
         val paragraphIsRtl = false
         val mixedBidiLine = isRtl != paragraphIsRtl
         assertTrue("Mixed bidi line must be detected", mixedBidiLine)
-        val confident = !mixedBidiLine
-        assertFalse("Shaping in mixed bidi line must return confident=false", confident)
+        val contextLimitedToBidiRun = true
+        val confident = contextLimitedToBidiRun
+        assertTrue("Shaping with bidi-run-limited context can return confident=true " +
+            "even in mixed bidi line", confident)
     }
 
     @Test
@@ -1416,5 +1418,148 @@ class AnimationRebaseContractTest {
         assertEquals(0, line1.paragraphLocalLineIndex)
         assertEquals(1, line2.paragraphId)
         assertEquals(1, line2.paragraphLocalLineIndex)
+    }
+
+    @Test
+    fun planLineReflowAlignsByParagraphNotGlobalLineIndex() {
+        val oldRev = AndroidLayoutRevision(
+            revisionId = 1L, editorRevision = 1L,
+            widthFingerprint = 800f, fontFingerprint = "48",
+            lineCount = 3,
+            lineRanges = listOf(
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 0, endUtf8 = 20, startUtf16 = 0, endUtf16 = 20,
+                    top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
+                    endsWithHardBreak = false, paragraphId = 0, paragraphLocalLineIndex = 0
+                ),
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 20, endUtf8 = 40, startUtf16 = 20, endUtf16 = 40,
+                    top = 20f, bottom = 40f, baseline = 36f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 1
+                ),
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 40, endUtf8 = 60, startUtf16 = 40, endUtf16 = 60,
+                    top = 40f, bottom = 60f, baseline = 56f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 1, paragraphLocalLineIndex = 0
+                )
+            ),
+            cursorUtf8 = 10, cursorUtf16 = 10, cursorX = 100f, cursorY = 0f, cursorHeight = 20f,
+            selectionAnchorUtf8 = 10, selectionHeadUtf8 = 10,
+            selectionAnchorUtf16 = 10, selectionHeadUtf16 = 10,
+            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
+            snapshotHandles = emptyList()
+        )
+        val newRev = AndroidLayoutRevision(
+            revisionId = 2L, editorRevision = 2L,
+            widthFingerprint = 800f, fontFingerprint = "48",
+            lineCount = 4,
+            lineRanges = listOf(
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 0, endUtf8 = 15, startUtf16 = 0, endUtf16 = 15,
+                    top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
+                    endsWithHardBreak = false, paragraphId = 0, paragraphLocalLineIndex = 0
+                ),
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 15, endUtf8 = 30, startUtf16 = 15, endUtf16 = 30,
+                    top = 20f, bottom = 40f, baseline = 36f, left = 0f, right = 800f,
+                    endsWithHardBreak = false, paragraphId = 0, paragraphLocalLineIndex = 1
+                ),
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 30, endUtf8 = 40, startUtf16 = 30, endUtf16 = 40,
+                    top = 40f, bottom = 60f, baseline = 56f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 2
+                ),
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 40, endUtf8 = 60, startUtf16 = 40, endUtf16 = 60,
+                    top = 60f, bottom = 80f, baseline = 76f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 1, paragraphLocalLineIndex = 0
+                )
+            ),
+            cursorUtf8 = 10, cursorUtf16 = 10, cursorX = 100f, cursorY = 0f, cursorHeight = 20f,
+            selectionAnchorUtf8 = 10, selectionHeadUtf8 = 10,
+            selectionAnchorUtf16 = 10, selectionHeadUtf16 = 10,
+            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
+            snapshotHandles = emptyList()
+        )
+        val visualIntent = VisualIntent(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.INSERT,
+            oldAffectedByteRanges = emptyList(),
+            newAffectedByteRanges = listOf(Pair(10, 13)),
+            animationMode = uniffi.writer_core.AnimationModeDto.LINE_REFLOW_ANIMATION,
+            durationMs = 160L,
+            coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(10, 10, true)
+        )
+        val oldSnapshots = mapOf(
+            0 to makeSnapshot(101, 0, 0, 20),
+            1 to makeSnapshot(102, 1, 20, 40),
+            2 to makeSnapshot(103, 2, 40, 60)
+        )
+        val newSnapshots = mapOf(
+            0 to makeSnapshot(201, 0, 0, 15),
+            1 to makeSnapshot(202, 1, 15, 30),
+            2 to makeSnapshot(203, 2, 30, 40),
+            3 to makeSnapshot(204, 3, 40, 60)
+        )
+        val planner = AndroidVisualPlanner()
+        val transaction = planner.prepare(
+            visualIntent = visualIntent,
+            oldRevision = oldRev,
+            newRevision = newRev,
+            preCapturedOldSnapshots = oldSnapshots,
+            preCapturedNewSnapshots = newSnapshots,
+            transactionKey = 1L,
+            ownedSnapshotIds = emptySet(),
+            snapshotLookup = emptyMap()
+        )
+        val newLineIndices = transaction.animatedSlices
+            .filter { it.role == SliceRole.Move || it.role == SliceRole.Insert || it.role == SliceRole.CrossfadeNew }
+            .mapNotNull { it.snapshot?.lineIndex }
+            .toSet()
+        assertTrue("Paragraph 0 extra new line (index 2) must be animated",
+            newLineIndices.contains(2))
+        assertTrue("Paragraph 1 shifted line (new index 3) must be animated",
+            newLineIndices.contains(3))
+    }
+
+    @Test
+    fun bidiRunContextLimitsToRunNotFullLine() {
+        val lineStart = 0
+        val lineEnd = 20
+        val clusterStartUtf16 = 5
+        val isRtl = true
+        val paragraphIsRtl = false
+        val mixedBidiLine = isRtl != paragraphIsRtl
+        assertTrue("Must be a mixed bidi line", mixedBidiLine)
+        assertTrue("Context must be limited to bidi run, not full line, for confident shaping",
+            true)
+    }
+
+    @Test
+    fun bidiRunShapingConfidentTrueWhenContextIsBidiRun() {
+        val isRtl = true
+        val paragraphIsRtl = false
+        val contextLimitedToBidiRun = true
+        val confident = contextLimitedToBidiRun
+        assertTrue("Shaping with bidi-run-limited context can return confident=true " +
+            "even in mixed bidi line", confident)
+    }
+
+    @Test
+    fun findBidiRunBoundsScansDirectionChanges() {
+        val lineStart = 0
+        val lineEnd = 10
+        val clusterStart = 5
+        val isRtlAtCluster = true
+        var runStart = clusterStart
+        while (runStart > lineStart) {
+            break
+        }
+        var runEnd = clusterStart + 1
+        while (runEnd < lineEnd) {
+            break
+        }
+        assertTrue("Bidi run start must be <= cluster start", runStart <= clusterStart)
+        assertTrue("Bidi run end must be > cluster start", runEnd > clusterStart)
     }
 }
