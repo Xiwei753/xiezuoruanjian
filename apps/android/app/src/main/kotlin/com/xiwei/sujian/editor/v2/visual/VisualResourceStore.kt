@@ -75,6 +75,19 @@ class VisualResourceStore {
         snapshots.clear()
     }
 
+    /**
+     * Transfer ownership of a snapshot from its current owner to [toOwner].
+     *
+     * Used during rebase in [AndroidTextAnimationEngine.submit]: when a new transaction
+     * references snapshots from the old transaction (e.g. a surviving Delete slice), ownership
+     * is transferred so the Bitmap survives the old transaction's release. This is an ownership
+     * *change* (not a duplicate release), preserving the single-release invariant.
+     *
+     * Returns false if the snapshot does not exist (already released or never registered).
+     * Does NOT check whether the current owner matches any particular identity — the caller
+     * (Engine.submit) is responsible for ensuring the transfer is valid (the snapshot is
+     * currently owned by the old transaction and the new transaction needs it).
+     */
     fun transferOwnership(fromSnapshotId: Long, toOwner: SnapshotOwner): Boolean {
         val entry = snapshots[fromSnapshotId] ?: return false
         entry.owner = toOwner

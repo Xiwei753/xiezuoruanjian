@@ -253,6 +253,18 @@ class AndroidEditorPipeline private constructor(
         ))
     }
 
+    /**
+     * Apply an [EditResult] from the Rust kernel via the animation pipeline.
+     *
+     * Composition-override invariant: [AndroidTextAnimationEngine.prepareAndSubmit] is the
+     * sole entry point for all visual state transitions — normal edits, composition updates,
+     * composition commits, and composition cancels all go through the same animation engine.
+     * There is no separate "fast path" that bypasses animation for composition or system-
+     * suppressed edits, because even suppressed edits must still update the mirror and layout
+     * (prepareAndSubmit handles this internally by calling mirrorUpdate + requestLayout when
+     * animation is suppressed). Bypassing prepareAndSubmit would leave the display showing
+     * stale text.
+     */
     fun applyEditResult(
         result: EditResult,
         beforePatch: (() -> Unit)? = null
@@ -577,6 +589,13 @@ class AndroidEditorPipeline private constructor(
         layoutEngine.requestLayout()
     }
 
+    /** Reset animation state after loading text from the kernel.
+     *  Uses [AndroidTextAnimationEngine.cancel] (not [resetForSession]) because loadText
+     *  replaces the mirror content atomically — the old session's Bitmaps are no longer
+     *  visually relevant, but the resource store may still hold snapshots from completed
+     *  transactions that will be garbage-collected naturally. [cancel] releases only the
+     *  active transaction's snapshots; [releaseAllResources] is reserved for host destruction
+     *  where no future rendering will occur. */
     fun resetAfterLoad() {
         animationEngine.cancel()
     }
