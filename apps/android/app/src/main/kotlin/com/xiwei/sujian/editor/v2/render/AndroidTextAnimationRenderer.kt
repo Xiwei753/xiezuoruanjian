@@ -61,23 +61,29 @@ class AndroidTextAnimationRenderer {
     }
 
     /**
-     * Collect the destination regions of all animated slices for static text hole-punching.
+     * Collect the destination regions of animated slices for static text hole-punching.
+     *
+     * Only "appearing" roles (Insert, Move, CrossfadeNew) punch holes in the static
+     * new-layout text. These slices draw new-layout content at [slice.destinationRect],
+     * so the static renderer must not also draw there (double-rendering).
+     *
+     * "Disappearing" roles (Delete, CrossfadeOld) do NOT punch holes. Their
+     * [slice.destinationRect] is the *old* position; the new layout may have shifted
+     * text there that must remain visible behind the fading-out slice. Punching a hole
+     * would hide that shifted text, creating a gap once the fade completes.
      *
      * Constraint: each region must be as small as possible — ideally the exact cluster
-     * bounding box — because the static renderer clips out these regions entirely.
-     * When a Move slice spans from one line to the next, merging source and destination
-     * into a single bounding rect can cover nearly two full lines, causing non-animated
-     * text in between to disappear during the animation.
-     *
-     * Currently returns only [slice.destinationRect]; for cross-line Moves this is the
-     * target position only (not the source), which is safe. Source-position holes are
-     * intentionally NOT punched because they would require separate small rects per source
-     * cluster — a merged source+destination bounding rect would swallow entire lines of
-     * non-animated text between the source and destination positions.
+     * bounding box. When a Move slice spans from one line to the next, merging source
+     * and destination into a single bounding rect can cover nearly two full lines,
+     * causing non-animated text in between to disappear during the animation.
+     * Source-position holes ([slice.fromDestinationRect]) are intentionally NOT punched
+     * because the new layout's text at the source position should remain visible and
+     * will be gradually revealed as the Move slice slides away.
      */
     fun computeAnimatedSliceRegions(transaction: PreparedVisualTransaction): List<android.graphics.RectF> {
         val regions = mutableListOf<android.graphics.RectF>()
         for (slice in transaction.animatedSlices) {
+            if (slice.role == SliceRole.Delete || slice.role == SliceRole.CrossfadeOld) continue
             val srcRect = slice.sourceRect
             if (srcRect.width() <= 0 || srcRect.height() <= 0) continue
             regions.add(android.graphics.RectF(slice.destinationRect))
