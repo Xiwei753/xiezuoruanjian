@@ -127,6 +127,11 @@ class AndroidLayoutEngine(
             // This is the only reliable way to detect paragraph boundaries because
             // Android Layout byte ranges are contiguous across `\n` — there is no
             // byte gap between adjacent visual lines to detect.
+            //
+            // getLineEnd() returns an *exclusive* boundary (one past the last character),
+            // so the last character is at index lineEndUtf16 - 1. Checking text[lineEndUtf16]
+            // would read the first character of the *next* line, producing a false positive
+            // when the next line starts with `\n`.
             val endsWithHardBreak = lineEndUtf16 > 0 && lineEndUtf16 <= text.length &&
                 text[lineEndUtf16 - 1] == '\n'
 
