@@ -84,7 +84,17 @@ class AndroidTextRenderer {
      * At progress=0 the text appears at its old Y position; at progress=1 it aligns with
      * the new layout (no translation). [paragraphEndUtf8] is exclusive; it is clamped to
      * the document's UTF-8 length before UTF-16 conversion to prevent exclusive-end越界
-     * into the next paragraph's first line.
+     * into the next paragraph's first line. After clamping, [getLineForOffset] on the
+     * exclusive end still returns the last line of the shifted paragraph (not the next
+     * paragraph's first line) because the clamped offset equals the last character's
+     * position, which belongs to the last line.
+     *
+     * Current limitation: each BlockShift entry corresponds to one paragraph and triggers
+     * a separate [layout.draw] call. Adjacent paragraphs with identical deltaY are NOT
+     * merged, so the number of draw calls per frame equals the number of shifted paragraphs.
+     * This is acceptable because no per-line Bitmap is allocated — only the static layout
+     * is re-drawn with a Y translation — but could be optimized by merging consecutive
+     * BlockShifts with the same deltaY into a single draw call.
      */
     fun drawStaticTextWithHoles(
         canvas: Canvas,

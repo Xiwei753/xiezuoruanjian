@@ -44,7 +44,11 @@ data class DisplayPatch(
 data class VisualIntent(
     val cause: EditorTransactionCauseDto,
     val operationKind: EditorOperationKindDto,
+    /** Byte ranges in the old document affected by this edit. Half-open: [start, end).
+     *  For pure Insert, this list is empty (no old bytes were affected). */
     val oldAffectedByteRanges: List<Pair<Int, Int>>,
+    /** Byte ranges in the new document affected by this edit. Half-open: [start, end).
+     *  For pure Delete, this list is empty (no new bytes were created). */
     val newAffectedByteRanges: List<Pair<Int, Int>>,
     val animationMode: AnimationModeDto,
     val durationMs: Long,

@@ -1315,9 +1315,15 @@ class AndroidVisualPlanner {
      * old revision may correspond to two paragraphs in the new revision (split), or two old
      * paragraphs may merge into one new paragraph. Both the old and new "edit paragraph
      * groups" are fully included in the affected line set, so the snapshot capture covers
-     * all structurally affected paragraphs. BlockShifts start only after the last paragraph
-     * in the edit group, preventing the same paragraph from appearing both as a Bitmap
-     * snapshot target and as a BlockShift target.
+     * all structurally affected paragraphs. Specifically:
+     * - Split (insert hard break): the old edit paragraph's lines + the new edit paragraph's
+     *   lines (which span both resulting paragraphs, since [newEditParaLines] includes all
+     *   lines sharing the new edit line's [paragraphId]) are all captured.
+     * - Merge (delete hard break): the old edit paragraph's lines + the new merged paragraph's
+     *   lines are all captured, ensuring the merged-in text has an old snapshot for its
+     *   CrossfadeOld/Move exit animation.
+     * BlockShifts start only after the last paragraph in the edit group, preventing the same
+     * paragraph from appearing both as a Bitmap snapshot target and as a BlockShift target.
      */
     private fun computeAffectedLines(
         visualIntent: VisualIntent,
