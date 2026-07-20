@@ -240,10 +240,11 @@ class AndroidLineSnapshotBuilder {
      * glyphs belonging to the target cluster by matching their X positions against the
      * cluster's expected horizontal span within the line.
      *
-     * If the line-level shape call fails or glyph extraction cannot match, falls back to
-     * shaping just the cluster text alone (which may miss contextual forms) plus the
-     * context hash — this is still better than nothing because the context hash captures
-     * adjacent codepoints and bidi direction.
+     * Returns [confident] = true ONLY when the full-line-context shaping path succeeds
+     * and extracts at least one matching glyph. This is the only path where the fingerprint
+     * captures the true visual output. Falls back to [shapeClusterInIsolationApi31]
+     * (confident = false) or hash-based fingerprint (confident = false) on any failure —
+     * these fallbacks cannot guarantee visual identity and must not be used for Move decisions.
      */
     private fun buildShapingFingerprintApi31(clusterText: String, layout: Layout, lineIndex: Int, clusterStartUtf16: Int, contextHash: Int): Pair<String, Boolean> {
         try {
@@ -314,6 +315,16 @@ class AndroidLineSnapshotBuilder {
         }
     }
 
+    /**
+     * Fallback when full-line-context shaping fails or glyph extraction matches zero glyphs.
+     *
+     * Shapes the cluster text alone (without surrounding line context), producing a fingerprint
+     * that captures glyph IDs and positions but may miss contextual shaping effects. Returns
+     * [confident] = false because isolated shaping cannot reproduce context-dependent forms:
+     * Arabic initial/medial/final variants, Indic conjuncts, and ligatures (fi, fl, etc.)
+     * all depend on adjacent characters. A false Move (same isolated fingerprint but different
+     * actual rendering) would cause visual glitches, so the planner must use Crossfade instead.
+     */
     private fun shapeClusterInIsolationApi31(
         clusterText: String,
         layout: Layout,

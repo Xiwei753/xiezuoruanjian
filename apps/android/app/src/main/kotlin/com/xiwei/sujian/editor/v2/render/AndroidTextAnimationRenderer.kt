@@ -73,13 +73,15 @@ class AndroidTextAnimationRenderer {
      * would hide that shifted text, creating a gap once the fade completes.
      *
      * Constraint: each region must be as small as possible — ideally the exact cluster
-     * bounding box. When a Move slice spans from one line to the next, merging source
-     * and destination into a single bounding rect can cover nearly two full lines,
-     * causing non-animated text in between to disappear during the animation.
-     * For Move slices, only [slice.destinationRect] (the target position) punches a hole —
-     * the source position ([slice.fromDestinationRect]) is NOT punched because the new
-     * layout's text there should remain visible and will be gradually revealed as the
-     * slice slides away.
+     * bounding box. For Move slices, ONLY [slice.destinationRect] (the target position)
+     * punches a hole — [slice.fromDestinationRect] (the source/pre-move position) is NOT
+     * punched because the new layout's text there should remain visible and will be
+     * gradually revealed as the slice slides away.
+     *
+     * DO NOT merge fromDestinationRect and destinationRect into a single bounding rect.
+     * For cross-line Moves, the source and target can be on different visual lines; their
+     * axis-aligned bounding rect would cover nearly two full lines, erasing non-animated
+     * text in between during the animation. Each position must remain an independent hole.
      */
     fun computeAnimatedSliceRegions(transaction: PreparedVisualTransaction): List<android.graphics.RectF> {
         val regions = mutableListOf<android.graphics.RectF>()
