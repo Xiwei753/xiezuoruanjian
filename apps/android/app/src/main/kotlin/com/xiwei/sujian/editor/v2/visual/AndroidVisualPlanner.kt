@@ -157,14 +157,14 @@ class AndroidVisualPlanner {
                 val structuralIndices = computeStructurallyAffectedOldLineIndices(visualIntent, oldRevision!!)
                 val combined = indices + structuralIndices
                 return AffectedLinesResult(
-                    lineIndices = combined,
+                    lineIndices = emptySet(),
                     oldLineIndices = combined,
                     newLineIndices = emptySet(),
                     blockShifts = emptyList()
                 )
             }
             return AffectedLinesResult(
-                lineIndices = indices,
+                lineIndices = emptySet(),
                 oldLineIndices = emptySet(),
                 newLineIndices = indices,
                 blockShifts = emptyList()
@@ -248,10 +248,22 @@ class AndroidVisualPlanner {
                     }
                 }
             } else {
-                for (i in oldRevision.lineRanges.indices) {
-                    val lineRange = oldRevision.lineRanges[i]
-                    if (start < lineRange.endUtf8 && end > lineRange.startUtf8) {
-                        affectedParaIds.add(lineRange.paragraphId)
+                val oldRanges = visualIntent.oldAffectedByteRanges
+                if (oldRanges.isNotEmpty()) {
+                    val oldAffectedStart = oldRanges.first().first
+                    val oldAffectedEnd = oldRanges.last().second
+                    for (i in oldRevision.lineRanges.indices) {
+                        val lineRange = oldRevision.lineRanges[i]
+                        if (oldAffectedStart < lineRange.endUtf8 && oldAffectedEnd > lineRange.startUtf8) {
+                            affectedParaIds.add(lineRange.paragraphId)
+                        }
+                    }
+                } else {
+                    for (i in oldRevision.lineRanges.indices) {
+                        val lineRange = oldRevision.lineRanges[i]
+                        if (start < lineRange.endUtf8 && end > lineRange.startUtf8) {
+                            affectedParaIds.add(lineRange.paragraphId)
+                        }
                     }
                 }
             }
@@ -1892,21 +1904,11 @@ class AndroidVisualPlanner {
                             endLineIndexExclusive = lastLine.index + 1,
                             top = firstLine.value.top,
                             bottom = lastLine.value.bottom,
-                            // left/right use min/max across all lines in the paragraph (not
-                            // just first/last) to ensure the clip rect covers the widest line,
-                            // preventing narrow intermediate lines from being clipped short.
-                            // Same logic as mergeAdjacentBlockShifts's merged left/right.
                             left = newParaLines.map { it.value.left }.minOrNull() ?: 0f,
                             right = newParaLines.map { it.value.right }.maxOrNull() ?: 0f,
                             deltaY = deltaY,
-                            // startUtf8 uses the NEW paragraph's byte offset (not the old
-                            // paragraph's) because BlockShifts translate new-layout text —
-                            // the renderer applies deltaY to the static new-layout drawing.
-                            // Rebase matching (applyRebaseToBlockShifts) uses startUtf8 to
-                            // find the corresponding old BlockShift; using the old paragraph's
-                            // startUtf8 would fail because the old offset may not exist in the
-                            // new revision after hard-break insertion/deletion.
-                            startUtf8 = newPara.startUtf8
+                            startUtf8 = newPara.startUtf8,
+                            endUtf8Exclusive = newPara.endUtf8Exclusive
                         ))
                     }
                 }
@@ -2057,7 +2059,8 @@ class AndroidVisualPlanner {
                     bottom = next.bottom,
                     left = minOf(current.left, next.left),
                     right = maxOf(current.right, next.right),
-                    startUtf8 = if (current.startUtf8 >= 0) current.startUtf8 else next.startUtf8
+                    startUtf8 = if (current.startUtf8 >= 0) current.startUtf8 else next.startUtf8,
+                    endUtf8Exclusive = if (next.endUtf8Exclusive >= 0) next.endUtf8Exclusive else current.endUtf8Exclusive
                 )
             } else {
                 merged.add(current)
@@ -2466,58 +2469,7 @@ class AndroidVisualPlanner {
         if (rebaseSnapshot.blockShiftStates.isEmpty() || newBlockShifts.isEmpty()) return newBlockShifts
         val usedRebaseIndices = mutableSetOf<Int>()
         return newBlockShifts.map { shift ->
-            val byteOffsetMatchIdx = if (shift.startUtf8 >= 0) {
-                val forwardMatchIdx = offsetMapper?.let { mapper ->
-                    rebaseSnapshot.blockShiftStates.indices.firstOrNull { i ->
-                        i !in usedRebaseIndices && rebaseSnapshot.blockShiftStates[i].startUtf8 >= 0 &&
-                            mapper(rebaseSnapshot.blockShiftStates[i].startUtf8) == shift.startUtf8
-                    }
-                }
-                if (forwardMatchIdx != null) {
-                    forwardMatchIdx
-                } else {
-                    val reverseMatchIdx = reverseMapper?.let { rMapper ->
-                        val mappedOldStart = rMapper(shift.startUtf8)
-                        if (mappedOldStart != null) {
-                            rebaseSnapshot.blockShiftStates.indices.firstOrNull { i ->
-                                i !in usedRebaseIndices && rebaseSnapshot.blockShiftStates[i].startUtf8 >= 0 &&
-                                    rebaseSnapshot.blockShiftStates[i].startUtf8 == mappedOldStart
-                            }
-                        } else null
-                    }
-                    if (reverseMatchIdx != null) {
-                        reverseMatchIdx
-                    } else {
-                        val nearMatchCandidates = rebaseSnapshot.blockShiftStates.indices.filter { i ->
-                            i !in usedRebaseIndices && rebaseSnapshot.blockShiftStates[i].startUtf8 >= 0
-                        }
-                        val forwardNearIdx = offsetMapper?.let { mapper ->
-                            nearMatchCandidates.minByOrNull { i ->
-                                val mapped = mapper(rebaseSnapshot.blockShiftStates[i].startUtf8)
-                                if (mapped != null) kotlin.math.abs(mapped - shift.startUtf8)
-                                else Int.MAX_VALUE
-                            }
-                        }
-                        if (forwardNearIdx != null) {
-                            val mappedDist = offsetMapper?.let { mapper ->
-                                val mapped = mapper(rebaseSnapshot.blockShiftStates[forwardNearIdx].startUtf8)
-                                if (mapped != null) kotlin.math.abs(mapped - shift.startUtf8) else Int.MAX_VALUE
-                            } ?: Int.MAX_VALUE
-                            if (mappedDist < 100) forwardNearIdx else null
-                        } else null
-                    }
-                }
-            } else null
-            val fallbackDirectMatchIdx = if (byteOffsetMatchIdx == null && shift.startUtf8 >= 0 && offsetMapper == null) {
-                rebaseSnapshot.blockShiftStates.indices.firstOrNull { i ->
-                    i !in usedRebaseIndices && rebaseSnapshot.blockShiftStates[i].startUtf8 == shift.startUtf8
-                }
-            } else null
-            val finalByteMatchIdx = byteOffsetMatchIdx ?: fallbackDirectMatchIdx
-            if (finalByteMatchIdx != null) {
-                usedRebaseIndices.add(finalByteMatchIdx)
-                shift.copy(deltaY = shift.deltaY - rebaseSnapshot.blockShiftStates[finalByteMatchIdx].currentTranslateY)
-            } else {
+            if (shift.startUtf8 < 0) {
                 val exactMatchIdx = rebaseSnapshot.blockShiftStates.indices.firstOrNull { i ->
                     i !in usedRebaseIndices &&
                         rebaseSnapshot.blockShiftStates[i].startLineIndex == shift.startLineIndex &&
@@ -2527,45 +2479,146 @@ class AndroidVisualPlanner {
                     usedRebaseIndices.add(exactMatchIdx)
                     shift.copy(deltaY = shift.deltaY - rebaseSnapshot.blockShiftStates[exactMatchIdx].currentTranslateY)
                 } else {
-                    val overlappingIndices = rebaseSnapshot.blockShiftStates.indices.filter { i ->
-                        i !in usedRebaseIndices &&
-                            rebaseSnapshot.blockShiftStates[i].startLineIndex < shift.endLineIndexExclusive &&
-                            rebaseSnapshot.blockShiftStates[i].endLineIndexExclusive > shift.startLineIndex
-                    }
-                    if (overlappingIndices.isNotEmpty()) {
-                        val bestIdx = overlappingIndices.maxByOrNull { i ->
-                            val overlapStart = maxOf(rebaseSnapshot.blockShiftStates[i].startLineIndex, shift.startLineIndex)
-                            val overlapEnd = minOf(rebaseSnapshot.blockShiftStates[i].endLineIndexExclusive, shift.endLineIndexExclusive)
-                            overlapEnd - overlapStart
-                        }
-                        if (bestIdx != null) {
-                            usedRebaseIndices.add(bestIdx)
-                            shift.copy(deltaY = shift.deltaY - rebaseSnapshot.blockShiftStates[bestIdx].currentTranslateY)
-                        } else {
-                            shift
-                        }
+                    val matchIdx = findBlockShiftRebaseByLineIndex(
+                        shift, rebaseSnapshot, usedRebaseIndices
+                    )
+                    if (matchIdx != null) {
+                        usedRebaseIndices.add(matchIdx)
+                        shift.copy(deltaY = shift.deltaY - rebaseSnapshot.blockShiftStates[matchIdx].currentTranslateY)
                     } else {
-                        val nearestIdx = rebaseSnapshot.blockShiftStates.indices
-                            .filter { i -> i !in usedRebaseIndices }
-                            .minByOrNull { i ->
-                                val oldState = rebaseSnapshot.blockShiftStates[i]
-                                val gap = if (oldState.endLineIndexExclusive <= shift.startLineIndex) {
-                                    shift.startLineIndex - oldState.endLineIndexExclusive
-                                } else {
-                                    oldState.startLineIndex - shift.endLineIndexExclusive
-                                }
-                                kotlin.math.abs(gap)
-                            }
-                        if (nearestIdx != null) {
-                            usedRebaseIndices.add(nearestIdx)
-                            shift.copy(deltaY = shift.deltaY - rebaseSnapshot.blockShiftStates[nearestIdx].currentTranslateY)
-                        } else {
-                            shift
-                        }
+                        shift
                     }
+                }
+            } else {
+                val matchIdx = findBlockShiftRebaseMatch(
+                    shift, rebaseSnapshot, usedRebaseIndices, offsetMapper, reverseMapper
+                )
+                if (matchIdx != null) {
+                    usedRebaseIndices.add(matchIdx)
+                    shift.copy(deltaY = shift.deltaY - rebaseSnapshot.blockShiftStates[matchIdx].currentTranslateY)
+                } else {
+                    shift
                 }
             }
         }
+    }
+
+    private fun findBlockShiftRebaseMatch(
+        shift: PreparedVisualTransaction.BlockShift,
+        rebaseSnapshot: VisualFrameSnapshot,
+        usedRebaseIndices: MutableSet<Int>,
+        offsetMapper: ((Int) -> Int?)?,
+        reverseMapper: ((Int) -> Int?)?
+    ): Int? {
+        val candidates = rebaseSnapshot.blockShiftStates.indices.filter { i ->
+            i !in usedRebaseIndices && rebaseSnapshot.blockShiftStates[i].startUtf8 >= 0
+        }
+        if (candidates.isEmpty()) return null
+
+        // Tier 1: Forward offset mapping with endUtf8Exclusive validation
+        offsetMapper?.let { mapper ->
+            for (i in candidates) {
+                val state = rebaseSnapshot.blockShiftStates[i]
+                if (mapper(state.startUtf8) == shift.startUtf8) {
+                    val endValidated = if (shift.endUtf8Exclusive >= 0 && state.endUtf8Exclusive >= 0) {
+                        val mappedEnd = mapper(state.endUtf8Exclusive)
+                        mappedEnd != null && mappedEnd == shift.endUtf8Exclusive
+                    } else true
+                    if (endValidated) return i
+                }
+            }
+            // Tier 1b: Forward offset mapping start-only match (endUtf8 mismatch or unavailable)
+            for (i in candidates) {
+                val state = rebaseSnapshot.blockShiftStates[i]
+                if (mapper(state.startUtf8) == shift.startUtf8) return i
+            }
+        }
+
+        // Tier 2: Reverse offset mapping
+        reverseMapper?.let { rMapper ->
+            val mappedOldStart = rMapper(shift.startUtf8)
+            if (mappedOldStart != null) {
+                for (i in candidates) {
+                    if (rebaseSnapshot.blockShiftStates[i].startUtf8 == mappedOldStart) return i
+                }
+            }
+        }
+
+        // Tier 3: Near-match by forward-mapped distance
+        offsetMapper?.let { mapper ->
+            val nearIdx = candidates.minByOrNull { i ->
+                val mapped = mapper(rebaseSnapshot.blockShiftStates[i].startUtf8)
+                if (mapped != null) kotlin.math.abs(mapped - shift.startUtf8)
+                else Int.MAX_VALUE
+            }
+            if (nearIdx != null) {
+                val mapped = mapper(rebaseSnapshot.blockShiftStates[nearIdx].startUtf8)
+                val dist = if (mapped != null) kotlin.math.abs(mapped - shift.startUtf8) else Int.MAX_VALUE
+                if (dist < 100) return nearIdx
+            }
+        }
+
+        // Tier 4: Direct byte equality (only when offsetMapper is null)
+        if (offsetMapper == null) {
+            for (i in candidates) {
+                if (rebaseSnapshot.blockShiftStates[i].startUtf8 == shift.startUtf8) return i
+            }
+        }
+
+        // Tier 5: Line-index overlap
+        val overlappingIndices = candidates.filter { i ->
+            val state = rebaseSnapshot.blockShiftStates[i]
+            state.startLineIndex < shift.endLineIndexExclusive &&
+                state.endLineIndexExclusive > shift.startLineIndex
+        }
+        if (overlappingIndices.isNotEmpty()) {
+            return overlappingIndices.maxByOrNull { i ->
+                val overlapStart = maxOf(rebaseSnapshot.blockShiftStates[i].startLineIndex, shift.startLineIndex)
+                val overlapEnd = minOf(rebaseSnapshot.blockShiftStates[i].endLineIndexExclusive, shift.endLineIndexExclusive)
+                overlapEnd - overlapStart
+            }
+        }
+
+        // Tier 6: Nearest by line-index gap
+        return candidates.minByOrNull { i ->
+            val state = rebaseSnapshot.blockShiftStates[i]
+            val gap = if (state.endLineIndexExclusive <= shift.startLineIndex) {
+                shift.startLineIndex - state.endLineIndexExclusive
+            } else {
+                state.startLineIndex - shift.endLineIndexExclusive
+            }
+            kotlin.math.abs(gap)
+        }
+    }
+
+    private fun findBlockShiftRebaseByLineIndex(
+        shift: PreparedVisualTransaction.BlockShift,
+        rebaseSnapshot: VisualFrameSnapshot,
+        usedRebaseIndices: MutableSet<Int>
+    ): Int? {
+        val overlappingIndices = rebaseSnapshot.blockShiftStates.indices.filter { i ->
+            i !in usedRebaseIndices &&
+                rebaseSnapshot.blockShiftStates[i].startLineIndex < shift.endLineIndexExclusive &&
+                rebaseSnapshot.blockShiftStates[i].endLineIndexExclusive > shift.startLineIndex
+        }
+        if (overlappingIndices.isNotEmpty()) {
+            return overlappingIndices.maxByOrNull { i ->
+                val overlapStart = maxOf(rebaseSnapshot.blockShiftStates[i].startLineIndex, shift.startLineIndex)
+                val overlapEnd = minOf(rebaseSnapshot.blockShiftStates[i].endLineIndexExclusive, shift.endLineIndexExclusive)
+                overlapEnd - overlapStart
+            }
+        }
+        return rebaseSnapshot.blockShiftStates.indices
+            .filter { i -> i !in usedRebaseIndices }
+            .minByOrNull { i ->
+                val state = rebaseSnapshot.blockShiftStates[i]
+                val gap = if (state.endLineIndexExclusive <= shift.startLineIndex) {
+                    shift.startLineIndex - state.endLineIndexExclusive
+                } else {
+                    state.startLineIndex - shift.endLineIndexExclusive
+                }
+                kotlin.math.abs(gap)
+            }
     }
 
     private fun applyRebaseState(

@@ -127,7 +127,14 @@ data class PreparedVisualTransaction(
          *  rather than jumping back to the full -newDeltaY offset. Without [startUtf8],
          *  line-index-based matching would pair the wrong BlockShifts after hard-break
          *  insertion/deletion, producing incorrect rebase adjustments and visible jumps. */
-        val startUtf8: Int = -1
+        val startUtf8: Int = -1,
+        /** Exclusive UTF-8 byte offset of the last line in this block. Provides a stable
+         *  document range [startUtf8, endUtf8Exclusive) for cross-revision matching.
+         *  When [startUtf8] alone matches but [endUtf8Exclusive] differs, the match is
+         *  downgraded from exact to approximate — this prevents pairing BlockShifts that
+         *  cover different document regions after hard-break insertion/deletion, which
+         *  would produce incorrect deltaY adjustments and visible jumps in the suffix text. */
+        val endUtf8Exclusive: Int = -1
     )
 }
 

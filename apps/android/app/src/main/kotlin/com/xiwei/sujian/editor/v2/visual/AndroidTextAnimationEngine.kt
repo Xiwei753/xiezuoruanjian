@@ -485,6 +485,7 @@ class AndroidTextAnimationEngine(
                 startLineIndex = shift.startLineIndex,
                 endLineIndexExclusive = shift.endLineIndexExclusive,
                 startUtf8 = shift.startUtf8,
+                endUtf8Exclusive = shift.endUtf8Exclusive,
                 currentTranslateY = currentTranslateY,
                 targetTranslateY = 0f
             )
