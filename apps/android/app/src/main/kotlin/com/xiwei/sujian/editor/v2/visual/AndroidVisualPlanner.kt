@@ -607,22 +607,28 @@ class AndroidVisualPlanner {
                 // identical fingerprints don't guarantee the same text (e.g. repeated
                 // characters), so it's only used when the primary matching path fails.
                 //
-                // Tiebreaker: closest documentByteStart distance (not visual position).
-                // Byte-start distance is preferred because (a) it's deterministic and
-                // independent of layout, (b) visual position can change due to reflow
-                // even when the text hasn't moved semantically, and (c) for same-line
-                // clusters with identical fingerprints, byte order is a stable proxy for
-                // visual order in LTR text and is at least consistent in RTL.
+                // Tiebreaker: closest distance between new cluster's documentByteStart and
+                // the old cluster's mappedStart in the new coordinate space. Using mappedStart
+                // instead of raw oldCluster.documentByteStart ensures both sides are in the
+                // same coordinate space after insertion/deletion, preventing cross-matching
+                // of repeated characters at different positions.
+                //
+                // Monotonicity: candidates are filtered to only include new clusters whose
+                // documentByteStart >= lastMatchedNewStart, enforcing document-order one-to-one
+                // matching. This prevents a later old cluster from matching an earlier new
+                // cluster, which would cause crossed animations for repeated text.
+                val referenceStart = mappedStart ?: oldCluster.documentByteStart
                 val candidates = allNewClusters.indices.filter { i ->
                     val candidate = allNewClusters[i].first
                     i !in newUsed &&
                         candidate.shapingFingerprint == oldCluster.shapingFingerprint &&
+                        candidate.documentByteStart >= referenceStart &&
                         visualIntent.newAffectedByteRanges.none { (start, end) ->
                             candidate.documentByteStart < end && candidate.documentByteEndExclusive > start
                         }
                 }
                 matchedNewIdx = candidates.minByOrNull { i ->
-                    kotlin.math.abs(allNewClusters[i].first.documentByteStart - oldCluster.documentByteStart)
+                    kotlin.math.abs(allNewClusters[i].first.documentByteStart - referenceStart)
                 }
             }
             if (matchedNewIdx != null) {
@@ -633,17 +639,12 @@ class AndroidVisualPlanner {
                 }
                 if (isExcluded) continue
                 val positionChanged = oldCluster.visualRectInDocument != newCluster.visualRectInDocument
-                if (!positionChanged) continue
+                val fingerprintChanged = oldCluster.shapingFingerprint != newCluster.shapingFingerprint
+                val identityConfident = oldCluster.shapingIdentityConfident && newCluster.shapingIdentityConfident
+                if (!positionChanged && identityConfident && !fingerprintChanged) continue
                 val newSnapshot = newInfo.second
                 val oldSnapshot = oldInfo.second
-                // Move requires BOTH clusters to have confident shaping fingerprints.
-                // A false Move (same fingerprint but different actual glyphs) causes visual
-                // glitches. On API < 31, shapingIdentityConfident is false, so Crossfade
-                // is always used as a safe fallback.
-                if (oldCluster.shapingFingerprint == newCluster.shapingFingerprint
-                    && oldCluster.shapingIdentityConfident
-                    && newCluster.shapingIdentityConfident
-                ) {
+                if (identityConfident && !fingerprintChanged && positionChanged) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Move,
                         snapshot = newSnapshot,
@@ -760,6 +761,7 @@ class AndroidVisualPlanner {
         }
 
         val newMatched = mutableSetOf<Int>()
+        var lastMatchedNewStart = 0
         for ((oldCluster, oldSnapshot) in allOldAffectedClusters) {
             // Byte-length equality is a necessary precondition for Move: clusters with
             // different byte lengths represent different amounts of text (e.g. "a" vs "ab"),
@@ -767,58 +769,62 @@ class AndroidVisualPlanner {
             // happen to match. Without this check, a 1-byte cluster could be paired with a
             // 2-byte cluster that has the same fingerprint for the first byte, producing a
             // Move slice that visually stretches or compresses the text.
+            //
+            // Monotonicity: candidates are filtered to only include new clusters whose
+            // documentByteStart >= lastMatchedNewStart, enforcing document-order one-to-one
+            // matching. This prevents a later old cluster from matching an earlier new
+            // cluster, which would cause crossed animations for repeated text.
             val candidates = allNewAffectedClusters.indices.filter { i ->
                 i !in newMatched && allNewAffectedClusters[i].first.shapingFingerprint == oldCluster.shapingFingerprint &&
                     allNewAffectedClusters[i].first.documentByteEndExclusive - allNewAffectedClusters[i].first.documentByteStart ==
-                    oldCluster.documentByteEndExclusive - oldCluster.documentByteStart
+                    oldCluster.documentByteEndExclusive - oldCluster.documentByteStart &&
+                    allNewAffectedClusters[i].first.documentByteStart >= lastMatchedNewStart
             }
             val matchIdx = candidates.minByOrNull { i ->
                 kotlin.math.abs(allNewAffectedClusters[i].first.documentByteStart - oldCluster.documentByteStart)
             }
             if (matchIdx != null) {
                 newMatched.add(matchIdx)
+                lastMatchedNewStart = allNewAffectedClusters[matchIdx].first.documentByteStart
                 val (newCluster, newSnapshot) = allNewAffectedClusters[matchIdx]
                 val positionChanged = oldCluster.visualRectInDocument != newCluster.visualRectInDocument
-                if (positionChanged) {
-                    // Move requires BOTH clusters to have confident shaping fingerprints;
-                    // see addMoveSlicesForShiftedClustersCrossLine for the full invariant.
-                    if (oldCluster.shapingFingerprint == newCluster.shapingFingerprint
-                    && oldCluster.shapingIdentityConfident
-                    && newCluster.shapingIdentityConfident
-                ) {
-                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                            role = SliceRole.Move,
-                            snapshot = newSnapshot,
-                            sourceRect = newCluster.sourceRectInLineImage,
-                            destinationRect = newCluster.visualRectInDocument,
-                            startAlpha = 1f,
-                            endAlpha = 1f,
-                            fromDestinationRect = oldCluster.visualRectInDocument,
-                            clusterByteStart = newCluster.documentByteStart,
-                            clusterByteEndExclusive = newCluster.documentByteEndExclusive
-                        ))
-                    } else {
-                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                            role = SliceRole.CrossfadeOld,
-                            snapshot = oldSnapshot,
-                            sourceRect = oldCluster.sourceRectInLineImage,
-                            destinationRect = oldCluster.visualRectInDocument,
-                            startAlpha = 1f,
-                            endAlpha = 0f,
-                            clusterByteStart = oldCluster.documentByteStart,
-                            clusterByteEndExclusive = oldCluster.documentByteEndExclusive
-                        ))
-                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                            role = SliceRole.CrossfadeNew,
-                            snapshot = newSnapshot,
-                            sourceRect = newCluster.sourceRectInLineImage,
-                            destinationRect = newCluster.visualRectInDocument,
-                            startAlpha = 0f,
-                            endAlpha = 1f,
-                            clusterByteStart = newCluster.documentByteStart,
-                            clusterByteEndExclusive = newCluster.documentByteEndExclusive
-                        ))
-                    }
+                val fingerprintChanged = oldCluster.shapingFingerprint != newCluster.shapingFingerprint
+                val identityConfident = oldCluster.shapingIdentityConfident && newCluster.shapingIdentityConfident
+                if (!positionChanged && identityConfident && !fingerprintChanged) {
+                    // continue
+                } else if (identityConfident && !fingerprintChanged && positionChanged) {
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.Move,
+                        snapshot = newSnapshot,
+                        sourceRect = newCluster.sourceRectInLineImage,
+                        destinationRect = newCluster.visualRectInDocument,
+                        startAlpha = 1f,
+                        endAlpha = 1f,
+                        fromDestinationRect = oldCluster.visualRectInDocument,
+                        clusterByteStart = newCluster.documentByteStart,
+                        clusterByteEndExclusive = newCluster.documentByteEndExclusive
+                    ))
+                } else {
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.CrossfadeOld,
+                        snapshot = oldSnapshot,
+                        sourceRect = oldCluster.sourceRectInLineImage,
+                        destinationRect = oldCluster.visualRectInDocument,
+                        startAlpha = 1f,
+                        endAlpha = 0f,
+                        clusterByteStart = oldCluster.documentByteStart,
+                        clusterByteEndExclusive = oldCluster.documentByteEndExclusive
+                    ))
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.CrossfadeNew,
+                        snapshot = newSnapshot,
+                        sourceRect = newCluster.sourceRectInLineImage,
+                        destinationRect = newCluster.visualRectInDocument,
+                        startAlpha = 0f,
+                        endAlpha = 1f,
+                        clusterByteStart = newCluster.documentByteStart,
+                        clusterByteEndExclusive = newCluster.documentByteEndExclusive
+                    ))
                 }
             } else {
                 animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
