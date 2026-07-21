@@ -268,7 +268,6 @@ class AndroidTextRenderer {
             layout.getSelectionPath(lineStart, lineEnd, path)
             if (path.isEmpty) continue
             val bottom = layout.getLineBottom(line).toFloat()
-            val top = layout.getLineTop(line).toFloat()
             canvas.save()
             canvas.clipPath(path)
             canvas.drawLine(0f, bottom, layout.width.toFloat(), bottom, preeditUnderlinePaint)
