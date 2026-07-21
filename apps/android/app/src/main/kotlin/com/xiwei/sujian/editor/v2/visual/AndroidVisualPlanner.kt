@@ -1314,6 +1314,7 @@ class AndroidVisualPlanner {
                 }
             }
             if (matchedNewIdx == null) {
+                val referenceStart = mappedStart ?: oldCluster.documentByteStart
                 val candidates = allNewClusters.indices.filter { i ->
                     val candidate = allNewClusters[i].first
                     i !in newUsed &&
@@ -1322,8 +1323,13 @@ class AndroidVisualPlanner {
                             candidate.documentByteStart < end && candidate.documentByteEndExclusive > start
                         }
                 }
-                matchedNewIdx = candidates.minByOrNull { i ->
-                    kotlin.math.abs(allNewClusters[i].first.documentByteStart - oldCluster.documentByteStart)
+                val sorted = candidates.sortedBy { i ->
+                    allNewClusters[i].first.documentByteStart
+                }
+                matchedNewIdx = sorted.firstOrNull { i ->
+                    allNewClusters[i].first.documentByteStart >= referenceStart
+                } ?: sorted.minByOrNull { i ->
+                    kotlin.math.abs(allNewClusters[i].first.documentByteStart - referenceStart)
                 }
             }
             if (matchedNewIdx != null) {
@@ -1331,44 +1337,45 @@ class AndroidVisualPlanner {
                 oldMatched.add(oldIdx)
                 val (newCluster, newSnapshot) = allNewClusters[matchedNewIdx]
                 val positionChanged = oldCluster.visualRectInDocument != newCluster.visualRectInDocument
-                if (positionChanged) {
-                    if (oldCluster.shapingFingerprint == newCluster.shapingFingerprint
-                        && oldCluster.shapingIdentityConfident
-                        && newCluster.shapingIdentityConfident
-                    ) {
-                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                            role = SliceRole.Move,
-                            snapshot = newSnapshot,
-                            sourceRect = newCluster.sourceRectInLineImage,
-                            destinationRect = newCluster.visualRectInDocument,
-                            startAlpha = 1f,
-                            endAlpha = 1f,
-                            fromDestinationRect = oldCluster.visualRectInDocument,
-                            clusterByteStart = newCluster.documentByteStart,
-                            clusterByteEndExclusive = newCluster.documentByteEndExclusive
-                        ))
-                    } else {
-                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                            role = SliceRole.CrossfadeOld,
-                            snapshot = oldSnapshot,
-                            sourceRect = oldCluster.sourceRectInLineImage,
-                            destinationRect = oldCluster.visualRectInDocument,
-                            startAlpha = 1f,
-                            endAlpha = 0f,
-                            clusterByteStart = oldCluster.documentByteStart,
-                            clusterByteEndExclusive = oldCluster.documentByteEndExclusive
-                        ))
-                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                            role = SliceRole.CrossfadeNew,
-                            snapshot = newSnapshot,
-                            sourceRect = newCluster.sourceRectInLineImage,
-                            destinationRect = newCluster.visualRectInDocument,
-                            startAlpha = 0f,
-                            endAlpha = 1f,
-                            clusterByteStart = newCluster.documentByteStart,
-                            clusterByteEndExclusive = newCluster.documentByteEndExclusive
-                        ))
-                    }
+                val identityConfident = oldCluster.shapingIdentityConfident && newCluster.shapingIdentityConfident
+                val fingerprintSame = oldCluster.shapingFingerprint == newCluster.shapingFingerprint
+                if (identityConfident && fingerprintSame && !positionChanged) {
+                    // Identity reliable, position unchanged → static new layout handles it
+                } else if (identityConfident && fingerprintSame && positionChanged) {
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.Move,
+                        snapshot = newSnapshot,
+                        sourceRect = newCluster.sourceRectInLineImage,
+                        destinationRect = newCluster.visualRectInDocument,
+                        startAlpha = 1f,
+                        endAlpha = 1f,
+                        fromDestinationRect = oldCluster.visualRectInDocument,
+                        clusterByteStart = newCluster.documentByteStart,
+                        clusterByteEndExclusive = newCluster.documentByteEndExclusive
+                    ))
+                } else {
+                    // Identity unreliable or fingerprint differs → CrossfadeOld + CrossfadeNew
+                    // regardless of position change
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.CrossfadeOld,
+                        snapshot = oldSnapshot,
+                        sourceRect = oldCluster.sourceRectInLineImage,
+                        destinationRect = oldCluster.visualRectInDocument,
+                        startAlpha = 1f,
+                        endAlpha = 0f,
+                        clusterByteStart = oldCluster.documentByteStart,
+                        clusterByteEndExclusive = oldCluster.documentByteEndExclusive
+                    ))
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.CrossfadeNew,
+                        snapshot = newSnapshot,
+                        sourceRect = newCluster.sourceRectInLineImage,
+                        destinationRect = newCluster.visualRectInDocument,
+                        startAlpha = 0f,
+                        endAlpha = 1f,
+                        clusterByteStart = newCluster.documentByteStart,
+                        clusterByteEndExclusive = newCluster.documentByteEndExclusive
+                    ))
                 }
             }
         }

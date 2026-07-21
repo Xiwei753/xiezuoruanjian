@@ -266,13 +266,13 @@ class AndroidTextRenderer {
             val lineEnd = if (line == endLine) compEnd else layout.getLineEnd(line)
             val path = Path()
             layout.getSelectionPath(lineStart, lineEnd, path)
-            val bounds = RectF()
-            path.computeBounds(bounds, true)
-            if (bounds.isEmpty) continue
-            val left = kotlin.math.min(bounds.left, bounds.right)
-            val right = kotlin.math.max(bounds.left, bounds.right)
+            if (path.isEmpty) continue
             val bottom = layout.getLineBottom(line).toFloat()
-            canvas.drawLine(left, bottom, right, bottom, preeditUnderlinePaint)
+            val top = layout.getLineTop(line).toFloat()
+            canvas.save()
+            canvas.clipPath(path)
+            canvas.drawLine(0f, bottom, layout.width.toFloat(), bottom, preeditUnderlinePaint)
+            canvas.restore()
         }
     }
 
