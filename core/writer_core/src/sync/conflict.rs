@@ -7,6 +7,9 @@ use crate::sync::types::SyncConflict;
 use crate::sync::types::SyncConflictSummary;
 use std::path::Path;
 
+/// 扫描工作区 Git 状态，返回 (是否有脏文件, 脏文件路径列表)。
+/// 仅统计白名单内且非黑名单的路径——黑名单路径（如 app-meta 内部文件）
+/// 不影响同步决策。
 #[cfg(feature = "git-https")]
 pub(crate) fn collect_git_status_summary(repo: &git2::Repository) -> (bool, Vec<String>) {
     let mut opts = git2::StatusOptions::new();
@@ -37,6 +40,9 @@ pub(crate) fn collect_git_status_summary(repo: &git2::Repository) -> (bool, Vec<
     (local_dirty, dirty_files)
 }
 
+/// 从 Git index 中收集未解决的合并冲突路径。
+/// 路径优先取 `our`（本地）侧，回退到 `their`（远端）或 `ancestor`（共同祖先）。
+/// 仅返回白名单内且非黑名单的路径，去重排序。
 #[cfg(feature = "git-https")]
 pub(crate) fn collect_index_conflicts(repo: &git2::Repository) -> Vec<String> {
     let mut conflicted = Vec::new();
@@ -68,6 +74,15 @@ pub(crate) fn collect_index_conflicts(repo: &git2::Repository) -> Vec<String> {
     conflicted
 }
 
+/// 构建同步冲突摘要——诊断当前同步状态并收集冲突文件列表。
+///
+/// 冲突文件来源有两个：
+/// 1. **dry-run checkout**：模拟 `git checkout` 检测远端与本地的工作区冲突
+/// 2. **index conflicts**：`git merge` 后留在 index 中的未解决冲突
+///
+/// 两者合并去重后过滤掉黑名单路径和非白名单路径。
+/// 若最终冲突列表为空但本地有脏文件，则用脏文件列表替代
+/// （这种情况通常意味着本地修改与远端无直接冲突，但需要用户确认）。
 #[cfg(feature = "git-https")]
 pub(crate) fn build_conflict_summary(
     repo: &git2::Repository,

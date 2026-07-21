@@ -54,12 +54,29 @@ use std::sync::Mutex;
 
 /// 两次事件间隔超过此值（毫秒）视为不同会话。
 /// 5 分钟与常见 IDE 的会话超时一致。
+/// 会话边界影响 `sessions_count` 统计和 `active_seconds` 计算——
+/// 间隔内的总时长计为活跃时间，间隔外的时间不计入。
 const SESSION_GAP_MS: i64 = 5 * 60 * 1000;
 /// 事件缓冲区刷新防抖间隔（毫秒）。避免高频输入时每次事件都触发磁盘写入。
 const FLUSH_DEBOUNCE_MS: i64 = 3000;
 /// 缓冲区最大事件数。达到此数量立即刷新，无论防抖间隔是否到期。
 const MAX_BUFFER_SIZE: usize = 100;
 
+/// 写作统计数据存储引擎。
+///
+/// ## 线程安全
+///
+/// `event_buffer` 和 `last_flush_ms` 使用 `Mutex` 保护，允许从多个线程
+/// （如编辑线程记录事件、后台线程定期 flush）安全访问。
+/// `Mutex::lock` 失败时返回错误而非 panic——这是对已中毒 mutex 的降级策略，
+/// 因为统计数据丢失可接受，但 panic 会导致编辑器崩溃。
+///
+/// ## 缓冲与刷盘策略
+///
+/// 事件先写入内存缓冲区，满足以下任一条件时刷盘：
+/// 1. 缓冲区大小 ≥ `MAX_BUFFER_SIZE`（100 条）
+/// 2. 距上次刷盘 ≥ `FLUSH_DEBOUNCE_MS`（3 秒）
+/// 这减少了高频输入时的磁盘 I/O，同时保证事件不会无限期滞留内存。
 pub struct StatsStore {
     workspace_path: PathBuf,
     event_buffer: Mutex<Vec<WritingInputEvent>>,

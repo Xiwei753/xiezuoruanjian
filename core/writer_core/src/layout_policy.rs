@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 // ========== 输入枚举 ==========
 
+/// 折叠状态：None=无折叠屏, Flat=完全展开, HalfOpened=半开（桌面模式）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FoldState {
     None,
@@ -22,18 +23,21 @@ pub enum FoldState {
     HalfOpened,
 }
 
+/// 折叠方向：Horizontal=铰链水平（上下屏）, Vertical=铰链垂直（左右屏）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FoldOrientation {
     Horizontal,
     Vertical,
 }
 
+/// 折叠遮挡类型：None=不遮挡, Full=折叠区域完全遮挡内容。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FoldOcclusion {
     None,
     Full,
 }
 
+/// 设备方向：Unknown=初始/旋转中, Portrait=竖屏, Landscape=横屏。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Orientation {
     Unknown,
@@ -41,6 +45,7 @@ pub enum Orientation {
     Landscape,
 }
 
+/// 主输入类型：影响导航目标和交互区域大小。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PointerKind {
     Unknown,
@@ -80,6 +85,7 @@ impl Default for FoldFeatureInfo {
 
 // ========== 输出枚举 ==========
 
+/// 宽度分类 — 参考 Material Design 3 响应式断点。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WidthClass {
     Compact,
@@ -89,6 +95,7 @@ pub enum WidthClass {
     ExtraLarge,
 }
 
+/// 高度分类 — 影响底部导航栏和内容区最小高度。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HeightClass {
     Compact,
@@ -96,6 +103,7 @@ pub enum HeightClass {
     Expanded,
 }
 
+/// Shell 模式 — 决定主界面框架结构。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ShellMode {
     SinglePane,
@@ -104,18 +112,21 @@ pub enum ShellMode {
     ThreePane,
 }
 
+/// 编辑器模式 — FullWidth=编辑器占满可用宽度, CenteredPaper=居中纸面模式（限宽）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EditorMode {
     FullWidth,
     CenteredPaper,
 }
 
+/// 导航模式 — Stack=手机式栈导航, ListDetail=列表-详情双栏。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NavigationMode {
     Stack,
     ListDetail,
 }
 
+/// 导航呈现方式 — 随宽度递增：BottomBar→NavigationRail→PermanentDrawer。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NavigationPresentation {
     BottomBar,
@@ -123,6 +134,7 @@ pub enum NavigationPresentation {
     PermanentDrawer,
 }
 
+/// 工作区面板模式 — 决定项目列表/章节树/编辑器的组合方式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WorkspacePaneMode {
     SinglePane,
@@ -130,6 +142,7 @@ pub enum WorkspacePaneMode {
     ThreePane,
 }
 
+/// 各面板可见性 — 平台端据此决定哪些 UI 组件需要渲染。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VisiblePaneRoles {
     pub show_project_list: bool,
@@ -172,6 +185,7 @@ impl Default for WindowMetrics {
 
 // ========== 输出结构体 ==========
 
+/// 面板宽度约束 — min/preferred/max 三级，平台端在约束范围内自由分配。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PaneWidthConstraint {
     pub min_dp: f32,
@@ -179,6 +193,7 @@ pub struct PaneWidthConstraint {
     pub max_dp: f32,
 }
 
+/// 避让区域类型 — WindowInset=系统窗口内嵌, VerticalHinge=竖向铰链, HorizontalHinge=横向铰链。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AvoidRegionKind {
     WindowInset,
@@ -186,6 +201,8 @@ pub enum AvoidRegionKind {
     HorizontalHinge,
 }
 
+/// 避让区域 — 折叠屏铰链或遮挡区域，平台端应避免在此放置交互元素。
+/// 坐标单位为 dp（来自 FoldFeatureInfo 的 vp，Core 不做 dp/vp 转换）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AvoidRegion {
     pub left_dp: f32,

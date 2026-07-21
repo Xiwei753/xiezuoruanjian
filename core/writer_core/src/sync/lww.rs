@@ -11,9 +11,14 @@ use crate::sync::SyncService;
 use rayon::prelude::*;
 use std::path::Path;
 
+/// 同步清单文件路径——记录本地所有文件的哈希、操作类型和时间戳。
+/// 这是 LWW 同步的唯一事实来源：三路比较的 base_hash 即从此文件读取。
 const SYNC_MANIFEST_PATH: &str = "app-meta/sync/manifest.sync.json";
+/// 并行下载最大线程数。4 线程在 GitHub API 速率限制和本地磁盘 I/O 之间取得平衡。
 const MAX_PARALLEL_DOWNLOADS: usize = 4;
 
+/// 创建并行下载线程池。线程数取 `task_count` 和 `MAX_PARALLEL_DOWNLOADS` 的较小值，
+/// 至少 1 线程。使用 rayon 的 work-stealing 调度器。
 fn sync_download_pool(task_count: usize) -> crate::Result<rayon::ThreadPool> {
     rayon::ThreadPoolBuilder::new()
         .num_threads(task_count.clamp(1, MAX_PARALLEL_DOWNLOADS))
@@ -21,6 +26,10 @@ fn sync_download_pool(task_count: usize) -> crate::Result<rayon::ThreadPool> {
         .map_err(|e| crate::Error::Io(std::io::Error::other(format!("sync_parallel_pool_error: {}", e))))
 }
 
+/// 将远端冲突内容保存为本地备份文件。
+///
+/// 文件名格式：`{原文件名}.remote-conflict-{时间戳}`，保存在原文件同目录下。
+/// 此备份供用户手动对比本地与远端内容，不参与自动合并逻辑。
 fn save_conflict_copy(
     workspace_path: &Path,
     path: &str,

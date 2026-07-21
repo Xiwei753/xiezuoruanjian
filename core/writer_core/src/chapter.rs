@@ -69,6 +69,8 @@ pub struct ChapterSaveReceipt {
     pub word_count: u32,
 }
 
+/// 列出项目下所有有效的章节 ID（跨卷扫描）。
+/// 用于同步模块验证远端引用的章节是否存在，不返回章节元数据。
 pub fn list_valid_chapter_ids(
     workspace_path: &Path,
     project_id: &str,
@@ -106,6 +108,9 @@ pub fn list_valid_chapter_ids(
     Ok(chapter_ids)
 }
 
+/// 列出指定卷下的所有章节，按 `order` 字段升序排列。
+/// 使用 `par_iter` 并行读取各章节的 `chapter.meta.json`，适用于章节数量较多的场景。
+/// 不存在的 meta 文件或解析失败的章节静默跳过（不返回错误）。
 pub fn list_chapters(
     workspace_path: &Path,
     project_id: &str,
@@ -163,6 +168,8 @@ pub fn calculate_word_count(text: &str) -> u32 {
     text.chars().filter(|c| !c.is_whitespace()).count() as u32
 }
 
+/// 创建章节。`order` 自动递增（当前最大 order + 1）。
+/// 空标题时自动生成"第N章"格式。创建后原子写入 meta 和空正文文件。
 pub fn create_chapter(
     workspace_path: &Path,
     project_id: &str,
@@ -216,6 +223,7 @@ pub fn create_chapter(
     Ok(chapter)
 }
 
+/// 读取章节内容（元数据 + 正文）。meta 或 md 文件不存在时返回 ChapterNotFound。
 pub fn read_chapter(
     workspace_path: &Path,
     project_id: &str,
@@ -243,6 +251,7 @@ pub fn read_chapter(
     Ok(ChapterContent { meta, content })
 }
 
+/// 保存章节正文（带空内容覆盖保护）。成功时丢弃回执。
 pub fn save_chapter(
     workspace_path: &Path,
     project_id: &str,
@@ -253,6 +262,7 @@ pub fn save_chapter(
     save_chapter_verified(workspace_path, project_id, volume_id, chapter_id, content).map(|_| ())
 }
 
+/// 保存章节正文并返回验证回执（默认拒绝空内容覆盖非空章节）。
 pub fn save_chapter_verified(
     workspace_path: &Path,
     project_id: &str,
@@ -270,6 +280,7 @@ pub fn save_chapter_verified(
     )
 }
 
+/// 保存章节正文（可控制是否允许空内容覆盖）。
 pub fn save_chapter_verified_with_allow_empty_overwrite(
     workspace_path: &Path,
     project_id: &str,
@@ -288,6 +299,7 @@ pub fn save_chapter_verified_with_allow_empty_overwrite(
     )
 }
 
+/// 清空章节正文（成功时丢弃回执）。等效于 `save_chapter_verified_with_options(_, "", true)`。
 pub fn clear_chapter_content(
     workspace_path: &Path,
     project_id: &str,
@@ -297,6 +309,7 @@ pub fn clear_chapter_content(
     clear_chapter_content_verified(workspace_path, project_id, volume_id, chapter_id).map(|_| ())
 }
 
+/// 清空章节正文并返回验证回执。
 pub fn clear_chapter_content_verified(
     workspace_path: &Path,
     project_id: &str,
@@ -482,6 +495,9 @@ pub fn rename_chapter(
     Ok(())
 }
 
+/// 删除章节。经过 `delete_guard` 验证后，将章节目录移入 `app-meta/sync/trash/`
+/// 并记录 tombstone（30 天后可清理）。删除后同步状态中保留墓碑记录，
+/// 确保下次同步时远端能感知到本地删除。
 pub fn delete_chapter(
     workspace_path: &Path,
     project_id: &str,

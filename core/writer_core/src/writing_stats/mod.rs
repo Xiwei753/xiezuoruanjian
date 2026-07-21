@@ -42,6 +42,11 @@ pub mod store;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// 事件来源 — 决定字符数分配到哪个计数器。
+///
+/// 聚合时按此枚举分发：`HumanTyped`→`human_typed_chars`，`Pasted`→`pasted_chars`，
+/// `Deleted`→`deleted_chars`，`AiInserted`→`ai_inserted_chars`。
+/// `SyncRemote` 和 `Unknown` 不计入任何分类计数器，但仍计入 `net_delta_chars`。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum EventSource {
@@ -148,6 +153,8 @@ impl WritingInputEvent {
     }
 }
 
+/// 日期范围 — 查询统计数据的半开区间 `[start_date, end_date]`（两端包含）。
+/// 日期格式为 `%Y-%m-%d`（ISO 8601），由调用方保证格式合法性。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DateRange {
     pub start_date: String,
