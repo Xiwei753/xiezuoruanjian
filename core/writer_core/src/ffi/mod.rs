@@ -124,6 +124,10 @@ pub unsafe extern "C" fn writer_core_init(path: *const c_char) -> i32 {
     }
 }
 
+/// # Safety
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+/// Thread-safe: acquires the global Mutex; must not be called from a thread
+/// already holding the Mutex (non-recursive lock, will deadlock).
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_get_last_error() -> *mut c_char {
     let msg = LAST_ERROR
@@ -147,6 +151,9 @@ pub unsafe extern "C" fn writer_core_get_load_status() -> *mut c_char {
 
 /// # Safety
 /// `text` must be a valid null-terminated UTF-8 C string.
+/// Thread-safe: acquires the global Mutex; must not be called from a thread
+/// already holding the Mutex (non-recursive lock, will deadlock).
+/// Returns word count on success, -2 on invalid UTF-8, -3 on mutex error.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_calculate_word_count(text: *const c_char) -> i32 {
     let text_str = match c_str_to_rust(text) {
@@ -169,6 +176,10 @@ pub unsafe extern "C" fn writer_core_free_string(ptr: *mut c_char) {
     }
 }
 
+/// # Safety
+/// Thread-safe: acquires the global Mutex; must not be called from a thread
+/// already holding the Mutex (non-recursive lock, will deadlock).
+/// Returns 1 if AI is available, 0 if unavailable or on error.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_is_ai_available() -> i32 {
     match with_core(|core| Ok(core.ai_available() as i32)) {

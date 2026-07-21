@@ -1869,6 +1869,14 @@ impl EditorEngine {
 ///
 /// 预输入文字必须真实推动后续正文、触发换行和 reflow。
 /// composing 更新不会修改 committed text、Undo、保存和同步状态。
+///
+/// 生命周期：BeginComposition → (CompositionUpdate)* → FinishComposition/CancelComposition。
+/// 每次 setComposingText 产生一个 CompositionUpdateTransaction，驱动 overlay
+/// 做轻量吐字/吞字动画。commit 时清空 preedit layer，正式 buffer 插入 commitString，
+/// 生成 CompositionCommitOrCancelTransaction。
+///
+/// `visual_class_kinds` 与 old_revision/new_revision 的 virtualText 差异一一对应，
+/// 平台端据此决定每个区域的动画类型（Insert/Delete/Move/Crossfade/Static）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompositionUpdateTransaction {
@@ -1886,6 +1894,11 @@ pub struct CompositionUpdateTransaction {
 ///
 /// 视觉文字完全相同时（is_visual_same=true），不重复播放吐字，
 /// 只移除 underline、segment style 和 composing cursor。
+///
+/// 不变量：`is_commit=true` 时 `committed_text_after` 是 commit 后的正文；
+/// `is_commit=false` 时 `committed_text_after` 是取消后恢复的原文（与 commit 前相同）。
+/// `visual_class_kinds` 基于 composition_revision.virtual_text 与 committed_text_after
+/// （commit）或 committed_text_before（cancel）的差异分类。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompositionCommitOrCancelTransaction {

@@ -1366,6 +1366,10 @@ impl EditorKernel {
         })
     }
 
+    /// 构造过期会话结果 — expected_revision 不匹配时返回的空操作结果。
+    ///
+    /// 不修改正文和选区，display_patches 为空。base_revision 和 new_revision
+    /// 均为当前 revision（未递增），平台端据此刷新本地状态并重试。
     fn stale_session_result(
         &mut self,
     ) -> EditorEditResult {
@@ -1530,6 +1534,17 @@ impl EditorKernel {
         }
     }
 
+    /// IME composition commit — 将预输入文本写入正文，替换 [byte_start, byte_end_exclusive)。
+    ///
+    /// 会话验证：必须匹配活跃会话的 session_id、base_revision 和 generation，
+    /// 否则返回 StaleRevision（会话可能已被 TextEditSession reset 使过期）。
+    /// 范围验证：byte_start/byte_end_exclusive 必须与会话的 replace_start/replace_end_exclusive
+    /// 一致，否则返回 InvalidRange（commit 不能改变 composition 的替换范围）。
+    ///
+    /// 光标坐标转换：resulting_selection_anchor/head 由平台以 UTF-8 byte offset 传入，
+    /// 内核自动对齐到 char boundary。若对齐后值与传入值不同，返回 AppliedWithAdjustedSelection。
+    ///
+    /// 确认后 composition 会话销毁，undo/redo 栈正常记录。
     #[allow(clippy::too_many_arguments)]
     fn apply_commit_text(
         &mut self,
@@ -2163,6 +2178,9 @@ impl EditorKernel {
         })
     }
 
+    /// 返回当前 composition 会话的三元组 (session_id, base_revision, generation)。
+    /// 无活跃会话时返回 None。平台端用此信息构造 UpdateComposition/FinishComposition
+    /// 命令的 composition_session_id / composition_base_revision / composition_generation 参数。
     pub fn composition_session_info(&self) -> Option<(u64, u64, u64)> {
         self.composition_session.as_ref().map(|s| (s.session_id, s.base_revision, s.generation))
     }

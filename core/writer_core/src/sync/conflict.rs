@@ -272,6 +272,11 @@ impl crate::sync::SyncService {
 
     /// 记录同步冲突——将冲突元数据追加到 `app-meta/sync/conflicts.json`，
     /// 并将本地内容备份为 `{path}.conflict.{timestamp}` 文件。
+    ///
+    /// 不变量：调用此方法前，路径必须已加入 `SyncState.conflicted_files`；
+    /// 调用后 `conflicts.json` 与 `state.conflicts` 保持一致。
+    /// 备份文件仅用于用户手动对比，不参与自动合并或同步逻辑。
+    /// 写入使用 atomic rename（先写 .tmp 再 rename），避免半写状态。
     pub fn record_sync_conflict(
         workspace_path: &Path,
         conflict: SyncConflict,

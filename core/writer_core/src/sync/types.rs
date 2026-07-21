@@ -621,6 +621,10 @@ pub struct SyncState {
     /// purge_after 过期后由同步引擎清理。
     #[serde(default)]
     pub tombstones: Vec<Tombstone>,
+    /// 本地已删除的文件路径集合——记录因远端删除而同步移除的本地文件。
+    /// 与 tombstones 的区别：tombstones 记录本地主动删除的文件（用于上传 delete 操作），
+    /// deleted_files 记录因远端删除而本地移除的文件（用于跳过已删除文件的三路比较）。
+    /// 两者不重叠：同一文件不会同时出现在两个集合中。
     #[serde(default)]
     pub deleted_files: std::collections::HashSet<String>,
     /// 本设备唯一标识，用于 LWW 平局决胜（字典序大的 device_id 获胜）。

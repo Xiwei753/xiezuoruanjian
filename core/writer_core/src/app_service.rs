@@ -23,12 +23,17 @@ struct EditorSession {
 
 /// Thin UniFFI adapter. Stable Core API behavior lives in `api::WriterCoreApi`.
 ///
-/// editor_session 和 session_registry 各自用 Mutex 保护，保证线程安全。
-/// Mutex 只在单次 FFI 调用期间持有，不跨调用持有，避免死锁。
+/// ## 线程安全
 ///
-/// editor_session 是旧版正文章节专用路径（单会话），
-/// session_registry 是新版多目标会话路径（项目名/章节名/星图标题/正文等）。
-/// 两者独立维护，不共享 EditorKernel 实例。
+/// `editor_session` 和 `session_registry` 各自用 `Mutex` 保护，保证线程安全。
+/// `Mutex` 只在单次 FFI 调用期间持有，不跨调用持有，避免死锁。
+/// **不得在持有 `editor_session` 锁的同时获取 `session_registry` 锁**（锁序：先 session 后 registry）。
+///
+/// ## 双会话路径
+///
+/// `editor_session` 是旧版正文章节专用路径（单 EditorKernel，单 generation），
+/// `session_registry` 是新版多目标会话路径（项目名/章节名/星图标题/正文等，各自独立 EditorKernel 和 generation）。
+/// 两者独立维护，不共享 EditorKernel 实例。同一时刻同一章节只能通过一条路径访问。
 pub struct WriterAppService {
     api: WriterCoreApi,
     /// 旧版正文章节会话——单 EditorKernel，generation 在 load_text 前递增。

@@ -954,6 +954,15 @@ pub enum CaretAffinity {
     Downstream,
 }
 
+/// 视觉行 — 排版后的单行文本，同时持有 UTF-8 byte offset 和 QChar (UTF-16) offset。
+///
+/// 坐标空间：x/y/width/height 为文档坐标系（不含 scroll offset）。
+/// byte_start/byte_end 为半开区间 [byte_start, byte_end)（UTF-8 byte offset，文档级）。
+/// qchar_start/qchar_end 为半开区间 [qchar_start, qchar_end)（QChar index，文档级）。
+///
+/// 段落相关字段（para_text, para_start, para_qchar_start/end, qtextline_idx,
+/// line_wrap_width, line_indent_x, para_indent, x_end_trailing）用于
+/// 重新调用 QTextLayout API 做精确光标定位和 hit test。
 #[derive(Clone, Debug, PartialEq)]
 pub struct VisualLine {
     pub id: usize,
@@ -983,6 +992,8 @@ pub struct VisualLine {
     pub qt_descent: f64,
 }
 
+/// 光标矩形 — 文档坐标系（不含 scroll offset）。
+/// visible=false 表示光标在可视区域外，平台端不应绘制。
 #[derive(Clone, Debug, PartialEq)]
 pub struct CaretRect {
     pub x: f64,
@@ -1004,6 +1015,9 @@ pub struct LayoutParams {
     pub padding: f32,
 }
 
+/// 布局快照 — 某次排版结果的完整快照，与特定 text_revision 绑定。
+/// text_ptr/text_len 用于快速判断文本缓冲区是否变更（指针+长度双重校验）。
+/// 缓存失效条件：revision、指针、长度、宽度、字号、字体、行距、缩进或内边距任一变化。
 #[derive(Clone, Debug)]
 pub struct LayoutSnapshot {
     pub text_revision: u64,
@@ -1019,6 +1033,10 @@ pub struct LayoutSnapshot {
     pub content_height: f32,
 }
 
+/// 编辑器布局引擎 — 管理 QTextLayout 排版缓存。
+///
+/// 线程约束：QTextLayout 只能在 GUI 线程使用，EditorLayout 不可跨线程。
+/// 缓存策略：snapshot() 在参数/revision 不变时复用缓存，避免重复排版。
 #[derive(Default)]
 pub struct EditorLayout {
     cache: Option<LayoutSnapshot>,
