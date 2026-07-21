@@ -17,6 +17,7 @@ use super::editor_kernel::EditorInputError;
 pub struct TextEditSessionId(pub u64);
 
 impl TextEditSessionId {
+    /// 提取内部 u64 值，用于 FFI 边界传递。
     pub fn as_u64(&self) -> u64 {
         self.0
     }
@@ -39,6 +40,7 @@ pub struct TextEditSession {
 }
 
 impl TextEditSession {
+    /// 创建空文本会话。generation 初始为 0，is_persistent 标识是否为长期会话。
     pub fn new(session_id: TextEditSessionId, target_id: String, is_persistent: bool) -> Self {
         Self {
             kernel: EditorKernel::new(),
@@ -49,6 +51,7 @@ impl TextEditSession {
         }
     }
 
+    /// 用初始文本和光标创建会话。cursor 必须为合法 UTF-8 char boundary。
     pub fn with_text(
         session_id: TextEditSessionId,
         target_id: String,
@@ -68,6 +71,9 @@ impl TextEditSession {
 }
 
 /// 文字编辑会话注册表 — 管理所有活跃编辑会话。
+///
+/// 会话 ID 从 1 开始单调递增（saturating_add），关闭的 ID 不回收。
+/// 注册表本身不持有锁——调用方需保证 `&mut self` 操作的线程安全。
 pub struct TextEditSessionRegistry {
     sessions: std::collections::HashMap<u64, TextEditSession>,
     next_session_id: u64,
@@ -81,6 +87,8 @@ impl TextEditSessionRegistry {
         }
     }
 
+    /// 创建新会话并返回其 ID。空文本使用 `new()`，非空使用 `with_text()`。
+    /// `initial_cursor` 仅在 `initial_text` 非空时有效。
     pub fn create_session(
         &mut self,
         target_id: String,
@@ -105,14 +113,17 @@ impl TextEditSessionRegistry {
         Ok(TextEditSessionId(id))
     }
 
+    /// 获取会话的不可变引用。不存在时返回 None。
     pub fn get_session(&self, session_id: TextEditSessionId) -> Option<&TextEditSession> {
         self.sessions.get(&session_id.0)
     }
 
+    /// 获取会话的可变引用。不存在时返回 None。
     pub fn get_session_mut(&mut self, session_id: TextEditSessionId) -> Option<&mut TextEditSession> {
         self.sessions.get_mut(&session_id.0)
     }
 
+    /// 关闭会话并移除。返回 true 表示存在并已移除，false 表示不存在。
     pub fn close_session(&mut self, session_id: TextEditSessionId) -> bool {
         self.sessions.remove(&session_id.0).is_some()
     }
@@ -145,10 +156,12 @@ impl TextEditSessionRegistry {
         }
     }
 
+    /// 检查会话是否存在。
     pub fn session_exists(&self, session_id: TextEditSessionId) -> bool {
         self.sessions.contains_key(&session_id.0)
     }
 
+    /// 当前活跃会话数量。
     pub fn active_session_count(&self) -> usize {
         self.sessions.len()
     }

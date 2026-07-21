@@ -8,19 +8,27 @@ extern "C" {
 #endif
 
 // ── Core lifecycle ──
+// writer_core_init: Initialize core with workspace path. Returns 0 on success,
+//   -1 if path is null/empty, -2 if workspace dir creation failed, -3 if manifest write failed.
+// All char* return values are heap-allocated by core and MUST be freed via writer_core_free_string.
 int32_t writer_core_init(const char* path);
 char*  writer_core_get_load_status(void);
 char*  writer_core_get_last_error(void);
 int32_t writer_core_calculate_word_count(const char* text);
+// writer_core_free_string: Free a char* previously returned by any writer_core_* function.
+//   Passing null is safe (no-op). Must not be called twice on the same pointer.
 void    writer_core_free_string(char* ptr);
 
 // ── Layout Policy ──
+// writer_core_resolve_layout: Input/output are JSON strings (ResultEnvelope<LayoutPolicyDto>).
 char*  writer_core_resolve_layout(const char* metrics_json);
 
 // ── Screen Policy ──
+// writer_core_resolve_screen_policy: Input/output are JSON strings (ResultEnvelope<ScreenPolicyDto>).
 char*  writer_core_resolve_screen_policy(const char* screen_role_json, const char* shell_mode_json);
 
 // ── Workspace ──
+// All return ResultEnvelope JSON. Path arguments are UTF-8 strings.
 char*  writer_core_validate_workspace(void);
 char*  writer_core_list_workspaces(void);
 char*  writer_core_open_workspace(const char* path);
@@ -83,6 +91,9 @@ char*  writer_core_delete_starmap(const char* starmap_id);
 char*  writer_core_rename_starmap(const char* starmap_id, const char* new_title);
 
 // ── Sync ──
+// All sync functions use JSON-in/JSON-out via ResultEnvelope.
+// writer_core_save_sync_config: Input is SyncConfigDto JSON.
+// Others take no input; config is loaded from workspace state.
 char*  writer_core_load_sync_config(void);
 char*  writer_core_save_sync_config(const char* config_json);
 char*  writer_core_sync_dry_run(void);

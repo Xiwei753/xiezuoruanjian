@@ -10,12 +10,17 @@
 
 // ── Inline utility helpers (shared across domains) ──
 
+// dup_napi_string: Copy a NAPI string value into a pre-allocated buffer.
+//   Caller must ensure buf is large enough (typically 2048 for paths).
 static char* dup_napi_string(napi_env env, napi_value value, char* buf, size_t buf_size) {
     size_t len = 0;
     napi_get_value_string_utf8(env, value, buf, buf_size, &len);
     return buf;
 }
 
+// ReturnJsonString: Bridge helper — wraps a core-allocated JSON char* into a NAPI string.
+//   Takes ownership of `json`: calls writer_core_free_string after copying to NAPI value.
+//   Returns a minimal error envelope if json is null.
 static napi_value ReturnJsonString(napi_env env, char* json) {
     if (json == nullptr) {
         napi_value empty;
@@ -41,6 +46,8 @@ static napi_value ReturnJsonString(napi_env env, char* json) {
 
 // ── Core lifecycle ──
 
+// NativeInit: Initialize core with workspace path. Returns int32 status code:
+//   0 = success, -1 = null/empty path, -2 = dir creation failed, -3 = manifest failed.
 static napi_value NativeInit(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value args[1];
@@ -69,6 +76,7 @@ static napi_value NativeInit(napi_env env, napi_callback_info info) {
     return ret;
 }
 
+// NativeGetLoadStatus: Returns current core load status as JSON string, or null on failure.
 static napi_value NativeGetLoadStatus(napi_env env, napi_callback_info info) {
     char* status = writer_core_get_load_status();
     if (status == nullptr) {
@@ -83,6 +91,7 @@ static napi_value NativeGetLoadStatus(napi_env env, napi_callback_info info) {
     return result;
 }
 
+// NativeGetLastError: Returns last error message, or empty string if none.
 static napi_value NativeGetLastError(napi_env env, napi_callback_info info) {
     char* err = writer_core_get_last_error();
     if (err == nullptr) {
@@ -97,6 +106,7 @@ static napi_value NativeGetLastError(napi_env env, napi_callback_info info) {
     return result;
 }
 
+// NativeCalculateWordCount: Returns word count for the given text (int32).
 static napi_value NativeCalculateWordCount(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value args[1];
@@ -121,7 +131,7 @@ static napi_value NativeCalculateWordCount(napi_env env, napi_callback_info info
 }
 
 // ── Layout Policy ──
-
+// NativeResolveLayout: Takes metrics JSON, returns ResultEnvelope<LayoutPolicyDto> JSON.
 static napi_value NativeResolveLayout(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value args[1];
@@ -144,7 +154,7 @@ static napi_value NativeResolveLayout(napi_env env, napi_callback_info info) {
 }
 
 // ── Screen Policy ──
-
+// NativeResolveScreenPolicy: Takes screen_role + shell_mode JSON, returns ResultEnvelope<ScreenPolicyDto> JSON.
 static napi_value NativeResolveScreenPolicy(napi_env env, napi_callback_info info) {
     size_t argc = 2;
     napi_value args[2];
@@ -187,7 +197,10 @@ static napi_value NativeIsAiAvailable(napi_env env, napi_callback_info info) {
 }
 
 // ── Module registration ──
-
+// Init: Merges descriptors from all domains (workspace, project, chapter, settings,
+//   sync, stats, starmap) plus core lifecycle into a single NAPI module.
+//   Domain descriptor arrays are allocated by each get*Descriptors() function
+//   and must remain valid for the lifetime of the module.
 static napi_value Init(napi_env env, napi_value exports) {
     // Collect descriptors from all domains
     size_t ws_count = 0, proj_count = 0, chap_count = 0, set_count = 0;

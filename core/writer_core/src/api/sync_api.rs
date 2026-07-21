@@ -1,7 +1,12 @@
 use super::service::{ApiResult, WriterCoreApi};
 use super::types::*;
 
+/// 同步 API — 跨平台同步配置、执行和冲突解决契约。
+///
+/// 同步配置（config）和密钥（secrets）分开存储：config 可同步，secrets 仅存本地。
+/// 冲突解决提供三种策略：保留本地、采用远端、标记已合并。
 impl WriterCoreApi {
+    /// 加载同步配置（含 remote_url、backend_type、auto_sync 等）。
     pub fn load_sync_config(&self) -> ApiResult<SyncConfigDto> {
         self.core()
             .load_sync_config()
@@ -9,6 +14,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// 保存同步配置。成功返回 true。
     pub fn save_sync_config(&self, config: SyncConfigDto) -> ApiResult<bool> {
         self.core()
             .save_sync_config(&config.into())
@@ -16,6 +22,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// 加载同步密钥（token 等）。密钥不同步到远端，仅存本地。
     pub fn load_sync_secrets(&self) -> ApiResult<SyncSecretsDto> {
         self.core()
             .load_sync_secrets()
@@ -23,6 +30,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// 保存同步密钥。成功返回 true。
     pub fn save_sync_secrets(&self, secrets: SyncSecretsDto) -> ApiResult<bool> {
         self.core()
             .save_sync_secrets(&secrets.into())
@@ -30,6 +38,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// 加载同步状态（上次同步时间、远端 commit 等）。
     pub fn load_sync_state(&self) -> ApiResult<SyncStateDto> {
         self.core()
             .load_sync_state()
@@ -37,6 +46,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// 执行同步诊断——检查网络、认证、仓库、分支可达性。
     pub fn perform_sync_diagnostics(
         &self,
         config: SyncConfigDto,
@@ -47,6 +57,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// 干运行——计算同步计划但不实际执行文件传输。
     pub fn perform_sync_dry_run(&self, config: SyncConfigDto) -> ApiResult<SyncPlanDto> {
         self.core()
             .perform_sync_dry_run(&config.into())
@@ -54,6 +65,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// 执行同步。`force_sync=true` 跳过部分安全检查（如脏仓库保护）。
     pub fn perform_sync(&self, config: SyncConfigDto, force_sync: bool) -> ApiResult<SyncResultDto> {
         self.core()
             .perform_sync(&config.into(), force_sync)
@@ -61,6 +73,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// 冲突解决：保留本地版本，丢弃远端变更。
     pub fn resolve_conflict_keep_local(&self, path: &str) -> ApiResult<bool> {
         self.core()
             .resolve_conflict_keep_local(path)
@@ -68,6 +81,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// 冲突解决：采用远端版本，覆盖本地。
     pub fn resolve_conflict_take_remote(&self, path: &str) -> ApiResult<bool> {
         self.core()
             .resolve_conflict_take_remote(path)
@@ -75,6 +89,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// 冲突解决：标记为已合并（用户已手动处理）。
     pub fn resolve_conflict_mark_merged(&self, path: &str) -> ApiResult<bool> {
         self.core()
             .resolve_conflict_mark_merged(path)
@@ -82,6 +97,8 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// 检查同步能力——综合 config 和 secrets 判断是否可执行同步。
+    /// 返回 `can_run`、`block_reason_code`（如 "DISABLED"/"TOKEN_MISSING"）和 i18n key。
     #[allow(clippy::unwrap_used)]
     pub fn get_sync_capability(&self) -> ApiResult<SyncCapabilityDto> {
         let config = self.load_sync_config()?;

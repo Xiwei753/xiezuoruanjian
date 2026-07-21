@@ -8,6 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
+/// 编辑光标 — UTF-8 byte offset，始终对齐到 char boundary。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorCursor {
@@ -16,6 +17,7 @@ pub struct EditorCursor {
 }
 
 impl EditorCursor {
+    /// 创建光标，自动将 index 对齐到最近的合法 UTF-8 char boundary。
     pub fn new(text: &str, index: usize) -> Self {
         Self {
             index: clamp_to_char_boundary(text, index),
@@ -23,6 +25,8 @@ impl EditorCursor {
     }
 }
 
+/// 编辑选区 — anchor 为固定端，head 为活动端（用户拖动方向）。
+/// anchor == head 表示折叠光标（无选中）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorSelection {
@@ -31,6 +35,7 @@ pub struct EditorSelection {
 }
 
 impl EditorSelection {
+    /// 创建折叠选区（光标模式），anchor == head。
     pub fn collapsed(text: &str, index: usize) -> Self {
         let cursor = EditorCursor::new(text, index);
         Self {
@@ -40,6 +45,7 @@ impl EditorSelection {
     }
 }
 
+/// 文本变更操作 — `index` 为 UTF-8 byte offset（半开区间起始）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum EditorChange {
@@ -48,12 +54,14 @@ pub enum EditorChange {
 }
 
 impl EditorChange {
+    /// 返回变更起始位置的 UTF-8 byte offset。
     pub fn index(&self) -> usize {
         match self {
             Self::Insert { index, .. } | Self::Delete { index, .. } => *index,
         }
     }
 
+    /// 返回被插入或删除的文本内容。
     pub fn text(&self) -> &str {
         match self {
             Self::Insert { text, .. } | Self::Delete { text, .. } => text,
@@ -61,6 +69,8 @@ impl EditorChange {
     }
 }
 
+/// 事务原因 — 标识触发编辑操作的用户意图或系统事件。
+/// 平台端和 Core 均依赖此枚举决定动画策略和光标行为。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum EditorTransactionCause {
@@ -76,6 +86,9 @@ pub enum EditorTransactionCause {
     Programmatic,
 }
 
+/// 编辑事务 — 一次原子编辑操作的完整描述。
+/// 包含旧/新文本、变更列表、旧/新选区、原因和动画标记。
+/// `changes` 中的 `index` 均为 UTF-8 byte offset，基于 `new_text`。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorTransaction {
@@ -88,6 +101,7 @@ pub struct EditorTransaction {
     pub should_animate: bool,
 }
 
+/// 动画种类 — 区分插入、删除、光标移动三种基本视觉反馈。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum EditorAnimationKind {
@@ -96,10 +110,10 @@ pub enum EditorAnimationKind {
     Cursor,
 }
 
-/// 分层动画模式 — 替代旧的 NoAnimation/CursorOnly/FullAnimation 三值判定。
+/// 分层动画模式 — Core 是动画语义的权威。
 ///
-/// Core 是动画语义的权威：choose_animation_mode 根据文本特征和系统状态
-/// 返回平台层应使用的动画模式。平台层只负责 offset 转换、布局捕获、渲染。
+/// `choose_animation_mode` 根据文本特征和系统状态返回平台层应使用的动画模式。
+/// 平台层只负责 offset 转换、布局捕获、渲染，不得自行决定动画粒度。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AnimationMode {
@@ -111,10 +125,10 @@ pub enum AnimationMode {
     RunAnimation,
     /// 换行/中间插入导致换行，按 old layout → new layout 行级 reflow
     LineReflowAnimation,
-    /// 极端长文本或复杂布局，用局部 snapshot 做整体位移/淡入淡出
-    /// UNAVAILABLE: No snapshot renderer exists on any platform.
-    /// choose_animation_mode() must never return this variant.
-    /// Retained for forward compatibility only.
+    /// 极端长文本或复杂布局，用局部 snapshot 做整体位移/淡入淡出。
+    /// 当前仅 undo/redo 路径使用（因无法拆分为细粒度 glyph/cluster 动画）。
+    /// choose_animation_mode() 对正常编辑路径不会返回此变体。
+    /// 平台端收到此模式时应使用快照对比方式渲染过渡。
     SnapshotAnimation,
     /// 系统抑制：滚动/加载/字号变化/章节切换/动画关闭
     /// 用户输入/删除/换行/IME commit/中间插入不能返回此值

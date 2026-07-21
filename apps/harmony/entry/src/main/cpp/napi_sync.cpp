@@ -1,5 +1,8 @@
 // ── Sync NAPI handlers ──
 // Included by napi_init.cpp — expects ReturnJsonString and writer_core_bridge.h to be available.
+// All handlers return ResultEnvelope JSON via ReturnJsonString (which frees the core-allocated char*).
+// NativeSaveSyncConfig takes a SyncConfigDto JSON as its first argument.
+// Other sync handlers take no arguments; core loads config from workspace state.
 
 static napi_value NativeLoadSyncConfig(napi_env env, napi_callback_info info) {
     return ReturnJsonString(env, writer_core_load_sync_config());

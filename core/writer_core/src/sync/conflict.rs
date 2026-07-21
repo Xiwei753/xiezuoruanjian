@@ -255,6 +255,8 @@ impl crate::sync::SyncService {
         }
     }
 
+    /// 记录同步冲突——将冲突元数据追加到 `app-meta/sync/conflicts.json`，
+    /// 并将本地内容备份为 `{path}.conflict.{timestamp}` 文件。
     pub fn record_sync_conflict(
         workspace_path: &Path,
         conflict: SyncConflict,

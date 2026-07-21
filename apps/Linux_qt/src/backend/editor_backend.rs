@@ -26,6 +26,11 @@ mod chapter_operations;
 #[path = "writing_stats.rs"]
 mod writing_stats;
 
+/// 编辑器 QML 后端——桥接 QML 前端与 Core API。
+///
+/// 所有 QML 可调用方法均通过 `#[allow(non_snake_case)]` 保持 Qt 命名惯例。
+/// 必须在 GUI 线程创建和使用——QObject 不可跨线程。
+/// 内部通过 `AppRef` 访问全局 `AppBackend`，后者持有 `WriterCoreApi` 实例。
 #[allow(non_snake_case)] // Qt QML naming convention (e.g. projectsReloaded)
 #[derive(QObject, Default)]
 pub struct EditorBackend {

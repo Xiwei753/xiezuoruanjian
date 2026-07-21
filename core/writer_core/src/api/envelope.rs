@@ -32,6 +32,9 @@ where
     pub changed_entities: Vec<ChangedEntityDto>,
 }
 
+/// 变更实体 DTO — 标识一次 API 调用导致的实体变更。
+/// `entity_type` 为 API 契约字符串（如 "ChapterSaved"、"ProjectCreated"），
+/// 平台端据此刷新对应 UI 区域。`entity_id` 为可选的具体实体标识。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ChangedEntityDto {
@@ -44,6 +47,7 @@ impl<T> ResultEnvelope<T>
 where
     T: Serialize,
 {
+    /// 构造成功信封，无变更路径和实体。
     pub fn success(data: T) -> Self {
         Self {
             success: true,
@@ -58,6 +62,7 @@ where
         }
     }
 
+    /// 构造成功信封，附带变更路径和实体列表（供平台端增量刷新）。
     pub fn success_with_changes(
         data: T,
         changed_paths: Vec<String>,
@@ -70,6 +75,7 @@ where
         }
     }
 
+    /// 构造错误信封——从 WriterError 提取 code、message_key、params 和 raw_error。
     pub fn error(error: WriterError) -> Self {
         Self {
             success: false,
@@ -84,6 +90,7 @@ where
         }
     }
 
+    /// 从 ApiResult 构造信封——Ok 映射为 success，Err 映射为 error。
     pub fn from_api_result(result: Result<T, WriterError>) -> Self {
         match result {
             Ok(data) => Self::success(data),
@@ -91,6 +98,7 @@ where
         }
     }
 
+    /// 将类型化信封转为 `serde_json::Value` 信封（用于 FFI 边界统一序列化）。
     pub fn into_value_envelope(self) -> ResultEnvelope<serde_json::Value> {
         ResultEnvelope {
             success: self.success,
@@ -105,6 +113,7 @@ where
         }
     }
 
+    /// 序列化为 JSON 字符串。序列化失败时返回标准错误信封（success=false, errorCode=JSON_ERROR）。
     pub fn to_json_string(&self) -> String {
         serde_json::to_string(self).unwrap_or_else(|err| {
             serde_json::json!({

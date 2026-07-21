@@ -88,6 +88,8 @@ cpp! {{
     }
 }}
 
+/// 确保场景图四层结构——从上到下：staticText(0), animatedText(1), decorations(2), cursor(3)。
+/// 每层由 QSGOpacityNode 包裹，支持独立透明度控制。必须在 GUI 线程调用。
 pub fn ensure_four_layer_nodes(root_raw: *mut std::ffi::c_void, item_ptr: *mut std::ffi::c_void) {
     // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [
@@ -100,6 +102,9 @@ pub fn ensure_four_layer_nodes(root_raw: *mut std::ffi::c_void, item_ptr: *mut s
     })
 }
 
+/// 更新纹理节点——将 QImage 的指定源区域渲染到场景图目标位置。
+/// `src_*` 为源图像物理像素坐标，`dest_*` 为逻辑像素坐标，`dpr` 用于缩放转换。
+/// 返回更新后的根节点指针。必须在 GUI 线程调用。
 pub fn update_texture_node(
     old_raw: *mut std::ffi::c_void,
     item_ptr: *mut std::ffi::c_void,

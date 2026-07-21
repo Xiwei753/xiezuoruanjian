@@ -1,7 +1,13 @@
 use super::service::{ApiResult, WriterCoreApi};
 use super::types::*;
 
+/// 章节 API — 跨平台章节 CRUD 契约。
+///
+/// 所有 `project_id`/`volume_id`/`chapter_id` 均为 Core 分配的 UUID 字符串。
+/// 正文内容始终为 UTF-8 纯文本，`save_chapter_content` 通过 `write_chapter_verified`
+/// 执行原子写入（tmp+rename），防止损坏。
 impl WriterCoreApi {
+    /// 列出指定卷下的所有章节，按 `order` 字段排序。
     pub fn list_chapters(
         &self,
         project_id: &str,
@@ -13,6 +19,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// 创建章节，自动分配 UUID 和递增 order。
     pub fn create_chapter(
         &self,
         project_id: &str,
@@ -25,6 +32,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// 在项目中创建章节——若项目无卷则自动创建"第一卷"。
     pub fn create_chapter_in_project(
         &self,
         project_id: &str,
@@ -40,6 +48,7 @@ impl WriterCoreApi {
         self.create_chapter(project_id, &volume_id, title)
     }
 
+    /// 重命名章节标题。
     pub fn rename_chapter(
         &self,
         project_id: &str,
@@ -53,6 +62,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// 删除章节（磁盘文件移至 trash，非立即删除）。
     pub fn delete_chapter(
         &self,
         project_id: &str,
@@ -65,6 +75,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// 重排章节顺序。`ordered_chapter_ids` 必须包含该卷下所有章节 ID。
     pub fn reorder_chapters(
         &self,
         project_id: &str,
@@ -77,6 +88,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// 打开章节，返回正文内容和元数据。
     pub fn open_chapter(
         &self,
         project_id: &str,
@@ -89,6 +101,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// 保存章节正文（原子写入）。空内容覆盖非空章节会被 `EmptyOverwriteBlocked` 拦截。
     pub fn save_chapter_content(
         &self,
         project_id: &str,
@@ -102,6 +115,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// 保存章节正文（带空覆盖控制）。`allow_empty_overwrite=true` 绕过安全拦截。
     pub fn save_chapter_content_with_options(
         &self,
         project_id: &str,
@@ -122,6 +136,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// 清空章节正文（等价于 `save_chapter_content_with_options(..., true)`）。
     pub fn clear_chapter_content(
         &self,
         project_id: &str,
@@ -134,6 +149,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// 更新章节备注（note 字段，独立于正文）。
     pub fn update_chapter_note(
         &self,
         project_id: &str,

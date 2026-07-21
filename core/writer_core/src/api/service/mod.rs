@@ -11,11 +11,19 @@ use crate::facade::WriterCore;
 
 pub type ApiResult<T> = Result<T, WriterError>;
 
+/// 跨平台 API 入口 — 所有平台（Android/Linux/Harmony/Windows）通过此结构体访问 Core 功能。
+///
+/// `workspace_path` 是工作区根目录，Core 内部所有路径均基于此解析。
+/// 此结构体无内部可变状态，每次调用通过 `core()` 创建无状态 `WriterCore` 实例，
+/// 因此天然线程安全（但 `WriterCoreApi` 本身未标记 `Send/Sync`，因为 `PathBuf` 的
+/// 跨线程共享由调用方保证）。
 pub struct WriterCoreApi {
     pub(crate) workspace_path: PathBuf,
 }
 
 impl WriterCoreApi {
+    /// 创建 API 实例。`workspace_path` 无需预先存在——部分 API（如 workspace 诊断）
+    /// 会检测路径有效性并返回结构化错误。
     pub fn new<P: AsRef<Path>>(workspace_path: P) -> Self {
         Self {
             workspace_path: workspace_path.as_ref().to_path_buf(),

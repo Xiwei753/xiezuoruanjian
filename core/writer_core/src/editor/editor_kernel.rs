@@ -350,6 +350,7 @@ impl Default for EditorKernel {
 }
 
 impl EditorKernel {
+    /// 创建空编辑器。默认 animation_duration_ms=160, max_animated_chars=8, animation_enabled=true。
     pub fn new() -> Self {
         Self {
             text: String::new(),
@@ -367,6 +368,8 @@ impl EditorKernel {
         }
     }
 
+    /// 用初始文本和光标创建编辑器。`cursor` 必须是合法 UTF-8 char boundary 且 ≤ text.len()，
+    /// 否则返回 `EditorInputError::InvalidCursorOffset`。
     pub fn with_text(text: String, cursor: usize) -> Result<Self, EditorInputError> {
         if cursor > text.len() || !text.is_char_boundary(cursor) {
             return Err(EditorInputError::InvalidCursorOffset {
@@ -408,30 +411,37 @@ impl EditorKernel {
         clamped
     }
 
+    /// 设置动画时长（毫秒）。仅影响后续事务，不改变已生成的事务。
     pub fn set_animation_duration_ms(&mut self, duration_ms: u64) {
         self.animation_duration_ms = duration_ms;
     }
 
+    /// 设置动画总开关。false 时所有编辑返回 `AnimationMode::SystemSuppressed`。
     pub fn set_animation_enabled(&mut self, enabled: bool) {
         self.animation_enabled = enabled;
     }
 
+    /// 当前正文（UTF-8 纯文本）。
     pub fn text(&self) -> &str {
         &self.text
     }
 
+    /// 修订号——每次成功编辑单调递增，用于乐观并发校验（expected_revision）。
     pub fn revision(&self) -> u64 {
         self.revision
     }
 
+    /// 主光标位置（UTF-8 byte offset，保证 char boundary）。
     pub fn cursor(&self) -> usize {
         self.cursor
     }
 
+    /// 选区固定端（UTF-8 byte offset）。与 cursor 不同时表示有选中范围。
     pub fn selection_anchor(&self) -> usize {
         self.selection_anchor
     }
 
+    /// 完整选区 (anchor, cursor)。anchor ≤ cursor 不保证——取决于选择方向。
     pub fn selection(&self) -> (usize, usize) {
         (self.selection_anchor, self.cursor)
     }

@@ -147,6 +147,7 @@ impl SyncService {
 }
 
 impl SyncService {
+    /// 干运行——构建同步计划但不执行文件传输。config.enabled=false 时返回空计划。
     pub fn perform_sync_dry_run(
         workspace_path: &Path,
         config: &SyncConfig,
@@ -159,6 +160,8 @@ impl SyncService {
 }
 
 impl SyncService {
+    /// LWW 同步主入口——基于 Last-Writer-Wins 策略执行文件级同步。
+    /// `force_sync=true` 跳过脏仓库保护等安全检查。
     pub fn perform_lww_sync(
         workspace_path: &Path,
         config: &SyncConfig,
@@ -801,16 +804,19 @@ impl SyncService {
         }
     }
 
+    /// 扫描工作区中所有可同步文件。
     pub fn scan_workspace_for_sync(
         workspace_path: &Path,
     ) -> crate::Result<Vec<crate::sync::types::SyncFileEntry>> {
         scanner::scan_workspace_for_sync(workspace_path)
     }
 
+    /// 从工作区构建同步计划（上传/下载/删除/冲突文件列表）。
     pub fn build_sync_plan_from_workspace(workspace_path: &Path) -> crate::Result<SyncPlan> {
         scanner::build_sync_plan_from_workspace(workspace_path)
     }
 
+    /// 占位同步方法——当前返回 NotImplemented，实际同步通过 perform_lww_sync 执行。
     pub fn sync(&self) -> crate::Result<()> {
         Err(crate::Error::NotImplemented)
     }

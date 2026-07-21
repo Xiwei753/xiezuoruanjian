@@ -44,6 +44,8 @@ pub enum WriterError {
 }
 
 impl WriterError {
+    /// 返回稳定错误码——这是跨端 API 契约，不可随意更改。
+    /// 平台端通过此码做错误分类，不得依赖错误文案包含关系。
     pub fn code(&self) -> &'static str {
         match self {
             WriterError::Io(_) => "IO_ERROR",

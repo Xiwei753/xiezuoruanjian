@@ -42,6 +42,8 @@ pub enum SyncErrorCategory {
 
 
 impl SyncErrorCategory {
+    /// 映射为 UI 状态字符串——供平台端决定同步状态图标和提示文案。
+    /// 返回值是 API 契约，不可随意更改。
     pub fn to_ui_status(&self) -> &'static str {
         match self {
             SyncErrorCategory::None => "error",
@@ -75,6 +77,7 @@ impl SyncErrorCategory {
         }
     }
 
+    /// 映射为 i18n message key——供 UI 层做本地化映射。key 是 API 契约。
     pub fn to_message_key(&self) -> &'static str {
         match self {
             SyncErrorCategory::None => "sync.result.generic_error",
@@ -113,6 +116,7 @@ impl SyncErrorCategory {
         }
     }
 
+    /// 从线格式 code 字符串反序列化。未知 code 映射为 `Other`。
     pub fn from_code(code: &str, _fallback_msg: &str) -> Self {
         match code {
             "none" | "" => SyncErrorCategory::Other,
@@ -346,6 +350,7 @@ impl Default for SyncDiagnosticsResult {
 }
 
 impl SyncDiagnosticsResult {
+    /// 创建默认诊断结果——所有检查项初始为 "unchecked"/false。
     pub fn new() -> Self {
         Self {
             success: false,
@@ -413,6 +418,7 @@ pub struct SyncResult {
 }
 
 impl SyncResult {
+    /// 创建成功结果——无冲突、无错误。
     pub fn success() -> Self {
         Self {
             status: SyncStatus::Success,
@@ -433,6 +439,7 @@ impl SyncResult {
         }
     }
 
+    /// 创建错误结果——status 应为 Error/Conflict 等终端状态，error_category 可选。
     pub fn error(status: SyncStatus, first_sync_mode: FirstSyncMode, error: String, error_category: Option<String>) -> Self {
         let message_key = error_category.as_deref().map(sync_error_category_to_message_key);
         Self {
@@ -454,6 +461,7 @@ impl SyncResult {
         }
     }
 
+    /// 创建冲突结果——包含具体冲突列表和错误描述。
     pub fn conflict(conflicts: Vec<SyncConflict>, error: String, error_category: Option<String>) -> Self {
         Self {
             status: SyncStatus::Conflict,
@@ -505,6 +513,7 @@ impl Default for SyncPlan {
 }
 
 impl SyncPlan {
+    /// 创建空同步计划——无上传/下载/删除/冲突。
     pub fn new() -> Self {
         Self {
             files_to_upload: Vec::new(),
