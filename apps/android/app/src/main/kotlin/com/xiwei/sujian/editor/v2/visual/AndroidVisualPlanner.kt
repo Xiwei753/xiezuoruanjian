@@ -1279,6 +1279,7 @@ class AndroidVisualPlanner {
         }
 
         val matchedNewParaIndices = mutableSetOf<Int>()
+        val unmatchedOldParaIndices = mutableSetOf<Int>()
         for ((oldParaIdx, oldPara) in oldParagraphs.withIndex()) {
             if (oldPara.paragraphId !in affectedOldParagraphIds) continue
 
@@ -1297,7 +1298,10 @@ class AndroidVisualPlanner {
                 bestNewParaIdx = newParagraphs.indexOfFirst { it.paragraphId == oldPara.paragraphId }
                     .takeIf { it >= 0 && it !in matchedNewParaIndices }
             }
-            if (bestNewParaIdx == null) continue
+            if (bestNewParaIdx == null) {
+                unmatchedOldParaIndices.add(oldParaIdx)
+                continue
+            }
             matchedNewParaIndices.add(bestNewParaIdx)
 
             val newPara = newParagraphs[bestNewParaIdx]
@@ -1427,6 +1431,47 @@ class AndroidVisualPlanner {
                     clusterByteStart = newCluster.documentByteStart,
                     clusterByteEndExclusive = newCluster.documentByteEndExclusive
                 ))
+            }
+        }
+
+        for (oldParaIdx in unmatchedOldParaIndices) {
+            val oldPara = oldParagraphs[oldParaIdx]
+            for (lineEntry in oldRev.lineRanges.withIndex()) {
+                if (lineEntry.value.paragraphId != oldPara.paragraphId) continue
+                val oldSnapshot = createSnapshotFromRevision(oldRev, lineEntry.index, preCapturedOldSnapshots, preCapturedNewSnapshots) ?: continue
+                for (cluster in oldSnapshot.clusters) {
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.Delete,
+                        snapshot = oldSnapshot,
+                        sourceRect = cluster.sourceRectInLineImage,
+                        destinationRect = cluster.visualRectInDocument,
+                        startAlpha = 1f,
+                        endAlpha = 0f,
+                        clusterByteStart = cluster.documentByteStart,
+                        clusterByteEndExclusive = cluster.documentByteEndExclusive
+                    ))
+                }
+            }
+        }
+
+        for ((newParaIdx, newPara) in newParagraphs.withIndex()) {
+            if (newParaIdx in matchedNewParaIndices) continue
+            if (newPara.paragraphId !in affectedNewParagraphIds) continue
+            for (lineEntry in newRev.lineRanges.withIndex()) {
+                if (lineEntry.value.paragraphId != newPara.paragraphId) continue
+                val newSnapshot = createSnapshotFromRevision(newRev, lineEntry.index, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = true) ?: continue
+                for (cluster in newSnapshot.clusters) {
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.Insert,
+                        snapshot = newSnapshot,
+                        sourceRect = cluster.sourceRectInLineImage,
+                        destinationRect = cluster.visualRectInDocument,
+                        startAlpha = 0f,
+                        endAlpha = 1f,
+                        clusterByteStart = cluster.documentByteStart,
+                        clusterByteEndExclusive = cluster.documentByteEndExclusive
+                    ))
+                }
             }
         }
     }
