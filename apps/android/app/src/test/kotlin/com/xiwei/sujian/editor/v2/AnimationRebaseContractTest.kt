@@ -4290,4 +4290,397 @@ class AnimationRebaseContractTest {
         val bestByMapped = distUsingMapped.minByOrNull { it.value }!!.key
         assertEquals("Should pick candidate closest to mappedStart=30", candidate2Start, bestByMapped)
     }
+
+    @Test
+    fun lineReflow_shapingChangedPositionUnchanged_producesCrossfadePairViaPrepare() {
+        val oldSnapshot = makeSnapshotWithClusters(1L, 0, 0, 30, listOf(
+            LineClusterSnapshot(
+                clusterId = 0, documentByteStart = 0, documentByteEndExclusive = 3,
+                documentUtf16Start = 0, documentUtf16EndExclusive = 3,
+                sourceRectInLineImage = android.graphics.Rect(0, 0, 30, 20),
+                visualRectInDocument = android.graphics.RectF(0f, 0f, 30f, 20f),
+                shapingFingerprint = "fp_edited", shapingIdentityConfident = true
+            ),
+            LineClusterSnapshot(
+                clusterId = 1, documentByteStart = 3, documentByteEndExclusive = 13,
+                documentUtf16Start = 3, documentUtf16EndExclusive = 13,
+                sourceRectInLineImage = android.graphics.Rect(30, 0, 130, 20),
+                visualRectInDocument = android.graphics.RectF(30f, 0f, 130f, 20f),
+                shapingFingerprint = "fp_retained_old", shapingIdentityConfident = true
+            ),
+            LineClusterSnapshot(
+                clusterId = 2, documentByteStart = 13, documentByteEndExclusive = 23,
+                documentUtf16Start = 13, documentUtf16EndExclusive = 23,
+                sourceRectInLineImage = android.graphics.Rect(130, 0, 230, 20),
+                visualRectInDocument = android.graphics.RectF(130f, 0f, 230f, 20f),
+                shapingFingerprint = "fp_tail", shapingIdentityConfident = true
+            )
+        ))
+        val newSnapshot = makeSnapshotWithClusters(2L, 0, 0, 30, listOf(
+            LineClusterSnapshot(
+                clusterId = 0, documentByteStart = 0, documentByteEndExclusive = 3,
+                documentUtf16Start = 0, documentUtf16EndExclusive = 3,
+                sourceRectInLineImage = android.graphics.Rect(0, 0, 30, 20),
+                visualRectInDocument = android.graphics.RectF(0f, 0f, 30f, 20f),
+                shapingFingerprint = "fp_edited_new", shapingIdentityConfident = true
+            ),
+            LineClusterSnapshot(
+                clusterId = 1, documentByteStart = 3, documentByteEndExclusive = 13,
+                documentUtf16Start = 3, documentUtf16EndExclusive = 13,
+                sourceRectInLineImage = android.graphics.Rect(30, 0, 130, 20),
+                visualRectInDocument = android.graphics.RectF(30f, 0f, 130f, 20f),
+                shapingFingerprint = "fp_retained_new", shapingIdentityConfident = true
+            ),
+            LineClusterSnapshot(
+                clusterId = 2, documentByteStart = 13, documentByteEndExclusive = 23,
+                documentUtf16Start = 13, documentUtf16EndExclusive = 23,
+                sourceRectInLineImage = android.graphics.Rect(130, 0, 230, 20),
+                visualRectInDocument = android.graphics.RectF(130f, 0f, 230f, 20f),
+                shapingFingerprint = "fp_tail", shapingIdentityConfident = true
+            )
+        ))
+        val oldRev = AndroidLayoutRevision(
+            revisionId = 1L, editorRevision = 1L,
+            widthFingerprint = 800f, fontFingerprint = "48",
+            lineCount = 1,
+            lineRanges = listOf(AndroidLayoutRevision.LineRange(
+                startUtf8 = 0, endUtf8 = 30, startUtf16 = 0, endUtf16 = 30,
+                top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
+                endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 0
+            )),
+            cursorUtf8 = 3, cursorUtf16 = 3, cursorX = 30f, cursorY = 0f, cursorHeight = 20f,
+            selectionAnchorUtf8 = 3, selectionHeadUtf8 = 3,
+            selectionAnchorUtf16 = 3, selectionHeadUtf16 = 3,
+            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
+            snapshotHandles = emptyList()
+        )
+        val newRev = AndroidLayoutRevision(
+            revisionId = 2L, editorRevision = 2L,
+            widthFingerprint = 800f, fontFingerprint = "48",
+            lineCount = 1,
+            lineRanges = listOf(AndroidLayoutRevision.LineRange(
+                startUtf8 = 0, endUtf8 = 30, startUtf16 = 0, endUtf16 = 30,
+                top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
+                endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 0
+            )),
+            cursorUtf8 = 3, cursorUtf16 = 3, cursorX = 30f, cursorY = 0f, cursorHeight = 20f,
+            selectionAnchorUtf8 = 3, selectionHeadUtf8 = 3,
+            selectionAnchorUtf16 = 3, selectionHeadUtf16 = 3,
+            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
+            snapshotHandles = emptyList()
+        )
+        val visualIntent = VisualIntent(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
+            oldAffectedByteRanges = listOf(Pair(0, 3)),
+            newAffectedByteRanges = listOf(Pair(0, 3)),
+            animationMode = uniffi.writer_core.AnimationModeDto.LINE_REFLOW_ANIMATION,
+            durationMs = 160L,
+            coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(3, 3, true)
+        )
+        val planner = AndroidVisualPlanner()
+        val transaction = planner.prepare(
+            visualIntent = visualIntent,
+            oldRevision = oldRev,
+            newRevision = newRev,
+            preCapturedOldSnapshots = mapOf(0 to oldSnapshot),
+            preCapturedNewSnapshots = mapOf(0 to newSnapshot),
+            transactionKey = 1L,
+            ownedSnapshotIds = setOf(1L, 2L),
+            snapshotLookup = emptyMap()
+        )
+        val retainedCrossfadeOld = transaction.animatedSlices.filter {
+            it.role == SliceRole.CrossfadeOld && it.clusterByteStart == 3 && it.clusterByteEndExclusive == 13
+        }
+        val retainedCrossfadeNew = transaction.animatedSlices.filter {
+            it.role == SliceRole.CrossfadeNew && it.clusterByteStart == 3 && it.clusterByteEndExclusive == 13
+        }
+        assertTrue("Retained cluster with changed fingerprint but same position must produce CrossfadeOld, got: ${transaction.animatedSlices.filter { it.clusterByteStart == 3 }.map { it.role }}",
+            retainedCrossfadeOld.isNotEmpty())
+        assertTrue("Retained cluster with changed fingerprint but same position must produce CrossfadeNew",
+            retainedCrossfadeNew.isNotEmpty())
+    }
+
+    @Test
+    fun lineReflow_identityConfidentPositionUnchanged_fingerprintSame_noSlices() {
+        val snapshot = makeSnapshotWithClusters(1L, 0, 0, 20, listOf(
+            LineClusterSnapshot(
+                clusterId = 0, documentByteStart = 0, documentByteEndExclusive = 10,
+                documentUtf16Start = 0, documentUtf16EndExclusive = 10,
+                sourceRectInLineImage = android.graphics.Rect(0, 0, 100, 20),
+                visualRectInDocument = android.graphics.RectF(0f, 0f, 100f, 20f),
+                shapingFingerprint = "fp_same", shapingIdentityConfident = true
+            ),
+            LineClusterSnapshot(
+                clusterId = 1, documentByteStart = 10, documentByteEndExclusive = 20,
+                documentUtf16Start = 10, documentUtf16EndExclusive = 20,
+                sourceRectInLineImage = android.graphics.Rect(100, 0, 200, 20),
+                visualRectInDocument = android.graphics.RectF(100f, 0f, 200f, 20f),
+                shapingFingerprint = "fp_retained", shapingIdentityConfident = true
+            )
+        ))
+        val oldRev = AndroidLayoutRevision(
+            revisionId = 1L, editorRevision = 1L,
+            widthFingerprint = 800f, fontFingerprint = "48",
+            lineCount = 1,
+            lineRanges = listOf(AndroidLayoutRevision.LineRange(
+                startUtf8 = 0, endUtf8 = 20, startUtf16 = 0, endUtf16 = 20,
+                top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
+                endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 0
+            )),
+            cursorUtf8 = 10, cursorUtf16 = 10, cursorX = 100f, cursorY = 0f, cursorHeight = 20f,
+            selectionAnchorUtf8 = 10, selectionHeadUtf8 = 10,
+            selectionAnchorUtf16 = 10, selectionHeadUtf16 = 10,
+            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
+            snapshotHandles = emptyList()
+        )
+        val newRev = AndroidLayoutRevision(
+            revisionId = 2L, editorRevision = 2L,
+            widthFingerprint = 800f, fontFingerprint = "48",
+            lineCount = 1,
+            lineRanges = listOf(AndroidLayoutRevision.LineRange(
+                startUtf8 = 0, endUtf8 = 20, startUtf16 = 0, endUtf16 = 20,
+                top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
+                endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 0
+            )),
+            cursorUtf8 = 10, cursorUtf16 = 10, cursorX = 100f, cursorY = 0f, cursorHeight = 20f,
+            selectionAnchorUtf8 = 10, selectionHeadUtf8 = 10,
+            selectionAnchorUtf16 = 10, selectionHeadUtf16 = 10,
+            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
+            snapshotHandles = emptyList()
+        )
+        val visualIntent = VisualIntent(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
+            oldAffectedByteRanges = listOf(Pair(0, 10)),
+            newAffectedByteRanges = listOf(Pair(0, 10)),
+            animationMode = uniffi.writer_core.AnimationModeDto.LINE_REFLOW_ANIMATION,
+            durationMs = 160L,
+            coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(10, 10, true)
+        )
+        val planner = AndroidVisualPlanner()
+        val transaction = planner.prepare(
+            visualIntent = visualIntent,
+            oldRevision = oldRev,
+            newRevision = newRev,
+            preCapturedOldSnapshots = mapOf(0 to snapshot),
+            preCapturedNewSnapshots = mapOf(0 to snapshot),
+            transactionKey = 1L,
+            ownedSnapshotIds = setOf(1L),
+            snapshotLookup = emptyMap()
+        )
+        val retainedSlices = transaction.animatedSlices.filter {
+            it.clusterByteStart == 10 && it.clusterByteEndExclusive == 20
+        }
+        assertTrue("Identity confident + fingerprint same + position unchanged must NOT produce slices for retained cluster",
+            retainedSlices.isEmpty())
+    }
+
+    @Test
+    fun preeditUnderline_usesClipPathPerLineNotComputeBounds() {
+        val renderer = com.xiwei.sujian.editor.v2.render.AndroidTextRenderer()
+        val method = renderer.javaClass.getDeclaredMethod(
+            "drawPreeditUnderlineUnshifted",
+            Canvas::class.java,
+            android.text.Layout::class.java,
+            Int::class.javaPrimitiveType,
+            Int::class.javaPrimitiveType
+        )
+        method.isAccessible = true
+        assertNotNull("drawPreeditUnderlineUnshifted method must exist with (Canvas, Layout, int, int) signature", method)
+        val sourceCode = method.declaringClass.declaredMethods
+            .firstOrNull { it.name == "drawPreeditUnderlineUnshifted" }?.toString() ?: ""
+        assertFalse("drawPreeditUnderlineUnshifted must NOT use computeBounds",
+            sourceCode.contains("computeBounds"))
+    }
+
+    @Test
+    fun lineReflow_lowConfidencePositionUnchanged_producesCrossfadeViaPrepare() {
+        val oldSnapshot = makeSnapshotWithClusters(1L, 0, 0, 30, listOf(
+            LineClusterSnapshot(
+                clusterId = 0, documentByteStart = 0, documentByteEndExclusive = 3,
+                documentUtf16Start = 0, documentUtf16EndExclusive = 3,
+                sourceRectInLineImage = android.graphics.Rect(0, 0, 30, 20),
+                visualRectInDocument = android.graphics.RectF(0f, 0f, 30f, 20f),
+                shapingFingerprint = "fp_edited", shapingIdentityConfident = true
+            ),
+            LineClusterSnapshot(
+                clusterId = 1, documentByteStart = 3, documentByteEndExclusive = 13,
+                documentUtf16Start = 3, documentUtf16EndExclusive = 13,
+                sourceRectInLineImage = android.graphics.Rect(30, 0, 130, 20),
+                visualRectInDocument = android.graphics.RectF(30f, 0f, 130f, 20f),
+                shapingFingerprint = "fp_retained", shapingIdentityConfident = false
+            )
+        ))
+        val newSnapshot = makeSnapshotWithClusters(2L, 0, 0, 30, listOf(
+            LineClusterSnapshot(
+                clusterId = 0, documentByteStart = 0, documentByteEndExclusive = 3,
+                documentUtf16Start = 0, documentUtf16EndExclusive = 3,
+                sourceRectInLineImage = android.graphics.Rect(0, 0, 30, 20),
+                visualRectInDocument = android.graphics.RectF(0f, 0f, 30f, 20f),
+                shapingFingerprint = "fp_edited_new", shapingIdentityConfident = true
+            ),
+            LineClusterSnapshot(
+                clusterId = 1, documentByteStart = 3, documentByteEndExclusive = 13,
+                documentUtf16Start = 3, documentUtf16EndExclusive = 13,
+                sourceRectInLineImage = android.graphics.Rect(30, 0, 130, 20),
+                visualRectInDocument = android.graphics.RectF(30f, 0f, 130f, 20f),
+                shapingFingerprint = "fp_retained", shapingIdentityConfident = false
+            )
+        ))
+        val oldRev = AndroidLayoutRevision(
+            revisionId = 1L, editorRevision = 1L,
+            widthFingerprint = 800f, fontFingerprint = "48",
+            lineCount = 1,
+            lineRanges = listOf(AndroidLayoutRevision.LineRange(
+                startUtf8 = 0, endUtf8 = 30, startUtf16 = 0, endUtf16 = 30,
+                top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
+                endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 0
+            )),
+            cursorUtf8 = 3, cursorUtf16 = 3, cursorX = 30f, cursorY = 0f, cursorHeight = 20f,
+            selectionAnchorUtf8 = 3, selectionHeadUtf8 = 3,
+            selectionAnchorUtf16 = 3, selectionHeadUtf16 = 3,
+            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
+            snapshotHandles = emptyList()
+        )
+        val newRev = AndroidLayoutRevision(
+            revisionId = 2L, editorRevision = 2L,
+            widthFingerprint = 800f, fontFingerprint = "48",
+            lineCount = 1,
+            lineRanges = listOf(AndroidLayoutRevision.LineRange(
+                startUtf8 = 0, endUtf8 = 30, startUtf16 = 0, endUtf16 = 30,
+                top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
+                endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 0
+            )),
+            cursorUtf8 = 3, cursorUtf16 = 3, cursorX = 30f, cursorY = 0f, cursorHeight = 20f,
+            selectionAnchorUtf8 = 3, selectionHeadUtf8 = 3,
+            selectionAnchorUtf16 = 3, selectionHeadUtf16 = 3,
+            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
+            snapshotHandles = emptyList()
+        )
+        val visualIntent = VisualIntent(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
+            oldAffectedByteRanges = listOf(Pair(0, 3)),
+            newAffectedByteRanges = listOf(Pair(0, 3)),
+            animationMode = uniffi.writer_core.AnimationModeDto.LINE_REFLOW_ANIMATION,
+            durationMs = 160L,
+            coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(3, 3, true)
+        )
+        val planner = AndroidVisualPlanner()
+        val transaction = planner.prepare(
+            visualIntent = visualIntent,
+            oldRevision = oldRev,
+            newRevision = newRev,
+            preCapturedOldSnapshots = mapOf(0 to oldSnapshot),
+            preCapturedNewSnapshots = mapOf(0 to newSnapshot),
+            transactionKey = 1L,
+            ownedSnapshotIds = setOf(1L, 2L),
+            snapshotLookup = emptyMap()
+        )
+        val retainedCrossfadeOld = transaction.animatedSlices.filter {
+            it.role == SliceRole.CrossfadeOld && it.clusterByteStart == 3 && it.clusterByteEndExclusive == 13
+        }
+        val retainedCrossfadeNew = transaction.animatedSlices.filter {
+            it.role == SliceRole.CrossfadeNew && it.clusterByteStart == 3 && it.clusterByteEndExclusive == 13
+        }
+        assertTrue("Low confidence retained cluster must produce CrossfadeOld, got: ${transaction.animatedSlices.filter { it.clusterByteStart == 3 }.map { it.role }}",
+            retainedCrossfadeOld.isNotEmpty())
+        assertTrue("Low confidence retained cluster must produce CrossfadeNew",
+            retainedCrossfadeNew.isNotEmpty())
+    }
+
+    @Test
+    fun lineReflow_fallbackMonotonicOneToOneViaPrepare() {
+        val oldClusters = listOf(
+            LineClusterSnapshot(
+                clusterId = 0, documentByteStart = 0, documentByteEndExclusive = 5,
+                documentUtf16Start = 0, documentUtf16EndExclusive = 5,
+                sourceRectInLineImage = android.graphics.Rect(0, 0, 50, 20),
+                visualRectInDocument = android.graphics.RectF(0f, 0f, 50f, 20f),
+                shapingFingerprint = "fp_dup", shapingIdentityConfident = true
+            ),
+            LineClusterSnapshot(
+                clusterId = 1, documentByteStart = 5, documentByteEndExclusive = 10,
+                documentUtf16Start = 5, documentUtf16EndExclusive = 10,
+                sourceRectInLineImage = android.graphics.Rect(50, 0, 100, 20),
+                visualRectInDocument = android.graphics.RectF(50f, 0f, 100f, 20f),
+                shapingFingerprint = "fp_dup", shapingIdentityConfident = true
+            )
+        )
+        val newClusters = listOf(
+            LineClusterSnapshot(
+                clusterId = 0, documentByteStart = 0, documentByteEndExclusive = 5,
+                documentUtf16Start = 0, documentUtf16EndExclusive = 5,
+                sourceRectInLineImage = android.graphics.Rect(0, 0, 50, 20),
+                visualRectInDocument = android.graphics.RectF(0f, 0f, 50f, 20f),
+                shapingFingerprint = "fp_dup", shapingIdentityConfident = true
+            ),
+            LineClusterSnapshot(
+                clusterId = 1, documentByteStart = 5, documentByteEndExclusive = 10,
+                documentUtf16Start = 5, documentUtf16EndExclusive = 10,
+                sourceRectInLineImage = android.graphics.Rect(50, 0, 100, 20),
+                visualRectInDocument = android.graphics.RectF(50f, 0f, 100f, 20f),
+                shapingFingerprint = "fp_dup", shapingIdentityConfident = true
+            )
+        )
+        val oldSnapshot = makeSnapshotWithClusters(1L, 0, 0, 10, oldClusters)
+        val newSnapshot = makeSnapshotWithClusters(2L, 0, 0, 10, newClusters)
+        val oldRev = AndroidLayoutRevision(
+            revisionId = 1L, editorRevision = 1L,
+            widthFingerprint = 800f, fontFingerprint = "48",
+            lineCount = 1,
+            lineRanges = listOf(AndroidLayoutRevision.LineRange(
+                startUtf8 = 0, endUtf8 = 10, startUtf16 = 0, endUtf16 = 10,
+                top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
+                endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 0
+            )),
+            cursorUtf8 = 5, cursorUtf16 = 5, cursorX = 50f, cursorY = 0f, cursorHeight = 20f,
+            selectionAnchorUtf8 = 5, selectionHeadUtf8 = 5,
+            selectionAnchorUtf16 = 5, selectionHeadUtf16 = 5,
+            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
+            snapshotHandles = emptyList()
+        )
+        val newRev = AndroidLayoutRevision(
+            revisionId = 2L, editorRevision = 2L,
+            widthFingerprint = 800f, fontFingerprint = "48",
+            lineCount = 1,
+            lineRanges = listOf(AndroidLayoutRevision.LineRange(
+                startUtf8 = 0, endUtf8 = 10, startUtf16 = 0, endUtf16 = 10,
+                top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
+                endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 0
+            )),
+            cursorUtf8 = 5, cursorUtf16 = 5, cursorX = 50f, cursorY = 0f, cursorHeight = 20f,
+            selectionAnchorUtf8 = 5, selectionHeadUtf8 = 5,
+            selectionAnchorUtf16 = 5, selectionHeadUtf16 = 5,
+            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
+            snapshotHandles = emptyList()
+        )
+        val visualIntent = VisualIntent(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
+            oldAffectedByteRanges = listOf(Pair(0, 5)),
+            newAffectedByteRanges = listOf(Pair(0, 5)),
+            animationMode = uniffi.writer_core.AnimationModeDto.LINE_REFLOW_ANIMATION,
+            durationMs = 160L,
+            coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(5, 5, true)
+        )
+        val planner = AndroidVisualPlanner()
+        val transaction = planner.prepare(
+            visualIntent = visualIntent,
+            oldRevision = oldRev,
+            newRevision = newRev,
+            preCapturedOldSnapshots = mapOf(0 to oldSnapshot),
+            preCapturedNewSnapshots = mapOf(0 to newSnapshot),
+            transactionKey = 1L,
+            ownedSnapshotIds = setOf(1L, 2L),
+            snapshotLookup = emptyMap()
+        )
+        val moveSlices = transaction.animatedSlices.filter { it.role == SliceRole.Move }
+        val newStarts = moveSlices.map { it.clusterByteStart }
+        for (i in 1 until newStarts.size) {
+            assertTrue("Move slice byte starts must be monotonically non-decreasing",
+                newStarts[i] >= newStarts[i - 1])
+        }
+    }
 }
