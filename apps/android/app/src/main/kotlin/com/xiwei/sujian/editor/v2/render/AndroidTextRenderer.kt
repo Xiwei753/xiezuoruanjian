@@ -257,18 +257,20 @@ class AndroidTextRenderer {
         }
     }
 
+    @Suppress("DEPRECATION")
     private fun drawPreeditUnderlineUnshifted(canvas: Canvas, layout: android.text.Layout, compStart: Int, compEnd: Int) {
         val startLine = layout.getLineForOffset(compStart)
         val endLine = layout.getLineForOffset((compEnd - 1).coerceAtLeast(compStart))
         for (line in startLine..endLine) {
             val lineStart = if (line == startLine) compStart else layout.getLineStart(line)
             val lineEnd = if (line == endLine) compEnd else layout.getLineEnd(line)
-            val x0 = layout.getPrimaryHorizontal(lineStart)
-            val x1 = layout.getPrimaryHorizontal(lineEnd)
-            val left = kotlin.math.min(x0, x1)
-            val right = kotlin.math.max(x0, x1)
+            val path = Path()
+            layout.getSelectionPath(lineStart, lineEnd, path)
+            val bounds = RectF()
+            path.computeBounds(bounds, true)
+            if (bounds.isEmpty) continue
             val bottom = layout.getLineBottom(line).toFloat()
-            canvas.drawLine(left, bottom, right, bottom, preeditUnderlinePaint)
+            canvas.drawLine(bounds.left, bottom, bounds.right, bottom, preeditUnderlinePaint)
         }
     }
 
