@@ -1,3 +1,10 @@
+//! # 项目/卷/章节 FFI 操作 — 工作区结构的 C ABI 入口
+//!
+//! 提供项目列表、项目树、章节 CRUD、卷重命名等操作的 FFI 桥接。
+//! 所有函数遵循统一的 JSON-in/JSON-out FFI 契约（见 `settings_ops` 模块文档）。
+//!
+//! 章节保存使用 `SaveTransaction` 确保正文和元数据的原子性写入。
+
 use std::os::raw::c_char;
 
 use super::{c_str_to_rust, err_json, ok_json, with_core};

@@ -1,3 +1,16 @@
+//! # 动作注册 DTO — ActionRegistry 的跨语言边界类型
+//!
+//! 动作分类语义：
+//! - Query：只读查询，不修改任何状态
+//! - Preview：预览变更（如查找替换预览），不持久化
+//! - Mutation：实际修改状态，需确认
+//!
+//! 风险等级：
+//! - SafeRead：无副作用
+//! - SafeWrite：修改非正文状态（设置、UI 偏好）
+//! - ContentWrite：修改正文内容，需 undo 支持
+//! - Dangerous：不可逆操作（删除项目），需二次确认
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 
 pub enum ActionKindDto {

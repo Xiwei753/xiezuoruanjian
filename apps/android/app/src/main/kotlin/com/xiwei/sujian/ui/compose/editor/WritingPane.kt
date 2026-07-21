@@ -39,6 +39,22 @@ import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
 import com.xiwei.sujian.ui.EditorViewModel
 import com.xiwei.sujian.ui.SaveStatus
 
+/**
+ * 章节正文编辑面板 — 连接 EditorViewModel 与 AnimatedTextEditorCoordinator。
+ *
+ * 核心职责：
+ * - 将 ViewModel 的 content 状态同步到 Coordinator 的持久会话
+ * - 将 Coordinator 的输入法编辑结果（onTextChanged/onCommit）回传 ViewModel
+ * - 章节切换时通过 resetPersistentSession 重置会话（而非 cancelForSession），
+ *   保留输入法连接避免闪烁
+ * - 外部内容变更（同步/撤销）通过 contentHash 检测并重置会话
+ *
+ * 会话生命周期：
+ * - DisposableEffect 注册/注销 target
+ * - LaunchedEffect(chapterId) 处理章节切换
+ * - LaunchedEffect(uiState.content) 处理外部内容变更
+ * - LaunchedEffect(targetId) 首次激活编辑会话
+ */
 @Composable
 fun WritingPane(
     projectId: String,

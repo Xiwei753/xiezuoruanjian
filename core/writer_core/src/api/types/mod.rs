@@ -1,3 +1,10 @@
+//! # API DTO 模块 — Core 内部类型与跨语言边界的类型映射
+//!
+//! 每个 `*_dto` 类型对应一个 Core 内部类型，提供 `From` 双向转换。
+//! DTO 使用 serde JSON 序列化，是 FFI/HTTP 边界的唯一合法数据格式。
+//! 内部类型的业务不变量在 DTO 层不强制执行（DTO 是薄传输层），
+//! 转换回内部类型时由 Core 验证。
+
 mod action;
 mod editor;
 mod platform;

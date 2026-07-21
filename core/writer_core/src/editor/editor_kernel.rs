@@ -29,8 +29,12 @@ use super::transaction::{
 /// 所有平台输入（IME、键盘、触摸选择）都翻译成 EditorCommand，
 /// 交给 EditorKernel.apply() 处理。平台不能再维护第二份可独立编辑的正文真相。
 ///
-/// range 单位统一为 UTF-8 byte boundary。
-/// Android/Windows 的 UTF-16、Qt 的 QChar index 只允许存在于平台 TextIndexMap 内。
+/// 偏移量单位统一为 UTF-8 byte boundary（半开区间 `[start, end_exclusive)`）。
+/// Android/Windows 的 UTF-16、Qt 的 QChar index 只允许存在于平台 TextIndexMap 内，
+/// 传入 Core 前必须通过 `utf16ToUtf8` / `utf16_code_unit_to_utf8_byte` 转换。
+///
+/// `expected_revision` 用于乐观并发控制：若当前正文 revision 与 expected 不匹配，
+/// apply() 返回 EditResult::conflict()，平台端需刷新后重试。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum EditorCommand {
@@ -121,6 +125,10 @@ pub enum EditorCommand {
 ///
 /// DisplayTextMirror 按 DisplayPatch 增量更新 SpannableStringBuilder，
 /// 不得根据 old/new 全文重新 diff，也不得先本地改 Buffer 再通知 Core。
+///
+/// `replace_byte_range` 为半开区间 `[start, end)`（UTF-8 byte offset），
+/// 表示要被替换的范围。`inserted_text` 为替换后的新文本。
+/// `resulting_selection_byte_range` 为替换完成后的选区（半开区间）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DisplayPatch {

@@ -561,6 +561,12 @@ fn execute_lww_sync_attempt(
     let now_ms = chrono::Utc::now().timestamp_millis();
     let mut local_records = std::collections::HashMap::new();
 
+    // ── 构建本地文件记录 ──
+    // updated_at_ms 的确定策略：
+    //   1. 已知文件且哈希未变 → 使用上次同步记录的时间戳（避免文件系统 mtime 精度丢失）
+    //   2. 已知文件但哈希已变 → 使用文件系统 mtime（反映实际修改时间）
+    //   3. 新文件（不在 known_files 中）→ 使用文件系统 mtime
+    //   4. mtime 读取失败 → 退回 now_ms（保守取当前时间，确保不被远端旧版本覆盖）
     for entry in &local_entries {
         if entry.sync_kind == SyncKind::Upload && entry.relative_path != SYNC_MANIFEST_PATH {
             let path = entry.relative_path.clone();
@@ -571,12 +577,14 @@ fn execute_lww_sync_attempt(
 
             if let Some(known_hash) = state.known_files.get(&path) {
                 if *known_hash == local_hash {
+                    // 哈希未变，沿用已知时间戳
                     updated_at_ms = state
                         .known_files_updated_at
                         .get(&path)
                         .cloned()
                         .unwrap_or(0);
                 } else {
+                    // 哈希已变，取文件系统修改时间
                     let modified_ms = std::fs::metadata(workspace_path.join(&path))
                         .and_then(|m| m.modified())
                         .and_then(|t| {
@@ -588,6 +596,7 @@ fn execute_lww_sync_attempt(
                     updated_at_ms = modified_ms;
                 }
             } else {
+                // 新文件，取文件系统修改时间
                 let modified_ms = std::fs::metadata(workspace_path.join(&path))
                     .and_then(|m| m.modified())
                     .and_then(|t| {
@@ -614,6 +623,10 @@ fn execute_lww_sync_attempt(
         }
     }
 
+    // ── 构建本地删除墓碑记录 ──
+    // known_files 中存在但本地文件已不存在的路径，生成 delete 墓碑。
+    // 墓碑的 updated_at_ms 优先取 tombstone 记录的 deleted_at（秒级→毫秒级），
+    // 否则使用当前时间。content_hash 为空，因为文件已不存在。
     for path in state.known_files.keys() {
         if !local_records.contains_key(path) {
             if !SyncService::is_whitelisted_path(path) || SyncService::is_blacklisted_path(path) {
@@ -649,6 +662,9 @@ fn execute_lww_sync_attempt(
         }
     }
 
+    // 远端 tree 中存在但 manifest 中无记录的文件（首次同步或 manifest 损失），
+    // 用 tree SHA 作为 content_hash 补充记录，时间戳设为 0（最旧），
+    // device_id 设为 "remote" 以避免与本地 device_id 冲突。
     for (path, sha) in &remote_tree_files {
         if path != SYNC_MANIFEST_PATH && !remote_records.contains_key(path) {
             if !SyncService::is_whitelisted_path(path) || SyncService::is_blacklisted_path(path) {
@@ -928,6 +944,10 @@ fn execute_lww_sync_attempt(
                         }
                     }
                 } else {
+                    // ── LWW 时间戳决胜（Metadata/GeneratedCache） ──
+                    // 时间戳较大者获胜。时间戳相同时：
+                    //   - 哈希和操作均相同 → 无实际冲突，忽略
+                    //   - 否则按 device_id 字典序决胜（确定性，无需用户干预）
                     let local_time = lww_record_time(local_rec);
                     let remote_time = lww_record_time(remote_rec);
                     let mut remote_wins = false;
@@ -990,6 +1010,9 @@ fn execute_lww_sync_attempt(
     }
 
     for path in &to_delete_local {
+        // 远端已删除的文件移至 trash 目录而非直接删除，
+        // 防止同步异常时用户数据丢失。trash 文件名格式：
+        // {timestamp}_{uuid}_{original_filename}
         let full_path = workspace_path.join(path);
         if full_path.exists() {
             let filename = full_path
@@ -1044,6 +1067,8 @@ fn execute_lww_sync_attempt(
         download_result?;
     }
 
+    // 清除超过 30 天的 delete 墓碑记录，避免 manifest 无限膨胀。
+    // 墓碑保留 30 天是为了让远端设备有足够时间拉取删除信息。
     let purge_time = now_ms - 30 * 24 * 3600 * 1000;
     let mut manifest_files_vec: Vec<ManifestFileRecord> =
         merged_manifest_files.values().cloned().collect();
@@ -1113,6 +1138,13 @@ fn execute_lww_sync_attempt(
 
     let post_local_entries = scan_workspace_for_sync(workspace_path)?;
 
+    // ── 同步后重建 known_files ──
+    // 同步完成后重新扫描本地文件，用当前文件哈希更新 known_files。
+    // 关键不变量：冲突路径的 known_files 必须保留在 base_hash（三路比较基准），
+    // 否则下次同步时 known_files 会变成当前本地哈希，导致三路比较误判为 NoConflict
+    // 或 LocalChanged，而非 BothChanged。
+    // 因此：先保存冲突路径的 base_hash → 清空 known_files → 重建 → 恢复冲突路径。
+    //
     // Before clearing known_files, save the base_hash values for conflicted
     // paths so we can restore them after the scan. The scan would otherwise
     // overwrite them with the current local file hash, which would break the
@@ -1176,6 +1208,7 @@ fn execute_lww_sync_attempt(
     // known_files at base_hash, and the unresolved_conflict_paths guard
     // at the top of the sync loop prevents any auto-resolution.
 
+    // 同步后清理过期墓碑（purge_after 已过期的条目）
     state
         .tombstones
         .retain(|t| t.purge_after > chrono::Utc::now().timestamp());

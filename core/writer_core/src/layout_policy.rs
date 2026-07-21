@@ -49,6 +49,8 @@ pub enum PointerKind {
     Mouse,
 }
 
+/// 折叠屏特性信息。坐标单位为 vp（密度无关像素），由平台端从 Android
+/// `FoldingFeature` / Qt `QScreen` 折叠区域转换后传入。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FoldFeatureInfo {
     pub state: FoldState,
@@ -138,6 +140,9 @@ pub struct VisiblePaneRoles {
 
 // ========== 输入结构体 ==========
 
+/// 窗口度量 — 平台端测量后传入。所有尺寸单位为 dp（密度无关像素）。
+/// 折叠屏坐标为 vp，Core 层在当前实现中不区分 dp/vp 差异，
+/// 由平台端在传入前完成必要的缩放。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowMetrics {
     pub width_dp: f32,
@@ -190,6 +195,9 @@ pub struct AvoidRegion {
     pub kind: AvoidRegionKind,
 }
 
+/// 布局计划 — `resolve_layout` 的纯函数输出，平台端据此绘制 UI。
+/// 所有尺寸单位为 dp。`avoid_regions` 的坐标来自 `FoldFeatureInfo`（vp），
+/// 平台端使用时需注意 dp/vp 差异。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LayoutPlan {
     pub width_class: WidthClass,
@@ -214,6 +222,9 @@ pub struct LayoutPlan {
 }
 
 // ========== 断点阈值 ==========
+// 宽度断点采用左闭右开区间 [0, MAX)：值 < MAX 属于该分类。
+// 例如 599.9 → Compact，600.0 → Medium。
+// 阈值参考 Material Design 3 响应式断点规范。
 
 const WIDTH_COMPACT_MAX: f32 = 600.0;
 const WIDTH_MEDIUM_MAX: f32 = 840.0;
@@ -224,6 +235,14 @@ const HEIGHT_MEDIUM_MAX: f32 = 900.0;
 
 // ========== 核心纯函数 ==========
 
+/// 根据窗口度量计算布局计划。纯函数，无副作用。
+///
+/// 决策优先级：
+/// 1. 宽度断点决定基础 shell/navigation/workspace_pane 模式
+/// 2. 折叠屏半开状态覆盖 shell_mode（水平半开→SupportingPane+SinglePane，
+///    其他半开→保留宽度决定的 workspace_pane_mode）
+/// 3. 虚拟键盘可见时隐藏底部导航栏
+/// 4. 折叠屏铰链/遮挡区域生成 avoid_regions
 pub fn resolve_layout(metrics: &WindowMetrics) -> LayoutPlan {
     let width_class = resolve_width_class(metrics.width_dp);
     let height_class = resolve_height_class(metrics.height_dp);
@@ -349,6 +368,7 @@ pub fn resolve_layout(metrics: &WindowMetrics) -> LayoutPlan {
     }
 }
 
+/// 宽度断点分类。左闭右开区间：`[0, 600)` → Compact, `[600, 840)` → Medium, 以此类推。
 pub fn resolve_width_class(width_dp: f32) -> WidthClass {
     if width_dp < WIDTH_COMPACT_MAX { WidthClass::Compact }
     else if width_dp < WIDTH_MEDIUM_MAX { WidthClass::Medium }
@@ -357,6 +377,7 @@ pub fn resolve_width_class(width_dp: f32) -> WidthClass {
     else { WidthClass::ExtraLarge }
 }
 
+/// 高度断点分类。左闭右开区间：`[0, 480)` → Compact, `[480, 900)` → Medium, `[900, ∞)` → Expanded。
 pub fn resolve_height_class(height_dp: f32) -> HeightClass {
     if height_dp < HEIGHT_COMPACT_MAX { HeightClass::Compact }
     else if height_dp < HEIGHT_MEDIUM_MAX { HeightClass::Medium }

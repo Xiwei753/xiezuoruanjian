@@ -545,6 +545,8 @@ fn default_schema_version() -> u32 {
 ///
 /// 本地和远端各维护一份 manifest，同步时交换比较。
 /// `files` 中的 `content_hash` 用于三路比较和变更检测。
+/// manifest 是 LWW 同步的唯一事实来源：所有文件的存在/删除/修改状态
+/// 均以 manifest 记录为准，而非文件系统快照。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SyncManifest {
     pub files: Vec<ManifestFileRecord>,

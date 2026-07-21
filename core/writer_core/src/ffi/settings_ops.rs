@@ -1,3 +1,13 @@
+//! # 设置 FFI 操作 — 本地设置与可同步设置的 C ABI 入口
+//!
+//! 所有函数遵循 FFI 契约：
+//! - 输入：C 字符串指针（`*const c_char`），由调用方分配和释放
+//! - 输出：Rust 分配的 C 字符串指针（`*mut c_char`），调用方必须调用对应的释放函数
+//! - 返回值：JSON 字符串，`{"ok": true, "data": ...}` 或 `{"ok": false, "error": ...}`
+//!
+//! `save_*` 函数采用 load-then-patch 模式：先加载当前设置，再按 JSON 中
+//! 提供的字段逐一覆盖，未提供的字段保持原值。这允许平台端部分更新设置。
+
 use std::os::raw::c_char;
 
 use super::{c_str_to_rust, err_json, ok_json, with_core};

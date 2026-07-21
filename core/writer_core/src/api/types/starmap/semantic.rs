@@ -1,3 +1,9 @@
+//! # 星图语义 DTO — 锚点、目标、Portal、DisplayPolicy 的跨语言类型
+//!
+//! `StarMapAnchorTargetDto` 使用 `kind` 字符串判别 + 扁平 Optional 字段模式
+//! （而非 Rust 枚举），因为 JSON 线格式需要跨语言可解析。
+//! `range_start`/`range_end` 为 UTF-8 byte offset（半开区间）。
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapAnchorDto {
@@ -30,6 +36,9 @@ impl From<StarMapAnchorDto> for crate::starmap::semantic::StarMapAnchor {
     }
 }
 
+/// 锚点目标 DTO — 使用 `kind` 字符串判别 + 扁平 Optional 字段。
+/// `range_start`/`range_end` 为 UTF-8 byte offset（半开区间 `[start, end)`），
+/// 仅在 `kind == "chapterRange"` 时有值。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapAnchorTargetDto {

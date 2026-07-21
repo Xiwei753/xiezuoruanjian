@@ -17,6 +17,12 @@ use super::events::decode_utf16_ptr;
 use crate::editor::paragraph_index_map::{utf16_code_unit_to_utf8_byte, utf16_code_unit_range_to_utf8_byte_range};
 use std::ffi::c_void;
 
+/// IME 查询数据 — 传递给 Qt InputMethodQuery 的光标和选区几何信息。
+///
+/// 坐标空间：相对于 SujianEditorItem 左上角的像素坐标（非 dp/vp）。
+/// `cursor_char_pos` / `anchor_char_pos` 为 UTF-16 code unit 偏移量，
+/// 与 Qt QTextDocument 内部编码一致，需通过 `utf16_code_unit_to_utf8_byte`
+/// 转换为 UTF-8 byte offset 才能用于 Core 编辑操作。
 #[repr(C)]
 pub struct SujianImeQueryData {
     pub cursor_rect_x: f64,

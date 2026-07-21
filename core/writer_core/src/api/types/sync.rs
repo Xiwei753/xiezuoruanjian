@@ -1,3 +1,15 @@
+//! # 同步 DTO 层 — Core 内部类型与 JSON 线格式的双向转换
+//!
+//! 本模块定义跨语言边界（FFI/HTTP）使用的数据传输对象。
+//! 线格式约定：
+//! - 枚举使用字符串表示（如 `"idle"`, `"syncing"`），而非数字或嵌套 JSON，
+//!   以保证 UniFFI/JNI/JSON 各端可无损解析
+//! - `_to_wire` 后缀函数将 Rust 枚举转换为线格式字符串
+//! - `From<Dto>` / `From<Internal>` 实现双向转换
+//!
+//! 注意：`SyncSecretsDto` → `SyncSecrets` 转换时 `ssh_private_key` 始终设为 None，
+//! 因为 SSH 密钥不通过 JSON DTO 传输，由平台端安全存储直接注入。
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct SyncConfigDto {
     pub enabled: bool,
@@ -278,6 +290,9 @@ fn sync_transport_to_wire(transport: crate::sync::SyncTransport) -> String {
     }
 }
 
+/// 将 `SyncStatus` 枚举转换为线格式字符串。
+/// `RecoverableError`/`FatalError`/`Error` 携带的详细信息在线格式中丢失，
+/// 平台端需通过 `error`/`error_category` 字段获取具体错误原因。
 fn sync_status_to_wire(status: &crate::sync::SyncStatus) -> String {
     match status {
         crate::sync::SyncStatus::Idle => "idle",

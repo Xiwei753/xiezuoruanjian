@@ -15,6 +15,9 @@ const RADIAL_CENTER_X: f32 = 400.0;
 const RADIAL_CENTER_Y: f32 = 300.0;
 const RADIAL_RING_SPACING: f32 = 200.0;
 
+/// 网格自动布局：新增节点从左到右、从上到下排列。
+/// 已有位置的节点保留原位（从 existing 中克隆），仅排列新增节点。
+/// 超过 GRID_MAX_WIDTH 时换行。输出 kind 始终为 Freeform（可手动拖拽调整）。
 pub fn calculate_grid_layout(node_ids: &[String], existing: &StarMapLayout) -> StarMapLayout {
     let existing_map: std::collections::HashMap<&str, &StarMapLayoutNode> = existing
         .nodes
@@ -58,6 +61,17 @@ pub fn calculate_grid_layout(node_ids: &[String], existing: &StarMapLayout) -> S
     }
 }
 
+/// 径向自动布局：以 BFS 从根节点向外扩展，每层子节点围绕父节点均匀分布。
+///
+/// 算法步骤：
+/// 1. 识别根节点（无父节点或父节点不在 node_ids 集合中的节点）
+/// 2. 根节点均匀分布在第一环（距中心 RADIAL_RING_SPACING）
+/// 3. BFS 逐层展开：每层子节点围绕父节点均匀分布，
+///    环半径随深度递减 `ring_radius = RADIAL_RING_SPACING / max(depth+1, 1.5)`
+/// 4. 每层子节点角度偏移 `depth * 0.3` 弧度，避免父子节点重叠
+///
+/// 已有位置的节点保留原位（从 existing 中克隆），仅计算新增节点位置。
+/// 已被前驱层级定位的节点不会被子节点重新定位（`positions.contains_key` 检查）。
 pub fn calculate_radial_layout(
     node_ids: &[String],
     parent_map: &std::collections::HashMap<String, Option<String>>,
