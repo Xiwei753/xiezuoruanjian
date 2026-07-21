@@ -611,8 +611,8 @@ class AndroidVisualPlanner {
                 }
                 matchedNewIdx = candidates.minByOrNull { i ->
                     val candidateStart = allNewClusters[i].first.documentByteStart
-                    val dist = if (mappedStart != null) kotlin.math.abs(candidateStart - mappedStart) else candidateStart
-                    dist
+                    val target = mappedStart ?: lastMatchedNewStart
+                    kotlin.math.abs(candidateStart - target)
                 }
             }
             if (matchedNewIdx != null) {
@@ -776,7 +776,7 @@ class AndroidVisualPlanner {
                 val fingerprintChanged = oldCluster.shapingFingerprint != newCluster.shapingFingerprint
                 val identityConfident = oldCluster.shapingIdentityConfident && newCluster.shapingIdentityConfident
                 if (!positionChanged && identityConfident && !fingerprintChanged) {
-                    // continue
+                    continue
                 } else if (identityConfident && !fingerprintChanged && positionChanged) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Move,
@@ -1083,7 +1083,7 @@ class AndroidVisualPlanner {
                 val fingerprintChanged = oldCluster.shapingFingerprint != newCluster.shapingFingerprint
                 val identityConfident = oldCluster.shapingIdentityConfident && newCluster.shapingIdentityConfident
                 if (!positionChanged && identityConfident && !fingerprintChanged) {
-                    // continue — static new layout handles this
+                    continue
                 } else if (identityConfident && !fingerprintChanged && positionChanged) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Move,
