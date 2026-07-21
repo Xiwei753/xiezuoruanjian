@@ -1,4 +1,4 @@
-//! #541: TextEditSessionRegistry — 多目标文字编辑会话注册表。
+//! TextEditSessionRegistry — 多目标文字编辑会话注册表。
 //!
 //! 每个可编辑文字目标（项目名、章节名、星图节点标题、正文等）
 //! 通过独立会话接入 Editor V2 主链。不同目标之间不共享 revision、

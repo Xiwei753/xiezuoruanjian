@@ -1,7 +1,15 @@
 //! UTF-16 ↔ UTF-8 偏移转换
 //!
-//! Qt 侧使用 UTF-16 offset（QTextCursor、QInputMethodEvent），
+//! Qt 侧使用 UTF-16 code unit offset（QTextCursor、QInputMethodEvent），
 //! Rust 内部使用 UTF-8 byte offset。转换只在此模块做一次。
+//!
+//! ## 边界对齐（clamping）行为
+//!
+//! 当输入 offset 落在多字节字符内部时，函数会自动对齐到最近的字符边界：
+//! - `utf16_to_utf8_offset`：UTF-16 offset 落在代理对中间时，对齐到该字符的起始位置
+//! - `utf8_to_utf16_offset`：UTF-8 byte offset 落在多字节序列中间时，对齐到该字符的起始位置
+//!
+//! 超出文本长度的 offset 会被 clamp 到文本末尾。
 
 /// UTF-16 offset → UTF-8 byte offset
 pub fn utf16_to_utf8_offset(text: &str, utf16_offset: usize) -> usize {

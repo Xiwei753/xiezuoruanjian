@@ -141,6 +141,16 @@ pub(crate) fn build_conflict_summary(
 
 #[cfg(feature = "git-https")]
 impl crate::sync::SyncService {
+    /// 逐键三路合并 JSON 设置对象。
+    ///
+    /// 以 base 为双方上次同步后的共识版本，对每个 key 独立判断：
+    /// - local == remote：取任一方
+    /// - 仅一方修改：取修改方
+    /// - 双方都修改且值不同：记录冲突
+    /// - 一方删除、另一方未修改 base：跟随删除
+    /// - 一方删除、另一方修改了 base：记录冲突（删除 vs 修改）
+    ///
+    /// 返回合并后的 Map；若有任何 key 冲突则返回冲突列表。
     pub(crate) fn semantic_merge_json(
         base: &serde_json::Map<String, serde_json::Value>,
         local: &serde_json::Map<String, serde_json::Value>,

@@ -1,3 +1,13 @@
+/// 段落级 UTF-8 byte ↔ QChar index 双向映射表。
+///
+/// Qt 的 QTextDocument 使用 QChar index（UTF-16 code unit offset），
+/// Rust 内部使用 UTF-8 byte offset。每个段落独立构建映射表，
+/// 避免全文映射的内存开销。
+///
+/// `qchar_to_document_byte`：每个 QChar 位置 → 文档级 UTF-8 byte offset。
+///   代理对中的两个 QChar 位置映射到同一个 byte offset（字符起始）。
+/// `document_byte_to_qchar`：每个 UTF-8 byte 位置 → QChar offset。
+///   多字节字符的每个 byte 位置映射到同一个 QChar offset。
 #[derive(Clone)]
 pub struct ParagraphIndexMap {
     qchar_to_document_byte: Vec<usize>,

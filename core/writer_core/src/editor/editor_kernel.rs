@@ -1,4 +1,4 @@
-//! #535: Rust EditorKernel — 正文和业务唯一真相。
+//! Rust EditorKernel — 正文和业务唯一真相。
 //!
 //! EditorKernel 是 Editor V2 的核心入口，负责：
 //! - 正文、章节 revision、逻辑选区和编辑事务
@@ -24,7 +24,7 @@ use super::transaction::{
     EditorChange, EditorTransactionCause,
 };
 
-/// #535: 编辑命令 — 平台输入适配器翻译系统事件后的标准化命令。
+/// 编辑命令 — 平台输入适配器翻译系统事件后的标准化命令。
 ///
 /// 所有平台输入（IME、键盘、触摸选择）都翻译成 EditorCommand，
 /// 交给 EditorKernel.apply() 处理。平台不能再维护第二份可独立编辑的正文真相。
@@ -117,7 +117,7 @@ pub enum EditorCommand {
     },
 }
 
-/// #535: 显示补丁 — 平台显示镜像唯一允许消费的正文变化。
+/// 显示补丁 — 平台显示镜像唯一允许消费的正文变化。
 ///
 /// DisplayTextMirror 按 DisplayPatch 增量更新 SpannableStringBuilder，
 /// 不得根据 old/new 全文重新 diff，也不得先本地改 Buffer 再通知 Core。
@@ -136,7 +136,7 @@ pub struct DisplayPatch {
     pub resulting_selection_byte_range: (usize, usize),
 }
 
-/// #535: 视觉意图 — Core 告诉平台层应该做什么动画。
+/// 视觉意图 — Core 告诉平台层应该做什么动画。
 ///
 /// Rust 决定动画模式和时长（产品规则）；
 /// glyph、cluster、line、rect、stable suffix 和 snapshot 属于平台排版事实，
@@ -162,7 +162,7 @@ pub struct EditorVisualIntent {
     pub coordinated_cursor: CoordinatedCursor,
 }
 
-/// #535: 操作类型 — 区分不同编辑操作的视觉语义
+/// 操作类型 — 区分不同编辑操作的视觉语义
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum EditorOperationKind {
@@ -177,7 +177,7 @@ pub enum EditorOperationKind {
     Format,
 }
 
-/// #535: 光标协同 — 描述光标移动的视觉语义
+/// 光标协同 — 描述光标移动的视觉语义
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CoordinatedCursor {
@@ -189,15 +189,21 @@ pub struct CoordinatedCursor {
     pub should_animate: bool,
 }
 
-/// #535: 编辑结果分类 — 平台必须区分不同结果走不同恢复路径。
+/// 编辑结果分类 — 平台必须区分不同结果走不同恢复路径。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum EditorEditOutcome {
+    /// 编辑成功应用，正文已变更
     Applied(EditorEditResult),
+    /// 编辑成功应用，但平台传入的选区 offset 不在 char boundary 上，内核已自动对齐
     AppliedWithAdjustedSelection(EditorEditResult),
+    /// 命令无实际效果（如空替换、空选区变更），正文未变
     NoChange(EditorEditResult),
+    /// expected_revision 与当前 revision 不匹配，平台需用结果中的最新 revision 重试
     StaleRevision(EditorEditResult),
+    /// offset 不在 UTF-8 char boundary 上或超出文本范围
     InvalidOffset(EditorEditResult),
+    /// range 语义非法（如 start ≥ end 对于 delete）
     InvalidRange(EditorEditResult),
 }
 
@@ -232,7 +238,7 @@ impl EditorEditOutcome {
     }
 }
 
-/// #535: 编辑结果 — EditorKernel.apply() 的返回值。
+/// 编辑结果 — EditorKernel.apply() 的返回值。
 ///
 /// 包含正文变化（display_patches）、选区变化和视觉意图。
 /// 平台端按此结果增量更新显示镜像、布局和动画。
@@ -258,6 +264,7 @@ pub struct EditorEditResult {
 /// 编辑器输入校验错误
 #[derive(Debug, Clone)]
 pub enum EditorInputError {
+    /// 光标 offset 超出文本长度或不在 UTF-8 char boundary 上
     InvalidCursorOffset { offset: usize, text_len: usize },
 }
 
@@ -273,10 +280,14 @@ impl std::fmt::Display for EditorInputError {
 
 impl std::error::Error for EditorInputError {}
 
-/// #535: EditorKernel — 正文和业务唯一真相。
+/// EditorKernel — 正文和业务唯一真相。
 ///
 /// 平台不能再维护第二份可独立编辑的正文真相。
 /// 平台只持有与 Rust revision 对应的显示镜像。
+///
+/// 选区模型：selection_anchor 是选区锚点（非移动端），
+/// cursor 是选区光标（移动端/插入点）。当无选区时两者相等。
+/// 所有 offset 均为 UTF-8 byte offset。
 #[derive(Debug, Clone)]
 pub struct EditorKernel {
     text: String,
@@ -293,6 +304,14 @@ pub struct EditorKernel {
     next_composition_session_id: u64,
 }
 
+/// Composition 会话状态 — 跟踪一次 IME composition 的生命周期。
+///
+/// 从 BeginComposition 到 FinishComposition/CancelComposition 之间有效。
+/// `generation` 在 TextEditSession reset 时递增，使过期的 composition 操作被内核拒绝。
+///
+/// `preedit_cursor_utf16` 使用 UTF-16 code unit 单位，因为 IME 协议
+/// （Android InputConnection、Qt QInputMethodEvent）以 UTF-16 报告光标位置。
+/// 内核其余字段统一使用 UTF-8 byte offset。
 #[derive(Debug, Clone)]
 struct CompositionSessionState {
     session_id: u64,
@@ -304,7 +323,10 @@ struct CompositionSessionState {
     preedit_cursor_utf16: usize,
 }
 
-/// undo 条目
+/// Undo 快照 — 存储编辑前后的全文快照与光标位置。
+///
+/// 每次编辑操作 push 一条 UndoEntry 到 undo_stack 并清空 redo_stack，
+/// 保证 undo/redo 栈的互斥性：新编辑使 redo 历史作废。
 #[derive(Debug, Clone)]
 struct UndoEntry {
     old_text: String,
@@ -360,6 +382,10 @@ impl EditorKernel {
         })
     }
 
+    /// 将 offset 对齐到最近的合法 UTF-8 char boundary。
+    ///
+    /// 超出文本长度时返回文本长度（末尾始终是合法 boundary）。
+    /// 落在多字节序列中间时向前回退到该字符的起始位置。
     fn clamp_to_char_boundary(text: &str, offset: usize) -> usize {
         if offset > text.len() {
             return text.len();
@@ -402,7 +428,7 @@ impl EditorKernel {
         (self.selection_anchor, self.cursor)
     }
 
-    /// #535: 应用编辑命令 — 唯一正文修改入口。
+    /// 应用编辑命令 — 唯一正文修改入口。
     ///
     /// 平台输入适配器只调用此方法，不能直接修改正文。
     /// 返回 EditorEditOutcome，区分 Applied/NoChange/StaleRevision/InvalidOffset/InvalidRange。
@@ -1022,6 +1048,14 @@ impl EditorKernel {
         })
     }
 
+    /// 计算从 old_text 到 new_text 的最小单段替换补丁。
+    ///
+    /// 返回 `(replace_byte_range, inserted_text)`，其中 replace_byte_range
+    /// 是半开区间 [start, end)，表示 old_text 中被替换的范围；
+    /// inserted_text 是替换后的新文本。
+    ///
+    /// 算法：先找公共前缀和公共后缀，中间部分即为差异。
+    /// 前缀/后缀长度会向 UTF-8 char boundary 对齐，保证返回的范围始终合法。
     fn compute_single_patch(old_text: &str, new_text: &str) -> ((usize, usize), String) {
         if old_text == new_text {
             return ((0, 0), String::new());
@@ -1328,6 +1362,7 @@ impl EditorKernel {
         id
     }
 
+    /// 确保 start ≤ end，使范围始终满足半开区间 [start, end) 语义。
     fn normalize_range(start: usize, end: usize) -> (usize, usize) {
         if start > end {
             (end, start)
@@ -1532,6 +1567,12 @@ impl EditorKernel {
         }
     }
 
+    /// 删除选区前后的文本（IME DeleteSurrounding 命令）。
+    ///
+    /// after_range 必须在选区右侧（start ≥ sel_max），
+    /// before_range 必须在选区左侧（end ≤ sel_min）。
+    /// 先删 after 再删 before，避免 offset 偏移。
+    /// 删除后根据删除量调整选区 anchor/head。
     fn apply_delete_surrounding(
         &mut self,
         before_byte_start: usize,
@@ -1660,6 +1701,11 @@ impl EditorKernel {
         })
     }
 
+    /// 开始一次 IME composition 会话。
+    ///
+    /// 同一时刻只允许一个活跃 composition 会话（重复调用返回 InvalidRange）。
+    /// 会话记录 replace 范围（半开区间），后续 UpdateComposition/FinishComposition
+    /// 必须与此范围匹配，否则返回 InvalidRange。
     fn apply_begin_composition(
         &mut self,
         replace_start: usize,
@@ -1718,6 +1764,12 @@ impl EditorKernel {
         })
     }
 
+    /// 更新 composition 的 preedit 文本。
+    ///
+    /// 必须匹配活跃会话的 session_id、generation 和 base_revision，
+    /// 否则返回 StaleRevision（会话可能已被 reset）。
+    /// 更新后 generation 递增，使后续操作必须使用新的 generation。
+    /// 此操作不修改正文，只更新 composition 状态供平台渲染 preedit。
     fn apply_update_composition(
         &mut self,
         composition_session_id: u64,
@@ -1797,6 +1849,12 @@ impl EditorKernel {
         })
     }
 
+    /// 确认 composition，将 preedit 文本写入正文。
+    ///
+    /// 会话的 preedit 文本替换 [replace_start, replace_end_exclusive) 范围。
+    /// 光标位置由 preedit_cursor_utf16（UTF-16 单位）转换为 UTF-8 byte offset。
+    /// 空预输入文本时仅关闭会话，不修改正文。
+    /// 确认后会话销毁，undo/redo 栈正常记录。
     fn apply_finish_composition(
         &mut self,
         composition_session_id: u64,
@@ -1940,6 +1998,10 @@ impl EditorKernel {
         }
     }
 
+    /// 取消 composition，恢复到 composition 开始前的正文状态。
+    ///
+    /// 不修改正文（preedit 文本从未写入正文），仅销毁会话。
+    /// 返回的 old_affected 告知平台需要清除的 preedit 渲染区域。
     fn apply_cancel_composition(
         &mut self,
         composition_session_id: u64,
@@ -2029,7 +2091,7 @@ impl EditorKernel {
         )
     }
 
-    /// #535: 获取 CompositionUpdate 的 VisualIntent。
+    /// 获取 CompositionUpdate 的 VisualIntent。
     ///
     /// 平台端在 composition update 时调用此方法获取动画意图，
     /// 然后交给 VisualPlanner 生成视觉事务。

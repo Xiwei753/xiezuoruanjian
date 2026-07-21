@@ -7,6 +7,10 @@ use crate::api::{
 
 use std::sync::Mutex;
 
+/// 旧版编辑会话 — 仅用于正文章节的 legacy 路径。
+///
+/// generation 在 load_text 时递增，使过期的 composition 操作被内核拒绝。
+/// 新代码应使用 TextEditSessionRegistry（支持多目标会话）。
 struct EditorSession {
     kernel: crate::editor::EditorKernel,
     chapter_id: Option<String>,
@@ -14,6 +18,9 @@ struct EditorSession {
 }
 
 /// Thin UniFFI adapter. Stable Core API behavior lives in `api::WriterCoreApi`.
+///
+/// editor_session 和 session_registry 各自用 Mutex 保护，保证线程安全。
+/// Mutex 只在单次 FFI 调用期间持有，不跨调用持有，避免死锁。
 pub struct WriterAppService {
     api: WriterCoreApi,
     editor_session: Mutex<EditorSession>,

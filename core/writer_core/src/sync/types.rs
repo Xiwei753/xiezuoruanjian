@@ -451,6 +451,11 @@ impl SyncPlan {
     }
 }
 
+/// 同步清单中的单条文件记录，持久化为 `manifest.sync.json`。
+///
+/// `op` 区分 upsert（新增/修改）和 delete（删除）两种操作。
+/// `content_hash` 为 MD5 十六进制摘要，用于三路比较和变更检测。
+/// `deleted_at_ms` 仅在 `op == "delete"` 时有值，记录精确的删除时间戳。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManifestFileRecord {
     pub path: String,
@@ -473,6 +478,10 @@ pub struct SyncManifest {
     pub files: Vec<ManifestFileRecord>,
 }
 
+/// 删除墓碑 — 记录已删除文件的信息，用于同步时通知远端。
+///
+/// 本地删除文件后不立即从 known_files 移除，而是创建墓碑，
+/// 使下次同步能向远端发送 delete 操作。`purge_after` 过期后墓碑被清理。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tombstone {
     pub original_path: String,
@@ -484,6 +493,12 @@ pub struct Tombstone {
     pub kind: String, // "local_delete" or "remote_delete"
 }
 
+/// 同步持久状态，保存为 `app-meta/sync/state.json`。
+///
+/// `known_files` 记录上次同步后双方共识的文件哈希（base_hash），
+/// 是三路比较的基准：known_files[path] == base_hash。
+/// 同步完成后会被 post-sync scan 重建，但冲突路径的 base_hash 会被保留，
+/// 以确保下次同步仍能检测到 BothChanged。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncState {
     pub remote_url: Option<String>,
@@ -491,14 +506,20 @@ pub struct SyncState {
     pub last_synced_commit: Option<String>,
     pub last_sync_time: Option<i64>,
     pub last_error: Option<String>,
+    /// 三路比较基准：path → 上次同步后的共识哈希（MD5 hex）。
     pub known_files: std::collections::HashMap<String, String>,
+    /// 已记录的冲突详情，供 resolve_conflict_* 查找 remote_hash
     pub conflicts: Vec<SyncConflict>,
+    /// 已删除文件的墓碑记录，用于同步时生成本地 delete 操作。
+    /// purge_after 过期后由同步引擎清理。
     #[serde(default)]
     pub tombstones: Vec<Tombstone>,
     #[serde(default)]
     pub deleted_files: std::collections::HashSet<String>,
+    /// 本设备唯一标识，用于 LWW 平局决胜（字典序大的 device_id 获胜）。
     #[serde(default)]
     pub device_id: String,
+    /// known_files 中各条目的更新时间戳（毫秒），用于 LWW 时间戳比较。
     #[serde(default)]
     pub known_files_updated_at: std::collections::HashMap<String, i64>,
     /// Paths that have unresolved sync conflicts. While a path is in this set,

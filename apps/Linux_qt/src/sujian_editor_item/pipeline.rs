@@ -14,6 +14,14 @@ use writer_core::editor::CompositionSession;
 use crate::editor::layout;
 use crate::platform::linux_qt::LinuxQtClipboardFocusAdapter;
 
+/// Qt 侧已确认正文镜像 — 持有与 Rust EditorKernel revision 对应的纯文本快照。
+///
+/// 不维护第二份可独立编辑的正文真相。所有修改必须通过 EditorKernel.apply() →
+/// EditorEditResult → apply_edit_result() 增量同步。镜像的 revision 必须与
+/// kernel 的 base_revision 匹配，否则 patch 被拒绝。
+///
+/// cursor 和 selection_anchor 均为 UTF-8 byte offset。
+/// selection_anchor 是选区锚点（非移动端），cursor 是光标（移动端/插入点）。
 pub(crate) struct CommittedTextMirror {
     text: String,
     revision: u64,

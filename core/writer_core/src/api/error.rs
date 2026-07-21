@@ -2,6 +2,10 @@ use std::collections::HashMap;
 
 use crate::error::Error;
 
+/// FFI 边界错误类型 — 跨语言传递的唯一错误形式。
+///
+/// 平台端通过 `code()` 和 `message_key()` 做错误分类和 i18n 映射，
+/// 不得依赖错误文案的包含关系作为主判断（见 AGENTS.md）。
 #[derive(Debug, thiserror::Error)]
 pub enum WriterError {
     #[error("IO error: {0}")]
@@ -16,6 +20,8 @@ pub enum WriterError {
     VolumeNotFound,
     #[error("Chapter not found")]
     ChapterNotFound,
+    /// 安全降级：当保存内容为空但旧内容非空时拒绝覆盖，
+    /// 防止因 bug 或损坏数据导致章节正文被意外清空。
     #[error("blocked_empty_overwrite: chapter_id={chapter_id}, old_len={old_len}, new_len={new_len}, reason={reason}")]
     EmptyOverwriteBlocked {
         chapter_id: String,

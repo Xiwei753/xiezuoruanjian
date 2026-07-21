@@ -55,6 +55,11 @@ fn save_conflict_copy(
     Ok(conflict_filename)
 }
 
+/// 获取 LWW 比较时间戳。
+///
+/// 对于 delete 操作，优先使用 `deleted_at_ms`（精确的删除时间），
+/// 回退到 `updated_at_ms`（删除操作记录的更新时间）。
+/// 对于 upsert 操作，直接使用 `updated_at_ms`。
 fn lww_record_time(record: &ManifestFileRecord) -> i64 {
     if record.op == "delete" {
         record.deleted_at_ms.unwrap_or(record.updated_at_ms)
@@ -218,6 +223,11 @@ pub(crate) fn is_document_content_path(path: &str) -> bool {
     classify_content_path(path) == ContentClass::UserTextDocument
 }
 
+/// 基于内容哈希的三路比较。
+///
+/// 以 `base_hash` 作为双方上次同步后的共识版本，比较 local 和 remote
+/// 各自是否相对 base 发生了变化。用于 UserTextDocument 类型的冲突检测：
+/// 仅一方修改时直接取修改方；双方都修改时返回 BothChanged，需走冲突解决流程。
 fn three_way_resolve(base_hash: &str, local_hash: &str, remote_hash: &str) -> ThreeWayResult {
     if local_hash == remote_hash {
         return ThreeWayResult::NoConflict;
@@ -234,10 +244,18 @@ fn three_way_resolve(base_hash: &str, local_hash: &str, remote_hash: &str) -> Th
     ThreeWayResult::NoConflict
 }
 
+/// 基于内容哈希的三路比较结果。
+///
+/// base 是上次同步后双方共识的文件版本哈希。
+/// 通过比较 local/remote 与 base 的差异判断冲突情况。
 enum ThreeWayResult {
+    /// 双方相同，或双方均未修改
     NoConflict,
+    /// 仅本地修改，远端未变 → 上传本地版本
     LocalChanged,
+    /// 仅远端修改，本地未变 → 下载远端版本
     RemoteChanged,
+    /// 双方均修改 → 需要冲突解决策略
     BothChanged,
 }
 
@@ -375,6 +393,20 @@ pub(crate) fn perform_lww_sync(
     }
 }
 
+/// 执行一次 LWW 同步尝试。
+///
+/// 整体流程：
+/// 1. 拉取远端 Git tree 和 manifest，诊断 404（空仓库 vs 权限不足 vs 分支不存在）
+/// 2. 扫描本地工作区，构建 local_records（含 upsert 和 delete 墓碑）
+/// 3. 处理 pending_take_remote：强制下载远端内容覆盖本地，不进入三路比较
+/// 4. 逐路径三路/LWW 比较：
+///    - UserTextDocument 走三路比较，BothChanged 时记录冲突
+///    - Metadata/GeneratedCache 走 LWW 时间戳决胜，平局时按 device_id 字典序
+///    - unresolved_conflict_paths 跳过，等待用户解决
+/// 5. 下载远端较新文件、上传本地较新文件、删除本地文件（移至 trash）
+/// 6. 写入合并后的 manifest、持久化 sync state
+///
+/// 调用方 `perform_lww_sync` 负责重试（最多 2 次）和错误分类。
 #[allow(clippy::cast_possible_truncation)]
 fn execute_lww_sync_attempt(
     workspace_path: &Path,
