@@ -95,8 +95,8 @@ impl CommittedTextMirror {
     ///   这类错误理论上不应发生（Core 保证输出合法 range），若出现说明存在 bug。
     /// - 选区越界或不在 char boundary 上：返回错误，调用方必须重建镜像。
     ///
-/// 不变量：成功返回后，mirror 的 revision 与 kernel 的 new_revision 一致，
-/// 正文和选区与 kernel 状态同步。
+    /// 不变量：成功返回后，mirror 的 revision 与 kernel 的 new_revision 一致，
+    /// 正文和选区与 kernel 状态同步。
     pub fn apply_edit_result(&mut self, result: &EditorEditResult) -> Result<(), String> {
         for patch in &result.display_patches {
             if patch.base_revision != self.revision {
