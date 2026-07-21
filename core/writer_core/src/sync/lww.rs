@@ -957,6 +957,9 @@ fn execute_lww_sync_attempt(
                     // 时间戳较大者获胜。时间戳相同时：
                     //   - 哈希和操作均相同 → 无实际冲突，忽略
                     //   - 否则按 device_id 字典序决胜（确定性，无需用户干预）
+                    //
+                    // 不变量：LWW 决胜仅适用于 Metadata 和 GeneratedCache，
+                    // UserTextDocument 必须走三路比较，不得静默覆盖。
                     let local_time = lww_record_time(local_rec);
                     let remote_time = lww_record_time(remote_rec);
                     let mut remote_wins = false;

@@ -298,17 +298,33 @@ impl std::error::Error for EditorInputError {}
 /// 所有 offset 均为 UTF-8 byte offset。
 #[derive(Debug, Clone)]
 pub struct EditorKernel {
+    /// 正文纯文本。始终是合法 UTF-8，不含格式标记。
     text: String,
+    /// 修订号——每次成功编辑 `saturating_add(1)`，用于乐观并发校验。
+    /// 平台端通过 `expected_revision` 匹配，不匹配时返回 `StaleRevision`。
     revision: u64,
+    /// 主光标位置（UTF-8 byte offset，保证 char boundary）。
+    /// 与 `selection_anchor` 不同时表示有选中范围。
     cursor: usize,
+    /// 选区固定端（UTF-8 byte offset）。拖选时不随光标移动。
     selection_anchor: usize,
+    /// 下一个事务 ID（单调递增），每次 `take_transaction_id()` 消费。
     next_transaction_id: u64,
+    /// 动画时长（毫秒），默认 160。仅影响后续事务，不改变已生成的事务。
     animation_duration_ms: u64,
+    /// 单次动画最大 glyph 数，超过时降级为 RunAnimation 或 SnapshotAnimation。
     max_animated_chars: usize,
+    /// 动画总开关。false 时所有编辑返回 `AnimationMode::SystemSuppressed`。
     animation_enabled: bool,
+    /// 已执行命令栈。undo 从栈顶弹出并应用 inverse，同时 push 到 redo_stack。
     undo_stack: Vec<UndoEntry>,
+    /// 已撤销命令栈。redo 从栈顶弹出并重新应用 forward，同时 push 回 undo_stack。
+    /// 新编辑（push UndoEntry）清空 redo_stack（标准线性 undo 语义）。
     redo_stack: Vec<UndoEntry>,
+    /// 当前活跃的 Composition 会话。同一时刻最多一个。
+    /// 非活跃时为 None；BeginComposition 时创建，Finish/Cancel 时销毁。
     composition_session: Option<CompositionSessionState>,
+    /// 下一个 Composition 会话 ID（单调递增）。
     next_composition_session_id: u64,
 }
 
@@ -320,14 +336,28 @@ pub struct EditorKernel {
 /// `preedit_cursor_utf16` 使用 UTF-16 code unit 单位，因为 IME 协议
 /// （Android InputConnection、Qt QInputMethodEvent）以 UTF-16 报告光标位置。
 /// 内核其余字段统一使用 UTF-8 byte offset。
+///
+/// 坐标空间约定：
+/// - `replace_start` / `replace_end_exclusive`：committed 正文坐标（UTF-8 byte offset，半开区间）
+/// - `preedit_cursor_utf16`：preedit 内部坐标（UTF-16 code unit offset）
+/// - 两者不可混用：committed 坐标不能用于定位 preedit 内部位置，反之亦然
 #[derive(Debug, Clone)]
 struct CompositionSessionState {
+    /// 会话唯一 ID，由 `next_composition_session_id` 分配
     session_id: u64,
+    /// 会话开始时的 committed revision，用于过期检测
     base_revision: u64,
+    /// 会话 generation，每次 TextEditSession reset 递增。
+    /// 过期 generation 的 UpdateComposition/FinishComposition/CancelComposition 被内核拒绝
     generation: u64,
+    /// committed 正文替换范围起始（UTF-8 byte offset）
     replace_start: usize,
+    /// committed 正文替换范围结束（不含，UTF-8 byte offset，半开区间 [replace_start, replace_end_exclusive)）
     replace_end_exclusive: usize,
+    /// 当前预输入文本（UTF-8 纯文本）
     preedit_text: String,
+    /// 预输入光标偏移（UTF-16 code unit 单位，preedit 内部坐标）。
+    /// IME 协议以 UTF-16 报告光标位置，内核其余字段统一使用 UTF-8 byte offset。
     preedit_cursor_utf16: usize,
 }
 
@@ -335,11 +365,20 @@ struct CompositionSessionState {
 ///
 /// 每次编辑操作 push 一条 UndoEntry 到 undo_stack 并清空 redo_stack，
 /// 保证 undo/redo 栈的互斥性：新编辑使 redo 历史作废。
+///
+/// 与 `history::command::TextEditCommand` 的区别：
+/// - UndoEntry 存储全文快照（old_text/new_text），适用于 EditorKernel 的全文模型
+/// - TextEditCommand 存储增量变更（forward/inverse EditorChange），适用于 HistoryManager 的增量模型
+/// 两者独立维护，EditorKernel 使用 UndoEntry，HistoryManager 使用 TextEditCommand。
 #[derive(Debug, Clone)]
 struct UndoEntry {
+    /// 编辑前的正文全文快照
     old_text: String,
+    /// 编辑后的正文全文快照
     new_text: String,
+    /// 编辑前的光标位置（UTF-8 byte offset，保证 char boundary）
     old_cursor: usize,
+    /// 编辑后的光标位置（UTF-8 byte offset，保证 char boundary）
     new_cursor: usize,
 }
 

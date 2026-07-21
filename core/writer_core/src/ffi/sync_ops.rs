@@ -2,6 +2,8 @@ use std::os::raw::c_char;
 
 use super::{c_str_to_rust, err_json, ok_json, with_core};
 
+/// # Safety
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_load_sync_config() -> *mut c_char {
     match with_core(|core| {
@@ -20,6 +22,9 @@ pub unsafe extern "C" fn writer_core_load_sync_config() -> *mut c_char {
     }
 }
 
+/// # Safety
+/// `config_json` must be a valid null-terminated UTF-8 C string containing valid JSON.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_save_sync_config(config_json: *const c_char) -> *mut c_char {
     let json_str = match c_str_to_rust(config_json) {
@@ -56,6 +61,8 @@ pub unsafe extern "C" fn writer_core_save_sync_config(config_json: *const c_char
     }
 }
 
+/// # Safety
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_sync_dry_run() -> *mut c_char {
     match with_core(|core| {
@@ -70,6 +77,8 @@ pub unsafe extern "C" fn writer_core_sync_dry_run() -> *mut c_char {
     }
 }
 
+/// # Safety
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_sync_diagnostics() -> *mut c_char {
     match with_core(|core| {
@@ -84,6 +93,8 @@ pub unsafe extern "C" fn writer_core_sync_diagnostics() -> *mut c_char {
     }
 }
 
+/// # Safety
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_perform_sync() -> *mut c_char {
     match with_core(|core| {

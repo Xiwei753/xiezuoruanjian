@@ -12,6 +12,8 @@ use std::os::raw::c_char;
 
 use super::{c_str_to_rust, err_json, ok_json, with_core};
 
+/// # Safety
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_load_local_settings() -> *mut c_char {
     match with_core(|core| {
@@ -40,6 +42,9 @@ pub unsafe extern "C" fn writer_core_load_local_settings() -> *mut c_char {
     }
 }
 
+/// # Safety
+/// `settings_json` must be a valid null-terminated UTF-8 C string containing valid JSON.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_save_local_settings(
     settings_json: *const c_char,
@@ -100,6 +105,8 @@ pub unsafe extern "C" fn writer_core_save_local_settings(
     }
 }
 
+/// # Safety
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_load_syncable_settings() -> *mut c_char {
     match with_core(|core| {
@@ -175,6 +182,9 @@ pub unsafe extern "C" fn writer_core_load_syncable_settings() -> *mut c_char {
     }
 }
 
+/// # Safety
+/// `settings_json` must be a valid null-terminated UTF-8 C string containing valid JSON.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_save_syncable_settings(
     settings_json: *const c_char,
@@ -379,6 +389,8 @@ pub unsafe extern "C" fn writer_core_save_syncable_settings(
     }
 }
 
+/// # Safety
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_list_palette_records() -> *mut c_char {
     match with_core(|core| {
@@ -390,6 +402,9 @@ pub unsafe extern "C" fn writer_core_list_palette_records() -> *mut c_char {
     }
 }
 
+/// # Safety
+/// `device_id` and `fingerprint` must be valid null-terminated UTF-8 C strings.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_load_palette_record(
     device_id: *const c_char,
@@ -412,6 +427,9 @@ pub unsafe extern "C" fn writer_core_load_palette_record(
     }
 }
 
+/// # Safety
+/// `device_id` and `fingerprint` must be valid null-terminated UTF-8 C strings.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_delete_palette_record(
     device_id: *const c_char,

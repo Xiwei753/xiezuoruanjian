@@ -9,6 +9,8 @@ use std::os::raw::c_char;
 
 use super::{c_str_to_rust, err_json, ok_json, with_core};
 
+/// # Safety
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_list_projects() -> *mut c_char {
     match with_core(|core| {
@@ -35,6 +37,9 @@ pub unsafe extern "C" fn writer_core_list_projects() -> *mut c_char {
     }
 }
 
+/// # Safety
+/// `project_id` must be a valid null-terminated UTF-8 C string.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_get_project_tree(project_id: *const c_char) -> *mut c_char {
     let pid = match c_str_to_rust(project_id) {
@@ -108,6 +113,9 @@ pub unsafe extern "C" fn writer_core_get_project_tree(project_id: *const c_char)
     }
 }
 
+/// # Safety
+/// `name` must be a valid null-terminated UTF-8 C string.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_create_project(name: *const c_char) -> *mut c_char {
     let title = match c_str_to_rust(name) {
@@ -131,6 +139,9 @@ pub unsafe extern "C" fn writer_core_create_project(name: *const c_char) -> *mut
     }
 }
 
+/// # Safety
+/// `project_id` must be a valid null-terminated UTF-8 C string.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_list_volumes(project_id: *const c_char) -> *mut c_char {
     let pid = match c_str_to_rust(project_id) {
@@ -166,6 +177,9 @@ pub unsafe extern "C" fn writer_core_list_volumes(project_id: *const c_char) -> 
     }
 }
 
+/// # Safety
+/// `project_id` and `name` must be valid null-terminated UTF-8 C strings.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_create_volume(
     project_id: *const c_char,
@@ -203,6 +217,9 @@ pub unsafe extern "C" fn writer_core_create_volume(
     }
 }
 
+/// # Safety
+/// `project_id` and `volume_id` must be valid null-terminated UTF-8 C strings.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_list_chapters(
     project_id: *const c_char,
@@ -251,6 +268,9 @@ pub unsafe extern "C" fn writer_core_list_chapters(
     }
 }
 
+/// # Safety
+/// `project_id`, `volume_id`, and `name` must be valid null-terminated UTF-8 C strings.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_create_chapter(
     project_id: *const c_char,
@@ -298,6 +318,9 @@ pub unsafe extern "C" fn writer_core_create_chapter(
     }
 }
 
+/// # Safety
+/// `project_id`, `volume_id`, and `chapter_id` must be valid null-terminated UTF-8 C strings.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_open_chapter(
     project_id: *const c_char,
@@ -351,6 +374,9 @@ pub unsafe extern "C" fn writer_core_open_chapter(
     }
 }
 
+/// # Safety
+/// `project_id`, `volume_id`, `chapter_id`, and `content` must be valid null-terminated UTF-8 C strings.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_save_chapter(
     project_id: *const c_char,
@@ -410,6 +436,9 @@ pub unsafe extern "C" fn writer_core_save_chapter(
     }
 }
 
+/// # Safety
+/// `project_id` and `new_name` must be valid null-terminated UTF-8 C strings.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_rename_project(
     project_id: *const c_char,
@@ -443,6 +472,9 @@ pub unsafe extern "C" fn writer_core_rename_project(
     }
 }
 
+/// # Safety
+/// `project_id` must be a valid null-terminated UTF-8 C string.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_delete_project(project_id: *const c_char) -> *mut c_char {
     let pid = match c_str_to_rust(project_id) {
@@ -463,6 +495,9 @@ pub unsafe extern "C" fn writer_core_delete_project(project_id: *const c_char) -
     }
 }
 
+/// # Safety
+/// `project_id` must be a valid null-terminated UTF-8 C string.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_get_project_stats(project_id: *const c_char) -> *mut c_char {
     let pid = match c_str_to_rust(project_id) {
@@ -487,6 +522,9 @@ pub unsafe extern "C" fn writer_core_get_project_stats(project_id: *const c_char
     }
 }
 
+/// # Safety
+/// `project_id`, `volume_id`, and `new_name` must be valid null-terminated UTF-8 C strings.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_rename_volume(
     project_id: *const c_char,
@@ -530,6 +568,9 @@ pub unsafe extern "C" fn writer_core_rename_volume(
     }
 }
 
+/// # Safety
+/// `project_id` and `volume_id` must be valid null-terminated UTF-8 C strings.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_delete_volume(
     project_id: *const c_char,
@@ -563,6 +604,10 @@ pub unsafe extern "C" fn writer_core_delete_volume(
     }
 }
 
+/// # Safety
+/// `project_id` and `ordered_ids_json` must be valid null-terminated UTF-8 C strings.
+/// `ordered_ids_json` must contain a valid JSON array of volume ID strings.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_reorder_volumes(
     project_id: *const c_char,
@@ -598,6 +643,9 @@ pub unsafe extern "C" fn writer_core_reorder_volumes(
     }
 }
 
+/// # Safety
+/// `project_id`, `volume_id`, `chapter_id`, and `new_name` must be valid null-terminated UTF-8 C strings.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_rename_chapter(
     project_id: *const c_char,
@@ -651,6 +699,9 @@ pub unsafe extern "C" fn writer_core_rename_chapter(
     }
 }
 
+/// # Safety
+/// `project_id`, `volume_id`, and `chapter_id` must be valid null-terminated UTF-8 C strings.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_delete_chapter(
     project_id: *const c_char,
@@ -694,6 +745,10 @@ pub unsafe extern "C" fn writer_core_delete_chapter(
     }
 }
 
+/// # Safety
+/// `project_id`, `volume_id`, and `ordered_ids_json` must be valid null-terminated UTF-8 C strings.
+/// `ordered_ids_json` must contain a valid JSON array of chapter ID strings.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_reorder_chapters(
     project_id: *const c_char,
@@ -739,6 +794,9 @@ pub unsafe extern "C" fn writer_core_reorder_chapters(
     }
 }
 
+/// # Safety
+/// `project_id`, `volume_id`, and `chapter_id` must be valid null-terminated UTF-8 C strings.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_clear_chapter(
     project_id: *const c_char,

@@ -2,6 +2,8 @@ use std::os::raw::c_char;
 
 use super::{c_str_to_rust, err_json, ok_json, with_core};
 
+/// # Safety
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_get_writing_stats() -> *mut c_char {
     match with_core(|core| {
@@ -20,6 +22,9 @@ pub unsafe extern "C" fn writer_core_get_writing_stats() -> *mut c_char {
     }
 }
 
+/// # Safety
+/// `event_json` must be a valid null-terminated UTF-8 C string containing valid JSON.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_process_writing_event(
     event_json: *const c_char,

@@ -304,6 +304,10 @@ impl From<crate::editor::Timeline> for TimelineDto {
 
 // ── #515: Unified Transaction Kind DTO ──
 
+/// 统一事务类型 DTO — 最终 Linux 和 Android 只保留四种事务。
+///
+/// 所有事务共用 VisualRevision、LineSnapshot、AnimatedSlice、
+/// StaticLinePatch、DecorationSlice、CursorPath 和 Timeline。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum UnifiedTransactionKindDto {
@@ -329,6 +333,9 @@ impl From<crate::editor::UnifiedTransactionKind> for UnifiedTransactionKindDto {
 
 // ── #515: Visual Class Kind DTO ──
 
+/// 视觉对象分类 DTO — 通过 old/new VisualRevision、OffsetMap 和 shaping identity 分类。
+///
+/// 中间插入、换行、段落合并和删除回流全部使用这套分类，不建立特例。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum VisualClassKindDto {
@@ -354,6 +361,7 @@ impl From<crate::editor::VisualClassKind> for VisualClassKindDto {
 
 // ── #515: Decoration Slice DTO ──
 
+/// 装饰切片类型 DTO — 预输入下划线、分段颜色、背景色和 IME 光标。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum DecorationSliceKindDto {
@@ -377,7 +385,14 @@ impl From<crate::editor::DecorationSliceKind> for DecorationSliceKindDto {
 
 // ── #515: PlatformVisualTransaction DTO ──
 
-/// 跨平台视觉事务 DTO — 包含 #515 统一时钟和分类。
+/// 跨平台视觉事务 DTO — 包含统一时钟和分类。
+///
+/// Core 输出 EditorVisualTransaction；平台端收到后，根据平台布局
+/// 生成 PlatformVisualTransaction。两端共享此 DTO 和状态机概念，
+/// 不共享平台渲染结构。
+///
+/// `generation` 用于过期检测：平台端持有的 generation 与 Core 当前 generation
+/// 不匹配时，后续操作被内核拒绝。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlatformVisualTransactionDto {
@@ -392,6 +407,9 @@ pub struct PlatformVisualTransactionDto {
     pub visual_class_kinds: Vec<VisualClassKindDto>,
 }
 
+/// 事务状态 DTO — 动画时间只能在首次进入 Rendering 时开始。
+/// 滚动开始时 Rendering → Paused，滚动结束后 revision 未变则累加
+/// pausedDuration 继续，revision 已变则取消失效事务。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum PlatformVisualTransactionStateDto {
@@ -433,6 +451,8 @@ impl From<crate::editor::PlatformVisualTransaction> for PlatformVisualTransactio
 
 // ── #535: Editor V2 Kernel DTOs ──
 
+/// 操作类型 DTO — 区分不同编辑操作的视觉语义。
+/// Core 根据此枚举决定动画策略和光标行为。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum EditorOperationKindDto {
@@ -464,6 +484,11 @@ impl From<crate::editor::EditorOperationKind> for EditorOperationKindDto {
     }
 }
 
+/// 光标协同 DTO — 描述光标移动的视觉语义。
+///
+/// `old_byte_offset` / `new_byte_offset` 均为 UTF-8 byte offset。
+/// `should_animate` 由 Core 根据动画开关、光标是否实际移动、
+/// 是否处于加载/格式化状态综合决定。平台端不得自行判断。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CoordinatedCursorDto {
@@ -483,6 +508,12 @@ impl From<crate::editor::CoordinatedCursor> for CoordinatedCursorDto {
     }
 }
 
+/// UTF-8 byte 范围 DTO — 半开区间 `[start, end_exclusive)`。
+///
+/// `start` 和 `end_exclusive` 均为 UTF-8 byte offset，保证 char boundary。
+/// 空范围表示为 `start == end_exclusive`（不是 0..0，因为 0..0 在 Kotlin IntRange 中包含一个元素）。
+/// 平台端应先检查 `has_inserted_range` / `has_deleted_range` 标志，
+/// 不能依赖 `start == 0 && end_exclusive == 0` 判断空范围。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorByteRangeDto {
@@ -500,6 +531,13 @@ impl From<(usize, usize)> for EditorByteRangeDto {
     }
 }
 
+/// 视觉意图 DTO — Core 告诉平台层应该做什么动画。
+///
+/// Core 裁判动画语义（模式、时长、受影响范围）；
+/// 平台层只负责 layout 坐标转换和绘制。
+///
+/// 所有 byte range 均为 UTF-8 byte offset 半开区间 `[start, end_exclusive)`。
+/// 平台端 DisplayTextMirror 使用 UTF-16 时必须先通过 TextIndexMap 转换。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorVisualIntentDto {
@@ -555,6 +593,14 @@ impl From<crate::editor::EditorVisualIntent> for EditorVisualIntentDto {
     }
 }
 
+/// 显示补丁 DTO — 平台显示镜像增量更新的最小单位。
+///
+/// `replace_byte_start..replace_byte_end_exclusive` 为半开区间（UTF-8 byte offset），
+/// 表示要被替换的范围。`inserted_text` 为替换后的新文本。
+/// `resulting_selection_start..resulting_selection_end` 为替换完成后的选区（半开区间）。
+///
+/// 平台端 DisplayTextMirror 按 DisplayPatch 增量更新 SpannableStringBuilder，
+/// 不得根据 old/new 全文重新 diff，也不得先本地改 Buffer 再通知 Core。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DisplayPatchDto {
@@ -582,6 +628,10 @@ impl From<crate::editor::DisplayPatch> for DisplayPatchDto {
     }
 }
 
+/// Composition 会话 DTO — 跨平台传递当前 IME composition 会话状态。
+///
+/// `generation` 用于过期检测：平台端持有的 generation 与 Core 当前 generation
+/// 不匹配时，后续 UpdateComposition/FinishComposition/CancelComposition 被内核拒绝。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompositionSessionDto {
@@ -590,6 +640,14 @@ pub struct CompositionSessionDto {
     pub generation: u64,
 }
 
+/// 编辑结果 DTO — EditorKernel.apply() 的跨平台返回值。
+///
+/// 包含正文变化（display_patches）、选区变化、视觉意图和 composition 会话状态。
+/// 平台端按此结果增量更新显示镜像、布局和动画。
+///
+/// 选区字段 `old_selection_start/end` 和 `new_selection_start/end` 均为
+/// UTF-8 byte offset 半开区间 `[start, end)`。平台端使用 UTF-16 时
+/// 必须通过 TextIndexMap 转换，不得直接用于 SpannableStringBuilder。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
  pub struct EditorEditResultDto {
@@ -625,6 +683,14 @@ impl EditorEditResultDto {
     }
 }
 
+/// 编辑结果分类 DTO — 平台必须区分不同结果走不同恢复路径。
+///
+/// - `Applied`：编辑成功应用，正文已变更
+/// - `AppliedWithAdjustedSelection`：编辑成功，但平台传入的选区 offset 不在 char boundary 上，内核已自动对齐
+/// - `NoChange`：命令无实际效果（如空替换、空选区变更），正文未变
+/// - `StaleRevision`：expected_revision 与当前 revision 不匹配，平台需用结果中的最新 revision 重试
+/// - `InvalidOffset`：offset 不在 UTF-8 char boundary 上或超出文本范围
+/// - `InvalidRange`：range 语义非法（如 start ≥ end 对于 delete）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum EditorEditOutcomeDto {
@@ -682,6 +748,10 @@ impl From<crate::editor::EditorEditResult> for EditorEditResultDto {
     }
 }
 
+/// 编辑器会话快照 DTO — 用于跨平台传递编辑器完整状态。
+///
+/// `cursor` 和 `selection_anchor` 均为 UTF-8 byte offset，保证 char boundary。
+/// 平台端使用 UTF-16 时必须通过 TextIndexMap 转换。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorSessionSnapshotDto {

@@ -1396,18 +1396,31 @@ pub enum TransactionCancelReason {
 /// #516: 四种事务（BodyEdit、CompositionUpdate、CompositionCommitOrCancel、CursorOnly）
 /// 全部进入同一队列和 Timeline。不再存在独立预输入覆盖主路径、
 /// 独立光标位移动画时间源。
+///
+/// `slice_document_byte_ranges` 与 `slice_roles` / `visual_class_kinds` 一一对应，
+/// 每个元素为半开区间 `[start, end)`（UTF-8 byte offset）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlatformVisualTransaction {
+    /// 事务唯一 ID
     pub transaction_id: u64,
+    /// 事务 generation，用于过期检测
     pub generation: u64,
+    /// 事务当前状态
     pub state: PlatformVisualTransactionState,
+    /// 旧视觉布局修订
     pub old_revision: VisualLayoutRevision,
+    /// 新视觉布局修订
     pub new_revision: VisualLayoutRevision,
+    /// 切片角色列表（与 slice_document_byte_ranges / visual_class_kinds 对应）
     pub slice_roles: Vec<AnimatedSliceRole>,
+    /// 切片文档字节范围列表（半开区间 `[start, end)`，UTF-8 byte offset）
     pub slice_document_byte_ranges: Vec<(usize, usize)>,
+    /// 静态行补丁列表（不需要动画的行）
     pub static_line_patches: Vec<StaticLinePatch>,
+    /// 光标过渡范围起始（UTF-8 byte offset）
     pub cursor_transition_byte_start: usize,
+    /// 光标过渡范围结束（UTF-8 byte offset）
     pub cursor_transition_byte_end: usize,
     pub duration_ms: u64,
     pub rendering_started_at_ms: Option<u64>,
@@ -1438,10 +1451,17 @@ pub struct PlatformVisualTransaction {
     pub cancel_reason: Option<TransactionCancelReason>,
 }
 
+/// 编辑引擎 — 创建 EditorTransaction 和 EditorVisualTransaction 的工厂。
+///
+/// 维护动画 ID 计数器和动画参数（max_animated_chars、animation_duration_ms）。
+/// 无状态：不持有正文、选区或 undo/redo 栈，每次调用传入当前文本。
 #[derive(Debug, Clone)]
 pub struct EditorEngine {
+    /// 下一个动画 ID（单调递增）
     next_animation_id: u64,
+    /// 单次动画最大 glyph 数，超过时降级为 RunAnimation 或 SnapshotAnimation
     max_animated_chars: usize,
+    /// 动画时长（毫秒），默认 160
     animation_duration_ms: u64,
 }
 

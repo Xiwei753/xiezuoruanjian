@@ -2,6 +2,8 @@ use std::os::raw::c_char;
 
 use super::{c_str_to_rust, err_json, ok_json, with_core, CORE};
 
+/// # Safety
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_validate_workspace() -> *mut c_char {
     match with_core(|core| core.validate_workspace().map_err(|e| format!("{}", e))) {
@@ -11,6 +13,9 @@ pub unsafe extern "C" fn writer_core_validate_workspace() -> *mut c_char {
 }
 
 /// List all known workspaces. Currently returns the single active workspace.
+///
+/// # Safety
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_list_workspaces() -> *mut c_char {
     match with_core(|core| {
@@ -127,6 +132,9 @@ pub unsafe extern "C" fn writer_core_open_workspace(path: *const c_char) -> *mut
 }
 
 /// Get the current workspace state (path, validity, projects, recent edits).
+///
+/// # Safety
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_get_workspace_state() -> *mut c_char {
     match with_core(|core| {
@@ -178,6 +186,10 @@ pub unsafe extern "C" fn writer_core_get_workspace_state() -> *mut c_char {
 ///
 /// 当前实现为线性扫描所有项目/卷目录。工作区规模有限时（数十项目、数百卷）可接受。
 /// 若需要支持更大规模，应建立 chapter_id → (project_id, volume_id) 的反向索引。
+///
+/// # Safety
+/// `chapter_id` must be a valid null-terminated UTF-8 C string.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_resolve_chapter_location(
     chapter_id: *const c_char,
@@ -224,6 +236,10 @@ pub unsafe extern "C" fn writer_core_resolve_chapter_location(
 /// This replaces the ArkTS-side tree traversal for volumeId -> projectId.
 ///
 /// 与 `writer_core_resolve_chapter_location` 同理，当前为线性扫描。
+///
+/// # Safety
+/// `volume_id` must be a valid null-terminated UTF-8 C string.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_resolve_volume_location(
     volume_id: *const c_char,
@@ -260,6 +276,8 @@ pub unsafe extern "C" fn writer_core_resolve_volume_location(
     }
 }
 
+/// # Safety
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_get_recent_edits() -> *mut c_char {
     match with_core(|core| {
