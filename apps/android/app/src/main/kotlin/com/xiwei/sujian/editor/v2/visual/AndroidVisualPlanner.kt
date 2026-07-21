@@ -1302,22 +1302,100 @@ class AndroidVisualPlanner {
 
             val newPara = newParagraphs[bestNewParaIdx]
 
+            val oldParaLineSnapshots = mutableListOf<Pair<Int, AndroidLineSnapshot>>()
             val allOldClusters = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
             for (lineEntry in oldRev.lineRanges.withIndex()) {
                 if (lineEntry.value.paragraphId != oldPara.paragraphId) continue
                 val oldSnapshot = createSnapshotFromRevision(oldRev, lineEntry.index, preCapturedOldSnapshots, preCapturedNewSnapshots) ?: continue
+                oldParaLineSnapshots.add(Pair(lineEntry.index, oldSnapshot))
                 for (cluster in oldSnapshot.clusters) {
                     allOldClusters.add(Pair(cluster, oldSnapshot))
                 }
             }
 
+            val newParaLineSnapshots = mutableListOf<Pair<Int, AndroidLineSnapshot>>()
             val allNewClusters = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
             for (lineEntry in newRev.lineRanges.withIndex()) {
                 if (lineEntry.value.paragraphId != newPara.paragraphId) continue
                 val newSnapshot = createSnapshotFromRevision(newRev, lineEntry.index, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = true) ?: continue
+                newParaLineSnapshots.add(Pair(lineEntry.index, newSnapshot))
                 for (cluster in newSnapshot.clusters) {
                     allNewClusters.add(Pair(cluster, newSnapshot))
                 }
+            }
+
+            if (allOldClusters.isEmpty() && allNewClusters.isEmpty()) {
+                val matchedNewLineIndices = mutableSetOf<Int>()
+                for ((oldLineIdx, oldSnapshot) in oldParaLineSnapshots) {
+                    val oldLineRange = oldRev.lineRanges.getOrNull(oldLineIdx) ?: continue
+                    var bestNewLineIdx: Int? = null
+                    val mappedStart = offsetMapper(oldLineRange.startUtf8)
+                    if (mappedStart != null) {
+                        for ((newLineIdx, newSnapshot) in newParaLineSnapshots) {
+                            if (newLineIdx in matchedNewLineIndices) continue
+                            val newLineRange = newRev.lineRanges.getOrNull(newLineIdx) ?: continue
+                            if (newLineRange.startUtf8 == mappedStart) {
+                                bestNewLineIdx = newLineIdx
+                                break
+                            }
+                        }
+                    }
+                    if (bestNewLineIdx != null) {
+                        matchedNewLineIndices.add(bestNewLineIdx)
+                        val newSnapshot = newParaLineSnapshots.firstOrNull { it.first == bestNewLineIdx }?.second ?: continue
+                        val newLineRange = newRev.lineRanges.getOrNull(bestNewLineIdx) ?: continue
+                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                            role = SliceRole.CrossfadeOld,
+                            snapshot = oldSnapshot,
+                            sourceRect = oldSnapshot.sourceRect,
+                            destinationRect = android.graphics.RectF(
+                                oldLineRange.left, oldLineRange.top,
+                                oldLineRange.right, oldLineRange.bottom
+                            ),
+                            startAlpha = 1f,
+                            endAlpha = 0f
+                        ))
+                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                            role = SliceRole.CrossfadeNew,
+                            snapshot = newSnapshot,
+                            sourceRect = newSnapshot.sourceRect,
+                            destinationRect = android.graphics.RectF(
+                                newLineRange.left, newLineRange.top,
+                                newLineRange.right, newLineRange.bottom
+                            ),
+                            startAlpha = 0f,
+                            endAlpha = 1f
+                        ))
+                    } else {
+                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                            role = SliceRole.Delete,
+                            snapshot = oldSnapshot,
+                            sourceRect = oldSnapshot.sourceRect,
+                            destinationRect = android.graphics.RectF(
+                                oldLineRange.left, oldLineRange.top,
+                                oldLineRange.right, oldLineRange.bottom
+                            ),
+                            startAlpha = 1f,
+                            endAlpha = 0f
+                        ))
+                    }
+                }
+                for ((newLineIdx, newSnapshot) in newParaLineSnapshots) {
+                    if (newLineIdx in matchedNewLineIndices) continue
+                    val newLineRange = newRev.lineRanges.getOrNull(newLineIdx) ?: continue
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.Insert,
+                        snapshot = newSnapshot,
+                        sourceRect = newSnapshot.sourceRect,
+                        destinationRect = android.graphics.RectF(
+                            newLineRange.left, newLineRange.top,
+                            newLineRange.right, newLineRange.bottom
+                        ),
+                        startAlpha = 0f,
+                        endAlpha = 1f
+                    ))
+                }
+                continue
             }
 
             val newUsed = mutableSetOf<Int>()
@@ -2786,17 +2864,7 @@ class AndroidVisualPlanner {
         val selStart = newRev.selectionStartUtf16
         val selEnd = newRev.selectionEndUtf16
         if (selStart == selEnd) return null
-
-        val rects = mutableListOf<android.graphics.RectF>()
-        for (lineRange in newRev.lineRanges) {
-            if (selStart < lineRange.endUtf16 && selEnd > lineRange.startUtf16) {
-                rects.add(android.graphics.RectF(
-                    lineRange.left, lineRange.top, lineRange.right, lineRange.bottom
-                ))
-            }
-        }
-        if (rects.isEmpty()) return null
-        return PreparedVisualTransaction.SelectionDecoration(selStart, selEnd, rects)
+        return PreparedVisualTransaction.SelectionDecoration(selStart, selEnd)
     }
 
     private fun buildPreeditDecoration(newRev: AndroidLayoutRevision?): PreparedVisualTransaction.PreeditDecoration? {

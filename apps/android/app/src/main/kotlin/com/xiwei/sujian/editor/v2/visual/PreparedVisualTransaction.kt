@@ -66,8 +66,7 @@ data class PreparedVisualTransaction(
 
     data class SelectionDecoration(
         val startUtf16: Int,
-        val endUtf16: Int,
-        val rects: List<android.graphics.RectF>
+        val endUtf16: Int
     )
 
     data class PreeditDecoration(
