@@ -699,3 +699,91 @@ fn test_settings_auto_indent_contract() {
     assert_eq!(json["autoIndentEnabled"], true);
     assert_eq!(json["autoIndentWidth"], 4.0);
 }
+
+#[test]
+fn test_project_stats_dto_contract() {
+    let summary = crate::api::types::ProjectStatsSummaryDto {
+        range: crate::api::types::DateRangeDto {
+            start_date: "2024-01-01".to_string(),
+            end_date: "2024-01-02".to_string(),
+        },
+        projects: vec![crate::api::types::ProjectStatsRecordDto {
+            project_id: "p1".to_string(),
+            human_typed_chars: 100,
+            pasted_chars: 50,
+            deleted_chars: 10,
+            ai_inserted_chars: 5,
+            net_delta_chars: 145,
+            active_seconds: 3600,
+        }],
+    };
+
+    let json = serde_json::to_value(&summary).unwrap();
+    assert!(json.get("range").is_some());
+    assert!(json.get("projects").is_some());
+
+    let project = &json["projects"][0];
+    assert!(project.get("projectId").is_some(), "camelCase key projectId must exist");
+    assert!(project.get("humanTypedChars").is_some(), "camelCase key humanTypedChars must exist");
+    assert!(project.get("netDeltaChars").is_some(), "camelCase key netDeltaChars must exist");
+}
+
+#[test]
+fn test_chapter_stats_dto_contract() {
+    let summary = crate::api::types::ChapterStatsSummaryDto {
+        range: crate::api::types::DateRangeDto {
+            start_date: "2024-01-01".to_string(),
+            end_date: "2024-01-02".to_string(),
+        },
+        chapters: vec![crate::api::types::ChapterStatsRecordDto {
+            chapter_id: "c1".to_string(),
+            human_typed_chars: 100,
+            pasted_chars: 50,
+            deleted_chars: 10,
+            ai_inserted_chars: 5,
+            net_delta_chars: 145,
+            active_seconds: 3600,
+        }],
+    };
+
+    let json = serde_json::to_value(&summary).unwrap();
+    assert!(json.get("range").is_some());
+    assert!(json.get("chapters").is_some());
+
+    let chapter = &json["chapters"][0];
+    assert!(chapter.get("chapterId").is_some(), "camelCase key chapterId must exist");
+    assert!(chapter.get("humanTypedChars").is_some(), "camelCase key humanTypedChars must exist");
+    assert!(chapter.get("netDeltaChars").is_some(), "camelCase key netDeltaChars must exist");
+}
+
+#[test]
+fn test_device_stats_dto_contract() {
+    let summary = crate::api::types::DeviceStatsSummaryDto {
+        range: crate::api::types::DateRangeDto {
+            start_date: "2024-01-01".to_string(),
+            end_date: "2024-01-02".to_string(),
+        },
+        devices: vec![crate::api::types::DeviceStatsRecordDto {
+            device_id: "d1".to_string(),
+            platform: crate::api::types::PlatformDto::Desktop,
+            device_class: "pc".to_string(),
+            human_typed_chars: 100,
+            pasted_chars: 50,
+            deleted_chars: 10,
+            ai_inserted_chars: 5,
+            net_delta_chars: 145,
+            active_seconds: 3600,
+            sessions_count: 2,
+        }],
+    };
+
+    let json = serde_json::to_value(&summary).unwrap();
+    assert!(json.get("range").is_some());
+    assert!(json.get("devices").is_some());
+
+    let device = &json["devices"][0];
+    assert!(device.get("deviceId").is_some(), "camelCase key deviceId must exist");
+    assert!(device.get("platform").is_some(), "camelCase key platform must exist");
+    assert!(device.get("deviceClass").is_some(), "camelCase key deviceClass must exist");
+    assert!(device.get("sessionsCount").is_some(), "camelCase key sessionsCount must exist");
+}
