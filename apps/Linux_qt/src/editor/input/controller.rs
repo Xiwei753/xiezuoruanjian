@@ -46,10 +46,13 @@ impl EditorInputController {
 
 /// 编辑器输入宿主 trait — 平台端必须实现。
 ///
-/// 所有方法在 GUI 线程上调用，实现方不得跨线程访问。
+/// 线程安全：所有方法在 GUI 线程上调用，实现方不得跨线程访问。
+/// Qt 对象（QWidget/QQuickItem）只能在主线程使用，后台线程只能发送强类型命令。
+///
 /// `input_set_suppress_next_ime_commit` / `input_take_suppress_next_ime_commit`
 /// 用于处理 ESC 取消 preedit 后延迟到达的 commit 事件：ESC 设置 suppress 标记，
 /// 后续 commit 检查并消费该标记后仅清除 preedit 而不插入文本。
+/// 这是一个一次性消费标记（take-and-clear），防止多次 commit 被误抑制。
 pub(crate) trait EditorInputHost {
     fn input_enabled(&self) -> bool;
     fn input_emit_explicit_clear_requested(&mut self);

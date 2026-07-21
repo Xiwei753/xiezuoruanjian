@@ -36,6 +36,11 @@ impl TextEditCommand {
         *cursor = clamp_cursor_to_char_boundary(text, self.cursor_after);
     }
 
+    /// 应用反向变更序列（撤销）。
+    ///
+    /// 关键：inverse 必须逆序应用（`.rev()`），因为多步变更的 offset 依赖于
+    /// 前序变更的执行结果。例如 Insert(0, "ab") + Insert(2, "cd") 的逆操作
+    /// 必须先删 "cd"（offset=2）再删 "ab"（offset=0），顺序颠倒会导致 offset 错位。
     pub fn apply_inverse(&self, text: &mut String, cursor: &mut usize) {
         for change in self.inverse.iter().rev() {
             apply_change(text, change);

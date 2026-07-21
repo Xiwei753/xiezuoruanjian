@@ -581,9 +581,20 @@ pub struct Tombstone {
 ///
 /// 非线程安全：只在同步引擎主路径读写，同步期间持有独占可变引用。
 ///
-/// `known_files` 记录上次同步后双方共识的文件哈希（base_hash），
-/// 是三路比较的基准：known_files[path] == base_hash。
-/// 同步完成后会被 post-sync scan 重建，但冲突路径的 base_hash 会被保留，
+/// 字段关系：
+/// - `known_files` + `known_files_updated_at` 是一对伴生映射，
+///   同一个 path 在两个映射中必须同时存在或同时不存在。
+///   `known_files[path]` 存储上次同步后的共识哈希（base_hash），
+///   `known_files_updated_at[path]` 存储该条目的更新时间戳（毫秒），
+///   两者共同构成 LWW 比较的基准。
+/// - `conflicted_files` 中的路径在同步时被跳过，不参与三路/LWW 比较，
+///   直到用户通过 resolve_conflict_* 显式解决。
+/// - `pending_take_remote` 记录用户选择"采用远端"但远端内容尚未下载的路径，
+///   下次 perform_sync 时强制下载这些路径后再进入正常比较流程。
+/// - `tombstones` 记录本地已删除文件的墓碑，用于下次同步时向远端发送 delete 操作，
+///   `purge_after` 过期后由同步引擎清理。
+///
+/// 同步完成后 known_files 会被 post-sync scan 重建，但冲突路径的 base_hash 会被保留，
 /// 以确保下次同步仍能检测到 BothChanged。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncState {

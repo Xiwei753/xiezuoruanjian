@@ -628,6 +628,12 @@ impl EditorKernel {
         }
     }
 
+    /// 插入文本 — 在 byte_offset 处插入 text。
+    ///
+    /// 不变量：byte_offset 必须是合法 UTF-8 char boundary 且 ≤ text.len()，
+    /// 否则返回 InvalidOffset。插入后光标移动到插入文本末尾，
+    /// 同时清除活跃 composition 会话（非 composition 操作中断正在进行的 IME 输入）。
+    /// 新编辑入 undo 栈并清空 redo 栈（标准线性 undo 语义）。
     fn apply_insert(
         &mut self,
         byte_offset: usize,
@@ -717,6 +723,11 @@ impl EditorKernel {
         })
     }
 
+    /// 删除文本 — 删除半开区间 [byte_start, byte_end_exclusive) 的文本。
+    ///
+    /// 不变量：byte_start/byte_end_exclusive 必须是合法 char boundary，
+    /// byte_start < byte_end_exclusive，且均在文本范围内。
+    /// 删除后光标移动到删除起始位置，清除 composition 会话。
     fn apply_delete(
         &mut self,
         byte_start: usize,
@@ -814,6 +825,10 @@ impl EditorKernel {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// 替换文本 — 用 replacement_text 替换半开区间 [byte_start, byte_end_exclusive) 的文本。
+    ///
+    /// 不变量：byte_start/byte_end_exclusive 必须是合法 char boundary 且在文本范围内。
+    /// 替换后光标移动到替换文本末尾，清除 composition 会话。
     fn apply_replace(
         &mut self,
         byte_start: usize,
@@ -963,6 +978,12 @@ impl EditorKernel {
         })
     }
 
+    /// 撤销 — 从 undo 栈弹出最近一条 UndoEntry，恢复编辑前正文和光标。
+    ///
+    /// 不变量：undo 和 redo 互为逆操作。undo 弹出 undo 栈顶并 push 到 redo 栈，
+    /// 使 redo 可以重新应用。undo 时清除活跃 composition 会话，
+    /// 因为 composition 基于的正文已被撤销。
+    /// undo/redo 始终使用 SnapshotAnimation（全文快照对比），不拆分细粒度动画。
     fn apply_undo(
         &mut self,
         base_revision: u64,
@@ -1034,6 +1055,10 @@ impl EditorKernel {
         })
     }
 
+    /// 重做 — 从 redo 栈弹出最近一条 UndoEntry，重新应用编辑后正文和光标。
+    ///
+    /// 不变量：redo 弹出 redo 栈顶并 push 回 undo 栈，使 undo 可以再次撤销。
+    /// redo 时清除活跃 composition 会话。与 undo 一样使用 SnapshotAnimation。
     fn apply_redo(
         &mut self,
         base_revision: u64,
@@ -1109,10 +1134,11 @@ impl EditorKernel {
     ///
     /// 返回 `(replace_byte_range, inserted_text)`，其中 replace_byte_range
     /// 是半开区间 [start, end)，表示 old_text 中被替换的范围；
-    /// inserted_text 是替换后的新文本。
+    /// inserted_text 是替换后的新文本，基于 new_text 坐标。
     ///
-    /// 算法：先找公共前缀和公共后缀，中间部分即为差异。
-    /// 前缀/后缀长度会向 UTF-8 char boundary 对齐，保证返回的范围始终合法。
+    /// 算法：找最长公共前缀和最长公共后缀，中间部分即为差异区域。
+    /// 前缀/后缀对齐到 char boundary（可能需要回退几个字节），
+    /// 因为 DisplayPatch 的 replace_byte_range 必须在 char boundary 上。
     fn compute_single_patch(old_text: &str, new_text: &str) -> ((usize, usize), String) {
         if old_text == new_text {
             return ((0, 0), String::new());
@@ -1396,6 +1422,11 @@ impl EditorKernel {
         }
     }
 
+    /// 从 EditorChange 列表提取受影响的 UTF-8 byte range 列表。
+    ///
+    /// Delete 变更的 range [index, index+text.len()) 记入 old_ranges（旧文本中被删除的范围），
+    /// Insert 变更的 range [index, index+text.len()) 记入 new_ranges（新文本中插入的范围）。
+    /// 所有 range 均为半开区间，基于变更后的文本坐标。
     #[allow(clippy::type_complexity)]
     fn affected_ranges_from_changes(changes: &[EditorChange]) -> (Vec<(usize, usize)>, Vec<(usize, usize)>) {
         let mut old_ranges = Vec::new();
@@ -1432,6 +1463,10 @@ impl EditorKernel {
     ///
     /// 始终生成完整 replacement patch，即使正文相同。
     /// 平台 Mirror 通过 loadFromSessionSnapshot 重建，不依赖增量 patch。
+    ///
+    /// 不变量：加载时清空 undo/redo 栈（新章节不应保留旧章节的撤销历史），
+    /// 清除活跃 composition 会话，光标对齐到最近 char boundary。
+    /// revision 递增（load 也是一次正文变更，需要新 revision）。
     pub fn load_text(&mut self, text: String, cursor: usize) -> EditorEditOutcome {
         let base_revision = self.revision;
         let old_cursor = self.cursor;
@@ -1970,6 +2005,11 @@ impl EditorKernel {
         let committed_utf16_len: usize = committed_text.chars().map(|c| c.len_utf16()).sum();
         let preedit_cursor_utf16_clamped = preedit_cursor_utf16.min(committed_utf16_len);
 
+        // UTF-16 → UTF-8 光标坐标转换：
+        // IME 协议（Android InputConnection / Qt QInputMethodEvent）以 UTF-16 code unit
+        // 报告 preedit 光标位置。此处逐字符遍历 committed_text，累加 UTF-16 code unit
+        // 直到达到 preedit_cursor_utf16_clamped，同时累加 UTF-8 byte offset。
+        // 最终光标 = replace_start + byte_offset（committed 正文坐标）。
         let resulting_cursor_before_clamp = if preedit_cursor_utf16_clamped > 0 {
             let mut utf16_count = 0usize;
             let mut byte_offset = 0usize;

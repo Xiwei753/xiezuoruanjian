@@ -16,12 +16,16 @@ use crate::platform::linux_qt::LinuxQtClipboardFocusAdapter;
 
 /// Qt 侧已确认正文镜像 — 持有与 Rust EditorKernel revision 对应的纯文本快照。
 ///
-/// 不维护第二份可独立编辑的正文真相。所有修改必须通过 EditorKernel.apply() →
-/// EditorEditResult → apply_edit_result() 增量同步。镜像的 revision 必须与
-/// kernel 的 base_revision 匹配，否则 patch 被拒绝。
+/// 不变量：镜像的 revision 必须与 kernel 的 base_revision 匹配，
+/// 否则 patch 被拒绝。所有修改必须通过 EditorKernel.apply() →
+/// EditorEditResult → apply_edit_result() 增量同步。
 ///
-/// cursor 和 selection_anchor 均为 UTF-8 byte offset。
+/// 平台端不得维护第二份可独立编辑的正文真相（见 AGENTS.md）。
+/// 不得先本地改 Buffer 再通知 Core——必须先调 Core，再按返回结果更新镜像。
+///
+/// cursor 和 selection_anchor 均为 UTF-8 byte offset（半开区间语义）。
 /// selection_anchor 是选区锚点（非移动端），cursor 是光标（移动端/插入点）。
+/// 当 anchor == cursor 时为折叠光标（无选中）。
 pub(crate) struct CommittedTextMirror {
     text: String,
     revision: u64,
@@ -265,8 +269,7 @@ pub(crate) struct VisualTransactionContext {
     pub dpr: f64,
 }
 
-/// Linux 编辑器管线 — 组合 EditorKernel、CommittedTextMirror、CompositionState、
-/// 动画协调器和纹理缓存。
+/// Linux Qt 编辑器管线 — 连接 Core EditorKernel 与 Qt 渲染层。
 ///
 /// 双修订模型：
 /// - `text_revision`：文本内容变更时递增（insert/delete/undo/redo/load），
@@ -274,7 +277,12 @@ pub(crate) struct VisualTransactionContext {
 /// - `visual_revision`：任何需要重绘的变化时递增（含文本变更、光标移动、选区变化、
 ///   preedit 更新等），比 text_revision 更频繁。
 ///
+/// 线程安全：此结构体仅在 GUI 线程使用，不得跨线程访问。
+/// Qt 对象（QQuickItem/QSGNode）只能在主线程使用，后台线程只能发送强类型命令。
+///
 /// 所有 byte offset（cursor、selection_anchor、composition range）均为 UTF-8 byte offset。
+/// Qt QChar index 和 QInputMethodEvent 的 UTF-16 code unit offset 只允许存在于
+/// 平台适配层（platform_ime.rs），传入管线前必须转换为 UTF-8。
 pub(crate) struct LinuxEditorPipeline {
     kernel: EditorKernel,
     mirror: CommittedTextMirror,

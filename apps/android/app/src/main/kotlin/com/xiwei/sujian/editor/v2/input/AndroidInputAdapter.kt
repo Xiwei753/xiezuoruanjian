@@ -10,6 +10,21 @@ import com.xiwei.sujian.editor.v2.pipeline.AndroidEditorPipeline
 import com.xiwei.sujian.editor.v2.mirror.EditResult
 import uniffi.writer_core.EditorTransactionCauseDto
 
+/**
+ * Android 输入适配器 — 将 Android InputConnection 事件翻译为 Core EditorCommand。
+ *
+ * 坐标空间约定：
+ * - Android InputConnection 使用 UTF-16 code unit offset（Java String/CharSequence 索引）
+ * - Core EditorKernel 使用 UTF-8 byte offset（半开区间）
+ * - 所有 UTF-16 → UTF-8 转换必须在此适配器内完成，Core 不接受 UTF-16 偏移量
+ * - maxLength 限制以 UTF-8 byte 为单位（与 Core 正文模型一致）
+ *
+ * Composition 生命周期：
+ * - setComposingText → BeginComposition + UpdateComposition
+ * - commitText → CommitText（关闭 composition 会话）
+ * - finishComposingText → FinishComposition
+ * - composition generation 由 Core 管理，适配器通过 syncCompositionGeneration 同步
+ */
 class AndroidInputAdapter(
     private val mirror: DisplayTextMirror,
     private val pipeline: AndroidEditorPipeline

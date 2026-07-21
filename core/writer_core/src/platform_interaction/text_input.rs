@@ -35,6 +35,11 @@ pub enum NormalizedTextInputEvent {
     /// `replace_start` 和 `replace_length` 均为 UTF-16 code unit offset，
     /// 由平台适配层在 normalize 阶段转换为 UTF-8 byte offset 后再进入编辑内核。
     /// 负值 `replace_start` 表示从当前光标位置向前回退。
+    ///
+    /// 坐标空间约定：这两个字段使用 UTF-16 单位是因为 IME 协议
+    /// （Android InputConnection.setComposingRegion、fcitx5 preedit callback）
+    /// 以 UTF-16 报告替换范围。平台适配层负责在 normalize 时完成
+    /// UTF-16 → UTF-8 转换，编辑内核只消费 UTF-8 byte offset。
     ImeReplacementCommit {
         text: String,
         replace_start: i32,

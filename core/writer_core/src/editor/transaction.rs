@@ -71,18 +71,35 @@ impl EditorChange {
 
 /// 事务原因 — 标识触发编辑操作的用户意图或系统事件。
 /// 平台端和 Core 均依赖此枚举决定动画策略和光标行为。
+///
+/// 动画决策规则：
+/// - Typing/Delete/TypingCommit：正常动画（Glyph/Cluster/Run）
+/// - Undo/Redo：SnapshotAnimation（全文快照对比）
+/// - Load/Format：SystemSuppressed（无动画）
+/// - ImeComposition：CompositionUpdate 专用动画
+/// - Paste/Programmatic：根据文本长度和复杂度选择动画模式
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum EditorTransactionCause {
+    /// 键盘直接输入（含中文 commit）
     Typing,
+    /// 删除操作（Backspace/Delete 键）
     Delete,
+    /// 粘贴
     Paste,
+    /// 撤销
     Undo,
+    /// 重做
     Redo,
+    /// 加载/切换章节
     Load,
+    /// 格式化操作
     Format,
+    /// IME 组合输入更新（setComposingText）
     ImeComposition,
+    /// IME commit 上屏
     TypingCommit,
+    /// 程序化调用（非用户直接操作）
     Programmatic,
 }
 
@@ -569,13 +586,22 @@ pub struct VisualLayoutRevision {
 ///
 /// Glyph、Cluster、Run、LineReflow 只是对 cluster 的分组方式，
 /// 不再维护四套不同 payload。
+///
+/// 配对规则：CrossfadeOld 和 CrossfadeNew 必须成对出现，
+/// 共享同一个 Timeline。Old 淡出、New 淡入，视觉上表现为文字变形过渡。
+/// Insert/Delete/Move 不需要配对，各自独立动画。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AnimatedSliceRole {
+    /// 新插入的文字——从光标附近位移到最终位置并淡入
     Insert,
+    /// 被删除的文字——从当前位置向删除后光标或收缩中心位移并淡出
     Delete,
+    /// 位置变化的文字——从 oldRect 移到 newRect（shaping 不变）
     Move,
+    /// Crossfade 旧侧——shaping 变化的旧文字淡出
     CrossfadeOld,
+    /// Crossfade 新侧——shaping 变化的新文字淡入，与 CrossfadeOld 配对
     CrossfadeNew,
 }
 
@@ -746,6 +772,13 @@ pub enum UnifiedTransactionKind {
 /// 视觉对象分类 — 通过 old/new VisualRevision、OffsetMap 和 shaping identity 分类。
 ///
 /// 中间插入、换行、段落合并和删除回流全部使用这套分类，不建立特例。
+///
+/// 分类规则（按优先级）：
+/// 1. 仅 new 存在 → Insert（新文字淡入）
+/// 2. 仅 old 存在 → Delete（旧文字淡出）
+/// 3. shaping identity 相同但位置变化 → Move（位移）
+/// 4. 文本可映射但 shaping 改变 → Crossfade（旧淡出+新淡入）
+/// 5. 完全相同 → Static（不需要动画，走 StaticLinePatch）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum VisualClassKind {
@@ -764,14 +797,17 @@ pub enum VisualClassKind {
 /// 装饰切片 — 预输入下划线、分段颜色和 IME cursor。
 ///
 /// 使用同一 Timeline，不另起独立时间链。
+///
+/// byte_start/byte_end 为半开区间 [byte_start, byte_end)（UTF-8 byte offset），
+/// 与 Core 其余范围语义一致。装饰范围不得超出所属 visual revision 的正文范围。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DecorationSlice {
     /// 装饰类型
     pub kind: DecorationSliceKind,
-    /// UTF-8 byte 范围起始
+    /// UTF-8 byte 范围起始（半开区间，含）
     pub byte_start: usize,
-    /// UTF-8 byte 范围结束
+    /// UTF-8 byte 范围结束（半开区间，不含）
     pub byte_end: usize,
     /// 矩形区域（由平台层填充）
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -245,8 +245,12 @@ pub(crate) fn is_document_content_path(path: &str) -> bool {
 /// 各自是否相对 base 发生了变化。用于 UserTextDocument 类型的冲突检测：
 /// 仅一方修改时直接取修改方；双方都修改时返回 BothChanged，需走冲突解决流程。
 ///
-/// 不变量：local_hash == remote_hash 时一定返回 NoConflict（即使两者都 != base），
-/// 因为内容相同无需选择。
+/// 不变量：
+/// - local_hash == remote_hash 时一定返回 NoConflict（即使两者都 != base），
+///   因为内容相同无需选择。
+/// - 三路比较仅用于 UserTextDocument；Metadata/GeneratedCache 走 LWW 时间戳决胜。
+/// - LWW 决胜不变量：时间戳较大方获胜；时间戳相同时按 device_id 字典序决胜
+///   （字典序较大的 device_id 获胜），保证双方独立计算结果一致。
 fn three_way_resolve(base_hash: &str, local_hash: &str, remote_hash: &str) -> ThreeWayResult {
     if local_hash == remote_hash {
         return ThreeWayResult::NoConflict;
@@ -477,8 +481,11 @@ fn execute_lww_sync_attempt(
             }
         }
     } else if tree_status.as_u16() == 404 {
-        // tree 404 不能直接当空远端：可能是仓库不存在、Token 无权限、或分支不存在。
-        // 先调用 /git/ref/heads/{branch} 诊断接口来区分。
+        // 404 诊断链：tree 404 有三种可能原因，需逐级诊断：
+        // 1. 空仓库（分支存在但无文件）→ 继续同步，remote_tree_files 为空
+        // 2. 分支不存在 → 返回 BranchMissing 错误，提示用户检查分支名
+        // 3. 仓库不存在或 Token 无权限 → 返回 RepoNotFoundOrNoPermission 错误
+        // 诊断顺序：/git/trees/{branch} 404 → /git/ref/heads/{branch} → 仓库本身
         let ref_url = format!("{}/git/ref/heads/{}", api_base, config.branch);
         let ref_resp = client
             .get(&ref_url)

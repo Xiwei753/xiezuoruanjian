@@ -9,11 +9,15 @@ use std::sync::Mutex;
 
 /// 旧版编辑会话 — 仅用于正文章节的 legacy 路径。
 ///
-/// generation 在 load_text 时递增，使过期的 composition 操作被内核拒绝。
+/// generation 在 load_text **之前**递增，使过期的 composition 操作被内核拒绝。
+/// 这保证 reset 期间任何异步到达的 composition update/finish/cancel
+/// 因 generation 不匹配而被 StaleRevision 拒绝，不会写入已重置的正文。
+///
 /// 新代码应使用 TextEditSessionRegistry（支持多目标会话）。
 struct EditorSession {
     kernel: crate::editor::EditorKernel,
     chapter_id: Option<String>,
+    /// 会话 generation——每次 load_text 前递增，用于拒绝过期 composition 操作。
     generation: u64,
 }
 
@@ -21,9 +25,15 @@ struct EditorSession {
 ///
 /// editor_session 和 session_registry 各自用 Mutex 保护，保证线程安全。
 /// Mutex 只在单次 FFI 调用期间持有，不跨调用持有，避免死锁。
+///
+/// editor_session 是旧版正文章节专用路径（单会话），
+/// session_registry 是新版多目标会话路径（项目名/章节名/星图标题/正文等）。
+/// 两者独立维护，不共享 EditorKernel 实例。
 pub struct WriterAppService {
     api: WriterCoreApi,
+    /// 旧版正文章节会话——单 EditorKernel，generation 在 load_text 前递增。
     editor_session: Mutex<EditorSession>,
+    /// 新版多目标会话注册表——每个目标独立 EditorKernel 和 generation。
     session_registry: Mutex<crate::editor::TextEditSessionRegistry>,
 }
 
@@ -711,6 +721,12 @@ impl WriterAppService {
         }
     }
 
+    /// 获取旧版编辑会话的可变引用。
+    ///
+    /// Mutex 中毒恢复策略：如果前一个线程 panic 时持有了锁，
+    /// `into_inner()` 取出内部数据继续使用，而非让所有后续 FFI 调用全部失败。
+    /// 这在 UniFFI 场景下是合理的——平台端持有 WriterAppService 的全局引用，
+    /// 一次编辑操作的 panic 不应使整个应用不可用。
     fn with_session<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut EditorSession) -> R,
@@ -817,6 +833,9 @@ impl WriterAppService {
         })
     }
 
+    /// 加载文本到旧版编辑会话——generation 在 load_text 前递增，
+    /// 使过期的 composition 操作被内核拒绝。
+    /// cursor_byte_offset 为 UTF-8 byte offset，由平台端从 UTF-16 转换。
     pub fn editor_kernel_load_text(
         &self,
         text: String,
