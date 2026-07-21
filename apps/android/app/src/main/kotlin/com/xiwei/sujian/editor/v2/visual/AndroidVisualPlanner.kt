@@ -1070,10 +1070,9 @@ class AndroidVisualPlanner {
                             candidate.documentByteStart < end && candidate.documentByteEndExclusive > start
                         }
                 }
+                val target = mappedStart ?: lastMatchedNewStart
                 matchIdx = candidates.minByOrNull { i ->
-                    val candidateStart = allNewAffectedClusters[i].first.documentByteStart
-                    val dist = if (mappedStart != null) kotlin.math.abs(candidateStart - mappedStart) else candidateStart
-                    dist
+                    kotlin.math.abs(allNewAffectedClusters[i].first.documentByteStart - target)
                 }
             }
             if (matchIdx != null) {
