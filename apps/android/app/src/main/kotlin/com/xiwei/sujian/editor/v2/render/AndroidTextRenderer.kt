@@ -269,8 +269,10 @@ class AndroidTextRenderer {
             val bounds = RectF()
             path.computeBounds(bounds, true)
             if (bounds.isEmpty) continue
+            val left = kotlin.math.min(bounds.left, bounds.right)
+            val right = kotlin.math.max(bounds.left, bounds.right)
             val bottom = layout.getLineBottom(line).toFloat()
-            canvas.drawLine(bounds.left, bottom, bounds.right, bottom, preeditUnderlinePaint)
+            canvas.drawLine(left, bottom, right, bottom, preeditUnderlinePaint)
         }
     }
 

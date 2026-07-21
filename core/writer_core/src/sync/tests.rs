@@ -165,10 +165,9 @@ mod tests {
                 Ok(())
             }
             fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
-                Err(crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "fatal: refusing to merge unrelated histories",
-                )))
+                Err(crate::Error::SyncUnrelatedHistories {
+                    detail: "refusing to merge unrelated histories".to_string(),
+                })
             }
             fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>) -> crate::Result<()> {
                 Ok(())
@@ -651,10 +650,9 @@ mod tests {
                 Ok(())
             }
             fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
-                Err(crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "pull failed: unable to merge unrelated histories",
-                )))
+                Err(crate::Error::SyncUnrelatedHistories {
+                    detail: "unable to merge unrelated histories".to_string(),
+                })
             }
             fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
                 Ok(())
@@ -1031,10 +1029,9 @@ mod tests {
                 Ok(())
             }
             fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
-                Err(crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "ref not found: refs/heads/main",
-                )))
+                Err(crate::Error::SyncRemoteBranchNotFound {
+                    detail: "ref not found: refs/heads/main".to_string(),
+                })
             }
             fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
                 Ok(())
@@ -1215,12 +1212,16 @@ mod tests {
             .unwrap();
         remote.fetch(&["main"], None, None).unwrap();
 
-        // Verify pull/merge fails with settings_conflict_payload
+        // Verify pull/merge fails with SyncSettingsConflict
         let backend = Git2Backend;
         let res = backend.pull(dir.path(), "main", None);
         assert!(res.is_err());
-        let err_msg = res.unwrap_err().to_string();
-        assert!(err_msg.contains("settings_conflict_payload"));
+        match res.unwrap_err() {
+            crate::Error::SyncSettingsConflict { details_json } => {
+                assert!(details_json.contains("font_size"), "Conflict must include font_size key, got: {}", details_json);
+            }
+            other => panic!("Expected SyncSettingsConflict, got: {:?}", other),
+        }
 
         // Verify that after transactional rollback:
         // 1. Index has no conflicts
