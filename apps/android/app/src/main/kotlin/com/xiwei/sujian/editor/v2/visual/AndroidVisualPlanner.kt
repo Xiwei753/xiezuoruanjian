@@ -745,28 +745,34 @@ class AndroidVisualPlanner {
             }
         }
 
+        val offsetMapper = buildOffsetMapper(visualIntent, oldRev, newRev)
         val newMatched = mutableSetOf<Int>()
         var lastMatchedNewStart = 0
         for ((oldCluster, oldSnapshot) in allOldAffectedClusters) {
-            // Byte-length equality is a necessary precondition for Move: clusters with
-            // different byte lengths represent different amounts of text (e.g. "a" vs "ab"),
-            // so they cannot be the same visual content even if their shaping fingerprints
-            // happen to match. Without this check, a 1-byte cluster could be paired with a
-            // 2-byte cluster that has the same fingerprint for the first byte, producing a
-            // Move slice that visually stretches or compresses the text.
-            //
-            // Monotonicity: candidates are filtered to only include new clusters whose
-            // documentByteStart >= lastMatchedNewStart, enforcing document-order one-to-one
-            // matching. This prevents a later old cluster from matching an earlier new
-            // cluster, which would cause crossed animations for repeated text.
-            val candidates = allNewAffectedClusters.indices.filter { i ->
-                i !in newMatched && allNewAffectedClusters[i].first.shapingFingerprint == oldCluster.shapingFingerprint &&
-                    allNewAffectedClusters[i].first.documentByteEndExclusive - allNewAffectedClusters[i].first.documentByteStart ==
-                    oldCluster.documentByteEndExclusive - oldCluster.documentByteStart &&
-                    allNewAffectedClusters[i].first.documentByteStart >= lastMatchedNewStart
+            val mappedStart = offsetMapper(oldCluster.documentByteStart)
+            val mappedEnd = offsetMapper(oldCluster.documentByteEndExclusive)
+            var matchIdx: Int? = null
+            if (mappedStart != null) {
+                matchIdx = allNewAffectedClusters.indices.firstOrNull { i ->
+                    i !in newMatched && allNewAffectedClusters[i].first.documentByteStart == mappedStart &&
+                        (mappedEnd == null || allNewAffectedClusters[i].first.documentByteEndExclusive == mappedEnd) &&
+                        allNewAffectedClusters[i].first.documentByteStart >= lastMatchedNewStart
+                }
             }
-            val matchIdx = candidates.minByOrNull { i ->
-                allNewAffectedClusters[i].first.documentByteStart
+            if (matchIdx == null) {
+                val referenceStart = maxOf(mappedStart ?: lastMatchedNewStart, lastMatchedNewStart)
+                val candidates = allNewAffectedClusters.indices.filter { i ->
+                    val candidate = allNewAffectedClusters[i].first
+                    i !in newMatched &&
+                        candidate.shapingFingerprint == oldCluster.shapingFingerprint &&
+                        candidate.documentByteEndExclusive - candidate.documentByteStart ==
+                        oldCluster.documentByteEndExclusive - oldCluster.documentByteStart &&
+                        candidate.documentByteStart >= referenceStart
+                }
+                val target = mappedStart ?: lastMatchedNewStart
+                matchIdx = candidates.minByOrNull { i ->
+                    kotlin.math.abs(allNewAffectedClusters[i].first.documentByteStart - target)
+                }
             }
             if (matchIdx != null) {
                 newMatched.add(matchIdx)
