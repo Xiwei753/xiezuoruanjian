@@ -4091,4 +4091,41 @@ class AnimationRebaseContractTest {
                 matches[i].second >= matches[i - 1].second)
         }
     }
+
+    @Test
+    fun runReplace_monotonicMatchingPreventsCrossedAnimations() {
+        val oldStarts = listOf(10, 20, 30)
+        val newStarts = listOf(5, 15, 25)
+        var lastMatchedNewStart = 0
+        val newUsed = mutableSetOf<Int>()
+        val matches = mutableListOf<Pair<Int, Int>>()
+        for (oldStart in oldStarts) {
+            val candidates = newStarts.indices.filter { i ->
+                i !in newUsed && newStarts[i] >= lastMatchedNewStart
+            }
+            val matchIdx = candidates.minByOrNull { i -> newStarts[i] }
+            if (matchIdx != null) {
+                newUsed.add(matchIdx)
+                lastMatchedNewStart = newStarts[matchIdx]
+                matches.add(Pair(oldStart, newStarts[matchIdx]))
+            }
+        }
+        assertEquals(3, matches.size)
+        for (i in 1 until matches.size) {
+            assertTrue("New cluster start must be monotonically non-decreasing",
+                matches[i].second >= matches[i - 1].second)
+        }
+    }
+
+    @Test
+    fun lineReflow_fallbackUsesLastMatchedNewStartWhenMappedStartIsNull() {
+        var lastMatchedNewStart = 15
+        val mappedStart: Int? = null
+        val referenceStart = maxOf(mappedStart ?: lastMatchedNewStart, lastMatchedNewStart)
+        assertEquals("When mappedStart is null, referenceStart should be lastMatchedNewStart",
+            15, referenceStart)
+        val newCandidateStarts = listOf(10, 20, 30)
+        val validCandidates = newCandidateStarts.filter { it >= referenceStart }
+        assertEquals(listOf(20, 30), validCandidates)
+    }
 }
