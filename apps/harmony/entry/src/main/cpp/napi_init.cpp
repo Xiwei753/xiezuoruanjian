@@ -3,6 +3,18 @@
 #include <hilog/log.h>
 #include "writer_core_bridge.h"
 
+// ── Harmony NAPI 绑定 ──
+//
+// 架构：NAPI handler → writer_core_bridge.h（C 声明）→ Rust core（实现）
+//
+// 内存所有权规则：
+// - Core 通过 writer_core_* 函数返回的 char* 由 Core 分配，
+//   调用方必须通过 writer_core_free_string 释放。
+// - ReturnJsonString 在将 char* 复制到 NAPI string 后立即释放，
+//   保证无内存泄漏。
+// - dup_napi_string 将 NAPI string 复制到调用方提供的缓冲区，
+//   缓冲区生命周期由调用方管理。
+
 #undef LOG_DOMAIN
 #undef LOG_TAG
 #define LOG_DOMAIN 0xFF00
@@ -12,6 +24,7 @@
 
 // dup_napi_string: Copy a NAPI string value into a pre-allocated buffer.
 //   Caller must ensure buf is large enough (typically 2048 for paths).
+//   Returns pointer to buf; lifetime managed by caller.
 static char* dup_napi_string(napi_env env, napi_value value, char* buf, size_t buf_size) {
     size_t len = 0;
     napi_get_value_string_utf8(env, value, buf, buf_size, &len);
@@ -21,6 +34,10 @@ static char* dup_napi_string(napi_env env, napi_value value, char* buf, size_t b
 // ReturnJsonString: Bridge helper — wraps a core-allocated JSON char* into a NAPI string.
 //   Takes ownership of `json`: calls writer_core_free_string after copying to NAPI value.
 //   Returns a minimal error envelope if json is null.
+//
+//   SAFETY: json 的所有权在调用时转移给本函数。无论 napi_create_string_utf8
+//   是否成功，json 都会被 writer_core_free_string 释放。如果 napi 调用失败，
+//   result 为未定义值但 json 已释放，不会泄漏。
 static napi_value ReturnJsonString(napi_env env, char* json) {
     if (json == nullptr) {
         napi_value empty;
@@ -47,7 +64,10 @@ static napi_value ReturnJsonString(napi_env env, char* json) {
 // ── Core lifecycle ──
 
 // NativeInit: Initialize core with workspace path. Returns int32 status code:
-//   0 = success, -1 = null/empty path, -2 = dir creation failed, -3 = manifest failed.
+//   0 = success
+//   -1 = null/empty path
+//   -2 = directory creation failed
+//   -3 = manifest file initialization failed (sync state, settings, etc.)
 static napi_value NativeInit(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value args[1];

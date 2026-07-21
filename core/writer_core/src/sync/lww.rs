@@ -1,3 +1,24 @@
+//! LWW (Last-Writer-Wins) 同步策略实现。
+//!
+//! 本模块实现基于 GitHub API 的文件级同步，不依赖 Git 本地仓库。
+//! 与 `service.rs` 中的 Git 同步路径（依赖 git2 crate，需 `git-https` feature）并行存在，
+//! 两者目的相同但传输和冲突检测方式不同：
+//!
+//! | 维度         | LWW 路径（本模块）                    | Git 路径（service.rs）          |
+//! |-------------|--------------------------------------|-------------------------------|
+//! | 传输方式     | GitHub REST API 直接读写文件           | git2 clone/pull/push          |
+//! | 冲突检测     | 三路比较（UserTextDocument）+ LWW 时间戳（Metadata/GeneratedCache） | dry-run checkout + index diff |
+//! | 清单文件     | `app-meta/sync/manifest.sync.json`    | Git index                     |
+//! | feature 门控 | 无（始终可用）                         | `git-https`                   |
+//!
+//! ## 核心不变量
+//!
+//! - `manifest.sync.json` 是本地文件状态的唯一事实来源，记录每个路径的 content_hash、op、updated_at_ms。
+//! - 三路比较仅用于 `UserTextDocument`（正文、大纲等）；`Metadata`/`GeneratedCache` 走 LWW 时间戳决胜。
+//! - LWW 决胜规则：时间戳较大方获胜；时间戳相同时按 device_id 字典序决胜（保证双方独立计算结果一致）。
+//! - 远端删除的文件移至 `app-meta/sync/trash/` 而非直接删除，防止同步异常导致数据丢失。
+//! - 下载使用 atomic rename（先写 .tmp 再 rename），保证中断不会留下半写入文件。
+
 use crate::sync::github_api_client::{
     github_delete_content_serial, github_get_content, github_put_content_serial,
 };
@@ -235,6 +256,8 @@ pub(crate) fn classify_content_path(raw_path: &str) -> ContentClass {
     ContentClass::GeneratedCache
 }
 
+/// `classify_content_path == UserTextDocument` 的快捷判断。
+/// 用于在同步流程中快速识别需要走三路比较的正文类文件。
 pub(crate) fn is_document_content_path(path: &str) -> bool {
     classify_content_path(path) == ContentClass::UserTextDocument
 }
@@ -785,6 +808,9 @@ fn execute_lww_sync_attempt(
         // Only clear paths that were successfully downloaded;
         // failed/missing paths remain in pending_take_remote so the user
         // is not silently left with stale local content.
+        //
+        // retain 语义：保留仍在 failed 集合中的路径（即下载失败/远端缺失的），
+        // 成功下载的路径从 pending_take_remote 中移除，后续走正常合并流程。
         state
             .pending_take_remote
             .retain(|p| pending_take_remote_failed.contains(p));
@@ -1050,6 +1076,9 @@ fn execute_lww_sync_attempt(
                 uuid::Uuid::new_v4(),
                 filename
             ));
+            // rename 失败时静默忽略：文件可能被其他进程占用或权限不足。
+            // 后果是本地文件残留，但 manifest 已记录远端删除，下次同步时
+            // 该文件会被视为本地新增（local-only），不会静默丢失用户数据。
             let _ = std::fs::rename(&full_path, &trash_path);
         }
     }

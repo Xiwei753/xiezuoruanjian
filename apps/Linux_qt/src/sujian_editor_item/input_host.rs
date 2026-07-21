@@ -1,5 +1,17 @@
 use super::*;
 
+// ── IME 输入处理模块 ──
+//
+// 将 Qt IME 事件翻译为 Core 编辑命令。核心交互流程：
+// 1. QInputMethodEvent → input_set_preedit / input_set_preedit_with_attrs
+// 2. Core CompositionSession 维护虚拟文本（committed + preedit）
+// 3. IME commit → input_replace_and_insert 将 preedit 写入正文
+//
+// 坐标空间约定：
+// - Core 层统一使用 UTF-8 byte offset
+// - Qt IME 协议使用 UTF-16 code unit（QChar index）
+// - 本模块在调用 Core 前完成坐标转换
+
 pub(crate) fn is_left_button_pressed(event: &QMouseEvent) -> bool {
     // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [event as "const QMouseEvent*"] -> bool as "bool" {
@@ -8,6 +20,9 @@ pub(crate) fn is_left_button_pressed(event: &QMouseEvent) -> bool {
 }
 
 impl SujianEditorItem {
+    /// 确保 composition session 存在。使用 `self.buffer.cursor` 而非
+    /// `self.pipeline.cursor()`，因为 buffer 是当前已提交文本的光标位置，
+    /// pipeline 可能包含未提交的 preedit 状态。
     fn ensure_composition_session(&mut self) {
         if self.pipeline.composition().composition_session.is_none() {
             let cursor = self.buffer.cursor;
@@ -28,6 +43,8 @@ impl SujianEditorItem {
         }
     }
 
+    /// 准备 composition 更新数据。`cursor` 为 preedit 内部 UTF-8 byte offset，
+    /// 指向 preedit 文本中的光标位置（非 committed 正文坐标）。
     fn prepare_composition_update(&mut self, text: String, cursor: usize) -> Option<CompositionUpdateData> {
         self.ensure_composition_session();
 
@@ -48,6 +65,11 @@ impl SujianEditorItem {
     }
 }
 
+/// Composition 更新数据，传递给动画协调器。
+///
+/// 坐标空间：
+/// - `composition_byte_start`/`composition_byte_end`：virtualText UTF-8 byte offset（半开区间）
+/// - `generation`：composition session 代数，用于过期检测
 struct CompositionUpdateData {
     old_preedit: String,
     generation: u64,
@@ -101,6 +123,9 @@ impl EditorInputHost for SujianEditorItem {
         self.insert_text(text.into());
     }
 
+    /// 替换指定范围并插入文本（IME commit 场景）。
+    /// `replace_start`/`replace_length` 为 UTF-16 code unit 坐标（Qt IME 协议），
+    /// 内部由 `ime_replace_and_insert` 转换为 UTF-8 byte offset 后调用 Core。
     fn input_replace_and_insert(&mut self, replace_start: i32, replace_length: i32, text: String) {
         self.ime_replace_and_insert(replace_start, replace_length, text);
     }
@@ -117,6 +142,10 @@ impl EditorInputHost for SujianEditorItem {
         self.move_to_line_edge(end, extend);
     }
 
+    /// 清除预输入文本。设计意图：
+    /// 1. 保留 preedit 光标矩形供后续动画使用（pending_preedit_cursor_rect）
+    /// 2. 若动画开启，构建新旧快照并触发 commit/cancel 动画过渡
+    /// 3. 动画完成后由协调器自动清除 preedit 状态
     fn input_clear_preedit(&mut self) {
         if !self.pipeline.composition().preedit_text.is_empty() || self.pipeline.composition().composition_session.is_some() {
             self.pipeline.composition_mut().pending_preedit_cursor_rect = self.pipeline.composition().preedit_cursor_rect.clone();
@@ -159,6 +188,8 @@ impl EditorInputHost for SujianEditorItem {
         self.update_ime_cursor_for_preedit();
     }
 
+    /// 设置预输入文本。`cursor` 为 preedit 内部 UTF-8 byte offset，
+    /// 指向 preedit 文本中的光标位置。动画开启时构建新旧快照并触发 composition update 动画。
     fn input_set_preedit(&mut self, text: String, cursor: usize) {
         self.pipeline.composition_mut().preedit_old_text = self.pipeline.composition().preedit_text.clone();
         self.pipeline.composition_mut().preedit_text = text.clone();
@@ -209,6 +240,8 @@ impl EditorInputHost for SujianEditorItem {
         self.request_static_repaint();
     }
 
+    /// 设置预输入文本（带格式属性）。与 `input_set_preedit` 逻辑相同，
+    /// 但额外保留 IME 格式属性（下划线、背景色等）供平台渲染 preedit 装饰。
     fn input_set_preedit_with_attrs(
         &mut self,
         text: String,

@@ -1,16 +1,34 @@
 use super::layout_snapshot::{LineSnapshotId, SourceRect, ShapingIdentity};
 use super::transaction_key::VisualTransactionKey;
 
+// ── 动画切片模块 ──
+//
+// 与 Core `AnimatedSliceRole` 的映射关系：
+// - InsertFadeIn  ↔ Core Insert（新文字从光标位置淡入）
+// - DeleteFadeOut ↔ Core Delete（旧文字向光标位置收缩淡出）
+// - ReflowMove    ↔ Core Move（shaping 不变，几何位移）
+// - ReflowCrossFade ↔ Core CrossfadeOld/CrossfadeNew（shaping 变化，成对淡入淡出）
+//
+// 线程安全：AnimatedSlice 仅在 Qt GUI 线程中使用，
+// 不跨线程传递——动画帧计算和渲染都在 GUI 线程完成。
+
 /// 动画切片类型，决定视觉语义和插值行为。
+///
+/// 与 Core `AnimatedSliceRole` 一一对应（见模块文档映射表）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AnimatedSliceKind {
     /// 新快照视觉从光标附近进入目标位置（透明→不透明）。
+    /// 对应 Core AnimatedSliceRole::Insert。
     InsertFadeIn,
     /// 旧快照视觉向删除后的光标位置收缩并消失（不透明→透明，缩小 0.7）。
+    /// 0.7 缩放因子为产品定义的视觉反馈强度，使删除动画有明显的收缩感。
+    /// 对应 Core AnimatedSliceRole::Delete。
     DeleteFadeOut,
     /// old/new shaping identity 相同，复用旧视觉资源做几何移动。
+    /// 对应 Core AnimatedSliceRole::Move。
     ReflowMove,
     /// shaping 发生变化，旧视觉淡出、新视觉淡入；同一逻辑对象由成对 slice 表达。
+    /// 对应 Core AnimatedSliceRole::CrossfadeOld/CrossfadeNew。
     ReflowCrossFade,
 }
 
@@ -38,6 +56,10 @@ pub(crate) struct AnimatedSlice {
 }
 
 impl AnimatedSlice {
+    /// 创建 Insert 淡入切片。
+    ///
+    /// `cursor_x`/`cursor_y` 为文档坐标（不含滚动偏移），作为动画起始位置。
+    /// 文字从光标位置淡入移动到 `to_document_rect`。
     pub fn insert_fade_in(
         key: VisualTransactionKey,
         snapshot_id: LineSnapshotId,
@@ -71,6 +93,10 @@ impl AnimatedSlice {
         }
     }
 
+    /// 创建 Delete 淡出切片。
+    ///
+    /// `cursor_x`/`cursor_y` 为文档坐标（不含滚动偏移），作为动画终止位置。
+    /// 文字从 `from_document_rect` 收缩到光标位置并淡出。
     pub fn delete_fade_out(
         key: VisualTransactionKey,
         snapshot_id: LineSnapshotId,
@@ -106,6 +132,10 @@ impl AnimatedSlice {
         }
     }
 
+    /// 创建 ReflowMove 切片——shaping 不变，复用旧快照纹理做几何移动。
+    ///
+    /// `_new_snapshot_id`/`_new_source_rect` 当前未使用（Move 复用旧纹理），
+    /// 保留参数签名与 ReflowCrossFade 对称，未来可能用于纹理缓存优化。
     pub fn reflow_move(
         key: VisualTransactionKey,
         old_snapshot_id: LineSnapshotId,
@@ -196,7 +226,9 @@ impl AnimatedSlice {
     }
 
     /// 接收当前已显示视觉帧的位置和透明度，用于连续事务无跳变衔接。
-    /// rebase 后 slice 从当前视觉状态开始，而不是从原始逻辑起点重新播放。
+    ///
+    /// 触发条件：新事务开始时旧事务仍在播放中，rebase 使动画从当前视觉状态
+    /// 平滑过渡到新目标，而不是从原始逻辑起点重新播放（避免跳变）。
     pub fn rebase_from(&mut self, current_x: f64, current_y: f64, current_opacity: f64) {
         self.from_document_rect.x = current_x;
         self.from_document_rect.y = current_y;
@@ -205,6 +237,10 @@ impl AnimatedSlice {
     }
 
     /// 纯插值计算：根据 progress 在 from/to 之间插值，不得查询布局或修改事务。
+    ///
+    /// 缓动函数：`1.0 - (1.0 - progress).powi(2)` 即 ease-out quadratic，
+    /// 选择原因：快速启动、缓慢结束，适合文字位移的视觉反馈——
+    /// 用户感知到即时响应，同时末段减速避免突兀停止。
     pub fn compute_frame(&self, progress: f64) -> AnimatedSliceFrame {
         match self.kind {
             AnimatedSliceKind::InsertFadeIn => {

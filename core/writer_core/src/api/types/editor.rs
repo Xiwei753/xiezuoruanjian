@@ -39,7 +39,8 @@ pub enum AnimationModeDto {
     RunAnimation,
     LineReflowAnimation,
     /// UNAVAILABLE: No snapshot renderer exists. Core never returns this.
-    /// Retained for forward compatibility only.
+    /// 保留此变体是因为 DTO 与 Core 枚举一一对应，保证前向兼容——
+    /// 未来实现 snapshot renderer 后无需新增变体或修改序列化格式。
     SnapshotAnimation,
     SystemSuppressed,
 }
@@ -219,6 +220,8 @@ pub struct EditorVisualTransactionDto {
     pub coordinate_mode: VisualCoordinateModeDto,
 }
 
+// SAFETY: UTF-8 byte offset 转 u32 截断安全——文本长度受 u32::MAX 限制，
+// 平台端和 Core 均不支持超过 4GB 的单章正文，实际 offset 远小于 u32::MAX。
 #[allow(clippy::cast_possible_truncation)]
 impl From<crate::editor::EditorVisualTransaction> for EditorVisualTransactionDto {
     fn from(vt: crate::editor::EditorVisualTransaction) -> Self {
@@ -504,6 +507,7 @@ pub struct CoordinatedCursorDto {
     pub should_animate: bool,
 }
 
+// SAFETY: 同上，UTF-8 byte offset 截断安全
 #[allow(clippy::cast_possible_truncation)]
 impl From<crate::editor::CoordinatedCursor> for CoordinatedCursorDto {
     fn from(c: crate::editor::CoordinatedCursor) -> Self {
@@ -528,6 +532,7 @@ pub struct EditorByteRangeDto {
     pub end_exclusive: u32,
 }
 
+// SAFETY: 同上，UTF-8 byte offset 截断安全
 #[allow(clippy::cast_possible_truncation)]
 impl From<(usize, usize)> for EditorByteRangeDto {
     fn from((start, end): (usize, usize)) -> Self {
@@ -620,6 +625,7 @@ pub struct DisplayPatchDto {
     pub resulting_selection_end: u32,
 }
 
+// SAFETY: 同上，UTF-8 byte offset 截断安全
 #[allow(clippy::cast_possible_truncation)]
 impl From<crate::editor::DisplayPatch> for DisplayPatchDto {
     fn from(p: crate::editor::DisplayPatch) -> Self {
@@ -709,6 +715,7 @@ pub enum EditorEditOutcomeDto {
     InvalidRange,
 }
 
+// SAFETY: 同上，UTF-8 byte offset 截断安全
 #[allow(clippy::cast_possible_truncation)]
 impl From<crate::editor::EditorEditOutcome> for EditorEditResultDto {
     fn from(outcome: crate::editor::EditorEditOutcome) -> Self {
@@ -736,6 +743,7 @@ impl From<crate::editor::EditorEditOutcome> for EditorEditResultDto {
     }
 }
 
+// SAFETY: 同上，UTF-8 byte offset 截断安全
 #[allow(clippy::cast_possible_truncation)]
 impl From<crate::editor::EditorEditResult> for EditorEditResultDto {
     fn from(r: crate::editor::EditorEditResult) -> Self {

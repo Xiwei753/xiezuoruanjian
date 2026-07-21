@@ -216,6 +216,11 @@ pub enum EditorEditOutcome {
 }
 
 impl EditorEditOutcome {
+    /// 将所有变体统一为 `EditorEditResult`。
+    ///
+    /// 所有变体均携带 `EditorEditResult`，即使编辑未成功应用也包含
+    /// 最新 revision、选区等信息，供平台端读取并更新显示状态。
+    /// 消费 `self`，调用后原 outcome 不可再使用。
     pub fn into_result(self) -> EditorEditResult {
         match self {
             EditorEditOutcome::Applied(r)
@@ -296,6 +301,10 @@ impl std::error::Error for EditorInputError {}
 /// 选区模型：selection_anchor 是选区锚点（非移动端），
 /// cursor 是选区光标（移动端/插入点）。当无选区时两者相等。
 /// 所有 offset 均为 UTF-8 byte offset。
+///
+/// 线程安全：EditorKernel 是 `Clone + Debug`，不含内部可变性。
+/// 每次 `apply_*` 方法消费 `&mut self`，调用方需保证独占访问。
+/// 跨线程传递时通过 FFI 边界的命令队列（而非共享引用）实现。
 #[derive(Debug, Clone)]
 pub struct EditorKernel {
     /// 正文纯文本。始终是合法 UTF-8，不含格式标记。
@@ -928,6 +937,11 @@ impl EditorKernel {
         })
     }
 
+    /// 设置选区 — 仅更新 anchor/head，不修改正文和 revision。
+    ///
+    /// 前置条件：`anchor_byte_offset`/`head_byte_offset` 必须是 char boundary 且 <= text.len()。
+    /// 不满足时返回 `InvalidOffset`（含 NoChange result，base_revision 来自参数）。
+    /// 后置条件：正文不变、revision 不变、返回 `NoChange` 变体。
     fn apply_set_selection(
         &mut self,
         anchor_byte_offset: usize,
@@ -1209,6 +1223,11 @@ impl EditorKernel {
         ((replace_start, replace_end), inserted_text)
     }
 
+    /// 全局替换 — 将正文中所有 `search` 替换为 `replacement`。
+    ///
+    /// 搜索为空或无匹配时返回 `NoChange`。
+    /// 替换后光标重定位到 `clamp_to_char_boundary(cursor)`（保证 UTF-8 char boundary），
+    /// 选区折叠为光标位置。undo 快照保存替换前的完整正文。
     fn apply_replace_all(
         &mut self,
         search: &str,
@@ -1279,6 +1298,11 @@ impl EditorKernel {
         })
     }
 
+    /// 插入换行 — 在 `byte_offset` 处插入 `"\n{auto_indent_prefix}"`。
+    ///
+    /// 与普通 Insert 命令的区别：换行 + 自动缩进作为一个原子操作，
+    /// 保证 undo 时一次性撤销换行和缩进。`auto_indent_prefix` 由平台端
+    /// 根据上一行缩进计算，Core 不自行推断缩进。
     fn apply_insert_line_break(
         &mut self,
         byte_offset: usize,
@@ -1397,6 +1421,9 @@ impl EditorKernel {
         }
     }
 
+    /// 构造无变更结果。与 `stale_session_result` 的区别：
+    /// - `noop_result` 的 `base_revision` 来自参数（调用方传入的预期版本）
+    /// - `stale_session_result` 的 `base_revision` 来自 `self.revision`（内核当前版本）
     fn noop_result(
         &mut self,
         base_revision: u64,
@@ -1448,6 +1475,8 @@ impl EditorKernel {
         (old_ranges, new_ranges)
     }
 
+    /// 消费并返回下一个事务 ID。ID 单调递增（saturating_add 防溢出），
+    /// 即使编辑无实际变更也分配新 ID，保证平台端能区分不同操作。
     fn take_transaction_id(&mut self) -> u64 {
         let id = self.next_transaction_id;
         self.next_transaction_id = self.next_transaction_id.saturating_add(1);
@@ -1813,6 +1842,12 @@ impl EditorKernel {
     /// 同一时刻只允许一个活跃 composition 会话（重复调用返回 InvalidRange）。
     /// 会话记录 replace 范围（半开区间），后续 UpdateComposition/FinishComposition
     /// 必须与此范围匹配，否则返回 InvalidRange。
+    /// 开始 composition 会话 — 在正文 `[replace_start, replace_end_exclusive)` 半开区间
+    /// 上建立 IME 预输入区域。
+    ///
+    /// 前置条件：无活跃会话、range 合法（start <= end、char boundary、<= text.len()）。
+    /// 不满足时返回 InvalidRange/InvalidOffset。
+    /// 后置条件：创建 CompositionSessionState，正文不变，返回 Applied（含空 patches）。
     fn apply_begin_composition(
         &mut self,
         replace_start: usize,

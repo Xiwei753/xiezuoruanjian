@@ -175,9 +175,9 @@ pub struct HiddenVisualRange {
     pub id: u64,
     /// 动画模式
     pub kind: AnimationMode,
-    /// 范围起始（UTF-8 byte offset）
+    /// 范围起始（UTF-8 byte offset，半开区间左端）
     pub range_start: usize,
-    /// 范围结束（UTF-8 byte offset）
+    /// 范围结束（UTF-8 byte offset，半开区间右端，即 `[range_start, range_end)`）
     pub range_end: usize,
     /// 旧矩形（LineReflow/Snapshot 使用）
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -198,9 +198,9 @@ pub struct HiddenVisualRange {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClusterRect {
-    /// 该 cluster 的 UTF-8 byte 起始位置
+    /// 该 cluster 的 UTF-8 byte 起始位置（半开区间左端）
     pub byte_start: usize,
-    /// 该 cluster 的 UTF-8 byte 结束位置
+    /// 该 cluster 的 UTF-8 byte 结束位置（半开区间右端，即 `[byte_start, byte_end)`）
     pub byte_end: usize,
     /// cluster 文本内容
     pub text: String,
@@ -213,9 +213,9 @@ pub struct ClusterRect {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClusterRun {
-    /// 该 run 的 UTF-8 byte 起始位置
+    /// 该 run 的 UTF-8 byte 起始位置（半开区间左端）
     pub byte_start: usize,
-    /// 该 run 的 UTF-8 byte 结束位置
+    /// 该 run 的 UTF-8 byte 结束位置（半开区间右端，即 `[byte_start, byte_end)`）
     pub byte_end: usize,
     /// run 文本内容
     pub text: String,
@@ -615,9 +615,13 @@ pub enum AnimatedSliceRole {
 #[serde(rename_all = "camelCase")]
 pub struct StaticLinePatch {
     pub new_snapshot_id: u64,
+    /// 补丁覆盖范围起始（new_text UTF-8 byte offset，半开区间左端）
     pub byte_start: usize,
+    /// 补丁覆盖范围结束（new_text UTF-8 byte offset，半开区间右端，即 `[byte_start, byte_end)`）
     pub byte_end: usize,
+    /// 补丁在视口中的目标矩形（文档坐标，不含滚动偏移）
     pub destination_rect: Rect,
+    /// 从 new_text 快照纹理中裁剪的可见子区域列表（纹理坐标）
     pub visible_source_rects: Vec<Rect>,
 }
 
@@ -721,6 +725,8 @@ impl Timeline {
     /// 调整 first_visible_frame_time_ms 使得
     /// progress(resume_time) = paused_progress，即：
     ///   new_start = resume_time - paused_progress * duration
+    // SAFETY: paused_progress ∈ [0.0, 1.0]（由 progress() clamp 保证），
+    // duration_ms 为正整数，乘积 ≤ duration_ms ≤ u64::MAX，截断安全。
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
    pub fn resume(&mut self, frame_time_ms: u64) {
         if self.pause_started_at_ms.is_none() {
@@ -1240,6 +1246,8 @@ impl CompositionSession {
 
     /// 通过 setComposingRegion 更新替换范围。
     ///
+    /// `start`/`end` 为 committed 正文 UTF-8 byte offset（半开区间），
+    /// 会被 clamp 到 committed_text_at_start.len()，并自动交换保证 start <= end。
     /// #517: 只有 setComposingRegion 或平台明确给出替换范围时才能修改 replaceRange。
     pub fn set_composing_region(&mut self, start: usize, end: usize) {
         self.replace_start = start.min(self.committed_text_at_start.len());
@@ -1491,6 +1499,12 @@ pub struct PlatformVisualTransaction {
 ///
 /// 维护动画 ID 计数器和动画参数（max_animated_chars、animation_duration_ms）。
 /// 无状态：不持有正文、选区或 undo/redo 栈，每次调用传入当前文本。
+///
+/// 与 `EditorKernel` 的关系：
+/// - `EditorEngine` 是无状态工厂，负责计算动画参数和生成视觉事务
+/// - `EditorKernel` 是有状态编辑器，持有正文、选区、undo/redo 栈和 composition session
+/// - 两者共享 `max_animated_chars` 和 `animation_duration_ms` 参数，
+///   但 `EditorEngine` 不参与编辑操作的状态管理
 #[derive(Debug, Clone)]
 pub struct EditorEngine {
     /// 下一个动画 ID（单调递增）

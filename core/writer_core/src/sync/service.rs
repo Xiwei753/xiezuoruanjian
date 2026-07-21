@@ -27,6 +27,10 @@ use crate::sync::url::sanitize_remote_url;
 use std::path::Path;
 
 #[cfg(feature = "git-https")]
+/// 将 IO 错误中的网络类错误映射为 `SyncNetworkUnavailable`。
+///
+/// 仅处理 `AddrNotAvailable`（DNS 解析失败）和 `ConnectionAborted`（连接中断），
+/// 其他 IO 错误（如 PermissionDenied、NotFound）不映射，保持原样传递。
 fn map_git_error(e: crate::Error) -> crate::Error {
     if let crate::Error::Io(io_err) = &e {
         if io_err.kind() == std::io::ErrorKind::AddrNotAvailable
@@ -41,6 +45,12 @@ fn map_git_error(e: crate::Error) -> crate::Error {
 }
 
 #[cfg(feature = "git-https")]
+/// 错误分类——将 `Error` 映射为 `SyncStatus` 供平台端展示。
+///
+/// 分类原则：
+/// - `RecoverableError`：网络/认证临时故障，可自动重试
+/// - `Conflict`：需要用户介入解决（checkout 冲突、设置冲突、文档冲突）
+/// - `FatalError`：不可恢复的错误（IO 错误、未知错误）
 fn classify_error(e: &crate::Error) -> SyncStatus {
     match e {
         crate::Error::SyncAuthFailed { .. }
@@ -107,6 +117,8 @@ pub struct SyncService {
 
 impl SyncService {
     #[cfg(feature = "git-https")]
+    /// 确保本地 Git 分支存在。先清理 merge state（防止上次中断的 merge 残留），
+    /// 再尝试查找或创建分支。`set_head` 失败时仍继续——HEAD 可能已指向正确引用。
     fn ensure_local_branch_exists(repo: &git2::Repository, branch: &str) -> crate::Result<()> {
         let branch_ref_name = format!("refs/heads/{}", branch);
 
@@ -172,6 +184,10 @@ impl SyncService {
     }
 }
 
+/// Git pull 操作的流程控制枚举。
+///
+/// - `Continue`：pull 成功或可忽略，继续后续步骤（stage → commit → push）
+/// - `Return`：遇到冲突或不可恢复错误，立即返回同步结果
 #[cfg(feature = "git-https")]
 #[allow(clippy::large_enum_variant)]
 enum PullOutcome {

@@ -1,3 +1,18 @@
+//! 同步冲突检测与解决。
+//!
+//! 本模块提供两种冲突检测路径：
+//! - **Git 路径**（需 `git-https` feature）：通过 dry-run checkout + index diff 检测冲突，
+//!   依赖 git2 crate 的合并基线计算。
+//! - **LWW 路径**（始终可用）：由 `lww.rs` 中的三路比较检测，本模块不参与。
+//!
+//! 冲突解决策略：
+//! - `resolve_conflict_keep_local`：保留本地版本，丢弃远端变更
+//! - `resolve_conflict_take_remote`：接受远端版本，丢弃本地变更
+//! - `resolve_conflict_mark_merged`：标记为已合并（用户手动解决后调用）
+//!
+//! `semantic_merge_json` 对设置文件执行逐键三路合并，自动解决单方修改的 key，
+//! 仅双方修改同一 key 且值不同时才报告冲突。
+
 #[cfg(feature = "git-https")]
 use crate::sync::service::SyncService;
 #[cfg(feature = "git-https")]
@@ -109,6 +124,8 @@ pub(crate) fn build_conflict_summary(
         if let Ok(commit) = repo.find_commit(remote_oid) {
             if let Ok(tree) = commit.tree() {
                 let paths = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+                // SAFETY: git2 操作非线程安全，dry-run checkout 在单线程上下文中执行。
+                // Rc<RefCell> 仅在此闭包和下方 borrow 之间共享，不跨线程。
                 let cp_clone = paths.clone();
                 let mut dry_run_builder = git2::build::CheckoutBuilder::default();
                 dry_run_builder.notify_on(git2::CheckoutNotificationType::CONFLICT);
@@ -186,6 +203,7 @@ impl crate::sync::SyncService {
 
             match (base_val, local_val, remote_val) {
                 (None, None, None) => {}
+                // 本地有值、远端已删除：若本地值与 base 相同则跟随删除，否则报告冲突（删除 vs 修改）
                 (_, Some(l), None) => {
                     if base_val == Some(l) {
                         // Deleted in remote, unmodified in local
@@ -197,6 +215,7 @@ impl crate::sync::SyncService {
                         });
                     }
                 }
+                // 远端有值、本地已删除：若远端值与 base 相同则跟随删除，否则报告冲突（删除 vs 修改）
                 (_, None, Some(r)) => {
                     if base_val == Some(r) {
                         // Deleted in local, unmodified in remote
@@ -223,6 +242,7 @@ impl crate::sync::SyncService {
                         });
                     }
                 }
+                // base 无值、双方都新增：值相同则取任一方，值不同则报告冲突
                 (None, Some(l), Some(r)) => {
                     if l == r {
                         merged.insert(key.clone(), l.clone());
@@ -234,6 +254,7 @@ impl crate::sync::SyncService {
                         });
                     }
                 }
+                // base 有值、双方都删除：无冲突，跟随删除
                 (Some(_b), None, None) => {}
             }
         }
@@ -249,6 +270,9 @@ impl crate::sync::SyncService {
 impl crate::sync::SyncService {
     /// Remove conflict records for `path` from the `conflicts.json` file.
     /// This keeps the on-disk conflict list in sync with `state.conflicts`.
+    ///
+    /// 如果 `conflicts.json` 不存在或内容损坏（半写/无效 JSON），
+    /// 回退为空列表——丢失冲突记录比阻塞后续同步更可接受。
     fn remove_conflict_from_json(workspace_path: &Path, path: &str) {
         let conflicts_path = workspace_path.join("app-meta/sync/conflicts.json");
         if !conflicts_path.exists() {

@@ -1,12 +1,19 @@
 // ── Settings NAPI handlers ──
 // Included by napi_init.cpp — expects ReturnJsonString and writer_core_bridge.h to be available.
+//
+// 设置分类：
+// - Local Settings：设备级设置（如编辑器字号、主题），不同步到远端
+// - Syncable Settings：跨设备同步设置（如写作目标、统计偏好），通过同步协议共享
+// - Palette Records：主题配色记录，按 device_id + fingerprint 标识
 
 // ── Local Settings ──
 
+// 返回 ResultEnvelope<LocalSettingsDto> JSON
 static napi_value NativeLoadLocalSettings(napi_env env, napi_callback_info info) {
     return ReturnJsonString(env, writer_core_load_local_settings());
 }
 
+// 输入：LocalSettingsDto JSON；输出：ResultEnvelope JSON
 static napi_value NativeSaveLocalSettings(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value args[1];
@@ -29,7 +36,10 @@ static napi_value NativeSaveLocalSettings(napi_env env, napi_callback_info info)
 }
 
 // ── Syncable Settings ──
+// 与 Local Settings 的区别：Syncable Settings 通过同步协议在设备间共享，
+// Local Settings 仅存储在本地设备上。
 
+// 返回 ResultEnvelope<SyncableSettingsDto> JSON
 static napi_value NativeLoadSyncableSettings(napi_env env, napi_callback_info info) {
     return ReturnJsonString(env, writer_core_load_syncable_settings());
 }
@@ -56,6 +66,8 @@ static napi_value NativeSaveSyncableSettings(napi_env env, napi_callback_info in
 }
 
 // ── Palette Records ──
+// device_id 标识创建此配色的设备，fingerprint 标识主题指纹（唯一标识一个配色方案）。
+// 删除不存在的记录时 Core 静默成功（幂等语义）。
 
 static napi_value NativeListPaletteRecords(napi_env env, napi_callback_info info) {
     return ReturnJsonString(env, writer_core_list_palette_records());
@@ -132,6 +144,7 @@ static napi_value NativeListBuiltinThemes(napi_env env, napi_callback_info info)
 }
 
 // ── Settings property descriptors ──
+// 使用 static 数组保证描述符在模块生命周期内有效（NAPI 要求描述符指针在注册后仍可访问）
 
 napi_property_descriptor* getSettingsDescriptors(size_t* count) {
     static napi_property_descriptor desc[] = {

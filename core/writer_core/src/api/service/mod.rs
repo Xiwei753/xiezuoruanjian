@@ -43,6 +43,9 @@ impl WriterCoreApi {
         serde_json::to_string(value).map_err(Into::into)
     }
 
+    /// 校验计数器值非负并转换为 u32。
+    /// 防止跨语言 FFI 边界的负值溢出——Kotlin Int/Long 在某些场景下
+    /// 可能为负（如未初始化字段），Core 侧必须显式拒绝。
     #[allow(clippy::cast_sign_loss)]
     pub(crate) fn non_negative_counter(name: &str, value: i32) -> ApiResult<u32> {
         if value < 0 {
@@ -56,6 +59,9 @@ impl WriterCoreApi {
 
     /// 探测工作区路径是否可写——创建临时文件后删除，验证文件系统权限。
     /// 返回 (可写, 原因描述)。用于同步前检查和诊断。
+    ///
+    /// 使用 `create_new(true)` 保证原子性创建——不会覆盖已有文件。
+    /// 测试文件名包含 PID 和纳秒时间戳，确保多进程/多线程场景下不冲突。
     fn probe_workspace_writable(path: &Path, is_dir: bool) -> (bool, String) {
         if !is_dir {
             return (

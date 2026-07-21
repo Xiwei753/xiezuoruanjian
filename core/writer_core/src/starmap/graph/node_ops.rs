@@ -29,6 +29,8 @@ pub fn add_starmap_node(
             y: default_y,
             width: 150.0,
             height: 60.0,
+            // 默认圆角半径 30px，与默认宽高 150×60 构成胶囊形状。
+            // 这些值是 UI 层的初始占位，平台端可按需覆盖。
             radius: 30.0,
             collapsed: false,
             z_index: 0,
@@ -150,6 +152,8 @@ pub fn delete_starmap_node(
                         keep = false;
                     }
                 }
+                // Anchor 的 node_id 标识此 anchor 属于哪个节点；
+                // 节点被删除时，其下所有 anchor 引用的边也必须级联删除
                 StarMapEdgeEndpoint::Anchor { node_id: id, .. }
                     if id == node_id => {
                         keep = false;

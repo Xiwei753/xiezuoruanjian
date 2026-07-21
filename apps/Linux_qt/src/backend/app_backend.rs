@@ -40,6 +40,8 @@ cpp! {{
     #include <QtGlobal>
 }}
 
+/// 调试级别，与 `log` crate level 映射：
+/// Error=1→log::Error, Warn=2→log::Warn, Info=3→log::Info, Debug=4→log::Debug, Trace=5→log::Trace
 #[derive(PartialEq, PartialOrd, Clone, Copy, Debug)]
 enum DebugLevel {
     Error = 1,
@@ -62,6 +64,7 @@ impl DebugLevel {
     }
 }
 
+/// 调试配置。`all_modules=true` 时忽略 `modules` 集合，输出所有模块日志。
 struct DebugConfig {
     enabled: bool,
     qml_enabled: bool,
@@ -70,6 +73,8 @@ struct DebugConfig {
     level: DebugLevel,
 }
 
+/// 全局调试配置，使用 OnceLock 保证只初始化一次。
+/// 选择 OnceLock 而非 LazyLock/OnceCell：标准库稳定、无需额外依赖。
 static DEBUG_CONFIG: OnceLock<DebugConfig> = OnceLock::new();
 
 fn get_debug_config() -> &'static DebugConfig {
@@ -109,6 +114,8 @@ fn get_debug_config() -> &'static DebugConfig {
     })
 }
 
+/// 检测是否为空内容覆盖阻止错误。业务场景：IME 异常清空正文时，
+/// Core 拒绝空内容覆盖以防止用户数据丢失。
 fn is_empty_overwrite_blocked(error: &writer_core::api::error::WriterError) -> bool {
     matches!(
         error,
@@ -275,7 +282,9 @@ pub struct AppBackend {
     current_sync_username: String,
     current_sync_token: String,
     current_sync_operation_state: String,
+    /// 当前同步操作的唯一 ID（由 Core 分配），用于跟踪操作生命周期
     current_sync_operation_id: String,
+    /// 当前同步操作类型（如 "full_sync"、"lww_sync"、"git_sync"）
     current_sync_operation_kind: String,
     current_sync_status: String,
     current_sync_in_progress: bool,
@@ -322,6 +331,10 @@ pub struct AppBackend {
 }
 
 impl AppBackend {
+    /// 将 AppBackend 当前状态同步到 DomainSnapshot。
+    ///
+    /// 调用时机：QML 属性变更后、同步操作完成后等需要刷新 QML 绑定的场景。
+    /// 线程安全：仅在 GUI 线程调用，DomainSnapshot 使用 Rc<RefCell> 非线程安全。
     pub(crate) fn update_snapshot(
         &self,
         snapshot: &std::rc::Rc<std::cell::RefCell<super::DomainSnapshot>>,

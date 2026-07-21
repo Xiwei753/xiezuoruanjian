@@ -1,6 +1,17 @@
 use cpp::cpp;
 use qmetaobject::QString;
 
+// ── Qt 文本布局模块 ──
+//
+// 坐标空间约定：
+// - Qt 层（本模块）：QChar index（UTF-16 code unit），与 QTextLayout/QTextLine API 一致
+// - Core 层：UTF-8 byte offset
+// - 转换入口：`sujian_editor_item` 中的 `utf8_to_utf16` / `utf16_to_utf8`
+//   在调用本模块函数前完成坐标转换
+//
+// 线程安全：`g_editor_layout_buf` 和 `g_glyph_buf` 为 thread_local，
+// 仅在 GUI 线程中使用，不跨线程共享。
+
 cpp! {{
     #include <QtGlobal>
     #include <QtGui/QFont>
