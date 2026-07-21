@@ -5091,4 +5091,204 @@ class AnimationRebaseContractTest {
         }
         assertNotNull("Offset mapper must match old cluster at 15 to new cluster at 15 with position change via Move", cluster2Slice)
     }
+
+    @Test
+    fun planRunReplaceAnimation_fingerprintChanged_positionSame_producesCrossfade() {
+        val oldSnapshot = makeSnapshotWithClusters(1L, 0, 0, 10, listOf(
+            LineClusterSnapshot(clusterId = 0, documentByteStart = 0, documentByteEndExclusive = 10,
+                documentUtf16Start = 0, documentUtf16EndExclusive = 10,
+                sourceRectInLineImage = android.graphics.Rect(0, 0, 100, 20),
+                visualRectInDocument = android.graphics.RectF(0f, 0f, 100f, 20f),
+                shapingFingerprint = "fp_old", shapingIdentityConfident = true)
+        ))
+        val newSnapshot = makeSnapshotWithClusters(2L, 0, 0, 10, listOf(
+            LineClusterSnapshot(clusterId = 0, documentByteStart = 0, documentByteEndExclusive = 10,
+                documentUtf16Start = 0, documentUtf16EndExclusive = 10,
+                sourceRectInLineImage = android.graphics.Rect(0, 0, 100, 20),
+                visualRectInDocument = android.graphics.RectF(0f, 0f, 100f, 20f),
+                shapingFingerprint = "fp_new", shapingIdentityConfident = true)
+        ))
+        val oldRev = AndroidLayoutRevision(
+            revisionId = 1L, editorRevision = 1L,
+            widthFingerprint = 800f, fontFingerprint = "48",
+            lineCount = 1,
+            lineRanges = listOf(AndroidLayoutRevision.LineRange(
+                startUtf8 = 0, endUtf8 = 10, startUtf16 = 0, endUtf16 = 10,
+                top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
+                endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 0
+            )),
+            cursorUtf8 = 5, cursorUtf16 = 5, cursorX = 50f, cursorY = 0f, cursorHeight = 20f,
+            selectionAnchorUtf8 = 5, selectionHeadUtf8 = 5,
+            selectionAnchorUtf16 = 5, selectionHeadUtf16 = 5,
+            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
+            snapshotHandles = emptyList()
+        )
+        val newRev = oldRev.copy(revisionId = 2L, editorRevision = 2L)
+        val visualIntent = VisualIntent(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
+            oldAffectedByteRanges = listOf(Pair(0, 5)),
+            newAffectedByteRanges = listOf(Pair(0, 5)),
+            animationMode = uniffi.writer_core.AnimationModeDto.RUN_ANIMATION,
+            durationMs = 160L,
+            coordinatedCursor = CoordinatedCursor(5, 5, true)
+        )
+        val planner = AndroidVisualPlanner()
+        val transaction = planner.prepare(
+            visualIntent = visualIntent,
+            oldRevision = oldRev,
+            newRevision = newRev,
+            preCapturedOldSnapshots = mapOf(0 to oldSnapshot),
+            preCapturedNewSnapshots = mapOf(0 to newSnapshot),
+            transactionKey = 1L,
+            ownedSnapshotIds = setOf(1L, 2L),
+            snapshotLookup = emptyMap()
+        )
+        val hasCrossfadeOld = transaction.animatedSlices.any { it.role == SliceRole.CrossfadeOld }
+        val hasCrossfadeNew = transaction.animatedSlices.any { it.role == SliceRole.CrossfadeNew }
+        assertTrue("Different fingerprint + position same in RUN_ANIMATION replace must produce CrossfadeOld", hasCrossfadeOld)
+        assertTrue("Different fingerprint + position same in RUN_ANIMATION replace must produce CrossfadeNew", hasCrossfadeNew)
+    }
+
+    @Test
+    fun planRunReplaceAnimation_fallbackUsesMappedStartDistance() {
+        val oldSnapshot = makeSnapshotWithClusters(1L, 0, 0, 20, listOf(
+            LineClusterSnapshot(clusterId = 0, documentByteStart = 0, documentByteEndExclusive = 5,
+                documentUtf16Start = 0, documentUtf16EndExclusive = 5,
+                sourceRectInLineImage = android.graphics.Rect(0, 0, 50, 20),
+                visualRectInDocument = android.graphics.RectF(0f, 0f, 50f, 20f),
+                shapingFingerprint = "fp_a", shapingIdentityConfident = true),
+            LineClusterSnapshot(clusterId = 1, documentByteStart = 5, documentByteEndExclusive = 20,
+                documentUtf16Start = 5, documentUtf16EndExclusive = 20,
+                sourceRectInLineImage = android.graphics.Rect(50, 0, 100, 20),
+                visualRectInDocument = android.graphics.RectF(50f, 0f, 100f, 20f),
+                shapingFingerprint = "fp_b", shapingIdentityConfident = true)
+        ))
+        val newSnapshot = makeSnapshotWithClusters(2L, 0, 0, 20, listOf(
+            LineClusterSnapshot(clusterId = 0, documentByteStart = 0, documentByteEndExclusive = 5,
+                documentUtf16Start = 0, documentUtf16EndExclusive = 5,
+                sourceRectInLineImage = android.graphics.Rect(0, 0, 50, 20),
+                visualRectInDocument = android.graphics.RectF(0f, 0f, 50f, 20f),
+                shapingFingerprint = "fp_a", shapingIdentityConfident = true),
+            LineClusterSnapshot(clusterId = 1, documentByteStart = 5, documentByteEndExclusive = 20,
+                documentUtf16Start = 5, documentUtf16EndExclusive = 20,
+                sourceRectInLineImage = android.graphics.Rect(50, 0, 100, 20),
+                visualRectInDocument = android.graphics.RectF(60f, 0f, 110f, 20f),
+                shapingFingerprint = "fp_b", shapingIdentityConfident = true)
+        ))
+        val oldRev = AndroidLayoutRevision(
+            revisionId = 1L, editorRevision = 1L,
+            widthFingerprint = 800f, fontFingerprint = "48",
+            lineCount = 1,
+            lineRanges = listOf(AndroidLayoutRevision.LineRange(
+                startUtf8 = 0, endUtf8 = 20, startUtf16 = 0, endUtf16 = 20,
+                top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
+                endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 0
+            )),
+            cursorUtf8 = 5, cursorUtf16 = 5, cursorX = 50f, cursorY = 0f, cursorHeight = 20f,
+            selectionAnchorUtf8 = 5, selectionHeadUtf8 = 5,
+            selectionAnchorUtf16 = 5, selectionHeadUtf16 = 5,
+            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
+            snapshotHandles = emptyList()
+        )
+        val newRev = oldRev.copy(revisionId = 2L, editorRevision = 2L)
+        val visualIntent = VisualIntent(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
+            oldAffectedByteRanges = listOf(Pair(0, 20)),
+            newAffectedByteRanges = listOf(Pair(0, 20)),
+            animationMode = uniffi.writer_core.AnimationModeDto.RUN_ANIMATION,
+            durationMs = 160L,
+            coordinatedCursor = CoordinatedCursor(5, 5, true)
+        )
+        val planner = AndroidVisualPlanner()
+        val transaction = planner.prepare(
+            visualIntent = visualIntent,
+            oldRevision = oldRev,
+            newRevision = newRev,
+            preCapturedOldSnapshots = mapOf(0 to oldSnapshot),
+            preCapturedNewSnapshots = mapOf(0 to newSnapshot),
+            transactionKey = 1L,
+            ownedSnapshotIds = setOf(1L, 2L),
+            snapshotLookup = emptyMap()
+        )
+        val retainedSlice = transaction.animatedSlices.find {
+            it.role == SliceRole.Move && it.clusterByteStart == 0
+        }
+        assertNotNull("RUN_ANIMATION offset mapper must match retained run with position change via Move", retainedSlice)
+    }
+
+    @Test
+    fun addMoveSlices_fingerprintChanged_positionSame_producesCrossfade() {
+        val oldSnapshot = makeSnapshotWithClusters(1L, 0, 0, 20, listOf(
+            LineClusterSnapshot(clusterId = 0, documentByteStart = 0, documentByteEndExclusive = 5,
+                documentUtf16Start = 0, documentUtf16EndExclusive = 5,
+                sourceRectInLineImage = android.graphics.Rect(0, 0, 50, 20),
+                visualRectInDocument = android.graphics.RectF(0f, 0f, 50f, 20f),
+                shapingFingerprint = "fp_edited", shapingIdentityConfident = true),
+            LineClusterSnapshot(clusterId = 1, documentByteStart = 5, documentByteEndExclusive = 20,
+                documentUtf16Start = 5, documentUtf16EndExclusive = 20,
+                sourceRectInLineImage = android.graphics.Rect(50, 0, 100, 20),
+                visualRectInDocument = android.graphics.RectF(50f, 0f, 100f, 20f),
+                shapingFingerprint = "fp_retained_old", shapingIdentityConfident = true)
+        ))
+        val newSnapshot = makeSnapshotWithClusters(2L, 0, 0, 20, listOf(
+            LineClusterSnapshot(clusterId = 0, documentByteStart = 0, documentByteEndExclusive = 5,
+                documentUtf16Start = 0, documentUtf16EndExclusive = 5,
+                sourceRectInLineImage = android.graphics.Rect(0, 0, 50, 20),
+                visualRectInDocument = android.graphics.RectF(0f, 0f, 50f, 20f),
+                shapingFingerprint = "fp_edited_new", shapingIdentityConfident = true),
+            LineClusterSnapshot(clusterId = 1, documentByteStart = 5, documentByteEndExclusive = 20,
+                documentUtf16Start = 5, documentUtf16EndExclusive = 20,
+                sourceRectInLineImage = android.graphics.Rect(50, 0, 100, 20),
+                visualRectInDocument = android.graphics.RectF(50f, 0f, 100f, 20f),
+                shapingFingerprint = "fp_retained_new", shapingIdentityConfident = true)
+        ))
+        val oldRev = AndroidLayoutRevision(
+            revisionId = 1L, editorRevision = 1L,
+            widthFingerprint = 800f, fontFingerprint = "48",
+            lineCount = 1,
+            lineRanges = listOf(AndroidLayoutRevision.LineRange(
+                startUtf8 = 0, endUtf8 = 20, startUtf16 = 0, endUtf16 = 20,
+                top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
+                endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 0
+            )),
+            cursorUtf8 = 5, cursorUtf16 = 5, cursorX = 50f, cursorY = 0f, cursorHeight = 20f,
+            selectionAnchorUtf8 = 5, selectionHeadUtf8 = 5,
+            selectionAnchorUtf16 = 5, selectionHeadUtf16 = 5,
+            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
+            snapshotHandles = emptyList()
+        )
+        val newRev = oldRev.copy(revisionId = 2L, editorRevision = 2L)
+        val visualIntent = VisualIntent(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
+            oldAffectedByteRanges = listOf(Pair(0, 5)),
+            newAffectedByteRanges = listOf(Pair(0, 5)),
+            animationMode = uniffi.writer_core.AnimationModeDto.GLYPH_ANIMATION,
+            durationMs = 160L,
+            coordinatedCursor = CoordinatedCursor(5, 5, true)
+        )
+        val planner = AndroidVisualPlanner()
+        val transaction = planner.prepare(
+            visualIntent = visualIntent,
+            oldRevision = oldRev,
+            newRevision = newRev,
+            preCapturedOldSnapshots = mapOf(0 to oldSnapshot),
+            preCapturedNewSnapshots = mapOf(0 to newSnapshot),
+            transactionKey = 1L,
+            ownedSnapshotIds = setOf(1L, 2L),
+            snapshotLookup = emptyMap()
+        )
+        val retainedCrossfadeOld = transaction.animatedSlices.filter {
+            it.role == SliceRole.CrossfadeOld && it.clusterByteStart == 5
+        }
+        val retainedCrossfadeNew = transaction.animatedSlices.filter {
+            it.role == SliceRole.CrossfadeNew && it.clusterByteStart == 5
+        }
+        assertTrue("Fingerprint changed + position same in addMoveSlices must produce CrossfadeOld for retained cluster",
+            retainedCrossfadeOld.isNotEmpty())
+        assertTrue("Fingerprint changed + position same in addMoveSlices must produce CrossfadeNew for retained cluster",
+            retainedCrossfadeNew.isNotEmpty())
+    }
 }
