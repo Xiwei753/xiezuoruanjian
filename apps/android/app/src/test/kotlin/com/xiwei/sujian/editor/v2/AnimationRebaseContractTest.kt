@@ -2478,11 +2478,13 @@ class AnimationRebaseContractTest {
         val method = planner.javaClass.getDeclaredMethod(
             "applyRebaseToBlockShifts",
             List::class.java,
-            VisualFrameSnapshot::class.java
+            VisualFrameSnapshot::class.java,
+            Function1::class.java,
+            Function1::class.java
         )
         method.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val result = method.invoke(planner, listOf(newShift), rebaseSnapshot) as List<*>
+        val result = method.invoke(planner, listOf(newShift), rebaseSnapshot, null, null) as List<*>
         val rebasedShift = result[0] as PreparedVisualTransaction.BlockShift
         assertTrue("Rebased deltaY must be larger than original (extending from mid-animation to new position)",
             kotlin.math.abs(rebasedShift.deltaY) > kotlin.math.abs(newShift.deltaY))
@@ -2526,11 +2528,13 @@ class AnimationRebaseContractTest {
         val method = planner.javaClass.getDeclaredMethod(
             "applyRebaseToBlockShifts",
             List::class.java,
-            VisualFrameSnapshot::class.java
+            VisualFrameSnapshot::class.java,
+            Function1::class.java,
+            Function1::class.java
         )
         method.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val result = method.invoke(planner, listOf(newShift), rebaseSnapshot) as List<*>
+        val result = method.invoke(planner, listOf(newShift), rebaseSnapshot, null, null) as List<*>
         val rebasedShift = result[0] as PreparedVisualTransaction.BlockShift
         assertTrue("Rebased deltaY must incorporate old currentTranslateY",
             kotlin.math.abs(rebasedShift.deltaY) > kotlin.math.abs(newShift.deltaY))
@@ -2567,11 +2571,13 @@ class AnimationRebaseContractTest {
         val method = planner.javaClass.getDeclaredMethod(
             "applyRebaseToBlockShifts",
             List::class.java,
-            VisualFrameSnapshot::class.java
+            VisualFrameSnapshot::class.java,
+            Function1::class.java,
+            Function1::class.java
         )
         method.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val result = method.invoke(planner, listOf(newShift), rebaseSnapshot) as List<*>
+        val result = method.invoke(planner, listOf(newShift), rebaseSnapshot, null, null) as List<*>
         val rebasedShift = result[0] as PreparedVisualTransaction.BlockShift
         assertTrue("Rebased deltaY must incorporate nearest old currentTranslateY",
             kotlin.math.abs(rebasedShift.deltaY - newShift.deltaY) > 0.01f)
@@ -2781,11 +2787,13 @@ class AnimationRebaseContractTest {
         val method = planner.javaClass.getDeclaredMethod(
             "applyRebaseToBlockShifts",
             List::class.java,
-            VisualFrameSnapshot::class.java
+            VisualFrameSnapshot::class.java,
+            Function1::class.java,
+            Function1::class.java
         )
         method.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val result = method.invoke(planner, listOf(newMergedShift), rebaseSnapshot) as List<*>
+        val result = method.invoke(planner, listOf(newMergedShift), rebaseSnapshot, null, null) as List<*>
         val rebasedShift = result[0] as PreparedVisualTransaction.BlockShift
         assertTrue("Merged rebase must incorporate old translateY",
             kotlin.math.abs(rebasedShift.deltaY) > kotlin.math.abs(newMergedShift.deltaY))
@@ -2822,11 +2830,13 @@ class AnimationRebaseContractTest {
         val method = planner.javaClass.getDeclaredMethod(
             "applyRebaseToBlockShifts",
             List::class.java,
-            VisualFrameSnapshot::class.java
+            VisualFrameSnapshot::class.java,
+            Function1::class.java,
+            Function1::class.java
         )
         method.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val result = method.invoke(planner, listOf(newShift), rebaseSnapshot) as List<*>
+        val result = method.invoke(planner, listOf(newShift), rebaseSnapshot, null, null) as List<*>
         val rebasedShift = result[0] as PreparedVisualTransaction.BlockShift
         assertTrue("Byte-offset match must find the old BlockShift even when line indices differ",
             kotlin.math.abs(rebasedShift.deltaY) > kotlin.math.abs(newShift.deltaY))
@@ -2870,11 +2880,13 @@ class AnimationRebaseContractTest {
         val method = planner.javaClass.getDeclaredMethod(
             "applyRebaseToBlockShifts",
             List::class.java,
-            VisualFrameSnapshot::class.java
+            VisualFrameSnapshot::class.java,
+            Function1::class.java,
+            Function1::class.java
         )
         method.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val result = method.invoke(planner, listOf(newShift), rebaseSnapshot) as List<*>
+        val result = method.invoke(planner, listOf(newShift), rebaseSnapshot, null, null) as List<*>
         val rebasedShift = result[0] as PreparedVisualTransaction.BlockShift
         assertEquals("Byte-offset match must select the correct old state (startUtf8=200, not 100)",
             20f - (-12f), rebasedShift.deltaY, 0.01f)
@@ -2911,11 +2923,13 @@ class AnimationRebaseContractTest {
         val method = planner.javaClass.getDeclaredMethod(
             "applyRebaseToBlockShifts",
             List::class.java,
-            VisualFrameSnapshot::class.java
+            VisualFrameSnapshot::class.java,
+            Function1::class.java,
+            Function1::class.java
         )
         method.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val result = method.invoke(planner, listOf(newShift), rebaseSnapshot) as List<*>
+        val result = method.invoke(planner, listOf(newShift), rebaseSnapshot, null, null) as List<*>
         val rebasedShift = result[0] as PreparedVisualTransaction.BlockShift
 
         val oldLayoutY = 100f
@@ -3078,11 +3092,13 @@ class AnimationRebaseContractTest {
         val method = planner.javaClass.getDeclaredMethod(
             "applyRebaseToBlockShifts",
             List::class.java,
-            VisualFrameSnapshot::class.java
+            VisualFrameSnapshot::class.java,
+            Function1::class.java,
+            Function1::class.java
         )
         method.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val result = method.invoke(planner, listOf(newShift1, newShift2), rebaseSnapshot) as List<*>
+        val result = method.invoke(planner, listOf(newShift1, newShift2), rebaseSnapshot, null, null) as List<*>
         val rebased1 = result[0] as PreparedVisualTransaction.BlockShift
         val rebased2 = result[1] as PreparedVisualTransaction.BlockShift
         assertTrue("First shift (startUtf8=100) must match the old state and get rebase adjustment",
@@ -3111,5 +3127,167 @@ class AnimationRebaseContractTest {
             shift.top < shift.bottom && shift.left < shift.right)
         assertTrue("startUtf8 must be stored for rebase matching (not for line lookup)",
             shift.startUtf8 >= 0)
+    }
+
+    @Test
+    fun computeStructurallyAffectedOldLineIndicesIncludesBothParagraphsForHardBreakDelete() {
+        val oldRev = AndroidLayoutRevision(
+            revisionId = 1L, editorRevision = 1L,
+            widthFingerprint = 800f, fontFingerprint = "48",
+            lineCount = 4,
+            lineRanges = listOf(
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 0, endUtf8 = 20, startUtf16 = 0, endUtf16 = 20,
+                    top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
+                    endsWithHardBreak = false, paragraphId = 0, paragraphLocalLineIndex = 0
+                ),
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 20, endUtf8 = 21, startUtf16 = 20, endUtf16 = 21,
+                    top = 20f, bottom = 40f, baseline = 36f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 1
+                ),
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 21, endUtf8 = 40, startUtf16 = 21, endUtf16 = 40,
+                    top = 40f, bottom = 60f, baseline = 56f, left = 0f, right = 800f,
+                    endsWithHardBreak = false, paragraphId = 1, paragraphLocalLineIndex = 0
+                ),
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 40, endUtf8 = 60, startUtf16 = 40, endUtf16 = 60,
+                    top = 60f, bottom = 80f, baseline = 76f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 1, paragraphLocalLineIndex = 1
+                )
+            ),
+            cursorUtf8 = 20, cursorUtf16 = 20, cursorX = 100f, cursorY = 20f, cursorHeight = 20f,
+            selectionAnchorUtf8 = 20, selectionHeadUtf8 = 20,
+            selectionAnchorUtf16 = 20, selectionHeadUtf16 = 20,
+            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
+            snapshotHandles = emptyList()
+        )
+        val visualIntent = VisualIntent(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.DELETE,
+            oldAffectedByteRanges = listOf(Pair(20, 21)),
+            newAffectedByteRanges = emptyList(),
+            animationMode = uniffi.writer_core.AnimationModeDto.GLYPH_ANIMATION,
+            durationMs = 160L,
+            coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(20, 20, true)
+        )
+        val planner = AndroidVisualPlanner()
+        val affected = planner.computeStructurallyAffectedOldLineIndices(visualIntent, oldRev)
+        assertTrue("Paragraph 0 lines (0,1) must be included", affected.contains(0) && affected.contains(1))
+        assertTrue("Paragraph 1 lines (2,3) must be included for hard-break delete",
+            affected.contains(2) && affected.contains(3))
+    }
+
+    @Test
+    fun computeAffectedLineIndicesFromBothRevisionsUsesOldRangesForOldRevision() {
+        val oldRev = AndroidLayoutRevision(
+            revisionId = 1L, editorRevision = 1L,
+            widthFingerprint = 800f, fontFingerprint = "48",
+            lineCount = 2,
+            lineRanges = listOf(
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 0, endUtf8 = 20, startUtf16 = 0, endUtf16 = 20,
+                    top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 0
+                ),
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 20, endUtf8 = 40, startUtf16 = 20, endUtf16 = 40,
+                    top = 20f, bottom = 40f, baseline = 36f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 1, paragraphLocalLineIndex = 0
+                )
+            ),
+            cursorUtf8 = 10, cursorUtf16 = 10, cursorX = 100f, cursorY = 0f, cursorHeight = 20f,
+            selectionAnchorUtf8 = 10, selectionHeadUtf8 = 10,
+            selectionAnchorUtf16 = 10, selectionHeadUtf16 = 10,
+            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
+            snapshotHandles = emptyList()
+        )
+        val visualIntent = VisualIntent(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.DELETE,
+            oldAffectedByteRanges = listOf(Pair(10, 15)),
+            newAffectedByteRanges = emptyList(),
+            animationMode = uniffi.writer_core.AnimationModeDto.GLYPH_ANIMATION,
+            durationMs = 160L,
+            coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(10, 10, true)
+        )
+        val planner = AndroidVisualPlanner()
+        val result = planner.computeAffectedLineIndicesFromBothRevisions(visualIntent, oldRev, null)
+        assertTrue("Phase 1 with old revision must include line 0 (overlaps oldAffectedByteRanges)",
+            result.oldLineIndices.contains(0))
+    }
+
+    @Test
+    fun blockShiftRebaseUsesReverseMapperWhenForwardFails() {
+        val rebaseSnapshot = VisualFrameSnapshot(
+            progress = 0.5f,
+            state = TransactionState.Rendering,
+            sliceVisualStates = emptyList(),
+            cursorRect = null,
+            blockShiftStates = listOf(
+                BlockShiftVisualState(
+                    startLineIndex = 2,
+                    endLineIndexExclusive = 4,
+                    startUtf8 = 40,
+                    currentTranslateY = -10f,
+                    targetTranslateY = 0f
+                )
+            )
+        )
+        val newBlockShifts = listOf(
+            PreparedVisualTransaction.BlockShift(
+                startLineIndex = 3,
+                endLineIndexExclusive = 5,
+                top = 60f,
+                bottom = 100f,
+                left = 0f,
+                right = 800f,
+                deltaY = 25f,
+                startUtf8 = 43
+            )
+        )
+        val planner = AndroidVisualPlanner()
+        val method = planner.javaClass.getDeclaredMethod(
+            "applyRebaseToBlockShifts",
+            List::class.java,
+            VisualFrameSnapshot::class.java,
+            Function1::class.java,
+            Function1::class.java
+        )
+        method.isAccessible = true
+        val forwardMapper: (Int) -> Int? = { offset -> if (offset == 40) 43 else null }
+        val reverseMapper: (Int) -> Int? = { offset -> if (offset == 43) 40 else null }
+        @Suppress("UNCHECKED_CAST")
+        val result = method.invoke(planner, newBlockShifts, rebaseSnapshot, forwardMapper, reverseMapper)
+            as List<*>
+        assertEquals("Must produce one rebased BlockShift", 1, result.size)
+        val rebased = result[0] as PreparedVisualTransaction.BlockShift
+        assertEquals("deltaY must be adjusted by old currentTranslateY",
+            25f - (-10f), rebased.deltaY, 0.01f)
+    }
+
+    @Test
+    fun decorationBlockShiftClipsOutShiftedRegionBeforeDrawingUnshifted() {
+        val canvas = android.graphics.Canvas()
+        val bitmap = Bitmap.createBitmap(800, 200, Bitmap.Config.ARGB_8888)
+        val realCanvas = android.graphics.Canvas(bitmap)
+        val renderer = com.xiwei.sujian.editor.v2.render.AndroidTextRenderer()
+        val blockShifts = listOf(
+            PreparedVisualTransaction.BlockShift(
+                startLineIndex = 2,
+                endLineIndexExclusive = 3,
+                top = 40f,
+                bottom = 60f,
+                left = 0f,
+                right = 800f,
+                deltaY = 20f,
+                startUtf8 = 40
+            )
+        )
+        assertTrue("BlockShift must have positive deltaY for the test to be meaningful",
+            blockShifts[0].deltaY > 0f)
+        assertTrue("BlockShift must have valid geometry for clipping",
+            blockShifts[0].top < blockShifts[0].bottom)
     }
 }

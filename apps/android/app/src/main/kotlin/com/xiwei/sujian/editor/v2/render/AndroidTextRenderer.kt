@@ -53,6 +53,12 @@ class AndroidTextRenderer {
             }
         }
         drawSearchHighlightsUnshifted(canvas, layout, unshiftedHighlights)
+        canvas.save()
+        for (shift in blockShifts) {
+            canvas.clipOutRect(shift.left, shift.top, shift.right, shift.bottom)
+        }
+        drawSearchHighlightsUnshifted(canvas, layout, shiftedHighlights)
+        canvas.restore()
         val groupedByDeltaY = blockShifts.groupBy { it.deltaY }
         for ((deltaY, group) in groupedByDeltaY) {
             val currentDeltaY = deltaY * (progress - 1f)
@@ -98,7 +104,12 @@ class AndroidTextRenderer {
             drawSelectionHighlightUnshifted(canvas, layout, selStart, selEnd)
             return
         }
+        canvas.save()
+        for (shift in blockShifts) {
+            canvas.clipOutRect(shift.left, shift.top, shift.right, shift.bottom)
+        }
         drawSelectionHighlightUnshifted(canvas, layout, selStart, selEnd)
+        canvas.restore()
         val groupedByDeltaY = blockShifts.groupBy { it.deltaY }
         for ((deltaY, group) in groupedByDeltaY) {
             val currentDeltaY = deltaY * (progress - 1f)
@@ -226,7 +237,12 @@ class AndroidTextRenderer {
             drawPreeditUnderlineUnshifted(canvas, layout, compStart, compEnd)
             return
         }
+        canvas.save()
+        for (shift in blockShifts) {
+            canvas.clipOutRect(shift.left, shift.top, shift.right, shift.bottom)
+        }
         drawPreeditUnderlineUnshifted(canvas, layout, compStart, compEnd)
+        canvas.restore()
         val groupedByDeltaY = blockShifts.groupBy { it.deltaY }
         for ((deltaY, group) in groupedByDeltaY) {
             val currentDeltaY = deltaY * (progress - 1f)

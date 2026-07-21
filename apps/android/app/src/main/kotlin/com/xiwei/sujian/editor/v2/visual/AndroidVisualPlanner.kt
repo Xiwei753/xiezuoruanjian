@@ -84,9 +84,13 @@ class AndroidVisualPlanner {
         if (editByteStart != null) {
             val editLine = findLineForUtf8(revision, editByteStart)
             val editParagraphId = revision.lineRanges.getOrNull(editLine)?.paragraphId ?: 0
-            for (i in editLine until revision.lineRanges.size) {
+            for (i in editLine downTo 0) {
+                if (revision.lineRanges.getOrNull(i)?.paragraphId != editParagraphId) break
                 affectedLines.add(i)
-                if (revision.lineRanges[i].endsWithHardBreak) break
+            }
+            for (i in editLine until revision.lineRanges.size) {
+                if (revision.lineRanges.getOrNull(i)?.paragraphId != editParagraphId) break
+                affectedLines.add(i)
             }
             val isDeleteOrReplace = visualIntent.isDelete() || visualIntent.isReplace()
                 || visualIntent.isCompositionCancel() || visualIntent.isCompositionCommit()
@@ -95,9 +99,10 @@ class AndroidVisualPlanner {
                 val lastEditLine = affectedLines.maxOrNull() ?: editLine
                 val nextParaStartLine = findNextParagraphStartLine(revision, lastEditLine)
                 if (nextParaStartLine != null) {
+                    val nextParaId = revision.lineRanges.getOrNull(nextParaStartLine)?.paragraphId ?: -1
                     for (i in nextParaStartLine until revision.lineRanges.size) {
+                        if (revision.lineRanges.getOrNull(i)?.paragraphId != nextParaId) break
                         affectedLines.add(i)
-                        if (revision.lineRanges[i].endsWithHardBreak) break
                     }
                 }
             }
@@ -145,15 +150,91 @@ class AndroidVisualPlanner {
         newRevision: AndroidLayoutRevision?
     ): AffectedLinesResult {
         if (oldRevision == null || newRevision == null) {
-            val indices = computeAffectedLineIndices(visualIntent, newRevision ?: oldRevision, useNewRanges = true)
+            val revision = newRevision ?: oldRevision ?: return AffectedLinesResult(emptySet(), emptySet(), emptySet(), emptyList())
+            val useNewRanges = newRevision != null
+            val indices = computeAffectedLineIndices(visualIntent, revision, useNewRanges = useNewRanges)
+            if (newRevision == null) {
+                val structuralIndices = computeStructurallyAffectedOldLineIndices(visualIntent, oldRevision!!)
+                val combined = indices + structuralIndices
+                return AffectedLinesResult(
+                    lineIndices = combined,
+                    oldLineIndices = combined,
+                    newLineIndices = emptySet(),
+                    blockShifts = emptyList()
+                )
+            }
             return AffectedLinesResult(
                 lineIndices = indices,
-                oldLineIndices = if (newRevision == null) indices else emptySet(),
-                newLineIndices = if (newRevision != null) indices else emptySet(),
+                oldLineIndices = emptySet(),
+                newLineIndices = indices,
                 blockShifts = emptyList()
             )
         }
         return computeAffectedLines(visualIntent, oldRevision, newRevision)
+    }
+
+    /**
+     * Compute structurally affected old paragraph line indices using ONLY the old revision
+     * and visual intent — no new revision required.
+     *
+     * This is called during Phase 1 of [AndroidTextAnimationEngine.prepareAndSubmit], before
+     * the mirror update, to ensure all old paragraphs that will be structurally affected by
+     * the edit have their Bitmaps captured. Without this, deleting a hard break between two
+     * paragraphs would only capture the first paragraph's Bitmap; the second paragraph's
+     * Bitmap cannot be captured after the mirror update because the layout has already changed.
+     *
+     * Detection strategy:
+     * - Find all paragraphs whose byte range overlaps with [VisualIntent.oldAffectedByteRanges].
+     * - For delete/replace, also include the paragraph immediately AFTER each affected paragraph,
+     *   because deleting a hard break merges the next paragraph into the current one.
+     * - Expand each affected paragraph to include ALL its visual lines (not just the ones
+     *   overlapping with the affected byte range).
+     */
+    fun computeStructurallyAffectedOldLineIndices(
+        visualIntent: VisualIntent,
+        oldRevision: AndroidLayoutRevision
+    ): Set<Int> {
+        val affectedLines = mutableSetOf<Int>()
+        val affectedParaIds = mutableSetOf<Int>()
+
+        for ((start, end) in visualIntent.oldAffectedByteRanges) {
+            for (i in oldRevision.lineRanges.indices) {
+                val lineRange = oldRevision.lineRanges[i]
+                if (start < lineRange.endUtf8 && end > lineRange.startUtf8) {
+                    affectedParaIds.add(lineRange.paragraphId)
+                }
+            }
+        }
+
+        val isDeleteOrReplace = visualIntent.isDelete() || visualIntent.isReplace()
+            || visualIntent.isCompositionCancel() || visualIntent.isCompositionCommit()
+            || visualIntent.isCompositionUpdate()
+        if (isDeleteOrReplace) {
+            val extraParaIds = mutableSetOf<Int>()
+            for (pid in affectedParaIds) {
+                val lastLineOfPara = oldRevision.lineRanges.withIndex()
+                    .filter { it.value.paragraphId == pid }
+                    .lastOrNull()?.index ?: continue
+                for (i in (lastLineOfPara + 1) until oldRevision.lineRanges.size) {
+                    val nextParaId = oldRevision.lineRanges[i].paragraphId
+                    if (nextParaId != pid) {
+                        extraParaIds.add(nextParaId)
+                        break
+                    }
+                }
+            }
+            affectedParaIds.addAll(extraParaIds)
+        }
+
+        for (pid in affectedParaIds) {
+            for (entry in oldRevision.lineRanges.withIndex()) {
+                if (entry.value.paragraphId == pid) {
+                    affectedLines.add(entry.index)
+                }
+            }
+        }
+
+        return affectedLines
     }
 
     /**
@@ -307,8 +388,12 @@ class AndroidVisualPlanner {
             buildOffsetMapper(visualIntent, oldRev, newRev)
         } else null
 
+        val reverseMapperForRebase = if (oldRev != null && newRev != null) {
+            buildReverseOffsetMapper(visualIntent, oldRev, newRev)
+        } else null
+
         val finalBlockShifts = if (rebaseSnapshot != null && rebaseSnapshot.blockShiftStates.isNotEmpty()) {
-            applyRebaseToBlockShifts(blockShifts, rebaseSnapshot, offsetMapperForRebase)
+            applyRebaseToBlockShifts(blockShifts, rebaseSnapshot, offsetMapperForRebase, reverseMapperForRebase)
         } else {
             blockShifts
         }
@@ -1410,6 +1495,7 @@ class AndroidVisualPlanner {
         preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap()
     ) {
+        val coveredNewByteRanges = mutableSetOf<Pair<Int, Int>>()
         for (lineIndex in affectedOldLineIndices) {
             val oldLineRange = oldRev.lineRanges.getOrNull(lineIndex) ?: continue
             val oldSnapshot = createSnapshotFromRevision(oldRev, lineIndex, preCapturedOldSnapshots, preCapturedNewSnapshots) ?: continue
@@ -1424,10 +1510,14 @@ class AndroidVisualPlanner {
                 startAlpha = 1f,
                 endAlpha = 0f
             ))
+            coveredNewByteRanges.add(Pair(oldLineRange.startUtf8, oldLineRange.endUtf8))
         }
         for (lineIndex in affectedNewLineIndices) {
             val newLineRange = newRev.lineRanges.getOrNull(lineIndex) ?: continue
-            if (affectedOldLineIndices.contains(lineIndex)) continue
+            val overlapsOld = coveredNewByteRanges.any { (oldStart, oldEnd) ->
+                newLineRange.startUtf8 < oldEnd && newLineRange.endUtf8 > oldStart
+            }
+            if (overlapsOld) continue
             val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = true) ?: continue
             animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                 role = SliceRole.Insert,
@@ -1848,6 +1938,14 @@ class AndroidVisualPlanner {
         // only use null as a signal that the offset falls inside newly-created content
         // (e.g. a paragraph created by a hard-break split), not for exact offset translation.
         return null
+    }
+
+    private fun buildReverseOffsetMapper(
+        visualIntent: VisualIntent,
+        oldRev: AndroidLayoutRevision,
+        newRev: AndroidLayoutRevision
+    ): (Int) -> Int? {
+        return { newOffset: Int -> reverseMapOffset(newOffset, visualIntent, oldRev, newRev) }
     }
 
     /**
@@ -2290,20 +2388,39 @@ class AndroidVisualPlanner {
     private fun applyRebaseToBlockShifts(
         newBlockShifts: List<PreparedVisualTransaction.BlockShift>,
         rebaseSnapshot: VisualFrameSnapshot,
-        offsetMapper: ((Int) -> Int?)? = null
+        offsetMapper: ((Int) -> Int?)? = null,
+        reverseMapper: ((Int) -> Int?)? = null
     ): List<PreparedVisualTransaction.BlockShift> {
         if (rebaseSnapshot.blockShiftStates.isEmpty() || newBlockShifts.isEmpty()) return newBlockShifts
         val usedRebaseIndices = mutableSetOf<Int>()
         return newBlockShifts.map { shift ->
             val byteOffsetMatchIdx = if (shift.startUtf8 >= 0) {
-                val mappedStartUtf8 = offsetMapper?.let { mapper ->
+                val forwardMatchIdx = offsetMapper?.let { mapper ->
                     rebaseSnapshot.blockShiftStates.indices.firstOrNull { i ->
                         i !in usedRebaseIndices && rebaseSnapshot.blockShiftStates[i].startUtf8 >= 0 &&
                             mapper(rebaseSnapshot.blockShiftStates[i].startUtf8) == shift.startUtf8
                     }
                 }
-                mappedStartUtf8 ?: rebaseSnapshot.blockShiftStates.indices.firstOrNull { i ->
-                    i !in usedRebaseIndices && rebaseSnapshot.blockShiftStates[i].startUtf8 == shift.startUtf8
+                if (forwardMatchIdx != null) {
+                    forwardMatchIdx
+                } else {
+                    val reverseMatchIdx = reverseMapper?.let { rMapper ->
+                        val mappedNewStart = rMapper(shift.startUtf8)
+                        if (mappedNewStart != null) {
+                            rebaseSnapshot.blockShiftStates.indices.firstOrNull { i ->
+                                i !in usedRebaseIndices && rebaseSnapshot.blockShiftStates[i].startUtf8 >= 0 &&
+                                    rebaseSnapshot.blockShiftStates[i].startUtf8 == mappedNewStart
+                            }
+                        } else null
+                    }
+                    if (reverseMatchIdx != null) {
+                        reverseMatchIdx
+                    } else {
+                        rebaseSnapshot.blockShiftStates.indices.firstOrNull { i ->
+                            i !in usedRebaseIndices && rebaseSnapshot.blockShiftStates[i].startUtf8 >= 0 &&
+                                rebaseSnapshot.blockShiftStates[i].startUtf8 == shift.startUtf8
+                        }
+                    }
                 }
             } else null
             if (byteOffsetMatchIdx != null) {
