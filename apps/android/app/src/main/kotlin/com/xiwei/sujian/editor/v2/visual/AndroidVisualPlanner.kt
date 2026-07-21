@@ -212,9 +212,17 @@ class AndroidVisualPlanner {
         if (isDeleteOrReplace) {
             val extraParaIds = mutableSetOf<Int>()
             for (pid in affectedParaIds) {
+                val firstLineOfPara = oldRevision.lineRanges.withIndex()
+                    .firstOrNull { it.value.paragraphId == pid }?.index ?: continue
                 val lastLineOfPara = oldRevision.lineRanges.withIndex()
                     .filter { it.value.paragraphId == pid }
                     .lastOrNull()?.index ?: continue
+                if (firstLineOfPara > 0) {
+                    val prevParaId = oldRevision.lineRanges[firstLineOfPara - 1].paragraphId
+                    if (prevParaId != pid) {
+                        extraParaIds.add(prevParaId)
+                    }
+                }
                 for (i in (lastLineOfPara + 1) until oldRevision.lineRanges.size) {
                     val nextParaId = oldRevision.lineRanges[i].paragraphId
                     if (nextParaId != pid) {
@@ -224,6 +232,15 @@ class AndroidVisualPlanner {
                 }
             }
             affectedParaIds.addAll(extraParaIds)
+        }
+
+        for ((start, end) in visualIntent.newAffectedByteRanges) {
+            for (i in oldRevision.lineRanges.indices) {
+                val lineRange = oldRevision.lineRanges[i]
+                if (start < lineRange.endUtf8 && end > lineRange.startUtf8) {
+                    affectedParaIds.add(lineRange.paragraphId)
+                }
+            }
         }
 
         for (pid in affectedParaIds) {
@@ -1495,6 +1512,7 @@ class AndroidVisualPlanner {
         preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap()
     ) {
+        val offsetMapper = buildOffsetMapper(visualIntent, oldRev, newRev)
         val coveredNewByteRanges = mutableSetOf<Pair<Int, Int>>()
         for (lineIndex in affectedOldLineIndices) {
             val oldLineRange = oldRev.lineRanges.getOrNull(lineIndex) ?: continue
@@ -1510,7 +1528,13 @@ class AndroidVisualPlanner {
                 startAlpha = 1f,
                 endAlpha = 0f
             ))
-            coveredNewByteRanges.add(Pair(oldLineRange.startUtf8, oldLineRange.endUtf8))
+            val mappedStart = offsetMapper(oldLineRange.startUtf8)
+            val mappedEnd = offsetMapper(oldLineRange.endUtf8)
+            if (mappedStart != null && mappedEnd != null) {
+                coveredNewByteRanges.add(Pair(mappedStart, mappedEnd))
+            } else {
+                coveredNewByteRanges.add(Pair(oldLineRange.startUtf8, oldLineRange.endUtf8))
+            }
         }
         for (lineIndex in affectedNewLineIndices) {
             val newLineRange = newRev.lineRanges.getOrNull(lineIndex) ?: continue
@@ -2395,30 +2419,50 @@ class AndroidVisualPlanner {
         val usedRebaseIndices = mutableSetOf<Int>()
         return newBlockShifts.map { shift ->
             val byteOffsetMatchIdx = if (shift.startUtf8 >= 0) {
-                val forwardMatchIdx = offsetMapper?.let { mapper ->
-                    rebaseSnapshot.blockShiftStates.indices.firstOrNull { i ->
-                        i !in usedRebaseIndices && rebaseSnapshot.blockShiftStates[i].startUtf8 >= 0 &&
-                            mapper(rebaseSnapshot.blockShiftStates[i].startUtf8) == shift.startUtf8
-                    }
+                val directMatchIdx = rebaseSnapshot.blockShiftStates.indices.firstOrNull { i ->
+                    i !in usedRebaseIndices && rebaseSnapshot.blockShiftStates[i].startUtf8 == shift.startUtf8
                 }
-                if (forwardMatchIdx != null) {
-                    forwardMatchIdx
+                if (directMatchIdx != null) {
+                    directMatchIdx
                 } else {
-                    val reverseMatchIdx = reverseMapper?.let { rMapper ->
-                        val mappedNewStart = rMapper(shift.startUtf8)
-                        if (mappedNewStart != null) {
-                            rebaseSnapshot.blockShiftStates.indices.firstOrNull { i ->
-                                i !in usedRebaseIndices && rebaseSnapshot.blockShiftStates[i].startUtf8 >= 0 &&
-                                    rebaseSnapshot.blockShiftStates[i].startUtf8 == mappedNewStart
-                            }
-                        } else null
-                    }
-                    if (reverseMatchIdx != null) {
-                        reverseMatchIdx
-                    } else {
+                    val forwardMatchIdx = offsetMapper?.let { mapper ->
                         rebaseSnapshot.blockShiftStates.indices.firstOrNull { i ->
                             i !in usedRebaseIndices && rebaseSnapshot.blockShiftStates[i].startUtf8 >= 0 &&
-                                rebaseSnapshot.blockShiftStates[i].startUtf8 == shift.startUtf8
+                                mapper(rebaseSnapshot.blockShiftStates[i].startUtf8) == shift.startUtf8
+                        }
+                    }
+                    if (forwardMatchIdx != null) {
+                        forwardMatchIdx
+                    } else {
+                        val reverseMatchIdx = reverseMapper?.let { rMapper ->
+                            val mappedNewStart = rMapper(shift.startUtf8)
+                            if (mappedNewStart != null) {
+                                rebaseSnapshot.blockShiftStates.indices.firstOrNull { i ->
+                                    i !in usedRebaseIndices && rebaseSnapshot.blockShiftStates[i].startUtf8 >= 0 &&
+                                        rebaseSnapshot.blockShiftStates[i].startUtf8 == mappedNewStart
+                                }
+                            } else null
+                        }
+                        if (reverseMatchIdx != null) {
+                            reverseMatchIdx
+                        } else {
+                            val nearMatchCandidates = rebaseSnapshot.blockShiftStates.indices.filter { i ->
+                                i !in usedRebaseIndices && rebaseSnapshot.blockShiftStates[i].startUtf8 >= 0
+                            }
+                            val forwardNearIdx = offsetMapper?.let { mapper ->
+                                nearMatchCandidates.minByOrNull { i ->
+                                    val mapped = mapper(rebaseSnapshot.blockShiftStates[i].startUtf8)
+                                    if (mapped != null) kotlin.math.abs(mapped - shift.startUtf8)
+                                    else Int.MAX_VALUE
+                                }
+                            }
+                            if (forwardNearIdx != null) {
+                                val mappedDist = offsetMapper?.let { mapper ->
+                                    val mapped = mapper(rebaseSnapshot.blockShiftStates[forwardNearIdx].startUtf8)
+                                    if (mapped != null) kotlin.math.abs(mapped - shift.startUtf8) else Int.MAX_VALUE
+                                } ?: Int.MAX_VALUE
+                                if (mappedDist < 100) forwardNearIdx else null
+                            } else null
                         }
                     }
                 }

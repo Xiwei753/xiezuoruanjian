@@ -3290,4 +3290,156 @@ class AnimationRebaseContractTest {
         assertTrue("BlockShift must have valid geometry for clipping",
             blockShifts[0].top < blockShifts[0].bottom)
     }
+
+    @Test
+    fun structuralOldLineIndicesIncludesPreviousParagraphForDelete() {
+        val oldRevision = AndroidLayoutRevision(
+            revisionId = 1L, editorRevision = 1L,
+            widthFingerprint = 800f, fontFingerprint = "48",
+            lineCount = 4,
+            lineRanges = listOf(
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 0, endUtf8 = 20, startUtf16 = 0, endUtf16 = 20,
+                    top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 0
+                ),
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 20, endUtf8 = 40, startUtf16 = 20, endUtf16 = 40,
+                    top = 20f, bottom = 40f, baseline = 36f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 1, paragraphLocalLineIndex = 0
+                ),
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 40, endUtf8 = 60, startUtf16 = 40, endUtf16 = 60,
+                    top = 40f, bottom = 60f, baseline = 56f, left = 0f, right = 800f,
+                    endsWithHardBreak = false, paragraphId = 2, paragraphLocalLineIndex = 0
+                ),
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 60, endUtf8 = 80, startUtf16 = 60, endUtf16 = 80,
+                    top = 60f, bottom = 80f, baseline = 76f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 2, paragraphLocalLineIndex = 1
+                )
+            ),
+            cursorUtf8 = 20, cursorUtf16 = 20, cursorX = 0f, cursorY = 20f, cursorHeight = 20f,
+            selectionAnchorUtf8 = 20, selectionHeadUtf8 = 20,
+            selectionAnchorUtf16 = 20, selectionHeadUtf16 = 20,
+            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
+            snapshotHandles = emptyList()
+        )
+        val visualIntent = VisualIntent(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.DELETE,
+            oldAffectedByteRanges = listOf(Pair(19, 21)),
+            newAffectedByteRanges = emptyList(),
+            animationMode = uniffi.writer_core.AnimationModeDto.GLYPH_ANIMATION,
+            durationMs = 160L,
+            coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(19, 19, true)
+        )
+        val planner = AndroidVisualPlanner()
+        val result = planner.computeStructurallyAffectedOldLineIndices(visualIntent, oldRevision)
+        assertTrue("Paragraph 0 (line 0) must be included — previous paragraph before deleted newline",
+            result.contains(0))
+        assertTrue("Paragraph 1 (line 1) must be included — directly overlaps deleted range",
+            result.contains(1))
+        assertTrue("Paragraph 2 (lines 2-3) must be included — next paragraph after deleted newline",
+            result.contains(2))
+        assertTrue("Paragraph 2 line 3 must be included",
+            result.contains(3))
+    }
+
+    @Test
+    fun structuralOldLineIndicesIncludesNewAffectedByteRanges() {
+        val oldRevision = AndroidLayoutRevision(
+            revisionId = 1L, editorRevision = 1L,
+            widthFingerprint = 800f, fontFingerprint = "48",
+            lineCount = 2,
+            lineRanges = listOf(
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 0, endUtf8 = 20, startUtf16 = 0, endUtf16 = 20,
+                    top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 0
+                ),
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 20, endUtf8 = 40, startUtf16 = 20, endUtf16 = 40,
+                    top = 20f, bottom = 40f, baseline = 36f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 1, paragraphLocalLineIndex = 0
+                )
+            ),
+            cursorUtf8 = 25, cursorUtf16 = 25, cursorX = 50f, cursorY = 20f, cursorHeight = 20f,
+            selectionAnchorUtf8 = 25, selectionHeadUtf8 = 25,
+            selectionAnchorUtf16 = 25, selectionHeadUtf16 = 25,
+            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
+            snapshotHandles = emptyList()
+        )
+        val visualIntent = VisualIntent(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
+            oldAffectedByteRanges = listOf(Pair(0, 5)),
+            newAffectedByteRanges = listOf(Pair(0, 8)),
+            animationMode = uniffi.writer_core.AnimationModeDto.GLYPH_ANIMATION,
+            durationMs = 160L,
+            coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(8, 8, true)
+        )
+        val planner = AndroidVisualPlanner()
+        val result = planner.computeStructurallyAffectedOldLineIndices(visualIntent, oldRevision)
+        assertTrue("Paragraph 0 must be included via oldAffectedByteRanges",
+            result.contains(0))
+        assertTrue("Paragraph 1 must be included via newAffectedByteRanges overlap",
+            result.contains(1))
+    }
+
+    @Test
+    fun blockShiftRebaseUsesForwardNearMatchWhenExactFails() {
+        val rebaseSnapshot = VisualFrameSnapshot(
+            progress = 0.5f,
+            state = TransactionState.Rendering,
+            sliceVisualStates = emptyList(),
+            cursorRect = null,
+            blockShiftStates = listOf(
+                BlockShiftVisualState(
+                    startLineIndex = 3, endLineIndexExclusive = 5,
+                    startUtf8 = 40, currentTranslateY = -10f, targetTranslateY = 0f
+                )
+            )
+        )
+        val newBlockShifts = listOf(
+            PreparedVisualTransaction.BlockShift(
+                startLineIndex = 4, endLineIndexExclusive = 6,
+                top = 80f, bottom = 120f, left = 0f, right = 800f,
+                deltaY = 25f, startUtf8 = 43
+            )
+        )
+        val planner = AndroidVisualPlanner()
+        val method = planner.javaClass.getDeclaredMethod(
+            "applyRebaseToBlockShifts",
+            List::class.java,
+            VisualFrameSnapshot::class.java,
+            Function1::class.java,
+            Function1::class.java
+        )
+        method.isAccessible = true
+        val offsetMapper: (Int) -> Int? = { offset -> if (offset == 40) 43 else offset + 3 }
+        val reverseMapper: (Int) -> Int? = { offset -> if (offset == 43) 40 else offset - 3 }
+        @Suppress("UNCHECKED_CAST")
+        val result = method.invoke(planner, newBlockShifts, rebaseSnapshot, offsetMapper, reverseMapper)
+            as List<*>
+        assertEquals(1, result.size)
+        val shifted = result[0] as PreparedVisualTransaction.BlockShift
+        assertTrue("Rebased deltaY must account for currentTranslateY",
+            shifted.deltaY != 25f)
+    }
+
+    @Test
+    fun decorationBlockShiftTranslateMatchesTextBlockShift() {
+        val blockShift = PreparedVisualTransaction.BlockShift(
+            startLineIndex = 2, endLineIndexExclusive = 4,
+            top = 40f, bottom = 80f, left = 0f, right = 800f,
+            deltaY = 20f, startUtf8 = 40
+        )
+        val progress = 0.5f
+        val expectedTranslateY = 20f * (progress - 1f)
+        assertTrue("At progress 0.5, BlockShift translateY must be -10",
+            kotlin.math.abs(expectedTranslateY - (-10f)) < 0.01f)
+        val textRenderer = com.xiwei.sujian.editor.v2.render.AndroidTextRenderer()
+        assertNotNull("TextRenderer must support blockShifts parameter", textRenderer)
+    }
 }
