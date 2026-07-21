@@ -25,6 +25,12 @@ mod writing_stats_ops;
 ///
 /// `CORE` 是全局 `OnceLock<Mutex<Option<WriterCore>>>`。同一时刻只有一个线程可以访问 Core。
 /// 调用方不得在闭包中再次调用 `with_core`（非递归锁，会死锁）。
+///
+/// ## 所有权
+///
+/// 闭包只获得 `&WriterCore` 不可变引用。所有修改操作通过内部可变性
+/// （`WriterAppService` 内部的 `Mutex<EditorSession>` 等）实现，
+/// 不违反 `with_core` 的只读约束。
 pub(crate) fn with_core<F, R>(f: F) -> Result<R, String>
 where
     F: FnOnce(&WriterCore) -> Result<R, String>,

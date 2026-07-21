@@ -1153,6 +1153,11 @@ impl EditorKernel {
     /// 算法：找最长公共前缀和最长公共后缀，中间部分即为差异区域。
     /// 前缀/后缀对齐到 char boundary（可能需要回退几个字节），
     /// 因为 DisplayPatch 的 replace_byte_range 必须在 char boundary 上。
+    ///
+    /// 不变量：返回的 replace_byte_range 和 inserted_text 满足：
+    /// `old_text[replace_start..replace_end]` 被替换为 `inserted_text`
+    /// 后得到 `new_text[prefix_len..new_text.len()-new_suffix_len]`。
+    /// 当 old_text == new_text 时返回 `((0, 0), "")`。
     fn compute_single_patch(old_text: &str, new_text: &str) -> ((usize, usize), String) {
         if old_text == new_text {
             return ((0, 0), String::new());
@@ -1708,7 +1713,11 @@ impl EditorKernel {
     /// after_range 必须在选区右侧（start ≥ sel_max），
     /// before_range 必须在选区左侧（end ≤ sel_min）。
     /// 先删 after 再删 before，避免 offset 偏移。
-    /// 删除后根据删除量调整选区 anchor/head。
+    ///
+    /// 选区调整逻辑：删除 before 区域后，选区 anchor/head 需要向前移动
+    /// before_deleted_len 个字节。删除 after 区域不影响选区 offset
+    /// （after 在选区右侧，删除后选区左侧的 offset 不变）。
+    /// 最终选区 = (原选区位置 - before_deleted_len)。
     fn apply_delete_surrounding(
         &mut self,
         before_byte_start: usize,
@@ -1837,17 +1846,15 @@ impl EditorKernel {
         })
     }
 
-    /// 开始一次 IME composition 会话。
-    ///
-    /// 同一时刻只允许一个活跃 composition 会话（重复调用返回 InvalidRange）。
-    /// 会话记录 replace 范围（半开区间），后续 UpdateComposition/FinishComposition
-    /// 必须与此范围匹配，否则返回 InvalidRange。
-    /// 开始 composition 会话 — 在正文 `[replace_start, replace_end_exclusive)` 半开区间
+    /// 开始 IME composition 会话 — 在正文 `[replace_start, replace_end_exclusive)` 半开区间
     /// 上建立 IME 预输入区域。
     ///
     /// 前置条件：无活跃会话、range 合法（start <= end、char boundary、<= text.len()）。
     /// 不满足时返回 InvalidRange/InvalidOffset。
     /// 后置条件：创建 CompositionSessionState，正文不变，返回 Applied（含空 patches）。
+    /// 同一时刻只允许一个活跃 composition 会话（重复调用返回 InvalidRange）。
+    /// 会话记录 replace 范围（半开区间），后续 UpdateComposition/FinishComposition
+    /// 必须与此范围匹配，否则返回 InvalidRange。
     fn apply_begin_composition(
         &mut self,
         replace_start: usize,
@@ -1908,10 +1915,12 @@ impl EditorKernel {
 
     /// 更新 composition 的 preedit 文本。
     ///
-    /// 必须匹配活跃会话的 session_id、generation 和 base_revision，
-    /// 否则返回 StaleRevision（会话可能已被 reset）。
-    /// 更新后 generation 递增，使后续操作必须使用新的 generation。
-    /// 此操作不修改正文，只更新 composition 状态供平台渲染 preedit。
+    /// 前置条件：必须匹配活跃会话的 session_id、generation 和 base_revision，
+    /// 否则返回 StaleRevision（会话可能已被 TextEditSession reset 使过期）。
+    /// 后置条件：更新 preedit_text 和 preedit_cursor_utf16，generation 递增，
+    /// 正文不变，display_patches 为空（preedit 是纯视觉层，不修改 committed 正文）。
+    /// `new_preedit_cursor_offset` 为 UTF-16 code unit 单位（IME 协议语义），
+    /// 内核其余字段统一使用 UTF-8 byte offset。
     fn apply_update_composition(
         &mut self,
         composition_session_id: u64,
@@ -1993,10 +2002,12 @@ impl EditorKernel {
 
     /// 确认 composition，将 preedit 文本写入正文。
     ///
-    /// 会话的 preedit 文本替换 [replace_start, replace_end_exclusive) 范围。
-    /// 光标位置由 preedit_cursor_utf16（UTF-16 单位）转换为 UTF-8 byte offset。
-    /// 空预输入文本时仅关闭会话，不修改正文。
-    /// 确认后会话销毁，undo/redo 栈正常记录。
+    /// 前置条件：必须匹配活跃会话的 session_id、generation 和 base_revision，
+    /// 否则返回 StaleRevision。
+    /// 后置条件：会话的 preedit 文本替换 [replace_start, replace_end_exclusive) 范围，
+    /// 会话销毁，undo/redo 栈正常记录。
+    /// 光标位置由 preedit_cursor_utf16（UTF-16 code unit）转换为 UTF-8 byte offset
+    /// （见下方 UTF-16→UTF-8 转换逻辑）。空预输入文本时仅关闭会话，不修改正文。
     fn apply_finish_composition(
         &mut self,
         composition_session_id: u64,
@@ -2147,7 +2158,9 @@ impl EditorKernel {
 
     /// 取消 composition，恢复到 composition 开始前的正文状态。
     ///
-    /// 不修改正文（preedit 文本从未写入正文），仅销毁会话。
+    /// 前置条件：必须匹配活跃会话的 session_id、generation 和 base_revision，
+    /// 否则返回 StaleRevision。
+    /// 后置条件：不修改正文（preedit 文本从未写入正文），仅销毁会话。
     /// 返回的 old_affected 告知平台需要清除的 preedit 渲染区域。
     fn apply_cancel_composition(
         &mut self,

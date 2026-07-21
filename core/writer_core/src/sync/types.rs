@@ -64,6 +64,9 @@ impl SyncErrorCategory {
                 "branch_missing"
             }
             SyncErrorCategory::NotFound | SyncErrorCategory::FileNotFound => "auth_failed",
+            // NotFound/FileNotFound 映射到 auth_failed 而非 not_found，因为 GitHub API
+            // 对无权限访问的仓库也返回 404（不区分"不存在"和"无权限"），
+            // 所以 404 在同步语境下等同于认证/权限问题。
             SyncErrorCategory::NonFastForward => "non_fast_forward",
             SyncErrorCategory::Conflict
             | SyncErrorCategory::CheckoutConflict

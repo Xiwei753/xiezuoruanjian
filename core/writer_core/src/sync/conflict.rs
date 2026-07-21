@@ -347,6 +347,12 @@ impl crate::sync::SyncService {
     /// `known_files` to the remote hash so the next sync sees
     /// base=remote_hash, local≠base, remote=base → LocalChanged → uploads
     /// the local version.
+    ///
+    /// 不变量：known_files 必须设为 remote_hash（而非 local_hash）。
+    /// 若设为 local_hash，三路比较会看到 base=local_hash, remote≠base → RemoteChanged，
+    /// 导致下次同步下载远端版本覆盖本地——与"保留本地"的意图相反。
+    /// 设为 remote_hash 后，三路比较看到 base=remote_hash, local≠base, remote=base
+    /// → LocalChanged → 上传本地版本，符合预期。
     pub fn resolve_conflict_keep_local(workspace_path: &Path, path: &str) -> crate::Result<()> {
         let mut state = Self::load_sync_state(workspace_path)?;
         if !state.conflicted_files.remove(path) {
@@ -395,6 +401,10 @@ impl crate::sync::SyncService {
     /// to `pending_take_remote`. On the next `perform_sync`, the engine will
     /// force-download the remote content to the local file, then update
     /// `known_files` to the final local hash.
+    ///
+    /// 不变量：不直接下载远端内容（可能在本函数调用时网络不可用），
+    /// 而是标记为 pending_take_remote，下次 perform_sync 时在正常三路比较之前
+    /// 强制下载。这保证"采用远端"意图不会因网络临时故障而丢失。
     pub fn resolve_conflict_take_remote(workspace_path: &Path, path: &str) -> crate::Result<()> {
         let mut state = Self::load_sync_state(workspace_path)?;
         if !state.conflicted_files.remove(path) {

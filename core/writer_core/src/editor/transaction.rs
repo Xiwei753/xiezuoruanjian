@@ -1630,9 +1630,16 @@ impl EditorEngine {
     }
 
     /// 从 transaction 生成 EditorVisualTransaction。
-    /// 
-    /// Core 只填充语义字段（id, kind, cause, old/new text, selection, inserted_range, duration, coordinate_mode, animation_mode）。
-    /// 平台层负责填充坐标字段（glyph_rects, cursor_rect, cluster_rects, cluster_runs）。
+    ///
+    /// 职责划分：
+    /// - Core 填充语义字段（id, kind, cause, old/new text, selection, inserted_range,
+    ///   deleted_range, duration, coordinate_mode, animation_mode, cluster_rects, cluster_runs,
+    ///   hidden_visual_ranges）。所有 byte range 均为 UTF-8 byte offset（半开区间）。
+    /// - 平台层负责填充坐标字段（glyph_rects, cursor_rect, reflow_glyph_rects），
+    ///   因为坐标需要平台布局引擎计算。
+    ///
+    /// 前置条件：transaction.should_animate == true 且 changes.len() == 1，
+    /// 否则返回 None（多变更事务和不需要动画的事务不生成视觉事务）。
     pub fn visual_transaction(
         &mut self,
         transaction: &EditorTransaction,

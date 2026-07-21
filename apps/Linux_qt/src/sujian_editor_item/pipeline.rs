@@ -86,7 +86,17 @@ impl CommittedTextMirror {
         self.revision = revision;
     }
 
-    pub fn apply_edit_result(&mut self, result: &EditorEditResult) -> Result<(), String> {
+    /// 将 Core 返回的编辑结果增量应用到正文镜像。
+    ///
+    /// 错误恢复策略：
+    /// - revision 不连续（patch.base_revision != mirror.revision）：说明中间有 patch 丢失，
+    ///   返回错误，调用方必须从 kernel snapshot 完整重建镜像。
+    /// - patch 范围越界或不在 char boundary 上：返回错误，调用方必须重建镜像。
+    ///   这类错误理论上不应发生（Core 保证输出合法 range），若出现说明存在 bug。
+    /// - 选区越界或不在 char boundary 上：返回错误，调用方必须重建镜像。
+    ///
+    /// 不变量：成功返回后，mirror 的 revision 与 kernel 的 new_revision 一致，
+    /// 正文和选区与 kernel 状态同步。
         for patch in &result.display_patches {
             if patch.base_revision != self.revision {
                 return Err(format!(
@@ -251,6 +261,11 @@ impl CompositionState {
 ///
 /// 每次布局重算时由平台端填充当前值。所有尺寸均为物理像素（已乘 dpr）。
 /// `scroll_y` 为文档坐标系中的滚动偏移，不含 viewport 顶部 padding。
+///
+/// 坐标空间约定：
+/// - 所有 x/y 坐标为文档坐标系（不含滚动偏移），布局引擎在渲染时减去 scroll_y
+/// - bounding_width / font_pixel_size / padding / text_indent / line_spacing 均为物理像素
+/// - dpr 用于逻辑像素到物理像素的转换，布局引擎内部统一使用物理像素
 pub(crate) struct VisualTransactionContext {
     pub typing_animation_enabled: bool,
     pub is_scrolling: bool,

@@ -1,3 +1,21 @@
+//! 同步相关 FFI 函数 — 暴露同步配置、执行、诊断和冲突解决操作。
+//!
+//! ## 线程安全契约
+//!
+//! 所有函数通过 `with_core` 获取全局 `WriterCore` 单例的 `Mutex` 锁。
+//! 调用方不得在回调中再次调用任何 FFI 函数（非递归锁，会死锁）。
+//! NAPI 桥接层在主线程调用这些函数，同步引擎在后台线程通过命令队列通信，
+//! 不直接调用 FFI 函数。
+//!
+//! ## JSON 传递语义
+//!
+//! 所有复杂数据通过 JSON C string 传递，格式为 `ResultEnvelope`：
+//! - 成功：`{"success": true, "data": ...}`
+//! - 失败：`{"success": false, "errorCode": "...", "userMessage": "..."}`
+//!
+//! 调用方必须用 `writer_core_free_string` 释放返回的 C string。
+//! 输入的 C string 由调用方拥有，Rust 侧只读取不释放。
+
 use std::os::raw::c_char;
 
 use super::{c_str_to_rust, err_json, ok_json, with_core};

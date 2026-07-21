@@ -740,6 +740,12 @@ impl WriterAppService {
         f(&mut session)
     }
 
+    /// 插入文本 — 旧版编辑会话路径。
+    ///
+    /// 前置条件：byte_offset 必须是合法 UTF-8 char boundary 且 <= 正文长度，
+    /// expected_revision 必须与当前 kernel revision 匹配。
+    /// 不满足时内核返回 InvalidOffset/StaleRevision，平台端需刷新后重试。
+    /// 所有 offset 均为 UTF-8 byte offset，平台端需在调用前完成 UTF-16→UTF-8 转换。
     pub fn editor_kernel_insert(
         &self,
         byte_offset: u32,
@@ -760,6 +766,11 @@ impl WriterAppService {
         })
     }
 
+    /// 删除文本 — 旧版编辑会话路径。
+    ///
+    /// 前置条件：byte_start/byte_end_exclusive 必须是合法 char boundary，
+    /// byte_start < byte_end_exclusive，expected_revision 匹配当前 revision。
+    /// `[byte_start, byte_end_exclusive)` 为半开区间（UTF-8 byte offset）。
     pub fn editor_kernel_delete(
         &self,
         byte_start: u32,
@@ -781,6 +792,10 @@ impl WriterAppService {
         })
     }
 
+    /// 替换文本 — 旧版编辑会话路径。
+    ///
+    /// 用 replacement_text 替换 `[byte_start, byte_end_exclusive)` 半开区间的文本。
+    /// 前置条件同 delete：offset 合法 char boundary、range 有效、revision 匹配。
     pub fn editor_kernel_replace(
         &self,
         byte_start: u32,
@@ -1079,6 +1094,11 @@ impl WriterAppService {
         })
     }
 
+    /// 获取编辑会话快照 — 包含正文、revision、光标、选区和 generation。
+    ///
+    /// 用途：平台端在镜像与内核不一致时（如 revision 不连续），
+    /// 用此快照完整重建 CommittedTextMirror，而非依赖增量 patch。
+    /// generation 用于 composition 操作的过期检测。
     #[allow(clippy::cast_possible_truncation)]
     pub fn editor_kernel_session_snapshot(&self) -> crate::api::EditorSessionSnapshotDto {
         self.with_session(|s| {
@@ -1179,6 +1199,11 @@ impl WriterAppService {
         })
     }
 
+    /// 重置编辑会话 — 加载新文本并递增 generation。
+    ///
+    /// 不变量：generation 在 load_text **之前**递增，使任何异步到达的
+    /// composition update/finish/cancel 因 generation 不匹配而被内核拒绝，
+    /// 不会写入已重置的正文。这与 EditorSession 的 generation 语义一致。
     pub fn text_edit_session_reset(
         &self,
         session_id: u64,

@@ -305,6 +305,19 @@ enum ThreeWayResult {
     BothChanged,
 }
 
+/// 执行 LWW 同步 — 入口函数。
+///
+/// 整体流程：前置检查 → debounce → 重试循环（最多 2 次）→ 错误分类。
+///
+/// 重试策略：最多重试 2 次，间隔 500ms。仅对可恢复错误（网络/限流）重试；
+/// 认证/权限等不可恢复错误直接返回，不重试。
+///
+/// 错误分类（`SyncErrorCategory`）：
+/// - `LocalIoError` → Error（不可恢复）
+/// - `TokenMissing/TokenInvalid/TokenPermissionDenied/AuthError` → Error（不可恢复）
+/// - `ApiRateLimited` → RecoverableError（可恢复，下次同步自动重试）
+/// - `GithubNetworkFailed/DnsFailed/TlsFailed/NetworkProbeFailed` → RecoverableError
+/// - 其他 → RecoverableError（保守处理，避免误报不可恢复）
 pub(crate) fn perform_lww_sync(
     workspace_path: &Path,
     config: &SyncConfig,
