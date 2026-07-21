@@ -44,7 +44,7 @@ class AndroidTextRenderer {
         val shiftedHighlights = mutableListOf<Pair<Int, Int>>()
         for ((startUtf16, endUtf16) in highlights) {
             val startLine = layout.getLineForOffset(startUtf16)
-            val endLine = layout.getLineForOffset(endUtf16)
+            val endLine = layout.getLineForOffset((endUtf16 - 1).coerceAtLeast(startUtf16))
             val anyShifted = (startLine..endLine).any { it in shiftedLineRanges }
             if (anyShifted) {
                 shiftedHighlights.add(Pair(startUtf16, endUtf16))
@@ -65,7 +65,7 @@ class AndroidTextRenderer {
             val groupLineRange = group.flatMap { shift -> shift.startLineIndex until shift.endLineIndexExclusive }.toSet()
             val groupShiftedHighlights = shiftedHighlights.filter { (startUtf16, endUtf16) ->
                 val startLine = layout.getLineForOffset(startUtf16)
-                val endLine = layout.getLineForOffset(endUtf16)
+                val endLine = layout.getLineForOffset((endUtf16 - 1).coerceAtLeast(startUtf16))
                 (startLine..endLine).any { it in groupLineRange }
             }
             canvas.save()
@@ -83,12 +83,12 @@ class AndroidTextRenderer {
     private fun drawSearchHighlightsUnshifted(canvas: Canvas, layout: android.text.Layout, highlights: List<Pair<Int, Int>>) {
         for ((startUtf16, endUtf16) in highlights) {
             val startLine = layout.getLineForOffset(startUtf16)
-            val endLine = layout.getLineForOffset(endUtf16)
+            val endLine = layout.getLineForOffset((endUtf16 - 1).coerceAtLeast(startUtf16))
             for (line in startLine..endLine) {
                 val hlStart = if (line == startLine) startUtf16 else layout.getLineStart(line)
                 val hlEnd = if (line == endLine) endUtf16 else layout.getLineEnd(line)
                 val left = layout.getPrimaryHorizontal(hlStart)
-                val right = layout.getPrimaryHorizontal(hlEnd - 1)
+                val right = layout.getPrimaryHorizontal((hlEnd - 1).coerceAtLeast(hlStart))
                 val top = layout.getLineTop(line).toFloat()
                 val bottom = layout.getLineBottom(line).toFloat()
                 canvas.drawRect(left, top, right, bottom, searchHighlightPaint)
@@ -104,7 +104,7 @@ class AndroidTextRenderer {
         }
         val shiftedLineRanges = blockShifts.flatMap { shift -> shift.startLineIndex until shift.endLineIndexExclusive }.toSet()
         val startLine = layout.getLineForOffset(selStart)
-        val endLine = layout.getLineForOffset(selEnd)
+        val endLine = layout.getLineForOffset((selEnd - 1).coerceAtLeast(selStart))
         val anyShifted = (startLine..endLine).any { it in shiftedLineRanges }
         if (!anyShifted) {
             drawSelectionHighlightUnshifted(canvas, layout, selStart, selEnd)
@@ -121,7 +121,7 @@ class AndroidTextRenderer {
             val currentDeltaY = deltaY * (progress - 1f)
             val groupLineRange = group.flatMap { shift -> shift.startLineIndex until shift.endLineIndexExclusive }.toSet()
             val selStartLine = layout.getLineForOffset(selStart)
-            val selEndLine = layout.getLineForOffset(selEnd)
+            val selEndLine = layout.getLineForOffset((selEnd - 1).coerceAtLeast(selStart))
             val overlapsGroup = (selStartLine..selEndLine).any { it in groupLineRange }
             if (!overlapsGroup) continue
             canvas.save()
@@ -138,17 +138,15 @@ class AndroidTextRenderer {
 
     private fun drawSelectionHighlightUnshifted(canvas: Canvas, layout: android.text.Layout, selStart: Int, selEnd: Int) {
         val startLine = layout.getLineForOffset(selStart)
-        val endLine = layout.getLineForOffset(selEnd)
+        val endLine = layout.getLineForOffset((selEnd - 1).coerceAtLeast(selStart))
         for (line in startLine..endLine) {
-            val lineStart = if (line == startLine) selStart else layout.getLineStart(line)
-            val lineEnd = if (line == endLine) selEnd else layout.getLineEnd(line)
+            val lineSelStart = if (line == startLine) selStart else layout.getLineStart(line)
+            val lineSelEnd = if (line == endLine) selEnd else layout.getLineEnd(line)
+            val left = layout.getPrimaryHorizontal(lineSelStart)
+            val right = layout.getPrimaryHorizontal((lineSelEnd - 1).coerceAtLeast(lineSelStart))
             val top = layout.getLineTop(line).toFloat()
             val bottom = layout.getLineBottom(line).toFloat()
-            canvas.drawRect(
-                layout.getLineLeft(line), top,
-                layout.getLineRight(line), bottom,
-                selectionPaint
-            )
+            canvas.drawRect(left, top, right, bottom, selectionPaint)
         }
     }
 
@@ -242,7 +240,7 @@ class AndroidTextRenderer {
         }
         val shiftedLineRanges = blockShifts.flatMap { shift -> shift.startLineIndex until shift.endLineIndexExclusive }.toSet()
         val startLine = layout.getLineForOffset(compStart)
-        val endLine = layout.getLineForOffset(compEnd)
+        val endLine = layout.getLineForOffset((compEnd - 1).coerceAtLeast(compStart))
         val anyShifted = (startLine..endLine).any { it in shiftedLineRanges }
         if (!anyShifted) {
             drawPreeditUnderlineUnshifted(canvas, layout, compStart, compEnd)
@@ -259,7 +257,7 @@ class AndroidTextRenderer {
             val currentDeltaY = deltaY * (progress - 1f)
             val groupLineRange = group.flatMap { shift -> shift.startLineIndex until shift.endLineIndexExclusive }.toSet()
             val compStartLine = layout.getLineForOffset(compStart)
-            val compEndLine = layout.getLineForOffset(compEnd)
+            val compEndLine = layout.getLineForOffset((compEnd - 1).coerceAtLeast(compStart))
             val overlapsGroup = (compStartLine..compEndLine).any { it in groupLineRange }
             if (!overlapsGroup) continue
             canvas.save()
@@ -276,12 +274,12 @@ class AndroidTextRenderer {
 
     private fun drawPreeditUnderlineUnshifted(canvas: Canvas, layout: android.text.Layout, compStart: Int, compEnd: Int) {
         val startLine = layout.getLineForOffset(compStart)
-        val endLine = layout.getLineForOffset(compEnd)
+        val endLine = layout.getLineForOffset((compEnd - 1).coerceAtLeast(compStart))
         for (line in startLine..endLine) {
             val lineStart = if (line == startLine) compStart else layout.getLineStart(line)
             val lineEnd = if (line == endLine) compEnd else layout.getLineEnd(line)
             val startX = layout.getPrimaryHorizontal(lineStart)
-            val endX = layout.getPrimaryHorizontal(lineEnd - 1)
+            val endX = layout.getPrimaryHorizontal((lineEnd - 1).coerceAtLeast(lineStart))
             val bottom = layout.getLineBottom(line).toFloat()
             canvas.drawLine(startX, bottom, endX, bottom, preeditUnderlinePaint)
         }
