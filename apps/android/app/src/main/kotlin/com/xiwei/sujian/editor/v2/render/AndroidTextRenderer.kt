@@ -62,6 +62,12 @@ class AndroidTextRenderer {
         val groupedByDeltaY = blockShifts.groupBy { it.deltaY }
         for ((deltaY, group) in groupedByDeltaY) {
             val currentDeltaY = deltaY * (progress - 1f)
+            val groupLineRange = group.flatMap { shift -> shift.startLineIndex until shift.endLineIndexExclusive }.toSet()
+            val groupShiftedHighlights = shiftedHighlights.filter { (startUtf16, endUtf16) ->
+                val startLine = layout.getLineForOffset(startUtf16)
+                val endLine = layout.getLineForOffset(endUtf16)
+                (startLine..endLine).any { it in groupLineRange }
+            }
             canvas.save()
             canvas.translate(0f, currentDeltaY)
             val clipPath = Path()
@@ -69,7 +75,7 @@ class AndroidTextRenderer {
                 clipPath.addRect(shift.left, shift.top, shift.right, shift.bottom, Path.Direction.CW)
             }
             canvas.clipPath(clipPath)
-            drawSearchHighlightsUnshifted(canvas, layout, shiftedHighlights)
+            drawSearchHighlightsUnshifted(canvas, layout, groupShiftedHighlights)
             canvas.restore()
         }
     }
@@ -113,6 +119,11 @@ class AndroidTextRenderer {
         val groupedByDeltaY = blockShifts.groupBy { it.deltaY }
         for ((deltaY, group) in groupedByDeltaY) {
             val currentDeltaY = deltaY * (progress - 1f)
+            val groupLineRange = group.flatMap { shift -> shift.startLineIndex until shift.endLineIndexExclusive }.toSet()
+            val selStartLine = layout.getLineForOffset(selStart)
+            val selEndLine = layout.getLineForOffset(selEnd)
+            val overlapsGroup = (selStartLine..selEndLine).any { it in groupLineRange }
+            if (!overlapsGroup) continue
             canvas.save()
             canvas.translate(0f, currentDeltaY)
             val clipPath = Path()
@@ -246,6 +257,11 @@ class AndroidTextRenderer {
         val groupedByDeltaY = blockShifts.groupBy { it.deltaY }
         for ((deltaY, group) in groupedByDeltaY) {
             val currentDeltaY = deltaY * (progress - 1f)
+            val groupLineRange = group.flatMap { shift -> shift.startLineIndex until shift.endLineIndexExclusive }.toSet()
+            val compStartLine = layout.getLineForOffset(compStart)
+            val compEndLine = layout.getLineForOffset(compEnd)
+            val overlapsGroup = (compStartLine..compEndLine).any { it in groupLineRange }
+            if (!overlapsGroup) continue
             canvas.save()
             canvas.translate(0f, currentDeltaY)
             val clipPath = Path()

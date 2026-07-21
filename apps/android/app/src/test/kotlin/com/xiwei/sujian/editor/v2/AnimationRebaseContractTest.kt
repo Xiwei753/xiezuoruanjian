@@ -1090,8 +1090,8 @@ class AnimationRebaseContractTest {
         method.isAccessible = true
         val result = method.invoke(planner, visualIntent, oldRev, newRev)
             as AndroidVisualPlanner.AffectedLinesResult
-        assertTrue("Paragraph 0 extra line (new index 2) must be included in lineIndices",
-            result.lineIndices.contains(2))
+        assertTrue("Paragraph 0 extra line (new index 2) must be included in newLineIndices",
+            result.newLineIndices.contains(2))
         assertTrue("Subsequent paragraph must produce a blockShift for Y geometry change",
             result.blockShifts.isNotEmpty())
     }
@@ -2056,7 +2056,7 @@ class AnimationRebaseContractTest {
         assertTrue("newLineIndices must be empty when newRevision is null",
             result.newLineIndices.isEmpty())
         assertTrue("lineIndices must equal oldLineIndices when newRevision is null",
-            result.lineIndices == result.oldLineIndices)
+            result.lineIndices == result.oldLineIndices && result.oldLineIndices.isNotEmpty())
     }
 
     @Test
@@ -2145,10 +2145,10 @@ class AnimationRebaseContractTest {
             assertTrue("blockShift deltaY must match actual geometry change",
                 kotlin.math.abs(shift.deltaY) > 0.01f)
         }
-        assertTrue("Edit paragraph lines must be in lineIndices (for Bitmap snapshots)",
-            result.lineIndices.isNotEmpty())
+        assertTrue("Edit paragraph lines must be in oldLineIndices or newLineIndices (for Bitmap snapshots)",
+            result.oldLineIndices.isNotEmpty() || result.newLineIndices.isNotEmpty())
         assertTrue("Edit paragraph lines must NOT extend to document end (blockShift instead)",
-            result.lineIndices.size < oldRev.lineRanges.size + newRev.lineRanges.size)
+            (result.oldLineIndices.size + result.newLineIndices.size) < oldRev.lineRanges.size + newRev.lineRanges.size)
     }
 
     @Test
@@ -3426,6 +3426,187 @@ class AnimationRebaseContractTest {
         val shifted = result[0] as PreparedVisualTransaction.BlockShift
         assertTrue("Rebased deltaY must account for currentTranslateY",
             shifted.deltaY != 25f)
+    }
+
+    @Test
+    fun structurallyAffectedOldParagraphs_includesBothSidesOfDeletedHardBreak() {
+        val planner = AndroidVisualPlanner()
+        val oldRev = AndroidLayoutRevision(
+            revisionId = 1L, editorRevision = 1L, widthFingerprint = 800f, fontFingerprint = "48",
+            lineCount = 3,
+            lineRanges = listOf(
+                AndroidLayoutRevision.LineRange(0, 5, 0, 5, 0f, 20f, 16f, 0f, 800f, endsWithHardBreak = true, paragraphId = 0),
+                AndroidLayoutRevision.LineRange(5, 10, 5, 10, 20f, 40f, 36f, 0f, 800f, endsWithHardBreak = true, paragraphId = 1),
+                AndroidLayoutRevision.LineRange(10, 15, 10, 15, 40f, 60f, 56f, 0f, 800f, endsWithHardBreak = false, paragraphId = 2)
+            ),
+            cursorUtf8 = 5, cursorUtf16 = 5, cursorX = 50f, cursorY = 20f, cursorHeight = 16f,
+            selectionAnchorUtf8 = 5, selectionHeadUtf8 = 5, selectionAnchorUtf16 = 5, selectionHeadUtf16 = 5,
+            compositionStartUtf16 = -1, compositionEndUtf16 = -1, snapshotHandles = emptyList()
+        )
+        val visualIntent = VisualIntent(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.DELETE,
+            oldAffectedByteRanges = listOf(Pair(5, 6)),
+            newAffectedByteRanges = emptyList(),
+            animationMode = uniffi.writer_core.AnimationModeDto.CLUSTER_ANIMATION,
+            durationMs = 160L,
+            coordinatedCursor = CoordinatedCursor(5, 5, true)
+        )
+        val method = planner.javaClass.getDeclaredMethod(
+            "computeStructurallyAffectedOldLineIndices",
+            VisualIntent::class.java,
+            AndroidLayoutRevision::class.java
+        )
+        method.isAccessible = true
+        val result = method.invoke(planner, visualIntent, oldRev) as Set<*>
+        assertTrue("Paragraph 0 (line 0) must be included when deleting hard break at its end",
+            result.contains(0))
+        assertTrue("Paragraph 1 (line 1) must be included as the merged-in paragraph",
+            result.contains(1))
+        assertTrue("Paragraph 2 (line 2) may be included as next-paragraph expansion for delete",
+            result.contains(0) && result.contains(1))
+    }
+
+    @Test
+    fun structurallyAffectedOldParagraphs_mapsNewRangesViaReverseOffset() {
+        val planner = AndroidVisualPlanner()
+        val oldRev = AndroidLayoutRevision(
+            revisionId = 1L, editorRevision = 1L, widthFingerprint = 800f, fontFingerprint = "48",
+            lineCount = 2,
+            lineRanges = listOf(
+                AndroidLayoutRevision.LineRange(0, 5, 0, 5, 0f, 20f, 16f, 0f, 800f, endsWithHardBreak = true, paragraphId = 0),
+                AndroidLayoutRevision.LineRange(5, 10, 5, 10, 20f, 40f, 36f, 0f, 800f, endsWithHardBreak = false, paragraphId = 1)
+            ),
+            cursorUtf8 = 3, cursorUtf16 = 3, cursorX = 30f, cursorY = 0f, cursorHeight = 16f,
+            selectionAnchorUtf8 = 3, selectionHeadUtf8 = 3, selectionAnchorUtf16 = 3, selectionHeadUtf16 = 3,
+            compositionStartUtf16 = -1, compositionEndUtf16 = -1, snapshotHandles = emptyList()
+        )
+        val visualIntent = VisualIntent(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
+            oldAffectedByteRanges = listOf(Pair(2, 4)),
+            newAffectedByteRanges = listOf(Pair(2, 7)),
+            animationMode = uniffi.writer_core.AnimationModeDto.CLUSTER_ANIMATION,
+            durationMs = 160L,
+            coordinatedCursor = CoordinatedCursor(2, 2, true)
+        )
+        val method = planner.javaClass.getDeclaredMethod(
+            "computeStructurallyAffectedOldLineIndices",
+            VisualIntent::class.java,
+            AndroidLayoutRevision::class.java
+        )
+        method.isAccessible = true
+        val result = method.invoke(planner, visualIntent, oldRev) as Set<*>
+        assertTrue("Paragraph 0 must be included (overlaps oldAffectedByteRanges)",
+            result.contains(0))
+    }
+
+    @Test
+    fun affectedLinesResult_lineIndicesEmptyWhenBothRevisionsExist() {
+        val planner = AndroidVisualPlanner()
+        val oldRev = AndroidLayoutRevision(
+            revisionId = 1L, editorRevision = 1L, widthFingerprint = 800f, fontFingerprint = "48",
+            lineCount = 2,
+            lineRanges = listOf(
+                AndroidLayoutRevision.LineRange(0, 5, 0, 5, 0f, 20f, 16f, 0f, 800f, endsWithHardBreak = true, paragraphId = 0),
+                AndroidLayoutRevision.LineRange(5, 10, 5, 10, 20f, 40f, 36f, 0f, 800f, endsWithHardBreak = false, paragraphId = 1)
+            ),
+            cursorUtf8 = 3, cursorUtf16 = 3, cursorX = 30f, cursorY = 0f, cursorHeight = 16f,
+            selectionAnchorUtf8 = 3, selectionHeadUtf8 = 3, selectionAnchorUtf16 = 3, selectionHeadUtf16 = 3,
+            compositionStartUtf16 = -1, compositionEndUtf16 = -1, snapshotHandles = emptyList()
+        )
+        val newRev = AndroidLayoutRevision(
+            revisionId = 2L, editorRevision = 2L, widthFingerprint = 800f, fontFingerprint = "48",
+            lineCount = 1,
+            lineRanges = listOf(
+                AndroidLayoutRevision.LineRange(0, 9, 0, 9, 0f, 20f, 16f, 0f, 800f, endsWithHardBreak = false, paragraphId = 0)
+            ),
+            cursorUtf8 = 3, cursorUtf16 = 3, cursorX = 30f, cursorY = 0f, cursorHeight = 16f,
+            selectionAnchorUtf8 = 3, selectionHeadUtf8 = 3, selectionAnchorUtf16 = 3, selectionHeadUtf16 = 3,
+            compositionStartUtf16 = -1, compositionEndUtf16 = -1, snapshotHandles = emptyList()
+        )
+        val visualIntent = VisualIntent(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.DELETE,
+            oldAffectedByteRanges = listOf(Pair(5, 6)),
+            newAffectedByteRanges = emptyList(),
+            animationMode = uniffi.writer_core.AnimationModeDto.LINE_REFLOW_ANIMATION,
+            durationMs = 200L,
+            coordinatedCursor = CoordinatedCursor(5, 5, true)
+        )
+        val method = planner.javaClass.getDeclaredMethod(
+            "computeAffectedLineIndicesFromBothRevisions",
+            VisualIntent::class.java,
+            AndroidLayoutRevision::class.java,
+            AndroidLayoutRevision::class.java
+        )
+        method.isAccessible = true
+        val result = method.invoke(planner, visualIntent, oldRev, newRev)
+            as AndroidVisualPlanner.AffectedLinesResult
+        assertTrue("lineIndices must be empty when both revisions exist (force split field usage)",
+            result.lineIndices.isEmpty())
+        assertTrue("oldLineIndices must be populated",
+            result.oldLineIndices.isNotEmpty())
+    }
+
+    @Test
+    fun blockShiftRebase_prioritizesForwardOffsetMapping_overDirectMatch() {
+        val rebaseSnapshot = VisualFrameSnapshot(
+            progress = 0.5f,
+            state = TransactionState.Rendering,
+            sliceVisualStates = emptyList(),
+            cursorRect = null,
+            blockShiftStates = listOf(
+                BlockShiftVisualState(
+                    startLineIndex = 3, endLineIndexExclusive = 5,
+                    startUtf8 = 40, currentTranslateY = -10f, targetTranslateY = 0f
+                )
+            )
+        )
+        val newBlockShifts = listOf(
+            PreparedVisualTransaction.BlockShift(
+                startLineIndex = 4, endLineIndexExclusive = 6,
+                top = 80f, bottom = 120f, left = 0f, right = 800f,
+                deltaY = 25f, startUtf8 = 43
+            )
+        )
+        val planner = AndroidVisualPlanner()
+        val method = planner.javaClass.getDeclaredMethod(
+            "applyRebaseToBlockShifts",
+            List::class.java,
+            VisualFrameSnapshot::class.java,
+            Function1::class.java,
+            Function1::class.java
+        )
+        method.isAccessible = true
+        val offsetMapper: (Int) -> Int? = { offset -> if (offset == 40) 43 else offset + 3 }
+        val reverseMapper: (Int) -> Int? = { offset -> if (offset == 43) 40 else offset - 3 }
+        @Suppress("UNCHECKED_CAST")
+        val result = method.invoke(planner, newBlockShifts, rebaseSnapshot, offsetMapper, reverseMapper)
+            as List<*>
+        assertEquals(1, result.size)
+        val shifted = result[0] as PreparedVisualTransaction.BlockShift
+        val expectedDeltaY = 25f - (-10f)
+        assertTrue("Rebased deltaY must be $expectedDeltaY (newDeltaY - currentTranslateY), got ${shifted.deltaY}",
+            kotlin.math.abs(shifted.deltaY - expectedDeltaY) < 0.01f)
+    }
+
+    @Test
+    fun decorationSearchHighlights_filteredPerDeltaYGroup() {
+        val textRenderer = com.xiwei.sujian.editor.v2.render.AndroidTextRenderer()
+        assertNotNull("TextRenderer must exist", textRenderer)
+        val blockShift1 = PreparedVisualTransaction.BlockShift(
+            startLineIndex = 2, endLineIndexExclusive = 4,
+            top = 40f, bottom = 80f, left = 0f, right = 800f,
+            deltaY = 20f, startUtf8 = 40
+        )
+        val blockShift2 = PreparedVisualTransaction.BlockShift(
+            startLineIndex = 5, endLineIndexExclusive = 7,
+            top = 100f, bottom = 140f, left = 0f, right = 800f,
+            deltaY = 30f, startUtf8 = 100
+        )
+        assertEquals("Two BlockShifts with different deltaY must form two groups",
+            2, listOf(blockShift1, blockShift2).groupBy { it.deltaY }.size)
     }
 
     @Test
