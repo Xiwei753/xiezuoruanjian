@@ -545,12 +545,12 @@ class AndroidEditorPipeline private constructor(
         // Without this condition, a pure BlockShift (e.g. inserting a line that pushes all
         // subsequent paragraphs down) would render without the translation animation.
         if (transaction != null && (transaction.animatedSlices.isNotEmpty() || transaction.blockShifts.isNotEmpty())) {
-            textRenderer.drawSearchHighlights(canvas, layout, frame.searchHighlightsUtf16)
-            textRenderer.drawSelectionHighlight(canvas, layout, frame.selectionStartUtf16, frame.selectionEndUtf16)
+            textRenderer.drawSearchHighlights(canvas, layout, frame.searchHighlightsUtf16, frame.blockShifts, frame.progress)
+            textRenderer.drawSelectionHighlight(canvas, layout, frame.selectionStartUtf16, frame.selectionEndUtf16, frame.blockShifts, frame.progress)
             val animatedRegions = animationRenderer.computeAnimatedSliceRegions(transaction)
             textRenderer.drawStaticTextWithHoles(canvas, layout, animatedRegions, frame.blockShifts, frame.progress)
             animationRenderer.drawAnimatedSlices(canvas, transaction, frame.progress)
-            textRenderer.drawPreeditUnderline(canvas, layout, frame.compositionStartUtf16, frame.compositionEndUtf16)
+            textRenderer.drawPreeditUnderline(canvas, layout, frame.compositionStartUtf16, frame.compositionEndUtf16, frame.blockShifts, frame.progress)
 
             val ct = transaction.cursorTransition
             if (ct != null && ct.shouldAnimate) {

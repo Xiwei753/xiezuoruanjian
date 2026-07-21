@@ -33,25 +33,49 @@ class AndroidTextRenderer {
         canvas.drawColor(backgroundColor)
     }
 
-    fun drawSearchHighlights(canvas: Canvas, layout: android.text.Layout, highlights: List<Pair<Int, Int>>) {
+    fun drawSearchHighlights(canvas: Canvas, layout: android.text.Layout, highlights: List<Pair<Int, Int>>, blockShifts: List<com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction.BlockShift> = emptyList(), progress: Float = 1f) {
         if (highlights.isEmpty()) return
+        if (blockShifts.isEmpty() || progress >= 1f) {
+            drawSearchHighlightsUnshifted(canvas, layout, highlights)
+            return
+        }
+        val shiftedLineRanges = blockShifts.flatMap { shift -> shift.startLineIndex until shift.endLineIndexExclusive }.toSet()
+        val unshiftedHighlights = mutableListOf<Pair<Int, Int>>()
+        val shiftedHighlights = mutableListOf<Pair<Int, Int>>()
+        for ((startUtf16, endUtf16) in highlights) {
+            val startLine = layout.getLineForOffset(startUtf16)
+            val endLine = layout.getLineForOffset(endUtf16)
+            val anyShifted = (startLine..endLine).any { it in shiftedLineRanges }
+            if (anyShifted) {
+                shiftedHighlights.add(Pair(startUtf16, endUtf16))
+            } else {
+                unshiftedHighlights.add(Pair(startUtf16, endUtf16))
+            }
+        }
+        drawSearchHighlightsUnshifted(canvas, layout, unshiftedHighlights)
+        val groupedByDeltaY = blockShifts.groupBy { it.deltaY }
+        for ((deltaY, group) in groupedByDeltaY) {
+            val currentDeltaY = deltaY * (progress - 1f)
+            canvas.save()
+            canvas.translate(0f, currentDeltaY)
+            val clipPath = Path()
+            for (shift in group) {
+                clipPath.addRect(shift.left, shift.top, shift.right, shift.bottom, Path.Direction.CW)
+            }
+            canvas.clipPath(clipPath)
+            drawSearchHighlightsUnshifted(canvas, layout, shiftedHighlights)
+            canvas.restore()
+        }
+    }
+
+    private fun drawSearchHighlightsUnshifted(canvas: Canvas, layout: android.text.Layout, highlights: List<Pair<Int, Int>>) {
         for ((startUtf16, endUtf16) in highlights) {
             val startLine = layout.getLineForOffset(startUtf16)
             val endLine = layout.getLineForOffset(endUtf16)
             for (line in startLine..endLine) {
                 val hlStart = if (line == startLine) startUtf16 else layout.getLineStart(line)
-                // getLineEnd returns an exclusive boundary (one past the last character).
-                // For multi-line highlights, the intermediate lines use getLineEnd directly
-                // because the highlight covers the entire line. For the last line, hlEnd is
-                // the highlight's end offset, which is also exclusive — so hlEnd - 1 is the
-                // last character's index, which is what getPrimaryHorizontal expects.
                 val hlEnd = if (line == endLine) endUtf16 else layout.getLineEnd(line)
                 val left = layout.getPrimaryHorizontal(hlStart)
-                // -1 because hlEnd is exclusive (from getLineEnd or the highlight range):
-                // getPrimaryHorizontal expects a character index, not a boundary position.
-                // Using hlEnd directly would read the first character of the next line
-                // (for getLineEnd) or one past the highlighted range, producing an incorrect
-                // right edge that extends beyond the actual highlight.
                 val right = layout.getPrimaryHorizontal(hlEnd - 1)
                 val top = layout.getLineTop(line).toFloat()
                 val bottom = layout.getLineBottom(line).toFloat()
@@ -60,8 +84,37 @@ class AndroidTextRenderer {
         }
     }
 
-    fun drawSelectionHighlight(canvas: Canvas, layout: android.text.Layout, selStart: Int, selEnd: Int) {
+    fun drawSelectionHighlight(canvas: Canvas, layout: android.text.Layout, selStart: Int, selEnd: Int, blockShifts: List<com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction.BlockShift> = emptyList(), progress: Float = 1f) {
         if (selStart == selEnd) return
+        if (blockShifts.isEmpty() || progress >= 1f) {
+            drawSelectionHighlightUnshifted(canvas, layout, selStart, selEnd)
+            return
+        }
+        val shiftedLineRanges = blockShifts.flatMap { shift -> shift.startLineIndex until shift.endLineIndexExclusive }.toSet()
+        val startLine = layout.getLineForOffset(selStart)
+        val endLine = layout.getLineForOffset(selEnd)
+        val anyShifted = (startLine..endLine).any { it in shiftedLineRanges }
+        if (!anyShifted) {
+            drawSelectionHighlightUnshifted(canvas, layout, selStart, selEnd)
+            return
+        }
+        drawSelectionHighlightUnshifted(canvas, layout, selStart, selEnd)
+        val groupedByDeltaY = blockShifts.groupBy { it.deltaY }
+        for ((deltaY, group) in groupedByDeltaY) {
+            val currentDeltaY = deltaY * (progress - 1f)
+            canvas.save()
+            canvas.translate(0f, currentDeltaY)
+            val clipPath = Path()
+            for (shift in group) {
+                clipPath.addRect(shift.left, shift.top, shift.right, shift.bottom, Path.Direction.CW)
+            }
+            canvas.clipPath(clipPath)
+            drawSelectionHighlightUnshifted(canvas, layout, selStart, selEnd)
+            canvas.restore()
+        }
+    }
+
+    private fun drawSelectionHighlightUnshifted(canvas: Canvas, layout: android.text.Layout, selStart: Int, selEnd: Int) {
         val startLine = layout.getLineForOffset(selStart)
         val endLine = layout.getLineForOffset(selEnd)
         for (line in startLine..endLine) {
@@ -159,8 +212,37 @@ class AndroidTextRenderer {
         }
     }
 
-    fun drawPreeditUnderline(canvas: Canvas, layout: android.text.Layout, compStart: Int, compEnd: Int) {
+    fun drawPreeditUnderline(canvas: Canvas, layout: android.text.Layout, compStart: Int, compEnd: Int, blockShifts: List<com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction.BlockShift> = emptyList(), progress: Float = 1f) {
         if (compStart < 0 || compEnd < 0 || compStart >= compEnd) return
+        if (blockShifts.isEmpty() || progress >= 1f) {
+            drawPreeditUnderlineUnshifted(canvas, layout, compStart, compEnd)
+            return
+        }
+        val shiftedLineRanges = blockShifts.flatMap { shift -> shift.startLineIndex until shift.endLineIndexExclusive }.toSet()
+        val startLine = layout.getLineForOffset(compStart)
+        val endLine = layout.getLineForOffset(compEnd)
+        val anyShifted = (startLine..endLine).any { it in shiftedLineRanges }
+        if (!anyShifted) {
+            drawPreeditUnderlineUnshifted(canvas, layout, compStart, compEnd)
+            return
+        }
+        drawPreeditUnderlineUnshifted(canvas, layout, compStart, compEnd)
+        val groupedByDeltaY = blockShifts.groupBy { it.deltaY }
+        for ((deltaY, group) in groupedByDeltaY) {
+            val currentDeltaY = deltaY * (progress - 1f)
+            canvas.save()
+            canvas.translate(0f, currentDeltaY)
+            val clipPath = Path()
+            for (shift in group) {
+                clipPath.addRect(shift.left, shift.top, shift.right, shift.bottom, Path.Direction.CW)
+            }
+            canvas.clipPath(clipPath)
+            drawPreeditUnderlineUnshifted(canvas, layout, compStart, compEnd)
+            canvas.restore()
+        }
+    }
+
+    private fun drawPreeditUnderlineUnshifted(canvas: Canvas, layout: android.text.Layout, compStart: Int, compEnd: Int) {
         val startLine = layout.getLineForOffset(compStart)
         val endLine = layout.getLineForOffset(compEnd)
         for (line in startLine..endLine) {
