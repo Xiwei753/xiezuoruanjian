@@ -1,5 +1,10 @@
 use serde::{Deserialize, Serialize};
 
+/// 同步错误分类 — 纯枚举，不携带可变文案。
+///
+/// 平台端通过 `to_ui_status()` 和 `to_message_key()` 做错误分类和 i18n 映射，
+/// 不得依赖错误文案的包含关系作为主判断（见 AGENTS.md）。
+/// `from_code()` 将字符串反序列化回枚举，未知 code 统一映射为 `Other`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
@@ -143,6 +148,7 @@ impl SyncErrorCategory {
     }
 }
 
+/// 同步后端类型 — 当前仅支持 GitHub API，Git SSH 为预留。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
@@ -152,6 +158,7 @@ pub enum BackendType {
     GithubApi,
 }
 
+/// 同步传输方式 — HTTPS token 或 SSH deploy key。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum SyncTransport {
@@ -159,6 +166,13 @@ pub enum SyncTransport {
     SshDeployKey,
 }
 
+/// 首次同步模式 — 记录工作区与远端仓库的初始关系。
+///
+/// - CloneIntoEmptyWorkspace：远端有内容，本地为空，直接 clone。
+/// - InitExistingWorkspace：本地已有内容，远端为空，push 本地内容。
+/// - AlreadyGitRepo：本地已是 git 仓库，直接 fetch+merge。
+/// - BlockedNonEmptyRemote：双方都有内容且无共同祖先，需用户决策。
+/// - UnrelatedHistories：git merge 时遇到 unrelated histories。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum FirstSyncMode {
@@ -171,6 +185,10 @@ pub enum FirstSyncMode {
     UnrelatedHistories,
 }
 
+/// 同步配置 — 持久化为 `app-meta/sync/config.json`，UI 层读写。
+///
+/// 非线程安全：只在主线程读写，同步引擎在同步期间持有快照。
+/// `sync_interval_seconds` 最小有效值为 60（引擎侧 clamp），0 表示仅手动同步。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncConfig {
     pub enabled: bool,
@@ -205,12 +223,21 @@ pub(crate) fn default_branch() -> String {
     "main".to_string()
 }
 
+/// 同步密钥 — 敏感凭证，不持久化到 config.json，由平台端安全存储注入。
+///
+/// `token`：GitHub personal access token（HTTPS 模式）。
+/// `ssh_private_key`：SSH deploy key（SSH 模式，当前未使用）。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SyncSecrets {
     pub token: Option<String>,
     pub ssh_private_key: Option<String>,
 }
 
+/// 同步状态 — UI 展示和引擎内部共用的终端状态枚举。
+///
+/// `RecoverableError`：网络/限流等临时错误，下次自动重试可恢复。
+/// `FatalError`：认证/权限等不可自动恢复的错误，需用户干预。
+/// `LatestWinsApplied`：LWW 决胜后自动应用了较新版本（仅 Metadata/GeneratedCache）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum SyncStatus {
@@ -229,6 +256,10 @@ pub enum SyncStatus {
     LatestWinsApplied,
 }
 
+/// 设置键冲突详情 — 逐键语义合并时双方都修改了同一 key。
+///
+/// `local_value`/`remote_value` 为 JSON 值，一方删除时对应 `Value::Null`。
+/// UI 展示冲突时使用此结构，用户选择 keep local / take remote / mark merged。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SettingConflictDetail {
     pub key: String,
@@ -236,6 +267,11 @@ pub struct SettingConflictDetail {
     pub remote_value: serde_json::Value,
 }
 
+/// 同步文件操作分类。
+///
+/// - Upload：本地较新或仅本地存在，需上传。
+/// - Ignore：双方相同或本地未变更，跳过。
+/// - ConflictCandidate：BothChanged，需走冲突解决流程。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum SyncKind {
@@ -244,6 +280,10 @@ pub enum SyncKind {
     ConflictCandidate,
 }
 
+/// 同步扫描结果中的单条文件记录 — 本地文件的快照信息。
+///
+/// `file_hash` 为 MD5 十六进制摘要。`modified_time` 为 Unix 毫秒时间戳。
+/// `sync_kind` 由扫描阶段根据 known_files 初步判定，后续由三路/LWW 比较可能调整。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncFileEntry {
     pub relative_path: String,
@@ -253,6 +293,10 @@ pub struct SyncFileEntry {
     pub sync_kind: SyncKind,
 }
 
+/// 同步冲突记录 — 描述一个 BothChanged 路径的双方版本信息。
+///
+/// `base_hash` 为三路比较的基准哈希（上次同步后的共识版本）。
+/// 冲突解决前，该路径在 `SyncState.conflicted_files` 中，同步引擎跳过自动处理。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncConflict {
     pub local_path: String,
@@ -264,6 +308,10 @@ pub struct SyncConflict {
     pub description: String,
 }
 
+/// 同步诊断结果 — 逐步检查网络、认证、仓库、分支的可达性。
+///
+/// 每一步的 `*_ok` 布尔值和 `*_status` 字符串独立记录，
+/// UI 可按步骤展示诊断链路。`remote_url_sanitized` 已去除凭证信息，可安全展示。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncDiagnosticsResult {
     pub success: bool,
@@ -321,6 +369,11 @@ impl SyncDiagnosticsResult {
     }
 }
 
+/// 同步冲突摘要 — 供 UI 展示冲突状态和下一步操作建议。
+///
+/// `local_dirty`/`remote_changed` 标识双方是否有未提交变更。
+/// `conflicted_files` 为具体冲突路径列表（可能为空，此时 local_dirty 兜底填充）。
+/// `safe_next_steps` 为用户可执行的操作建议。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncConflictSummary {
     pub status: String,
@@ -331,6 +384,12 @@ pub struct SyncConflictSummary {
     pub safe_next_steps: Vec<String>,
 }
 
+/// 同步结果 — 一次 `perform_sync` 的完整输出。
+///
+/// `status` 是终端状态（Success/Conflict/Error 等），其余字段提供详情。
+/// `uploaded_files` / `downloaded_files` / `ignored_files` 仅在 Success 时有意义。
+/// `conflicts` 仅在 Conflict/PartialConflict 时非空。
+/// `overwritten_files` 记录 LWW 决胜中被覆盖的一方（仅 Metadata/GeneratedCache）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncResult {
     pub status: SyncStatus,
@@ -421,6 +480,13 @@ fn sync_error_category_to_message_key(category: &str) -> String {
     cat.to_message_key().to_string()
 }
 
+/// 同步计划 — 三路/LWW 比较后、实际执行前的文件操作清单。
+///
+/// `files_to_upload`：本地较新需上传的文件。
+/// `files_to_download`：远端较新需下载的文件。
+/// `files_to_delete_local`：远端已删除、本地需移至 trash 的文件。
+/// `files_to_delete_remote`：本地已删除、需从远端删除的文件。
+/// `conflicts`：BothChanged 且未自动解决的路径，等待用户决策。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncPlan {
     pub files_to_upload: Vec<String>,
@@ -455,7 +521,9 @@ impl SyncPlan {
 ///
 /// `op` 区分 upsert（新增/修改）和 delete（删除）两种操作。
 /// `content_hash` 为 MD5 十六进制摘要，用于三路比较和变更检测。
-/// `deleted_at_ms` 仅在 `op == "delete"` 时有值，记录精确的删除时间戳。
+/// `deleted_at_ms` 仅在 `op == "delete"` 时有值，记录精确的删除时间戳，
+/// 优先于 `updated_at_ms` 作为 LWW 比较时间（见 `lww_record_time`）。
+/// `device_id` 用于 LWW 平局决胜：时间戳相同时字典序大的 device_id 获胜。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManifestFileRecord {
     pub path: String,
@@ -473,6 +541,10 @@ fn default_schema_version() -> u32 {
     1
 }
 
+/// 同步清单 — 持久化为 `app-meta/sync/manifest.sync.json`，记录所有已同步文件的元数据。
+///
+/// 本地和远端各维护一份 manifest，同步时交换比较。
+/// `files` 中的 `content_hash` 用于三路比较和变更检测。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SyncManifest {
     pub files: Vec<ManifestFileRecord>,
@@ -482,6 +554,7 @@ pub struct SyncManifest {
 ///
 /// 本地删除文件后不立即从 known_files 移除，而是创建墓碑，
 /// 使下次同步能向远端发送 delete 操作。`purge_after` 过期后墓碑被清理。
+/// `kind` 区分本地主动删除（local_delete）和远端删除同步到本地（remote_delete）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tombstone {
     pub original_path: String,
@@ -494,6 +567,8 @@ pub struct Tombstone {
 }
 
 /// 同步持久状态，保存为 `app-meta/sync/state.json`。
+///
+/// 非线程安全：只在同步引擎主路径读写，同步期间持有独占可变引用。
 ///
 /// `known_files` 记录上次同步后双方共识的文件哈希（base_hash），
 /// 是三路比较的基准：known_files[path] == base_hash。

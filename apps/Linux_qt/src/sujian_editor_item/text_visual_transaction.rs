@@ -239,7 +239,10 @@ impl PreparedTextVisualTransaction {
 ///
 /// 冲突判断基于 byte range 与仍活跃的视觉资源，不是简单"新输入清空旧动画"：
 /// 新事务的 byte range 与现有事务的 slices/patches 有重叠时，先从旧事务的当前视觉帧
-/// rebase，再取消旧事务，保证连续输入无跳变。
+/// rebase（保证连续输入无跳变），再取消旧事务。
+///
+/// rebase 语义：新事务的 old_snapshot 取自被取消事务的当前视觉帧而非原始快照，
+/// 使动画起点与用户当前看到的画面一致。
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PreparedTransactionQueue {
     transactions: Vec<PreparedTextVisualTransaction>,

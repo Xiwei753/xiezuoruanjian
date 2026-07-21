@@ -103,6 +103,10 @@ impl ParagraphIndexMap {
     }
 }
 
+/// 全文级 UTF-16 code unit (QChar) offset → UTF-8 byte offset 转换。
+///
+/// 代理对中的低代理项（trailing surrogate）映射到该字符的 UTF-8 起始 byte offset，
+/// 与 ParagraphIndexMap 的行为一致。超出文本末尾的 offset 返回 `text.len()`。
 pub fn utf16_code_unit_to_utf8_byte(text: &str, qchar_offset: usize) -> usize {
     let mut utf16_offset: usize = 0;
     for (byte_pos, ch) in text.char_indices() {
@@ -118,6 +122,10 @@ pub fn utf16_code_unit_to_utf8_byte(text: &str, qchar_offset: usize) -> usize {
     text.len()
 }
 
+/// 全文级 UTF-16 code unit range → UTF-8 byte range 转换。
+///
+/// `qchar_length` 为 UTF-16 code unit 数量（非字符数），返回半开区间
+/// (byte_start, byte_end)。代理对中的低代理项按字符起始处理。
 pub fn utf16_code_unit_range_to_utf8_byte_range(
     text: &str,
     qchar_start: usize,

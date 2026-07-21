@@ -31,6 +31,10 @@ pub enum NormalizedTextInputEvent {
         text: String,
     },
     /// IME commit 带替换语义（fcitx5 拼音修正等）
+    ///
+    /// `replace_start` 和 `replace_length` 均为 UTF-16 code unit offset，
+    /// 由平台适配层在 normalize 阶段转换为 UTF-8 byte offset 后再进入编辑内核。
+    /// 负值 `replace_start` 表示从当前光标位置向前回退。
     ImeReplacementCommit {
         text: String,
         replace_start: i32,
@@ -102,9 +106,15 @@ pub trait TextInputAdapter {
     }
 
     /// UTF-16 offset → UTF-8 byte offset 转换（平台特定）
+    ///
+    /// `utf16_offset` 为 UTF-16 code unit 计数（即 QChar index / Java char offset），
+    /// 返回对应的 UTF-8 byte offset。代理对中的低代理项映射到字符起始 byte offset。
     fn utf16_to_utf8_offset(&self, text: &str, utf16_offset: usize) -> usize;
 
     /// UTF-8 byte offset → UTF-16 offset 转换（平台特定）
+    ///
+    /// `utf8_offset` 为 UTF-8 byte 计数，返回对应的 UTF-16 code unit 计数。
+    /// 多字节字符的中间 byte 位置映射到该字符起始的 UTF-16 offset。
     fn utf8_to_utf16_offset(&self, text: &str, utf8_offset: usize) -> usize;
 }
 

@@ -147,6 +147,13 @@ mod tests {
     }
 }
 
+/// 内容分类 — 决定同步策略。
+///
+/// - UserTextDocument：用户创作的文本（章节正文、笔记等），走三路比较，
+///   BothChanged 时记录冲突，不静默覆盖。
+/// - Metadata：项目/卷/章元数据 JSON，走 LWW 或逐键语义合并。
+/// - LocalOnly：本地专用数据（备份、app-meta 内部文件），不同步。
+/// - GeneratedCache：生成/缓存数据，LWW 可接受。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ContentClass {
     /// User-authored text: chapter.md, note.md, outline.md, scene.md, etc.
@@ -228,6 +235,9 @@ pub(crate) fn is_document_content_path(path: &str) -> bool {
 /// 以 `base_hash` 作为双方上次同步后的共识版本，比较 local 和 remote
 /// 各自是否相对 base 发生了变化。用于 UserTextDocument 类型的冲突检测：
 /// 仅一方修改时直接取修改方；双方都修改时返回 BothChanged，需走冲突解决流程。
+///
+/// 不变量：local_hash == remote_hash 时一定返回 NoConflict（即使两者都 != base），
+/// 因为内容相同无需选择。
 fn three_way_resolve(base_hash: &str, local_hash: &str, remote_hash: &str) -> ThreeWayResult {
     if local_hash == remote_hash {
         return ThreeWayResult::NoConflict;

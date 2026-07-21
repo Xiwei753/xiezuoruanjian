@@ -125,6 +125,12 @@ impl CommittedTextMirror {
     }
 }
 
+/// IME 组合输入状态 — 跟踪一次 composition 从 preedit 到 commit/cancel 的完整生命周期。
+///
+/// 生命周期：preedit 开始 → (多次 updatePreedit) → commit 或 cancel。
+/// composition_session 由 EditorKernel 在 beginComposition 时创建，包含 replace range
+/// 和 virtual text。commit 后 session 被清除，preedit 字段归零。
+/// suppress_next_ime_commit 用于抑制 fcitx5 等输入法在 cancel 后自动发送的冗余 commit。
 pub(crate) struct CompositionState {
     pub preedit_text: String,
     pub preedit_cursor: usize,
@@ -137,6 +143,10 @@ pub(crate) struct CompositionState {
     pub suppress_next_ime_commit: bool,
 }
 
+/// IME commit 参数 — 描述一次 composition 上屏的替换范围和原因。
+///
+/// `session_replace_start`/`session_replace_end` 为 composition session 记录的
+/// 原 preedit 占位范围（UTF-8 byte offset，半开区间），commit 时用上屏文本替换此范围。
 pub(crate) struct CompositionCommitParams {
     pub inserted_text: String,
     pub session_replace_start: usize,
@@ -144,6 +154,12 @@ pub(crate) struct CompositionCommitParams {
     pub cause: EditorTransactionCause,
 }
 
+/// IME commit 结果 — 记录一次 composition 上屏前后的 byte range 映射，
+/// 供动画协调器构建视觉事务。
+///
+/// 所有 byte range 均为 UTF-8 byte offset，半开区间 [start, end)。
+/// `candidate_*` 指上屏文本在 committed 文本中的位置；
+/// `committed_*` 指被替换的原 preedit 占位范围。
 pub(crate) struct CompositionCommitResult {
     pub pending_preedit_cursor_rect: Option<CursorRect>,
     pub was_composing: bool,
@@ -227,6 +243,10 @@ impl CompositionState {
     }
 }
 
+/// 视觉事务上下文 — 传递给布局引擎的渲染参数快照。
+///
+/// 每次布局重算时由平台端填充当前值。所有尺寸均为物理像素（已乘 dpr）。
+/// `scroll_y` 为文档坐标系中的滚动偏移，不含 viewport 顶部 padding。
 pub(crate) struct VisualTransactionContext {
     pub typing_animation_enabled: bool,
     pub is_scrolling: bool,
@@ -245,6 +265,16 @@ pub(crate) struct VisualTransactionContext {
     pub dpr: f64,
 }
 
+/// Linux 编辑器管线 — 组合 EditorKernel、CommittedTextMirror、CompositionState、
+/// 动画协调器和纹理缓存。
+///
+/// 双修订模型：
+/// - `text_revision`：文本内容变更时递增（insert/delete/undo/redo/load），
+///   触发布局重算。
+/// - `visual_revision`：任何需要重绘的变化时递增（含文本变更、光标移动、选区变化、
+///   preedit 更新等），比 text_revision 更频繁。
+///
+/// 所有 byte offset（cursor、selection_anchor、composition range）均为 UTF-8 byte offset。
 pub(crate) struct LinuxEditorPipeline {
     kernel: EditorKernel,
     mirror: CommittedTextMirror,

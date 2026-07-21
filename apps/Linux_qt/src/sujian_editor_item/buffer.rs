@@ -1,3 +1,7 @@
+/// 编辑器快照 — 旧版 EditorBuffer 的 undo/redo 记录单元。
+///
+/// cursor 和 selection_anchor 均为 UTF-8 byte offset。
+/// 当前主链使用 EditorKernel + CommittedTextMirror，此类型仅用于 legacy 路径。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EditorSnapshot {
     pub text: String,
@@ -5,6 +9,10 @@ pub struct EditorSnapshot {
     pub selection_anchor: usize,
 }
 
+/// 旧版编辑器缓冲区 — 不维护独立编辑真相，仅用于 Qt 侧的本地 undo/redo 栈。
+///
+/// 当前主链：EditorKernel 持有正文真相，CommittedTextMirror 增量同步。
+/// EditorBuffer 的 undo/redo 栈在 Editor V2 模式下不再使用。
 #[derive(Clone, Debug)]
 #[derive(Default)]
 pub struct EditorBuffer {
