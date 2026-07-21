@@ -32,6 +32,23 @@ class AnimationRebaseContractTest {
         )
     }
 
+    private fun makeSnapshotWithClusters(
+        id: Long, lineIndex: Int, byteStart: Int, byteEnd: Int,
+        clusters: List<LineClusterSnapshot>
+    ): AndroidLineSnapshot {
+        val bitmap = Bitmap.createBitmap(100, 20, Bitmap.Config.ARGB_8888)
+        return AndroidLineSnapshot(
+            snapshotId = id,
+            bitmap = bitmap,
+            lineIndex = lineIndex,
+            sourceRect = android.graphics.Rect(0, 0, 100, 20),
+            destinationRect = android.graphics.RectF(0f, lineIndex * 20f, 100f, (lineIndex + 1) * 20f),
+            documentByteStart = byteStart,
+            documentByteEndExclusive = byteEnd,
+            clusters = clusters
+        )
+    }
+
     private fun makeTransaction(
         transactionId: Long = 1L,
         slices: List<PreparedVisualTransaction.AnimatedSlice> = emptyList(),
@@ -1494,15 +1511,92 @@ class AnimationRebaseContractTest {
             coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(10, 10, true)
         )
         val oldSnapshots = mapOf(
-            0 to makeSnapshot(101, 0, 0, 20),
-            1 to makeSnapshot(102, 1, 20, 40),
-            2 to makeSnapshot(103, 2, 40, 60)
+            0 to makeSnapshotWithClusters(101, 0, 0, 20, listOf(
+                LineClusterSnapshot(clusterId = 0, documentByteStart = 0, documentByteEndExclusive = 10,
+                    documentUtf16Start = 0, documentUtf16EndExclusive = 10,
+                    sourceRectInLineImage = android.graphics.Rect(0, 0, 50, 20),
+                    visualRectInDocument = android.graphics.RectF(0f, 0f, 50f, 20f),
+                    shapingFingerprint = "fp0", shapingIdentityConfident = true),
+                LineClusterSnapshot(clusterId = 1, documentByteStart = 10, documentByteEndExclusive = 20,
+                    documentUtf16Start = 10, documentUtf16EndExclusive = 20,
+                    sourceRectInLineImage = android.graphics.Rect(50, 0, 100, 20),
+                    visualRectInDocument = android.graphics.RectF(50f, 0f, 100f, 20f),
+                    shapingFingerprint = "fp1", shapingIdentityConfident = true)
+            )),
+            1 to makeSnapshotWithClusters(102, 1, 20, 40, listOf(
+                LineClusterSnapshot(clusterId = 2, documentByteStart = 20, documentByteEndExclusive = 30,
+                    documentUtf16Start = 20, documentUtf16EndExclusive = 30,
+                    sourceRectInLineImage = android.graphics.Rect(0, 0, 50, 20),
+                    visualRectInDocument = android.graphics.RectF(0f, 20f, 50f, 40f),
+                    shapingFingerprint = "fp2", shapingIdentityConfident = true),
+                LineClusterSnapshot(clusterId = 3, documentByteStart = 30, documentByteEndExclusive = 40,
+                    documentUtf16Start = 30, documentUtf16EndExclusive = 40,
+                    sourceRectInLineImage = android.graphics.Rect(50, 0, 100, 20),
+                    visualRectInDocument = android.graphics.RectF(50f, 20f, 100f, 40f),
+                    shapingFingerprint = "fp3", shapingIdentityConfident = true)
+            )),
+            2 to makeSnapshotWithClusters(103, 2, 40, 60, listOf(
+                LineClusterSnapshot(clusterId = 4, documentByteStart = 40, documentByteEndExclusive = 50,
+                    documentUtf16Start = 40, documentUtf16EndExclusive = 50,
+                    sourceRectInLineImage = android.graphics.Rect(0, 0, 50, 20),
+                    visualRectInDocument = android.graphics.RectF(0f, 40f, 50f, 60f),
+                    shapingFingerprint = "fp4", shapingIdentityConfident = true),
+                LineClusterSnapshot(clusterId = 5, documentByteStart = 50, documentByteEndExclusive = 60,
+                    documentUtf16Start = 50, documentUtf16EndExclusive = 60,
+                    sourceRectInLineImage = android.graphics.Rect(50, 0, 100, 20),
+                    visualRectInDocument = android.graphics.RectF(50f, 40f, 100f, 60f),
+                    shapingFingerprint = "fp5", shapingIdentityConfident = true)
+            ))
         )
         val newSnapshots = mapOf(
-            0 to makeSnapshot(201, 0, 0, 15),
-            1 to makeSnapshot(202, 1, 15, 30),
-            2 to makeSnapshot(203, 2, 30, 40),
-            3 to makeSnapshot(204, 3, 40, 60)
+            0 to makeSnapshotWithClusters(201, 0, 0, 15, listOf(
+                LineClusterSnapshot(clusterId = 10, documentByteStart = 0, documentByteEndExclusive = 10,
+                    documentUtf16Start = 0, documentUtf16EndExclusive = 10,
+                    sourceRectInLineImage = android.graphics.Rect(0, 0, 50, 20),
+                    visualRectInDocument = android.graphics.RectF(0f, 0f, 50f, 20f),
+                    shapingFingerprint = "fp0", shapingIdentityConfident = true),
+                LineClusterSnapshot(clusterId = 11, documentByteStart = 10, documentByteEndExclusive = 13,
+                    documentUtf16Start = 10, documentUtf16EndExclusive = 13,
+                    sourceRectInLineImage = android.graphics.Rect(50, 0, 65, 20),
+                    visualRectInDocument = android.graphics.RectF(50f, 0f, 65f, 20f),
+                    shapingFingerprint = "fp-insert", shapingIdentityConfident = true),
+                LineClusterSnapshot(clusterId = 12, documentByteStart = 13, documentByteEndExclusive = 15,
+                    documentUtf16Start = 13, documentUtf16EndExclusive = 15,
+                    sourceRectInLineImage = android.graphics.Rect(65, 0, 100, 20),
+                    visualRectInDocument = android.graphics.RectF(65f, 0f, 100f, 20f),
+                    shapingFingerprint = "fp1", shapingIdentityConfident = true)
+            )),
+            1 to makeSnapshotWithClusters(202, 1, 15, 30, listOf(
+                LineClusterSnapshot(clusterId = 13, documentByteStart = 15, documentByteEndExclusive = 20,
+                    documentUtf16Start = 15, documentUtf16EndExclusive = 20,
+                    sourceRectInLineImage = android.graphics.Rect(0, 0, 50, 20),
+                    visualRectInDocument = android.graphics.RectF(0f, 20f, 50f, 40f),
+                    shapingFingerprint = "fp2", shapingIdentityConfident = true),
+                LineClusterSnapshot(clusterId = 14, documentByteStart = 20, documentByteEndExclusive = 30,
+                    documentUtf16Start = 20, documentUtf16EndExclusive = 30,
+                    sourceRectInLineImage = android.graphics.Rect(50, 0, 100, 20),
+                    visualRectInDocument = android.graphics.RectF(50f, 20f, 100f, 40f),
+                    shapingFingerprint = "fp3", shapingIdentityConfident = true)
+            )),
+            2 to makeSnapshotWithClusters(203, 2, 30, 40, listOf(
+                LineClusterSnapshot(clusterId = 15, documentByteStart = 30, documentByteEndExclusive = 40,
+                    documentUtf16Start = 30, documentUtf16EndExclusive = 40,
+                    sourceRectInLineImage = android.graphics.Rect(0, 0, 100, 20),
+                    visualRectInDocument = android.graphics.RectF(0f, 40f, 100f, 60f),
+                    shapingFingerprint = "fp-extra", shapingIdentityConfident = true)
+            )),
+            3 to makeSnapshotWithClusters(204, 3, 40, 60, listOf(
+                LineClusterSnapshot(clusterId = 16, documentByteStart = 40, documentByteEndExclusive = 50,
+                    documentUtf16Start = 40, documentUtf16EndExclusive = 50,
+                    sourceRectInLineImage = android.graphics.Rect(0, 0, 50, 20),
+                    visualRectInDocument = android.graphics.RectF(0f, 60f, 50f, 80f),
+                    shapingFingerprint = "fp4", shapingIdentityConfident = true),
+                LineClusterSnapshot(clusterId = 17, documentByteStart = 50, documentByteEndExclusive = 60,
+                    documentUtf16Start = 50, documentUtf16EndExclusive = 60,
+                    sourceRectInLineImage = android.graphics.Rect(50, 0, 100, 20),
+                    visualRectInDocument = android.graphics.RectF(50f, 60f, 100f, 80f),
+                    shapingFingerprint = "fp5", shapingIdentityConfident = true)
+            ))
         )
         val planner = AndroidVisualPlanner()
         val transaction = planner.prepare(
@@ -1691,16 +1785,38 @@ class AnimationRebaseContractTest {
         )
         val visualIntent = VisualIntent(
             cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
-            operationKind = uniffi.writer_core.EditorOperationKindDto.INSERT,
-            oldAffectedByteRanges = emptyList(),
+            operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
+            oldAffectedByteRanges = listOf(Pair(10, 13)),
             newAffectedByteRanges = listOf(Pair(10, 13)),
             animationMode = uniffi.writer_core.AnimationModeDto.LINE_REFLOW_ANIMATION,
             durationMs = 160L,
             coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(10, 10, true)
         )
         val planner = AndroidVisualPlanner()
-        val oldSnapshots = mapOf(0 to makeSnapshot(101, 0, 0, 20))
-        val newSnapshots = mapOf(0 to makeSnapshot(201, 0, 0, 20))
+        val oldSnapshots = mapOf(0 to makeSnapshotWithClusters(101, 0, 0, 20, listOf(
+            LineClusterSnapshot(clusterId = 0, documentByteStart = 0, documentByteEndExclusive = 10,
+                documentUtf16Start = 0, documentUtf16EndExclusive = 10,
+                sourceRectInLineImage = android.graphics.Rect(0, 0, 50, 20),
+                visualRectInDocument = android.graphics.RectF(0f, 0f, 50f, 20f),
+                shapingFingerprint = "fp-old", shapingIdentityConfident = false),
+            LineClusterSnapshot(clusterId = 1, documentByteStart = 13, documentByteEndExclusive = 20,
+                documentUtf16Start = 13, documentUtf16EndExclusive = 20,
+                sourceRectInLineImage = android.graphics.Rect(50, 0, 100, 20),
+                visualRectInDocument = android.graphics.RectF(50f, 0f, 100f, 20f),
+                shapingFingerprint = "fp-old2", shapingIdentityConfident = false)
+        )))
+        val newSnapshots = mapOf(0 to makeSnapshotWithClusters(201, 0, 0, 20, listOf(
+            LineClusterSnapshot(clusterId = 10, documentByteStart = 0, documentByteEndExclusive = 10,
+                documentUtf16Start = 0, documentUtf16EndExclusive = 10,
+                sourceRectInLineImage = android.graphics.Rect(0, 0, 50, 20),
+                visualRectInDocument = android.graphics.RectF(0f, 0f, 48f, 20f),
+                shapingFingerprint = "fp-new", shapingIdentityConfident = false),
+            LineClusterSnapshot(clusterId = 11, documentByteStart = 13, documentByteEndExclusive = 20,
+                documentUtf16Start = 13, documentUtf16EndExclusive = 20,
+                sourceRectInLineImage = android.graphics.Rect(50, 0, 100, 20),
+                visualRectInDocument = android.graphics.RectF(48f, 0f, 100f, 20f),
+                shapingFingerprint = "fp-new2", shapingIdentityConfident = false)
+        )))
         val transaction = planner.prepare(
             visualIntent = visualIntent,
             oldRevision = oldRev,
