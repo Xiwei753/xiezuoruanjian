@@ -65,6 +65,10 @@ pub fn list_projects(workspace_path: &Path) -> Result<Vec<Project>> {
     Ok(projects)
 }
 
+/// 项目统计摘要。
+///
+/// `total_word_count` 为所有章节字数之和，`volume_count`/`chapter_count` 为直接子项计数。
+/// 计算需要遍历所有卷和章节目录，对大型项目有一定 I/O 开销。
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ProjectStats {
     pub total_word_count: u32,

@@ -1,3 +1,30 @@
+//! # 多文件事务写入
+//!
+//! 当一次保存需要同时写入多个文件（如章节正文 `chapter.md` + 元数据 `chapter.meta.json`）时，
+//! 使用本模块确保"全部成功或全部不变"。
+//!
+//! ## 两阶段提交协议
+//!
+//! 1. **暂存阶段**（`add_file`）：将每个文件内容写入事务目录下的临时文件
+//! 2. **提交阶段**（`commit`）：
+//!    a. 写入 `manifest.json`（记录每个暂存文件到目标路径的映射）
+//!    b. 逐个 `fs::rename` 暂存文件到最终目标路径
+//!    c. 写入 `committed` 标记文件
+//!    d. 清理事务目录
+//!
+//! ## 崩溃恢复
+//!
+//! 启动时调用 `recover_pending_transactions`：
+//! - 存在 `committed` 标记 → 事务已完成，清理目录
+//! - 存在 `manifest.json` 但无 `committed` → 事务中断，尝试将暂存文件重命名到目标路径
+//! - 两者都不存在 → 无效事务目录，直接清理
+//!
+//! ## 不变量
+//!
+//! - `committed` 标记存在意味着所有 `rename` 已完成；恢复时只需清理
+//! - 无 `committed` 标记时，`manifest.json` 记录了完整的暂存→目标映射，可部分恢复
+//! - `Drop` 实现只在 `committed == true` 时清理，未提交的事务目录留给恢复流程处理
+
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,6 +49,10 @@ pub struct TransactionEntry {
     pub target_relative: String,
 }
 
+/// 多文件保存事务。
+///
+/// 生命周期：`new` → `add_file`×N → `commit`。
+/// `Drop` 只在 `committed == true` 时清理事务目录；未提交的事务留给 `recover_pending_transactions`。
 pub struct SaveTransaction {
     workspace_path: PathBuf,
     transaction_id: String,
@@ -66,6 +97,7 @@ impl SaveTransaction {
             return Ok(());
         }
 
+        // 写入 manifest：记录暂存文件名 → 目标相对路径的映射，供崩溃恢复使用
         let manifest = TransactionManifest {
             transaction_id: self.transaction_id.clone(),
             created_at_ms: chrono::Utc::now().timestamp_millis(),
@@ -75,6 +107,9 @@ impl SaveTransaction {
         let manifest_path = self.tx_dir.join(MANIFEST_FILENAME);
         crate::storage::atomic_write_string(&manifest_path, &manifest_json)?;
 
+        // 逐个 rename 暂存文件到最终目标路径。
+        // rename 在同一文件系统上是原子的，但跨 N 个文件不保证原子性；
+        // committed 标记在全部 rename 完成后才写入，恢复时据此判断。
         let mut created_dirs = std::collections::HashSet::new();
         for entry in &self.entries {
             let staging_path = self.tx_dir.join(&entry.staging_filename);
@@ -88,6 +123,7 @@ impl SaveTransaction {
             fs::rename(&staging_path, &target_path)?;
         }
 
+        // committed 标记是事务完成的唯一判据：存在即表示所有 rename 已成功
         let commit_marker = self.tx_dir.join(COMMIT_MARKER);
         let _ = fs::write(&commit_marker, b"ok");
 
@@ -103,12 +139,20 @@ impl SaveTransaction {
 
 impl Drop for SaveTransaction {
     fn drop(&mut self) {
+        // 只在已提交时清理。未提交的事务目录留给 recover_pending_transactions 处理，
+        // 避免在 Drop 中意外删除可能需要恢复的暂存文件。
         if self.committed {
             self.cleanup();
         }
     }
 }
 
+/// 扫描事务目录，恢复未完成的事务。
+///
+/// 判定逻辑：
+/// - `committed` 标记存在 → 事务已成功完成，清理目录
+/// - `manifest.json` 存在但无 `committed` → 中断的事务，尝试将暂存文件 rename 到目标
+/// - 两者都不存在 → 无效目录，清理
 pub fn recover_pending_transactions(workspace_path: &Path) -> Vec<TransactionRecovery> {
     let tx_base = workspace_path.join(TRANSACTIONS_DIR);
     if !tx_base.exists() {

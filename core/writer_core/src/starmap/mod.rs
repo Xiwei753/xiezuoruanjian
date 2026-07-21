@@ -24,6 +24,13 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
+/// 星图元数据。
+///
+/// 每个星图同时维护两份持久化：
+/// 1. 独立元数据文件 `app-meta/starmaps/{id}.meta.json`
+/// 2. 全局索引 `app-meta/starmaps/index.json` 中的条目
+///
+/// 两份数据必须保持一致（双写），修改时需同时更新两者。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapMeta {
@@ -55,6 +62,10 @@ fn default_accent_color() -> String {
     "#7B8CDE".to_string()
 }
 
+/// 星图全局索引。
+///
+/// 存储于 `app-meta/starmaps/index.json`，包含所有星图的元数据摘要。
+/// 与各星图独立元数据文件构成双写关系，修改时需同步更新。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapIndex {
@@ -239,6 +250,11 @@ pub fn rename_starmap(workspace: &Path, starmap_id: &str, new_title: &str) -> Re
     Ok(meta)
 }
 
+/// 删除星图。
+///
+/// 先检查是否有外部引用（embed/link/edge 指向此星图），有则拒绝删除。
+/// 自引用（星图内部的边/嵌入指向自身）不阻止删除。
+/// 删除后同步更新父星图的 `child_starmap_count` 和全局索引。
 pub fn delete_starmap(workspace: &Path, starmap_id: &str) -> Result<()> {
     // Before deleting, check if it's referenced by any EXTERNAL StarMap.
     let refs = find_starmap_references(workspace, starmap_id)?;
@@ -297,6 +313,10 @@ pub fn bind_starmap_to_project(workspace: &Path, starmap_id: &str, project_id: &
     Ok(())
 }
 
+/// 设置项目的主星图。
+///
+/// 先清除该项目下所有星图的 `is_main_for_project` 标记，再设置目标星图。
+/// 清除和设置之间不是原子的，崩溃可能导致无主星图状态，但不会导致多主星图。
 pub fn set_main_starmap_for_project(
     workspace: &Path,
     starmap_id: &str,

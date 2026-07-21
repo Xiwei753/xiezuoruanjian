@@ -19,6 +19,12 @@ mod sync_ops;
 mod workspace_ops;
 mod writing_stats_ops;
 
+/// 获取全局 `WriterCore` 单例的互斥锁并执行闭包。
+///
+/// ## 线程安全
+///
+/// `CORE` 是全局 `OnceLock<Mutex<Option<WriterCore>>>`。同一时刻只有一个线程可以访问 Core。
+/// 调用方不得在闭包中再次调用 `with_core`（非递归锁，会死锁）。
 pub(crate) fn with_core<F, R>(f: F) -> Result<R, String>
 where
     F: FnOnce(&WriterCore) -> Result<R, String>,
@@ -31,6 +37,11 @@ where
     f(core)
 }
 
+/// 将成功数据包装为 JSON ResultEnvelope 并返回 C string。
+///
+/// ## 所有权
+///
+/// 返回的 `*mut c_char` 由 Rust 分配，调用方必须用 `writer_core_free_string` 释放。
 pub(crate) fn ok_json<T: serde::Serialize>(data: T) -> *mut c_char {
     let envelope = serde_json::json!({
         "success": true,
@@ -41,6 +52,11 @@ pub(crate) fn ok_json<T: serde::Serialize>(data: T) -> *mut c_char {
     CString::new(s).unwrap_or_default().into_raw()
 }
 
+/// 将错误信息包装为 JSON ResultEnvelope 并返回 C string。
+///
+/// ## 所有权
+///
+/// 返回的 `*mut c_char` 由 Rust 分配，调用方必须用 `writer_core_free_string` 释放。
 pub(crate) fn err_json(code: &str, msg: &str) -> *mut c_char {
     let envelope = serde_json::json!({
         "success": false,
@@ -56,6 +72,12 @@ pub(crate) fn err_json(code: &str, msg: &str) -> *mut c_char {
     CString::new(s).unwrap_or_default().into_raw()
 }
 
+/// 将 C string 转换为 Rust `String`。
+///
+/// ## 错误码
+///
+/// - `-1`：空指针
+/// - `-2`：无效 UTF-8
 pub(crate) fn c_str_to_rust(s: *const c_char) -> Result<String, i32> {
     if s.is_null() {
         return Err(-1);

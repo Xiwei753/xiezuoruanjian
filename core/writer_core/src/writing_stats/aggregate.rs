@@ -64,6 +64,10 @@ impl StatsAggregator {
         Ok(daily_stats)
     }
 
+    /// 实时聚合单个事件并保存。
+    ///
+    /// 读取当日统计 → 合并事件 → 写回。此 read-modify-write 非原子：
+    /// 并发写入可能导致数据丢失。当前设计假设单进程写入，多进程场景需外部串行化。
     pub fn aggregate_single_event(&self, event: &WritingInputEvent) -> Result<()> {
         let date = self.store.timestamp_to_date(event.timestamp_ms)?;
 
@@ -80,6 +84,10 @@ impl StatsAggregator {
         Ok(())
     }
 
+    /// 计算写作速度曲线。
+    ///
+    /// 将时间范围按 `bucket_minutes` 分桶，统计每个桶内的输入字符数和字符/分钟。
+    /// 桶区间为半开区间 `[bucket_start, bucket_end)`。
     pub fn get_speed_curve(
         &self,
         start_date: &str,

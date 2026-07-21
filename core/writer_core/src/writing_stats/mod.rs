@@ -71,6 +71,11 @@ impl std::fmt::Display for Platform {
     }
 }
 
+/// 写作输入事件。
+///
+/// `net_delta_chars` = inserted + pasted + ai_inserted - deleted，由 `new()` 自动计算。
+/// 各来源字符数独立记录，不做互斥：一次事件只应设置一个来源的非零字段，
+/// 但结构上不强制，聚合时按 `source` 枚举分发到对应计数器。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WritingInputEvent {
     pub event_id: String,

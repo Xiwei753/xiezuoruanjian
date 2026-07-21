@@ -56,6 +56,9 @@ pub struct ChapterContent {
 }
 
 /// 章节保存回执（用于客户端确认保存成功）。
+///
+/// `content_hash` 是正文内容的 MD5，`meta_hash` 是元数据 JSON 的 MD5。
+/// 客户端可据此验证传输完整性，但 MD5 不用于安全目的。
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ChapterSaveReceipt {
     pub chapter_relative_path: String,
@@ -151,6 +154,10 @@ pub fn list_chapters(
     Ok(chapters)
 }
 
+/// 计算字数。
+///
+/// 当前实现为非空白字符计数，适用于 CJK 文本（每个汉字计为一个字）。
+/// 对英文等空格分词语言，此计数不等于传统"单词数"。
 #[allow(clippy::cast_possible_truncation)]
 pub fn calculate_word_count(text: &str) -> u32 {
     text.chars().filter(|c| !c.is_whitespace()).count() as u32
@@ -299,6 +306,18 @@ pub fn clear_chapter_content_verified(
     save_chapter_verified_with_options(workspace_path, project_id, volume_id, chapter_id, "", true)
 }
 
+/// 章节保存的核心实现。
+///
+/// ## 空内容覆盖保护
+///
+/// 当 `allow_empty_overwrite == false` 时，拒绝用空/纯空白内容覆盖非空章节。
+/// 这是防止客户端 bug 导致数据丢失的最后一道防线。
+///
+/// ## 事务写入 + 写后验证
+///
+/// 1. 通过 `SaveTransaction` 原子写入 `chapter.md` 和 `chapter.meta.json`
+/// 2. 写入后重新读取文件并计算 hash，与预期 hash 比对
+/// 3. 验证失败返回错误，但文件已被事务提交（无法自动回滚）
 fn save_chapter_verified_with_options(
     workspace_path: &Path,
     project_id: &str,

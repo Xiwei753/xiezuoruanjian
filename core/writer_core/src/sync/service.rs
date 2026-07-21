@@ -89,6 +89,17 @@ fn classify_error(e: &crate::Error) -> SyncStatus {
     }
 }
 
+/// 同步服务。
+///
+/// 封装 Git 同步的完整生命周期：配置加载 → dry-run → 执行 → 冲突处理。
+/// `config` 为 `None` 表示未配置同步；`status` 跟踪最近一次同步结果。
+///
+/// ## 错误分类
+///
+/// `classify_error` 将 `Error` 映射为 `SyncStatus`：
+/// - `RecoverableError`：网络/认证临时故障，可重试
+/// - `Conflict`：需要用户介入解决
+/// - `FatalError`：不可恢复的错误
 pub struct SyncService {
     pub config: Option<SyncConfig>,
     pub status: SyncStatus,

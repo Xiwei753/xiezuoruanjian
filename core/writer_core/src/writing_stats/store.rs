@@ -52,8 +52,12 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+/// 两次事件间隔超过此值（毫秒）视为不同会话。
+/// 5 分钟与常见 IDE 的会话超时一致。
 const SESSION_GAP_MS: i64 = 5 * 60 * 1000;
+/// 事件缓冲区刷新防抖间隔（毫秒）。避免高频输入时每次事件都触发磁盘写入。
 const FLUSH_DEBOUNCE_MS: i64 = 3000;
+/// 缓冲区最大事件数。达到此数量立即刷新，无论防抖间隔是否到期。
 const MAX_BUFFER_SIZE: usize = 100;
 
 pub struct StatsStore {
@@ -62,6 +66,11 @@ pub struct StatsStore {
     last_flush_ms: Mutex<i64>,
 }
 
+/// 每日统计（单设备维度）。
+///
+/// 同一日期可有多个 `DailyStats`（每设备一个），由 `DailyStatsFile` 聚合。
+/// `per_project`/`per_volume`/`per_chapter` 使用 HashMap 以 ID 为键，
+/// 允许同一维度下多个实体的独立统计。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DailyStats {
     pub date: String,
@@ -330,6 +339,10 @@ impl StatsStore {
         Ok(all_events)
     }
 
+    /// 保存每日统计文件。
+    ///
+    /// 注意：此方法使用 write+rename 而非 `atomic_write_string`，
+    /// 因为每日统计文件是可重建的派生数据，损坏后可从原始事件重新聚合。
     pub fn save_daily_stats_file(&self, file: &DailyStatsFile) -> Result<()> {
         let daily_dir = self.daily_dir();
         fs::create_dir_all(&daily_dir)?;
@@ -353,6 +366,10 @@ impl StatsStore {
         Ok(Some(file))
     }
 
+    /// 保存或合并每日统计。
+    ///
+    /// 合并以 `device_id` 为键：同设备同日期的统计累加到已有记录，
+    /// 新设备的统计追加到 `devices` 列表。此设计支持多设备独立写入后合并。
     pub fn save_or_merge_daily_stats(&self, stats: &DailyStats) -> Result<()> {
         let mut file = self
             .load_daily_stats_file(&stats.date)?

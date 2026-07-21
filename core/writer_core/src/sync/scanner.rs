@@ -1,8 +1,29 @@
+//! # 同步扫描与计划构建
+//!
+//! 扫描工作区文件系统，构建上传/删除计划。与 `SyncService` 配合使用。
+//!
+//! ## 扫描逻辑
+//!
+//! - 遍历工作区所有文件（跳过 `.git/`）
+//! - 白名单路径标记为 `Upload`，其余为 `Ignore`
+//! - 黑名单路径直接忽略（不进入上传计划）
+//!
+//! ## 计划构建
+//!
+//! - **首次同步**（`known_files` 为空）：所有白名单文件上传
+//! - **增量同步**：仅上传 hash 变化的文件 + 新增文件
+//! - **远端删除**：本地已不存在但远端仍有的文件
+//! - **墓碑清理**：超过 `purge_after` 时间的本地 trash 文件
+
 use crate::sync::types::{SyncFileEntry, SyncKind, SyncPlan};
 use crate::sync::SyncService;
 use std::path::Path;
 
 #[allow(clippy::cast_possible_wrap)]
+/// 扫描工作区所有文件，生成 `SyncFileEntry` 列表。
+///
+/// `.git/` 目录被排除。`modified_time` 使用 Unix epoch 秒；
+/// 文件 hash 为空字符串表示计算失败（扫描不因单个文件失败而中断）。
 pub(crate) fn scan_workspace_for_sync(workspace_path: &Path) -> crate::Result<Vec<SyncFileEntry>> {
     let mut entries = Vec::new();
 
@@ -52,6 +73,11 @@ pub(crate) fn scan_workspace_for_sync(workspace_path: &Path) -> crate::Result<Ve
     Ok(entries)
 }
 
+/// 基于扫描结果和同步状态构建 `SyncPlan`。
+///
+/// - 首次同步：所有白名单文件上传
+/// - 增量同步：hash 变化或新增的文件上传；本地已删除的远端文件标记删除
+/// - 墓碑清理：`purge_after <= now` 的 trash 文件标记本地删除
 pub(crate) fn build_sync_plan_from_workspace(workspace_path: &Path) -> crate::Result<SyncPlan> {
     let mut plan = SyncPlan::new();
 

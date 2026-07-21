@@ -1,3 +1,8 @@
+//! # 星图边渲染计算（Core 层，跨端共享）
+//!
+//! 根据节点位置和边参数计算箭头、偏移、标签位置等渲染几何。
+//! 双向边自动偏移以避免重叠。所有坐标为星图文档坐标。
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

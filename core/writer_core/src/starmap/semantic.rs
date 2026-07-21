@@ -1,3 +1,9 @@
+//! # 星图语义模型（Core 层）
+//!
+//! 定义节点内容类型（内联文本、章节引用、实体引用、外部链接）、
+//! 锚点、链接、嵌入和深目标（DeepTarget）等语义结构。
+//! 这些类型是星图数据模型的跨平台契约，平台端只负责渲染和交互。
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

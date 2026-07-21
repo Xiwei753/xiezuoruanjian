@@ -208,6 +208,10 @@ pub unsafe extern "C" fn writer_core_ensure_device_info(
     }
 }
 
+/// 校验平台/设备类别标识符的合法性。
+///
+/// 仅允许 ASCII 字母数字、下划线和连字符，最长 64 字符。
+/// 此限制确保标识符可安全嵌入文件路径和 Git 分支名，无需额外转义。
 fn validate_platform_identifier(s: &str) -> bool {
     s.len() <= 64 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }

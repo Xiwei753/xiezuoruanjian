@@ -44,6 +44,10 @@ pub struct Volume {
     pub order: i32,
 }
 
+/// 列出指定项目下所有卷。
+///
+/// 使用 `rayon` 并行读取各卷的 `volume.json`，解析失败的卷静默跳过。
+/// 结果按 `order` 字段升序排列。
 pub fn list_volumes(workspace_path: &Path, project_id: &str) -> Result<Vec<Volume>> {
     let volumes_dir = workspace_path
         .join("projects")
@@ -147,6 +151,11 @@ pub fn rename_volume(
     Ok(())
 }
 
+/// 删除卷。
+///
+/// 经过 `delete_guard` 双重验证后，将卷目录移入 `app-meta/sync/trash/`，
+/// 命名格式为 `{timestamp}_{uuid}_{volume_id}`，确保唯一且可溯源。
+/// 同时生成 tombstone 记录供同步使用。
 pub fn delete_volume(workspace_path: &Path, project_id: &str, volume_id: &str) -> Result<()> {
     let project_id = crate::delete_guard::validate_id_segment(project_id)?;
     let volume_id = crate::delete_guard::validate_id_segment(volume_id)?;
@@ -184,6 +193,10 @@ pub fn delete_volume(workspace_path: &Path, project_id: &str, volume_id: &str) -
     Ok(())
 }
 
+/// 重排卷顺序。
+///
+/// `ordered_ids` 必须是当前项目所有卷 ID 的精确排列（集合完全一致，无遗漏无多余），
+/// 否则返回错误。每个卷的 `order` 字段被设置为该 ID 在列表中的索引。
 #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
 pub fn reorder_volumes(
     workspace_path: &Path,

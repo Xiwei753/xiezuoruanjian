@@ -1,5 +1,11 @@
+//! # 星图命中测试（Core 层，跨端共享）
+//!
+//! 提供节点 AABB 和边线段距离的命中测试算法。
+//! 坐标空间为星图文档坐标（不含视口滚动偏移），由平台渲染层负责变换。
+
 use crate::starmap::types::StarMapLayoutNode;
 
+/// 边命中距离阈值（文档坐标像素）。点击位置距边线段小于此值视为命中。
 const EDGE_HIT_THRESHOLD: f32 = 10.0;
 
 #[derive(Debug, Clone)]

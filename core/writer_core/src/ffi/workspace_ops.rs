@@ -57,6 +57,11 @@ pub unsafe extern "C" fn writer_core_list_workspaces() -> *mut c_char {
 }
 
 /// Open (re-initialize) a workspace at the given path.
+///
+/// ## 全局状态替换
+///
+/// 此函数替换全局 `CORE` 单例。替换期间持有 Mutex 锁，保证与 `with_core` 互斥。
+/// 替换后旧 Core 被 drop，所有未保存状态丢失。
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_open_workspace(path: *const c_char) -> *mut c_char {
     let path_str = match c_str_to_rust(path) {
@@ -168,6 +173,11 @@ pub unsafe extern "C" fn writer_core_get_workspace_state() -> *mut c_char {
 
 /// Resolve the project and volume that contain a given chapter.
 /// This replaces the ArkTS-side tree traversal in NativeWriterCoreBridge.
+///
+/// ## 性能特征
+///
+/// 当前实现为线性扫描所有项目/卷目录。工作区规模有限时（数十项目、数百卷）可接受。
+/// 若需要支持更大规模，应建立 chapter_id → (project_id, volume_id) 的反向索引。
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_resolve_chapter_location(
     chapter_id: *const c_char,
@@ -212,6 +222,8 @@ pub unsafe extern "C" fn writer_core_resolve_chapter_location(
 
 /// Resolve the project that contains a given volume.
 /// This replaces the ArkTS-side tree traversal for volumeId -> projectId.
+///
+/// 与 `writer_core_resolve_chapter_location` 同理，当前为线性扫描。
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_resolve_volume_location(
     volume_id: *const c_char,

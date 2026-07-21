@@ -1,3 +1,8 @@
+//! # 星图自动布局算法（Core 层，跨端共享）
+//!
+//! 提供 grid 和 radial 两种自动布局。已有位置的节点保留原位，仅布局新增节点。
+//! 平台端可在此基础上叠加手动拖拽调整，Core 不感知拖拽状态。
+
 use crate::starmap::types::{StarMapLayout, StarMapLayoutKind, StarMapLayoutNode};
 
 const DEFAULT_NODE_WIDTH: f32 = 150.0;
