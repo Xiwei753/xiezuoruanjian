@@ -1032,6 +1032,9 @@ fn execute_lww_sync_attempt(
         // 远端已删除的文件移至 trash 目录而非直接删除，
         // 防止同步异常时用户数据丢失。trash 文件名格式：
         // {timestamp}_{uuid}_{original_filename}
+        //
+        // 不变量：远端删除操作只在本地文件与远端记录一致（三路 NoConflict/RemoteChanged，
+        // 或 LWW 远端获胜）时执行。冲突路径不会进入 to_delete_local。
         let full_path = workspace_path.join(path);
         if full_path.exists() {
             let filename = full_path
@@ -1052,6 +1055,9 @@ fn execute_lww_sync_attempt(
     }
 
     log::debug!("[sync] github_api step=download newer remote files");
+    // 下载使用 rayon 并行线程池，线程数取 min(文件数, MAX_PARALLEL_DOWNLOADS)。
+    // 每个文件先写入临时文件（带随机后缀），再 rename 替换目标文件，
+    // 保证下载中断不会留下半写入文件。
     if !to_download.is_empty() {
         let download_pool = sync_download_pool(to_download.len())?;
         let download_result: crate::Result<()> = download_pool.install(|| {
@@ -1108,6 +1114,8 @@ fn execute_lww_sync_attempt(
         .map_err(|e| crate::Error::Io(std::io::Error::other(format!("write manifest: {}", e))))?;
 
     log::debug!("[sync] github_api step=正在上传本地较新文件");
+    // 上传串行执行（GitHub API 要求 serial PUT 以避免 SHA 冲突），
+    // 每个 PUT 需要携带远端文件的当前 SHA（若存在），实现幂等的 create-or-update。
     for path in &to_upload {
         let full_path = workspace_path.join(path);
         if !full_path.exists() {

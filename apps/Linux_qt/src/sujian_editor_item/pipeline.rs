@@ -284,14 +284,23 @@ pub(crate) struct VisualTransactionContext {
 /// Qt QChar index 和 QInputMethodEvent 的 UTF-16 code unit offset 只允许存在于
 /// 平台适配层（platform_ime.rs），传入管线前必须转换为 UTF-8。
 pub(crate) struct LinuxEditorPipeline {
+    /// Core 编辑器内核——正文和业务唯一真相
     kernel: EditorKernel,
+    /// Qt 侧已确认正文镜像——与 kernel revision 对应的纯文本快照
     mirror: CommittedTextMirror,
+    /// IME 组合输入状态——跟踪 preedit 到 commit/cancel 的完整生命周期
     composition: CompositionState,
+    /// 编辑引擎工厂——创建 EditorTransaction 和 EditorVisualTransaction
     engine: writer_core::editor::EditorEngine,
+    /// 动画协调器——管理视觉事务队列和 Timeline
     animation_coordinator: LinuxEditorAnimationCoordinator,
+    /// 纹理缓存——行快照到 QSGTexture 的映射
     texture_cache: TextureCache,
+    /// 剪贴板适配器——处理复制/剪切/粘贴
     clipboard_adapter: LinuxQtClipboardFocusAdapter,
+    /// 文本内容变更时递增——触发布局重算
     text_revision: u64,
+    /// 任何需要重绘的变化时递增——比 text_revision 更频繁
     visual_revision: u64,
     animation_enabled: bool,
     typing_animation_enabled: bool,
@@ -299,9 +308,12 @@ pub(crate) struct LinuxEditorPipeline {
     coordinated_cursor_animation_enabled: bool,
     smooth_cursor_enabled: bool,
     cursor_animation_duration_ms: u32,
+    /// 当前布局快照——包含视觉行信息和 QChar 边界
     current_layout_snapshot: Option<EditorLayoutSnapshot>,
+    /// 前一次布局快照——用于动画 old/new 对比
     previous_layout_snapshot: Option<EditorLayoutSnapshot>,
     previous_canonical_snapshot: Option<crate::editor::layout::CanonicalDocumentVisualSnapshot>,
+    /// 布局修订——宽度/字号/字体/行距等变化时递增
     layout_revision: LayoutRevision,
 }
 

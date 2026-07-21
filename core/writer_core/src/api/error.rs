@@ -6,6 +6,11 @@ use crate::error::Error;
 ///
 /// 平台端通过 `code()` 和 `message_key()` 做错误分类和 i18n 映射，
 /// 不得依赖错误文案的包含关系作为主判断（见 AGENTS.md）。
+///
+/// 与 `crate::error::Error` 的区别：
+/// - `Error` 是 Core 内部错误枚举，携带丰富上下文（如 SyncDocumentConflict 的 path/hash）
+/// - `WriterError` 是 FFI 边界的简化版本，只保留平台端需要的分类信息
+/// - 两者通过 `From<Error>` 转换，内部错误细节在转换时可能被折叠为通用 SyncConflict/SyncFailed
 #[derive(Debug, thiserror::Error)]
 pub enum WriterError {
     #[error("IO error: {0}")]
@@ -35,8 +40,10 @@ pub enum WriterError {
     RefuseToDeleteWorkspaceRoot,
     #[error("Invalid delete target: {0}")]
     InvalidDeleteTarget(String),
+    /// 同步冲突——包含冲突详情描述，需用户干预解决
     #[error("Sync conflict: {0}")]
     SyncConflict(String),
+    /// 同步失败——网络/认证/API 等非冲突性错误
     #[error("Sync failed: {0}")]
     SyncFailed(String),
     #[error("Other error: {0}")]

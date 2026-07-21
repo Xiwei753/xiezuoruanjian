@@ -41,6 +41,13 @@ use serde::{Deserialize, Serialize};
 use crate::chapter::Chapter;
 use crate::writing_stats::api::StatsApi;
 
+/// Core 内部统一入口——薄 Facade，只做参数转发和类型转换。
+///
+/// **不是平台稳定 API 边界**：Android/Linux/Harmony 不得把此结构体当主暴露层，
+/// 应走 `api::WriterCoreApi` 或其绑定适配层。
+///
+/// 无状态：每次 API 调用通过 `core()` 创建临时 `WriterCore` 实例，
+/// 不持有可变状态。`stats_api` 使用 `OnceLock` 懒初始化，首次访问后复用。
 pub struct WriterCore {
     pub(crate) workspace_path: PathBuf,
     pub(crate) stats_api: OnceLock<StatsApi>,

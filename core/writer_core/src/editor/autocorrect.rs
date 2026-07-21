@@ -28,15 +28,27 @@
 use aho_corasick::AhoCorasick;
 use serde::Serialize;
 
+/// 单个拼写错误的纠正建议。
+///
+/// `start_index`/`end_index` 为 UTF-8 byte offset（半开区间 [start, end)），
+/// 与 Core 其余范围语义一致。
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct TypoCorrection {
+    /// 错误文本的起始位置（UTF-8 byte offset，含）
     pub start_index: usize,
+    /// 错误文本的结束位置（UTF-8 byte offset，不含，半开区间）
     pub end_index: usize,
+    /// 原始错误文本
     pub original_text: String,
+    /// 纠正建议文本
     pub suggestion: String,
 }
 
+/// 自动纠错引擎——基于 Aho-Corasick 多模式匹配。
+///
+/// 初始化时构建匹配器和替换规则，之后可反复调用 `scan_text` 扫描文本。
+/// 不持有可变状态，线程安全（只要求 &self）。
 pub struct AutoCorrectEngine {
     matcher: AhoCorasick,
     replacements: Vec<String>,

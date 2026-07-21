@@ -17,20 +17,37 @@ use thiserror::Error;
 /// Core 层统一错误枚举。
 ///
 /// 所有错误变体都携带足够上下文，便于客户端决定如何展示给用户。
+///
+/// 错误分类原则：
+/// - `code()` 返回稳定字符串，是跨端 API 契约，不可随意更改
+/// - `recoverable()` 标记是否可重试——UI 据此决定是否显示"重试"按钮
+/// - `params()` 返回结构化参数，UI 用 code + params 做本地化，不依赖正则匹配 message
+/// - `debug_message` 仅用于日志和调试，不直接展示给普通用户
+///
+/// 平台端不得依赖错误文案的包含关系作为主判断（见 AGENTS.md），
+/// 必须使用 `code()` 或 `SyncErrorCategory::from_code()` 做分类。
 #[derive(Error, Debug)]
 pub enum Error {
+    /// 文件系统 I/O 错误。可恢复（磁盘临时不可用等）。
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+    /// JSON 序列化/反序列化错误。不可恢复（数据格式损坏）。
     #[error("JSON parsing error: {0}")]
     Json(#[from] serde_json::Error),
+    /// 工作区路径无效或不存在。
     #[error("Workspace not found or invalid")]
     InvalidWorkspace,
+    /// 项目 ID 未找到。
     #[error("Project not found")]
     ProjectNotFound,
+    /// 卷 ID 未找到。
     #[error("Volume not found")]
     VolumeNotFound,
+    /// 章节 ID 未找到。
     #[error("Chapter not found")]
     ChapterNotFound,
+    /// 空覆写被阻止——章节已有内容时不允许用空字符串覆盖。
+    /// 防止误操作清空章节正文。
     #[error("blocked_empty_overwrite: chapter_id={chapter_id}, old_len={old_len}, new_len={new_len}, reason={reason}")]
     EmptyOverwriteBlocked {
         chapter_id: String,
@@ -38,20 +55,27 @@ pub enum Error {
         new_len: usize,
         reason: String,
     },
+    /// 功能未实现。
     #[error("Not implemented")]
     NotImplemented,
+    /// 拒绝删除工作区根目录。
     #[error("Refuse to delete workspace root")]
     RefuseToDeleteWorkspaceRoot,
+    /// 删除目标无效（非项目/卷/章节路径）。
     #[error("Invalid delete target: {0}")]
     InvalidDeleteTarget(String),
 
     // --- Sync errors ---
+    /// 同步认证失败（Token 无效/权限不足）。不可恢复，需用户干预。
     #[error("Sync auth failed: {reason}")]
     SyncAuthFailed { reason: String },
+    /// 同步网络不可用（DNS/TLS/连接失败）。可恢复，可重试。
     #[error("Sync network unavailable: {reason}")]
     SyncNetworkUnavailable { reason: String },
+    /// 同步 API 速率限制。可恢复，等待 retry_after_secs 后重试。
     #[error("Sync rate limited: retry_after_secs={retry_after_secs}")]
     SyncRateLimited { retry_after_secs: u64 },
+    /// 正文文件双端修改冲突。不可恢复，需用户选择 keep local / take remote / mark merged。
     #[error(
         "Sync document conflict: path={path}, local_hash={local_hash}, remote_hash={remote_hash}"
     )]
@@ -60,24 +84,32 @@ pub enum Error {
         local_hash: String,
         remote_hash: String,
     },
+    /// 同步事务不完整（部分文件上传/下载失败）。可恢复，重试补全。
     #[error("Sync incomplete transaction: tx_id={transaction_id}, missing={missing_files:?}")]
     SyncIncompleteTransaction {
         transaction_id: String,
         missing_files: Vec<String>,
     },
+    /// Git checkout 冲突（本地有未提交变更阻止 pull）。不可恢复，需用户处理。
     #[error("Sync checkout conflict: {summary_json}")]
     SyncCheckoutConflict { summary_json: String },
+    /// 设置键冲突（逐键语义合并时双方修改了同一 key）。不可恢复，需用户决策。
     #[error("Sync settings conflict: {details_json}")]
     SyncSettingsConflict { details_json: String },
+    /// 同步冲突已检测到（通用标记）。
     #[error("Sync conflict detected")]
     SyncConflictDetected,
+    /// Git non-fast-forward 错误（远端有新提交，本地也有）。
     #[error("Sync non-fast-forward: {detail}")]
     SyncNonFastForward { detail: String },
+    /// Git unrelated histories 错误（本地和远端无共同祖先）。
     #[error("Sync unrelated histories: {detail}")]
     SyncUnrelatedHistories { detail: String },
+    /// 远端分支不存在。
     #[error("Sync remote branch not found: {detail}")]
     SyncRemoteBranchNotFound { detail: String },
 
+    /// GitHub API 错误——包含 HTTP 状态码和分类，便于平台端做错误映射。
     #[error("GitHub API error [{category}]: {context} failed with HTTP {status}: {body_preview}")]
     SyncGithubApiError {
         category: String,
@@ -87,11 +119,14 @@ pub enum Error {
     },
 
     // --- Storage errors ---
+    /// 磁盘空间不足。
     #[error("Disk full: path={path}, required={required_bytes} bytes")]
     DiskFull { path: String, required_bytes: u64 },
+    /// 存储事务不完整（部分文件写入失败）。
     #[error("Storage transaction incomplete: tx_id={transaction_id}")]
     StorageTransactionIncomplete { transaction_id: String },
 
+    /// 兜底错误——不应频繁使用，新错误应添加具体变体。
     #[error("Other error: {0}")]
     Other(String),
 }

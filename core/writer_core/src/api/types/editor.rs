@@ -4,6 +4,13 @@
 //! stable API boundary types used by UniFFI and C-ABI FFI layers.
 //! Platform clients (Android, Linux_qt, HarmonyOS) consume these
 //! to decide whether and how to animate text changes.
+//!
+//! 边界契约：
+//! - 所有 byte offset / byte range 字段均为 UTF-8 byte offset（半开区间 [start, end)）
+//! - 平台端 UTF-16 index 只存在于平台 TextIndexMap 内，传入 Core 前必须转换
+//! - DTO 的 u32 字段对应 Kotlin ULong/Int——平台端需注意溢出和符号
+//! - `has_inserted_range` / `has_deleted_range` 必须先检查，不能依赖 start/end == 0 判断
+//!   因为 0..0 在 Kotlin IntRange 中包含一个元素（0），不是空范围
 
 /// Kind of animation event emitted by the editor engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]

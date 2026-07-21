@@ -926,6 +926,12 @@ impl WriterAppService {
         })
     }
 
+    /// 开始 IME composition 会话。
+    ///
+    /// replace_start/replace_end_exclusive 为 committed 正文坐标（UTF-8 byte offset，半开区间）。
+    /// 成功时返回的 DTO 包含 composition_session（session_id, base_revision, generation），
+    /// 平台端必须在后续 UpdateComposition/FinishComposition/CancelComposition 中携带此信息。
+    /// generation 用于过期检测——session reset 后旧 generation 的操作被内核拒绝。
     pub fn editor_kernel_begin_composition(
         &self,
         replace_start: u32,
@@ -955,6 +961,10 @@ impl WriterAppService {
         })
     }
 
+    /// 更新 IME 预输入文本。
+    ///
+    /// composition_generation 必须与会话当前 generation 匹配，否则返回 StaleRevision。
+    /// new_preedit_cursor_offset 为 preedit 内部 UTF-8 byte offset（非 committed 正文坐标）。
     pub fn editor_kernel_update_composition(
         &self,
         composition_session_id: u64,
@@ -976,6 +986,8 @@ impl WriterAppService {
         })
     }
 
+    /// 完成 IME composition——将预输入文本提交到 committed 正文。
+    /// commit 后 composition session 被销毁，后续 composition 操作需重新 BeginComposition。
     pub fn editor_kernel_finish_composition(
         &self,
         composition_session_id: u64,
@@ -993,6 +1005,8 @@ impl WriterAppService {
         })
     }
 
+    /// 取消 IME composition——丢弃预输入文本，恢复 committed 正文。
+    /// cancel 后 composition session 被销毁，committed 正文不变。
     pub fn editor_kernel_cancel_composition(
         &self,
         composition_session_id: u64,

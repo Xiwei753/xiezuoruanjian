@@ -2016,6 +2016,11 @@ pub fn transactions_overlap(
     old_start < new_end && new_start < old_end
 }
 
+/// 基于最长公共前缀/后缀的纯文本差异算法。
+///
+/// 返回的 `EditorChange::Insert/Delete` 的 `index` 均为 UTF-8 byte offset，
+/// 基于 `old_text` 的坐标系。替换操作分解为 Delete + Insert（同一 index）。
+/// 空输入或完全相同时返回空 Vec。
 pub fn diff_plain_text(old_text: &str, new_text: &str) -> Vec<EditorChange> {
     if old_text == new_text {
         return Vec::new();
@@ -2044,6 +2049,13 @@ pub fn diff_plain_text(old_text: &str, new_text: &str) -> Vec<EditorChange> {
     changes
 }
 
+/// 判断编辑变更是否应产生动画。
+///
+/// 系统状态（Load/Format/Programmatic）和 IME 预输入阶段（ImeComposition）
+/// 不进吞吐动画——预输入有自己的 CompositionUpdate 视觉层。
+/// IME commit 走 TypingCommit cause，已允许动画。
+/// 多变更（changes.len() != 1）和空文本变更不进动画。
+/// 具体动画模式由 `choose_animation_mode` 决定。
 fn should_animate_changes(
     changes: &[EditorChange],
     cause: EditorTransactionCause,
@@ -2281,6 +2293,11 @@ pub fn split_text_into_runs(text: &str, base_offset: usize) -> Vec<ClusterRun> {
 
 /// 将文本按 grapheme cluster 分割，用于 ClusterAnimation。
 /// 每个 cluster 记录 byte range 和是否复杂。
+///
+/// `base_offset` 为该文本在完整正文中的 UTF-8 byte 起始位置，
+/// 所有 ClusterRect 的 byte_start/byte_end 均为绝对坐标（base_offset + 片内偏移）。
+/// 指针算术 `grapheme.as_ptr() - text.as_ptr()` 仅在同一次 String 分配内有效，
+/// 不适用于子串切片后的跨分配场景。
 pub fn split_text_into_clusters(text: &str, base_offset: usize) -> Vec<ClusterRect> {
     use unicode_segmentation::UnicodeSegmentation;
     let mut clusters = Vec::new();
@@ -2298,6 +2315,10 @@ pub fn split_text_into_clusters(text: &str, base_offset: usize) -> Vec<ClusterRe
     clusters
 }
 
+/// 计算两个文本的公共前缀长度（UTF-8 byte 单位）。
+///
+/// 逐字符比较，返回第一个不同字符之前的 byte 长度。
+/// 结果保证是合法 UTF-8 char boundary。
 fn common_prefix_byte_len(old_text: &str, new_text: &str) -> usize {
     let mut prefix = 0;
     for ((old_index, old_char), (_, new_char)) in
@@ -2311,6 +2332,11 @@ fn common_prefix_byte_len(old_text: &str, new_text: &str) -> usize {
     prefix
 }
 
+/// 计算两个文本的公共后缀长度（UTF-8 byte 单位），排除前缀部分。
+///
+/// `prefix` 参数为 `common_prefix_byte_len` 的结果，避免前缀/后缀重叠。
+/// 从尾部逐字符反向比较，返回公共后缀的 byte 长度。
+/// 结果保证是合法 UTF-8 char boundary。
 fn common_suffix_byte_len(old_text: &str, new_text: &str, prefix: usize) -> usize {
     let old_tail = &old_text[prefix..];
     let new_tail = &new_text[prefix..];
@@ -2328,6 +2354,10 @@ fn common_suffix_byte_len(old_text: &str, new_text: &str, prefix: usize) -> usiz
     suffix
 }
 
+/// 将 offset 对齐到最近的合法 UTF-8 char boundary。
+///
+/// 超出文本长度时返回文本长度（末尾始终是合法 boundary）。
+/// 落在多字节序列中间时向前回退到该字符的起始位置。
 fn clamp_to_char_boundary(text: &str, index: usize) -> usize {
     if index > text.len() {
         return text.len();

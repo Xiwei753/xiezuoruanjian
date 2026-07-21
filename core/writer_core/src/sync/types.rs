@@ -193,16 +193,26 @@ pub enum FirstSyncMode {
 ///
 /// 非线程安全：只在主线程读写，同步引擎在同步期间持有快照。
 /// `sync_interval_seconds` 最小有效值为 60（引擎侧 clamp），0 表示仅手动同步。
+///
+/// 敏感字段（token、ssh_private_key）不在 SyncConfig 中，
+/// 由 SyncSecrets 单独管理，平台端安全存储注入。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncConfig {
+    /// 是否启用同步
     pub enabled: bool,
+    /// 同步后端类型（当前仅 GithubApi）
     #[serde(default)]
     pub backend_type: BackendType,
+    /// 远端仓库 URL（HTTPS 或 SSH）
     pub remote_url: String,
+    /// 传输方式（HTTPS token 或 SSH deploy key）
     pub transport: SyncTransport,
+    /// 远端分支名，默认 "main"
     #[serde(default = "default_branch")]
     pub branch: String,
+    /// 是否启用自动同步
     pub auto_sync: bool,
+    /// 自动同步间隔（秒），最小有效值 60，0 表示仅手动
     pub sync_interval_seconds: u32,
 
     /// GitHub username for HTTPS credential callback.
