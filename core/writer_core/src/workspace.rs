@@ -77,6 +77,11 @@ type RecentEditsCache = HashMap<PathBuf, Vec<RecentEdit>>;
 
 /// 进程内缓存：避免频繁磁盘读取。
 /// Key = workspace_path，Value = 最近编辑列表。
+///
+/// 使用 `OnceLock<Mutex<...>>` 实现懒初始化的进程级单例。
+/// Mutex poison 被转换为 `Error::Other`（见 `lock_recent_edits_cache`），
+/// 不会因 panic 传播而中断业务流程。
+/// 当前仅 GUI 线程访问，但 Mutex 保证未来多线程扩展的安全性。
 #[cfg(test)]
 pub static RECENT_EDITS_CACHE: OnceLock<Mutex<RecentEditsCache>> = OnceLock::new();
 
@@ -126,7 +131,10 @@ pub fn get_recent_edits(workspace_path: &Path) -> Result<Vec<RecentEdit>> {
 
 /// 记录一次章节编辑（去重 + 插入头部 + 截断到 MAX_RECENT_EDITS 条 + 防抖落盘）。
 ///
-/// 防抖策略：最多每 RECENT_EDITS_FLUSH_INTERVAL 落盘一次，减少高频编辑时的 I/O 开销。
+/// 防抖策略：最多每 RECENT_EDITS_FLUSH_INTERVAL（5 秒）落盘一次，
+/// 减少高频编辑时的 I/O 开销。应用退出或切换工作区时应调用
+/// `flush_recent_edits` 强制落盘，防止丢失最近一条记录。
+/// 注意：防抖期间进程崩溃可能丢失最后一次落盘之后的所有编辑记录。
 pub fn record_recent_edit(
     workspace_path: &Path,
     project_id: &str,

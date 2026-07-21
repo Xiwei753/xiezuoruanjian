@@ -43,6 +43,8 @@ impl EditorBuffer {
         self.cursor != self.selection_anchor
     }
 
+    /// 返回选区的半开区间 [start, end)（UTF-8 byte offset）。
+    /// start ≤ end，无论光标和锚点的相对位置。
     pub fn selection_range(&self) -> (usize, usize) {
         if self.cursor <= self.selection_anchor {
             (self.cursor, self.selection_anchor)
@@ -154,6 +156,11 @@ impl EditorBuffer {
     }
 }
 
+/// 将富文本/平台文本归一化为编辑器纯文本。
+///
+/// 规则：段落分隔符 U+2029 → `\n`，CRLF/CR → `\n`，
+/// 保留 `\n` 和 `\t`，过滤其余控制字符。
+/// 归一化后的文本可直接写入 `chapter.md`（正文永远是纯文本）。
 pub fn normalize_plain_text(text: &str) -> String {
     let replaced = text
         .replace('\u{2029}', "\n")
@@ -165,6 +172,10 @@ pub fn normalize_plain_text(text: &str) -> String {
         .collect()
 }
 
+/// 返回 `index` 之前最近的 char boundary（UTF-8 byte offset）。
+///
+/// 用于退格删除：定位前一个字符的起始字节位置。
+/// 如果 `index` 为 0 或文本为空则返回 `None`。
 pub fn prev_char_boundary(text: &str, index: usize) -> Option<usize> {
     if index == 0 || text.is_empty() {
         return None;
@@ -175,6 +186,10 @@ pub fn prev_char_boundary(text: &str, index: usize) -> Option<usize> {
         .last()
 }
 
+/// 返回 `index` 之后最近的 char boundary（UTF-8 byte offset）。
+///
+/// 用于 Delete 键：定位后一个字符的起始字节位置。
+/// 如果 `index` 已在文本末尾则返回 `None`；末尾字符之后返回 `text.len()`。
 pub fn next_char_boundary(text: &str, index: usize) -> Option<usize> {
     if index >= text.len() {
         return None;
@@ -185,6 +200,10 @@ pub fn next_char_boundary(text: &str, index: usize) -> Option<usize> {
         .or(Some(text.len()))
 }
 
+/// 将 UTF-8 byte offset 对齐到最近的 char boundary。
+///
+/// 超出文本长度时返回 `text.len()`；落在多字节字符中间时向左回退。
+/// 所有外部输入的 offset（来自 IME、光标移动等）都应经过此函数校验。
 pub fn clamp_to_char_boundary(text: &str, index: usize) -> usize {
     if index > text.len() {
         return text.len();
@@ -199,6 +218,10 @@ pub fn clamp_to_char_boundary(text: &str, index: usize) -> usize {
     clamped
 }
 
+/// UTF-8 byte offset → 字符索引（char count）。
+///
+/// 先将 byte offset 对齐到 char boundary，再计算 `[0..offset)` 范围内的字符数。
+/// 用于需要字符级计数的场景（如 Android StaticLayout）。
 pub fn byte_to_char_index(text: &str, byte_index: usize) -> usize {
     text[..clamp_to_char_boundary(text, byte_index)]
         .chars()

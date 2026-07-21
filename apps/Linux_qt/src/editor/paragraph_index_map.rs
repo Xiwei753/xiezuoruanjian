@@ -46,6 +46,10 @@ impl ParagraphIndexMap {
         }
     }
 
+    /// QChar index → 文档级 UTF-8 byte offset。
+    ///
+    /// 越界回退：QChar 超出段落长度时返回段落末尾的 byte offset；
+    /// 映射表为空时返回 0。
     pub fn qchar_to_document_byte(&self, qchar_index: usize) -> usize {
         self.qchar_to_document_byte
             .get(qchar_index)
@@ -65,6 +69,9 @@ impl ParagraphIndexMap {
             })
     }
 
+    /// 文档级 UTF-8 byte offset → QChar index。
+    ///
+    /// 越界回退：byte offset 超出段落范围时返回段落的 QChar 长度（末尾位置）。
     pub fn document_byte_to_qchar(&self, document_byte: usize, paragraph_document_byte_start: usize) -> usize {
         let local_byte = document_byte.saturating_sub(paragraph_document_byte_start);
         self.document_byte_to_qchar

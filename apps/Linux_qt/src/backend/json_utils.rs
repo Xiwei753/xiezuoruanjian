@@ -1,20 +1,31 @@
 use qmetaobject::{QJsonArray, QJsonObject, QJsonValue, QString};
 
+/// 将 Core WriterError 包装为 ResultEnvelope 错误 JSON 字符串。
+///
+/// Qt QML 层通过 JSON 字符串与 Rust 通信，此函数确保错误响应格式统一。
 pub(crate) fn envelope_error_json(error: writer_core::api::WriterError) -> String {
     writer_core::api::ResultEnvelope::<serde_json::Value>::error(error).to_json_string()
 }
 
+/// 生成 AppBackend 借用冲突错误 JSON。
+///
+/// 当 RefCell<AppBackend> 的 borrow/borrow_mut 冲突时调用，
+/// 表示 GUI 线程上存在重入调用（不应发生，但需防御性处理）。
 pub(crate) fn borrow_conflict_error_json() -> String {
     envelope_error_json(writer_core::api::WriterError::Other(
         "AppBackend 借用冲突，操作未执行".to_string(),
     ))
 }
 
+/// 将成功数据包装为 ResultEnvelope JSON 字符串。
 pub(crate) fn envelope_ok_json<T: serde::Serialize>(data: T) -> String {
     writer_core::api::ResultEnvelope::success(data).to_json_string()
 }
 
 
+/// serde_json::Value → QJsonValue 递归转换。
+///
+/// Null → QJsonValue::default()，Number 统一转为 f64（Qt JSON 无整数类型）。
 pub(crate) fn serde_value_to_qjson(value: serde_json::Value) -> QJsonValue {
     match value {
         serde_json::Value::Null => QJsonValue::default(),

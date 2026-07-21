@@ -20,6 +20,10 @@ pub enum HitKind {
     Edge,
 }
 
+/// 节点 AABB 命中测试。
+///
+/// 遍历所有节点，返回包含点击位置且 z_index 最高的节点。
+/// 坐标为星图文档坐标（不含视口滚动偏移）。
 pub fn hit_test_nodes(x: f32, y: f32, nodes: &[StarMapLayoutNode]) -> Option<HitResult> {
     let mut best: Option<(i32, &StarMapLayoutNode)> = None;
     for node in nodes {
@@ -36,6 +40,11 @@ pub fn hit_test_nodes(x: f32, y: f32, nodes: &[StarMapLayoutNode]) -> Option<Hit
     })
 }
 
+/// 边线段距离命中测试。
+///
+/// `node_positions` 为节点中心坐标（文档坐标）。
+/// 返回距点击位置最近且距离 < EDGE_HIT_THRESHOLD 的边。
+/// 多条边同时命中时取最近的。
 pub fn hit_test_edges(
     x: f32,
     y: f32,
@@ -68,6 +77,10 @@ pub fn hit_test_edges(
     })
 }
 
+/// 点到线段的最短距离。
+///
+/// 将点投影到线段方向，`t` 值 clamp 到 [0, 1] 保证投影不超出线段端点。
+/// 退化为零长线段时返回点到端点的距离。
 pub fn point_to_segment_distance(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
     let dx = bx - ax;
     let dy = by - ay;

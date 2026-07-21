@@ -44,6 +44,12 @@ impl EditorInputController {
     }
 }
 
+/// 编辑器输入宿主 trait — 平台端必须实现。
+///
+/// 所有方法在 GUI 线程上调用，实现方不得跨线程访问。
+/// `input_set_suppress_next_ime_commit` / `input_take_suppress_next_ime_commit`
+/// 用于处理 ESC 取消 preedit 后延迟到达的 commit 事件：ESC 设置 suppress 标记，
+/// 后续 commit 检查并消费该标记后仅清除 preedit 而不插入文本。
 pub(crate) trait EditorInputHost {
     fn input_enabled(&self) -> bool;
     fn input_emit_explicit_clear_requested(&mut self);
@@ -186,6 +192,11 @@ pub(crate) fn cancel_preedit<H: EditorInputHost + ?Sized>(host: &mut H) {
     host.input_request_repaint();
 }
 
+/// IME commit 处理。
+///
+/// 检查 suppress-next-ime-commit 标记：如果被设置（ESC 取消 preedit 后），
+/// 仅清除 preedit 而不插入文本；否则正常插入。
+/// 这防止了 fcitx5/ibus 在 cancel 后仍发送 commit 的问题。
 pub(crate) fn ime_commit<H: EditorInputHost + ?Sized>(host: &mut H, text: String) {
     if !host.input_enabled() || text.is_empty() {
         return;
@@ -213,6 +224,11 @@ pub(crate) fn ime_replace_and_commit<H: EditorInputHost + ?Sized>(
     host.input_replace_and_insert(replace_start, replace_length, text);
 }
 
+/// IME preedit 更新。
+///
+/// `cursor` 参数为 UTF-16 code unit 偏移量（来自 Qt InputMethodEvent），
+/// 此处已由 platform_ime 转换为 UTF-8 byte offset。
+/// 非空 preedit 会清除 suppress-next-ime-commit 标记（用户重新开始输入）。
 pub(crate) fn ime_preedit<H: EditorInputHost + ?Sized>(host: &mut H, text: String, cursor: i32) {
     if !host.input_enabled() {
         return;
@@ -224,6 +240,10 @@ pub(crate) fn ime_preedit<H: EditorInputHost + ?Sized>(host: &mut H, text: Strin
     host.input_set_preedit(text, cursor);
 }
 
+/// IME preedit 更新（带属性）。
+///
+/// `attributes` 中的 start/length 已由 platform_ime 从 UTF-16 code unit
+/// 转换为 UTF-8 byte offset。`cursor` 同理。
 pub(crate) fn ime_preedit_with_attrs<H: EditorInputHost + ?Sized>(
     host: &mut H,
     text: String,

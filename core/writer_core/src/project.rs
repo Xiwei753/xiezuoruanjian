@@ -133,6 +133,10 @@ pub fn get_project_stats(workspace_path: &Path, project_id: &str) -> Result<Proj
     Ok(stats)
 }
 
+/// 创建项目并自动创建"第一卷"。
+///
+/// `order` 字段取现有项目最大 order + 1，保证新项目排在最后。
+/// 自动调用 `volume::create_volume` 创建默认卷，保持产品一致性。
 pub fn create_project(workspace_path: &Path, title: &str) -> Result<Project> {
     let projects = list_projects(workspace_path)?;
     let order = projects
@@ -167,6 +171,10 @@ pub fn create_project(workspace_path: &Path, title: &str) -> Result<Project> {
     Ok(project)
 }
 
+/// 重命名项目。
+///
+/// 同一工作区内不允许重名（title 唯一性检查）。
+/// 如果新标题已被其他项目使用，返回 `Error::Other`。
 pub fn rename_project(workspace_path: &Path, project_id: &str, new_title: &str) -> Result<()> {
     let projects = list_projects(workspace_path)?;
     if projects

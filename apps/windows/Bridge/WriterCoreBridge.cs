@@ -12,6 +12,8 @@ public sealed record WritingStatsDto(int TotalWords, int TodayWords, int Session
 public sealed record StarmapSummaryDto(string Id, string Name, int NodeCount, int EdgeCount);
 public sealed record ProjectStatsDto(int TotalWords, int TotalChapters, string LastEditedAt);
 
+/// Bridge 信封结果 — 与 Core ResultEnvelope 对齐的统一响应结构。
+/// ErrorCode 与 Core Error.code() 返回的字符串一致，是跨端 API 契约。
 internal sealed class EnvelopeResult
 {
     public bool Success { get; set; }
@@ -23,6 +25,11 @@ internal sealed class EnvelopeResult
     public string? RawError { get; set; }
 }
 
+/// Windows 端 Core FFI Bridge — 通过 P/Invoke 调用 writer_core 原生库。
+///
+/// 所有 FFI 函数返回 JSON 字符串（IntPtr），由 CallFFI 统一解析为 EnvelopeResult。
+/// 字符串指针必须通过 writer_core_free_string 释放，避免内存泄漏。
+/// 调用方通过 WrapResult 将 EnvelopeResult 转换为业务类型或抛出异常。
 public sealed class WriterCoreBridge
 {
     private const string DllName = "writer_core";

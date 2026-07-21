@@ -1,7 +1,22 @@
 use super::command::TextEditCommand;
 
+/// 线性 undo/redo 栈深度上限。
+///
+/// 超过此深度时，最旧的命令被逐出（FIFO）。256 条可覆盖约 10 分钟的连续打字。
 const DEFAULT_MAX_STACK: usize = 256;
 
+/// 线性 undo/redo 管理器。
+///
+/// ## 模型
+///
+/// - `undo_stack`：已执行命令，undo 时从栈顶弹出并应用 inverse
+/// - `redo_stack`：已撤销命令，redo 时从栈顶弹出并重新应用 forward
+/// - **push 清空 redo**：新编辑丢弃所有可 redo 的命令（标准线性 undo 语义）
+/// - **空命令忽略**：`forward.is_empty()` 的命令不入栈
+///
+/// ## 线程安全
+///
+/// 本类型非 `Sync`。调用方需保证单线程访问（编辑操作在 GUI 线程执行）。
 #[derive(Debug)]
 pub struct HistoryManager {
     undo_stack: Vec<TextEditCommand>,

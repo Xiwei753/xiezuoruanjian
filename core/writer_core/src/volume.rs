@@ -25,7 +25,10 @@ use std::path::Path;
 use uuid::Uuid;
 use rayon::prelude::*;
 
-/// Normalize path for tombstone, safely handling paths that are not prefixed
+/// 将路径归一化为相对于 base 的正斜杠字符串。
+///
+/// 用于 tombstone 和同步协议中的路径表示（Git/远端约定正斜杠）。
+/// 如果 path 不以 base 为前缀，返回 path 本身的归一化形式。
 pub(crate) fn normalize_rel_path(path: &Path, base: &Path) -> String {
     path.strip_prefix(base)
         .unwrap_or(path)
@@ -88,6 +91,10 @@ pub fn list_volumes(workspace_path: &Path, project_id: &str) -> Result<Vec<Volum
     Ok(volumes)
 }
 
+/// 创建卷。
+///
+/// `order` 字段取当前项目下最大 order + 1，保证新卷排在最后。
+/// 同时创建 `chapters/` 子目录和 `volume.json` 元数据文件。
 pub fn create_volume(workspace_path: &Path, project_id: &str, title: &str) -> Result<Volume> {
     let volumes = list_volumes(workspace_path, project_id)?;
     let order = volumes

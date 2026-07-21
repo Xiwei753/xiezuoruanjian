@@ -16,6 +16,13 @@ class WriterAppServiceHolder(workspacePath: String) {
         private const val TAG = "WriterAppServiceHolder"
     }
 
+    /**
+     * 统一错误包装：将 Core 调用结果包装为 [BridgeResult]。
+     *
+     * - [UnsatisfiedLinkError] → [BridgeResult.NotLoaded]（原生库未加载）
+     * - [WriterException] → [BridgeResult.Error]（Core 错误，errorCode 来自 UniFFI）
+     * - 其他 [Exception] → [BridgeResult.Error]（errorCode = UNKNOWN）
+     */
     fun <T> wrapResult(block: () -> T): BridgeResult<T> {
         return try {
             BridgeResult.Success(block())

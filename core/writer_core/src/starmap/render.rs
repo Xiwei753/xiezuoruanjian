@@ -13,6 +13,13 @@ const DEFAULT_ARROW_PADDING: f32 = 42.0;
 const DEFAULT_ARROW_LENGTH: f32 = 10.0;
 const DEFAULT_HIT_THRESHOLD: f32 = 10.0;
 
+/// 边渲染几何数据 — 平台端据此绘制箭头和标签。
+///
+/// 所有坐标为星图文档坐标（像素）。
+/// `from_cx/cy`、`to_cx/cy`：节点中心点。
+/// `start_x/y`、`end_x/y`：边线段起止点（含双向偏移和箭头内缩）。
+/// `arrow_tip/left/right`：箭头三角形的三个顶点。
+/// `label_x/y`：标签定位点（边中点）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EdgeRender {

@@ -4,6 +4,15 @@ package com.xiwei.sujian.data
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 
+/**
+ * Android 端 Bridge 调用结果密封类。
+ *
+ * - [Success]：Core 返回成功数据，envelope 携带完整信封
+ * - [Error]：Core 或 Bridge 层返回错误，errorCode 与 Core Error.code() 对齐
+ * - [NotLoaded]：原生库未加载（UnsatisfiedLinkError），UI 应提示用户
+ *
+ * 所有 Bridge 方法统一返回此类型，ViewModel 据此决定展示逻辑。
+ */
 sealed class BridgeResult<out T> {
     data class Success<out T>(val data: T, val envelope: ResultEnvelope<T> = ResultEnvelope.success(data)) : BridgeResult<T>()
     data class Error(
@@ -27,6 +36,14 @@ data class ChangedEntity(
     val entityId: String? = null
 )
 
+/**
+ * 跨端 Bridge 信封 — 与 Core BridgeError 对齐的统一响应结构。
+ *
+ * - errorCode：与 Core Error.code() 返回的字符串一致，是跨端 API 契约
+ * - messageKey：errorCode 到 i18n key 的映射，UI 层据此做本地化
+ * - messageArgs：错误参数（与 Core Error.params() 对齐），供本地化模板填充
+ * - changedPaths / changedEntities：本次操作影响的实体，供 UI 刷新
+ */
 data class ResultEnvelope<out T>(
     val success: Boolean,
     val data: T? = null,
@@ -75,6 +92,13 @@ data class ResultEnvelope<out T>(
     }
 }
 
+/**
+ * 将 JSON 字符串结果解析为强类型对象。
+ *
+ * Core FFI 层返回 JSON 字符串，此函数在 Bridge 层完成反序列化。
+ * 解析失败时返回 [BridgeResult.Error]（errorCode = JSON_ERROR），
+ * 不向上抛异常。
+ */
 internal inline fun <reified T> BridgeResult<String>.parseJsonResult(
     gson: Gson,
     label: String

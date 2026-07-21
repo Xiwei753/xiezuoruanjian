@@ -350,6 +350,7 @@ pub enum StarMapTargetDetail {
         node_id: String,
         anchor_id: String,
     },
+    /// 章节范围引用。`range_start`/`range_end` 为 UTF-8 byte offset（半开区间）。
     ChapterRange {
         project_id: Option<String>,
         volume_id: Option<String>,
