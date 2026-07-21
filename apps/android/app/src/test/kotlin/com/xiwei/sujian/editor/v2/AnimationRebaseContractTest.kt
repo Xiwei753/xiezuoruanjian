@@ -4128,4 +4128,63 @@ class AnimationRebaseContractTest {
         val validCandidates = newCandidateStarts.filter { it >= referenceStart }
         assertEquals(listOf(20, 30), validCandidates)
     }
+
+    @Test
+    fun fingerprintFallback_monotonicOrderPreventsBackwardMatching() {
+        val oldStarts = listOf(5, 10, 15)
+        val newStarts = listOf(16, 6, 11)
+        var lastMatchedNewStart = 0
+        val newUsed = mutableSetOf<Int>()
+        val matches = mutableListOf<Pair<Int, Int>>()
+        for (oldStart in oldStarts) {
+            val candidates = newStarts.indices.filter { i ->
+                i !in newUsed && newStarts[i] >= lastMatchedNewStart
+            }
+            val matchIdx = candidates.minByOrNull { i -> newStarts[i] }
+            if (matchIdx != null) {
+                newUsed.add(matchIdx)
+                lastMatchedNewStart = newStarts[matchIdx]
+                matches.add(Pair(oldStart, newStarts[matchIdx]))
+            }
+        }
+        assertEquals(3, matches.size)
+        for (i in 1 until matches.size) {
+            assertTrue("New cluster start must be monotonically non-decreasing",
+                matches[i].second >= matches[i - 1].second)
+        }
+    }
+
+    @Test
+    fun fingerprintFallback_duplicateTextNoCrossMatching() {
+        val oldStarts = listOf(10, 20)
+        val newStarts = listOf(15, 25)
+        val fingerprint = "fp_a"
+        var lastMatchedNewStart = 0
+        val newUsed = mutableSetOf<Int>()
+        val matches = mutableListOf<Pair<Int, Int>>()
+        for (oldStart in oldStarts) {
+            val candidates = newStarts.indices.filter { i ->
+                i !in newUsed && newStarts[i] >= lastMatchedNewStart
+            }
+            val matchIdx = candidates.minByOrNull { i -> newStarts[i] }
+            if (matchIdx != null) {
+                newUsed.add(matchIdx)
+                lastMatchedNewStart = newStarts[matchIdx]
+                matches.add(Pair(oldStart, newStarts[matchIdx]))
+            }
+        }
+        assertEquals(listOf(Pair(10, 15), Pair(20, 25)), matches)
+        assertTrue("No backward matching: each old[i] maps to new[i], not new[i+1]",
+            matches[0].second < matches[1].second)
+    }
+
+    @Test
+    fun lineReflow_fallbackUsesMappedStartDistanceNotMinStart() {
+        val mappedStart = 20
+        val lastMatchedNewStart = 0
+        val target = mappedStart
+        val candidateStarts = listOf(12, 19, 30)
+        val best = candidateStarts.minByOrNull { kotlin.math.abs(it - target) }
+        assertEquals("Should pick candidate closest to mappedStart=20", 19, best)
+    }
 }

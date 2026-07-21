@@ -1323,8 +1323,9 @@ class AndroidVisualPlanner {
                             candidate.documentByteStart < end && candidate.documentByteEndExclusive > start
                         }
                 }
+                val target = mappedStart ?: lastMatchedNewStart
                 matchedNewIdx = candidates.minByOrNull { i ->
-                    allNewClusters[i].first.documentByteStart
+                    kotlin.math.abs(allNewClusters[i].first.documentByteStart - target)
                 }
             }
             if (matchedNewIdx != null) {
@@ -1481,6 +1482,7 @@ class AndroidVisualPlanner {
             if (isInserted) continue
             newByFp.getOrPut(cluster.shapingFingerprint) { mutableListOf() }.add(i)
         }
+        var lastMatchedNewStart = 0
         for (oldCluster in oldSnapshot.clusters) {
             val isDeleted = deleteByteRanges.any { (start, end) ->
                 oldCluster.documentByteStart < end && oldCluster.documentByteEndExclusive > start
@@ -1488,8 +1490,14 @@ class AndroidVisualPlanner {
             if (isDeleted) continue
             val candidates = newByFp[oldCluster.shapingFingerprint]
             if (candidates != null && candidates.isNotEmpty()) {
-                val newIdx = candidates.removeAt(0)
-                pairs.add(Pair(oldCluster, newSnapshot.clusters[newIdx]))
+                val validIdx = candidates.indexOfFirst { i ->
+                    newSnapshot.clusters[i].documentByteStart >= lastMatchedNewStart
+                }
+                if (validIdx >= 0) {
+                    val newIdx = candidates.removeAt(validIdx)
+                    lastMatchedNewStart = newSnapshot.clusters[newIdx].documentByteStart
+                    pairs.add(Pair(oldCluster, newSnapshot.clusters[newIdx]))
+                }
             }
         }
         return pairs
