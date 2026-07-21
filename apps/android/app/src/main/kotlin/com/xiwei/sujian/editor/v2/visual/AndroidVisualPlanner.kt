@@ -1266,8 +1266,6 @@ class AndroidVisualPlanner {
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap()
     ) {
         val offsetMapper = buildOffsetMapper(visualIntent, oldRev, newRev)
-        val oldParagraphs = buildParagraphRanges(oldRev)
-        val newParagraphs = buildParagraphRanges(newRev)
 
         val affectedOldParagraphIds = mutableSetOf<Int>()
         val affectedNewParagraphIds = mutableSetOf<Int>()
@@ -1278,201 +1276,131 @@ class AndroidVisualPlanner {
             newRev.lineRanges.getOrNull(lineIndex)?.paragraphId?.let { affectedNewParagraphIds.add(it) }
         }
 
-        val matchedNewParaIndices = mutableSetOf<Int>()
-        val unmatchedOldParaIndices = mutableSetOf<Int>()
-        for ((oldParaIdx, oldPara) in oldParagraphs.withIndex()) {
-            if (oldPara.paragraphId !in affectedOldParagraphIds) continue
+        val allOldClusters = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
+        for (lineEntry in oldRev.lineRanges.withIndex()) {
+            if (lineEntry.value.paragraphId !in affectedOldParagraphIds) continue
+            val oldSnapshot = createSnapshotFromRevision(oldRev, lineEntry.index, preCapturedOldSnapshots, preCapturedNewSnapshots) ?: continue
+            for (cluster in oldSnapshot.clusters) {
+                allOldClusters.add(Pair(cluster, oldSnapshot))
+            }
+        }
 
-            var bestNewParaIdx: Int? = null
-            val mappedStart = offsetMapper(oldPara.startUtf8)
+        val allNewClusters = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
+        for (lineEntry in newRev.lineRanges.withIndex()) {
+            if (lineEntry.value.paragraphId !in affectedNewParagraphIds) continue
+            val newSnapshot = createSnapshotFromRevision(newRev, lineEntry.index, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = true) ?: continue
+            for (cluster in newSnapshot.clusters) {
+                allNewClusters.add(Pair(cluster, newSnapshot))
+            }
+        }
+
+        val newUsed = mutableSetOf<Int>()
+        val oldMatched = mutableSetOf<Int>()
+
+        for ((oldIdx, pair) in allOldClusters.withIndex()) {
+            val (oldCluster, oldSnapshot) = pair
+            val isDeleted = visualIntent.oldAffectedByteRanges.any { (start, end) ->
+                oldCluster.documentByteStart < end && oldCluster.documentByteEndExclusive > start
+            }
+            if (isDeleted) continue
+
+            val mappedStart = offsetMapper(oldCluster.documentByteStart)
+            val mappedEnd = offsetMapper(oldCluster.documentByteEndExclusive)
+            var matchedNewIdx: Int? = null
             if (mappedStart != null) {
-                for ((newParaIdx, newPara) in newParagraphs.withIndex()) {
-                    if (newParaIdx in matchedNewParaIndices) continue
-                    if (newPara.startUtf8 == mappedStart) {
-                        bestNewParaIdx = newParaIdx
-                        break
-                    }
+                matchedNewIdx = allNewClusters.indices.firstOrNull { i ->
+                    i !in newUsed && allNewClusters[i].first.documentByteStart == mappedStart &&
+                        (mappedEnd == null || allNewClusters[i].first.documentByteEndExclusive == mappedEnd)
                 }
             }
-            if (bestNewParaIdx == null && oldPara.paragraphId in affectedNewParagraphIds) {
-                bestNewParaIdx = newParagraphs.indexOfFirst { it.paragraphId == oldPara.paragraphId }
-                    .takeIf { it >= 0 && it !in matchedNewParaIndices }
-            }
-            if (bestNewParaIdx == null) {
-                unmatchedOldParaIndices.add(oldParaIdx)
-                continue
-            }
-            matchedNewParaIndices.add(bestNewParaIdx)
-
-            val newPara = newParagraphs[bestNewParaIdx]
-
-            val allOldClusters = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
-            for (lineEntry in oldRev.lineRanges.withIndex()) {
-                if (lineEntry.value.paragraphId != oldPara.paragraphId) continue
-                val oldSnapshot = createSnapshotFromRevision(oldRev, lineEntry.index, preCapturedOldSnapshots, preCapturedNewSnapshots) ?: continue
-                for (cluster in oldSnapshot.clusters) {
-                    allOldClusters.add(Pair(cluster, oldSnapshot))
-                }
-            }
-
-            val allNewClusters = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
-            for (lineEntry in newRev.lineRanges.withIndex()) {
-                if (lineEntry.value.paragraphId != newPara.paragraphId) continue
-                val newSnapshot = createSnapshotFromRevision(newRev, lineEntry.index, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = true) ?: continue
-                for (cluster in newSnapshot.clusters) {
-                    allNewClusters.add(Pair(cluster, newSnapshot))
-                }
-            }
-
-            val newUsed = mutableSetOf<Int>()
-            val oldMatched = mutableSetOf<Int>()
-
-            for ((oldIdx, pair) in allOldClusters.withIndex()) {
-                val (oldCluster, oldSnapshot) = pair
-                val isDeleted = visualIntent.oldAffectedByteRanges.any { (start, end) ->
-                    oldCluster.documentByteStart < end && oldCluster.documentByteEndExclusive > start
-                }
-                if (isDeleted) continue
-
-                val mappedStart = offsetMapper(oldCluster.documentByteStart)
-                val mappedEnd = offsetMapper(oldCluster.documentByteEndExclusive)
-                var matchedNewIdx: Int? = null
-                if (mappedStart != null) {
-                    matchedNewIdx = allNewClusters.indices.firstOrNull { i ->
-                        i !in newUsed && allNewClusters[i].first.documentByteStart == mappedStart &&
-                            (mappedEnd == null || allNewClusters[i].first.documentByteEndExclusive == mappedEnd)
-                    }
-                }
-                if (matchedNewIdx == null) {
-                    val candidates = allNewClusters.indices.filter { i ->
-                        val candidate = allNewClusters[i].first
-                        i !in newUsed &&
-                            candidate.shapingFingerprint == oldCluster.shapingFingerprint &&
-                            visualIntent.newAffectedByteRanges.none { (start, end) ->
-                                candidate.documentByteStart < end && candidate.documentByteEndExclusive > start
-                            }
-                    }
-                    matchedNewIdx = candidates.minByOrNull { i ->
-                        kotlin.math.abs(allNewClusters[i].first.documentByteStart - oldCluster.documentByteStart)
-                    }
-                }
-                if (matchedNewIdx != null) {
-                    newUsed.add(matchedNewIdx)
-                    oldMatched.add(oldIdx)
-                    val (newCluster, newSnapshot) = allNewClusters[matchedNewIdx]
-                    val positionChanged = oldCluster.visualRectInDocument != newCluster.visualRectInDocument
-                    if (positionChanged) {
-                        if (oldCluster.shapingFingerprint == newCluster.shapingFingerprint
-                            && oldCluster.shapingIdentityConfident
-                            && newCluster.shapingIdentityConfident
-                        ) {
-                            animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                                role = SliceRole.Move,
-                                snapshot = newSnapshot,
-                                sourceRect = newCluster.sourceRectInLineImage,
-                                destinationRect = newCluster.visualRectInDocument,
-                                startAlpha = 1f,
-                                endAlpha = 1f,
-                                fromDestinationRect = oldCluster.visualRectInDocument,
-                                clusterByteStart = newCluster.documentByteStart,
-                                clusterByteEndExclusive = newCluster.documentByteEndExclusive
-                            ))
-                        } else {
-                            animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                                role = SliceRole.CrossfadeOld,
-                                snapshot = oldSnapshot,
-                                sourceRect = oldCluster.sourceRectInLineImage,
-                                destinationRect = oldCluster.visualRectInDocument,
-                                startAlpha = 1f,
-                                endAlpha = 0f,
-                                clusterByteStart = oldCluster.documentByteStart,
-                                clusterByteEndExclusive = oldCluster.documentByteEndExclusive
-                            ))
-                            animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                                role = SliceRole.CrossfadeNew,
-                                snapshot = newSnapshot,
-                                sourceRect = newCluster.sourceRectInLineImage,
-                                destinationRect = newCluster.visualRectInDocument,
-                                startAlpha = 0f,
-                                endAlpha = 1f,
-                                clusterByteStart = newCluster.documentByteStart,
-                                clusterByteEndExclusive = newCluster.documentByteEndExclusive
-                            ))
+            if (matchedNewIdx == null) {
+                val candidates = allNewClusters.indices.filter { i ->
+                    val candidate = allNewClusters[i].first
+                    i !in newUsed &&
+                        candidate.shapingFingerprint == oldCluster.shapingFingerprint &&
+                        visualIntent.newAffectedByteRanges.none { (start, end) ->
+                            candidate.documentByteStart < end && candidate.documentByteEndExclusive > start
                         }
+                }
+                matchedNewIdx = candidates.minByOrNull { i ->
+                    kotlin.math.abs(allNewClusters[i].first.documentByteStart - oldCluster.documentByteStart)
+                }
+            }
+            if (matchedNewIdx != null) {
+                newUsed.add(matchedNewIdx)
+                oldMatched.add(oldIdx)
+                val (newCluster, newSnapshot) = allNewClusters[matchedNewIdx]
+                val positionChanged = oldCluster.visualRectInDocument != newCluster.visualRectInDocument
+                if (positionChanged) {
+                    if (oldCluster.shapingFingerprint == newCluster.shapingFingerprint
+                        && oldCluster.shapingIdentityConfident
+                        && newCluster.shapingIdentityConfident
+                    ) {
+                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                            role = SliceRole.Move,
+                            snapshot = newSnapshot,
+                            sourceRect = newCluster.sourceRectInLineImage,
+                            destinationRect = newCluster.visualRectInDocument,
+                            startAlpha = 1f,
+                            endAlpha = 1f,
+                            fromDestinationRect = oldCluster.visualRectInDocument,
+                            clusterByteStart = newCluster.documentByteStart,
+                            clusterByteEndExclusive = newCluster.documentByteEndExclusive
+                        ))
+                    } else {
+                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                            role = SliceRole.CrossfadeOld,
+                            snapshot = oldSnapshot,
+                            sourceRect = oldCluster.sourceRectInLineImage,
+                            destinationRect = oldCluster.visualRectInDocument,
+                            startAlpha = 1f,
+                            endAlpha = 0f,
+                            clusterByteStart = oldCluster.documentByteStart,
+                            clusterByteEndExclusive = oldCluster.documentByteEndExclusive
+                        ))
+                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                            role = SliceRole.CrossfadeNew,
+                            snapshot = newSnapshot,
+                            sourceRect = newCluster.sourceRectInLineImage,
+                            destinationRect = newCluster.visualRectInDocument,
+                            startAlpha = 0f,
+                            endAlpha = 1f,
+                            clusterByteStart = newCluster.documentByteStart,
+                            clusterByteEndExclusive = newCluster.documentByteEndExclusive
+                        ))
                     }
                 }
             }
-
-            for ((oldIdx, pair) in allOldClusters.withIndex()) {
-                if (oldIdx in oldMatched) continue
-                val (oldCluster, oldSnapshot) = pair
-                animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                    role = SliceRole.Delete,
-                    snapshot = oldSnapshot,
-                    sourceRect = oldCluster.sourceRectInLineImage,
-                    destinationRect = oldCluster.visualRectInDocument,
-                    startAlpha = 1f,
-                    endAlpha = 0f,
-                    clusterByteStart = oldCluster.documentByteStart,
-                    clusterByteEndExclusive = oldCluster.documentByteEndExclusive
-                ))
-            }
-
-            for ((newIdx, pair) in allNewClusters.withIndex()) {
-                if (newIdx in newUsed) continue
-                val (newCluster, newSnapshot) = pair
-                animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                    role = SliceRole.Insert,
-                    snapshot = newSnapshot,
-                    sourceRect = newCluster.sourceRectInLineImage,
-                    destinationRect = newCluster.visualRectInDocument,
-                    startAlpha = 0f,
-                    endAlpha = 1f,
-                    clusterByteStart = newCluster.documentByteStart,
-                    clusterByteEndExclusive = newCluster.documentByteEndExclusive
-                ))
-            }
         }
 
-        for (oldParaIdx in unmatchedOldParaIndices) {
-            val oldPara = oldParagraphs[oldParaIdx]
-            for (lineEntry in oldRev.lineRanges.withIndex()) {
-                if (lineEntry.value.paragraphId != oldPara.paragraphId) continue
-                val oldSnapshot = createSnapshotFromRevision(oldRev, lineEntry.index, preCapturedOldSnapshots, preCapturedNewSnapshots) ?: continue
-                for (cluster in oldSnapshot.clusters) {
-                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                        role = SliceRole.Delete,
-                        snapshot = oldSnapshot,
-                        sourceRect = cluster.sourceRectInLineImage,
-                        destinationRect = cluster.visualRectInDocument,
-                        startAlpha = 1f,
-                        endAlpha = 0f,
-                        clusterByteStart = cluster.documentByteStart,
-                        clusterByteEndExclusive = cluster.documentByteEndExclusive
-                    ))
-                }
-            }
+        for ((oldIdx, pair) in allOldClusters.withIndex()) {
+            if (oldIdx in oldMatched) continue
+            val (oldCluster, oldSnapshot) = pair
+            animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                role = SliceRole.Delete,
+                snapshot = oldSnapshot,
+                sourceRect = oldCluster.sourceRectInLineImage,
+                destinationRect = oldCluster.visualRectInDocument,
+                startAlpha = 1f,
+                endAlpha = 0f,
+                clusterByteStart = oldCluster.documentByteStart,
+                clusterByteEndExclusive = oldCluster.documentByteEndExclusive
+            ))
         }
 
-        for ((newParaIdx, newPara) in newParagraphs.withIndex()) {
-            if (newParaIdx in matchedNewParaIndices) continue
-            if (newPara.paragraphId !in affectedNewParagraphIds) continue
-            for (lineEntry in newRev.lineRanges.withIndex()) {
-                if (lineEntry.value.paragraphId != newPara.paragraphId) continue
-                val newSnapshot = createSnapshotFromRevision(newRev, lineEntry.index, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = true) ?: continue
-                for (cluster in newSnapshot.clusters) {
-                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                        role = SliceRole.Insert,
-                        snapshot = newSnapshot,
-                        sourceRect = cluster.sourceRectInLineImage,
-                        destinationRect = cluster.visualRectInDocument,
-                        startAlpha = 0f,
-                        endAlpha = 1f,
-                        clusterByteStart = cluster.documentByteStart,
-                        clusterByteEndExclusive = cluster.documentByteEndExclusive
-                    ))
-                }
-            }
+        for ((newIdx, pair) in allNewClusters.withIndex()) {
+            if (newIdx in newUsed) continue
+            val (newCluster, newSnapshot) = pair
+            animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                role = SliceRole.Insert,
+                snapshot = newSnapshot,
+                sourceRect = newCluster.sourceRectInLineImage,
+                destinationRect = newCluster.visualRectInDocument,
+                startAlpha = 0f,
+                endAlpha = 1f,
+                clusterByteStart = newCluster.documentByteStart,
+                clusterByteEndExclusive = newCluster.documentByteEndExclusive
+            ))
         }
     }
 

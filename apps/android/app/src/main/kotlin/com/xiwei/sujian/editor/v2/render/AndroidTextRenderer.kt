@@ -81,18 +81,11 @@ class AndroidTextRenderer {
     }
 
     private fun drawSearchHighlightsUnshifted(canvas: Canvas, layout: android.text.Layout, highlights: List<Pair<Int, Int>>) {
+        val path = Path()
         for ((startUtf16, endUtf16) in highlights) {
-            val startLine = layout.getLineForOffset(startUtf16)
-            val endLine = layout.getLineForOffset((endUtf16 - 1).coerceAtLeast(startUtf16))
-            for (line in startLine..endLine) {
-                val hlStart = if (line == startLine) startUtf16 else layout.getLineStart(line)
-                val hlEnd = if (line == endLine) endUtf16 else layout.getLineEnd(line)
-                val left = layout.getPrimaryHorizontal(hlStart)
-                val right = layout.getPrimaryHorizontal((hlEnd - 1).coerceAtLeast(hlStart))
-                val top = layout.getLineTop(line).toFloat()
-                val bottom = layout.getLineBottom(line).toFloat()
-                canvas.drawRect(left, top, right, bottom, searchHighlightPaint)
-            }
+            path.reset()
+            layout.getSelectionPath(startUtf16, endUtf16, path)
+            canvas.drawPath(path, searchHighlightPaint)
         }
     }
 
@@ -137,17 +130,9 @@ class AndroidTextRenderer {
     }
 
     private fun drawSelectionHighlightUnshifted(canvas: Canvas, layout: android.text.Layout, selStart: Int, selEnd: Int) {
-        val startLine = layout.getLineForOffset(selStart)
-        val endLine = layout.getLineForOffset((selEnd - 1).coerceAtLeast(selStart))
-        for (line in startLine..endLine) {
-            val lineSelStart = if (line == startLine) selStart else layout.getLineStart(line)
-            val lineSelEnd = if (line == endLine) selEnd else layout.getLineEnd(line)
-            val left = layout.getPrimaryHorizontal(lineSelStart)
-            val right = layout.getPrimaryHorizontal((lineSelEnd - 1).coerceAtLeast(lineSelStart))
-            val top = layout.getLineTop(line).toFloat()
-            val bottom = layout.getLineBottom(line).toFloat()
-            canvas.drawRect(left, top, right, bottom, selectionPaint)
-        }
+        val path = Path()
+        layout.getSelectionPath(selStart, selEnd, path)
+        canvas.drawPath(path, selectionPaint)
     }
 
     fun drawStaticText(canvas: Canvas, layout: android.text.Layout) {
@@ -278,10 +263,12 @@ class AndroidTextRenderer {
         for (line in startLine..endLine) {
             val lineStart = if (line == startLine) compStart else layout.getLineStart(line)
             val lineEnd = if (line == endLine) compEnd else layout.getLineEnd(line)
-            val startX = layout.getPrimaryHorizontal(lineStart)
-            val endX = layout.getPrimaryHorizontal((lineEnd - 1).coerceAtLeast(lineStart))
+            val x0 = layout.getPrimaryHorizontal(lineStart)
+            val x1 = layout.getPrimaryHorizontal(lineEnd)
+            val left = kotlin.math.min(x0, x1)
+            val right = kotlin.math.max(x0, x1)
             val bottom = layout.getLineBottom(line).toFloat()
-            canvas.drawLine(startX, bottom, endX, bottom, preeditUnderlinePaint)
+            canvas.drawLine(left, bottom, right, bottom, preeditUnderlinePaint)
         }
     }
 
