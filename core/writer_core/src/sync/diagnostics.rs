@@ -1,3 +1,10 @@
+//! 同步诊断 — 探测网络、认证、仓库和分支可用性。
+//!
+//! 诊断流程按层级递进：权限 → URL 格式 → 网络连通 → 认证 → 仓库 → 分支。
+//! 任一层失败则跳过后续层级，返回对应 `error_category` 供平台端 i18n 映射。
+//!
+//! SSH 传输方式当前跳过诊断（`ssh_not_recommended`），因为 LWW 后端仅支持 HTTPS。
+
 use crate::sync::backends::SyncBackend;
 use crate::sync::types::BackendType;
 use crate::sync::types::SyncConfig;

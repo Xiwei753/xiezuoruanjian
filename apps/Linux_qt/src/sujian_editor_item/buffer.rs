@@ -1,3 +1,11 @@
+//! 旧版编辑器缓冲区 — Qt 侧本地 undo/redo 栈。
+//!
+//! 当前主链使用 `EditorKernel`（Core 侧正文真相）+ `CommittedTextMirror`（增量同步），
+//! 此模块的 `EditorBuffer` 仅用于 legacy 路径。
+//!
+//! 所有 offset（cursor、selection_anchor）均为 UTF-8 byte offset，保证 char boundary。
+//! 选区为半开区间 `[start, end)`。
+
 /// 编辑器快照 — 旧版 EditorBuffer 的 undo/redo 记录单元。
 ///
 /// cursor 和 selection_anchor 均为 UTF-8 byte offset。

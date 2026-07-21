@@ -1,5 +1,36 @@
+//! GitHub Contents API 底层客户端 — 封装 HTTP 请求和错误分类。
+//!
+//! 此模块是 GitHub API 交互的最底层，负责：
+//! - HTTP 请求构造和响应解析
+//! - HTTP 状态码到业务错误分类的映射（`github_api_error`）
+//! - SHA 冲突自动重试（`github_put_content_serial` / `github_delete_content_serial`）
+//!
+//! ## 错误分类契约
+//!
+//! `github_api_error` 返回的 `category` 字符串是跨平台契约——
+//! Android/Linux/i18n 层根据 category 映射用户可见的错误提示。
+//! 新增 category 必须同步更新所有平台的 i18n 资源。
+//!
+//! ## SHA 冲突重试
+//!
+//! GitHub Contents API 的 PUT/DELETE 要求提供文件的当前 SHA。
+//! 并发写入时 SHA 可能过期（HTTP 409），`_serial` 函数会自动刷新 SHA 并重试一次。
+//! 不做指数退避——同步是串行执行的，并发冲突由 LWW manifest 层面解决。
+
 use base64::Engine;
 
+/// 将 GitHub API HTTP 错误转换为带分类的 `crate::Error`。
+///
+/// `category` 分类规则（平台端 i18n 依赖此映射）：
+/// - `token_invalid`：401，token 无效或过期
+/// - `token_permission_denied`：403 + body 含 "Resource not accessible by personal access token"
+/// - `auth_error`：403 但非权限拒绝（如 API rate limit 触发的 403 归入 `api_rate_limited`）
+/// - `repo_not_found_or_no_permission`：404 且上下文为 get ref/tree/put/delete（仓库不存在或无权限）
+/// - `file_not_found`：404 且上下文为 get contents（文件不存在，属于正常业务场景）
+/// - `remote_sha_conflict`：409，并发写入导致 SHA 过期
+/// - `api_rate_limited`：429，触发 GitHub API 速率限制
+/// - `network_error`：5xx，服务端错误
+/// - `api_error`：其他未分类错误
 pub(crate) fn github_api_error(
     context: &str,
     status: reqwest::StatusCode,
@@ -44,6 +75,10 @@ pub(crate) fn github_api_error(
     }
 }
 
+/// 获取远程文件内容和 SHA。
+///
+/// 返回 `Some((bytes, sha))` 表示文件存在，`None` 表示 404（文件不存在，非错误）。
+/// `bytes` 为文件内容的 base64 解码结果，`sha` 为 Git blob SHA（用于后续 PUT/DELETE 的冲突检测）。
 pub(crate) fn github_get_content(
     client: &reqwest::blocking::Client,
     api_base: &str,
@@ -98,6 +133,7 @@ pub(crate) fn github_get_content(
     Ok(Some((bytes, sha)))
 }
 
+/// 仅获取远程文件的 SHA，不下载内容。用于 DELETE 操作的前置查询。
 pub(crate) fn github_get_content_sha(
     client: &reqwest::blocking::Client,
     api_base: &str,
@@ -108,6 +144,10 @@ pub(crate) fn github_get_content_sha(
     Ok(github_get_content(client, api_base, token, branch, path)?.and_then(|(_, sha)| sha))
 }
 
+/// 上传或更新远程文件（单次尝试）。
+///
+/// `sha = Some(...)` 时为更新已有文件，`sha = None` 时为创建新文件。
+/// 返回 HTTP 状态码和响应体，由调用方决定是否重试。
 pub(crate) fn github_put_content_once(
     client: &reqwest::blocking::Client,
     api_base: &str,
@@ -141,6 +181,11 @@ pub(crate) fn github_put_content_once(
     Ok((status, body))
 }
 
+/// 串行上传文件，自动处理 SHA 冲突（HTTP 409）。
+///
+/// 首次 PUT 失败且为 409 时，刷新远程 SHA 后重试一次。
+/// 不做指数退避——同步流程串行执行，并发冲突由 LWW manifest 层面解决。
+/// 重试仍失败则返回错误。
 pub(crate) fn github_put_content_serial(
     client: &reqwest::blocking::Client,
     api_base: &str,
@@ -189,6 +234,9 @@ pub(crate) fn github_put_content_serial(
     ))
 }
 
+/// 删除远程文件（单次尝试）。需要提供文件的当前 SHA。
+///
+/// 返回 HTTP 状态码和响应体。404 视为成功（文件已不存在）。
 pub(crate) fn github_delete_content_once(
     client: &reqwest::blocking::Client,
     api_base: &str,
@@ -218,6 +266,11 @@ pub(crate) fn github_delete_content_once(
     Ok((status, body))
 }
 
+/// 串行删除远程文件，自动处理 SHA 冲突（HTTP 409）。
+///
+/// 若 `remote_sha` 为 None 则跳过删除（文件在远程不存在）。
+/// 首次 DELETE 失败且为 409 时，刷新远程 SHA 后重试一次。
+/// 404 视为成功（文件已不存在），重试仍失败则返回错误。
 pub(crate) fn github_delete_content_serial(
     client: &reqwest::blocking::Client,
     api_base: &str,

@@ -1,3 +1,16 @@
+//! 同步服务层 — 编排 Git 和 LWW 两种同步策略的统一入口。
+//!
+//! `SyncService` 是同步功能的业务编排层，提供：
+//! - Git 同步（`perform_sync`）：基于 libgit2 的三路合并，需 `git-https` feature
+//! - LWW 同步（`perform_lww_sync`）：基于 GitHub Contents API 的文件级 Last Writer Wins
+//! - 诊断（`perform_sync_diagnostics`）：探测网络、认证、仓库和分支可用性
+//! - 路径过滤（`is_blacklisted_path`/`is_whitelisted_path`）：见 `config_store` 模块
+//!
+//! ## 线程安全
+//!
+//! `SyncService` 的方法均为关联函数（无 `&self`），所有状态通过参数传递。
+//! 调用方（`WriterAppService`）通过 `Mutex` 保证线程安全。
+
 #[cfg(feature = "git-https")]
 use crate::sync::conflict::collect_git_status_summary;
 

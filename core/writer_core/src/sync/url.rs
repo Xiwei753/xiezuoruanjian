@@ -1,13 +1,29 @@
+//! URL 解析与凭证脱敏 — 同步模块的 URL 处理工具。
+//!
+//! 核心职责：
+//! - 从嵌入凭证的 URL（`https://user:token@host/path`）中提取并剥离 userinfo
+//! - 检测传输方式（HTTPS token vs SSH deploy key）
+//! - 日志和错误消息中的凭证脱敏（`mask_token_in_url` / `redact_secrets_from_message`）
+//!
+//! 安全约束：脱敏函数必须保证 token 不出现在日志、错误消息和 UI 展示中。
+//! `redact_secrets_from_message` 是当前主链，`mask_token` 是遗留别名。
+
 use crate::sync::types::BackendType;
 use crate::sync::types::SyncConfig;
 use crate::sync::types::SyncTransport;
 
+/// URL 解析结果 — 剥离 userinfo 后的 URL 和提取的凭证。
 pub struct ParsedRemoteUrl {
     pub sanitized_url: String,
     pub extracted_username: Option<String>,
     pub extracted_token: Option<String>,
 }
 
+/// 从嵌入凭证的 URL 中剥离 userinfo，返回脱敏 URL 和提取的 username/token。
+///
+/// 输入格式：`https://user:token@github.com/owner/repo.git`
+/// 输出：`sanitized_url = "https://github.com/owner/repo.git"`, `extracted_username = Some("user")`, `extracted_token = Some("token")`
+/// 无 userinfo 的 URL 原样返回。
 pub fn sanitize_remote_url(url: &str) -> ParsedRemoteUrl {
     if url.contains("://") && url.contains('@') {
         if let Some(after_scheme) = url.split_once("://") {
@@ -65,6 +81,9 @@ fn url_decode(s: String) -> String {
     result
 }
 
+/// 根据远程 URL 的协议前缀检测传输方式。
+///
+/// `git@` 或 `ssh://` 开头返回 `SshDeployKey`，其余返回 `HttpsToken`。
 pub fn detect_transport(remote_url: &str) -> SyncTransport {
     let lower = remote_url.to_lowercase();
     if lower.starts_with("git@") || lower.starts_with("ssh://") {
@@ -80,6 +99,10 @@ pub fn is_github_https_remote(remote_url: &str) -> bool {
     lower.starts_with("https://github.com/") || lower.starts_with("http://github.com/")
 }
 
+/// 解析最终使用的后端类型 — 若配置为 Git 但 URL 为 GitHub HTTPS，自动切换为 GithubApi。
+///
+/// GitHub HTTPS 远程仓库使用 REST API 更高效（无需 clone 整个仓库），
+/// 因此当 `config.backend_type == Git` 且 URL 为 `https://github.com/` 时自动升级。
 pub fn resolved_backend_type(config: &SyncConfig) -> BackendType {
     if config.backend_type == BackendType::Git && is_github_https_remote(&config.remote_url) {
         BackendType::GithubApi
@@ -88,6 +111,10 @@ pub fn resolved_backend_type(config: &SyncConfig) -> BackendType {
     }
 }
 
+/// 将 URL 中的 userinfo 部分替换为 `***`，用于日志和 UI 展示。
+///
+/// `https://user:pass@host/path` → `https://***@host/path`
+/// 无 userinfo 的 URL 原样返回。
 pub fn mask_token_in_url(url: &str) -> String {
     if url.contains('@') {
         if let Some(after_scheme) = url.split_once("://") {

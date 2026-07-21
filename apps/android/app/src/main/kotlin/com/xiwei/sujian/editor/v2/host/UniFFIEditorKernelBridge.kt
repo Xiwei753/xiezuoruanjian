@@ -8,13 +8,22 @@ import uniffi.writer_core.EditorTransactionCauseDto
 /**
  * UniFFI-based implementation of [EditorKernelBridge].
  *
- * Current limitation: all calls go through [AppServiceBridge]'s global singleton
- * editor kernel, which has no session parameter. Per #541, this will be replaced by
- * a session-scoped bridge (TextEditSessionBridge) that carries a session ID and
- * dispatches to the correct EditorKernel via TextEditSessionRegistry.
+ * Delegates all editor operations to Core's `EditorKernel` via [AppServiceBridge].
+ * This bridge uses the legacy single-session path (global editor kernel).
+ * New code should prefer [TextEditSessionBridge] which supports multi-target sessions
+ * (project name, chapter name, starmap title, etc.) with independent revision/generation.
  *
- * Thread constraint: all methods must be called on the UI thread. The underlying
- * UniFFI calls are synchronous and block the caller.
+ * ## Offset convention
+ *
+ * All byte offset parameters (`byteOffset`, `byteStart`, `byteEndExclusive`, etc.)
+ * are UTF-8 byte offsets with half-open interval semantics `[start, end)`.
+ * Android's UTF-16 code unit offsets must be converted via [AndroidTextIndexMap]
+ * before passing to these methods.
+ *
+ * ## Thread constraint
+ *
+ * All methods must be called on the UI thread. The underlying UniFFI calls
+ * are synchronous and block the caller.
  */
 class UniFFIEditorKernelBridge(
     private val appServiceBridge: AppServiceBridge

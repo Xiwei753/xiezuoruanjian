@@ -27,6 +27,12 @@
 
 use serde::{Deserialize, Serialize};
 
+/// 设置值 — 支持四种类型的设置项。
+///
+/// - `Toggle`：布尔开关（如"启用动画"）
+/// - `Slider`：数值滑块，含范围 `[min, max]` 和步长 `step`
+/// - `TextInput`：文本输入，含占位提示 `placeholder`
+/// - `Dropdown`：下拉选择，`value` 为当前选中项，`options` 为可选项列表
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum SettingValue {
@@ -49,6 +55,11 @@ pub enum SettingValue {
     },
 }
 
+/// 设置节点 — 树形设置结构的基本单元。
+///
+/// `value = Some(...)` 时为叶子节点（可编辑的设置项），
+/// `value = None` 时为分组节点（仅包含子节点，如"编辑器设置"分组）。
+/// `children` 为空时表示叶子节点没有子项。
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingNode {
@@ -59,6 +70,12 @@ pub struct SettingNode {
     pub children: Vec<SettingNode>,
 }
 
+/// 设置树 — 应用程序设置的根容器。
+///
+/// `schema_version` 用于设置格式的版本演进：
+/// - 版本 1：初始格式
+/// - 新增版本时需在加载逻辑中实现向后兼容迁移
+/// - 版本号不匹配时平台端应提示用户重置设置
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsTree {

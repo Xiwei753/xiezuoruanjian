@@ -41,6 +41,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
 
+/// 按项目聚合的统计数据。
+///
+/// `net_delta_chars` = `human_typed_chars` + `pasted_chars` + `ai_inserted_chars` - `deleted_chars`，
+/// 可能为负值（删除多于新增）。`active_seconds` 为有输入事件的时间段累计，非挂机时间。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ProjectStatsAgg {
@@ -53,6 +57,7 @@ struct ProjectStatsAgg {
     active_seconds: u64,
 }
 
+/// 按章节聚合的统计数据。字段语义同 `ProjectStatsAgg`。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ChapterStatsAgg {
@@ -65,6 +70,12 @@ struct ChapterStatsAgg {
     active_seconds: u64,
 }
 
+/// 按设备聚合的统计数据。
+///
+/// - `device_id`：设备唯一标识（UUID，由 Core 在首次同步时生成）
+/// - `platform`：平台标识（`"android"` / `"linux_qt"` / `"windows"` / `"harmony"`）
+/// - `device_class`：设备类型（`"phone"` / `"tablet"` / `"desktop"`）
+/// - `sessions_count`：活跃编辑会话数（有输入事件的天数）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DeviceStatsAgg {
@@ -80,6 +91,9 @@ struct DeviceStatsAgg {
     sessions_count: u32,
 }
 
+/// 按设备类型聚合的统计数据 — 用于多设备对比视图。
+///
+/// `device_count` 为该类型的设备数量，其余字段为该类型所有设备的累计值。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DeviceClassAgg {
@@ -90,6 +104,11 @@ struct DeviceClassAgg {
     active_seconds: u64,
 }
 
+/// 写作统计 API 入口 — 封装 StatsAggregator 并提供高层查询接口。
+///
+/// 线程安全：此结构体不是 `Sync`/`Send`，调用方需保证单线程访问
+/// （通过 `WriterAppService` 的 `Mutex` 保护）。
+/// 所有查询方法返回 `serde_json::Value`，便于直接序列化为 JSON 响应。
 pub struct StatsApi {
     aggregator: StatsAggregator,
 }

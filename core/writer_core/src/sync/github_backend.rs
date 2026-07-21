@@ -1,3 +1,20 @@
+//! GitHub REST API 同步后端 — 基于 LWW（Last Writer Wins）的文件级同步。
+//!
+//! 与 `GitSyncBackend`（基于 Git 协议的三路合并）不同，此后端使用 GitHub Contents API
+//! 逐文件上传/下载，通过 manifest 文件记录每条路径的最新修改时间和设备，
+//! 冲突时以最新修改为准（LWW）。
+//!
+//! ## 同步流程
+//!
+//! 1. `diagnose`：探测网络、认证、仓库和分支可用性
+//! 2. `sync`/`pull`/`push`：委托 `SyncService::perform_lww_sync` 执行 LWW 同步
+//!
+//! ## 错误边界
+//!
+//! `sync` 方法使用 `catch_unwind` 捕获 panic 并转为 `SyncResult::Error`，
+//! 防止同步过程中的意外 panic 传播到平台端。这是仓库中少数使用 `AssertUnwindSafe`
+//! 的位置——SAFETY 说明见方法内注释。
+
 use crate::sync::backends::SyncBackend;
 use crate::sync::service::SyncService;
 use crate::sync::types::FirstSyncMode;
@@ -10,6 +27,7 @@ use crate::sync::url::mask_token_in_url;
 use crate::sync::url::sanitize_remote_url;
 use std::path::Path;
 
+/// GitHub REST API 同步后端 — 无状态结构体，所有状态通过参数传递。
 pub struct GitHubApiBackend;
 
 impl GitHubApiBackend {
@@ -23,6 +41,10 @@ impl GitHubApiBackend {
             .map_err(|e| crate::Error::SyncNetworkUnavailable { reason: format!("Failed to build HTTP client: {}", e) })
     }
 
+    /// 从远程 URL 推导 GitHub API base URL。
+    ///
+    /// 输入格式约定：`https://github.com/owner/repo` 或 `https://github.com/owner/repo.git`。
+    /// `.git` 后缀会被自动剥离。非 GitHub 域名的 URL 原样返回（用于自托管 GitHub Enterprise）。
     pub(crate) fn api_base_url(remote_url: &str) -> String {
         let sanitized = sanitize_remote_url(remote_url).sanitized_url;
         if let Some(path) = sanitized.strip_prefix("https://github.com/") {

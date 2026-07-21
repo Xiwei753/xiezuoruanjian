@@ -8,6 +8,17 @@ import com.xiwei.sujian.model.SyncResult
 import com.xiwei.sujian.model.SyncSecrets
 import com.xiwei.sujian.model.SyncState
 
+/**
+ * Android 端同步功能桥接层 — 委托 Core `WriterAppService` 的同步方法。
+ *
+ * 所有方法通过 [WriterAppServiceHolder] 访问 UniFFI 生成的 Core 服务，
+ * 返回 [BridgeResult] 封装成功/失败。调用方必须在 UI 线程执行。
+ *
+ * ## 线程约束
+ *
+ * UniFFI 调用是同步阻塞的，底层 Core 使用 `Mutex` 保护共享状态。
+ * 不得在持有 Android 锁的同时调用此桥接方法，避免与 Core 侧 Mutex 死锁。
+ */
 class SyncBridge internal constructor(private val holder: WriterAppServiceHolder) {
     fun loadSyncConfig(): BridgeResult<SyncConfig> = holder.wrapResult {
         holder.service.loadSyncConfig().toModel()

@@ -192,6 +192,13 @@ impl From<crate::sync::SyncDiagnosticsResult> for SyncDiagnosticsResultDto {
     }
 }
 
+/// 同步能力查询结果 — 告知平台端同步是否可执行及阻塞原因。
+///
+/// - `can_run`：同步是否可立即执行
+/// - `block_reason_code`：阻塞原因代码（如 `"no_internet"`、`"sync_in_progress"`），
+///   平台端 i18n 层根据此代码映射用户可见提示
+/// - `block_message_key`：阻塞原因的 i18n key（备选，当 reason_code 不够描述时使用）
+/// - `message_args`：i18n 模板参数（如同步进度百分比）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct SyncCapabilityDto {
     pub can_run: bool,
@@ -211,6 +218,13 @@ pub struct SyncOperationCountsDto {
     pub conflicts: u32,
 }
 
+/// 同步操作状态 — 描述一次同步操作的进度和结果。
+///
+/// - `operation_id`：操作唯一标识（用于取消和进度跟踪）
+/// - `operation_kind`：操作类型（`"sync"` / `"pull"` / `"push"` / `"diagnose"`）
+/// - `status_code`：操作状态（`"idle"` / `"running"` / `"completed"` / `"failed"`）
+/// - `phase_key`：当前阶段 i18n key（如 `"uploading"` / `"downloading"` / `"resolving_conflicts"`）
+/// - `summary_key`：完成摘要 i18n key（如 `"sync_completed"` / `"sync_completed_with_conflicts"`）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct SyncOperationStateDto {
     pub operation_id: String,

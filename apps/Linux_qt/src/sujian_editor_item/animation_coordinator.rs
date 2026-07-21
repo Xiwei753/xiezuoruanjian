@@ -48,6 +48,18 @@ use super::static_line_patch::StaticLinePatch;
 use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId, SourceRect, ShapingIdentity};
 
+/// 将旧事务的视觉帧 rebase 到新事务的 slice 上。
+///
+/// 三层匹配策略（优先级从高到低）：
+/// 1. **tier1 — 精确 byte range 匹配**：旧帧的 `(byte_start, byte_end)` 与新 slice 完全一致。
+///    适用于连续输入同一位置（如逐字打字）。
+/// 2. **tier2 — offset map 映射后匹配**：旧 byte range 通过 `OffsetMap` 映射到新文本坐标后匹配。
+///    适用于插入/删除导致偏移但文本内容未变的场景。
+/// 3. **tier3 — shaping identity + 范围包含匹配**：映射后按 shaping 一致性和范围包含关系
+///    选择最佳匹配。适用于格式变化或换行导致 slice 拆分的场景。
+///
+/// 匹配成功后调用 `rebase_from` 将旧帧的当前位置设为新 slice 的动画起点，
+/// 保证视觉连续性。未匹配的旧帧被丢弃（对应 slice 不再存在）。
 fn match_rebase_frames(
     rebase_frames: &[(usize, usize, f64, f64, f64, Option<ShapingIdentity>)],
     slices: &mut [AnimatedSlice],
@@ -92,6 +104,13 @@ fn match_rebase_frames(
     }
 }
 
+/// Linux Qt 文字动画协调器 — 管理动画事务的生命周期和 rebase。
+///
+/// - `next_key_id`：事务键 ID 分配器（单调递增），每个事务有唯一键用于取消和 rebase。
+/// - `prepared_queue`：已准备好的动画事务队列，按时间线顺序执行。
+/// - `layout_revision`：上次处理事务时的布局修订号，用于检测布局是否已变化。
+///   与 `EditorKernel.revision` 不同——`layout_revision` 跟踪排版结果变更（含窗口宽度、字号等），
+///   `revision` 跟踪文本内容变更。两者独立递增。
 pub(crate) struct LinuxEditorAnimationCoordinator {
     next_key_id: u64,
     pub(crate) prepared_queue: PreparedTransactionQueue,

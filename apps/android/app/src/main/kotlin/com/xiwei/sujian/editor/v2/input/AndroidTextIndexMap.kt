@@ -23,6 +23,16 @@ class AndroidTextIndexMap private constructor(
     companion object {
         fun fromText(text: String): AndroidTextIndexMap = AndroidTextIndexMap(text)
 
+        /**
+         * Compute the resulting selection (UTF-8 byte offsets) after an IME commit operation.
+         *
+         * [newCursorPosition] follows Android's InputConnection convention:
+         * - `> 0`: cursor is placed after the replacement, 1-indexed from replacement end.
+         * - `<= 0`: cursor is placed before the replacement, 0-indexed from replacement start.
+         *
+         * Returns a collapsed selection (anchor == head) in UTF-8 byte offsets,
+         * clamped to valid char boundaries within the virtual text.
+         */
         fun computeResultingSelectionUtf8(
             committedText: String,
             newCursorPosition: Int,

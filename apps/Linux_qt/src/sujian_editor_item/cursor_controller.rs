@@ -1,3 +1,25 @@
+//! 光标控制器 — 管理光标位置、动画和闪烁状态。
+//!
+//! ## 坐标空间
+//!
+//! 所有坐标为文档坐标系（物理像素，不含滚动偏移）。
+//! `target_x/y` 是光标应到达的目标位置（由布局引擎计算），
+//! `visual_x/y` 是当前渲染位置（动画中间态可能与 target 不同）。
+//!
+//! ## 动画模型
+//!
+//! 光标移动走 Snap（瞬移）或 Tween（缓动）两种模式：
+//! - Snap：跨行、大距离跳转、章节加载时使用，visual 立即设为 target
+//! - Tween：同行小距离移动时使用，visual 从当前位置缓动到 target
+//!
+//! 动画中断时从当前 visual 位置 rebase 到新 target，保证无跳变。
+//!
+//! ## 闪烁模型
+//!
+//! `blink_visible` 控制光标是否可见（530ms 交替）。
+//! 编辑操作触发 `blink_reset_requested`，使光标重新可见并重置闪烁计时器。
+//! 滚动和动画期间闪烁暂停。
+
 use super::animation_coordinator::{CursorAnimationPlan, CursorBlinkMode, CursorTransition};
 use super::rendering::CursorAnimationState;
 use crate::editor::layout::CaretAffinity;
@@ -5,6 +27,14 @@ use std::time::{Duration, Instant};
 
 const BLINK_INTERVAL_MS: u64 = 530;
 
+/// 光标状态 — 跟踪光标位置、动画和闪烁。
+///
+/// - `target_x/y`：光标应到达的位置（布局引擎计算结果）
+/// - `visual_x/y`：当前渲染位置（动画中间态可能与 target 不同，动画结束后 visual == target）
+/// - `affinity`：行末换行时光标偏向哪一端（Downstream=下一行行首，Upstream=当前行行末）
+/// - `current_visual_line_id`：光标所在 visual line 的 ID，用于判断是否跨行移动
+/// - `force_snap_next`：下次更新强制 Snap（跳过 Tween），用于章节加载、滚动恢复等场景
+/// - `blink_reset_requested`：编辑操作后请求重置闪烁（使光标重新可见）
 pub struct CursorController {
     pub target_x: f64,
     pub target_y: f64,
@@ -268,6 +298,13 @@ impl CursorController {
     }
 }
 
+/// 光标更新结果 — 描述一次光标更新后需要通知平台层的 UI 变化。
+///
+/// - `ime_needs_update`：光标位置变化需要通知输入法（QInputMethod::update）
+/// - `needs_repaint`：光标视觉状态变化需要重绘
+/// - `visibility_changed`：光标可见性变化（显示/隐藏切换）
+/// - `blink_changed`：闪烁状态切换（可见↔不可见）
+/// - `visual_position_changed`：光标渲染位置变化（动画帧推进或目标位置更新）
 pub struct CursorUpdateResult {
     pub ime_needs_update: bool,
     pub needs_repaint: bool,
