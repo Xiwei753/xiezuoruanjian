@@ -610,7 +610,9 @@ class AndroidVisualPlanner {
                         }
                 }
                 matchedNewIdx = candidates.minByOrNull { i ->
-                    allNewClusters[i].first.documentByteStart
+                    val candidateStart = allNewClusters[i].first.documentByteStart
+                    val dist = if (mappedStart != null) kotlin.math.abs(candidateStart - mappedStart) else candidateStart
+                    dist
                 }
             }
             if (matchedNewIdx != null) {
@@ -1041,71 +1043,81 @@ class AndroidVisualPlanner {
             }
         }
 
+        val offsetMapper = buildOffsetMapper(visualIntent, oldRev, newRev)
         val newMatched = mutableSetOf<Int>()
         var lastMatchedNewStart = 0
         for ((oldCluster, oldSnapshot) in allOldAffectedClusters) {
-            // Byte-length equality precondition: same rationale as planClusterReplaceAnimation —
-            // clusters with different byte lengths represent different amounts of text and must
-            // not be paired for Move even if shaping fingerprints happen to match.
-            //
-            // Monotonicity: candidates are filtered to only include new clusters whose
-            // documentByteStart >= lastMatchedNewStart, enforcing document-order one-to-one
-            // matching. This prevents a later old cluster from matching an earlier new
-            // cluster, which would cause crossed animations for repeated text.
-            val candidates = allNewAffectedClusters.indices.filter { i ->
-                i !in newMatched && allNewAffectedClusters[i].first.shapingFingerprint == oldCluster.shapingFingerprint &&
-                    allNewAffectedClusters[i].first.documentByteEndExclusive - allNewAffectedClusters[i].first.documentByteStart ==
-                    oldCluster.documentByteEndExclusive - oldCluster.documentByteStart &&
-                    allNewAffectedClusters[i].first.documentByteStart >= lastMatchedNewStart
+            val mappedStart = offsetMapper(oldCluster.documentByteStart)
+            val mappedEnd = offsetMapper(oldCluster.documentByteEndExclusive)
+            var matchIdx: Int? = null
+            if (mappedStart != null) {
+                matchIdx = allNewAffectedClusters.indices.firstOrNull { i ->
+                    i !in newMatched && allNewAffectedClusters[i].first.documentByteStart == mappedStart &&
+                        (mappedEnd == null || allNewAffectedClusters[i].first.documentByteEndExclusive == mappedEnd) &&
+                        allNewAffectedClusters[i].first.documentByteStart >= lastMatchedNewStart
+                }
             }
-            val matchIdx = candidates.minByOrNull { i ->
-                allNewAffectedClusters[i].first.documentByteStart
+            if (matchIdx == null) {
+                val referenceStart = maxOf(mappedStart ?: lastMatchedNewStart, lastMatchedNewStart)
+                val candidates = allNewAffectedClusters.indices.filter { i ->
+                    val candidate = allNewAffectedClusters[i].first
+                    i !in newMatched &&
+                        candidate.shapingFingerprint == oldCluster.shapingFingerprint &&
+                        candidate.documentByteEndExclusive - candidate.documentByteStart ==
+                        oldCluster.documentByteEndExclusive - oldCluster.documentByteStart &&
+                        candidate.documentByteStart >= referenceStart &&
+                        visualIntent.newAffectedByteRanges.none { (start, end) ->
+                            candidate.documentByteStart < end && candidate.documentByteEndExclusive > start
+                        }
+                }
+                matchIdx = candidates.minByOrNull { i ->
+                    val candidateStart = allNewAffectedClusters[i].first.documentByteStart
+                    val dist = if (mappedStart != null) kotlin.math.abs(candidateStart - mappedStart) else candidateStart
+                    dist
+                }
             }
             if (matchIdx != null) {
                 newMatched.add(matchIdx)
                 lastMatchedNewStart = allNewAffectedClusters[matchIdx].first.documentByteStart
                 val (newCluster, newSnapshot) = allNewAffectedClusters[matchIdx]
                 val positionChanged = oldCluster.visualRectInDocument != newCluster.visualRectInDocument
-                if (positionChanged) {
-                    // Move requires BOTH clusters to have confident shaping fingerprints;
-                    // see addMoveSlicesForShiftedClustersCrossLine for the full invariant.
-                    if (oldCluster.shapingFingerprint == newCluster.shapingFingerprint
-                        && oldCluster.shapingIdentityConfident
-                        && newCluster.shapingIdentityConfident
-                    ) {
-                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                            role = SliceRole.Move,
-                            snapshot = newSnapshot,
-                            sourceRect = newCluster.sourceRectInLineImage,
-                            destinationRect = newCluster.visualRectInDocument,
-                            startAlpha = 1f,
-                            endAlpha = 1f,
-                            fromDestinationRect = oldCluster.visualRectInDocument,
-                            clusterByteStart = newCluster.documentByteStart,
-                            clusterByteEndExclusive = newCluster.documentByteEndExclusive
-                        ))
-                    } else {
-                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                            role = SliceRole.CrossfadeOld,
-                            snapshot = oldSnapshot,
-                            sourceRect = oldCluster.sourceRectInLineImage,
-                            destinationRect = oldCluster.visualRectInDocument,
-                            startAlpha = 1f,
-                            endAlpha = 0f,
-                            clusterByteStart = oldCluster.documentByteStart,
-                            clusterByteEndExclusive = oldCluster.documentByteEndExclusive
-                        ))
-                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                            role = SliceRole.CrossfadeNew,
-                            snapshot = newSnapshot,
-                            sourceRect = newCluster.sourceRectInLineImage,
-                            destinationRect = newCluster.visualRectInDocument,
-                            startAlpha = 0f,
-                            endAlpha = 1f,
-                            clusterByteStart = newCluster.documentByteStart,
-                            clusterByteEndExclusive = newCluster.documentByteEndExclusive
-                        ))
-                    }
+                val fingerprintChanged = oldCluster.shapingFingerprint != newCluster.shapingFingerprint
+                val identityConfident = oldCluster.shapingIdentityConfident && newCluster.shapingIdentityConfident
+                if (!positionChanged && identityConfident && !fingerprintChanged) {
+                    // continue — static new layout handles this
+                } else if (identityConfident && !fingerprintChanged && positionChanged) {
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.Move,
+                        snapshot = newSnapshot,
+                        sourceRect = newCluster.sourceRectInLineImage,
+                        destinationRect = newCluster.visualRectInDocument,
+                        startAlpha = 1f,
+                        endAlpha = 1f,
+                        fromDestinationRect = oldCluster.visualRectInDocument,
+                        clusterByteStart = newCluster.documentByteStart,
+                        clusterByteEndExclusive = newCluster.documentByteEndExclusive
+                    ))
+                } else {
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.CrossfadeOld,
+                        snapshot = oldSnapshot,
+                        sourceRect = oldCluster.sourceRectInLineImage,
+                        destinationRect = oldCluster.visualRectInDocument,
+                        startAlpha = 1f,
+                        endAlpha = 0f,
+                        clusterByteStart = oldCluster.documentByteStart,
+                        clusterByteEndExclusive = oldCluster.documentByteEndExclusive
+                    ))
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.CrossfadeNew,
+                        snapshot = newSnapshot,
+                        sourceRect = newCluster.sourceRectInLineImage,
+                        destinationRect = newCluster.visualRectInDocument,
+                        startAlpha = 0f,
+                        endAlpha = 1f,
+                        clusterByteStart = newCluster.documentByteStart,
+                        clusterByteEndExclusive = newCluster.documentByteEndExclusive
+                    ))
                 }
             } else {
                 animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
@@ -1451,7 +1463,7 @@ class AndroidVisualPlanner {
             }
         }
         if (pairs.isNotEmpty()) return pairs
-        return matchClustersByFingerprint(oldSnapshot, newSnapshot, visualIntent)
+        return matchClustersByFingerprint(oldSnapshot, newSnapshot, visualIntent, mapper)
     }
 
     /**
@@ -1468,7 +1480,8 @@ class AndroidVisualPlanner {
     private fun matchClustersByFingerprint(
         oldSnapshot: AndroidLineSnapshot,
         newSnapshot: AndroidLineSnapshot,
-        visualIntent: VisualIntent
+        visualIntent: VisualIntent,
+        offsetMapper: ((Int) -> Int?)? = null
     ): List<Pair<LineClusterSnapshot, LineClusterSnapshot>> {
         val pairs = mutableListOf<Pair<LineClusterSnapshot, LineClusterSnapshot>>()
         val insertByteRanges = visualIntent.newAffectedByteRanges.toSet()
@@ -1488,15 +1501,23 @@ class AndroidVisualPlanner {
                 oldCluster.documentByteStart < end && oldCluster.documentByteEndExclusive > start
             }
             if (isDeleted) continue
+            val mappedStart = offsetMapper?.invoke(oldCluster.documentByteStart)
             val candidates = newByFp[oldCluster.shapingFingerprint]
             if (candidates != null && candidates.isNotEmpty()) {
-                val validIdx = candidates.indexOfFirst { i ->
+                val validIndices = candidates.filterIndexed { _, i ->
                     newSnapshot.clusters[i].documentByteStart >= lastMatchedNewStart
                 }
-                if (validIdx >= 0) {
-                    val newIdx = candidates.removeAt(validIdx)
-                    lastMatchedNewStart = newSnapshot.clusters[newIdx].documentByteStart
-                    pairs.add(Pair(oldCluster, newSnapshot.clusters[newIdx]))
+                if (validIndices.isNotEmpty()) {
+                    val bestCandidateIdx = validIndices.minBy { i ->
+                        val candidateStart = newSnapshot.clusters[i].documentByteStart
+                        if (mappedStart != null) kotlin.math.abs(candidateStart - mappedStart) else candidateStart
+                    }
+                    val removePos = candidates.indexOf(bestCandidateIdx)
+                    if (removePos >= 0) {
+                        val newIdx = candidates.removeAt(removePos)
+                        lastMatchedNewStart = newSnapshot.clusters[newIdx].documentByteStart
+                        pairs.add(Pair(oldCluster, newSnapshot.clusters[newIdx]))
+                    }
                 }
             }
         }

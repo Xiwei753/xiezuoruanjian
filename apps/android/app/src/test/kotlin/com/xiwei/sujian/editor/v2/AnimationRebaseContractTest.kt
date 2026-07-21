@@ -4187,4 +4187,107 @@ class AnimationRebaseContractTest {
         val best = candidateStarts.minByOrNull { kotlin.math.abs(it - target) }
         assertEquals("Should pick candidate closest to mappedStart=20", 19, best)
     }
+
+    @Test
+    fun runReplace_shapingChangedPositionUnchanged_producesCrossfadeNotSkip() {
+        val oldCluster = LineClusterSnapshot(
+            clusterId = 1,
+            documentByteStart = 10,
+            documentByteEndExclusive = 15,
+            documentUtf16Start = 10,
+            documentUtf16EndExclusive = 15,
+            sourceRectInLineImage = android.graphics.Rect(0, 0, 50, 20),
+            visualRectInDocument = android.graphics.RectF(10f, 0f, 60f, 20f),
+            shapingFingerprint = "fp_a",
+            shapingIdentityConfident = true
+        )
+        val newCluster = LineClusterSnapshot(
+            clusterId = 2,
+            documentByteStart = 10,
+            documentByteEndExclusive = 15,
+            documentUtf16Start = 10,
+            documentUtf16EndExclusive = 15,
+            sourceRectInLineImage = android.graphics.Rect(0, 0, 50, 20),
+            visualRectInDocument = android.graphics.RectF(10f, 0f, 60f, 20f),
+            shapingFingerprint = "fp_b",
+            shapingIdentityConfident = true
+        )
+        val positionChanged = oldCluster.visualRectInDocument != newCluster.visualRectInDocument
+        assertFalse("Position should be unchanged", positionChanged)
+        val fingerprintChanged = oldCluster.shapingFingerprint != newCluster.shapingFingerprint
+        assertTrue("Fingerprint should differ", fingerprintChanged)
+        val identityConfident = oldCluster.shapingIdentityConfident && newCluster.shapingIdentityConfident
+        assertTrue("Identity should be confident", identityConfident)
+        assertFalse("Must NOT skip when fingerprint changed but position unchanged",
+            !positionChanged && identityConfident && !fingerprintChanged)
+    }
+
+    @Test
+    fun runReplace_lowConfidencePositionUnchanged_producesCrossfade() {
+        val oldCluster = LineClusterSnapshot(
+            clusterId = 1,
+            documentByteStart = 10,
+            documentByteEndExclusive = 15,
+            documentUtf16Start = 10,
+            documentUtf16EndExclusive = 15,
+            sourceRectInLineImage = android.graphics.Rect(0, 0, 50, 20),
+            visualRectInDocument = android.graphics.RectF(10f, 0f, 60f, 20f),
+            shapingFingerprint = "fp_a",
+            shapingIdentityConfident = false
+        )
+        val newCluster = LineClusterSnapshot(
+            clusterId = 2,
+            documentByteStart = 10,
+            documentByteEndExclusive = 15,
+            documentUtf16Start = 10,
+            documentUtf16EndExclusive = 15,
+            sourceRectInLineImage = android.graphics.Rect(0, 0, 50, 20),
+            visualRectInDocument = android.graphics.RectF(10f, 0f, 60f, 20f),
+            shapingFingerprint = "fp_a",
+            shapingIdentityConfident = false
+        )
+        val positionChanged = oldCluster.visualRectInDocument != newCluster.visualRectInDocument
+        assertFalse("Position should be unchanged", positionChanged)
+        val identityConfident = oldCluster.shapingIdentityConfident && newCluster.shapingIdentityConfident
+        assertFalse("Identity should not be confident", identityConfident)
+        assertFalse("Must NOT skip when identity not confident even if position and fingerprint match",
+            !positionChanged && identityConfident)
+    }
+
+    @Test
+    fun runReplace_fallbackUsesMappedStartDistance() {
+        val mappedStart = 25
+        val oldClusterStart = 10
+        val candidate1Start = 12
+        val candidate2Start = 24
+        val distUsingMapped = mapOf(
+            candidate1Start to kotlin.math.abs(candidate1Start - mappedStart),
+            candidate2Start to kotlin.math.abs(candidate2Start - mappedStart)
+        )
+        val distUsingRaw = mapOf(
+            candidate1Start to kotlin.math.abs(candidate1Start - oldClusterStart),
+            candidate2Start to kotlin.math.abs(candidate2Start - oldClusterStart)
+        )
+        val bestByMapped = distUsingMapped.minByOrNull { it.value }!!.key
+        val bestByRaw = distUsingRaw.minByOrNull { it.value }!!.key
+        assertNotEquals("mappedStart-based and raw-offset-based matching must differ",
+            bestByMapped, bestByRaw)
+        assertEquals("mappedStart-based should pick candidate2 (closest to mapped=25)",
+            candidate2Start, bestByMapped)
+        assertEquals("raw-offset-based should pick candidate1 (closest to raw=10)",
+            candidate1Start, bestByRaw)
+    }
+
+    @Test
+    fun matchClustersByFingerprint_usesMappedStartDistanceWhenAvailable() {
+        val mappedStart = 30
+        val candidate1Start = 15
+        val candidate2Start = 28
+        val distUsingMapped = mapOf(
+            candidate1Start to kotlin.math.abs(candidate1Start - mappedStart),
+            candidate2Start to kotlin.math.abs(candidate2Start - mappedStart)
+        )
+        val bestByMapped = distUsingMapped.minByOrNull { it.value }!!.key
+        assertEquals("Should pick candidate closest to mappedStart=30", candidate2Start, bestByMapped)
+    }
 }
