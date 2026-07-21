@@ -1,6 +1,20 @@
 use crate::error::{Error, Result};
 use crate::starmap::types::*;
 
+/// 图数据完整性验证入口。
+///
+/// 在 `save_starmap_graph` 保存前调用，确保写入磁盘的数据满足引用完整性不变量。
+/// 验证失败时阻止保存（返回 Err），避免持久化损坏的图数据。
+///
+/// ## 验证不变量
+///
+/// - 节点 ID 全局唯一
+/// - 边端点引用的节点/锚点必须存在（legacy ID、endpoint、deep_target 三级校验）
+/// - 嵌入的 `instance_id` 全局唯一，且不能自嵌入
+/// - 链接的 `link_id` 全局唯一
+/// - Portal deep_target 可达（无循环、无缺失）
+/// - DisplayPolicy scale 层级有序
+/// - 数值字段无 NaN/非法值
 pub(crate) fn validate_graph(workspace: &std::path::Path, graph: &StarMapGraph) -> Result<()> {
     let node_ids = validate_nodes(workspace, graph)?;
     validate_edges(workspace, graph, &node_ids)?;
@@ -9,6 +23,8 @@ pub(crate) fn validate_graph(workspace: &std::path::Path, graph: &StarMapGraph) 
     Ok(())
 }
 
+/// 验证节点：ID 唯一性、内容范围合法性、锚点 ID 唯一性、portal 可达性、display_policy。
+/// 返回节点 ID 集合，供后续边/嵌入/链接验证使用。
 fn validate_nodes(
     workspace: &std::path::Path,
     graph: &StarMapGraph,
@@ -100,6 +116,13 @@ fn validate_nodes(
     Ok(node_ids)
 }
 
+/// 验证边：端点引用完整性。
+///
+/// 每条边的 from/to 端点按优先级校验：
+/// 1. `endpoint`（结构化端点）→ 检查节点/锚点存在性
+/// 2. `legacy_target`（旧格式 deep_target）→ 调用 resolve_deep_target
+/// 3. `legacy_id`（最旧格式节点 ID）→ 检查节点存在性
+/// `Starmap` 端点和 `DeepTarget` 端点中的 Starmap 变体无需本地节点引用。
 fn validate_edges(
     workspace: &std::path::Path,
     graph: &StarMapGraph,
@@ -188,6 +211,8 @@ fn validate_edges(
     Ok(())
 }
 
+/// 验证嵌入：instance_id 唯一、禁止自嵌入、目标星图存在、
+/// placement/viewport 数值合法性、source_node_id/host_endpoint 引用完整性。
 fn validate_embeds(
     workspace: &std::path::Path,
     graph: &StarMapGraph,
@@ -282,6 +307,7 @@ fn validate_embeds(
     Ok(())
 }
 
+/// 验证链接：link_id 唯一、source 端点引用完整、target deep_target 可达。
 fn validate_links(
     workspace: &std::path::Path,
     graph: &StarMapGraph,
@@ -338,6 +364,8 @@ fn validate_links(
     Ok(())
 }
 
+/// 布局验证：scale > 0 且非 NaN，depth/focus_weight 非 NaN。
+/// 坐标值（x/y/width/height）允许为负或零，因为平台端可能使用不同坐标系原点。
 pub(crate) fn validate_layout(layout: &StarMapLayout) -> Result<()> {
     for node in &layout.nodes {
         if node.scale <= 0.0 || node.scale.is_nan() {
@@ -356,6 +384,8 @@ pub(crate) fn validate_layout(layout: &StarMapLayout) -> Result<()> {
     Ok(())
 }
 
+/// 视口验证：scale 为有限正值，所有偏移/尺寸为有限数。
+/// offset 允许为负（视口可向左/上平移），但 NaN/Inf 会导致渲染异常。
 pub(crate) fn validate_viewport(viewport: &StarMapViewport) -> Result<()> {
     if viewport.scale <= 0.0 || !viewport.scale.is_finite() {
         return Err(Error::Io(std::io::Error::new(

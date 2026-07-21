@@ -2,6 +2,10 @@ use serde::{Deserialize, Serialize};
 
 use super::layout::StarMapViewport;
 
+/// 嵌入放置参数：位置、尺寸、缩放、层级。
+///
+/// 所有坐标为星图文档坐标（逻辑像素），平台渲染时乘以 dpr 转为物理像素。
+/// `width`/`height` 允许为 0（折叠状态），不允许为负（验证拦截）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapEmbedPlacement {
@@ -28,6 +32,9 @@ impl Default for StarMapEmbedPlacement {
     }
 }
 
+/// 嵌入目标视口：子星图在嵌入框内的初始视口参数。
+///
+/// `scale` 为子星图内容的缩放比，`offset_x`/`offset_y` 为子星图坐标偏移。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapEmbedViewport {
@@ -46,6 +53,13 @@ impl Default for StarMapEmbedViewport {
     }
 }
 
+/// 星图嵌入（子星图放置实例）。
+///
+/// 使用自定义 `Deserialize` 实现以兼容旧格式：
+/// - 旧格式 `viewport` 字段（`StarMapViewport`）会被合并到新格式的
+///   `placement`（width/height）和 `target_viewport`（scale/offset）中。
+/// - 旧格式 `host_anchor` 字符串会被转换为 `host_endpoint::Anchor`，
+///   但需要 `source_node_id` 同时存在才能构造完整端点。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapEmbed {
@@ -63,6 +77,11 @@ pub struct StarMapEmbed {
     pub updated_at: u64,
 }
 
+/// 自定义反序列化：兼容旧格式字段迁移。
+///
+/// 1. 旧 `viewport` → 新 `placement.width/height` + `target_viewport.scale/offset`
+/// 2. 旧 `host_anchor` (String) → 新 `host_endpoint::Anchor { node_id, anchor_id }`
+///    （需要 `source_node_id` 同时存在，否则 host_anchor 被丢弃）
 impl<'de> Deserialize<'de> for StarMapEmbed {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -130,6 +149,10 @@ impl<'de> Deserialize<'de> for StarMapEmbed {
     }
 }
 
+/// 端点引用（用于嵌入和链接的 source/host）。
+///
+/// 与 `StarMapEdgeEndpoint` 类似但更简单：无 `DeepTarget` 变体，
+/// 因为嵌入/链接的 source 端始终在当前星图内。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum StarMapEndpoint {

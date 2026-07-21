@@ -1,3 +1,20 @@
+/// 解析深目标（DeepTarget）的可达性。
+///
+/// ## 算法
+///
+/// 1. **深度限制**：`path.len() > 32` 返回 `TooDeep`。此上限防止恶意或错误数据
+///    导致无限递归，32 层远超实际使用深度（通常 0-3 层）。
+/// 2. **循环检测**：沿 `path` 逐段遍历，用 `HashSet` 记录已访问的 `starmap_id`，
+///    重复进入同一星图即返回 `CycleDetected`。
+/// 3. **存在性校验**：每层 `EnterChild` 的 `starmap_id` 必须在磁盘上存在。
+/// 4. **终节点校验**：路径末端的 `StarMapTargetDetail`（Node/Anchor/ChapterRange）
+///    在目标星图的 `graph.json` 中验证存在性和范围合法性。
+///
+/// ## 性能注意
+///
+/// 此函数在 `validation::validate_graph` 中对每个 deep_target 调用，
+/// 涉及磁盘 I/O（`load_starmap_meta`、`read_to_string`）。
+/// 对于大量 deep_target 的图，验证可能较慢。
 pub fn resolve_deep_target(
     workspace: &std::path::Path,
     dt: &crate::starmap::semantic::StarMapDeepTarget,

@@ -6,6 +6,10 @@
 
 use serde::{Deserialize, Serialize};
 
+/// 节点内容类型。
+///
+/// `ChapterRef` 中的 `range_start`/`range_end` 为 UTF-8 byte offset（半开区间），
+/// 指向章节正文中的引用范围。`None` 表示引用整个章节。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum StarMapNodeContent {
@@ -32,6 +36,10 @@ pub enum StarMapNodeContent {
     },
 }
 
+/// 锚点：节点内的可引用定位点。
+///
+/// 锚点允许边精确连接到节点内部的特定位置（如章节段落、实体属性），
+/// 而不仅仅是节点整体。`role` 描述锚点在关系中的角色。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapAnchor {
@@ -42,6 +50,9 @@ pub struct StarMapAnchor {
     pub role: StarMapAnchorRole,
 }
 
+/// 锚点目标：锚点指向的具体资源。
+///
+/// `ChapterRange` 中的 `range_start`/`range_end` 为 UTF-8 byte offset（半开区间）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum StarMapAnchorTarget {
@@ -99,6 +110,11 @@ pub enum StarMapAnchorRole {
     Custom,
 }
 
+/// 传送门：节点进入子星图的入口。
+///
+/// - `EnterChild`：点击后进入子星图编辑空间
+/// - `PreviewInline`：在当前星图内内联预览子星图
+/// - `ReferenceOnly`：仅作为引用标记，不提供交互入口
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapPortal {
@@ -131,6 +147,20 @@ pub enum StarMapPortalPreviewPolicy {
     Never,
 }
 
+/// 显示策略：控制节点/嵌入在不同缩放级别下的可见内容。
+///
+/// ## Scale 层级不变量
+///
+/// `min_visible_scale <= title_scale <= summary_scale <= detail_scale`
+///
+/// - `min_visible_scale`：节点开始可见的最低缩放
+/// - `title_scale`：标题文字可读的缩放
+/// - `summary_scale`：摘要可读的缩放
+/// - `detail_scale`：完整详情可读的缩放
+///
+/// `importance` 影响自动布局中的节点排序权重。
+/// `max_preview_chars` 限制内联预览文本长度（防止大文本拖慢渲染）。
+/// `min_readable_px` 为平台端提供最小可读像素阈值参考。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapDisplayPolicy {
@@ -157,6 +187,10 @@ impl Default for StarMapDisplayPolicy {
     }
 }
 
+/// 校验 DisplayPolicy 的 scale 层级不变量和数值合法性。
+///
+/// 不变量：`min_visible_scale <= title_scale <= summary_scale <= detail_scale`，
+/// 所有值非 NaN、非负，`max_preview_chars ≤ 10000`。
 pub fn validate_display_policy(dp: &StarMapDisplayPolicy) -> crate::error::Result<()> {
     if dp.importance.is_nan()
         || dp.importance < 0.0
@@ -209,6 +243,16 @@ pub enum StarMapOpenBehavior {
     Custom,
 }
 
+/// 来源溯源（Provenance）：记录节点/嵌入的创建来源和审核状态。
+///
+/// ## 审计语义
+///
+/// - `source`：创建来源（Human/Import/Plugin/Ai/System）
+/// - `review_status`：审核状态（Accepted/Draft/NeedsReview/Rejected）
+/// - `generated_by`/`prompt_id`：AI 生成时的模型和提示词标识
+/// - `created_from_anchor`：从锚点自动创建时的来源锚点 ID
+///
+/// 平台端可据此实现审核工作流和来源过滤。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapProvenance {
@@ -260,6 +304,21 @@ pub enum StarMapReviewStatus {
     Unknown,
 }
 
+/// 深目标：描述跨星图层级的引用路径。
+///
+/// ## 路径结构
+///
+/// - `starmap_id`：起始星图 ID
+/// - `path`：中间层级穿越段（目前只有 `EnterChild`——进入子星图空间）
+/// - `target`：路径终点的具体引用（节点/锚点/章节范围等）
+///
+/// 路径中间层只允许进入子星图空间（`EnterChild`），节点是原子，
+/// 不能作为路径段"进入"。节点只能作为终点的 `target`。
+///
+/// ## 验证
+///
+/// `resolve_deep_target` 会校验：深度 ≤ 32、无循环、每层星图存在、
+/// 终节点/锚点在目标星图中存在、章节范围合法。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapDeepTarget {
@@ -318,6 +377,13 @@ pub enum StarMapTargetDisplayStatus {
     ExpandedGraph,
 }
 
+/// 深目标解析状态。
+///
+/// - `Resolved`：路径完整可达
+/// - `MissingStarmap/Node/Anchor`：引用的目标不存在
+/// - `TooDeep`：路径超过 32 层深度限制
+/// - `CycleDetected`：路径中存在循环引用
+/// - `InvalidRange`：章节范围 range_start > range_end
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum StarMapTargetResolveStatus {

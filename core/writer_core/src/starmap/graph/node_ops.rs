@@ -2,6 +2,13 @@ use crate::error::{Error, Result};
 use crate::starmap::now_epoch;
 use crate::starmap::types::*;
 
+/// 添加节点到星图，同时在 layout 中创建默认定位条目。
+///
+/// ## 双写语义
+///
+/// 节点同时写入 `graph.json`（语义数据）和 `layout.json`（视觉定位）。
+/// layout 写入失败时静默忽略（`let _ =`），因为 layout 缺失不影响语义完整性——
+/// 下次加载 layout 会回退到默认值，平台端可重新触发布局计算。
 pub fn add_starmap_node(
     workspace: &std::path::Path,
     starmap_id: &str,
@@ -36,6 +43,11 @@ pub fn add_starmap_node(
     Ok(new_node)
 }
 
+/// 局部更新节点（patch 语义）。
+///
+/// `StarMapNodePatch` 中 `None` 表示"不修改"，`Some(None)` 表示"清空可选字段"。
+/// 保存时 `validation::validate_graph` 会校验 portal deep_target 可达性、
+/// anchor 唯一性、display_policy scale 层级等不变量。
 pub fn update_starmap_node(
     workspace: &std::path::Path,
     starmap_id: &str,
@@ -87,6 +99,23 @@ pub fn update_starmap_node(
     }
 }
 
+/// 删除节点并级联清理所有引用该节点的边、嵌入、链接和布局条目。
+///
+/// ## 级联清理范围
+///
+/// 1. **edges**：`from`/`to` legacy ID 或 `from_endpoint`/`to_endpoint` 中
+///    的 `Node`/`Anchor` 变体引用了此 node_id 的边全部移除。
+///    `Starmap`/`DeepTarget` 端点不受影响（它们不直接引用节点 ID）。
+/// 2. **embeds**：`source_node_id` 或 `host_endpoint` 引用了此 node_id 的嵌入全部移除。
+/// 3. **links**：`source` 端点引用了此 node_id 的链接全部移除。
+///    link 的 `target` 是 `StarMapDeepTarget`，不直接引用节点 ID，故不做级联。
+/// 4. **layout**：移除对应的 `StarMapLayoutNode` 条目（静默，失败不影响主流程）。
+///
+/// ## 设计意图
+///
+/// 级联删除确保图数据引用完整性——不允许存在悬空引用。
+/// 这是一次性全量扫描，适用于当前数据规模；若未来图规模增长，
+/// 可能需要索引加速。
 pub fn delete_starmap_node(
     workspace: &std::path::Path,
     starmap_id: &str,
