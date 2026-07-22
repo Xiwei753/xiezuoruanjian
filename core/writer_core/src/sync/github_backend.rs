@@ -131,7 +131,7 @@ impl SyncBackend for GitHubApiBackend {
                     result.raw_error = Some(format!(
                         "HTTP {} (body truncated): {}",
                         status,
-                        &body.chars().take(200).collect::<String>()
+                        body.chars().take(200).collect::<String>()
                     ));
                 } else if status == 404 {
                     result.network_ok = true;
@@ -144,7 +144,7 @@ impl SyncBackend for GitHubApiBackend {
                     result.raw_error = Some(format!(
                         "HTTP {} (body truncated): {}",
                         status,
-                        &body.chars().take(200).collect::<String>()
+                        body.chars().take(200).collect::<String>()
                     ));
                 } else {
                     result.network_ok = false;
@@ -153,7 +153,7 @@ impl SyncBackend for GitHubApiBackend {
                     result.raw_error = Some(format!(
                         "HTTP {} (body truncated): {}",
                         status,
-                        &body.chars().take(200).collect::<String>()
+                        body.chars().take(200).collect::<String>()
                     ));
                 }
             }

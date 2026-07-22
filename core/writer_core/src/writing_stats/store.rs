@@ -508,13 +508,13 @@ impl StatsStore {
             stats.sessions_count = session_count;
             stats.active_seconds = (active_ms / 1000) as u64;
 
-            for (_, proj) in stats.per_project.iter_mut() {
+            for proj in stats.per_project.values_mut() {
                 proj.active_seconds = stats.active_seconds;
             }
-            for (_, vol) in stats.per_volume.iter_mut() {
+            for vol in stats.per_volume.values_mut() {
                 vol.active_seconds = stats.active_seconds;
             }
-            for (_, chap) in stats.per_chapter.iter_mut() {
+            for chap in stats.per_chapter.values_mut() {
                 chap.active_seconds = stats.active_seconds;
             }
 
