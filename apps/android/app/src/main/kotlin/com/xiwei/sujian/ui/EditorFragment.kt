@@ -508,16 +508,14 @@ class EditorFragment : Fragment() {
             val chapterTargetId = getChapterBodyTargetId()
             val sessionId = coordinator.getPersistentSessionId(chapterTargetId)
             if (sessionId != null) {
-                val bridge = com.xiwei.sujian.data.BridgeProvider.getAppServiceBridge(requireContext())
-                when (val result = bridge.textEditSessionReplace(sessionId, start.toUInt(), end.toUInt(), replaceText, searchText, uniffi.writer_core.EditorTransactionCauseDto.TYPING, 0uL)) {
-                    is com.xiwei.sujian.data.BridgeResult.Success -> {
-                        val snapshotResult = bridge.textEditSessionSnapshot(sessionId)
-                        if (snapshotResult is com.xiwei.sujian.data.BridgeResult.Success) {
-                            val snapshot = snapshotResult.data ?: return@setOnClickListener
-                            coordinator.resetPersistentSession(chapterTargetId, snapshot.text, snapshot.cursor.toInt(), com.xiwei.sujian.editor.v2.coordinator.SessionResetSource.EXTERNAL)
-                        }
+                when (val result = coordinator.applyTargetCommand(
+                    chapterTargetId,
+                    com.xiwei.sujian.editor.v2.coordinator.TargetCommand.Replace(start, end, replaceText, searchText)
+                )) {
+                    is com.xiwei.sujian.editor.v2.coordinator.TargetCommandResult.Success -> {
+                        coordinator.updateTargetText(chapterTargetId, result.snapshot.text)
                     }
-                    else -> {}
+                    is com.xiwei.sujian.editor.v2.coordinator.TargetCommandResult.Failed -> {}
                 }
             } else {
                 val view = getEditorView() ?: return@setOnClickListener
@@ -531,16 +529,14 @@ class EditorFragment : Fragment() {
             val chapterTargetId = getChapterBodyTargetId()
             val sessionId = coordinator.getPersistentSessionId(chapterTargetId)
             if (sessionId != null) {
-                val bridge = com.xiwei.sujian.data.BridgeProvider.getAppServiceBridge(requireContext())
-                when (val result = bridge.textEditSessionReplaceAll(sessionId, searchText, replaceText, 0uL)) {
-                    is com.xiwei.sujian.data.BridgeResult.Success -> {
-                        val snapshotResult = bridge.textEditSessionSnapshot(sessionId)
-                        if (snapshotResult is com.xiwei.sujian.data.BridgeResult.Success) {
-                            val snapshot = snapshotResult.data ?: return@setOnClickListener
-                            coordinator.resetPersistentSession(chapterTargetId, snapshot.text, snapshot.cursor.toInt(), com.xiwei.sujian.editor.v2.coordinator.SessionResetSource.EXTERNAL)
-                        }
+                when (val result = coordinator.applyTargetCommand(
+                    chapterTargetId,
+                    com.xiwei.sujian.editor.v2.coordinator.TargetCommand.ReplaceAll(searchText, replaceText)
+                )) {
+                    is com.xiwei.sujian.editor.v2.coordinator.TargetCommandResult.Success -> {
+                        coordinator.updateTargetText(chapterTargetId, result.snapshot.text)
                     }
-                    else -> {}
+                    is com.xiwei.sujian.editor.v2.coordinator.TargetCommandResult.Failed -> {}
                 }
             } else {
                 val view = getEditorView() ?: return@setOnClickListener
@@ -591,6 +587,14 @@ class EditorFragment : Fragment() {
             if (view != null && coordinator.activeTargetId == chapterTargetId) {
                 view.setSearchHighlights(searchResults)
             }
+            coordinator.setTargetDecorations(
+                chapterTargetId,
+                com.xiwei.sujian.editor.v2.coordinator.TargetDecorations(
+                    searchHighlightsUtf8 = searchResults,
+                    selectionStartUtf8 = searchResults[0].first,
+                    selectionEndUtf8 = searchResults[0].second
+                )
+            )
             focusSearchResult()
         }
     }
@@ -599,6 +603,14 @@ class EditorFragment : Fragment() {
         if (searchResults.isEmpty() || currentSearchIndex < 0) return
         val (start, end) = searchResults[currentSearchIndex]
         val chapterTargetId = getChapterBodyTargetId()
+        coordinator.setTargetDecorations(
+            chapterTargetId,
+            com.xiwei.sujian.editor.v2.coordinator.TargetDecorations(
+                searchHighlightsUtf8 = searchResults,
+                selectionStartUtf8 = start,
+                selectionEndUtf8 = end
+            )
+        )
         val sessionId = coordinator.getPersistentSessionId(chapterTargetId)
         if (sessionId != null) {
             val bridge = com.xiwei.sujian.data.BridgeProvider.getAppServiceBridge(requireContext())

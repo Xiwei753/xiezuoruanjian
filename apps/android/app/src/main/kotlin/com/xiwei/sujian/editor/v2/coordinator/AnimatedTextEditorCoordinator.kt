@@ -11,6 +11,8 @@ import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import com.xiwei.sujian.editor.v2.host.TextEditSessionBridge
 import com.xiwei.sujian.editor.v2.coordinator.SecretPolicy
+import com.xiwei.sujian.editor.v2.projection.TargetReadonlyProjection
+import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 
 /**
  * Window-level coordinator that manages a single shared [SujianEditorView] and dispatches
@@ -35,12 +37,14 @@ import com.xiwei.sujian.editor.v2.coordinator.SecretPolicy
 class AnimatedTextEditorCoordinator(
     private val context: Context,
     private val appServiceBridge: AppServiceBridge
-) {
+) : SessionCommandPort {
     private val targets = mutableMapOf<String, EditableTextTarget>()
     // ULong matching Rust's u64 TextEditSessionId at the FFI boundary.
     private var activeSessionId: ULong? = null
     private var sharedEditorView: SujianEditorView? = null
     private val persistentSessionIds = mutableMapOf<String, ULong>()
+    private val targetProjections = mutableMapOf<String, TargetReadonlyProjection>()
+    private val targetDecorations = mutableMapOf<String, TargetDecorations>()
 
     var activeTargetId: String? by mutableStateOf(null)
         private set
@@ -82,6 +86,8 @@ class AnimatedTextEditorCoordinator(
         if (persistentSessionId != null) {
             closeSession(persistentSessionId)
         }
+        targetProjections.remove(targetId)?.release()
+        targetDecorations.remove(targetId)
         targets.remove(targetId)
     }
 
@@ -93,6 +99,8 @@ class AnimatedTextEditorCoordinator(
             val oldTarget = targets[activeTargetId]
             editingState = EditingState.REBINDING
             oldTarget?.onEditingStateChanged?.invoke(EditingState.REBINDING)
+
+            saveActiveTargetProjection()
 
             clearActiveCallbacks()
 
@@ -316,6 +324,7 @@ class AnimatedTextEditorCoordinator(
         if (targetId == activeTargetId) {
             sharedEditorView?.loadText(text, cursorUtf8)
         }
+        updateTargetProjection(targetId)
     }
 
     fun getTargetGeometry(targetId: String): Rect? = targets[targetId]?.currentGeometry
@@ -343,6 +352,9 @@ class AnimatedTextEditorCoordinator(
             closeSession(sessionId)
         }
         persistentSessionIds.clear()
+        targetProjections.values.forEach { it.release() }
+        targetProjections.clear()
+        targetDecorations.clear()
         sharedEditorView?.let { view ->
             view.release()
         }
@@ -373,6 +385,160 @@ class AnimatedTextEditorCoordinator(
             view.onContentChanged = null
             view.onCommitRequested = null
             view.onCancelRequested = null
+        }
+    }
+
+    // ── SessionCommandPort implementation ──
+
+    override fun queryTargetSnapshot(targetId: String): TargetSnapshot? {
+        val sessionId = persistentSessionIds[targetId] ?: return null
+        if (!validateSession(sessionId)) return null
+        return when (val result = appServiceBridge.textEditSessionSnapshot(sessionId)) {
+            is BridgeResult.Success -> {
+                val snap = result.data ?: return null
+                TargetSnapshot(
+                    text = snap.text,
+                    cursorUtf8 = snap.cursor.toInt(),
+                    revision = snap.revision.toLong(),
+                    selectionAnchorUtf8 = snap.selectionAnchor.toInt(),
+                    selectionHeadUtf8 = snap.cursor.toInt()
+                )
+            }
+            else -> null
+        }
+    }
+
+    override fun applyTargetCommand(targetId: String, command: TargetCommand): TargetCommandResult {
+        val sessionId = persistentSessionIds[targetId]
+            ?: return TargetCommandResult.Failed("No persistent session for target $targetId")
+        if (!validateSession(sessionId)) {
+            return TargetCommandResult.Failed("Session $sessionId no longer valid for target $targetId")
+        }
+
+        val bridge = TextEditSessionBridge(appServiceBridge, sessionId)
+        val snapshotBefore = queryTargetSnapshot(targetId)
+            ?: return TargetCommandResult.Failed("Cannot read snapshot for target $targetId")
+
+        val dtoResult = when (command) {
+            is TargetCommand.Replace -> {
+                bridge.replace(
+                    command.byteStart, command.byteEndExclusive,
+                    command.replacementText, command.originalText,
+                    uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+                    snapshotBefore.revision
+                )
+            }
+            is TargetCommand.ReplaceAll -> {
+                bridge.replaceAll(
+                    command.searchText, command.replacementText,
+                    snapshotBefore.revision
+                )
+            }
+            is TargetCommand.SetSelection -> {
+                bridge.setSelection(
+                    command.anchorUtf8, command.headUtf8,
+                    snapshotBefore.revision
+                )
+            }
+        }
+
+        if (dtoResult == null) {
+            return TargetCommandResult.Failed("Kernel returned null for command on target $targetId")
+        }
+
+        val editResult = com.xiwei.sujian.editor.v2.mirror.EditResult.fromDto(dtoResult)
+        if (!editResult.isApplied()) {
+            return TargetCommandResult.Failed("Kernel rejected command: ${editResult.outcome}")
+        }
+
+        if (targetId == activeTargetId) {
+            val view = sharedEditorView
+            if (view != null) {
+                view.getPipeline().applyEditResult(editResult)
+                view.handlePipelineOutput(com.xiwei.sujian.editor.v2.pipeline.AndroidEditorPipeline.PipelineOutput.Edited(editResult))
+            }
+        }
+
+        val snapshotAfter = queryTargetSnapshot(targetId)
+            ?: return TargetCommandResult.Failed("Cannot read snapshot after command for target $targetId")
+
+        targets[targetId]?.updateText(snapshotAfter.text)
+        updateTargetProjection(targetId)
+
+        return TargetCommandResult.Success(snapshotAfter)
+    }
+
+    override fun setTargetDecorations(targetId: String, decorations: TargetDecorations) {
+        targetDecorations[targetId] = decorations
+        val projection = targetProjections[targetId]
+        if (projection != null) {
+            projection.setSearchHighlights(decorations.searchHighlightsUtf8)
+            if (decorations.selectionStartUtf8 >= 0 && decorations.selectionEndUtf8 >= 0) {
+                projection.setSelection(decorations.selectionStartUtf8, decorations.selectionEndUtf8)
+            }
+        }
+        if (targetId == activeTargetId) {
+            val view = sharedEditorView
+            if (view != null && decorations.searchHighlightsUtf8.isNotEmpty()) {
+                view.setSearchHighlights(decorations.searchHighlightsUtf8)
+            }
+        }
+    }
+
+    // ── Read-only projection for inactive targets ──
+
+    fun getTargetProjection(targetId: String): TargetReadonlyProjection? {
+        return targetProjections[targetId]
+    }
+
+    private fun saveActiveTargetProjection() {
+        val targetId = activeTargetId ?: return
+        val target = targets[targetId] ?: return
+        if (!target.isPersistent) return
+
+        val projection = getOrCreateProjection(targetId, target)
+        val view = sharedEditorView ?: return
+        projection.updateFromSnapshot(
+            view.getText(),
+            view.getPipeline().getCursorUtf8(),
+            view.getPipeline().getRevision()
+        )
+        val decorations = targetDecorations[targetId]
+        if (decorations != null) {
+            projection.setSearchHighlights(decorations.searchHighlightsUtf8)
+            if (decorations.selectionStartUtf8 >= 0 && decorations.selectionEndUtf8 >= 0) {
+                projection.setSelection(decorations.selectionStartUtf8, decorations.selectionEndUtf8)
+            }
+        }
+    }
+
+    private fun updateTargetProjection(targetId: String) {
+        val target = targets[targetId] ?: return
+        if (!target.isPersistent) return
+        val snapshot = queryTargetSnapshot(targetId) ?: return
+        val projection = getOrCreateProjection(targetId, target)
+        projection.updateFromSnapshot(snapshot.text, snapshot.cursorUtf8, snapshot.revision)
+        val decorations = targetDecorations[targetId]
+        if (decorations != null) {
+            projection.setSearchHighlights(decorations.searchHighlightsUtf8)
+            if (decorations.selectionStartUtf8 >= 0 && decorations.selectionEndUtf8 >= 0) {
+                projection.setSelection(decorations.selectionStartUtf8, decorations.selectionEndUtf8)
+            }
+        }
+    }
+
+    private fun getOrCreateProjection(targetId: String, target: EditableTextTarget): TargetReadonlyProjection {
+        return targetProjections.getOrPut(targetId) {
+            val mirror = DisplayTextMirror()
+            val textPaint = android.text.TextPaint().apply {
+                textSize = 48f
+                isAntiAlias = true
+            }
+            val projection = TargetReadonlyProjection(mirror, textPaint)
+            if (target.profile.secretPolicy == SecretPolicy.MASK_AND_CLEAR_ON_COMMIT) {
+                projection.setSecretMasked(true)
+            }
+            projection
         }
     }
 

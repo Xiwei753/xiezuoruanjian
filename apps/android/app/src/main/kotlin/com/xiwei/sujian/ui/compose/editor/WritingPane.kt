@@ -38,6 +38,7 @@ import com.xiwei.sujian.editor.v2.coordinator.SessionResetSource
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
 import com.xiwei.sujian.ui.EditorViewModel
 import com.xiwei.sujian.ui.SaveStatus
+import androidx.compose.ui.viewinterop.AndroidView
 
 /**
  * 章节正文编辑面板 — 连接 EditorViewModel 与 AnimatedTextEditorCoordinator。
@@ -196,6 +197,7 @@ fun WritingPane(
                 CircularProgressIndicator()
             }
         } else {
+            val isActiveTarget = coordinator.activeTargetId == targetId
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -211,8 +213,21 @@ fun WritingPane(
                             rect.left.toInt(), rect.top.toInt(),
                             rect.right.toInt(), rect.bottom.toInt()
                         ))
+                        if (!isActiveTarget) {
+                            val projection = coordinator.getTargetProjection(targetId)
+                            if (projection != null) {
+                                projection.setWidth(size.width.toFloat())
+                            }
+                        }
                     }
-            )
+            ) {
+                if (!isActiveTarget) {
+                    val projection = coordinator.getTargetProjection(targetId)
+                    if (projection != null && projection.getText().isNotEmpty()) {
+                        ReadonlyChapterPreview(projection = projection)
+                    }
+                }
+            }
         }
     }
 }

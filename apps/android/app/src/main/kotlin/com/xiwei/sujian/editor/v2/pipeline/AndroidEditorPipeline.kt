@@ -17,6 +17,7 @@ import com.xiwei.sujian.editor.v2.render.AndroidTextAnimationRenderer
 import com.xiwei.sujian.editor.v2.input.AndroidInputAdapter
 import com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap
 import com.xiwei.sujian.editor.v2.host.EditorKernelBridge
+import com.xiwei.sujian.editor.v2.projection.DisplayTextProjection
 import android.view.View
 import uniffi.writer_core.EditorTransactionCauseDto
 
@@ -51,7 +52,9 @@ class AndroidEditorPipeline private constructor(
     val textRenderer: AndroidTextRenderer,
     val animationRenderer: AndroidTextAnimationRenderer,
     val frameComposer: EditorFrameComposer,
-    var inputAdapter: AndroidInputAdapter?
+    var inputAdapter: AndroidInputAdapter?,
+    val layoutRuntime: AndroidLayoutRuntime,
+    val visualRuntime: AndroidVisualRuntime
 ) {
 
     val mirror: DisplayTextMirror get() = editPipeline.mirror
@@ -69,7 +72,9 @@ class AndroidEditorPipeline private constructor(
             val textRenderer = AndroidTextRenderer()
             val animationRenderer = AndroidTextAnimationRenderer()
             val frameComposer = EditorFrameComposer()
-            val pipeline = AndroidEditorPipeline(editPipeline, layoutEngine, visualPlanner, animationEngine, textRenderer, animationRenderer, frameComposer, null)
+            val layoutRuntime = AndroidLayoutRuntime(mirror, layoutEngine)
+            val visualRuntime = AndroidVisualRuntime(visualPlanner, animationEngine, resourceStore)
+            val pipeline = AndroidEditorPipeline(editPipeline, layoutEngine, visualPlanner, animationEngine, textRenderer, animationRenderer, frameComposer, null, layoutRuntime, visualRuntime)
             val inputAdapter = AndroidInputAdapter(mirror, pipeline)
             inputAdapter.setHostView(hostView)
             pipeline.inputAdapter = inputAdapter
@@ -797,16 +802,12 @@ class AndroidEditorPipeline private constructor(
     fun getMaxLength(): Int = maxLength
 
     private var secretDisplayMode: Boolean = false
+    private var currentProjection: DisplayTextProjection = DisplayTextProjection.identity("")
 
     fun setSecretDisplayMode(enabled: Boolean) {
         if (secretDisplayMode != enabled) {
             secretDisplayMode = enabled
-            if (enabled) {
-                val maskedText = "\u2022".repeat(mirror.getText().length)
-                layoutEngine.setDisplayTextOverride(maskedText)
-            } else {
-                layoutEngine.clearDisplayTextOverride()
-            }
+            rebuildProjection()
         }
     }
 
@@ -814,8 +815,24 @@ class AndroidEditorPipeline private constructor(
 
     fun applySecretDisplayIfActive() {
         if (secretDisplayMode) {
-            val maskedText = "\u2022".repeat(mirror.getText().length)
-            layoutEngine.setDisplayTextOverride(maskedText)
+            rebuildProjection()
         }
     }
+
+    private fun rebuildProjection() {
+        val text = mirror.getText()
+        currentProjection = if (secretDisplayMode) {
+            DisplayTextProjection.masked(text)
+        } else {
+            DisplayTextProjection.identity(text)
+        }
+        if (secretDisplayMode) {
+            layoutEngine.setDisplayTextOverride(currentProjection.displayText)
+        } else {
+            layoutEngine.clearDisplayTextOverride()
+        }
+        layoutEngine.requestLayout()
+    }
+
+    fun getCurrentProjection(): DisplayTextProjection = currentProjection
 }

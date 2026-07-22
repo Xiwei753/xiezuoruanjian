@@ -95,6 +95,14 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     private fun handlePipelineOutput(output: AndroidEditorPipeline.PipelineOutput, suppressContentCallback: Boolean = false) {
+        handlePipelineOutputInternal(output, suppressContentCallback)
+    }
+
+    fun handlePipelineOutput(output: AndroidEditorPipeline.PipelineOutput) {
+        handlePipelineOutputInternal(output, false)
+    }
+
+    private fun handlePipelineOutputInternal(output: AndroidEditorPipeline.PipelineOutput, suppressContentCallback: Boolean = false) {
         when (output) {
             is AndroidEditorPipeline.PipelineOutput.Edited -> {
                 pipeline.applySecretDisplayIfActive()
