@@ -477,11 +477,17 @@ class AndroidEditorPipeline private constructor(
     fun drawFrame(canvas: android.graphics.Canvas, searchHighlightsUtf16: List<Pair<Int, Int>>, viewportWidth: Int, viewportHeight: Int, scrollX: Float, scrollY: Float) {
         val layout = layoutRuntime.getLayout()
         if (layout != null) {
+            val frameTimeMs = System.nanoTime() / 1_000_000
+            val transaction = visualRuntime.getActiveTransaction()
+            val progress = visualRuntime.getTimelineProgress(frameTimeMs)
+            visualRuntime.markFirstVisibleFrame(frameTimeMs)
             renderRuntime.drawFrame(
-                canvas, layout, layoutRuntime, visualRuntime, mirror,
+                canvas, layout, layoutRuntime.getCurrentRevision(),
+                transaction, progress,
                 searchHighlightsUtf16, viewportWidth, viewportHeight,
-                scrollX, scrollY, cursorVisible, selectionAllowed
+                scrollX, scrollY, cursorVisible, selectionAllowed, mirror
             )
+            visualRuntime.completeIfFinished(frameTimeMs)
         }
     }
 

@@ -187,4 +187,38 @@ class RuntimeOwnershipTest {
         assertTrue("engine's planner must be same instance as passed planner", enginePlanner === planner)
         assertTrue("engine's store must be same instance as passed store", engineStore === store)
     }
+
+    @Test
+    fun renderRuntimeDrawFrameDoesNotDependOnLayoutRuntimeOrVisualRuntime() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidRenderRuntime")
+        val drawFrameMethods = clazz.declaredMethods.filter { it.name == "drawFrame" }
+        assertTrue("AndroidRenderRuntime should have drawFrame method", drawFrameMethods.isNotEmpty())
+        val method = drawFrameMethods.first()
+        val paramTypes = method.parameterTypes.map { it.name }
+        assertFalse("drawFrame should not take AndroidLayoutRuntime as parameter",
+            paramTypes.any { it.contains("AndroidLayoutRuntime") })
+        assertFalse("drawFrame should not take AndroidVisualRuntime as parameter",
+            paramTypes.any { it.contains("AndroidVisualRuntime") })
+    }
+
+    @Test
+    fun pipelineDrawFrameConvergesRuntimeAccess() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidEditorPipeline")
+        val method = clazz.getDeclaredMethod("drawFrame",
+            android.graphics.Canvas::class.java,
+            List::class.java,
+            Int::class.javaPrimitiveType,
+            Int::class.javaPrimitiveType,
+            Float::class.javaPrimitiveType,
+            Float::class.javaPrimitiveType
+        )
+        assertNotNull(method)
+    }
+
+    @Test
+    fun targetReadonlyProjectionHasGetRevision() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetReadonlyProjection")
+        val method = clazz.getDeclaredMethod("getRevision")
+        assertEquals(Long::class.javaPrimitiveType, method.returnType)
+    }
 }

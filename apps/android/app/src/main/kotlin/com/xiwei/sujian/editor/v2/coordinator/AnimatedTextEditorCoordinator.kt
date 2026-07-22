@@ -454,6 +454,9 @@ class AnimatedTextEditorCoordinator(
             }
         }
 
+        val projectionForRevision = targetProjections[targetId]
+        val effectiveRevision = projectionForRevision?.getRevision() ?: snapshotBefore.revision
+
         val bridge = TextEditSessionBridge(appServiceBridge, sessionId)
         val dtoResult = when (command) {
             is TargetCommand.Replace -> {
@@ -461,19 +464,19 @@ class AnimatedTextEditorCoordinator(
                     command.byteStart, command.byteEndExclusive,
                     command.replacementText, command.originalText,
                     uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
-                    snapshotBefore.revision
+                    effectiveRevision
                 )
             }
             is TargetCommand.ReplaceAll -> {
                 bridge.replaceAll(
                     command.searchText, command.replacementText,
-                    snapshotBefore.revision
+                    effectiveRevision
                 )
             }
             is TargetCommand.SetSelection -> {
                 bridge.setSelection(
                     command.anchorUtf8, command.headUtf8,
-                    snapshotBefore.revision
+                    effectiveRevision
                 )
             }
         }
@@ -487,9 +490,9 @@ class AnimatedTextEditorCoordinator(
             return TargetCommandResult.Failed(TargetCommandError.KERNEL_REJECTED)
         }
 
-        val projection = targetProjections[targetId]
-        if (projection != null) {
-            projection.applyEditResult(editResult)
+        val applyProjection = targetProjections[targetId]
+        if (applyProjection != null) {
+            applyProjection.applyEditResult(editResult)
         } else {
             updateTargetProjection(targetId)
         }

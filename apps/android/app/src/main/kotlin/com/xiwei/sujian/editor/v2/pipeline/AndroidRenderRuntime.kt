@@ -1,6 +1,7 @@
 package com.xiwei.sujian.editor.v2.pipeline
 
 import android.graphics.Canvas
+import com.xiwei.sujian.editor.v2.layout.AndroidLayoutRevision
 import com.xiwei.sujian.editor.v2.render.ComposedFrame
 import com.xiwei.sujian.editor.v2.render.EditorFrameComposer
 import com.xiwei.sujian.editor.v2.render.AndroidTextRenderer
@@ -20,39 +21,33 @@ class AndroidRenderRuntime(
     fun drawFrame(
         canvas: Canvas,
         layout: android.text.Layout,
-        layoutRuntime: AndroidLayoutRuntime,
-        visualRuntime: AndroidVisualRuntime,
-        mirror: com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror,
+        layoutRevision: AndroidLayoutRevision?,
+        transaction: com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction?,
+        timelineProgress: Float,
         searchHighlightsUtf16: List<Pair<Int, Int>>,
         viewportWidth: Int,
         viewportHeight: Int,
         scrollX: Float,
         scrollY: Float,
         cursorVisible: Boolean,
-        selectionAllowed: Boolean
+        selectionAllowed: Boolean,
+        mirror: com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
     ) {
-        val frameTimeMs = System.nanoTime() / 1_000_000
-        val rev = layoutRuntime.getCurrentRevision()
-        val effectiveSelStart = if (selectionAllowed) (rev?.selectionStartUtf16 ?: mirror.getSelectionStartUtf16()) else mirror.getCursorUtf16()
-        val effectiveSelEnd = if (selectionAllowed) (rev?.selectionEndUtf16 ?: mirror.getSelectionEndUtf16()) else mirror.getCursorUtf16()
-
-        val transaction = visualRuntime.getActiveTransaction()
-        val progress = visualRuntime.getTimelineProgress(frameTimeMs)
-
-        visualRuntime.markFirstVisibleFrame(frameTimeMs)
+        val effectiveSelStart = if (selectionAllowed) (layoutRevision?.selectionStartUtf16 ?: mirror.getSelectionStartUtf16()) else mirror.getCursorUtf16()
+        val effectiveSelEnd = if (selectionAllowed) (layoutRevision?.selectionEndUtf16 ?: mirror.getSelectionEndUtf16()) else mirror.getCursorUtf16()
 
         val composedFrame = frameComposer.compose(
             layout = layout,
             transaction = transaction,
-            progress = progress,
-            cursorUtf16 = if (cursorVisible) (rev?.cursorUtf16 ?: mirror.getCursorUtf16()) else -1,
-            cursorX = rev?.cursorX ?: 0f,
-            cursorY = rev?.cursorY ?: 0f,
-            cursorHeight = rev?.cursorHeight ?: 0f,
+            progress = timelineProgress,
+            cursorUtf16 = if (cursorVisible) (layoutRevision?.cursorUtf16 ?: mirror.getCursorUtf16()) else -1,
+            cursorX = layoutRevision?.cursorX ?: 0f,
+            cursorY = layoutRevision?.cursorY ?: 0f,
+            cursorHeight = layoutRevision?.cursorHeight ?: 0f,
             selectionStartUtf16 = effectiveSelStart,
             selectionEndUtf16 = effectiveSelEnd,
-            compositionStartUtf16 = rev?.compositionStartUtf16 ?: -1,
-            compositionEndUtf16 = rev?.compositionEndUtf16 ?: -1,
+            compositionStartUtf16 = layoutRevision?.compositionStartUtf16 ?: -1,
+            compositionEndUtf16 = layoutRevision?.compositionEndUtf16 ?: -1,
             searchHighlightsUtf16 = searchHighlightsUtf16,
             viewportWidth = viewportWidth,
             viewportHeight = viewportHeight,
@@ -61,8 +56,6 @@ class AndroidRenderRuntime(
         )
 
         renderComposedFrame(canvas, composedFrame)
-
-        visualRuntime.completeIfFinished(frameTimeMs)
     }
 
     fun renderComposedFrame(canvas: Canvas, frame: ComposedFrame) {

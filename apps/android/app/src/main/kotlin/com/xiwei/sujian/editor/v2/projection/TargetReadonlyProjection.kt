@@ -12,6 +12,7 @@ class TargetReadonlyProjection(
 ) {
     private val layoutEngine: AndroidLayoutEngine = AndroidLayoutEngine(mirror, textPaint)
     private var projection: DisplayTextProjection = DisplayTextProjection.identity("")
+    private var secretDisplayMode: Boolean = false
     private var searchHighlightsUtf8: List<Pair<Int, Int>> = emptyList()
     private var selectionStartUtf8: Int = 0
     private var selectionEndUtf8: Int = 0
@@ -24,14 +25,19 @@ class TargetReadonlyProjection(
     fun applyEditResult(result: EditResult) {
         if (!result.isApplied()) return
         mirror.applyEditResult(result)
-        rebuildProjectionContent()
-        layoutEngine.requestLayout()
+        rebuildProjectionAndLayout()
     }
 
     private fun rebuildProjectionContent() {
         val text = mirror.getText()
-        projection = if (projection.isMasked) {
-            DisplayTextProjection.masked(text)
+        projection = if (secretDisplayMode) {
+            val compRange = mirror.getCompositionRangeUtf16()
+            if (compRange != null && compRange.first >= 0 && compRange.second > compRange.first) {
+                val compText = mirror.getSpannable().substring(compRange.first, compRange.second)
+                DisplayTextProjection.maskedWithComposition(text, compRange.first, compRange.second, compText)
+            } else {
+                DisplayTextProjection.masked(text)
+            }
         } else {
             DisplayTextProjection.identity(text)
         }
@@ -48,18 +54,8 @@ class TargetReadonlyProjection(
     }
 
     fun setSecretMasked(masked: Boolean) {
-        val text = mirror.getText()
-        projection = if (masked) {
-            DisplayTextProjection.masked(text)
-        } else {
-            DisplayTextProjection.identity(text)
-        }
-        if (masked) {
-            layoutEngine.setDisplayTextOverride(projection.displayText)
-        } else {
-            layoutEngine.clearDisplayTextOverride()
-        }
-        layoutEngine.requestLayout()
+        secretDisplayMode = masked
+        rebuildProjectionAndLayout()
     }
 
     fun setSearchHighlights(highlights: List<Pair<Int, Int>>) {

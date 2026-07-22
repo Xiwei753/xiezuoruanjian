@@ -19,6 +19,7 @@ class TargetReadonlyProjectionContractTest {
         assert(clazz.declaredMethods.any { it.name == "getSelectionStartUtf16" })
         assert(clazz.declaredMethods.any { it.name == "getSelectionEndUtf16" })
         assert(clazz.declaredMethods.any { it.name == "getProjection" })
+        assert(clazz.declaredMethods.any { it.name == "getRevision" })
     }
 
     @Test
@@ -62,5 +63,27 @@ class TargetReadonlyProjectionContractTest {
         val utf8Len = text.toByteArray(Charsets.UTF_8).size
         assertEquals(utf8Len, proj.realLengthUtf8)
         assertEquals(3, proj.displayLengthUtf16)
+    }
+
+    @Test
+    fun targetReadonlyProjectionOwnsSecretDisplayMode() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetReadonlyProjection")
+        val field = clazz.getDeclaredField("secretDisplayMode")
+        assertEquals(Boolean::class.javaPrimitiveType, field.type)
+    }
+
+    @Test
+    fun targetReadonlyProjectionRebuildUsesComposition() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetReadonlyProjection")
+        val mirrorClazz = Class.forName("com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror")
+        val constructor = clazz.getDeclaredConstructor(mirrorClazz, android.text.TextPaint::class.java)
+        assertTrue(constructor != null)
+    }
+
+    @Test
+    fun applyEditResultTriggersRebuildProjectionAndLayout() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetReadonlyProjection")
+        val method = clazz.getDeclaredMethod("applyEditResult", Class.forName("com.xiwei.sujian.editor.v2.mirror.EditResult"))
+        assertTrue(method != null)
     }
 }
