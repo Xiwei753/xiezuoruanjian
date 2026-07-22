@@ -150,3 +150,164 @@ impl LinuxTextEditorCoordinator {
         }
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn register_and_begin_edit() {
+        let mut coord = LinuxTextEditorCoordinator::new();
+        coord.register_target(EditableTextTarget {
+            target_id: "test-target".to_string(),
+            is_persistent: false,
+            current_text: "hello".to_string(),
+        });
+        assert!(coord.begin_edit("test-target"));
+        assert_eq!(coord.active_target_id(), Some("test-target"));
+    }
+
+    #[test]
+    fn begin_edit_unknown_target_fails() {
+        let mut coord = LinuxTextEditorCoordinator::new();
+        assert!(!coord.begin_edit("nonexistent"));
+    }
+
+    #[test]
+    fn begin_edit_same_target_is_idempotent() {
+        let mut coord = LinuxTextEditorCoordinator::new();
+        coord.register_target(EditableTextTarget {
+            target_id: "t1".to_string(),
+            is_persistent: false,
+            current_text: "abc".to_string(),
+        });
+        assert!(coord.begin_edit("t1"));
+        assert!(coord.begin_edit("t1"));
+    }
+
+    #[test]
+    fn commit_closes_non_persistent_session() {
+        let mut coord = LinuxTextEditorCoordinator::new();
+        coord.register_target(EditableTextTarget {
+            target_id: "t1".to_string(),
+            is_persistent: false,
+            current_text: "abc".to_string(),
+        });
+        assert!(coord.begin_edit("t1"));
+        assert!(coord.commit_active_edit());
+        assert!(coord.active_target_id().is_none());
+    }
+
+    #[test]
+    fn commit_keeps_persistent_session() {
+        let mut coord = LinuxTextEditorCoordinator::new();
+        coord.register_target(EditableTextTarget {
+            target_id: "t1".to_string(),
+            is_persistent: true,
+            current_text: "abc".to_string(),
+        });
+        assert!(coord.begin_edit("t1"));
+        assert!(coord.commit_active_edit());
+        assert!(coord.active_target_id().is_none());
+        assert!(coord.persistent_session_ids.contains_key("t1"));
+    }
+
+    #[test]
+    fn cancel_closes_session() {
+        let mut coord = LinuxTextEditorCoordinator::new();
+        coord.register_target(EditableTextTarget {
+            target_id: "t1".to_string(),
+            is_persistent: true,
+            current_text: "abc".to_string(),
+        });
+        assert!(coord.begin_edit("t1"));
+        assert!(coord.cancel_active_edit());
+        assert!(coord.active_target_id().is_none());
+        assert!(!coord.persistent_session_ids.contains_key("t1"));
+    }
+
+    #[test]
+    fn commit_without_active_returns_false() {
+        let mut coord = LinuxTextEditorCoordinator::new();
+        assert!(!coord.commit_active_edit());
+    }
+
+    #[test]
+    fn cancel_without_active_returns_false() {
+        let mut coord = LinuxTextEditorCoordinator::new();
+        assert!(!coord.cancel_active_edit());
+    }
+
+    #[test]
+    fn unregister_cancels_active_edit() {
+        let mut coord = LinuxTextEditorCoordinator::new();
+        coord.register_target(EditableTextTarget {
+            target_id: "t1".to_string(),
+            is_persistent: false,
+            current_text: "abc".to_string(),
+        });
+        assert!(coord.begin_edit("t1"));
+        coord.unregister_target("t1");
+        assert!(coord.active_target_id().is_none());
+    }
+
+    #[test]
+    fn switching_target_commits_previous() {
+        let mut coord = LinuxTextEditorCoordinator::new();
+        coord.register_target(EditableTextTarget {
+            target_id: "t1".to_string(),
+            is_persistent: false,
+            current_text: "abc".to_string(),
+        });
+        coord.register_target(EditableTextTarget {
+            target_id: "t2".to_string(),
+            is_persistent: false,
+            current_text: "def".to_string(),
+        });
+        assert!(coord.begin_edit("t1"));
+        assert!(coord.begin_edit("t2"));
+        assert_eq!(coord.active_target_id(), Some("t2"));
+    }
+
+    #[test]
+    fn update_target_text() {
+        let mut coord = LinuxTextEditorCoordinator::new();
+        coord.register_target(EditableTextTarget {
+            target_id: "t1".to_string(),
+            is_persistent: false,
+            current_text: "abc".to_string(),
+        });
+        coord.update_target_text("t1", "xyz".to_string());
+        assert_eq!(coord.targets.get("t1").unwrap().current_text, "xyz");
+    }
+
+    #[test]
+    fn persistent_session_reuse() {
+        let mut coord = LinuxTextEditorCoordinator::new();
+        coord.register_target(EditableTextTarget {
+            target_id: "t1".to_string(),
+            is_persistent: true,
+            current_text: "abc".to_string(),
+        });
+        assert!(coord.begin_edit("t1"));
+        let first_session = coord.active_session_id.unwrap();
+        assert!(coord.commit_active_edit());
+        assert!(coord.begin_edit("t1"));
+        let second_session = coord.active_session_id.unwrap();
+        assert_eq!(first_session, second_session);
+    }
+
+    #[test]
+    fn get_active_session_returns_session() {
+        let mut coord = LinuxTextEditorCoordinator::new();
+        coord.register_target(EditableTextTarget {
+            target_id: "t1".to_string(),
+            is_persistent: false,
+            current_text: "abc".to_string(),
+        });
+        coord.begin_edit("t1");
+        let session = coord.get_active_session();
+        assert!(session.is_some());
+    }
+}

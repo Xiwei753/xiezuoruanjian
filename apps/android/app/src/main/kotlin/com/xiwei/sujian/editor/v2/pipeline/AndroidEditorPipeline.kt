@@ -21,12 +21,17 @@ import android.view.View
 import uniffi.writer_core.EditorTransactionCauseDto
 
 /**
- * Central orchestrator of the Android editing pipeline.
+ * Visual pipeline for the Android editing runtime.
  *
- * Holds all platform-side components: [DisplayTextMirror] (text truth), [AndroidLayoutEngine]
- * (visual projection), [AndroidVisualPlanner] (pure planning), [AndroidTextAnimationEngine]
- * (animation runtime owner), [AndroidTextRenderer]/[AndroidTextAnimationRenderer] (rendering),
- * [EditorFrameComposer] (frame assembly), and [AndroidInputAdapter] (IME).
+ * Ownership split (per #550):
+ * - [EditPipeline] owns [DisplayTextMirror] and [EditorKernelBridge] — applies EditResult
+ *   to mirror and requests new LayoutRevision.
+ * - [AndroidTextAnimationEngine] owns [AndroidVisualPlanner], Timeline, [VisualResourceStore]
+ *   and active visual transactions.
+ * - [EditorFrameComposer] + [AndroidTextRenderer]/[AndroidTextAnimationRenderer] compose
+ *   and draw the current frame.
+ * - [SujianEditorView] handles focus, InputConnection, viewport, system notifications
+ *   and frame requests.
  *
  * Both normal text edits and IME composition update/commit/cancel go through the same
  * [AndroidTextAnimationEngine] — composition animations are not a separate code path.
@@ -39,19 +44,24 @@ import uniffi.writer_core.EditorTransactionCauseDto
  * of a long document.
  */
 class AndroidEditorPipeline private constructor(
-    val mirror: DisplayTextMirror,
+    val editPipeline: EditPipeline,
     val layoutEngine: AndroidLayoutEngine,
     val visualPlanner: AndroidVisualPlanner,
     val animationEngine: AndroidTextAnimationEngine,
     val textRenderer: AndroidTextRenderer,
     val animationRenderer: AndroidTextAnimationRenderer,
     val frameComposer: EditorFrameComposer,
-    var inputAdapter: AndroidInputAdapter?,
-    var kernelBridge: EditorKernelBridge?
+    var inputAdapter: AndroidInputAdapter?
 ) {
+
+    val mirror: DisplayTextMirror get() = editPipeline.mirror
+    var kernelBridge: EditorKernelBridge?
+        get() = editPipeline.kernelBridge
+        set(value) { editPipeline.setKernelBridge(value) }
 
     companion object {
         fun create(mirror: DisplayTextMirror, textPaint: TextPaint, hostView: View): AndroidEditorPipeline {
+            val editPipeline = EditPipeline(mirror)
             val layoutEngine = AndroidLayoutEngine(mirror, textPaint)
             val visualPlanner = AndroidVisualPlanner()
             val resourceStore = VisualResourceStore()
@@ -59,7 +69,7 @@ class AndroidEditorPipeline private constructor(
             val textRenderer = AndroidTextRenderer()
             val animationRenderer = AndroidTextAnimationRenderer()
             val frameComposer = EditorFrameComposer()
-            val pipeline = AndroidEditorPipeline(mirror, layoutEngine, visualPlanner, animationEngine, textRenderer, animationRenderer, frameComposer, null, null)
+            val pipeline = AndroidEditorPipeline(editPipeline, layoutEngine, visualPlanner, animationEngine, textRenderer, animationRenderer, frameComposer, null)
             val inputAdapter = AndroidInputAdapter(mirror, pipeline)
             inputAdapter.setHostView(hostView)
             pipeline.inputAdapter = inputAdapter
@@ -72,79 +82,65 @@ class AndroidEditorPipeline private constructor(
     private var maxLength: Int = 0
 
     fun loadText(text: String, cursorUtf8: Int): LoadTextResult {
-        val bridge = kernelBridge ?: return LoadTextResult.Failed
         inputAdapter?.invalidateCompositionSession()
-        val dto = bridge.loadText(text, cursorUtf8) ?: return LoadTextResult.Failed
-        val result = EditResult.fromDto(dto)
-        if (result.isStale()) {
-            return LoadTextResult.Failed
-        }
-        if (result.isApplied() || result.isNoChange()) {
-            mirror.loadFromSnapshot(text, result.newSelectionEnd, result.newRevision, result.newSelectionStart, result.newSelectionEnd)
+        val result = editPipeline.loadText(text, cursorUtf8)
+        if (result is LoadTextResult.Loaded) {
             resetAfterLoad()
-            return LoadTextResult.Loaded(result)
         }
-        return LoadTextResult.Failed
+        return result
     }
 
     fun insertText(byteOffset: Int, text: String, cause: EditorTransactionCauseDto = EditorTransactionCauseDto.TYPING): PipelineOutput {
-        val bridge = kernelBridge ?: return PipelineOutput.StaleOrInvalid
         inputAdapter?.invalidateCompositionSession()
         if (autoIndentEnabled && text == "\n") {
             val indentPrefix = computeAutoIndentPrefix()
-            val dto = bridge.insertLineBreak(byteOffset, indentPrefix, cause, mirror.getRevision()) ?: return PipelineOutput.StaleOrInvalid
-            val result = EditResult.fromDto(dto)
+            val result = editPipeline.insertLineBreak(byteOffset, indentPrefix, cause)
+                ?: return PipelineOutput.StaleOrInvalid
             return applyEditResult(result)
         }
-        val dto = bridge.insert(byteOffset, text, cause, mirror.getRevision()) ?: return PipelineOutput.StaleOrInvalid
-        val result = EditResult.fromDto(dto)
+        val result = editPipeline.insertText(byteOffset, text, cause)
+            ?: return PipelineOutput.StaleOrInvalid
         return applyEditResult(result)
     }
 
     fun deleteRange(byteStart: Int, byteEndExclusive: Int, cause: EditorTransactionCauseDto = EditorTransactionCauseDto.DELETE): PipelineOutput {
-        val bridge = kernelBridge ?: return PipelineOutput.StaleOrInvalid
         inputAdapter?.invalidateCompositionSession()
-        val dto = bridge.delete(byteStart, byteEndExclusive, cause, mirror.getRevision()) ?: return PipelineOutput.StaleOrInvalid
-        val result = EditResult.fromDto(dto)
+        val result = editPipeline.deleteRange(byteStart, byteEndExclusive, cause)
+            ?: return PipelineOutput.StaleOrInvalid
         return applyEditResult(result)
     }
 
     fun replaceRangeTyped(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto = EditorTransactionCauseDto.TYPING, beforePatch: (() -> Unit)? = null): PipelineOutput {
-        val bridge = kernelBridge ?: return PipelineOutput.StaleOrInvalid
         inputAdapter?.invalidateCompositionSession()
-        val dto = bridge.replace(byteStart, byteEndExclusive, replacementText, originalText, cause, mirror.getRevision()) ?: return PipelineOutput.StaleOrInvalid
-        val result = EditResult.fromDto(dto)
+        val result = editPipeline.replaceRange(byteStart, byteEndExclusive, replacementText, originalText, cause)
+            ?: return PipelineOutput.StaleOrInvalid
         return applyEditResult(result, beforePatch)
     }
 
     fun setSelectionTyped(anchorByteOffset: Int, headByteOffset: Int): PipelineOutput {
-        val bridge = kernelBridge ?: return PipelineOutput.StaleOrInvalid
-        val dto = bridge.setSelection(anchorByteOffset, headByteOffset, mirror.getRevision()) ?: return PipelineOutput.StaleOrInvalid
-        val result = EditResult.fromDto(dto)
+        val result = editPipeline.setSelection(anchorByteOffset, headByteOffset)
+            ?: return PipelineOutput.StaleOrInvalid
         return applyEditResult(result)
     }
 
     fun performUndo(): PipelineOutput {
-        val bridge = kernelBridge ?: return PipelineOutput.StaleOrInvalid
         inputAdapter?.invalidateCompositionSession()
-        val dto = bridge.undo(mirror.getRevision()) ?: return PipelineOutput.StaleOrInvalid
-        val result = EditResult.fromDto(dto)
+        val result = editPipeline.undo()
+            ?: return PipelineOutput.StaleOrInvalid
         return applyEditResult(result)
     }
 
     fun performRedo(): PipelineOutput {
-        val bridge = kernelBridge ?: return PipelineOutput.StaleOrInvalid
         inputAdapter?.invalidateCompositionSession()
-        val dto = bridge.redo(mirror.getRevision()) ?: return PipelineOutput.StaleOrInvalid
-        val result = EditResult.fromDto(dto)
+        val result = editPipeline.redo()
+            ?: return PipelineOutput.StaleOrInvalid
         return applyEditResult(result)
     }
 
     fun replaceAll(searchStr: String, replaceStr: String): PipelineOutput {
-        val bridge = kernelBridge ?: return PipelineOutput.StaleOrInvalid
         inputAdapter?.invalidateCompositionSession()
-        val dto = bridge.replaceAll(searchStr, replaceStr, mirror.getRevision()) ?: return PipelineOutput.StaleOrInvalid
-        val result = EditResult.fromDto(dto)
+        val result = editPipeline.replaceAll(searchStr, replaceStr)
+            ?: return PipelineOutput.StaleOrInvalid
         return applyEditResult(result)
     }
 
@@ -285,7 +281,7 @@ class AndroidEditorPipeline private constructor(
         animationEngine.prepareAndSubmit(
             visualIntent = result.visualIntent,
             layoutEngine = layoutEngine,
-            mirrorUpdate = { mirror.applyEditResult(result) },
+            mirrorUpdate = { editPipeline.applyEditResult(result) },
             beforePatch = beforePatch
         )
 
@@ -313,7 +309,7 @@ class AndroidEditorPipeline private constructor(
         animationEngine.prepareAndSubmit(
             visualIntent = visualIntent,
             layoutEngine = layoutEngine,
-            mirrorUpdate = { mirror.applyEditResult(result) },
+            mirrorUpdate = { editPipeline.applyEditResult(result) },
             beforePatch = beforePatch
         )
 
@@ -601,36 +597,25 @@ class AndroidEditorPipeline private constructor(
     }
 
     fun reloadFromKernel(): Boolean {
-        val bridge = kernelBridge ?: return false
-        val snapshot = bridge.sessionSnapshot() ?: return false
-        val cursorUtf8 = snapshot.cursor.toInt()
-        val selAnchorUtf8 = snapshot.selectionAnchor.toInt()
-        val selHeadUtf8 = cursorUtf8
-        mirror.loadFromSnapshot(
-            snapshot.text,
-            cursorUtf8,
-            snapshot.revision.toLong(),
-            selAnchorUtf8,
-            selHeadUtf8
-        )
+        if (!editPipeline.reloadFromKernel()) return false
         cancelActiveTransaction()
         releaseAllResources()
         return true
     }
 
-    fun getText(): String = mirror.getText()
-    fun getRevision(): Long = mirror.getRevision()
-    fun getCursorUtf8(): Int = mirror.getCursorUtf8()
-    fun getCursorUtf16(): Int = mirror.getCursorUtf16()
-    fun getSelectionStartUtf8(): Int = mirror.getSelectionStartUtf8()
-    fun getSelectionEndUtf8(): Int = mirror.getSelectionEndUtf8()
-    fun getSelectionStartUtf16(): Int = mirror.getSelectionStartUtf16()
-    fun getSelectionEndUtf16(): Int = mirror.getSelectionEndUtf16()
-    fun getLengthUtf16(): Int = mirror.getLengthUtf16()
-    fun getCommittedCursorUtf8(): Int = mirror.getCommittedCursorUtf8()
-    fun getCommittedSelectionStartUtf8(): Int = mirror.getCommittedSelectionStartUtf8()
-    fun getCommittedSelectionEndUtf8(): Int = mirror.getCommittedSelectionEndUtf8()
-    fun getCommittedText(): String = mirror.getCommittedText()
+    fun getText(): String = editPipeline.getText()
+    fun getRevision(): Long = editPipeline.getRevision()
+    fun getCursorUtf8(): Int = editPipeline.getCursorUtf8()
+    fun getCursorUtf16(): Int = editPipeline.getCursorUtf16()
+    fun getSelectionStartUtf8(): Int = editPipeline.getSelectionStartUtf8()
+    fun getSelectionEndUtf8(): Int = editPipeline.getSelectionEndUtf8()
+    fun getSelectionStartUtf16(): Int = editPipeline.getSelectionStartUtf16()
+    fun getSelectionEndUtf16(): Int = editPipeline.getSelectionEndUtf16()
+    fun getLengthUtf16(): Int = editPipeline.getLengthUtf16()
+    fun getCommittedCursorUtf8(): Int = editPipeline.getCommittedCursorUtf8()
+    fun getCommittedSelectionStartUtf8(): Int = editPipeline.getCommittedSelectionStartUtf8()
+    fun getCommittedSelectionEndUtf8(): Int = editPipeline.getCommittedSelectionEndUtf8()
+    fun getCommittedText(): String = editPipeline.getCommittedText()
 
     fun setAutoIndent(enabled: Boolean, widthSp: Float) {
         autoIndentEnabled = enabled
@@ -730,7 +715,7 @@ class AndroidEditorPipeline private constructor(
         return indexMap.utf8ToUtf16(offsetUtf8)
     }
 
-    fun getSpannable(): android.text.SpannableStringBuilder = mirror.getSpannable()
+    fun getSpannable(): android.text.SpannableStringBuilder = editPipeline.getSpannable()
 
     fun onCreateInputConnection(outAttrs: android.view.inputmethod.EditorInfo?): android.view.inputmethod.InputConnection? {
         return inputAdapter?.onCreateInputConnection(outAttrs)
@@ -768,7 +753,7 @@ class AndroidEditorPipeline private constructor(
      */
     fun resetForReuse() {
         animationEngine.cancel()
-        mirror.loadFromSnapshot("", 0, 0, 0, 0)
+        editPipeline.loadFromSnapshot("", 0, 0, 0, 0)
         layoutEngine.requestLayout()
     }
 

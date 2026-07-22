@@ -336,6 +336,7 @@ pub struct SujianEditorItem {
     verify_animation_signal_meta_object: qt_method!(fn(&self) -> bool),
 
     pipeline: pipeline::LinuxEditorPipeline,
+    coordinator: linux_coordinator::LinuxTextEditorCoordinator,
     buffer: EditorBuffer,
     current_content_height: f32,
     content_height_dirty: Cell<bool>,
@@ -457,6 +458,7 @@ impl Default for SujianEditorItem {
             verify_animation_signal_meta_object: Default::default(),
 
             pipeline: pipeline::LinuxEditorPipeline::new(),
+            coordinator: linux_coordinator::LinuxTextEditorCoordinator::new(),
             buffer: EditorBuffer::default(),
             current_content_height: 0.0,
             content_height_dirty: Cell::new(false),
@@ -493,6 +495,39 @@ impl Default for SujianEditorItem {
 }
 
 impl SujianEditorItem {
+    pub fn register_text_target(&mut self, target_id: String, is_persistent: bool, initial_text: String) {
+        let target = linux_coordinator::EditableTextTarget {
+            target_id: target_id.clone(),
+            is_persistent,
+            current_text: initial_text,
+        };
+        self.coordinator.register_target(target);
+    }
+
+    pub fn unregister_text_target(&mut self, target_id: String) {
+        self.coordinator.unregister_target(&target_id);
+    }
+
+    pub fn begin_text_edit(&mut self, target_id: String) -> bool {
+        self.coordinator.begin_edit(&target_id)
+    }
+
+    pub fn commit_text_edit(&mut self) -> bool {
+        self.coordinator.commit_active_edit()
+    }
+
+    pub fn cancel_text_edit(&mut self) -> bool {
+        self.coordinator.cancel_active_edit()
+    }
+
+    pub fn update_target_text(&mut self, target_id: String, text: String) {
+        self.coordinator.update_target_text(&target_id, text);
+    }
+
+    pub fn active_target_id(&self) -> Option<String> {
+        self.coordinator.active_target_id().map(|s| s.to_string())
+    }
+
     pub(crate) fn sync_buffer_from_pipeline(&mut self) {
         let mirror = self.pipeline.mirror();
         if self.buffer.text != mirror.text() {
