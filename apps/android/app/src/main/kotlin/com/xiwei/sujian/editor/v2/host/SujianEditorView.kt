@@ -502,12 +502,11 @@ class SujianEditorView @JvmOverloads constructor(
         kernelBridge = sessionBridge
         currentProfile = profile
         isSessionBound = true
-        applyProfileToPipeline(profile)
-        loadText(initialText, initialCursorUtf8)
+        applyProfileToPipeline(profile, initialText, initialCursorUtf8)
         requestFocus()
     }
 
-    private fun applyProfileToPipeline(profile: TextEditorProfile) {
+    private fun applyProfileToPipeline(profile: TextEditorProfile, initialText: String? = null, initialCursorUtf8: Int = 0) {
         pipeline.inputAdapter?.applyProfile(profile)
         pipeline.setAutoIndent(
             profile.autoIndentPolicy == com.xiwei.sujian.editor.v2.coordinator.AutoIndentPolicy.INDENT_ON_ENTER,
@@ -539,10 +538,18 @@ class SujianEditorView @JvmOverloads constructor(
         pipeline.setMaxLength(profile.maxLength)
         pipeline.setCopyAllowed(profile.copyPolicy != com.xiwei.sujian.editor.v2.coordinator.CopyPolicy.BLOCK)
         pipeline.setPasteAllowed(profile.pastePolicy != com.xiwei.sujian.editor.v2.coordinator.PastePolicy.BLOCK)
-        if (profile.secretPolicy == com.xiwei.sujian.editor.v2.coordinator.SecretPolicy.MASK_AND_CLEAR_ON_COMMIT) {
-            pipeline.setSecretDisplayMode(true)
+        val isSecret = profile.secretPolicy == com.xiwei.sujian.editor.v2.coordinator.SecretPolicy.MASK_AND_CLEAR_ON_COMMIT
+        if (initialText != null) {
+            pipeline.loadText(initialText, initialCursorUtf8, applySecret = false)
+            if (isSecret) {
+                pipeline.setSecretDisplayMode(true)
+            }
         } else {
-            pipeline.setSecretDisplayMode(false)
+            if (isSecret) {
+                pipeline.setSecretDisplayMode(true)
+            } else {
+                pipeline.setSecretDisplayMode(false)
+            }
         }
     }
 

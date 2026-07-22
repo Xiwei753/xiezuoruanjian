@@ -415,10 +415,36 @@ class AnimatedTextEditorCoordinator(
             return TargetCommandResult.Failed("Session $sessionId no longer valid for target $targetId")
         }
 
-        val bridge = TextEditSessionBridge(appServiceBridge, sessionId)
         val snapshotBefore = queryTargetSnapshot(targetId)
             ?: return TargetCommandResult.Failed("Cannot read snapshot for target $targetId")
 
+        if (targetId == activeTargetId) {
+            val view = sharedEditorView
+            if (view != null) {
+                val pipelineOutput = when (command) {
+                    is TargetCommand.Replace -> {
+                        view.getPipeline().replaceRangeTyped(
+                            command.byteStart, command.byteEndExclusive,
+                            command.replacementText, command.originalText,
+                            uniffi.writer_core.EditorTransactionCauseDto.TYPING
+                        )
+                    }
+                    is TargetCommand.ReplaceAll -> {
+                        view.getPipeline().replaceAll(command.searchText, command.replacementText)
+                    }
+                    is TargetCommand.SetSelection -> {
+                        view.getPipeline().setSelectionTyped(command.anchorUtf8, command.headUtf8)
+                    }
+                }
+                view.handlePipelineOutput(pipelineOutput)
+                val snapshotAfter = queryTargetSnapshot(targetId)
+                    ?: return TargetCommandResult.Failed("Cannot read snapshot after command for target $targetId")
+                targets[targetId]?.updateText(snapshotAfter.text)
+                return TargetCommandResult.Success(snapshotAfter)
+            }
+        }
+
+        val bridge = TextEditSessionBridge(appServiceBridge, sessionId)
         val dtoResult = when (command) {
             is TargetCommand.Replace -> {
                 bridge.replace(
@@ -451,19 +477,17 @@ class AnimatedTextEditorCoordinator(
             return TargetCommandResult.Failed("Kernel rejected command: ${editResult.outcome}")
         }
 
-        if (targetId == activeTargetId) {
-            val view = sharedEditorView
-            if (view != null) {
-                view.getPipeline().applyEditResult(editResult)
-                view.handlePipelineOutput(com.xiwei.sujian.editor.v2.pipeline.PipelineOutput.Edited(editResult))
-            }
+        val projection = targetProjections[targetId]
+        if (projection != null) {
+            projection.applyEditResult(editResult)
+        } else {
+            updateTargetProjection(targetId)
         }
 
         val snapshotAfter = queryTargetSnapshot(targetId)
             ?: return TargetCommandResult.Failed("Cannot read snapshot after command for target $targetId")
 
         targets[targetId]?.updateText(snapshotAfter.text)
-        updateTargetProjection(targetId)
 
         return TargetCommandResult.Success(snapshotAfter)
     }
@@ -479,8 +503,15 @@ class AnimatedTextEditorCoordinator(
         }
         if (targetId == activeTargetId) {
             val view = sharedEditorView
-            if (view != null && decorations.searchHighlightsUtf8.isNotEmpty()) {
-                view.setSearchHighlights(decorations.searchHighlightsUtf8)
+            if (view != null) {
+                if (decorations.searchHighlightsUtf8.isNotEmpty()) {
+                    view.setSearchHighlights(decorations.searchHighlightsUtf8)
+                } else {
+                    view.clearSearchHighlights()
+                }
+                if (decorations.selectionStartUtf8 >= 0 && decorations.selectionEndUtf8 >= 0) {
+                    view.setSelectionRange(decorations.selectionStartUtf8, decorations.selectionEndUtf8)
+                }
             }
         }
     }

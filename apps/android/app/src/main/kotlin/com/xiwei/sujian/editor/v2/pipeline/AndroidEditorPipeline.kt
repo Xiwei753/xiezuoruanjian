@@ -7,9 +7,6 @@ import com.xiwei.sujian.editor.v2.mirror.EditResult
 import com.xiwei.sujian.editor.v2.mirror.VisualIntent
 import com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
-import com.xiwei.sujian.editor.v2.visual.AndroidTextAnimationEngine
-import com.xiwei.sujian.editor.v2.visual.AndroidVisualPlanner
-import com.xiwei.sujian.editor.v2.visual.VisualResourceStore
 import com.xiwei.sujian.editor.v2.render.ComposedFrame
 import com.xiwei.sujian.editor.v2.render.EditorFrameComposer
 import com.xiwei.sujian.editor.v2.render.AndroidTextRenderer
@@ -52,9 +49,6 @@ sealed class PipelineOutput {
 
 class AndroidEditorPipeline private constructor(
     val editPipeline: EditPipeline,
-    private val layoutEngine: AndroidLayoutEngine,
-    private val visualPlanner: AndroidVisualPlanner,
-    private val animationEngine: AndroidTextAnimationEngine,
     private val textRenderer: AndroidTextRenderer,
     private val animationRenderer: AndroidTextAnimationRenderer,
     private val frameComposer: EditorFrameComposer,
@@ -71,16 +65,12 @@ class AndroidEditorPipeline private constructor(
     companion object {
         fun create(mirror: DisplayTextMirror, textPaint: TextPaint, hostView: View): AndroidEditorPipeline {
             val editPipeline = EditPipeline(mirror)
-            val layoutEngine = AndroidLayoutEngine(mirror, textPaint)
-            val visualPlanner = AndroidVisualPlanner()
-            val resourceStore = VisualResourceStore()
-            val animationEngine = AndroidTextAnimationEngine(visualPlanner, resourceStore)
+            val layoutRuntime = AndroidLayoutRuntime(mirror, textPaint)
+            val visualRuntime = AndroidVisualRuntime()
             val textRenderer = AndroidTextRenderer()
             val animationRenderer = AndroidTextAnimationRenderer()
             val frameComposer = EditorFrameComposer()
-            val layoutRuntime = AndroidLayoutRuntime(mirror, layoutEngine)
-            val visualRuntime = AndroidVisualRuntime(visualPlanner, animationEngine, resourceStore)
-            val pipeline = AndroidEditorPipeline(editPipeline, layoutEngine, visualPlanner, animationEngine, textRenderer, animationRenderer, frameComposer, null, layoutRuntime, visualRuntime)
+            val pipeline = AndroidEditorPipeline(editPipeline, textRenderer, animationRenderer, frameComposer, null, layoutRuntime, visualRuntime)
             val inputAdapter = AndroidInputAdapter(mirror, pipeline)
             inputAdapter.setHostView(hostView)
             pipeline.inputAdapter = inputAdapter
@@ -92,12 +82,14 @@ class AndroidEditorPipeline private constructor(
     private var autoIndentWidthSp: Float = 2f
     private var maxLength: Int = 0
 
-    fun loadText(text: String, cursorUtf8: Int): LoadTextResult {
+    fun loadText(text: String, cursorUtf8: Int, applySecret: Boolean = true): LoadTextResult {
         inputAdapter?.invalidateCompositionSession()
         val result = editPipeline.loadText(text, cursorUtf8)
         if (result is LoadTextResult.Loaded) {
             resetAfterLoad()
-            applySecretDisplayIfActive()
+            if (applySecret) {
+                applySecretDisplayIfActive()
+            }
         }
         return result
     }
@@ -290,9 +282,9 @@ class AndroidEditorPipeline private constructor(
             return PipelineOutput.NeedReload
         }
 
-        animationEngine.prepareAndSubmit(
+        visualRuntime.prepareAndSubmit(
             visualIntent = result.visualIntent,
-            layoutEngine = layoutEngine,
+            layoutEngine = layoutRuntime.layoutEngine,
             mirrorUpdate = { editPipeline.applyEditResult(result) },
             beforePatch = beforePatch
         )
@@ -318,9 +310,9 @@ class AndroidEditorPipeline private constructor(
             return PipelineOutput.NeedReload
         }
 
-        animationEngine.prepareAndSubmit(
+        visualRuntime.prepareAndSubmit(
             visualIntent = visualIntent,
-            layoutEngine = layoutEngine,
+            layoutEngine = layoutRuntime.layoutEngine,
             mirrorUpdate = { editPipeline.applyEditResult(result) },
             beforePatch = beforePatch
         )
@@ -341,9 +333,9 @@ class AndroidEditorPipeline private constructor(
         visualIntent: VisualIntent,
         mirrorUpdate: (() -> Unit)? = null
     ) {
-        animationEngine.prepareAndSubmit(
+        visualRuntime.prepareAndSubmit(
             visualIntent = visualIntent,
-            layoutEngine = layoutEngine,
+            layoutEngine = layoutRuntime.layoutEngine,
             mirrorUpdate = mirrorUpdate
         )
     }
@@ -418,9 +410,9 @@ class AndroidEditorPipeline private constructor(
             durationMs = 160L,
             coordinatedCursor = CoordinatedCursor(0, 0, true)
         )
-        animationEngine.prepareAndSubmit(
+        visualRuntime.prepareAndSubmit(
             visualIntent = visualIntent,
-            layoutEngine = layoutEngine,
+            layoutEngine = layoutRuntime.layoutEngine,
             mirrorUpdate = mirrorUpdate
         )
     }
@@ -458,9 +450,9 @@ class AndroidEditorPipeline private constructor(
             durationMs = 160L,
             coordinatedCursor = CoordinatedCursor(0, 0, true)
         )
-        animationEngine.prepareAndSubmit(
+        visualRuntime.prepareAndSubmit(
             visualIntent = visualIntent,
-            layoutEngine = layoutEngine,
+            layoutEngine = layoutRuntime.layoutEngine,
             mirrorUpdate = mirrorUpdate
         )
     }
@@ -475,7 +467,7 @@ class AndroidEditorPipeline private constructor(
      * the renderer would draw the old composition state.
      */
     override fun onCompositionUpdated() {
-        layoutEngine.requestLayout()
+        layoutRuntime.requestLayout()
     }
 
     /**
@@ -493,16 +485,16 @@ class AndroidEditorPipeline private constructor(
         // would cause AnimationTimeline.progress to return values < 0 or regress from a
         // previously returned value, breaking the monotonic progress invariant.
         val frameTimeMs = System.nanoTime() / 1_000_000
-        val layout = layoutEngine.getLayout()
+        val layout = layoutRuntime.getLayout()
         if (layout != null) {
-            val rev = layoutEngine.getCurrentRevision()
+            val rev = layoutRuntime.getCurrentRevision()
             val effectiveSelStart = if (selectionAllowed) (rev?.selectionStartUtf16 ?: mirror.getSelectionStartUtf16()) else mirror.getCursorUtf16()
             val effectiveSelEnd = if (selectionAllowed) (rev?.selectionEndUtf16 ?: mirror.getSelectionEndUtf16()) else mirror.getCursorUtf16()
 
-            val transaction = animationEngine.getActiveTransaction()
-            val progress = animationEngine.getTimelineProgress(frameTimeMs)
+            val transaction = visualRuntime.getActiveTransaction()
+            val progress = visualRuntime.getTimelineProgress(frameTimeMs)
 
-            animationEngine.markFirstVisibleFrame(frameTimeMs)
+            visualRuntime.markFirstVisibleFrame(frameTimeMs)
 
             val composedFrame = frameComposer.compose(
                 layout = layout,
@@ -525,7 +517,7 @@ class AndroidEditorPipeline private constructor(
 
             renderComposedFrame(canvas, composedFrame)
 
-            animationEngine.completeIfFinished(frameTimeMs)
+            visualRuntime.completeIfFinished(frameTimeMs)
         }
     }
 
@@ -579,7 +571,7 @@ class AndroidEditorPipeline private constructor(
      *  Used when the host loses focus or the window is backgrounded — the active
      *  animation is abandoned and the display reverts to the static new-layout text. */
     fun cancelActiveTransaction() {
-        animationEngine.cancel()
+        visualRuntime.cancel()
     }
 
     /** Release all animation resources (active transaction + all session-owned Bitmaps).
@@ -587,14 +579,14 @@ class AndroidEditorPipeline private constructor(
      *  [AndroidTextAnimationEngine.release] which calls [VisualResourceStore.releaseAll]
      *  to ensure no Bitmaps survive after the host is removed from the composition tree. */
     fun releaseAllResources() {
-        animationEngine.release()
+        visualRuntime.release()
     }
 
-    fun hasActiveAnimation(): Boolean = animationEngine.hasActiveAnimation()
+    fun hasActiveAnimation(): Boolean = visualRuntime.hasActiveAnimation()
 
     fun updateLayout(width: Float) {
-        layoutEngine.setWidth(width)
-        layoutEngine.requestLayout()
+        layoutRuntime.setWidth(width)
+        layoutRuntime.requestLayout()
     }
 
     /** Reset animation state after loading text from the kernel.
@@ -605,7 +597,7 @@ class AndroidEditorPipeline private constructor(
      *  active transaction's snapshots; [releaseAllResources] is reserved for host destruction
      *  where no future rendering will occur. */
     fun resetAfterLoad() {
-        animationEngine.cancel()
+        visualRuntime.cancel()
     }
 
     override fun reloadFromKernel(): Boolean {
@@ -675,42 +667,42 @@ class AndroidEditorPipeline private constructor(
     }
 
     fun getLayoutMaxScrollY(viewHeight: Int): Float {
-        val layout = layoutEngine.getLayout() ?: return 0f
+        val layout = layoutRuntime.getLayout() ?: return 0f
         return (layout.height - viewHeight).coerceAtLeast(0).toFloat()
     }
 
     fun getLayoutLineForVertical(y: Int): Int {
-        val layout = layoutEngine.getLayout() ?: return 0
+        val layout = layoutRuntime.getLayout() ?: return 0
         return layout.getLineForVertical(y)
     }
 
     fun getLayoutOffsetForHorizontal(line: Int, x: Float): Int {
-        val layout = layoutEngine.getLayout() ?: return 0
+        val layout = layoutRuntime.getLayout() ?: return 0
         return layout.getOffsetForHorizontal(line, x)
     }
 
     fun getLayoutLineTop(line: Int): Int {
-        val layout = layoutEngine.getLayout() ?: return 0
+        val layout = layoutRuntime.getLayout() ?: return 0
         return layout.getLineTop(line)
     }
 
     fun getLayoutLineBottom(line: Int): Int {
-        val layout = layoutEngine.getLayout() ?: return 0
+        val layout = layoutRuntime.getLayout() ?: return 0
         return layout.getLineBottom(line)
     }
 
     fun getLayoutLineForOffset(offsetUtf16: Int): Int {
-        val layout = layoutEngine.getLayout() ?: return 0
+        val layout = layoutRuntime.getLayout() ?: return 0
         return layout.getLineForOffset(offsetUtf16)
     }
 
     fun getLayoutPrimaryHorizontal(offsetUtf16: Int): Float {
-        val layout = layoutEngine.getLayout() ?: return 0f
+        val layout = layoutRuntime.getLayout() ?: return 0f
         return layout.getPrimaryHorizontal(offsetUtf16)
     }
 
     fun setLineSpacingMultiplier(multiplier: Float) {
-        layoutEngine.setLineSpacingMultiplier(multiplier)
+        layoutRuntime.setLineSpacingMultiplier(multiplier)
     }
 
     fun setThemeColors(textColor: Int, cursorColor: Int, selectionColor: Int, preeditColor: Int, bgColor: Int = Color.WHITE) {
@@ -758,9 +750,9 @@ class AndroidEditorPipeline private constructor(
      * captures on the next edit).
      */
     fun resetForReuse() {
-        animationEngine.cancel()
+        visualRuntime.cancel()
         editPipeline.loadFromSnapshot("", 0, 0, 0, 0)
-        layoutEngine.requestLayout()
+        layoutRuntime.requestLayout()
     }
 
     fun invalidateCompositionSession() {
@@ -827,22 +819,17 @@ class AndroidEditorPipeline private constructor(
         } else {
             DisplayTextProjection.identity(text)
         }
-        if (secretDisplayMode) {
-            layoutEngine.setDisplayTextOverride(currentProjection.displayText)
-        } else {
-            layoutEngine.clearDisplayTextOverride()
-        }
-        layoutEngine.requestLayout()
+        layoutRuntime.applyProjection(currentProjection)
     }
 
     fun getCurrentProjection(): DisplayTextProjection = currentProjection
 
     fun setAnimationPolicy(policy: com.xiwei.sujian.editor.v2.visual.TextAnimationPolicy) {
-        animationEngine.setAnimationPolicy(policy)
+        visualRuntime.setAnimationPolicy(policy)
     }
 
     fun releaseAnimationResources() {
-        animationEngine.release()
+        visualRuntime.release()
     }
 
     fun setRendererThemeColors(textColor: Int, cursorColor: Int, selectionColor: Int, preeditColor: Int, bgColor: Int = Color.WHITE) {

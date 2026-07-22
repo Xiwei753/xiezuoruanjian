@@ -4,6 +4,7 @@ import android.text.TextPaint
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutRevision
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
+import com.xiwei.sujian.editor.v2.mirror.EditResult
 
 class TargetReadonlyProjection(
     private val mirror: DisplayTextMirror,
@@ -17,20 +18,36 @@ class TargetReadonlyProjection(
 
     fun updateFromSnapshot(text: String, cursorUtf8: Int, revision: Long) {
         mirror.loadFromSnapshot(text, cursorUtf8, revision)
+        rebuildProjectionAndLayout()
+    }
+
+    fun applyEditResult(result: EditResult) {
+        if (!result.isApplied()) return
+        mirror.applyEditResult(result)
+        rebuildProjectionAndLayout()
+    }
+
+    private fun rebuildProjectionAndLayout() {
+        val text = mirror.getText()
         projection = if (projection.isMasked) {
             DisplayTextProjection.masked(text)
         } else {
             DisplayTextProjection.identity(text)
         }
-        layoutEngine.setDisplayTextOverride(projection.displayText)
+        if (projection.isMasked) {
+            layoutEngine.setDisplayTextOverride(projection.displayText)
+        } else {
+            layoutEngine.clearDisplayTextOverride()
+        }
         layoutEngine.requestLayout()
     }
 
     fun setSecretMasked(masked: Boolean) {
+        val text = mirror.getText()
         projection = if (masked) {
-            DisplayTextProjection.masked(mirror.getText())
+            DisplayTextProjection.masked(text)
         } else {
-            DisplayTextProjection.identity(mirror.getText())
+            DisplayTextProjection.identity(text)
         }
         if (masked) {
             layoutEngine.setDisplayTextOverride(projection.displayText)
@@ -70,6 +87,5 @@ class TargetReadonlyProjection(
     }
 
     fun release() {
-        // No-op for now; layout engine doesn't hold external resources
     }
 }
