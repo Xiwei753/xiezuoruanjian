@@ -10,8 +10,10 @@
 #![allow(clippy::too_many_arguments, clippy::module_inception, clippy::type_complexity)]
 #![allow(clippy::redundant_closure, clippy::redundant_pattern, clippy::field_reassign_with_default)]
 #![allow(clippy::map_identity, clippy::clone_on_copy, clippy::needless_range_loop)]
-#![allow(clippy::identity_op, clippy::assert_eq_bool, clippy::eq_op, clippy::double_must_use)]
+#![allow(clippy::identity_op, clippy::bool_assert_comparison, clippy::eq_op, clippy::double_must_use)]
 #![allow(clippy::items_after_test_module, clippy::same_functions_in_if_condition)]
+#![allow(clippy::option_map_unit_fn, clippy::match_same_arms, clippy::redundant_field_names)]
+#![allow(clippy::get_first, clippy::format_in_format_args, clippy::let_and_return)]
 #![allow(unused_imports, unused_variables, unreachable_patterns)]
 #![allow(deprecated)]
 //
