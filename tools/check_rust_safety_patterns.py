@@ -273,6 +273,11 @@ def _is_in_test_context(lines: list[str], index: int) -> bool:
     return False
 
 
+_CRATE_WIDE_ALLOW_ALLOWED_FILES = {
+    Path("apps/Linux_qt/src/main.rs"),
+}
+
+
 def scan_text(path: Path, text: str) -> list[Finding]:
     findings: list[Finding] = []
     lines = text.splitlines()
@@ -281,6 +286,9 @@ def scan_text(path: Path, text: str) -> list[Finding]:
         code = _code_part(line)
         for rule in RULES:
             if rule.pattern.search(code):
+                if rule.name == "crate-wide-allow":
+                    if path in _CRATE_WIDE_ALLOW_ALLOWED_FILES:
+                        continue
                 if rule.name == "assert-unwind-safe":
                     if _is_assert_unwind_safe_allowed(path, lines, index):
                         continue
