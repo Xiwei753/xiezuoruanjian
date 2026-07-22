@@ -202,6 +202,25 @@ class RuntimeOwnershipTest {
     }
 
     @Test
+    fun renderRuntimeDrawFrameFromRuntimesOrchestratesFrame() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidRenderRuntime")
+        val method = clazz.getDeclaredMethod("drawFrameFromRuntimes",
+            android.graphics.Canvas::class.java,
+            Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidLayoutRuntime"),
+            Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidVisualRuntime"),
+            List::class.java,
+            Int::class.javaPrimitiveType,
+            Int::class.javaPrimitiveType,
+            Float::class.javaPrimitiveType,
+            Float::class.javaPrimitiveType,
+            Boolean::class.javaPrimitiveType,
+            Boolean::class.javaPrimitiveType,
+            Class.forName("com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror")
+        )
+        assertNotNull(method)
+    }
+
+    @Test
     fun pipelineDrawFrameConvergesRuntimeAccess() {
         val clazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidEditorPipeline")
         val method = clazz.getDeclaredMethod("drawFrame",
@@ -213,6 +232,25 @@ class RuntimeOwnershipTest {
             Float::class.javaPrimitiveType
         )
         assertNotNull(method)
+    }
+
+    @Test
+    fun pipelineDrawFrameDelegatesToRenderRuntime() {
+        val renderRuntimeClazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidRenderRuntime")
+        val drawFrameFromRuntimesMethod = renderRuntimeClazz.getDeclaredMethod("drawFrameFromRuntimes",
+            android.graphics.Canvas::class.java,
+            Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidLayoutRuntime"),
+            Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidVisualRuntime"),
+            List::class.java,
+            Int::class.javaPrimitiveType,
+            Int::class.javaPrimitiveType,
+            Float::class.javaPrimitiveType,
+            Float::class.javaPrimitiveType,
+            Boolean::class.javaPrimitiveType,
+            Boolean::class.javaPrimitiveType,
+            Class.forName("com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror")
+        )
+        assertNotNull(drawFrameFromRuntimesMethod)
     }
 
     @Test

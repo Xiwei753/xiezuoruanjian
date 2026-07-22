@@ -63,14 +63,12 @@ class AndroidLayoutRuntime(
 
     fun applySecretDisplayIfActive() {
         if (secretDisplayMode) {
-            rebuildSecretProjectionContent()
+            rebuildSecretProjection()
         }
     }
 
     fun applySecretDisplayIfActiveWithLayout() {
-        if (secretDisplayMode) {
-            rebuildSecretProjection()
-        }
+        applySecretDisplayIfActive()
     }
 
     private fun rebuildSecretProjectionContent() {

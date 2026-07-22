@@ -58,6 +58,34 @@ class AndroidRenderRuntime(
         renderComposedFrame(canvas, composedFrame)
     }
 
+    fun drawFrameFromRuntimes(
+        canvas: Canvas,
+        layoutRuntime: AndroidLayoutRuntime,
+        visualRuntime: AndroidVisualRuntime,
+        searchHighlightsUtf16: List<Pair<Int, Int>>,
+        viewportWidth: Int,
+        viewportHeight: Int,
+        scrollX: Float,
+        scrollY: Float,
+        cursorVisible: Boolean,
+        selectionAllowed: Boolean,
+        mirror: com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
+    ) {
+        val layout = layoutRuntime.getLayout()
+        if (layout == null) return
+        val frameTimeMs = System.nanoTime() / 1_000_000
+        val transaction = visualRuntime.getActiveTransaction()
+        val progress = visualRuntime.getTimelineProgress(frameTimeMs)
+        visualRuntime.markFirstVisibleFrame(frameTimeMs)
+        drawFrame(
+            canvas, layout, layoutRuntime.getCurrentRevision(),
+            transaction, progress,
+            searchHighlightsUtf16, viewportWidth, viewportHeight,
+            scrollX, scrollY, cursorVisible, selectionAllowed, mirror
+        )
+        visualRuntime.completeIfFinished(frameTimeMs)
+    }
+
     fun renderComposedFrame(canvas: Canvas, frame: ComposedFrame) {
         val layout = frame.layout ?: return
         val transaction = frame.transaction

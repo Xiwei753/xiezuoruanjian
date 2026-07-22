@@ -475,20 +475,11 @@ class AndroidEditorPipeline private constructor(
      * → preedit underline → static cursor.
      */
     fun drawFrame(canvas: android.graphics.Canvas, searchHighlightsUtf16: List<Pair<Int, Int>>, viewportWidth: Int, viewportHeight: Int, scrollX: Float, scrollY: Float) {
-        val layout = layoutRuntime.getLayout()
-        if (layout != null) {
-            val frameTimeMs = System.nanoTime() / 1_000_000
-            val transaction = visualRuntime.getActiveTransaction()
-            val progress = visualRuntime.getTimelineProgress(frameTimeMs)
-            visualRuntime.markFirstVisibleFrame(frameTimeMs)
-            renderRuntime.drawFrame(
-                canvas, layout, layoutRuntime.getCurrentRevision(),
-                transaction, progress,
-                searchHighlightsUtf16, viewportWidth, viewportHeight,
-                scrollX, scrollY, cursorVisible, selectionAllowed, mirror
-            )
-            visualRuntime.completeIfFinished(frameTimeMs)
-        }
+        renderRuntime.drawFrameFromRuntimes(
+            canvas, layoutRuntime, visualRuntime,
+            searchHighlightsUtf16, viewportWidth, viewportHeight,
+            scrollX, scrollY, cursorVisible, selectionAllowed, mirror
+        )
     }
 
     /** Cancel the active animation transaction and release its snapshots.

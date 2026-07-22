@@ -427,24 +427,22 @@ class AnimatedTextEditorCoordinator(
             val view = sharedEditorView
             if (view != null) {
                 val commandPort = view.getPipeline()
-                val pipelineOutput = when (command) {
+                when (command) {
                     is TargetCommand.Replace -> {
-                        commandPort.replaceRangeTyped(
+                        val pipelineOutput = commandPort.replaceRangeTyped(
                             command.byteStart, command.byteEndExclusive,
                             command.replacementText, command.originalText,
                             uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC
                         )
+                        view.handlePipelineOutput(pipelineOutput)
                     }
                     is TargetCommand.ReplaceAll -> {
                         view.replaceAll(command.searchText, command.replacementText)
-                        null
                     }
                     is TargetCommand.SetSelection -> {
-                        commandPort.setSelectionTyped(command.anchorUtf8, command.headUtf8)
+                        val pipelineOutput = commandPort.setSelectionTyped(command.anchorUtf8, command.headUtf8)
+                        view.handlePipelineOutput(pipelineOutput)
                     }
-                }
-                if (pipelineOutput != null) {
-                    view.handlePipelineOutput(pipelineOutput)
                 }
                 val snapshotAfter = queryTargetSnapshot(targetId)
                     ?: return TargetCommandResult.Failed(TargetCommandError.SNAPSHOT_UNAVAILABLE)
@@ -493,6 +491,13 @@ class AnimatedTextEditorCoordinator(
         val applyProjection = targetProjections[targetId]
         if (applyProjection != null) {
             applyProjection.applyEditResult(editResult)
+            val decorations = targetDecorations[targetId]
+            if (decorations != null) {
+                applyProjection.setSearchHighlights(decorations.searchHighlightsUtf8)
+                if (decorations.selectionStartUtf8 >= 0 && decorations.selectionEndUtf8 >= 0) {
+                    applyProjection.setSelection(decorations.selectionStartUtf8, decorations.selectionEndUtf8)
+                }
+            }
         } else {
             updateTargetProjection(targetId)
         }

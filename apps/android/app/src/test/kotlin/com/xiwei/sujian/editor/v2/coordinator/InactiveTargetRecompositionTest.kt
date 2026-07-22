@@ -77,6 +77,20 @@ class InactiveTargetRecompositionTest {
         assertEquals("new", cmd.replacementText)
     }
 
+    @Test
+    fun targetReadonlyProjectionHasSetSearchHighlights() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetReadonlyProjection")
+        val method = clazz.getDeclaredMethod("setSearchHighlights", List::class.java)
+        assertNotNull(method)
+    }
+
+    @Test
+    fun targetReadonlyProjectionHasSetSelection() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetReadonlyProjection")
+        val method = clazz.getDeclaredMethod("setSelection", Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
+        assertNotNull(method)
+    }
+
     private fun assertNotNull(obj: Any?) {
         assertTrue("Expected non-null value", obj != null)
     }
