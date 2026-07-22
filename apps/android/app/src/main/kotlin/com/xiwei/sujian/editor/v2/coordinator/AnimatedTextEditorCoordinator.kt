@@ -421,19 +421,20 @@ class AnimatedTextEditorCoordinator(
         if (targetId == activeTargetId) {
             val view = sharedEditorView
             if (view != null) {
+                val commandPort = view.getPipeline()
                 val pipelineOutput = when (command) {
                     is TargetCommand.Replace -> {
-                        view.getPipeline().replaceRangeTyped(
+                        commandPort.replaceRangeTyped(
                             command.byteStart, command.byteEndExclusive,
                             command.replacementText, command.originalText,
                             uniffi.writer_core.EditorTransactionCauseDto.TYPING
                         )
                     }
                     is TargetCommand.ReplaceAll -> {
-                        view.getPipeline().replaceAll(command.searchText, command.replacementText)
+                        commandPort.replaceAll(command.searchText, command.replacementText)
                     }
                     is TargetCommand.SetSelection -> {
-                        view.getPipeline().setSelectionTyped(command.anchorUtf8, command.headUtf8)
+                        commandPort.setSelectionTyped(command.anchorUtf8, command.headUtf8)
                     }
                 }
                 view.handlePipelineOutput(pipelineOutput)
@@ -528,12 +529,17 @@ class AnimatedTextEditorCoordinator(
         if (!target.isPersistent) return
 
         val projection = getOrCreateProjection(targetId, target)
-        val view = sharedEditorView ?: return
-        projection.updateFromSnapshot(
-            view.getText(),
-            view.getPipeline().getCursorUtf8(),
-            view.getPipeline().getRevision()
-        )
+        val snapshot = queryTargetSnapshot(targetId)
+        if (snapshot != null) {
+            projection.updateFromSnapshot(snapshot.text, snapshot.cursorUtf8, snapshot.revision)
+        } else {
+            val view = sharedEditorView ?: return
+            projection.updateFromSnapshot(
+                view.getText(),
+                view.getPipeline().getCursorUtf8(),
+                view.getPipeline().getRevision()
+            )
+        }
         val decorations = targetDecorations[targetId]
         if (decorations != null) {
             projection.setSearchHighlights(decorations.searchHighlightsUtf8)

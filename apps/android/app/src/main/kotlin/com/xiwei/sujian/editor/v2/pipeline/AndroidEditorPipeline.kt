@@ -52,10 +52,13 @@ class AndroidEditorPipeline private constructor(
     private val textRenderer: AndroidTextRenderer,
     private val animationRenderer: AndroidTextAnimationRenderer,
     private val frameComposer: EditorFrameComposer,
-    var inputAdapter: AndroidInputAdapter?,
-    val layoutRuntime: AndroidLayoutRuntime,
-    val visualRuntime: AndroidVisualRuntime
+    inputAdapter: AndroidInputAdapter?,
+    internal val layoutRuntime: AndroidLayoutRuntime,
+    internal val visualRuntime: AndroidVisualRuntime
 ) : EditorCommandPort {
+
+    var inputAdapter: AndroidInputAdapter? = inputAdapter
+        private set
 
     override val mirror: DisplayTextMirror get() = editPipeline.mirror
     override var kernelBridge: EditorKernelBridge?
@@ -141,7 +144,7 @@ class AndroidEditorPipeline private constructor(
         return applyEditResult(result)
     }
 
-    fun replaceAll(searchStr: String, replaceStr: String): PipelineOutput {
+    override fun replaceAll(searchStr: String, replaceStr: String): PipelineOutput {
         inputAdapter?.invalidateCompositionSession()
         val result = editPipeline.replaceAll(searchStr, replaceStr)
             ?: return PipelineOutput.StaleOrInvalid
@@ -607,9 +610,9 @@ class AndroidEditorPipeline private constructor(
         return true
     }
 
-    fun getText(): String = editPipeline.getText()
-    fun getRevision(): Long = editPipeline.getRevision()
-    fun getCursorUtf8(): Int = editPipeline.getCursorUtf8()
+    override fun getText(): String = editPipeline.getText()
+    override fun getRevision(): Long = editPipeline.getRevision()
+    override fun getCursorUtf8(): Int = editPipeline.getCursorUtf8()
     fun getCursorUtf16(): Int = editPipeline.getCursorUtf16()
     fun getSelectionStartUtf8(): Int = editPipeline.getSelectionStartUtf8()
     fun getSelectionEndUtf8(): Int = editPipeline.getSelectionEndUtf8()

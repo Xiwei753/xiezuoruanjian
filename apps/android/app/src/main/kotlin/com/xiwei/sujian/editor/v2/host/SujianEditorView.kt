@@ -12,6 +12,7 @@ import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import com.xiwei.sujian.editor.v2.mirror.EditResult
 import com.xiwei.sujian.editor.v2.pipeline.AndroidEditorPipeline
+import com.xiwei.sujian.editor.v2.pipeline.EditorCommandPort
 import com.xiwei.sujian.editor.v2.pipeline.PipelineOutput
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
 import com.xiwei.sujian.editor.v2.coordinator.NewlinePolicy
@@ -379,7 +380,7 @@ class SujianEditorView @JvmOverloads constructor(
         invalidate()
     }
 
-    fun getPipeline(): AndroidEditorPipeline = pipeline
+    fun getPipeline(): EditorCommandPort = pipeline
 
     var onContentChanged: ((String) -> Unit)? = null
 
@@ -467,12 +468,10 @@ class SujianEditorView @JvmOverloads constructor(
         get() = currentProfile.secretPolicy == com.xiwei.sujian.editor.v2.coordinator.SecretPolicy.MASK_AND_CLEAR_ON_COMMIT
 
     fun getDisplayText(): String {
-        val realText = pipeline.getText()
-        return if (isSecretMode && isSessionBound) {
-            "\u2022".repeat(realText.length)
-        } else {
-            realText
+        if (isSecretMode && isSessionBound) {
+            return pipeline.getCurrentProjection().displayText
         }
+        return pipeline.getText()
     }
     private var commitOnFocusLoss: Boolean = true
     var onCommitRequested: (() -> Unit)? = null
