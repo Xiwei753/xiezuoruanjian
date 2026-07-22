@@ -40,7 +40,7 @@ jobs:
 
       - name: Clippy on sujian-linux-qt
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq qt6-base-dev qt6-declarative-dev libgl-dev
+          sudo apt-get update -qq && sudo apt-get install -y -qq qt6-base-dev qt6-declarative-dev qt6-tools-dev libgl-dev
           cargo clippy --package sujian-linux-qt --all-targets -- -D warnings
 
       - name: Check no binary artifacts in tracked files
