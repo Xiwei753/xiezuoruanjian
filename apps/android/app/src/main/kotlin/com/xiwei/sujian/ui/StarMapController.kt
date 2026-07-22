@@ -17,6 +17,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.unit.dp
 
 /**
@@ -192,20 +193,13 @@ class StarMapController(
                     modifier = androidx.compose.ui.Modifier.height(16.dp)
                 )
                 var expanded by mutableStateOf(false)
-                androidx.compose.material3.ExposedDropdownMenuBox(
-                    expanded = expanded,
-                    onExpandedChange = { expanded = !expanded }
-                ) {
-                    androidx.compose.material3.OutlinedTextField(
-                        value = kinds[selectedKindIndex],
-                        onValueChange = {},
-                        readOnly = true,
-                        trailingIcon = {
-                            androidx.compose.material3.ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
-                        },
-                        modifier = androidx.compose.ui.Modifier.menuAnchor()
-                    )
-                    androidx.compose.material3.ExposedDropdownMenu(
+                Box {
+                    androidx.compose.material3.OutlinedButton(
+                        onClick = { expanded = true }
+                    ) {
+                        androidx.compose.material3.Text(kinds[selectedKindIndex])
+                    }
+                    androidx.compose.material3.DropdownMenu(
                         expanded = expanded,
                         onDismissRequest = { expanded = false }
                     ) {

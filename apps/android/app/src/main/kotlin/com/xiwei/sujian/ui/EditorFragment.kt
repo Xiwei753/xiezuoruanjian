@@ -282,15 +282,13 @@ class EditorFragment : Fragment() {
 
     private fun utf16ToUtf8Offsets(text: String, utf16Ranges: List<Pair<Int, Int>>): List<Pair<Int, Int>> {
         return utf16Ranges.map { (utf16Start, utf16End) ->
-            var utf8Pos = 0
-            var utf16Pos = 0
             val utf8Start = run {
                 var pos = 0
                 var u16 = 0
                 for (ch in text) {
                     if (u16 >= utf16Start) break
-                    u16 += ch.lenUtf16()
-                    pos += ch.lenUtf8()
+                    u16 += if (ch.code > 0xFFFF) 2 else 1
+                    pos += ch.code.toString(Charsets.UTF_8).size
                 }
                 pos
             }
@@ -299,8 +297,8 @@ class EditorFragment : Fragment() {
                 var u16 = 0
                 for (ch in text) {
                     if (u16 >= utf16End) break
-                    u16 += ch.lenUtf16()
-                    pos += ch.lenUtf8()
+                    u16 += if (ch.code > 0xFFFF) 2 else 1
+                    pos += ch.code.toString(Charsets.UTF_8).size
                 }
                 pos
             }
@@ -537,10 +535,13 @@ class EditorFragment : Fragment() {
             val sessionId = coordinator.getPersistentSessionId(chapterTargetId)
             if (sessionId != null) {
                 val bridge = com.xiwei.sujian.data.BridgeProvider.getAppServiceBridge(requireContext())
-                when (val result = bridge.textEditSessionReplace(sessionId, start.toUInt(), end.toUInt(), replaceText, searchText, com.xiwei.sujian.editor.v2.mirror.EditorTransactionCauseDto.TYPING, 0uL)) {
+                when (val result = bridge.textEditSessionReplace(sessionId, start.toUInt(), end.toUInt(), replaceText, searchText, uniffi.writer_core.EditorTransactionCauseDto.TYPING, 0uL)) {
                     is com.xiwei.sujian.data.BridgeResult.Success -> {
-                        val newText = result.data?.newText ?: return@setOnClickListener
-                        coordinator.resetPersistentSession(chapterTargetId, newText, newText.toByteArray(Charsets.UTF_8).size, com.xiwei.sujian.editor.v2.coordinator.SessionResetSource.EXTERNAL)
+                        val snapshotResult = bridge.textEditSessionSnapshot(sessionId)
+                        if (snapshotResult is com.xiwei.sujian.data.BridgeResult.Success) {
+                            val snapshot = snapshotResult.data ?: return@setOnClickListener
+                            coordinator.resetPersistentSession(chapterTargetId, snapshot.text, snapshot.cursor.toInt(), com.xiwei.sujian.editor.v2.coordinator.SessionResetSource.EXTERNAL)
+                        }
                     }
                     else -> {}
                 }
@@ -559,8 +560,11 @@ class EditorFragment : Fragment() {
                 val bridge = com.xiwei.sujian.data.BridgeProvider.getAppServiceBridge(requireContext())
                 when (val result = bridge.textEditSessionReplaceAll(sessionId, searchText, replaceText, 0uL)) {
                     is com.xiwei.sujian.data.BridgeResult.Success -> {
-                        val newText = result.data?.newText ?: return@setOnClickListener
-                        coordinator.resetPersistentSession(chapterTargetId, newText, newText.toByteArray(Charsets.UTF_8).size, com.xiwei.sujian.editor.v2.coordinator.SessionResetSource.EXTERNAL)
+                        val snapshotResult = bridge.textEditSessionSnapshot(sessionId)
+                        if (snapshotResult is com.xiwei.sujian.data.BridgeResult.Success) {
+                            val snapshot = snapshotResult.data ?: return@setOnClickListener
+                            coordinator.resetPersistentSession(chapterTargetId, snapshot.text, snapshot.cursor.toInt(), com.xiwei.sujian.editor.v2.coordinator.SessionResetSource.EXTERNAL)
+                        }
                     }
                     else -> {}
                 }

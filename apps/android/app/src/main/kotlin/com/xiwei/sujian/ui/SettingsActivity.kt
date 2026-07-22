@@ -1,6 +1,7 @@
 package com.xiwei.sujian.ui
 
 import android.os.Bundle
+import android.widget.FrameLayout
 import com.google.android.material.slider.Slider
 import android.widget.ArrayAdapter
 import android.widget.TextView

@@ -528,7 +528,7 @@ class SujianEditorView @JvmOverloads constructor(
         }
         pipeline.setMaxLength(profile.maxLength)
         pipeline.setCopyAllowed(profile.copyPolicy != com.xiwei.sujian.editor.v2.coordinator.CopyPolicy.BLOCK)
-        pipeline.setPasteAllowed(profile.pastePolicy != com.xiwei.sujian.editor.v2.coordinator.CopyPolicy.BLOCK)
+        pipeline.setPasteAllowed(profile.pastePolicy != com.xiwei.sujian.editor.v2.coordinator.PastePolicy.BLOCK)
         if (profile.secretPolicy == com.xiwei.sujian.editor.v2.coordinator.SecretPolicy.MASK_AND_CLEAR_ON_COMMIT) {
             pipeline.setSecretDisplayMode(true)
         } else {
