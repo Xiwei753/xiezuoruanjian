@@ -2505,7 +2505,7 @@ mod tests {
         assert!(tx.should_animate);
         let events = engine.animation_events(&tx);
         // Paste 长文本产生 Insert + Cursor 事件
-        assert!(events.len() >= 1);
+        assert!(!events.is_empty());
         assert_eq!(events[0].kind, EditorAnimationKind::Insert);
     }
 
@@ -2789,7 +2789,7 @@ mod tests {
         assert!(tx.should_animate);
         let events = engine.animation_events(&tx);
         // Paste 长文本产生 Insert + Cursor 事件
-        assert!(events.len() >= 1);
+        assert!(!events.is_empty());
         assert_eq!(events[0].kind, EditorAnimationKind::Insert);
     }
 
@@ -2848,7 +2848,7 @@ mod tests {
         assert!(tx.should_animate, "Undo cause should animate");
         let events = engine.animation_events(&tx);
         // Undo 产生 Delete + Cursor 事件
-        assert!(events.len() >= 1);
+        assert!(!events.is_empty());
         assert_eq!(events[0].kind, EditorAnimationKind::Delete);
     }
 
@@ -2866,7 +2866,7 @@ mod tests {
         assert!(tx.should_animate, "Redo cause should animate");
         let events = engine.animation_events(&tx);
         // Redo 产生 Insert + Cursor 事件
-        assert!(events.len() >= 1);
+        assert!(!events.is_empty());
         assert_eq!(events[0].kind, EditorAnimationKind::Insert);
     }
 
@@ -3006,7 +3006,7 @@ mod tests {
         );
         assert!(tx_undo.should_animate, "Undo should animate");
         let events_undo = engine.animation_events(&tx_undo);
-        assert!(events_undo.len() >= 1);
+        assert!(!events_undo.is_empty());
         assert_eq!(events_undo[0].kind, EditorAnimationKind::Delete);
 
         // Redo with text change 现在进入 visual transaction
@@ -3019,7 +3019,7 @@ mod tests {
         );
         assert!(tx_redo.should_animate, "Redo should animate");
         let events_redo = engine.animation_events(&tx_redo);
-        assert!(events_redo.len() >= 1);
+        assert!(!events_redo.is_empty());
         assert_eq!(events_redo[0].kind, EditorAnimationKind::Insert);
     }
 
@@ -3037,7 +3037,7 @@ mod tests {
         );
         assert!(tx.should_animate, "Paste should animate even for single char");
         let events = engine.animation_events(&tx);
-        assert!(events.len() >= 1);
+        assert!(!events.is_empty());
         assert_eq!(events[0].kind, EditorAnimationKind::Insert);
 
         // Paste with multi-char text 也进入 visual transaction

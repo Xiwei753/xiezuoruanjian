@@ -539,7 +539,7 @@ mod tests {
                 (json, "ProjectRenamed", Some(project.id.clone()))
             },
             {
-                let result = api.reorder_projects(&vec![project.id.clone()]);
+                let result = api.reorder_projects(std::slice::from_ref(&project.id));
                 let json = match result {
                     Ok(data) => ResultEnvelope::success_with_changes(
                         data,
@@ -604,7 +604,7 @@ mod tests {
             },
             {
                 let result =
-                    api.reorder_chapters(&project.id, &volume.id, &vec![chapter.id.clone()]);
+                    api.reorder_chapters(&project.id, &volume.id, std::slice::from_ref(&chapter.id));
                 let json = match result {
                     Ok(data) => ResultEnvelope::success_with_changes(
                         data,
@@ -777,7 +777,7 @@ mod tests {
             .save_chapter_content(&project.id, &volume.id, &chapter.id, content)
             .unwrap();
 
-        assert_eq!(receipt.content_len, content.len() as u32);
+        assert_eq!(receipt.content_len, u32::try_from(content.len()).unwrap());
         assert!(receipt.word_count > 0);
         assert!(!receipt.content_hash.is_empty());
 

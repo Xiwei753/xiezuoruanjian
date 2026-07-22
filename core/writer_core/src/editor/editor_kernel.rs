@@ -376,8 +376,10 @@ struct CompositionSessionState {
 /// 保证 undo/redo 栈的互斥性：新编辑使 redo 历史作废。
 ///
 /// 与 `history::command::TextEditCommand` 的区别：
+///
 /// - UndoEntry 存储全文快照（old_text/new_text），适用于 EditorKernel 的全文模型
 /// - TextEditCommand 存储增量变更（forward/inverse EditorChange），适用于 HistoryManager 的增量模型
+///
 /// 两者独立维护，EditorKernel 使用 UndoEntry，HistoryManager 使用 TextEditCommand。
 #[derive(Debug, Clone)]
 struct UndoEntry {
@@ -1718,6 +1720,7 @@ impl EditorKernel {
     /// before_deleted_len 个字节。删除 after 区域不影响选区 offset
     /// （after 在选区右侧，删除后选区左侧的 offset 不变）。
     /// 最终选区 = (原选区位置 - before_deleted_len)。
+    #[allow(clippy::too_many_arguments)]
     fn apply_delete_surrounding(
         &mut self,
         before_byte_start: usize,
@@ -1921,6 +1924,7 @@ impl EditorKernel {
     /// 正文不变，display_patches 为空（preedit 是纯视觉层，不修改 committed 正文）。
     /// `new_preedit_cursor_offset` 为 UTF-16 code unit 单位（IME 协议语义），
     /// 内核其余字段统一使用 UTF-8 byte offset。
+    #[allow(clippy::too_many_arguments)]
     fn apply_update_composition(
         &mut self,
         composition_session_id: u64,
@@ -3036,7 +3040,7 @@ mod tests {
             expected_revision: 0,
         }).into_result();
 
-        let (session_id, base_rev, gen) = kernel.composition_session_info().unwrap();
+        let (session_id, _base_rev, gen) = kernel.composition_session_info().unwrap();
 
         kernel.apply(EditorCommand::UpdateComposition {
             composition_session_id: session_id,
@@ -3068,7 +3072,7 @@ mod tests {
             expected_revision: 0,
         }).into_result();
 
-        let (session_id, base_rev, gen) = kernel.composition_session_info().unwrap();
+        let (session_id, _base_rev, gen) = kernel.composition_session_info().unwrap();
 
         let outcome = kernel.apply(EditorCommand::FinishComposition {
             composition_session_id: session_id,
@@ -3090,7 +3094,7 @@ mod tests {
             expected_revision: 0,
         }).into_result();
 
-        let (session_id, base_rev, gen) = kernel.composition_session_info().unwrap();
+        let (session_id, _base_rev, gen) = kernel.composition_session_info().unwrap();
 
         kernel.apply(EditorCommand::UpdateComposition {
             composition_session_id: session_id,
@@ -3213,7 +3217,7 @@ mod tests {
             expected_revision: 0,
         }).into_result();
 
-        let (session_id, base_rev, gen) = kernel.composition_session_info().unwrap();
+        let (session_id, _base_rev, gen) = kernel.composition_session_info().unwrap();
 
         kernel.apply(EditorCommand::UpdateComposition {
             composition_session_id: session_id,

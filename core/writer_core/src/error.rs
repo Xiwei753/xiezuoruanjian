@@ -341,7 +341,7 @@ mod tests {
 
     #[test]
     fn test_recoverable() {
-        assert!(Error::Io(std::io::Error::new(std::io::ErrorKind::Other, "test")).recoverable());
+        assert!(Error::Io(std::io::Error::other("test")).recoverable());
         assert!(!Error::ProjectNotFound.recoverable());
         assert!(Error::SyncNetworkUnavailable {
             reason: "timeout".into()

@@ -290,29 +290,25 @@ mod tests {
 
     #[test]
     fn test_screen_role_variants() {
-        let variants = vec![
-            ScreenRole::Home,
+        let variants = [ScreenRole::Home,
             ScreenRole::ProjectList,
             ScreenRole::ProjectWorkspace,
             ScreenRole::Writing,
             ScreenRole::StarMap,
             ScreenRole::Stats,
             ScreenRole::Settings,
-            ScreenRole::Sync,
-        ];
+            ScreenRole::Sync];
         assert_eq!(variants.len(), 8);
     }
 
     #[test]
     fn test_pane_role_variants() {
-        let variants = vec![
-            PaneRole::PrimaryList,
+        let variants = [PaneRole::PrimaryList,
             PaneRole::Detail,
             PaneRole::Editor,
             PaneRole::Inspector,
             PaneRole::Drawer,
-            PaneRole::Supporting,
-        ];
+            PaneRole::Supporting];
         assert_eq!(variants.len(), 6);
     }
 

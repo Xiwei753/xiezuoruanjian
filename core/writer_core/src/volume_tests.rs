@@ -134,7 +134,7 @@ mod tests {
         let path_with_backslash = Path::new("volumes\\vol1\\file.txt");
         let base_empty = Path::new("");
         assert_eq!(
-            normalize_rel_path(&path_with_backslash, base_empty),
+            normalize_rel_path(path_with_backslash, base_empty),
             "volumes/vol1/file.txt"
         );
     }

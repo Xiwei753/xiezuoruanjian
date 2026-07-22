@@ -74,8 +74,10 @@ const MAX_BUFFER_SIZE: usize = 100;
 /// ## 缓冲与刷盘策略
 ///
 /// 事件先写入内存缓冲区，满足以下任一条件时刷盘：
+///
 /// 1. 缓冲区大小 ≥ `MAX_BUFFER_SIZE`（100 条）
 /// 2. 距上次刷盘 ≥ `FLUSH_DEBOUNCE_MS`（3 秒）
+///
 /// 这减少了高频输入时的磁盘 I/O，同时保证事件不会无限期滞留内存。
 pub struct StatsStore {
     workspace_path: PathBuf,

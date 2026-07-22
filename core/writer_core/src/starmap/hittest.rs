@@ -148,8 +148,8 @@ mod tests {
         positions.insert("b".to_string(), (100.0f32, 0.0f32));
 
         // Debug: verify positions are accessible
-        assert!(positions.get("a").is_some(), "positions.get('a') failed");
-        assert!(positions.get("b").is_some(), "positions.get('b') failed");
+        assert!(positions.contains_key("a"), "positions.get('a') failed");
+        assert!(positions.contains_key("b"), "positions.get('b') failed");
 
         let d = point_to_segment_distance(50.0, 5.0, 0.0, 0.0, 100.0, 0.0);
         assert!(d < 10.0, "distance {} should be < 10", d);

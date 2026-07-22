@@ -1,4 +1,5 @@
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod tests {
     use crate::sync::backends::SyncBackend;
     #[cfg(feature = "git-https")]
@@ -1235,6 +1236,7 @@ mod tests {
         assert_eq!(content_after, local_content);
     }
 
+    #[allow(clippy::type_complexity)]
     fn start_mock_github_api(
         initial_manifest: Option<SyncManifest>,
         initial_files: std::collections::HashMap<String, String>,
@@ -1485,19 +1487,11 @@ mod tests {
                                     }
                                     response_body =
                                         r#"{"message":"git db api must not be used"}"#.to_string();
-                                } else if method == "POST" && path.contains("/git/trees") {
-                                    status_line = "HTTP/1.1 500 Internal Server Error";
-                                    response_body =
-                                        r#"{"message":"git db api must not be used"}"#.to_string();
-                                } else if method == "POST" && path.contains("/git/commits") {
-                                    status_line = "HTTP/1.1 500 Internal Server Error";
-                                    response_body =
-                                        r#"{"message":"git db api must not be used"}"#.to_string();
-                                } else if method == "POST" && path.contains("/git/refs") {
-                                    status_line = "HTTP/1.1 500 Internal Server Error";
-                                    response_body =
-                                        r#"{"message":"git db api must not be used"}"#.to_string();
-                                } else if method == "PATCH" && path.contains("/git/refs/heads/main")
+                                } else if (method == "POST"
+                                    && (path.contains("/git/trees")
+                                        || path.contains("/git/commits")
+                                        || path.contains("/git/refs")))
+                                    || (method == "PATCH" && path.contains("/git/refs/heads/main"))
                                 {
                                     status_line = "HTTP/1.1 500 Internal Server Error";
                                     response_body =
@@ -2802,7 +2796,7 @@ mod tests {
         state_before_3.last_sync_time = None;
         SyncService::save_sync_state(dir.path(), &state_before_3).unwrap();
 
-        let (mock_url3, shutdown3, files_map3, _manifest_str3, server_thread3) =
+        let (mock_url3, shutdown3, _files_map3, _manifest_str3, server_thread3) =
             start_mock_github_api(Some(initial_manifest.clone()), initial_files.clone());
 
         let config3 = SyncConfig {
@@ -3345,13 +3339,13 @@ mod tests {
         };
 
         // 第一次同步（force_sync=true）应该尝试执行（虽然会因网络失败，但不会被 debounce 跳过）
-        let res1 = SyncService::perform_lww_sync(dir.path(), &config, &secrets, true).unwrap();
+        let _res1 = SyncService::perform_lww_sync(dir.path(), &config, &secrets, true).unwrap();
         // 因为是测试环境没有真实 GitHub API，预期返回错误状态而非 Success
         // debounce 跳过时返回 Success，所以只要不是 Success 就说明没被 debounce 跳过
 
         // 第二次同步（force_sync=false）在 min_interval 内应该被 debounce 跳过
         // debounce 跳过时返回 status=Success
-        let res2 = SyncService::perform_lww_sync(dir.path(), &config, &secrets, false).unwrap();
+        let _res2 = SyncService::perform_lww_sync(dir.path(), &config, &secrets, false).unwrap();
         // 如果被 debounce 跳过，status 应该是 Success
         // 注意：如果第一次同步失败没有更新 last_sync_time，则不会被 debounce
         // 所以这个测试验证的是：如果 last_sync_time 在 min_interval 内，force_sync=false 会被跳过

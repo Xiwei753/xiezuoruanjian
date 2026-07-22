@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use criterion::{criterion_group, criterion_main, Criterion};
 use std::fs;
 use tempfile::tempdir;

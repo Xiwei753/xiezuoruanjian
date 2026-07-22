@@ -670,7 +670,7 @@ fn test_settings_auto_indent_logic() {
     settings.auto_indent_enabled = true;
     settings.auto_indent_width = 4.0;
     settings.validate();
-    assert_eq!(settings.auto_indent_enabled, true);
+    assert!(settings.auto_indent_enabled);
     assert_eq!(settings.auto_indent_width, 4.0);
 
     settings.auto_indent_width = 0.0;

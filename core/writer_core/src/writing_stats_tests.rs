@@ -555,7 +555,7 @@ fn test_char_count_uses_unicode_scalar() {
         "vol1",
         "chap1",
         EventSource::HumanTyped,
-        char_count as u32,
+        u32::try_from(char_count).unwrap(),
         0,
         0,
         0,

@@ -177,6 +177,6 @@ mod tests {
         };
 
         let result = api.save_sync_config(config);
-        assert_eq!(result.unwrap(), true);
+        assert!(result.unwrap());
     }
 }

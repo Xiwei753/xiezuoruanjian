@@ -789,8 +789,7 @@ mod tests {
         assert_eq!(meta_after.title, "New Title");
         assert_eq!(meta_after.id, chapter.id);
         assert!(
-            meta_after.updated_at > meta_before.updated_at
-                || meta_after.updated_at == meta_before.updated_at
+            meta_after.updated_at >= meta_before.updated_at
         );
     }
 

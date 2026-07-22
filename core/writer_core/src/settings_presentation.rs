@@ -577,6 +577,6 @@ mod tests {
 
         let first = &sections[0];
         assert!(first.get("id").is_some());
-        assert!(first.get("items").unwrap().as_array().unwrap().len() > 0);
+        assert!(!first.get("items").unwrap().as_array().unwrap().is_empty());
     }
 }

@@ -122,6 +122,7 @@ fn validate_nodes(
 /// 1. `endpoint`（结构化端点）→ 检查节点/锚点存在性
 /// 2. `legacy_target`（旧格式 deep_target）→ 调用 resolve_deep_target
 /// 3. `legacy_id`（最旧格式节点 ID）→ 检查节点存在性
+///
 /// `Starmap` 端点和 `DeepTarget` 端点中的 Starmap 变体无需本地节点引用。
 fn validate_edges(
     workspace: &std::path::Path,

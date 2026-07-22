@@ -890,6 +890,7 @@ impl WriterAppService {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn editor_kernel_commit_text(
         &self,
         byte_start: u32,
@@ -1239,7 +1240,7 @@ impl WriterAppService {
             });
             result.into_result().into()
         })
-        .unwrap_or_else(|| crate::api::EditorEditResultDto::stale_fallback())
+        .unwrap_or_else(crate::api::EditorEditResultDto::stale_fallback)
     }
 
     pub fn text_edit_session_delete(
@@ -1262,9 +1263,10 @@ impl WriterAppService {
             });
             result.into_result().into()
         })
-        .unwrap_or_else(|| crate::api::EditorEditResultDto::stale_fallback())
+        .unwrap_or_else(crate::api::EditorEditResultDto::stale_fallback)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn text_edit_session_replace(
         &self,
         session_id: u64,
@@ -1288,7 +1290,7 @@ impl WriterAppService {
             });
             result.into_result().into()
         })
-        .unwrap_or_else(|| crate::api::EditorEditResultDto::stale_fallback())
+        .unwrap_or_else(crate::api::EditorEditResultDto::stale_fallback)
     }
 
     pub fn text_edit_session_set_selection(
@@ -1307,7 +1309,7 @@ impl WriterAppService {
             });
             result.into_result().into()
         })
-        .unwrap_or_else(|| crate::api::EditorEditResultDto::stale_fallback())
+        .unwrap_or_else(crate::api::EditorEditResultDto::stale_fallback)
     }
 
     pub fn text_edit_session_undo(
@@ -1320,7 +1322,7 @@ impl WriterAppService {
             let result = s.kernel.apply(EditorCommand::Undo { expected_revision });
             result.into_result().into()
         })
-        .unwrap_or_else(|| crate::api::EditorEditResultDto::stale_fallback())
+        .unwrap_or_else(crate::api::EditorEditResultDto::stale_fallback)
     }
 
     pub fn text_edit_session_redo(
@@ -1333,7 +1335,7 @@ impl WriterAppService {
             let result = s.kernel.apply(EditorCommand::Redo { expected_revision });
             result.into_result().into()
         })
-        .unwrap_or_else(|| crate::api::EditorEditResultDto::stale_fallback())
+        .unwrap_or_else(crate::api::EditorEditResultDto::stale_fallback)
     }
 
     /// Load text into a session, replacing all content. Generation is incremented before
@@ -1350,12 +1352,13 @@ impl WriterAppService {
             let result = s.kernel.load_text(text, cursor_byte_offset as usize);
             result.into_result().into()
         })
-        .unwrap_or_else(|| crate::api::EditorEditResultDto::stale_fallback())
+        .unwrap_or_else(crate::api::EditorEditResultDto::stale_fallback)
     }
 
     /// Commit text with composition session validation. composition_session_id/base_revision/
     /// generation allow the kernel to verify the commit corresponds to an active composition.
     /// If the session has been reset (generation mismatch), the commit is rejected.
+    #[allow(clippy::too_many_arguments)]
     pub fn text_edit_session_commit_text(
         &self,
         session_id: u64,
@@ -1387,9 +1390,10 @@ impl WriterAppService {
             });
             result.into()
         })
-        .unwrap_or_else(|| crate::api::EditorEditResultDto::stale_fallback())
+        .unwrap_or_else(crate::api::EditorEditResultDto::stale_fallback)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn text_edit_session_delete_surrounding(
         &self,
         session_id: u64,
@@ -1413,7 +1417,7 @@ impl WriterAppService {
             });
             result.into()
         })
-        .unwrap_or_else(|| crate::api::EditorEditResultDto::stale_fallback())
+        .unwrap_or_else(crate::api::EditorEditResultDto::stale_fallback)
     }
 
     /// Begin a composition session. Returns composition_session (sessionId, baseRevision,
@@ -1447,7 +1451,7 @@ impl WriterAppService {
             }
             dto
         })
-        .unwrap_or_else(|| crate::api::EditorEditResultDto::stale_fallback())
+        .unwrap_or_else(crate::api::EditorEditResultDto::stale_fallback)
     }
 
     /// Update an active composition. composition_generation must match the kernel's current
@@ -1472,7 +1476,7 @@ impl WriterAppService {
             });
             result.into()
         })
-        .unwrap_or_else(|| crate::api::EditorEditResultDto::stale_fallback())
+        .unwrap_or_else(crate::api::EditorEditResultDto::stale_fallback)
     }
 
     pub fn text_edit_session_finish_composition(
@@ -1491,7 +1495,7 @@ impl WriterAppService {
             });
             result.into()
         })
-        .unwrap_or_else(|| crate::api::EditorEditResultDto::stale_fallback())
+        .unwrap_or_else(crate::api::EditorEditResultDto::stale_fallback)
     }
 
     pub fn text_edit_session_cancel_composition(
@@ -1510,7 +1514,7 @@ impl WriterAppService {
             });
             result.into()
         })
-        .unwrap_or_else(|| crate::api::EditorEditResultDto::stale_fallback())
+        .unwrap_or_else(crate::api::EditorEditResultDto::stale_fallback)
     }
 
     pub fn text_edit_session_composition_update_visual_intent(
@@ -1534,7 +1538,7 @@ impl WriterAppService {
             );
             intent.into()
         })
-        .unwrap_or_else(|| crate::api::EditorVisualIntentDto::default_fallback())
+        .unwrap_or_else(crate::api::EditorVisualIntentDto::default_fallback)
     }
 
     pub fn text_edit_session_set_animation_enabled(
@@ -1609,7 +1613,7 @@ impl WriterAppService {
             });
             result.into_result().into()
         })
-        .unwrap_or_else(|| crate::api::EditorEditResultDto::stale_fallback())
+        .unwrap_or_else(crate::api::EditorEditResultDto::stale_fallback)
     }
 
     pub fn text_edit_session_insert_line_break(
@@ -1631,6 +1635,6 @@ impl WriterAppService {
             });
             result.into_result().into()
         })
-        .unwrap_or_else(|| crate::api::EditorEditResultDto::stale_fallback())
+        .unwrap_or_else(crate::api::EditorEditResultDto::stale_fallback)
     }
 }

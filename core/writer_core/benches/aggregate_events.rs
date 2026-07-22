@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use std::path::PathBuf;
 use writer_core::writing_stats::{store::StatsStore, EventSource, Platform, WritingInputEvent};

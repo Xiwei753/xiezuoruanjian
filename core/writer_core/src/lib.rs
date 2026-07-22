@@ -3,6 +3,7 @@
 //! 本 crate 是整个应用的**唯一事实来源**（Single Source of Truth）。
 //! 所有文件 I/O、项目管理、同步、格式化、设置规则都在此实现。
 //!
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::field_reassign_with_default, deprecated))]
 //! ## 架构约束
 //!
 //! - **严格排除 UI 逻辑**：不允许出现动画、窗口管理、输入法、平台特定代码。
