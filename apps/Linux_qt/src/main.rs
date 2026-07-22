@@ -1,6 +1,11 @@
 // =============================================================================
 // main.rs — Linux_qt 客户端应用主入口
 // =============================================================================
+// QML/C++ 通过 cpp! 和 qmetaobject 宏调用的方法对 Rust 编译器不可见，
+// 因此 dead_code 和 unwrap_used 是误报；测试代码同理。
+#![allow(dead_code)]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::field_reassign_with_default, deprecated))]
+//
 //
 // 引用了什么：
 // - qmetaobject：用于提供 Rust 与 Qt/QML 引擎的高性能双向桥接。
