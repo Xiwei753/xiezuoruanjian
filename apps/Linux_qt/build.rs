@@ -443,6 +443,7 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/AppButton.qml");
     println!("cargo:rerun-if-changed=qml/AppCard.qml");
     println!("cargo:rerun-if-changed=qml/AppTextField.qml");
+    println!("cargo:rerun-if-changed=qml/CoordinatorTextField.qml");
     println!("cargo:rerun-if-changed=qml/AppSwitch.qml");
     println!("cargo:rerun-if-changed=qml/AppSlider.qml");
     println!("cargo:rerun-if-changed=qml/AppComboBox.qml");

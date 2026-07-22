@@ -145,6 +145,7 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/AppButton.qml" as "AppButton.qml",
     "qml/AppCard.qml" as "AppCard.qml",
     "qml/AppTextField.qml" as "AppTextField.qml",
+    "qml/CoordinatorTextField.qml" as "CoordinatorTextField.qml",
     "qml/AppSwitch.qml" as "AppSwitch.qml",
     "qml/AppSlider.qml" as "AppSlider.qml",
     "qml/AppComboBox.qml" as "AppComboBox.qml",
