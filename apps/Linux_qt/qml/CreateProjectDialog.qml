@@ -82,7 +82,6 @@ Dialog {
 
     onOpened: {
         titleField.text = "";
-        titleField.forceActiveFocus();
     }
 
     onAccepted: {

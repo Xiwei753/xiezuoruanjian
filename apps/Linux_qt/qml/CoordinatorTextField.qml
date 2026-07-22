@@ -12,9 +12,8 @@ Item {
     property string label: ""
     property string placeholder: ""
     property alias placeholderText: control.placeholder
-    property alias text: inputField.text
-    property alias echoMode: inputField.echoMode
-    property alias validator: inputField.validator
+    property alias text: staticDisplay.displayText
+    property alias echoMode: staticDisplay.echoMode
     property bool fieldTabFocus: true
 
     property var coordinator: null
@@ -23,6 +22,7 @@ Item {
     property bool isSecret: false
     property bool isSearch: false
     property bool isUrl: false
+    property bool isEditingActive: false
 
     readonly property color normalTextColor: control.resolvedDt.onSurface
     readonly property color placeholderColor: control.resolvedDt.textMuted
@@ -36,7 +36,7 @@ Item {
     signal accepted()
     signal editingFinished()
 
-    implicitHeight: inputField.height + (control.label.length > 0 ? 24 : 0)
+    implicitHeight: staticDisplay.height + (control.label.length > 0 ? 24 : 0)
     implicitWidth: 200
 
     Component.onCompleted: {
@@ -72,51 +72,48 @@ Item {
             visible: control.label.length > 0
         }
 
-        TextField {
-            id: inputField
+        Rectangle {
+            id: staticDisplay
             Layout.fillWidth: true
             implicitHeight: control.resolvedDt.settingsControlHeight
-            placeholderText: control.placeholder
-            color: control.normalTextColor
-            placeholderTextColor: control.placeholderColor
-            selectionColor: control.highlightColor
-            selectedTextColor: control.highlightTextColor
-            activeFocusOnTab: control.fieldTabFocus
-            onAccepted: control.accepted()
-            onEditingFinished: {
-                if (coordinator && targetId.length > 0) {
-                    coordinator.update_text(targetId, text)
-                    coordinator.commit_edit()
-                }
-                control.editingFinished()
+            color: control.backgroundColor
+            border.color: isEditingActive ? control.activeBorderColor : control.inactiveBorderColor
+            border.width: isEditingActive ? 2 : 1
+            radius: control.resolvedDt.radiusMd
+
+            property string displayText: ""
+            property int echoMode: TextInput.Normal
+
+            Text {
+                id: displayLabel
+                anchors.fill: parent
+                anchors.leftMargin: control.resolvedDt.sp12
+                anchors.rightMargin: control.resolvedDt.sp12
+                anchors.topMargin: control.resolvedDt.sp8
+                anchors.bottomMargin: control.resolvedDt.sp8
+                text: staticDisplay.echoMode === TextInput.Password
+                      ? "\u2022".repeat(staticDisplay.displayText.length)
+                      : (staticDisplay.displayText.length > 0 ? staticDisplay.displayText : control.placeholder)
+                color: staticDisplay.displayText.length > 0 ? control.normalTextColor : control.placeholderColor
+                font.pixelSize: control.resolvedDt.body
+                font.family: control.resolvedDt.fontFamily
+                verticalAlignment: Text.AlignVCenter
+                elide: Text.ElideRight
             }
-            onActiveFocusChanged: {
-                if (coordinator && targetId.length > 0) {
-                    if (activeFocus) {
+
+            MouseArea {
+                anchors.fill: parent
+                onClicked: {
+                    if (coordinator && targetId.length > 0) {
+                        isEditingActive = true
                         coordinator.begin_edit(targetId)
-                    } else {
-                        coordinator.update_text(targetId, text)
-                        coordinator.commit_edit()
                     }
                 }
             }
-            onTextChanged: {
-                if (coordinator && targetId.length > 0 && activeFocus) {
-                    coordinator.update_text(targetId, text)
-                }
-            }
-            background: Rectangle {
-                color: control.backgroundColor
-                border.color: inputField.activeFocus ? control.activeBorderColor : control.inactiveBorderColor
-                border.width: inputField.activeFocus ? 2 : 1
-                radius: control.resolvedDt.radiusMd
-            }
-            font.pixelSize: control.resolvedDt.body
-            font.family: control.resolvedDt.fontFamily
-            leftPadding: control.resolvedDt.sp12
-            rightPadding: control.resolvedDt.sp12
-            topPadding: control.resolvedDt.sp8
-            bottomPadding: control.resolvedDt.sp8
         }
+    }
+
+    function updateText(newText) {
+        staticDisplay.displayText = newText
     }
 }

@@ -352,6 +352,7 @@ pub struct SujianEditorItem {
 
     pipeline: pipeline::LinuxEditorPipeline,
     coordinator: linux_coordinator::LinuxTextEditorCoordinator,
+    saved_body_kernel: Option<writer_core::editor::EditorKernel>,
     buffer: EditorBuffer,
     current_content_height: f32,
     content_height_dirty: Cell<bool>,
@@ -481,6 +482,7 @@ impl Default for SujianEditorItem {
 
             pipeline: pipeline::LinuxEditorPipeline::new(),
             coordinator: linux_coordinator::LinuxTextEditorCoordinator::new(),
+            saved_body_kernel: None,
             buffer: EditorBuffer::default(),
             current_content_height: 0.0,
             content_height_dirty: Cell::new(false),
@@ -548,14 +550,38 @@ impl SujianEditorItem {
     }
 
     pub fn begin_text_edit(&mut self, target_id: String) -> bool {
-        self.coordinator.begin_edit(&target_id)
+        if !self.coordinator.begin_edit(&target_id) {
+            return false;
+        }
+        if let Some(session_kernel) = self.coordinator.take_active_session_kernel() {
+            self.saved_body_kernel = Some(self.pipeline.swap_kernel(session_kernel));
+            self.sync_buffer_from_pipeline();
+            self.clear_active_text_animations();
+            self.request_static_repaint();
+        }
+        true
     }
 
     pub fn commit_text_edit(&mut self) -> bool {
+        if let Some(session_kernel) = self.coordinator.take_active_session_kernel() {
+            let _ = self.pipeline.swap_kernel(session_kernel);
+        }
+        if let Some(body_kernel) = self.saved_body_kernel.take() {
+            self.pipeline.swap_kernel(body_kernel);
+            self.sync_buffer_from_pipeline();
+            self.clear_active_text_animations();
+            self.request_static_repaint();
+        }
         self.coordinator.commit_active_edit()
     }
 
     pub fn cancel_text_edit(&mut self) -> bool {
+        if let Some(body_kernel) = self.saved_body_kernel.take() {
+            self.pipeline.swap_kernel(body_kernel);
+            self.sync_buffer_from_pipeline();
+            self.clear_active_text_animations();
+            self.request_static_repaint();
+        }
         self.coordinator.cancel_active_edit()
     }
 

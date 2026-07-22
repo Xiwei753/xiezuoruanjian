@@ -115,6 +115,9 @@ class SettingsActivity : AppCompatActivity() {
         syncHelper = SyncSettingsHelper(this, settingsRepository)
         syncHelper.initViews()
         syncHelper.loadSyncState()
+        syncHelper.setupComposeAfterLoad()
+
+        setupEditorSlot()
 
         val toolbar: MaterialToolbar = findViewById(R.id.toolbar)
         setSupportActionBar(toolbar)
@@ -580,5 +583,21 @@ class SettingsActivity : AppCompatActivity() {
     private fun captureDynamicColor() {
         com.xiwei.sujian.ui.compose.theme.ThemeStore.captureDynamicColorAndSave(this)
         refreshPaletteRecords()
+    }
+
+    private fun setupEditorSlot() {
+        val slotContainer = findViewById<FrameLayout>(R.id.editorSlotContainer) ?: return
+        val slotComposeView = androidx.compose.ui.platform.ComposeView(this).apply {
+            setViewCompositionStrategy(androidx.compose.ui.platform.ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+        }
+        slotContainer.addView(slotComposeView, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        ))
+        slotComposeView.setContent {
+            com.xiwei.sujian.editor.v2.compose.AnimatedTextEditorSlot(
+                coordinator = textEditorCoordinator
+            )
+        }
     }
 }

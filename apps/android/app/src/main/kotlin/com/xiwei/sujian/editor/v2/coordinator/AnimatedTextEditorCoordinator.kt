@@ -211,7 +211,7 @@ class AnimatedTextEditorCoordinator(
 
         editingState = EditingState.IDLE
         target.onEditingStateChanged?.invoke(EditingState.IDLE)
-        lastCommittedText = finalText
+        lastCommittedText = if (target.profile.secretPolicy == SecretPolicy.MASK_AND_CLEAR_ON_COMMIT) null else finalText
         return true
     }
 
@@ -319,6 +319,10 @@ class AnimatedTextEditorCoordinator(
     }
 
     fun getTargetGeometry(targetId: String): Rect? = targets[targetId]?.currentGeometry
+
+    fun getTargetText(targetId: String): String? = targets[targetId]?.currentText
+
+    fun getPersistentSessionId(targetId: String): ULong? = persistentSessionIds[targetId]
 
     fun getSharedEditorView(): SujianEditorView? = sharedEditorView
 

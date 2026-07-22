@@ -53,11 +53,13 @@ internal class SyncSettingsHelper(
         btnTestConnection = activity.findViewById(R.id.btnTestConnection)
         btnPerformSync = activity.findViewById(R.id.btnPerformSync)
 
-        setupComposeInputContainers()
-
         sbSyncInterval.addOnChangeListener { _, value, _ ->
             tvSyncIntervalValue.text = formatSyncIntervalText(value.toInt())
         }
+    }
+
+    fun setupComposeAfterLoad() {
+        setupComposeInputContainers()
     }
 
     private fun setupComposeInputContainers() {
@@ -150,6 +152,16 @@ internal class SyncSettingsHelper(
         tvSyncIntervalValue.text = formatSyncIntervalText(currentSyncConfig.syncIntervalSeconds ?: 300)
         updateTokenStatusUI()
         applySyncCapability()
+        syncTargetTextsToCoordinator()
+    }
+
+    private fun syncTargetTextsToCoordinator() {
+        val coordinator = (activity as? com.xiwei.sujian.ui.SettingsActivity)?.textEditorCoordinator ?: return
+        coordinator.updateTargetText("settings-repo-url", repoUrl)
+        coordinator.updateTargetText("settings-branch", branchName)
+        if (tokenValue.isNotEmpty()) {
+            coordinator.updateTargetText("settings-token", tokenValue)
+        }
     }
 
     private fun applySyncCapability() {

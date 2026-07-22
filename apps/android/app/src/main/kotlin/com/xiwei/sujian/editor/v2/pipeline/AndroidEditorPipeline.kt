@@ -795,4 +795,12 @@ class AndroidEditorPipeline private constructor(
     }
 
     fun getMaxLength(): Int = maxLength
+
+    private var secretDisplayMode: Boolean = false
+
+    fun setSecretDisplayMode(enabled: Boolean) {
+        secretDisplayMode = enabled
+    }
+
+    fun isSecretDisplayMode(): Boolean = secretDisplayMode
 }

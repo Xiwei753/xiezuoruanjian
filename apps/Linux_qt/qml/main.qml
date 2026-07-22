@@ -804,7 +804,6 @@ ApplicationWindow {
         }
         onOpened: {
             inputField.text = inputDialog.defaultText;
-            inputField.forceActiveFocus();
         }
     }
 }

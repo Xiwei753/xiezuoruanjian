@@ -191,10 +191,35 @@ class StarMapController(
                 androidx.compose.foundation.layout.Spacer(
                     modifier = androidx.compose.ui.Modifier.height(16.dp)
                 )
-                androidx.compose.material3.DropdownMenuItem(
-                    text = { androidx.compose.material3.Text(kinds[selectedKindIndex]) },
-                    onClick = { }
-                )
+                var expanded by mutableStateOf(false)
+                androidx.compose.material3.ExposedDropdownMenuBox(
+                    expanded = expanded,
+                    onExpandedChange = { expanded = !expanded }
+                ) {
+                    androidx.compose.material3.OutlinedTextField(
+                        value = kinds[selectedKindIndex],
+                        onValueChange = {},
+                        readOnly = true,
+                        trailingIcon = {
+                            androidx.compose.material3.ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
+                        },
+                        modifier = androidx.compose.ui.Modifier.menuAnchor()
+                    )
+                    androidx.compose.material3.ExposedDropdownMenu(
+                        expanded = expanded,
+                        onDismissRequest = { expanded = false }
+                    ) {
+                        kinds.forEachIndexed { index, kind ->
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { androidx.compose.material3.Text(kind) },
+                                onClick = {
+                                    selectedKindIndex = index
+                                    expanded = false
+                                }
+                            )
+                        }
+                    }
+                }
             }
         }
 

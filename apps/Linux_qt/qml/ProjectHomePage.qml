@@ -172,7 +172,6 @@ Rectangle {
         }
         onOpened: {
             renameField.text = renameProjectDialog.currentTitle;
-            renameField.forceActiveFocus();
         }
     }
 

@@ -246,7 +246,7 @@ class SujianEditorView @JvmOverloads constructor(
     override fun onInitializeAccessibilityNodeInfo(info: android.view.accessibility.AccessibilityNodeInfo?) {
         super.onInitializeAccessibilityNodeInfo(info)
         info?.isEditable = true
-        info?.text = pipeline.getText()
+        info?.text = if (isSecretMode) getDisplayText() else pipeline.getText()
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -453,6 +453,17 @@ class SujianEditorView @JvmOverloads constructor(
 
     private var isSessionBound: Boolean = false
     private var currentProfile: TextEditorProfile = TextEditorProfile.DocumentBody
+    private val isSecretMode: Boolean
+        get() = currentProfile.secretPolicy == com.xiwei.sujian.editor.v2.coordinator.SecretPolicy.MASK_AND_CLEAR_ON_COMMIT
+
+    fun getDisplayText(): String {
+        val realText = pipeline.getText()
+        return if (isSecretMode && isSessionBound) {
+            "\u2022".repeat(realText.length)
+        } else {
+            realText
+        }
+    }
     private var commitOnFocusLoss: Boolean = true
     var onCommitRequested: (() -> Unit)? = null
     var onCancelRequested: (() -> Unit)? = null
@@ -496,6 +507,34 @@ class SujianEditorView @JvmOverloads constructor(
             if (profile.commitOnImeAction) {
                 onCommitRequested?.invoke()
             }
+        }
+        commitOnFocusLoss = profile.commitOnFocusLoss
+        if (profile.animationPolicy == com.xiwei.sujian.editor.v2.coordinator.AnimationPolicy.SYSTEM_SUPPRESSED) {
+            pipeline.kernelBridge?.setAnimationEnabled(false)
+            pipeline.animationEngine.setAnimationPolicy(com.xiwei.sujian.editor.v2.visual.TextAnimationPolicy.SYSTEM_SUPPRESSED)
+        } else {
+            pipeline.kernelBridge?.setAnimationEnabled(true)
+            pipeline.animationEngine.setAnimationPolicy(com.xiwei.sujian.editor.v2.visual.TextAnimationPolicy.INHERIT_GLOBAL)
+        }
+        if (profile.cursorPolicy == com.xiwei.sujian.editor.v2.coordinator.CursorPolicy.HIDDEN) {
+            pipeline.setCursorVisible(false)
+        } else {
+            pipeline.setCursorVisible(true)
+        }
+        if (profile.selectionPolicy == com.xiwei.sujian.editor.v2.coordinator.SelectionPolicy.CURSOR_ONLY) {
+            pipeline.setSelectionAllowed(false)
+        } else {
+            pipeline.setSelectionAllowed(true)
+        }
+        pipeline.setMaxLength(profile.maxLength)
+        pipeline.setCopyAllowed(profile.copyPolicy != com.xiwei.sujian.editor.v2.coordinator.CopyPolicy.BLOCK)
+        pipeline.setPasteAllowed(profile.pastePolicy != com.xiwei.sujian.editor.v2.coordinator.CopyPolicy.BLOCK)
+        if (profile.secretPolicy == com.xiwei.sujian.editor.v2.coordinator.SecretPolicy.MASK_AND_CLEAR_ON_COMMIT) {
+            pipeline.setSecretDisplayMode(true)
+        } else {
+            pipeline.setSecretDisplayMode(false)
+        }
+    }
         }
         commitOnFocusLoss = profile.commitOnFocusLoss
         if (profile.animationPolicy == com.xiwei.sujian.editor.v2.coordinator.AnimationPolicy.SYSTEM_SUPPRESSED) {
