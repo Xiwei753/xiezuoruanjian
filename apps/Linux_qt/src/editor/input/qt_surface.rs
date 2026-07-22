@@ -343,7 +343,9 @@ cpp! {{
         item->setFlag(QQuickItem::ItemHasContents, true);
         item->setFlag(QQuickItem::ItemAcceptsInputMethod, true);
         item->setAcceptedMouseButtons(Qt::AllButtons);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
         item->setFocusPolicy(Qt::StrongFocus);
+#endif
         QInputMethod* im = QGuiApplication::inputMethod();
         if (im) {
             im->update(Qt::ImEnabled);
