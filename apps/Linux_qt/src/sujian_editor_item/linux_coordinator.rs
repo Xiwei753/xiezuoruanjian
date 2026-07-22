@@ -1,8 +1,9 @@
 use writer_core::editor::text_edit_session::{TextEditSessionId, TextEditSessionRegistry};
 use std::collections::HashMap;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) enum TextInputType {
+    #[default]
     Text,
     MultiLine,
     Number,
@@ -10,84 +11,48 @@ pub(crate) enum TextInputType {
     Password,
 }
 
-impl Default for TextInputType {
-    fn default() -> Self {
-        Self::Text
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) enum SecretPolicy {
+    #[default]
     None,
     MaskAndClearOnCommit,
 }
 
-impl Default for SecretPolicy {
-    fn default() -> Self {
-        Self::None
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) enum AutocorrectPolicy {
+    #[default]
     Default,
     Disabled,
 }
 
-impl Default for AutocorrectPolicy {
-    fn default() -> Self {
-        Self::Default
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) enum CapitalizationPolicy {
+    #[default]
     None,
     Characters,
     Words,
     Sentences,
 }
 
-impl Default for CapitalizationPolicy {
-    fn default() -> Self {
-        Self::None
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) enum CopyPolicy {
+    #[default]
     Allow,
     Block,
 }
 
-impl Default for CopyPolicy {
-    fn default() -> Self {
-        Self::Allow
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) enum PastePolicy {
+    #[default]
     Allow,
     Block,
 }
 
-impl Default for PastePolicy {
-    fn default() -> Self {
-        Self::Allow
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) enum SelectionPolicy {
+    #[default]
     Allow,
     CursorOnly,
-}
-
-impl Default for SelectionPolicy {
-    fn default() -> Self {
-        Self::Allow
-    }
 }
 
 #[derive(Clone, Debug)]
