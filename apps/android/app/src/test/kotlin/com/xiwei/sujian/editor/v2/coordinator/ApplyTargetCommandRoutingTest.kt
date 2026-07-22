@@ -89,8 +89,8 @@ class ApplyTargetCommandRoutingTest {
 
     @Test
     fun targetCommandResultFailedHoldsReason() {
-        val result = TargetCommandResult.Failed("no session")
-        assertEquals("no session", result.reason)
+        val result = TargetCommandResult.Failed(TargetCommandError.NO_PERSISTENT_SESSION)
+        assertEquals(TargetCommandError.NO_PERSISTENT_SESSION, result.reason)
     }
 
     private fun assertNotNull(obj: Any?) {

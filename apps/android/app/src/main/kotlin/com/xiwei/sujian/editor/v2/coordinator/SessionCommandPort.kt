@@ -41,8 +41,16 @@ sealed class TargetCommandResult {
     ) : TargetCommandResult()
 
     data class Failed(
-        val reason: String
+        val reason: TargetCommandError
     ) : TargetCommandResult()
+}
+
+enum class TargetCommandError {
+    NO_PERSISTENT_SESSION,
+    SESSION_INVALID,
+    SNAPSHOT_UNAVAILABLE,
+    KERNEL_REJECTED,
+    KERNEL_NULL_RESULT
 }
 
 interface SessionCommandPort {

@@ -87,5 +87,6 @@ class TargetReadonlyProjection(
     }
 
     fun release() {
+        layoutEngine.release()
     }
 }

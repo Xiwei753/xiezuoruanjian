@@ -75,8 +75,19 @@ class SessionCommandPortContractTest {
 
     @Test
     fun targetCommandResultFailedHoldsReason() {
-        val result = TargetCommandResult.Failed("no session")
-        assertEquals("no session", result.reason)
+        val result = TargetCommandResult.Failed(TargetCommandError.NO_PERSISTENT_SESSION)
+        assertEquals(TargetCommandError.NO_PERSISTENT_SESSION, result.reason)
+    }
+
+    @Test
+    fun targetCommandErrorEnumCoversAllFailureModes() {
+        val errors = TargetCommandError.values()
+        assertTrue(errors.contains(TargetCommandError.NO_PERSISTENT_SESSION))
+        assertTrue(errors.contains(TargetCommandError.SESSION_INVALID))
+        assertTrue(errors.contains(TargetCommandError.SNAPSHOT_UNAVAILABLE))
+        assertTrue(errors.contains(TargetCommandError.KERNEL_REJECTED))
+        assertTrue(errors.contains(TargetCommandError.KERNEL_NULL_RESULT))
+        assertEquals(5, errors.size)
     }
 
     @Test
@@ -101,5 +112,16 @@ class SessionCommandPortContractTest {
     @Test
     fun sessionResetSourceValues() {
         assertEquals(3, SessionResetSource.values().size)
+    }
+
+    @Test
+    fun coordinatorHasOnTargetContentChangedCallback() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator")
+        val field = clazz.getDeclaredField("onTargetContentChanged")
+        assertNotNull(field)
+    }
+
+    private fun assertNotNull(obj: Any?) {
+        assertTrue("Expected non-null value", obj != null)
     }
 }

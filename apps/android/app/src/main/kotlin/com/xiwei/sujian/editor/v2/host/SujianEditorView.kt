@@ -107,7 +107,6 @@ class SujianEditorView @JvmOverloads constructor(
     private fun handlePipelineOutputInternal(output: PipelineOutput, suppressContentCallback: Boolean = false) {
         when (output) {
             is PipelineOutput.Edited -> {
-                pipeline.applySecretDisplayIfActive()
                 updateMaxScroll()
                 scrollY = scrollY.coerceIn(0f, maxScrollY)
                 if (!suppressContentCallback && output.result.displayPatches.isNotEmpty()) {

@@ -506,20 +506,14 @@ class EditorFragment : Fragment() {
             if (searchResults.isEmpty() || currentSearchIndex < 0) return@setOnClickListener
             val (start, end) = searchResults[currentSearchIndex]
             val chapterTargetId = getChapterBodyTargetId()
-            val sessionId = coordinator.getPersistentSessionId(chapterTargetId)
-            if (sessionId != null) {
-                when (val result = coordinator.applyTargetCommand(
-                    chapterTargetId,
-                    com.xiwei.sujian.editor.v2.coordinator.TargetCommand.Replace(start, end, replaceText, searchText)
-                )) {
-                    is com.xiwei.sujian.editor.v2.coordinator.TargetCommandResult.Success -> {
-                        coordinator.updateTargetText(chapterTargetId, result.snapshot.text)
-                    }
-                    is com.xiwei.sujian.editor.v2.coordinator.TargetCommandResult.Failed -> {}
+            when (val result = coordinator.applyTargetCommand(
+                chapterTargetId,
+                com.xiwei.sujian.editor.v2.coordinator.TargetCommand.Replace(start, end, replaceText, searchText)
+            )) {
+                is com.xiwei.sujian.editor.v2.coordinator.TargetCommandResult.Success -> {
+                    coordinator.updateTargetText(chapterTargetId, result.snapshot.text)
                 }
-            } else {
-                val view = getEditorView() ?: return@setOnClickListener
-                view.replaceRange(start, end, replaceText)
+                is com.xiwei.sujian.editor.v2.coordinator.TargetCommandResult.Failed -> {}
             }
             performSearch()
         }
@@ -527,20 +521,14 @@ class EditorFragment : Fragment() {
         btnReplaceAll.setOnClickListener {
             if (searchResults.isEmpty()) return@setOnClickListener
             val chapterTargetId = getChapterBodyTargetId()
-            val sessionId = coordinator.getPersistentSessionId(chapterTargetId)
-            if (sessionId != null) {
-                when (val result = coordinator.applyTargetCommand(
-                    chapterTargetId,
-                    com.xiwei.sujian.editor.v2.coordinator.TargetCommand.ReplaceAll(searchText, replaceText)
-                )) {
-                    is com.xiwei.sujian.editor.v2.coordinator.TargetCommandResult.Success -> {
-                        coordinator.updateTargetText(chapterTargetId, result.snapshot.text)
-                    }
-                    is com.xiwei.sujian.editor.v2.coordinator.TargetCommandResult.Failed -> {}
+            when (val result = coordinator.applyTargetCommand(
+                chapterTargetId,
+                com.xiwei.sujian.editor.v2.coordinator.TargetCommand.ReplaceAll(searchText, replaceText)
+            )) {
+                is com.xiwei.sujian.editor.v2.coordinator.TargetCommandResult.Success -> {
+                    coordinator.updateTargetText(chapterTargetId, result.snapshot.text)
                 }
-            } else {
-                val view = getEditorView() ?: return@setOnClickListener
-                view.replaceAll(searchText, replaceText)
+                is com.xiwei.sujian.editor.v2.coordinator.TargetCommandResult.Failed -> {}
             }
             performSearch()
         }

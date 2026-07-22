@@ -3,6 +3,7 @@ package com.xiwei.sujian.ui.compose.editor
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
@@ -16,7 +17,7 @@ fun ReadonlyChapterPreview(
 ) {
     val layoutEngine = projection.getLayoutEngine()
     val layout = layoutEngine.getLayout()
-    val renderer = AndroidTextRenderer()
+    val renderer = remember { AndroidTextRenderer() }
 
     Canvas(modifier = modifier.fillMaxSize()) {
         if (layout != null) {

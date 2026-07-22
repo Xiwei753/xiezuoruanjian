@@ -51,6 +51,8 @@ class AnimatedTextEditorCoordinator(
     var editingState: EditingState by mutableStateOf(EditingState.IDLE)
         private set
 
+    var onTargetContentChanged: ((targetId: String, newText: String) -> Unit)? = null
+
     var activeTargetGeometry: Rect by mutableStateOf(Rect())
         private set
     var activeTargetTransform: Transform2D by mutableStateOf(Transform2D.IDENTITY)
@@ -410,13 +412,13 @@ class AnimatedTextEditorCoordinator(
 
     override fun applyTargetCommand(targetId: String, command: TargetCommand): TargetCommandResult {
         val sessionId = persistentSessionIds[targetId]
-            ?: return TargetCommandResult.Failed("No persistent session for target $targetId")
+            ?: return TargetCommandResult.Failed(TargetCommandError.NO_PERSISTENT_SESSION)
         if (!validateSession(sessionId)) {
-            return TargetCommandResult.Failed("Session $sessionId no longer valid for target $targetId")
+            return TargetCommandResult.Failed(TargetCommandError.SESSION_INVALID)
         }
 
         val snapshotBefore = queryTargetSnapshot(targetId)
-            ?: return TargetCommandResult.Failed("Cannot read snapshot for target $targetId")
+            ?: return TargetCommandResult.Failed(TargetCommandError.SNAPSHOT_UNAVAILABLE)
 
         if (targetId == activeTargetId) {
             val view = sharedEditorView
@@ -427,7 +429,7 @@ class AnimatedTextEditorCoordinator(
                         commandPort.replaceRangeTyped(
                             command.byteStart, command.byteEndExclusive,
                             command.replacementText, command.originalText,
-                            uniffi.writer_core.EditorTransactionCauseDto.TYPING
+                            uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC
                         )
                     }
                     is TargetCommand.ReplaceAll -> {
@@ -439,8 +441,9 @@ class AnimatedTextEditorCoordinator(
                 }
                 view.handlePipelineOutput(pipelineOutput)
                 val snapshotAfter = queryTargetSnapshot(targetId)
-                    ?: return TargetCommandResult.Failed("Cannot read snapshot after command for target $targetId")
+                    ?: return TargetCommandResult.Failed(TargetCommandError.SNAPSHOT_UNAVAILABLE)
                 targets[targetId]?.updateText(snapshotAfter.text)
+                updateTargetProjection(targetId)
                 return TargetCommandResult.Success(snapshotAfter)
             }
         }
@@ -451,7 +454,7 @@ class AnimatedTextEditorCoordinator(
                 bridge.replace(
                     command.byteStart, command.byteEndExclusive,
                     command.replacementText, command.originalText,
-                    uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+                    uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
                     snapshotBefore.revision
                 )
             }
@@ -470,12 +473,12 @@ class AnimatedTextEditorCoordinator(
         }
 
         if (dtoResult == null) {
-            return TargetCommandResult.Failed("Kernel returned null for command on target $targetId")
+            return TargetCommandResult.Failed(TargetCommandError.KERNEL_NULL_RESULT)
         }
 
         val editResult = com.xiwei.sujian.editor.v2.mirror.EditResult.fromDto(dtoResult)
         if (!editResult.isApplied()) {
-            return TargetCommandResult.Failed("Kernel rejected command: ${editResult.outcome}")
+            return TargetCommandResult.Failed(TargetCommandError.KERNEL_REJECTED)
         }
 
         val projection = targetProjections[targetId]
@@ -486,9 +489,12 @@ class AnimatedTextEditorCoordinator(
         }
 
         val snapshotAfter = queryTargetSnapshot(targetId)
-            ?: return TargetCommandResult.Failed("Cannot read snapshot after command for target $targetId")
+            ?: return TargetCommandResult.Failed(TargetCommandError.SNAPSHOT_UNAVAILABLE)
 
         targets[targetId]?.updateText(snapshotAfter.text)
+        if (targetId != activeTargetId) {
+            onTargetContentChanged?.invoke(targetId, snapshotAfter.text)
+        }
 
         return TargetCommandResult.Success(snapshotAfter)
     }

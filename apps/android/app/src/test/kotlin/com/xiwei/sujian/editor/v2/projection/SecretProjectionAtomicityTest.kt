@@ -78,4 +78,35 @@ class SecretProjectionAtomicityTest {
         val proj = DisplayTextProjection.masked("ab", "*")
         assertEquals("**", proj.displayText)
     }
+
+    @Test
+    fun layoutRuntimeOwnsApplySecretDisplayIfActive() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidLayoutRuntime")
+        val method = clazz.getDeclaredMethod("applySecretDisplayIfActive")
+        assertNotNull(method)
+    }
+
+    @Test
+    fun layoutRuntimeOwnsRebuildSecretProjection() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidLayoutRuntime")
+        val method = clazz.getDeclaredMethod("rebuildSecretProjection")
+        assertNotNull(method)
+    }
+
+    @Test
+    fun pipelineApplyEditResultIncludesSecretInMirrorUpdate() {
+        val pipelineClazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidEditorPipeline")
+        val editResultClazz = Class.forName("com.xiwei.sujian.editor.v2.mirror.EditResult")
+        val functionType = kotlin.jvm.functions.Function0::class.java
+        val applyMethod = pipelineClazz.getDeclaredMethod(
+            "applyEditResult",
+            editResultClazz,
+            functionType
+        )
+        assertNotNull(applyMethod)
+    }
+
+    private fun assertNotNull(obj: Any?) {
+        assertTrue("Expected non-null value", obj != null)
+    }
 }

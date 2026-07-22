@@ -241,4 +241,10 @@ class AndroidLayoutEngine(
         displayTextOverride = null
         lastConfigFingerprint = ""
     }
+
+    fun release() {
+        layout = null
+        currentRevision = null
+        displayTextOverride = null
+    }
 }
