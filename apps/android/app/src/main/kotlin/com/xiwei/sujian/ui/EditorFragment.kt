@@ -512,6 +512,7 @@ class EditorFragment : Fragment() {
             )) {
                 is com.xiwei.sujian.editor.v2.coordinator.TargetCommandResult.Success -> {
                     coordinator.updateTargetText(chapterTargetId, result.snapshot.text)
+                    viewModel.onContentChanged(result.snapshot.text)
                 }
                 is com.xiwei.sujian.editor.v2.coordinator.TargetCommandResult.Failed -> {}
             }
@@ -527,6 +528,7 @@ class EditorFragment : Fragment() {
             )) {
                 is com.xiwei.sujian.editor.v2.coordinator.TargetCommandResult.Success -> {
                     coordinator.updateTargetText(chapterTargetId, result.snapshot.text)
+                    viewModel.onContentChanged(result.snapshot.text)
                 }
                 is com.xiwei.sujian.editor.v2.coordinator.TargetCommandResult.Failed -> {}
             }

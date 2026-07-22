@@ -494,6 +494,8 @@ class AnimatedTextEditorCoordinator(
             updateTargetProjection(targetId)
         }
 
+        targetDecorationsVersion++
+
         val snapshotAfter = queryTargetSnapshot(targetId)
             ?: return TargetCommandResult.Failed(TargetCommandError.SNAPSHOT_UNAVAILABLE)
 

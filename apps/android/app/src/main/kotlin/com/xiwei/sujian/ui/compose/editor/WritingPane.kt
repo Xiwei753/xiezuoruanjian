@@ -142,14 +142,17 @@ fun WritingPane(
                 val contentHash = uiState.content.hashCode().toLong()
                 if (externalContentHash != contentHash) {
                     externalContentHash = contentHash
-                    coordinator.resetPersistentSession(
-                        targetId,
-                        uiState.content,
-                        uiState.content.toByteArray(Charsets.UTF_8).size,
-                        SessionResetSource.EXTERNAL
-                    )
-                    if (coordinator.activeTargetId != targetId) {
-                        coordinator.beginEdit(targetId, uiState.content.toByteArray(Charsets.UTF_8).size)
+                    val kernelText = coordinator.getTargetText(targetId)
+                    if (kernelText != uiState.content) {
+                        coordinator.resetPersistentSession(
+                            targetId,
+                            uiState.content,
+                            uiState.content.toByteArray(Charsets.UTF_8).size,
+                            SessionResetSource.EXTERNAL
+                        )
+                        if (coordinator.activeTargetId != targetId) {
+                            coordinator.beginEdit(targetId, uiState.content.toByteArray(Charsets.UTF_8).size)
+                        }
                     }
                 }
             }
