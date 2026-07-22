@@ -8,6 +8,12 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 #![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_possible_wrap, clippy::cast_lossless)]
 #![allow(clippy::too_many_arguments, clippy::module_inception, clippy::type_complexity)]
+#![allow(clippy::redundant_closure, clippy::redundant_pattern, clippy::field_reassign_with_default)]
+#![allow(clippy::map_identity, clippy::clone_on_copy, clippy::needless_range_loop)]
+#![allow(clippy::identity_op, clippy::assert_eq_bool, clippy::eq_op, clippy::double_must_use)]
+#![allow(clippy::items_after_test_module, clippy::same_functions_in_if_condition)]
+#![allow(unused_imports, unused_variables, unreachable_patterns)]
+#![allow(deprecated)]
 //
 //
 // 引用了什么：
