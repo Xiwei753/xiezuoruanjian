@@ -130,4 +130,61 @@ class RuntimeOwnershipTest {
         val rendererFields = clazz.declaredFields.filter { it.name == "textRenderer" || it.name == "animationRenderer" || it.name == "frameComposer" }
         assertTrue("Pipeline should not own textRenderer/animationRenderer/frameComposer directly — they belong to RenderRuntime", rendererFields.isEmpty())
     }
+
+    @Test
+    fun visualRuntimeDefaultConstructorSharesPlannerAndResourceStore() {
+        val runtime = AndroidVisualRuntime()
+        val plannerField = AndroidVisualRuntime::class.java.getDeclaredField("visualPlanner")
+        plannerField.isAccessible = true
+        val engineField = AndroidVisualRuntime::class.java.getDeclaredField("animationEngine")
+        engineField.isAccessible = true
+        val storeField = AndroidVisualRuntime::class.java.getDeclaredField("resourceStore")
+        storeField.isAccessible = true
+
+        val outerPlanner = plannerField.get(runtime)
+        val engine = engineField.get(runtime)
+        val outerStore = storeField.get(runtime)
+
+        val enginePlannerField = engine.javaClass.getDeclaredField("visualPlanner")
+        enginePlannerField.isAccessible = true
+        val engineStoreField = engine.javaClass.getDeclaredField("resourceStore")
+        engineStoreField.isAccessible = true
+
+        val enginePlanner = enginePlannerField.get(engine)
+        val engineStore = engineStoreField.get(engine)
+
+        assertTrue("visualPlanner must be same instance as animationEngine's planner", outerPlanner === enginePlanner)
+        assertTrue("resourceStore must be same instance as animationEngine's store", outerStore === engineStore)
+    }
+
+    @Test
+    fun visualRuntimeSecondaryConstructorSharesPlannerAndResourceStore() {
+        val planner = com.xiwei.sujian.editor.v2.visual.AndroidVisualPlanner()
+        val store = com.xiwei.sujian.editor.v2.visual.VisualResourceStore()
+        val runtime = AndroidVisualRuntime(planner, store)
+
+        val plannerField = AndroidVisualRuntime::class.java.getDeclaredField("visualPlanner")
+        plannerField.isAccessible = true
+        val engineField = AndroidVisualRuntime::class.java.getDeclaredField("animationEngine")
+        engineField.isAccessible = true
+        val storeField = AndroidVisualRuntime::class.java.getDeclaredField("resourceStore")
+        storeField.isAccessible = true
+
+        val outerPlanner = plannerField.get(runtime)
+        val engine = engineField.get(runtime)
+        val outerStore = storeField.get(runtime)
+
+        val enginePlannerField = engine.javaClass.getDeclaredField("visualPlanner")
+        enginePlannerField.isAccessible = true
+        val engineStoreField = engine.javaClass.getDeclaredField("resourceStore")
+        engineStoreField.isAccessible = true
+
+        val enginePlanner = enginePlannerField.get(engine)
+        val engineStore = engineStoreField.get(engine)
+
+        assertTrue("visualPlanner must be same instance as passed planner", outerPlanner === planner)
+        assertTrue("resourceStore must be same instance as passed store", outerStore === store)
+        assertTrue("engine's planner must be same instance as passed planner", enginePlanner === planner)
+        assertTrue("engine's store must be same instance as passed store", engineStore === store)
+    }
 }

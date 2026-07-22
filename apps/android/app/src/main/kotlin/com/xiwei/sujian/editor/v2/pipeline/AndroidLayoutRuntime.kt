@@ -77,7 +77,13 @@ class AndroidLayoutRuntime(
     private fun rebuildSecretProjectionContent() {
         val text = mirror.getText()
         currentProjection = if (secretDisplayMode) {
-            DisplayTextProjection.masked(text)
+            val compRange = mirror.getCompositionRangeUtf16()
+            if (compRange != null && compRange.first >= 0 && compRange.second > compRange.first) {
+                val compText = mirror.getSpannable().substring(compRange.first, compRange.second)
+                DisplayTextProjection.maskedWithComposition(text, compRange.first, compRange.second, compText)
+            } else {
+                DisplayTextProjection.masked(text)
+            }
         } else {
             DisplayTextProjection.identity(text)
         }

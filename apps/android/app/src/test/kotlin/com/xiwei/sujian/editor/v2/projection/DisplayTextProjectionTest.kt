@@ -83,4 +83,48 @@ class DisplayTextProjectionTest {
         assertEquals(utf8Len, proj.displayUtf16ToRealUtf8(5))
         assertEquals(0, proj.displayUtf16ToRealUtf8(0))
     }
+
+    @Test
+    fun maskedWithCompositionShowsCompTextUnmasked() {
+        val text = "password"
+        val proj = DisplayTextProjection.maskedWithComposition(text, 4, 8, "word")
+        assertEquals("\u2022\u2022\u2022\u2022word", proj.displayText)
+        assertTrue(proj.isMasked)
+    }
+
+    @Test
+    fun maskedWithCompositionAtStart() {
+        val text = "hello"
+        val proj = DisplayTextProjection.maskedWithComposition(text, 0, 3, "hel")
+        assertEquals("hel\u2022\u2022", proj.displayText)
+    }
+
+    @Test
+    fun maskedWithCompositionFullCoverage() {
+        val text = "abc"
+        val proj = DisplayTextProjection.maskedWithComposition(text, 0, 3, "abc")
+        assertEquals("abc", proj.displayText)
+    }
+
+    @Test
+    fun maskedWithCompositionEmptyCompRangeFallsBackToMasked() {
+        val text = "abc"
+        val proj = DisplayTextProjection.maskedWithComposition(text, -1, -1, "")
+        assertEquals("\u2022\u2022\u2022", proj.displayText)
+    }
+
+    @Test
+    fun maskedWithCompositionDisplayLength() {
+        val text = "abcdef"
+        val proj = DisplayTextProjection.maskedWithComposition(text, 3, 6, "def")
+        assertEquals(6, proj.displayLengthUtf16)
+        assertEquals(text.toByteArray(Charsets.UTF_8).size, proj.realLengthUtf8)
+    }
+
+    @Test
+    fun maskedWithCompositionCustomMaskChar() {
+        val text = "ab"
+        val proj = DisplayTextProjection.maskedWithComposition(text, 1, 2, "b", "*")
+        assertEquals("*b", proj.displayText)
+    }
 }

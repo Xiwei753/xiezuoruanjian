@@ -15,7 +15,6 @@ class AndroidVisualRuntime(
 ) {
     constructor() : this(
         AndroidVisualPlanner(),
-        AndroidTextAnimationEngine(AndroidVisualPlanner(), VisualResourceStore()),
         VisualResourceStore()
     )
 

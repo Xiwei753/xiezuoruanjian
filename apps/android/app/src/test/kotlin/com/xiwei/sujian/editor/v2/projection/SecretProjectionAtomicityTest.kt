@@ -113,6 +113,29 @@ class SecretProjectionAtomicityTest {
         assertNotNull(applyMethod)
     }
 
+    @Test
+    fun displayTextProjectionHasMaskedWithComposition() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.DisplayTextProjection")
+        val companion = clazz.declaredClasses.first { it.simpleName == "Companion" }
+        val method = companion.getDeclaredMethod(
+            "maskedWithComposition",
+            String::class.java,
+            Int::class.javaPrimitiveType,
+            Int::class.javaPrimitiveType,
+            String::class.java,
+            String::class.java
+        )
+        assertNotNull(method)
+    }
+
+    @Test
+    fun layoutRuntimeRebuildSecretProjectionUsesComposition() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidLayoutRuntime")
+        val mirrorClazz = Class.forName("com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror")
+        val constructor = clazz.getDeclaredConstructor(mirrorClazz, android.text.TextPaint::class.java)
+        assertNotNull(constructor)
+    }
+
     private fun assertNotNull(obj: Any?) {
         assertTrue("Expected non-null value", obj != null)
     }

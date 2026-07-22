@@ -340,7 +340,10 @@ class AndroidEditorPipeline private constructor(
         visualRuntime.prepareAndSubmit(
             visualIntent = visualIntent,
             layoutEngine = layoutRuntime.layoutEngine,
-            mirrorUpdate = mirrorUpdate
+            mirrorUpdate = {
+                mirrorUpdate?.invoke()
+                layoutRuntime.applySecretDisplayIfActive()
+            }
         )
     }
 
@@ -417,7 +420,10 @@ class AndroidEditorPipeline private constructor(
         visualRuntime.prepareAndSubmit(
             visualIntent = visualIntent,
             layoutEngine = layoutRuntime.layoutEngine,
-            mirrorUpdate = mirrorUpdate
+            mirrorUpdate = {
+                mirrorUpdate?.invoke()
+                layoutRuntime.applySecretDisplayIfActive()
+            }
         )
     }
 
@@ -457,7 +463,10 @@ class AndroidEditorPipeline private constructor(
         visualRuntime.prepareAndSubmit(
             visualIntent = visualIntent,
             layoutEngine = layoutRuntime.layoutEngine,
-            mirrorUpdate = mirrorUpdate
+            mirrorUpdate = {
+                mirrorUpdate?.invoke()
+                layoutRuntime.applySecretDisplayIfActive()
+            }
         )
     }
 
