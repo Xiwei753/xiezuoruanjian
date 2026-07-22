@@ -613,8 +613,10 @@ class EditorFragment : Fragment() {
         )
         val sessionId = coordinator.getPersistentSessionId(chapterTargetId)
         if (sessionId != null) {
-            val bridge = com.xiwei.sujian.data.BridgeProvider.getAppServiceBridge(requireContext())
-            bridge.textEditSessionSetSelection(sessionId, start.toUInt(), end.toUInt(), 0uL)
+            coordinator.applyTargetCommand(
+                chapterTargetId,
+                com.xiwei.sujian.editor.v2.coordinator.TargetCommand.SetSelection(start, end)
+            )
         }
         val view = getEditorView()
         if (view != null && coordinator.activeTargetId == chapterTargetId) {

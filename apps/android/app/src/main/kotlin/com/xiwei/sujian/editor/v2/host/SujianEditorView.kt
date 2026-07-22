@@ -12,6 +12,7 @@ import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import com.xiwei.sujian.editor.v2.mirror.EditResult
 import com.xiwei.sujian.editor.v2.pipeline.AndroidEditorPipeline
+import com.xiwei.sujian.editor.v2.pipeline.PipelineOutput
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
 import com.xiwei.sujian.editor.v2.coordinator.NewlinePolicy
 import uniffi.writer_core.EditorTransactionCauseDto
@@ -45,7 +46,7 @@ class SujianEditorView @JvmOverloads constructor(
     private var themeBackgroundColor: Int = Color.WHITE
 
     init {
-        pipeline.inputAdapter?.onPipelineOutput = { output -> handlePipelineOutput(output) }
+        pipeline.inputAdapter?.onPipelineOutput = { output: PipelineOutput -> handlePipelineOutput(output) }
         pipeline.inputAdapter?.onCompositionVisualUpdate = {
             updateMaxScroll()
             scrollY = scrollY.coerceIn(0f, maxScrollY)
@@ -94,17 +95,17 @@ class SujianEditorView @JvmOverloads constructor(
         handlePipelineOutput(output)
     }
 
-    private fun handlePipelineOutput(output: AndroidEditorPipeline.PipelineOutput, suppressContentCallback: Boolean = false) {
+    private fun handlePipelineOutput(output: PipelineOutput, suppressContentCallback: Boolean = false) {
         handlePipelineOutputInternal(output, suppressContentCallback)
     }
 
-    fun handlePipelineOutput(output: AndroidEditorPipeline.PipelineOutput) {
+    fun handlePipelineOutput(output: PipelineOutput) {
         handlePipelineOutputInternal(output, false)
     }
 
-    private fun handlePipelineOutputInternal(output: AndroidEditorPipeline.PipelineOutput, suppressContentCallback: Boolean = false) {
+    private fun handlePipelineOutputInternal(output: PipelineOutput, suppressContentCallback: Boolean = false) {
         when (output) {
-            is AndroidEditorPipeline.PipelineOutput.Edited -> {
+            is PipelineOutput.Edited -> {
                 pipeline.applySecretDisplayIfActive()
                 updateMaxScroll()
                 scrollY = scrollY.coerceIn(0f, maxScrollY)
@@ -113,10 +114,10 @@ class SujianEditorView @JvmOverloads constructor(
                 }
                 invalidate()
             }
-            is AndroidEditorPipeline.PipelineOutput.NeedReload -> {
+            is PipelineOutput.NeedReload -> {
                 reloadFromKernel()
             }
-            is AndroidEditorPipeline.PipelineOutput.StaleOrInvalid -> {
+            is PipelineOutput.StaleOrInvalid -> {
                 reloadFromKernel()
             }
         }
@@ -392,7 +393,7 @@ class SujianEditorView @JvmOverloads constructor(
         if (!enabled) {
             pipeline.cancelActiveTransaction()
         }
-        pipeline.animationEngine.setAnimationPolicy(
+        pipeline.setAnimationPolicy(
             if (enabled) com.xiwei.sujian.editor.v2.visual.TextAnimationPolicy.ENABLED
             else com.xiwei.sujian.editor.v2.visual.TextAnimationPolicy.SYSTEM_SUPPRESSED
         )
@@ -426,7 +427,7 @@ class SujianEditorView @JvmOverloads constructor(
     fun applyThemeColorsFromAdapter(colors: com.xiwei.sujian.ui.compose.theme.EditorThemeColors) {
         themeBackgroundColor = colors.background
         textPaint.color = colors.text
-        pipeline.textRenderer.setThemeColors(
+        pipeline.setRendererThemeColors(
             textColor = colors.text,
             cursorColor = colors.cursor,
             selectionColor = colors.selection,
@@ -520,10 +521,10 @@ class SujianEditorView @JvmOverloads constructor(
         commitOnFocusLoss = profile.commitOnFocusLoss
         if (profile.animationPolicy == com.xiwei.sujian.editor.v2.coordinator.AnimationPolicy.SYSTEM_SUPPRESSED) {
             pipeline.kernelBridge?.setAnimationEnabled(false)
-            pipeline.animationEngine.setAnimationPolicy(com.xiwei.sujian.editor.v2.visual.TextAnimationPolicy.SYSTEM_SUPPRESSED)
+            pipeline.setAnimationPolicy(com.xiwei.sujian.editor.v2.visual.TextAnimationPolicy.SYSTEM_SUPPRESSED)
         } else {
             pipeline.kernelBridge?.setAnimationEnabled(true)
-            pipeline.animationEngine.setAnimationPolicy(com.xiwei.sujian.editor.v2.visual.TextAnimationPolicy.INHERIT_GLOBAL)
+            pipeline.setAnimationPolicy(com.xiwei.sujian.editor.v2.visual.TextAnimationPolicy.INHERIT_GLOBAL)
         }
         if (profile.cursorPolicy == com.xiwei.sujian.editor.v2.coordinator.CursorPolicy.HIDDEN) {
             pipeline.setCursorVisible(false)
@@ -633,7 +634,7 @@ class SujianEditorView @JvmOverloads constructor(
      */
     fun release() {
         unbindSession("release")
-        pipeline.animationEngine.release()
+        pipeline.releaseAnimationResources()
     }
 }
 

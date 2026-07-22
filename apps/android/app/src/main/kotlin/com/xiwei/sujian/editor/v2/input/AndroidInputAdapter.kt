@@ -11,31 +11,17 @@ import com.xiwei.sujian.editor.v2.coordinator.SecretPolicy
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
 import com.xiwei.sujian.editor.v2.coordinator.TextInputType
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
-import com.xiwei.sujian.editor.v2.pipeline.AndroidEditorPipeline
+import com.xiwei.sujian.editor.v2.pipeline.EditorCommandPort
+import com.xiwei.sujian.editor.v2.pipeline.PipelineOutput
 import com.xiwei.sujian.editor.v2.mirror.EditResult
 import uniffi.writer_core.EditorTransactionCauseDto
 
-/**
- * Android 输入适配器 — 将 Android InputConnection 事件翻译为 Core EditorCommand。
- *
- * 坐标空间约定：
- * - Android InputConnection 使用 UTF-16 code unit offset（Java String/CharSequence 索引）
- * - Core EditorKernel 使用 UTF-8 byte offset（半开区间）
- * - 所有 UTF-16 → UTF-8 转换必须在此适配器内完成，Core 不接受 UTF-16 偏移量
- * - maxLength 限制以 UTF-8 byte 为单位（与 Core 正文模型一致）
- *
- * Composition 生命周期：
- * - setComposingText → BeginComposition + UpdateComposition
- * - commitText → CommitText（关闭 composition 会话）
- * - finishComposingText → FinishComposition
- * - composition generation 由 Core 管理，适配器通过 syncCompositionGeneration 同步
- */
 class AndroidInputAdapter(
     private val mirror: DisplayTextMirror,
-    private val pipeline: AndroidEditorPipeline
+    private val commandPort: EditorCommandPort
 ) {
 
-    var onPipelineOutput: ((AndroidEditorPipeline.PipelineOutput) -> Unit)? = null
+    var onPipelineOutput: ((PipelineOutput) -> Unit)? = null
     var onCompositionVisualUpdate: (() -> Unit)? = null
     var onPerformEditorAction: ((Int) -> Unit)? = null
 
@@ -113,33 +99,33 @@ class AndroidInputAdapter(
             if (currentProfile.singleLine && !currentProfile.commitOnImeAction) {
                 outAttrs.imeOptions = outAttrs.imeOptions or android.view.inputmethod.EditorInfo.IME_FLAG_NO_ENTER_ACTION
             }
-            return AndroidInputConnection(this, mirror, pipeline, host)
+            return AndroidInputConnection(this, mirror, commandPort, host)
         }
         return null
     }
 
     fun sendInsertToKernel(byteOffset: Int, text: String, cause: EditorTransactionCauseDto) {
-        val output = pipeline.insertText(byteOffset, text, cause)
+        val output = commandPort.insertText(byteOffset, text, cause)
         onPipelineOutput?.invoke(output)
     }
 
     fun sendDeleteToKernel(byteStart: Int, byteEndExclusive: Int, cause: EditorTransactionCauseDto) {
-        val output = pipeline.deleteRange(byteStart, byteEndExclusive, cause)
+        val output = commandPort.deleteRange(byteStart, byteEndExclusive, cause)
         onPipelineOutput?.invoke(output)
     }
 
     fun sendReplaceToKernel(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto) {
-        val output = pipeline.replaceRangeTyped(byteStart, byteEndExclusive, replacementText, originalText, cause)
+        val output = commandPort.replaceRangeTyped(byteStart, byteEndExclusive, replacementText, originalText, cause)
         onPipelineOutput?.invoke(output)
     }
 
     fun sendSetSelectionToKernel(anchorByteOffset: Int, headByteOffset: Int) {
-        val output = pipeline.setSelectionTyped(anchorByteOffset, headByteOffset)
+        val output = commandPort.setSelectionTyped(anchorByteOffset, headByteOffset)
         onPipelineOutput?.invoke(output)
     }
 
     fun sendCommitTextToKernel(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, resultingSelectionAnchor: Int, resultingSelectionHead: Int, cause: EditorTransactionCauseDto) {
-        val bridge = pipeline.kernelBridge ?: return
+        val bridge = commandPort.kernelBridge ?: return
         val (sessionId, baseRev, generation) = compositionSessionInfo()
         val preeditAtCommit = currentCompositionText
         val dto = bridge.commitText(
@@ -151,16 +137,16 @@ class AndroidInputAdapter(
         val result = dto?.let { EditResult.fromDto(it) }
         if (result != null && result.isApplied()) {
             clearCompositionState()
-            val output = pipeline.applyCompositionCommit(dto, preeditAtCommit)
+            val output = commandPort.applyCompositionCommit(dto, preeditAtCommit)
             onPipelineOutput?.invoke(output)
             return
         }
         clearCompositionState()
-        pipeline.reloadFromKernel()
+        commandPort.reloadFromKernel()
     }
 
     fun sendDeleteSurroundingToKernel(beforeByteStart: Int, beforeByteEndExclusive: Int, afterByteStart: Int, afterByteEndExclusive: Int, cause: EditorTransactionCauseDto) {
-        val bridge = pipeline.kernelBridge ?: return
+        val bridge = commandPort.kernelBridge ?: return
         invalidateCompositionSession()
         val dto = bridge.deleteSurrounding(
             beforeByteStart, beforeByteEndExclusive,
@@ -168,18 +154,15 @@ class AndroidInputAdapter(
             cause, mirror.getRevision()
         ) ?: return
         val result = EditResult.fromDto(dto)
-        val output = pipeline.applyEditResult(result)
+        val output = commandPort.applyEditResult(result)
         onPipelineOutput?.invoke(output)
     }
 
     fun sendBeginCompositionToKernel(replaceStart: Int, replaceEndExclusive: Int): Boolean {
-        val bridge = pipeline.kernelBridge ?: return false
+        val bridge = commandPort.kernelBridge ?: return false
         val dto = bridge.beginComposition(replaceStart, replaceEndExclusive, mirror.getRevision()) ?: return false
         val result = EditResult.fromDto(dto)
         if (result.isApplied()) {
-            // The kernel returns compositionSession (sessionId, baseRevision, generation) on
-            // successful BeginComposition. These must be preserved for subsequent
-            // UpdateComposition/FinishComposition/CancelComposition calls.
             val sessionDto = dto.compositionSession
             if (sessionDto != null) {
                 compositionSessionId = sessionDto.sessionId.toLong()
@@ -192,7 +175,7 @@ class AndroidInputAdapter(
     }
 
     fun sendUpdateCompositionToKernel(newPreeditText: String, newPreeditCursorOffset: Int): Boolean {
-        val bridge = pipeline.kernelBridge ?: return false
+        val bridge = commandPort.kernelBridge ?: return false
         val (sessionId, _baseRev, generation) = compositionSessionInfo()
         if (sessionId == 0L) return false
         val dto = bridge.updateComposition(
@@ -202,9 +185,6 @@ class AndroidInputAdapter(
         ) ?: return false
         val result = EditResult.fromDto(dto)
         if (result.isApplied()) {
-            // Generation is incremented locally after each successful update so the next
-            // update carries the correct expected generation. If the kernel rejects the
-            // generation (stale), the composition is invalidated and the pipeline reloads.
             compositionGeneration++
             return true
         }
@@ -212,7 +192,7 @@ class AndroidInputAdapter(
     }
 
     fun sendFinishCompositionToKernel() {
-        val bridge = pipeline.kernelBridge ?: return
+        val bridge = commandPort.kernelBridge ?: return
         val (sessionId, _baseRev, generation) = compositionSessionInfo()
         if (sessionId == 0L) return
         val preeditAtFinish = currentCompositionText
@@ -221,17 +201,17 @@ class AndroidInputAdapter(
             val result = EditResult.fromDto(dto)
             if (result.isApplied()) {
                 clearCompositionState()
-                val output = pipeline.applyCompositionCommit(dto, preeditAtFinish)
+                val output = commandPort.applyCompositionCommit(dto, preeditAtFinish)
                 onPipelineOutput?.invoke(output)
                 return
             }
         }
         clearCompositionState()
-        pipeline.reloadFromKernel()
+        commandPort.reloadFromKernel()
     }
 
     fun sendCancelCompositionToKernel(): Boolean {
-        val bridge = pipeline.kernelBridge ?: return false
+        val bridge = commandPort.kernelBridge ?: return false
         val (sessionId, _baseRev, generation) = compositionSessionInfo()
         if (sessionId == 0L) return false
         val dto = bridge.cancelComposition(sessionId, generation, mirror.getRevision())
@@ -245,19 +225,8 @@ class AndroidInputAdapter(
         return true
     }
 
-    // Composition session state — tracks the Rust-side composition session lifecycle.
-    // sessionId: unique ID returned by EditorKernel on beginComposition; 0 means no session.
-    // baseRevision: the editor revision at which this composition session was started.
-    //   Used to detect stale composition operations (kernel rejects mismatched revisions).
-    // generation: monotonic counter incremented on each updateComposition call; the kernel
-    //   uses this to ensure updates arrive in order and match the expected generation.
-    //   All three are cleared atomically in [clearCompositionState] on commit/cancel/failure.
     private var compositionSessionId: Long = 0L
     private var compositionBaseRevision: Long = 0L
-    // compositionGeneration: stored as UInt because the Kotlin-side increment (line 170)
-    // is simpler with unsigned arithmetic; the toLong() widening in compositionSessionInfo()
-    // preserves the value because generation never exceeds UInt.MAX_VALUE in practice.
-    // The Rust side uses u64, and the FFI boundary handles UInt→u64 widening.
     private var compositionGeneration: UInt = 0u
 
     private fun clearCompositionState() {
@@ -288,21 +257,6 @@ class AndroidInputAdapter(
         return Triple(compositionSessionId, compositionBaseRevision, compositionGeneration.toLong())
     }
 
-    /**
-     * Handle an IME composition update (preedit text changed).
-     *
-     * Ordering invariant: the Rust kernel is updated first (sendUpdateCompositionToKernel),
-     * then the platform mirror is updated (via the mirrorUpdate lambda passed to
-     * applyCompositionUpdateAnimated). If the kernel rejects the update, the composition
-     * is cleared and the pipeline reloads — the mirror must not be left in a state where
-     * it shows preedit text that the kernel doesn't know about.
-     *
-     * Animation path: uses [AndroidEditorPipeline.applyCompositionUpdateAnimated] which
-     * constructs a platform-side VisualIntent (not Rust's), because the platform knows
-     * the exact old/new preedit text and can detect visual-same (old == new) to suppress
-     * unnecessary animation, and can select animation mode by grapheme characteristics
-     * rather than Rust's generic byte-count heuristic.
-     */
     fun handleCompositionUpdate(preeditText: String, newCursorPosition: Int) {
         if (currentProfile.newlinePolicy == NewlinePolicy.FORBID && preeditText.contains('\n')) {
             return
@@ -327,7 +281,7 @@ class AndroidInputAdapter(
             }
             val beginOk = sendBeginCompositionToKernel(compositionReplaceStartUtf8, compositionReplaceEndUtf8)
             if (!beginOk) {
-                pipeline.reloadFromKernel()
+                commandPort.reloadFromKernel()
                 return
             }
             isComposing = true
@@ -335,29 +289,25 @@ class AndroidInputAdapter(
         previousCompositionText = currentCompositionText
         currentCompositionText = preeditText
         val preeditUtf16Len = AndroidTextIndexMap.countUtf16CodeUnits(preeditText)
-        // newCursorPosition sign convention (Android InputConnection API):
-        //   > 0 : 1-based offset from start of preedit → convert to 0-based: (n-1)
-        //   <= 0: 0-based offset from end of preedit → already 0-based from end
-        // Both paths coerce to [0, preeditUtf16Len] to stay within the preedit bounds.
         compositionCursorUtf16 = if (newCursorPosition > 0) {
             (preeditUtf16Len + newCursorPosition - 1).coerceIn(0, preeditUtf16Len)
         } else {
             (0 + newCursorPosition).coerceIn(0, preeditUtf16Len)
         }
 
-        val bridge = pipeline.kernelBridge
+        val bridge = commandPort.kernelBridge
         if (bridge != null) {
             val updateOk = sendUpdateCompositionToKernel(preeditText, compositionCursorUtf16)
             if (!updateOk) {
                 mirror.clearComposition()
                 clearCompositionState()
-                pipeline.reloadFromKernel()
+                commandPort.reloadFromKernel()
                 onCompositionVisualUpdate?.invoke()
                 return
             }
         }
 
-        pipeline.applyCompositionUpdateAnimated(
+        commandPort.applyCompositionUpdateAnimated(
             compositionReplaceStartUtf8, compositionReplaceEndUtf8,
             preeditText, previousCompositionText
         ) {
@@ -375,7 +325,7 @@ class AndroidInputAdapter(
             mirror.getCommittedText(), newCursorPosition, replaceStart, replaceEnd, finalText
         )
 
-        val bridge = pipeline.kernelBridge
+        val bridge = commandPort.kernelBridge
         if (bridge != null) {
             val (sessionId, baseRev, generation) = compositionSessionInfo()
             val preeditAtCommit = currentCompositionText
@@ -389,18 +339,18 @@ class AndroidInputAdapter(
                 val result = EditResult.fromDto(dto)
                 if (result.isApplied()) {
                     clearCompositionState()
-                    val output = pipeline.applyCompositionCommit(dto, preeditAtCommit)
+                    val output = commandPort.applyCompositionCommit(dto, preeditAtCommit)
                     onPipelineOutput?.invoke(output)
                     return
                 }
             }
             clearCompositionState()
-            pipeline.reloadFromKernel()
+            commandPort.reloadFromKernel()
             return
         }
 
         clearCompositionState()
-        pipeline.reloadFromKernel()
+        commandPort.reloadFromKernel()
     }
 
     fun handleCompositionFinish() {
@@ -408,15 +358,6 @@ class AndroidInputAdapter(
         sendFinishCompositionToKernel()
     }
 
-    /**
-     * Cancel the active composition.
-     *
-     * Ordering invariant: the platform animation (fade-out of the preedit) is submitted
-     * *before* the kernel cancel call completes — the visual transition starts immediately
-     * while the kernel state is being reconciled. If the kernel cancel fails, the pipeline
-     * reloads from the kernel snapshot to restore consistency, but the visual cancel has
-     * already been initiated and cannot be revoked.
-     */
     fun handleCompositionCancel() {
         if (!isComposing) return
 
@@ -425,13 +366,13 @@ class AndroidInputAdapter(
         val replaceStart = compositionReplaceStartUtf8
         val replaceEnd = compositionReplaceEndUtf8
 
-        pipeline.applyCompositionCancelAnimated(replaceStart, replaceEnd, oldPreeditText) {
+        commandPort.applyCompositionCancelAnimated(replaceStart, replaceEnd, oldPreeditText) {
             mirror.clearComposition()
         }
         clearCompositionState()
 
         if (!cancelOk) {
-            pipeline.reloadFromKernel()
+            commandPort.reloadFromKernel()
             onCompositionVisualUpdate?.invoke()
             return
         }

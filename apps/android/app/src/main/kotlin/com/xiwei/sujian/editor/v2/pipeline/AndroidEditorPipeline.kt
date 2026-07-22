@@ -44,21 +44,27 @@ import uniffi.writer_core.EditorTransactionCauseDto
  * creating per-line Bitmaps, preventing unbounded memory allocation when editing near the top
  * of a long document.
  */
+sealed class PipelineOutput {
+    data class Edited(val result: EditResult) : PipelineOutput()
+    object NeedReload : PipelineOutput()
+    object StaleOrInvalid : PipelineOutput()
+}
+
 class AndroidEditorPipeline private constructor(
     val editPipeline: EditPipeline,
-    val layoutEngine: AndroidLayoutEngine,
-    val visualPlanner: AndroidVisualPlanner,
-    val animationEngine: AndroidTextAnimationEngine,
-    val textRenderer: AndroidTextRenderer,
-    val animationRenderer: AndroidTextAnimationRenderer,
-    val frameComposer: EditorFrameComposer,
+    private val layoutEngine: AndroidLayoutEngine,
+    private val visualPlanner: AndroidVisualPlanner,
+    private val animationEngine: AndroidTextAnimationEngine,
+    private val textRenderer: AndroidTextRenderer,
+    private val animationRenderer: AndroidTextAnimationRenderer,
+    private val frameComposer: EditorFrameComposer,
     var inputAdapter: AndroidInputAdapter?,
     val layoutRuntime: AndroidLayoutRuntime,
     val visualRuntime: AndroidVisualRuntime
-) {
+) : EditorCommandPort {
 
-    val mirror: DisplayTextMirror get() = editPipeline.mirror
-    var kernelBridge: EditorKernelBridge?
+    override val mirror: DisplayTextMirror get() = editPipeline.mirror
+    override var kernelBridge: EditorKernelBridge?
         get() = editPipeline.kernelBridge
         set(value) { editPipeline.setKernelBridge(value) }
 
@@ -91,11 +97,12 @@ class AndroidEditorPipeline private constructor(
         val result = editPipeline.loadText(text, cursorUtf8)
         if (result is LoadTextResult.Loaded) {
             resetAfterLoad()
+            applySecretDisplayIfActive()
         }
         return result
     }
 
-    fun insertText(byteOffset: Int, text: String, cause: EditorTransactionCauseDto = EditorTransactionCauseDto.TYPING): PipelineOutput {
+    override fun insertText(byteOffset: Int, text: String, cause: EditorTransactionCauseDto): PipelineOutput {
         inputAdapter?.invalidateCompositionSession()
         if (autoIndentEnabled && text == "\n") {
             val indentPrefix = computeAutoIndentPrefix()
@@ -108,21 +115,21 @@ class AndroidEditorPipeline private constructor(
         return applyEditResult(result)
     }
 
-    fun deleteRange(byteStart: Int, byteEndExclusive: Int, cause: EditorTransactionCauseDto = EditorTransactionCauseDto.DELETE): PipelineOutput {
+    override fun deleteRange(byteStart: Int, byteEndExclusive: Int, cause: EditorTransactionCauseDto): PipelineOutput {
         inputAdapter?.invalidateCompositionSession()
         val result = editPipeline.deleteRange(byteStart, byteEndExclusive, cause)
             ?: return PipelineOutput.StaleOrInvalid
         return applyEditResult(result)
     }
 
-    fun replaceRangeTyped(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto = EditorTransactionCauseDto.TYPING, beforePatch: (() -> Unit)? = null): PipelineOutput {
+    override fun replaceRangeTyped(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto, beforePatch: (() -> Unit)?): PipelineOutput {
         inputAdapter?.invalidateCompositionSession()
         val result = editPipeline.replaceRange(byteStart, byteEndExclusive, replacementText, originalText, cause)
             ?: return PipelineOutput.StaleOrInvalid
         return applyEditResult(result, beforePatch)
     }
 
-    fun setSelectionTyped(anchorByteOffset: Int, headByteOffset: Int): PipelineOutput {
+    override fun setSelectionTyped(anchorByteOffset: Int, headByteOffset: Int): PipelineOutput {
         val result = editPipeline.setSelection(anchorByteOffset, headByteOffset)
             ?: return PipelineOutput.StaleOrInvalid
         return applyEditResult(result)
@@ -168,9 +175,9 @@ class AndroidEditorPipeline private constructor(
      *
      * All byte ranges use half-open intervals [start, end).
      */
-    fun applyCompositionCommit(
+    override fun applyCompositionCommit(
         dto: uniffi.writer_core.EditorEditResultDto,
-        preeditText: String = ""
+        preeditText: String
     ): PipelineOutput {
         val result = EditResult.fromDto(dto)
         val rustOldAffected = result.visualIntent.oldAffectedByteRanges
@@ -266,9 +273,9 @@ class AndroidEditorPipeline private constructor(
      * animation is suppressed). Bypassing prepareAndSubmit would leave the display showing
      * stale text.
      */
-    fun applyEditResult(
+    override fun applyEditResult(
         result: EditResult,
-        beforePatch: (() -> Unit)? = null
+        beforePatch: (() -> Unit)?
     ): PipelineOutput {
         if (result.isStale()) {
             return PipelineOutput.StaleOrInvalid
@@ -359,12 +366,12 @@ class AndroidEditorPipeline private constructor(
      * to keep the mirror's composition overlay in sync with the IME state, even when
      * no text animation runs.
      */
-    fun applyCompositionUpdateAnimated(
+    override fun applyCompositionUpdateAnimated(
         replaceStartUtf8: Int,
         replaceEndUtf8: Int,
         newPreeditText: String,
         oldPreeditText: String,
-        mirrorUpdate: (() -> Unit)? = null
+        mirrorUpdate: (() -> Unit)?
     ) {
         val oldPreeditByteLen = oldPreeditText.toByteArray(Charsets.UTF_8).size
         val newPreeditByteLen = newPreeditText.toByteArray(Charsets.UTF_8).size
@@ -432,11 +439,11 @@ class AndroidEditorPipeline private constructor(
      * cancel typically involves short preedit spans where per-cluster fade-out provides
      * the best visual granularity without the overhead of per-glypheme slices.
      */
-    fun applyCompositionCancelAnimated(
+    override fun applyCompositionCancelAnimated(
         replaceStartUtf8: Int,
         replaceEndUtf8: Int,
         oldPreeditText: String,
-        mirrorUpdate: (() -> Unit)? = null
+        mirrorUpdate: (() -> Unit)?
     ) {
         val preeditByteLen = oldPreeditText.toByteArray(Charsets.UTF_8).size
         val oldAffected = if (preeditByteLen == 0 && replaceStartUtf8 == replaceEndUtf8) emptyList()
@@ -467,7 +474,7 @@ class AndroidEditorPipeline private constructor(
      * [AndroidLayoutRevision] reflecting the updated composition overlay — without it,
      * the renderer would draw the old composition state.
      */
-    fun onCompositionUpdated() {
+    override fun onCompositionUpdated() {
         layoutEngine.requestLayout()
     }
 
@@ -601,7 +608,7 @@ class AndroidEditorPipeline private constructor(
         animationEngine.cancel()
     }
 
-    fun reloadFromKernel(): Boolean {
+    override fun reloadFromKernel(): Boolean {
         if (!editPipeline.reloadFromKernel()) return false
         cancelActiveTransaction()
         releaseAllResources()
@@ -728,12 +735,6 @@ class AndroidEditorPipeline private constructor(
 
     fun getInputAdapterHostView(): View? = inputAdapter?.getHostView()
 
-    sealed class PipelineOutput {
-        data class Edited(val result: EditResult) : PipelineOutput()
-        object NeedReload : PipelineOutput()
-        object StaleOrInvalid : PipelineOutput()
-    }
-
     sealed class LoadTextResult {
         data class Loaded(val result: EditResult) : LoadTextResult()
         object Failed : LoadTextResult()
@@ -835,4 +836,16 @@ class AndroidEditorPipeline private constructor(
     }
 
     fun getCurrentProjection(): DisplayTextProjection = currentProjection
+
+    fun setAnimationPolicy(policy: com.xiwei.sujian.editor.v2.visual.TextAnimationPolicy) {
+        animationEngine.setAnimationPolicy(policy)
+    }
+
+    fun releaseAnimationResources() {
+        animationEngine.release()
+    }
+
+    fun setRendererThemeColors(textColor: Int, cursorColor: Int, selectionColor: Int, preeditColor: Int, bgColor: Int = Color.WHITE) {
+        textRenderer.setThemeColors(textColor, cursorColor, selectionColor, preeditColor, bgColor)
+    }
 }

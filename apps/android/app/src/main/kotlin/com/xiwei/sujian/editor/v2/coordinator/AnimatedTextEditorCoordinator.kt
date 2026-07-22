@@ -455,7 +455,7 @@ class AnimatedTextEditorCoordinator(
             val view = sharedEditorView
             if (view != null) {
                 view.getPipeline().applyEditResult(editResult)
-                view.handlePipelineOutput(com.xiwei.sujian.editor.v2.pipeline.AndroidEditorPipeline.PipelineOutput.Edited(editResult))
+                view.handlePipelineOutput(com.xiwei.sujian.editor.v2.pipeline.PipelineOutput.Edited(editResult))
             }
         }
 

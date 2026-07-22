@@ -4,13 +4,13 @@ import android.view.View
 import android.view.inputmethod.BaseInputConnection
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.mirror.EditResult
-import com.xiwei.sujian.editor.v2.pipeline.AndroidEditorPipeline
+import com.xiwei.sujian.editor.v2.pipeline.EditorCommandPort
 import uniffi.writer_core.EditorTransactionCauseDto
 
 class AndroidInputConnection(
     private val adapter: AndroidInputAdapter,
     private val mirror: DisplayTextMirror,
-    private val pipeline: AndroidEditorPipeline,
+    private val commandPort: EditorCommandPort,
     private val hostView: View
 ) : BaseInputConnection(hostView, true) {
 
@@ -248,7 +248,7 @@ class AndroidInputConnection(
         val selectedText = extractUtf8Text(byteStart, byteEnd)
         val beginOk = adapter.sendBeginCompositionToKernel(byteStart, byteEnd)
         if (!beginOk) {
-            pipeline.reloadFromKernel()
+            commandPort.reloadFromKernel()
             return false
         }
         adapter.startComposingRegion(byteStart, byteEnd, selectedText)
@@ -266,7 +266,7 @@ class AndroidInputConnection(
             mirror.setSelectionInternal(anchorUtf8, headUtf8)
             val (sessionId, _, generation) = adapter.compositionSessionInfo()
             if (sessionId != 0L) {
-                val bridge = pipeline.kernelBridge ?: return true
+                val bridge = commandPort.kernelBridge ?: return true
                 val compRangeUtf16 = mirror.getCompositionRangeUtf16()
                 val preeditCursorUtf16 = if (compRangeUtf16 != null) {
                     val compStartUtf16 = compRangeUtf16.first
@@ -291,11 +291,11 @@ class AndroidInputConnection(
                         adapter.syncCompositionGeneration()
                     } else {
                         adapter.invalidateCompositionSession()
-                        pipeline.reloadFromKernel()
+                        commandPort.reloadFromKernel()
                     }
                 } else {
                     adapter.invalidateCompositionSession()
-                    pipeline.reloadFromKernel()
+                    commandPort.reloadFromKernel()
                 }
             }
         } else {
