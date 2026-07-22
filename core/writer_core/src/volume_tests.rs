@@ -55,6 +55,31 @@ mod tests {
     }
 
     #[test]
+    fn test_reorder_volumes_success() {
+        let dir = tempdir().unwrap();
+        let workspace_path = dir.path();
+        create_workspace(workspace_path).unwrap();
+
+        let project = create_project(workspace_path, "Test Project").unwrap();
+
+        let _volume1 = create_volume(workspace_path, &project.id, "Volume 1").unwrap();
+        let _volume2 = create_volume(workspace_path, &project.id, "Volume 2").unwrap();
+
+        let volumes = list_volumes(workspace_path, &project.id).unwrap();
+        let mut ordered_ids = volumes.iter().map(|v| v.id.clone()).collect::<Vec<_>>();
+
+        // Reverse the order
+        ordered_ids.reverse();
+
+        let result = reorder_volumes(workspace_path, &project.id, &ordered_ids);
+        assert!(result.is_ok());
+
+        let new_volumes = list_volumes(workspace_path, &project.id).unwrap();
+        let new_ids = new_volumes.iter().map(|v| v.id.clone()).collect::<Vec<_>>();
+        assert_eq!(new_ids, ordered_ids);
+    }
+
+    #[test]
     fn test_reorder_volumes_mismatch_error() {
         let dir = tempdir().unwrap();
         let workspace_path = dir.path();

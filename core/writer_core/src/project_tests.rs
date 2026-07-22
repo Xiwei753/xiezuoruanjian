@@ -118,6 +118,51 @@ mod tests {
         assert_eq!(stats.chapter_count, 0);
         assert_eq!(stats.total_word_count, 0);
     }
+
+    #[test]
+    fn test_reorder_projects_success_and_mismatch_error() {
+        let dir = tempdir().unwrap();
+        let workspace_path = dir.path();
+        create_workspace(workspace_path).unwrap();
+
+        let _project1 = create_project(workspace_path, "Project 1").unwrap();
+        let _project2 = create_project(workspace_path, "Project 2").unwrap();
+
+        let projects = list_projects(workspace_path).unwrap();
+        assert!(projects.len() >= 2);
+
+        let mut ordered_ids = projects.iter().map(|p| p.id.clone()).collect::<Vec<_>>();
+
+        // Success path: Reverse order
+        ordered_ids.reverse();
+        let result = crate::project::reorder_projects(workspace_path, &ordered_ids);
+        assert!(result.is_ok());
+
+        let new_projects = list_projects(workspace_path).unwrap();
+        let new_ids = new_projects.iter().map(|p| p.id.clone()).collect::<Vec<_>>();
+        assert_eq!(new_ids, ordered_ids);
+
+        // Error path: Missing IDs
+        let missing_ids = vec![ordered_ids[0].clone()];
+        let result = crate::project::reorder_projects(workspace_path, &missing_ids);
+        match result {
+            Err(crate::error::Error::Other(msg)) => {
+                assert_eq!(msg, "Invalid ordered_ids for reorder")
+            }
+            _ => panic!("Expected Error::Other for missing IDs"),
+        }
+
+        // Error path: Extra invalid IDs
+        let mut extra_ids = ordered_ids.clone();
+        extra_ids.push("non-existent-id".to_string());
+        let result = crate::project::reorder_projects(workspace_path, &extra_ids);
+        match result {
+            Err(crate::error::Error::Other(msg)) => {
+                assert_eq!(msg, "Invalid ordered_ids for reorder")
+            }
+            _ => panic!("Expected Error::Other for extra non-existent IDs"),
+        }
+    }
 }
 
 #[cfg(test)]
