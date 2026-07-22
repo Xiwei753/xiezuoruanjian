@@ -17,6 +17,7 @@ import QtQuick.Controls
 import QtQuick.Controls.Material
 import QtQuick.Layouts
 import QtQuick.Window
+import Sujian 1.0
 
 ApplicationWindow {
     id: window
