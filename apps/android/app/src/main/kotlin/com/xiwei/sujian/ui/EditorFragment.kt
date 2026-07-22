@@ -288,7 +288,7 @@ class EditorFragment : Fragment() {
                 for (ch in text) {
                     if (u16 >= utf16Start) break
                     u16 += if (ch.code > 0xFFFF) 2 else 1
-                    pos += ch.code.toString(Charsets.UTF_8).size
+                    pos += ch.toByteArray(Charsets.UTF_8).size
                 }
                 pos
             }
@@ -298,7 +298,7 @@ class EditorFragment : Fragment() {
                 for (ch in text) {
                     if (u16 >= utf16End) break
                     u16 += if (ch.code > 0xFFFF) 2 else 1
-                    pos += ch.code.toString(Charsets.UTF_8).size
+                    pos += ch.toByteArray(Charsets.UTF_8).size
                 }
                 pos
             }
