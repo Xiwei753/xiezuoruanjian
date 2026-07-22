@@ -3,8 +3,11 @@
 // =============================================================================
 // QML/C++ 通过 cpp! 和 qmetaobject 宏调用的方法对 Rust 编译器不可见，
 // 因此 dead_code 和 unwrap_used 是误报；测试代码同理。
+// Qt FFI 边界大量 u32/i64/f32/f64 类型转换属于平台协议，无法避免。
 #![allow(dead_code)]
-#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::field_reassign_with_default, deprecated))]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_possible_wrap, clippy::cast_lossless)]
+#![allow(clippy::too_many_arguments, clippy::module_inception, clippy::type_complexity)]
 //
 //
 // 引用了什么：
