@@ -17,6 +17,7 @@ class AndroidLayoutRuntime(
     )
 
     private var currentProjection: DisplayTextProjection = DisplayTextProjection.identity("")
+    private var secretDisplayMode: Boolean = false
 
     fun requestLayout() {
         layoutEngine.requestLayout()
@@ -51,6 +52,36 @@ class AndroidLayoutRuntime(
     }
 
     fun getCurrentProjection(): DisplayTextProjection = currentProjection
+
+    fun setSecretDisplayMode(enabled: Boolean) {
+        if (secretDisplayMode != enabled) {
+            secretDisplayMode = enabled
+            rebuildSecretProjection()
+        }
+    }
+
+    fun isSecretDisplayMode(): Boolean = secretDisplayMode
+
+    fun applySecretDisplayIfActive() {
+        if (secretDisplayMode) {
+            rebuildSecretProjection()
+        }
+    }
+
+    private fun rebuildSecretProjection() {
+        val text = mirror.getText()
+        currentProjection = if (secretDisplayMode) {
+            DisplayTextProjection.masked(text)
+        } else {
+            DisplayTextProjection.identity(text)
+        }
+        if (currentProjection.isMasked) {
+            layoutEngine.setDisplayTextOverride(currentProjection.displayText)
+        } else {
+            layoutEngine.clearDisplayTextOverride()
+        }
+        layoutEngine.requestLayout()
+    }
 
     fun captureLineBitmapSnapshots(lineIndices: Set<Int>): Map<Int, com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot> =
         layoutEngine.captureLineBitmapSnapshots(lineIndices)

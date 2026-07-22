@@ -70,4 +70,22 @@ class RuntimeOwnershipTest {
         assertTrue(Class.forName("com.xiwei.sujian.editor.v2.coordinator.SessionCommandPort")
             .isAssignableFrom(Class.forName("com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator")))
     }
+
+    @Test
+    fun layoutRuntimeOwnsSecretProjectionState() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidLayoutRuntime")
+        val secretField = clazz.getDeclaredField("secretDisplayMode")
+        assertEquals(Boolean::class.javaPrimitiveType, secretField.type)
+        val setMethod = clazz.getDeclaredMethod("setSecretDisplayMode", Boolean::class.javaPrimitiveType)
+        assertNotNull(setMethod)
+        val applyMethod = clazz.getDeclaredMethod("applySecretDisplayIfActive")
+        assertNotNull(applyMethod)
+    }
+
+    @Test
+    fun pipelineDoesNotOwnSecretProjectionState() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidEditorPipeline")
+        val secretFields = clazz.declaredFields.filter { it.name == "secretDisplayMode" || it.name == "currentProjection" }
+        assertTrue("Pipeline should not own secretDisplayMode or currentProjection — they belong to LayoutRuntime", secretFields.isEmpty())
+    }
 }

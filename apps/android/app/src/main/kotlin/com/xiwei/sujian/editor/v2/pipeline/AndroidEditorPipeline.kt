@@ -797,35 +797,17 @@ class AndroidEditorPipeline private constructor(
 
     fun getMaxLength(): Int = maxLength
 
-    private var secretDisplayMode: Boolean = false
-    private var currentProjection: DisplayTextProjection = DisplayTextProjection.identity("")
-
     fun setSecretDisplayMode(enabled: Boolean) {
-        if (secretDisplayMode != enabled) {
-            secretDisplayMode = enabled
-            rebuildProjection()
-        }
+        layoutRuntime.setSecretDisplayMode(enabled)
     }
 
-    fun isSecretDisplayMode(): Boolean = secretDisplayMode
+    fun isSecretDisplayMode(): Boolean = layoutRuntime.isSecretDisplayMode()
 
     fun applySecretDisplayIfActive() {
-        if (secretDisplayMode) {
-            rebuildProjection()
-        }
+        layoutRuntime.applySecretDisplayIfActive()
     }
 
-    private fun rebuildProjection() {
-        val text = mirror.getText()
-        currentProjection = if (secretDisplayMode) {
-            DisplayTextProjection.masked(text)
-        } else {
-            DisplayTextProjection.identity(text)
-        }
-        layoutRuntime.applyProjection(currentProjection)
-    }
-
-    fun getCurrentProjection(): DisplayTextProjection = currentProjection
+    fun getCurrentProjection(): DisplayTextProjection = layoutRuntime.getCurrentProjection()
 
     fun setAnimationPolicy(policy: com.xiwei.sujian.editor.v2.visual.TextAnimationPolicy) {
         visualRuntime.setAnimationPolicy(policy)
