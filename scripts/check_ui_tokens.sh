@@ -189,6 +189,8 @@ while IFS= read -r line; do
     if [[ "$FILE" == *"ThemePaletteHelper.kt" ]]; then continue; fi
     # Whitelist: SujianEditorView.kt (alpha compositing on dynamic theme color)
     if [[ "$FILE" == *"SujianEditorView.kt" ]]; then continue; fi
+    # Whitelist: AndroidTextRenderer.kt (editor render layer debug/placeholder colors)
+    if [[ "$FILE" == *"AndroidTextRenderer.kt" ]]; then continue; fi
     # Whitelist: test files
     if [[ "$FILE" == *"/test/"* ]]; then continue; fi
     KT_COLOR_ISSUES="${KT_COLOR_ISSUES}  $line"$'\n'
