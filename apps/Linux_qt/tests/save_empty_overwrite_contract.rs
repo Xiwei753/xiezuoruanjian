@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use tempfile::tempdir;
 use writer_core::api::error::WriterError;
 use writer_core::api::WriterCoreApi;

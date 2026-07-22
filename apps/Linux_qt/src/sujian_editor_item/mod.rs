@@ -37,6 +37,7 @@ pub(crate) mod animated_slice;
 pub(crate) mod pipeline;
 pub(crate) mod static_line_patch;
 pub(crate) mod text_visual_transaction;
+#[allow(clippy::misnamed_getters)]
 pub(crate) mod properties;
 pub(crate) mod qquickitem_impl;
 pub(crate) mod render_plan;
@@ -47,6 +48,7 @@ pub(crate) mod texture_cache;
 pub(crate) mod transaction;
 pub(crate) mod transaction_key;
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests;
 
 use crate::editor::input::{self, EditorInputHost};

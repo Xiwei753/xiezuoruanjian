@@ -20,7 +20,7 @@
 #![allow(clippy::if_same_then_else)]
 #![allow(clippy::question_mark, clippy::vec_init_then_push, clippy::collapsible_if)]
 #![allow(clippy::manual_clamp, clippy::unnecessary_cast)]
-#![allow(clippy::wrong_self_convention, clippy::misrefactored_getter)]
+#![allow(clippy::wrong_self_convention)]
 #![allow(unused_imports, unused_variables, unreachable_patterns, unused_mut)]
 #![allow(deprecated)]
 //

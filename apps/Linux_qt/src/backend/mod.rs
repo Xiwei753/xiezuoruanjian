@@ -2,6 +2,7 @@
 // mod.rs — Linux_qt 客户端 QObject 后端聚合与生命周期管理器
 // =============================================================================
 
+#[allow(clippy::misnamed_getters)]
 pub mod app_backend;
 pub mod linux_qt_layout_plan_dto;
 pub mod linux_theme_controller;

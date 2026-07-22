@@ -249,7 +249,7 @@ impl SujianEditorItem {
         let new_base = format!(
             "{}{}{}",
             &base_text[..del_start],
-            &inserted,
+            inserted,
             &base_text[del_end..]
         );
 

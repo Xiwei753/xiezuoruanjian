@@ -659,7 +659,7 @@ mod tests {
         format!(
             "{}{}{}",
             &base_text[..del_start],
-            &inserted,
+            inserted,
             &base_text[del_end..]
         )
     }
@@ -752,7 +752,7 @@ mod tests {
         let new_text = format!(
             "{}{}{}",
             &base_text[..del_start],
-            &inserted,
+            inserted,
             &base_text[del_end..]
         );
         let candidate_byte_start = del_start;
@@ -821,7 +821,7 @@ mod tests {
         let new_text_with_preedit = format!(
             "{}{}{}",
             &r.new_text[..r.candidate_byte_end],
-            &new_preedit,
+            new_preedit,
             &r.new_text[r.candidate_byte_end..]
         );
         assert_eq!(new_text_with_preedit, "你好朋友abc世界");
@@ -860,7 +860,7 @@ mod tests {
         let new_text_with_preedit = format!(
             "{}{}{}",
             &r.new_text[..r.candidate_byte_end],
-            &new_preedit,
+            new_preedit,
             &r.new_text[r.candidate_byte_end..]
         );
         assert_eq!(new_text_with_preedit, "你好朋友abc世界");

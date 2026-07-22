@@ -288,10 +288,7 @@ pub fn calculate_grid_layout_json(node_ids_json: &str, existing_layout_json: &st
     };
 
     let existing: writer_core::starmap::types::StarMapLayout =
-        match serde_json::from_str(existing_layout_json) {
-            Ok(v) => v,
-            Err(_) => writer_core::starmap::types::StarMapLayout::default(),
-        };
+        serde_json::from_str(existing_layout_json).unwrap_or_default();
 
     let layout = writer_core::starmap::layout::calculate_grid_layout(&node_ids, &existing);
     envelope_ok(layout)
