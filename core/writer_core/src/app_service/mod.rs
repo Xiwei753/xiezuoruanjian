@@ -1,23 +1,16 @@
+mod project_ops;
+mod volume_chapter_ops;
+
 use crate::api::{
-    ChapterContentDto, ChapterMetaDto, ChapterSaveReceiptDto, LocalSettingsDto, ProjectDto,
-    ProjectStatsDto, RecentEditDto, SyncConfigDto, SyncDiagnosticsResultDto, SyncPlanDto,
-    SyncResultDto, SyncSecretsDto, SyncStateDto, SyncableSettingsDto, VolumeDto, WriterCoreApi,
-    WriterError,
+    LocalSettingsDto, SyncConfigDto, SyncDiagnosticsResultDto, SyncPlanDto, SyncResultDto,
+    SyncSecretsDto, SyncStateDto, SyncableSettingsDto, WriterCoreApi, WriterError,
 };
 
 use std::sync::Mutex;
 
-/// 旧版编辑会话 — 仅用于正文章节的 legacy 路径。
-///
-/// generation 在 load_text **之前**递增，使过期的 composition 操作被内核拒绝。
-/// 这保证 reset 期间任何异步到达的 composition update/finish/cancel
-/// 因 generation 不匹配而被 StaleRevision 拒绝，不会写入已重置的正文。
-///
-/// 新代码应使用 TextEditSessionRegistry（支持多目标会话）。
 struct EditorSession {
     kernel: crate::editor::EditorKernel,
     chapter_id: Option<String>,
-    /// 会话 generation——每次 load_text 前递增，用于拒绝过期 composition 操作。
     generation: u64,
 }
 
@@ -36,9 +29,7 @@ struct EditorSession {
 /// 两者独立维护，不共享 EditorKernel 实例。同一时刻同一章节只能通过一条路径访问。
 pub struct WriterAppService {
     api: WriterCoreApi,
-    /// 旧版正文章节会话——单 EditorKernel，generation 在 load_text 前递增。
     editor_session: Mutex<EditorSession>,
-    /// 新版多目标会话注册表——每个目标独立 EditorKernel 和 generation。
     session_registry: Mutex<crate::editor::TextEditSessionRegistry>,
 }
 
@@ -55,210 +46,7 @@ impl WriterAppService {
         }
     }
 
-    pub fn list_projects(&self) -> Result<Vec<ProjectDto>, WriterError> {
-        self.api.list_projects()
-    }
-
-    pub fn create_workspace_if_needed(&self) -> Result<bool, WriterError> {
-        self.api.create_workspace_if_needed()
-    }
-
-    pub fn validate_workspace(&self) -> Result<bool, WriterError> {
-        self.api.validate_workspace()
-    }
-
-    pub fn get_recent_edits(&self) -> Result<Vec<RecentEditDto>, WriterError> {
-        self.api.get_recent_edits()
-    }
-
-    pub fn record_recent_edit(
-        &self,
-        project_id: String,
-        volume_id: String,
-        chapter_id: String,
-    ) -> Result<bool, WriterError> {
-        self.api
-            .record_recent_edit(&project_id, &volume_id, &chapter_id)
-    }
-
-    pub fn flush_recent_edits(&self) -> Result<bool, WriterError> {
-        self.api.flush_recent_edits()
-    }
-
-    pub fn create_project(&self, title: String) -> Result<ProjectDto, WriterError> {
-        self.api.create_project(&title)
-    }
-
-    pub fn get_project_stats(&self, project_id: String) -> Result<ProjectStatsDto, WriterError> {
-        self.api.get_project_stats(&project_id)
-    }
-
-    pub fn rename_project(
-        &self,
-        project_id: String,
-        new_title: String,
-    ) -> Result<bool, WriterError> {
-        self.api.rename_project(&project_id, &new_title)
-    }
-
-    pub fn delete_project(&self, project_id: String) -> Result<bool, WriterError> {
-        self.api.delete_project(&project_id)
-    }
-
-    pub fn reorder_projects(&self, ordered_project_ids: Vec<String>) -> Result<bool, WriterError> {
-        self.api.reorder_projects(&ordered_project_ids)
-    }
-
-    pub fn list_volumes(&self, project_id: String) -> Result<Vec<VolumeDto>, WriterError> {
-        self.api.list_volumes(&project_id)
-    }
-
-    pub fn create_volume(
-        &self,
-        project_id: String,
-        title: String,
-    ) -> Result<VolumeDto, WriterError> {
-        self.api.create_volume(&project_id, &title)
-    }
-
-    pub fn rename_volume(
-        &self,
-        project_id: String,
-        volume_id: String,
-        new_title: String,
-    ) -> Result<bool, WriterError> {
-        self.api.rename_volume(&project_id, &volume_id, &new_title)
-    }
-
-    pub fn delete_volume(
-        &self,
-        project_id: String,
-        volume_id: String,
-    ) -> Result<bool, WriterError> {
-        self.api.delete_volume(&project_id, &volume_id)
-    }
-
-    pub fn reorder_volumes(
-        &self,
-        project_id: String,
-        ordered_volume_ids: Vec<String>,
-    ) -> Result<bool, WriterError> {
-        self.api.reorder_volumes(&project_id, &ordered_volume_ids)
-    }
-
-    pub fn list_chapters(
-        &self,
-        project_id: String,
-        volume_id: String,
-    ) -> Result<Vec<ChapterMetaDto>, WriterError> {
-        self.api.list_chapters(&project_id, &volume_id)
-    }
-
-    pub fn create_chapter(
-        &self,
-        project_id: String,
-        volume_id: String,
-        title: String,
-    ) -> Result<ChapterMetaDto, WriterError> {
-        self.api.create_chapter(&project_id, &volume_id, &title)
-    }
-
-    pub fn create_chapter_in_project(
-        &self,
-        project_id: String,
-        title: String,
-    ) -> Result<ChapterMetaDto, WriterError> {
-        self.api.create_chapter_in_project(&project_id, &title)
-    }
-
-    pub fn rename_chapter(
-        &self,
-        project_id: String,
-        volume_id: String,
-        chapter_id: String,
-        new_title: String,
-    ) -> Result<bool, WriterError> {
-        self.api
-            .rename_chapter(&project_id, &volume_id, &chapter_id, &new_title)
-    }
-
-    pub fn delete_chapter(
-        &self,
-        project_id: String,
-        volume_id: String,
-        chapter_id: String,
-    ) -> Result<bool, WriterError> {
-        self.api
-            .delete_chapter(&project_id, &volume_id, &chapter_id)
-    }
-
-    pub fn reorder_chapters(
-        &self,
-        project_id: String,
-        volume_id: String,
-        ordered_chapter_ids: Vec<String>,
-    ) -> Result<bool, WriterError> {
-        self.api
-            .reorder_chapters(&project_id, &volume_id, &ordered_chapter_ids)
-    }
-
-    pub fn open_chapter(
-        &self,
-        project_id: String,
-        volume_id: String,
-        chapter_id: String,
-    ) -> Result<ChapterContentDto, WriterError> {
-        self.api.open_chapter(&project_id, &volume_id, &chapter_id)
-    }
-
-    pub fn save_chapter_content(
-        &self,
-        project_id: String,
-        volume_id: String,
-        chapter_id: String,
-        content: String,
-    ) -> Result<ChapterSaveReceiptDto, WriterError> {
-        self.api
-            .save_chapter_content(&project_id, &volume_id, &chapter_id, &content)
-    }
-
-    pub fn save_chapter_content_with_options(
-        &self,
-        project_id: String,
-        volume_id: String,
-        chapter_id: String,
-        content: String,
-        allow_empty_overwrite: bool,
-    ) -> Result<ChapterSaveReceiptDto, WriterError> {
-        self.api.save_chapter_content_with_options(
-            &project_id,
-            &volume_id,
-            &chapter_id,
-            &content,
-            allow_empty_overwrite,
-        )
-    }
-
-    pub fn clear_chapter_content(
-        &self,
-        project_id: String,
-        volume_id: String,
-        chapter_id: String,
-    ) -> Result<ChapterSaveReceiptDto, WriterError> {
-        self.api
-            .clear_chapter_content(&project_id, &volume_id, &chapter_id)
-    }
-
-    pub fn update_chapter_note(
-        &self,
-        project_id: String,
-        volume_id: String,
-        chapter_id: String,
-        note: String,
-    ) -> Result<bool, WriterError> {
-        self.api
-            .update_chapter_note(&project_id, &volume_id, &chapter_id, &note)
-    }
+    // ── Settings ──
 
     pub fn load_local_settings(&self) -> Result<LocalSettingsDto, WriterError> {
         self.api.load_local_settings()
@@ -303,6 +91,8 @@ impl WriterAppService {
         self.api.get_sync_capability()
     }
 
+    // ── Sync ──
+
     pub fn perform_sync_diagnostics(
         &self,
         config: SyncConfigDto,
@@ -329,6 +119,8 @@ impl WriterAppService {
     pub fn resolve_conflict_mark_merged(&self, path: String) -> Result<bool, WriterError> {
         self.api.resolve_conflict_mark_merged(&path)
     }
+
+    // ── Writing Stats ──
 
     pub fn get_writing_stats_summary(
         &self,
@@ -450,6 +242,8 @@ impl WriterAppService {
         self.api.load_device_info()
     }
 
+    // ── Theme ──
+
     pub fn save_palette_record(
         &self,
         record: crate::api::types::ThemePaletteRecordDto,
@@ -493,7 +287,8 @@ impl WriterAppService {
         self.api.list_builtin_themes()
     }
 
-    // StarMap
+    // ── StarMap ──
+
     pub fn list_starmaps(&self) -> Result<Vec<crate::api::types::StarMapMetaDto>, WriterError> {
         self.api.list_starmaps()
     }
@@ -678,7 +473,8 @@ impl WriterAppService {
         self.api.get_starmap_motion_policy()
     }
 
-    // Actions
+    // ── Actions ──
+
     pub fn list_registered_actions(
         &self,
     ) -> Result<Vec<crate::api::types::ActionDescriptorDto>, WriterError> {
@@ -726,12 +522,8 @@ impl WriterAppService {
         }
     }
 
-    /// 获取旧版编辑会话的可变引用。
-    ///
-    /// Mutex 中毒恢复策略：如果前一个线程 panic 时持有了锁，
-    /// `into_inner()` 取出内部数据继续使用，而非让所有后续 FFI 调用全部失败。
-    /// 这在 UniFFI 场景下是合理的——平台端持有 WriterAppService 的全局引用，
-    /// 一次编辑操作的 panic 不应使整个应用不可用。
+    // ── Legacy Editor Session ──
+
     fn with_session<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut EditorSession) -> R,
@@ -740,12 +532,6 @@ impl WriterAppService {
         f(&mut session)
     }
 
-    /// 插入文本 — 旧版编辑会话路径。
-    ///
-    /// 前置条件：byte_offset 必须是合法 UTF-8 char boundary 且 <= 正文长度，
-    /// expected_revision 必须与当前 kernel revision 匹配。
-    /// 不满足时内核返回 InvalidOffset/StaleRevision，平台端需刷新后重试。
-    /// 所有 offset 均为 UTF-8 byte offset，平台端需在调用前完成 UTF-16→UTF-8 转换。
     pub fn editor_kernel_insert(
         &self,
         byte_offset: u32,
@@ -766,11 +552,6 @@ impl WriterAppService {
         })
     }
 
-    /// 删除文本 — 旧版编辑会话路径。
-    ///
-    /// 前置条件：byte_start/byte_end_exclusive 必须是合法 char boundary，
-    /// byte_start < byte_end_exclusive，expected_revision 匹配当前 revision。
-    /// `[byte_start, byte_end_exclusive)` 为半开区间（UTF-8 byte offset）。
     pub fn editor_kernel_delete(
         &self,
         byte_start: u32,
@@ -792,10 +573,6 @@ impl WriterAppService {
         })
     }
 
-    /// 替换文本 — 旧版编辑会话路径。
-    ///
-    /// 用 replacement_text 替换 `[byte_start, byte_end_exclusive)` 半开区间的文本。
-    /// 前置条件同 delete：offset 合法 char boundary、range 有效、revision 匹配。
     pub fn editor_kernel_replace(
         &self,
         byte_start: u32,
@@ -853,9 +630,6 @@ impl WriterAppService {
         })
     }
 
-    /// 加载文本到旧版编辑会话——generation 在 load_text 前递增，
-    /// 使过期的 composition 操作被内核拒绝。
-    /// cursor_byte_offset 为 UTF-8 byte offset，由平台端从 UTF-16 转换。
     pub fn editor_kernel_load_text(
         &self,
         text: String,
@@ -947,12 +721,6 @@ impl WriterAppService {
         })
     }
 
-    /// 开始 IME composition 会话。
-    ///
-    /// replace_start/replace_end_exclusive 为 committed 正文坐标（UTF-8 byte offset，半开区间）。
-    /// 成功时返回的 DTO 包含 composition_session（session_id, base_revision, generation），
-    /// 平台端必须在后续 UpdateComposition/FinishComposition/CancelComposition 中携带此信息。
-    /// generation 用于过期检测——session reset 后旧 generation 的操作被内核拒绝。
     pub fn editor_kernel_begin_composition(
         &self,
         replace_start: u32,
@@ -982,10 +750,6 @@ impl WriterAppService {
         })
     }
 
-    /// 更新 IME 预输入文本。
-    ///
-    /// composition_generation 必须与会话当前 generation 匹配，否则返回 StaleRevision。
-    /// new_preedit_cursor_offset 为 preedit 内部 UTF-8 byte offset（非 committed 正文坐标）。
     pub fn editor_kernel_update_composition(
         &self,
         composition_session_id: u64,
@@ -1007,8 +771,6 @@ impl WriterAppService {
         })
     }
 
-    /// 完成 IME composition——将预输入文本提交到 committed 正文。
-    /// commit 后 composition session 被销毁，后续 composition 操作需重新 BeginComposition。
     pub fn editor_kernel_finish_composition(
         &self,
         composition_session_id: u64,
@@ -1026,8 +788,6 @@ impl WriterAppService {
         })
     }
 
-    /// 取消 IME composition——丢弃预输入文本，恢复 committed 正文。
-    /// cancel 后 composition session 被销毁，committed 正文不变。
     pub fn editor_kernel_cancel_composition(
         &self,
         composition_session_id: u64,
@@ -1095,11 +855,6 @@ impl WriterAppService {
         })
     }
 
-    /// 获取编辑会话快照 — 包含正文、revision、光标、选区和 generation。
-    ///
-    /// 用途：平台端在镜像与内核不一致时（如 revision 不连续），
-    /// 用此快照完整重建 CommittedTextMirror，而非依赖增量 patch。
-    /// generation 用于 composition 操作的过期检测。
     #[allow(clippy::cast_possible_truncation)]
     pub fn editor_kernel_session_snapshot(&self) -> crate::api::EditorSessionSnapshotDto {
         self.with_session(|s| {
@@ -1151,7 +906,7 @@ impl WriterAppService {
         })
     }
 
-    // ── #541: Text Edit Session API ──
+    // ── Text Edit Session ──
 
     fn with_registry<F, R>(&self, f: F) -> R
     where
@@ -1200,11 +955,6 @@ impl WriterAppService {
         })
     }
 
-    /// 重置编辑会话 — 加载新文本并递增 generation。
-    ///
-    /// 不变量：generation 在 load_text **之前**递增，使任何异步到达的
-    /// composition update/finish/cancel 因 generation 不匹配而被内核拒绝，
-    /// 不会写入已重置的正文。这与 EditorSession 的 generation 语义一致。
     pub fn text_edit_session_reset(
         &self,
         session_id: u64,
@@ -1338,9 +1088,6 @@ impl WriterAppService {
         .unwrap_or_else(crate::api::EditorEditResultDto::stale_fallback)
     }
 
-    /// Load text into a session, replacing all content. Generation is incremented before
-    /// load_text so that any in-flight composition operations with the old generation are
-    /// rejected — same invariant as text_edit_session_reset.
     pub fn text_edit_session_load_text(
         &self,
         session_id: u64,
@@ -1355,9 +1102,6 @@ impl WriterAppService {
         .unwrap_or_else(crate::api::EditorEditResultDto::stale_fallback)
     }
 
-    /// Commit text with composition session validation. composition_session_id/base_revision/
-    /// generation allow the kernel to verify the commit corresponds to an active composition.
-    /// If the session has been reset (generation mismatch), the commit is rejected.
     #[allow(clippy::too_many_arguments)]
     pub fn text_edit_session_commit_text(
         &self,
@@ -1420,9 +1164,6 @@ impl WriterAppService {
         .unwrap_or_else(crate::api::EditorEditResultDto::stale_fallback)
     }
 
-    /// Begin a composition session. Returns composition_session (sessionId, baseRevision,
-    /// generation) on success so the platform can track the composition lifecycle.
-    /// The kernel validates these on subsequent updateComposition/finishComposition/cancelComposition.
     pub fn text_edit_session_begin_composition(
         &self,
         session_id: u64,
@@ -1454,8 +1195,6 @@ impl WriterAppService {
         .unwrap_or_else(crate::api::EditorEditResultDto::stale_fallback)
     }
 
-    /// Update an active composition. composition_generation must match the kernel's current
-    /// composition generation; a mismatch results in STALE_REVISION outcome.
     pub fn text_edit_session_update_composition(
         &self,
         session_id: u64,
