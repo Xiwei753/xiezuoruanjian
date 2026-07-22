@@ -1,10 +1,208 @@
 use writer_core::editor::text_edit_session::{TextEditSessionId, TextEditSessionRegistry};
 use std::collections::HashMap;
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum TextInputType {
+    Text,
+    MultiLine,
+    Number,
+    Email,
+    Password,
+}
+
+impl Default for TextInputType {
+    fn default() -> Self {
+        Self::Text
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum SecretPolicy {
+    None,
+    MaskAndClearOnCommit,
+}
+
+impl Default for SecretPolicy {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum AutocorrectPolicy {
+    Default,
+    Disabled,
+}
+
+impl Default for AutocorrectPolicy {
+    fn default() -> Self {
+        Self::Default
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum CapitalizationPolicy {
+    None,
+    Characters,
+    Words,
+    Sentences,
+}
+
+impl Default for CapitalizationPolicy {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum CopyPolicy {
+    Allow,
+    Block,
+}
+
+impl Default for CopyPolicy {
+    fn default() -> Self {
+        Self::Allow
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum PastePolicy {
+    Allow,
+    Block,
+}
+
+impl Default for PastePolicy {
+    fn default() -> Self {
+        Self::Allow
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum SelectionPolicy {
+    Allow,
+    CursorOnly,
+}
+
+impl Default for SelectionPolicy {
+    fn default() -> Self {
+        Self::Allow
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TextEditorProfile {
+    pub single_line: bool,
+    pub input_type: TextInputType,
+    pub autocorrect_policy: AutocorrectPolicy,
+    pub capitalization_policy: CapitalizationPolicy,
+    pub selection_policy: SelectionPolicy,
+    pub copy_policy: CopyPolicy,
+    pub paste_policy: PastePolicy,
+    pub secret_policy: SecretPolicy,
+    pub commit_on_focus_loss: bool,
+}
+
+impl Default for TextEditorProfile {
+    fn default() -> Self {
+        Self {
+            single_line: false,
+            input_type: TextInputType::MultiLine,
+            autocorrect_policy: AutocorrectPolicy::Default,
+            capitalization_policy: CapitalizationPolicy::None,
+            selection_policy: SelectionPolicy::Allow,
+            copy_policy: CopyPolicy::Allow,
+            paste_policy: PastePolicy::Allow,
+            secret_policy: SecretPolicy::None,
+            commit_on_focus_loss: true,
+        }
+    }
+}
+
+impl TextEditorProfile {
+    pub fn document_body() -> Self {
+        Self {
+            single_line: false,
+            input_type: TextInputType::MultiLine,
+            commit_on_focus_loss: false,
+            ..Self::default()
+        }
+    }
+
+    pub fn short_title() -> Self {
+        Self {
+            single_line: true,
+            input_type: TextInputType::Text,
+            ..Self::default()
+        }
+    }
+
+    pub fn search_query() -> Self {
+        Self {
+            single_line: true,
+            input_type: TextInputType::Text,
+            autocorrect_policy: AutocorrectPolicy::Disabled,
+            ..Self::default()
+        }
+    }
+
+    pub fn replace_query() -> Self {
+        Self {
+            single_line: true,
+            input_type: TextInputType::Text,
+            autocorrect_policy: AutocorrectPolicy::Disabled,
+            ..Self::default()
+        }
+    }
+
+    pub fn canvas_label() -> Self {
+        Self {
+            single_line: true,
+            input_type: TextInputType::Text,
+            ..Self::default()
+        }
+    }
+
+    pub fn repository_url() -> Self {
+        Self {
+            single_line: true,
+            input_type: TextInputType::Text,
+            autocorrect_policy: AutocorrectPolicy::Disabled,
+            ..Self::default()
+        }
+    }
+
+    pub fn branch_name() -> Self {
+        Self {
+            single_line: true,
+            input_type: TextInputType::Text,
+            autocorrect_policy: AutocorrectPolicy::Disabled,
+            ..Self::default()
+        }
+    }
+
+    pub fn secret_token() -> Self {
+        Self {
+            single_line: true,
+            input_type: TextInputType::Password,
+            selection_policy: SelectionPolicy::CursorOnly,
+            copy_policy: CopyPolicy::Block,
+            paste_policy: PastePolicy::Allow,
+            secret_policy: SecretPolicy::MaskAndClearOnCommit,
+            ..Self::default()
+        }
+    }
+
+    pub fn is_secret(&self) -> bool {
+        self.secret_policy == SecretPolicy::MaskAndClearOnCommit
+    }
+}
+
 pub(crate) struct EditableTextTarget {
     pub target_id: String,
     pub is_persistent: bool,
     pub current_text: String,
+    pub profile: TextEditorProfile,
 }
 
 pub(crate) struct LinuxTextEditorCoordinator {
@@ -110,6 +308,11 @@ impl LinuxTextEditorCoordinator {
         if !is_persistent {
             self.persistent_session_ids.remove(&target_id);
             self.registry.close_session(TextEditSessionId(session_id_raw));
+            if let Some(target) = self.targets.get_mut(&target_id) {
+                if target.profile.is_secret() {
+                    target.current_text.clear();
+                }
+            }
         }
 
         true
@@ -163,6 +366,7 @@ mod tests {
             target_id: "test-target".to_string(),
             is_persistent: false,
             current_text: "hello".to_string(),
+            profile: TextEditorProfile::default(),
         });
         assert!(coord.begin_edit("test-target"));
         assert_eq!(coord.active_target_id(), Some("test-target"));
@@ -181,6 +385,7 @@ mod tests {
             target_id: "t1".to_string(),
             is_persistent: false,
             current_text: "abc".to_string(),
+            profile: TextEditorProfile::default(),
         });
         assert!(coord.begin_edit("t1"));
         assert!(coord.begin_edit("t1"));
@@ -193,6 +398,7 @@ mod tests {
             target_id: "t1".to_string(),
             is_persistent: false,
             current_text: "abc".to_string(),
+            profile: TextEditorProfile::default(),
         });
         assert!(coord.begin_edit("t1"));
         assert!(coord.commit_active_edit());
@@ -206,6 +412,7 @@ mod tests {
             target_id: "t1".to_string(),
             is_persistent: true,
             current_text: "abc".to_string(),
+            profile: TextEditorProfile::default(),
         });
         assert!(coord.begin_edit("t1"));
         assert!(coord.commit_active_edit());
@@ -220,6 +427,7 @@ mod tests {
             target_id: "t1".to_string(),
             is_persistent: true,
             current_text: "abc".to_string(),
+            profile: TextEditorProfile::default(),
         });
         assert!(coord.begin_edit("t1"));
         assert!(coord.cancel_active_edit());
@@ -246,6 +454,7 @@ mod tests {
             target_id: "t1".to_string(),
             is_persistent: false,
             current_text: "abc".to_string(),
+            profile: TextEditorProfile::default(),
         });
         assert!(coord.begin_edit("t1"));
         coord.unregister_target("t1");
@@ -259,11 +468,13 @@ mod tests {
             target_id: "t1".to_string(),
             is_persistent: false,
             current_text: "abc".to_string(),
+            profile: TextEditorProfile::default(),
         });
         coord.register_target(EditableTextTarget {
             target_id: "t2".to_string(),
             is_persistent: false,
             current_text: "def".to_string(),
+            profile: TextEditorProfile::default(),
         });
         assert!(coord.begin_edit("t1"));
         assert!(coord.begin_edit("t2"));
@@ -277,6 +488,7 @@ mod tests {
             target_id: "t1".to_string(),
             is_persistent: false,
             current_text: "abc".to_string(),
+            profile: TextEditorProfile::default(),
         });
         coord.update_target_text("t1", "xyz".to_string());
         assert_eq!(coord.targets.get("t1").unwrap().current_text, "xyz");
@@ -289,6 +501,7 @@ mod tests {
             target_id: "t1".to_string(),
             is_persistent: true,
             current_text: "abc".to_string(),
+            profile: TextEditorProfile::default(),
         });
         assert!(coord.begin_edit("t1"));
         let first_session = coord.active_session_id.unwrap();
@@ -305,9 +518,66 @@ mod tests {
             target_id: "t1".to_string(),
             is_persistent: false,
             current_text: "abc".to_string(),
+            profile: TextEditorProfile::default(),
         });
         coord.begin_edit("t1");
         let session = coord.get_active_session();
         assert!(session.is_some());
+    }
+
+    #[test]
+    fn secret_text_cleared_on_commit() {
+        let mut coord = LinuxTextEditorCoordinator::new();
+        coord.register_target(EditableTextTarget {
+            target_id: "secret-1".to_string(),
+            is_persistent: false,
+            current_text: "my-secret-token".to_string(),
+            profile: TextEditorProfile::secret_token(),
+        });
+        assert!(coord.begin_edit("secret-1"));
+        assert!(coord.commit_active_edit());
+        assert_eq!(coord.targets.get("secret-1").unwrap().current_text, "");
+    }
+
+    #[test]
+    fn secret_text_not_cleared_on_persistent_commit() {
+        let mut coord = LinuxTextEditorCoordinator::new();
+        coord.register_target(EditableTextTarget {
+            target_id: "persistent-secret".to_string(),
+            is_persistent: true,
+            current_text: "my-secret-token".to_string(),
+            profile: TextEditorProfile::secret_token(),
+        });
+        assert!(coord.begin_edit("persistent-secret"));
+        assert!(coord.commit_active_edit());
+        assert_eq!(coord.targets.get("persistent-secret").unwrap().current_text, "my-secret-token");
+    }
+
+    #[test]
+    fn non_secret_text_not_cleared_on_commit() {
+        let mut coord = LinuxTextEditorCoordinator::new();
+        coord.register_target(EditableTextTarget {
+            target_id: "normal-1".to_string(),
+            is_persistent: false,
+            current_text: "hello".to_string(),
+            profile: TextEditorProfile::search_query(),
+        });
+        assert!(coord.begin_edit("normal-1"));
+        assert!(coord.commit_active_edit());
+        assert_eq!(coord.targets.get("normal-1").unwrap().current_text, "hello");
+    }
+
+    #[test]
+    fn profile_presets_correct() {
+        let secret = TextEditorProfile::secret_token();
+        assert!(secret.is_secret());
+        assert_eq!(secret.input_type, TextInputType::Password);
+        assert_eq!(secret.copy_policy, CopyPolicy::Block);
+        assert_eq!(secret.selection_policy, SelectionPolicy::CursorOnly);
+
+        let search = TextEditorProfile::search_query();
+        assert!(!search.is_secret());
+        assert_eq!(search.autocorrect_policy, AutocorrectPolicy::Disabled);
+        assert!(search.single_line);
     }
 }

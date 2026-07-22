@@ -16,6 +16,7 @@ import QtQuick.Layouts
 Rectangle {
     id: root
     property var dt: null
+    property var textCoordinator: null
     color: dt.surface
 
     property string starmapId: ""
@@ -56,10 +57,12 @@ Rectangle {
             visible: selectedNode !== null
 
             AppText { dt: root.dt; text: qsTr("标题"); color: dt.textSecondary }
-            AppTextField {
+            CoordinatorTextField {
                 id: titleInput
                 Layout.fillWidth: true
                 text: selectedNode ? selectedNode.title : ""
+                coordinator: root.textCoordinator
+                targetId: "starmap-node-title"
                 onEditingFinished: {
                     if (selectedNode && text !== selectedNode.title) {
                         nodeUpdated(selectedNode.id, { title: text })
@@ -86,10 +89,12 @@ Rectangle {
             visible: selectedEdge !== null
 
             AppText { dt: root.dt; text: qsTr("标签"); color: dt.textSecondary }
-            AppTextField {
+            CoordinatorTextField {
                 id: labelInput
                 Layout.fillWidth: true
                 text: selectedEdge && selectedEdge.label ? selectedEdge.label : ""
+                coordinator: root.textCoordinator
+                targetId: "starmap-edge-label"
                 onEditingFinished: {
                     if (selectedEdge) {
                         var l = text

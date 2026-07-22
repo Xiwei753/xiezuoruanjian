@@ -35,6 +35,7 @@ pub(crate) mod line_snapshot;
 pub(crate) mod line_snapshot_builder;
 pub(crate) mod animated_slice;
 pub(crate) mod linux_coordinator;
+pub(crate) mod coordinator_item;
 pub(crate) mod pipeline;
 pub(crate) mod static_line_patch;
 pub(crate) mod text_visual_transaction;
@@ -334,6 +335,20 @@ pub struct SujianEditorItem {
     snap_next_cursor_update: qt_method!(fn(&mut self)),
     #[allow(dead_code)]
     verify_animation_signal_meta_object: qt_method!(fn(&self) -> bool),
+    #[allow(dead_code)]
+    register_text_target_qml: qt_method!(fn(&mut self, target_id: QString, is_persistent: bool, initial_text: QString)),
+    #[allow(dead_code)]
+    unregister_text_target_qml: qt_method!(fn(&mut self, target_id: QString)),
+    #[allow(dead_code)]
+    begin_text_edit_qml: qt_method!(fn(&mut self, target_id: QString) -> bool),
+    #[allow(dead_code)]
+    commit_text_edit_qml: qt_method!(fn(&mut self) -> bool),
+    #[allow(dead_code)]
+    cancel_text_edit_qml: qt_method!(fn(&mut self) -> bool),
+    #[allow(dead_code)]
+    update_target_text_qml: qt_method!(fn(&mut self, target_id: QString, text: QString)),
+    #[allow(dead_code)]
+    active_target_id_qml: qt_method!(fn(&self) -> QString),
 
     pipeline: pipeline::LinuxEditorPipeline,
     coordinator: linux_coordinator::LinuxTextEditorCoordinator,
@@ -456,6 +471,13 @@ impl Default for SujianEditorItem {
             request_text_input_focus: Default::default(),
             snap_next_cursor_update: Default::default(),
             verify_animation_signal_meta_object: Default::default(),
+            register_text_target_qml: Default::default(),
+            unregister_text_target_qml: Default::default(),
+            begin_text_edit_qml: Default::default(),
+            commit_text_edit_qml: Default::default(),
+            cancel_text_edit_qml: Default::default(),
+            update_target_text_qml: Default::default(),
+            active_target_id_qml: Default::default(),
 
             pipeline: pipeline::LinuxEditorPipeline::new(),
             coordinator: linux_coordinator::LinuxTextEditorCoordinator::new(),
@@ -500,6 +522,23 @@ impl SujianEditorItem {
             target_id: target_id.clone(),
             is_persistent,
             current_text: initial_text,
+            profile: linux_coordinator::TextEditorProfile::default(),
+        };
+        self.coordinator.register_target(target);
+    }
+
+    pub fn register_text_target_with_profile(
+        &mut self,
+        target_id: String,
+        is_persistent: bool,
+        initial_text: String,
+        profile: linux_coordinator::TextEditorProfile,
+    ) {
+        let target = linux_coordinator::EditableTextTarget {
+            target_id: target_id.clone(),
+            is_persistent,
+            current_text: initial_text,
+            profile,
         };
         self.coordinator.register_target(target);
     }
@@ -526,6 +565,34 @@ impl SujianEditorItem {
 
     pub fn active_target_id(&self) -> Option<String> {
         self.coordinator.active_target_id().map(|s| s.to_string())
+    }
+
+    pub fn register_text_target_qml(&mut self, target_id: QString, is_persistent: bool, initial_text: QString) {
+        self.register_text_target(target_id.to_string(), is_persistent, initial_text.to_string());
+    }
+
+    pub fn unregister_text_target_qml(&mut self, target_id: QString) {
+        self.unregister_text_target(target_id.to_string());
+    }
+
+    pub fn begin_text_edit_qml(&mut self, target_id: QString) -> bool {
+        self.begin_text_edit(target_id.to_string())
+    }
+
+    pub fn commit_text_edit_qml(&mut self) -> bool {
+        self.commit_text_edit()
+    }
+
+    pub fn cancel_text_edit_qml(&mut self) -> bool {
+        self.cancel_text_edit()
+    }
+
+    pub fn update_target_text_qml(&mut self, target_id: QString, text: QString) {
+        self.update_target_text(target_id.to_string(), text.to_string());
+    }
+
+    pub fn active_target_id_qml(&self) -> QString {
+        QString::from(self.active_target_id().unwrap_or_default())
     }
 
     pub(crate) fn sync_buffer_from_pipeline(&mut self) {

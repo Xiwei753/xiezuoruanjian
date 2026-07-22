@@ -18,6 +18,7 @@ Rectangle {
     property var dt: null
     property var backendRef: null
     property var projectBackendRef: null
+    property var textCoordinator: null
     property var appState: ({})
     property var tree: []
 
@@ -136,12 +137,14 @@ Rectangle {
                 font.family: dt.fontFamily
                 font.weight: Font.DemiBold
             }
-            AppTextField {
+            CoordinatorTextField {
                 id: renameField
                 Layout.fillWidth: true
                 dt: root.dt
                 text: renameProjectDialog.currentTitle
                 placeholderText: qsTr("作品名称")
+                coordinator: root.textCoordinator
+                targetId: "project-rename"
                 onAccepted: renameConfirmButton.clicked()
             }
             RowLayout {

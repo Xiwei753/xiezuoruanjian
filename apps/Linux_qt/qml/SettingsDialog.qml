@@ -30,6 +30,7 @@ Dialog {
     property var syncBackendRef: null
     property var editorBackendRef: null
     property var beforeSyncHook: null
+    property var textCoordinator: null
     property var dt: theme
     property bool updatingValues: false
     property bool settingsDirty: false
@@ -488,6 +489,7 @@ Dialog {
                     Layout.fillWidth: true
                     dt: root.dt
                     backendRef: root.syncBackendRef
+                    textCoordinator: root.textCoordinator
                     beforeSyncHook: function() {
                         if (typeof root.beforeSyncHook === "function") return root.beforeSyncHook();
                         return true;

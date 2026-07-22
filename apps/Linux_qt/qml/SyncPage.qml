@@ -22,6 +22,7 @@ Item {
     readonly property var resolvedDt: dt || fallbackDt
     property var backendRef: null
     property var beforeSyncHook: null
+    property var textCoordinator: null
     signal settingsChanged()
 
     property string activeOperationId: ""
@@ -305,31 +306,39 @@ Item {
             variant: "surface"
             spacing: resolvedDt.sp16
 
-            AppTextField {
+            CoordinatorTextField {
                 id: urlField
                 Layout.fillWidth: true
                 dt: root.resolvedDt
                 label: qsTr("远程仓库地址")
                 text: (root.backendRef ? root.backendRef.sync_remote_url : "")
                 placeholderText: "https://github.com/user/repo"
+                coordinator: root.textCoordinator
+                targetId: "sync-repo-url"
+                isUrl: true
             }
 
-            AppTextField {
+            CoordinatorTextField {
                 id: branchField
                 Layout.fillWidth: true
                 dt: root.resolvedDt
                 label: qsTr("分支名")
                 text: (root.backendRef ? root.backendRef.sync_branch : "")
                 placeholderText: "main"
+                coordinator: root.textCoordinator
+                targetId: "sync-branch"
             }
 
-            AppTextField {
+            CoordinatorTextField {
                 id: tokenField
                 Layout.fillWidth: true
                 dt: root.resolvedDt
                 label: qsTr("访问 Token")
                 placeholderText: (root.backendRef ? root.backendRef.has_sync_token : false) ? qsTr("已设置（输入新 Token 以覆盖）") : qsTr("请输入 GitHub Personal Access Token")
                 echoMode: TextInput.Password
+                coordinator: root.textCoordinator
+                targetId: "sync-token"
+                isSecret: true
             }
 
             RowLayout {

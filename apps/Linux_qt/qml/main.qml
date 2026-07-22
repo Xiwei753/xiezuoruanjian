@@ -257,6 +257,10 @@ ApplicationWindow {
         }
     }
 
+    TextEditorCoordinatorItem {
+        id: globalTextCoordinator
+    }
+
     ProjectController {
         id: projectController
         backendRef: backend
@@ -436,6 +440,7 @@ ApplicationWindow {
                 projectBackendRef: projectBackend
             editorBackendRef: editorBackend
                 starmapBackendRef: starmapBackend
+                textCoordinator: globalTextCoordinator
                 starMapController: globalStarMapController
                 appState: window.appState
                 tree: window.appState.tree || []
@@ -591,6 +596,7 @@ ApplicationWindow {
     CreateProjectDialog {
         id: createProjectDialog
         theme: designTokens
+        textCoordinator: globalTextCoordinator
         onSubmitProject: function(title) {
             var trimmedTitle = title ? title.trim() : "";
             var isEmpty = (trimmedTitle === "");
@@ -705,6 +711,7 @@ ApplicationWindow {
             workspaceBackendRef: workspaceBackend
             syncBackendRef: syncBackend
             editorBackendRef: editorBackend
+            textCoordinator: globalTextCoordinator
             beforeSyncHook: function() { return window.preSyncBarrier() }
             onSettingsChanged: {
                 appController.refreshState(qsTr("刷新设置失败"));
@@ -751,7 +758,7 @@ ApplicationWindow {
                 font.family: designTokens.fontFamily
             }
 
-            AppTextField {
+            CoordinatorTextField {
                 id: inputField
                 Layout.fillWidth: true
                 dt: designTokens
@@ -760,6 +767,8 @@ ApplicationWindow {
                     if (inputDialog.actionType === "chapter") return qsTr("例如：第一章");
                     return qsTr("请输入新名称");
                 }
+                coordinator: globalTextCoordinator
+                targetId: "main-rename-dialog"
                 onAccepted: confirmInputButton.clicked()
             }
             RowLayout {

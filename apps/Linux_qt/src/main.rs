@@ -451,6 +451,12 @@ fn main() {
         0,
         c"SujianEditorItem",
     );
+    qmetaobject::qml_register_type::<sujian_editor_item::coordinator_item::TextEditorCoordinatorItem>(
+        c"Sujian",
+        1,
+        0,
+        c"TextEditorCoordinatorItem",
+    );
 
     let qml_path = "qrc:/main.qml";
     log_desktop_runtime_profile(&qt_ver, qml_path);
