@@ -6,7 +6,9 @@ import com.xiwei.sujian.editor.v2.visual.VisualResourceStore
 import com.xiwei.sujian.editor.v2.visual.TextAnimationPolicy
 import com.xiwei.sujian.editor.v2.mirror.VisualIntent
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
+import com.xiwei.sujian.editor.v2.layout.AndroidLayoutRevision
 import com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction
+import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 
 class AndroidVisualRuntime(
     val visualPlanner: AndroidVisualPlanner,
@@ -57,5 +59,40 @@ class AndroidVisualRuntime(
 
     fun setAnimationPolicy(policy: TextAnimationPolicy) {
         animationEngine.setAnimationPolicy(policy)
+    }
+
+    fun tick(
+        frameTimeMs: Long,
+        layout: android.text.Layout?,
+        layoutRevision: AndroidLayoutRevision?,
+        searchHighlightsUtf16: List<Pair<Int, Int>>,
+        viewportWidth: Int,
+        viewportHeight: Int,
+        scrollX: Float,
+        scrollY: Float,
+        cursorVisible: Boolean,
+        selectionAllowed: Boolean,
+        mirror: DisplayTextMirror
+    ): FrameState? {
+        if (layout == null) return null
+        val transaction = animationEngine.getActiveTransaction()
+        val progress = animationEngine.getTimelineProgress(frameTimeMs)
+        animationEngine.markFirstVisibleFrame(frameTimeMs)
+        val renderInput = FrameRenderInput(
+            layout = layout,
+            layoutRevision = layoutRevision,
+            transaction = transaction,
+            timelineProgress = progress,
+            searchHighlightsUtf16 = searchHighlightsUtf16,
+            viewportWidth = viewportWidth,
+            viewportHeight = viewportHeight,
+            scrollX = scrollX,
+            scrollY = scrollY,
+            cursorVisible = cursorVisible,
+            selectionAllowed = selectionAllowed,
+            mirror = mirror
+        )
+        animationEngine.completeIfFinished(frameTimeMs)
+        return FrameState(renderInput)
     }
 }

@@ -8,8 +8,8 @@ import org.junit.Test
 class TargetReadonlyProjectionContractTest {
 
     @Test
-    fun targetReadonlyProjectionClassExists() {
-        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetReadonlyProjection")
+    fun targetDisplayRuntimeClassExists() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetDisplayRuntime")
         assert(clazz.declaredMethods.any { it.name == "updateFromSnapshot" })
         assert(clazz.declaredMethods.any { it.name == "applyEditResult" })
         assert(clazz.declaredMethods.any { it.name == "setSecretMasked" })
@@ -20,11 +20,14 @@ class TargetReadonlyProjectionContractTest {
         assert(clazz.declaredMethods.any { it.name == "getSelectionEndUtf16" })
         assert(clazz.declaredMethods.any { it.name == "getProjection" })
         assert(clazz.declaredMethods.any { it.name == "getRevision" })
+        assert(clazz.declaredMethods.any { it.name == "clearDecorations" })
+        assert(clazz.declaredMethods.any { it.name == "drawFrame" })
+        assert(clazz.declaredMethods.any { it.name == "getVisualRuntime" })
     }
 
     @Test
     fun applyEditResultMethodExists() {
-        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetReadonlyProjection")
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetDisplayRuntime")
         val methods = clazz.declaredMethods.filter { it.name == "applyEditResult" }
         assertTrue(methods.isNotEmpty())
     }
@@ -66,15 +69,15 @@ class TargetReadonlyProjectionContractTest {
     }
 
     @Test
-    fun targetReadonlyProjectionOwnsSecretDisplayMode() {
-        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetReadonlyProjection")
+    fun targetDisplayRuntimeOwnsSecretDisplayMode() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetDisplayRuntime")
         val field = clazz.getDeclaredField("secretDisplayMode")
         assertEquals(Boolean::class.javaPrimitiveType, field.type)
     }
 
     @Test
-    fun targetReadonlyProjectionRebuildUsesComposition() {
-        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetReadonlyProjection")
+    fun targetDisplayRuntimeRebuildUsesComposition() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetDisplayRuntime")
         val mirrorClazz = Class.forName("com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror")
         val constructor = clazz.getDeclaredConstructor(mirrorClazz, android.text.TextPaint::class.java)
         assertTrue(constructor != null)
@@ -82,8 +85,15 @@ class TargetReadonlyProjectionContractTest {
 
     @Test
     fun applyEditResultTriggersRebuildProjectionAndLayout() {
-        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetReadonlyProjection")
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetDisplayRuntime")
         val method = clazz.getDeclaredMethod("applyEditResult", Class.forName("com.xiwei.sujian.editor.v2.mirror.EditResult"))
         assertTrue(method != null)
+    }
+
+    @Test
+    fun targetDisplayRuntimeHasGetRevision() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetDisplayRuntime")
+        val method = clazz.getDeclaredMethod("getRevision")
+        assertEquals(Long::class.javaPrimitiveType, method.returnType)
     }
 }

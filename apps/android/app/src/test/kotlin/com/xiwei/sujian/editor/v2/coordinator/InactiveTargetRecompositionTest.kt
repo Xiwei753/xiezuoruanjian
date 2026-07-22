@@ -78,15 +78,15 @@ class InactiveTargetRecompositionTest {
     }
 
     @Test
-    fun targetReadonlyProjectionHasSetSearchHighlights() {
-        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetReadonlyProjection")
+    fun targetDisplayRuntimeHasSetSearchHighlights() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetDisplayRuntime")
         val method = clazz.getDeclaredMethod("setSearchHighlights", List::class.java)
         assertNotNull(method)
     }
 
     @Test
-    fun targetReadonlyProjectionHasSetSelection() {
-        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetReadonlyProjection")
+    fun targetDisplayRuntimeHasSetSelection() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetDisplayRuntime")
         val method = clazz.getDeclaredMethod("setSelection", Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
         assertNotNull(method)
     }

@@ -31,7 +31,9 @@ data class TextEditorProfile(
     val capitalizationPolicy: CapitalizationPolicy = CapitalizationPolicy.NONE,
     val copyPolicy: CopyPolicy = CopyPolicy.ALLOW,
     val pastePolicy: PastePolicy = PastePolicy.ALLOW,
-    val secretPolicy: SecretPolicy = SecretPolicy.NONE
+    val secretPolicy: SecretPolicy = SecretPolicy.NONE,
+    val fontSizePx: Float = 48f,
+    val lineSpacingMultiplier: Float = 1.0f
 ) {
     companion object {
         val DocumentBody = TextEditorProfile(

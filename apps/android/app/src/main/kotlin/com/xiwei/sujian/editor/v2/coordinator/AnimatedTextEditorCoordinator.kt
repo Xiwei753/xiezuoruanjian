@@ -11,7 +11,7 @@ import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import com.xiwei.sujian.editor.v2.host.TextEditSessionBridge
 import com.xiwei.sujian.editor.v2.coordinator.SecretPolicy
-import com.xiwei.sujian.editor.v2.projection.TargetReadonlyProjection
+import com.xiwei.sujian.editor.v2.projection.TargetDisplayRuntime
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 
 /**
@@ -43,7 +43,7 @@ class AnimatedTextEditorCoordinator(
     private var activeSessionId: ULong? = null
     private var sharedEditorView: SujianEditorView? = null
     private val persistentSessionIds = mutableMapOf<String, ULong>()
-    private val targetProjections = mutableMapOf<String, TargetReadonlyProjection>()
+    private val targetProjections = mutableMapOf<String, TargetDisplayRuntime>()
 
     var targetDecorationsVersion by mutableStateOf(0L)
         private set
@@ -520,9 +520,14 @@ class AnimatedTextEditorCoordinator(
         targetDecorationsVersion++
         val projection = targetProjections[targetId]
         if (projection != null) {
-            projection.setSearchHighlights(decorations.searchHighlightsUtf8)
-            if (decorations.selectionStartUtf8 >= 0 && decorations.selectionEndUtf8 >= 0) {
-                projection.setSelection(decorations.selectionStartUtf8, decorations.selectionEndUtf8)
+            if (decorations.searchHighlightsUtf8.isEmpty() &&
+                decorations.selectionStartUtf8 < 0 && decorations.selectionEndUtf8 < 0) {
+                projection.clearDecorations()
+            } else {
+                projection.setSearchHighlights(decorations.searchHighlightsUtf8)
+                if (decorations.selectionStartUtf8 >= 0 && decorations.selectionEndUtf8 >= 0) {
+                    projection.setSelection(decorations.selectionStartUtf8, decorations.selectionEndUtf8)
+                }
             }
         }
         if (targetId == activeTargetId) {
@@ -542,7 +547,7 @@ class AnimatedTextEditorCoordinator(
 
     // ── Read-only projection for inactive targets ──
 
-    fun getTargetProjection(targetId: String): TargetReadonlyProjection? {
+    fun getTargetProjection(targetId: String): TargetDisplayRuntime? {
         return targetProjections[targetId]
     }
 
@@ -562,6 +567,11 @@ class AnimatedTextEditorCoordinator(
                 view.getPipeline().getCursorUtf8(),
                 view.getPipeline().getRevision()
             )
+        }
+        val view = sharedEditorView
+        if (view != null) {
+            projection.setScrollPosition(view.getScrollXPos(), view.getScrollYPos())
+            projection.setViewportSize(view.width, view.height)
         }
         val decorations = targetDecorations[targetId]
         if (decorations != null) {
@@ -587,14 +597,14 @@ class AnimatedTextEditorCoordinator(
         }
     }
 
-    private fun getOrCreateProjection(targetId: String, target: EditableTextTarget): TargetReadonlyProjection {
+    private fun getOrCreateProjection(targetId: String, target: EditableTextTarget): TargetDisplayRuntime {
         return targetProjections.getOrPut(targetId) {
             val mirror = DisplayTextMirror()
             val textPaint = android.text.TextPaint().apply {
-                textSize = 48f
+                textSize = target.profile.fontSizePx.coerceAtLeast(1f)
                 isAntiAlias = true
             }
-            val projection = TargetReadonlyProjection(mirror, textPaint)
+            val projection = TargetDisplayRuntime(mirror, textPaint)
             if (target.profile.secretPolicy == SecretPolicy.MASK_AND_CLEAR_ON_COMMIT) {
                 projection.setSecretMasked(true)
             }

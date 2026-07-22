@@ -25,6 +25,52 @@ class DisplayTextProjectionTest {
     }
 
     @Test
+    fun identityProjectionChineseUtf8ToUtf16() {
+        val text = "中a"
+        val proj = DisplayTextProjection.identity(text)
+        assertEquals(0, proj.realUtf8ToDisplayUtf16(0))
+        assertEquals(1, proj.realUtf8ToDisplayUtf16(3))
+        assertEquals(2, proj.realUtf8ToDisplayUtf16(4))
+    }
+
+    @Test
+    fun identityProjectionChineseUtf16ToUtf8() {
+        val text = "中a"
+        val proj = DisplayTextProjection.identity(text)
+        assertEquals(0, proj.displayUtf16ToRealUtf8(0))
+        assertEquals(3, proj.displayUtf16ToRealUtf8(1))
+        assertEquals(4, proj.displayUtf16ToRealUtf8(2))
+    }
+
+    @Test
+    fun identityProjectionEmojiUtf8ToUtf16() {
+        val text = "a😀b"
+        val proj = DisplayTextProjection.identity(text)
+        assertEquals(0, proj.realUtf8ToDisplayUtf16(0))
+        assertEquals(1, proj.realUtf8ToDisplayUtf16(1))
+        assertEquals(3, proj.realUtf8ToDisplayUtf16(5))
+        assertEquals(4, proj.realUtf8ToDisplayUtf16(6))
+    }
+
+    @Test
+    fun identityProjectionEmojiUtf16ToUtf8() {
+        val text = "a😀b"
+        val proj = DisplayTextProjection.identity(text)
+        assertEquals(0, proj.displayUtf16ToRealUtf8(0))
+        assertEquals(1, proj.displayUtf16ToRealUtf8(1))
+        assertEquals(5, proj.displayUtf16ToRealUtf8(3))
+        assertEquals(6, proj.displayUtf16ToRealUtf8(4))
+    }
+
+    @Test
+    fun identityProjectionMidByteSnapsToCodePoint() {
+        val text = "中a"
+        val proj = DisplayTextProjection.identity(text)
+        assertEquals(0, proj.realUtf8ToDisplayUtf16(1))
+        assertEquals(0, proj.realUtf8ToDisplayUtf16(2))
+    }
+
+    @Test
     fun maskedProjectionDisplayIsMasked() {
         val text = "abc"
         val proj = DisplayTextProjection.masked(text)
@@ -40,6 +86,44 @@ class DisplayTextProjectionTest {
         assertEquals(2, proj.displayLengthUtf16)
         val utf8Len = text.toByteArray(Charsets.UTF_8).size
         assertEquals(utf8Len, proj.realLengthUtf8)
+    }
+
+    @Test
+    fun maskedProjectionChineseUtf8ToDisplayUtf16() {
+        val text = "中a"
+        val proj = DisplayTextProjection.masked(text)
+        assertEquals(0, proj.realUtf8ToDisplayUtf16(0))
+        assertEquals(1, proj.realUtf8ToDisplayUtf16(3))
+        assertEquals(2, proj.realUtf8ToDisplayUtf16(4))
+    }
+
+    @Test
+    fun maskedProjectionChineseDisplayUtf16ToRealUtf8() {
+        val text = "中a"
+        val proj = DisplayTextProjection.masked(text)
+        assertEquals(0, proj.displayUtf16ToRealUtf8(0))
+        assertEquals(3, proj.displayUtf16ToRealUtf8(1))
+        assertEquals(4, proj.displayUtf16ToRealUtf8(2))
+    }
+
+    @Test
+    fun maskedProjectionEmojiUtf8ToDisplayUtf16() {
+        val text = "a😀b"
+        val proj = DisplayTextProjection.masked(text)
+        assertEquals(0, proj.realUtf8ToDisplayUtf16(0))
+        assertEquals(1, proj.realUtf8ToDisplayUtf16(1))
+        assertEquals(2, proj.realUtf8ToDisplayUtf16(5))
+        assertEquals(3, proj.realUtf8ToDisplayUtf16(6))
+    }
+
+    @Test
+    fun maskedProjectionEmojiDisplayUtf16ToRealUtf8() {
+        val text = "a😀b"
+        val proj = DisplayTextProjection.masked(text)
+        assertEquals(0, proj.displayUtf16ToRealUtf8(0))
+        assertEquals(1, proj.displayUtf16ToRealUtf8(1))
+        assertEquals(5, proj.displayUtf16ToRealUtf8(2))
+        assertEquals(6, proj.displayUtf16ToRealUtf8(3))
     }
 
     @Test
@@ -140,5 +224,110 @@ class DisplayTextProjectionTest {
         val text = "ab\ncd"
         val proj = DisplayTextProjection.maskedWithComposition(text, 0, 2, "ab")
         assertEquals("ab\n\u2022\u2022", proj.displayText)
+    }
+
+    @Test
+    fun maskedWithCompositionChineseOffsetMapping() {
+        val text = "你好世界"
+        val proj = DisplayTextProjection.maskedWithComposition(text, 2, 4, "好世")
+        assertEquals("\u2022\u2022好世", proj.displayText)
+        assertEquals(0, proj.realUtf8ToDisplayUtf16(0))
+        assertEquals(1, proj.realUtf8ToDisplayUtf16(3))
+        assertEquals(2, proj.realUtf8ToDisplayUtf16(6))
+        assertEquals(3, proj.realUtf8ToDisplayUtf16(9))
+        assertEquals(4, proj.realUtf8ToDisplayUtf16(12))
+    }
+
+    @Test
+    fun maskedEmojiOffsetMapping() {
+        val text = "a😀b"
+        val proj = DisplayTextProjection.masked(text)
+        assertEquals(0, proj.realUtf8ToDisplayUtf16(0))
+        assertEquals(1, proj.realUtf8ToDisplayUtf16(1))
+        assertEquals(2, proj.realUtf8ToDisplayUtf16(5))
+        assertEquals(3, proj.realUtf8ToDisplayUtf16(6))
+
+        assertEquals(0, proj.displayUtf16ToRealUtf8(0))
+        assertEquals(1, proj.displayUtf16ToRealUtf8(1))
+        assertEquals(5, proj.displayUtf16ToRealUtf8(2))
+        assertEquals(6, proj.displayUtf16ToRealUtf8(3))
+    }
+
+    @Test
+    fun identityRoundTripChineseAtCodePointBoundaries() {
+        val text = "中文字"
+        val proj = DisplayTextProjection.identity(text)
+        val codePointUtf8Boundaries = mutableListOf(0)
+        var bytePos = 0
+        var i = 0
+        while (i < text.length) {
+            val codePoint = text.codePointAt(i)
+            val utf8Len = when {
+                codePoint <= 0x7F -> 1
+                codePoint <= 0x7FF -> 2
+                codePoint <= 0xFFFF -> 3
+                else -> 4
+            }
+            bytePos += utf8Len
+            codePointUtf8Boundaries.add(bytePos)
+            i += Character.charCount(codePoint)
+        }
+        for (utf8 in codePointUtf8Boundaries) {
+            val utf16 = proj.realUtf8ToDisplayUtf16(utf8)
+            val back = proj.displayUtf16ToRealUtf8(utf16)
+            assertEquals("Round-trip for utf8=$utf8", utf8, back)
+        }
+    }
+
+    @Test
+    fun maskedRoundTripChineseAtCodePointBoundaries() {
+        val text = "中文字"
+        val proj = DisplayTextProjection.masked(text)
+        val codePointUtf8Boundaries = mutableListOf(0)
+        var bytePos = 0
+        var i = 0
+        while (i < text.length) {
+            val codePoint = text.codePointAt(i)
+            val utf8Len = when {
+                codePoint <= 0x7F -> 1
+                codePoint <= 0x7FF -> 2
+                codePoint <= 0xFFFF -> 3
+                else -> 4
+            }
+            bytePos += utf8Len
+            codePointUtf8Boundaries.add(bytePos)
+            i += Character.charCount(codePoint)
+        }
+        for (utf8 in codePointUtf8Boundaries) {
+            val utf16 = proj.realUtf8ToDisplayUtf16(utf8)
+            val back = proj.displayUtf16ToRealUtf8(utf16)
+            assertEquals("Round-trip for utf8=$utf8", utf8, back)
+        }
+    }
+
+    @Test
+    fun identityRoundTripMixedAtCodePointBoundaries() {
+        val text = "a中b😀c"
+        val proj = DisplayTextProjection.identity(text)
+        val codePointUtf8Boundaries = mutableListOf(0)
+        var bytePos = 0
+        var i = 0
+        while (i < text.length) {
+            val codePoint = text.codePointAt(i)
+            val utf8Len = when {
+                codePoint <= 0x7F -> 1
+                codePoint <= 0x7FF -> 2
+                codePoint <= 0xFFFF -> 3
+                else -> 4
+            }
+            bytePos += utf8Len
+            codePointUtf8Boundaries.add(bytePos)
+            i += Character.charCount(codePoint)
+        }
+        for (utf8 in codePointUtf8Boundaries) {
+            val utf16 = proj.realUtf8ToDisplayUtf16(utf8)
+            val back = proj.displayUtf16ToRealUtf8(utf16)
+            assertEquals("Round-trip for utf8=$utf8", utf8, back)
+        }
     }
 }

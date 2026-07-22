@@ -86,6 +86,13 @@ class RuntimeOwnershipTest {
     }
 
     @Test
+    fun visualRuntimeHasTick() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidVisualRuntime")
+        val methods = clazz.declaredMethods.filter { it.name == "tick" }
+        assertTrue("AndroidVisualRuntime should have tick method", methods.isNotEmpty())
+    }
+
+    @Test
     fun inputAdapterDependsOnInputCommandPortInterface() {
         val clazz = Class.forName("com.xiwei.sujian.editor.v2.input.AndroidInputAdapter")
         val constructor = clazz.getDeclaredConstructor(
@@ -202,20 +209,11 @@ class RuntimeOwnershipTest {
     }
 
     @Test
-    fun renderRuntimeDrawFrameFromRuntimesOrchestratesFrame() {
+    fun renderRuntimeHasDrawFromFrameState() {
         val clazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidRenderRuntime")
-        val method = clazz.getDeclaredMethod("drawFrameFromRuntimes",
+        val method = clazz.getDeclaredMethod("drawFromFrameState",
             android.graphics.Canvas::class.java,
-            Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidLayoutRuntime"),
-            Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidVisualRuntime"),
-            List::class.java,
-            Int::class.javaPrimitiveType,
-            Int::class.javaPrimitiveType,
-            Float::class.javaPrimitiveType,
-            Float::class.javaPrimitiveType,
-            Boolean::class.javaPrimitiveType,
-            Boolean::class.javaPrimitiveType,
-            Class.forName("com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror")
+            Class.forName("com.xiwei.sujian.editor.v2.pipeline.FrameState")
         )
         assertNotNull(method)
     }
@@ -235,28 +233,41 @@ class RuntimeOwnershipTest {
     }
 
     @Test
-    fun pipelineDrawFrameDelegatesToRenderRuntime() {
-        val renderRuntimeClazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidRenderRuntime")
-        val drawFrameFromRuntimesMethod = renderRuntimeClazz.getDeclaredMethod("drawFrameFromRuntimes",
-            android.graphics.Canvas::class.java,
-            Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidLayoutRuntime"),
-            Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidVisualRuntime"),
-            List::class.java,
-            Int::class.javaPrimitiveType,
-            Int::class.javaPrimitiveType,
-            Float::class.javaPrimitiveType,
-            Float::class.javaPrimitiveType,
-            Boolean::class.javaPrimitiveType,
-            Boolean::class.javaPrimitiveType,
-            Class.forName("com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror")
-        )
-        assertNotNull(drawFrameFromRuntimesMethod)
+    fun frameStateContainsRenderInput() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.FrameState")
+        val field = clazz.getDeclaredField("renderInput")
+        assertEquals(Class.forName("com.xiwei.sujian.editor.v2.pipeline.FrameRenderInput"), field.type)
     }
 
     @Test
-    fun targetReadonlyProjectionHasGetRevision() {
-        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetReadonlyProjection")
-        val method = clazz.getDeclaredMethod("getRevision")
-        assertEquals(Long::class.javaPrimitiveType, method.returnType)
+    fun targetDisplayRuntimeHasClearDecorations() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetDisplayRuntime")
+        val method = clazz.getDeclaredMethod("clearDecorations")
+        assertNotNull(method)
+    }
+
+    @Test
+    fun targetDisplayRuntimeHasDrawFrame() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetDisplayRuntime")
+        val method = clazz.getDeclaredMethod("drawFrame", android.graphics.Canvas::class.java)
+        assertNotNull(method)
+    }
+
+    @Test
+    fun targetDisplayRuntimeHasVisualRuntime() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetDisplayRuntime")
+        val method = clazz.getDeclaredMethod("getVisualRuntime")
+        assertEquals(Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidVisualRuntime"), method.returnType)
+    }
+
+    @Test
+    fun targetDisplayRuntimeHasScrollPosition() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetDisplayRuntime")
+        val setMethod = clazz.getDeclaredMethod("setScrollPosition", Float::class.javaPrimitiveType, Float::class.javaPrimitiveType)
+        assertNotNull(setMethod)
+        val getXMethod = clazz.getDeclaredMethod("getScrollX")
+        assertNotNull(getXMethod)
+        val getYMethod = clazz.getDeclaredMethod("getScrollY")
+        assertNotNull(getYMethod)
     }
 }

@@ -38,6 +38,9 @@ class SujianEditorView @JvmOverloads constructor(
     private var scrollX: Float = 0f
     private var scrollY: Float = 0f
     private var maxScrollY: Float = 0f
+
+    fun getScrollXPos(): Float = scrollX
+    fun getScrollYPos(): Float = scrollY
     private var searchHighlights: List<Pair<Int, Int>> = emptyList()
     private var pendingLayoutNeeded: Boolean = false
 
