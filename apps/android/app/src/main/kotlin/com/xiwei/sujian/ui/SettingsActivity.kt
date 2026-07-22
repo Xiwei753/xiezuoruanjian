@@ -10,8 +10,10 @@ import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.textfield.MaterialAutoCompleteTextView
 import com.xiwei.sujian.R
+import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.data.CoreSettingsEvents
+import com.xiwei.sujian.data.AppServiceBridge
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.diagnostics.DiagnosticsExporter
 import com.xiwei.sujian.diagnostics.EditorEventRingBuffer
@@ -31,6 +33,10 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var syncHelper: SyncSettingsHelper
     private var isRendering: Boolean = false
     private var currentPaletteRecords: List<uniffi.writer_core.ThemePaletteRecordDto> = emptyList()
+
+    val textEditorCoordinator by lazy {
+        com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator(this, BridgeProvider.getAppServiceBridge(this))
+    }
 
     private var systemBarsController: SystemBarsController? = null
 

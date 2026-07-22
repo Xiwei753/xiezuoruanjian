@@ -10,6 +10,7 @@ import com.xiwei.sujian.data.AppServiceBridge
 import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import com.xiwei.sujian.editor.v2.host.TextEditSessionBridge
+import com.xiwei.sujian.editor.v2.coordinator.SecretPolicy
 
 /**
  * Window-level coordinator that manages a single shared [SujianEditorView] and dispatches
@@ -199,6 +200,9 @@ class AnimatedTextEditorCoordinator(
 
         if (!target.isPersistent) {
             persistentSessionIds.remove(targetId)
+            if (target.profile.secretPolicy == SecretPolicy.MASK_AND_CLEAR_ON_COMMIT) {
+                target.updateText("")
+            }
         }
         activeTargetId = null
         activeSessionId = null

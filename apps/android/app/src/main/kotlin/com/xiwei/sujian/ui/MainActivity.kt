@@ -4,11 +4,16 @@ import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.activity.compose.setContent
+import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.model.LocalSettings
 import com.xiwei.sujian.ui.compose.SujianApp
 
 class MainActivity : AppCompatActivity() {
+
+    val textEditorCoordinator by lazy {
+        com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator(this, BridgeProvider.getAppServiceBridge(this))
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

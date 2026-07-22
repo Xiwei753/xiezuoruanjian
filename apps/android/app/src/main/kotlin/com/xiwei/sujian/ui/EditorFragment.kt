@@ -11,6 +11,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -32,9 +33,14 @@ import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import com.xiwei.sujian.editor.v2.host.TextEditSessionBridge
 import com.xiwei.sujian.editor.v2.compose.LocalAnimatedTextEditorCoordinator
+import com.xiwei.sujian.editor.v2.compose.AnimatedTextField
+import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
 import com.xiwei.sujian.ui.compose.editor.WritingPane
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.flow.collectLatest
@@ -75,8 +81,8 @@ class EditorFragment : Fragment() {
     private lateinit var tvSaveStatus: TextView
 
     private lateinit var searchLayout: LinearLayout
-    private lateinit var etSearch: EditText
-    private lateinit var etReplace: EditText
+    private var searchText: String = ""
+    private var replaceText: String = ""
     private lateinit var btnSearchNext: ImageButton
     private lateinit var btnSearchClose: ImageButton
     private lateinit var btnReplace: Button
@@ -134,12 +140,12 @@ class EditorFragment : Fragment() {
         tvSaveStatus = view.findViewById(R.id.tvSaveStatus)
 
         searchLayout = view.findViewById(R.id.searchLayout)
-        etSearch = view.findViewById(R.id.etSearch)
-        etReplace = view.findViewById(R.id.etReplace)
         btnSearchNext = view.findViewById(R.id.btnSearchNext)
         btnSearchClose = view.findViewById(R.id.btnSearchClose)
         btnReplace = view.findViewById(R.id.btnReplace)
         btnReplaceAll = view.findViewById(R.id.btnReplaceAll)
+
+        setupSearchComposeContainers(view)
 
         setupComposeEditor(view)
 
@@ -178,6 +184,61 @@ class EditorFragment : Fragment() {
             viewModel.initChapter(projectId!!, volumeId!!, chapterId!!, chapterTitle)
         } else {
             viewModel.initErrorState(getString(R.string.error_missing_chapter_identifiers))
+        }
+    }
+
+    private fun setupSearchComposeContainers(view: View) {
+        val searchContainer = view.findViewById<FrameLayout>(R.id.searchComposeContainer) ?: return
+        val replaceContainer = view.findViewById<FrameLayout>(R.id.replaceComposeContainer) ?: return
+
+        val searchComposeView = androidx.compose.ui.platform.ComposeView(requireContext()).apply {
+            setViewCompositionStrategy(androidx.compose.ui.platform.ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+        }
+        searchContainer.addView(searchComposeView, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        ))
+
+        searchComposeView.setContent {
+            AnimatedTextField(
+                targetId = "editor-search",
+                value = searchText,
+                onValueChange = { newText ->
+                    searchText = newText
+                    performSearch()
+                },
+                onCommit = { newText ->
+                    searchText = newText
+                    performSearch()
+                },
+                profile = TextEditorProfile.SearchQuery,
+                placeholder = { androidx.compose.material3.Text(getString(R.string.hint_search)) },
+                coordinator = coordinator
+            )
+        }
+
+        val replaceComposeView = androidx.compose.ui.platform.ComposeView(requireContext()).apply {
+            setViewCompositionStrategy(androidx.compose.ui.platform.ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+        }
+        replaceContainer.addView(replaceComposeView, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        ))
+
+        replaceComposeView.setContent {
+            AnimatedTextField(
+                targetId = "editor-replace",
+                value = replaceText,
+                onValueChange = { newText ->
+                    replaceText = newText
+                },
+                onCommit = { newText ->
+                    replaceText = newText
+                },
+                profile = TextEditorProfile.ReplaceQuery,
+                placeholder = { androidx.compose.material3.Text(getString(R.string.hint_replace)) },
+                coordinator = coordinator
+            )
         }
     }
 
@@ -262,7 +323,6 @@ class EditorFragment : Fragment() {
             clearHighlights()
         } else {
             searchLayout.visibility = View.VISIBLE
-            etSearch.requestFocus()
             performSearch()
         }
     }
@@ -274,21 +334,28 @@ class EditorFragment : Fragment() {
         if (pid == null || vid == null || cid == null) return
 
         val currentNote = viewModel.uiState.value.chapterNote ?: ""
+        var noteText by mutableStateOf(currentNote)
 
-        val editText = EditText(requireContext())
-        editText.hint = getString(R.string.hint_chapter_note)
-        editText.setPadding(48, 48, 48, 48)
-        editText.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
-        editText.minLines = 3
-        editText.maxLines = 10
-        editText.gravity = android.view.Gravity.TOP or android.view.Gravity.START
-        editText.setText(currentNote)
+        val composeView = androidx.compose.ui.platform.ComposeView(requireContext()).apply {
+            setViewCompositionStrategy(androidx.compose.ui.platform.ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+        }
+        composeView.setContent {
+            com.xiwei.sujian.editor.v2.compose.AnimatedTextArea(
+                targetId = "chapter-note:$cid",
+                value = noteText,
+                onValueChange = { noteText = it },
+                onCommit = { noteText = it },
+                profile = com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile.LongNote,
+                placeholder = { androidx.compose.material3.Text(getString(R.string.hint_chapter_note)) },
+                coordinator = coordinator
+            )
+        }
 
         AlertDialog.Builder(requireContext())
             .setTitle(R.string.dialog_chapter_note_title)
-            .setView(editText)
+            .setView(composeView)
             .setPositiveButton(R.string.action_save) { _, _ ->
-                val newNote = editText.text.toString().trim()
+                val newNote = noteText.trim()
                 viewModel.updateChapterNote(newNote)
             }
             .setNegativeButton(R.string.action_cancel, null)
@@ -422,14 +489,6 @@ class EditorFragment : Fragment() {
             clearHighlights()
         }
 
-        etSearch.addTextChangedListener(object : android.text.TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                performSearch()
-            }
-            override fun afterTextChanged(s: android.text.Editable?) {}
-        })
-
         btnSearchNext.setOnClickListener {
             if (searchResults.isNotEmpty()) {
                 currentSearchIndex = (currentSearchIndex + 1) % searchResults.size
@@ -441,17 +500,14 @@ class EditorFragment : Fragment() {
             val view = getEditorView() ?: return@setOnClickListener
             if (searchResults.isEmpty() || currentSearchIndex < 0) return@setOnClickListener
             val (start, end) = searchResults[currentSearchIndex]
-            val replaceStr = etReplace.text.toString()
-            view.replaceRange(start, end, replaceStr)
+            view.replaceRange(start, end, replaceText)
             performSearch()
         }
 
         btnReplaceAll.setOnClickListener {
             val view = getEditorView() ?: return@setOnClickListener
             if (searchResults.isEmpty()) return@setOnClickListener
-            val searchStr = etSearch.text.toString()
-            val replaceStr = etReplace.text.toString()
-            view.replaceAll(searchStr, replaceStr)
+            view.replaceAll(searchText, replaceText)
             performSearch()
         }
     }
@@ -463,17 +519,16 @@ class EditorFragment : Fragment() {
 
         if (searchLayout.visibility == View.GONE) return
 
-        val searchStr = etSearch.text.toString()
-        if (searchStr.isEmpty()) return
+        if (searchText.isEmpty()) return
 
         val view = getEditorView() ?: return
         val content = view.getText()
-        var startIndex = content.indexOf(searchStr)
+        var startIndex = content.indexOf(searchText)
 
         while (startIndex >= 0) {
-            val endIndex = startIndex + searchStr.length
+            val endIndex = startIndex + searchText.length
             searchResults.add(Pair(startIndex, endIndex))
-            startIndex = content.indexOf(searchStr, endIndex)
+            startIndex = content.indexOf(searchText, endIndex)
         }
 
         if (searchResults.isNotEmpty()) {

@@ -34,6 +34,7 @@ pub(crate) mod layout_revision;
 pub(crate) mod line_snapshot;
 pub(crate) mod line_snapshot_builder;
 pub(crate) mod animated_slice;
+pub(crate) mod linux_coordinator;
 pub(crate) mod pipeline;
 pub(crate) mod static_line_patch;
 pub(crate) mod text_visual_transaction;

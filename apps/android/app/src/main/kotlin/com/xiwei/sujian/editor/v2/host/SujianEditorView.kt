@@ -516,6 +516,8 @@ class SujianEditorView @JvmOverloads constructor(
             pipeline.setSelectionAllowed(true)
         }
         pipeline.setMaxLength(profile.maxLength)
+        pipeline.setCopyAllowed(profile.copyPolicy != com.xiwei.sujian.editor.v2.coordinator.CopyPolicy.BLOCK)
+        pipeline.setPasteAllowed(profile.pastePolicy != com.xiwei.sujian.editor.v2.coordinator.PastePolicy.BLOCK)
     }
 
     fun updateEditorProfile(profile: TextEditorProfile) {

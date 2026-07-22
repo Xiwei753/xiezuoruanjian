@@ -26,7 +26,12 @@ data class TextEditorProfile(
     val cursorPolicy: CursorPolicy = CursorPolicy.VISIBLE_WHEN_FOCUSED,
     val selectionPolicy: SelectionPolicy = SelectionPolicy.ALLOW,
     val commitOnImeAction: Boolean = true,
-    val commitOnFocusLoss: Boolean = true
+    val commitOnFocusLoss: Boolean = true,
+    val autocorrectPolicy: AutocorrectPolicy = AutocorrectPolicy.DEFAULT,
+    val capitalizationPolicy: CapitalizationPolicy = CapitalizationPolicy.NONE,
+    val copyPolicy: CopyPolicy = CopyPolicy.ALLOW,
+    val pastePolicy: PastePolicy = PastePolicy.ALLOW,
+    val secretPolicy: SecretPolicy = SecretPolicy.NONE
 ) {
     companion object {
         val DocumentBody = TextEditorProfile(
@@ -92,6 +97,50 @@ data class TextEditorProfile(
             animationPolicy = AnimationPolicy.INHERIT_GLOBAL,
             commitOnFocusLoss = false
         )
+        val SecretToken = TextEditorProfile(
+            singleLine = true,
+            inputType = TextInputType.PASSWORD,
+            imeAction = ImeAction.DONE,
+            newlinePolicy = NewlinePolicy.FORBID,
+            animationPolicy = AnimationPolicy.SYSTEM_SUPPRESSED,
+            selectionPolicy = SelectionPolicy.CURSOR_ONLY,
+            copyPolicy = CopyPolicy.BLOCK,
+            pastePolicy = PastePolicy.ALLOW,
+            secretPolicy = SecretPolicy.MASK_AND_CLEAR_ON_COMMIT,
+            commitOnFocusLoss = true
+        )
+        val RepositoryUrl = TextEditorProfile(
+            singleLine = true,
+            inputType = TextInputType.TEXT,
+            imeAction = ImeAction.DONE,
+            newlinePolicy = NewlinePolicy.FORBID,
+            maxLength = 500,
+            animationPolicy = AnimationPolicy.SYSTEM_SUPPRESSED,
+            autocorrectPolicy = AutocorrectPolicy.DISABLED,
+            capitalizationPolicy = CapitalizationPolicy.NONE,
+            commitOnFocusLoss = true
+        )
+        val BranchName = TextEditorProfile(
+            singleLine = true,
+            inputType = TextInputType.TEXT,
+            imeAction = ImeAction.DONE,
+            newlinePolicy = NewlinePolicy.FORBID,
+            maxLength = 200,
+            animationPolicy = AnimationPolicy.SYSTEM_SUPPRESSED,
+            autocorrectPolicy = AutocorrectPolicy.DISABLED,
+            capitalizationPolicy = CapitalizationPolicy.NONE,
+            commitOnFocusLoss = true
+        )
+        val ReplaceQuery = TextEditorProfile(
+            singleLine = true,
+            inputType = TextInputType.TEXT,
+            imeAction = ImeAction.DONE,
+            newlinePolicy = NewlinePolicy.FORBID,
+            maxLength = 500,
+            animationPolicy = AnimationPolicy.SYSTEM_SUPPRESSED,
+            autocorrectPolicy = AutocorrectPolicy.DISABLED,
+            commitOnFocusLoss = true
+        )
     }
 }
 
@@ -99,7 +148,8 @@ enum class TextInputType {
     TEXT,
     MULTI_LINE,
     NUMBER,
-    EMAIL
+    EMAIL,
+    PASSWORD
 }
 
 enum class ImeAction {
@@ -149,4 +199,31 @@ enum class SelectionPolicy {
 enum class CommitPolicy {
     COMMIT_ON_CONFIRM,
     COMMIT_ON_EVERY_CHANGE
+}
+
+enum class AutocorrectPolicy {
+    DEFAULT,
+    DISABLED
+}
+
+enum class CapitalizationPolicy {
+    NONE,
+    CHARACTERS,
+    WORDS,
+    SENTENCES
+}
+
+enum class CopyPolicy {
+    ALLOW,
+    BLOCK
+}
+
+enum class PastePolicy {
+    ALLOW,
+    BLOCK
+}
+
+enum class SecretPolicy {
+    NONE,
+    MASK_AND_CLEAR_ON_COMMIT
 }

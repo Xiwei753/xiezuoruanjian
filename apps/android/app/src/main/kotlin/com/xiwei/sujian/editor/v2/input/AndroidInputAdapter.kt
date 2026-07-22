@@ -1,8 +1,13 @@
 package com.xiwei.sujian.editor.v2.input
 
 import android.view.View
+import com.xiwei.sujian.editor.v2.coordinator.AutocorrectPolicy
+import com.xiwei.sujian.editor.v2.coordinator.CapitalizationPolicy
+import com.xiwei.sujian.editor.v2.coordinator.CopyPolicy
 import com.xiwei.sujian.editor.v2.coordinator.ImeAction
 import com.xiwei.sujian.editor.v2.coordinator.NewlinePolicy
+import com.xiwei.sujian.editor.v2.coordinator.PastePolicy
+import com.xiwei.sujian.editor.v2.coordinator.SecretPolicy
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
 import com.xiwei.sujian.editor.v2.coordinator.TextInputType
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
@@ -78,11 +83,23 @@ class AndroidInputAdapter(
                 TextInputType.EMAIL -> android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
                 TextInputType.MULTI_LINE -> android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
                 TextInputType.TEXT -> android.text.InputType.TYPE_CLASS_TEXT
+                TextInputType.PASSWORD -> android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
             }
             if (currentProfile.singleLine) {
                 outAttrs.inputType = inputType and android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE.inv()
             } else {
                 outAttrs.inputType = inputType
+            }
+
+            if (currentProfile.autocorrectPolicy == AutocorrectPolicy.DISABLED) {
+                outAttrs.inputType = outAttrs.inputType and android.text.InputType.TYPE_TEXT_FLAG_AUTO_CORRECT.inv()
+            }
+
+            when (currentProfile.capitalizationPolicy) {
+                CapitalizationPolicy.CHARACTERS -> outAttrs.inputType = outAttrs.inputType or android.text.InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+                CapitalizationPolicy.WORDS -> outAttrs.inputType = outAttrs.inputType or android.text.InputType.TYPE_TEXT_FLAG_CAP_WORDS
+                CapitalizationPolicy.SENTENCES -> outAttrs.inputType = outAttrs.inputType or android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+                CapitalizationPolicy.NONE -> { }
             }
 
             val imeAction = when (currentProfile.imeAction) {

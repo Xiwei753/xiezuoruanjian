@@ -26,6 +26,7 @@ import androidx.compose.ui.semantics.setText
 import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
 import com.xiwei.sujian.editor.v2.coordinator.EditableTextTarget
 import com.xiwei.sujian.editor.v2.coordinator.EditingState
+import com.xiwei.sujian.editor.v2.coordinator.SecretPolicy
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -171,7 +172,11 @@ private fun AnimatedTextFieldWithCoordinator(
             },
             enabled = enabled,
             singleLine = singleLine,
-            visualTransformation = androidx.compose.ui.text.input.VisualTransformation.None,
+            visualTransformation = if (currentProfile.secretPolicy == SecretPolicy.MASK_AND_CLEAR_ON_COMMIT && !isEditing) {
+                androidx.compose.ui.text.input.PasswordVisualTransformation()
+            } else {
+                androidx.compose.ui.text.input.VisualTransformation.None
+            },
             interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
             label = label,
             placeholder = placeholder

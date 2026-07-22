@@ -12,6 +12,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.unit.dp
 
 /**
  * StarMapController — 星图控制器
@@ -145,17 +151,12 @@ class StarMapController(
 
     fun showNewNodeDialog() {
         if (starmapId.isEmpty()) return
-        
-        val layout = android.widget.LinearLayout(activity)
-        layout.orientation = android.widget.LinearLayout.VERTICAL
-        layout.setPadding(48, 48, 48, 48)
-        
-        val titleInput = android.widget.EditText(activity)
-        titleInput.hint = activity.getString(R.string.hint_node_name)
-        layout.addView(titleInput)
-        
-        val kindSpinner = android.widget.Spinner(activity)
-        val kinds = arrayOf(
+
+        val composeView = androidx.compose.ui.platform.ComposeView(activity)
+        var nodeTitle by mutableStateOf("")
+        var selectedKindIndex by mutableStateOf(0)
+
+        val kinds = listOf(
             activity.getString(R.string.node_kind_character),
             activity.getString(R.string.node_kind_location),
             activity.getString(R.string.node_kind_event),
@@ -173,18 +174,37 @@ class StarMapController(
             activity.getString(R.string.node_kind_chapter) to com.xiwei.sujian.model.StarMapNodeKind.Chapter,
             activity.getString(R.string.node_kind_other) to com.xiwei.sujian.model.StarMapNodeKind.Custom
         )
-        val adapter = android.widget.ArrayAdapter(activity, android.R.layout.simple_spinner_item, kinds)
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        kindSpinner.adapter = adapter
-        layout.addView(kindSpinner)
-        
+
+        composeView.setContent {
+            androidx.compose.foundation.layout.Column(
+                modifier = androidx.compose.ui.Modifier.padding(24.dp)
+            ) {
+                com.xiwei.sujian.editor.v2.compose.AnimatedTextField(
+                    targetId = "starmap-new-node-title",
+                    value = nodeTitle,
+                    onValueChange = { nodeTitle = it },
+                    onCommit = { nodeTitle = it },
+                    profile = com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile.CanvasLabel,
+                    placeholder = { androidx.compose.material3.Text(activity.getString(R.string.hint_node_name)) },
+                    coordinator = (activity as? com.xiwei.sujian.ui.MainActivity)?.textEditorCoordinator
+                )
+                androidx.compose.foundation.layout.Spacer(
+                    modifier = androidx.compose.ui.Modifier.height(16.dp)
+                )
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { androidx.compose.material3.Text(kinds[selectedKindIndex]) },
+                    onClick = { }
+                )
+            }
+        }
+
         androidx.appcompat.app.AlertDialog.Builder(activity)
             .setTitle(activity.getString(R.string.dialog_new_chapter_title))
-            .setView(layout)
+            .setView(composeView)
             .setPositiveButton(activity.getString(R.string.action_ok)) { _, _ ->
-                val title = titleInput.text.toString().trim()
+                val title = nodeTitle.trim()
                 if (title.isNotEmpty()) {
-                    val kindStr = kindSpinner.selectedItem.toString()
+                    val kindStr = kinds[selectedKindIndex]
                     val kind = kindMap[kindStr] ?: com.xiwei.sujian.model.StarMapNodeKind.Custom
                     addNode(title, kind)
                 }

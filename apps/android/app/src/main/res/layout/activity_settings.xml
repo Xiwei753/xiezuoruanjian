@@ -434,42 +434,23 @@
                         android:textSize="16sp"
                         android:layout_marginBottom="8dp"/>
 
-                    <com.google.android.material.textfield.TextInputLayout
+                    <FrameLayout
+                        android:id="@+id/repoComposeContainer"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
-                        android:layout_marginBottom="12dp">
-                        <com.google.android.material.textfield.TextInputEditText
-                            android:id="@+id/etGithubRepo"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:hint="@string/pref_github_repo"/>
-                    </com.google.android.material.textfield.TextInputLayout>
+                        android:layout_marginBottom="12dp" />
 
-                    <com.google.android.material.textfield.TextInputLayout
+                    <FrameLayout
+                        android:id="@+id/branchComposeContainer"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
-                        android:layout_marginBottom="12dp">
-                        <com.google.android.material.textfield.TextInputEditText
-                            android:id="@+id/etBranch"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:hint="@string/pref_branch"/>
-                    </com.google.android.material.textfield.TextInputLayout>
+                        android:layout_marginBottom="12dp" />
 
-                    <com.google.android.material.textfield.TextInputLayout
+                    <FrameLayout
+                        android:id="@+id/tokenComposeContainer"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
-                        android:layout_marginBottom="12dp">
-                        <com.google.android.material.textfield.TextInputEditText
-                            android:id="@+id/etHttpsToken"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:inputType="textPassword"
-                            android:hint="@string/pref_https_token"/>
-                    </com.google.android.material.textfield.TextInputLayout>
+                        android:layout_marginBottom="12dp" />
 
                     <TextView
                         android:id="@+id/tvTokenStatus"

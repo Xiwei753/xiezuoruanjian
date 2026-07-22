@@ -778,6 +778,8 @@ class AndroidEditorPipeline private constructor(
 
     private var cursorVisible: Boolean = true
     private var selectionAllowed: Boolean = true
+    private var copyAllowed: Boolean = true
+    private var pasteAllowed: Boolean = true
 
     fun setCursorVisible(visible: Boolean) {
         cursorVisible = visible
@@ -790,6 +792,18 @@ class AndroidEditorPipeline private constructor(
     }
 
     fun isSelectionAllowed(): Boolean = selectionAllowed
+
+    fun setCopyAllowed(allowed: Boolean) {
+        copyAllowed = allowed
+    }
+
+    fun isCopyAllowed(): Boolean = copyAllowed
+
+    fun setPasteAllowed(allowed: Boolean) {
+        pasteAllowed = allowed
+    }
+
+    fun isPasteAllowed(): Boolean = pasteAllowed
 
     fun setMaxLength(max: Int) {
         maxLength = max

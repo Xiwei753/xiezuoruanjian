@@ -36,18 +36,11 @@
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:gravity="center_vertical">
-                <EditText
-                    android:id="@+id/etSearch"
+                <FrameLayout
+                    android:id="@+id/searchComposeContainer"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:hint="@string/hint_search"
-                    android:inputType="text"
-                    android:maxLines="1"
-                    android:background="@android:color/transparent"
-                    android:textColor="?attr/colorOnSurface"
-                    android:textColorHint="?attr/colorOnSurfaceVariant"
-                    android:paddingVertical="8dp" />
+                    android:layout_weight="1" />
                 <ImageButton
                     android:id="@+id/btnSearchNext"
                     android:layout_width="wrap_content"
@@ -71,18 +64,11 @@
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:gravity="center_vertical">
-                <EditText
-                    android:id="@+id/etReplace"
+                <FrameLayout
+                    android:id="@+id/replaceComposeContainer"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:hint="@string/hint_replace"
-                    android:inputType="text"
-                    android:maxLines="1"
-                    android:background="@android:color/transparent"
-                    android:textColor="?attr/colorOnSurface"
-                    android:textColorHint="?attr/colorOnSurfaceVariant"
-                    android:paddingVertical="8dp" />
+                    android:layout_weight="1" />
                 <Button
                     android:id="@+id/btnReplace"
                     style="@style/Widget.Material3.Button.TextButton"

@@ -1,5 +1,6 @@
 package com.xiwei.sujian.ui
 
+import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -7,7 +8,6 @@ import com.google.android.material.button.MaterialButton
 import com.google.android.material.R.attr as M3Attr
 import com.google.android.material.color.MaterialColors
 import com.google.android.material.materialswitch.MaterialSwitch
-import com.google.android.material.textfield.TextInputEditText
 import com.xiwei.sujian.R
 import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.data.ResultEnvelope
@@ -23,9 +23,6 @@ internal class SyncSettingsHelper(
     private val settingsRepository: SettingsRepository
 ) {
     lateinit var switchEnableSync: MaterialSwitch
-    lateinit var etGithubRepo: TextInputEditText
-    lateinit var etBranch: TextInputEditText
-    lateinit var etHttpsToken: TextInputEditText
     lateinit var tvTokenStatus: TextView
     lateinit var switchAutoSync: MaterialSwitch
     lateinit var sbSyncInterval: com.google.android.material.slider.Slider
@@ -34,6 +31,13 @@ internal class SyncSettingsHelper(
     lateinit var btnTestConnection: MaterialButton
     lateinit var btnPerformSync: MaterialButton
 
+    var repoUrl: String = ""
+        private set
+    var branchName: String = ""
+        private set
+    var tokenValue: String = ""
+        private set
+
     var currentSyncConfig: SyncConfig = SyncConfig()
         private set
     var currentSyncSecrets: SyncSecrets = SyncSecrets()
@@ -41,9 +45,6 @@ internal class SyncSettingsHelper(
 
     fun initViews() {
         switchEnableSync = activity.findViewById(R.id.switchEnableSync)
-        etGithubRepo = activity.findViewById(R.id.etGithubRepo)
-        etBranch = activity.findViewById(R.id.etBranch)
-        etHttpsToken = activity.findViewById(R.id.etHttpsToken)
         tvTokenStatus = activity.findViewById(R.id.tvTokenStatus)
         switchAutoSync = activity.findViewById(R.id.switchAutoSync)
         sbSyncInterval = activity.findViewById(R.id.sbSyncInterval)
@@ -52,16 +53,82 @@ internal class SyncSettingsHelper(
         btnTestConnection = activity.findViewById(R.id.btnTestConnection)
         btnPerformSync = activity.findViewById(R.id.btnPerformSync)
 
-        etHttpsToken.addTextChangedListener(object : android.text.TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                updateTokenStatusUI()
-            }
-            override fun afterTextChanged(s: android.text.Editable?) {}
-        })
+        setupComposeInputContainers()
 
         sbSyncInterval.addOnChangeListener { _, value, _ ->
             tvSyncIntervalValue.text = formatSyncIntervalText(value.toInt())
+        }
+    }
+
+    private fun setupComposeInputContainers() {
+        val coordinator = (activity as? com.xiwei.sujian.ui.SettingsActivity)?.textEditorCoordinator
+            ?: return
+
+        val repoContainer = activity.findViewById<FrameLayout>(R.id.repoComposeContainer) ?: return
+        val branchContainer = activity.findViewById<FrameLayout>(R.id.branchComposeContainer) ?: return
+        val tokenContainer = activity.findViewById<FrameLayout>(R.id.tokenComposeContainer) ?: return
+
+        val repoComposeView = androidx.compose.ui.platform.ComposeView(activity).apply {
+            setViewCompositionStrategy(androidx.compose.ui.platform.ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+        }
+        repoContainer.addView(repoComposeView, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        ))
+        repoComposeView.setContent {
+            com.xiwei.sujian.editor.v2.compose.AnimatedTextField(
+                targetId = "settings-repo-url",
+                value = repoUrl,
+                onValueChange = { repoUrl = it },
+                onCommit = { repoUrl = it },
+                profile = com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile.RepositoryUrl,
+                placeholder = { androidx.compose.material3.Text(activity.getString(R.string.pref_github_repo)) },
+                coordinator = coordinator
+            )
+        }
+
+        val branchComposeView = androidx.compose.ui.platform.ComposeView(activity).apply {
+            setViewCompositionStrategy(androidx.compose.ui.platform.ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+        }
+        branchContainer.addView(branchComposeView, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        ))
+        branchComposeView.setContent {
+            com.xiwei.sujian.editor.v2.compose.AnimatedTextField(
+                targetId = "settings-branch",
+                value = branchName,
+                onValueChange = { branchName = it },
+                onCommit = { branchName = it },
+                profile = com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile.BranchName,
+                placeholder = { androidx.compose.material3.Text(activity.getString(R.string.pref_branch)) },
+                coordinator = coordinator
+            )
+        }
+
+        val tokenComposeView = androidx.compose.ui.platform.ComposeView(activity).apply {
+            setViewCompositionStrategy(androidx.compose.ui.platform.ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+        }
+        tokenContainer.addView(tokenComposeView, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        ))
+        tokenComposeView.setContent {
+            com.xiwei.sujian.editor.v2.compose.AnimatedTextField(
+                targetId = "settings-token",
+                value = tokenValue,
+                onValueChange = { newText ->
+                    tokenValue = newText
+                    updateTokenStatusUI()
+                },
+                onCommit = { newText ->
+                    tokenValue = newText
+                    updateTokenStatusUI()
+                },
+                profile = com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile.SecretToken,
+                placeholder = { androidx.compose.material3.Text(activity.getString(R.string.pref_https_token)) },
+                coordinator = coordinator
+            )
         }
     }
 
@@ -76,8 +143,8 @@ internal class SyncSettingsHelper(
 
     fun bindSyncSettings() {
         switchEnableSync.isChecked = currentSyncConfig.enabled ?: false
-        etGithubRepo.setText(currentSyncConfig.remoteUrl ?: "")
-        etBranch.setText(currentSyncConfig.branch ?: "main")
+        repoUrl = currentSyncConfig.remoteUrl ?: ""
+        branchName = currentSyncConfig.branch ?: "main"
         switchAutoSync.isChecked = currentSyncConfig.autoSync ?: false
         sbSyncInterval.value = (currentSyncConfig.syncIntervalSeconds ?: 300).toFloat()
         tvSyncIntervalValue.text = formatSyncIntervalText(currentSyncConfig.syncIntervalSeconds ?: 300)
@@ -121,9 +188,9 @@ internal class SyncSettingsHelper(
         return currentSyncConfig.copy(
             enabled = switchEnableSync.isChecked,
             backendType = com.xiwei.sujian.model.BackendType.GithubApi,
-            remoteUrl = etGithubRepo.text?.toString() ?: "",
+            remoteUrl = repoUrl,
             transport = currentSyncConfig.transport ?: com.xiwei.sujian.model.SyncTransport.HttpsToken,
-            branch = etBranch.text?.toString()?.ifEmpty { "main" } ?: "main",
+            branch = branchName.ifEmpty { "main" },
             autoSync = switchAutoSync.isChecked,
             syncIntervalSeconds = sbSyncInterval.value.toInt()
         )
@@ -131,9 +198,8 @@ internal class SyncSettingsHelper(
 
     fun saveCurrentState(applyCapability: Boolean = true) {
         val uiConfig = getUIConfig()
-        val tokenInput = etHttpsToken.text?.toString() ?: ""
-        val uiSecrets = if (tokenInput.isNotEmpty()) {
-            currentSyncSecrets.copy(token = tokenInput)
+        val uiSecrets = if (tokenValue.isNotEmpty()) {
+            currentSyncSecrets.copy(token = tokenValue)
         } else currentSyncSecrets
 
         ErrorUtil.safeRun(activity) {
@@ -478,8 +544,7 @@ internal class SyncSettingsHelper(
     }
 
     fun updateTokenStatusUI() {
-        val input = etHttpsToken.text?.toString() ?: ""
-        if (input.isNotEmpty()) {
+        if (tokenValue.isNotEmpty()) {
             tvTokenStatus.text = activity.getString(R.string.token_input_active)
             tvTokenStatus.setTextColor(MaterialColors.getColor(tvTokenStatus, M3Attr.colorPrimary))
         } else {
@@ -497,18 +562,17 @@ internal class SyncSettingsHelper(
         return currentSyncConfig.copy(
             enabled = switchEnableSync.isChecked,
             backendType = com.xiwei.sujian.model.BackendType.GithubApi,
-            remoteUrl = etGithubRepo.text?.toString() ?: "",
+            remoteUrl = repoUrl,
             transport = currentSyncConfig.transport ?: com.xiwei.sujian.model.SyncTransport.HttpsToken,
-            branch = etBranch.text?.toString()?.ifEmpty { "main" } ?: "main",
+            branch = branchName.ifEmpty { "main" },
             autoSync = switchAutoSync.isChecked,
             syncIntervalSeconds = sbSyncInterval.value.toInt()
         )
     }
 
     fun buildSaveSyncSecrets(): SyncSecrets {
-        val tokenInput = etHttpsToken.text?.toString() ?: ""
-        return if (tokenInput.isNotEmpty()) {
-            currentSyncSecrets.copy(token = tokenInput)
+        return if (tokenValue.isNotEmpty()) {
+            currentSyncSecrets.copy(token = tokenValue)
         } else currentSyncSecrets
     }
 
