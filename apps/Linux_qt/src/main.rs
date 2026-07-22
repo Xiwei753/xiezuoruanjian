@@ -14,7 +14,10 @@
 #![allow(clippy::items_after_test_module, clippy::same_functions_in_if_condition)]
 #![allow(clippy::option_map_unit_fn, clippy::match_same_arms, clippy::redundant_field_names)]
 #![allow(clippy::get_first, clippy::format_in_format_args, clippy::let_and_return)]
-#![allow(unused_imports, unused_variables, unreachable_patterns)]
+#![allow(clippy::transmute_ptr_to_ptr, clippy::transmute_ptr_to_ref)]
+#![allow(clippy::len_zero, clippy::comparison_to_one)]
+#![allow(clippy::get_unwrap, clippy::redundant_clone)]
+#![allow(unused_imports, unused_variables, unreachable_patterns, unused_mut)]
 #![allow(deprecated)]
 //
 //
