@@ -280,32 +280,6 @@ class EditorFragment : Fragment() {
         return "chapter-body:$pid:$vid:$cid"
     }
 
-    private fun utf16ToUtf8Offsets(text: String, utf16Ranges: List<Pair<Int, Int>>): List<Pair<Int, Int>> {
-        return utf16Ranges.map { (utf16Start, utf16End) ->
-            val utf8Start = run {
-                var pos = 0
-                var u16 = 0
-                for (ch in text) {
-                    if (u16 >= utf16Start) break
-                    u16 += if (ch.code > 0xFFFF) 2 else 1
-                    pos += ch.toString().toByteArray(Charsets.UTF_8).size
-                }
-                pos
-            }
-            val utf8End = run {
-                var pos = 0
-                var u16 = 0
-                for (ch in text) {
-                    if (u16 >= utf16End) break
-                    u16 += if (ch.code > 0xFFFF) 2 else 1
-                    pos += ch.toString().toByteArray(Charsets.UTF_8).size
-                }
-                pos
-            }
-            Pair(utf8Start, utf8End)
-        }
-    }
-
     override fun onResume() {
         super.onResume()
 
@@ -587,21 +561,36 @@ class EditorFragment : Fragment() {
 
         val chapterTargetId = getChapterBodyTargetId()
         val content = coordinator.getTargetText(chapterTargetId) ?: return
-        var startIndex = content.indexOf(searchText)
 
-        val utf16Ranges = mutableListOf<Pair<Int, Int>>()
-        while (startIndex >= 0) {
-            val endIndex = startIndex + searchText.length
-            utf16Ranges.add(Pair(startIndex, endIndex))
-            startIndex = content.indexOf(searchText, endIndex)
+        val utf8Ranges = mutableListOf<Pair<Int, Int>>()
+        var bytePos = 0
+        val searchBytes = searchText.toByteArray(Charsets.UTF_8)
+        val contentBytes = content.toByteArray(Charsets.UTF_8)
+
+        while (bytePos <= contentBytes.size - searchBytes.size) {
+            var match = true
+            for (i in searchBytes.indices) {
+                if (contentBytes[bytePos + i] != searchBytes[i]) {
+                    match = false
+                    break
+                }
+            }
+            if (match) {
+                utf8Ranges.add(Pair(bytePos, bytePos + searchBytes.size))
+                bytePos += searchBytes.size
+            } else {
+                bytePos++
+            }
         }
 
-        searchResults = utf16ToUtf8Offsets(content, utf16Ranges).toMutableList()
+        searchResults = utf8Ranges.toMutableList()
 
         if (searchResults.isNotEmpty()) {
             currentSearchIndex = 0
-            val view = getEditorView() ?: return
-            view.setSearchHighlights(searchResults)
+            val view = getEditorView()
+            if (view != null && coordinator.activeTargetId == chapterTargetId) {
+                view.setSearchHighlights(searchResults)
+            }
             focusSearchResult()
         }
     }
@@ -615,8 +604,8 @@ class EditorFragment : Fragment() {
             val bridge = com.xiwei.sujian.data.BridgeProvider.getAppServiceBridge(requireContext())
             bridge.textEditSessionSetSelection(sessionId, start.toUInt(), end.toUInt(), 0uL)
         }
-        val view = getEditorView() ?: return
-        if (coordinator.activeTargetId == chapterTargetId) {
+        val view = getEditorView()
+        if (view != null && coordinator.activeTargetId == chapterTargetId) {
             view.setSelectionRange(start, end)
             view.scrollToSelection()
         }

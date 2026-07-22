@@ -650,4 +650,84 @@ mod tests {
         let kernel = writer_core::editor::EditorKernel::new();
         assert!(!coord.return_kernel_to_active_session(kernel));
     }
+
+    #[test]
+    fn register_with_secret_profile() {
+        let mut coord = LinuxTextEditorCoordinator::new();
+        coord.register_target(EditableTextTarget {
+            target_id: "secret-target".to_string(),
+            is_persistent: false,
+            current_text: "my-token".to_string(),
+            profile: TextEditorProfile::secret_token(),
+        });
+        assert!(coord.begin_edit("secret-target"));
+        let profile = coord.active_profile().unwrap();
+        assert!(profile.is_secret());
+        assert_eq!(profile.input_type, TextInputType::Password);
+        assert_eq!(profile.copy_policy, CopyPolicy::Block);
+        assert_eq!(profile.selection_policy, SelectionPolicy::CursorOnly);
+    }
+
+    #[test]
+    fn register_with_search_profile() {
+        let mut coord = LinuxTextEditorCoordinator::new();
+        coord.register_target(EditableTextTarget {
+            target_id: "search-target".to_string(),
+            is_persistent: false,
+            current_text: "query".to_string(),
+            profile: TextEditorProfile::search_query(),
+        });
+        assert!(coord.begin_edit("search-target"));
+        let profile = coord.active_profile().unwrap();
+        assert!(!profile.is_secret());
+        assert_eq!(profile.autocorrect_policy, AutocorrectPolicy::Disabled);
+        assert!(profile.single_line);
+    }
+
+    #[test]
+    fn register_with_url_profile() {
+        let mut coord = LinuxTextEditorCoordinator::new();
+        coord.register_target(EditableTextTarget {
+            target_id: "url-target".to_string(),
+            is_persistent: false,
+            current_text: "https://github.com".to_string(),
+            profile: TextEditorProfile::repository_url(),
+        });
+        assert!(coord.begin_edit("url-target"));
+        let profile = coord.active_profile().unwrap();
+        assert!(!profile.is_secret());
+        assert_eq!(profile.autocorrect_policy, AutocorrectPolicy::Disabled);
+        assert!(profile.single_line);
+    }
+
+    #[test]
+    fn commit_secret_non_persistent_clears_text() {
+        let mut coord = LinuxTextEditorCoordinator::new();
+        coord.register_target(EditableTextTarget {
+            target_id: "secret-1".to_string(),
+            is_persistent: false,
+            current_text: "my-secret".to_string(),
+            profile: TextEditorProfile::secret_token(),
+        });
+        assert!(coord.begin_edit("secret-1"));
+        let kernel = coord.take_active_session_kernel().unwrap();
+        assert_eq!(kernel.text(), "my-secret");
+        assert!(coord.return_kernel_to_active_session(kernel));
+        assert!(coord.commit_active_edit());
+        assert_eq!(coord.targets.get("secret-1").unwrap().current_text, "");
+    }
+
+    #[test]
+    fn commit_secret_persistent_retains_text() {
+        let mut coord = LinuxTextEditorCoordinator::new();
+        coord.register_target(EditableTextTarget {
+            target_id: "persistent-secret".to_string(),
+            is_persistent: true,
+            current_text: "my-secret".to_string(),
+            profile: TextEditorProfile::secret_token(),
+        });
+        assert!(coord.begin_edit("persistent-secret"));
+        assert!(coord.commit_active_edit());
+        assert_eq!(coord.targets.get("persistent-secret").unwrap().current_text, "my-secret");
+    }
 }

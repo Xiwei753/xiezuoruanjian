@@ -97,6 +97,7 @@ class SujianEditorView @JvmOverloads constructor(
     private fun handlePipelineOutput(output: AndroidEditorPipeline.PipelineOutput, suppressContentCallback: Boolean = false) {
         when (output) {
             is AndroidEditorPipeline.PipelineOutput.Edited -> {
+                pipeline.applySecretDisplayIfActive()
                 updateMaxScroll()
                 scrollY = scrollY.coerceIn(0f, maxScrollY)
                 if (!suppressContentCallback && output.result.displayPatches.isNotEmpty()) {
@@ -246,7 +247,7 @@ class SujianEditorView @JvmOverloads constructor(
     override fun onInitializeAccessibilityNodeInfo(info: android.view.accessibility.AccessibilityNodeInfo?) {
         super.onInitializeAccessibilityNodeInfo(info)
         info?.isEditable = true
-        info?.text = if (isSecretMode) getDisplayText() else pipeline.getText()
+        info?.text = getDisplayText()
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {

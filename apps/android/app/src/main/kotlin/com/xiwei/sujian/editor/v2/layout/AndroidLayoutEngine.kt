@@ -17,6 +17,7 @@ class AndroidLayoutEngine(
     private var lineSpacingMultiplier: Float = 1.0f
     private var revisionCounter: Long = 0
     private var lastConfigFingerprint: String = ""
+    private var displayTextOverride: String? = null
 
     private fun computeConfigFingerprint(): String {
         return "${width}_${textPaint.textSize}_${textPaint.typeface?.hashCode() ?: 0}_${lineSpacingMultiplier}"
@@ -33,13 +34,15 @@ class AndroidLayoutEngine(
     }
 
     fun requestLayout() {
-        val text = mirror.getSpannable()
+        val effectiveText = displayTextOverride?.let { override ->
+            android.text.SpannableStringBuilder(override)
+        } ?: mirror.getSpannable()
         if (width <= 0f) return
 
         val currentConfigFp = computeConfigFingerprint()
 
         if (currentConfigFp != lastConfigFingerprint || layout == null) {
-            layout = DynamicLayout.Builder.obtain(text, textPaint, width.toInt())
+            layout = DynamicLayout.Builder.obtain(effectiveText, textPaint, width.toInt())
                 .setAlignment(Layout.Alignment.ALIGN_NORMAL)
                 .setLineSpacing(0f, lineSpacingMultiplier)
                 .setIncludePad(false)
@@ -227,5 +230,15 @@ class AndroidLayoutEngine(
             compRange?.second ?: -1,
             emptyList()
         )
+    }
+
+    fun setDisplayTextOverride(override: String) {
+        displayTextOverride = override
+        lastConfigFingerprint = ""
+    }
+
+    fun clearDisplayTextOverride() {
+        displayTextOverride = null
+        lastConfigFingerprint = ""
     }
 }

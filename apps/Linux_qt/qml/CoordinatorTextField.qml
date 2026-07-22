@@ -39,23 +39,43 @@ Item {
     implicitHeight: staticDisplay.height + (control.label.length > 0 ? 24 : 0)
     implicitWidth: 200
 
+    function _isSujianEditorItem(obj) {
+        return obj && typeof obj.register_text_target_qml === "function"
+    }
+
     Component.onCompleted: {
         if (coordinator && targetId.length > 0) {
-            if (isSecret) {
-                coordinator.register_secret_target(targetId, isPersistent, text)
-            } else if (isSearch) {
-                coordinator.register_search_target(targetId, text)
-            } else if (isUrl) {
-                coordinator.register_url_target(targetId, text)
+            if (_isSujianEditorItem(coordinator)) {
+                if (isSecret) {
+                    coordinator.register_secret_target_qml(targetId, isPersistent, text)
+                } else if (isSearch) {
+                    coordinator.register_search_target_qml(targetId, text)
+                } else if (isUrl) {
+                    coordinator.register_url_target_qml(targetId, text)
+                } else {
+                    coordinator.register_text_target_qml(targetId, isPersistent, text)
+                }
             } else {
-                coordinator.register_target(targetId, isPersistent, text)
+                if (isSecret) {
+                    coordinator.register_secret_target(targetId, isPersistent, text)
+                } else if (isSearch) {
+                    coordinator.register_search_target(targetId, text)
+                } else if (isUrl) {
+                    coordinator.register_url_target(targetId, text)
+                } else {
+                    coordinator.register_target(targetId, isPersistent, text)
+                }
             }
         }
     }
 
     Component.onDestruction: {
         if (coordinator && targetId.length > 0) {
-            coordinator.unregister_target(targetId)
+            if (_isSujianEditorItem(coordinator)) {
+                coordinator.unregister_text_target_qml(targetId)
+            } else {
+                coordinator.unregister_target(targetId)
+            }
         }
     }
 
@@ -106,7 +126,11 @@ Item {
                 onClicked: {
                     if (coordinator && targetId.length > 0) {
                         isEditingActive = true
-                        coordinator.begin_edit(targetId)
+                        if (_isSujianEditorItem(coordinator)) {
+                            coordinator.begin_text_edit_qml(targetId)
+                        } else {
+                            coordinator.begin_edit(targetId)
+                        }
                     }
                 }
             }
@@ -115,5 +139,12 @@ Item {
 
     function updateText(newText) {
         staticDisplay.displayText = newText
+        if (coordinator && targetId.length > 0) {
+            if (_isSujianEditorItem(coordinator)) {
+                coordinator.update_target_text_qml(targetId, newText)
+            } else {
+                coordinator.update_text(targetId, newText)
+            }
+        }
     }
 }

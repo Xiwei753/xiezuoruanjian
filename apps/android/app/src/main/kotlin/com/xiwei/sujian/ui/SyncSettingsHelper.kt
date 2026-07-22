@@ -17,6 +17,9 @@ import com.xiwei.sujian.model.FirstSyncMode
 import com.xiwei.sujian.model.SyncCapabilityData
 import com.xiwei.sujian.model.SyncConfig
 import com.xiwei.sujian.model.SyncSecrets
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 
 internal class SyncSettingsHelper(
     private val activity: AppCompatActivity,
@@ -31,11 +34,11 @@ internal class SyncSettingsHelper(
     lateinit var btnTestConnection: MaterialButton
     lateinit var btnPerformSync: MaterialButton
 
-    var repoUrl: String = ""
+    var repoUrl by mutableStateOf("")
         private set
-    var branchName: String = ""
+    var branchName by mutableStateOf("")
         private set
-    var tokenValue: String = ""
+    var tokenValue by mutableStateOf("")
         private set
 
     var currentSyncConfig: SyncConfig = SyncConfig()
@@ -147,6 +150,7 @@ internal class SyncSettingsHelper(
         switchEnableSync.isChecked = currentSyncConfig.enabled ?: false
         repoUrl = currentSyncConfig.remoteUrl ?: ""
         branchName = currentSyncConfig.branch ?: "main"
+        tokenValue = currentSyncSecrets.token ?: ""
         switchAutoSync.isChecked = currentSyncConfig.autoSync ?: false
         sbSyncInterval.value = (currentSyncConfig.syncIntervalSeconds ?: 300).toFloat()
         tvSyncIntervalValue.text = formatSyncIntervalText(currentSyncConfig.syncIntervalSeconds ?: 300)
@@ -159,9 +163,7 @@ internal class SyncSettingsHelper(
         val coordinator = (activity as? com.xiwei.sujian.ui.SettingsActivity)?.textEditorCoordinator ?: return
         coordinator.updateTargetText("settings-repo-url", repoUrl)
         coordinator.updateTargetText("settings-branch", branchName)
-        if (tokenValue.isNotEmpty()) {
-            coordinator.updateTargetText("settings-token", tokenValue)
-        }
+        coordinator.updateTargetText("settings-token", tokenValue)
     }
 
     private fun applySyncCapability() {

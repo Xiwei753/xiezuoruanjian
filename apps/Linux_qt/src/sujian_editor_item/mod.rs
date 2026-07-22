@@ -338,6 +338,12 @@ pub struct SujianEditorItem {
     #[allow(dead_code)]
     register_text_target_qml: qt_method!(fn(&mut self, target_id: QString, is_persistent: bool, initial_text: QString)),
     #[allow(dead_code)]
+    register_secret_target_qml: qt_method!(fn(&mut self, target_id: QString, is_persistent: bool, initial_text: QString)),
+    #[allow(dead_code)]
+    register_search_target_qml: qt_method!(fn(&mut self, target_id: QString, initial_text: QString)),
+    #[allow(dead_code)]
+    register_url_target_qml: qt_method!(fn(&mut self, target_id: QString, initial_text: QString)),
+    #[allow(dead_code)]
     unregister_text_target_qml: qt_method!(fn(&mut self, target_id: QString)),
     #[allow(dead_code)]
     begin_text_edit_qml: qt_method!(fn(&mut self, target_id: QString) -> bool),
@@ -473,6 +479,9 @@ impl Default for SujianEditorItem {
             snap_next_cursor_update: Default::default(),
             verify_animation_signal_meta_object: Default::default(),
             register_text_target_qml: Default::default(),
+            register_secret_target_qml: Default::default(),
+            register_search_target_qml: Default::default(),
+            register_url_target_qml: Default::default(),
             unregister_text_target_qml: Default::default(),
             begin_text_edit_qml: Default::default(),
             commit_text_edit_qml: Default::default(),
@@ -595,6 +604,33 @@ impl SujianEditorItem {
 
     pub fn register_text_target_qml(&mut self, target_id: QString, is_persistent: bool, initial_text: QString) {
         self.register_text_target(target_id.to_string(), is_persistent, initial_text.to_string());
+    }
+
+    pub fn register_secret_target_qml(&mut self, target_id: QString, is_persistent: bool, initial_text: QString) {
+        self.register_text_target_with_profile(
+            target_id.to_string(),
+            is_persistent,
+            initial_text.to_string(),
+            linux_coordinator::TextEditorProfile::secret_token(),
+        );
+    }
+
+    pub fn register_search_target_qml(&mut self, target_id: QString, initial_text: QString) {
+        self.register_text_target_with_profile(
+            target_id.to_string(),
+            false,
+            initial_text.to_string(),
+            linux_coordinator::TextEditorProfile::search_query(),
+        );
+    }
+
+    pub fn register_url_target_qml(&mut self, target_id: QString, initial_text: QString) {
+        self.register_text_target_with_profile(
+            target_id.to_string(),
+            false,
+            initial_text.to_string(),
+            linux_coordinator::TextEditorProfile::repository_url(),
+        );
     }
 
     pub fn unregister_text_target_qml(&mut self, target_id: QString) {

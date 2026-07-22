@@ -258,8 +258,14 @@ ApplicationWindow {
         }
     }
 
-    TextEditorCoordinatorItem {
+    SujianEditorItem {
         id: globalTextCoordinator
+        x: 0
+        y: 0
+        width: 0
+        height: 0
+        visible: false
+        editor_enabled: false
     }
 
     ProjectController {

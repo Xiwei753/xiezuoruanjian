@@ -799,8 +799,23 @@ class AndroidEditorPipeline private constructor(
     private var secretDisplayMode: Boolean = false
 
     fun setSecretDisplayMode(enabled: Boolean) {
-        secretDisplayMode = enabled
+        if (secretDisplayMode != enabled) {
+            secretDisplayMode = enabled
+            if (enabled) {
+                val maskedText = "\u2022".repeat(mirror.getText().length)
+                layoutEngine.setDisplayTextOverride(maskedText)
+            } else {
+                layoutEngine.clearDisplayTextOverride()
+            }
+        }
     }
 
     fun isSecretDisplayMode(): Boolean = secretDisplayMode
+
+    fun applySecretDisplayIfActive() {
+        if (secretDisplayMode) {
+            val maskedText = "\u2022".repeat(mirror.getText().length)
+            layoutEngine.setDisplayTextOverride(maskedText)
+        }
+    }
 }
