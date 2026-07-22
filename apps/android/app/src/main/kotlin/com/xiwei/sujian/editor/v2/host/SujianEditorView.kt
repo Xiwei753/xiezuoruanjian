@@ -11,6 +11,7 @@ import android.view.View
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import com.xiwei.sujian.editor.v2.mirror.EditResult
+import com.xiwei.sujian.editor.v2.input.AndroidInputAdapter
 import com.xiwei.sujian.editor.v2.pipeline.AndroidEditorPipeline
 import com.xiwei.sujian.editor.v2.pipeline.EditorCommandPort
 import com.xiwei.sujian.editor.v2.pipeline.PipelineOutput
@@ -30,9 +31,9 @@ class SujianEditorView @JvmOverloads constructor(
     }
     private val pipeline = AndroidEditorPipeline.create(
         com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror(),
-        textPaint,
-        this
+        textPaint
     )
+    private val inputAdapter = AndroidInputAdapter(pipeline.mirror, pipeline)
 
     private var scrollX: Float = 0f
     private var scrollY: Float = 0f
@@ -47,8 +48,9 @@ class SujianEditorView @JvmOverloads constructor(
     private var themeBackgroundColor: Int = Color.WHITE
 
     init {
-        pipeline.inputAdapter?.onPipelineOutput = { output: PipelineOutput -> handlePipelineOutput(output) }
-        pipeline.inputAdapter?.onCompositionVisualUpdate = {
+        inputAdapter.setHostView(this)
+        inputAdapter.onPipelineOutput = { output: PipelineOutput -> handlePipelineOutput(output) }
+        inputAdapter.onCompositionVisualUpdate = {
             updateMaxScroll()
             scrollY = scrollY.coerceIn(0f, maxScrollY)
             invalidate()
@@ -188,7 +190,9 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun replaceAll(searchStr: String, replaceStr: String) {
         val output = pipeline.replaceAll(searchStr, replaceStr)
-        handlePipelineOutput(output)
+        if (output != null) {
+            handlePipelineOutput(output)
+        }
     }
 
     fun applyCompositionCommit(dto: uniffi.writer_core.EditorEditResultDto, preeditText: String = "") {
@@ -248,7 +252,7 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     override fun onCreateInputConnection(outAttrs: android.view.inputmethod.EditorInfo?): InputConnection? {
-        return pipeline.onCreateInputConnection(outAttrs)
+        return inputAdapter.onCreateInputConnection(outAttrs)
     }
 
     override fun onCheckIsTextEditor(): Boolean = isSessionBound
@@ -505,12 +509,12 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     private fun applyProfileToPipeline(profile: TextEditorProfile, initialText: String? = null, initialCursorUtf8: Int = 0) {
-        pipeline.inputAdapter?.applyProfile(profile)
+        inputAdapter.applyProfile(profile)
         pipeline.setAutoIndent(
             profile.autoIndentPolicy == com.xiwei.sujian.editor.v2.coordinator.AutoIndentPolicy.INDENT_ON_ENTER,
             2f
         )
-        pipeline.inputAdapter?.onPerformEditorAction = { _ ->
+        inputAdapter.onPerformEditorAction = { _ ->
             if (profile.commitOnImeAction) {
                 onCommitRequested?.invoke()
             }
@@ -568,8 +572,8 @@ class SujianEditorView @JvmOverloads constructor(
     fun unbindSession(@Suppress("UNUSED_PARAMETER") reason: String) {
         if (!isSessionBound) return
         pipeline.cancelActiveTransaction()
-        pipeline.invalidateCompositionSession()
-        pipeline.inputAdapter?.onPerformEditorAction = null
+        inputAdapter.invalidateCompositionSession()
+        inputAdapter.onPerformEditorAction = null
         onContentChanged = null
         onCommitRequested = null
         onCancelRequested = null
@@ -621,7 +625,7 @@ class SujianEditorView @JvmOverloads constructor(
      */
     fun softResetForPersistentCommit() {
         pipeline.cancelActiveTransaction()
-        pipeline.invalidateCompositionSession()
+        inputAdapter.invalidateCompositionSession()
     }
 
     /**

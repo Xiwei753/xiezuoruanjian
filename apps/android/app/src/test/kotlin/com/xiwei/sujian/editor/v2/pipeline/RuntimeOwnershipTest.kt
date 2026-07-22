@@ -86,11 +86,11 @@ class RuntimeOwnershipTest {
     }
 
     @Test
-    fun inputAdapterDependsOnEditorCommandPortInterface() {
+    fun inputAdapterDependsOnInputCommandPortInterface() {
         val clazz = Class.forName("com.xiwei.sujian.editor.v2.input.AndroidInputAdapter")
         val constructor = clazz.getDeclaredConstructor(
             Class.forName("com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror"),
-            Class.forName("com.xiwei.sujian.editor.v2.pipeline.EditorCommandPort")
+            Class.forName("com.xiwei.sujian.editor.v2.pipeline.InputCommandPort")
         )
         assertNotNull(constructor)
     }
@@ -120,8 +120,8 @@ class RuntimeOwnershipTest {
     @Test
     fun pipelineDoesNotOwnSecretProjectionState() {
         val clazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidEditorPipeline")
-        val secretFields = clazz.declaredFields.filter { it.name == "secretDisplayMode" || it.name == "currentProjection" }
-        assertTrue("Pipeline should not own secretDisplayMode or currentProjection — they belong to LayoutRuntime", secretFields.isEmpty())
+        val secretFields = clazz.declaredFields.filter { it.name == "secretDisplayMode" || it.name == "currentProjection" || it.name == "inputAdapter" }
+        assertTrue("Pipeline should not own secretDisplayMode, currentProjection or inputAdapter — they belong to LayoutRuntime/View", secretFields.isEmpty())
     }
 
     @Test

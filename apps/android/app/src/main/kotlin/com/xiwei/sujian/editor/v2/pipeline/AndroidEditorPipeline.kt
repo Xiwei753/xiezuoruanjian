@@ -7,11 +7,9 @@ import com.xiwei.sujian.editor.v2.mirror.EditResult
 import com.xiwei.sujian.editor.v2.mirror.VisualIntent
 import com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
-import com.xiwei.sujian.editor.v2.input.AndroidInputAdapter
 import com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap
 import com.xiwei.sujian.editor.v2.host.EditorKernelBridge
 import com.xiwei.sujian.editor.v2.projection.DisplayTextProjection
-import android.view.View
 import uniffi.writer_core.EditorTransactionCauseDto
 
 /**
@@ -49,13 +47,9 @@ sealed class PipelineOutput {
 class AndroidEditorPipeline private constructor(
     val editPipeline: EditPipeline,
     internal val renderRuntime: AndroidRenderRuntime,
-    inputAdapter: AndroidInputAdapter?,
     internal val layoutRuntime: AndroidLayoutRuntime,
     internal val visualRuntime: AndroidVisualRuntime
-) : EditorCommandPort {
-
-    var inputAdapter: AndroidInputAdapter? = inputAdapter
-        private set
+) : EditorCommandPort, InputCommandPort {
 
     override val mirror: DisplayTextMirror get() = editPipeline.mirror
     override var kernelBridge: EditorKernelBridge?
@@ -63,16 +57,12 @@ class AndroidEditorPipeline private constructor(
         set(value) { editPipeline.setKernelBridge(value) }
 
     companion object {
-        fun create(mirror: DisplayTextMirror, textPaint: TextPaint, hostView: View): AndroidEditorPipeline {
+        fun create(mirror: DisplayTextMirror, textPaint: TextPaint): AndroidEditorPipeline {
             val editPipeline = EditPipeline(mirror)
             val layoutRuntime = AndroidLayoutRuntime(mirror, textPaint)
             val visualRuntime = AndroidVisualRuntime()
             val renderRuntime = AndroidRenderRuntime()
-            val pipeline = AndroidEditorPipeline(editPipeline, renderRuntime, null, layoutRuntime, visualRuntime)
-            val inputAdapter = AndroidInputAdapter(mirror, pipeline)
-            inputAdapter.setHostView(hostView)
-            pipeline.inputAdapter = inputAdapter
-            return pipeline
+            return AndroidEditorPipeline(editPipeline, renderRuntime, layoutRuntime, visualRuntime)
         }
     }
 
@@ -81,7 +71,6 @@ class AndroidEditorPipeline private constructor(
     private var maxLength: Int = 0
 
     fun loadText(text: String, cursorUtf8: Int, applySecret: Boolean = true): LoadTextResult {
-        inputAdapter?.invalidateCompositionSession()
         val result = editPipeline.loadText(text, cursorUtf8)
         if (result is LoadTextResult.Loaded) {
             resetAfterLoad()
@@ -93,7 +82,6 @@ class AndroidEditorPipeline private constructor(
     }
 
     override fun insertText(byteOffset: Int, text: String, cause: EditorTransactionCauseDto): PipelineOutput {
-        inputAdapter?.invalidateCompositionSession()
         if (autoIndentEnabled && text == "\n") {
             val indentPrefix = computeAutoIndentPrefix()
             val result = editPipeline.insertLineBreak(byteOffset, indentPrefix, cause)
@@ -106,14 +94,12 @@ class AndroidEditorPipeline private constructor(
     }
 
     override fun deleteRange(byteStart: Int, byteEndExclusive: Int, cause: EditorTransactionCauseDto): PipelineOutput {
-        inputAdapter?.invalidateCompositionSession()
         val result = editPipeline.deleteRange(byteStart, byteEndExclusive, cause)
             ?: return PipelineOutput.StaleOrInvalid
         return applyEditResult(result)
     }
 
     override fun replaceRangeTyped(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto, beforePatch: (() -> Unit)?): PipelineOutput {
-        inputAdapter?.invalidateCompositionSession()
         val result = editPipeline.replaceRange(byteStart, byteEndExclusive, replacementText, originalText, cause)
             ?: return PipelineOutput.StaleOrInvalid
         return applyEditResult(result, beforePatch)
@@ -126,21 +112,18 @@ class AndroidEditorPipeline private constructor(
     }
 
     fun performUndo(): PipelineOutput {
-        inputAdapter?.invalidateCompositionSession()
         val result = editPipeline.undo()
             ?: return PipelineOutput.StaleOrInvalid
         return applyEditResult(result)
     }
 
     fun performRedo(): PipelineOutput {
-        inputAdapter?.invalidateCompositionSession()
         val result = editPipeline.redo()
             ?: return PipelineOutput.StaleOrInvalid
         return applyEditResult(result)
     }
 
-    override fun replaceAll(searchStr: String, replaceStr: String): PipelineOutput {
-        inputAdapter?.invalidateCompositionSession()
+    fun replaceAll(searchStr: String, replaceStr: String): PipelineOutput {
         val result = editPipeline.replaceAll(searchStr, replaceStr)
             ?: return PipelineOutput.StaleOrInvalid
         return applyEditResult(result)
@@ -656,12 +639,6 @@ class AndroidEditorPipeline private constructor(
 
     fun getSpannable(): android.text.SpannableStringBuilder = editPipeline.getSpannable()
 
-    fun onCreateInputConnection(outAttrs: android.view.inputmethod.EditorInfo?): android.view.inputmethod.InputConnection? {
-        return inputAdapter?.onCreateInputConnection(outAttrs)
-    }
-
-    fun getInputAdapterHostView(): View? = inputAdapter?.getHostView()
-
     sealed class LoadTextResult {
         data class Loaded(val result: EditResult) : LoadTextResult()
         object Failed : LoadTextResult()
@@ -690,8 +667,36 @@ class AndroidEditorPipeline private constructor(
         layoutRuntime.requestLayout()
     }
 
-    fun invalidateCompositionSession() {
-        inputAdapter?.invalidateCompositionSession()
+    // ── InputCommandPort implementation ──
+
+    override fun commitComposition(byteStart: Int, byteEndExclusive: Int, replacementText: String, resultingSelectionAnchor: Int, resultingSelectionHead: Int, compositionSessionId: Long, compositionBaseRevision: Long, compositionGeneration: Long, cause: EditorTransactionCauseDto): uniffi.writer_core.EditorEditResultDto? {
+        val bridge = kernelBridge ?: return null
+        return bridge.commitText(byteStart, byteEndExclusive, replacementText, resultingSelectionAnchor, resultingSelectionHead, compositionSessionId, compositionBaseRevision, compositionGeneration, cause, mirror.getRevision())
+    }
+
+    override fun deleteSurrounding(beforeByteStart: Int, beforeByteEndExclusive: Int, afterByteStart: Int, afterByteEndExclusive: Int, cause: EditorTransactionCauseDto): uniffi.writer_core.EditorEditResultDto? {
+        val bridge = kernelBridge ?: return null
+        return bridge.deleteSurrounding(beforeByteStart, beforeByteEndExclusive, afterByteStart, afterByteEndExclusive, cause, mirror.getRevision())
+    }
+
+    override fun beginComposition(replaceStart: Int, replaceEndExclusive: Int): uniffi.writer_core.EditorEditResultDto? {
+        val bridge = kernelBridge ?: return null
+        return bridge.beginComposition(replaceStart, replaceEndExclusive, mirror.getRevision())
+    }
+
+    override fun updateComposition(compositionSessionId: Long, compositionGeneration: Long, newPreeditText: String, newPreeditCursorOffset: Int): uniffi.writer_core.EditorEditResultDto? {
+        val bridge = kernelBridge ?: return null
+        return bridge.updateComposition(compositionSessionId, compositionGeneration, newPreeditText, newPreeditCursorOffset, mirror.getRevision())
+    }
+
+    override fun finishComposition(compositionSessionId: Long, compositionGeneration: Long): uniffi.writer_core.EditorEditResultDto? {
+        val bridge = kernelBridge ?: return null
+        return bridge.finishComposition(compositionSessionId, compositionGeneration, mirror.getRevision())
+    }
+
+    override fun cancelComposition(compositionSessionId: Long, compositionGeneration: Long): uniffi.writer_core.EditorEditResultDto? {
+        val bridge = kernelBridge ?: return null
+        return bridge.cancelComposition(compositionSessionId, compositionGeneration, mirror.getRevision())
     }
 
     private var cursorVisible: Boolean = true

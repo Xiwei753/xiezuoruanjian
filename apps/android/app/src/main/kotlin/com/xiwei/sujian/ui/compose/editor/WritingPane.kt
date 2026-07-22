@@ -198,6 +198,8 @@ fun WritingPane(
             }
         } else {
             val isActiveTarget = coordinator.activeTargetId == targetId
+            @Suppress("UNUSED_EXPRESSION")
+            (coordinator.targetDecorationsVersion)
             Box(
                 modifier = Modifier
                     .weight(1f)

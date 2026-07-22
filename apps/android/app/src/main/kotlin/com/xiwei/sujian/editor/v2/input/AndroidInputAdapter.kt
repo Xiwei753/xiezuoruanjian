@@ -11,14 +11,14 @@ import com.xiwei.sujian.editor.v2.coordinator.SecretPolicy
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
 import com.xiwei.sujian.editor.v2.coordinator.TextInputType
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
-import com.xiwei.sujian.editor.v2.pipeline.EditorCommandPort
+import com.xiwei.sujian.editor.v2.pipeline.InputCommandPort
 import com.xiwei.sujian.editor.v2.pipeline.PipelineOutput
 import com.xiwei.sujian.editor.v2.mirror.EditResult
 import uniffi.writer_core.EditorTransactionCauseDto
 
 class AndroidInputAdapter(
     private val mirror: DisplayTextMirror,
-    private val commandPort: EditorCommandPort
+    private val commandPort: InputCommandPort
 ) {
 
     var onPipelineOutput: ((PipelineOutput) -> Unit)? = null
@@ -115,7 +115,7 @@ class AndroidInputAdapter(
     }
 
     fun sendReplaceToKernel(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto) {
-        val output = commandPort.replaceRangeTyped(byteStart, byteEndExclusive, replacementText, originalText, cause)
+        val output = commandPort.replaceRangeTyped(byteStart, byteEndExclusive, replacementText, originalText, cause, null)
         onPipelineOutput?.invoke(output)
     }
 
@@ -125,14 +125,13 @@ class AndroidInputAdapter(
     }
 
     fun sendCommitTextToKernel(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, resultingSelectionAnchor: Int, resultingSelectionHead: Int, cause: EditorTransactionCauseDto) {
-        val bridge = commandPort.kernelBridge ?: return
         val (sessionId, baseRev, generation) = compositionSessionInfo()
         val preeditAtCommit = currentCompositionText
-        val dto = bridge.commitText(
+        val dto = commandPort.commitComposition(
             byteStart, byteEndExclusive, replacementText,
             resultingSelectionAnchor, resultingSelectionHead,
             sessionId, baseRev, generation,
-            cause, mirror.getRevision()
+            cause
         )
         val result = dto?.let { EditResult.fromDto(it) }
         if (result != null && result.isApplied()) {
@@ -146,21 +145,19 @@ class AndroidInputAdapter(
     }
 
     fun sendDeleteSurroundingToKernel(beforeByteStart: Int, beforeByteEndExclusive: Int, afterByteStart: Int, afterByteEndExclusive: Int, cause: EditorTransactionCauseDto) {
-        val bridge = commandPort.kernelBridge ?: return
         invalidateCompositionSession()
-        val dto = bridge.deleteSurrounding(
+        val dto = commandPort.deleteSurrounding(
             beforeByteStart, beforeByteEndExclusive,
             afterByteStart, afterByteEndExclusive,
-            cause, mirror.getRevision()
+            cause
         ) ?: return
         val result = EditResult.fromDto(dto)
-        val output = commandPort.applyEditResult(result)
+        val output = commandPort.applyEditResult(result, null)
         onPipelineOutput?.invoke(output)
     }
 
     fun sendBeginCompositionToKernel(replaceStart: Int, replaceEndExclusive: Int): Boolean {
-        val bridge = commandPort.kernelBridge ?: return false
-        val dto = bridge.beginComposition(replaceStart, replaceEndExclusive, mirror.getRevision()) ?: return false
+        val dto = commandPort.beginComposition(replaceStart, replaceEndExclusive) ?: return false
         val result = EditResult.fromDto(dto)
         if (result.isApplied()) {
             val sessionDto = dto.compositionSession
@@ -175,13 +172,11 @@ class AndroidInputAdapter(
     }
 
     fun sendUpdateCompositionToKernel(newPreeditText: String, newPreeditCursorOffset: Int): Boolean {
-        val bridge = commandPort.kernelBridge ?: return false
         val (sessionId, _baseRev, generation) = compositionSessionInfo()
         if (sessionId == 0L) return false
-        val dto = bridge.updateComposition(
+        val dto = commandPort.updateComposition(
             sessionId, generation,
-            newPreeditText, newPreeditCursorOffset,
-            mirror.getRevision()
+            newPreeditText, newPreeditCursorOffset
         ) ?: return false
         val result = EditResult.fromDto(dto)
         if (result.isApplied()) {
@@ -192,11 +187,10 @@ class AndroidInputAdapter(
     }
 
     fun sendFinishCompositionToKernel() {
-        val bridge = commandPort.kernelBridge ?: return
         val (sessionId, _baseRev, generation) = compositionSessionInfo()
         if (sessionId == 0L) return
         val preeditAtFinish = currentCompositionText
-        val dto = bridge.finishComposition(sessionId, generation, mirror.getRevision())
+        val dto = commandPort.finishComposition(sessionId, generation)
         if (dto != null) {
             val result = EditResult.fromDto(dto)
             if (result.isApplied()) {
@@ -211,10 +205,9 @@ class AndroidInputAdapter(
     }
 
     fun sendCancelCompositionToKernel(): Boolean {
-        val bridge = commandPort.kernelBridge ?: return false
         val (sessionId, _baseRev, generation) = compositionSessionInfo()
         if (sessionId == 0L) return false
-        val dto = bridge.cancelComposition(sessionId, generation, mirror.getRevision())
+        val dto = commandPort.cancelComposition(sessionId, generation)
         if (dto == null) {
             return false
         }
@@ -295,16 +288,13 @@ class AndroidInputAdapter(
             (0 + newCursorPosition).coerceIn(0, preeditUtf16Len)
         }
 
-        val bridge = commandPort.kernelBridge
-        if (bridge != null) {
-            val updateOk = sendUpdateCompositionToKernel(preeditText, compositionCursorUtf16)
-            if (!updateOk) {
-                mirror.clearComposition()
-                clearCompositionState()
-                commandPort.reloadFromKernel()
-                onCompositionVisualUpdate?.invoke()
-                return
-            }
+        val updateOk = sendUpdateCompositionToKernel(preeditText, compositionCursorUtf16)
+        if (!updateOk) {
+            mirror.clearComposition()
+            clearCompositionState()
+            commandPort.reloadFromKernel()
+            onCompositionVisualUpdate?.invoke()
+            return
         }
 
         commandPort.applyCompositionUpdateAnimated(
@@ -325,30 +315,23 @@ class AndroidInputAdapter(
             mirror.getCommittedText(), newCursorPosition, replaceStart, replaceEnd, finalText
         )
 
-        val bridge = commandPort.kernelBridge
-        if (bridge != null) {
-            val (sessionId, baseRev, generation) = compositionSessionInfo()
-            val preeditAtCommit = currentCompositionText
-            val dto = bridge.commitText(
-                replaceStart, replaceEnd, finalText,
-                resultingAnchor, resultingHead,
-                sessionId, baseRev, generation,
-                EditorTransactionCauseDto.TYPING_COMMIT, mirror.getRevision()
-            )
-            if (dto != null) {
-                val result = EditResult.fromDto(dto)
-                if (result.isApplied()) {
-                    clearCompositionState()
-                    val output = commandPort.applyCompositionCommit(dto, preeditAtCommit)
-                    onPipelineOutput?.invoke(output)
-                    return
-                }
+        val (sessionId, baseRev, generation) = compositionSessionInfo()
+        val preeditAtCommit = currentCompositionText
+        val dto = commandPort.commitComposition(
+            replaceStart, replaceEnd, finalText,
+            resultingAnchor, resultingHead,
+            sessionId, baseRev, generation,
+            EditorTransactionCauseDto.TYPING_COMMIT
+        )
+        if (dto != null) {
+            val result = EditResult.fromDto(dto)
+            if (result.isApplied()) {
+                clearCompositionState()
+                val output = commandPort.applyCompositionCommit(dto, preeditAtCommit)
+                onPipelineOutput?.invoke(output)
+                return
             }
-            clearCompositionState()
-            commandPort.reloadFromKernel()
-            return
         }
-
         clearCompositionState()
         commandPort.reloadFromKernel()
     }

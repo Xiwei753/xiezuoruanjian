@@ -127,7 +127,7 @@ class AndroidLayoutEngine(
 
     private fun buildRevision(l: Layout): AndroidLayoutRevision {
         val indexMap = AndroidTextIndexMap(mirror)
-        val text = mirror.getText()
+        val layoutText = displayTextOverride ?: mirror.getText()
         val lineRanges = mutableListOf<AndroidLayoutRevision.LineRange>()
         var currentParagraphId = 0
         var currentParagraphLocalLineIndex = 0
@@ -164,8 +164,8 @@ class AndroidLayoutEngine(
             // so the planner stops expanding the affected-line set at the first line where
             // endsWithHardBreak is true. Subsequent paragraphs are handled via BlockShift
             // (uniform Y translation) rather than per-line Bitmap snapshots.
-            val endsWithHardBreak = lineEndUtf16 > 0 && lineEndUtf16 <= text.length &&
-                text[lineEndUtf16 - 1] == '\n'
+            val endsWithHardBreak = lineEndUtf16 > 0 && lineEndUtf16 <= layoutText.length &&
+                layoutText[lineEndUtf16 - 1] == '\n'
 
             if (i == 0) {
                 currentParagraphId = 0

@@ -58,11 +58,13 @@ class DisplayTextProjection(
             val safeCompEnd = compEndUtf16.coerceIn(safeCompStart, utf16Len)
             val maskedText = buildString {
                 for (i in 0 until safeCompStart) {
-                    append(maskChar)
+                    if (text[i] == '\n') append('\n')
+                    else append(maskChar)
                 }
                 append(compText)
                 for (i in safeCompEnd until utf16Len) {
-                    append(maskChar)
+                    if (text[i] == '\n') append('\n')
+                    else append(maskChar)
                 }
             }
             val displayLen = maskedText.length
@@ -109,7 +111,12 @@ class DisplayTextProjection(
         fun masked(text: String, maskChar: String = "\u2022"): DisplayTextProjection {
             val bytes = text.toByteArray(Charsets.UTF_8)
             val utf16Len = text.length
-            val maskedText = maskChar.repeat(utf16Len)
+            val maskedText = buildString {
+                for (char in text) {
+                    if (char == '\n') append(char)
+                    else append(maskChar)
+                }
+            }
             return DisplayTextProjection(
                 realText = text,
                 displayText = maskedText,

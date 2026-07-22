@@ -44,6 +44,9 @@ class AnimatedTextEditorCoordinator(
     private var sharedEditorView: SujianEditorView? = null
     private val persistentSessionIds = mutableMapOf<String, ULong>()
     private val targetProjections = mutableMapOf<String, TargetReadonlyProjection>()
+
+    var targetDecorationsVersion by mutableStateOf(0L)
+        private set
     private val targetDecorations = mutableMapOf<String, TargetDecorations>()
 
     var activeTargetId: String? by mutableStateOf(null)
@@ -433,13 +436,16 @@ class AnimatedTextEditorCoordinator(
                         )
                     }
                     is TargetCommand.ReplaceAll -> {
-                        commandPort.replaceAll(command.searchText, command.replacementText)
+                        view.replaceAll(command.searchText, command.replacementText)
+                        null
                     }
                     is TargetCommand.SetSelection -> {
                         commandPort.setSelectionTyped(command.anchorUtf8, command.headUtf8)
                     }
                 }
-                view.handlePipelineOutput(pipelineOutput)
+                if (pipelineOutput != null) {
+                    view.handlePipelineOutput(pipelineOutput)
+                }
                 val snapshotAfter = queryTargetSnapshot(targetId)
                     ?: return TargetCommandResult.Failed(TargetCommandError.SNAPSHOT_UNAVAILABLE)
                 targets[targetId]?.updateText(snapshotAfter.text)
@@ -501,6 +507,7 @@ class AnimatedTextEditorCoordinator(
 
     override fun setTargetDecorations(targetId: String, decorations: TargetDecorations) {
         targetDecorations[targetId] = decorations
+        targetDecorationsVersion++
         val projection = targetProjections[targetId]
         if (projection != null) {
             projection.setSearchHighlights(decorations.searchHighlightsUtf8)

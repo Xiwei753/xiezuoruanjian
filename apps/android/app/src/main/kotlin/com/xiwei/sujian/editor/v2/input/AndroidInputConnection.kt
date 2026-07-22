@@ -4,13 +4,13 @@ import android.view.View
 import android.view.inputmethod.BaseInputConnection
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.mirror.EditResult
-import com.xiwei.sujian.editor.v2.pipeline.EditorCommandPort
+import com.xiwei.sujian.editor.v2.pipeline.InputCommandPort
 import uniffi.writer_core.EditorTransactionCauseDto
 
 class AndroidInputConnection(
     private val adapter: AndroidInputAdapter,
     private val mirror: DisplayTextMirror,
-    private val commandPort: EditorCommandPort,
+    private val commandPort: InputCommandPort,
     private val hostView: View
 ) : BaseInputConnection(hostView, true) {
 
@@ -266,7 +266,6 @@ class AndroidInputConnection(
             mirror.setSelectionInternal(anchorUtf8, headUtf8)
             val (sessionId, _, generation) = adapter.compositionSessionInfo()
             if (sessionId != 0L) {
-                val bridge = commandPort.kernelBridge ?: return true
                 val compRangeUtf16 = mirror.getCompositionRangeUtf16()
                 val preeditCursorUtf16 = if (compRangeUtf16 != null) {
                     val compStartUtf16 = compRangeUtf16.first
@@ -280,10 +279,9 @@ class AndroidInputConnection(
                 } else {
                     0
                 }
-                val dto = bridge.updateComposition(
+                val dto = commandPort.updateComposition(
                     sessionId, generation,
-                    adapter.getCompositionText(), preeditCursorUtf16,
-                    mirror.getRevision()
+                    adapter.getCompositionText(), preeditCursorUtf16
                 )
                 if (dto != null) {
                     val result = EditResult.fromDto(dto)

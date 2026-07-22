@@ -33,10 +33,9 @@ class EditorCommandPortContractTest {
     }
 
     @Test
-    fun editorCommandPortDeclaresReplaceAll() {
-        val method = EditorCommandPort::class.java.getDeclaredMethod("replaceAll", String::class.java, String::class.java)
-        assertNotNull(method)
-        assertEquals(PipelineOutput::class.java, method.returnType)
+    fun editorCommandPortDoesNotDeclareReplaceAll() {
+        val methods = EditorCommandPort::class.java.declaredMethods.filter { it.name == "replaceAll" }
+        assertTrue("replaceAll should not be on EditorCommandPort — use SessionCommandPort.applyTargetCommand(TargetCommand.ReplaceAll) instead", methods.isEmpty())
     }
 
     @Test
@@ -68,12 +67,9 @@ class EditorCommandPortContractTest {
     }
 
     @Test
-    fun inputAdapterIsPrivateSet() {
-        val field = AndroidEditorPipeline::class.java.getDeclaredField("inputAdapter")
-        val setter = AndroidEditorPipeline::class.java.declaredMethods.filter {
-            it.name == "setInputAdapter" && it.parameterCount == 1
-        }
-        assertTrue(setter.isEmpty() || setter.all { !java.lang.reflect.Modifier.isPublic(it.modifiers) })
+    fun inputAdapterIsNotOnPipeline() {
+        val fields = AndroidEditorPipeline::class.java.declaredFields.filter { it.name == "inputAdapter" }
+        assertTrue("Pipeline should not own inputAdapter — it belongs to SujianEditorView", fields.isEmpty())
     }
 
     @Test

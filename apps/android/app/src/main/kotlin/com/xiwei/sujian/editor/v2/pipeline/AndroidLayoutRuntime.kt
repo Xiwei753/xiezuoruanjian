@@ -56,7 +56,6 @@ class AndroidLayoutRuntime(
     fun setSecretDisplayMode(enabled: Boolean) {
         if (secretDisplayMode != enabled) {
             secretDisplayMode = enabled
-            rebuildSecretProjection()
         }
     }
 

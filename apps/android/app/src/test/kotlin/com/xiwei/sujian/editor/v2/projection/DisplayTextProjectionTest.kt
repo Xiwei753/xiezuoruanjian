@@ -127,4 +127,18 @@ class DisplayTextProjectionTest {
         val proj = DisplayTextProjection.maskedWithComposition(text, 1, 2, "b", "*")
         assertEquals("*b", proj.displayText)
     }
+
+    @Test
+    fun maskedProjectionPreservesNewlines() {
+        val text = "ab\ncd"
+        val proj = DisplayTextProjection.masked(text)
+        assertEquals("\u2022\u2022\n\u2022\u2022", proj.displayText)
+    }
+
+    @Test
+    fun maskedWithCompositionPreservesNewlines() {
+        val text = "ab\ncd"
+        val proj = DisplayTextProjection.maskedWithComposition(text, 0, 2, "ab")
+        assertEquals("ab\n\u2022\u2022", proj.displayText)
+    }
 }
