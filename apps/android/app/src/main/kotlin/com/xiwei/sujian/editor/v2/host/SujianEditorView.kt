@@ -535,29 +535,6 @@ class SujianEditorView @JvmOverloads constructor(
             pipeline.setSecretDisplayMode(false)
         }
     }
-        }
-        commitOnFocusLoss = profile.commitOnFocusLoss
-        if (profile.animationPolicy == com.xiwei.sujian.editor.v2.coordinator.AnimationPolicy.SYSTEM_SUPPRESSED) {
-            pipeline.kernelBridge?.setAnimationEnabled(false)
-            pipeline.animationEngine.setAnimationPolicy(com.xiwei.sujian.editor.v2.visual.TextAnimationPolicy.SYSTEM_SUPPRESSED)
-        } else {
-            pipeline.kernelBridge?.setAnimationEnabled(true)
-            pipeline.animationEngine.setAnimationPolicy(com.xiwei.sujian.editor.v2.visual.TextAnimationPolicy.INHERIT_GLOBAL)
-        }
-        if (profile.cursorPolicy == com.xiwei.sujian.editor.v2.coordinator.CursorPolicy.HIDDEN) {
-            pipeline.setCursorVisible(false)
-        } else {
-            pipeline.setCursorVisible(true)
-        }
-        if (profile.selectionPolicy == com.xiwei.sujian.editor.v2.coordinator.SelectionPolicy.CURSOR_ONLY) {
-            pipeline.setSelectionAllowed(false)
-        } else {
-            pipeline.setSelectionAllowed(true)
-        }
-        pipeline.setMaxLength(profile.maxLength)
-        pipeline.setCopyAllowed(profile.copyPolicy != com.xiwei.sujian.editor.v2.coordinator.CopyPolicy.BLOCK)
-        pipeline.setPasteAllowed(profile.pastePolicy != com.xiwei.sujian.editor.v2.coordinator.PastePolicy.BLOCK)
-    }
 
     fun updateEditorProfile(profile: TextEditorProfile) {
         currentProfile = profile
