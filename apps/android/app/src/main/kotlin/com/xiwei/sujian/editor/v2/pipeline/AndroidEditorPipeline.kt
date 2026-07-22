@@ -7,10 +7,6 @@ import com.xiwei.sujian.editor.v2.mirror.EditResult
 import com.xiwei.sujian.editor.v2.mirror.VisualIntent
 import com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
-import com.xiwei.sujian.editor.v2.render.ComposedFrame
-import com.xiwei.sujian.editor.v2.render.EditorFrameComposer
-import com.xiwei.sujian.editor.v2.render.AndroidTextRenderer
-import com.xiwei.sujian.editor.v2.render.AndroidTextAnimationRenderer
 import com.xiwei.sujian.editor.v2.input.AndroidInputAdapter
 import com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap
 import com.xiwei.sujian.editor.v2.host.EditorKernelBridge
@@ -24,10 +20,13 @@ import uniffi.writer_core.EditorTransactionCauseDto
  * Ownership split (per #550):
  * - [EditPipeline] owns [DisplayTextMirror] and [EditorKernelBridge] — applies EditResult
  *   to mirror and requests new LayoutRevision.
- * - [AndroidTextAnimationEngine] owns [AndroidVisualPlanner], Timeline, [VisualResourceStore]
+ * - [AndroidLayoutRuntime] owns [AndroidLayoutEngine], [DisplayTextProjection] and secret
+ *   display state — produces LayoutRevision and geometric queries.
+ * - [AndroidVisualRuntime] owns [AndroidVisualPlanner], Timeline, [VisualResourceStore]
  *   and active visual transactions.
- * - [EditorFrameComposer] + [AndroidTextRenderer]/[AndroidTextAnimationRenderer] compose
- *   and draw the current frame.
+ * - [AndroidRenderRuntime] owns [AndroidTextRenderer], [AndroidTextAnimationRenderer]
+ *   and [EditorFrameComposer] — composes and draws the current frame.
+ * - [AndroidInputAdapter] depends only on [DisplayTextMirror] and [EditorCommandPort].
  * - [SujianEditorView] handles focus, InputConnection, viewport, system notifications
  *   and frame requests.
  *
@@ -49,9 +48,7 @@ sealed class PipelineOutput {
 
 class AndroidEditorPipeline private constructor(
     val editPipeline: EditPipeline,
-    private val textRenderer: AndroidTextRenderer,
-    private val animationRenderer: AndroidTextAnimationRenderer,
-    private val frameComposer: EditorFrameComposer,
+    internal val renderRuntime: AndroidRenderRuntime,
     inputAdapter: AndroidInputAdapter?,
     internal val layoutRuntime: AndroidLayoutRuntime,
     internal val visualRuntime: AndroidVisualRuntime
@@ -70,10 +67,8 @@ class AndroidEditorPipeline private constructor(
             val editPipeline = EditPipeline(mirror)
             val layoutRuntime = AndroidLayoutRuntime(mirror, textPaint)
             val visualRuntime = AndroidVisualRuntime()
-            val textRenderer = AndroidTextRenderer()
-            val animationRenderer = AndroidTextAnimationRenderer()
-            val frameComposer = EditorFrameComposer()
-            val pipeline = AndroidEditorPipeline(editPipeline, textRenderer, animationRenderer, frameComposer, null, layoutRuntime, visualRuntime)
+            val renderRuntime = AndroidRenderRuntime()
+            val pipeline = AndroidEditorPipeline(editPipeline, renderRuntime, null, layoutRuntime, visualRuntime)
             val inputAdapter = AndroidInputAdapter(mirror, pipeline)
             inputAdapter.setHostView(hostView)
             pipeline.inputAdapter = inputAdapter
@@ -91,7 +86,7 @@ class AndroidEditorPipeline private constructor(
         if (result is LoadTextResult.Loaded) {
             resetAfterLoad()
             if (applySecret) {
-                applySecretDisplayIfActive()
+                layoutRuntime.applySecretDisplayIfActiveWithLayout()
             }
         }
         return result
@@ -488,91 +483,13 @@ class AndroidEditorPipeline private constructor(
      * → preedit underline → static cursor.
      */
     fun drawFrame(canvas: android.graphics.Canvas, searchHighlightsUtf16: List<Pair<Int, Int>>, viewportWidth: Int, viewportHeight: Int, scrollX: Float, scrollY: Float) {
-        // System.nanoTime() / 1_000_000 provides a monotonic millisecond clock consistent
-        // with AnimationTimeline's internal time base. Must use System.nanoTime rather than
-        // System.currentTimeMillis: the latter can jump backwards on NTP adjustments, which
-        // would cause AnimationTimeline.progress to return values < 0 or regress from a
-        // previously returned value, breaking the monotonic progress invariant.
-        val frameTimeMs = System.nanoTime() / 1_000_000
         val layout = layoutRuntime.getLayout()
         if (layout != null) {
-            val rev = layoutRuntime.getCurrentRevision()
-            val effectiveSelStart = if (selectionAllowed) (rev?.selectionStartUtf16 ?: mirror.getSelectionStartUtf16()) else mirror.getCursorUtf16()
-            val effectiveSelEnd = if (selectionAllowed) (rev?.selectionEndUtf16 ?: mirror.getSelectionEndUtf16()) else mirror.getCursorUtf16()
-
-            val transaction = visualRuntime.getActiveTransaction()
-            val progress = visualRuntime.getTimelineProgress(frameTimeMs)
-
-            visualRuntime.markFirstVisibleFrame(frameTimeMs)
-
-            val composedFrame = frameComposer.compose(
-                layout = layout,
-                transaction = transaction,
-                progress = progress,
-                cursorUtf16 = if (cursorVisible) (rev?.cursorUtf16 ?: mirror.getCursorUtf16()) else -1,
-                cursorX = rev?.cursorX ?: 0f,
-                cursorY = rev?.cursorY ?: 0f,
-                cursorHeight = rev?.cursorHeight ?: 0f,
-                selectionStartUtf16 = effectiveSelStart,
-                selectionEndUtf16 = effectiveSelEnd,
-                compositionStartUtf16 = rev?.compositionStartUtf16 ?: -1,
-                compositionEndUtf16 = rev?.compositionEndUtf16 ?: -1,
-                searchHighlightsUtf16 = searchHighlightsUtf16,
-                viewportWidth = viewportWidth,
-                viewportHeight = viewportHeight,
-                scrollX = scrollX,
-                scrollY = scrollY
+            renderRuntime.drawFrame(
+                canvas, layout, layoutRuntime, visualRuntime, mirror,
+                searchHighlightsUtf16, viewportWidth, viewportHeight,
+                scrollX, scrollY, cursorVisible, selectionAllowed
             )
-
-            renderComposedFrame(canvas, composedFrame)
-
-            visualRuntime.completeIfFinished(frameTimeMs)
-        }
-    }
-
-    /**
-     * Render a composed frame onto [canvas].
-     *
-     * Layer order when animation is active (matches [EditorFrameComposer] pipeline docs):
-     * 1. Background
-     * 2. Search highlights
-     * 3. Selection highlight
-     * 4. [AndroidTextRenderer.drawStaticTextWithHoles] — base pass + block-shift pass
-     * 5. [AndroidTextAnimationRenderer.drawAnimatedSlices] — animated slices
-     * 6. Preedit underline
-     * 7. Animated cursor (or static cursor if no cursor transition)
-     */
-    private fun renderComposedFrame(canvas: android.graphics.Canvas, frame: ComposedFrame) {
-        val layout = frame.layout ?: return
-        val transaction = frame.transaction
-
-        textRenderer.drawBackground(canvas)
-
-        // Animation-active path: used when there are animated slices OR block shifts.
-        // BlockShifts alone (no slices) still require drawStaticTextWithHoles because the
-        // shifted region must be clipped from the base draw and re-drawn with Y translation.
-        // Without this condition, a pure BlockShift (e.g. inserting a line that pushes all
-        // subsequent paragraphs down) would render without the translation animation.
-        if (transaction != null && (transaction.animatedSlices.isNotEmpty() || transaction.blockShifts.isNotEmpty())) {
-            textRenderer.drawSearchHighlights(canvas, layout, frame.searchHighlightsUtf16, frame.blockShifts, frame.progress)
-            textRenderer.drawSelectionHighlight(canvas, layout, frame.selectionStartUtf16, frame.selectionEndUtf16, frame.blockShifts, frame.progress)
-            val animatedRegions = animationRenderer.computeAnimatedSliceRegions(transaction)
-            textRenderer.drawStaticTextWithHoles(canvas, layout, animatedRegions, frame.blockShifts, frame.progress)
-            animationRenderer.drawAnimatedSlices(canvas, transaction, frame.progress)
-            textRenderer.drawPreeditUnderline(canvas, layout, frame.compositionStartUtf16, frame.compositionEndUtf16, frame.blockShifts, frame.progress)
-
-            val ct = transaction.cursorTransition
-            if (ct != null && ct.shouldAnimate) {
-                animationRenderer.drawAnimatedCursor(canvas, transaction, frame.progress, textRenderer.getCursorPaint())
-            } else {
-                textRenderer.drawCursor(canvas, frame.cursorUtf16, frame.cursorX, frame.cursorY, frame.cursorHeight)
-            }
-        } else {
-            textRenderer.drawSearchHighlights(canvas, layout, frame.searchHighlightsUtf16)
-            textRenderer.drawSelectionHighlight(canvas, layout, frame.selectionStartUtf16, frame.selectionEndUtf16)
-            textRenderer.drawStaticText(canvas, layout)
-            textRenderer.drawPreeditUnderline(canvas, layout, frame.compositionStartUtf16, frame.compositionEndUtf16)
-            textRenderer.drawCursor(canvas, frame.cursorUtf16, frame.cursorX, frame.cursorY, frame.cursorHeight)
         }
     }
 
@@ -715,7 +632,7 @@ class AndroidEditorPipeline private constructor(
     }
 
     fun setThemeColors(textColor: Int, cursorColor: Int, selectionColor: Int, preeditColor: Int, bgColor: Int = Color.WHITE) {
-        textRenderer.setThemeColors(textColor, cursorColor, selectionColor, preeditColor, bgColor)
+        renderRuntime.setThemeColors(textColor, cursorColor, selectionColor, preeditColor, bgColor)
     }
 
     fun utf16ToUtf8(offsetUtf16: Int): Int {
@@ -813,6 +730,10 @@ class AndroidEditorPipeline private constructor(
         layoutRuntime.applySecretDisplayIfActive()
     }
 
+    fun applySecretDisplayIfActiveWithLayout() {
+        layoutRuntime.applySecretDisplayIfActiveWithLayout()
+    }
+
     fun getCurrentProjection(): DisplayTextProjection = layoutRuntime.getCurrentProjection()
 
     fun setAnimationPolicy(policy: com.xiwei.sujian.editor.v2.visual.TextAnimationPolicy) {
@@ -824,6 +745,6 @@ class AndroidEditorPipeline private constructor(
     }
 
     fun setRendererThemeColors(textColor: Int, cursorColor: Int, selectionColor: Int, preeditColor: Int, bgColor: Int = Color.WHITE) {
-        textRenderer.setThemeColors(textColor, cursorColor, selectionColor, preeditColor, bgColor)
+        renderRuntime.setThemeColors(textColor, cursorColor, selectionColor, preeditColor, bgColor)
     }
 }

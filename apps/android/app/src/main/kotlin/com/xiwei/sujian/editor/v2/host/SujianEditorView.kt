@@ -537,17 +537,13 @@ class SujianEditorView @JvmOverloads constructor(
         pipeline.setCopyAllowed(profile.copyPolicy != com.xiwei.sujian.editor.v2.coordinator.CopyPolicy.BLOCK)
         pipeline.setPasteAllowed(profile.pastePolicy != com.xiwei.sujian.editor.v2.coordinator.PastePolicy.BLOCK)
         val isSecret = profile.secretPolicy == com.xiwei.sujian.editor.v2.coordinator.SecretPolicy.MASK_AND_CLEAR_ON_COMMIT
-        if (initialText != null) {
-            pipeline.loadText(initialText, initialCursorUtf8, applySecret = false)
-            if (isSecret) {
-                pipeline.setSecretDisplayMode(true)
-            }
+        if (isSecret) {
+            pipeline.setSecretDisplayMode(true)
         } else {
-            if (isSecret) {
-                pipeline.setSecretDisplayMode(true)
-            } else {
-                pipeline.setSecretDisplayMode(false)
-            }
+            pipeline.setSecretDisplayMode(false)
+        }
+        if (initialText != null) {
+            pipeline.loadText(initialText, initialCursorUtf8, applySecret = true)
         }
     }
 

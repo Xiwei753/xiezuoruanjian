@@ -24,10 +24,11 @@ class TargetReadonlyProjection(
     fun applyEditResult(result: EditResult) {
         if (!result.isApplied()) return
         mirror.applyEditResult(result)
-        rebuildProjectionAndLayout()
+        rebuildProjectionContent()
+        layoutEngine.requestLayout()
     }
 
-    private fun rebuildProjectionAndLayout() {
+    private fun rebuildProjectionContent() {
         val text = mirror.getText()
         projection = if (projection.isMasked) {
             DisplayTextProjection.masked(text)
@@ -39,6 +40,10 @@ class TargetReadonlyProjection(
         } else {
             layoutEngine.clearDisplayTextOverride()
         }
+    }
+
+    private fun rebuildProjectionAndLayout() {
+        rebuildProjectionContent()
         layoutEngine.requestLayout()
     }
 

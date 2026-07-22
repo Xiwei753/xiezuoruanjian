@@ -23,6 +23,41 @@ class RuntimeOwnershipTest {
     }
 
     @Test
+    fun pipelineDelegatesToRenderRuntime() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidEditorPipeline")
+        val renderRuntimeField = clazz.getDeclaredField("renderRuntime")
+        assertEquals(Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidRenderRuntime"), renderRuntimeField.type)
+    }
+
+    @Test
+    fun renderRuntimeOwnsTextRenderer() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidRenderRuntime")
+        val field = clazz.getDeclaredField("textRenderer")
+        assertEquals(Class.forName("com.xiwei.sujian.editor.v2.render.AndroidTextRenderer"), field.type)
+    }
+
+    @Test
+    fun renderRuntimeOwnsAnimationRenderer() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidRenderRuntime")
+        val field = clazz.getDeclaredField("animationRenderer")
+        assertEquals(Class.forName("com.xiwei.sujian.editor.v2.render.AndroidTextAnimationRenderer"), field.type)
+    }
+
+    @Test
+    fun renderRuntimeOwnsFrameComposer() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidRenderRuntime")
+        val field = clazz.getDeclaredField("frameComposer")
+        assertEquals(Class.forName("com.xiwei.sujian.editor.v2.render.EditorFrameComposer"), field.type)
+    }
+
+    @Test
+    fun renderRuntimeOwnsDrawFrame() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidRenderRuntime")
+        val methods = clazz.declaredMethods.filter { it.name == "drawFrame" }
+        assertTrue("AndroidRenderRuntime should have drawFrame method", methods.isNotEmpty())
+    }
+
+    @Test
     fun layoutRuntimeOwnsLayoutEngine() {
         val clazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidLayoutRuntime")
         val layoutEngineField = clazz.getDeclaredField("layoutEngine")
@@ -87,5 +122,12 @@ class RuntimeOwnershipTest {
         val clazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidEditorPipeline")
         val secretFields = clazz.declaredFields.filter { it.name == "secretDisplayMode" || it.name == "currentProjection" }
         assertTrue("Pipeline should not own secretDisplayMode or currentProjection — they belong to LayoutRuntime", secretFields.isEmpty())
+    }
+
+    @Test
+    fun pipelineDoesNotOwnRenderersDirectly() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidEditorPipeline")
+        val rendererFields = clazz.declaredFields.filter { it.name == "textRenderer" || it.name == "animationRenderer" || it.name == "frameComposer" }
+        assertTrue("Pipeline should not own textRenderer/animationRenderer/frameComposer directly — they belong to RenderRuntime", rendererFields.isEmpty())
     }
 }

@@ -87,4 +87,10 @@ class EditorCommandPortContractTest {
         val field = AndroidEditorPipeline::class.java.getDeclaredField("visualRuntime")
         assertTrue(!java.lang.reflect.Modifier.isPublic(field.modifiers))
     }
+
+    @Test
+    fun renderRuntimeIsInternal() {
+        val field = AndroidEditorPipeline::class.java.getDeclaredField("renderRuntime")
+        assertTrue(!java.lang.reflect.Modifier.isPublic(field.modifiers))
+    }
 }

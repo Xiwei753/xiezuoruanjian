@@ -64,11 +64,17 @@ class AndroidLayoutRuntime(
 
     fun applySecretDisplayIfActive() {
         if (secretDisplayMode) {
+            rebuildSecretProjectionContent()
+        }
+    }
+
+    fun applySecretDisplayIfActiveWithLayout() {
+        if (secretDisplayMode) {
             rebuildSecretProjection()
         }
     }
 
-    private fun rebuildSecretProjection() {
+    private fun rebuildSecretProjectionContent() {
         val text = mirror.getText()
         currentProjection = if (secretDisplayMode) {
             DisplayTextProjection.masked(text)
@@ -80,6 +86,10 @@ class AndroidLayoutRuntime(
         } else {
             layoutEngine.clearDisplayTextOverride()
         }
+    }
+
+    private fun rebuildSecretProjection() {
+        rebuildSecretProjectionContent()
         layoutEngine.requestLayout()
     }
 
