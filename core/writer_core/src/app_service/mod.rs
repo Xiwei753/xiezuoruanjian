@@ -1,10 +1,9 @@
 mod project_ops;
 mod volume_chapter_ops;
+mod settings_ops;
+mod sync_ops;
 
-use crate::api::{
-    LocalSettingsDto, SyncConfigDto, SyncDiagnosticsResultDto, SyncPlanDto, SyncResultDto,
-    SyncSecretsDto, SyncStateDto, SyncableSettingsDto, WriterCoreApi, WriterError,
-};
+use crate::api::{WriterCoreApi, WriterError};
 
 use std::sync::Mutex;
 
@@ -44,80 +43,6 @@ impl WriterAppService {
             }),
             session_registry: Mutex::new(crate::editor::TextEditSessionRegistry::new()),
         }
-    }
-
-    // ── Settings ──
-
-    pub fn load_local_settings(&self) -> Result<LocalSettingsDto, WriterError> {
-        self.api.load_local_settings()
-    }
-
-    pub fn save_local_settings(&self, settings: LocalSettingsDto) -> Result<bool, WriterError> {
-        self.api.save_local_settings(settings)
-    }
-
-    pub fn load_syncable_settings(&self) -> Result<SyncableSettingsDto, WriterError> {
-        self.api.load_syncable_settings()
-    }
-
-    pub fn save_syncable_settings(
-        &self,
-        settings: SyncableSettingsDto,
-    ) -> Result<bool, WriterError> {
-        self.api.save_syncable_settings(settings)
-    }
-
-    pub fn load_sync_config(&self) -> Result<SyncConfigDto, WriterError> {
-        self.api.load_sync_config()
-    }
-
-    pub fn save_sync_config(&self, config: SyncConfigDto) -> Result<bool, WriterError> {
-        self.api.save_sync_config(config)
-    }
-
-    pub fn load_sync_secrets(&self) -> Result<SyncSecretsDto, WriterError> {
-        self.api.load_sync_secrets()
-    }
-
-    pub fn save_sync_secrets(&self, secrets: SyncSecretsDto) -> Result<bool, WriterError> {
-        self.api.save_sync_secrets(secrets)
-    }
-
-    pub fn load_sync_state(&self) -> Result<SyncStateDto, WriterError> {
-        self.api.load_sync_state()
-    }
-
-    pub fn get_sync_capability(&self) -> Result<crate::api::SyncCapabilityDto, WriterError> {
-        self.api.get_sync_capability()
-    }
-
-    // ── Sync ──
-
-    pub fn perform_sync_diagnostics(
-        &self,
-        config: SyncConfigDto,
-    ) -> Result<SyncDiagnosticsResultDto, WriterError> {
-        self.api.perform_sync_diagnostics(config)
-    }
-
-    pub fn perform_sync_dry_run(&self, config: SyncConfigDto) -> Result<SyncPlanDto, WriterError> {
-        self.api.perform_sync_dry_run(config)
-    }
-
-    pub fn perform_sync(&self, config: SyncConfigDto, force_sync: bool) -> Result<SyncResultDto, WriterError> {
-        self.api.perform_sync(config, force_sync)
-    }
-
-    pub fn resolve_conflict_keep_local(&self, path: String) -> Result<bool, WriterError> {
-        self.api.resolve_conflict_keep_local(&path)
-    }
-
-    pub fn resolve_conflict_take_remote(&self, path: String) -> Result<bool, WriterError> {
-        self.api.resolve_conflict_take_remote(&path)
-    }
-
-    pub fn resolve_conflict_mark_merged(&self, path: String) -> Result<bool, WriterError> {
-        self.api.resolve_conflict_mark_merged(&path)
     }
 
     // ── Writing Stats ──
