@@ -483,7 +483,10 @@ class AndroidEditorPipeline private constructor(
             searchHighlightsUtf16,
             viewportWidth, viewportHeight,
             scrollX, scrollY,
-            cursorVisible, selectionAllowed, mirror
+            cursorVisible, selectionAllowed,
+            mirror.getCursorUtf16(),
+            mirror.getSelectionStartUtf16(),
+            mirror.getSelectionEndUtf16()
         )
         if (frameState != null) {
             renderRuntime.drawFromFrameState(canvas, frameState)

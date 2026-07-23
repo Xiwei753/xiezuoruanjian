@@ -19,14 +19,14 @@ class AndroidRenderRuntime(
 
     fun drawFromFrameState(canvas: Canvas, frameState: FrameState) {
         val input = frameState.renderInput
-        val effectiveSelStart = if (input.selectionAllowed) (input.layoutRevision?.selectionStartUtf16 ?: input.mirror.getSelectionStartUtf16()) else input.mirror.getCursorUtf16()
-        val effectiveSelEnd = if (input.selectionAllowed) (input.layoutRevision?.selectionEndUtf16 ?: input.mirror.getSelectionEndUtf16()) else input.mirror.getCursorUtf16()
+        val effectiveSelStart = if (input.selectionAllowed) (input.layoutRevision?.selectionStartUtf16 ?: input.selectionStartUtf16) else input.cursorUtf16
+        val effectiveSelEnd = if (input.selectionAllowed) (input.layoutRevision?.selectionEndUtf16 ?: input.selectionEndUtf16) else input.cursorUtf16
 
         val composedFrame = frameComposer.compose(
             layout = input.layout,
             transaction = input.transaction,
             progress = input.timelineProgress,
-            cursorUtf16 = if (input.cursorVisible) (input.layoutRevision?.cursorUtf16 ?: input.mirror.getCursorUtf16()) else -1,
+            cursorUtf16 = if (input.cursorVisible) (input.layoutRevision?.cursorUtf16 ?: input.cursorUtf16) else -1,
             cursorX = input.layoutRevision?.cursorX ?: 0f,
             cursorY = input.layoutRevision?.cursorY ?: 0f,
             cursorHeight = input.layoutRevision?.cursorHeight ?: 0f,

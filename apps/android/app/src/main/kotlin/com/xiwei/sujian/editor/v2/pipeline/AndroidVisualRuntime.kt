@@ -7,7 +7,6 @@ import com.xiwei.sujian.editor.v2.visual.TextAnimationPolicy
 import com.xiwei.sujian.editor.v2.mirror.VisualIntent
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutRevision
-import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 
 class AndroidVisualRuntime(
     private val visualPlanner: AndroidVisualPlanner,
@@ -59,7 +58,9 @@ class AndroidVisualRuntime(
         scrollY: Float,
         cursorVisible: Boolean,
         selectionAllowed: Boolean,
-        mirror: DisplayTextMirror
+        cursorUtf16: Int,
+        selectionStartUtf16: Int,
+        selectionEndUtf16: Int
     ): FrameState? {
         if (layout == null) return null
         val transaction = animationEngine.getActiveTransaction()
@@ -77,7 +78,9 @@ class AndroidVisualRuntime(
             scrollY = scrollY,
             cursorVisible = cursorVisible,
             selectionAllowed = selectionAllowed,
-            mirror = mirror
+            cursorUtf16 = cursorUtf16,
+            selectionStartUtf16 = selectionStartUtf16,
+            selectionEndUtf16 = selectionEndUtf16
         )
         animationEngine.completeIfFinished(frameTimeMs)
         return FrameState(renderInput)

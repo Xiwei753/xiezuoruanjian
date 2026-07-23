@@ -270,4 +270,31 @@ class RuntimeOwnershipTest {
         val getYMethod = clazz.getDeclaredMethod("getScrollY")
         assertNotNull(getYMethod)
     }
+
+    @Test
+    fun frameRenderInputDoesNotHoldMirror() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.FrameRenderInput")
+        val mirrorField = clazz.declaredFields.find { it.name == "mirror" }
+        assertTrue("FrameRenderInput should not hold mirror field — use immutable cursor/selection values", mirrorField == null)
+    }
+
+    @Test
+    fun frameRenderInputHoldsImmutableCursorFields() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.FrameRenderInput")
+        val cursorField = clazz.getDeclaredField("cursorUtf16")
+        assertEquals(Int::class.javaPrimitiveType, cursorField.type)
+        val selStartField = clazz.getDeclaredField("selectionStartUtf16")
+        assertEquals(Int::class.javaPrimitiveType, selStartField.type)
+        val selEndField = clazz.getDeclaredField("selectionEndUtf16")
+        assertEquals(Int::class.javaPrimitiveType, selEndField.type)
+    }
+
+    @Test
+    fun displayTextProjectionHasRealUtf16Mappings() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.DisplayTextProjection")
+        val realToDisplay = clazz.getDeclaredMethod("realUtf16ToDisplayUtf16", Int::class.javaPrimitiveType)
+        assertNotNull(realToDisplay)
+        val displayToReal = clazz.getDeclaredMethod("displayUtf16ToRealUtf16", Int::class.javaPrimitiveType)
+        assertNotNull(displayToReal)
+    }
 }

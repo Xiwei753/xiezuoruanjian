@@ -2,7 +2,6 @@ package com.xiwei.sujian.editor.v2.pipeline
 
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutRevision
 import com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction
-import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 
 data class FrameRenderInput(
     val layout: android.text.Layout,
@@ -16,7 +15,9 @@ data class FrameRenderInput(
     val scrollY: Float,
     val cursorVisible: Boolean,
     val selectionAllowed: Boolean,
-    val mirror: DisplayTextMirror
+    val cursorUtf16: Int,
+    val selectionStartUtf16: Int,
+    val selectionEndUtf16: Int
 )
 
 class FrameState(

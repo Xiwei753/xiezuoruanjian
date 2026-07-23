@@ -190,12 +190,8 @@ class AndroidLayoutEngine(
         val compStartDisplayUtf16: Int
         val compEndDisplayUtf16: Int
         if (projection != null && compRange != null && compRange.first >= 0 && compRange.second >= 0) {
-            val compStartUtf8 = indexMap?.utf16ToUtf8(compRange.first)
-                ?: AndroidTextIndexMap(mirror).utf16ToUtf8(compRange.first)
-            val compEndUtf8 = indexMap?.utf16ToUtf8(compRange.second)
-                ?: AndroidTextIndexMap(mirror).utf16ToUtf8(compRange.second)
-            compStartDisplayUtf16 = projection.realUtf8ToDisplayUtf16(compStartUtf8)
-            compEndDisplayUtf16 = projection.realUtf8ToDisplayUtf16(compEndUtf8)
+            compStartDisplayUtf16 = projection.realUtf16ToDisplayUtf16(compRange.first)
+            compEndDisplayUtf16 = projection.realUtf16ToDisplayUtf16(compRange.second)
         } else {
             compStartDisplayUtf16 = compRange?.first ?: -1
             compEndDisplayUtf16 = compRange?.second ?: -1

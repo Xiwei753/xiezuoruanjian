@@ -389,4 +389,135 @@ class DisplayTextProjectionTest {
             assertEquals("Round-trip for utf8=$utf8", utf8, back)
         }
     }
+
+    @Test
+    fun identityRealUtf16ToDisplayUtf16Chinese() {
+        val text = "中a"
+        val proj = DisplayTextProjection.identity(text)
+        assertEquals(0, proj.realUtf16ToDisplayUtf16(0))
+        assertEquals(1, proj.realUtf16ToDisplayUtf16(1))
+        assertEquals(2, proj.realUtf16ToDisplayUtf16(2))
+    }
+
+    @Test
+    fun identityDisplayUtf16ToRealUtf16Chinese() {
+        val text = "中a"
+        val proj = DisplayTextProjection.identity(text)
+        assertEquals(0, proj.displayUtf16ToRealUtf16(0))
+        assertEquals(1, proj.displayUtf16ToRealUtf16(1))
+        assertEquals(2, proj.displayUtf16ToRealUtf16(2))
+    }
+
+    @Test
+    fun identityRealUtf16ToDisplayUtf16Emoji() {
+        val text = "a😀b"
+        val proj = DisplayTextProjection.identity(text)
+        assertEquals(0, proj.realUtf16ToDisplayUtf16(0))
+        assertEquals(1, proj.realUtf16ToDisplayUtf16(1))
+        assertEquals(3, proj.realUtf16ToDisplayUtf16(3))
+        assertEquals(4, proj.realUtf16ToDisplayUtf16(4))
+    }
+
+    @Test
+    fun maskedRealUtf16ToDisplayUtf16Chinese() {
+        val text = "中a"
+        val proj = DisplayTextProjection.masked(text)
+        assertEquals(0, proj.realUtf16ToDisplayUtf16(0))
+        assertEquals(1, proj.realUtf16ToDisplayUtf16(1))
+        assertEquals(2, proj.realUtf16ToDisplayUtf16(2))
+    }
+
+    @Test
+    fun maskedDisplayUtf16ToRealUtf16Chinese() {
+        val text = "中a"
+        val proj = DisplayTextProjection.masked(text)
+        assertEquals(0, proj.displayUtf16ToRealUtf16(0))
+        assertEquals(1, proj.displayUtf16ToRealUtf16(1))
+        assertEquals(2, proj.displayUtf16ToRealUtf16(2))
+    }
+
+    @Test
+    fun maskedRealUtf16ToDisplayUtf16Emoji() {
+        val text = "a😀b"
+        val proj = DisplayTextProjection.masked(text)
+        assertEquals(0, proj.realUtf16ToDisplayUtf16(0))
+        assertEquals(1, proj.realUtf16ToDisplayUtf16(1))
+        assertEquals(1, proj.realUtf16ToDisplayUtf16(2))
+        assertEquals(2, proj.realUtf16ToDisplayUtf16(3))
+        assertEquals(3, proj.realUtf16ToDisplayUtf16(4))
+    }
+
+    @Test
+    fun maskedWithCompositionRealUtf16ToDisplayUtf16() {
+        val text = "你好世界"
+        val proj = DisplayTextProjection.maskedWithComposition(text, 2, 4, "好世")
+        assertEquals(0, proj.realUtf16ToDisplayUtf16(0))
+        assertEquals(1, proj.realUtf16ToDisplayUtf16(1))
+        assertEquals(2, proj.realUtf16ToDisplayUtf16(2))
+        assertEquals(3, proj.realUtf16ToDisplayUtf16(3))
+        assertEquals(4, proj.realUtf16ToDisplayUtf16(4))
+    }
+
+    @Test
+    fun maskedWithCompositionDisplayUtf16ToRealUtf16() {
+        val text = "你好世界"
+        val proj = DisplayTextProjection.maskedWithComposition(text, 2, 4, "好世")
+        assertEquals(0, proj.displayUtf16ToRealUtf16(0))
+        assertEquals(1, proj.displayUtf16ToRealUtf16(1))
+        assertEquals(2, proj.displayUtf16ToRealUtf16(2))
+        assertEquals(3, proj.displayUtf16ToRealUtf16(3))
+        assertEquals(4, proj.displayUtf16ToRealUtf16(4))
+        assertEquals(4, proj.displayUtf16ToRealUtf16(5))
+    }
+
+    @Test
+    fun realUtf16RoundTripIdentity() {
+        val text = "a中b😀c"
+        val proj = DisplayTextProjection.identity(text)
+        var utf16Pos = 0
+        var i = 0
+        while (i < text.length) {
+            val codePoint = text.codePointAt(i)
+            val charCount = Character.charCount(codePoint)
+            val displayUtf16 = proj.realUtf16ToDisplayUtf16(utf16Pos)
+            val back = proj.displayUtf16ToRealUtf16(displayUtf16)
+            assertEquals("Round-trip for realUtf16=$utf16Pos", utf16Pos, back)
+            utf16Pos += charCount
+            i += charCount
+        }
+    }
+
+    @Test
+    fun realUtf16RoundTripMasked() {
+        val text = "a中b😀c"
+        val proj = DisplayTextProjection.masked(text)
+        var utf16Pos = 0
+        var i = 0
+        while (i < text.length) {
+            val codePoint = text.codePointAt(i)
+            val charCount = Character.charCount(codePoint)
+            val displayUtf16 = proj.realUtf16ToDisplayUtf16(utf16Pos)
+            val back = proj.displayUtf16ToRealUtf16(displayUtf16)
+            assertEquals("Round-trip for realUtf16=$utf16Pos", utf16Pos, back)
+            utf16Pos += charCount
+            i += charCount
+        }
+    }
+
+    @Test
+    fun realUtf16RoundTripMaskedWithComposition() {
+        val text = "a😀b😀c"
+        val proj = DisplayTextProjection.maskedWithComposition(text, 1, 3, "😀")
+        var utf16Pos = 0
+        var i = 0
+        while (i < text.length) {
+            val codePoint = text.codePointAt(i)
+            val charCount = Character.charCount(codePoint)
+            val displayUtf16 = proj.realUtf16ToDisplayUtf16(utf16Pos)
+            val back = proj.displayUtf16ToRealUtf16(displayUtf16)
+            assertEquals("Round-trip for realUtf16=$utf16Pos", utf16Pos, back)
+            utf16Pos += charCount
+            i += charCount
+        }
+    }
 }

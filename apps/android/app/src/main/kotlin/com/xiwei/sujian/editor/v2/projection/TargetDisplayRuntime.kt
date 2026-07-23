@@ -159,7 +159,10 @@ class TargetDisplayRuntime(
             highlightsUtf16,
             viewportWidth, viewportHeight,
             scrollX, scrollY,
-            true, true, mirror
+            true, true,
+            mirror.getCursorUtf16(),
+            mirror.getSelectionStartUtf16(),
+            mirror.getSelectionEndUtf16()
         )
         if (frameState != null) {
             renderRuntime.drawFromFrameState(canvas, frameState)
