@@ -5,6 +5,9 @@ import androidx.lifecycle.lifecycleScope
 import androidx.window.layout.FoldingFeature
 import androidx.window.layout.WindowInfoTracker
 import androidx.window.layout.WindowLayoutInfo
+import com.xiwei.sujian.platform.api.FoldOrientation
+import com.xiwei.sujian.platform.api.FoldPosture
+import com.xiwei.sujian.platform.api.OcclusionType
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -40,9 +43,9 @@ class AndroidAdaptiveWindowAdapter(private val activity: ComponentActivity) {
     companion object {
         fun toFoldFeatureInfo(feature: FoldingFeature): AndroidFoldFeatureInfo {
             val state = when (feature.state) {
-                FoldingFeature.State.FLAT -> FoldState.Flat
-                FoldingFeature.State.HALF_OPENED -> FoldState.HalfOpened
-                else -> FoldState.None
+                FoldingFeature.State.FLAT -> FoldPosture.Flat
+                FoldingFeature.State.HALF_OPENED -> FoldPosture.HalfOpened
+                else -> FoldPosture.None
             }
             val orientation = if (feature.orientation == FoldingFeature.Orientation.HORIZONTAL) {
                 FoldOrientation.Horizontal
@@ -50,8 +53,8 @@ class AndroidAdaptiveWindowAdapter(private val activity: ComponentActivity) {
                 FoldOrientation.Vertical
             }
             val occlusion = when (feature.occlusionType) {
-                FoldingFeature.OcclusionType.FULL -> FoldOcclusionType.Full
-                else -> FoldOcclusionType.None
+                FoldingFeature.OcclusionType.FULL -> OcclusionType.Full
+                else -> OcclusionType.None
             }
             val bounds = feature.bounds
             return AndroidFoldFeatureInfo(

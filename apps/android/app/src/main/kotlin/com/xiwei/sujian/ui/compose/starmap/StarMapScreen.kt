@@ -13,10 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Delete
+import com.xiwei.sujian.designsystem.icon.SujianIcons
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import com.xiwei.sujian.editor.v2.compose.AnimatedTextField
@@ -123,7 +120,7 @@ private fun StarMapListScreen(
 
     SujianScreenScaffold(
         title = stringResource(id = R.string.title_starmap),
-        fabIcon = Icons.Default.Add,
+        fabIcon = SujianIcons.Add,
         fabContentDescription = stringResource(id = R.string.starmap_create_new),
         onFabClick = { showCreateDialog = true },
         modifier = modifier,
@@ -289,12 +286,12 @@ private fun StarMapEditorScreen(
             Spacer(modifier = Modifier.width(8.dp))
             SujianIconButton(
                 onClick = { showAddEdgeDialog = true },
-                icon = Icons.Default.Add,
+                icon = SujianIcons.Add,
                 contentDescription = stringResource(id = R.string.starmap_add_edge),
             )
             SujianIconButton(
                 onClick = { showAddNodeDialog = true },
-                icon = Icons.Default.Add,
+                icon = SujianIcons.Add,
                 contentDescription = stringResource(id = R.string.starmap_add_node),
             )
         },
@@ -613,7 +610,7 @@ private fun NodeEditPanel(
                 ) {
                     SujianIconButton(
                         onClick = onDelete,
-                        icon = Icons.Default.Delete,
+                        icon = SujianIcons.Delete,
                         contentDescription = stringResource(id = R.string.starmap_delete_node),
                     )
                 }

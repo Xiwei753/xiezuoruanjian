@@ -7,15 +7,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoStories
-import androidx.compose.material.icons.filled.BugReport
-import androidx.compose.material.icons.filled.CloudSync
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Palette
-import androidx.compose.material.icons.filled.Save
-import androidx.compose.material.icons.filled.Science
+import com.xiwei.sujian.designsystem.icon.SujianIcons
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -148,14 +140,14 @@ data class SettingsCategory(
 )
 
 val settingsCategories = listOf(
-    SettingsCategory(SettingsSection.Appearance, R.string.pref_category_appearance, Icons.Default.Palette),
-    SettingsCategory(SettingsSection.Editor, R.string.pref_category_editor, Icons.Default.Edit),
-    SettingsCategory(SettingsSection.Save, R.string.pref_category_save, Icons.Default.Save),
-    SettingsCategory(SettingsSection.Sync, R.string.pref_category_sync, Icons.Default.CloudSync),
-    SettingsCategory(SettingsSection.Ai, R.string.pref_category_ai, Icons.Default.AutoStories),
-    SettingsCategory(SettingsSection.Diagnostics, R.string.pref_category_diagnostics, Icons.Default.BugReport),
-    SettingsCategory(SettingsSection.Laboratory, R.string.pref_category_laboratory, Icons.Default.Science),
-    SettingsCategory(SettingsSection.About, R.string.pref_category_about, Icons.Default.Info),
+    SettingsCategory(SettingsSection.Appearance, R.string.pref_category_appearance, SujianIcons.Palette),
+    SettingsCategory(SettingsSection.Editor, R.string.pref_category_editor, SujianIcons.Edit),
+    SettingsCategory(SettingsSection.Save, R.string.pref_category_save, SujianIcons.Save),
+    SettingsCategory(SettingsSection.Sync, R.string.pref_category_sync, SujianIcons.CloudSync),
+    SettingsCategory(SettingsSection.Ai, R.string.pref_category_ai, SujianIcons.AutoStories),
+    SettingsCategory(SettingsSection.Diagnostics, R.string.pref_category_diagnostics, SujianIcons.BugReport),
+    SettingsCategory(SettingsSection.Laboratory, R.string.pref_category_laboratory, SujianIcons.Science),
+    SettingsCategory(SettingsSection.About, R.string.pref_category_about, SujianIcons.Info),
 )
 
 @Parcelize

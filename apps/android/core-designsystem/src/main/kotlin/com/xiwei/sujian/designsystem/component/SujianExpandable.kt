@@ -1,9 +1,6 @@
 package com.xiwei.sujian.designsystem.component
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.clickable
@@ -23,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import com.xiwei.sujian.designsystem.icon.SujianIcons
 import com.xiwei.sujian.designsystem.theme.LocalSujianMotion
 
 @Composable
@@ -71,9 +69,9 @@ fun SujianExpandableCard(
                 }
                 Icon(
                     imageVector = if (expanded) {
-                        Icons.Default.KeyboardArrowUp
+                        SujianIcons.KeyboardArrowUp
                     } else {
-                        Icons.Default.KeyboardArrowDown
+                        SujianIcons.KeyboardArrowDown
                     },
                     contentDescription = if (expanded) "收起" else "展开",
                     modifier = Modifier.size(24.dp),
@@ -121,9 +119,9 @@ fun SujianExpandableListItem(
             trailingContent = {
                 Icon(
                     imageVector = if (expanded) {
-                        Icons.Default.KeyboardArrowUp
+                        SujianIcons.KeyboardArrowUp
                     } else {
-                        Icons.Default.KeyboardArrowDown
+                        SujianIcons.KeyboardArrowDown
                     },
                     contentDescription = if (expanded) "收起" else "展开",
                     modifier = Modifier.size(24.dp),

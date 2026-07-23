@@ -6,15 +6,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoStories
-import androidx.compose.material.icons.filled.BarChart
-import androidx.compose.material.icons.filled.Hub
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.outlined.AutoStories
-import androidx.compose.material.icons.outlined.BarChart
-import androidx.compose.material.icons.outlined.Hub
-import androidx.compose.material.icons.outlined.Settings
+import com.xiwei.sujian.designsystem.icon.SujianIcons
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
@@ -42,23 +34,23 @@ enum class SujianDestination(
 ) {
     Works(
         labelResId = R.string.title_projects,
-        selectedIcon = Icons.Filled.AutoStories,
-        unselectedIcon = Icons.Outlined.AutoStories,
+        selectedIcon = SujianIcons.AutoStories,
+        unselectedIcon = SujianIcons.AutoStoriesOutlined,
     ),
     StarMap(
         labelResId = R.string.title_starmap,
-        selectedIcon = Icons.Filled.Hub,
-        unselectedIcon = Icons.Outlined.Hub,
+        selectedIcon = SujianIcons.Hub,
+        unselectedIcon = SujianIcons.HubOutlined,
     ),
     Stats(
         labelResId = R.string.title_stats,
-        selectedIcon = Icons.Filled.BarChart,
-        unselectedIcon = Icons.Outlined.BarChart,
+        selectedIcon = SujianIcons.BarChart,
+        unselectedIcon = SujianIcons.BarChartOutlined,
     ),
     Settings(
         labelResId = R.string.action_settings,
-        selectedIcon = Icons.Filled.Settings,
-        unselectedIcon = Icons.Outlined.Settings,
+        selectedIcon = SujianIcons.Settings,
+        unselectedIcon = SujianIcons.SettingsOutlined,
     ),
 }
 

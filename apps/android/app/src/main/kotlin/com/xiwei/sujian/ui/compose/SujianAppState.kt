@@ -21,10 +21,11 @@ import com.xiwei.sujian.model.Project
 import com.xiwei.sujian.model.RecentEdit
 import com.xiwei.sujian.model.ShellMode
 import com.xiwei.sujian.model.WindowMetrics
+import com.xiwei.sujian.platform.api.FoldPosture
+import com.xiwei.sujian.platform.api.FoldOrientation as PlatformFoldOrientation
+import com.xiwei.sujian.platform.api.OcclusionType
 import com.xiwei.sujian.ui.compose.adaptive.AndroidAdaptiveWindowAdapter
-import com.xiwei.sujian.ui.compose.adaptive.FoldState as AdaptiveFoldState
-import com.xiwei.sujian.ui.compose.adaptive.FoldOrientation as AdaptiveFoldOrientation
-import com.xiwei.sujian.ui.compose.adaptive.FoldOcclusionType
+import com.xiwei.sujian.ui.compose.adaptive.AndroidFoldFeatureInfo
 import com.xiwei.sujian.ui.compose.navigation.SujianDestination
 import androidx.window.layout.FoldingFeature
 import androidx.lifecycle.viewModelScope
@@ -141,13 +142,16 @@ class SujianAppViewModel(
             val info = AndroidAdaptiveWindowAdapter.toFoldFeatureInfo(feature)
             FoldFeatureInfo(
                 state = when (info.state) {
-                    AdaptiveFoldState.Flat -> FoldState.Flat
-                    AdaptiveFoldState.HalfOpened -> FoldState.HalfOpened
+                    FoldPosture.Flat -> FoldState.Flat
+                    FoldPosture.HalfOpened -> FoldState.HalfOpened
                     else -> FoldState.None
                 },
-                orientation = if (info.orientation == AdaptiveFoldOrientation.Horizontal) FoldOrientation.Horizontal else FoldOrientation.Vertical,
+                orientation = if (info.orientation == PlatformFoldOrientation.Horizontal) FoldOrientation.Horizontal else FoldOrientation.Vertical,
                 isSeparating = info.isSeparating,
-                occlusion = if (info.occlusionType == FoldOcclusionType.Full) FoldOcclusion.Full else FoldOcclusion.None,
+                occlusion = when (info.occlusionType) {
+                    OcclusionType.Full -> FoldOcclusion.Full
+                    else -> FoldOcclusion.None
+                },
                 boundsLeftVp = info.boundsLeft.toFloat() / density,
                 boundsTopVp = info.boundsTop.toFloat() / density,
                 boundsRightVp = info.boundsRight.toFloat() / density,

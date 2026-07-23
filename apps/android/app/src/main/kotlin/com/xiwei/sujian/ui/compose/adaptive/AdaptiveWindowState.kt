@@ -18,6 +18,9 @@ import androidx.window.layout.FoldingFeature
 import com.xiwei.sujian.model.AvoidRegionKind
 import com.xiwei.sujian.model.LayoutPlan
 import com.xiwei.sujian.model.WorkspacePaneMode
+import com.xiwei.sujian.platform.api.FoldOrientation
+import com.xiwei.sujian.platform.api.FoldPosture
+import com.xiwei.sujian.platform.api.OcclusionType
 
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
@@ -121,24 +124,12 @@ private fun calculatePaneScaffoldDirective(
 }
 
 data class AndroidFoldFeatureInfo(
-    val state: FoldState,
+    val state: FoldPosture,
     val orientation: FoldOrientation,
     val isSeparating: Boolean,
-    val occlusionType: FoldOcclusionType,
+    val occlusionType: OcclusionType,
     val boundsLeft: Int,
     val boundsTop: Int,
     val boundsRight: Int,
     val boundsBottom: Int
 )
-
-enum class FoldState {
-    None, Flat, HalfOpened
-}
-
-enum class FoldOrientation {
-    Horizontal, Vertical
-}
-
-enum class FoldOcclusionType {
-    None, Full
-}

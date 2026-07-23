@@ -8,6 +8,17 @@ enum class FoldPosture {
     HalfOpened,
 }
 
+enum class FoldOrientation {
+    Horizontal,
+    Vertical,
+}
+
+enum class OcclusionType {
+    None,
+    Partial,
+    Full,
+}
+
 enum class PointerKind {
     Touch,
     Stylus,

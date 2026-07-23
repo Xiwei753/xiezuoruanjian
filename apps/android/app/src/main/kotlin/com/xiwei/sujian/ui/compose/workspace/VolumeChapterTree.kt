@@ -10,12 +10,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
+import com.xiwei.sujian.designsystem.icon.SujianIcons
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
@@ -95,14 +91,14 @@ fun VolumeChapterTree(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBackToProjects) {
-                Icon(Icons.Default.ArrowBack, contentDescription = stringResource(id = R.string.back_to_project_list))
+                Icon(SujianIcons.ArrowBack, contentDescription = stringResource(id = R.string.back_to_project_list))
             }
             Text(stringResource(id = R.string.volume_chapter_title), style = MaterialTheme.typography.titleMedium)
             }
             IconButton(onClick = {
                 dialogState = WorkspaceDialogState.CreateVolume()
             }) {
-                Icon(Icons.Default.Add, contentDescription = stringResource(id = R.string.action_new_volume_short))
+                Icon(SujianIcons.Add, contentDescription = stringResource(id = R.string.action_new_volume_short))
             }
         }
 
@@ -480,7 +476,7 @@ fun VolumeRow(
         leadingContent = {
             IconButton(onClick = onToggleExpand) {
                 Icon(
-                    Icons.Default.KeyboardArrowRight,
+                    SujianIcons.KeyboardArrowRight,
                     contentDescription = if (volume.isExpanded) stringResource(id = R.string.action_collapse) else stringResource(id = R.string.action_expand),
                     modifier = Modifier.size(24.dp)
                 )
@@ -490,14 +486,14 @@ fun VolumeRow(
             Row {
                 IconButton(onClick = onCreateChapter) {
                     Icon(
-                        Icons.Default.Add,
+                        SujianIcons.Add,
                         contentDescription = stringResource(id = R.string.action_new_chapter),
                         modifier = Modifier.size(24.dp)
                     )
                 }
                 IconButton(onClick = onMoreActions) {
                     Icon(
-                        Icons.Default.MoreVert,
+                        SujianIcons.MoreVert,
                         contentDescription = stringResource(id = R.string.action_more),
                         modifier = Modifier.size(24.dp)
                     )
@@ -529,7 +525,7 @@ fun ChapterRow(
         trailingContent = {
             IconButton(onClick = onMoreActions) {
                 Icon(
-                    Icons.Default.MoreVert,
+                    SujianIcons.MoreVert,
                     contentDescription = stringResource(id = R.string.action_more),
                     modifier = Modifier.size(24.dp)
                 )

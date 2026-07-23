@@ -1,6 +1,9 @@
 package com.xiwei.sujian.platform.window
 
 import androidx.window.layout.FoldingFeature
+import com.xiwei.sujian.platform.api.FoldOrientation
+import com.xiwei.sujian.platform.api.FoldPosture
+import com.xiwei.sujian.platform.api.OcclusionType
 
 data class FoldPostureState(
     val posture: FoldPosture = FoldPosture.None,
@@ -12,18 +15,6 @@ data class FoldPostureState(
     val hingeBoundsRight: Int = 0,
     val hingeBoundsBottom: Int = 0,
 )
-
-enum class FoldPosture {
-    None,
-    Flat,
-    HalfOpened,
-}
-
-enum class OcclusionType {
-    None,
-    Partial,
-    Full,
-}
 
 class FoldPostureAdapter {
 

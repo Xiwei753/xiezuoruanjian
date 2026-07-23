@@ -11,11 +11,10 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import com.xiwei.sujian.designsystem.component.SujianFab
 import com.xiwei.sujian.designsystem.component.SujianSnackbar
 import com.xiwei.sujian.designsystem.component.SujianTopAppBar
+import com.xiwei.sujian.designsystem.icon.SujianIcons
 
 @Composable
 fun SujianAppScaffold(
@@ -56,7 +55,7 @@ fun SujianScreenScaffold(
     content: @Composable (PaddingValues) -> Unit,
 ) {
     val resolvedNavIcon = navigationIcon
-        ?: if (onNavigateBack != null) Icons.AutoMirrored.Filled.ArrowBack else null
+        ?: if (onNavigateBack != null) SujianIcons.ArrowBack else null
     val resolvedNavClick = onNavigationClick ?: onNavigateBack
 
     Scaffold(

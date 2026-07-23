@@ -15,9 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.MoreVert
+import com.xiwei.sujian.designsystem.icon.SujianIcons
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import com.xiwei.sujian.editor.v2.compose.AnimatedTextField
@@ -98,7 +96,7 @@ fun ProjectListScreen(
 
         SujianFab(
             onClick = { showCreateDialog = true },
-            icon = Icons.Default.Add,
+            icon = SujianIcons.Add,
             contentDescription = stringResource(id = R.string.action_new_project),
             modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp)
         )
@@ -168,7 +166,7 @@ private fun ProjectCard(
             }
             SujianIconButton(
                 onClick = onMoreActions,
-                icon = Icons.Default.MoreVert,
+                icon = SujianIcons.MoreVert,
                 contentDescription = stringResource(id = R.string.action_more),
             )
         }
