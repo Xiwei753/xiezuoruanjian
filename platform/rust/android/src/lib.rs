@@ -16,7 +16,7 @@
 //! ```
 
 #[allow(unused_imports)]
-use writer_uniffi;
+use writer_uniffi::WriterAppService;
 
 use std::path::PathBuf;
 use writer_platform_api::{FileConfigStore, PlatformInit, PlatformKind};
