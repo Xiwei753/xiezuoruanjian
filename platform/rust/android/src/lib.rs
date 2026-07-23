@@ -47,7 +47,9 @@ pub fn init_default_config_store(config_dir: PathBuf) {
 }
 
 pub fn create_sync_transport() -> Box<dyn writer_platform_api::SyncTransport> {
-    Box::new(writer_core::sync::github_backend::ReqwestSyncTransport::new().expect("Failed to create HTTP transport"))
+    let transport = writer_core::sync::github_backend::ReqwestSyncTransport::new()
+        .unwrap_or_else(|e| panic!("Failed to create HTTP transport: {}", e));
+    Box::new(transport)
 }
 
 pub fn init_platform(platform_init: PlatformInit, config_dir: PathBuf) {

@@ -306,7 +306,10 @@ impl ReqwestSyncTransport {
 #[cfg(feature = "github-api")]
 impl Default for ReqwestSyncTransport {
     fn default() -> Self {
-        Self::new().expect("Failed to create ReqwestSyncTransport")
+        match Self::new() {
+            Ok(t) => t,
+            Err(e) => panic!("Failed to create ReqwestSyncTransport: {}", e),
+        }
     }
 }
 
