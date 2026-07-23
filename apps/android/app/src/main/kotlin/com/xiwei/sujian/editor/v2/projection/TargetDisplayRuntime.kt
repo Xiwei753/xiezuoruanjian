@@ -46,6 +46,7 @@ class TargetDisplayRuntime(
     override fun needsFrame(): Boolean = hasActiveAnimation() || cachedFrameState == null
 
     override fun onFrame(frameTimeNanos: Long) {
+        val versionAtFrameStart = displayStateVersion
         val frameTimeMs = frameTimeNanos / 1_000_000
         val layout = layoutEngine.getLayout()
         if (layout != null) {
@@ -66,7 +67,7 @@ class TargetDisplayRuntime(
                 selEndDisplayUtf16
             )
             if (tickResult != null) {
-                cachedFrameState = FrameState(tickResult.renderInput, displayStateVersion)
+                cachedFrameState = FrameState(tickResult.renderInput, versionAtFrameStart)
             }
         }
         frameGeneration++
@@ -79,7 +80,7 @@ class TargetDisplayRuntime(
             isRegisteredWithClock = false
         }
         frameClock = clock
-        if (clock != null && hasActiveAnimation()) {
+        if (clock != null && (hasActiveAnimation() || cachedFrameState == null)) {
             clock.addListener(this)
             isRegisteredWithClock = true
             clock.requestFrame()

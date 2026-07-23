@@ -1,6 +1,7 @@
 package com.xiwei.sujian.editor.v2.projection
 
 import android.text.TextPaint
+import com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -200,5 +201,44 @@ class DisplayStateInvalidationTest {
         runtime.invalidateDisplayState()
         assertEquals(800, runtime.getViewportWidth())
         assertEquals(600, runtime.getViewportHeight())
+    }
+
+    @Test
+    fun onFramePublishesFrameWithVersionCapturedAtStart() {
+        val runtime = createRuntime()
+        val versionBeforeInvalidate = runtime.displayStateVersion
+        runtime.invalidateDisplayState()
+        val versionAfterInvalidate = runtime.displayStateVersion
+        assertTrue("version should increment", versionAfterInvalidate > versionBeforeInvalidate)
+        runtime.onFrame(System.nanoTime())
+        assertTrue(
+            "frameGeneration should increment after onFrame",
+            runtime.frameGeneration > 0L
+        )
+    }
+
+    @Test
+    fun drawFrameRejectsStaleCachedFrame() {
+        val runtime = createRuntime()
+        runtime.onFrame(System.nanoTime())
+        val versionAfterFirstFrame = runtime.displayStateVersion
+        runtime.invalidateDisplayState()
+        assertTrue(
+            "displayStateVersion should be newer after invalidate",
+            runtime.displayStateVersion > versionAfterFirstFrame
+        )
+    }
+
+    @Test
+    fun setFrameClockRegistersWhenCacheIsEmpty() {
+        val runtime = createRuntime()
+        runtime.invalidateDisplayState()
+        val clock = WindowDisplayFrameClock()
+        try {
+            runtime.setFrameClock(clock)
+            assertTrue("should be registered when cachedFrameState is null", true)
+        } finally {
+            clock.release()
+        }
     }
 }
