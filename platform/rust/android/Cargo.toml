@@ -11,6 +11,7 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["github-api"]
+ai = ["writer_uniffi/ai"]
 github-api = ["writer_uniffi/github-api"]
 git-https = ["writer_uniffi/git-https"]
 
