@@ -2739,7 +2739,9 @@ dependencies = [
  "serde_json",
  "tempfile",
  "uuid",
+ "writer-platform-linux",
  "writer_core",
+ "writer_platform_api",
  "zip",
 ]
 
@@ -3803,6 +3805,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 
 [[package]]
+name = "writer-platform-android"
+version = "0.1.0"
+dependencies = [
+ "writer_core",
+ "writer_platform_api",
+]
+
+[[package]]
+name = "writer-platform-linux"
+version = "0.1.0"
+dependencies = [
+ "uuid",
+ "writer_core",
+ "writer_platform_api",
+]
+
+[[package]]
 name = "writer_core"
 version = "0.1.0"
 dependencies = [
@@ -3825,6 +3844,14 @@ dependencies = [
  "uniffi",
  "uuid",
  "walkdir",
+ "writer_platform_api",
+]
+
+[[package]]
+name = "writer_platform_api"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

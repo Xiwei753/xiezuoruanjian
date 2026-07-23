@@ -1,0 +1,12 @@
+[package]
+name = "writer-platform-linux"
+version = "0.1.0"
+edition = "2021"
+
+[lints]
+workspace = true
+
+[dependencies]
+writer_core = { path = "../../../core/writer_core" }
+writer_platform_api = { path = "../../../core/writer_platform_api" }
+uuid = { version = "1.8", features = ["v4"] }

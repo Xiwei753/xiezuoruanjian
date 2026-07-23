@@ -1,0 +1,11 @@
+[package]
+name = "writer-platform-android"
+version = "0.1.0"
+edition = "2021"
+
+[lints]
+workspace = true
+
+[dependencies]
+writer_core = { path = "../../../core/writer_core" }
+writer_platform_api = { path = "../../../core/writer_platform_api" }

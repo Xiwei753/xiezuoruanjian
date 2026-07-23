@@ -1,6 +1,9 @@
 [workspace]
 members = [
     "core/writer_core",
+    "core/writer_platform_api",
+    "platform/rust/linux",
+    "platform/rust/android",
     "apps/Linux_qt",
 ]
 resolver = "2"

@@ -12,6 +12,8 @@ ai = ["writer_core/ai"]
 
 [dependencies]
 writer_core = { path = "../../core/writer_core", features = ["git-https"] }
+writer_platform_api = { path = "../../core/writer_platform_api" }
+writer-platform-linux = { path = "../../platform/rust/linux" }
 arboard = "3.4.1"
 rfd = "0.14.1"
 qmetaobject = "0.2.10"
