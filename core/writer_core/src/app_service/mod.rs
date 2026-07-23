@@ -36,11 +36,20 @@ struct EditorSession {
 ///
 /// `WriterAppService` 持有平台初始化上下文 `platform_init`，
 /// 由平台适配层在启动时注入，Core 不再自行猜测平台目录。
+///
+/// ## 平台能力注入
+///
+/// - `secure_storage`：安全存储（令牌、凭据），由平台端注入 Keychain/Keystore 实现
+/// - `network_state`：网络状态（联网、代理、计费），由平台端注入系统网络信息
+///
+/// 同步操作优先使用 `SecureStorage` 获取 token，不再将凭据作为普通 JSON 存在工作区。
 pub struct WriterAppService {
     api: WriterCoreApi,
     editor_session: Mutex<EditorSession>,
     session_registry: Mutex<crate::editor::TextEditSessionRegistry>,
     platform_init: Option<writer_platform_api::PlatformInit>,
+    secure_storage: Option<Box<dyn writer_platform_api::SecureStorage>>,
+    network_state: Option<writer_platform_api::NetworkState>,
 }
 
 impl WriterAppService {
@@ -54,6 +63,8 @@ impl WriterAppService {
             }),
             session_registry: Mutex::new(crate::editor::TextEditSessionRegistry::new()),
             platform_init: None,
+            secure_storage: None,
+            network_state: None,
         }
     }
 
@@ -67,7 +78,21 @@ impl WriterAppService {
             }),
             session_registry: Mutex::new(crate::editor::TextEditSessionRegistry::new()),
             platform_init: Some(init),
+            secure_storage: None,
+            network_state: None,
         }
+    }
+
+    pub fn set_secure_storage(&mut self, storage: Box<dyn writer_platform_api::SecureStorage>) {
+        self.secure_storage = Some(storage);
+    }
+
+    pub fn set_network_state(&mut self, state: writer_platform_api::NetworkState) {
+        self.network_state = Some(state);
+    }
+
+    pub fn network_state(&self) -> Option<&writer_platform_api::NetworkState> {
+        self.network_state.as_ref()
     }
 
     pub fn platform_init(&self) -> Option<&writer_platform_api::PlatformInit> {
