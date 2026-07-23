@@ -11,7 +11,7 @@ default = []
 ai = ["writer_core/ai"]
 
 [dependencies]
-writer_core = { path = "../../core/writer_core", features = ["git-https"] }
+writer_core = { path = "../../core/writer_core", features = ["git-https", "github-api"] }
 writer_platform_api = { path = "../../core/writer_platform_api" }
 writer-platform-linux = { path = "../../platform/rust/linux" }
 arboard = "3.4.1"

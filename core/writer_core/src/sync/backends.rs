@@ -18,7 +18,15 @@
 //!
 //! `force_sync = true` 时跳过本地脏检查，即使本地无变更也执行完整同步流程。
 //! 用于平台端"立即同步"按钮等场景。`force_sync = false` 时后端可跳过不必要的网络请求。
+//!
+//! ## Feature 门控
+//!
+//! - `git-https`：启用 Git 同步后端（依赖 `git2`）
+//! - `github-api`：启用 GitHub API 同步后端（依赖 `reqwest`）
+//!
+//! 未启用 feature 时对应后端返回不可用错误，编译通过且运行时行为明确。
 
+#[cfg(feature = "github-api")]
 use crate::sync::github_backend::GitHubApiBackend;
 #[cfg(feature = "git-https")]
 use crate::sync::service::SyncService;
@@ -166,16 +174,71 @@ impl SyncBackend for GitSyncBackend {
     }
 }
 
+/// GitHub API 不可用占位后端 — 在 `github-api` feature 未启用时替代 `GitHubApiBackend`。
+///
+/// 所有方法返回错误，提示用户启用 `github-api` feature。
+#[cfg(not(feature = "github-api"))]
+pub struct UnavailableGithubApiBackend;
+
+#[cfg(not(feature = "github-api"))]
+impl SyncBackend for UnavailableGithubApiBackend {
+    fn diagnose(
+        &self,
+        _config: &SyncConfig,
+        _secrets: &SyncSecrets,
+    ) -> crate::Result<SyncDiagnosticsResult> {
+        Err(crate::Error::Other(
+            "github_api backend is unavailable in this build; enable 'github-api' feature".into(),
+        ))
+    }
+    fn pull(
+        &self,
+        _workspace_path: &Path,
+        _config: &SyncConfig,
+        _secrets: &SyncSecrets,
+        _force_sync: bool,
+    ) -> crate::Result<SyncResult> {
+        Err(crate::Error::Other(
+            "github_api backend is unavailable in this build; enable 'github-api' feature".into(),
+        ))
+    }
+    fn push(
+        &self,
+        _workspace_path: &Path,
+        _config: &SyncConfig,
+        _secrets: &SyncSecrets,
+        _force_sync: bool,
+    ) -> crate::Result<SyncResult> {
+        Err(crate::Error::Other(
+            "github_api backend is unavailable in this build; enable 'github-api' feature".into(),
+        ))
+    }
+    fn sync(
+        &self,
+        _workspace_path: &Path,
+        _config: &SyncConfig,
+        _secrets: &SyncSecrets,
+        _force_sync: bool,
+    ) -> crate::Result<SyncResult> {
+        Err(crate::Error::Other(
+            "github_api backend is unavailable in this build; enable 'github-api' feature".into(),
+        ))
+    }
+}
+
 /// 同步后端工厂 — 根据 `BackendType` 创建对应的后端实例。
 ///
 /// 返回 `Box<dyn SyncBackend>`，调用方不关心具体实现类型。
-/// `BackendType::Git` 在无 `git-https` feature 时返回 `UnavailableGitBackend`（所有操作失败）。
+/// 未启用 feature 的后端类型返回占位实现（所有操作失败）。
 pub fn create_sync_backend(backend_type: &BackendType) -> Box<dyn SyncBackend> {
     match backend_type {
         #[cfg(feature = "git-https")]
         BackendType::Git => Box::new(GitSyncBackend),
         #[cfg(not(feature = "git-https"))]
         BackendType::Git => Box::new(UnavailableGitBackend),
+        #[cfg(feature = "github-api")]
         BackendType::GithubApi => Box::new(GitHubApiBackend),
+        #[cfg(not(feature = "github-api"))]
+        BackendType::GithubApi => Box::new(UnavailableGithubApiBackend),
     }
 }

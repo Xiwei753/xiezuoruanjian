@@ -18,6 +18,7 @@ use crate::sync::conflict::collect_git_status_summary;
 use crate::sync::git_backend::GitAuth;
 #[cfg(feature = "git-https")]
 use crate::sync::git_backend::GitBackend;
+#[cfg(feature = "github-api")]
 use crate::sync::lww;
 use crate::sync::scanner;
 #[cfg(feature = "git-https")]
@@ -30,9 +31,11 @@ use crate::sync::types::SyncConflict;
 #[cfg(feature = "git-https")]
 use crate::sync::types::SyncConflictSummary;
 use crate::sync::types::SyncPlan;
-use crate::sync::types::SyncResult;
-use crate::sync::types::SyncSecrets;
 use crate::sync::types::SyncStatus;
+#[cfg(any(feature = "git-https", feature = "github-api"))]
+use crate::sync::types::SyncResult;
+#[cfg(any(feature = "git-https", feature = "github-api"))]
+use crate::sync::types::SyncSecrets;
 #[cfg(feature = "git-https")]
 use crate::sync::types::SyncTransport;
 #[cfg(feature = "git-https")]
@@ -185,6 +188,7 @@ impl SyncService {
 }
 
 impl SyncService {
+    #[cfg(feature = "github-api")]
     /// LWW 同步主入口——基于 Last-Writer-Wins 策略执行文件级同步。
     /// `force_sync=true` 跳过脏仓库保护等安全检查。
     pub fn perform_lww_sync(

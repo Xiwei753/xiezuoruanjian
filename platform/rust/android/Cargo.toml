@@ -10,6 +10,6 @@ workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-writer_core = { path = "../../../core/writer_core" }
+writer_core = { path = "../../../core/writer_core", features = ["github-api"] }
 writer_platform_api = { path = "../../../core/writer_platform_api" }
 writer_uniffi = { path = "../../../core/writer_uniffi" }

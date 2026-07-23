@@ -5,6 +5,7 @@
 //!
 //! SSH 传输方式当前跳过诊断（`ssh_not_recommended`），因为 LWW 后端仅支持 HTTPS。
 
+#[cfg(feature = "github-api")]
 use crate::sync::backends::SyncBackend;
 use crate::sync::types::BackendType;
 use crate::sync::types::SyncConfig;
@@ -79,11 +80,8 @@ impl crate::sync::SyncService {
             return Ok(result);
         }
 
-        // --- 委托给实际后端进行真实诊断 ---
-        // 不再假成功，而是走真实后端的 diagnose 方法
-        // 对于 GithubApi 后端，直接调用 GitHubApiBackend::diagnose 进行真实 GitHub API 请求
-        // 对于 Git 后端，保留快速路径（git 后端不支持独立 diagnose）
         match config.backend_type {
+            #[cfg(feature = "github-api")]
             BackendType::GithubApi => {
                 let backend = crate::sync::github_backend::GitHubApiBackend;
                 match backend.diagnose(config, secrets) {
@@ -95,6 +93,13 @@ impl crate::sync::SyncService {
                         Ok(result)
                     }
                 }
+            }
+            #[cfg(not(feature = "github-api"))]
+            BackendType::GithubApi => {
+                result.error_category = "github_api_unavailable".to_string();
+                result.network_status = "unavailable".to_string();
+                result.success = false;
+                Ok(result)
             }
             BackendType::Git => {
                 // Git 后端（libgit2）是 legacy 后端，不支持独立 diagnose。

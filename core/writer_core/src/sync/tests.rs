@@ -8,6 +8,7 @@ mod tests {
     use crate::sync::git_backend::GitAuth;
     #[cfg(feature = "git-https")]
     use crate::sync::git_backend::GitBackend;
+    #[cfg(feature = "github-api")]
     use crate::sync::github_backend::GitHubApiBackend;
     use crate::sync::service::SyncService;
     use crate::sync::types::BackendType;
@@ -25,6 +26,7 @@ mod tests {
     use std::path::Path;
     use tempfile::tempdir;
     #[test]
+    #[cfg(feature = "github-api")]
     fn test_github_api_diagnostics_reports_backend_type_without_token() {
         let config = SyncConfig {
             enabled: true,
@@ -1521,6 +1523,7 @@ mod tests {
 
     #[test]
     #[cfg(not(windows))]
+    #[cfg(feature = "github-api")]
     fn test_perform_lww_sync_first_download() {
         let dir = tempdir().unwrap();
         let mut initial_files = std::collections::HashMap::new();
@@ -1587,6 +1590,7 @@ mod tests {
 
     #[test]
     #[cfg(not(windows))]
+    #[cfg(feature = "github-api")]
     fn test_perform_lww_sync_local_delete_generates_manifest_delete() {
         let dir = tempdir().unwrap();
 
@@ -1659,6 +1663,7 @@ mod tests {
 
     #[test]
     #[cfg(not(windows))]
+    #[cfg(feature = "github-api")]
     fn test_perform_lww_sync_remote_delete_removes_local_file() {
         let dir = tempdir().unwrap();
         let local_path = dir.path().join("projects/p1/project.json");
@@ -1721,6 +1726,7 @@ mod tests {
 
     #[test]
     #[ignore]
+    #[cfg(feature = "github-api")]
     fn test_perform_lww_sync_timestamp_wins() {
         let dir = tempdir().unwrap();
 
@@ -1833,6 +1839,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "github-api")]
     fn test_lww_sync_ignores_local_only_files() {
         let dir = tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("app-meta/sync")).unwrap();
@@ -1885,6 +1892,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "github-api")]
     fn test_is_document_content_path() {
         use crate::sync::lww::is_document_content_path;
         assert!(is_document_content_path(
@@ -1924,6 +1932,7 @@ mod tests {
 
     #[test]
     #[cfg(not(windows))]
+    #[cfg(feature = "github-api")]
     fn test_lww_document_conflict_no_overwrite() {
         let dir = tempdir().unwrap();
         let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
@@ -2016,6 +2025,7 @@ mod tests {
 
     #[test]
     #[cfg(not(windows))]
+    #[cfg(feature = "github-api")]
     fn test_lww_document_conflict_manifest_not_polluted() {
         let dir = tempdir().unwrap();
         let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
@@ -2115,6 +2125,7 @@ mod tests {
 
     #[test]
     #[cfg(not(windows))]
+    #[cfg(feature = "github-api")]
     fn test_lww_document_only_local_changed_allows_upload() {
         let dir = tempdir().unwrap();
         let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
@@ -2186,6 +2197,7 @@ mod tests {
 
     #[test]
     #[cfg(not(windows))]
+    #[cfg(feature = "github-api")]
     fn test_lww_document_only_remote_changed_downloads() {
         let dir = tempdir().unwrap();
         let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
@@ -2260,6 +2272,7 @@ mod tests {
 
     #[test]
     #[cfg(not(windows))]
+    #[cfg(feature = "github-api")]
     fn test_lww_document_remote_delete_local_modified_is_conflict() {
         let dir = tempdir().unwrap();
         let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
@@ -2337,6 +2350,7 @@ mod tests {
     /// 4. Conflicts persist until user resolves.
     #[test]
     #[cfg(not(windows))]
+    #[cfg(feature = "github-api")]
     fn test_lww_conflict_persists_across_syncs() {
         let dir = tempdir().unwrap();
         let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
@@ -2666,6 +2680,7 @@ mod tests {
     /// → resolve_conflict_keep_local → third sync uploads local version normally.
     #[test]
     #[cfg(not(windows))]
+    #[cfg(feature = "github-api")]
     fn test_resolve_conflict_then_sync_recovers() {
         let dir = tempdir().unwrap();
         let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
@@ -2847,6 +2862,7 @@ mod tests {
     /// NOT re-upload the old local version.
     #[test]
     #[cfg(not(windows))]
+    #[cfg(feature = "github-api")]
     fn test_resolve_conflict_take_remote_then_sync() {
         let dir = tempdir().unwrap();
         let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
@@ -3026,6 +3042,7 @@ mod tests {
     /// and must return a RecoverableError.
     #[test]
     #[cfg(not(windows))]
+    #[cfg(feature = "github-api")]
     fn test_pending_take_remote_remote_missing_no_upload() {
         let dir = tempdir().unwrap();
         let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
@@ -3136,6 +3153,7 @@ mod tests {
     /// contains the path.
     #[test]
     #[cfg(not(windows))]
+    #[cfg(feature = "github-api")]
     fn test_pending_take_remote_remote_exists_downloads_and_clears() {
         let dir = tempdir().unwrap();
         let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
@@ -3258,6 +3276,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "github-api")]
     fn test_github_api_error_404_not_found_not_used() {
         // After the fix, github_api_error should no longer produce the generic "not_found" category.
         // All 404s should be classified as repo_not_found_or_no_permission or file_not_found.
@@ -3315,6 +3334,7 @@ mod tests {
     // ── force_sync debounce 测试 ──
 
     #[test]
+    #[cfg(feature = "github-api")]
     fn test_perform_lww_sync_debounce_skips_when_not_forced() {
         // 测试自动同步（force_sync=false）在 min_interval 内被 debounce 跳过
         let dir = tempfile::tempdir().unwrap();
@@ -3352,6 +3372,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "github-api")]
     fn test_perform_lww_sync_force_sync_bypasses_debounce() {
         // 测试手动同步（force_sync=true）绕过 debounce
         let dir = tempfile::tempdir().unwrap();
@@ -3391,6 +3412,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "github-api")]
     fn test_pending_take_remote_bypasses_debounce() {
         // 冲突解决后（pending_take_remote 非空），即使 force_sync=false 也应绕过 debounce
         let dir = tempfile::tempdir().unwrap();
