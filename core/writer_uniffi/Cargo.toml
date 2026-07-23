@@ -12,9 +12,11 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = []
 ai = ["writer_core/ai"]
+github-api = ["writer_core/github-api"]
+git-https = ["writer_core/git-https"]
 
 [dependencies]
-writer_core = { path = "../writer_core", features = ["github-api"] }
+writer_core = { path = "../writer_core" }
 writer_platform_api = { path = "../writer_platform_api" }
 
 [dependencies.uniffi]

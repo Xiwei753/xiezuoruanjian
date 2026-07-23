@@ -78,6 +78,10 @@ impl WriterAppService {
         self.platform_init.as_ref().map(|init| init.paths())
     }
 
+    pub fn device_id(&self) -> Option<&str> {
+        self.platform_init.as_ref().map(|init| init.device_id.as_str())
+    }
+
     // ── Actions ──
 
     pub fn list_registered_actions(

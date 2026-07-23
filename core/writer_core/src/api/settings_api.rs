@@ -32,7 +32,7 @@ impl WriterCoreApi {
 
     pub fn ensure_device_info(&self, platform: &str, device_class: &str) -> ApiResult<bool> {
         self.core()
-            .ensure_device_info(platform, device_class)
+            .ensure_device_info(platform, device_class, None)
             .map(|_| true)
             .map_err(Into::into)
     }

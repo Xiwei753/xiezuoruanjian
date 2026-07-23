@@ -197,16 +197,36 @@ impl crate::sync::SyncService {
     /// 迁移时若 `device_id` 为空则生成新 UUID，保证每台设备有唯一标识。
     /// `device_id` 用于 LWW 同步中区分不同设备的写入。
     pub fn load_sync_state(workspace_path: &Path) -> crate::Result<SyncState> {
+        Self::load_sync_state_with_preferred_device_id(workspace_path, None)
+    }
+
+    /// 加载同步状态，优先使用平台注入的 device_id。
+    ///
+    /// 当 `preferred_device_id` 为 `Some` 且 state 中 device_id 为空时，
+    /// 使用平台注入值而非随机生成。这保证同一设备在不同工作区使用相同的 device_id。
+    pub fn load_sync_state_with_preferred_device_id(
+        workspace_path: &Path,
+        preferred_device_id: Option<&str>,
+    ) -> crate::Result<SyncState> {
+        let resolve_device_id = |existing: &str| -> String {
+            if !existing.is_empty() {
+                return existing.to_string();
+            }
+            if let Some(id) = preferred_device_id {
+                if !id.is_empty() {
+                    return id.to_string();
+                }
+            }
+            uuid::Uuid::new_v4().to_string()
+        };
+
         let state_path = workspace_path.join("app-meta/sync/state.local.json");
         if !state_path.exists() {
-            // Try to migrate if the old sync_state.json exists
             let old_path = workspace_path.join("app-meta/sync/sync_state.json");
             if old_path.exists() {
                 if let Ok(content) = std::fs::read_to_string(&old_path) {
                     if let Ok(mut state) = serde_json::from_str::<SyncState>(&content) {
-                        if state.device_id.is_empty() {
-                            state.device_id = uuid::Uuid::new_v4().to_string();
-                        }
+                        state.device_id = resolve_device_id(&state.device_id);
                         let _ = Self::save_sync_state(workspace_path, &state);
                         let _ = std::fs::remove_file(old_path);
                         return Ok(state);
@@ -214,14 +234,15 @@ impl crate::sync::SyncService {
                 }
             }
 
-            let default_state = SyncState { device_id: uuid::Uuid::new_v4().to_string(), ..Default::default() };
+            let default_state = SyncState { device_id: resolve_device_id(""), ..Default::default() };
             return Ok(default_state);
         }
 
         let content = std::fs::read_to_string(state_path)?;
         let mut state: SyncState = serde_json::from_str(&content).unwrap_or_default();
-        if state.device_id.is_empty() {
-            state.device_id = uuid::Uuid::new_v4().to_string();
+        let new_device_id = resolve_device_id(&state.device_id);
+        if new_device_id != state.device_id {
+            state.device_id = new_device_id;
             let _ = Self::save_sync_state(workspace_path, &state);
         }
         Ok(state)

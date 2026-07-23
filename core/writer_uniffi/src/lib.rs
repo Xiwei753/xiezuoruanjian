@@ -12,6 +12,8 @@
 //! ```
 //!
 //! `writer_core` 自身是 `rlib`，不直接产生 `cdylib`。
+//! UniFFI scaffolding（UDL + `include_scaffolding!`）保留在 `writer_core` 中，
+//! 因为 UDL 中定义的类型实现位于 `writer_core`，UniFFI 要求 scaffolding 与类型定义在同一 crate。
 //! 所有平台的最终库都通过 `writer_uniffi` 或平台 crate 组装。
 //!
 //! ## 导出边界

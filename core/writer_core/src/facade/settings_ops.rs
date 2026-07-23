@@ -26,8 +26,8 @@ impl super::WriterCore {
         settings::save_device_info(&self.workspace_path, info)
     }
 
-    pub fn ensure_device_info(&self, platform: &str, device_class: &str) -> Result<DeviceInfo> {
-        settings::ensure_device_info(&self.workspace_path, platform, device_class)
+    pub fn ensure_device_info(&self, platform: &str, device_class: &str, preferred_device_id: Option<&str>) -> Result<DeviceInfo> {
+        settings::ensure_device_info(&self.workspace_path, platform, device_class, preferred_device_id)
     }
 
     pub fn list_registered_settings(&self) -> crate::settings_registry::SettingsRegistry {

@@ -10,7 +10,7 @@
 
 use crate::sync::types::BackendType;
 use crate::sync::types::SyncConfig;
-use crate::sync::types::SyncTransport;
+use crate::sync::types::SyncProtocol;
 
 /// URL 解析结果 — 剥离 userinfo 后的 URL 和提取的凭证。
 pub struct ParsedRemoteUrl {
@@ -84,12 +84,12 @@ fn url_decode(s: String) -> String {
 /// 根据远程 URL 的协议前缀检测传输方式。
 ///
 /// `git@` 或 `ssh://` 开头返回 `SshDeployKey`，其余返回 `HttpsToken`。
-pub fn detect_transport(remote_url: &str) -> SyncTransport {
+pub fn detect_transport(remote_url: &str) -> SyncProtocol {
     let lower = remote_url.to_lowercase();
     if lower.starts_with("git@") || lower.starts_with("ssh://") {
-        SyncTransport::SshDeployKey
+        SyncProtocol::SshDeployKey
     } else {
-        SyncTransport::HttpsToken
+        SyncProtocol::HttpsToken
     }
 }
 

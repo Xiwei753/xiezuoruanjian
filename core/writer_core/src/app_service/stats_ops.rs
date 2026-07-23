@@ -117,7 +117,12 @@ impl super::WriterAppService {
         platform: String,
         device_class: String,
     ) -> Result<bool, WriterError> {
-        self.api.ensure_device_info(&platform, &device_class)
+        let preferred_id = self.device_id().map(|s| s.to_string());
+        self.api
+            .core()
+            .ensure_device_info(&platform, &device_class, preferred_id.as_deref())
+            .map(|_| true)
+            .map_err(WriterError::from)
     }
 
     pub fn load_device_info(&self) -> Result<DeviceInfoDto, WriterError> {

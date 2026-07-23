@@ -546,15 +546,20 @@ pub fn save_device_info(workspace_path: &Path, info: &DeviceInfo) -> Result<()> 
 
 /// 确保设备信息存在，如果不存在则创建并持久化。
 /// 仅在字段为空时填充，已有值不会被覆盖。
+/// 当 `preferred_device_id` 为 `Some` 时优先使用平台注入值，避免随机生成。
 pub fn ensure_device_info(
     workspace_path: &Path,
     platform: &str,
     device_class: &str,
+    preferred_device_id: Option<&str>,
 ) -> Result<DeviceInfo> {
     let mut info = load_device_info(workspace_path).unwrap_or_default();
     let mut changed = false;
     if info.device_id.is_empty() {
-        info.device_id = uuid::Uuid::new_v4().to_string();
+        info.device_id = preferred_device_id
+            .filter(|id| !id.is_empty())
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         changed = true;
     }
     if info.platform.is_empty() {
@@ -1264,16 +1269,22 @@ mod tests {
     #[test]
     fn test_ensure_device_info_creates_new() {
         let temp_dir = tempdir().unwrap();
-        let info = ensure_device_info(temp_dir.path(), "desktop", "desktop").unwrap();
+        let info = ensure_device_info(temp_dir.path(), "desktop", "desktop", None).unwrap();
         assert!(!info.device_id.is_empty());
         assert_eq!(info.platform, "desktop");
         assert_eq!(info.device_class, "desktop");
 
-        // 再次调用不应覆盖已有值
-        let info2 = ensure_device_info(temp_dir.path(), "android", "phone").unwrap();
+        let info2 = ensure_device_info(temp_dir.path(), "android", "phone", None).unwrap();
         assert_eq!(info2.device_id, info.device_id, "device_id should not change");
         assert_eq!(info2.platform, "desktop", "platform should not change");
         assert_eq!(info2.device_class, "desktop", "device_class should not change");
+    }
+
+    #[test]
+    fn test_ensure_device_info_uses_preferred_id() {
+        let temp_dir = tempdir().unwrap();
+        let info = ensure_device_info(temp_dir.path(), "desktop", "desktop", Some("platform-device-123")).unwrap();
+        assert_eq!(info.device_id, "platform-device-123");
     }
 
     #[test]

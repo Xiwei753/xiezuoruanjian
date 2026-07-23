@@ -11,7 +11,7 @@ use crate::sync::types::BackendType;
 use crate::sync::types::SyncConfig;
 use crate::sync::types::SyncDiagnosticsResult;
 use crate::sync::types::SyncSecrets;
-use crate::sync::types::SyncTransport;
+use crate::sync::types::SyncProtocol;
 use crate::sync::url::detect_transport;
 use crate::sync::url::sanitize_remote_url;
 
@@ -51,11 +51,11 @@ impl crate::sync::SyncService {
 
         let transport = detect_transport(&sanitized_url);
         result.transport = match transport {
-            SyncTransport::HttpsToken => "https".to_string(),
-            SyncTransport::SshDeployKey => "ssh".to_string(),
+            SyncProtocol::HttpsToken => "https".to_string(),
+            SyncProtocol::SshDeployKey => "ssh".to_string(),
         };
 
-        if transport == SyncTransport::SshDeployKey {
+        if transport == SyncProtocol::SshDeployKey {
             result.error_category = "ssh_not_recommended".to_string();
             result.network_status = "skipped_ssh".to_string();
             result.auth_status = "skipped".to_string();

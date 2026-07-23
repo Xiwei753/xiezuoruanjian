@@ -165,10 +165,13 @@ pub enum BackendType {
     GithubApi,
 }
 
-/// 同步传输方式 — HTTPS token 或 SSH deploy key。
+/// 同步协议方式 — HTTPS token 或 SSH deploy key。
+///
+/// 命名为 `SyncProtocol` 以区别于 `writer_platform_api::SyncTransport` trait。
+/// `SyncProtocol` 描述用户选择的同步认证方式，`SyncTransport` trait 描述 HTTP 执行能力。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub enum SyncTransport {
+pub enum SyncProtocol {
     HttpsToken,
     SshDeployKey,
 }
@@ -209,7 +212,7 @@ pub struct SyncConfig {
     /// 远端仓库 URL（HTTPS 或 SSH）
     pub remote_url: String,
     /// 传输方式（HTTPS token 或 SSH deploy key）
-    pub transport: SyncTransport,
+    pub transport: SyncProtocol,
     /// 远端分支名，默认 "main"
     #[serde(default = "default_branch")]
     pub branch: String,
@@ -612,7 +615,7 @@ pub struct Tombstone {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncState {
     pub remote_url: Option<String>,
-    pub transport: Option<SyncTransport>,
+    pub transport: Option<SyncProtocol>,
     pub last_synced_commit: Option<String>,
     pub last_sync_time: Option<i64>,
     pub last_error: Option<String>,

@@ -116,7 +116,7 @@ impl super::WriterCore {
                 enabled: false,
                 backend_type: crate::sync::BackendType::GithubApi,
                 remote_url: String::new(),
-                transport: crate::sync::SyncTransport::HttpsToken,
+                transport: crate::sync::SyncProtocol::HttpsToken,
                 branch: "main".to_string(),
                 auto_sync: false,
                 sync_interval_seconds: 300,

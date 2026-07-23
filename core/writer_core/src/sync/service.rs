@@ -37,7 +37,7 @@ use crate::sync::types::SyncResult;
 #[cfg(any(feature = "git-https", feature = "github-api"))]
 use crate::sync::types::SyncSecrets;
 #[cfg(feature = "git-https")]
-use crate::sync::types::SyncTransport;
+use crate::sync::types::SyncProtocol;
 #[cfg(feature = "git-https")]
 use crate::sync::url::sanitize_remote_url;
 use std::path::Path;
@@ -507,11 +507,11 @@ impl SyncService {
         };
 
         let auth = match &config.transport {
-            SyncTransport::HttpsToken => Some(GitAuth::HttpsToken {
+            SyncProtocol::HttpsToken => Some(GitAuth::HttpsToken {
                 username: username_for_cred.clone(),
                 token: token.clone(),
             }),
-            SyncTransport::SshDeployKey => {
+            SyncProtocol::SshDeployKey => {
                 return Ok(SyncResult::error(
                     SyncStatus::Error("SshDeployKey is not implemented".to_string()),
                     FirstSyncMode::NotAttempted,

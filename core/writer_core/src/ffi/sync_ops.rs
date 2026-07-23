@@ -224,7 +224,7 @@ pub unsafe extern "C" fn writer_core_ensure_device_info(
     };
     match with_core(|core| {
         let info = core
-            .ensure_device_info(&platform_str, &device_class_str)
+            .ensure_device_info(&platform_str, &device_class_str, None)
             .map_err(|e| format!("{}", e))?;
         Ok(serde_json::json!({
             "deviceId": info.device_id,

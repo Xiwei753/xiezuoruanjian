@@ -140,7 +140,7 @@ impl AppBackend {
             enabled: true,
             backend_type: BackendType::GithubApi,
             remote_url: sanitized_url.clone(),
-            transport: writer_core::sync::SyncTransport::HttpsToken,
+            transport: writer_core::sync::SyncProtocol::HttpsToken,
             branch: branch.to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,

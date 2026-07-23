@@ -34,8 +34,8 @@ impl From<crate::sync::SyncConfig> for SyncConfigDto {
             },
             remote_url: c.remote_url,
             transport: match c.transport {
-                crate::sync::SyncTransport::HttpsToken => "https_token".to_string(),
-                crate::sync::SyncTransport::SshDeployKey => "ssh_deploy_key".to_string(),
+                crate::sync::SyncProtocol::HttpsToken => "https_token".to_string(),
+                crate::sync::SyncProtocol::SshDeployKey => "ssh_deploy_key".to_string(),
             },
             branch: c.branch,
             auto_sync: c.auto_sync,
@@ -59,9 +59,9 @@ impl From<SyncConfigDto> for crate::sync::SyncConfig {
             },
             remote_url: c.remote_url,
             transport: match c.transport.as_str() {
-                "https_token" => crate::sync::SyncTransport::HttpsToken,
-                "ssh" | "ssh_deploy_key" => crate::sync::SyncTransport::SshDeployKey,
-                _ => crate::sync::SyncTransport::HttpsToken,
+                "https_token" => crate::sync::SyncProtocol::HttpsToken,
+                "ssh" | "ssh_deploy_key" => crate::sync::SyncProtocol::SshDeployKey,
+                _ => crate::sync::SyncProtocol::HttpsToken,
             },
             branch: c.branch,
             auto_sync: c.auto_sync,
@@ -297,10 +297,10 @@ impl From<crate::sync::SyncResult> for SyncResultDto {
     }
 }
 
-fn sync_transport_to_wire(transport: crate::sync::SyncTransport) -> String {
+fn sync_transport_to_wire(transport: crate::sync::SyncProtocol) -> String {
     match transport {
-        crate::sync::SyncTransport::HttpsToken => "https_token".to_string(),
-        crate::sync::SyncTransport::SshDeployKey => "ssh_deploy_key".to_string(),
+        crate::sync::SyncProtocol::HttpsToken => "https_token".to_string(),
+        crate::sync::SyncProtocol::SshDeployKey => "ssh_deploy_key".to_string(),
     }
 }
 
