@@ -10,7 +10,6 @@ import com.xiwei.sujian.designsystem.theme.SujianDarkColorScheme
 import com.xiwei.sujian.designsystem.theme.SujianLightColorScheme
 import com.xiwei.sujian.designsystem.theme.SujianTheme
 import com.xiwei.sujian.designsystem.theme.SujianShapes
-import com.xiwei.sujian.designsystem.theme.SujianShapes
 import com.xiwei.sujian.designsystem.theme.SujianTypography
 import com.xiwei.sujian.designsystem.theme.hexToColor
 

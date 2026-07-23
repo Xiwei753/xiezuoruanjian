@@ -30,5 +30,5 @@ data class SujianElevation(
     val level5: Dp = 12.dp,
 )
 
-internal val LocalSujianMotion = staticCompositionLocalOf { SujianMotion() }
-internal val LocalSujianElevation = staticCompositionLocalOf { SujianElevation() }
+val LocalSujianMotion = staticCompositionLocalOf { SujianMotion() }
+val LocalSujianElevation = staticCompositionLocalOf { SujianElevation() }

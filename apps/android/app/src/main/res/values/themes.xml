@@ -36,8 +36,7 @@
         <!-- Inverse/scrim colors: not exposed as Material3 style attrs in 1.12.0.
              Access via @color/md_theme_light_inverseSurface etc. in code/layouts. -->
 
-        <item name="android:statusBarColor">?attr/colorSurface</item>
-        <item name="android:windowLightStatusBar" tools:targetApi="m">true</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
 
         <!-- System font fallback -->
         <item name="android:fontFamily">sans-serif</item>
