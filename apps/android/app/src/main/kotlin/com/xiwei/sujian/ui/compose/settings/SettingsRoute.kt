@@ -1,14 +1,13 @@
 package com.xiwei.sujian.ui.compose.settings
 
+import android.os.Parcelable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoStories
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.CloudSync
@@ -17,15 +16,10 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Science
-import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
-import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -37,7 +31,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.designsystem.component.SujianListItem
-import com.xiwei.sujian.designsystem.layout.SujianScreenScaffold
+import com.xiwei.sujian.designsystem.layout.SujianListDetailScaffold
 import com.xiwei.sujian.model.LocalSettings
 import com.xiwei.sujian.ui.compose.navigation.SettingsSection
 import kotlinx.coroutines.Dispatchers
@@ -46,6 +40,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.parcelize.Parcelize
 
 data class SettingsUiState(
     val settings: LocalSettings = LocalSettings(),
@@ -163,6 +158,10 @@ val settingsCategories = listOf(
     SettingsCategory(SettingsSection.About, R.string.pref_category_about, Icons.Default.Info),
 )
 
+@Parcelize
+private data class SettingsSelection(val section: SettingsSection) : Parcelable
+
+@OptIn(androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi::class)
 @Composable
 fun SettingsRoute(
     onNavigateBack: (() -> Unit)? = null,
@@ -171,68 +170,30 @@ fun SettingsRoute(
     val context = LocalContext.current
     val vm: SettingsViewModel = viewModel()
     val uiState by vm.uiState.collectAsState()
-    var selectedSection by remember { mutableStateOf<SettingsSection?>(null) }
 
     LaunchedEffect(Unit) {
         vm.initialize(SettingsRepository(context))
     }
 
-    val windowWidthSizeClass = currentWindowAdaptiveInfo().windowSizeClass.windowWidthSizeClass
-    val isExpanded = windowWidthSizeClass == androidx.window.core.layout.WindowWidthSizeClass.EXPANDED
-
-    if (isExpanded) {
-        androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold(
-            navigationSuiteItems = {},
-            modifier = modifier.fillMaxSize(),
-        ) {
-            androidx.compose.foundation.layout.Row(modifier = Modifier.fillMaxSize()) {
-                androidx.compose.foundation.layout.Box(modifier = Modifier.weight(1f)) {
-                    SettingsListPane(
-                        onNavigateToDetail = { section -> selectedSection = section },
-                        selectedSection = selectedSection,
-                    )
-                }
-                androidx.compose.foundation.layout.Box(modifier = Modifier.weight(1f)) {
-                    if (selectedSection != null) {
-                        SettingsDetailPane(
-                            section = selectedSection!!,
-                            state = uiState,
-                            onIntent = vm::handleIntent,
-                        )
-                    }
-                }
-            }
-        }
-    } else {
-        if (selectedSection != null) {
-            val section = selectedSection!!
-            SujianScreenScaffold(
-                title = settingsCategories.find { it.section == section }?.let {
-                    stringResource(id = it.titleResId)
-                } ?: "",
-                navigationIcon = Icons.AutoMirrored.Filled.ArrowBack,
-                onNavigationClick = { selectedSection = null },
-            ) { innerPadding ->
+    SujianListDetailScaffold<SettingsSelection>(
+        modifier = modifier,
+        listPane = {
+            SettingsListPane(
+                onNavigateToDetail = { section -> navigateToDetail(SettingsSelection(section)) },
+                selectedSection = currentContentKey?.section,
+            )
+        },
+        detailPane = {
+            val selection = currentContentKey
+            if (selection != null) {
                 SettingsDetailPane(
-                    section = section,
+                    section = selection.section,
                     state = uiState,
                     onIntent = vm::handleIntent,
-                    modifier = Modifier.padding(innerPadding),
                 )
             }
-        } else {
-            SujianScreenScaffold(
-                title = stringResource(id = R.string.action_settings),
-                onNavigateBack = onNavigateBack,
-            ) { innerPadding ->
-                SettingsListPane(
-                    onNavigateToDetail = { section -> selectedSection = section },
-                    selectedSection = selectedSection,
-                    modifier = Modifier.padding(innerPadding),
-                )
-            }
-        }
-    }
+        },
+    )
 }
 
 @Composable
