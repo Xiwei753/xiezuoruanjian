@@ -81,6 +81,7 @@ class TargetDisplayRuntime(
                 rebuildProjectionContent()
             }
         )
+        frameGeneration++
         ensureRegisteredWithClock()
     }
 
@@ -107,6 +108,8 @@ class TargetDisplayRuntime(
     private fun rebuildProjectionAndLayout() {
         rebuildProjectionContent()
         layoutEngine.requestLayout()
+        frameGeneration++
+        ensureRegisteredWithClock()
     }
 
     fun setSecretMasked(masked: Boolean) {

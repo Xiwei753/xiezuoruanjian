@@ -17,9 +17,7 @@ class WindowDisplayFrameClock {
             if (!isTicking) return
             val snapshot = listeners.toList()
             for (listener in snapshot) {
-                if (listener.needsFrame()) {
-                    listener.onFrame(frameTimeNanos)
-                }
+                listener.onFrame(frameTimeNanos)
             }
             if (snapshot.any { it.needsFrame() }) {
                 choreographer.postFrameCallback(this)

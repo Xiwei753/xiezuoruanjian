@@ -19,7 +19,8 @@ class AndroidLineSnapshotBuilder {
         layout: Layout?,
         revision: AndroidLayoutRevision?,
         startIndex: Int,
-        endIndex: Int
+        endIndex: Int,
+        projection: DisplayTextProjection? = null
     ): List<AndroidLineSnapshot> {
         if (layout == null || revision == null) return emptyList()
 
@@ -28,7 +29,7 @@ class AndroidLineSnapshotBuilder {
         val safeEnd = endIndex.coerceAtMost(layout.lineCount)
 
         for (i in safeStart until safeEnd) {
-            val snapshot = buildSnapshotForLine(layout, i, revision)
+            val snapshot = buildSnapshotForLine(layout, i, revision, projection)
             if (snapshot != null) {
                 snapshots.add(snapshot)
             }
@@ -39,7 +40,8 @@ class AndroidLineSnapshotBuilder {
     fun buildSnapshotForLine(
         layout: Layout?,
         lineIndex: Int,
-        revision: AndroidLayoutRevision?
+        revision: AndroidLayoutRevision?,
+        projection: DisplayTextProjection? = null
     ): AndroidLineSnapshot? {
         if (layout == null || revision == null) return null
         if (lineIndex < 0 || lineIndex >= layout.lineCount) return null
@@ -79,6 +81,17 @@ class AndroidLineSnapshotBuilder {
 
         val snapshotId = nextSnapshotId()
 
+        val lineStartRealUtf16 = if (projection != null) {
+            projection.displayUtf16ToRealUtf16(lineRange.startUtf16)
+        } else {
+            lineRange.startUtf16
+        }
+        val lineEndRealUtf16 = if (projection != null) {
+            projection.displayUtf16ToRealUtf16(lineRange.endUtf16)
+        } else {
+            lineRange.endUtf16
+        }
+
         return AndroidLineSnapshot(
             snapshotId = snapshotId,
             bitmap = bitmap,
@@ -88,8 +101,8 @@ class AndroidLineSnapshotBuilder {
             clusters = emptyList(),
             documentByteStart = lineRange.startUtf8,
             documentByteEndExclusive = lineRange.endUtf8,
-            documentUtf16Start = lineRange.startUtf16,
-            documentUtf16EndExclusive = lineRange.endUtf16,
+            documentUtf16Start = lineStartRealUtf16,
+            documentUtf16EndExclusive = lineEndRealUtf16,
             baseline = lineRange.baseline,
             lineHeight = bottom - top
         )
@@ -122,7 +135,7 @@ class AndroidLineSnapshotBuilder {
         mirror: DisplayTextMirror,
         projection: DisplayTextProjection? = null
     ): AndroidLineSnapshot? {
-        val snapshot = buildSnapshotForLine(layout, lineIndex, revision) ?: return null
+        val snapshot = buildSnapshotForLine(layout, lineIndex, revision, projection) ?: return null
         if (layout == null) return snapshot
 
         val lineRange = revision?.lineRanges?.getOrNull(lineIndex) ?: return snapshot
