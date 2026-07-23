@@ -1,5 +1,6 @@
 package com.xiwei.sujian.ui.compose.theme
 
+import com.xiwei.sujian.designsystem.theme.ColorSource
 import uniffi.writer_core.BuiltinThemeDto
 import uniffi.writer_core.ThemePaletteRecordDto
 

@@ -1,0 +1,154 @@
+package com.xiwei.sujian.platform.api
+
+import android.app.ActivityManager
+import android.content.Context
+import android.content.res.Configuration
+import android.hardware.SensorManager
+import android.os.Build
+import android.view.WindowManager
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+enum class FoldPosture {
+    None,
+    Flat,
+    HalfOpened,
+}
+
+enum class PointerKind {
+    Touch,
+    Stylus,
+    Mouse,
+    Trackpad,
+}
+
+enum class WindowSizeClass {
+    Compact,
+    Medium,
+    Expanded,
+}
+
+data class AndroidCapabilities(
+    val sdkInt: Int = Build.VERSION.SDK_INT,
+    val windowSizeClass: WindowSizeClass = WindowSizeClass.Compact,
+    val foldPosture: FoldPosture = FoldPosture.None,
+    val hasHardwareKeyboard: Boolean = false,
+    val pointerKinds: Set<PointerKind> = setOf(PointerKind.Touch),
+    val refreshRateHz: Float = 60f,
+    val isLowRamDevice: Boolean = false,
+    val hasGyroscope: Boolean = false,
+    val hasAccelerometer: Boolean = false,
+    val hasHaptics: Boolean = false,
+    val supportsDynamicColor: Boolean = Build.VERSION.SDK_INT >= 31,
+    val supportsPredictiveBack: Boolean = Build.VERSION.SDK_INT >= 34,
+)
+
+data class AndroidPlatformInfo(
+    val manufacturer: String = Build.MANUFACTURER,
+    val brand: String = Build.BRAND,
+    val model: String = Build.MODEL,
+    val device: String = Build.DEVICE,
+    val sdkInt: Int = Build.VERSION.SDK_INT,
+    val release: String = Build.VERSION.RELEASE,
+    val abi: String = Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown",
+)
+
+open class CapabilityProvider(private val context: Context) {
+
+    private val _capabilities = MutableStateFlow(detectCapabilities())
+    val capabilities: StateFlow<AndroidCapabilities> = _capabilities.asStateFlow()
+
+    fun updateFromConfiguration(config: Configuration) {
+        val current = _capabilities.value
+        val windowSizeClass = config.toWindowSizeClass()
+        val hasHardwareKeyboard = config.keyboard != Configuration.KEYBOARD_NOKEYS
+        val pointerKinds = config.toPointerKinds()
+        _capabilities.value = current.copy(
+            windowSizeClass = windowSizeClass,
+            hasHardwareKeyboard = hasHardwareKeyboard,
+            pointerKinds = pointerKinds,
+        )
+    }
+
+    fun updateFromFoldFeatures(features: List<androidx.window.layout.DisplayFeature>) {
+        val current = _capabilities.value
+        val foldPosture = features.toFoldPosture()
+        _capabilities.value = current.copy(foldPosture = foldPosture)
+    }
+
+    private fun detectCapabilities(): AndroidCapabilities {
+        val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+        val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+        val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+
+        val hasGyroscope = sensorManager?.getDefaultSensor(android.hardware.Sensor.TYPE_GYROSCOPE) != null
+        val hasAccelerometer = sensorManager?.getDefaultSensor(android.hardware.Sensor.TYPE_ACCELEROMETER) != null
+        val isLowRamDevice = activityManager?.isLowRamDevice == true
+
+        val refreshRate = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            windowManager?.defaultDisplay?.let { display ->
+                if (display.supportedModes.isNotEmpty()) {
+                    display.supportedModes.maxOfOrNull { it.refreshRate } ?: 60f
+                } else 60f
+            } ?: 60f
+        } else 60f
+
+        val hasHaptics = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            context.getSystemService(Context.VIBRATOR_SERVICE)?.let {
+                (it as? android.os.Vibrator)?.hasVibrator() == true
+            } ?: false
+        } else {
+            @Suppress("DEPRECATION")
+            (context.getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator)?.hasVibrator() == true
+        }
+
+        val config = context.resources.configuration
+        val supportsDynamicColor = Build.VERSION.SDK_INT >= 31
+
+        return AndroidCapabilities(
+            sdkInt = Build.VERSION.SDK_INT,
+            windowSizeClass = config.toWindowSizeClass(),
+            foldPosture = FoldPosture.None,
+            hasHardwareKeyboard = config.keyboard != Configuration.KEYBOARD_NOKEYS,
+            pointerKinds = config.toPointerKinds(),
+            refreshRateHz = refreshRate,
+            isLowRamDevice = isLowRamDevice,
+            hasGyroscope = hasGyroscope,
+            hasAccelerometer = hasAccelerometer,
+            hasHaptics = hasHaptics,
+            supportsDynamicColor = supportsDynamicColor,
+            supportsPredictiveBack = Build.VERSION.SDK_INT >= 34,
+        )
+    }
+
+    private fun Configuration.toWindowSizeClass(): WindowSizeClass {
+        val screenWidthDp = screenWidthDp
+        return when {
+            screenWidthDp >= 840 -> WindowSizeClass.Expanded
+            screenWidthDp >= 600 -> WindowSizeClass.Medium
+            else -> WindowSizeClass.Compact
+        }
+    }
+
+    private fun Configuration.toPointerKinds(): Set<PointerKind> {
+        val kinds = mutableSetOf(PointerKind.Touch)
+        if (keyboard != Configuration.KEYBOARD_NOKEYS) {
+            kinds.add(PointerKind.Trackpad)
+        }
+        if (touchscreen == Configuration.TOUCHSCREEN_STYLUS) {
+            kinds.add(PointerKind.Stylus)
+        }
+        return kinds
+    }
+
+    private fun List<androidx.window.layout.DisplayFeature>.toFoldPosture(): FoldPosture {
+        val foldingFeature = filterIsInstance<androidx.window.layout.FoldingFeature>().firstOrNull()
+            ?: return FoldPosture.None
+        return when (foldingFeature.state) {
+            androidx.window.layout.FoldingFeature.State.FLAT -> FoldPosture.Flat
+            androidx.window.layout.FoldingFeature.State.HALF_OPENED -> FoldPosture.HalfOpened
+            else -> FoldPosture.None
+        }
+    }
+}
