@@ -121,11 +121,23 @@ impl WriterCoreApi {
         let (platform, device_class) = if let Ok(info) = crate::settings::load_device_info(
             &self.workspace_path,
         ) {
-            let p = if info.platform.is_empty() { "android" } else { &info.platform };
-            let dc = if info.device_class.is_empty() { "phone" } else { &info.device_class };
-            (p.to_string(), dc.to_string())
+            let p = if info.platform.is_empty() {
+                crate::writing_stats::Platform::Desktop
+            } else {
+                crate::writing_stats::Platform::from_str_name(&info.platform)
+                    .unwrap_or(crate::writing_stats::Platform::Desktop)
+            };
+            let dc = if info.device_class.is_empty() {
+                p.default_device_class().to_string()
+            } else {
+                info.device_class
+            };
+            (p.to_str_name().to_string(), dc)
         } else {
-            ("android".to_string(), "phone".to_string())
+            (
+                crate::writing_stats::Platform::Desktop.to_str_name().to_string(),
+                crate::writing_stats::Platform::Desktop.default_device_class().to_string(),
+            )
         };
 
         self.core()
@@ -166,26 +178,18 @@ impl WriterCoreApi {
             &self.workspace_path,
         ) {
             if info.device_class.is_empty() {
-                // fallback：根据 platform 推断
-                if platform == "android" {
-                    "phone".to_string()
-                } else if platform == "harmony" {
-                    "tablet".to_string()
-                } else {
-                    "desktop".to_string()
-                }
+                crate::writing_stats::Platform::from_str_name(platform)
+                    .unwrap_or(crate::writing_stats::Platform::Desktop)
+                    .default_device_class()
+                    .to_string()
             } else {
                 info.device_class
             }
         } else {
-            // fallback：根据 platform 推断
-            if platform == "android" {
-                "phone".to_string()
-            } else if platform == "harmony" {
-                "tablet".to_string()
-            } else {
-                "desktop".to_string()
-            }
+            crate::writing_stats::Platform::from_str_name(platform)
+                .unwrap_or(crate::writing_stats::Platform::Desktop)
+                .default_device_class()
+                .to_string()
         };
 
         self.core()

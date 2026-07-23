@@ -252,7 +252,7 @@ mod tests {
     #[test]
     fn test_validate_platform_identifier_valid() {
         assert!(validate_platform_identifier("android"));
-        assert!(validate_platform_identifier("linux_qt"));
+        assert!(validate_platform_identifier("desktop"));
         assert!(validate_platform_identifier("windows-x86"));
         assert!(validate_platform_identifier("a"));
     }

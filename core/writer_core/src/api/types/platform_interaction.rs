@@ -35,7 +35,7 @@ impl From<crate::platform_interaction::PlatformCapabilities> for PlatformCapabil
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PlatformKindDto {
-    LinuxQt,
+    Desktop,
     Android,
     Windows,
     Harmony,
@@ -45,7 +45,7 @@ pub enum PlatformKindDto {
 impl From<crate::platform_interaction::PlatformKind> for PlatformKindDto {
     fn from(kind: crate::platform_interaction::PlatformKind) -> Self {
         match kind {
-            crate::platform_interaction::PlatformKind::LinuxQt => Self::LinuxQt,
+            crate::platform_interaction::PlatformKind::Desktop => Self::Desktop,
             crate::platform_interaction::PlatformKind::Android => Self::Android,
             crate::platform_interaction::PlatformKind::Windows => Self::Windows,
             crate::platform_interaction::PlatformKind::Harmony => Self::Harmony,
@@ -59,8 +59,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dto_from_linux_qt_capabilities() {
-        let caps = crate::platform_interaction::PlatformCapabilities::linux_qt();
+    fn dto_from_desktop_capabilities() {
+        let caps = crate::platform_interaction::PlatformCapabilities::desktop();
         let dto: PlatformCapabilitiesDto = caps.into();
         assert!(dto.supports_ime_preedit);
         assert!(dto.supports_cursor_anchor);
@@ -79,7 +79,7 @@ mod tests {
 
     #[test]
     fn dto_serializes_camel_case() {
-        let caps = crate::platform_interaction::PlatformCapabilities::linux_qt();
+        let caps = crate::platform_interaction::PlatformCapabilities::desktop();
         let dto: PlatformCapabilitiesDto = caps.into();
         let json = serde_json::to_string(&dto).unwrap();
         assert!(json.contains("\"supportsImePreedit\":"));

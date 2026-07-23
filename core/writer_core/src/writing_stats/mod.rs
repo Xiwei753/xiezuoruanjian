@@ -68,10 +68,33 @@ pub enum Platform {
 
 impl std::fmt::Display for Platform {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_str_name())
+    }
+}
+
+impl Platform {
+    pub fn to_str_name(&self) -> &'static str {
         match self {
-            Platform::Desktop => write!(f, "desktop"),
-            Platform::Android => write!(f, "android"),
-            Platform::Harmony => write!(f, "harmony"),
+            Platform::Desktop => "desktop",
+            Platform::Android => "android",
+            Platform::Harmony => "harmony",
+        }
+    }
+
+    pub fn from_str_name(s: &str) -> Option<Self> {
+        match s {
+            "desktop" | "linux" | "linux_qt" => Some(Platform::Desktop),
+            "android" => Some(Platform::Android),
+            "harmony" => Some(Platform::Harmony),
+            _ => None,
+        }
+    }
+
+    pub fn default_device_class(&self) -> &'static str {
+        match self {
+            Platform::Desktop => "desktop",
+            Platform::Android => "phone",
+            Platform::Harmony => "tablet",
         }
     }
 }

@@ -29,7 +29,7 @@ pub struct PlatformCapabilities {
 
 /// 预定义的平台能力配置
 impl PlatformCapabilities {
-    /// Linux Qt 当前能力
+    /// Linux/Qt 桌面端当前能力
     ///
     /// 已真实接入的能力：
     /// - IME preedit: SujianEventFilter → FFI → EditorInputController 完整链路
@@ -40,7 +40,7 @@ impl PlatformCapabilities {
     /// - reflow animation: Core reflow visual transaction → overlay
     /// - clipboard: LinuxQtClipboardFocusAdapter → QClipboard
     /// - context menu: LinuxQtClipboardFocusAdapter → QML context_menu_requested signal
-    pub fn linux_qt() -> Self {
+    pub fn desktop() -> Self {
         Self {
             supports_ime_preedit: true,
             supports_cursor_anchor: true,
@@ -147,25 +147,63 @@ impl PlatformCapabilities {
 }
 
 /// 平台标识 — 用于选择能力配置
+///
+/// 与 `writer_platform_api::PlatformKind` 保持语义一致。
+/// 新增平台时只需在此枚举添加变体并实现对应的 `default_capabilities`，
+/// 无需修改项目、章节、星图、统计等业务模块。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PlatformKind {
-    LinuxQt,
+    Desktop,
     Android,
     Windows,
     Harmony,
     Unknown,
 }
 
+impl std::fmt::Display for PlatformKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Desktop => write!(f, "desktop"),
+            Self::Android => write!(f, "android"),
+            Self::Windows => write!(f, "windows"),
+            Self::Harmony => write!(f, "harmony"),
+            Self::Unknown => write!(f, "unknown"),
+        }
+    }
+}
+
 impl PlatformKind {
     /// 获取该平台的默认能力配置
     pub fn default_capabilities(&self) -> PlatformCapabilities {
         match self {
-            Self::LinuxQt => PlatformCapabilities::linux_qt(),
+            Self::Desktop => PlatformCapabilities::desktop(),
             Self::Android => PlatformCapabilities::android(),
             Self::Windows => PlatformCapabilities::windows(),
             Self::Harmony => PlatformCapabilities::harmony(),
             Self::Unknown => PlatformCapabilities::minimal(),
+        }
+    }
+
+    /// 转换为 `writer_platform_api::PlatformKind`
+    pub fn to_platform_api_kind(self) -> writer_platform_api::PlatformKind {
+        match self {
+            Self::Desktop => writer_platform_api::PlatformKind::Linux,
+            Self::Android => writer_platform_api::PlatformKind::Android,
+            Self::Windows => writer_platform_api::PlatformKind::Windows,
+            Self::Harmony => writer_platform_api::PlatformKind::Harmony,
+            Self::Unknown => writer_platform_api::PlatformKind::Linux,
+        }
+    }
+
+    /// 从 `writer_platform_api::PlatformKind` 转换
+    pub fn from_platform_api_kind(kind: writer_platform_api::PlatformKind) -> Self {
+        match kind {
+            writer_platform_api::PlatformKind::Linux => Self::Desktop,
+            writer_platform_api::PlatformKind::Android => Self::Android,
+            writer_platform_api::PlatformKind::Windows => Self::Windows,
+            writer_platform_api::PlatformKind::Harmony => Self::Harmony,
+            writer_platform_api::PlatformKind::Apple => Self::Unknown,
         }
     }
 }
@@ -175,8 +213,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn linux_qt_capabilities_reflect_real_ime() {
-        let caps = PlatformCapabilities::linux_qt();
+    fn desktop_capabilities_reflect_real_ime() {
+        let caps = PlatformCapabilities::desktop();
         assert!(caps.supports_ime_preedit);
         assert!(caps.supports_replacement_commit);
         assert!(caps.supports_text_animation);
@@ -219,7 +257,7 @@ mod tests {
 
     #[test]
     fn platform_kind_default_capabilities() {
-        assert!(PlatformKind::LinuxQt.default_capabilities().supports_cursor_anchor);
+        assert!(PlatformKind::Desktop.default_capabilities().supports_cursor_anchor);
         assert!(PlatformKind::Android.default_capabilities().supports_replacement_commit);
         assert!(!PlatformKind::Harmony.default_capabilities().supports_text_animation);
         assert!(!PlatformKind::Unknown.default_capabilities().has_any_animation_support());
@@ -227,14 +265,14 @@ mod tests {
 
     #[test]
     fn has_any_animation_support() {
-        assert!(PlatformCapabilities::linux_qt().has_any_animation_support());
+        assert!(PlatformCapabilities::desktop().has_any_animation_support());
         assert!(!PlatformCapabilities::harmony().has_any_animation_support());
         assert!(!PlatformCapabilities::minimal().has_any_animation_support());
     }
 
     #[test]
     fn capabilities_serialize_camel_case() {
-        let caps = PlatformCapabilities::linux_qt();
+        let caps = PlatformCapabilities::desktop();
         let json = serde_json::to_string(&caps).unwrap();
         assert!(json.contains("\"supportsImePreedit\":"));
         assert!(json.contains("\"supportsCursorAnchor\":"));

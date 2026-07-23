@@ -17,7 +17,7 @@ impl WriterCoreApi {
 impl From<PlatformKindDto> for PlatformKind {
     fn from(dto: PlatformKindDto) -> Self {
         match dto {
-            PlatformKindDto::LinuxQt => Self::LinuxQt,
+            PlatformKindDto::Desktop => Self::Desktop,
             PlatformKindDto::Android => Self::Android,
             PlatformKindDto::Windows => Self::Windows,
             PlatformKindDto::Harmony => Self::Harmony,
