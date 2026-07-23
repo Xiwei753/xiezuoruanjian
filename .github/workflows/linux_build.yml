@@ -8,6 +8,9 @@ on:
     paths:
       - 'apps/Linux_qt/**'
       - 'core/writer_core/**'
+      - 'core/writer_platform_api/**'
+      - 'core/writer_uniffi/**'
+      - 'platform/rust/linux/**'
       - '.github/workflows/linux_build.yml'
       - 'Cargo.lock'
       - 'Cargo.toml'
