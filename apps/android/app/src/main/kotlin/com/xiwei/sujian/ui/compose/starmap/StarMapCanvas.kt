@@ -29,6 +29,7 @@ import com.xiwei.sujian.model.StarMapLayoutNodeData
 import com.xiwei.sujian.model.StarMapEdgeRenderData
 import com.xiwei.sujian.model.StarMapViewportData
 import com.xiwei.sujian.model.StarMapNodeKind
+import androidx.compose.material3.MaterialTheme
 
 private data class NodeDragState(
     val nodeId: String,
@@ -56,6 +57,34 @@ data class EdgeLabelGeometry(
     val offsetY: Float
 )
 
+data class StarMapColors(
+    val edgeColor: Color,
+    val edgeLabelColor: Color,
+    val nodeKindColors: Map<StarMapNodeKind, Color>,
+    val defaultNodeColor: Color,
+)
+
+@Composable
+fun rememberStarMapColors(): StarMapColors {
+    val cs = MaterialTheme.colorScheme
+    return remember(cs) {
+        StarMapColors(
+            edgeColor = cs.outlineVariant,
+            edgeLabelColor = cs.onSurfaceVariant,
+            nodeKindColors = mapOf(
+                StarMapNodeKind.Character to cs.tertiary,
+                StarMapNodeKind.Event to cs.error,
+                StarMapNodeKind.Location to cs.primary,
+                StarMapNodeKind.Item to cs.secondary,
+                StarMapNodeKind.Concept to cs.tertiaryContainer,
+                StarMapNodeKind.Theme to cs.primaryContainer,
+                StarMapNodeKind.Note to cs.onSurfaceVariant,
+            ),
+            defaultNodeColor = cs.outline,
+        )
+    }
+}
+
 @Composable
 fun StarMapCanvas(
     data: StarMapData,
@@ -68,6 +97,7 @@ fun StarMapCanvas(
     editingEdgeId: String? = null,
     modifier: Modifier = Modifier
 ) {
+    val colors = rememberStarMapColors()
     var scale by remember { mutableFloatStateOf(data.viewport.scale.coerceIn(0.2f, 5f)) }
     var offsetX by remember { mutableFloatStateOf(data.viewport.offsetX) }
     var offsetY by remember { mutableFloatStateOf(data.viewport.offsetY) }
@@ -207,7 +237,9 @@ fun StarMapCanvas(
                 offsetX = offsetX,
                 offsetY = offsetY,
                 canvasWidth = canvasWidth,
-                canvasHeight = canvasHeight
+                canvasHeight = canvasHeight,
+                edgeColor = colors.edgeColor,
+                edgeLabelColor = colors.edgeLabelColor,
             )
         }
 
@@ -221,7 +253,9 @@ fun StarMapCanvas(
                 offsetY = offsetY,
                 canvasWidth = canvasWidth,
                 canvasHeight = canvasHeight,
-                hideText = layoutNode.nodeId == editingNodeId
+                hideText = layoutNode.nodeId == editingNodeId,
+                nodeKindColors = colors.nodeKindColors,
+                defaultNodeColor = colors.defaultNodeColor,
             )
         }
     }
@@ -276,6 +310,8 @@ private fun DrawScope.drawEdgeRender(
     offsetY: Float,
     canvasWidth: Float,
     canvasHeight: Float,
+    edgeColor: Color,
+    edgeLabelColor: Color,
     hideLabel: Boolean = false
 ) {
     val startX = (edge.startX + offsetX) * scale
@@ -289,7 +325,7 @@ private fun DrawScope.drawEdgeRender(
     if (startY > canvasHeight + 100 && endY > canvasHeight + 100) return
 
     drawLine(
-        color = Color(0xFF888888),
+        color = edgeColor,
         start = Offset(startX, startY),
         end = Offset(endX, endY),
         strokeWidth = 1.5f * scale,
@@ -310,7 +346,7 @@ private fun DrawScope.drawEdgeRender(
                 lineTo(rightX, rightY)
                 close()
             },
-            color = Color(0xFF888888)
+            color = edgeColor
         )
     }
 
@@ -322,7 +358,7 @@ private fun DrawScope.drawEdgeRender(
             lx,
             ly + 4f * scale,
             android.graphics.Paint().apply {
-                color = Color(0xFF666666).toArgb()
+                color = edgeLabelColor.toArgb()
                 textSize = 11f * scale
                 textAlign = android.graphics.Paint.Align.CENTER
                 isAntiAlias = true
@@ -339,6 +375,8 @@ private fun DrawScope.drawNode(
     offsetY: Float,
     canvasWidth: Float,
     canvasHeight: Float,
+    nodeKindColors: Map<StarMapNodeKind, Color>,
+    defaultNodeColor: Color,
     hideText: Boolean = false
 ) {
     val cx = (layoutNode.x + offsetX) * scale
@@ -349,16 +387,7 @@ private fun DrawScope.drawNode(
     if (cx + w / 2 < 0 || cx - w / 2 > canvasWidth) return
     if (cy + h / 2 < 0 || cy - h / 2 > canvasHeight) return
 
-    val nodeColor = when (graphNode?.kind) {
-        StarMapNodeKind.Character -> Color(0xFF6750A4)
-        StarMapNodeKind.Event -> Color(0xFFB3261E)
-        StarMapNodeKind.Location -> Color(0xFF2E7D32)
-        StarMapNodeKind.Item -> Color(0xFFFF8F00)
-        StarMapNodeKind.Concept -> Color(0xFF0288D1)
-        StarMapNodeKind.Theme -> Color(0xFF7B1FA2)
-        StarMapNodeKind.Note -> Color(0xFF546E7A)
-        else -> Color(0xFF625B71)
-    }
+    val nodeColor = (graphNode?.kind?.let { nodeKindColors[it] }) ?: defaultNodeColor
 
     val radius = layoutNode.radius * scale
     drawRoundRect(
