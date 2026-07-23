@@ -4,22 +4,46 @@
 
 ## 总体结构
 
-素笺写作采用“Rust Core + 平台原生客户端”的单仓库结构。
+素笺写作采用"Rust Core + 平台原生客户端"的单仓库结构。
 
 - Rust Core 负责业务数据、磁盘格式、项目结构、设置、同步、统计和跨平台规则。
 - 平台客户端负责界面、导航、输入法、排版、渲染、动画和系统集成。
 - Bridge 只转换类型和调用约定，不复制业务规则。
 
+### Rust 工作区结构
+
+```text
+core/
+  writer_core/            # 通用业务核心（rlib）
+  writer_platform_api/    # 平台能力契约与初始化参数
+  writer_uniffi/          # UniFFI 对外入口与 cdylib 组装
+
+platform/rust/
+  android/                # Android Rust 适配与最终 cdylib
+  linux/                  # Linux Rust 适配与最终库
+  harmony/                # HarmonyOS Rust 适配（预留）
+  windows/                # Windows Rust 适配（预留）
+  apple/                  # Apple Rust 适配（预留）
+```
+
 依赖方向固定为：
 
 ```text
-UI / Platform
-    ↓
-Typed Bridge / Adapter
-    ↓
-Rust Core API
-    ↓
-Domain / Storage / Sync
+writer_platform_api <- writer_core
+writer_core + writer_platform_api <- writer_uniffi
+writer_core + writer_platform_api + writer_uniffi <- platform/rust/<target>
+```
+
+`writer_core` 不依赖任何平台 crate，也不依赖 Qt、JNI、Android Context、ArkTS、WinRT 等类型。
+
+运行时依赖方向：
+
+```text
+Android / Linux / HarmonyOS 原生应用层
+        ↓
+对应平台适配层与绑定层
+        ↓
+writer_core 通用业务核心
 ```
 
 下层不得依赖上层，Core 不知道任何平台 UI 类型。
@@ -51,7 +75,24 @@ Core 不负责：
 - 字体塑形与像素坐标；
 - 光标绘制、候选框和平台输入法协议；
 - 动画时间线、纹理和图形 API；
-- 平台权限与安装包。
+- 平台权限与安装包；
+- 应用目录、设备标识、系统密钥库、代理和网络环境；
+- 平台生命周期、后台任务、通知和文件选择器。
+
+## 平台能力契约
+
+`writer_platform_api` 定义平台与 Core 之间的稳定边界：
+
+- `PlatformInit`：平台启动时注入的初始化上下文（平台类型、应用目录、设备 ID、语言、时区）。
+- `PlatformPaths`：应用数据目录、缓存目录、日志目录、配置目录。
+- `ConfigStore`：配置存储契约（load/save），Core 不自行猜测平台目录。
+- `SecureStorage`：安全存储契约（令牌、凭据），平台端注入 Keychain/Keystore 实现。
+- `NetworkState`：网络状态信息（联网、代理、计费）。
+- `SyncTransport`：同步传输契约（HTTP 执行与同步协议分离）。
+- `PlatformCapabilities`：平台能力报告（IME、动画、剪贴板等）。
+
+业务核心只消费这些明确参数或 trait，不再自行猜测平台目录或环境变量。
+新增平台时实现一套适配层并组装对应库，无需修改项目、章节、星图、统计等业务代码。
 
 ## 编辑器边界
 
@@ -84,6 +125,9 @@ Core 不负责：
 - Rust 内部不得把强类型结果序列化后再解析回来。
 - 自动生成绑定是构建产物，不承载手写业务逻辑。
 - Bridge 不允许通过默认值制造假成功或吞掉错误。
+- `writer_uniffi` 只暴露稳定、粗粒度的业务服务，不导出内部模块函数。
+- 平台目录、Activity、Context、窗口对象、Compose 类型和 Qt 类型停留在平台端。
+- `reqwest`、`git2`、OpenSSL/rustls 等网络依赖通过 feature gate 隔离，按平台实际使用方式启用。
 
 ## 数据与同步
 
