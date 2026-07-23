@@ -152,6 +152,9 @@ class TargetDisplayRuntime(
         val frameTimeMs = System.nanoTime() / 1_000_000
         val layout = layoutEngine.getLayout() ?: return
         val highlightsUtf16 = getSearchHighlightsUtf16()
+        val cursorDisplayUtf16 = projection.realUtf8ToDisplayUtf16(mirror.getCursorUtf8())
+        val selStartDisplayUtf16 = projection.realUtf8ToDisplayUtf16(selectionStartUtf8)
+        val selEndDisplayUtf16 = projection.realUtf8ToDisplayUtf16(selectionEndUtf8)
         val frameState = visualRuntime.tick(
             frameTimeMs,
             layout,
@@ -160,9 +163,9 @@ class TargetDisplayRuntime(
             viewportWidth, viewportHeight,
             scrollX, scrollY,
             true, true,
-            mirror.getCursorUtf16(),
-            mirror.getSelectionStartUtf16(),
-            mirror.getSelectionEndUtf16()
+            cursorDisplayUtf16,
+            selStartDisplayUtf16,
+            selEndDisplayUtf16
         )
         if (frameState != null) {
             renderRuntime.drawFromFrameState(canvas, frameState)

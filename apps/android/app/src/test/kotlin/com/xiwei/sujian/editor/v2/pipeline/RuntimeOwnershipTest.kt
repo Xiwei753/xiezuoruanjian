@@ -297,4 +297,27 @@ class RuntimeOwnershipTest {
         val displayToReal = clazz.getDeclaredMethod("displayUtf16ToRealUtf16", Int::class.javaPrimitiveType)
         assertNotNull(displayToReal)
     }
+
+    @Test
+    fun pipelineDrawFrameUsesProjectionForCursorAndSelection() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidEditorPipeline")
+        val method = clazz.getDeclaredMethod("drawFrame",
+            android.graphics.Canvas::class.java,
+            List::class.java,
+            Int::class.javaPrimitiveType,
+            Int::class.javaPrimitiveType,
+            Float::class.javaPrimitiveType,
+            Float::class.javaPrimitiveType
+        )
+        assertNotNull(method)
+    }
+
+    @Test
+    fun targetDisplayRuntimeDrawFrameUsesProjectionMapping() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetDisplayRuntime")
+        val method = clazz.getDeclaredMethod("drawFrame", android.graphics.Canvas::class.java)
+        assertNotNull(method)
+        val projectionField = clazz.getDeclaredField("projection")
+        assertEquals(Class.forName("com.xiwei.sujian.editor.v2.projection.DisplayTextProjection"), projectionField.type)
+    }
 }

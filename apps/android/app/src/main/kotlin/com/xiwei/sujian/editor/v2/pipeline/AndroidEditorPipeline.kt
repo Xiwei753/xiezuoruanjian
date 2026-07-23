@@ -476,6 +476,10 @@ class AndroidEditorPipeline private constructor(
      */
     fun drawFrame(canvas: android.graphics.Canvas, searchHighlightsUtf16: List<Pair<Int, Int>>, viewportWidth: Int, viewportHeight: Int, scrollX: Float, scrollY: Float) {
         val frameTimeMs = System.nanoTime() / 1_000_000
+        val projection = layoutRuntime.getCurrentProjection()
+        val cursorDisplayUtf16 = projection.realUtf8ToDisplayUtf16(mirror.getCursorUtf8())
+        val selStartDisplayUtf16 = projection.realUtf8ToDisplayUtf16(mirror.getSelectionStartUtf8())
+        val selEndDisplayUtf16 = projection.realUtf8ToDisplayUtf16(mirror.getSelectionEndUtf8())
         val frameState = visualRuntime.tick(
             frameTimeMs,
             layoutRuntime.getLayout(),
@@ -484,9 +488,9 @@ class AndroidEditorPipeline private constructor(
             viewportWidth, viewportHeight,
             scrollX, scrollY,
             cursorVisible, selectionAllowed,
-            mirror.getCursorUtf16(),
-            mirror.getSelectionStartUtf16(),
-            mirror.getSelectionEndUtf16()
+            cursorDisplayUtf16,
+            selStartDisplayUtf16,
+            selEndDisplayUtf16
         )
         if (frameState != null) {
             renderRuntime.drawFromFrameState(canvas, frameState)
