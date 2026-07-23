@@ -1,11 +1,12 @@
 //! # Android 平台适配层
 //!
-//! 提供 Android 端的平台初始化、配置存储和最终库组装。
+//! 提供 Android 端的平台初始化、配置存储、同步传输和最终库组装。
 //!
 //! ## 职责
 //!
 //! - 接收 Kotlin 层传入的 Context 目录信息构造 `PlatformInit`
 //! - 使用 `writer_platform_api::FileConfigStore` 提供配置存储
+//! - 通过 `writer_core::ReqwestSyncTransport` 提供同步 HTTP 传输
 //! - 组装最终 `cdylib`：包含通用核心、Android 适配和 UniFFI 元数据
 //!
 //! ## 依赖方向
@@ -43,6 +44,10 @@ pub fn create_platform_init(
 pub fn init_default_config_store(config_dir: PathBuf) {
     let store = FileConfigStore::new(config_dir);
     writer_core::app_config::set_default_config_store(Box::new(store));
+}
+
+pub fn create_sync_transport() -> Box<dyn writer_platform_api::SyncTransport> {
+    Box::new(writer_core::sync::github_backend::ReqwestSyncTransport::new().expect("Failed to create HTTP transport"))
 }
 
 pub fn init_platform(platform_init: PlatformInit, config_dir: PathBuf) {

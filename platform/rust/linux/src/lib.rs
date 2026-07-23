@@ -1,12 +1,13 @@
 //! # Linux 平台适配层
 //!
-//! 提供 Linux 桌面端的平台初始化、目录解析和配置存储。
+//! 提供 Linux 桌面端的平台初始化、目录解析、配置存储和同步传输。
 //!
 //! ## 职责
 //!
 //! - 按 XDG Base Directory 规范解析应用目录
 //! - 构造 `PlatformInit` 并注入 Core
 //! - 使用 `writer_platform_api::FileConfigStore` 提供配置存储
+//! - 通过 `writer_core::ReqwestSyncTransport` 提供同步 HTTP 传输
 //!
 //! ## 依赖方向
 //!
@@ -86,4 +87,9 @@ pub fn init_default_config_store() {
     let config_dir = xdg_config_dir();
     let store = FileConfigStore::new(config_dir);
     writer_core::app_config::set_default_config_store(Box::new(store));
+}
+
+#[cfg(feature = "github-api")]
+pub fn create_sync_transport() -> Box<dyn writer_platform_api::SyncTransport> {
+    Box::new(writer_core::sync::github_backend::ReqwestSyncTransport::new().expect("Failed to create HTTP transport"))
 }

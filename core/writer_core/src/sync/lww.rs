@@ -22,7 +22,6 @@
 use crate::sync::github_api_client::{
     github_delete_content_serial, github_get_content, github_put_content_serial,
 };
-use crate::sync::github_backend::GitHubApiBackend;
 use crate::sync::scanner::scan_workspace_for_sync;
 use crate::sync::types::{
     FirstSyncMode, ManifestFileRecord, SyncConfig, SyncConflict, SyncKind, SyncManifest,
@@ -31,6 +30,7 @@ use crate::sync::types::{
 use crate::sync::SyncService;
 use rayon::prelude::*;
 use std::path::Path;
+use writer_platform_api::{HttpRequest, SyncTransport};
 
 /// 同步清单文件路径——记录本地所有文件的哈希、操作类型和时间戳。
 /// 这是 LWW 同步的唯一事实来源：三路比较的 base_hash 即从此文件读取。
@@ -323,6 +323,7 @@ pub(crate) fn perform_lww_sync(
     config: &SyncConfig,
     secrets: &SyncSecrets,
     force_sync: bool,
+    transport: &dyn SyncTransport,
 ) -> crate::Result<SyncResult> {
     log::debug!(
         "[sync] backend_type=github_api sync_mode=lww_manifest entry=perform_lww_sync workspace={}",
@@ -391,15 +392,7 @@ pub(crate) fn perform_lww_sync(
         }
     }
 
-    let api_base = GitHubApiBackend::api_base_url(&config.remote_url);
-    let client = match GitHubApiBackend::build_client() {
-        Ok(c) => c,
-        Err(e) => {
-            result.error = Some(e.to_string());
-            result.status = SyncStatus::RecoverableError(e.to_string());
-            return Ok(result);
-        }
-    };
+    let api_base = crate::sync::github_backend::GitHubApiBackend::api_base_url(&config.remote_url);
 
     let max_retries = 2;
     let mut attempt = 0;
@@ -409,7 +402,7 @@ pub(crate) fn perform_lww_sync(
             config,
             &token,
             &api_base,
-            &client,
+            transport,
             &mut state,
             &mut result,
         ) {
@@ -472,26 +465,30 @@ fn execute_lww_sync_attempt(
     config: &SyncConfig,
     token: &str,
     api_base: &str,
-    client: &reqwest::blocking::Client,
+    transport: &dyn SyncTransport,
     state: &mut SyncState,
     result: &mut SyncResult,
 ) -> crate::Result<SyncResult> {
     log::debug!("[sync] github_api step=正在拉取远端清单");
     let tree_url = format!("{}/git/trees/{}?recursive=1", api_base, config.branch);
-    let resp = client
-        .get(&tree_url)
-        .header("Authorization", format!("Bearer {}", token))
-        .header("User-Agent", "WriterApp/1.0")
-        .header("Accept", "application/vnd.github+json")
-        .send()
-        .map_err(|e| crate::Error::SyncNetworkUnavailable { reason: e.to_string() })?;
+    let tree_request = HttpRequest {
+        method: "GET".to_string(),
+        url: tree_url,
+        headers: vec![
+            ("Authorization".to_string(), format!("Bearer {}", token)),
+            ("User-Agent".to_string(), "WriterApp/1.0".to_string()),
+            ("Accept".to_string(), "application/vnd.github+json".to_string()),
+        ],
+        body: None,
+    };
+    let tree_resp = transport.execute(tree_request).map_err(|e| crate::Error::SyncNetworkUnavailable {
+        reason: format!("{}: {}", e.category, e.message),
+    })?;
 
     let mut remote_tree_files = std::collections::HashMap::new();
-    let tree_status = resp.status();
-    let tree_body = resp
-        .text()
-        .map_err(|e| crate::Error::SyncNetworkUnavailable { reason: e.to_string() })?;
-    if tree_status.as_u16() == 200 {
+    let tree_status = tree_resp.status;
+    let tree_body = String::from_utf8(tree_resp.body).unwrap_or_default();
+    if tree_status == 200 {
         let json: serde_json::Value = serde_json::from_str(&tree_body)
             .map_err(|e| crate::Error::SyncGithubApiError {
                 category: "api_error".to_string(),
@@ -516,21 +513,22 @@ fn execute_lww_sync_attempt(
                 }
             }
         }
-    } else if tree_status.as_u16() == 404 {
-        // 404 诊断链：tree 404 有三种可能原因，需逐级诊断：
-        // 1. 空仓库（分支存在但无文件）→ 继续同步，remote_tree_files 为空
-        // 2. 分支不存在 → 返回 BranchMissing 错误，提示用户检查分支名
-        // 3. 仓库不存在或 Token 无权限 → 返回 RepoNotFoundOrNoPermission 错误
-        // 诊断顺序：/git/trees/{branch} 404 → /git/ref/heads/{branch} → 仓库本身
+    } else if tree_status == 404 {
         let ref_url = format!("{}/git/ref/heads/{}", api_base, config.branch);
-        let ref_resp = client
-            .get(&ref_url)
-            .header("Authorization", format!("Bearer {}", token))
-            .header("User-Agent", "WriterApp/1.0")
-            .header("Accept", "application/vnd.github+json")
-            .send()
-            .map_err(|e| crate::Error::SyncNetworkUnavailable { reason: e.to_string() })?;
-        let ref_status = ref_resp.status().as_u16();
+        let ref_request = HttpRequest {
+            method: "GET".to_string(),
+            url: ref_url,
+            headers: vec![
+                ("Authorization".to_string(), format!("Bearer {}", token)),
+                ("User-Agent".to_string(), "WriterApp/1.0".to_string()),
+                ("Accept".to_string(), "application/vnd.github+json".to_string()),
+            ],
+            body: None,
+        };
+        let ref_resp = transport.execute(ref_request).map_err(|e| crate::Error::SyncNetworkUnavailable {
+            reason: format!("{}: {}", e.category, e.message),
+        })?;
+        let ref_status = ref_resp.status;
         if ref_status == 200 {
             // 仓库和分支都存在，tree 404 说明是空仓库，remote_tree_files 保持为空
             log::debug!(
@@ -538,16 +536,20 @@ fn execute_lww_sync_attempt(
                 config.branch
             );
         } else if ref_status == 404 {
-            // ref 也 404：可能是仓库不存在或 Token 无权限，也可能是分支不存在
-            // 再尝试访问仓库本身来区分
-            let repo_resp = client
-                .get(api_base)
-                .header("Authorization", format!("Bearer {}", token))
-                .header("User-Agent", "WriterApp/1.0")
-                .header("Accept", "application/vnd.github+json")
-                .send()
-                .map_err(|e| crate::Error::SyncNetworkUnavailable { reason: e.to_string() })?;
-            let repo_status = repo_resp.status().as_u16();
+            let repo_request = HttpRequest {
+                method: "GET".to_string(),
+                url: api_base.to_string(),
+                headers: vec![
+                    ("Authorization".to_string(), format!("Bearer {}", token)),
+                    ("User-Agent".to_string(), "WriterApp/1.0".to_string()),
+                    ("Accept".to_string(), "application/vnd.github+json".to_string()),
+                ],
+                body: None,
+            };
+            let repo_resp = transport.execute(repo_request).map_err(|e| crate::Error::SyncNetworkUnavailable {
+                reason: format!("{}: {}", e.category, e.message),
+            })?;
+            let repo_status = repo_resp.status;
             if repo_status == 200 {
                 // 仓库可访问但分支不存在
                 return Err(crate::Error::SyncRemoteBranchNotFound {
@@ -594,7 +596,7 @@ fn execute_lww_sync_attempt(
     let mut remote_manifest = SyncManifest::default();
     if remote_tree_files.contains_key(SYNC_MANIFEST_PATH) {
         if let Some((content_bytes, _)) =
-            github_get_content(client, api_base, token, &config.branch, SYNC_MANIFEST_PATH)?
+            github_get_content(transport, api_base, token, &config.branch, SYNC_MANIFEST_PATH)?
         {
             remote_manifest =
                 serde_json::from_slice::<SyncManifest>(&content_bytes).map_err(|e| {
@@ -769,7 +771,7 @@ fn execute_lww_sync_attempt(
                 .par_iter()
                 .map(|path| {
                     let remote =
-                        github_get_content(client, api_base, token, &config.branch, path)?;
+                        github_get_content(transport, api_base, token, &config.branch, path)?;
                     let Some((content, _sha)) = remote else {
                         return Ok((path.clone(), None));
                     };
@@ -940,7 +942,7 @@ fn execute_lww_sync_attempt(
 
                             let conflict = if remote_rec.op == "upsert" {
                                 if let Some((remote_content, _)) = github_get_content(
-                                    client,
+                                    transport,
                                     api_base,
                                     token,
                                     &config.branch,
@@ -1105,7 +1107,7 @@ fn execute_lww_sync_attempt(
         let download_result: crate::Result<()> = download_pool.install(|| {
             to_download.par_iter().try_for_each(|path| {
                 let Some((content, _sha)) =
-                    github_get_content(client, api_base, token, &config.branch, path)?
+                    github_get_content(transport, api_base, token, &config.branch, path)?
                 else {
                     return Err(crate::Error::SyncGithubApiError {
                         category: "api_error".to_string(),
@@ -1166,7 +1168,7 @@ fn execute_lww_sync_attempt(
         let content = std::fs::read(&full_path)
             .map_err(|e| crate::Error::Io(std::io::Error::other(format!("read {}: {}", path, e))))?;
         github_put_content_serial(
-            client,
+            transport,
             api_base,
             token,
             &config.branch,
@@ -1178,7 +1180,7 @@ fn execute_lww_sync_attempt(
 
     for path in &local_deletes_count {
         github_delete_content_serial(
-            client,
+            transport,
             api_base,
             token,
             &config.branch,
@@ -1188,7 +1190,7 @@ fn execute_lww_sync_attempt(
     }
 
     github_put_content_serial(
-        client,
+        transport,
         api_base,
         token,
         &config.branch,

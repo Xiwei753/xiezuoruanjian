@@ -83,7 +83,7 @@ impl crate::sync::SyncService {
         match config.backend_type {
             #[cfg(feature = "github-api")]
             BackendType::GithubApi => {
-                let backend = crate::sync::github_backend::GitHubApiBackend;
+                let backend = crate::sync::github_backend::GitHubApiBackend::new();
                 match backend.diagnose(config, secrets) {
                     Ok(diag_result) => Ok(diag_result),
                     Err(e) => {

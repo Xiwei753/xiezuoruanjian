@@ -5,6 +5,15 @@
 //! - HTTP 状态码到业务错误分类的映射（`github_api_error`）
 //! - SHA 冲突自动重试（`github_put_content_serial` / `github_delete_content_serial`）
 //!
+//! ## 依赖方向
+//!
+//! 本模块通过 `writer_platform_api::SyncTransport` trait 消费 HTTP 能力，
+//! 不直接依赖 `reqwest`。平台端注入具体的 HTTP 客户端实现。
+//!
+//! ```text
+//! writer_core 同步引擎 → SyncTransport trait → 平台 HTTP 实现
+//! ```
+//!
 //! ## 错误分类契约
 //!
 //! `github_api_error` 返回的 `category` 字符串是跨平台契约——
@@ -18,6 +27,62 @@
 //! 不做指数退避——同步是串行执行的，并发冲突由 LWW manifest 层面解决。
 
 use base64::Engine;
+use writer_platform_api::{HttpRequest, HttpResponse, SyncTransport, TransportError};
+
+fn transport_err_to_core(e: TransportError) -> crate::Error {
+    crate::Error::SyncNetworkUnavailable {
+        reason: format!("{}: {}", e.category, e.message),
+    }
+}
+
+fn execute_get(
+    transport: &dyn SyncTransport,
+    url: &str,
+    token: &str,
+) -> crate::Result<HttpResponse> {
+    let request = HttpRequest {
+        method: "GET".to_string(),
+        url: url.to_string(),
+        headers: vec![
+            ("Authorization".to_string(), format!("Bearer {}", token)),
+            ("User-Agent".to_string(), "WriterApp/1.0".to_string()),
+            ("Accept".to_string(), "application/vnd.github+json".to_string()),
+        ],
+        body: None,
+    };
+    transport.execute(request).map_err(transport_err_to_core)
+}
+
+fn execute_json(
+    transport: &dyn SyncTransport,
+    method: &str,
+    url: &str,
+    token: &str,
+    payload: &serde_json::Value,
+) -> crate::Result<HttpResponse> {
+    let request = HttpRequest {
+        method: method.to_string(),
+        url: url.to_string(),
+        headers: vec![
+            ("Authorization".to_string(), format!("Bearer {}", token)),
+            ("User-Agent".to_string(), "WriterApp/1.0".to_string()),
+            ("Accept".to_string(), "application/vnd.github+json".to_string()),
+            ("Content-Type".to_string(), "application/json".to_string()),
+        ],
+        body: Some(serde_json::to_vec(payload).map_err(|e| crate::Error::SyncNetworkUnavailable {
+            reason: format!("json serialize: {}", e),
+        })?),
+    };
+    transport.execute(request).map_err(transport_err_to_core)
+}
+
+fn is_success_status(status: u16) -> bool {
+    (200..300).contains(&status)
+}
+
+fn is_server_error(status: u16) -> bool {
+    (500..600).contains(&status)
+}
 
 /// 将 GitHub API HTTP 错误转换为带分类的 `crate::Error`。
 ///
@@ -33,11 +98,10 @@ use base64::Engine;
 /// - `api_error`：其他未分类错误
 pub(crate) fn github_api_error(
     context: &str,
-    status: reqwest::StatusCode,
+    status: u16,
     body: String,
 ) -> crate::Error {
-    let status_u16 = status.as_u16();
-    let category = match status_u16 {
+    let category = match status {
         401 => "token_invalid",
         403 => {
             if body.contains("Resource not accessible by personal access token") {
@@ -59,7 +123,7 @@ pub(crate) fn github_api_error(
         409 => "remote_sha_conflict",
         429 => "api_rate_limited",
         _ => {
-            if status.is_server_error() {
+            if is_server_error(status) {
                 "network_error"
             } else {
                 "api_error"
@@ -70,7 +134,7 @@ pub(crate) fn github_api_error(
     crate::Error::SyncGithubApiError {
         category: category.to_string(),
         context: context.to_string(),
-        status: status_u16,
+        status,
         body_preview,
     }
 }
@@ -80,28 +144,20 @@ pub(crate) fn github_api_error(
 /// 返回 `Some((bytes, sha))` 表示文件存在，`None` 表示 404（文件不存在，非错误）。
 /// `bytes` 为文件内容的 base64 解码结果，`sha` 为 Git blob SHA（用于后续 PUT/DELETE 的冲突检测）。
 pub(crate) fn github_get_content(
-    client: &reqwest::blocking::Client,
+    transport: &dyn SyncTransport,
     api_base: &str,
     token: &str,
     branch: &str,
     path: &str,
 ) -> crate::Result<Option<(Vec<u8>, Option<String>)>> {
     let url = format!("{}/contents/{}?ref={}", api_base, path, branch);
-    let resp = client
-        .get(&url)
-        .header("Authorization", format!("Bearer {}", token))
-        .header("User-Agent", "WriterApp/1.0")
-        .header("Accept", "application/vnd.github+json")
-        .send()
-        .map_err(|e| crate::Error::SyncNetworkUnavailable { reason: e.to_string() })?;
-    let status = resp.status();
-    let body = resp
-        .text()
-        .map_err(|e| crate::Error::SyncNetworkUnavailable { reason: e.to_string() })?;
-    if status.as_u16() == 404 {
+    let resp = execute_get(transport, &url, token)?;
+    let status = resp.status;
+    let body = String::from_utf8(resp.body).unwrap_or_default();
+    if status == 404 {
         return Ok(None);
     }
-    if !status.is_success() {
+    if !is_success_status(status) {
         return Err(github_api_error(
             &format!("get contents {}", path),
             status,
@@ -135,13 +191,13 @@ pub(crate) fn github_get_content(
 
 /// 仅获取远程文件的 SHA，不下载内容。用于 DELETE 操作的前置查询。
 pub(crate) fn github_get_content_sha(
-    client: &reqwest::blocking::Client,
+    transport: &dyn SyncTransport,
     api_base: &str,
     token: &str,
     branch: &str,
     path: &str,
 ) -> crate::Result<Option<String>> {
-    Ok(github_get_content(client, api_base, token, branch, path)?.and_then(|(_, sha)| sha))
+    Ok(github_get_content(transport, api_base, token, branch, path)?.and_then(|(_, sha)| sha))
 }
 
 /// 上传或更新远程文件（单次尝试）。
@@ -149,14 +205,14 @@ pub(crate) fn github_get_content_sha(
 /// `sha = Some(...)` 时为更新已有文件，`sha = None` 时为创建新文件。
 /// 返回 HTTP 状态码和响应体，由调用方决定是否重试。
 pub(crate) fn github_put_content_once(
-    client: &reqwest::blocking::Client,
+    transport: &dyn SyncTransport,
     api_base: &str,
     token: &str,
     branch: &str,
     path: &str,
     content: &[u8],
     sha: Option<&str>,
-) -> crate::Result<(reqwest::StatusCode, String)> {
+) -> crate::Result<(u16, String)> {
     let url = format!("{}/contents/{}", api_base, path);
     let mut payload = serde_json::json!({
         "message": format!("WriterApp sync {}", path),
@@ -166,19 +222,9 @@ pub(crate) fn github_put_content_once(
     if let Some(sha) = sha {
         payload["sha"] = serde_json::json!(sha);
     }
-    let resp = client
-        .put(&url)
-        .header("Authorization", format!("Bearer {}", token))
-        .header("User-Agent", "WriterApp/1.0")
-        .header("Accept", "application/vnd.github+json")
-        .json(&payload)
-        .send()
-        .map_err(|e| crate::Error::SyncNetworkUnavailable { reason: e.to_string() })?;
-    let status = resp.status();
-    let body = resp
-        .text()
-        .map_err(|e| crate::Error::SyncNetworkUnavailable { reason: e.to_string() })?;
-    Ok((status, body))
+    let resp = execute_json(transport, "PUT", &url, token, &payload)?;
+    let body = String::from_utf8(resp.body).unwrap_or_default();
+    Ok((resp.status, body))
 }
 
 /// 串行上传文件，自动处理 SHA 冲突（HTTP 409）。
@@ -187,7 +233,7 @@ pub(crate) fn github_put_content_once(
 /// 不做指数退避——同步流程串行执行，并发冲突由 LWW manifest 层面解决。
 /// 重试仍失败则返回错误。
 pub(crate) fn github_put_content_serial(
-    client: &reqwest::blocking::Client,
+    transport: &dyn SyncTransport,
     api_base: &str,
     token: &str,
     branch: &str,
@@ -196,7 +242,7 @@ pub(crate) fn github_put_content_serial(
     remote_sha: Option<String>,
 ) -> crate::Result<()> {
     let (status, body) = github_put_content_once(
-        client,
+        transport,
         api_base,
         token,
         branch,
@@ -204,13 +250,13 @@ pub(crate) fn github_put_content_serial(
         content,
         remote_sha.as_deref(),
     )?;
-    if status.is_success() {
+    if is_success_status(status) {
         return Ok(());
     }
-    if status.as_u16() == 409 {
-        let refreshed_sha = github_get_content_sha(client, api_base, token, branch, path)?;
+    if status == 409 {
+        let refreshed_sha = github_get_content_sha(transport, api_base, token, branch, path)?;
         let (retry_status, retry_body) = github_put_content_once(
-            client,
+            transport,
             api_base,
             token,
             branch,
@@ -218,7 +264,7 @@ pub(crate) fn github_put_content_serial(
             content,
             refreshed_sha.as_deref(),
         )?;
-        if retry_status.is_success() {
+        if is_success_status(retry_status) {
             return Ok(());
         }
         return Err(github_api_error(
@@ -238,32 +284,22 @@ pub(crate) fn github_put_content_serial(
 ///
 /// 返回 HTTP 状态码和响应体。404 视为成功（文件已不存在）。
 pub(crate) fn github_delete_content_once(
-    client: &reqwest::blocking::Client,
+    transport: &dyn SyncTransport,
     api_base: &str,
     token: &str,
     branch: &str,
     path: &str,
     sha: &str,
-) -> crate::Result<(reqwest::StatusCode, String)> {
+) -> crate::Result<(u16, String)> {
     let url = format!("{}/contents/{}", api_base, path);
     let payload = serde_json::json!({
         "message": format!("WriterApp delete {}", path),
         "sha": sha,
         "branch": branch,
     });
-    let resp = client
-        .delete(&url)
-        .header("Authorization", format!("Bearer {}", token))
-        .header("User-Agent", "WriterApp/1.0")
-        .header("Accept", "application/vnd.github+json")
-        .json(&payload)
-        .send()
-        .map_err(|e| crate::Error::SyncNetworkUnavailable { reason: e.to_string() })?;
-    let status = resp.status();
-    let body = resp
-        .text()
-        .map_err(|e| crate::Error::SyncNetworkUnavailable { reason: e.to_string() })?;
-    Ok((status, body))
+    let resp = execute_json(transport, "DELETE", &url, token, &payload)?;
+    let body = String::from_utf8(resp.body).unwrap_or_default();
+    Ok((resp.status, body))
 }
 
 /// 串行删除远程文件，自动处理 SHA 冲突（HTTP 409）。
@@ -272,7 +308,7 @@ pub(crate) fn github_delete_content_once(
 /// 首次 DELETE 失败且为 409 时，刷新远程 SHA 后重试一次。
 /// 404 视为成功（文件已不存在），重试仍失败则返回错误。
 pub(crate) fn github_delete_content_serial(
-    client: &reqwest::blocking::Client,
+    transport: &dyn SyncTransport,
     api_base: &str,
     token: &str,
     branch: &str,
@@ -282,17 +318,17 @@ pub(crate) fn github_delete_content_serial(
     let Some(mut sha) = remote_sha else {
         return Ok(());
     };
-    let (status, body) = github_delete_content_once(client, api_base, token, branch, path, &sha)?;
-    if status.is_success() || status.as_u16() == 404 {
+    let (status, body) = github_delete_content_once(transport, api_base, token, branch, path, &sha)?;
+    if is_success_status(status) || status == 404 {
         return Ok(());
     }
-    if status.as_u16() == 409 {
-        if let Some(refreshed_sha) = github_get_content_sha(client, api_base, token, branch, path)?
+    if status == 409 {
+        if let Some(refreshed_sha) = github_get_content_sha(transport, api_base, token, branch, path)?
         {
             sha = refreshed_sha;
             let (retry_status, retry_body) =
-                github_delete_content_once(client, api_base, token, branch, path, &sha)?;
-            if retry_status.is_success() || retry_status.as_u16() == 404 {
+                github_delete_content_once(transport, api_base, token, branch, path, &sha)?;
+            if is_success_status(retry_status) || retry_status == 404 {
                 return Ok(());
             }
             return Err(github_api_error(
@@ -318,7 +354,7 @@ mod tests {
     fn test_github_api_error_404_get_ref_classified_as_repo_not_found() {
         let err = github_api_error(
             "get ref heads/main",
-            reqwest::StatusCode::NOT_FOUND,
+            404,
             "{}".to_string(),
         );
         assert_eq!(err.sync_category(), "repo_not_found_or_no_permission");
@@ -328,7 +364,7 @@ mod tests {
     fn test_github_api_error_404_get_recursive_tree_classified_as_repo_not_found() {
         let err = github_api_error(
             "get recursive tree",
-            reqwest::StatusCode::NOT_FOUND,
+            404,
             "{}".to_string(),
         );
         assert_eq!(err.sync_category(), "repo_not_found_or_no_permission");
@@ -338,7 +374,7 @@ mod tests {
     fn test_github_api_error_404_get_contents_classified_as_file_not_found() {
         let err = github_api_error(
             "get contents chapter.md",
-            reqwest::StatusCode::NOT_FOUND,
+            404,
             "{}".to_string(),
         );
         assert_eq!(err.sync_category(), "file_not_found");
@@ -348,7 +384,7 @@ mod tests {
     fn test_github_api_error_404_put_contents_classified_as_repo_not_found() {
         let err = github_api_error(
             "put contents chapter.md",
-            reqwest::StatusCode::NOT_FOUND,
+            404,
             "{}".to_string(),
         );
         assert_eq!(err.sync_category(), "repo_not_found_or_no_permission");
@@ -358,7 +394,7 @@ mod tests {
     fn test_github_api_error_404_delete_contents_classified_as_repo_not_found() {
         let err = github_api_error(
             "delete contents chapter.md",
-            reqwest::StatusCode::NOT_FOUND,
+            404,
             "{}".to_string(),
         );
         assert_eq!(err.sync_category(), "repo_not_found_or_no_permission");
@@ -368,7 +404,7 @@ mod tests {
     fn test_github_api_error_401_classified_as_token_invalid() {
         let err = github_api_error(
             "get ref heads/main",
-            reqwest::StatusCode::UNAUTHORIZED,
+            401,
             "{}".to_string(),
         );
         assert_eq!(err.sync_category(), "token_invalid");
@@ -378,7 +414,7 @@ mod tests {
     fn test_github_api_error_403_with_permission_denied_body() {
         let err = github_api_error(
             "get ref heads/main",
-            reqwest::StatusCode::FORBIDDEN,
+            403,
             "Resource not accessible by personal access token".to_string(),
         );
         assert_eq!(err.sync_category(), "token_permission_denied");
@@ -388,7 +424,7 @@ mod tests {
     fn test_github_api_error_403_without_permission_denied_body() {
         let err = github_api_error(
             "get ref heads/main",
-            reqwest::StatusCode::FORBIDDEN,
+            403,
             "{}".to_string(),
         );
         assert_eq!(err.sync_category(), "auth_error");
@@ -398,7 +434,7 @@ mod tests {
     fn test_github_api_error_404_generic_context_classified_as_repo_not_found() {
         let err = github_api_error(
             "some unknown operation",
-            reqwest::StatusCode::NOT_FOUND,
+            404,
             "{}".to_string(),
         );
         assert_eq!(err.sync_category(), "repo_not_found_or_no_permission");
@@ -415,7 +451,7 @@ mod tests {
             "some unknown operation",
         ];
         for ctx in &contexts {
-            let err = github_api_error(ctx, reqwest::StatusCode::NOT_FOUND, "{}".to_string());
+            let err = github_api_error(ctx, 404, "{}".to_string());
             let category = err.sync_category();
             assert!(
                 category != "not_found",
@@ -424,5 +460,25 @@ mod tests {
                 category
             );
         }
+    }
+
+    #[test]
+    fn test_github_api_error_5xx_classified_as_network_error() {
+        let err = github_api_error("get ref", 500, "internal server error".to_string());
+        assert_eq!(err.sync_category(), "network_error");
+        let err2 = github_api_error("get ref", 503, "service unavailable".to_string());
+        assert_eq!(err2.sync_category(), "network_error");
+    }
+
+    #[test]
+    fn test_github_api_error_409_classified_as_remote_sha_conflict() {
+        let err = github_api_error("put contents test.md", 409, "sha conflict".to_string());
+        assert_eq!(err.sync_category(), "remote_sha_conflict");
+    }
+
+    #[test]
+    fn test_github_api_error_429_classified_as_api_rate_limited() {
+        let err = github_api_error("get ref", 429, "rate limited".to_string());
+        assert_eq!(err.sync_category(), "api_rate_limited");
     }
 }

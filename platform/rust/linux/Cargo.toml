@@ -6,6 +6,10 @@ edition = "2021"
 [lints]
 workspace = true
 
+[features]
+default = ["github-api"]
+github-api = ["writer_core/github-api"]
+
 [dependencies]
 writer_core = { path = "../../../core/writer_core" }
 writer_platform_api = { path = "../../../core/writer_platform_api" }

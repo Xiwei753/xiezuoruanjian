@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::Serialize;
 
@@ -24,6 +25,7 @@ pub type ApiResult<T> = Result<T, WriterError>;
 /// 调用链：平台端 → WriterAppService（Mutex 保护）→ WriterCoreApi → WriterCore（无状态 Facade）→ 子模块
 pub struct WriterCoreApi {
     pub(crate) workspace_path: PathBuf,
+    pub(crate) sync_transport: Option<Arc<dyn Fn() -> Box<dyn writer_platform_api::SyncTransport> + Send + Sync>>,
 }
 
 impl WriterCoreApi {
@@ -32,11 +34,24 @@ impl WriterCoreApi {
     pub fn new<P: AsRef<Path>>(workspace_path: P) -> Self {
         Self {
             workspace_path: workspace_path.as_ref().to_path_buf(),
+            sync_transport: None,
+        }
+    }
+
+    pub fn with_sync_transport<P: AsRef<Path>>(
+        workspace_path: P,
+        transport_factory: Arc<dyn Fn() -> Box<dyn writer_platform_api::SyncTransport> + Send + Sync>,
+    ) -> Self {
+        Self {
+            workspace_path: workspace_path.as_ref().to_path_buf(),
+            sync_transport: Some(transport_factory),
         }
     }
 
     pub(crate) fn core(&self) -> WriterCore {
-        WriterCore::new(&self.workspace_path)
+        let mut core = WriterCore::new(&self.workspace_path);
+        core.sync_transport = self.sync_transport.clone();
+        core
     }
 
     pub(crate) fn json_string<T: Serialize>(value: &T) -> ApiResult<String> {

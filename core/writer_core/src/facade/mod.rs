@@ -34,7 +34,7 @@ mod workspace_ops;
 mod writing_stats_ops;
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
@@ -51,6 +51,7 @@ use crate::writing_stats::api::StatsApi;
 pub struct WriterCore {
     pub(crate) workspace_path: PathBuf,
     pub(crate) stats_api: OnceLock<StatsApi>,
+    pub(crate) sync_transport: Option<Arc<dyn Fn() -> Box<dyn writer_platform_api::SyncTransport> + Send + Sync>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -64,6 +65,7 @@ impl WriterCore {
         Self {
             workspace_path: workspace_path.as_ref().to_path_buf(),
             stats_api: OnceLock::new(),
+            sync_transport: None,
         }
     }
 

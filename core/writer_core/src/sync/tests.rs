@@ -34,6 +34,17 @@ mod tests {
     #[cfg(any(feature = "git-https", feature = "github-api"))]
     use std::path::Path;
     use tempfile::tempdir;
+
+    #[cfg(feature = "github-api")]
+    fn lww_sync(
+        workspace_path: &Path,
+        config: &SyncConfig,
+        secrets: &SyncSecrets,
+        force_sync: bool,
+    ) -> crate::Result<crate::sync::SyncResult> {
+        let transport = crate::sync::github_backend::ReqwestSyncTransport::new()?;
+        SyncService::perform_lww_sync(workspace_path, config, secrets, force_sync, &transport)
+    }
     #[test]
     #[cfg(feature = "github-api")]
     fn test_github_api_diagnostics_reports_backend_type_without_token() {
@@ -55,7 +66,7 @@ mod tests {
             ssh_private_key: None,
         };
 
-        let result = GitHubApiBackend.diagnose(&config, &secrets).unwrap();
+        let result = GitHubApiBackend::new().diagnose(&config, &secrets).unwrap();
         assert_eq!(result.backend_type, "github_api");
         assert_eq!(result.error_category, "token_missing");
     }
@@ -1590,7 +1601,7 @@ mod tests {
             ssh_private_key: None,
         };
 
-        let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets, false).unwrap();
+        let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
         assert!(res
             .downloaded_files
             .contains(&"projects/p1/project.json".to_string()));
@@ -1667,7 +1678,7 @@ mod tests {
             ssh_private_key: None,
         };
 
-        let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets, false).unwrap();
+        let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
         assert!(res
             .local_deletes
             .contains(&"projects/p1/project.json".to_string()));
@@ -1738,7 +1749,7 @@ mod tests {
             ssh_private_key: None,
         };
 
-        let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets, false).unwrap();
+        let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
         assert!(res
             .remote_deletes
             .contains(&"projects/p1/project.json".to_string()));
@@ -1835,7 +1846,7 @@ mod tests {
             ssh_private_key: None,
         };
 
-        let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets, false).unwrap();
+        let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
 
         assert!(res
             .uploaded_files
@@ -1908,7 +1919,7 @@ mod tests {
             ssh_private_key: None,
         };
 
-        let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets, false).unwrap();
+        let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
         assert_ne!(res.status, SyncStatus::DirtyRepoBlocked);
 
         shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -2019,7 +2030,7 @@ mod tests {
             ssh_private_key: None,
         };
 
-        let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets, false).unwrap();
+        let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
 
         assert_eq!(res.status, SyncStatus::PartialConflict);
         assert!(!res.conflicts.is_empty());
@@ -2111,7 +2122,7 @@ mod tests {
             ssh_private_key: None,
         };
 
-        let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets, false).unwrap();
+        let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
         assert_eq!(res.status, SyncStatus::PartialConflict);
 
         let uploaded_manifest: SyncManifest =
@@ -2208,7 +2219,7 @@ mod tests {
             ssh_private_key: None,
         };
 
-        let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets, false).unwrap();
+        let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
 
         assert_eq!(res.status, SyncStatus::LatestWinsApplied);
         assert!(res.uploaded_files.contains(&chapter_rel.to_string()));
@@ -2280,7 +2291,7 @@ mod tests {
             ssh_private_key: None,
         };
 
-        let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets, false).unwrap();
+        let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
 
         assert_eq!(res.status, SyncStatus::LatestWinsApplied);
         assert!(res.downloaded_files.contains(&chapter_rel.to_string()));
@@ -2354,7 +2365,7 @@ mod tests {
             ssh_private_key: None,
         };
 
-        let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets, false).unwrap();
+        let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
 
         assert_eq!(res.status, SyncStatus::PartialConflict);
         assert!(!res.conflicts.is_empty());
@@ -2437,7 +2448,7 @@ mod tests {
             ssh_private_key: None,
         };
 
-        let res1 = SyncService::perform_lww_sync(dir.path(), &config, &secrets, false).unwrap();
+        let res1 = lww_sync(dir.path(), &config, &secrets, false).unwrap();
 
         // First sync: conflict detected
         assert_eq!(res1.status, SyncStatus::PartialConflict);
@@ -2486,7 +2497,7 @@ mod tests {
             has_network_state_permission: true,
         };
 
-        let res2 = SyncService::perform_lww_sync(dir.path(), &config2, &secrets, false).unwrap();
+        let res2 = lww_sync(dir.path(), &config2, &secrets, false).unwrap();
 
         // Second sync: conflict must still be present (not auto-resolved)
         // The path is in conflicted_files, so it's skipped entirely.
@@ -2770,7 +2781,7 @@ mod tests {
             ssh_private_key: None,
         };
 
-        let res1 = SyncService::perform_lww_sync(dir.path(), &config, &secrets, false).unwrap();
+        let res1 = lww_sync(dir.path(), &config, &secrets, false).unwrap();
         assert_eq!(res1.status, SyncStatus::PartialConflict);
         assert!(!res1.uploaded_files.contains(&chapter_rel.to_string()));
         assert!(!res1.downloaded_files.contains(&chapter_rel.to_string()));
@@ -2800,7 +2811,7 @@ mod tests {
             has_network_state_permission: true,
         };
 
-        let res2 = SyncService::perform_lww_sync(dir.path(), &config2, &secrets, false).unwrap();
+        let res2 = lww_sync(dir.path(), &config2, &secrets, false).unwrap();
         assert!(
             !res2.uploaded_files.contains(&chapter_rel.to_string()),
             "Second sync must NOT upload before resolution"
@@ -2854,7 +2865,7 @@ mod tests {
             has_network_state_permission: true,
         };
 
-        let res3 = SyncService::perform_lww_sync(dir.path(), &config3, &secrets, false).unwrap();
+        let res3 = lww_sync(dir.path(), &config3, &secrets, false).unwrap();
 
         // After resolve, three-way sees LocalChanged → uploads local version
         assert!(
@@ -2951,7 +2962,7 @@ mod tests {
             ssh_private_key: None,
         };
 
-        let res1 = SyncService::perform_lww_sync(dir.path(), &config, &secrets, false).unwrap();
+        let res1 = lww_sync(dir.path(), &config, &secrets, false).unwrap();
         assert_eq!(res1.status, SyncStatus::PartialConflict);
 
         shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -2988,7 +2999,7 @@ mod tests {
             has_network_state_permission: true,
         };
 
-        let res3 = SyncService::perform_lww_sync(dir.path(), &config3, &secrets, false).unwrap();
+        let res3 = lww_sync(dir.path(), &config3, &secrets, false).unwrap();
 
         // After take_remote resolution, sync must download the remote content
         assert!(
@@ -3042,7 +3053,7 @@ mod tests {
             has_network_state_permission: true,
         };
 
-        let res4 = SyncService::perform_lww_sync(dir.path(), &config4, &secrets, false).unwrap();
+        let res4 = lww_sync(dir.path(), &config4, &secrets, false).unwrap();
 
         assert!(
             !res4.uploaded_files.contains(&chapter_rel.to_string()),
@@ -3131,7 +3142,7 @@ mod tests {
             ssh_private_key: None,
         };
 
-        let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets, false).unwrap();
+        let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
 
         // Must NOT upload the local content
         assert!(
@@ -3243,7 +3254,7 @@ mod tests {
             ssh_private_key: None,
         };
 
-        let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets, false).unwrap();
+        let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
 
         // Must download the remote content
         assert!(
@@ -3285,7 +3296,7 @@ mod tests {
         // The new code should have a `tree_status.as_u16() == 404` branch that
         // calls /git/ref/heads/{branch} to diagnose.
         assert!(
-            source.contains("tree_status.as_u16() == 404"),
+            source.contains("tree_status == 404") || source.contains("tree_status.as_u16() == 404"),
             "lww.rs must have an explicit tree 404 branch that diagnoses the cause"
         );
         assert!(
@@ -3387,13 +3398,13 @@ mod tests {
         };
 
         // 第一次同步（force_sync=true）应该尝试执行（虽然会因网络失败，但不会被 debounce 跳过）
-        let _res1 = SyncService::perform_lww_sync(dir.path(), &config, &secrets, true).unwrap();
+        let _res1 = lww_sync(dir.path(), &config, &secrets, true).unwrap();
         // 因为是测试环境没有真实 GitHub API，预期返回错误状态而非 Success
         // debounce 跳过时返回 Success，所以只要不是 Success 就说明没被 debounce 跳过
 
         // 第二次同步（force_sync=false）在 min_interval 内应该被 debounce 跳过
         // debounce 跳过时返回 status=Success
-        let _res2 = SyncService::perform_lww_sync(dir.path(), &config, &secrets, false).unwrap();
+        let _res2 = lww_sync(dir.path(), &config, &secrets, false).unwrap();
         // 如果被 debounce 跳过，status 应该是 Success
         // 注意：如果第一次同步失败没有更新 last_sync_time，则不会被 debounce
         // 所以这个测试验证的是：如果 last_sync_time 在 min_interval 内，force_sync=false 会被跳过
@@ -3429,11 +3440,11 @@ mod tests {
         crate::sync::SyncService::save_sync_state(dir.path(), &state).unwrap();
 
         // force_sync=false 应该被 debounce 跳过（返回 Success）
-        let res1 = SyncService::perform_lww_sync(dir.path(), &config, &secrets, false).unwrap();
+        let res1 = lww_sync(dir.path(), &config, &secrets, false).unwrap();
         assert_eq!(res1.status, SyncStatus::Success, "auto sync should be debounced");
 
         // force_sync=true 应该绕过 debounce（尝试执行，虽然网络会失败）
-        let res2 = SyncService::perform_lww_sync(dir.path(), &config, &secrets, true).unwrap();
+        let res2 = lww_sync(dir.path(), &config, &secrets, true).unwrap();
         // force_sync=true 绕过了 debounce，会尝试网络请求
         // 因为测试环境没有真实 API，预期返回错误状态
         assert_ne!(res2.status, SyncStatus::Success, "force_sync should bypass debounce and attempt sync");
@@ -3471,7 +3482,7 @@ mod tests {
         crate::sync::SyncService::save_sync_state(dir.path(), &state).unwrap();
 
         // force_sync=false 但有 pending_take_remote，应该绕过 debounce（尝试执行）
-        let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets, false).unwrap();
+        let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
         // 绕过了 debounce，会尝试网络请求，因测试环境没有真实 API，预期返回错误状态
         assert_ne!(res.status, SyncStatus::Success, "pending_take_remote should bypass debounce");
     }

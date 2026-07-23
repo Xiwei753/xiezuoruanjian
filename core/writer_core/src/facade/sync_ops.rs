@@ -49,7 +49,11 @@ impl super::WriterCore {
     ) -> crate::error::Result<crate::sync::SyncDiagnosticsResult> {
         let secrets = self.load_sync_secrets().unwrap_or_default();
         let backend_type = crate::sync::resolved_backend_type(config);
-        let backend = crate::sync::create_sync_backend(&backend_type);
+        let backend = if let Some(transport) = self.sync_transport.as_ref() {
+            crate::sync::create_sync_backend_with_transport(&backend_type, transport())
+        } else {
+            crate::sync::create_sync_backend(&backend_type)
+        };
         backend.diagnose(config, &secrets)
     }
 
@@ -67,7 +71,11 @@ impl super::WriterCore {
     ) -> crate::error::Result<crate::sync::SyncResult> {
         let secrets = self.load_sync_secrets().unwrap_or_default();
         let backend_type = crate::sync::resolved_backend_type(config);
-        let backend = crate::sync::create_sync_backend(&backend_type);
+        let backend = if let Some(transport) = self.sync_transport.as_ref() {
+            crate::sync::create_sync_backend_with_transport(&backend_type, transport())
+        } else {
+            crate::sync::create_sync_backend(&backend_type)
+        };
         backend.sync(&self.workspace_path, config, &secrets, force_sync)
     }
 

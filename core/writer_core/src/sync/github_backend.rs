@@ -4,6 +4,16 @@
 //! 逐文件上传/下载，通过 manifest 文件记录每条路径的最新修改时间和设备，
 //! 冲突时以最新修改为准（LWW）。
 //!
+//! ## 依赖方向
+//!
+//! 本后端通过 `writer_platform_api::SyncTransport` trait 消费 HTTP 能力。
+//! 平台端注入具体的 HTTP 客户端实现（如基于 reqwest 的实现），
+//! Core 不直接依赖 reqwest 类型。
+//!
+//! ```text
+//! 平台适配层 → 注入 SyncTransport → GitHubApiBackend → writer_core 同步引擎
+//! ```
+//!
 //! ## 同步流程
 //!
 //! 1. `diagnose`：探测网络、认证、仓库和分支可用性
@@ -26,19 +36,58 @@ use crate::sync::types::SyncStatus;
 use crate::sync::url::mask_token_in_url;
 use crate::sync::url::sanitize_remote_url;
 use std::path::Path;
+use writer_platform_api::{HttpRequest, HttpResponse, SyncTransport, TransportError};
 
-/// GitHub REST API 同步后端 — 无状态结构体，所有状态通过参数传递。
-pub struct GitHubApiBackend;
+/// GitHub REST API 同步后端。
+///
+/// 通过 `SyncTransport` trait 消费 HTTP 能力，不直接依赖 reqwest。
+/// 平台端通过 `with_transport` 注入具体实现。
+pub struct GitHubApiBackend {
+    transport: Option<Box<dyn SyncTransport>>,
+}
 
 impl GitHubApiBackend {
-    /// 构建 HTTP 客户端（直连模式，不使用代理）。
-    pub(crate) fn build_client() -> crate::Result<reqwest::blocking::Client> {
-        reqwest::blocking::Client::builder()
-            .user_agent("WriterApp/1.0")
-            .timeout(std::time::Duration::from_secs(15))
-            .no_proxy()
-            .build()
-            .map_err(|e| crate::Error::SyncNetworkUnavailable { reason: format!("Failed to build HTTP client: {}", e) })
+    pub fn new() -> Self {
+        Self { transport: None }
+    }
+
+    pub fn with_transport(transport: Box<dyn SyncTransport>) -> Self {
+        Self {
+            transport: Some(transport),
+        }
+    }
+
+    fn ensure_transport(&self) -> crate::Result<&dyn SyncTransport> {
+        self.transport
+            .as_ref()
+            .map(|t| t.as_ref())
+            .ok_or_else(|| crate::Error::SyncNetworkUnavailable {
+                reason: "No SyncTransport configured — platform must inject HTTP transport before sync".to_string(),
+            })
+    }
+
+    fn transport_err_to_core(e: TransportError) -> crate::Error {
+        crate::Error::SyncNetworkUnavailable {
+            reason: format!("{}: {}", e.category, e.message),
+        }
+    }
+
+    fn execute_get(
+        transport: &dyn SyncTransport,
+        url: &str,
+        token: &str,
+    ) -> crate::Result<HttpResponse> {
+        let request = HttpRequest {
+            method: "GET".to_string(),
+            url: url.to_string(),
+            headers: vec![
+                ("Authorization".to_string(), format!("Bearer {}", token)),
+                ("User-Agent".to_string(), "WriterApp/1.0".to_string()),
+                ("Accept".to_string(), "application/vnd.github+json".to_string()),
+            ],
+            body: None,
+        };
+        transport.execute(request).map_err(Self::transport_err_to_core)
     }
 
     /// 从远程 URL 推导 GitHub API base URL。
@@ -56,6 +105,12 @@ impl GitHubApiBackend {
         } else {
             sanitized
         }
+    }
+}
+
+impl Default for GitHubApiBackend {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -86,8 +141,8 @@ impl SyncBackend for GitHubApiBackend {
         let api_base = Self::api_base_url(&config.remote_url);
         let _masked_url = mask_token_in_url(&api_base);
 
-        let client = match Self::build_client() {
-            Ok(c) => c,
+        let transport = match self.ensure_transport() {
+            Ok(t) => t,
             Err(e) => {
                 result.error_category = "network_probe_failed".to_string();
                 result.raw_error = Some(e.to_string());
@@ -97,16 +152,10 @@ impl SyncBackend for GitHubApiBackend {
 
         let api_url = format!("{}/git/ref/heads/{}", api_base, config.branch);
 
-        match client
-            .get(&api_url)
-            .header("Authorization", format!("Bearer {}", token))
-            .header("User-Agent", "WriterApp/1.0")
-            .header("Accept", "application/vnd.github+json")
-            .send()
-        {
+        match Self::execute_get(transport, &api_url, &token) {
             Ok(resp) => {
-                let status = resp.status().as_u16();
-                let body = resp.text().unwrap_or_default();
+                let status = resp.status;
+                let body = String::from_utf8(resp.body).unwrap_or_default();
                 if status == 200 {
                     result.success = true;
                     result.network_ok = true;
@@ -158,8 +207,9 @@ impl SyncBackend for GitHubApiBackend {
                 }
             }
             Err(e) => {
-                result.raw_error = Some(e.to_string());
-                if e.is_connect() {
+                let err_str = e.to_string();
+                result.raw_error = Some(err_str.clone());
+                if err_str.contains("dns") || err_str.contains("connect") {
                     result.error_category = "dns_failed".to_string();
                 } else {
                     result.error_category = "github_network_failed".to_string();
@@ -204,9 +254,10 @@ impl SyncBackend for GitHubApiBackend {
             force_sync,
             mask_token_in_url(&sanitize_remote_url(&config.remote_url).sanitized_url)
         );
+        let transport = self.ensure_transport()?;
         // SAFETY: AssertUnwindSafe needed for catch_unwind at sync boundary; the closure only calls perform_lww_sync with borrowed data; on panic, the error is caught and returned as a SyncResult::Error.
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            SyncService::perform_lww_sync(workspace_path, config, secrets, force_sync)
+            SyncService::perform_lww_sync(workspace_path, config, secrets, force_sync, transport)
         })) {
             Ok(result) => result,
             Err(err) => {
@@ -228,11 +279,95 @@ impl SyncBackend for GitHubApiBackend {
     }
 }
 
+/// 基于 reqwest 的 SyncTransport 实现。
+///
+/// 仅在 `github-api` feature 启用时可用，供平台端直接使用或作为默认实现。
+/// 平台端也可以提供自己的 `SyncTransport` 实现（如使用 Android 特定的 HTTP 客户端）。
+#[cfg(feature = "github-api")]
+pub struct ReqwestSyncTransport {
+    client: reqwest::blocking::Client,
+}
+
+#[cfg(feature = "github-api")]
+impl ReqwestSyncTransport {
+    pub fn new() -> crate::Result<Self> {
+        let client = reqwest::blocking::Client::builder()
+            .user_agent("WriterApp/1.0")
+            .timeout(std::time::Duration::from_secs(15))
+            .no_proxy()
+            .build()
+            .map_err(|e| crate::Error::SyncNetworkUnavailable {
+                reason: format!("Failed to build HTTP client: {}", e),
+            })?;
+        Ok(Self { client })
+    }
+}
+
+#[cfg(feature = "github-api")]
+impl Default for ReqwestSyncTransport {
+    fn default() -> Self {
+        Self::new().expect("Failed to create ReqwestSyncTransport")
+    }
+}
+
+#[cfg(feature = "github-api")]
+impl SyncTransport for ReqwestSyncTransport {
+    fn execute(&self, request: HttpRequest) -> Result<HttpResponse, TransportError> {
+        let mut req = match request.method.as_str() {
+            "GET" => self.client.get(&request.url),
+            "PUT" => self.client.put(&request.url),
+            "DELETE" => self.client.delete(&request.url),
+            "POST" => self.client.post(&request.url),
+            "PATCH" => self.client.patch(&request.url),
+            "HEAD" => self.client.head(&request.url),
+            _ => {
+                return Err(TransportError::new(
+                    "invalid_method",
+                    format!("Unsupported HTTP method: {}", request.method),
+                ));
+            }
+        };
+
+        for (key, value) in &request.headers {
+            req = req.header(key.as_str(), value.as_str());
+        }
+
+        if let Some(body) = request.body {
+            req = req.body(body);
+        }
+
+        let resp = req.send().map_err(|e| {
+            if e.is_connect() {
+                TransportError::new("dns_failed", e.to_string())
+            } else if e.is_timeout() {
+                TransportError::new("timeout", e.to_string())
+            } else {
+                TransportError::new("network", e.to_string())
+            }
+        })?;
+
+        let status = resp.status().as_u16();
+        let headers: Vec<(String, String)> = resp
+            .headers()
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+            .collect();
+        let body = resp.bytes().map_err(|e| {
+            TransportError::new("response_read", e.to_string())
+        })?;
+        Ok(HttpResponse {
+            status,
+            headers,
+            body: body.to_vec(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "github-api")]
     #[test]
-    fn test_build_client_uses_no_proxy() {
-        let client = super::GitHubApiBackend::build_client().unwrap();
-        drop(client);
+    fn test_reqwest_transport_creates_client() {
+        let _transport = super::ReqwestSyncTransport::new().unwrap();
     }
 }

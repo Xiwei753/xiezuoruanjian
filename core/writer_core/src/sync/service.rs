@@ -191,13 +191,15 @@ impl SyncService {
     #[cfg(feature = "github-api")]
     /// LWW 同步主入口——基于 Last-Writer-Wins 策略执行文件级同步。
     /// `force_sync=true` 跳过脏仓库保护等安全检查。
+    /// `transport` 提供平台 HTTP 客户端实现，Core 不直接依赖 reqwest。
     pub fn perform_lww_sync(
         workspace_path: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
         force_sync: bool,
+        transport: &dyn writer_platform_api::SyncTransport,
     ) -> crate::Result<SyncResult> {
-        lww::perform_lww_sync(workspace_path, config, secrets, force_sync)
+        lww::perform_lww_sync(workspace_path, config, secrets, force_sync, transport)
     }
 }
 

@@ -230,6 +230,9 @@ impl SyncBackend for UnavailableGithubApiBackend {
 ///
 /// 返回 `Box<dyn SyncBackend>`，调用方不关心具体实现类型。
 /// 未启用 feature 的后端类型返回占位实现（所有操作失败）。
+///
+/// GitHub API 后端需要 `SyncTransport` 才能工作。
+/// 使用 `create_sync_backend_with_transport` 注入平台 HTTP 实现。
 pub fn create_sync_backend(backend_type: &BackendType) -> Box<dyn SyncBackend> {
     match backend_type {
         #[cfg(feature = "git-https")]
@@ -237,7 +240,27 @@ pub fn create_sync_backend(backend_type: &BackendType) -> Box<dyn SyncBackend> {
         #[cfg(not(feature = "git-https"))]
         BackendType::Git => Box::new(UnavailableGitBackend),
         #[cfg(feature = "github-api")]
-        BackendType::GithubApi => Box::new(GitHubApiBackend),
+        BackendType::GithubApi => Box::new(GitHubApiBackend::new()),
+        #[cfg(not(feature = "github-api"))]
+        BackendType::GithubApi => Box::new(UnavailableGithubApiBackend),
+    }
+}
+
+/// 同步后端工厂（带 SyncTransport 注入）。
+///
+/// 平台端应优先使用此函数，将平台 HTTP 客户端注入同步后端，
+/// 而不是让 Core 自行构建 HTTP 客户端。
+pub fn create_sync_backend_with_transport(
+    backend_type: &BackendType,
+    _transport: Box<dyn writer_platform_api::SyncTransport>,
+) -> Box<dyn SyncBackend> {
+    match backend_type {
+        #[cfg(feature = "git-https")]
+        BackendType::Git => Box::new(GitSyncBackend),
+        #[cfg(not(feature = "git-https"))]
+        BackendType::Git => Box::new(UnavailableGitBackend),
+        #[cfg(feature = "github-api")]
+        BackendType::GithubApi => Box::new(GitHubApiBackend::with_transport(_transport)),
         #[cfg(not(feature = "github-api"))]
         BackendType::GithubApi => Box::new(UnavailableGithubApiBackend),
     }
