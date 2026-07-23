@@ -9,6 +9,7 @@
 //! - 定义 `ConfigStore`：配置存储契约
 //! - 定义 `SecureStorage`：安全存储契约（令牌、凭据）
 //! - 定义 `NetworkState`：网络状态信息
+//! - 定义 `SyncTransport`：同步传输契约（HTTP 执行与同步协议分离）
 //!
 //! ## 依赖方向
 //!
@@ -24,8 +25,10 @@ mod network_state;
 mod platform_init;
 mod platform_paths;
 mod secure_storage;
+mod sync_transport;
 
-pub use config_store::ConfigStore;
+pub use config_store::{ConfigStore, FileConfigStore};
 pub use network_state::NetworkState;
 pub use platform_init::{PlatformInit, PlatformKind, PlatformPaths};
 pub use secure_storage::SecureStorage;
+pub use sync_transport::{HttpRequest, HttpResponse, SyncTransport, TransportError};

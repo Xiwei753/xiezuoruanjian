@@ -1,20 +1,21 @@
 //! # Android 平台适配层
 //!
-//! 提供 Android 端的平台初始化和配置存储。
+//! 提供 Android 端的平台初始化、配置存储和最终库组装。
 //!
 //! ## 职责
 //!
 //! - 接收 Kotlin 层传入的 Context 目录信息构造 `PlatformInit`
-//! - 提供 `FileConfigStore` 的 Android 路径实现
+//! - 使用 `writer_platform_api::FileConfigStore` 提供配置存储
+//! - 组装最终 `cdylib`：包含通用核心、Android 适配和 UniFFI 元数据
 //!
 //! ## 依赖方向
 //!
 //! ```text
-//! Kotlin/Compose → writer-platform-android → writer_core + writer_platform_api
+//! Kotlin/Compose → writer-platform-android (cdylib) → writer_uniffi → writer_core + writer_platform_api
 //! ```
 
 use std::path::PathBuf;
-use writer_platform_api::{PlatformInit, PlatformKind};
+use writer_platform_api::{FileConfigStore, PlatformInit, PlatformKind};
 
 pub fn create_platform_init(
     files_dir: PathBuf,
@@ -40,6 +41,11 @@ pub fn create_platform_init(
 }
 
 pub fn init_default_config_store(config_dir: PathBuf) {
-    let store = writer_core::app_config::FileConfigStore::new(config_dir);
+    let store = FileConfigStore::new(config_dir);
     writer_core::app_config::set_default_config_store(Box::new(store));
+}
+
+pub fn init_platform(platform_init: PlatformInit, config_dir: PathBuf) {
+    init_default_config_store(config_dir);
+    let _ = platform_init;
 }

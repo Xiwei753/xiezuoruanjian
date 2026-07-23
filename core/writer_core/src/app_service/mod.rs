@@ -31,10 +31,16 @@ struct EditorSession {
 /// `editor_session` 是旧版正文章节专用路径（单 EditorKernel，单 generation），
 /// `session_registry` 是新版多目标会话路径（项目名/章节名/星图标题/正文等，各自独立 EditorKernel 和 generation）。
 /// 两者独立维护，不共享 EditorKernel 实例。同一时刻同一章节只能通过一条路径访问。
+///
+/// ## 平台初始化
+///
+/// `WriterAppService` 持有平台初始化上下文 `platform_init`，
+/// 由平台适配层在启动时注入，Core 不再自行猜测平台目录。
 pub struct WriterAppService {
     api: WriterCoreApi,
     editor_session: Mutex<EditorSession>,
     session_registry: Mutex<crate::editor::TextEditSessionRegistry>,
+    platform_init: Option<writer_platform_api::PlatformInit>,
 }
 
 impl WriterAppService {
@@ -47,7 +53,29 @@ impl WriterAppService {
                 generation: 0,
             }),
             session_registry: Mutex::new(crate::editor::TextEditSessionRegistry::new()),
+            platform_init: None,
         }
+    }
+
+    pub fn with_platform_init(workspace_path: String, init: writer_platform_api::PlatformInit) -> Self {
+        Self {
+            api: WriterCoreApi::new(workspace_path),
+            editor_session: Mutex::new(EditorSession {
+                kernel: crate::editor::EditorKernel::new(),
+                chapter_id: None,
+                generation: 0,
+            }),
+            session_registry: Mutex::new(crate::editor::TextEditSessionRegistry::new()),
+            platform_init: Some(init),
+        }
+    }
+
+    pub fn platform_init(&self) -> Option<&writer_platform_api::PlatformInit> {
+        self.platform_init.as_ref()
+    }
+
+    pub fn platform_paths(&self) -> Option<writer_platform_api::PlatformPaths> {
+        self.platform_init.as_ref().map(|init| init.paths())
     }
 
     // ── Actions ──

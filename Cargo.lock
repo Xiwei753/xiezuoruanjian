@@ -3810,6 +3810,7 @@ version = "0.1.0"
 dependencies = [
  "writer_core",
  "writer_platform_api",
+ "writer_uniffi",
 ]
 
 [[package]]
@@ -3852,6 +3853,15 @@ name = "writer_platform_api"
 version = "0.1.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "writer_uniffi"
+version = "0.1.0"
+dependencies = [
+ "uniffi",
+ "writer_core",
+ "writer_platform_api",
 ]
 
 [[package]]

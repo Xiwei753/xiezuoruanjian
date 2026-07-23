@@ -1,0 +1,25 @@
+[package]
+name = "writer_uniffi"
+version = "0.1.0"
+edition = "2021"
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+writer_core = { path = "../writer_core" }
+writer_platform_api = { path = "../writer_platform_api" }
+
+[dependencies.uniffi]
+version = "0.28.0"
+features = ["cli"]
+
+[build-dependencies]
+uniffi = { version = "0.28.0", features = ["build"] }
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"

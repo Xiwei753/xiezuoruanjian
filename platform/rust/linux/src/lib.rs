@@ -6,7 +6,7 @@
 //!
 //! - 按 XDG Base Directory 规范解析应用目录
 //! - 构造 `PlatformInit` 并注入 Core
-//! - 提供 `FileConfigStore` 的 Linux 路径实现
+//! - 使用 `writer_platform_api::FileConfigStore` 提供配置存储
 //!
 //! ## 依赖方向
 //!
@@ -15,7 +15,7 @@
 //! ```
 
 use std::path::PathBuf;
-use writer_platform_api::{PlatformInit, PlatformKind};
+use writer_platform_api::{FileConfigStore, PlatformInit, PlatformKind};
 
 pub fn resolve_platform_init() -> PlatformInit {
     let config_dir = xdg_config_dir();
@@ -84,6 +84,6 @@ fn local_timezone() -> String {
 
 pub fn init_default_config_store() {
     let config_dir = xdg_config_dir();
-    let store = writer_core::app_config::FileConfigStore::new(config_dir);
+    let store = FileConfigStore::new(config_dir);
     writer_core::app_config::set_default_config_store(Box::new(store));
 }

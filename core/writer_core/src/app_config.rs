@@ -16,15 +16,13 @@
 //! ```
 //!
 //! Core 业务模块通过 `ConfigStore` trait 消费配置，不直接访问文件系统或环境变量。
+//!
+//! `FileConfigStore` 实现已迁移至 `writer_platform_api::FileConfigStore`，
+//! 平台适配层直接使用该实现或提供自己的 `ConfigStore` 实现。
 
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::io::Write;
-use std::path::PathBuf;
 use std::sync::Mutex;
 use writer_platform_api::ConfigStore;
-
-const CONFIG_FILE_NAME: &str = "app_config.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -140,92 +138,14 @@ pub fn clear_last_navigation_state() -> Result<(), String> {
     save_app_config(&config)
 }
 
-pub struct FileConfigStore {
-    config_dir: PathBuf,
-}
-
-impl FileConfigStore {
-    pub fn new(config_dir: PathBuf) -> Self {
-        Self { config_dir }
-    }
-
-    fn config_path(&self) -> PathBuf {
-        self.config_dir.join(CONFIG_FILE_NAME)
-    }
-}
-
-impl ConfigStore for FileConfigStore {
-    fn load(&self) -> Result<Option<Vec<u8>>, String> {
-        let path = self.config_path();
-        if !path.exists() {
-            return Ok(None);
-        }
-        fs::read(&path).map(Some).map_err(|e| e.to_string())
-    }
-
-    fn save(&self, bytes: &[u8]) -> Result<(), String> {
-        let path = self.config_path();
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        let tmp_path = path.with_extension("tmp");
-
-        let mut file = fs::File::create(&tmp_path).map_err(|e| e.to_string())?;
-        file.write_all(bytes).map_err(|e| e.to_string())?;
-        file.flush().map_err(|e| e.to_string())?;
-        file.sync_all().map_err(|e| e.to_string())?;
-        drop(file);
-
-        if path.exists() {
-            fs::remove_file(&path).map_err(|e| e.to_string())?;
-        }
-
-        fs::rename(&tmp_path, &path).map_err(|e| e.to_string())?;
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use writer_platform_api::FileConfigStore;
 
-    struct TestConfigStore {
-        dir: tempfile::TempDir,
-    }
-
-    impl TestConfigStore {
-        fn new() -> Self {
-            Self {
-                dir: tempfile::tempdir().expect("无法创建临时目录"),
-            }
-        }
-
-        fn config_path(&self) -> PathBuf {
-            self.dir.path().join(CONFIG_FILE_NAME)
-        }
-    }
-
-    impl ConfigStore for TestConfigStore {
-        fn load(&self) -> Result<Option<Vec<u8>>, String> {
-            let path = self.config_path();
-            if !path.exists() {
-                return Ok(None);
-            }
-            std::fs::read(&path).map(Some).map_err(|e| e.to_string())
-        }
-
-        fn save(&self, bytes: &[u8]) -> Result<(), String> {
-            let path = self.config_path();
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-            }
-            std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
-            Ok(())
-        }
-    }
-
-    fn with_test_store<R, F: FnOnce(&TestConfigStore) -> R>(f: F) -> R {
-        let store = TestConfigStore::new();
+    fn with_test_store<R, F: FnOnce(&FileConfigStore) -> R>(f: F) -> R {
+        let dir = tempfile::tempdir().expect("无法创建临时目录");
+        let store = FileConfigStore::new(dir.path().to_path_buf());
         f(&store)
     }
 
@@ -285,7 +205,7 @@ mod tests {
 
         let tmp_path = dir.path().join("app_config.tmp");
         assert!(!tmp_path.exists(), "临时文件不应残留");
-        let config_path = dir.path().join(CONFIG_FILE_NAME);
+        let config_path = dir.path().join("app_config.json");
         assert!(config_path.exists(), "目标文件应该存在");
     }
 
@@ -302,7 +222,7 @@ mod tests {
         let content = serde_json::to_string_pretty(&config).unwrap();
         store.save(content.as_bytes()).unwrap();
 
-        let config_path = nested.join(CONFIG_FILE_NAME);
+        let config_path = nested.join("app_config.json");
         assert!(config_path.exists());
     }
 
@@ -432,7 +352,7 @@ mod tests {
     #[test]
     fn test_load_app_config_from_invalid_json_returns_default() {
         let dir = tempfile::tempdir().expect("无法创建临时目录");
-        let config_path = dir.path().join(CONFIG_FILE_NAME);
+        let config_path = dir.path().join("app_config.json");
         std::fs::write(&config_path, "this is not json{{{").unwrap();
 
         let loaded: AppConfig = std::fs::read(&config_path)
