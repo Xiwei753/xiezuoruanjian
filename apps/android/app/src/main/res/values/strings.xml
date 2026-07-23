@@ -416,4 +416,5 @@
     <string name="confirm_delete_message">确定要删除「%1$s」吗？此操作不可撤销。</string>
     <string name="action_collapse">折叠</string>
     <string name="action_expand">展开</string>
+    <string name="pref_category_font_layout">字体与排版</string>
 </resources>

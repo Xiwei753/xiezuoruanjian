@@ -101,7 +101,7 @@ fun AppearanceSettings(
             )
         }
 
-        SujianSection(title = "字体与排版") {
+        SujianSection(title = stringResource(id = R.string.pref_category_font_layout)) {
             SujianSlider(
                 title = stringResource(id = R.string.pref_font_size),
                 value = fontSize,
