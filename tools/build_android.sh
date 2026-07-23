@@ -24,6 +24,7 @@
 #
 # 构建产物：
 #   - Rust UniFFI native library: apps/android/app/src/main/jniLibs/arm64-v8a/libuniffi_writer_core.so
+#     (由 platform/rust/android crate 编译产生 libwriter_platform_android.so 后重命名)
 #   - Android APK: apps/android/app/build/outputs/apk/*/debug/sujian-android-*.apk
 #
 # 注意事项：
@@ -78,24 +79,25 @@ echo "清理旧的 Android native library 文件..."
 rm -f "$LIB_DIR/libwriter_core_jni.so"
 rm -f "$LIB_DIR/libwriter_core.so"
 rm -f "$LIB_DIR/libwriter_uniffi.so"
+rm -f "$LIB_DIR/libwriter_platform_android.so"
 rm -f "$LIB_DIR/libuniffi_writer_core.so"
 
 echo "使用 cargo-ndk 编译 arm64-v8a 架构..."
-cd "$WORKSPACE_ROOT/core/writer_uniffi"
+cd "$WORKSPACE_ROOT/platform/rust/android"
 
 # shellcheck disable=SC2086
 cargo ndk -t arm64-v8a -o "$WORKSPACE_ROOT/apps/android/app/src/main/jniLibs" build --release $RUST_FEATURES
 
 if [ $? -eq 0 ]; then
-    if [ ! -f "$LIB_DIR/libwriter_uniffi.so" ]; then
-        echo "错误: 找不到 libwriter_uniffi.so。"
+    if [ ! -f "$LIB_DIR/libwriter_platform_android.so" ]; then
+        echo "错误: 找不到 libwriter_platform_android.so。"
         exit 1
     fi
 
-    mv "$LIB_DIR/libwriter_uniffi.so" "$LIB_DIR/libuniffi_writer_core.so"
+    mv "$LIB_DIR/libwriter_platform_android.so" "$LIB_DIR/libuniffi_writer_core.so"
 
     if [ ! -f "$LIB_DIR/libuniffi_writer_core.so" ]; then
-        echo "错误: libwriter_uniffi.so 重命名为 libuniffi_writer_core.so 失败。"
+        echo "错误: libwriter_platform_android.so 重命名为 libuniffi_writer_core.so 失败。"
         exit 1
     fi
 

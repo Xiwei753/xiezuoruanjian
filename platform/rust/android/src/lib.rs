@@ -15,6 +15,9 @@
 //! Kotlin/Compose → writer-platform-android (cdylib) → writer_uniffi → writer_core + writer_platform_api
 //! ```
 
+#[allow(unused_imports)]
+use writer_uniffi;
+
 use std::path::PathBuf;
 use writer_platform_api::{FileConfigStore, PlatformInit, PlatformKind};
 
