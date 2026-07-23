@@ -35,12 +35,15 @@ class TargetDisplayRuntime(
     var frameGeneration by mutableLongStateOf(0L)
         private set
 
+    var displayStateVersion by mutableLongStateOf(0L)
+        private set
+
     private var cachedFrameState: FrameState? = null
 
     private var frameClock: WindowDisplayFrameClock? = null
     private var isRegisteredWithClock: Boolean = false
 
-    override fun needsFrame(): Boolean = hasActiveAnimation()
+    override fun needsFrame(): Boolean = hasActiveAnimation() || cachedFrameState == null
 
     override fun onFrame(frameTimeNanos: Long) {
         val frameTimeMs = frameTimeNanos / 1_000_000
@@ -50,7 +53,7 @@ class TargetDisplayRuntime(
             val cursorDisplayUtf16 = projection.realUtf8ToDisplayUtf16(mirror.getCursorUtf8())
             val selStartDisplayUtf16 = projection.realUtf8ToDisplayUtf16(selectionStartUtf8)
             val selEndDisplayUtf16 = projection.realUtf8ToDisplayUtf16(selectionEndUtf8)
-            cachedFrameState = visualRuntime.tick(
+            val tickResult = visualRuntime.tick(
                 frameTimeMs,
                 layout,
                 layoutEngine.getCurrentRevision(),
@@ -62,6 +65,9 @@ class TargetDisplayRuntime(
                 selStartDisplayUtf16,
                 selEndDisplayUtf16
             )
+            if (tickResult != null) {
+                cachedFrameState = FrameState(tickResult.renderInput, displayStateVersion)
+            }
         }
         frameGeneration++
     }
@@ -89,9 +95,18 @@ class TargetDisplayRuntime(
         clock.requestFrame()
     }
 
+    fun invalidateDisplayState() {
+        cachedFrameState = null
+        displayStateVersion++
+        frameGeneration++
+        ensureRegisteredWithClock()
+    }
+
     fun updateFromSnapshot(text: String, cursorUtf8: Int, revision: Long) {
         mirror.loadFromSnapshot(text, cursorUtf8, revision)
-        rebuildProjectionAndLayout()
+        rebuildProjectionContent()
+        layoutEngine.requestLayout()
+        invalidateDisplayState()
     }
 
     fun applyEditResult(result: EditResult) {
@@ -104,8 +119,7 @@ class TargetDisplayRuntime(
                 rebuildProjectionContent()
             }
         )
-        frameGeneration++
-        ensureRegisteredWithClock()
+        invalidateDisplayState()
     }
 
     private fun rebuildProjectionContent() {
@@ -128,31 +142,29 @@ class TargetDisplayRuntime(
         }
     }
 
-    private fun rebuildProjectionAndLayout() {
-        rebuildProjectionContent()
-        layoutEngine.requestLayout()
-        frameGeneration++
-        ensureRegisteredWithClock()
-    }
-
     fun setSecretMasked(masked: Boolean) {
         secretDisplayMode = masked
-        rebuildProjectionAndLayout()
+        rebuildProjectionContent()
+        layoutEngine.requestLayout()
+        invalidateDisplayState()
     }
 
     fun setSearchHighlights(highlights: List<Pair<Int, Int>>) {
         searchHighlightsUtf8 = highlights
+        invalidateDisplayState()
     }
 
     fun setSelection(startUtf8: Int, endUtf8: Int) {
         selectionStartUtf8 = startUtf8
         selectionEndUtf8 = endUtf8
+        invalidateDisplayState()
     }
 
     fun clearDecorations() {
         searchHighlightsUtf8 = emptyList()
         selectionStartUtf8 = 0
         selectionEndUtf8 = 0
+        invalidateDisplayState()
     }
 
     fun getSearchHighlightsUtf16(): List<Pair<Int, Int>> {
@@ -173,11 +185,13 @@ class TargetDisplayRuntime(
     fun setWidth(width: Float) {
         layoutEngine.setWidth(width)
         layoutEngine.requestLayout()
+        invalidateDisplayState()
     }
 
     fun setScrollPosition(sx: Float, sy: Float) {
         scrollX = sx
         scrollY = sy
+        invalidateDisplayState()
     }
 
     fun getScrollX(): Float = scrollX
@@ -186,6 +200,7 @@ class TargetDisplayRuntime(
     fun setViewportSize(w: Int, h: Int) {
         viewportWidth = w
         viewportHeight = h
+        invalidateDisplayState()
     }
 
     fun getViewportWidth(): Int = viewportWidth
@@ -194,6 +209,7 @@ class TargetDisplayRuntime(
     fun setLineSpacingMultiplier(multiplier: Float) {
         layoutEngine.setLineSpacingMultiplier(multiplier)
         layoutEngine.requestLayout()
+        invalidateDisplayState()
     }
 
     fun setFontSize(sizePx: Float) {
@@ -204,15 +220,17 @@ class TargetDisplayRuntime(
             layoutEngine.clearDisplayTextOverride(projection)
         }
         layoutEngine.requestLayout()
+        invalidateDisplayState()
     }
 
     fun setThemeColors(textColor: Int, cursorColor: Int, selectionColor: Int, preeditColor: Int, bgColor: Int) {
         renderRuntime.setThemeColors(textColor, cursorColor, selectionColor, preeditColor, bgColor)
+        invalidateDisplayState()
     }
 
     fun drawFrame(canvas: Canvas) {
         val cached = cachedFrameState
-        if (cached != null) {
+        if (cached != null && cached.displayStateVersion == displayStateVersion) {
             renderRuntime.drawFromFrameState(canvas, cached)
             return
         }
@@ -235,7 +253,9 @@ class TargetDisplayRuntime(
             selEndDisplayUtf16
         )
         if (frameState != null) {
-            renderRuntime.drawFromFrameState(canvas, frameState)
+            val versionedFrameState = FrameState(frameState.renderInput, displayStateVersion)
+            cachedFrameState = versionedFrameState
+            renderRuntime.drawFromFrameState(canvas, versionedFrameState)
         }
     }
 

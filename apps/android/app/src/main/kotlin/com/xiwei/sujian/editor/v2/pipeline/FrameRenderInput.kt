@@ -21,5 +21,6 @@ data class FrameRenderInput(
 )
 
 class FrameState(
-    val renderInput: FrameRenderInput
+    val renderInput: FrameRenderInput,
+    val displayStateVersion: Long = 0L
 )

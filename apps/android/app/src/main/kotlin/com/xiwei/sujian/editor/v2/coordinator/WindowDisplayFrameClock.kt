@@ -40,8 +40,9 @@ class WindowDisplayFrameClock {
     }
 
     fun requestFrame() {
-        if (isTicking) return
-        isTicking = true
+        if (!isTicking) {
+            isTicking = true
+        }
         choreographer.postFrameCallback(frameCallback)
     }
 

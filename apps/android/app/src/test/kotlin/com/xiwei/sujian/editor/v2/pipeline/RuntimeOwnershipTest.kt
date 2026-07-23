@@ -269,6 +269,27 @@ class RuntimeOwnershipTest {
     }
 
     @Test
+    fun targetDisplayRuntimeHasInvalidateDisplayState() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetDisplayRuntime")
+        val method = clazz.getDeclaredMethod("invalidateDisplayState")
+        assertNotNull(method)
+    }
+
+    @Test
+    fun targetDisplayRuntimeHasDisplayStateVersion() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetDisplayRuntime")
+        val method = clazz.getDeclaredMethod("getDisplayStateVersion")
+        assertEquals(Long::class.javaPrimitiveType, method.returnType)
+    }
+
+    @Test
+    fun frameStateHoldsDisplayStateVersion() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.FrameState")
+        val field = clazz.getDeclaredField("displayStateVersion")
+        assertEquals(Long::class.javaPrimitiveType, field.type)
+    }
+
+    @Test
     fun targetDisplayRuntimeHasHasActiveAnimation() {
         val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetDisplayRuntime")
         val method = clazz.getDeclaredMethod("hasActiveAnimation")
