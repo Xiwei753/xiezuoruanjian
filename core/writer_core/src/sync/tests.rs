@@ -1,6 +1,7 @@
 #[cfg(test)]
 #[allow(clippy::module_inception)]
 mod tests {
+    #[cfg(feature = "github-api")]
     use crate::sync::backends::SyncBackend;
     #[cfg(feature = "git-https")]
     use crate::sync::git_backend::Git2Backend;
@@ -14,12 +15,14 @@ mod tests {
     use crate::sync::types::BackendType;
     #[cfg(feature = "git-https")]
     use crate::sync::types::FirstSyncMode;
+    #[cfg(feature = "github-api")]
     use crate::sync::types::ManifestFileRecord;
     use crate::sync::types::SyncConfig;
     use crate::sync::types::SyncConflict;
     use crate::sync::types::SyncManifest;
     use crate::sync::types::SyncSecrets;
     use crate::sync::types::SyncState;
+    #[cfg(feature = "github-api")]
     use crate::sync::types::SyncStatus;
     use crate::sync::types::SyncTransport;
     use base64::Engine;
@@ -1238,6 +1241,7 @@ mod tests {
         assert_eq!(content_after, local_content);
     }
 
+    #[cfg(feature = "github-api")]
     #[allow(clippy::type_complexity)]
     fn start_mock_github_api(
         initial_manifest: Option<SyncManifest>,
