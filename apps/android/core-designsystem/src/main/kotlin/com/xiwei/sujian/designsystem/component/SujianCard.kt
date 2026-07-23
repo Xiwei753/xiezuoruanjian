@@ -28,6 +28,26 @@ fun SujianCard(
 }
 
 @Composable
+fun SujianCard(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    content: @Composable () -> Unit,
+) {
+    Card(
+        onClick = onClick,
+        modifier = modifier.fillMaxWidth(),
+        enabled = enabled,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        ),
+        shape = MaterialTheme.shapes.large,
+    ) {
+        content()
+    }
+}
+
+@Composable
 fun SujianSection(
     title: String,
     modifier: Modifier = Modifier,

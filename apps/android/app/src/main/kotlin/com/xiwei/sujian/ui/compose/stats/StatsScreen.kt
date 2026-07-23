@@ -12,8 +12,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -29,6 +27,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.R
 import com.xiwei.sujian.data.BridgeProvider
+import com.xiwei.sujian.designsystem.component.SujianCard
 import com.xiwei.sujian.model.ProjectWritingStatsItem
 import com.xiwei.sujian.model.WritingStatsSummary
 import kotlinx.coroutines.Dispatchers
@@ -84,9 +83,8 @@ fun StatsScreen(
 
         summary?.let { s ->
             item {
-                Card(
+                SujianCard(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Row(
@@ -117,9 +115,8 @@ fun StatsScreen(
                 Spacer(modifier = Modifier.height(8.dp))
             }
             items(projectItems, key = { it.projectId ?: "" }) { item ->
-                Card(
+                SujianCard(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(item.projectTitle ?: "", style = MaterialTheme.typography.titleSmall)

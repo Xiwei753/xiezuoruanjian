@@ -17,12 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import com.xiwei.sujian.editor.v2.compose.AnimatedTextField
 import com.xiwei.sujian.editor.v2.compose.AnimatedTextArea
@@ -33,7 +28,11 @@ import com.xiwei.sujian.editor.v2.coordinator.EditableTextTarget
 import com.xiwei.sujian.editor.v2.coordinator.EditingState
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.xiwei.sujian.designsystem.component.SujianCard
+import com.xiwei.sujian.designsystem.component.SujianDialog
+import com.xiwei.sujian.designsystem.component.SujianFab
+import com.xiwei.sujian.designsystem.component.SujianIconButton
+import com.xiwei.sujian.designsystem.component.SujianTextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -142,10 +141,9 @@ private fun StarMapListScreen(
                 modifier = Modifier.fillMaxSize()
             ) {
                 items(starMaps, key = { it.starmapId }) { meta ->
-                    Card(
+                    SujianCard(
                         onClick = { onSelectStarmap(meta.starmapId) },
                         modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
                     ) {
                         Column(modifier = Modifier.padding(16.dp)) {
                             Text(meta.title, style = MaterialTheme.typography.titleMedium)
@@ -159,12 +157,12 @@ private fun StarMapListScreen(
             }
         }
 
-        FloatingActionButton(
+        SujianFab(
             onClick = { showCreateDialog = true },
+            icon = Icons.Default.Add,
+            contentDescription = stringResource(id = R.string.starmap_create_new),
             modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp)
-        ) {
-            Icon(Icons.Default.Add, contentDescription = stringResource(id = R.string.starmap_create_new))
-        }
+        )
 
         AnimatedTextEditorSlot(
             coordinator = coordinator
@@ -174,13 +172,36 @@ private fun StarMapListScreen(
     if (showCreateDialog) {
         var title by remember { mutableStateOf("") }
         var description by remember { mutableStateOf("") }
-        AlertDialog(
+        SujianDialog(
             onDismissRequest = {
                 coordinator.cancelActiveEdit()
                 showCreateDialog = false
             },
-            title = { Text(stringResource(id = R.string.starmap_create_new)) },
-            text = {
+            title = stringResource(id = R.string.starmap_create_new),
+            confirmText = stringResource(id = R.string.action_create),
+            onConfirm = {
+                coordinator.commitActiveEdit()
+                val t = coordinator.lastCommittedText?.trim() ?: title.trim()
+                if (t.isNotBlank()) {
+                    val d = description.trim()
+                    coroutineScope.launch {
+                        withContext(Dispatchers.IO) {
+                            try {
+                                val bridge = BridgeProvider.getStarmapBridge(context)
+                                bridge.createStarmap(t, d)
+                            } catch (_: Exception) { }
+                        }
+                        loadStarMaps()
+                    }
+                }
+                showCreateDialog = false
+            },
+            dismissText = stringResource(id = R.string.action_cancel),
+            onDismiss = {
+                coordinator.cancelActiveEdit()
+                showCreateDialog = false
+            },
+            body = {
                 Column {
                     AnimatedTextField(
                         targetId = "starmap-title:new",
@@ -201,31 +222,6 @@ private fun StarMapListScreen(
                         maxLines = 3
                     )
                 }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    coordinator.commitActiveEdit()
-                    val t = coordinator.lastCommittedText?.trim() ?: title.trim()
-                    if (t.isNotBlank()) {
-                        val d = description.trim()
-                        coroutineScope.launch {
-                            withContext(Dispatchers.IO) {
-                                try {
-                                    val bridge = BridgeProvider.getStarmapBridge(context)
-                                    bridge.createStarmap(t, d)
-                                } catch (_: Exception) { }
-                            }
-                            loadStarMaps()
-                        }
-                    }
-                    showCreateDialog = false
-                }) { Text(stringResource(id = R.string.action_create)) }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    coordinator.cancelActiveEdit()
-                    showCreateDialog = false
-                }) { Text(stringResource(id = R.string.action_cancel)) }
             }
         )
     }
@@ -287,9 +283,11 @@ private fun StarMapEditorScreen(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.Default.ArrowBack, contentDescription = stringResource(id = R.string.starmap_back))
-            }
+            SujianIconButton(
+                onClick = onBack,
+                icon = Icons.Default.ArrowBack,
+                contentDescription = stringResource(id = R.string.starmap_back),
+            )
             Text(starMapData?.graph?.title ?: stringResource(id = R.string.title_starmap), style = MaterialTheme.typography.titleMedium)
             Spacer(modifier = Modifier.weight(1f))
             Text(
@@ -297,12 +295,16 @@ private fun StarMapEditorScreen(
                 style = MaterialTheme.typography.bodySmall
             )
             Spacer(modifier = Modifier.width(8.dp))
-            IconButton(onClick = { showAddEdgeDialog = true }) {
-                Icon(Icons.Default.Add, contentDescription = stringResource(id = R.string.starmap_add_edge))
-            }
-            IconButton(onClick = { showAddNodeDialog = true }) {
-                Icon(Icons.Default.Add, contentDescription = stringResource(id = R.string.starmap_add_node))
-            }
+            SujianIconButton(
+                onClick = { showAddEdgeDialog = true },
+                icon = Icons.Default.Add,
+                contentDescription = stringResource(id = R.string.starmap_add_edge),
+            )
+            SujianIconButton(
+                onClick = { showAddNodeDialog = true },
+                icon = Icons.Default.Add,
+                contentDescription = stringResource(id = R.string.starmap_add_node),
+            )
         }
 
         if (isLoading) {
@@ -445,13 +447,41 @@ private fun StarMapEditorScreen(
     if (showAddNodeDialog) {
         var nodeTitle by remember { mutableStateOf("") }
         var nodeKind by remember { mutableStateOf(StarMapNodeKind.Note) }
-        AlertDialog(
+        SujianDialog(
             onDismissRequest = {
                 coordinator.cancelActiveEdit()
                 showAddNodeDialog = false
             },
-            title = { Text(stringResource(id = R.string.starmap_add_node)) },
-            text = {
+            title = stringResource(id = R.string.starmap_add_node),
+            confirmText = stringResource(id = R.string.starmap_action_add),
+            onConfirm = {
+                coordinator.commitActiveEdit()
+                val t = coordinator.lastCommittedText?.trim() ?: nodeTitle.trim()
+                if (t.isNotBlank()) {
+                    coroutineScope.launch {
+                        withContext(Dispatchers.IO) {
+                            try {
+                                val bridge = BridgeProvider.getStarmapBridge(context)
+                                val nodeId = java.util.UUID.randomUUID().toString()
+                                val node = StarMapGraphNode(
+                                    id = nodeId,
+                                    title = t,
+                                    kind = nodeKind
+                                )
+                                bridge.addStarmapNode(starmapId, node)
+                            } catch (_: Exception) { }
+                        }
+                        loadStarMap()
+                    }
+                }
+                showAddNodeDialog = false
+            },
+            dismissText = stringResource(id = R.string.action_cancel),
+            onDismiss = {
+                coordinator.cancelActiveEdit()
+                showAddNodeDialog = false
+            },
+            body = {
                 Column {
                     AnimatedTextField(
                         targetId = "starmap-node-title:new",
@@ -464,48 +494,13 @@ private fun StarMapEditorScreen(
                     Spacer(modifier = Modifier.height(8.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         StarMapNodeKind.entries.take(6).forEach { kind ->
-                            TextButton(
+                            SujianTextButton(
+                                text = kind.name,
                                 onClick = { nodeKind = kind },
-                                modifier = Modifier
-                            ) {
-                                Text(
-                                    kind.name,
-                                    color = if (nodeKind == kind) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                )
-                            }
+                            )
                         }
                     }
                 }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    coordinator.commitActiveEdit()
-                    val t = coordinator.lastCommittedText?.trim() ?: nodeTitle.trim()
-                    if (t.isNotBlank()) {
-                        coroutineScope.launch {
-                            withContext(Dispatchers.IO) {
-                                try {
-                                    val bridge = BridgeProvider.getStarmapBridge(context)
-                                    val nodeId = java.util.UUID.randomUUID().toString()
-                                    val node = StarMapGraphNode(
-                                        id = nodeId,
-                                        title = t,
-                                        kind = nodeKind
-                                    )
-                                    bridge.addStarmapNode(starmapId, node)
-                                } catch (_: Exception) { }
-                            }
-                            loadStarMap()
-                        }
-                    }
-                    showAddNodeDialog = false
-                }) { Text(stringResource(id = R.string.starmap_action_add)) }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    coordinator.cancelActiveEdit()
-                    showAddNodeDialog = false
-                }) { Text(stringResource(id = R.string.action_cancel)) }
             }
         )
     }
@@ -515,66 +510,55 @@ private fun StarMapEditorScreen(
         var fromNodeId by remember { mutableStateOf(nodes.firstOrNull()?.id ?: "") }
         var toNodeId by remember { mutableStateOf(nodes.drop(1).firstOrNull()?.id ?: "") }
 
-        AlertDialog(
+        SujianDialog(
             onDismissRequest = {
                 coordinator.cancelActiveEdit()
                 showAddEdgeDialog = false
             },
-            title = { Text(stringResource(id = R.string.starmap_add_edge)) },
-            text = {
+            title = stringResource(id = R.string.starmap_add_edge),
+            confirmText = stringResource(id = R.string.starmap_action_add),
+            onConfirm = {
+                if (fromNodeId.isNotBlank() && toNodeId.isNotBlank() && fromNodeId != toNodeId) {
+                    coroutineScope.launch {
+                        withContext(Dispatchers.IO) {
+                            try {
+                                val bridge = BridgeProvider.getStarmapBridge(context)
+                                bridge.addStarmapEdge(starmapId, fromNodeId, toNodeId)
+                            } catch (_: Exception) { }
+                        }
+                        loadStarMap()
+                    }
+                }
+                showAddEdgeDialog = false
+            },
+            dismissText = stringResource(id = R.string.action_cancel),
+            onDismiss = {
+                showAddEdgeDialog = false
+            },
+            body = {
                 Column {
                     Text(stringResource(id = R.string.starmap_from_node), style = MaterialTheme.typography.bodySmall)
                     LazyColumn(modifier = Modifier.height(120.dp)) {
                         items(nodes) { node ->
-                            TextButton(
+                            SujianTextButton(
+                                text = node.title,
                                 onClick = { fromNodeId = node.id },
                                 modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(
-                                    node.title,
-                                    color = if (fromNodeId == node.id) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                )
-                            }
+                            )
                         }
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(stringResource(id = R.string.starmap_to_node), style = MaterialTheme.typography.bodySmall)
                     LazyColumn(modifier = Modifier.height(120.dp)) {
                         items(nodes) { node ->
-                            TextButton(
+                            SujianTextButton(
+                                text = node.title,
                                 onClick = { toNodeId = node.id },
                                 modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(
-                                    node.title,
-                                    color = if (toNodeId == node.id) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                )
-                            }
+                            )
                         }
                     }
                 }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        if (fromNodeId.isNotBlank() && toNodeId.isNotBlank() && fromNodeId != toNodeId) {
-                            coroutineScope.launch {
-                                withContext(Dispatchers.IO) {
-                                    try {
-                                        val bridge = BridgeProvider.getStarmapBridge(context)
-                                        bridge.addStarmapEdge(starmapId, fromNodeId, toNodeId)
-                                    } catch (_: Exception) { }
-                                }
-                                loadStarMap()
-                            }
-                        }
-                        showAddEdgeDialog = false
-                    },
-                    enabled = fromNodeId.isNotBlank() && toNodeId.isNotBlank() && fromNodeId != toNodeId
-                ) { Text(stringResource(id = R.string.starmap_action_add)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { showAddEdgeDialog = false }) { Text(stringResource(id = R.string.action_cancel)) }
             }
         )
     }
@@ -591,13 +575,26 @@ private fun NodeEditPanel(
     var editTitle by remember { mutableStateOf(node.title) }
     var editKind by remember { mutableStateOf(node.kind) }
 
-    AlertDialog(
+    SujianDialog(
         onDismissRequest = {
             coordinator.cancelActiveEdit()
             onDismiss()
         },
-        title = { Text(stringResource(id = R.string.starmap_edit_node)) },
-        text = {
+        title = stringResource(id = R.string.starmap_edit_node),
+        confirmText = stringResource(id = R.string.action_save),
+        onConfirm = {
+            coordinator.commitActiveEdit()
+            val finalTitle = coordinator.lastCommittedText?.trim() ?: editTitle.trim()
+            if (finalTitle.isNotBlank()) {
+                onUpdate(finalTitle, editKind)
+            }
+        },
+        dismissText = stringResource(id = R.string.action_cancel),
+        onDismiss = {
+            coordinator.cancelActiveEdit()
+            onDismiss()
+        },
+        body = {
             Column {
                 AnimatedTextField(
                     targetId = "starmap-node-title:edit",
@@ -610,12 +607,10 @@ private fun NodeEditPanel(
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     StarMapNodeKind.entries.take(6).forEach { kind ->
-                        TextButton(onClick = { editKind = kind }) {
-                            Text(
-                                kind.name,
-                                color = if (editKind == kind) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                            )
-                        }
+                        SujianTextButton(
+                            text = kind.name,
+                            onClick = { editKind = kind },
+                        )
                     }
                 }
                 Spacer(modifier = Modifier.height(16.dp))
@@ -623,30 +618,13 @@ private fun NodeEditPanel(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End
                 ) {
-                    IconButton(onClick = onDelete) {
-                        Icon(
-                            Icons.Default.Delete,
-                            contentDescription = stringResource(id = R.string.starmap_delete_node),
-                            tint = MaterialTheme.colorScheme.error
-                        )
-                    }
+                    SujianIconButton(
+                        onClick = onDelete,
+                        icon = Icons.Default.Delete,
+                        contentDescription = stringResource(id = R.string.starmap_delete_node),
+                    )
                 }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                coordinator.commitActiveEdit()
-                val finalTitle = coordinator.lastCommittedText?.trim() ?: editTitle.trim()
-                if (finalTitle.isNotBlank()) {
-                    onUpdate(finalTitle, editKind)
-                }
-            }) { Text(stringResource(id = R.string.action_save)) }
-        },
-        dismissButton = {
-            TextButton(onClick = {
-                coordinator.cancelActiveEdit()
-                onDismiss()
-            }) { Text(stringResource(id = R.string.action_cancel)) }
         }
     )
 }

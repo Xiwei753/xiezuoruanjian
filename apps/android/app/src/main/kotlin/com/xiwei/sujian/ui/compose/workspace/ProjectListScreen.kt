@@ -18,19 +18,14 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import com.xiwei.sujian.editor.v2.compose.AnimatedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.xiwei.sujian.designsystem.component.SujianCard
+import com.xiwei.sujian.designsystem.component.SujianDialog
+import com.xiwei.sujian.designsystem.component.SujianFab
+import com.xiwei.sujian.designsystem.component.SujianIconButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -76,10 +71,9 @@ fun ProjectListScreen(
                     }
                     items(appState.recentEdits) { edit ->
                         val project = appState.projects.find { it.id == edit.projectId }
-                        Card(
-                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).clickable {
-                                onSelectProject(edit.projectId, project?.title ?: "")
-                            }
+                        SujianCard(
+                            onClick = { onSelectProject(edit.projectId, project?.title ?: "") },
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
                                 Text(project?.title ?: stringResource(id = R.string.unknown_project), style = MaterialTheme.typography.titleMedium)
@@ -102,20 +96,29 @@ fun ProjectListScreen(
             }
         }
 
-        FloatingActionButton(
+        SujianFab(
             onClick = { showCreateDialog = true },
+            icon = Icons.Default.Add,
+            contentDescription = stringResource(id = R.string.action_new_project),
             modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp)
-        ) {
-            Icon(Icons.Default.Add, contentDescription = stringResource(id = R.string.action_new_project))
-        }
+        )
     }
 
     if (showCreateDialog) {
         var title by remember { mutableStateOf("") }
-        AlertDialog(
+        SujianDialog(
             onDismissRequest = { showCreateDialog = false },
-            title = { Text(stringResource(id = R.string.dialog_new_project_title)) },
-            text = {
+            title = stringResource(id = R.string.dialog_new_project_title),
+            confirmText = stringResource(id = R.string.action_create),
+            onConfirm = {
+                if (title.isNotBlank()) {
+                    appState.createProject(title.trim())
+                    showCreateDialog = false
+                }
+            },
+            dismissText = stringResource(id = R.string.action_cancel),
+            onDismiss = { showCreateDialog = false },
+            body = {
                 AnimatedTextField(
                     targetId = "project-title:new",
                     value = title,
@@ -124,17 +127,6 @@ fun ProjectListScreen(
                     label = { Text(stringResource(id = R.string.hint_project_title_new)) },
                     singleLine = true
                 )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    if (title.isNotBlank()) {
-                        appState.createProject(title.trim())
-                        showCreateDialog = false
-                    }
-                }) { Text(stringResource(id = R.string.action_create)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { showCreateDialog = false }) { Text(stringResource(id = R.string.action_cancel)) }
             }
         )
     }
@@ -161,9 +153,9 @@ private fun ProjectCard(
     onSelect: () -> Unit,
     onMoreActions: () -> Unit
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).clickable(onClick = onSelect),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
+    SujianCard(
+        onClick = onSelect,
+        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
     ) {
         Row(
             modifier = Modifier.padding(16.dp).fillMaxWidth(),
@@ -174,9 +166,11 @@ private fun ProjectCard(
                 Text(project.title, style = MaterialTheme.typography.titleMedium)
                 Text(project.updatedAt.substringBefore("T"), style = MaterialTheme.typography.bodySmall)
             }
-            IconButton(onClick = onMoreActions) {
-                Icon(Icons.Default.MoreVert, contentDescription = stringResource(id = R.string.action_more))
-            }
+            SujianIconButton(
+                onClick = onMoreActions,
+                icon = Icons.Default.MoreVert,
+                contentDescription = stringResource(id = R.string.action_more),
+            )
         }
     }
 }
@@ -192,10 +186,19 @@ private fun ProjectMenuDialog(
 
     if (showRename) {
         var newTitle by remember { mutableStateOf(project.title) }
-        AlertDialog(
+        SujianDialog(
             onDismissRequest = { showRename = false },
-            title = { Text(stringResource(id = R.string.action_rename)) },
-            text = {
+            title = stringResource(id = R.string.action_rename),
+            confirmText = stringResource(id = R.string.action_ok),
+            onConfirm = {
+                if (newTitle.isNotBlank() && newTitle != project.title) {
+                    onRename(newTitle.trim())
+                }
+                showRename = false
+            },
+            dismissText = stringResource(id = R.string.action_cancel),
+            onDismiss = { showRename = false },
+            body = {
                 AnimatedTextField(
                     targetId = "project-title:rename:${project.id}",
                     value = newTitle,
@@ -204,24 +207,15 @@ private fun ProjectMenuDialog(
                     label = { Text(stringResource(id = R.string.hint_new_title)) },
                     singleLine = true
                 )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    if (newTitle.isNotBlank() && newTitle != project.title) {
-                        onRename(newTitle.trim())
-                    }
-                    showRename = false
-                }) { Text(stringResource(id = R.string.action_ok)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { showRename = false }) { Text(stringResource(id = R.string.action_cancel)) }
             }
         )
     } else {
-        AlertDialog(
+        SujianDialog(
             onDismissRequest = onDismiss,
-            title = { Text(project.title) },
-            text = {
+            title = project.title,
+            confirmText = "",
+            onConfirm = {},
+            body = {
                 Column {
                     DropdownMenuItem(
                         text = { Text(stringResource(id = R.string.action_rename)) },
@@ -232,10 +226,6 @@ private fun ProjectMenuDialog(
                         onClick = onDelete
                     )
                 }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = onDismiss) { Text(stringResource(id = R.string.action_cancel)) }
             }
         )
     }
