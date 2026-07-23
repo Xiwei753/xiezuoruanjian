@@ -27,6 +27,8 @@ import com.xiwei.sujian.ui.compose.navigation.SujianNavigationSuite
 import com.xiwei.sujian.ui.compose.theme.SujianTheme
 import com.xiwei.sujian.ui.compose.theme.ThemeStore
 import com.xiwei.sujian.ui.compose.theme.rememberThemeController
+import com.xiwei.sujian.platform.aosp.VendorAdapterSetup
+import com.xiwei.sujian.platform.vendor.VendorAdapterRegistry
 
 @Composable
 fun SujianApp(
@@ -36,6 +38,7 @@ fun SujianApp(
     val vm: SujianAppViewModel = viewModel()
     val appState = remember { SujianAppState(vm) }
     val themeController = rememberThemeController(context)
+    val vendorRegistry = remember { VendorAdapterRegistry().also { VendorAdapterSetup.ensureInitialized(it) } }
 
     val coordinator = remember {
         val bridge = BridgeProvider.getAppServiceBridge(context)

@@ -33,6 +33,7 @@ import com.xiwei.sujian.designsystem.component.SujianDialog
 import com.xiwei.sujian.designsystem.component.SujianFab
 import com.xiwei.sujian.designsystem.component.SujianIconButton
 import com.xiwei.sujian.designsystem.component.SujianTextButton
+import com.xiwei.sujian.designsystem.layout.SujianScreenScaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -120,14 +121,20 @@ private fun StarMapListScreen(
         loadStarMaps()
     }
 
-    Box(modifier = modifier.fillMaxSize()) {
+    SujianScreenScaffold(
+        title = stringResource(id = R.string.title_starmap),
+        fabIcon = Icons.Default.Add,
+        fabContentDescription = stringResource(id = R.string.starmap_create_new),
+        onFabClick = { showCreateDialog = true },
+        modifier = modifier,
+    ) { paddingValues ->
         if (isLoading) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Box(modifier = Modifier.fillMaxSize().padding(paddingValues), contentAlignment = Alignment.Center) {
                 Text(stringResource(id = R.string.loading), style = MaterialTheme.typography.bodyLarge)
             }
         } else if (starMaps.isEmpty()) {
             Column(
-                modifier = Modifier.fillMaxSize().padding(32.dp),
+                modifier = Modifier.fillMaxSize().padding(paddingValues).padding(32.dp),
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
@@ -138,7 +145,7 @@ private fun StarMapListScreen(
         } else {
             LazyColumn(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.fillMaxSize().padding(paddingValues)
             ) {
                 items(starMaps, key = { it.starmapId }) { meta ->
                     SujianCard(
@@ -156,13 +163,6 @@ private fun StarMapListScreen(
                 }
             }
         }
-
-        SujianFab(
-            onClick = { showCreateDialog = true },
-            icon = Icons.Default.Add,
-            contentDescription = stringResource(id = R.string.starmap_create_new),
-            modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp)
-        )
 
         AnimatedTextEditorSlot(
             coordinator = coordinator
@@ -278,18 +278,10 @@ private fun StarMapEditorScreen(
         loadStarMap()
     }
 
-    Column(modifier = modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            SujianIconButton(
-                onClick = onBack,
-                icon = Icons.Default.ArrowBack,
-                contentDescription = stringResource(id = R.string.starmap_back),
-            )
-            Text(starMapData?.graph?.title ?: stringResource(id = R.string.title_starmap), style = MaterialTheme.typography.titleMedium)
-            Spacer(modifier = Modifier.weight(1f))
+    SujianScreenScaffold(
+        title = starMapData?.graph?.title ?: stringResource(id = R.string.title_starmap),
+        onNavigateBack = onBack,
+        actions = {
             Text(
                 stringResource(R.string.starmap_node_edge_count, starMapData?.graph?.nodes?.size ?: 0, starMapData?.graph?.edges?.size ?: 0),
                 style = MaterialTheme.typography.bodySmall
@@ -305,10 +297,11 @@ private fun StarMapEditorScreen(
                 icon = Icons.Default.Add,
                 contentDescription = stringResource(id = R.string.starmap_add_node),
             )
-        }
-
+        },
+        modifier = modifier,
+    ) { paddingValues ->
         if (isLoading) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Box(modifier = Modifier.fillMaxSize().padding(paddingValues), contentAlignment = Alignment.Center) {
                 Text(stringResource(id = R.string.loading), style = MaterialTheme.typography.bodyLarge)
             }
         } else if (starMapData != null) {
@@ -396,18 +389,18 @@ private fun StarMapEditorScreen(
                     }
                 },
                 editingNodeId = canvasEditingNodeId,
-                modifier = Modifier.weight(1f).fillMaxWidth()
+                modifier = Modifier.fillMaxSize().padding(paddingValues)
             )
         } else {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Box(modifier = Modifier.fillMaxSize().padding(paddingValues), contentAlignment = Alignment.Center) {
                 Text(stringResource(id = R.string.starmap_load_failed), style = MaterialTheme.typography.bodyLarge)
             }
         }
-    }
 
-    AnimatedTextEditorSlot(
-        coordinator = coordinator
-    )
+        AnimatedTextEditorSlot(
+            coordinator = coordinator
+        )
+    }
 
     selectedNodeId?.let { nodeId ->
         val graphNode = starMapData?.graph?.nodes?.find { it.id == nodeId }

@@ -2,6 +2,7 @@ package com.xiwei.sujian.designsystem.layout
 
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FabPosition
 import androidx.compose.material3.MaterialTheme
@@ -23,7 +24,7 @@ fun SujianAppScaffold(
     content: @Composable (PaddingValues) -> Unit,
 ) {
     Scaffold(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier.fillMaxSize().imePadding(),
         containerColor = MaterialTheme.colorScheme.surface,
         snackbarHost = {
             if (snackbarHostState != null) {
@@ -59,7 +60,7 @@ fun SujianScreenScaffold(
     val resolvedNavClick = onNavigationClick ?: onNavigateBack
 
     Scaffold(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier.fillMaxSize().imePadding(),
         topBar = {
             SujianTopAppBar(
                 title = title,

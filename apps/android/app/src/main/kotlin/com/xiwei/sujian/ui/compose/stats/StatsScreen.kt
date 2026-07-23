@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.R
 import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.designsystem.component.SujianCard
+import com.xiwei.sujian.designsystem.layout.SujianScreenScaffold
 import com.xiwei.sujian.model.ProjectWritingStatsItem
 import com.xiwei.sujian.model.WritingStatsSummary
 import kotlinx.coroutines.Dispatchers
@@ -65,17 +66,20 @@ fun StatsScreen(
         isLoading = false
     }
 
-    if (isLoading) {
-        Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(stringResource(id = R.string.loading), style = MaterialTheme.typography.bodyLarge)
+    SujianScreenScaffold(
+        title = stringResource(id = R.string.title_stats),
+    ) { paddingValues ->
+        if (isLoading) {
+            Box(modifier = modifier.fillMaxSize().padding(paddingValues), contentAlignment = Alignment.Center) {
+                Text(stringResource(id = R.string.loading), style = MaterialTheme.typography.bodyLarge)
+            }
+            return@SujianScreenScaffold
         }
-        return
-    }
 
-    LazyColumn(
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-        modifier = modifier.fillMaxSize()
-    ) {
+        LazyColumn(
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            modifier = modifier.fillMaxSize().padding(paddingValues)
+        ) {
         item {
             Text(stringResource(id = R.string.stats_recent_30_days), style = MaterialTheme.typography.titleMedium)
             Spacer(modifier = Modifier.height(16.dp))
@@ -132,6 +136,7 @@ fun StatsScreen(
                     Text(stringResource(id = R.string.stats_no_data), style = MaterialTheme.typography.bodyLarge)
                 }
             }
+        }
         }
     }
 }
