@@ -124,18 +124,32 @@ class DisplayTextProjection(
         ): DisplayTextProjection {
             val bytes = text.toByteArray(Charsets.UTF_8)
             val utf16Len = text.length
-            val safeCompStart = compStartUtf16.coerceIn(0, utf16Len)
-            val safeCompEnd = compEndUtf16.coerceIn(safeCompStart, utf16Len)
+            var safeCompStart = compStartUtf16.coerceIn(0, utf16Len)
+            var safeCompEnd = compEndUtf16.coerceIn(safeCompStart, utf16Len)
+            if (safeCompStart > 0 && safeCompStart < utf16Len && Character.isLowSurrogate(text[safeCompStart])) {
+                safeCompStart--
+            }
+            if (safeCompEnd > safeCompStart && safeCompEnd < utf16Len && Character.isLowSurrogate(text[safeCompEnd])) {
+                safeCompEnd--
+            }
 
             val displayText = buildString {
-                for (i in 0 until safeCompStart) {
-                    if (text[i] == '\n') append('\n')
+                var i = 0
+                while (i < safeCompStart) {
+                    val codePoint = text.codePointAt(i)
+                    val charCount = Character.charCount(codePoint)
+                    if (codePoint == '\n'.code) append('\n')
                     else append(maskChar)
+                    i += charCount
                 }
                 append(compText)
-                for (i in safeCompEnd until utf16Len) {
-                    if (text[i] == '\n') append('\n')
+                i = safeCompEnd
+                while (i < utf16Len) {
+                    val codePoint = text.codePointAt(i)
+                    val charCount = Character.charCount(codePoint)
+                    if (codePoint == '\n'.code) append('\n')
                     else append(maskChar)
+                    i += charCount
                 }
             }
             val displayLen = displayText.length

@@ -51,10 +51,10 @@ class RuntimeOwnershipTest {
     }
 
     @Test
-    fun renderRuntimeOwnsDrawFrame() {
+    fun renderRuntimeOwnsDrawFromFrameState() {
         val clazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidRenderRuntime")
-        val methods = clazz.declaredMethods.filter { it.name == "drawFrame" }
-        assertTrue("AndroidRenderRuntime should have drawFrame method", methods.isNotEmpty())
+        val methods = clazz.declaredMethods.filter { it.name == "drawFromFrameState" }
+        assertTrue("AndroidRenderRuntime should have drawFromFrameState method", methods.isNotEmpty())
     }
 
     @Test
@@ -196,15 +196,15 @@ class RuntimeOwnershipTest {
     }
 
     @Test
-    fun renderRuntimeDrawFrameDoesNotDependOnLayoutRuntimeOrVisualRuntime() {
+    fun renderRuntimeDrawFromFrameStateDoesNotDependOnLayoutRuntimeOrVisualRuntime() {
         val clazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidRenderRuntime")
-        val drawFrameMethods = clazz.declaredMethods.filter { it.name == "drawFrame" }
-        assertTrue("AndroidRenderRuntime should have drawFrame method", drawFrameMethods.isNotEmpty())
-        val method = drawFrameMethods.first()
+        val methods = clazz.declaredMethods.filter { it.name == "drawFromFrameState" }
+        assertTrue("AndroidRenderRuntime should have drawFromFrameState method", methods.isNotEmpty())
+        val method = methods.first()
         val paramTypes = method.parameterTypes.map { it.name }
-        assertFalse("drawFrame should not take AndroidLayoutRuntime as parameter",
+        assertFalse("drawFromFrameState should not take AndroidLayoutRuntime as parameter",
             paramTypes.any { it.contains("AndroidLayoutRuntime") })
-        assertFalse("drawFrame should not take AndroidVisualRuntime as parameter",
+        assertFalse("drawFromFrameState should not take AndroidVisualRuntime as parameter",
             paramTypes.any { it.contains("AndroidVisualRuntime") })
     }
 
@@ -254,10 +254,10 @@ class RuntimeOwnershipTest {
     }
 
     @Test
-    fun targetDisplayRuntimeHasVisualRuntime() {
+    fun targetDisplayRuntimeHasHasActiveAnimation() {
         val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.TargetDisplayRuntime")
-        val method = clazz.getDeclaredMethod("getVisualRuntime")
-        assertEquals(Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidVisualRuntime"), method.returnType)
+        val method = clazz.getDeclaredMethod("hasActiveAnimation")
+        assertNotNull(method)
     }
 
     @Test

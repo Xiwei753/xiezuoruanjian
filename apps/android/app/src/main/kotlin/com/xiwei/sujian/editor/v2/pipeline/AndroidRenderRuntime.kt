@@ -1,16 +1,15 @@
 package com.xiwei.sujian.editor.v2.pipeline
 
 import android.graphics.Canvas
-import com.xiwei.sujian.editor.v2.layout.AndroidLayoutRevision
 import com.xiwei.sujian.editor.v2.render.ComposedFrame
 import com.xiwei.sujian.editor.v2.render.EditorFrameComposer
 import com.xiwei.sujian.editor.v2.render.AndroidTextRenderer
 import com.xiwei.sujian.editor.v2.render.AndroidTextAnimationRenderer
 
 class AndroidRenderRuntime(
-    val textRenderer: AndroidTextRenderer,
-    val animationRenderer: AndroidTextAnimationRenderer,
-    val frameComposer: EditorFrameComposer
+    private val textRenderer: AndroidTextRenderer,
+    private val animationRenderer: AndroidTextAnimationRenderer,
+    private val frameComposer: EditorFrameComposer
 ) {
     constructor() : this(
         AndroidTextRenderer(),
@@ -18,55 +17,31 @@ class AndroidRenderRuntime(
         EditorFrameComposer()
     )
 
-    fun drawFrame(
-        canvas: Canvas,
-        layout: android.text.Layout,
-        layoutRevision: AndroidLayoutRevision?,
-        transaction: com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction?,
-        timelineProgress: Float,
-        searchHighlightsUtf16: List<Pair<Int, Int>>,
-        viewportWidth: Int,
-        viewportHeight: Int,
-        scrollX: Float,
-        scrollY: Float,
-        cursorVisible: Boolean,
-        selectionAllowed: Boolean,
-        mirror: com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
-    ) {
-        val effectiveSelStart = if (selectionAllowed) (layoutRevision?.selectionStartUtf16 ?: mirror.getSelectionStartUtf16()) else mirror.getCursorUtf16()
-        val effectiveSelEnd = if (selectionAllowed) (layoutRevision?.selectionEndUtf16 ?: mirror.getSelectionEndUtf16()) else mirror.getCursorUtf16()
+    fun drawFromFrameState(canvas: Canvas, frameState: FrameState) {
+        val input = frameState.renderInput
+        val effectiveSelStart = if (input.selectionAllowed) (input.layoutRevision?.selectionStartUtf16 ?: input.mirror.getSelectionStartUtf16()) else input.mirror.getCursorUtf16()
+        val effectiveSelEnd = if (input.selectionAllowed) (input.layoutRevision?.selectionEndUtf16 ?: input.mirror.getSelectionEndUtf16()) else input.mirror.getCursorUtf16()
 
         val composedFrame = frameComposer.compose(
-            layout = layout,
-            transaction = transaction,
-            progress = timelineProgress,
-            cursorUtf16 = if (cursorVisible) (layoutRevision?.cursorUtf16 ?: mirror.getCursorUtf16()) else -1,
-            cursorX = layoutRevision?.cursorX ?: 0f,
-            cursorY = layoutRevision?.cursorY ?: 0f,
-            cursorHeight = layoutRevision?.cursorHeight ?: 0f,
+            layout = input.layout,
+            transaction = input.transaction,
+            progress = input.timelineProgress,
+            cursorUtf16 = if (input.cursorVisible) (input.layoutRevision?.cursorUtf16 ?: input.mirror.getCursorUtf16()) else -1,
+            cursorX = input.layoutRevision?.cursorX ?: 0f,
+            cursorY = input.layoutRevision?.cursorY ?: 0f,
+            cursorHeight = input.layoutRevision?.cursorHeight ?: 0f,
             selectionStartUtf16 = effectiveSelStart,
             selectionEndUtf16 = effectiveSelEnd,
-            compositionStartUtf16 = layoutRevision?.compositionStartUtf16 ?: -1,
-            compositionEndUtf16 = layoutRevision?.compositionEndUtf16 ?: -1,
-            searchHighlightsUtf16 = searchHighlightsUtf16,
-            viewportWidth = viewportWidth,
-            viewportHeight = viewportHeight,
-            scrollX = scrollX,
-            scrollY = scrollY
+            compositionStartUtf16 = input.layoutRevision?.compositionStartUtf16 ?: -1,
+            compositionEndUtf16 = input.layoutRevision?.compositionEndUtf16 ?: -1,
+            searchHighlightsUtf16 = input.searchHighlightsUtf16,
+            viewportWidth = input.viewportWidth,
+            viewportHeight = input.viewportHeight,
+            scrollX = input.scrollX,
+            scrollY = input.scrollY
         )
 
         renderComposedFrame(canvas, composedFrame)
-    }
-
-    fun drawFromFrameState(canvas: Canvas, frameState: FrameState) {
-        val input = frameState.renderInput
-        drawFrame(
-            canvas, input.layout, input.layoutRevision,
-            input.transaction, input.timelineProgress,
-            input.searchHighlightsUtf16, input.viewportWidth, input.viewportHeight,
-            input.scrollX, input.scrollY, input.cursorVisible, input.selectionAllowed,
-            input.mirror
-        )
     }
 
     fun renderComposedFrame(canvas: Canvas, frame: ComposedFrame) {

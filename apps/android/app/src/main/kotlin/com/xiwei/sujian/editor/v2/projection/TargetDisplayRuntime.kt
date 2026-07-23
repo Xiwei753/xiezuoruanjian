@@ -107,8 +107,6 @@ class TargetDisplayRuntime(
     fun getText(): String = mirror.getText()
     fun getRevision(): Long = mirror.getRevision()
     fun getProjection(): DisplayTextProjection = projection
-    fun getVisualRuntime(): AndroidVisualRuntime = visualRuntime
-    fun getRenderRuntime(): AndroidRenderRuntime = renderRuntime
 
     fun setWidth(width: Float) {
         layoutEngine.setWidth(width)
@@ -138,7 +136,11 @@ class TargetDisplayRuntime(
 
     fun setFontSize(sizePx: Float) {
         textPaint.textSize = sizePx
-        layoutEngine.setDisplayTextOverride(projection.displayText)
+        if (projection.isMasked) {
+            layoutEngine.setDisplayTextOverride(projection.displayText, projection)
+        } else {
+            layoutEngine.clearDisplayTextOverride()
+        }
         layoutEngine.requestLayout()
     }
 

@@ -7,13 +7,12 @@ import com.xiwei.sujian.editor.v2.visual.TextAnimationPolicy
 import com.xiwei.sujian.editor.v2.mirror.VisualIntent
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutRevision
-import com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 
 class AndroidVisualRuntime(
-    val visualPlanner: AndroidVisualPlanner,
-    val animationEngine: AndroidTextAnimationEngine,
-    val resourceStore: VisualResourceStore
+    private val visualPlanner: AndroidVisualPlanner,
+    private val animationEngine: AndroidTextAnimationEngine,
+    private val resourceStore: VisualResourceStore
 ) {
     constructor() : this(
         AndroidVisualPlanner(),
@@ -44,18 +43,6 @@ class AndroidVisualRuntime(
     }
 
     fun hasActiveAnimation(): Boolean = animationEngine.hasActiveAnimation()
-
-    fun getActiveTransaction(): PreparedVisualTransaction? = animationEngine.getActiveTransaction()
-
-    fun getTimelineProgress(frameTimeMs: Long): Float = animationEngine.getTimelineProgress(frameTimeMs)
-
-    fun markFirstVisibleFrame(frameTimeMs: Long) {
-        animationEngine.markFirstVisibleFrame(frameTimeMs)
-    }
-
-    fun completeIfFinished(frameTimeMs: Long) {
-        animationEngine.completeIfFinished(frameTimeMs)
-    }
 
     fun setAnimationPolicy(policy: TextAnimationPolicy) {
         animationEngine.setAnimationPolicy(policy)

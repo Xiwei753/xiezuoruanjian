@@ -330,4 +330,63 @@ class DisplayTextProjectionTest {
             assertEquals("Round-trip for utf8=$utf8", utf8, back)
         }
     }
+
+    @Test
+    fun maskedWithCompositionEmojiNoSurrogateSplit() {
+        val text = "a😀b"
+        val proj = DisplayTextProjection.maskedWithComposition(text, 1, 3, "😀")
+        assertEquals("\u2022😀\u2022", proj.displayText)
+    }
+
+    @Test
+    fun maskedWithCompositionEmojiOffsetMapping() {
+        val text = "a😀b"
+        val proj = DisplayTextProjection.maskedWithComposition(text, 1, 3, "😀")
+        assertEquals(0, proj.realUtf8ToDisplayUtf16(0))
+        assertEquals(1, proj.realUtf8ToDisplayUtf16(1))
+        assertEquals(3, proj.realUtf8ToDisplayUtf16(5))
+        assertEquals(4, proj.realUtf8ToDisplayUtf16(6))
+
+        assertEquals(0, proj.displayUtf16ToRealUtf8(0))
+        assertEquals(1, proj.displayUtf16ToRealUtf8(1))
+        assertEquals(5, proj.displayUtf16ToRealUtf8(3))
+        assertEquals(6, proj.displayUtf16ToRealUtf8(4))
+    }
+
+    @Test
+    fun maskedWithCompositionMixedChineseEmoji() {
+        val text = "中😀a"
+        val proj = DisplayTextProjection.maskedWithComposition(text, 0, 3, "中😀")
+        assertEquals("中😀\u2022", proj.displayText)
+        assertEquals(0, proj.realUtf8ToDisplayUtf16(0))
+        assertEquals(1, proj.realUtf8ToDisplayUtf16(3))
+        assertEquals(3, proj.realUtf8ToDisplayUtf16(7))
+        assertEquals(4, proj.realUtf8ToDisplayUtf16(8))
+    }
+
+    @Test
+    fun maskedWithCompositionEmojiRoundTrip() {
+        val text = "a😀b😀c"
+        val proj = DisplayTextProjection.maskedWithComposition(text, 1, 3, "😀")
+        val codePointUtf8Boundaries = mutableListOf(0)
+        var bytePos = 0
+        var i = 0
+        while (i < text.length) {
+            val codePoint = text.codePointAt(i)
+            val utf8Len = when {
+                codePoint <= 0x7F -> 1
+                codePoint <= 0x7FF -> 2
+                codePoint <= 0xFFFF -> 3
+                else -> 4
+            }
+            bytePos += utf8Len
+            codePointUtf8Boundaries.add(bytePos)
+            i += Character.charCount(codePoint)
+        }
+        for (utf8 in codePointUtf8Boundaries) {
+            val utf16 = proj.realUtf8ToDisplayUtf16(utf8)
+            val back = proj.displayUtf16ToRealUtf8(utf16)
+            assertEquals("Round-trip for utf8=$utf8", utf8, back)
+        }
+    }
 }

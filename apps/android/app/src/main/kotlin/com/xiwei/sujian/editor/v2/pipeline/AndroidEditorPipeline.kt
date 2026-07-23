@@ -46,9 +46,9 @@ sealed class PipelineOutput {
 
 class AndroidEditorPipeline private constructor(
     val editPipeline: EditPipeline,
-    internal val renderRuntime: AndroidRenderRuntime,
-    internal val layoutRuntime: AndroidLayoutRuntime,
-    internal val visualRuntime: AndroidVisualRuntime
+    private val renderRuntime: AndroidRenderRuntime,
+    private val layoutRuntime: AndroidLayoutRuntime,
+    private val visualRuntime: AndroidVisualRuntime
 ) : EditorCommandPort, InputCommandPort {
 
     override val mirror: DisplayTextMirror get() = editPipeline.mirror

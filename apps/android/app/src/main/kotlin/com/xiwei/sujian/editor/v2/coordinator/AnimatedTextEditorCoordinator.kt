@@ -373,9 +373,11 @@ class AnimatedTextEditorCoordinator(
         }
         view.onSearchHighlightsCleared = {
             for ((targetId, _) in targetProjections) {
-                if (targetId != activeTargetId) {
-                    setTargetDecorations(targetId, TargetDecorations())
-                }
+                setTargetDecorations(targetId, TargetDecorations())
+            }
+            if (activeTargetId != null) {
+                targetDecorations.remove(activeTargetId)
+                targetDecorationsVersion++
             }
         }
     }
