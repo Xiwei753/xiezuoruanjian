@@ -9,6 +9,7 @@ import com.xiwei.sujian.editor.v2.mirror.EditResult
 import com.xiwei.sujian.editor.v2.mirror.VisualIntent
 import com.xiwei.sujian.editor.v2.pipeline.AndroidVisualRuntime
 import com.xiwei.sujian.editor.v2.pipeline.AndroidRenderRuntime
+import com.xiwei.sujian.editor.v2.pipeline.FrameState
 import android.graphics.Canvas
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.getValue
@@ -34,12 +35,34 @@ class TargetDisplayRuntime(
     var frameGeneration by mutableLongStateOf(0L)
         private set
 
+    private var cachedFrameState: FrameState? = null
+
     private var frameClock: WindowDisplayFrameClock? = null
     private var isRegisteredWithClock: Boolean = false
 
     override fun needsFrame(): Boolean = hasActiveAnimation()
 
     override fun onFrame(frameTimeNanos: Long) {
+        val frameTimeMs = frameTimeNanos / 1_000_000
+        val layout = layoutEngine.getLayout()
+        if (layout != null) {
+            val highlightsUtf16 = getSearchHighlightsUtf16()
+            val cursorDisplayUtf16 = projection.realUtf8ToDisplayUtf16(mirror.getCursorUtf8())
+            val selStartDisplayUtf16 = projection.realUtf8ToDisplayUtf16(selectionStartUtf8)
+            val selEndDisplayUtf16 = projection.realUtf8ToDisplayUtf16(selectionEndUtf8)
+            cachedFrameState = visualRuntime.tick(
+                frameTimeMs,
+                layout,
+                layoutEngine.getCurrentRevision(),
+                highlightsUtf16,
+                viewportWidth, viewportHeight,
+                scrollX, scrollY,
+                true, true,
+                cursorDisplayUtf16,
+                selStartDisplayUtf16,
+                selEndDisplayUtf16
+            )
+        }
         frameGeneration++
     }
 
@@ -188,6 +211,11 @@ class TargetDisplayRuntime(
     }
 
     fun drawFrame(canvas: Canvas) {
+        val cached = cachedFrameState
+        if (cached != null) {
+            renderRuntime.drawFromFrameState(canvas, cached)
+            return
+        }
         val frameTimeMs = System.nanoTime() / 1_000_000
         val layout = layoutEngine.getLayout() ?: return
         val highlightsUtf16 = getSearchHighlightsUtf16()

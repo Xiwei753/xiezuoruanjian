@@ -17,8 +17,8 @@ fun ReadonlyChapterPreview(
         modifier = modifier
             .fillMaxSize()
             .drawBehind {
-                @Suppress("UNUSED_VARIABLE")
                 val gen = projection.frameGeneration
+                if (gen < 0) return@drawBehind
                 val nativeCanvas = drawContext.canvas.nativeCanvas
                 nativeCanvas.save()
                 projection.drawFrame(nativeCanvas)
