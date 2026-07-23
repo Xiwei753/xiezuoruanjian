@@ -7,15 +7,16 @@
 //! ## 架构约束
 //!
 //! - **严格排除 UI 逻辑**：不允许出现动画、窗口管理、输入法、平台特定代码。
-//! - **客户端只做展示**：Android / Linux_qt 客户端通过 Facade（`facade.rs`）调用 Core。
+//! - **客户端只做展示**：平台客户端通过 `writer_uniffi` 或 `writer_platform_api` 调用 Core。
 //! - **正文永远是纯文本**：所有文件读写都是纯文本，不使用 HTML。
+//! - **平台能力注入**：目录、设备 ID、密钥存储、网络状态由 `writer_platform_api` 契约注入，Core 不自行猜测平台。
 //!
 //! ## 模块分层
 //!
 //! | 模块 | 职责 | 边界 |
 //! |------|------|------|
 //! | `facade` | Core 内部统一入口，聚合所有子模块 | 不直接作为平台稳定边界 |
-//! | `api` | 跨平台稳定 API 层，提供 DTO / Error / Service | UniFFI、Linux binding、未来前端的底座 |
+//! | `api` | 跨平台稳定 API 层，提供 DTO / Error / Service | `writer_uniffi` 和平台适配层的底座 |
 //! | `workspace` | 工作区创建、验证、最近编辑 | 不处理项目内容 |
 //! | `project` | 作品 CRUD、统计、排序、删除 | 删除走 `delete_guard` |
 //! | `volume` | 卷 CRUD、排序、删除 | 删除走 `delete_guard` |
