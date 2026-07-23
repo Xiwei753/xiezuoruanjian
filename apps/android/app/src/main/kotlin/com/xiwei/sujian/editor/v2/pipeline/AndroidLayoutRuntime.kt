@@ -40,14 +40,14 @@ class AndroidLayoutRuntime(
         if (projection.isMasked) {
             layoutEngine.setDisplayTextOverride(projection.displayText, projection)
         } else {
-            layoutEngine.clearDisplayTextOverride()
+            layoutEngine.clearDisplayTextOverride(projection)
         }
         layoutEngine.requestLayout()
     }
 
     fun clearProjection() {
         currentProjection = DisplayTextProjection.identity(mirror.getText())
-        layoutEngine.clearDisplayTextOverride()
+        layoutEngine.clearDisplayTextOverride(currentProjection)
         layoutEngine.requestLayout()
     }
 
@@ -87,7 +87,7 @@ class AndroidLayoutRuntime(
         if (currentProjection.isMasked) {
             layoutEngine.setDisplayTextOverride(currentProjection.displayText, currentProjection)
         } else {
-            layoutEngine.clearDisplayTextOverride()
+            layoutEngine.clearDisplayTextOverride(currentProjection)
         }
     }
 

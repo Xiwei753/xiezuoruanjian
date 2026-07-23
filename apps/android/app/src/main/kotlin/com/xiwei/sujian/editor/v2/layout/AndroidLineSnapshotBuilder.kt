@@ -3,8 +3,8 @@ package com.xiwei.sujian.editor.v2.layout
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.text.Layout
-import com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
+import com.xiwei.sujian.editor.v2.projection.DisplayTextProjection
 import android.icu.text.BreakIterator
 
 class AndroidLineSnapshotBuilder {
@@ -119,13 +119,14 @@ class AndroidLineSnapshotBuilder {
         layout: Layout?,
         lineIndex: Int,
         revision: AndroidLayoutRevision?,
-        mirror: DisplayTextMirror
+        mirror: DisplayTextMirror,
+        projection: DisplayTextProjection? = null
     ): AndroidLineSnapshot? {
         val snapshot = buildSnapshotForLine(layout, lineIndex, revision) ?: return null
         if (layout == null) return snapshot
 
         val lineRange = revision?.lineRanges?.getOrNull(lineIndex) ?: return snapshot
-        val clusters = buildClustersForLine(layout, lineIndex, lineRange, mirror)
+        val clusters = buildClustersForLine(layout, lineIndex, lineRange, mirror, projection)
 
         return snapshot.copy(clusters = clusters)
     }
@@ -134,11 +135,12 @@ class AndroidLineSnapshotBuilder {
         layout: Layout,
         lineIndex: Int,
         lineRange: AndroidLayoutRevision.LineRange,
-        mirror: DisplayTextMirror
+        mirror: DisplayTextMirror,
+        projection: DisplayTextProjection? = null
     ): List<LineClusterSnapshot> {
         val clusters = mutableListOf<LineClusterSnapshot>()
         val text = mirror.getText()
-        val indexMap = AndroidTextIndexMap(mirror)
+        val effectiveProjection = projection ?: DisplayTextProjection.identity(text)
 
         val lineStartUtf16 = layout.getLineStart(lineIndex)
         val lineEndUtf16 = layout.getLineEnd(lineIndex)
@@ -153,8 +155,8 @@ class AndroidLineSnapshotBuilder {
             val clusterStartUtf16 = lineStartUtf16 + start
             val clusterEndUtf16 = lineStartUtf16 + end
 
-            val clusterStartUtf8 = indexMap.utf16ToUtf8(clusterStartUtf16)
-            val clusterEndUtf8 = indexMap.utf16ToUtf8(clusterEndUtf16)
+            val clusterStartUtf8 = effectiveProjection.displayUtf16ToRealUtf8(clusterStartUtf16)
+            val clusterEndUtf8 = effectiveProjection.displayUtf16ToRealUtf8(clusterEndUtf16)
 
             val x0 = layout.getPrimaryHorizontal(clusterStartUtf16)
             // Line-end cluster right boundary: use getLineRight instead of

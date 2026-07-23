@@ -64,7 +64,7 @@ class TargetDisplayRuntime(
         if (projection.isMasked) {
             layoutEngine.setDisplayTextOverride(projection.displayText, projection)
         } else {
-            layoutEngine.clearDisplayTextOverride()
+            layoutEngine.clearDisplayTextOverride(projection)
         }
     }
 
@@ -139,7 +139,7 @@ class TargetDisplayRuntime(
         if (projection.isMasked) {
             layoutEngine.setDisplayTextOverride(projection.displayText, projection)
         } else {
-            layoutEngine.clearDisplayTextOverride()
+            layoutEngine.clearDisplayTextOverride(projection)
         }
         layoutEngine.requestLayout()
     }

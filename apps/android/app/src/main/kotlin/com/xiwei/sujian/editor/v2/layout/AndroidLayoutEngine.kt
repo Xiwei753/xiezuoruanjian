@@ -77,7 +77,7 @@ class AndroidLayoutEngine(
         val rev = currentRevision ?: return emptyMap()
         val result = mutableMapOf<Int, AndroidLineSnapshot>()
         for (idx in lineIndices) {
-            val snapshot = snapshotBuilder.buildSnapshotForLineWithClusters(l, idx, rev, mirror)
+            val snapshot = snapshotBuilder.buildSnapshotForLineWithClusters(l, idx, rev, mirror, currentProjection)
             if (snapshot != null) {
                 result[idx] = snapshot
             }
@@ -85,15 +85,12 @@ class AndroidLayoutEngine(
         return result
     }
 
-    /** Capture line snapshots WITH per-cluster data (source rects, shaping fingerprints).
-     *  This is the primary path used by [AndroidTextAnimationEngine.prepareAndSubmit] —
-     *  cluster data is required for Insert/Delete/Move/Crossfade slice generation. */
     fun captureLineBitmapSnapshotsWithClusters(lineIndices: Set<Int>): Map<Int, AndroidLineSnapshot> {
         val l = layout ?: return emptyMap()
         val rev = currentRevision ?: return emptyMap()
         val result = mutableMapOf<Int, AndroidLineSnapshot>()
         for (idx in lineIndices) {
-            val snapshot = snapshotBuilder.buildSnapshotForLineWithClusters(l, idx, rev, mirror)
+            val snapshot = snapshotBuilder.buildSnapshotForLineWithClusters(l, idx, rev, mirror, currentProjection)
             if (snapshot != null) {
                 result[idx] = snapshot
             }
@@ -128,9 +125,8 @@ class AndroidLayoutEngine(
     }
 
     private fun buildRevision(l: Layout): AndroidLayoutRevision {
-        val projection = currentProjection
+        val projection = currentProjection ?: DisplayTextProjection.identity(mirror.getText())
         val layoutText = displayTextOverride ?: mirror.getText()
-        val indexMap = if (projection == null) AndroidTextIndexMap(mirror) else null
         val lineRanges = mutableListOf<AndroidLayoutRevision.LineRange>()
         var currentParagraphId = 0
         var currentParagraphLocalLineIndex = 0
@@ -143,10 +139,8 @@ class AndroidLayoutEngine(
             val left = l.getLineLeft(i)
             val right = l.getLineRight(i)
 
-            val startUtf8 = projection?.displayUtf16ToRealUtf8(lineStartUtf16)
-                ?: indexMap!!.utf16ToUtf8(lineStartUtf16)
-            val endUtf8 = projection?.displayUtf16ToRealUtf8(lineEndUtf16)
-                ?: indexMap!!.utf16ToUtf8(lineEndUtf16)
+            val startUtf8 = projection.displayUtf16ToRealUtf8(lineStartUtf16)
+            val endUtf8 = projection.displayUtf16ToRealUtf8(lineEndUtf16)
 
             val endsWithHardBreak = lineEndUtf16 > 0 && lineEndUtf16 <= layoutText.length &&
                 layoutText[lineEndUtf16 - 1] == '\n'
@@ -179,8 +173,7 @@ class AndroidLayoutEngine(
 
         val fontFingerprint = "${textPaint.textSize}_${textPaint.typeface?.hashCode() ?: 0}"
 
-        val cursorDisplayUtf16 = projection?.realUtf8ToDisplayUtf16(mirror.getCursorUtf8())
-            ?: mirror.getCursorUtf16()
+        val cursorDisplayUtf16 = projection.realUtf8ToDisplayUtf16(mirror.getCursorUtf8())
         val cursorLine = if (cursorDisplayUtf16 in 0..layoutText.length) l.getLineForOffset(cursorDisplayUtf16) else 0
         val cursorX = if (cursorDisplayUtf16 in 0..layoutText.length) l.getPrimaryHorizontal(cursorDisplayUtf16) else 0f
         val cursorY = l.getLineTop(cursorLine).toFloat()
@@ -189,7 +182,7 @@ class AndroidLayoutEngine(
         val compRange = mirror.getCompositionRangeUtf16()
         val compStartDisplayUtf16: Int
         val compEndDisplayUtf16: Int
-        if (projection != null && compRange != null && compRange.first >= 0 && compRange.second >= 0) {
+        if (compRange != null && compRange.first >= 0 && compRange.second >= 0) {
             compStartDisplayUtf16 = projection.realUtf16ToDisplayUtf16(compRange.first)
             compEndDisplayUtf16 = projection.realUtf16ToDisplayUtf16(compRange.second)
         } else {
@@ -197,10 +190,8 @@ class AndroidLayoutEngine(
             compEndDisplayUtf16 = compRange?.second ?: -1
         }
 
-        val selectionAnchorDisplayUtf16 = projection?.realUtf8ToDisplayUtf16(mirror.getSelectionAnchorUtf8())
-            ?: mirror.getSelectionAnchorUtf16()
-        val selectionHeadDisplayUtf16 = projection?.realUtf8ToDisplayUtf16(mirror.getSelectionHeadUtf8())
-            ?: mirror.getSelectionHeadUtf16()
+        val selectionAnchorDisplayUtf16 = projection.realUtf8ToDisplayUtf16(mirror.getSelectionAnchorUtf8())
+        val selectionHeadDisplayUtf16 = projection.realUtf8ToDisplayUtf16(mirror.getSelectionHeadUtf8())
 
         return AndroidLayoutRevision(
             revisionCounter,
@@ -230,9 +221,9 @@ class AndroidLayoutEngine(
         lastConfigFingerprint = ""
     }
 
-    fun clearDisplayTextOverride() {
+    fun clearDisplayTextOverride(projection: DisplayTextProjection? = null) {
         displayTextOverride = null
-        currentProjection = null
+        currentProjection = projection
         lastConfigFingerprint = ""
     }
 

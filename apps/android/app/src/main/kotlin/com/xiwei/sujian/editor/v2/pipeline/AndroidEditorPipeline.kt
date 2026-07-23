@@ -7,7 +7,6 @@ import com.xiwei.sujian.editor.v2.mirror.EditResult
 import com.xiwei.sujian.editor.v2.mirror.VisualIntent
 import com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
-import com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap
 import com.xiwei.sujian.editor.v2.host.EditorKernelBridge
 import com.xiwei.sujian.editor.v2.projection.DisplayTextProjection
 import uniffi.writer_core.EditorTransactionCauseDto
@@ -562,9 +561,9 @@ class AndroidEditorPipeline private constructor(
 
     private fun computeAutoIndentPrefix(): String {
         if (!autoIndentEnabled) return ""
-        val indexMap = AndroidTextIndexMap(mirror)
+        val projection = layoutRuntime.getCurrentProjection()
         val cursorUtf8 = mirror.getCursorUtf8()
-        val cursorUtf16 = indexMap.utf8ToUtf16(cursorUtf8)
+        val cursorUtf16 = projection.realUtf8ToDisplayUtf16(cursorUtf8)
         val text = mirror.getText()
         val safeCursorUtf16 = cursorUtf16.coerceIn(0, text.length)
         val lineStartUtf16 = if (safeCursorUtf16 > 0) text.lastIndexOf('\n', safeCursorUtf16 - 1) + 1 else 0
@@ -574,26 +573,26 @@ class AndroidEditorPipeline private constructor(
     }
 
     fun previousGraphemeByteLen(offset: Int): Int {
-        val indexMap = AndroidTextIndexMap(mirror)
-        val utf16Offset = indexMap.utf8ToUtf16(offset)
+        val projection = layoutRuntime.getCurrentProjection()
+        val utf16Offset = projection.realUtf8ToDisplayUtf16(offset)
         if (utf16Offset <= 0) return 0
         val iter = android.icu.text.BreakIterator.getCharacterInstance()
         iter.setText(mirror.getText())
         val prev = iter.preceding(utf16Offset)
         if (prev == android.icu.text.BreakIterator.DONE) return 0
-        val prevUtf8 = indexMap.utf16ToUtf8(prev)
+        val prevUtf8 = projection.displayUtf16ToRealUtf8(prev)
         return offset - prevUtf8
     }
 
     fun nextGraphemeByteLen(offset: Int): Int {
-        val indexMap = AndroidTextIndexMap(mirror)
-        val utf16Offset = indexMap.utf8ToUtf16(offset)
+        val projection = layoutRuntime.getCurrentProjection()
+        val utf16Offset = projection.realUtf8ToDisplayUtf16(offset)
         if (utf16Offset >= mirror.getLengthUtf16()) return 0
         val iter = android.icu.text.BreakIterator.getCharacterInstance()
         iter.setText(mirror.getText())
         val next = iter.following(utf16Offset)
         if (next == android.icu.text.BreakIterator.DONE) return 0
-        val nextUtf8 = indexMap.utf16ToUtf8(next)
+        val nextUtf8 = projection.displayUtf16ToRealUtf8(next)
         return nextUtf8 - offset
     }
 
