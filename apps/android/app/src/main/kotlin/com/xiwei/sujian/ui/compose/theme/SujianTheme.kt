@@ -18,7 +18,8 @@ private fun schemeFromRecord(
     isDark: Boolean
 ): androidx.compose.material3.ColorScheme {
     val scheme = if (isDark) record.darkScheme else record.lightScheme
-    return androidx.compose.material3.ColorScheme(
+    val base = if (isDark) SujianDarkColorScheme else SujianLightColorScheme
+    return base.copy(
         primary = hexToColor(scheme.primary),
         onPrimary = hexToColor(scheme.onPrimary),
         primaryContainer = hexToColor(scheme.primaryContainer),
@@ -63,7 +64,8 @@ private fun schemeFromBuiltin(
     isDark: Boolean
 ): androidx.compose.material3.ColorScheme {
     val scheme = if (isDark) theme.darkScheme else theme.lightScheme
-    return androidx.compose.material3.ColorScheme(
+    val base = if (isDark) SujianDarkColorScheme else SujianLightColorScheme
+    return base.copy(
         primary = hexToColor(scheme.primary),
         onPrimary = hexToColor(scheme.onPrimary),
         primaryContainer = hexToColor(scheme.primaryContainer),

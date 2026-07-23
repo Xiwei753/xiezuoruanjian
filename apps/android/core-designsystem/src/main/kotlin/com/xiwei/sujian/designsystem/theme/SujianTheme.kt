@@ -11,6 +11,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalInspectionMode
 
 enum class ColorSource {
     BUILT_IN,
@@ -114,13 +115,28 @@ fun SujianTheme(
     typography: androidx.compose.material3.Typography = SujianTypography,
     shapes: androidx.compose.material3.Shapes = SujianShapes,
     dimensions: SujianDimensions = SujianDimensions(),
-    motion: SujianMotion = SujianMotion(),
+    motion: SujianMotion? = null,
     elevation: SujianElevation = SujianElevation(),
     content: @Composable () -> Unit
 ) {
+    val isInInspectionMode = LocalInspectionMode.current
+    val resolvedMotion = motion ?: if (isInInspectionMode) {
+        SujianMotion.reducedMotion()
+    } else {
+        val context = LocalContext.current
+        val accessibilityManager = context.getSystemService(android.content.Context.ACCESSIBILITY_SERVICE)
+            as? android.view.accessibility.AccessibilityManager
+        val isReducedMotion = accessibilityManager?.isTouchExplorationEnabled == true ||
+            android.provider.Settings.System.getFloat(
+                context.contentResolver,
+                android.provider.Settings.Global.TRANSITION_ANIMATION_SCALE,
+                1f
+            ) == 0f
+        if (isReducedMotion) SujianMotion.reducedMotion() else SujianMotion()
+    }
     CompositionLocalProvider(
         LocalSujianDimensions provides dimensions,
-        LocalSujianMotion provides motion,
+        LocalSujianMotion provides resolvedMotion,
         LocalSujianElevation provides elevation,
     ) {
         MaterialTheme(

@@ -18,7 +18,21 @@ data class SujianMotion(
     val emphasizedDecelerateEasing: Easing = CubicBezierEasing(0f, 0f, 0f, 1f),
     val emphasizedAccelerateEasing: Easing = CubicBezierEasing(0.3f, 0f, 0.8f, 0.15f),
     val linearEasing: Easing = CubicBezierEasing(0f, 0f, 1f, 1f),
-)
+) {
+    companion object {
+        fun reducedMotion(): SujianMotion = SujianMotion(
+            instantDurationMs = 0,
+            quickDurationMs = 0,
+            standardDurationMs = 0,
+            emphasizedDurationMs = 0,
+            standardEasing = Easing { it },
+            emphasizedEasing = Easing { it },
+            emphasizedDecelerateEasing = Easing { it },
+            emphasizedAccelerateEasing = Easing { it },
+            linearEasing = Easing { it },
+        )
+    }
+}
 
 @Immutable
 data class SujianElevation(

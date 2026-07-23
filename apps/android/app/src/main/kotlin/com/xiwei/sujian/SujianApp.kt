@@ -4,7 +4,6 @@ import android.app.Application
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
-import com.google.android.material.color.DynamicColors
 import com.xiwei.sujian.data.AutoSyncScheduler
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
@@ -19,11 +18,6 @@ class SujianApp : Application(), DefaultLifecycleObserver {
 
     override fun onCreate() {
         super<Application>.onCreate()
-        val repo = SettingsRepository(this)
-        val localSettings = repo.getLocalSettings()
-        if (localSettings.dynamicColorEnabled) {
-            DynamicColors.applyToActivitiesIfAvailable(this)
-        }
         ProcessLifecycleOwner.get().lifecycle.addObserver(this)
         initDiagnostics()
         installCrashHandler()
