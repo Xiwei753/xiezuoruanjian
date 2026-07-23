@@ -1,20 +1,21 @@
-//! # Writer UniFFI — 跨平台绑定入口与最终库组装
+//! # Writer UniFFI — 跨平台绑定入口
 //!
-//! 本 crate 是 UniFFI 对外的唯一入口，负责：
+//! 本 crate 是 UniFFI 绑定的中间层，负责：
 //! - 重新导出 `writer_core` 的稳定 API（包括 UniFFI scaffolding）
-//! - 产生最终 `cdylib` 供 Android/HarmonyOS 等平台链接
 //! - 提供 `uniffi-bindgen` 二进制用于生成 Kotlin/Swift 绑定
 //!
 //! ## 依赖方向
 //!
 //! ```text
-//! 原生端 → writer_uniffi (cdylib) → writer_core + writer_platform_api
+//! 原生端 → 平台 crate (cdylib) → writer_uniffi (rlib) → writer_core + writer_platform_api
 //! ```
 //!
-//! `writer_core` 自身是 `rlib`，不直接产生 `cdylib`。
+//! `writer_uniffi` 自身是 `rlib`，不直接产生 `cdylib`。
+//! 最终 `cdylib` 由平台 crate（`writer-platform-android`、`writer-platform-linux`）组装，
+//! 每个平台 crate 包含通用核心、平台适配和 UniFFI 元数据。
+//!
 //! UniFFI scaffolding（UDL + `include_scaffolding!`）保留在 `writer_core` 中，
 //! 因为 UDL 中定义的类型实现位于 `writer_core`，UniFFI 要求 scaffolding 与类型定义在同一 crate。
-//! 所有平台的最终库都通过 `writer_uniffi` 或平台 crate 组装。
 //!
 //! ## 导出边界
 //!

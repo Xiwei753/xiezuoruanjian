@@ -3820,6 +3820,7 @@ dependencies = [
  "uuid",
  "writer_core",
  "writer_platform_api",
+ "writer_uniffi",
 ]
 
 [[package]]

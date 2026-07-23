@@ -1,6 +1,6 @@
 //! # Linux 平台适配层
 //!
-//! 提供 Linux 桌面端的平台初始化、目录解析、配置存储和同步传输。
+//! 提供 Linux 桌面端的平台初始化、目录解析、配置存储、同步传输和最终库组装。
 //!
 //! ## 职责
 //!
@@ -8,11 +8,12 @@
 //! - 构造 `PlatformInit` 并注入 Core
 //! - 使用 `writer_platform_api::FileConfigStore` 提供配置存储
 //! - 通过 `writer_core::ReqwestSyncTransport` 提供同步 HTTP 传输
+//! - 组装最终 `cdylib`：包含通用核心、Linux 适配和 UniFFI 元数据
 //!
 //! ## 依赖方向
 //!
 //! ```text
-//! Linux Qt 应用 → writer-platform-linux → writer_core + writer_platform_api
+//! Linux Qt 应用 → writer-platform-linux (cdylib) → writer_uniffi → writer_core + writer_platform_api
 //! ```
 
 use std::path::PathBuf;
