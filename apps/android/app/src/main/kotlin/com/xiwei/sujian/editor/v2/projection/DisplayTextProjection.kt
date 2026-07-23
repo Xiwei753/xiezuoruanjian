@@ -5,6 +5,8 @@ data class OffsetMapping(
     val displayUtf16ToRealUtf8: (Int) -> Int,
     val realUtf16ToDisplayUtf16: (Int) -> Int,
     val displayUtf16ToRealUtf16: (Int) -> Int,
+    val realUtf8ToRealUtf16: (Int) -> Int,
+    val realUtf16ToRealUtf8: (Int) -> Int,
     val displayLengthUtf16: Int,
     val realLengthUtf8: Int,
     val realLengthUtf16: Int
@@ -31,6 +33,12 @@ class DisplayTextProjection(
 
     fun displayUtf16ToRealUtf16(utf16: Int): Int =
         offsetMapping.displayUtf16ToRealUtf16(utf16)
+
+    fun realUtf8ToRealUtf16(utf8: Int): Int =
+        offsetMapping.realUtf8ToRealUtf16(utf8)
+
+    fun realUtf16ToRealUtf8(utf16: Int): Int =
+        offsetMapping.realUtf16ToRealUtf8(utf16)
 
     fun getDisplaySpannable(): android.text.SpannableStringBuilder =
         android.text.SpannableStringBuilder(displayText)
@@ -112,6 +120,14 @@ class DisplayTextProjection(
                     displayUtf16ToRealUtf16 = { displayUtf16 ->
                         val idx = lookupByBinarySearch(realUtf16Arr, displayUtf16)
                         realUtf16Arr.getOrElse(idx) { utf16Len }.coerceIn(0, utf16Len)
+                    },
+                    realUtf8ToRealUtf16 = { utf8 ->
+                        val idx = lookupByBinarySearch(realUtf8Arr, utf8)
+                        realUtf16Arr.getOrElse(idx) { utf16Len }.coerceIn(0, utf16Len)
+                    },
+                    realUtf16ToRealUtf8 = { utf16 ->
+                        val idx = lookupByBinarySearch(realUtf16Arr, utf16)
+                        realUtf8Arr.getOrElse(idx) { bytes.size }.coerceIn(0, bytes.size)
                     },
                     displayLengthUtf16 = utf16Len,
                     realLengthUtf8 = bytes.size,
@@ -258,6 +274,16 @@ class DisplayTextProjection(
                 }
             }
 
+            val realUtf8ToRealUtf16Mapping = { utf8: Int ->
+                val idx = lookupByBinarySearch(realUtf8Arr, utf8)
+                realUtf16Arr.getOrElse(idx) { utf16Len }.coerceIn(0, utf16Len)
+            }
+
+            val realUtf16ToRealUtf8Mapping = { utf16: Int ->
+                val idx = lookupByBinarySearch(realUtf16Arr, utf16)
+                realUtf8Arr.getOrElse(idx) { bytes.size }.coerceIn(0, bytes.size)
+            }
+
             return DisplayTextProjection(
                 realText = text,
                 displayText = displayText,
@@ -267,6 +293,8 @@ class DisplayTextProjection(
                     displayUtf16ToRealUtf8 = displayUtf16ToRealUtf8Mapping,
                     realUtf16ToDisplayUtf16 = realUtf16ToDisplayUtf16Mapping,
                     displayUtf16ToRealUtf16 = displayUtf16ToRealUtf16Mapping,
+                    realUtf8ToRealUtf16 = realUtf8ToRealUtf16Mapping,
+                    realUtf16ToRealUtf8 = realUtf16ToRealUtf8Mapping,
                     displayLengthUtf16 = displayLen,
                     realLengthUtf8 = bytes.size,
                     realLengthUtf16 = utf16Len
@@ -311,6 +339,14 @@ class DisplayTextProjection(
                     displayUtf16ToRealUtf16 = { displayUtf16 ->
                         val cpPos = displayUtf16.coerceIn(0, codePointCount)
                         realUtf16Arr.getOrElse(cpPos) { utf16Len }.coerceIn(0, utf16Len)
+                    },
+                    realUtf8ToRealUtf16 = { utf8 ->
+                        val idx = lookupByBinarySearch(realUtf8Arr, utf8)
+                        realUtf16Arr.getOrElse(idx) { utf16Len }.coerceIn(0, utf16Len)
+                    },
+                    realUtf16ToRealUtf8 = { utf16 ->
+                        val idx = lookupByBinarySearch(realUtf16Arr, utf16)
+                        realUtf8Arr.getOrElse(idx) { bytes.size }.coerceIn(0, bytes.size)
                     },
                     displayLengthUtf16 = displayLen,
                     realLengthUtf8 = bytes.size,

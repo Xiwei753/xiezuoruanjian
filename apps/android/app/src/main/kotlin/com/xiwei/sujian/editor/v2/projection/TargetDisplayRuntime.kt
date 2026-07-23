@@ -1,6 +1,7 @@
 package com.xiwei.sujian.editor.v2.projection
 
 import android.text.TextPaint
+import android.view.Choreographer
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutRevision
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
@@ -13,6 +14,9 @@ import com.xiwei.sujian.editor.v2.render.EditorFrameComposer
 import com.xiwei.sujian.editor.v2.render.ComposedFrame
 import com.xiwei.sujian.editor.v2.pipeline.AndroidRenderRuntime
 import android.graphics.Canvas
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 
 class TargetDisplayRuntime(
     private val mirror: DisplayTextMirror,
@@ -31,6 +35,36 @@ class TargetDisplayRuntime(
     private var viewportWidth: Int = 0
     private var viewportHeight: Int = 0
 
+    var frameGeneration by mutableLongStateOf(0L)
+        private set
+
+    private val choreographer = Choreographer.getInstance()
+    private var choreographerCallback: Choreographer.FrameCallback? = null
+    private var isTicking: Boolean = false
+
+    private val frameCallback = object : Choreographer.FrameCallback {
+        override fun doFrame(frameTimeNanos: Long) {
+            if (!isTicking) return
+            if (hasActiveAnimation()) {
+                frameGeneration++
+                choreographer.postFrameCallback(this)
+            } else {
+                isTicking = false
+            }
+        }
+    }
+
+    fun startFrameClock() {
+        if (isTicking) return
+        isTicking = true
+        choreographer.postFrameCallback(frameCallback)
+    }
+
+    fun stopFrameClock() {
+        isTicking = false
+        choreographer.removeFrameCallback(frameCallback)
+    }
+
     fun updateFromSnapshot(text: String, cursorUtf8: Int, revision: Long) {
         mirror.loadFromSnapshot(text, cursorUtf8, revision)
         rebuildProjectionAndLayout()
@@ -46,6 +80,7 @@ class TargetDisplayRuntime(
                 rebuildProjectionContent()
             }
         )
+        startFrameClock()
     }
 
     private fun rebuildProjectionContent() {
@@ -175,6 +210,7 @@ class TargetDisplayRuntime(
     fun hasActiveAnimation(): Boolean = visualRuntime.hasActiveAnimation()
 
     fun release() {
+        stopFrameClock()
         visualRuntime.release()
         layoutEngine.release()
     }

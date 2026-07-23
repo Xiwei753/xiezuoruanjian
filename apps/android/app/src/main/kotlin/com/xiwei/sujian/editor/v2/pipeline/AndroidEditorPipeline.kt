@@ -69,13 +69,11 @@ class AndroidEditorPipeline private constructor(
     private var autoIndentWidthSp: Float = 2f
     private var maxLength: Int = 0
 
-    fun loadText(text: String, cursorUtf8: Int, applySecret: Boolean = true): LoadTextResult {
+    fun loadText(text: String, cursorUtf8: Int, @Suppress("UNUSED_PARAMETER") applySecret: Boolean = true): LoadTextResult {
         val result = editPipeline.loadText(text, cursorUtf8)
         if (result is LoadTextResult.Loaded) {
             resetAfterLoad()
-            if (applySecret) {
-                layoutRuntime.applySecretDisplayIfActiveWithLayout()
-            }
+            layoutRuntime.rebuildDisplayProjection()
         }
         return result
     }
@@ -267,7 +265,7 @@ class AndroidEditorPipeline private constructor(
             layoutEngine = layoutRuntime.layoutEngine,
             mirrorUpdate = {
                 editPipeline.applyEditResult(result)
-                layoutRuntime.applySecretDisplayIfActive()
+                layoutRuntime.rebuildDisplayProjection()
             },
             beforePatch = beforePatch
         )
@@ -298,7 +296,7 @@ class AndroidEditorPipeline private constructor(
             layoutEngine = layoutRuntime.layoutEngine,
             mirrorUpdate = {
                 editPipeline.applyEditResult(result)
-                layoutRuntime.applySecretDisplayIfActive()
+                layoutRuntime.rebuildDisplayProjection()
             },
             beforePatch = beforePatch
         )
@@ -324,7 +322,7 @@ class AndroidEditorPipeline private constructor(
             layoutEngine = layoutRuntime.layoutEngine,
             mirrorUpdate = {
                 mirrorUpdate?.invoke()
-                layoutRuntime.applySecretDisplayIfActive()
+                layoutRuntime.rebuildDisplayProjection()
             }
         )
     }
@@ -404,7 +402,7 @@ class AndroidEditorPipeline private constructor(
             layoutEngine = layoutRuntime.layoutEngine,
             mirrorUpdate = {
                 mirrorUpdate?.invoke()
-                layoutRuntime.applySecretDisplayIfActive()
+                layoutRuntime.rebuildDisplayProjection()
             }
         )
     }
@@ -447,7 +445,7 @@ class AndroidEditorPipeline private constructor(
             layoutEngine = layoutRuntime.layoutEngine,
             mirrorUpdate = {
                 mirrorUpdate?.invoke()
-                layoutRuntime.applySecretDisplayIfActive()
+                layoutRuntime.rebuildDisplayProjection()
             }
         )
     }
@@ -563,9 +561,9 @@ class AndroidEditorPipeline private constructor(
         if (!autoIndentEnabled) return ""
         val projection = layoutRuntime.getCurrentProjection()
         val cursorUtf8 = mirror.getCursorUtf8()
-        val cursorUtf16 = projection.realUtf8ToDisplayUtf16(cursorUtf8)
+        val cursorRealUtf16 = projection.realUtf8ToRealUtf16(cursorUtf8)
         val text = mirror.getText()
-        val safeCursorUtf16 = cursorUtf16.coerceIn(0, text.length)
+        val safeCursorUtf16 = cursorRealUtf16.coerceIn(0, text.length)
         val lineStartUtf16 = if (safeCursorUtf16 > 0) text.lastIndexOf('\n', safeCursorUtf16 - 1) + 1 else 0
         val linePrefix = text.substring(lineStartUtf16, safeCursorUtf16)
         val indent = linePrefix.takeWhile { it == ' ' || it == '\t' }
@@ -574,25 +572,25 @@ class AndroidEditorPipeline private constructor(
 
     fun previousGraphemeByteLen(offset: Int): Int {
         val projection = layoutRuntime.getCurrentProjection()
-        val utf16Offset = projection.realUtf8ToDisplayUtf16(offset)
-        if (utf16Offset <= 0) return 0
+        val realUtf16 = projection.realUtf8ToRealUtf16(offset)
+        if (realUtf16 <= 0) return 0
         val iter = android.icu.text.BreakIterator.getCharacterInstance()
         iter.setText(mirror.getText())
-        val prev = iter.preceding(utf16Offset)
+        val prev = iter.preceding(realUtf16)
         if (prev == android.icu.text.BreakIterator.DONE) return 0
-        val prevUtf8 = projection.displayUtf16ToRealUtf8(prev)
+        val prevUtf8 = projection.realUtf16ToRealUtf8(prev)
         return offset - prevUtf8
     }
 
     fun nextGraphemeByteLen(offset: Int): Int {
         val projection = layoutRuntime.getCurrentProjection()
-        val utf16Offset = projection.realUtf8ToDisplayUtf16(offset)
-        if (utf16Offset >= mirror.getLengthUtf16()) return 0
+        val realUtf16 = projection.realUtf8ToRealUtf16(offset)
+        if (realUtf16 >= mirror.getLengthUtf16()) return 0
         val iter = android.icu.text.BreakIterator.getCharacterInstance()
         iter.setText(mirror.getText())
-        val next = iter.following(utf16Offset)
+        val next = iter.following(realUtf16)
         if (next == android.icu.text.BreakIterator.DONE) return 0
-        val nextUtf8 = projection.displayUtf16ToRealUtf8(next)
+        val nextUtf8 = projection.realUtf16ToRealUtf8(next)
         return nextUtf8 - offset
     }
 
@@ -676,7 +674,7 @@ class AndroidEditorPipeline private constructor(
     fun resetForReuse() {
         visualRuntime.cancel()
         editPipeline.loadFromSnapshot("", 0, 0, 0, 0)
-        layoutRuntime.requestLayout()
+        layoutRuntime.rebuildDisplayProjection()
     }
 
     // ── InputCommandPort implementation ──
@@ -753,11 +751,15 @@ class AndroidEditorPipeline private constructor(
     fun isSecretDisplayMode(): Boolean = layoutRuntime.isSecretDisplayMode()
 
     fun applySecretDisplayIfActive() {
-        layoutRuntime.applySecretDisplayIfActive()
+        layoutRuntime.rebuildDisplayProjection()
     }
 
     fun applySecretDisplayIfActiveWithLayout() {
-        layoutRuntime.applySecretDisplayIfActiveWithLayout()
+        layoutRuntime.rebuildDisplayProjection()
+    }
+
+    fun rebuildDisplayProjection() {
+        layoutRuntime.rebuildDisplayProjection()
     }
 
     fun getCurrentProjection(): DisplayTextProjection = layoutRuntime.getCurrentProjection()

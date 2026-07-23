@@ -142,33 +142,33 @@ class AndroidLineSnapshotBuilder {
         val text = mirror.getText()
         val effectiveProjection = projection ?: DisplayTextProjection.identity(text)
 
-        val lineStartUtf16 = layout.getLineStart(lineIndex)
-        val lineEndUtf16 = layout.getLineEnd(lineIndex)
+        val lineStartDisplayUtf16 = layout.getLineStart(lineIndex)
+        val lineEndDisplayUtf16 = layout.getLineEnd(lineIndex)
 
-        val lineText = text.substring(lineStartUtf16.coerceAtMost(text.length), lineEndUtf16.coerceAtMost(text.length))
+        val lineStartRealUtf16 = effectiveProjection.displayUtf16ToRealUtf16(lineStartDisplayUtf16)
+        val lineEndRealUtf16 = effectiveProjection.displayUtf16ToRealUtf16(lineEndDisplayUtf16)
+
+        val safeLineStart = lineStartRealUtf16.coerceIn(0, text.length)
+        val safeLineEnd = lineEndRealUtf16.coerceIn(safeLineStart, text.length)
+        val lineText = text.substring(safeLineStart, safeLineEnd)
 
         val graphemeRanges = computeGraphemeRanges(lineText)
 
         var clusterIdCounter = 0L
 
         for ((start, end) in graphemeRanges) {
-            val clusterStartUtf16 = lineStartUtf16 + start
-            val clusterEndUtf16 = lineStartUtf16 + end
+            val clusterStartRealUtf16 = lineStartRealUtf16 + start
+            val clusterEndRealUtf16 = lineStartRealUtf16 + end
 
-            val clusterStartUtf8 = effectiveProjection.displayUtf16ToRealUtf8(clusterStartUtf16)
-            val clusterEndUtf8 = effectiveProjection.displayUtf16ToRealUtf8(clusterEndUtf16)
+            val clusterStartDisplayUtf16 = effectiveProjection.realUtf16ToDisplayUtf16(clusterStartRealUtf16)
+            val clusterEndDisplayUtf16 = effectiveProjection.realUtf16ToDisplayUtf16(clusterEndRealUtf16)
 
-            val x0 = layout.getPrimaryHorizontal(clusterStartUtf16)
-            // Line-end cluster right boundary: use getLineRight instead of
-            // getPrimaryHorizontal(clusterEndUtf16) when the cluster ends at the line end.
-            // getPrimaryHorizontal at the line-end offset can return an unreliable value
-            // (it may return the position of the next line's start character in RTL, or
-            // the cursor position after the last character which may differ from the
-            // visual right edge). getLineRight is the Layout's authoritative right bound
-            // and is direction-independent — it always returns the visual right edge
-            // regardless of text direction.
-            val x1 = if (clusterEndUtf16 < layout.getLineEnd(lineIndex)) {
-                layout.getPrimaryHorizontal(clusterEndUtf16)
+            val clusterStartUtf8 = effectiveProjection.realUtf16ToRealUtf8(clusterStartRealUtf16)
+            val clusterEndUtf8 = effectiveProjection.realUtf16ToRealUtf8(clusterEndRealUtf16)
+
+            val x0 = layout.getPrimaryHorizontal(clusterStartDisplayUtf16)
+            val x1 = if (clusterEndDisplayUtf16 < layout.getLineEnd(lineIndex)) {
+                layout.getPrimaryHorizontal(clusterEndDisplayUtf16)
             } else {
                 layout.getLineRight(lineIndex)
             }
@@ -216,14 +216,14 @@ class AndroidLineSnapshotBuilder {
             val localStart = start.coerceIn(0, lineText.length)
             val localEnd = end.coerceIn(0, lineText.length)
             val clusterText = lineText.substring(localStart, localEnd)
-            val shapingResult = buildShapingFingerprint(clusterText, layout, lineIndex, clusterStartUtf16)
+            val shapingResult = buildShapingFingerprint(clusterText, layout, lineIndex, clusterStartDisplayUtf16)
 
             clusters.add(LineClusterSnapshot(
                 clusterId = clusterIdCounter++,
                 documentByteStart = clusterStartUtf8,
                 documentByteEndExclusive = clusterEndUtf8,
-                documentUtf16Start = clusterStartUtf16,
-                documentUtf16EndExclusive = clusterEndUtf16,
+                documentUtf16Start = clusterStartRealUtf16,
+                documentUtf16EndExclusive = clusterEndRealUtf16,
                 sourceRectInLineImage = android.graphics.Rect(sourceRectLeft, sourceRectTop, sourceRectRight, sourceRectBottom),
                 visualRectInDocument = android.graphics.RectF(visualLeft, top, visualRight, bottom),
                 shapingFingerprint = shapingResult.first,

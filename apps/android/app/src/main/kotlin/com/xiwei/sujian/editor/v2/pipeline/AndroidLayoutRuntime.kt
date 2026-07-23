@@ -61,17 +61,20 @@ class AndroidLayoutRuntime(
 
     fun isSecretDisplayMode(): Boolean = secretDisplayMode
 
+    fun rebuildDisplayProjection() {
+        rebuildProjectionContent()
+        layoutEngine.requestLayout()
+    }
+
     fun applySecretDisplayIfActive() {
-        if (secretDisplayMode) {
-            rebuildSecretProjection()
-        }
+        rebuildDisplayProjection()
     }
 
     fun applySecretDisplayIfActiveWithLayout() {
-        applySecretDisplayIfActive()
+        rebuildDisplayProjection()
     }
 
-    private fun rebuildSecretProjectionContent() {
+    private fun rebuildProjectionContent() {
         val text = mirror.getText()
         currentProjection = if (secretDisplayMode) {
             val compRange = mirror.getCompositionRangeUtf16()
@@ -89,11 +92,6 @@ class AndroidLayoutRuntime(
         } else {
             layoutEngine.clearDisplayTextOverride(currentProjection)
         }
-    }
-
-    private fun rebuildSecretProjection() {
-        rebuildSecretProjectionContent()
-        layoutEngine.requestLayout()
     }
 
     fun captureLineBitmapSnapshots(lineIndices: Set<Int>): Map<Int, com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot> =

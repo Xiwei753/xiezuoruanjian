@@ -94,16 +94,16 @@ class SecretProjectionAtomicityTest {
     }
 
     @Test
-    fun applySecretDisplayIfActiveDelegatesToWithLayout() {
+    fun applySecretDisplayIfActiveDelegatesToRebuildDisplayProjection() {
         val clazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidLayoutRuntime")
-        val withLayoutMethod = clazz.getDeclaredMethod("applySecretDisplayIfActiveWithLayout")
-        assertNotNull(withLayoutMethod)
+        val rebuildMethod = clazz.getDeclaredMethod("rebuildDisplayProjection")
+        assertNotNull(rebuildMethod)
     }
 
     @Test
-    fun layoutRuntimeOwnsRebuildSecretProjection() {
+    fun layoutRuntimeOwnsRebuildDisplayProjection() {
         val clazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidLayoutRuntime")
-        val method = clazz.getDeclaredMethod("rebuildSecretProjection")
+        val method = clazz.getDeclaredMethod("rebuildDisplayProjection")
         assertNotNull(method)
     }
 

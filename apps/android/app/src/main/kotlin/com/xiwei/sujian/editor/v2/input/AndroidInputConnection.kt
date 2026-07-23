@@ -281,15 +281,23 @@ class AndroidInputConnection(
             mirror.setSelectionInternal(anchorUtf8, headUtf8)
             val (sessionId, _, generation) = adapter.compositionSessionInfo()
             if (sessionId != 0L) {
+                val projection = projectionProvider?.invoke()
                 val compRangeUtf16 = mirror.getCompositionRangeUtf16()
-                val preeditCursorUtf16 = if (compRangeUtf16 != null) {
-                    val compStartUtf16 = compRangeUtf16.first
-                    val compEndUtf16 = compRangeUtf16.second
+                val preeditCursorUtf16 = if (compRangeUtf16 != null && projection != null) {
+                    val compStartDisplayUtf16 = projection.realUtf16ToDisplayUtf16(compRangeUtf16.first)
+                    val compEndDisplayUtf16 = projection.realUtf16ToDisplayUtf16(compRangeUtf16.second)
                     val preeditUtf16Len = AndroidTextIndexMap.countUtf16CodeUnits(adapter.getCompositionText())
                     when {
-                        start < compStartUtf16 -> 0
-                        start > compEndUtf16 -> preeditUtf16Len
-                        else -> start - compStartUtf16
+                        start < compStartDisplayUtf16 -> 0
+                        start > compEndDisplayUtf16 -> preeditUtf16Len
+                        else -> start - compStartDisplayUtf16
+                    }
+                } else if (compRangeUtf16 != null) {
+                    val preeditUtf16Len = AndroidTextIndexMap.countUtf16CodeUnits(adapter.getCompositionText())
+                    when {
+                        start < compRangeUtf16.first -> 0
+                        start > compRangeUtf16.second -> preeditUtf16Len
+                        else -> start - compRangeUtf16.first
                     }
                 } else {
                     0
@@ -385,7 +393,7 @@ class AndroidInputConnection(
         val projection = projectionProvider?.invoke()
         val selStart: Int
         val selEnd: Int
-        if (projection != null && projection.isMasked) {
+        if (projection != null) {
             selStart = projection.realUtf8ToDisplayUtf16(mirror.getSelectionStartUtf8())
             selEnd = projection.realUtf8ToDisplayUtf16(mirror.getSelectionEndUtf8())
         } else {
@@ -393,8 +401,15 @@ class AndroidInputConnection(
             selEnd = mirror.getSelectionEndUtf16()
         }
         val compRange = mirror.getCompositionRangeUtf16()
-        val candidatesStart = compRange?.first ?: -1
-        val candidatesEnd = compRange?.second ?: -1
+        val candidatesStart: Int
+        val candidatesEnd: Int
+        if (compRange != null && projection != null) {
+            candidatesStart = projection.realUtf16ToDisplayUtf16(compRange.first)
+            candidatesEnd = projection.realUtf16ToDisplayUtf16(compRange.second)
+        } else {
+            candidatesStart = compRange?.first ?: -1
+            candidatesEnd = compRange?.second ?: -1
+        }
         imm.updateSelection(hostView, selStart, selEnd, candidatesStart, candidatesEnd)
     }
 }
