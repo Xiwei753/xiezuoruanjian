@@ -17,13 +17,14 @@ import com.xiwei.sujian.editor.v2.pipeline.EditorCommandPort
 import com.xiwei.sujian.editor.v2.pipeline.PipelineOutput
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
 import com.xiwei.sujian.editor.v2.coordinator.NewlinePolicy
+import com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock
 import uniffi.writer_core.EditorTransactionCauseDto
 
 class SujianEditorView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
     defStyleAttr: Int = 0
-) : View(context, attrs, defStyleAttr) {
+) : View(context, attrs, defStyleAttr), WindowDisplayFrameClock.FrameListener {
 
     private val textPaint = TextPaint().apply {
         textSize = 48f
@@ -43,6 +44,8 @@ class SujianEditorView @JvmOverloads constructor(
     fun getScrollYPos(): Float = scrollY
     private var searchHighlights: List<Pair<Int, Int>> = emptyList()
     private var pendingLayoutNeeded: Boolean = false
+    private var frameClock: WindowDisplayFrameClock? = null
+    private var isRegisteredWithClock: Boolean = false
 
     var kernelBridge: EditorKernelBridge?
         get() = pipeline.kernelBridge
@@ -119,6 +122,9 @@ class SujianEditorView @JvmOverloads constructor(
                     onContentChanged?.invoke(pipeline.getText())
                 }
                 invalidate()
+                if (pipeline.hasActiveAnimation()) {
+                    requestAnimationFrame()
+                }
             }
             is PipelineOutput.NeedReload -> {
                 reloadFromKernel()
@@ -141,6 +147,9 @@ class SujianEditorView @JvmOverloads constructor(
         updateMaxScroll()
         scrollY = scrollY.coerceIn(0f, maxScrollY)
         invalidate()
+        if (pipeline.hasActiveAnimation()) {
+            requestAnimationFrame()
+        }
     }
 
     fun applyCompositionUpdate(visualIntent: com.xiwei.sujian.editor.v2.mirror.VisualIntent, mirrorUpdate: (() -> Unit)? = null) {
@@ -148,6 +157,9 @@ class SujianEditorView @JvmOverloads constructor(
         updateMaxScroll()
         scrollY = scrollY.coerceIn(0f, maxScrollY)
         invalidate()
+        if (pipeline.hasActiveAnimation()) {
+            requestAnimationFrame()
+        }
     }
 
     fun getText(): String = pipeline.getText()
@@ -238,12 +250,12 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     /**
-     * Main rendering loop: draw one frame and request the next if animation is still active.
+     * Main rendering loop: draw one frame.
      *
-     * The invalidate() at the end triggers a new onDraw on the next vsync, creating a
-     * self-sustaining frame loop as long as [hasActiveAnimation] is true. When the
-     * animation completes (checked in [AndroidEditorPipeline.drawFrame] via
-     * [AndroidTextAnimationEngine.completeIfFinished]), the loop stops naturally.
+     * Animation-driven invalidation is now handled by [WindowDisplayFrameClock]:
+     * the clock calls [onFrame] which triggers [invalidate], creating a
+     * self-sustaining frame loop as long as [needsFrame] returns true.
+     * When the animation completes, the clock stops naturally.
      */
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
@@ -254,9 +266,30 @@ class SujianEditorView @JvmOverloads constructor(
         }
         pipeline.drawFrame(canvas, searchHighlightsUtf16, width, height, scrollX, scrollY)
         canvas.restore()
-        if (pipeline.hasActiveAnimation()) {
-            invalidate()
+    }
+
+    override fun needsFrame(): Boolean = pipeline.hasActiveAnimation()
+
+    override fun onFrame(frameTimeNanos: Long) {
+        invalidate()
+    }
+
+    fun setFrameClock(clock: WindowDisplayFrameClock?) {
+        val oldClock = frameClock
+        if (oldClock != null && isRegisteredWithClock) {
+            oldClock.removeListener(this)
+            isRegisteredWithClock = false
         }
+        frameClock = clock
+    }
+
+    fun requestAnimationFrame() {
+        val clock = frameClock ?: return
+        if (!isRegisteredWithClock) {
+            clock.addListener(this)
+            isRegisteredWithClock = true
+        }
+        clock.requestFrame()
     }
 
     override fun onCreateInputConnection(outAttrs: android.view.inputmethod.EditorInfo?): InputConnection? {

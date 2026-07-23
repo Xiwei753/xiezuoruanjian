@@ -531,6 +531,7 @@ class AndroidEditorPipeline private constructor(
         if (!editPipeline.reloadFromKernel()) return false
         cancelActiveTransaction()
         releaseAllResources()
+        layoutRuntime.rebuildDisplayProjection()
         return true
     }
 

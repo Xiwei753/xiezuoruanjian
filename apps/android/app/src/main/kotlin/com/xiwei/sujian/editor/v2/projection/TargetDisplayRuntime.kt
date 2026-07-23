@@ -1,17 +1,13 @@
 package com.xiwei.sujian.editor.v2.projection
 
 import android.text.TextPaint
-import android.view.Choreographer
+import com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutRevision
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.mirror.EditResult
 import com.xiwei.sujian.editor.v2.mirror.VisualIntent
 import com.xiwei.sujian.editor.v2.pipeline.AndroidVisualRuntime
-import com.xiwei.sujian.editor.v2.render.AndroidTextRenderer
-import com.xiwei.sujian.editor.v2.render.AndroidTextAnimationRenderer
-import com.xiwei.sujian.editor.v2.render.EditorFrameComposer
-import com.xiwei.sujian.editor.v2.render.ComposedFrame
 import com.xiwei.sujian.editor.v2.pipeline.AndroidRenderRuntime
 import android.graphics.Canvas
 import androidx.compose.runtime.mutableLongStateOf
@@ -21,7 +17,7 @@ import androidx.compose.runtime.setValue
 class TargetDisplayRuntime(
     private val mirror: DisplayTextMirror,
     private val textPaint: TextPaint
-) {
+) : WindowDisplayFrameClock.FrameListener {
     private val layoutEngine: AndroidLayoutEngine = AndroidLayoutEngine(mirror, textPaint)
     private val visualRuntime: AndroidVisualRuntime = AndroidVisualRuntime()
     private val renderRuntime: AndroidRenderRuntime = AndroidRenderRuntime()
@@ -38,31 +34,36 @@ class TargetDisplayRuntime(
     var frameGeneration by mutableLongStateOf(0L)
         private set
 
-    private val choreographer = Choreographer.getInstance()
-    private var choreographerCallback: Choreographer.FrameCallback? = null
-    private var isTicking: Boolean = false
+    private var frameClock: WindowDisplayFrameClock? = null
+    private var isRegisteredWithClock: Boolean = false
 
-    private val frameCallback = object : Choreographer.FrameCallback {
-        override fun doFrame(frameTimeNanos: Long) {
-            if (!isTicking) return
-            frameGeneration++
-            if (hasActiveAnimation()) {
-                choreographer.postFrameCallback(this)
-            } else {
-                isTicking = false
-            }
+    override fun needsFrame(): Boolean = hasActiveAnimation()
+
+    override fun onFrame(frameTimeNanos: Long) {
+        frameGeneration++
+    }
+
+    fun setFrameClock(clock: WindowDisplayFrameClock?) {
+        val oldClock = frameClock
+        if (oldClock != null && isRegisteredWithClock) {
+            oldClock.removeListener(this)
+            isRegisteredWithClock = false
+        }
+        frameClock = clock
+        if (clock != null && hasActiveAnimation()) {
+            clock.addListener(this)
+            isRegisteredWithClock = true
+            clock.requestFrame()
         }
     }
 
-    fun startFrameClock() {
-        if (isTicking) return
-        isTicking = true
-        choreographer.postFrameCallback(frameCallback)
-    }
-
-    fun stopFrameClock() {
-        isTicking = false
-        choreographer.removeFrameCallback(frameCallback)
+    private fun ensureRegisteredWithClock() {
+        val clock = frameClock ?: return
+        if (!isRegisteredWithClock) {
+            clock.addListener(this)
+            isRegisteredWithClock = true
+        }
+        clock.requestFrame()
     }
 
     fun updateFromSnapshot(text: String, cursorUtf8: Int, revision: Long) {
@@ -80,7 +81,7 @@ class TargetDisplayRuntime(
                 rebuildProjectionContent()
             }
         )
-        startFrameClock()
+        ensureRegisteredWithClock()
     }
 
     private fun rebuildProjectionContent() {
@@ -210,7 +211,12 @@ class TargetDisplayRuntime(
     fun hasActiveAnimation(): Boolean = visualRuntime.hasActiveAnimation()
 
     fun release() {
-        stopFrameClock()
+        val clock = frameClock
+        if (clock != null && isRegisteredWithClock) {
+            clock.removeListener(this)
+            isRegisteredWithClock = false
+        }
+        frameClock = null
         visualRuntime.release()
         layoutEngine.release()
     }

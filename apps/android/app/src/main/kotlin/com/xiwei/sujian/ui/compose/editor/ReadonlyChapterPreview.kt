@@ -3,7 +3,6 @@ package com.xiwei.sujian.ui.compose.editor
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.nativeCanvas
@@ -14,13 +13,6 @@ fun ReadonlyChapterPreview(
     projection: TargetDisplayRuntime,
     modifier: Modifier = Modifier
 ) {
-    DisposableEffect(projection) {
-        projection.startFrameClock()
-        onDispose {
-            projection.stopFrameClock()
-        }
-    }
-
     Box(
         modifier = modifier
             .fillMaxSize()

@@ -39,11 +39,11 @@ class AnimatedTextEditorCoordinator(
     private val appServiceBridge: AppServiceBridge
 ) : SessionCommandPort {
     private val targets = mutableMapOf<String, EditableTextTarget>()
-    // ULong matching Rust's u64 TextEditSessionId at the FFI boundary.
     private var activeSessionId: ULong? = null
     private var sharedEditorView: SujianEditorView? = null
     private val persistentSessionIds = mutableMapOf<String, ULong>()
     private val targetProjections = mutableMapOf<String, TargetDisplayRuntime>()
+    private val windowFrameClock = WindowDisplayFrameClock()
 
     var targetDecorationsVersion by mutableStateOf(0L)
         private set
@@ -361,9 +361,11 @@ class AnimatedTextEditorCoordinator(
         targetProjections.clear()
         targetDecorations.clear()
         sharedEditorView?.let { view ->
+            view.setFrameClock(null)
             view.release()
         }
         sharedEditorView = null
+        windowFrameClock.release()
         editingState = EditingState.RELEASED
     }
 
@@ -627,6 +629,7 @@ class AnimatedTextEditorCoordinator(
                 isAntiAlias = true
             }
             val projection = TargetDisplayRuntime(mirror, textPaint)
+            projection.setFrameClock(windowFrameClock)
             if (target.profile.secretPolicy == SecretPolicy.MASK_AND_CLEAR_ON_COMMIT) {
                 projection.setSecretMasked(true)
             }
@@ -636,6 +639,7 @@ class AnimatedTextEditorCoordinator(
 
     private fun getOrCreateEditorView(): SujianEditorView {
         return sharedEditorView ?: SujianEditorView(context).also {
+            it.setFrameClock(windowFrameClock)
             sharedEditorView = it
         }
     }
