@@ -35,6 +35,7 @@ dependencies {
     api(libs.compose.material3.adaptive.navigation.suite)
     implementation(libs.compose.ui)
     implementation(libs.compose.foundation)
+    implementation(libs.compose.material.icons.extended)
 
     implementation(libs.androidx.window)
 }
