@@ -24,7 +24,7 @@ fun SujianAppScaffold(
 ) {
     Scaffold(
         modifier = modifier.fillMaxSize().imePadding(),
-        containerColor = MaterialTheme.colorScheme.surface,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
         snackbarHost = {
             if (snackbarHostState != null) {
                 SnackbarHost(hostState = snackbarHostState) { data ->
@@ -88,7 +88,7 @@ fun SujianScreenScaffold(
             }
         },
         floatingActionButtonPosition = FabPosition.End,
-        containerColor = MaterialTheme.colorScheme.surface,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
         content = content,
     )
 }

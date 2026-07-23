@@ -1,9 +1,10 @@
 package com.xiwei.sujian.ui.compose.navigation
 
 import android.os.Parcelable
+import androidx.navigation3.runtime.NavKey
 import kotlinx.parcelize.Parcelize
 
-sealed interface SujianRoute : Parcelable {
+sealed interface SujianRoute : Parcelable, NavKey {
     @Parcelize
     data object Works : SujianRoute
 

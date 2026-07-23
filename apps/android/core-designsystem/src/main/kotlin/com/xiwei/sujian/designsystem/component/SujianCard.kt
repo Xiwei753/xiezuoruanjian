@@ -19,7 +19,7 @@ fun SujianCard(
     Card(
         modifier = modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
         ),
         shape = MaterialTheme.shapes.large,
     ) {
@@ -39,7 +39,7 @@ fun SujianCard(
         modifier = modifier.fillMaxWidth(),
         enabled = enabled,
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
         ),
         shape = MaterialTheme.shapes.large,
     ) {
