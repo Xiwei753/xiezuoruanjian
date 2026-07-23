@@ -171,3 +171,23 @@ impl From<ActionResultDto> for crate::action_registry::ActionResult {
         }
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_action_kind_dto_roundtrip() {
+        let core = crate::action_registry::ActionKind::Query;
+        let dto: ActionKindDto = core.clone().into();
+        let core_back: crate::action_registry::ActionKind = dto.into();
+        assert_eq!(core, core_back);
+    }
+
+    #[test]
+    fn test_action_risk_level_dto_roundtrip() {
+        let core = crate::action_registry::ActionRiskLevel::Dangerous;
+        let dto: ActionRiskLevelDto = core.clone().into();
+        let core_back: crate::action_registry::ActionRiskLevel = dto.into();
+        assert_eq!(core, core_back);
+    }
+}
