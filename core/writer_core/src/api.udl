@@ -321,7 +321,9 @@ enum WriterError {
 enum PlatformDto {
     "Desktop",
     "Android",
+    "Windows",
     "Harmony",
+    "Apple",
 };
 
 dictionary WorkspaceSummaryDto {

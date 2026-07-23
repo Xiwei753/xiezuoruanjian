@@ -4,7 +4,9 @@ pub enum PlatformDto {
     #[default]
     Desktop,
     Android,
+    Windows,
     Harmony,
+    Apple,
 }
 
 impl From<crate::writing_stats::Platform> for PlatformDto {
@@ -12,7 +14,9 @@ impl From<crate::writing_stats::Platform> for PlatformDto {
         match p {
             crate::writing_stats::Platform::Desktop => Self::Desktop,
             crate::writing_stats::Platform::Android => Self::Android,
+            crate::writing_stats::Platform::Windows => Self::Windows,
             crate::writing_stats::Platform::Harmony => Self::Harmony,
+            crate::writing_stats::Platform::Apple => Self::Apple,
         }
     }
 }
@@ -22,7 +26,9 @@ impl From<PlatformDto> for crate::writing_stats::Platform {
         match dto {
             PlatformDto::Desktop => Self::Desktop,
             PlatformDto::Android => Self::Android,
+            PlatformDto::Windows => Self::Windows,
             PlatformDto::Harmony => Self::Harmony,
+            PlatformDto::Apple => Self::Apple,
         }
     }
 }

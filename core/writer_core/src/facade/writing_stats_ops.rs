@@ -1,5 +1,5 @@
 use crate::error::Result;
-use crate::writing_stats::{DateRange, EventSource, Platform, WritingInputEvent};
+use crate::writing_stats::{DateRange, EventSource, WritingInputEvent};
 
 use serde_json::Value;
 
@@ -21,11 +21,10 @@ impl super::WriterCore {
             .load_device_info()
             .map(|info| info.device_class)
             .unwrap_or_else(|_| {
-                if platform_str == "android" {
-                    "phone".to_string()
-                } else {
-                    "desktop".to_string()
-                }
+                writer_platform_api::PlatformKind::from_str_name(platform_str)
+                    .unwrap_or(writer_platform_api::PlatformKind::Desktop)
+                    .default_device_class()
+                    .to_string()
             });
 
         let old_len = old_text.chars().count() as i32;
@@ -87,11 +86,8 @@ impl super::WriterCore {
         duration_seconds: u32,
         session_id: &str,
     ) -> Result<()> {
-        let platform = match platform_str {
-            "android" => Platform::Android,
-            "harmony" => Platform::Harmony,
-            _ => Platform::Desktop,
-        };
+        let platform = writer_platform_api::PlatformKind::from_str_name(platform_str)
+            .unwrap_or(writer_platform_api::PlatformKind::Desktop);
         let source = match source_str {
             "pasted" => EventSource::Pasted,
             "deleted" => EventSource::Deleted,

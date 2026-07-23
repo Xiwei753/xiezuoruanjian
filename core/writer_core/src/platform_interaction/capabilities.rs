@@ -146,64 +146,25 @@ impl PlatformCapabilities {
     }
 }
 
-/// 平台标识 — 用于选择能力配置
+/// 平台标识 — 委托 `writer_platform_api::PlatformKind`
 ///
-/// 与 `writer_platform_api::PlatformKind` 保持语义一致。
-/// 新增平台时只需在此枚举添加变体并实现对应的 `default_capabilities`，
+/// 新增平台时只需在 `writer_platform_api::PlatformKind` 添加变体并在此实现对应的 `default_capabilities`，
 /// 无需修改项目、章节、星图、统计等业务模块。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum PlatformKind {
-    Desktop,
-    Android,
-    Windows,
-    Harmony,
-    Unknown,
+pub type PlatformKind = writer_platform_api::PlatformKind;
+
+/// 平台能力扩展 trait
+pub trait PlatformCapabilitiesExt {
+    fn default_capabilities(&self) -> PlatformCapabilities;
 }
 
-impl std::fmt::Display for PlatformKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Desktop => write!(f, "desktop"),
-            Self::Android => write!(f, "android"),
-            Self::Windows => write!(f, "windows"),
-            Self::Harmony => write!(f, "harmony"),
-            Self::Unknown => write!(f, "unknown"),
-        }
-    }
-}
-
-impl PlatformKind {
-    /// 获取该平台的默认能力配置
-    pub fn default_capabilities(&self) -> PlatformCapabilities {
+impl PlatformCapabilitiesExt for writer_platform_api::PlatformKind {
+    fn default_capabilities(&self) -> PlatformCapabilities {
         match self {
             Self::Desktop => PlatformCapabilities::desktop(),
             Self::Android => PlatformCapabilities::android(),
             Self::Windows => PlatformCapabilities::windows(),
             Self::Harmony => PlatformCapabilities::harmony(),
-            Self::Unknown => PlatformCapabilities::minimal(),
-        }
-    }
-
-    /// 转换为 `writer_platform_api::PlatformKind`
-    pub fn to_platform_api_kind(self) -> writer_platform_api::PlatformKind {
-        match self {
-            Self::Desktop => writer_platform_api::PlatformKind::Linux,
-            Self::Android => writer_platform_api::PlatformKind::Android,
-            Self::Windows => writer_platform_api::PlatformKind::Windows,
-            Self::Harmony => writer_platform_api::PlatformKind::Harmony,
-            Self::Unknown => writer_platform_api::PlatformKind::Linux,
-        }
-    }
-
-    /// 从 `writer_platform_api::PlatformKind` 转换
-    pub fn from_platform_api_kind(kind: writer_platform_api::PlatformKind) -> Self {
-        match kind {
-            writer_platform_api::PlatformKind::Linux => Self::Desktop,
-            writer_platform_api::PlatformKind::Android => Self::Android,
-            writer_platform_api::PlatformKind::Windows => Self::Windows,
-            writer_platform_api::PlatformKind::Harmony => Self::Harmony,
-            writer_platform_api::PlatformKind::Apple => Self::Unknown,
+            Self::Apple => PlatformCapabilities::minimal(),
         }
     }
 }
@@ -257,10 +218,10 @@ mod tests {
 
     #[test]
     fn platform_kind_default_capabilities() {
-        assert!(PlatformKind::Desktop.default_capabilities().supports_cursor_anchor);
-        assert!(PlatformKind::Android.default_capabilities().supports_replacement_commit);
-        assert!(!PlatformKind::Harmony.default_capabilities().supports_text_animation);
-        assert!(!PlatformKind::Unknown.default_capabilities().has_any_animation_support());
+        use super::PlatformCapabilitiesExt;
+        assert!(writer_platform_api::PlatformKind::Desktop.default_capabilities().supports_cursor_anchor);
+        assert!(writer_platform_api::PlatformKind::Android.default_capabilities().supports_replacement_commit);
+        assert!(!writer_platform_api::PlatformKind::Harmony.default_capabilities().supports_text_animation);
     }
 
     #[test]

@@ -24,7 +24,7 @@ pub fn resolve_platform_init() -> PlatformInit {
     let log_dir = cache_dir.join("writer").join("log");
 
     PlatformInit {
-        platform: PlatformKind::Linux,
+        platform: PlatformKind::Desktop,
         app_data_dir,
         cache_dir,
         log_dir,

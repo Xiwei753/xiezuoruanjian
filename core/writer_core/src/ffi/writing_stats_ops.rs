@@ -44,11 +44,11 @@ pub unsafe extern "C" fn writer_core_process_writing_event(
         let device_id = val
             .get("deviceId")
             .and_then(|v| v.as_str())
-            .unwrap_or("harmony");
+            .unwrap_or("");
         let platform = val
             .get("platform")
             .and_then(|v| v.as_str())
-            .unwrap_or("harmony");
+            .unwrap_or("desktop");
         let project_id = val.get("projectId").and_then(|v| v.as_str()).unwrap_or("");
         let volume_id = val.get("volumeId").and_then(|v| v.as_str()).unwrap_or("");
         let chapter_id = val.get("chapterId").and_then(|v| v.as_str()).unwrap_or("");

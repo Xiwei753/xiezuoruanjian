@@ -58,46 +58,11 @@ pub enum EventSource {
     Unknown,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum Platform {
-    Desktop,
-    Android,
-    Harmony,
-}
-
-impl std::fmt::Display for Platform {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_str_name())
-    }
-}
-
-impl Platform {
-    pub fn to_str_name(&self) -> &'static str {
-        match self {
-            Platform::Desktop => "desktop",
-            Platform::Android => "android",
-            Platform::Harmony => "harmony",
-        }
-    }
-
-    pub fn from_str_name(s: &str) -> Option<Self> {
-        match s {
-            "desktop" | "linux" | "linux_qt" => Some(Platform::Desktop),
-            "android" => Some(Platform::Android),
-            "harmony" => Some(Platform::Harmony),
-            _ => None,
-        }
-    }
-
-    pub fn default_device_class(&self) -> &'static str {
-        match self {
-            Platform::Desktop => "desktop",
-            Platform::Android => "phone",
-            Platform::Harmony => "tablet",
-        }
-    }
-}
+/// 平台标识 — 委托 `writer_platform_api::PlatformKind`
+///
+/// 保持向后兼容的字符串序列化，同时统一平台枚举定义。
+/// `from_str_name` 支持旧字符串 `"linux"` / `"linux_qt"` 映射到 `Desktop`。
+pub type Platform = writer_platform_api::PlatformKind;
 
 /// 写作输入事件。
 ///
