@@ -18,7 +18,8 @@ import uniffi.writer_core.EditorTransactionCauseDto
 
 class AndroidInputAdapter(
     private val mirror: DisplayTextMirror,
-    private val commandPort: InputCommandPort
+    private val commandPort: InputCommandPort,
+    private val projectionProvider: (() -> com.xiwei.sujian.editor.v2.projection.DisplayTextProjection)? = null
 ) {
 
     var onPipelineOutput: ((PipelineOutput) -> Unit)? = null
@@ -99,7 +100,7 @@ class AndroidInputAdapter(
             if (currentProfile.singleLine && !currentProfile.commitOnImeAction) {
                 outAttrs.imeOptions = outAttrs.imeOptions or android.view.inputmethod.EditorInfo.IME_FLAG_NO_ENTER_ACTION
             }
-            return AndroidInputConnection(this, mirror, commandPort, host)
+            return AndroidInputConnection(this, mirror, commandPort, host, projectionProvider)
         }
         return null
     }

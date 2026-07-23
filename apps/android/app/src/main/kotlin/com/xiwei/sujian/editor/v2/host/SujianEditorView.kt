@@ -33,7 +33,7 @@ class SujianEditorView @JvmOverloads constructor(
         com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror(),
         textPaint
     )
-    private val inputAdapter = AndroidInputAdapter(pipeline.mirror, pipeline)
+    private val inputAdapter = AndroidInputAdapter(pipeline.mirror, pipeline) { pipeline.getCurrentProjection() }
 
     private var scrollX: Float = 0f
     private var scrollY: Float = 0f

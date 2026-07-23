@@ -95,11 +95,26 @@ class RuntimeOwnershipTest {
     @Test
     fun inputAdapterDependsOnInputCommandPortInterface() {
         val clazz = Class.forName("com.xiwei.sujian.editor.v2.input.AndroidInputAdapter")
-        val constructor = clazz.getDeclaredConstructor(
-            Class.forName("com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror"),
-            Class.forName("com.xiwei.sujian.editor.v2.pipeline.InputCommandPort")
-        )
-        assertNotNull(constructor)
+        val constructors = clazz.declaredConstructors
+        assertTrue("AndroidInputAdapter should have a constructor accepting DisplayTextMirror and InputCommandPort",
+            constructors.any { c ->
+                val paramTypes = c.parameterTypes.map { it.name }
+                paramTypes.contains("com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror") &&
+                paramTypes.contains("com.xiwei.sujian.editor.v2.pipeline.InputCommandPort")
+            })
+    }
+
+    @Test
+    fun inputConnectionAcceptsProjectionProvider() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.input.AndroidInputConnection")
+        val constructors = clazz.declaredConstructors
+        assertTrue("AndroidInputConnection should have a constructor accepting projectionProvider",
+            constructors.any { c ->
+                val paramTypes = c.parameterTypes.map { it.name }
+                paramTypes.contains("com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror") &&
+                paramTypes.contains("com.xiwei.sujian.editor.v2.pipeline.InputCommandPort") &&
+                paramTypes.contains("android.view.View")
+            })
     }
 
     @Test

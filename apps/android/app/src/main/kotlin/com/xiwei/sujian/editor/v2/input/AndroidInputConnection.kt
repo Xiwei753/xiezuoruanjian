@@ -5,14 +5,32 @@ import android.view.inputmethod.BaseInputConnection
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.mirror.EditResult
 import com.xiwei.sujian.editor.v2.pipeline.InputCommandPort
+import com.xiwei.sujian.editor.v2.projection.DisplayTextProjection
 import uniffi.writer_core.EditorTransactionCauseDto
 
 class AndroidInputConnection(
     private val adapter: AndroidInputAdapter,
     private val mirror: DisplayTextMirror,
     private val commandPort: InputCommandPort,
-    private val hostView: View
+    private val hostView: View,
+    private val projectionProvider: (() -> DisplayTextProjection)? = null
 ) : BaseInputConnection(hostView, true) {
+
+    private fun displayUtf16ToRealUtf8(utf16: Int): Int {
+        val projection = projectionProvider?.invoke()
+        if (projection != null && projection.isMasked) {
+            return projection.displayUtf16ToRealUtf8(utf16)
+        }
+        return AndroidTextIndexMap(mirror).utf16ToUtf8(utf16)
+    }
+
+    private fun realUtf8ToDisplayUtf16(utf8: Int): Int {
+        val projection = projectionProvider?.invoke()
+        if (projection != null && projection.isMasked) {
+            return projection.realUtf8ToDisplayUtf16(utf8)
+        }
+        return AndroidTextIndexMap(mirror).utf8ToUtf16(utf8)
+    }
 
     override fun performEditorAction(actionCode: Int): Boolean {
         val profile = adapter.getCurrentProfile()
@@ -69,23 +87,25 @@ class AndroidInputConnection(
         if (adapter.isComposing()) {
             return handleCompositionDelete(beforeLength, afterLength)
         }
-        val indexMap = AndroidTextIndexMap(mirror)
         val selAnchorUtf8 = mirror.getSelectionAnchorUtf8()
         val selHeadUtf8 = mirror.getSelectionHeadUtf8()
         val (selMin, selMax) = if (selAnchorUtf8 <= selHeadUtf8) Pair(selAnchorUtf8, selHeadUtf8) else Pair(selHeadUtf8, selAnchorUtf8)
 
-        val selMinUtf16 = indexMap.utf8ToUtf16(selMin)
-        val selMaxUtf16 = indexMap.utf8ToUtf16(selMax)
+        val selMinUtf16 = realUtf8ToDisplayUtf16(selMin)
+        val selMaxUtf16 = realUtf8ToDisplayUtf16(selMax)
+
+        val projection = projectionProvider?.invoke()
+        val displayLen = projection?.displayLengthUtf16 ?: AndroidTextIndexMap(mirror).getUtf16Length()
 
         val deleteStartUtf16 = (selMinUtf16 - beforeLength).coerceAtLeast(0)
-        val deleteEndUtf16 = (selMaxUtf16 + afterLength).coerceAtMost(indexMap.getUtf16Length())
+        val deleteEndUtf16 = (selMaxUtf16 + afterLength).coerceAtMost(displayLen)
 
         if (deleteStartUtf16 >= deleteEndUtf16) return false
 
-        val beforeStartUtf8 = indexMap.utf16ToUtf8(deleteStartUtf16)
+        val beforeStartUtf8 = displayUtf16ToRealUtf8(deleteStartUtf16)
         val beforeEndUtf8 = selMin
         val afterStartUtf8 = selMax
-        val afterEndUtf8 = indexMap.utf16ToUtf8(deleteEndUtf16)
+        val afterEndUtf8 = displayUtf16ToRealUtf8(deleteEndUtf16)
 
         val hasBefore = beforeStartUtf8 < beforeEndUtf8
         val hasAfter = afterStartUtf8 < afterEndUtf8
@@ -114,35 +134,34 @@ class AndroidInputConnection(
         if (adapter.isComposing()) {
             return handleCompositionDeleteCodePoints(beforeLength, afterLength)
         }
-        val indexMap = AndroidTextIndexMap(mirror)
         val selAnchorUtf8 = mirror.getSelectionAnchorUtf8()
         val selHeadUtf8 = mirror.getSelectionHeadUtf8()
         val (selMin, selMax) = if (selAnchorUtf8 <= selHeadUtf8) Pair(selAnchorUtf8, selHeadUtf8) else Pair(selHeadUtf8, selAnchorUtf8)
 
-        val selMinUtf16 = indexMap.utf8ToUtf16(selMin)
-        val selMaxUtf16 = indexMap.utf8ToUtf16(selMax)
-        val fullText = mirror.getText()
+        val selMinUtf16 = realUtf8ToDisplayUtf16(selMin)
+        val selMaxUtf16 = realUtf8ToDisplayUtf16(selMax)
+        val displayText = projectionProvider?.invoke()?.displayText ?: mirror.getText()
 
         var deleteStartUtf16 = selMinUtf16
         var count = beforeLength
         while (count > 0 && deleteStartUtf16 > 0) {
-            deleteStartUtf16 = fullText.offsetByCodePoints(deleteStartUtf16, -1)
+            deleteStartUtf16 = displayText.offsetByCodePoints(deleteStartUtf16, -1)
             count--
         }
 
         var deleteEndUtf16 = selMaxUtf16
         count = afterLength
-        while (count > 0 && deleteEndUtf16 < fullText.length) {
-            deleteEndUtf16 = fullText.offsetByCodePoints(deleteEndUtf16, 1)
+        while (count > 0 && deleteEndUtf16 < displayText.length) {
+            deleteEndUtf16 = displayText.offsetByCodePoints(deleteEndUtf16, 1)
             count--
         }
 
         if (deleteStartUtf16 >= deleteEndUtf16) return false
 
-        val beforeStartUtf8 = indexMap.utf16ToUtf8(deleteStartUtf16)
+        val beforeStartUtf8 = displayUtf16ToRealUtf8(deleteStartUtf16)
         val beforeEndUtf8 = selMin
         val afterStartUtf8 = selMax
-        val afterEndUtf8 = indexMap.utf16ToUtf8(deleteEndUtf16)
+        val afterEndUtf8 = displayUtf16ToRealUtf8(deleteEndUtf16)
 
         val hasBefore = beforeStartUtf8 < beforeEndUtf8
         val hasAfter = afterStartUtf8 < afterEndUtf8
@@ -237,14 +256,11 @@ class AndroidInputConnection(
      */
     override fun setComposingRegion(start: Int, end: Int): Boolean {
         if (start < 0 || end < 0 || start > end) return false
-        // start/end are UTF-16 offsets from the InputConnection API; convert to UTF-8
-        // byte offsets for the Rust kernel via AndroidTextIndexMap.
         if (adapter.isComposing()) {
             adapter.handleCompositionCancel()
         }
-        val indexMap = AndroidTextIndexMap(mirror)
-        val byteStart = indexMap.utf16ToUtf8(start)
-        val byteEnd = indexMap.utf16ToUtf8(end)
+        val byteStart = displayUtf16ToRealUtf8(start)
+        val byteEnd = displayUtf16ToRealUtf8(end)
         val selectedText = extractUtf8Text(byteStart, byteEnd)
         val beginOk = adapter.sendBeginCompositionToKernel(byteStart, byteEnd)
         if (!beginOk) {
@@ -259,9 +275,8 @@ class AndroidInputConnection(
 
     override fun setSelection(start: Int, end: Int): Boolean {
         if (start < 0 || end < 0) return false
-        val indexMap = AndroidTextIndexMap(mirror)
-        val anchorUtf8 = indexMap.utf16ToUtf8(start)
-        val headUtf8 = indexMap.utf16ToUtf8(end)
+        val anchorUtf8 = displayUtf16ToRealUtf8(start)
+        val headUtf8 = displayUtf16ToRealUtf8(end)
         if (adapter.isComposing()) {
             mirror.setSelectionInternal(anchorUtf8, headUtf8)
             val (sessionId, _, generation) = adapter.compositionSessionInfo()
@@ -304,6 +319,12 @@ class AndroidInputConnection(
     }
 
     override fun getTextBeforeCursor(n: Int, flags: Int): CharSequence {
+        val projection = projectionProvider?.invoke()
+        if (projection != null && projection.isMasked) {
+            val cursorDisplayUtf16 = projection.realUtf8ToDisplayUtf16(mirror.getCursorUtf8())
+            val start = (cursorDisplayUtf16 - n).coerceAtLeast(0)
+            return projection.displayText.substring(start, cursorDisplayUtf16.coerceAtMost(projection.displayText.length))
+        }
         val cursorUtf16 = mirror.getCursorUtf16()
         val start = (cursorUtf16 - n).coerceAtLeast(0)
         val text = mirror.getText()
@@ -311,6 +332,12 @@ class AndroidInputConnection(
     }
 
     override fun getTextAfterCursor(n: Int, flags: Int): CharSequence {
+        val projection = projectionProvider?.invoke()
+        if (projection != null && projection.isMasked) {
+            val cursorDisplayUtf16 = projection.realUtf8ToDisplayUtf16(mirror.getCursorUtf8())
+            val end = (cursorDisplayUtf16 + n).coerceAtMost(projection.displayText.length)
+            return projection.displayText.substring(cursorDisplayUtf16.coerceAtMost(projection.displayText.length), end)
+        }
         val cursorUtf16 = mirror.getCursorUtf16()
         val text = mirror.getText()
         val end = (cursorUtf16 + n).coerceAtMost(text.length)
@@ -318,6 +345,15 @@ class AndroidInputConnection(
     }
 
     override fun getSelectedText(flags: Int): CharSequence? {
+        val projection = projectionProvider?.invoke()
+        if (projection != null && projection.isMasked) {
+            val selStartDisplayUtf16 = projection.realUtf8ToDisplayUtf16(mirror.getSelectionStartUtf8())
+            val selEndDisplayUtf16 = projection.realUtf8ToDisplayUtf16(mirror.getSelectionEndUtf8())
+            if (selStartDisplayUtf16 < 0 || selEndDisplayUtf16 < 0 || selStartDisplayUtf16 == selEndDisplayUtf16) return null
+            val start = selStartDisplayUtf16.coerceAtMost(projection.displayText.length)
+            val end = selEndDisplayUtf16.coerceAtMost(projection.displayText.length)
+            return projection.displayText.substring(start.coerceAtMost(end), end.coerceAtLeast(start))
+        }
         val selStart = mirror.getSelectionStartUtf16()
         val selEnd = mirror.getSelectionEndUtf16()
         if (selStart < 0 || selEnd < 0 || selStart == selEnd) return null
@@ -346,10 +382,19 @@ class AndroidInputConnection(
 
     private fun notifySelectionChanged() {
         val imm = hostView.context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager ?: return
-        val selStart = mirror.getSelectionStartUtf16()
-        val selEnd = mirror.getSelectionEndUtf16()
-        val candidatesStart = mirror.getCompositionRangeUtf16()?.first ?: -1
-        val candidatesEnd = mirror.getCompositionRangeUtf16()?.second ?: -1
+        val projection = projectionProvider?.invoke()
+        val selStart: Int
+        val selEnd: Int
+        if (projection != null && projection.isMasked) {
+            selStart = projection.realUtf8ToDisplayUtf16(mirror.getSelectionStartUtf8())
+            selEnd = projection.realUtf8ToDisplayUtf16(mirror.getSelectionEndUtf8())
+        } else {
+            selStart = mirror.getSelectionStartUtf16()
+            selEnd = mirror.getSelectionEndUtf16()
+        }
+        val compRange = mirror.getCompositionRangeUtf16()
+        val candidatesStart = compRange?.first ?: -1
+        val candidatesEnd = compRange?.second ?: -1
         imm.updateSelection(hostView, selStart, selEnd, candidatesStart, candidatesEnd)
     }
 }
