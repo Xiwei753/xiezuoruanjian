@@ -62,7 +62,7 @@ class TargetDisplayRuntime(
             DisplayTextProjection.identity(text)
         }
         if (projection.isMasked) {
-            layoutEngine.setDisplayTextOverride(projection.displayText)
+            layoutEngine.setDisplayTextOverride(projection.displayText, projection)
         } else {
             layoutEngine.clearDisplayTextOverride()
         }
@@ -147,16 +147,21 @@ class TargetDisplayRuntime(
     }
 
     fun drawFrame(canvas: Canvas) {
+        val frameTimeMs = System.nanoTime() / 1_000_000
         val layout = layoutEngine.getLayout() ?: return
         val highlightsUtf16 = getSearchHighlightsUtf16()
-        renderRuntime.drawFrame(
-            canvas, layout, layoutEngine.getCurrentRevision(),
-            visualRuntime.getActiveTransaction(),
-            visualRuntime.getTimelineProgress(System.nanoTime() / 1_000_000),
-            highlightsUtf16, viewportWidth, viewportHeight,
-            scrollX, scrollY, true, true, mirror
+        val frameState = visualRuntime.tick(
+            frameTimeMs,
+            layout,
+            layoutEngine.getCurrentRevision(),
+            highlightsUtf16,
+            viewportWidth, viewportHeight,
+            scrollX, scrollY,
+            true, true, mirror
         )
-        visualRuntime.completeIfFinished(System.nanoTime() / 1_000_000)
+        if (frameState != null) {
+            renderRuntime.drawFromFrameState(canvas, frameState)
+        }
     }
 
     fun hasActiveAnimation(): Boolean = visualRuntime.hasActiveAnimation()

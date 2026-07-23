@@ -617,6 +617,11 @@ class EditorFragment : Fragment() {
 
     private fun clearHighlights() {
         getEditorView()?.clearSearchHighlights()
+        val chapterTargetId = getChapterBodyTargetId()
+        coordinator.setTargetDecorations(
+            chapterTargetId,
+            com.xiwei.sujian.editor.v2.coordinator.TargetDecorations()
+        )
         searchResults.clear()
         currentSearchIndex = -1
     }

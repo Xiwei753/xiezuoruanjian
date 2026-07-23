@@ -5,6 +5,7 @@ import android.text.Layout
 import android.text.TextPaint
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap
+import com.xiwei.sujian.editor.v2.projection.DisplayTextProjection
 
 class AndroidLayoutEngine(
     private val mirror: DisplayTextMirror,
@@ -18,6 +19,7 @@ class AndroidLayoutEngine(
     private var revisionCounter: Long = 0
     private var lastConfigFingerprint: String = ""
     private var displayTextOverride: String? = null
+    private var currentProjection: DisplayTextProjection? = null
 
     private fun computeConfigFingerprint(): String {
         return "${width}_${textPaint.textSize}_${textPaint.typeface?.hashCode() ?: 0}_${lineSpacingMultiplier}"
@@ -108,8 +110,8 @@ class AndroidLayoutEngine(
     fun getMirror(): DisplayTextMirror = mirror
 
     fun getLineForUtf8(byteOffset: Int): Int {
-        val indexMap = AndroidTextIndexMap(mirror)
-        val utf16 = indexMap.utf8ToUtf16(byteOffset)
+        val utf16 = currentProjection?.realUtf8ToDisplayUtf16(byteOffset)
+            ?: AndroidTextIndexMap(mirror).utf8ToUtf16(byteOffset)
         val l = layout ?: return 0
         return l.getLineForOffset(utf16)
     }
@@ -119,15 +121,16 @@ class AndroidLayoutEngine(
     }
 
     fun getPrimaryHorizontalUtf8(byteOffset: Int): Float {
-        val indexMap = AndroidTextIndexMap(mirror)
-        val utf16 = indexMap.utf8ToUtf16(byteOffset)
+        val utf16 = currentProjection?.realUtf8ToDisplayUtf16(byteOffset)
+            ?: AndroidTextIndexMap(mirror).utf8ToUtf16(byteOffset)
         val l = layout ?: return 0f
         return l.getPrimaryHorizontal(utf16)
     }
 
     private fun buildRevision(l: Layout): AndroidLayoutRevision {
-        val indexMap = AndroidTextIndexMap(mirror)
+        val projection = currentProjection
         val layoutText = displayTextOverride ?: mirror.getText()
+        val indexMap = if (projection == null) AndroidTextIndexMap(mirror) else null
         val lineRanges = mutableListOf<AndroidLayoutRevision.LineRange>()
         var currentParagraphId = 0
         var currentParagraphLocalLineIndex = 0
@@ -140,30 +143,11 @@ class AndroidLayoutEngine(
             val left = l.getLineLeft(i)
             val right = l.getLineRight(i)
 
-            val startUtf8 = indexMap.utf16ToUtf8(lineStartUtf16)
-            val endUtf8 = indexMap.utf16ToUtf8(lineEndUtf16)
+            val startUtf8 = projection?.displayUtf16ToRealUtf8(lineStartUtf16)
+                ?: indexMap!!.utf16ToUtf8(lineStartUtf16)
+            val endUtf8 = projection?.displayUtf16ToRealUtf8(lineEndUtf16)
+                ?: indexMap!!.utf16ToUtf8(lineEndUtf16)
 
-            // Source-text inspection: the visual line's last character is `\n`.
-            // This is the only reliable way to detect paragraph boundaries because
-            // Android Layout byte ranges are contiguous across `\n` — there is no
-            // byte gap between adjacent visual lines to detect. A previous approach
-            // compared curr.startUtf8 > prev.endUtf8, but this never fires because
-            // Android Layout's lineEnd is the position after the last character,
-            // which is also the start of the next line — the ranges are contiguous
-            // even across hard breaks.
-            //
-            // getLineEnd() returns an *exclusive* boundary (one past the last character),
-            // so the last character is at index lineEndUtf16 - 1. Checking text[lineEndUtf16]
-            // would read the first character of the *next* line, producing a false positive
-            // when the next line starts with `\n`. The -1 adjustment is essential and
-            // must not be removed — it is the only correct way to inspect the line's own
-            // last character.
-            //
-            // Invariant: this field is used by the animation planner to stop reflow scanning.
-            // Text reflow (soft-wrap changes) cannot propagate across a hard paragraph break,
-            // so the planner stops expanding the affected-line set at the first line where
-            // endsWithHardBreak is true. Subsequent paragraphs are handled via BlockShift
-            // (uniform Y translation) rather than per-line Bitmap snapshots.
             val endsWithHardBreak = lineEndUtf16 > 0 && lineEndUtf16 <= layoutText.length &&
                 layoutText[lineEndUtf16 - 1] == '\n'
 
@@ -176,13 +160,6 @@ class AndroidLayoutEngine(
             } else {
                 currentParagraphLocalLineIndex++
             }
-            // NOTE: paragraphId is a sequential integer that changes when hard breaks are
-            // inserted or deleted (all subsequent paragraphs get new IDs). It is NOT a stable
-            // identity for cross-revision paragraph matching. The animation planner uses
-            // offset-map-based alignment (buildOffsetMapper) to match old/new paragraphs by
-            // their UTF-8 byte range, not by paragraphId. paragraphId is only used for
-            // grouping lines within a single revision (e.g. collecting all lines of the
-            // current edit paragraph for snapshot capture).
 
             lineRanges.add(AndroidLayoutRevision.LineRange(
                 startUtf8 = startUtf8,
@@ -202,13 +179,32 @@ class AndroidLayoutEngine(
 
         val fontFingerprint = "${textPaint.textSize}_${textPaint.typeface?.hashCode() ?: 0}"
 
-        val cursorUtf16 = mirror.getCursorUtf16()
-        val cursorLine = if (cursorUtf16 in 0..mirror.getLengthUtf16()) l.getLineForOffset(cursorUtf16) else 0
-        val cursorX = if (cursorUtf16 in 0..mirror.getLengthUtf16()) l.getPrimaryHorizontal(cursorUtf16) else 0f
+        val cursorDisplayUtf16 = projection?.realUtf8ToDisplayUtf16(mirror.getCursorUtf8())
+            ?: mirror.getCursorUtf16()
+        val cursorLine = if (cursorDisplayUtf16 in 0..layoutText.length) l.getLineForOffset(cursorDisplayUtf16) else 0
+        val cursorX = if (cursorDisplayUtf16 in 0..layoutText.length) l.getPrimaryHorizontal(cursorDisplayUtf16) else 0f
         val cursorY = l.getLineTop(cursorLine).toFloat()
         val cursorHeight = (l.getLineBottom(cursorLine) - l.getLineTop(cursorLine)).toFloat()
 
         val compRange = mirror.getCompositionRangeUtf16()
+        val compStartDisplayUtf16: Int
+        val compEndDisplayUtf16: Int
+        if (projection != null && compRange != null && compRange.first >= 0 && compRange.second >= 0) {
+            val compStartUtf8 = indexMap?.utf16ToUtf8(compRange.first)
+                ?: AndroidTextIndexMap(mirror).utf16ToUtf8(compRange.first)
+            val compEndUtf8 = indexMap?.utf16ToUtf8(compRange.second)
+                ?: AndroidTextIndexMap(mirror).utf16ToUtf8(compRange.second)
+            compStartDisplayUtf16 = projection.realUtf8ToDisplayUtf16(compStartUtf8)
+            compEndDisplayUtf16 = projection.realUtf8ToDisplayUtf16(compEndUtf8)
+        } else {
+            compStartDisplayUtf16 = compRange?.first ?: -1
+            compEndDisplayUtf16 = compRange?.second ?: -1
+        }
+
+        val selectionAnchorDisplayUtf16 = projection?.realUtf8ToDisplayUtf16(mirror.getSelectionAnchorUtf8())
+            ?: mirror.getSelectionAnchorUtf16()
+        val selectionHeadDisplayUtf16 = projection?.realUtf8ToDisplayUtf16(mirror.getSelectionHeadUtf8())
+            ?: mirror.getSelectionHeadUtf16()
 
         return AndroidLayoutRevision(
             revisionCounter,
@@ -218,27 +214,29 @@ class AndroidLayoutEngine(
             l.lineCount,
             lineRanges.toList(),
             mirror.getCursorUtf8(),
-            cursorUtf16,
+            cursorDisplayUtf16,
             cursorX,
             cursorY,
             cursorHeight,
             mirror.getSelectionAnchorUtf8(),
             mirror.getSelectionHeadUtf8(),
-            mirror.getSelectionAnchorUtf16(),
-            mirror.getSelectionHeadUtf16(),
-            compRange?.first ?: -1,
-            compRange?.second ?: -1,
+            selectionAnchorDisplayUtf16,
+            selectionHeadDisplayUtf16,
+            compStartDisplayUtf16,
+            compEndDisplayUtf16,
             emptyList()
         )
     }
 
-    fun setDisplayTextOverride(override: String) {
+    fun setDisplayTextOverride(override: String, projection: DisplayTextProjection? = null) {
         displayTextOverride = override
+        currentProjection = projection
         lastConfigFingerprint = ""
     }
 
     fun clearDisplayTextOverride() {
         displayTextOverride = null
+        currentProjection = null
         lastConfigFingerprint = ""
     }
 

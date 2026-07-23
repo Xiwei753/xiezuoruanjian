@@ -371,6 +371,13 @@ class AnimatedTextEditorCoordinator(
         view.onContentChanged = { newText ->
             target.onTextChanged?.invoke(newText)
         }
+        view.onSearchHighlightsCleared = {
+            for ((targetId, _) in targetProjections) {
+                if (targetId != activeTargetId) {
+                    setTargetDecorations(targetId, TargetDecorations())
+                }
+            }
+        }
     }
 
     private fun installCommitRequestedCallback(view: SujianEditorView) {
@@ -390,6 +397,7 @@ class AnimatedTextEditorCoordinator(
             view.onContentChanged = null
             view.onCommitRequested = null
             view.onCancelRequested = null
+            view.onSearchHighlightsCleared = null
         }
     }
 
@@ -572,6 +580,18 @@ class AnimatedTextEditorCoordinator(
         if (view != null) {
             projection.setScrollPosition(view.getScrollXPos(), view.getScrollYPos())
             projection.setViewportSize(view.width, view.height)
+            projection.setFontSize(view.getPipelineTextPaintSize())
+            projection.setLineSpacingMultiplier(view.getPipelineLineSpacingMultiplier())
+            val themeColors = view.getPipelineThemeColors()
+            if (themeColors != null) {
+                projection.setThemeColors(
+                    themeColors.text,
+                    themeColors.cursor,
+                    themeColors.selection,
+                    themeColors.composing,
+                    themeColors.background
+                )
+            }
         }
         val decorations = targetDecorations[targetId]
         if (decorations != null) {

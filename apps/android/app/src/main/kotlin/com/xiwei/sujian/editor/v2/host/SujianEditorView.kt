@@ -49,6 +49,7 @@ class SujianEditorView @JvmOverloads constructor(
         set(value) { pipeline.kernelBridge = value }
 
     private var themeBackgroundColor: Int = Color.WHITE
+    private var lastAppliedThemeColors: com.xiwei.sujian.ui.compose.theme.EditorThemeColors? = null
 
     init {
         inputAdapter.setHostView(this)
@@ -172,8 +173,9 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     fun scrollToSelection() {
-        val cursorUtf16 = pipeline.getCursorUtf16()
-        if (cursorUtf16 < 0 || cursorUtf16 > pipeline.getLengthUtf16()) return
+        val cursorUtf16 = pipeline.getDisplayCursorUtf16()
+        val layoutTextLen = pipeline.getLengthUtf16()
+        if (cursorUtf16 < 0 || cursorUtf16 > layoutTextLen) return
         val line = pipeline.getLayoutLineForOffset(cursorUtf16)
         val lineTop = pipeline.getLayoutLineTop(line).toFloat()
         val lineBottom = pipeline.getLayoutLineBottom(line).toFloat()
@@ -210,8 +212,11 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun clearSearchHighlights() {
         searchHighlights = emptyList()
+        onSearchHighlightsCleared?.invoke()
         invalidate()
     }
+
+    var onSearchHighlightsCleared: (() -> Unit)? = null
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
@@ -388,6 +393,12 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun getPipeline(): EditorCommandPort = pipeline
 
+    fun getPipelineTextPaintSize(): Float = textPaint.textSize
+
+    fun getPipelineLineSpacingMultiplier(): Float = lineSpacingMultiplier
+
+    fun getPipelineThemeColors(): com.xiwei.sujian.ui.compose.theme.EditorThemeColors? = lastAppliedThemeColors
+
     var onContentChanged: ((String) -> Unit)? = null
 
     fun setText(text: String) {
@@ -432,6 +443,7 @@ class SujianEditorView @JvmOverloads constructor(
     fun isCoordinatedAnimationEnabled(): Boolean = coordinatedAnimationEnabled
 
     fun applyThemeColorsFromAdapter(colors: com.xiwei.sujian.ui.compose.theme.EditorThemeColors) {
+        lastAppliedThemeColors = colors
         themeBackgroundColor = colors.background
         textPaint.color = colors.text
         pipeline.setRendererThemeColors(
@@ -451,8 +463,9 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun notifyCursorAnchorInfo() {
         val imm = context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager ?: return
-        val cursorUtf16 = pipeline.getCursorUtf16()
-        if (cursorUtf16 < 0 || cursorUtf16 > pipeline.getLengthUtf16()) return
+        val cursorUtf16 = pipeline.getDisplayCursorUtf16()
+        val layoutTextLen = pipeline.getLengthUtf16()
+        if (cursorUtf16 < 0 || cursorUtf16 > layoutTextLen) return
 
         val line = pipeline.getLayoutLineForOffset(cursorUtf16)
         val x = pipeline.getLayoutPrimaryHorizontal(cursorUtf16)

@@ -6,8 +6,17 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 
-class AndroidTextRenderer {
+class AndroidTextRenderer(
+    private val textPaint: Paint = Paint().apply {
+        color = Color.BLACK
+        isAntiAlias = true
+    }
+) {
     private var backgroundColor: Int = Color.WHITE
+    private val backgroundPaint = Paint().apply {
+        color = Color.WHITE
+        style = Paint.Style.FILL
+    }
     private val cursorPaint = Paint().apply {
         color = Color.BLACK
         strokeWidth = 2f
@@ -282,10 +291,20 @@ class AndroidTextRenderer {
 
     fun getCursorPaint(): Paint = cursorPaint
 
-    fun setThemeColors(@Suppress("UNUSED_PARAMETER") textColor: Int, cursorColor: Int, selectionColor: Int, preeditColor: Int, bgColor: Int = Color.WHITE) {
+    fun getPaint(): Paint = textPaint
+
+    fun getPreeditPaint(): Paint = preeditUnderlinePaint
+
+    fun getSelectionPaint(): Paint = selectionPaint
+
+    fun getBackgroundPaint(): Paint = backgroundPaint
+
+    fun setThemeColors(textColor: Int, cursorColor: Int, selectionColor: Int, preeditColor: Int, bgColor: Int = Color.WHITE) {
+        textPaint.color = textColor
         cursorPaint.color = cursorColor
         selectionPaint.color = selectionColor
         preeditUnderlinePaint.color = preeditColor
         backgroundColor = bgColor
+        backgroundPaint.color = bgColor
     }
 }

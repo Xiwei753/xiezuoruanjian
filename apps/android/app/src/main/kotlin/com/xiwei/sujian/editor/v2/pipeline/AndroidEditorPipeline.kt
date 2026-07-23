@@ -534,6 +534,7 @@ class AndroidEditorPipeline private constructor(
     override fun getRevision(): Long = editPipeline.getRevision()
     override fun getCursorUtf8(): Int = editPipeline.getCursorUtf8()
     fun getCursorUtf16(): Int = editPipeline.getCursorUtf16()
+    fun getDisplayCursorUtf16(): Int = layoutRuntime.getCurrentProjection().realUtf8ToDisplayUtf16(mirror.getCursorUtf8())
     fun getSelectionStartUtf8(): Int = editPipeline.getSelectionStartUtf8()
     fun getSelectionEndUtf8(): Int = editPipeline.getSelectionEndUtf8()
     fun getSelectionStartUtf16(): Int = editPipeline.getSelectionStartUtf16()
@@ -633,13 +634,13 @@ class AndroidEditorPipeline private constructor(
     }
 
     fun utf16ToUtf8(offsetUtf16: Int): Int {
-        val indexMap = AndroidTextIndexMap(mirror)
-        return indexMap.utf16ToUtf8(offsetUtf16)
+        val projection = layoutRuntime.getCurrentProjection()
+        return projection.displayUtf16ToRealUtf8(offsetUtf16)
     }
 
     fun utf8ToUtf16(offsetUtf8: Int): Int {
-        val indexMap = AndroidTextIndexMap(mirror)
-        return indexMap.utf8ToUtf16(offsetUtf8)
+        val projection = layoutRuntime.getCurrentProjection()
+        return projection.realUtf8ToDisplayUtf16(offsetUtf8)
     }
 
     fun getSpannable(): android.text.SpannableStringBuilder = editPipeline.getSpannable()

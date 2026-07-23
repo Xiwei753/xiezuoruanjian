@@ -38,7 +38,7 @@ class AndroidLayoutRuntime(
     fun applyProjection(projection: DisplayTextProjection) {
         currentProjection = projection
         if (projection.isMasked) {
-            layoutEngine.setDisplayTextOverride(projection.displayText)
+            layoutEngine.setDisplayTextOverride(projection.displayText, projection)
         } else {
             layoutEngine.clearDisplayTextOverride()
         }
@@ -85,7 +85,7 @@ class AndroidLayoutRuntime(
             DisplayTextProjection.identity(text)
         }
         if (currentProjection.isMasked) {
-            layoutEngine.setDisplayTextOverride(currentProjection.displayText)
+            layoutEngine.setDisplayTextOverride(currentProjection.displayText, currentProjection)
         } else {
             layoutEngine.clearDisplayTextOverride()
         }
