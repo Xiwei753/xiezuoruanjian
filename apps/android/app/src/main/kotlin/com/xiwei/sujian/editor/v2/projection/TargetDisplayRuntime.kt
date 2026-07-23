@@ -45,8 +45,8 @@ class TargetDisplayRuntime(
     private val frameCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
             if (!isTicking) return
+            frameGeneration++
             if (hasActiveAnimation()) {
-                frameGeneration++
                 choreographer.postFrameCallback(this)
             } else {
                 isTicking = false
