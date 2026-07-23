@@ -73,7 +73,7 @@ struct ChapterStatsAgg {
 /// 按设备聚合的统计数据。
 ///
 /// - `device_id`：设备唯一标识（UUID，由 Core 在首次同步时生成）
-/// - `platform`：平台标识（`"android"` / `"linux_qt"` / `"windows"` / `"harmony"`）
+/// - `platform`：平台标识（`"android"` / `"desktop"` / `"windows"` / `"harmony"` / `"apple"`）
 /// - `device_class`：设备类型（`"phone"` / `"tablet"` / `"desktop"`）
 /// - `sessions_count`：活跃编辑会话数（有输入事件的天数）
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -22,6 +22,7 @@
 
 mod config_store;
 mod network_state;
+mod platform_capabilities;
 mod platform_init;
 mod platform_paths;
 mod secure_storage;
@@ -29,6 +30,7 @@ mod sync_transport;
 
 pub use config_store::{ConfigStore, FileConfigStore};
 pub use network_state::NetworkState;
+pub use platform_capabilities::{PlatformCapabilities, PlatformCapabilitiesExt};
 pub use platform_init::{PlatformInit, PlatformKind, PlatformPaths};
 pub use secure_storage::SecureStorage;
 pub use sync_transport::{HttpRequest, HttpResponse, SyncTransport, TransportError};
