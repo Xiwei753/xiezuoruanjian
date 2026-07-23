@@ -45,7 +45,7 @@ jobs:
         run: cargo test -p writer_core
 
       - name: Generate UniFFI Kotlin bindings
-        run: cargo run --bin uniffi-bindgen -p writer_core -- generate core/writer_core/src/api.udl --language kotlin --out-dir apps/android/app/src/main/kotlin/com/xiwei/sujian/uniffi --config core/writer_core/uniffi.toml --no-format
+        run: cargo run --bin uniffi-bindgen -p writer_uniffi -- generate core/writer_core/src/api.udl --language kotlin --out-dir apps/android/app/src/main/kotlin/com/xiwei/sujian/uniffi --config core/writer_uniffi/uniffi.toml --no-format
 
       - name: Test Android no-ai Debug unit tests
         working-directory: apps/android
@@ -125,7 +125,7 @@ jobs:
         run: cargo test -p writer_core --features ai
 
       - name: Generate UniFFI Kotlin bindings
-        run: cargo run --bin uniffi-bindgen -p writer_core -- generate core/writer_core/src/api.udl --language kotlin --out-dir apps/android/app/src/main/kotlin/com/xiwei/sujian/uniffi --config core/writer_core/uniffi.toml --no-format
+        run: cargo run --bin uniffi-bindgen -p writer_uniffi -- generate core/writer_core/src/api.udl --language kotlin --out-dir apps/android/app/src/main/kotlin/com/xiwei/sujian/uniffi --config core/writer_uniffi/uniffi.toml --no-format
 
       - name: Test Android ai Debug unit tests
         working-directory: apps/android

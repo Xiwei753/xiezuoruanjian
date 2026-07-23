@@ -39,14 +39,9 @@ unicode-segmentation = "1.11"
 
 [dependencies.uniffi]
 version = "0.28.0"
-features = ["cli"]
 
 [build-dependencies]
 uniffi = { version = "0.28.0", features = ["build"] }
-
-[[bin]]
-name = "uniffi-bindgen"
-path = "src/bin/uniffi-bindgen.rs"
 
 [dev-dependencies]
 criterion = "0.5.1"

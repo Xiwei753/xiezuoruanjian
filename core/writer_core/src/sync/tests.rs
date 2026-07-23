@@ -18,9 +18,13 @@ mod tests {
     #[cfg(feature = "github-api")]
     use crate::sync::types::ManifestFileRecord;
     use crate::sync::types::SyncConfig;
+    #[cfg(feature = "github-api")]
     use crate::sync::types::SyncConflict;
+    #[cfg(feature = "github-api")]
     use crate::sync::types::SyncManifest;
+    #[cfg(feature = "github-api")]
     use crate::sync::types::SyncSecrets;
+    #[cfg(feature = "github-api")]
     use crate::sync::types::SyncState;
     #[cfg(feature = "github-api")]
     use crate::sync::types::SyncStatus;
@@ -56,6 +60,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "github-api")]
     fn test_sync_manifest_deserializes_with_deleted_at_ms() {
         let raw = r#"{
             "files": [{
@@ -75,6 +80,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "github-api")]
     fn test_sync_manifest_serializes_with_deleted_at_ms() {
         let manifest = SyncManifest {
             files: vec![crate::sync::types::ManifestFileRecord {
@@ -95,6 +101,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "github-api")]
     fn test_sync_manifest_deserializes_without_deleted_at_ms() {
         let raw = r#"{
             "files": [{
@@ -218,6 +225,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "github-api")]
     #[ignore]
     fn test_record_sync_conflict_error_handling() {
         // Provide an invalid path to force an IO error
@@ -317,6 +325,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "github-api")]
     fn test_no_unknown_conflicts() {
         let conflict = SyncConflict {
             local_path: "real/path.txt".to_string(),
@@ -332,6 +341,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "github-api")]
     fn test_sync_config_state_no_token() {
         let config = SyncConfig {
             enabled: true,
@@ -467,6 +477,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "github-api")]
     fn test_record_sync_conflict_writes_correctly() {
         let dir = tempdir().unwrap();
         let conflict = SyncConflict {
@@ -492,6 +503,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "github-api")]
     fn test_sync_state_does_not_leak_tokens() {
         let dir = tempdir().unwrap();
         let state = SyncState {
@@ -697,6 +709,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "github-api")]
     #[cfg(all(not(windows), feature = "git-https"))]
     fn test_save_sync_state_failure() {
         let dir = tempfile::tempdir().unwrap();
@@ -769,6 +782,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "github-api")]
     #[cfg(feature = "git-https")]
     fn test_first_sync_mode_clone_into_empty_workspace() {
         let dir = tempfile::tempdir().unwrap();
@@ -834,6 +848,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "github-api")]
     #[cfg(feature = "git-https")]
     fn test_first_sync_mode_init_existing_workspace() {
         let dir = tempfile::tempdir().unwrap();
@@ -899,6 +914,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "github-api")]
     #[cfg(feature = "git-https")]
     fn test_first_sync_mode_already_git_repo() {
         let dir = tempfile::tempdir().unwrap();
@@ -1005,6 +1021,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "github-api")]
     #[cfg(feature = "git-https")]
     fn test_first_sync_empty_remote_branch_not_found() {
         let dir = tempfile::tempdir().unwrap();
@@ -1132,6 +1149,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "github-api")]
     #[cfg(all(not(windows), feature = "git-https"))]
     fn test_settings_semantic_merge_conflict_recovery() {
         let dir = tempfile::tempdir().unwrap();
@@ -2527,6 +2545,7 @@ mod tests {
     /// P0-1: Test that resolve_conflict_keep_local properly clears the conflict
     /// and sets known_files to the remote hash so the next sync uploads local.
     #[test]
+    #[cfg(feature = "github-api")]
     fn test_resolve_conflict_keep_local() {
         let dir = tempdir().unwrap();
         let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
@@ -2580,6 +2599,7 @@ mod tests {
     /// P0-1: Test that resolve_conflict_take_remote properly clears the conflict
     /// and adds the path to pending_take_remote (not known_files).
     #[test]
+    #[cfg(feature = "github-api")]
     fn test_resolve_conflict_take_remote() {
         let dir = tempdir().unwrap();
         let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
@@ -2631,6 +2651,7 @@ mod tests {
     /// P0-1: Test that resolve_conflict_mark_merged properly clears the conflict
     /// and sets known_files to the remote hash so the next sync uploads the merged version.
     #[test]
+    #[cfg(feature = "github-api")]
     fn test_resolve_conflict_mark_merged() {
         let dir = tempdir().unwrap();
         let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
@@ -3304,6 +3325,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "github-api")]
     fn test_git_backend_diagnostics_not_assumed_ok() {
         // Git 后端诊断不再假成功，应返回明确的"不支持"状态
         let config = SyncConfig {

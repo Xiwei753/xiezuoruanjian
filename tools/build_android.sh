@@ -109,11 +109,11 @@ echo "生成 UniFFI Kotlin 绑定..."
 cd "$WORKSPACE_ROOT"
 UNIFFI_OUT_DIR="apps/android/app/src/main/kotlin/com/xiwei/sujian/uniffi/uniffi/writer_core"
 rm -rf "$UNIFFI_OUT_DIR"
-cargo run --bin uniffi-bindgen -p writer_core -- generate \
+cargo run --bin uniffi-bindgen -p writer_uniffi -- generate \
     core/writer_core/src/api.udl \
     --language kotlin \
     --out-dir apps/android/app/src/main/kotlin/com/xiwei/sujian/uniffi \
-    --config core/writer_core/uniffi.toml \
+    --config core/writer_uniffi/uniffi.toml \
     --no-format
 
 if [ $? -ne 0 ]; then
