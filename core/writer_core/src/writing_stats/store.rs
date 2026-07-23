@@ -648,12 +648,9 @@ pub fn aggregate_by_device_class(stats: &[DailyStats]) -> HashMap<String, Device
     let mut result: HashMap<String, DeviceClassSummary> = HashMap::new();
     for stat in stats {
         let class = if stat.device_class.is_empty() {
-            // 兼容旧数据：根据 platform 推断
-            if stat.platform.contains("android") {
-                "phone".to_string()
-            } else {
-                "desktop".to_string()
-            }
+            let kind = crate::writing_stats::Platform::from_str_name(&stat.platform)
+                .unwrap_or(crate::writing_stats::Platform::Desktop);
+            kind.default_device_class().to_string()
         } else {
             stat.device_class.clone()
         };
