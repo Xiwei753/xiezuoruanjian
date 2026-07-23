@@ -162,9 +162,9 @@ mod tests {
         SyncDiagnosticsResultDto {
             success: true,
             backend_type: "github".to_string(),
-            android_has_internet_permission: false,
-            android_has_access_network_state_permission: false,
-            android_network_state: String::new(),
+            has_network_permission: false,
+            has_network_state_permission: false,
+            network_state: String::new(),
             network_ok: true,
             auth_ok: true,
             repo_ok: true,

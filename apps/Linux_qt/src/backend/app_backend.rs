@@ -295,8 +295,8 @@ pub struct AppBackend {
     current_system_color_scheme: String,
     current_pending_github_init_path: String,
     pub current_ai_enabled: bool,
-    pub current_setting_linux_qt_sidebar_width: f64,
-    pub current_setting_linux_qt_editor_width: f64,
+    pub current_setting_desktop_sidebar_width: f64,
+    pub current_setting_desktop_editor_width: f64,
     current_setting_font_size: f32,
     current_setting_line_spacing: f32,
     current_setting_auto_save_enabled: bool,
@@ -405,8 +405,8 @@ impl AppBackend {
         s.sync_can_run = self.current_has_workspace && self.current_sync_enabled && !self.current_sync_in_progress;
         s.ai_available = cfg!(feature = "ai");
         s.ai_enabled = self.current_ai_enabled;
-        s.setting_linux_qt_sidebar_width = self.current_setting_linux_qt_sidebar_width;
-        s.setting_linux_qt_editor_width = self.current_setting_linux_qt_editor_width;
+        s.setting_desktop_sidebar_width = self.current_setting_desktop_sidebar_width;
+        s.setting_desktop_editor_width = self.current_setting_desktop_editor_width;
         s.setting_diagnostics_enabled = self.current_setting_diagnostics_enabled;
         s.setting_diagnostics_verbose = self.current_setting_diagnostics_verbose;
         s.setting_dynamic_color_enabled = self.current_setting_dynamic_color_enabled;

@@ -225,14 +225,14 @@ pub struct SyncConfig {
     /// Defaults to "x-access-token" when empty.
     #[serde(default)]
     pub username: String,
-    /// Android-only: whether INTERNET permission is granted.
-    /// Linux always sets this to true.
-    #[serde(default = "default_true")]
-    pub android_has_internet_permission: bool,
-    /// Android-only: whether ACCESS_NETWORK_STATE permission is granted.
-    /// Linux always sets this to true.
-    #[serde(default = "default_true")]
-    pub android_has_access_network_state_permission: bool,
+    /// Whether the platform grants network access permission.
+    /// Android sets this based on INTERNET permission; desktop platforms always true.
+    #[serde(default = "default_true", alias = "android_has_internet_permission")]
+    pub has_network_permission: bool,
+    /// Whether the platform grants network state query permission.
+    /// Android sets this based on ACCESS_NETWORK_STATE permission; desktop platforms always true.
+    #[serde(default = "default_true", alias = "android_has_access_network_state_permission")]
+    pub has_network_state_permission: bool,
 }
 
 pub(crate) fn default_true() -> bool {
@@ -337,10 +337,15 @@ pub struct SyncDiagnosticsResult {
     pub success: bool,
     /// Backend type: git/github_api
     pub backend_type: String,
-    /// Android permission check results
-    pub android_has_internet_permission: bool,
-    pub android_has_access_network_state_permission: bool,
-    pub android_network_state: String,
+    /// Whether the platform grants network access permission.
+    #[serde(alias = "android_has_internet_permission")]
+    pub has_network_permission: bool,
+    /// Whether the platform grants network state query permission.
+    #[serde(alias = "android_has_access_network_state_permission")]
+    pub has_network_state_permission: bool,
+    /// Current network connectivity state reported by the platform.
+    #[serde(alias = "android_network_state")]
+    pub network_state: String,
     pub network_ok: bool,
     pub auth_ok: bool,
     pub repo_ok: bool,
@@ -371,9 +376,9 @@ impl SyncDiagnosticsResult {
         Self {
             success: false,
             backend_type: "git".to_string(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
-            android_network_state: "unchecked".to_string(),
+            has_network_permission: true,
+            has_network_state_permission: true,
+            network_state: "unchecked".to_string(),
             network_ok: false,
             auth_ok: false,
             repo_ok: false,

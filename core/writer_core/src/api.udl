@@ -110,8 +110,8 @@ dictionary LocalSettingsDto {
     u64 editor_smooth_cursor_duration_ms;
     boolean ai_enabled;
     string? stats_device_id;
-    f64 linux_qt_sidebar_width;
-    f64 linux_qt_editor_width;
+    f64 desktop_sidebar_width;
+    f64 desktop_editor_width;
     boolean editor_coordinated_text_cursor_animation_enabled;
     boolean diagnostics_enabled;
     boolean diagnostics_verbose;
@@ -199,8 +199,8 @@ dictionary SyncConfigDto {
     boolean auto_sync;
     u32 sync_interval_seconds;
     string username;
-    boolean android_has_internet_permission;
-    boolean android_has_access_network_state_permission;
+    boolean has_network_permission;
+    boolean has_network_state_permission;
 };
 
 dictionary SyncSecretsDto {
@@ -231,9 +231,9 @@ dictionary SyncStateDto {
 dictionary SyncDiagnosticsResultDto {
     boolean success;
     string backend_type;
-    boolean android_has_internet_permission;
-    boolean android_has_access_network_state_permission;
-    string android_network_state;
+    boolean has_network_permission;
+    boolean has_network_state_permission;
+    string network_state;
     boolean network_ok;
     boolean auth_ok;
     boolean repo_ok;

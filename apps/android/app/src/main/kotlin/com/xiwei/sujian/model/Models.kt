@@ -145,8 +145,8 @@ data class SyncConfig(
     @SerializedName("auto_sync") val autoSync: Boolean? = false,
     @SerializedName("sync_interval_seconds") val syncIntervalSeconds: Int? = 300,
     val username: String? = "",
-    @SerializedName("android_has_internet_permission") val androidHasInternetPermission: Boolean? = null,
-    @SerializedName("android_has_access_network_state_permission") val androidHasAccessNetworkStatePermission: Boolean? = null
+    @SerializedName("has_network_permission") val hasNetworkPermission: Boolean? = null,
+    @SerializedName("has_network_state_permission") val hasNetworkStatePermission: Boolean? = null
 ) {
     fun normalize(): SyncConfig {
         return copy(
@@ -158,8 +158,8 @@ data class SyncConfig(
             autoSync = autoSync ?: false,
             syncIntervalSeconds = if (syncIntervalSeconds == null || syncIntervalSeconds <= 0) 300 else syncIntervalSeconds,
             username = username ?: "",
-            androidHasInternetPermission = androidHasInternetPermission ?: true,
-            androidHasAccessNetworkStatePermission = androidHasAccessNetworkStatePermission ?: true
+            hasNetworkPermission = hasNetworkPermission ?: true,
+            hasNetworkStatePermission = hasNetworkStatePermission ?: true
         )
     }
 }
@@ -292,9 +292,9 @@ data class SyncConflict(
 data class SyncDiagnosticsResult(
     val success: Boolean,
     val backendType: String,
-    @SerializedName("android_has_internet_permission") val androidHasInternetPermission: Boolean,
-    @SerializedName("android_has_access_network_state_permission") val androidHasAccessNetworkStatePermission: Boolean,
-    @SerializedName("android_network_state") val androidNetworkState: String,
+    @SerializedName("has_network_permission") val hasNetworkPermission: Boolean,
+    @SerializedName("has_network_state_permission") val hasNetworkStatePermission: Boolean,
+    @SerializedName("network_state") val networkState: String,
     val networkOk: Boolean,
     val authOk: Boolean,
     val repoOk: Boolean,

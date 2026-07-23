@@ -47,8 +47,8 @@ mod tests {
             sync_interval_seconds: 0,
 
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: None,
@@ -211,8 +211,8 @@ mod tests {
             sync_interval_seconds: 300,
             backend_type: BackendType::Git,
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -265,8 +265,8 @@ mod tests {
             sync_interval_seconds: 0,
             backend_type: BackendType::Git,
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("dummy".to_string()),
@@ -353,8 +353,8 @@ mod tests {
             sync_interval_seconds: 0,
             backend_type: BackendType::Git,
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
         let state = SyncState {
             remote_url: Some("url".to_string()),
@@ -456,8 +456,8 @@ mod tests {
             sync_interval_seconds: 300,
             backend_type: BackendType::Git,
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
         let content = serde_json::to_string(&config).unwrap();
         // token might be there if some other struct is serialized, but we want to ensure
@@ -569,8 +569,8 @@ mod tests {
             sync_interval_seconds: 300,
             backend_type: BackendType::Git,
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
 
         let plan = SyncService::perform_sync_dry_run(dir.path(), &config).unwrap();
@@ -590,8 +590,8 @@ mod tests {
             sync_interval_seconds: 300,
             backend_type: BackendType::Git,
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
 
         // Create some whitelisted and blacklisted files
@@ -622,8 +622,8 @@ mod tests {
             sync_interval_seconds: 300,
             backend_type: BackendType::Git,
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
 
         let secrets = SyncSecrets {
@@ -653,8 +653,8 @@ mod tests {
             sync_interval_seconds: 300,
             backend_type: BackendType::Git,
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("dummy".to_string()),
@@ -727,8 +727,8 @@ mod tests {
             sync_interval_seconds: 300,
             backend_type: BackendType::Git,
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("dummy".to_string()),
@@ -796,8 +796,8 @@ mod tests {
             sync_interval_seconds: 300,
             backend_type: BackendType::Git,
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("dummy".to_string()),
@@ -862,8 +862,8 @@ mod tests {
             sync_interval_seconds: 300,
             backend_type: BackendType::Git,
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("dummy".to_string()),
@@ -928,8 +928,8 @@ mod tests {
             sync_interval_seconds: 300,
             backend_type: BackendType::Git,
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("dummy".to_string()),
@@ -1037,8 +1037,8 @@ mod tests {
             sync_interval_seconds: 300,
             backend_type: BackendType::Git,
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("dummy".to_string()),
@@ -1581,8 +1581,8 @@ mod tests {
             sync_interval_seconds: 0,
 
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
 
         let secrets = SyncSecrets {
@@ -1659,8 +1659,8 @@ mod tests {
             sync_interval_seconds: 0,
 
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -1730,8 +1730,8 @@ mod tests {
             sync_interval_seconds: 0,
 
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -1826,8 +1826,8 @@ mod tests {
             sync_interval_seconds: 0,
 
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
 
         let secrets = SyncSecrets {
@@ -1900,8 +1900,8 @@ mod tests {
             sync_interval_seconds: 0,
 
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -2011,8 +2011,8 @@ mod tests {
             sync_interval_seconds: 0,
 
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -2103,8 +2103,8 @@ mod tests {
             sync_interval_seconds: 0,
 
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -2200,8 +2200,8 @@ mod tests {
             sync_interval_seconds: 0,
 
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -2272,8 +2272,8 @@ mod tests {
             sync_interval_seconds: 0,
 
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -2346,8 +2346,8 @@ mod tests {
             sync_interval_seconds: 0,
 
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -2429,8 +2429,8 @@ mod tests {
             auto_sync: false,
             sync_interval_seconds: 0,
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -2482,8 +2482,8 @@ mod tests {
             auto_sync: false,
             sync_interval_seconds: 0,
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
 
         let res2 = SyncService::perform_lww_sync(dir.path(), &config2, &secrets, false).unwrap();
@@ -2762,8 +2762,8 @@ mod tests {
             auto_sync: false,
             sync_interval_seconds: 0,
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -2796,8 +2796,8 @@ mod tests {
             auto_sync: false,
             sync_interval_seconds: 0,
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
 
         let res2 = SyncService::perform_lww_sync(dir.path(), &config2, &secrets, false).unwrap();
@@ -2850,8 +2850,8 @@ mod tests {
             auto_sync: false,
             sync_interval_seconds: 0,
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
 
         let res3 = SyncService::perform_lww_sync(dir.path(), &config3, &secrets, false).unwrap();
@@ -2943,8 +2943,8 @@ mod tests {
             auto_sync: false,
             sync_interval_seconds: 0,
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -2984,8 +2984,8 @@ mod tests {
             auto_sync: false,
             sync_interval_seconds: 0,
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
 
         let res3 = SyncService::perform_lww_sync(dir.path(), &config3, &secrets, false).unwrap();
@@ -3038,8 +3038,8 @@ mod tests {
             auto_sync: false,
             sync_interval_seconds: 0,
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
 
         let res4 = SyncService::perform_lww_sync(dir.path(), &config4, &secrets, false).unwrap();
@@ -3123,8 +3123,8 @@ mod tests {
             auto_sync: false,
             sync_interval_seconds: 0,
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -3235,8 +3235,8 @@ mod tests {
             auto_sync: false,
             sync_interval_seconds: 0,
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -3338,8 +3338,8 @@ mod tests {
             auto_sync: false,
             sync_interval_seconds: 0,
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("test_token".to_string()),
@@ -3378,8 +3378,8 @@ mod tests {
             auto_sync: false,
             sync_interval_seconds: 300, // 5 分钟
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("test_token".to_string()),
@@ -3415,8 +3415,8 @@ mod tests {
             auto_sync: false,
             sync_interval_seconds: 300,
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("test_token".to_string()),
@@ -3455,8 +3455,8 @@ mod tests {
             auto_sync: false,
             sync_interval_seconds: 300,
             username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("test_token".to_string()),

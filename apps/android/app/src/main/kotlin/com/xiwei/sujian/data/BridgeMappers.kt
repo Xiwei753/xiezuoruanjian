@@ -182,8 +182,8 @@ internal fun SyncConfigDto.toModel() = SyncConfig(
     autoSync = autoSync,
     syncIntervalSeconds = syncIntervalSeconds.toInt(),
     username = username,
-    androidHasAccessNetworkStatePermission = null,
-    androidHasInternetPermission = null
+    hasNetworkStatePermission = null,
+    hasNetworkPermission = null
 )
 
 internal fun SyncConfig.toDto(): SyncConfigDto {
@@ -197,8 +197,8 @@ internal fun SyncConfig.toDto(): SyncConfigDto {
         autoSync = normalized.autoSync ?: false,
         syncIntervalSeconds = (normalized.syncIntervalSeconds ?: 300).toUInt(),
         username = normalized.username ?: "",
-        androidHasInternetPermission = normalized.androidHasInternetPermission ?: false,
-        androidHasAccessNetworkStatePermission = normalized.androidHasAccessNetworkStatePermission ?: false
+        hasNetworkPermission = normalized.hasNetworkPermission ?: false,
+        hasNetworkStatePermission = normalized.hasNetworkStatePermission ?: false
     )
 }
 
@@ -221,9 +221,9 @@ internal fun SyncConflictDto.toModel() = SyncConflict(localPath, remotePath, loc
 internal fun SyncDiagnosticsResultDto.toModel() = SyncDiagnosticsResult(
     success = success,
     backendType = backendType,
-    androidHasInternetPermission = androidHasInternetPermission,
-    androidHasAccessNetworkStatePermission = androidHasAccessNetworkStatePermission,
-    androidNetworkState = androidNetworkState,
+    hasNetworkPermission = hasNetworkPermission,
+    hasNetworkStatePermission = hasNetworkStatePermission,
+    networkState = networkState,
     networkOk = networkOk,
     authOk = authOk,
     repoOk = repoOk,

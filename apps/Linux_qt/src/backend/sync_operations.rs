@@ -240,8 +240,8 @@ impl AppBackend {
                         };
                     }
                 };
-                config.android_has_internet_permission = true;
-                config.android_has_access_network_state_permission = true;
+                config.has_network_permission = true;
+                config.has_network_state_permission = true;
 
                 match api.perform_sync_dry_run(config) {
                     Ok(plan) => {
@@ -526,8 +526,8 @@ impl AppBackend {
                         };
                     }
                 };
-                config.android_has_internet_permission = true;
-                config.android_has_access_network_state_permission = true;
+                config.has_network_permission = true;
+                config.has_network_state_permission = true;
 
                 let backend_label = config.backend_type.clone();
                 debug_log_static(

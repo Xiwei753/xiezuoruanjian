@@ -145,8 +145,8 @@ impl AppBackend {
             auto_sync: false,
             sync_interval_seconds: 300,
             username: parsed.extracted_username.clone().unwrap_or_default(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
 
         let secrets = SyncSecrets {

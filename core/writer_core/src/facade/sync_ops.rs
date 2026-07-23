@@ -121,8 +121,8 @@ impl super::WriterCore {
                 auto_sync: false,
                 sync_interval_seconds: 300,
                 username: String::new(),
-                android_has_internet_permission: true,
-                android_has_access_network_state_permission: true,
+                has_network_permission: true,
+                has_network_state_permission: true,
             });
         }
         let content = std::fs::read_to_string(&config_path)?;

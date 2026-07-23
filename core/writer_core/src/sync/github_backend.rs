@@ -72,7 +72,7 @@ impl SyncBackend for GitHubApiBackend {
             .clone();
         result.transport = "https".to_string();
 
-        if !config.android_has_internet_permission {
+        if !config.has_network_permission {
             result.error_category = "missing_permission".to_string();
             return Ok(result);
         }

@@ -172,8 +172,8 @@ mod tests {
             auto_sync: false,
             sync_interval_seconds: 300,
             username: "".to_string(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
+            has_network_permission: true,
+            has_network_state_permission: true,
         };
 
         let result = api.save_sync_config(config);

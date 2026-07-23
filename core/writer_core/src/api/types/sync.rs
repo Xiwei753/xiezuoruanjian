@@ -20,8 +20,8 @@ pub struct SyncConfigDto {
     pub auto_sync: bool,
     pub sync_interval_seconds: u32,
     pub username: String,
-    pub android_has_internet_permission: bool,
-    pub android_has_access_network_state_permission: bool,
+    pub has_network_permission: bool,
+    pub has_network_state_permission: bool,
 }
 
 impl From<crate::sync::SyncConfig> for SyncConfigDto {
@@ -41,9 +41,9 @@ impl From<crate::sync::SyncConfig> for SyncConfigDto {
             auto_sync: c.auto_sync,
             sync_interval_seconds: c.sync_interval_seconds,
             username: c.username,
-            android_has_internet_permission: c.android_has_internet_permission,
-            android_has_access_network_state_permission: c
-                .android_has_access_network_state_permission,
+            has_network_permission: c.has_network_permission,
+            has_network_state_permission: c
+                .has_network_state_permission,
         }
     }
 }
@@ -67,9 +67,9 @@ impl From<SyncConfigDto> for crate::sync::SyncConfig {
             auto_sync: c.auto_sync,
             sync_interval_seconds: c.sync_interval_seconds,
             username: c.username,
-            android_has_access_network_state_permission: c
-                .android_has_access_network_state_permission,
-            android_has_internet_permission: c.android_has_internet_permission,
+            has_network_state_permission: c
+                .has_network_state_permission,
+            has_network_permission: c.has_network_permission,
         }
     }
 }
@@ -150,9 +150,9 @@ impl From<crate::sync::SyncState> for SyncStateDto {
 pub struct SyncDiagnosticsResultDto {
     pub success: bool,
     pub backend_type: String,
-    pub android_has_internet_permission: bool,
-    pub android_has_access_network_state_permission: bool,
-    pub android_network_state: String,
+    pub has_network_permission: bool,
+    pub has_network_state_permission: bool,
+    pub network_state: String,
     pub network_ok: bool,
     pub auth_ok: bool,
     pub repo_ok: bool,
@@ -172,10 +172,10 @@ impl From<crate::sync::SyncDiagnosticsResult> for SyncDiagnosticsResultDto {
         Self {
             success: d.success,
             backend_type: d.backend_type,
-            android_has_internet_permission: d.android_has_internet_permission,
-            android_has_access_network_state_permission: d
-                .android_has_access_network_state_permission,
-            android_network_state: d.android_network_state,
+            has_network_permission: d.has_network_permission,
+            has_network_state_permission: d
+                .has_network_state_permission,
+            network_state: d.network_state,
             network_ok: d.network_ok,
             auth_ok: d.auth_ok,
             repo_ok: d.repo_ok,

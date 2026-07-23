@@ -26,11 +26,11 @@ impl crate::sync::SyncService {
             BackendType::GithubApi => "github_api".to_string(),
         };
 
-        result.android_has_internet_permission = config.android_has_internet_permission;
-        result.android_has_access_network_state_permission =
-            config.android_has_access_network_state_permission;
+        result.has_network_permission = config.has_network_permission;
+        result.has_network_state_permission =
+            config.has_network_state_permission;
 
-        if !config.android_has_internet_permission {
+        if !config.has_network_permission {
             result.network_status = "failed_no_internet_permission".to_string();
             result.auth_status = "skipped".to_string();
             result.repo_status = "skipped".to_string();
@@ -39,10 +39,10 @@ impl crate::sync::SyncService {
             return Ok(result);
         }
 
-        if !config.android_has_access_network_state_permission {
-            result.android_network_state = "unknown_no_permission".to_string();
+        if !config.has_network_state_permission {
+            result.network_state = "unknown_no_permission".to_string();
         } else {
-            result.android_network_state = "permission_granted".to_string();
+            result.network_state = "permission_granted".to_string();
         }
 
         let parsed = sanitize_remote_url(&config.remote_url);

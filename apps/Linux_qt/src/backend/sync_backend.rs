@@ -492,8 +492,8 @@ impl AppBackend {
                         };
                     }
                 };
-                config.android_has_internet_permission = true;
-                config.android_has_access_network_state_permission = true;
+                config.has_network_permission = true;
+                config.has_network_state_permission = true;
 
                 match api.perform_sync_diagnostics(config) {
                     Ok(result) => {
@@ -643,8 +643,8 @@ impl AppBackend {
                     auto_sync: false,
                     sync_interval_seconds: 300,
                     username: "".to_string(),
-                    android_has_internet_permission: false,
-                    android_has_access_network_state_permission: false,
+                    has_network_permission: false,
+                    has_network_state_permission: false,
                 });
 
             let raw_url = self.current_sync_remote_url.clone();
