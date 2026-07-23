@@ -90,8 +90,8 @@ pub fn init_default_config_store() {
 }
 
 #[cfg(feature = "github-api")]
-pub fn create_sync_transport() -> Box<dyn writer_platform_api::SyncTransport> {
+pub fn create_sync_transport() -> Result<Box<dyn writer_platform_api::SyncTransport>, writer_platform_api::TransportError> {
     let transport = writer_core::sync::github_backend::ReqwestSyncTransport::new()
-        .unwrap_or_else(|e| panic!("Failed to create HTTP transport: {}", e));
-    Box::new(transport)
+        .map_err(|e| writer_platform_api::TransportError::new("init", e.to_string()))?;
+    Ok(Box::new(transport))
 }

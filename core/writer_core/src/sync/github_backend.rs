@@ -304,16 +304,6 @@ impl ReqwestSyncTransport {
 }
 
 #[cfg(feature = "github-api")]
-impl Default for ReqwestSyncTransport {
-    fn default() -> Self {
-        match Self::new() {
-            Ok(t) => t,
-            Err(e) => panic!("Failed to create ReqwestSyncTransport: {}", e),
-        }
-    }
-}
-
-#[cfg(feature = "github-api")]
 impl SyncTransport for ReqwestSyncTransport {
     fn execute(&self, request: HttpRequest) -> Result<HttpResponse, TransportError> {
         let mut req = match request.method.as_str() {
