@@ -9,6 +9,10 @@ workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = []
+ai = ["writer_core/ai"]
+
 [dependencies]
 writer_core = { path = "../writer_core", features = ["github-api"] }
 writer_platform_api = { path = "../writer_platform_api" }
