@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.model.LocalSettings
@@ -18,6 +19,8 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        enableEdgeToEdge()
+
         ErrorUtil.safeRun(this) {
             val settingsRepository = SettingsRepository(this)
             val settings = ErrorUtil.safeRun(this, LocalSettings()) {
@@ -30,8 +33,10 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        val initialDestination = intent?.getStringExtra("navigateTo")
+
         setContent {
-            SujianApp()
+            SujianApp(initialDestination = initialDestination)
         }
     }
 }

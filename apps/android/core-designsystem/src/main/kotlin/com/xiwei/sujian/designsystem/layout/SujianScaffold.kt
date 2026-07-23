@@ -10,6 +10,8 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import com.xiwei.sujian.designsystem.component.SujianFab
 import com.xiwei.sujian.designsystem.component.SujianSnackbar
 import com.xiwei.sujian.designsystem.component.SujianTopAppBar
@@ -42,6 +44,7 @@ fun SujianScreenScaffold(
     navigationIcon: androidx.compose.ui.graphics.vector.ImageVector? = null,
     navigationIconContentDescription: String? = null,
     onNavigationClick: (() -> Unit)? = null,
+    onNavigateBack: (() -> Unit)? = null,
     actions: @Composable () -> Unit = {},
     snackbarHostState: SnackbarHostState? = null,
     fabIcon: androidx.compose.ui.graphics.vector.ImageVector? = null,
@@ -51,14 +54,18 @@ fun SujianScreenScaffold(
     onFabClick: (() -> Unit)? = null,
     content: @Composable (PaddingValues) -> Unit,
 ) {
+    val resolvedNavIcon = navigationIcon
+        ?: if (onNavigateBack != null) Icons.AutoMirrored.Filled.ArrowBack else null
+    val resolvedNavClick = onNavigationClick ?: onNavigateBack
+
     Scaffold(
         modifier = modifier.fillMaxSize(),
         topBar = {
             SujianTopAppBar(
                 title = title,
-                navigationIcon = navigationIcon,
+                navigationIcon = resolvedNavIcon,
                 navigationIconContentDescription = navigationIconContentDescription,
-                onNavigationClick = onNavigationClick,
+                onNavigationClick = resolvedNavClick,
                 actions = actions,
             )
         },

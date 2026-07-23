@@ -13,7 +13,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * ## 使用场景
  * - 同步完成后通知 UI 刷新
- * - SettingsActivity 监听同步状态变化
+ * - Compose SettingsRoute 监听同步状态变化
  */
 object SyncChangeBus {
     private val changed = AtomicBoolean(false)

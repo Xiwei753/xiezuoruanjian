@@ -384,7 +384,8 @@ class EditorFragment : Fragment() {
                 true
             }
             R.id.action_settings -> {
-                val intent = android.content.Intent(requireContext(), SettingsActivity::class.java)
+                val intent = android.content.Intent(requireContext(), MainActivity::class.java)
+                intent.putExtra("navigateTo", "settings")
                 startActivity(intent)
                 true
             }

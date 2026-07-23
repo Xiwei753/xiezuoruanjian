@@ -16,7 +16,7 @@ import com.xiwei.sujian.data.RepositoryException
  * - 捕获 RepositoryException 并展示错误信息
  *
  * ## 使用场景
- * - SettingsActivity 中的安全操作执行
+ * - Compose SettingsRoute 中的安全操作执行
  * - 各种 Activity 中的错误处理
  */
 object ErrorUtil {

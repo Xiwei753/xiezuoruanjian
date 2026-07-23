@@ -6,7 +6,7 @@ import com.xiwei.sujian.R
  * 实验室功能注册表 — 可扩展的实验性功能管理
  *
  * 每个实验性功能定义为一个 ExperimentalFeature，
- * 通过 registry 统一管理，SettingsActivity 根据注册表动态生成开关。
+ * 通过 registry 统一管理，Compose SettingsRoute 根据注册表动态生成开关。
  */
 data class ExperimentalFeature(
     val id: String,

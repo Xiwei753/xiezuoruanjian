@@ -1,10 +1,7 @@
 package com.xiwei.sujian.ui.compose.settings
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -20,8 +17,8 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Science
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -40,7 +37,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.designsystem.component.SujianListItem
-import com.xiwei.sujian.designsystem.component.SujianTopAppBar
 import com.xiwei.sujian.designsystem.layout.SujianScreenScaffold
 import com.xiwei.sujian.model.LocalSettings
 import com.xiwei.sujian.ui.compose.navigation.SettingsSection
@@ -185,20 +181,25 @@ fun SettingsRoute(
     val isExpanded = windowWidthSizeClass == androidx.window.core.layout.WindowWidthSizeClass.EXPANDED
 
     if (isExpanded) {
-        Row(modifier = modifier.fillMaxSize()) {
-            Box(modifier = Modifier.weight(1f)) {
-                SettingsListPane(
-                    onNavigateToDetail = { section -> selectedSection = section },
-                    selectedSection = selectedSection,
-                )
-            }
-            Box(modifier = Modifier.weight(1f)) {
-                if (selectedSection != null) {
-                    SettingsDetailPane(
-                        section = selectedSection!!,
-                        state = uiState,
-                        onIntent = vm::handleIntent,
+        androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold(
+            navigationSuiteItems = {},
+            modifier = modifier.fillMaxSize(),
+        ) {
+            androidx.compose.foundation.layout.Row(modifier = Modifier.fillMaxSize()) {
+                androidx.compose.foundation.layout.Box(modifier = Modifier.weight(1f)) {
+                    SettingsListPane(
+                        onNavigateToDetail = { section -> selectedSection = section },
+                        selectedSection = selectedSection,
                     )
+                }
+                androidx.compose.foundation.layout.Box(modifier = Modifier.weight(1f)) {
+                    if (selectedSection != null) {
+                        SettingsDetailPane(
+                            section = selectedSection!!,
+                            state = uiState,
+                            onIntent = vm::handleIntent,
+                        )
+                    }
                 }
             }
         }
@@ -220,11 +221,16 @@ fun SettingsRoute(
                 )
             }
         } else {
-            SettingsListPane(
-                onNavigateToDetail = { section -> selectedSection = section },
-                selectedSection = selectedSection,
-                modifier = modifier,
-            )
+            SujianScreenScaffold(
+                title = stringResource(id = R.string.action_settings),
+                onNavigateBack = onNavigateBack,
+            ) { innerPadding ->
+                SettingsListPane(
+                    onNavigateToDetail = { section -> selectedSection = section },
+                    selectedSection = selectedSection,
+                    modifier = Modifier.padding(innerPadding),
+                )
+            }
         }
     }
 }

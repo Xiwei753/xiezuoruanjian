@@ -20,7 +20,7 @@ import com.xiwei.sujian.model.SyncableSettings
  *
  * ## 使用场景
  * - EditorViewModel 加载编辑器设置
- * - SettingsActivity 保存用户设置
+ * - Compose SettingsRoute 保存用户设置
  * - SyncPage 加载/保存同步配置
  */
 class SettingsRepository(context: Context) {

@@ -9,6 +9,9 @@ import com.xiwei.sujian.designsystem.theme.ColorSource
 import com.xiwei.sujian.designsystem.theme.SujianDarkColorScheme
 import com.xiwei.sujian.designsystem.theme.SujianLightColorScheme
 import com.xiwei.sujian.designsystem.theme.SujianTheme
+import com.xiwei.sujian.designsystem.theme.SujianShapes
+import com.xiwei.sujian.designsystem.theme.SujianShapes
+import com.xiwei.sujian.designsystem.theme.SujianTypography
 import com.xiwei.sujian.designsystem.theme.hexToColor
 
 private fun schemeFromRecord(
@@ -139,6 +142,8 @@ fun SujianTheme(
 
     SujianTheme(
         colorScheme = colorScheme,
+        typography = SujianTypography,
+        shapes = SujianShapes,
         content = content,
     )
 }

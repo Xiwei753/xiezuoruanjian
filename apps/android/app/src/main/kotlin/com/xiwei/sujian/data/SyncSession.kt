@@ -13,7 +13,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * - 防止多个同步任务同时执行
  *
  * ## 使用场景
- * - SettingsActivity 中的同步按钮状态管理
+ * - Compose SettingsRoute 中的同步按钮状态管理
  * - 防止重复点击导致的并发同步问题
  */
 object SyncSession {

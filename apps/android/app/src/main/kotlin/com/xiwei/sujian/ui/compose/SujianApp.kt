@@ -2,8 +2,6 @@ package com.xiwei.sujian.ui.compose
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -31,7 +29,9 @@ import com.xiwei.sujian.ui.compose.theme.ThemeStore
 import com.xiwei.sujian.ui.compose.theme.rememberThemeController
 
 @Composable
-fun SujianApp() {
+fun SujianApp(
+    initialDestination: String? = null,
+) {
     val context = LocalContext.current
     val vm: SujianAppViewModel = viewModel()
     val appState = remember { SujianAppState(vm) }
@@ -47,6 +47,9 @@ fun SujianApp() {
         val settingsRepo = SettingsRepository(context)
         val workspaceUC = WorkspaceUseCase(workspaceRepo)
         vm.initialize(workspaceRepo, workspaceUC, settingsRepo, context)
+        if (initialDestination == "settings") {
+            vm.navigateTo(com.xiwei.sujian.ui.compose.navigation.SujianDestination.Settings)
+        }
     }
 
     val windowState = rememberAdaptiveWindowState()
@@ -77,17 +80,15 @@ fun SujianApp() {
         androidx.compose.runtime.CompositionLocalProvider(
             LocalAnimatedTextEditorCoordinator provides coordinator
         ) {
-            Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                Box(modifier = Modifier.fillMaxSize()) {
-                    SujianNavigationSuite(
-                        appState = appState,
-                        modifier = Modifier.padding(innerPadding)
-                    )
-                    AnimatedTextEditorSlot(
-                        coordinator = coordinator,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
+            Box(modifier = Modifier.fillMaxSize()) {
+                SujianNavigationSuite(
+                    appState = appState,
+                    modifier = Modifier.fillMaxSize()
+                )
+                AnimatedTextEditorSlot(
+                    coordinator = coordinator,
+                    modifier = Modifier.fillMaxSize()
+                )
             }
         }
     }
