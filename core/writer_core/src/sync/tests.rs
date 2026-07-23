@@ -25,6 +25,7 @@ mod tests {
     #[cfg(feature = "github-api")]
     use crate::sync::types::SyncStatus;
     use crate::sync::types::SyncTransport;
+    #[cfg(feature = "github-api")]
     use base64::Engine;
     use std::path::Path;
     use tempfile::tempdir;
