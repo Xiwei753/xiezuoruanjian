@@ -2,27 +2,40 @@ package com.xiwei.sujian.editor.v2.coordinator
 
 import android.view.Choreographer
 
-class WindowDisplayFrameClock {
+class WindowDisplayFrameClock(
+    private val poster: FrameCallbackPoster = ChoreographerPoster(Choreographer.getInstance())
+) {
     interface FrameListener {
         fun needsFrame(): Boolean
         fun onFrame(frameTimeNanos: Long)
     }
 
-    private val choreographer = Choreographer.getInstance()
+    interface FrameCallbackPoster {
+        fun postFrameCallback(callback: Choreographer.FrameCallback)
+        fun removeFrameCallback(callback: Choreographer.FrameCallback)
+    }
+
+    class ChoreographerPoster(private val choreographer: Choreographer) : FrameCallbackPoster {
+        override fun postFrameCallback(callback: Choreographer.FrameCallback) {
+            choreographer.postFrameCallback(callback)
+        }
+        override fun removeFrameCallback(callback: Choreographer.FrameCallback) {
+            choreographer.removeFrameCallback(callback)
+        }
+    }
+
     private val listeners = mutableListOf<FrameListener>()
-    private var isTicking: Boolean = false
+    private var callbackPosted: Boolean = false
 
     private val frameCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
-            if (!isTicking) return
+            callbackPosted = false
             val snapshot = listeners.toList()
             for (listener in snapshot) {
                 listener.onFrame(frameTimeNanos)
             }
             if (snapshot.any { it.needsFrame() }) {
-                choreographer.postFrameCallback(this)
-            } else {
-                isTicking = false
+                requestFrame()
             }
         }
     }
@@ -40,15 +53,14 @@ class WindowDisplayFrameClock {
     }
 
     fun requestFrame() {
-        if (!isTicking) {
-            isTicking = true
-        }
-        choreographer.postFrameCallback(frameCallback)
+        if (callbackPosted) return
+        callbackPosted = true
+        poster.postFrameCallback(frameCallback)
     }
 
     fun stop() {
-        isTicking = false
-        choreographer.removeFrameCallback(frameCallback)
+        callbackPosted = false
+        poster.removeFrameCallback(frameCallback)
     }
 
     fun release() {
