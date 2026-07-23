@@ -16,7 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import com.xiwei.sujian.designsystem.icon.SujianIcons
-import androidx.compose.material3.DropdownMenuItem
+import com.xiwei.sujian.designsystem.component.SujianListItem
 import androidx.compose.material3.MaterialTheme
 import com.xiwei.sujian.editor.v2.compose.AnimatedTextField
 import androidx.compose.material3.Text
@@ -215,13 +215,13 @@ private fun ProjectMenuDialog(
             onConfirm = {},
             body = {
                 Column {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(id = R.string.action_rename)) },
-                        onClick = { showRename = true }
+                    SujianListItem(
+                        headline = stringResource(id = R.string.action_rename),
+                        onClick = { showRename = true },
                     )
-                    DropdownMenuItem(
-                        text = { Text(stringResource(id = R.string.action_delete)) },
-                        onClick = onDelete
+                    SujianListItem(
+                        headline = stringResource(id = R.string.action_delete),
+                        onClick = onDelete,
                     )
                 }
             }

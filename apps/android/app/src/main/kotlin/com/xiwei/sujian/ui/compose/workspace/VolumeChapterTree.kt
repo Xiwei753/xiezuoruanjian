@@ -1,24 +1,17 @@
 package com.xiwei.sujian.ui.compose.workspace
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.AlertDialog
 import com.xiwei.sujian.designsystem.icon.SujianIcons
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
-import com.xiwei.sujian.editor.v2.compose.AnimatedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.xiwei.sujian.editor.v2.compose.AnimatedTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -31,6 +24,11 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
+import com.xiwei.sujian.designsystem.component.SujianDialog
+import com.xiwei.sujian.designsystem.component.SujianIconButton
+import com.xiwei.sujian.designsystem.component.SujianListItem
+import com.xiwei.sujian.designsystem.component.SujianDangerButton
+import com.xiwei.sujian.designsystem.component.SujianTextButton
 
 sealed class WorkspaceDialogState {
     data object None : WorkspaceDialogState()
@@ -90,16 +88,20 @@ fun VolumeChapterTree(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onBackToProjects) {
-                Icon(SujianIcons.ArrowBack, contentDescription = stringResource(id = R.string.back_to_project_list))
+                SujianIconButton(
+                    onClick = onBackToProjects,
+                    icon = SujianIcons.ArrowBack,
+                    contentDescription = stringResource(id = R.string.back_to_project_list),
+                )
+                Text(stringResource(id = R.string.volume_chapter_title), style = MaterialTheme.typography.titleMedium)
             }
-            Text(stringResource(id = R.string.volume_chapter_title), style = MaterialTheme.typography.titleMedium)
-            }
-            IconButton(onClick = {
-                dialogState = WorkspaceDialogState.CreateVolume()
-            }) {
-                Icon(SujianIcons.Add, contentDescription = stringResource(id = R.string.action_new_volume_short))
-            }
+            SujianIconButton(
+                onClick = {
+                    dialogState = WorkspaceDialogState.CreateVolume()
+                },
+                icon = SujianIcons.Add,
+                contentDescription = stringResource(id = R.string.action_new_volume_short),
+            )
         }
 
         uiState.projectStats?.let { stats ->
@@ -276,10 +278,17 @@ private fun CreateVolumeDialog(
     onDismiss: () -> Unit
 ) {
     var title by remember { mutableStateOf("") }
-    AlertDialog(
+    SujianDialog(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(id = R.string.action_new_volume_short)) },
-        text = {
+        title = stringResource(id = R.string.action_new_volume_short),
+        confirmText = stringResource(id = R.string.action_create),
+        onConfirm = {
+            if (title.isNotBlank()) onConfirm(title.trim())
+            else onDismiss()
+        },
+        dismissText = stringResource(id = R.string.action_cancel),
+        onDismiss = onDismiss,
+        body = {
             AnimatedTextField(
                 targetId = "volume-title:new",
                 value = title,
@@ -288,15 +297,6 @@ private fun CreateVolumeDialog(
                 label = { Text(stringResource(id = R.string.hint_volume_title_short)) },
                 singleLine = true
             )
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                if (title.isNotBlank()) onConfirm(title.trim())
-                else onDismiss()
-            }) { Text(stringResource(id = R.string.action_create)) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(id = R.string.action_cancel)) }
         }
     )
 }
@@ -308,10 +308,17 @@ private fun CreateChapterDialog(
     onDismiss: () -> Unit
 ) {
     var title by remember { mutableStateOf("") }
-    AlertDialog(
+    SujianDialog(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.create_chapter_in_volume, volumeTitle)) },
-        text = {
+        title = stringResource(R.string.create_chapter_in_volume, volumeTitle),
+        confirmText = stringResource(id = R.string.action_create),
+        onConfirm = {
+            if (title.isNotBlank()) onConfirm(title.trim())
+            else onDismiss()
+        },
+        dismissText = stringResource(id = R.string.action_cancel),
+        onDismiss = onDismiss,
+        body = {
             AnimatedTextField(
                 targetId = "chapter-title:new",
                 value = title,
@@ -320,15 +327,6 @@ private fun CreateChapterDialog(
                 label = { Text(stringResource(id = R.string.hint_chapter_title_short)) },
                 singleLine = true
             )
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                if (title.isNotBlank()) onConfirm(title.trim())
-                else onDismiss()
-            }) { Text(stringResource(id = R.string.action_create)) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(id = R.string.action_cancel)) }
         }
     )
 }
@@ -342,32 +340,30 @@ private fun VolumeActionsDialog(
     onMoveDown: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    AlertDialog(
+    SujianDialog(
         onDismissRequest = onDismiss,
-        title = { Text(volume.title) },
-        text = {
+        title = volume.title,
+        confirmText = "",
+        onConfirm = {},
+        body = {
             Column {
-                androidx.compose.material3.DropdownMenuItem(
-                    text = { Text(stringResource(id = R.string.action_rename)) },
-                    onClick = onRename
+                SujianListItem(
+                    headline = stringResource(id = R.string.action_rename),
+                    onClick = onRename,
                 )
-                androidx.compose.material3.DropdownMenuItem(
-                    text = { Text(stringResource(id = R.string.action_move_up)) },
-                    onClick = onMoveUp
+                SujianListItem(
+                    headline = stringResource(id = R.string.action_move_up),
+                    onClick = onMoveUp,
                 )
-                androidx.compose.material3.DropdownMenuItem(
-                    text = { Text(stringResource(id = R.string.action_move_down)) },
-                    onClick = onMoveDown
+                SujianListItem(
+                    headline = stringResource(id = R.string.action_move_down),
+                    onClick = onMoveDown,
                 )
-                androidx.compose.material3.DropdownMenuItem(
-                    text = { Text(stringResource(id = R.string.action_delete)) },
-                    onClick = onDelete
+                SujianListItem(
+                    headline = stringResource(id = R.string.action_delete),
+                    onClick = onDelete,
                 )
             }
-        },
-        confirmButton = {},
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(id = R.string.action_cancel)) }
         }
     )
 }
@@ -381,32 +377,30 @@ private fun ChapterActionsDialog(
     onMoveDown: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    AlertDialog(
+    SujianDialog(
         onDismissRequest = onDismiss,
-        title = { Text(chapter.title) },
-        text = {
+        title = chapter.title,
+        confirmText = "",
+        onConfirm = {},
+        body = {
             Column {
-                androidx.compose.material3.DropdownMenuItem(
-                    text = { Text(stringResource(id = R.string.action_rename)) },
-                    onClick = onRename
+                SujianListItem(
+                    headline = stringResource(id = R.string.action_rename),
+                    onClick = onRename,
                 )
-                androidx.compose.material3.DropdownMenuItem(
-                    text = { Text(stringResource(id = R.string.action_move_up)) },
-                    onClick = onMoveUp
+                SujianListItem(
+                    headline = stringResource(id = R.string.action_move_up),
+                    onClick = onMoveUp,
                 )
-                androidx.compose.material3.DropdownMenuItem(
-                    text = { Text(stringResource(id = R.string.action_move_down)) },
-                    onClick = onMoveDown
+                SujianListItem(
+                    headline = stringResource(id = R.string.action_move_down),
+                    onClick = onMoveDown,
                 )
-                androidx.compose.material3.DropdownMenuItem(
-                    text = { Text(stringResource(id = R.string.action_delete)) },
-                    onClick = onDelete
+                SujianListItem(
+                    headline = stringResource(id = R.string.action_delete),
+                    onClick = onDelete,
                 )
             }
-        },
-        confirmButton = {},
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(id = R.string.action_cancel)) }
         }
     )
 }
@@ -419,10 +413,17 @@ private fun RenameDialog(
     onDismiss: () -> Unit
 ) {
     var newTitle by remember { mutableStateOf(initialValue) }
-    AlertDialog(
+    SujianDialog(
         onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
+        title = title,
+        confirmText = stringResource(id = R.string.action_ok),
+        onConfirm = {
+            if (newTitle.isNotBlank()) onConfirm(newTitle.trim())
+            onDismiss()
+        },
+        dismissText = stringResource(id = R.string.action_cancel),
+        onDismiss = onDismiss,
+        body = {
             AnimatedTextField(
                 targetId = "rename:$initialValue",
                 value = newTitle,
@@ -431,15 +432,6 @@ private fun RenameDialog(
                 label = { Text(stringResource(id = R.string.hint_new_title)) },
                 singleLine = true
             )
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                if (newTitle.isNotBlank()) onConfirm(newTitle.trim())
-                onDismiss()
-            }) { Text(stringResource(id = R.string.action_ok)) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(id = R.string.action_cancel)) }
         }
     )
 }
@@ -450,15 +442,16 @@ private fun ConfirmDeleteDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    AlertDialog(
+    SujianDialog(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(id = R.string.confirm_delete)) },
-        text = { Text(stringResource(R.string.confirm_delete_message, name)) },
-        confirmButton = {
-            TextButton(onClick = onConfirm) { Text(stringResource(id = R.string.action_delete)) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(id = R.string.action_cancel)) }
+        title = stringResource(id = R.string.confirm_delete),
+        confirmText = stringResource(id = R.string.action_delete),
+        onConfirm = onConfirm,
+        dismissText = stringResource(id = R.string.action_cancel),
+        onDismiss = onDismiss,
+        dangerous = true,
+        body = {
+            Text(stringResource(R.string.confirm_delete_message, name))
         }
     )
 }
@@ -471,36 +464,25 @@ fun VolumeRow(
     onMoreActions: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    ListItem(
-        headlineContent = { Text(volume.title) },
-        leadingContent = {
-            IconButton(onClick = onToggleExpand) {
-                Icon(
-                    SujianIcons.KeyboardArrowRight,
-                    contentDescription = if (volume.isExpanded) stringResource(id = R.string.action_collapse) else stringResource(id = R.string.action_expand),
-                    modifier = Modifier.size(24.dp)
+    SujianListItem(
+        headline = volume.title,
+        leadingIcon = if (volume.isExpanded) SujianIcons.KeyboardArrowDown else SujianIcons.KeyboardArrowRight,
+        onClick = onToggleExpand,
+        trailingContent = {
+            Row {
+                SujianIconButton(
+                    onClick = onCreateChapter,
+                    icon = SujianIcons.Add,
+                    contentDescription = stringResource(id = R.string.action_new_chapter),
+                )
+                SujianIconButton(
+                    onClick = onMoreActions,
+                    icon = SujianIcons.MoreVert,
+                    contentDescription = stringResource(id = R.string.action_more),
                 )
             }
         },
-        trailingContent = {
-            Row {
-                IconButton(onClick = onCreateChapter) {
-                    Icon(
-                        SujianIcons.Add,
-                        contentDescription = stringResource(id = R.string.action_new_chapter),
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-                IconButton(onClick = onMoreActions) {
-                    Icon(
-                        SujianIcons.MoreVert,
-                        contentDescription = stringResource(id = R.string.action_more),
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-            }
-        },
-        modifier = modifier
+        modifier = modifier,
     )
 }
 
@@ -512,25 +494,18 @@ fun ChapterRow(
     onMoreActions: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    ListItem(
-        headlineContent = {
-            Text(
-                chapter.title,
-                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+    SujianListItem(
+        headline = chapter.title,
+        supportingText = if (chapter.wordCount > 0) stringResource(R.string.word_count_format, chapter.wordCount) else null,
+        selected = isSelected,
+        onClick = onSelect,
+        trailingContent = {
+            SujianIconButton(
+                onClick = onMoreActions,
+                icon = SujianIcons.MoreVert,
+                contentDescription = stringResource(id = R.string.action_more),
             )
         },
-        supportingContent = if (chapter.wordCount > 0) {
-            { Text(stringResource(R.string.word_count_format, chapter.wordCount)) }
-        } else null,
-        trailingContent = {
-            IconButton(onClick = onMoreActions) {
-                Icon(
-                    SujianIcons.MoreVert,
-                    contentDescription = stringResource(id = R.string.action_more),
-                    modifier = Modifier.size(24.dp)
-                )
-            }
-        },
-        modifier = modifier.clickable(onClick = onSelect)
+        modifier = modifier,
     )
 }
