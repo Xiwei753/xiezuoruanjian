@@ -50,7 +50,12 @@ impl super::WriterCore {
         let secrets = self.load_sync_secrets().unwrap_or_default();
         let backend_type = crate::sync::resolved_backend_type(config);
         let backend = if let Some(transport) = self.sync_transport.as_ref() {
-            crate::sync::create_sync_backend_with_transport(&backend_type, transport())
+            match transport() {
+                Ok(t) => crate::sync::create_sync_backend_with_transport(&backend_type, t),
+                Err(e) => return Err(crate::Error::Io(std::io::Error::other(
+                    format!("Transport init failed: {} - {}", e.category, e.message)
+                ))),
+            }
         } else {
             crate::sync::create_sync_backend(&backend_type)
         };
@@ -72,7 +77,12 @@ impl super::WriterCore {
         let secrets = self.load_sync_secrets().unwrap_or_default();
         let backend_type = crate::sync::resolved_backend_type(config);
         let backend = if let Some(transport) = self.sync_transport.as_ref() {
-            crate::sync::create_sync_backend_with_transport(&backend_type, transport())
+            match transport() {
+                Ok(t) => crate::sync::create_sync_backend_with_transport(&backend_type, t),
+                Err(e) => return Err(crate::Error::Io(std::io::Error::other(
+                    format!("Transport init failed: {} - {}", e.category, e.message)
+                ))),
+            }
         } else {
             crate::sync::create_sync_backend(&backend_type)
         };

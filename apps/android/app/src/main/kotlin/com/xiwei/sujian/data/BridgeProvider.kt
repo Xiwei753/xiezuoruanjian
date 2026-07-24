@@ -1,6 +1,8 @@
 package com.xiwei.sujian.data
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import java.util.Locale
 import java.util.TimeZone
 
@@ -13,6 +15,7 @@ object BridgeProvider {
             appServiceInstance ?: run {
                 val appContext = context.applicationContext
                 val workspacePath = WorkspaceManager.getWorkspaceDir(appContext).absolutePath
+                val (isConnected, isMetered) = detectNetworkState(appContext)
                 val holder = WriterAppServiceHolder.createFromContext(
                     workspacePath = workspacePath,
                     filesDir = appContext.filesDir.absolutePath,
@@ -22,8 +25,8 @@ object BridgeProvider {
                     appVersion = resolveAppVersion(appContext),
                     locale = Locale.getDefault().toLanguageTag(),
                     timezone = TimeZone.getDefault().id,
-                    isConnected = true,
-                    isMetered = false,
+                    isConnected = isConnected,
+                    isMetered = isMetered,
                 )
                 AppServiceBridge(holder).also { appServiceInstance = it }
             }
@@ -38,8 +41,19 @@ object BridgeProvider {
     fun getSyncBridge(context: Context): SyncBridge = getAppServiceBridge(context).syncBridge
     fun getActionBridge(context: Context): ActionBridge = ActionBridge(getAppServiceBridge(context))
     fun getLayoutPolicyBridge(context: Context): LayoutPolicyBridge = getAppServiceBridge(context).layoutPolicyBridge
-    fun getScreenPolicyBridge(context: Context): ScreenPolicyBridge = ScreenPolicyBridge(getAppServiceBridge(context))
+    fun getScreenPolicyBridge(context: Context): ScreenPolicyBridge = getAppServiceBridge(context).screenPolicyBridge
     fun getAiStatus(context: Context): Boolean = getAppServiceBridge(context).aiAvailable()
+
+    private fun detectNetworkState(context: Context): Pair<Boolean, Boolean> {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return Pair(false, false)
+        val network = cm.activeNetwork ?: return Pair(false, false)
+        val caps = cm.getNetworkCapabilities(network) ?: return Pair(false, false)
+        val isConnected = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        val isMetered = !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+        return Pair(isConnected, isMetered)
+    }
 
     private fun resolveDeviceId(context: Context): String {
         val deviceIdFile = java.io.File(context.noBackupFilesDir, "device_id")

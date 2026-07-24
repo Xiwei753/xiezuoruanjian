@@ -57,10 +57,8 @@ pub fn create_platform_services() -> PlatformServices {
     #[cfg(feature = "github-api")]
     let sync_transport_factory: Option<writer_platform_api::SyncTransportFactory> = {
         let factory: writer_platform_api::SyncTransportFactory =
-            std::sync::Arc::new(|| -> Box<dyn SyncTransport> {
-                let transport = ReqwestSyncTransport::new()
-                    .unwrap_or_else(|e| panic!("Failed to create Linux SyncTransport: {}", e.message));
-                Box::new(transport)
+            std::sync::Arc::new(|| -> Result<Box<dyn SyncTransport>, TransportError> {
+                ReqwestSyncTransport::new().map(|t| Box::new(t) as Box<dyn SyncTransport>)
             });
         Some(factory)
     };
@@ -84,11 +82,15 @@ fn create_secure_storage() -> Option<Box<dyn SecureStorage>> {
         match KeyringSecureStorage::new() {
             Ok(storage) => return Some(Box::new(storage)),
             Err(e) => {
-                eprintln!("Warning: Secret Service unavailable, falling back to file storage: {}", e);
+                eprintln!("Warning: Secret Service unavailable, secure storage disabled: {}", e);
             }
         }
     }
-    Some(Box::new(LinuxFileSecureStorage::new(xdg_config_dir())))
+    #[cfg(not(feature = "secret-service"))]
+    {
+        eprintln!("Warning: Secret Service support not compiled, secure storage disabled");
+    }
+    None
 }
 
 pub fn xdg_config_dir() -> PathBuf {
@@ -160,8 +162,9 @@ pub fn init_default_config_store() {
 }
 
 fn detect_network_state() -> NetworkState {
+    let is_connected = check_network_connectivity();
     NetworkState {
-        is_connected: true,
+        is_connected,
         is_metered: false,
         proxy_host: std::env::var("http_proxy")
             .or_else(|_| std::env::var("HTTP_PROXY"))
@@ -198,6 +201,28 @@ fn detect_network_state() -> NetworkState {
     }
 }
 
+fn check_network_connectivity() -> bool {
+    if let Ok(entries) = std::fs::read_dir("/sys/class/net") {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str == "lo" {
+                continue;
+            }
+            let operstate_path = std::path::Path::new("/sys/class/net")
+                .join(name_str.as_ref())
+                .join("operstate");
+            if let Ok(state) = std::fs::read_to_string(&operstate_path) {
+                let state = state.trim();
+                if state == "up" {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 #[cfg(feature = "secret-service")]
 struct KeyringSecureStorage;
 
@@ -206,8 +231,11 @@ impl KeyringSecureStorage {
     fn new() -> Result<Self, String> {
         let test_entry = keyring::Entry::new("com.xiwei.sujian", "sujian.__availability_check__")
             .map_err(|e| format!("Secret Service unavailable: {}", e))?;
-        let _ = test_entry.get_password();
-        Ok(Self)
+        match test_entry.get_secret() {
+            Ok(_) => Ok(Self),
+            Err(keyring::Error::NoEntry) => Ok(Self),
+            Err(e) => Err(format!("Secret Service unavailable: {}", e)),
+        }
     }
 
     fn entry_for_key(&self, key: &str) -> Result<keyring::Entry, String> {
@@ -222,7 +250,10 @@ impl SecureStorage for KeyringSecureStorage {
         let entry = self.entry_for_key(key)?;
         match entry.get_secret() {
             Ok(secret) => Ok(Some(secret)),
-            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(keyring::Error::NoEntry) => {
+                let migrated = self.migrate_from_plaintext(key)?;
+                Ok(migrated)
+            }
             Err(e) => Err(format!("Failed to get secret: {}", e)),
         }
     }
@@ -235,51 +266,27 @@ impl SecureStorage for KeyringSecureStorage {
 
     fn delete_secret(&self, key: &str) -> Result<(), String> {
         let entry = self.entry_for_key(key)?;
-        entry.delete_credential()
-            .map_err(|e| format!("Failed to delete secret: {}", e))
+        match entry.delete_credential() {
+            Ok(()) => Ok(()),
+            Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(format!("Failed to delete secret: {}", e)),
+        }
     }
 }
 
-struct LinuxFileSecureStorage {
-    storage_dir: PathBuf,
-}
-
-impl LinuxFileSecureStorage {
-    fn new(storage_dir: PathBuf) -> Self {
-        Self { storage_dir }
-    }
-
-    fn secret_path(&self, key: &str) -> PathBuf {
-        self.storage_dir.join("secrets").join(format!("{}.bin", key))
-    }
-}
-
-impl SecureStorage for LinuxFileSecureStorage {
-    fn get_secret(&self, key: &str) -> Result<Option<Vec<u8>>, String> {
-        let path = self.secret_path(key);
-        if !path.exists() {
+#[cfg(feature = "secret-service")]
+impl KeyringSecureStorage {
+    fn migrate_from_plaintext(&self, key: &str) -> Result<Option<Vec<u8>>, String> {
+        let legacy_path = xdg_config_dir().join("secrets").join(format!("{}.bin", key));
+        if !legacy_path.exists() {
             return Ok(None);
         }
-        std::fs::read(&path).map(Some).map_err(|e| e.to_string())
-    }
-
-    fn set_secret(&self, key: &str, value: &[u8]) -> Result<(), String> {
-        let path = self.secret_path(key);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        let tmp_path = path.with_extension("tmp");
-        std::fs::write(&tmp_path, value).map_err(|e| e.to_string())?;
-        std::fs::rename(&tmp_path, &path).map_err(|e| e.to_string())
-    }
-
-    fn delete_secret(&self, key: &str) -> Result<(), String> {
-        let path = self.secret_path(key);
-        if path.exists() {
-            std::fs::remove_file(&path).map_err(|e| e.to_string())
-        } else {
-            Ok(())
-        }
+        let plaintext = std::fs::read(&legacy_path).map_err(|e| e.to_string())?;
+        let entry = self.entry_for_key(key)?;
+        entry.set_secret(&plaintext)
+            .map_err(|e| format!("Migration failed: {}", e))?;
+        let _ = std::fs::remove_file(&legacy_path);
+        Ok(Some(plaintext))
     }
 }
 

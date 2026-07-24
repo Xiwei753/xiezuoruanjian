@@ -49,7 +49,7 @@ pub struct WriterAppService {
     editor_session: Mutex<EditorSession>,
     session_registry: Mutex<crate::editor::TextEditSessionRegistry>,
     platform_init: Option<writer_platform_api::PlatformInit>,
-    network_state: Option<writer_platform_api::NetworkState>,
+    network_state: Mutex<Option<writer_platform_api::NetworkState>>,
 }
 
 impl WriterAppService {
@@ -63,7 +63,7 @@ impl WriterAppService {
             }),
             session_registry: Mutex::new(crate::editor::TextEditSessionRegistry::new()),
             platform_init: None,
-            network_state: None,
+            network_state: Mutex::new(None),
         }
     }
 
@@ -77,7 +77,7 @@ impl WriterAppService {
             }),
             session_registry: Mutex::new(crate::editor::TextEditSessionRegistry::new()),
             platform_init: Some(init),
-            network_state: None,
+            network_state: Mutex::new(None),
         }
     }
 
@@ -106,12 +106,25 @@ impl WriterAppService {
             }),
             session_registry: Mutex::new(crate::editor::TextEditSessionRegistry::new()),
             platform_init: Some(services.init),
-            network_state: services.network_state,
+            network_state: Mutex::new(services.network_state),
         }
     }
 
-    pub fn set_network_state(&mut self, state: writer_platform_api::NetworkState) {
-        self.network_state = Some(state);
+    pub fn update_network_state(&self, is_connected: bool, is_metered: bool, proxy_host: Option<String>, proxy_port: Option<u16>) {
+        if let Ok(mut state) = self.network_state.lock() {
+            *state = Some(writer_platform_api::NetworkState {
+                is_connected,
+                is_metered,
+                proxy_host,
+                proxy_port,
+            });
+        }
+    }
+
+    pub fn set_network_state(&self, state: writer_platform_api::NetworkState) {
+        if let Ok(mut guard) = self.network_state.lock() {
+            *guard = Some(state);
+        }
     }
 
     pub fn set_platform_init(&mut self, init: writer_platform_api::PlatformInit) {
@@ -123,8 +136,12 @@ impl WriterAppService {
         self.api = WriterCoreApi::with_sync_transport(workspace_path, factory);
     }
 
-    pub fn network_state(&self) -> Option<&writer_platform_api::NetworkState> {
-        self.network_state.as_ref()
+    pub fn sync_transport_factory(&self) -> Option<&writer_platform_api::SyncTransportFactory> {
+        self.api.sync_transport.as_ref()
+    }
+
+    pub fn network_state(&self) -> Option<writer_platform_api::NetworkState> {
+        self.network_state.lock().ok().and_then(|g| g.clone())
     }
 
     pub fn platform_init(&self) -> Option<&writer_platform_api::PlatformInit> {

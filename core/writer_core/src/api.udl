@@ -1130,6 +1130,8 @@ interface WriterAppService {
 
     boolean ai_available();
 
+    void update_network_state(boolean is_connected, boolean is_metered, string? proxy_host, u16? proxy_port);
+
     // ── Palette Catalog ──
 
     [Throws=WriterError]

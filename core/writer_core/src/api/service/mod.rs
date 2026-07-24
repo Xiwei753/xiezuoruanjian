@@ -25,7 +25,7 @@ pub type ApiResult<T> = Result<T, WriterError>;
 /// 调用链：平台端 → WriterAppService（Mutex 保护）→ WriterCoreApi → WriterCore（无状态 Facade）→ 子模块
 pub struct WriterCoreApi {
     pub(crate) workspace_path: PathBuf,
-    pub(crate) sync_transport: Option<Arc<dyn Fn() -> Box<dyn writer_platform_api::SyncTransport> + Send + Sync>>,
+    pub(crate) sync_transport: Option<Arc<dyn Fn() -> Result<Box<dyn writer_platform_api::SyncTransport>, writer_platform_api::TransportError> + Send + Sync>>,
     pub(crate) secure_storage: Option<Arc<dyn writer_platform_api::SecureStorage>>,
     secrets_override: std::sync::Mutex<Option<crate::sync::SyncSecrets>>,
 }
@@ -44,7 +44,7 @@ impl WriterCoreApi {
 
     pub fn with_sync_transport<P: AsRef<Path>>(
         workspace_path: P,
-        transport_factory: Arc<dyn Fn() -> Box<dyn writer_platform_api::SyncTransport> + Send + Sync>,
+        transport_factory: Arc<dyn Fn() -> Result<Box<dyn writer_platform_api::SyncTransport>, writer_platform_api::TransportError> + Send + Sync>,
     ) -> Self {
         Self {
             workspace_path: workspace_path.as_ref().to_path_buf(),
@@ -56,7 +56,7 @@ impl WriterCoreApi {
 
     pub fn with_platform_services<P: AsRef<Path>>(
         workspace_path: P,
-        sync_transport_factory: Option<Arc<dyn Fn() -> Box<dyn writer_platform_api::SyncTransport> + Send + Sync>>,
+        sync_transport_factory: Option<Arc<dyn Fn() -> Result<Box<dyn writer_platform_api::SyncTransport>, writer_platform_api::TransportError> + Send + Sync>>,
         secure_storage: Option<Arc<dyn writer_platform_api::SecureStorage>>,
     ) -> Self {
         Self {
