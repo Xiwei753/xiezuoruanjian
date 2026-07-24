@@ -63,8 +63,25 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
+        val requestedAndroidAbis = providers
+            .gradleProperty("sujian.android.abis")
+            .orElse("arm64-v8a")
+            .map { value ->
+                value.split(',')
+                    .map(String::trim)
+                    .filter(String::isNotEmpty)
+                    .distinct()
+            }
+            .get()
+
+        val validAbis = setOf("arm64-v8a", "x86_64")
+        val invalidAbis = requestedAndroidAbis.filter { it !in validAbis }
+        require(invalidAbis.isEmpty()) {
+            "Invalid Android ABI(s): $invalidAbis. Only ${validAbis.joinToString(", ")} are allowed."
+        }
+
         ndk {
-            abiFilters.addAll(listOf("arm64-v8a"))
+            abiFilters.addAll(requestedAndroidAbis)
         }
     }
 
@@ -78,6 +95,17 @@ android {
             applicationIdSuffix = ".ai"
             versionNameSuffix = "-ai"
             dimension = "ai"
+        }
+    }
+
+    val nativeDir = providers
+        .gradleProperty("sujian.android.nativeDir")
+        .orElse(layout.buildDirectory.dir("generated/writer-native").map { it.asFile.absolutePath })
+        .get()
+
+    sourceSets {
+        getByName("main") {
+            jniLibs.srcDirs(nativeDir)
         }
     }
 
@@ -112,18 +140,34 @@ android {
         jvmTarget = "17"
     }
 
+    val requestedAbisForNaming = providers
+        .gradleProperty("sujian.android.abis")
+        .orElse("arm64-v8a")
+        .map { value ->
+            value.split(',')
+                .map(String::trim)
+                .filter(String::isNotEmpty)
+                .distinct()
+                .sorted()
+        }
+
     applicationVariants.all {
         val variant = this
+        val abis = requestedAbisForNaming.get()
+        val abiSuffix = when {
+            abis.size > 1 -> "universal"
+            abis.size == 1 -> abis.first()
+            else -> "all"
+        }
         variant.outputs.all {
             val output = this
             if (output is com.android.build.gradle.api.ApkVariantOutput) {
-                val abi = output.filters.find { it.filterType == "ABI" }?.identifier ?: "all"
                 variant.packageApplicationProvider.configure {
                     doLast {
                         val defaultApk = output.outputFile
                         if (defaultApk.exists()) {
                             val flavorName = variant.productFlavors.firstOrNull()?.name ?: variant.name
-                            val customName = "sujian-android-${flavorName}-${appVersionName}-${appVersionCode}-${gitCommitSha}-${abi}.apk"
+                            val customName = "sujian-android-${flavorName}-${appVersionName}-${appVersionCode}-${gitCommitSha}-${abiSuffix}.apk"
                             val destFile = File(defaultApk.parentFile, customName)
                             defaultApk.copyTo(destFile, overwrite = true)
                             println("Successfully copied custom-named APK to ${destFile.absolutePath}")

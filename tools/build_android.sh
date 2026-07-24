@@ -1,156 +1,186 @@
 #!/bin/bash
-# =============================================================================
-# Android 构建脚本
-# =============================================================================
-#
-# 本脚本用于构建 Android 应用的完整流程，包括：
-# 1. 编译 Rust UniFFI native library（使用 cargo-ndk）
-# 2. 构建 Android APK（使用 Gradle）
-# 3. 验证 native library 是否正确打包到 APK 中
-#
-# 使用方法：
-#   ./build_android.sh [--ai|--no-ai]
-#
-# 参数说明：
-#   --ai    : 预留 AI 构建变体，当前功能未开放
-#   --no-ai : 禁用 AI 功能（默认选项）
-#
-# 环境要求：
-#   - Rust 工具链（rustup, cargo）
-#   - cargo-ndk（可通过 cargo install cargo-ndk 安装）
-#   - Android NDK（需要设置 ANDROID_NDK_HOME 环境变量）
-#   - Android SDK
-#   - Java JDK
-#
-# 构建产物：
-#   - Rust UniFFI native library: apps/android/app/src/main/jniLibs/arm64-v8a/libuniffi_writer_core.so
-#     (由 platform/rust/android crate 编译产生 libwriter_platform_android.so 后重命名)
-#   - Android APK: apps/android/app/build/outputs/apk/*/debug/sujian-android-*.apk
-#
-# 注意事项：
-#   - 本脚本只支持 arm64-v8a 架构（官方只支持 64 位 ARM 设备）
-#   - 构建过程中会自动清理旧的 native library 文件
-#   - 如果构建失败，请检查环境变量和依赖是否正确安装
+set -euo pipefail
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 WORKSPACE_ROOT="$( cd "$DIR/.." && pwd )"
-LIB_DIR="$WORKSPACE_ROOT/apps/android/app/src/main/jniLibs/arm64-v8a"
 
-# 解析命令行参数
+VALID_ABIS=("arm64-v8a" "x86_64")
+DEFAULT_ABI="arm64-v8a"
+
 RUST_FEATURES=""
 GRADLE_FLAVOR="noAiDebug"
 APK_VARIANT="noAiDebug"
+REQUESTED_ABI=""
 
-for arg in "$@"; do
-    case $arg in
+usage() {
+    echo "用法: $0 [--ai|--no-ai] [--abi <abi>]"
+    echo ""
+    echo "参数:"
+    echo "  --ai       启用 AI 构建变体"
+    echo "  --no-ai    禁用 AI 功能（默认）"
+    echo "  --abi <abi>  目标 ABI: arm64-v8a, x86_64, universal"
+    echo "               默认: arm64-v8a"
+    echo "               universal = arm64-v8a + x86_64"
+    echo ""
+    echo "示例:"
+    echo "  $0 --no-ai --abi arm64-v8a"
+    echo "  $0 --no-ai --abi x86_64"
+    echo "  $0 --no-ai --abi universal"
+    echo "  $0 --ai --abi arm64-v8a"
+    exit 1
+}
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
         --ai)
-            RUST_FEATURES="--features ai"
+            RUST_FEATURES="ai"
             GRADLE_FLAVOR="aiDebug"
             APK_VARIANT="aiDebug"
+            shift
             ;;
         --no-ai)
             RUST_FEATURES=""
             GRADLE_FLAVOR="noAiDebug"
             APK_VARIANT="noAiDebug"
+            shift
+            ;;
+        --abi)
+            REQUESTED_ABI="$2"
+            shift 2
             ;;
         *)
-            echo "未知参数: $arg"
-            echo "使用方法: $0 [--ai|--no-ai]"
-            exit 1
+            echo "未知参数: $1"
+            usage
             ;;
     esac
 done
 
-echo "开始构建素笺写作 Android UniFFI native library..."
-echo "  Rust 特性: ${RUST_FEATURES:-<无>}"
-echo "  Gradle 构建类型: $GRADLE_FLAVOR"
-
-# 检查 cargo-ndk 是否已安装
-if ! command -v cargo-ndk &> /dev/null; then
-    echo "错误: cargo-ndk 未安装。"
-    echo "要构建 Rust native library，请通过以下命令安装: cargo install cargo-ndk"
-    echo "确保 ANDROID_NDK_HOME 环境变量已正确设置。"
-    echo ""
-    echo "中止构建以防止缺少 libuniffi_writer_core.so 文件。"
-    exit 1
+if [ -z "$REQUESTED_ABI" ]; then
+    REQUESTED_ABI="$DEFAULT_ABI"
 fi
 
-echo "清理旧的 Android native library 文件..."
-rm -f "$LIB_DIR/libwriter_core_jni.so"
-rm -f "$LIB_DIR/libwriter_core.so"
-rm -f "$LIB_DIR/libwriter_uniffi.so"
-rm -f "$LIB_DIR/libwriter_platform_android.so"
-rm -f "$LIB_DIR/libuniffi_writer_core.so"
-
-echo "使用 cargo-ndk 编译 arm64-v8a 架构..."
-cd "$WORKSPACE_ROOT/platform/rust/android"
-
-# shellcheck disable=SC2086
-cargo ndk -t arm64-v8a -o "$WORKSPACE_ROOT/apps/android/app/src/main/jniLibs" build --release $RUST_FEATURES
-
-if [ $? -eq 0 ]; then
-    if [ ! -f "$LIB_DIR/libwriter_platform_android.so" ]; then
-        echo "错误: 找不到 libwriter_platform_android.so。"
+ABI_LIST=""
+case "$REQUESTED_ABI" in
+    arm64-v8a)
+        ABI_LIST="arm64-v8a"
+        ;;
+    x86_64)
+        ABI_LIST="x86_64"
+        ;;
+    universal)
+        ABI_LIST="arm64-v8a,x86_64"
+        ;;
+    *)
+        echo "错误: 不支持的 ABI '$REQUESTED_ABI'，只允许: arm64-v8a, x86_64, universal"
         exit 1
-    fi
+        ;;
+esac
 
-    mv "$LIB_DIR/libwriter_platform_android.so" "$LIB_DIR/libuniffi_writer_core.so"
-
-    if [ ! -f "$LIB_DIR/libuniffi_writer_core.so" ]; then
-        echo "错误: libwriter_platform_android.so 重命名为 libuniffi_writer_core.so 失败。"
-        exit 1
-    fi
-
-    echo "Rust UniFFI native library 构建成功并已复制到 jniLibs 目录。"
+VARIANT_NAME=""
+if [ -n "$RUST_FEATURES" ]; then
+    VARIANT_NAME="aiDebug"
 else
-    echo "Rust native library 构建失败。"
+    VARIANT_NAME="noAiDebug"
+fi
+
+GENERATED_DIR="$WORKSPACE_ROOT/apps/android/app/build/generated/writer-native/$VARIANT_NAME"
+
+echo "素笺写作 Android 构建"
+echo "  变体: $VARIANT_NAME"
+echo "  ABI: $ABI_LIST"
+echo "  Rust features: ${RUST_FEATURES:-<无>}"
+echo "  产物目录: $GENERATED_DIR"
+
+if ! command -v cargo-ndk &> /dev/null; then
+    echo "错误: cargo-ndk 未安装。请运行: cargo install cargo-ndk"
     exit 1
 fi
 
-echo "生成 UniFFI Kotlin 绑定 (library mode)..."
+echo ""
+echo "=== 步骤 1: 构建 Rust 原生库 ==="
+FEATURE_ARG=""
+if [ -n "$RUST_FEATURES" ]; then
+    FEATURE_ARG="--features $RUST_FEATURES"
+fi
+
+"$DIR/android/build_native.sh" \
+    --variant "$VARIANT_NAME" \
+    --abis "$ABI_LIST" \
+    --output "$GENERATED_DIR" \
+    ${FEATURE_ARG:+$FEATURE_ARG}
+
+echo ""
+echo "=== 步骤 2: 生成 UniFFI Kotlin 绑定 ==="
+UNIFFI_SO_ABI=""
+IFS=',' read -ra ABI_ARRAY <<< "$ABI_LIST"
+for abi in "${ABI_ARRAY[@]}"; do
+    abi_trimmed=$(echo "$abi" | xargs)
+    if [ "$abi_trimmed" = "arm64-v8a" ]; then
+        UNIFFI_SO_ABI="$abi_trimmed"
+        break
+    fi
+done
+if [ -z "$UNIFFI_SO_ABI" ]; then
+    UNIFFI_SO_ABI="${ABI_ARRAY[0]}"
+    UNIFFI_SO_ABI=$(echo "$UNIFFI_SO_ABI" | xargs)
+fi
+
+UNIFFI_SO_PATH="$GENERATED_DIR/$UNIFFI_SO_ABI/libuniffi_writer_core.so"
+if [ ! -f "$UNIFFI_SO_PATH" ]; then
+    echo "错误: UniFFI 绑定所需的 .so 文件不存在: $UNIFFI_SO_PATH"
+    exit 1
+fi
+
+UNIFFI_OUT_DIR="apps/android/app/src/main/kotlin/com/xiwei/sujian/uniffi"
+rm -rf "$WORKSPACE_ROOT/$UNIFFI_OUT_DIR/uniffi/writer_core"
+
 cd "$WORKSPACE_ROOT"
-UNIFFI_OUT_DIR="apps/android/app/src/main/kotlin/com/xiwei/sujian/uniffi/uniffi/writer_core"
-rm -rf "$UNIFFI_OUT_DIR"
 cargo run --bin uniffi-bindgen -p writer_uniffi -- generate \
-    --library "$LIB_DIR/libuniffi_writer_core.so" \
+    --library "$UNIFFI_SO_PATH" \
     --language kotlin \
-    --out-dir apps/android/app/src/main/kotlin/com/xiwei/sujian/uniffi \
+    --out-dir "$UNIFFI_OUT_DIR" \
     --no-format
 
 if [ $? -ne 0 ]; then
-    echo "错误: UniFFI Kotlin 绑定生成失败。"
+    echo "错误: UniFFI Kotlin 绑定生成失败"
     exit 1
 fi
 echo "UniFFI Kotlin 绑定生成成功。"
 
+echo ""
+echo "=== 步骤 3: 构建 Android APK ==="
 cd "$WORKSPACE_ROOT/apps/android"
 
-echo "开始构建 Android 应用 ($GRADLE_FLAVOR)..."
-./gradlew "assemble${GRADLE_FLAVOR^}"
+GRADLE_ABI_PROP="$ABI_LIST"
 
-if [ $? -eq 0 ]; then
-    echo "Android 应用构建成功。"
+echo "Gradle 构建: assemble${GRADLE_FLAVOR^}"
+echo "  ABI property: $GRADLE_ABI_PROP"
+echo "  Native dir: $GENERATED_DIR"
 
-    # 查找生成的 APK 文件
-    APK_DIR="app/build/outputs/apk/${APK_VARIANT%Debug}/debug"
-    APK_PATH=$(find "$APK_DIR" -name "sujian-android-*.apk" -type f 2>/dev/null | head -1)
+./gradlew "assemble${GRADLE_FLAVOR^}" \
+    -Psujian.android.abis="$GRADLE_ABI_PROP" \
+    -Psujian.android.nativeDir="$GENERATED_DIR"
 
-    if [ -z "$APK_PATH" ]; then
-        # 如果找不到自定义名称的 APK，使用默认名称
-        APK_PATH="app/build/outputs/apk/${APK_VARIANT%Debug}/debug/app-${APK_VARIANT}.apk"
-    fi
-
-    echo "APK 文件位置: apps/android/$APK_PATH"
-
-    # 验证 native library 是否正确打包到 APK 中
-    echo "验证 APK 中的 native .so 文件..."
-    if unzip -l "$APK_PATH" | grep -q "lib/arm64-v8a/libuniffi_writer_core.so"; then
-        echo "验证通过: 在 arm64-v8a 目录中找到 libuniffi_writer_core.so"
-    else
-        echo "错误: 在 APK 的 arm64-v8a 目录中未找到 libuniffi_writer_core.so！"
-        exit 1
-    fi
-else
-    echo "Android 应用构建失败。"
+if [ $? -ne 0 ]; then
+    echo "错误: Android APK 构建失败"
     exit 1
 fi
+
+echo ""
+echo "=== 步骤 4: 验证 APK ==="
+APK_DIR="app/build/outputs/apk/${APK_VARIANT%Debug}/debug"
+APK_PATH=$(find "$APK_DIR" -name "sujian-android-*.apk" -type f 2>/dev/null | head -1)
+
+if [ -z "$APK_PATH" ]; then
+    APK_PATH="app/build/outputs/apk/${APK_VARIANT%Debug}/debug/app-${APK_VARIANT}.apk"
+fi
+
+if [ ! -f "$APK_PATH" ]; then
+    echo "警告: 未找到 APK 文件，跳过验证"
+else
+    echo "APK 文件: apps/android/$APK_PATH"
+    "$DIR/android/verify_apk_abis.sh" "$APK_PATH" "$ABI_LIST"
+fi
+
+echo ""
+echo "构建完成 ✓"

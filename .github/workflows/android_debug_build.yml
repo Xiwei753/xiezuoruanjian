@@ -10,8 +10,13 @@ permissions:
   contents: read
 
 jobs:
-  build-no-ai:
+  build:
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        flavor: [no-ai, ai]
+        abi: [arm64-v8a, x86_64]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -25,7 +30,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android
+          targets: aarch64-linux-android,x86_64-linux-android
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk
@@ -38,30 +43,34 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x apps/android/gradlew
 
-      - name: Make build script executable
-        run: chmod +x tools/build_android.sh
+      - name: Make build scripts executable
+        run: chmod +x tools/build_android.sh tools/android/build_native.sh tools/android/verify_apk_abis.sh
 
       - name: Test Rust core
-        run: cargo test -p writer_core
+        run: cargo test -p writer_core ${{ matrix.flavor == 'ai' && '--features ai' || '' }}
 
-      - name: Build Rust native library for host (for library-mode binding generation)
+      - name: Build Rust native library and generate UniFFI bindings
         run: |
           export ANDROID_NDK_HOME=$ANDROID_NDK_ROOT
           cd platform/rust/android
-          cargo ndk -t arm64-v8a -o ../../../apps/android/app/src/main/jniLibs build --release
-          LIB_DIR="../../../apps/android/app/src/main/jniLibs/arm64-v8a"
+          if [ "${{ matrix.flavor }}" = "ai" ]; then
+            cargo ndk -t ${{ matrix.abi }} -o ../../../apps/android/app/build/generated/writer-native/${{ matrix.flavor }}Debug build --release --features ai
+          else
+            cargo ndk -t ${{ matrix.abi }} -o ../../../apps/android/app/build/generated/writer-native/${{ matrix.flavor }}Debug build --release
+          fi
+          LIB_DIR="../../../apps/android/app/build/generated/writer-native/${{ matrix.flavor }}Debug/${{ matrix.abi }}"
           mv "$LIB_DIR/libwriter_platform_android.so" "$LIB_DIR/libuniffi_writer_core.so"
 
       - name: Generate UniFFI Kotlin bindings (library mode)
-        run: cargo run --bin uniffi-bindgen -p writer_uniffi -- generate --library apps/android/app/src/main/jniLibs/arm64-v8a/libuniffi_writer_core.so --language kotlin --out-dir apps/android/app/src/main/kotlin/com/xiwei/sujian/uniffi --no-format
+        run: cargo run --bin uniffi-bindgen -p writer_uniffi -- generate --library apps/android/app/build/generated/writer-native/${{ matrix.flavor }}Debug/${{ matrix.abi }}/libuniffi_writer_core.so --language kotlin --out-dir apps/android/app/src/main/kotlin/com/xiwei/sujian/uniffi --no-format
 
-      - name: Test Android no-ai Debug unit tests
+      - name: Test Android ${{ matrix.flavor }} Debug unit tests
         working-directory: apps/android
-        run: ./gradlew testNoAiDebugUnitTest
+        run: ./gradlew test${{ matrix.flavor == 'no-ai' && 'NoAi' || 'Ai' }}DebugUnitTest
 
-      - name: Compile Android no-ai Debug Kotlin
+      - name: Compile Android ${{ matrix.flavor }} Debug Kotlin
         working-directory: apps/android
-        run: ./gradlew :app:compileNoAiDebugKotlin
+        run: ./gradlew :app:compile${{ matrix.flavor == 'no-ai' && 'NoAi' || 'Ai' }}DebugKotlin
 
       - name: Decode Android Keystore
         env:
@@ -82,7 +91,7 @@ jobs:
           fi
           echo "Keystore decoded successfully."
 
-      - name: Build Android no-ai Debug APK
+      - name: Build Android ${{ matrix.flavor }} Debug APK (${{ matrix.abi }})
         env:
           WRITER_ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/keystore.jks
           WRITER_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -90,98 +99,20 @@ jobs:
           WRITER_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           export ANDROID_NDK_HOME=$ANDROID_NDK_ROOT
-          ./tools/build_android.sh --no-ai
+          ./tools/build_android.sh --${{ matrix.flavor }} --abi ${{ matrix.abi }}
 
-      - name: Upload no-ai Artifact
+      - name: Verify APK ABI
+        run: |
+          FLAVOR_DIR="${{ matrix.flavor == 'no-ai' && 'noAi' || 'ai' }}"
+          APK_PATH=$(find apps/android/app/build/outputs/apk/$FLAVOR_DIR/debug -name "sujian-android-*.apk" -type f 2>/dev/null | head -1)
+          if [ -z "$APK_PATH" ]; then
+            echo "Warning: APK not found for ABI verification"
+          else
+            ./tools/android/verify_apk_abis.sh "$APK_PATH" "${{ matrix.abi }}"
+          fi
+
+      - name: Upload ${{ matrix.flavor }} ${{ matrix.abi }} Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sujian-android-no-ai-debug
-          path: apps/android/app/build/outputs/apk/noAi/debug/sujian-android-noAi-*.apk
-
-  build-ai:
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'zulu'
-          java-version: '17'
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android
-
-      - name: Install cargo-ndk
-        run: cargo install cargo-ndk
-
-      - name: Setup Android NDK
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r25c
-
-      - name: Make gradlew executable
-        run: chmod +x apps/android/gradlew
-
-      - name: Make build script executable
-        run: chmod +x tools/build_android.sh
-
-      - name: Test Rust core
-        run: cargo test -p writer_core --features ai
-
-      - name: Build Rust native library for host (for library-mode binding generation)
-        run: |
-          export ANDROID_NDK_HOME=$ANDROID_NDK_ROOT
-          cd platform/rust/android
-          cargo ndk -t arm64-v8a -o ../../../apps/android/app/src/main/jniLibs build --release --features ai
-          LIB_DIR="../../../apps/android/app/src/main/jniLibs/arm64-v8a"
-          mv "$LIB_DIR/libwriter_platform_android.so" "$LIB_DIR/libuniffi_writer_core.so"
-
-      - name: Generate UniFFI Kotlin bindings (library mode)
-        run: cargo run --bin uniffi-bindgen -p writer_uniffi -- generate --library apps/android/app/src/main/jniLibs/arm64-v8a/libuniffi_writer_core.so --language kotlin --out-dir apps/android/app/src/main/kotlin/com/xiwei/sujian/uniffi --no-format
-
-      - name: Test Android ai Debug unit tests
-        working-directory: apps/android
-        run: ./gradlew testAiDebugUnitTest
-
-      - name: Compile Android ai Debug Kotlin
-        working-directory: apps/android
-        run: ./gradlew :app:compileAiDebugKotlin
-
-      - name: Decode Android Keystore
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          if [ -z "$ANDROID_KEYSTORE_BASE64" ] || [ -z "$ANDROID_KEYSTORE_PASSWORD" ] || [ -z "$ANDROID_KEY_ALIAS" ] || [ -z "$ANDROID_KEY_PASSWORD" ]; then
-            echo "::error::Android signing secrets are incomplete. Refusing to build with runner debug signing."
-            exit 1
-          fi
-          echo "Decoding Android keystore from secret..."
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/keystore.jks"
-          if [ ! -s "$RUNNER_TEMP/keystore.jks" ]; then
-            echo "::error::Keystore decode failed: output file is empty or missing. Check ANDROID_KEYSTORE_BASE64 secret."
-            exit 1
-          fi
-          echo "Keystore decoded successfully."
-
-      - name: Build Android ai Debug APK
-        env:
-          WRITER_ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/keystore.jks
-          WRITER_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          WRITER_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          WRITER_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          export ANDROID_NDK_HOME=$ANDROID_NDK_ROOT
-          ./tools/build_android.sh --ai
-
-      - name: Upload ai Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: sujian-android-ai-debug
-          path: apps/android/app/build/outputs/apk/ai/debug/sujian-android-ai-*.apk
+          name: sujian-android-${{ matrix.flavor }}-${{ matrix.abi }}-debug
+          path: apps/android/app/build/outputs/apk/${{ matrix.flavor == 'no-ai' && 'noAi' || 'ai' }}/debug/sujian-android-*.apk
