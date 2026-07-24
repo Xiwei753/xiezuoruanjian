@@ -593,7 +593,8 @@ class AnimatedTextEditorCoordinator(
                     themeColors.cursor,
                     themeColors.selection,
                     themeColors.composing,
-                    themeColors.background
+                    themeColors.background,
+                    themeColors.searchHighlight
                 )
             }
         }

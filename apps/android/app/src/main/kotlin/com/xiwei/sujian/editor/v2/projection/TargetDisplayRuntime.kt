@@ -224,8 +224,8 @@ class TargetDisplayRuntime(
         invalidateDisplayState()
     }
 
-    fun setThemeColors(textColor: Int, cursorColor: Int, selectionColor: Int, preeditColor: Int, bgColor: Int) {
-        renderRuntime.setThemeColors(textColor, cursorColor, selectionColor, preeditColor, bgColor)
+    fun setThemeColors(textColor: Int, cursorColor: Int, selectionColor: Int, preeditColor: Int, bgColor: Int, searchHighlightColor: Int = android.graphics.Color.argb(40, 255, 200, 0)) {
+        renderRuntime.setThemeColors(textColor, cursorColor, selectionColor, preeditColor, bgColor, searchHighlightColor)
         invalidateDisplayState()
     }
 

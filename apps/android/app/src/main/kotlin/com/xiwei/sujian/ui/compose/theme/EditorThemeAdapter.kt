@@ -18,6 +18,7 @@ data class EditorThemeColors(
     val border: Int,
     val helperText: Int,
     val preeditText: Int,
+    val searchHighlight: Int,
 )
 
 object EditorThemeAdapter {
@@ -44,6 +45,7 @@ object EditorThemeAdapter {
                 border = borderColor.toArgb(),
                 helperText = helperTextColor.toArgb(),
                 preeditText = preeditTextColor.toArgb(),
+                searchHighlight = (colorScheme.tertiary.copy(alpha = 0.25f)).toArgb(),
             )
         }
     }

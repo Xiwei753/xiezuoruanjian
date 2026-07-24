@@ -309,12 +309,13 @@ class AndroidTextRenderer(
 
     fun getBackgroundPaint(): Paint = backgroundPaint
 
-    fun setThemeColors(textColor: Int, cursorColor: Int, selectionColor: Int, preeditColor: Int, bgColor: Int = Color.WHITE) {
+    fun setThemeColors(textColor: Int, cursorColor: Int, selectionColor: Int, preeditColor: Int, bgColor: Int = Color.WHITE, searchHighlightColor: Int = Color.argb(40, 255, 200, 0)) {
         textPaint.color = textColor
         cursorPaint.color = cursorColor
         selectionPaint.color = selectionColor
         preeditUnderlinePaint.color = preeditColor
         backgroundColor = bgColor
         backgroundPaint.color = bgColor
+        searchHighlightPaint.color = searchHighlightColor
     }
 }

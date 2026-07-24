@@ -484,7 +484,8 @@ class SujianEditorView @JvmOverloads constructor(
             cursorColor = colors.cursor,
             selectionColor = colors.selection,
             preeditColor = colors.composing,
-            bgColor = colors.background
+            bgColor = colors.background,
+            searchHighlightColor = colors.searchHighlight
         )
         invalidate()
     }
