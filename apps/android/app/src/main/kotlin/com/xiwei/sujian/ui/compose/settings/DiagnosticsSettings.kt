@@ -28,6 +28,9 @@ fun DiagnosticsSettings(
     val context = LocalContext.current
     val settings = state.settings
     val dims = LocalSujianDimensions.current
+    val exportFailedText = stringResource(id = R.string.diagnostics_export_failed)
+    val clearedText = stringResource(id = R.string.diagnostics_cleared)
+    val deviceInfoCopiedText = stringResource(id = R.string.diagnostics_device_info_copied)
 
     androidx.compose.foundation.layout.Column(
         modifier = modifier.padding(dims.space16),
@@ -67,7 +70,7 @@ fun DiagnosticsSettings(
                     if (zipFile != null) {
                         DiagnosticsExporter.shareZip(context, zipFile)
                     } else {
-                        Toast.makeText(context, context.getString(R.string.diagnostics_export_failed), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, exportFailedText, Toast.LENGTH_SHORT).show()
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
@@ -78,7 +81,7 @@ fun DiagnosticsSettings(
                 onClick = {
                     DiagnosticsLogger.clearLogs()
                     EditorEventRingBuffer.clear()
-                    Toast.makeText(context, context.getString(R.string.diagnostics_cleared), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, clearedText, Toast.LENGTH_SHORT).show()
                 },
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -90,7 +93,7 @@ fun DiagnosticsSettings(
                     val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                     @Suppress("HardcodedText")
                     clipboard.setPrimaryClip(android.content.ClipData.newPlainText("device_info", deviceInfoJson))
-                    Toast.makeText(context, context.getString(R.string.diagnostics_device_info_copied), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, deviceInfoCopiedText, Toast.LENGTH_SHORT).show()
                 },
                 modifier = Modifier.fillMaxWidth(),
             )

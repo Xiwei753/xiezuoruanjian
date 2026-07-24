@@ -597,6 +597,7 @@ fun SettingsRoute(
         vm.initialize(SettingsRepository(context))
     }
 
+    @Suppress("LocalContextGetResourceValueCall")
     LaunchedEffect(Unit) {
         vm.saveFailureEvents.collect { errorResId ->
             snackbarHostState.showSnackbar(context.getString(errorResId))

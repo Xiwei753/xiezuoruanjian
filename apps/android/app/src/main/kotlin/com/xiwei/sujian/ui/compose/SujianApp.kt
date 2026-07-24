@@ -76,7 +76,7 @@ fun SujianApp(
         vm.initialize(workspaceRepo, workspaceUC, settingsRepo, context)
     }
 
-    val activity = LocalContext.current as? androidx.activity.ComponentActivity
+    val activity = androidx.activity.compose.LocalActivity.current as? androidx.activity.ComponentActivity
     var foldingFeatures by remember { mutableStateOf<List<androidx.window.layout.FoldingFeature>>(emptyList()) }
 
     if (activity != null) {
