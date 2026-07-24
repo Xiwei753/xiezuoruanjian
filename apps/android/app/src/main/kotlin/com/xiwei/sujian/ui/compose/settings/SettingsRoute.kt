@@ -112,6 +112,12 @@ private data class PendingCommands(
 
 enum class SyncCommandType { DRY_RUN, TEST_CONNECTION, PERFORM_SYNC }
 
+private data class SyncCommandIoResult(
+    val configSaved: Boolean,
+    val secretsSaved: Boolean,
+    val result: Pair<String, Boolean>,
+)
+
 class SettingsViewModel : ViewModel() {
     private var settingsRepo: SettingsRepository? = null
     private var initialized = false
@@ -431,22 +437,20 @@ class SettingsViewModel : ViewModel() {
                 withContext(Dispatchers.IO) {
                     val saveResult = repo.saveSyncConfig(config)
                     if (saveResult is SettingsSaveResult.Failed) {
-                        return@withContext "save_config_failed" to false
+                        return@withContext SyncCommandIoResult(false, false, "save_config_failed" to false)
                     }
-                    syncConfigPersistedRevision = syncConfigRevision
 
                     val secretsResult = repo.saveSyncSecrets(secrets)
                     if (secretsResult is SettingsSaveResult.Failed) {
-                        return@withContext "save_secrets_failed" to false
+                        return@withContext SyncCommandIoResult(true, false, "save_secrets_failed" to false)
                     }
-                    syncSecretsPersistedRevision = syncSecretsRevision
 
                     val capability = repo.getSyncCapability()
                     if (!capability.canRun) {
-                        return@withContext (capability.blockReasonCode ?: "sync_not_ready") to false
+                        return@withContext SyncCommandIoResult(true, true, (capability.blockReasonCode ?: "sync_not_ready") to false)
                     }
 
-                    when (type) {
+                    val syncResult = when (type) {
                         SyncCommandType.DRY_RUN -> {
                             when (val r = repo.performSyncDryRun(config)) {
                                 is BridgeResult.Success -> {
@@ -496,6 +500,7 @@ class SettingsViewModel : ViewModel() {
                             }
                         }
                     }
+                    SyncCommandIoResult(true, true, syncResult)
                 }
             }
 
@@ -504,7 +509,10 @@ class SettingsViewModel : ViewModel() {
                     _uiState.update { it.copy(syncCommandResult = "sync_already_running", lastCommandType = type) }
                 }
                 is ExclusiveResult.Success -> {
-                    val (message, success) = exclusiveResult.value
+                    val ioResult = exclusiveResult.value
+                    if (ioResult.configSaved) syncConfigPersistedRevision = syncConfigRevision
+                    if (ioResult.secretsSaved) syncSecretsPersistedRevision = syncSecretsRevision
+                    val (message, success) = ioResult.result
                     _uiState.update { current ->
                         if (success) {
                             current.successStateField().copy(syncCommandResult = message)
