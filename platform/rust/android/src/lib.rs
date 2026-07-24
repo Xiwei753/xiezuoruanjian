@@ -139,7 +139,7 @@ impl AndroidEncryptedSecureStorage {
                 std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create key dir: {}", e))?;
             }
             let tmp_path = key_path.with_extension("tmp");
-            std::fs::write(&tmp_path, &key).map_err(|e| format!("Failed to write encryption key: {}", e))?;
+            std::fs::write(&tmp_path, key).map_err(|e| format!("Failed to write encryption key: {}", e))?;
             std::fs::rename(&tmp_path, &key_path).map_err(|e| format!("Failed to rename encryption key: {}", e))?;
             key
         };
