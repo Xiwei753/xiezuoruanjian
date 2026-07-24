@@ -177,7 +177,12 @@ open class SettingsRepository(context: Context) {
 
     fun saveSyncSecrets(secrets: SyncSecrets): SettingsSaveResult {
         return when (val result = syncBridge.saveSyncSecrets(secrets)) {
-            is BridgeResult.Success -> SettingsSaveResult.Success
+            is BridgeResult.Success -> {
+                if (secrets.token != null) {
+                    settingsBridge.dismissMigrationWarning()
+                }
+                SettingsSaveResult.Success
+            }
             is BridgeResult.Error -> {
                 warn("Failed to save sync secrets: ${result.message}")
                 SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_SECRETS, 0L)))
@@ -219,6 +224,10 @@ open class SettingsRepository(context: Context) {
 
     fun getSecureStorageWarning(): String? {
         return settingsBridge.getSecureStorageWarning()
+    }
+
+    fun dismissMigrationWarning() {
+        settingsBridge.dismissMigrationWarning()
     }
 
     /**

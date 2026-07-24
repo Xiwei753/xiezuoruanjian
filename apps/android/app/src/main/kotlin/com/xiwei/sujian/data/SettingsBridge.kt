@@ -104,7 +104,10 @@ class SettingsBridge internal constructor(private val holder: WriterAppServiceHo
     }
 
     fun getSecureStorageWarning(): String? {
-        val error = holder.secureStorageError ?: return null
-        return if (error.startsWith("migration_failed:")) error else null
+        return holder.secureStorageWarning
+    }
+
+    fun dismissMigrationWarning() {
+        holder.dismissMigrationWarning()
     }
 }

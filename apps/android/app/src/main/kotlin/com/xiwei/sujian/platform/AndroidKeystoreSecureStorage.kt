@@ -33,6 +33,7 @@ class AndroidKeystoreSecureStorage(
 ) : SecureStorageProvider {
 
     private val secretsDir = File(context.noBackupFilesDir, SECRETS_DIR)
+    private val migrationMarker = File(context.noBackupFilesDir, ".keystore_migration_done")
 
     init {
         if (!secretsDir.exists()) {
@@ -161,6 +162,16 @@ class AndroidKeystoreSecureStorage(
         private set
 
     private fun migrateOldEncKey() {
+        if (migrationMarker.exists()) {
+            val oldKeyFile = File(context.noBackupFilesDir, OLD_KEY_FILE)
+            val oldSecretsDir = File(context.noBackupFilesDir, OLD_SECRETS_DIR)
+            if (oldKeyFile.exists() || (oldSecretsDir.exists() && oldSecretsDir.isDirectory)) {
+                oldKeyFile.delete()
+                oldSecretsDir.deleteRecursively()
+                DiagnosticsLogger.i(TAG, "Migration already completed, cleaned up leftover old files")
+            }
+            return
+        }
         migrationError = migrateOldEncKeyInternal()
         if (migrationError != null) {
             DiagnosticsLogger.e(TAG, "Keystore migration failed (Keystore still usable for new secrets): $migrationError")
@@ -174,6 +185,7 @@ class AndroidKeystoreSecureStorage(
         val oldSecretsDir = File(context.noBackupFilesDir, OLD_SECRETS_DIR)
         if (!oldSecretsDir.exists() || !oldSecretsDir.isDirectory) {
             oldKeyFile.delete()
+            migrationMarker.createNewFile()
             DiagnosticsLogger.i(TAG, "Migrated old .enc_key: no old secrets dir, deleted key file")
             return null
         }
@@ -182,6 +194,7 @@ class AndroidKeystoreSecureStorage(
         if (encFiles.isEmpty()) {
             oldSecretsDir.deleteRecursively()
             oldKeyFile.delete()
+            migrationMarker.createNewFile()
             DiagnosticsLogger.i(TAG, "Migrated old .enc_key: no .enc files, cleaned up")
             return null
         }
@@ -200,12 +213,18 @@ class AndroidKeystoreSecureStorage(
 
         val oldAesKey = SecretKeySpec(oldKeyData, "AES")
 
-        val setSecretNames = mutableListOf<String>()
+        val existingValues = mutableMapOf<String, ByteArray?>()
+        val decryptedOldValues = mutableMapOf<String, ByteArray>()
         var failedCount = 0
 
         for (encFile in encFiles) {
+            val secretName = encFile.nameWithoutExtension
             try {
-                val secretName = encFile.nameWithoutExtension
+                existingValues[secretName] = try { getSecret(secretName) } catch (_: Exception) { null }
+            } catch (_: Exception) {
+                existingValues[secretName] = null
+            }
+            try {
                 val encData = encFile.readBytes()
                 if (encData.size < GCM_IV_LENGTH) {
                     DiagnosticsLogger.e(TAG, "Old .enc file ${encFile.name} too short, skipping")
@@ -219,37 +238,69 @@ class AndroidKeystoreSecureStorage(
                 val spec = GCMParameterSpec(GCM_TAG_LENGTH, nonce)
                 cipher.init(Cipher.DECRYPT_MODE, oldAesKey, spec)
                 val plaintext = cipher.doFinal(ciphertext)
-
-                setSecret(secretName, plaintext)
-                setSecretNames.add(secretName)
-
-                val readBack = getSecret(secretName)
-                if (readBack == null || !readBack.contentEquals(plaintext)) {
-                    DiagnosticsLogger.e(TAG, "Migration verification failed for secret $secretName: read-back mismatch")
-                    failedCount++
-                    continue
-                }
+                decryptedOldValues[secretName] = plaintext
             } catch (e: Exception) {
-                DiagnosticsLogger.e(TAG, "Failed to migrate secret ${encFile.name}", e)
+                DiagnosticsLogger.e(TAG, "Failed to decrypt old secret ${encFile.name}", e)
                 failedCount++
             }
         }
 
-        if (failedCount == 0) {
+        if (failedCount > 0 && decryptedOldValues.isEmpty()) {
+            DiagnosticsLogger.e(TAG, "All old secrets failed to decrypt, cannot proceed with migration")
+            return "Migration failed: $failedCount secrets could not be decrypted"
+        }
+
+        val migratedNames = mutableListOf<String>()
+        val skippedExisting = mutableListOf<String>()
+        var commitFailedCount = 0
+
+        for ((secretName, plaintext) in decryptedOldValues) {
+            try {
+                val existing = existingValues[secretName]
+                if (existing != null) {
+                    skippedExisting.add(secretName)
+                    DiagnosticsLogger.i(TAG, "Skipping migration of secret $secretName: already exists in new Keystore")
+                    continue
+                }
+
+                setSecret(secretName, plaintext)
+                migratedNames.add(secretName)
+
+                val readBack = getSecret(secretName)
+                if (readBack == null || !readBack.contentEquals(plaintext)) {
+                    DiagnosticsLogger.e(TAG, "Migration verification failed for secret $secretName: read-back mismatch")
+                    commitFailedCount++
+                    continue
+                }
+            } catch (e: Exception) {
+                DiagnosticsLogger.e(TAG, "Failed to commit migrated secret $secretName", e)
+                commitFailedCount++
+            }
+        }
+
+        val totalFailures = failedCount + commitFailedCount
+        if (totalFailures == 0) {
             oldSecretsDir.deleteRecursively()
             oldKeyFile.delete()
-            DiagnosticsLogger.i(TAG, "Migrated ${setSecretNames.size} old secrets to Keystore successfully")
+            migrationMarker.createNewFile()
+            DiagnosticsLogger.i(TAG, "Migrated ${migratedNames.size} old secrets to Keystore successfully, ${skippedExisting.size} already existed")
             return null
         } else {
-            for (name in setSecretNames) {
+            for (name in migratedNames) {
                 try {
-                    deleteSecret(name)
+                    val existing = existingValues[name]
+                    if (existing != null) {
+                        setSecret(name, existing)
+                        DiagnosticsLogger.i(TAG, "Restored original value for secret $name during rollback")
+                    } else {
+                        deleteSecret(name)
+                    }
                 } catch (e: Exception) {
                     DiagnosticsLogger.e(TAG, "Failed to roll back migrated secret $name", e)
                 }
             }
-            DiagnosticsLogger.e(TAG, "Migration failed: ${setSecretNames.size} rolled back, $failedCount failed. All old data preserved.")
-            return "Migration failed: $failedCount secrets could not be migrated, ${setSecretNames.size} rolled back"
+            DiagnosticsLogger.e(TAG, "Migration failed: $totalFailures total failures, ${migratedNames.size} rolled back, ${skippedExisting.size} preserved. All old data preserved.")
+            return "Migration failed: $totalFailures secrets could not be migrated, ${migratedNames.size} rolled back"
         }
     }
 }

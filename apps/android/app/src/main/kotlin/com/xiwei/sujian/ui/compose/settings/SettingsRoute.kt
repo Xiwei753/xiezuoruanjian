@@ -23,6 +23,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
+import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.data.SaveField
 import com.xiwei.sujian.data.SaveFailure
 import com.xiwei.sujian.data.SettingsRepository
@@ -43,6 +44,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.parcelize.Parcelize
 
+enum class SyncCommandState { IDLE, RUNNING, SUCCESS, FAILURE }
+
 data class SettingsUiState(
     val settings: LocalSettings = LocalSettings(),
     val fontSize: Float = 16f,
@@ -56,6 +59,10 @@ data class SettingsUiState(
     val workspacePath: String = "",
     val versionInfo: String = "",
     val saveErrorResId: Int? = null,
+    val dryRunState: SyncCommandState = SyncCommandState.IDLE,
+    val testConnectionState: SyncCommandState = SyncCommandState.IDLE,
+    val performSyncState: SyncCommandState = SyncCommandState.IDLE,
+    val syncCommandResult: String? = null,
 )
 
 sealed interface SettingsIntent {
@@ -66,6 +73,9 @@ sealed interface SettingsIntent {
     data object Refresh : SettingsIntent
     data object CaptureDynamicColor : SettingsIntent
     data class DeletePalette(val deviceId: String, val fingerprint: String) : SettingsIntent
+    data object DryRun : SettingsIntent
+    data object TestConnection : SettingsIntent
+    data object PerformSync : SettingsIntent
 }
 
 sealed interface SettingsSaveCommand {
@@ -96,6 +106,8 @@ private data class PendingCommands(
     val syncConfig: SettingsSaveCommand.SyncConfig? = null,
     val syncSecrets: SettingsSaveCommand.SyncSecrets? = null,
 )
+
+private enum class SyncCommandType { DRY_RUN, TEST_CONNECTION, PERFORM_SYNC }
 
 class SettingsViewModel : ViewModel() {
     private var settingsRepo: SettingsRepository? = null
@@ -296,24 +308,28 @@ class SettingsViewModel : ViewModel() {
                 if (localRevision != failure.revision) return
                 val settings = withContext(Dispatchers.IO) { repo.getLocalSettings() }
                 if (localRevision != failure.revision) return
+                localRevision = localPersistedRevision
                 _uiState.update { it.copy(settings = settings) }
             }
             SaveField.FONT_SIZE -> {
                 if (fontSizeRevision != failure.revision) return
                 val fontSize = withContext(Dispatchers.IO) { repo.getEffectiveFontSize() }
                 if (fontSizeRevision != failure.revision) return
+                fontSizeRevision = fontSizePersistedRevision
                 _uiState.update { it.copy(fontSize = fontSize) }
             }
             SaveField.SYNC_CONFIG -> {
                 if (syncConfigRevision != failure.revision) return
                 val config = withContext(Dispatchers.IO) { repo.loadSyncConfig() }
                 if (syncConfigRevision != failure.revision) return
+                syncConfigRevision = syncConfigPersistedRevision
                 _uiState.update { it.copy(syncConfig = config) }
             }
             SaveField.SYNC_SECRETS -> {
                 if (syncSecretsRevision != failure.revision) return
                 val secrets = withContext(Dispatchers.IO) { repo.loadSyncSecrets() }
                 if (syncSecretsRevision != failure.revision) return
+                syncSecretsRevision = syncSecretsPersistedRevision
                 _uiState.update { it.copy(syncSecrets = secrets) }
             }
         }
@@ -362,6 +378,129 @@ class SettingsViewModel : ViewModel() {
                     _uiState.update { it.copy(paletteRecords = records) }
                 }
             }
+            is SettingsIntent.DryRun -> executeSyncCommand(SyncCommandType.DRY_RUN)
+            is SettingsIntent.TestConnection -> executeSyncCommand(SyncCommandType.TEST_CONNECTION)
+            is SettingsIntent.PerformSync -> executeSyncCommand(SyncCommandType.PERFORM_SYNC)
+        }
+    }
+
+    private fun executeSyncCommand(type: SyncCommandType) {
+        val repo = settingsRepo ?: return
+        val config = _uiState.value.syncConfig
+        val secrets = _uiState.value.syncSecrets
+        val canRun = _uiState.value.syncCapability.canRun
+        if (!canRun) return
+
+        val runningStateField: SettingsUiState.() -> SettingsUiState
+        val successStateField: SettingsUiState.() -> SettingsUiState
+        val failureStateField: SettingsUiState.() -> SettingsUiState
+
+        when (type) {
+            SyncCommandType.DRY_RUN -> {
+                runningStateField = { copy(dryRunState = SyncCommandState.RUNNING, syncCommandResult = null) }
+                successStateField = { copy(dryRunState = SyncCommandState.SUCCESS) }
+                failureStateField = { copy(dryRunState = SyncCommandState.FAILURE) }
+            }
+            SyncCommandType.TEST_CONNECTION -> {
+                runningStateField = { copy(testConnectionState = SyncCommandState.RUNNING, syncCommandResult = null) }
+                successStateField = { copy(testConnectionState = SyncCommandState.SUCCESS) }
+                failureStateField = { copy(testConnectionState = SyncCommandState.FAILURE) }
+            }
+            SyncCommandType.PERFORM_SYNC -> {
+                runningStateField = { copy(performSyncState = SyncCommandState.RUNNING, syncCommandResult = null) }
+                successStateField = { copy(performSyncState = SyncCommandState.SUCCESS) }
+                failureStateField = { copy(performSyncState = SyncCommandState.FAILURE) }
+            }
+        }
+
+        _uiState.update { it.runningStateField() }
+
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                when (type) {
+                    SyncCommandType.DRY_RUN -> {
+                        val saveResult = repo.saveSyncConfig(config)
+                        if (saveResult is SettingsSaveResult.Failed) {
+                            return@withContext "save_config_failed" to false
+                        }
+                        val secretsResult = repo.saveSyncSecrets(secrets)
+                        if (secretsResult is SettingsSaveResult.Failed) {
+                            return@withContext "save_secrets_failed" to false
+                        }
+                        when (val r = repo.performSyncDryRun(config)) {
+                            is BridgeResult.Success -> {
+                                val plan = r.data
+                                val msg = buildString {
+                                    append("↑${plan.filesToUpload.size} ↓${plan.filesToDownload.size}")
+                                    if (plan.filesToDeleteRemote.isNotEmpty()) append(" 远端删${plan.filesToDeleteRemote.size}")
+                                    if (plan.filesToDeleteLocal.isNotEmpty()) append(" 本地删${plan.filesToDeleteLocal.size}")
+                                    if (plan.conflicts.isNotEmpty()) append(" ⚠冲突${plan.conflicts.size}")
+                                }
+                                msg to true
+                            }
+                            is BridgeResult.Error -> (r.message ?: "dry_run_error") to false
+                            BridgeResult.NotLoaded -> "core_not_loaded" to false
+                        }
+                    }
+                    SyncCommandType.TEST_CONNECTION -> {
+                        val saveResult = repo.saveSyncConfig(config)
+                        if (saveResult is SettingsSaveResult.Failed) {
+                            return@withContext "save_config_failed" to false
+                        }
+                        val secretsResult = repo.saveSyncSecrets(secrets)
+                        if (secretsResult is SettingsSaveResult.Failed) {
+                            return@withContext "save_secrets_failed" to false
+                        }
+                        when (val r = repo.performSyncDiagnostics(config)) {
+                            is BridgeResult.Success -> {
+                                val diag = r.data
+                                val msg = buildString {
+                                    append(if (diag.success) "✓" else "✗")
+                                    append(" 网络:${if (diag.networkOk) "✓" else "✗"}")
+                                    append(" 认证:${if (diag.authOk) "✓" else "✗"}")
+                                    append(" 仓库:${if (diag.repoOk) "✓" else "✗"}")
+                                    append(" 分支:${if (diag.branchOk) "✓" else "✗"}")
+                                    if (!diag.success && diag.rawError != null) append(" 错误:${diag.rawError}")
+                                }
+                                msg to diag.success
+                            }
+                            is BridgeResult.Error -> (r.message ?: "diagnostics_error") to false
+                            BridgeResult.NotLoaded -> "core_not_loaded" to false
+                        }
+                    }
+                    SyncCommandType.PERFORM_SYNC -> {
+                        val saveResult = repo.saveSyncConfig(config)
+                        if (saveResult is SettingsSaveResult.Failed) {
+                            return@withContext "save_config_failed" to false
+                        }
+                        val secretsResult = repo.saveSyncSecrets(secrets)
+                        if (secretsResult is SettingsSaveResult.Failed) {
+                            return@withContext "save_secrets_failed" to false
+                        }
+                        when (val r = repo.performSync(config)) {
+                            is BridgeResult.Success -> {
+                                val sync = r.data
+                                val msg = buildString {
+                                    append("↑${sync.uploadedFiles.size} ↓${sync.downloadedFiles.size}")
+                                    if (sync.error != null) append(" 错误:${sync.error}")
+                                }
+                                msg to (sync.error == null)
+                            }
+                            is BridgeResult.Error -> (r.message ?: "sync_error") to false
+                            BridgeResult.NotLoaded -> "core_not_loaded" to false
+                        }
+                    }
+                }
+            }
+
+            _uiState.update { current ->
+                val (message, success) = result
+                if (success) {
+                    current.successStateField().copy(syncCommandResult = message)
+                } else {
+                    current.failureStateField().copy(syncCommandResult = message)
+                }
+            }
         }
     }
 
@@ -391,6 +530,10 @@ class SettingsViewModel : ViewModel() {
                     paletteRecords = paletteRecords,
                     aiAvailable = aiAvailable,
                     workspacePath = workspacePath,
+                    dryRunState = current.dryRunState,
+                    testConnectionState = current.testConnectionState,
+                    performSyncState = current.performSyncState,
+                    syncCommandResult = current.syncCommandResult,
                 )
             }
         }

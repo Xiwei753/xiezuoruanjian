@@ -26,6 +26,20 @@ class WriterAppServiceHolder(
         }
     }
 
+    @Volatile
+    private var _migrationWarningDismissed = false
+
+    val secureStorageWarning: String?
+        get() {
+            val error = secureStorageError ?: return null
+            if (_migrationWarningDismissed) return null
+            return if (error.startsWith("migration_failed:")) error else null
+        }
+
+    fun dismissMigrationWarning() {
+        _migrationWarningDismissed = true
+    }
+
     companion object {
         private const val TAG = "WriterAppServiceHolder"
 
