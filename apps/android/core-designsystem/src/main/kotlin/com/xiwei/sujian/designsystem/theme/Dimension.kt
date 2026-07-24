@@ -29,4 +29,4 @@ data class SujianDimensions(
     val iconSizeLarge: Dp = 36.dp,
 )
 
-internal val LocalSujianDimensions = staticCompositionLocalOf { SujianDimensions() }
+val LocalSujianDimensions = staticCompositionLocalOf { SujianDimensions() }

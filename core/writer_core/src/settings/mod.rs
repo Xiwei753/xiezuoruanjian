@@ -428,9 +428,31 @@ pub struct ThemeColorScheme {
     pub outline_variant: String,
     #[serde(default)]
     pub scrim: String,
+    #[serde(default)]
+    pub primary_fixed: String,
+    #[serde(default)]
+    pub primary_fixed_dim: String,
+    #[serde(default)]
+    pub on_primary_fixed: String,
+    #[serde(default)]
+    pub on_primary_fixed_variant: String,
+    #[serde(default)]
+    pub secondary_fixed: String,
+    #[serde(default)]
+    pub secondary_fixed_dim: String,
+    #[serde(default)]
+    pub on_secondary_fixed: String,
+    #[serde(default)]
+    pub on_secondary_fixed_variant: String,
+    #[serde(default)]
+    pub tertiary_fixed: String,
+    #[serde(default)]
+    pub tertiary_fixed_dim: String,
+    #[serde(default)]
+    pub on_tertiary_fixed: String,
+    #[serde(default)]
+    pub on_tertiary_fixed_variant: String,
 }
-
-/// Immutable theme palette record stored in the palette catalog.
 /// Each record is a complete snapshot of a Material 3 theme from one device.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -745,6 +767,18 @@ pub fn legacy_palette_to_record(palette: &ThemePalette) -> ThemePaletteRecord {
         outline: palette.light_outline.clone(),
         outline_variant: palette.light_outline_variant.clone(),
         scrim: String::new(),
+        primary_fixed: String::new(),
+        primary_fixed_dim: String::new(),
+        on_primary_fixed: String::new(),
+        on_primary_fixed_variant: String::new(),
+        secondary_fixed: String::new(),
+        secondary_fixed_dim: String::new(),
+        on_secondary_fixed: String::new(),
+        on_secondary_fixed_variant: String::new(),
+        tertiary_fixed: String::new(),
+        tertiary_fixed_dim: String::new(),
+        on_tertiary_fixed: String::new(),
+        on_tertiary_fixed_variant: String::new(),
     };
     let dark = ThemeColorScheme {
         primary: palette.dark_primary.clone(),
@@ -783,6 +817,18 @@ pub fn legacy_palette_to_record(palette: &ThemePalette) -> ThemePaletteRecord {
         outline: palette.dark_outline.clone(),
         outline_variant: palette.dark_outline_variant.clone(),
         scrim: String::new(),
+        primary_fixed: String::new(),
+        primary_fixed_dim: String::new(),
+        on_primary_fixed: String::new(),
+        on_primary_fixed_variant: String::new(),
+        secondary_fixed: String::new(),
+        secondary_fixed_dim: String::new(),
+        on_secondary_fixed: String::new(),
+        on_secondary_fixed_variant: String::new(),
+        tertiary_fixed: String::new(),
+        tertiary_fixed_dim: String::new(),
+        on_tertiary_fixed: String::new(),
+        on_tertiary_fixed_variant: String::new(),
     };
     let fingerprint = compute_palette_fingerprint(&light, &dark);
     let device_id = if palette.device_id.is_empty() {
@@ -886,6 +932,18 @@ pub fn list_builtin_themes() -> Vec<BuiltinTheme> {
             outline: "#71787D".to_string(),
             outline_variant: "#C1C7CE".to_string(),
             scrim: "#000000".to_string(),
+            primary_fixed: "#C9E6FF".to_string(),
+            primary_fixed_dim: "#A5CCF0".to_string(),
+            on_primary_fixed: "#001E2F".to_string(),
+            on_primary_fixed_variant: "#004B6E".to_string(),
+            secondary_fixed: "#D3E5F5".to_string(),
+            secondary_fixed_dim: "#B7C9D8".to_string(),
+            on_secondary_fixed: "#0C1D29".to_string(),
+            on_secondary_fixed_variant: "#384956".to_string(),
+            tertiary_fixed: "#EBDDFF".to_string(),
+            tertiary_fixed_dim: "#CFC0E7".to_string(),
+            on_tertiary_fixed: "#201634".to_string(),
+            on_tertiary_fixed_variant: "#4D4462".to_string(),
         },
         dark_scheme: ThemeColorScheme {
             primary: "#87CEFF".to_string(),
@@ -924,6 +982,18 @@ pub fn list_builtin_themes() -> Vec<BuiltinTheme> {
             outline: "#8B9198".to_string(),
             outline_variant: "#41484D".to_string(),
             scrim: "#000000".to_string(),
+            primary_fixed: "#C9E6FF".to_string(),
+            primary_fixed_dim: "#87CEFF".to_string(),
+            on_primary_fixed: "#001E2F".to_string(),
+            on_primary_fixed_variant: "#004B6E".to_string(),
+            secondary_fixed: "#D3E5F5".to_string(),
+            secondary_fixed_dim: "#B7C9D8".to_string(),
+            on_secondary_fixed: "#0C1D29".to_string(),
+            on_secondary_fixed_variant: "#384956".to_string(),
+            tertiary_fixed: "#EBDDFF".to_string(),
+            tertiary_fixed_dim: "#CFC0E7".to_string(),
+            on_tertiary_fixed: "#201634".to_string(),
+            on_tertiary_fixed_variant: "#4D4462".to_string(),
         },
     }]
 }

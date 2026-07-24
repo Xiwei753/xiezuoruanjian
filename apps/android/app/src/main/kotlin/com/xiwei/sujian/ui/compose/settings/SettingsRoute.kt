@@ -26,6 +26,7 @@ import com.xiwei.sujian.designsystem.component.SujianListItem
 import com.xiwei.sujian.designsystem.layout.SujianListDetailScaffold
 import com.xiwei.sujian.model.LocalSettings
 import com.xiwei.sujian.ui.compose.navigation.SettingsSection
+import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -72,38 +73,53 @@ class SettingsViewModel : ViewModel() {
                 val repo = settingsRepo ?: return
                 val current = _uiState.value.settings
                 val updated = intent.transform(current)
-                repo.saveLocalSettings(updated)
-                com.xiwei.sujian.ui.compose.theme.ThemeStore.reload()
-                _uiState.value = _uiState.value.copy(settings = updated)
+                viewModelScope.launch {
+                    withContext(Dispatchers.IO) {
+                        repo.saveLocalSettings(updated)
+                        com.xiwei.sujian.ui.compose.theme.ThemeStore.reload()
+                    }
+                    _uiState.value = _uiState.value.copy(settings = updated)
+                }
             }
             is SettingsIntent.UpdateFontSize -> {
                 val repo = settingsRepo ?: return
-                repo.setFontSize(intent.fontSize)
-                _uiState.value = _uiState.value.copy(fontSize = intent.fontSize)
+                val fontSize = intent.fontSize
+                viewModelScope.launch {
+                    withContext(Dispatchers.IO) { repo.setFontSize(fontSize) }
+                    _uiState.value = _uiState.value.copy(fontSize = fontSize)
+                }
             }
             is SettingsIntent.UpdateSyncConfig -> {
                 val repo = settingsRepo ?: return
-                repo.saveSyncConfig(intent.config)
-                _uiState.value = _uiState.value.copy(syncConfig = intent.config)
+                val config = intent.config
+                viewModelScope.launch {
+                    withContext(Dispatchers.IO) { repo.saveSyncConfig(config) }
+                    _uiState.value = _uiState.value.copy(syncConfig = config)
+                }
             }
             is SettingsIntent.UpdateSyncSecrets -> {
                 val repo = settingsRepo ?: return
-                repo.saveSyncSecrets(intent.secrets)
-                _uiState.value = _uiState.value.copy(syncSecrets = intent.secrets)
+                val secrets = intent.secrets
+                viewModelScope.launch {
+                    withContext(Dispatchers.IO) { repo.saveSyncSecrets(secrets) }
+                    _uiState.value = _uiState.value.copy(syncSecrets = secrets)
+                }
             }
             is SettingsIntent.Refresh -> refresh()
             is SettingsIntent.CaptureDynamicColor -> {
                 val repo = settingsRepo ?: return
-                _uiState.value = _uiState.value.copy(
-                    paletteRecords = repo.listPaletteRecords()
-                )
+                viewModelScope.launch {
+                    val records = withContext(Dispatchers.IO) { repo.listPaletteRecords() }
+                    _uiState.value = _uiState.value.copy(paletteRecords = records)
+                }
             }
             is SettingsIntent.DeletePalette -> {
                 val repo = settingsRepo ?: return
-                repo.deletePaletteRecord(intent.deviceId, intent.fingerprint)
-                _uiState.value = _uiState.value.copy(
-                    paletteRecords = repo.listPaletteRecords()
-                )
+                viewModelScope.launch {
+                    withContext(Dispatchers.IO) { repo.deletePaletteRecord(intent.deviceId, intent.fingerprint) }
+                    val records = withContext(Dispatchers.IO) { repo.listPaletteRecords() }
+                    _uiState.value = _uiState.value.copy(paletteRecords = records)
+                }
             }
         }
     }
@@ -194,10 +210,11 @@ fun SettingsListPane(
     modifier: Modifier = Modifier,
     selectedSection: SettingsSection? = null,
 ) {
+    val dims = LocalSujianDimensions.current
     LazyColumn(
         modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        contentPadding = PaddingValues(dims.space16),
+        verticalArrangement = Arrangement.spacedBy(dims.space4),
     ) {
         items(settingsCategories) { category ->
             SujianListItem(

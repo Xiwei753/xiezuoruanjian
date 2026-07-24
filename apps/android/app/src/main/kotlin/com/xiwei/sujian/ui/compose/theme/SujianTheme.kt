@@ -56,6 +56,18 @@ private fun schemeFromRecord(
         surfaceContainerHighest = hexToColor(scheme.surfaceContainerHighest),
         surfaceContainerLow = hexToColor(scheme.surfaceContainerLow),
         surfaceContainerLowest = hexToColor(scheme.surfaceContainerLowest),
+        primaryFixed = hexToColor(scheme.primaryFixed),
+        primaryFixedDim = hexToColor(scheme.primaryFixedDim),
+        onPrimaryFixed = hexToColor(scheme.onPrimaryFixed),
+        onPrimaryFixedVariant = hexToColor(scheme.onPrimaryFixedVariant),
+        secondaryFixed = hexToColor(scheme.secondaryFixed),
+        secondaryFixedDim = hexToColor(scheme.secondaryFixedDim),
+        onSecondaryFixed = hexToColor(scheme.onSecondaryFixed),
+        onSecondaryFixedVariant = hexToColor(scheme.onSecondaryFixedVariant),
+        tertiaryFixed = hexToColor(scheme.tertiaryFixed),
+        tertiaryFixedDim = hexToColor(scheme.tertiaryFixedDim),
+        onTertiaryFixed = hexToColor(scheme.onTertiaryFixed),
+        onTertiaryFixedVariant = hexToColor(scheme.onTertiaryFixedVariant),
     )
 }
 
@@ -102,6 +114,18 @@ private fun schemeFromBuiltin(
         surfaceContainerHighest = hexToColor(scheme.surfaceContainerHighest),
         surfaceContainerLow = hexToColor(scheme.surfaceContainerLow),
         surfaceContainerLowest = hexToColor(scheme.surfaceContainerLowest),
+        primaryFixed = hexToColor(scheme.primaryFixed),
+        primaryFixedDim = hexToColor(scheme.primaryFixedDim),
+        onPrimaryFixed = hexToColor(scheme.onPrimaryFixed),
+        onPrimaryFixedVariant = hexToColor(scheme.onPrimaryFixedVariant),
+        secondaryFixed = hexToColor(scheme.secondaryFixed),
+        secondaryFixedDim = hexToColor(scheme.secondaryFixedDim),
+        onSecondaryFixed = hexToColor(scheme.onSecondaryFixed),
+        onSecondaryFixedVariant = hexToColor(scheme.onSecondaryFixedVariant),
+        tertiaryFixed = hexToColor(scheme.tertiaryFixed),
+        tertiaryFixedDim = hexToColor(scheme.tertiaryFixedDim),
+        onTertiaryFixed = hexToColor(scheme.onTertiaryFixed),
+        onTertiaryFixedVariant = hexToColor(scheme.onTertiaryFixedVariant),
     )
 }
 

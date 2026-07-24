@@ -10,11 +10,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.R
 import com.xiwei.sujian.designsystem.component.SujianOutlinedButton
 import com.xiwei.sujian.designsystem.component.SujianSection
 import com.xiwei.sujian.designsystem.component.SujianSwitchRow
+import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.diagnostics.DiagnosticsExporter
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.diagnostics.EditorEventRingBuffer
@@ -27,10 +27,11 @@ fun DiagnosticsSettings(
 ) {
     val context = LocalContext.current
     val settings = state.settings
+    val dims = LocalSujianDimensions.current
 
     androidx.compose.foundation.layout.Column(
-        modifier = modifier.padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        modifier = modifier.padding(dims.space16),
+        verticalArrangement = Arrangement.spacedBy(dims.space16),
     ) {
         SujianSection(title = stringResource(id = R.string.pref_category_diagnostics)) {
             SujianSwitchRow(
@@ -47,7 +48,7 @@ fun DiagnosticsSettings(
                     onIntent(SettingsIntent.UpdateLocal { s })
                 },
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(dims.space8))
             SujianSwitchRow(
                 title = stringResource(id = R.string.pref_diagnostics_verbose),
                 checked = settings.diagnosticsVerbose,
@@ -57,7 +58,7 @@ fun DiagnosticsSettings(
                 },
                 enabled = settings.diagnosticsEnabled,
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(dims.space8))
             SujianOutlinedButton(
                 text = stringResource(id = R.string.btn_export_diagnostics),
                 onClick = {
@@ -71,7 +72,7 @@ fun DiagnosticsSettings(
                 },
                 modifier = Modifier.fillMaxWidth(),
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(dims.space8))
             SujianOutlinedButton(
                 text = stringResource(id = R.string.btn_clear_logs),
                 onClick = {
@@ -81,7 +82,7 @@ fun DiagnosticsSettings(
                 },
                 modifier = Modifier.fillMaxWidth(),
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(dims.space8))
             SujianOutlinedButton(
                 text = stringResource(id = R.string.btn_copy_device_info),
                 onClick = {

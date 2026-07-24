@@ -90,12 +90,17 @@ open class CapabilityProvider(private val context: Context) {
     private fun Configuration.toPointerKinds(): Set<PointerKind> {
         val kinds = mutableSetOf(PointerKind.Touch)
         if (keyboard != Configuration.KEYBOARD_NOKEYS) {
-            kinds.add(PointerKind.Trackpad)
+            kinds.add(PointerKind.Mouse)
         }
         if (touchscreen == Configuration.TOUCHSCREEN_STYLUS) {
             kinds.add(PointerKind.Stylus)
         }
         return kinds
+    }
+
+    fun updateFromInputDevices(inputDeviceSources: Set<PointerKind>) {
+        val current = _capabilities.value
+        _capabilities.value = current.copy(pointerKinds = inputDeviceSources)
     }
 
     private fun List<androidx.window.layout.DisplayFeature>.toFoldPosture(): FoldPosture {

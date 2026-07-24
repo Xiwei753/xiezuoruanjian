@@ -8,15 +8,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.R
 import com.xiwei.sujian.designsystem.component.SujianSection
 import com.xiwei.sujian.designsystem.component.SujianSlider
 import com.xiwei.sujian.designsystem.component.SujianSwitchRow
+import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 
 @Composable
 fun EditorSettings(
@@ -25,13 +25,14 @@ fun EditorSettings(
     modifier: Modifier = Modifier,
 ) {
     val settings = state.settings
-    var autoIndentWidth by remember { mutableFloatStateOf(settings.autoIndentWidth) }
-    var typingDuration by remember { mutableFloatStateOf(settings.editorTypingAnimationDurationMs.toFloat()) }
-    var cursorDuration by remember { mutableFloatStateOf(settings.editorSmoothCursorDurationMs.toFloat()) }
+    val dims = LocalSujianDimensions.current
+    var autoIndentWidth by rememberSaveable(settings.autoIndentWidth) { mutableFloatStateOf(settings.autoIndentWidth) }
+    var typingDuration by rememberSaveable(settings.editorTypingAnimationDurationMs.toFloat()) { mutableFloatStateOf(settings.editorTypingAnimationDurationMs.toFloat()) }
+    var cursorDuration by rememberSaveable(settings.editorSmoothCursorDurationMs.toFloat()) { mutableFloatStateOf(settings.editorSmoothCursorDurationMs.toFloat()) }
 
     androidx.compose.foundation.layout.Column(
-        modifier = modifier.padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        modifier = modifier.padding(dims.space16),
+        verticalArrangement = Arrangement.spacedBy(dims.space16),
     ) {
         SujianSection(title = stringResource(id = R.string.pref_category_editor)) {
             SujianSwitchRow(
@@ -41,7 +42,7 @@ fun EditorSettings(
                     onIntent(SettingsIntent.UpdateLocal { it.copy(autoIndentEnabled = checked) })
                 },
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(dims.space8))
             SujianSlider(
                 title = stringResource(id = R.string.pref_auto_indent_width),
                 value = autoIndentWidth,
@@ -64,7 +65,7 @@ fun EditorSettings(
                     onIntent(SettingsIntent.UpdateLocal { it.copy(editorTypingAnimationEnabled = checked) })
                 },
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(dims.space8))
             SujianSlider(
                 title = stringResource(id = R.string.pref_editor_typing_animation_duration),
                 value = typingDuration,
@@ -78,7 +79,7 @@ fun EditorSettings(
                 enabled = settings.editorTypingAnimationEnabled,
                 modifier = Modifier.fillMaxWidth(),
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(dims.space8))
             SujianSwitchRow(
                 title = stringResource(id = R.string.pref_editor_smooth_cursor),
                 checked = settings.editorSmoothCursorEnabled,
@@ -86,7 +87,7 @@ fun EditorSettings(
                     onIntent(SettingsIntent.UpdateLocal { it.copy(editorSmoothCursorEnabled = checked) })
                 },
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(dims.space8))
             SujianSlider(
                 title = stringResource(id = R.string.pref_editor_smooth_cursor_duration),
                 value = cursorDuration,

@@ -12,7 +12,7 @@ sealed interface SujianRoute : Parcelable, NavKey {
     data class Project(val projectId: String) : SujianRoute
 
     @Parcelize
-    data class Chapter(val projectId: String, val chapterId: String) : SujianRoute
+    data class Chapter(val projectId: String, val volumeId: String, val chapterId: String) : SujianRoute
 
     @Parcelize
     data object StarMap : SujianRoute

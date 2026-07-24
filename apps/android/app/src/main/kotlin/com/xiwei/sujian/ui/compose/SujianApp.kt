@@ -3,6 +3,7 @@ package com.xiwei.sujian.ui.compose
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -15,20 +16,29 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.data.WorkspaceUseCase
-import com.xiwei.sujian.model.Orientation
-import com.xiwei.sujian.model.PointerKind
-import com.xiwei.sujian.model.WindowMetrics
-import com.xiwei.sujian.ui.compose.adaptive.rememberAdaptiveWindowState
 import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.editor.v2.compose.AnimatedTextEditorSlot
 import com.xiwei.sujian.editor.v2.compose.LocalAnimatedTextEditorCoordinator
 import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
+import com.xiwei.sujian.model.Orientation
+import com.xiwei.sujian.model.WindowMetrics
+import com.xiwei.sujian.platform.api.AndroidCapabilities
+import com.xiwei.sujian.platform.api.FoldPosture
+import com.xiwei.sujian.platform.api.PointerKind
+import com.xiwei.sujian.platform.aosp.AospCapabilityProvider
+import com.xiwei.sujian.platform.window.detectPointerKindsFromInputDevices
+import com.xiwei.sujian.ui.compose.adaptive.rememberAdaptiveWindowState
+import com.xiwei.sujian.ui.compose.navigation.SujianDestination
 import com.xiwei.sujian.ui.compose.navigation.SujianNavigationSuite
 import com.xiwei.sujian.ui.compose.theme.SujianTheme
 import com.xiwei.sujian.ui.compose.theme.ThemeStore
 import com.xiwei.sujian.ui.compose.theme.rememberThemeController
 import com.xiwei.sujian.platform.aosp.VendorAdapterSetup
 import com.xiwei.sujian.platform.vendor.VendorAdapterRegistry
+
+val LocalAndroidCapabilities = androidx.compose.runtime.compositionLocalOf<AndroidCapabilities> {
+    AndroidCapabilities()
+}
 
 @Composable
 fun SujianApp(
@@ -39,6 +49,9 @@ fun SujianApp(
     val appState = remember { SujianAppState(vm) }
     val themeController = rememberThemeController(context)
     val vendorRegistry = remember { VendorAdapterRegistry().also { VendorAdapterSetup.ensureInitialized(it) } }
+
+    val capabilityProvider = remember { AospCapabilityProvider(context.applicationContext) }
+    val capabilities by capabilityProvider.capabilities.collectAsState()
 
     val coordinator = remember {
         val bridge = BridgeProvider.getAppServiceBridge(context)
@@ -51,7 +64,7 @@ fun SujianApp(
         val workspaceUC = WorkspaceUseCase(workspaceRepo)
         vm.initialize(workspaceRepo, workspaceUC, settingsRepo, context)
         if (initialDestination == "settings") {
-            vm.navigateTo(com.xiwei.sujian.ui.compose.navigation.SujianDestination.Settings)
+            vm.navigateTo(SujianDestination.Settings)
         }
     }
 
@@ -60,19 +73,34 @@ fun SujianApp(
     val density = LocalDensity.current.density
 
     LaunchedEffect(windowState.foldingFeatures, configuration.screenWidthDp, configuration.screenHeightDp) {
+        capabilityProvider.updateFromFoldFeatures(windowState.foldingFeatures)
+        capabilityProvider.updateFromConfiguration(configuration)
+        val pointerKinds = detectPointerKindsFromInputDevices(context)
+        capabilityProvider.updateFromInputDevices(pointerKinds)
+
         vm.updateFoldFeaturesFromAdaptive(windowState.foldingFeatures, density)
-        val hasFoldFeature = windowState.foldingFeatures.isNotEmpty()
+
         val settingsRepo = SettingsRepository(context)
+        val hasFoldFeature = windowState.foldingFeatures.isNotEmpty()
         val deviceClass = settingsRepo.detectDeviceClassFromFoldFeature(
             hasFoldFeature, configuration.smallestScreenWidthDp
         )
         ThemeStore.setFoldDeviceClass(deviceClass)
+    }
+
+    LaunchedEffect(capabilities) {
+        val pointerKind = capabilities.pointerKinds.firstOrNull() ?: PointerKind.Touch
         val metrics = WindowMetrics(
             widthDp = configuration.screenWidthDp.toFloat(),
             heightDp = configuration.screenHeightDp.toFloat(),
             foldFeature = vm.foldFeatureInfo,
             orientation = if (configuration.screenWidthDp > configuration.screenHeightDp) Orientation.Landscape else Orientation.Portrait,
-            pointer = PointerKind.Touch
+            pointer = when (pointerKind) {
+                PointerKind.Mouse -> com.xiwei.sujian.model.PointerKind.Mouse
+                PointerKind.Trackpad -> com.xiwei.sujian.model.PointerKind.Trackpad
+                PointerKind.Stylus -> com.xiwei.sujian.model.PointerKind.Stylus
+                else -> com.xiwei.sujian.model.PointerKind.Touch
+            },
         )
         vm.resolveLayout(metrics)
     }
@@ -80,8 +108,9 @@ fun SujianApp(
     val uiState by themeController.uiState.collectAsState()
 
     SujianTheme(uiState = uiState) {
-        androidx.compose.runtime.CompositionLocalProvider(
-            LocalAnimatedTextEditorCoordinator provides coordinator
+        CompositionLocalProvider(
+            LocalAndroidCapabilities provides capabilities,
+            LocalAnimatedTextEditorCoordinator provides coordinator,
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
                 SujianNavigationSuite(

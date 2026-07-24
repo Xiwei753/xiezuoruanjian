@@ -9,7 +9,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -20,6 +20,7 @@ import com.xiwei.sujian.designsystem.component.SujianDropdownMenu
 import com.xiwei.sujian.designsystem.component.SujianSection
 import com.xiwei.sujian.designsystem.component.SujianSlider
 import com.xiwei.sujian.designsystem.component.SujianSwitchRow
+import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 
 @Composable
 fun AppearanceSettings(
@@ -28,14 +29,15 @@ fun AppearanceSettings(
     modifier: Modifier = Modifier,
 ) {
     val settings = state.settings
-    var fontSize by remember { mutableFloatStateOf(state.fontSize) }
-    var lineSpacing by remember { mutableFloatStateOf(settings.editorLineSpacingMultiplier) }
+    val dims = LocalSujianDimensions.current
+    var fontSize by rememberSaveable(state.fontSize) { mutableFloatStateOf(state.fontSize) }
+    var lineSpacing by rememberSaveable(settings.editorLineSpacingMultiplier) { mutableFloatStateOf(settings.editorLineSpacingMultiplier) }
     val context = LocalContext.current
-    var autoSaveDelay by remember { mutableFloatStateOf((settings.autoSaveDelayMs / 1000f)) }
+    var autoSaveDelay by rememberSaveable(settings.autoSaveDelayMs / 1000f) { mutableFloatStateOf(settings.autoSaveDelayMs / 1000f) }
 
     androidx.compose.foundation.layout.Column(
-        modifier = modifier.padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        modifier = modifier.padding(dims.space16),
+        verticalArrangement = Arrangement.spacedBy(dims.space16),
     ) {
         SujianSection(title = stringResource(id = R.string.pref_category_theme)) {
             SujianDropdownMenu(
@@ -60,7 +62,7 @@ fun AppearanceSettings(
                 },
                 modifier = Modifier.fillMaxWidth(),
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(dims.space8))
             SujianDropdownMenu(
                 label = stringResource(id = R.string.pref_hint_color_theme),
                 selectedIndex = when (settings.colorSource) {
@@ -87,7 +89,7 @@ fun AppearanceSettings(
                 },
                 modifier = Modifier.fillMaxWidth(),
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(dims.space8))
             SujianSwitchRow(
                 title = stringResource(id = R.string.pref_use_dynamic_color),
                 checked = settings.dynamicColorEnabled,
@@ -112,7 +114,7 @@ fun AppearanceSettings(
                 valueLabel = "${fontSize.toInt()}sp",
                 modifier = Modifier.fillMaxWidth(),
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(dims.space8))
             SujianSlider(
                 title = stringResource(id = R.string.pref_line_spacing),
                 value = lineSpacing,

@@ -352,6 +352,18 @@ pub struct ThemeColorSchemeDto {
     pub outline: String,
     pub outline_variant: String,
     pub scrim: String,
+    pub primary_fixed: String,
+    pub primary_fixed_dim: String,
+    pub on_primary_fixed: String,
+    pub on_primary_fixed_variant: String,
+    pub secondary_fixed: String,
+    pub secondary_fixed_dim: String,
+    pub on_secondary_fixed: String,
+    pub on_secondary_fixed_variant: String,
+    pub tertiary_fixed: String,
+    pub tertiary_fixed_dim: String,
+    pub on_tertiary_fixed: String,
+    pub on_tertiary_fixed_variant: String,
 }
 
 impl From<crate::settings::ThemeColorScheme> for ThemeColorSchemeDto {
@@ -393,6 +405,18 @@ impl From<crate::settings::ThemeColorScheme> for ThemeColorSchemeDto {
             outline: s.outline,
             outline_variant: s.outline_variant,
             scrim: s.scrim,
+            primary_fixed: s.primary_fixed,
+            primary_fixed_dim: s.primary_fixed_dim,
+            on_primary_fixed: s.on_primary_fixed,
+            on_primary_fixed_variant: s.on_primary_fixed_variant,
+            secondary_fixed: s.secondary_fixed,
+            secondary_fixed_dim: s.secondary_fixed_dim,
+            on_secondary_fixed: s.on_secondary_fixed,
+            on_secondary_fixed_variant: s.on_secondary_fixed_variant,
+            tertiary_fixed: s.tertiary_fixed,
+            tertiary_fixed_dim: s.tertiary_fixed_dim,
+            on_tertiary_fixed: s.on_tertiary_fixed,
+            on_tertiary_fixed_variant: s.on_tertiary_fixed_variant,
         }
     }
 }
@@ -436,6 +460,18 @@ impl From<ThemeColorSchemeDto> for crate::settings::ThemeColorScheme {
             outline: s.outline,
             outline_variant: s.outline_variant,
             scrim: s.scrim,
+            primary_fixed: s.primary_fixed,
+            primary_fixed_dim: s.primary_fixed_dim,
+            on_primary_fixed: s.on_primary_fixed,
+            on_primary_fixed_variant: s.on_primary_fixed_variant,
+            secondary_fixed: s.secondary_fixed,
+            secondary_fixed_dim: s.secondary_fixed_dim,
+            on_secondary_fixed: s.on_secondary_fixed,
+            on_secondary_fixed_variant: s.on_secondary_fixed_variant,
+            tertiary_fixed: s.tertiary_fixed,
+            tertiary_fixed_dim: s.tertiary_fixed_dim,
+            on_tertiary_fixed: s.on_tertiary_fixed,
+            on_tertiary_fixed_variant: s.on_tertiary_fixed_variant,
         }
     }
 }

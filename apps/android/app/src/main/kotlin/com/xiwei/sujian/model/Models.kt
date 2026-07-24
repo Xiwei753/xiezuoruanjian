@@ -517,7 +517,7 @@ enum class Orientation {
 }
 
 enum class PointerKind {
-    Unknown, Touch, Stylus, Mouse
+    Unknown, Touch, Stylus, Mouse, Trackpad
 }
 
 enum class WidthClass {

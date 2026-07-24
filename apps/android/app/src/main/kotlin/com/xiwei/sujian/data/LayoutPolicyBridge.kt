@@ -79,6 +79,7 @@ class LayoutPolicyBridge internal constructor(private val holder: WriterAppServi
         PointerKind.Touch -> PointerKindDto.TOUCH
         PointerKind.Stylus -> PointerKindDto.STYLUS
         PointerKind.Mouse -> PointerKindDto.MOUSE
+        PointerKind.Trackpad -> PointerKindDto.MOUSE
     }
 
     private fun WidthClassDto.toModel(): WidthClass = when (this) {

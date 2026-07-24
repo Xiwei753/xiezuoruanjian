@@ -94,9 +94,10 @@ fun SujianNavigationSuite(
     LaunchedEffect(appState.currentProjectId, appState.currentChapterId) {
         val projectId = appState.currentProjectId
         val chapterId = appState.currentChapterId
+        val volumeId = appState.currentVolumeId
         val topRoute = backStack.lastOrNull() as? SujianRoute
-        if (projectId != null && chapterId != null && appState.currentVolumeId != null) {
-            val target = SujianRoute.Chapter(projectId, chapterId)
+        if (projectId != null && chapterId != null && volumeId != null) {
+            val target = SujianRoute.Chapter(projectId, volumeId, chapterId)
             if (topRoute != target) {
                 backStack.removeAll { (it as? SujianRoute)?.toTopDestination() != SujianDestination.Works }
                 backStack.add(SujianRoute.Project(projectId))
@@ -145,7 +146,7 @@ fun SujianNavigationSuite(
                     val newTop = backStack.lastOrNull() as? SujianRoute
                     when {
                         newTop is SujianRoute.Chapter -> {
-                            appState.selectChapter(newTop.projectId, newTop.chapterId, "")
+                            appState.selectChapter(newTop.volumeId, newTop.chapterId, "")
                         }
                         newTop is SujianRoute.Project -> {
                             appState.selectProject(newTop.projectId, "")

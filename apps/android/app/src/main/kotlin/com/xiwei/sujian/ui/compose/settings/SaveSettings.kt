@@ -8,15 +8,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.R
 import com.xiwei.sujian.designsystem.component.SujianSection
 import com.xiwei.sujian.designsystem.component.SujianSlider
 import com.xiwei.sujian.designsystem.component.SujianSwitchRow
+import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 
 @Composable
 fun SaveSettings(
@@ -25,11 +25,12 @@ fun SaveSettings(
     modifier: Modifier = Modifier,
 ) {
     val settings = state.settings
-    var autoSaveDelay by remember { mutableFloatStateOf((settings.autoSaveDelayMs / 1000f)) }
+    val dims = LocalSujianDimensions.current
+    var autoSaveDelay by rememberSaveable(settings.autoSaveDelayMs / 1000f) { mutableFloatStateOf(settings.autoSaveDelayMs / 1000f) }
 
     androidx.compose.foundation.layout.Column(
-        modifier = modifier.padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        modifier = modifier.padding(dims.space16),
+        verticalArrangement = Arrangement.spacedBy(dims.space16),
     ) {
         SujianSection(title = stringResource(id = R.string.pref_category_save)) {
             SujianSwitchRow(
@@ -39,7 +40,7 @@ fun SaveSettings(
                     onIntent(SettingsIntent.UpdateLocal { it.copy(autoSaveEnabled = checked) })
                 },
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(dims.space8))
             SujianSlider(
                 title = stringResource(id = R.string.pref_auto_save_delay),
                 value = autoSaveDelay,

@@ -142,14 +142,12 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.material.view)
-    implementation(libs.androidx.constraintlayout)
     implementation(libs.gson)
 
     implementation(libs.androidx.lifecycle.viewmodel.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.process)
     implementation(libs.androidx.activity.ktx)
-    implementation(libs.androidx.fragment.ktx)
     implementation(libs.androidx.work.runtime.ktx)
 
     val composeBom = platform(libs.compose.bom)

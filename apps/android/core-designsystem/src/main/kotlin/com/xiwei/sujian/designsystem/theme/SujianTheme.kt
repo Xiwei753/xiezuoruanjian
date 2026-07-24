@@ -68,6 +68,18 @@ val SujianLightColorScheme = lightColorScheme(
     outline = SujianLightOutline,
     outlineVariant = SujianLightOutlineVariant,
     scrim = SujianLightScrim,
+    primaryFixed = SujianLightPrimaryFixed,
+    primaryFixedDim = SujianLightPrimaryFixedDim,
+    onPrimaryFixed = SujianLightOnPrimaryFixed,
+    onPrimaryFixedVariant = SujianLightOnPrimaryFixedVariant,
+    secondaryFixed = SujianLightSecondaryFixed,
+    secondaryFixedDim = SujianLightSecondaryFixedDim,
+    onSecondaryFixed = SujianLightOnSecondaryFixed,
+    onSecondaryFixedVariant = SujianLightOnSecondaryFixedVariant,
+    tertiaryFixed = SujianLightTertiaryFixed,
+    tertiaryFixedDim = SujianLightTertiaryFixedDim,
+    onTertiaryFixed = SujianLightOnTertiaryFixed,
+    onTertiaryFixedVariant = SujianLightOnTertiaryFixedVariant,
 )
 
 val SujianDarkColorScheme = darkColorScheme(
@@ -107,6 +119,18 @@ val SujianDarkColorScheme = darkColorScheme(
     outline = SujianDarkOutline,
     outlineVariant = SujianDarkOutlineVariant,
     scrim = SujianDarkScrim,
+    primaryFixed = SujianDarkPrimaryFixed,
+    primaryFixedDim = SujianDarkPrimaryFixedDim,
+    onPrimaryFixed = SujianDarkOnPrimaryFixed,
+    onPrimaryFixedVariant = SujianDarkOnPrimaryFixedVariant,
+    secondaryFixed = SujianDarkSecondaryFixed,
+    secondaryFixedDim = SujianDarkSecondaryFixedDim,
+    onSecondaryFixed = SujianDarkOnSecondaryFixed,
+    onSecondaryFixedVariant = SujianDarkOnSecondaryFixedVariant,
+    tertiaryFixed = SujianDarkTertiaryFixed,
+    tertiaryFixedDim = SujianDarkTertiaryFixedDim,
+    onTertiaryFixed = SujianDarkOnTertiaryFixed,
+    onTertiaryFixedVariant = SujianDarkOnTertiaryFixedVariant,
 )
 
 @Composable

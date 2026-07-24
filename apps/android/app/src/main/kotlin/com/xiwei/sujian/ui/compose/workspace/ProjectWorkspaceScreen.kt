@@ -31,6 +31,7 @@ import com.xiwei.sujian.model.WorkspacePaneMode
 import com.xiwei.sujian.ui.compose.SujianAppState
 import com.xiwei.sujian.ui.compose.adaptive.rememberCoreLayoutDirective
 import com.xiwei.sujian.ui.compose.editor.SujianEditorHost
+import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
@@ -183,7 +184,7 @@ fun ProjectWorkspaceScreen(
                             modifier = Modifier.fillMaxSize().then(windowInsetsPadding),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text(stringResource(id = R.string.select_chapter_to_write), modifier = Modifier.padding(16.dp))
+                            Text(stringResource(id = R.string.select_chapter_to_write), modifier = Modifier.padding(LocalSujianDimensions.current.space16))
                         }
                     }
                 }

@@ -161,6 +161,18 @@ dictionary ThemeColorSchemeDto {
     string outline;
     string outline_variant;
     string scrim;
+    string primary_fixed;
+    string primary_fixed_dim;
+    string on_primary_fixed;
+    string on_primary_fixed_variant;
+    string secondary_fixed;
+    string secondary_fixed_dim;
+    string on_secondary_fixed;
+    string on_secondary_fixed_variant;
+    string tertiary_fixed;
+    string tertiary_fixed_dim;
+    string on_tertiary_fixed;
+    string on_tertiary_fixed_variant;
 };
 
 dictionary ThemePaletteRecordDto {

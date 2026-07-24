@@ -62,6 +62,18 @@ object ThemePaletteHelper {
             outline = colorToHex(scheme.outline),
             outlineVariant = colorToHex(scheme.outlineVariant),
             scrim = colorToHex(scheme.scrim),
+            primaryFixed = colorToHex(scheme.primaryFixed),
+            primaryFixedDim = colorToHex(scheme.primaryFixedDim),
+            onPrimaryFixed = colorToHex(scheme.onPrimaryFixed),
+            onPrimaryFixedVariant = colorToHex(scheme.onPrimaryFixedVariant),
+            secondaryFixed = colorToHex(scheme.secondaryFixed),
+            secondaryFixedDim = colorToHex(scheme.secondaryFixedDim),
+            onSecondaryFixed = colorToHex(scheme.onSecondaryFixed),
+            onSecondaryFixedVariant = colorToHex(scheme.onSecondaryFixedVariant),
+            tertiaryFixed = colorToHex(scheme.tertiaryFixed),
+            tertiaryFixedDim = colorToHex(scheme.tertiaryFixedDim),
+            onTertiaryFixed = colorToHex(scheme.onTertiaryFixed),
+            onTertiaryFixedVariant = colorToHex(scheme.onTertiaryFixedVariant),
         )
     }
 
