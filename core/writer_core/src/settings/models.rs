@@ -82,3 +82,75 @@ pub struct SettingsTree {
     pub schema_version: u32,
     pub root: SettingNode,
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_setting_value_serialization() {
+        let toggle = SettingValue::Toggle { value: true };
+        let json = serde_json::to_value(&toggle).unwrap();
+        assert_eq!(json["type"], "toggle");
+        assert_eq!(json["value"], true);
+
+        let slider = SettingValue::Slider { value: 1.0, min: 0.0, max: 10.0, step: 0.1 };
+        let json = serde_json::to_value(&slider).unwrap();
+        assert_eq!(json["type"], "slider");
+        assert_eq!(json["value"], 1.0);
+        assert_eq!(json["min"], 0.0);
+        assert_eq!(json["max"], 10.0);
+        assert!((json["step"].as_f64().unwrap() - 0.1).abs() < 1e-6);
+
+        let text_input = SettingValue::TextInput { value: "test".to_string(), placeholder: "ph".to_string() };
+        let json = serde_json::to_value(&text_input).unwrap();
+        assert_eq!(json["type"], "textInput");
+        assert_eq!(json["value"], "test");
+        assert_eq!(json["placeholder"], "ph");
+
+        let dropdown = SettingValue::Dropdown { value: "A".to_string(), options: vec!["A".to_string(), "B".to_string()] };
+        let json = serde_json::to_value(&dropdown).unwrap();
+        assert_eq!(json["type"], "dropdown");
+        assert_eq!(json["value"], "A");
+        assert_eq!(json["options"][0], "A");
+        assert_eq!(json["options"][1], "B");
+    }
+
+    #[test]
+    fn test_setting_node_serialization() {
+        let node = SettingNode {
+            id: "node1".to_string(),
+            title: "Node 1".to_string(),
+            description: Some("Desc 1".to_string()),
+            value: Some(SettingValue::Toggle { value: false }),
+            children: vec![],
+        };
+        let json = serde_json::to_value(&node).unwrap();
+        assert_eq!(json["id"], "node1");
+        assert_eq!(json["title"], "Node 1");
+        assert_eq!(json["description"], "Desc 1");
+        assert_eq!(json["value"]["type"], "toggle");
+        assert_eq!(json["value"]["value"], false);
+        assert!(json["children"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_settings_tree_serialization() {
+        let tree = SettingsTree {
+            schema_version: 2,
+            root: SettingNode {
+                id: "root".to_string(),
+                title: "Root".to_string(),
+                description: None,
+                value: None,
+                children: vec![],
+            },
+        };
+        let json = serde_json::to_value(&tree).unwrap();
+        assert_eq!(json["schemaVersion"], 2);
+        assert_eq!(json["root"]["id"], "root");
+        assert_eq!(json["root"]["title"], "Root");
+        assert!(json["root"]["description"].is_null());
+        assert!(json["root"]["value"].is_null());
+        assert!(json["root"]["children"].as_array().unwrap().is_empty());
+    }
+}
