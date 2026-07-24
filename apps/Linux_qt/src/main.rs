@@ -432,7 +432,17 @@ fn main() {
         if let Some(secure_storage) = services.secure_storage {
             crate::backend::app_backend::set_linux_secure_storage(std::sync::Arc::from(secure_storage));
         }
+        // 初始网络状态已在 create_platform_services 内缓存
     }
+
+    // 启动后台线程定时刷新网络状态（每 30 秒）
+    std::thread::Builder::new()
+        .name("net-monitor".into())
+        .spawn(|| loop {
+            std::thread::sleep(std::time::Duration::from_secs(30));
+            writer_platform_linux::refresh_network_state();
+        })
+        .ok();
 
     // ===== 最早期初始化：确保崩溃/错误能写入日志文件 =====
     // 这两行必须在所有其他代码之前执行

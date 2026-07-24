@@ -240,7 +240,8 @@ impl AppBackend {
                         };
                     }
                 };
-                config.has_network_permission = true;
+                let net = crate::backend::app_backend::current_network_state();
+                config.has_network_permission = net.is_connected;
                 config.has_network_state_permission = true;
 
                 match api.perform_sync_dry_run(config) {
@@ -526,7 +527,8 @@ impl AppBackend {
                         };
                     }
                 };
-                config.has_network_permission = true;
+                let net = crate::backend::app_backend::current_network_state();
+                config.has_network_permission = net.is_connected;
                 config.has_network_state_permission = true;
 
                 let backend_label = config.backend_type.clone();

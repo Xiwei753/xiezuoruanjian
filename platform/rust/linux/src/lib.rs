@@ -20,9 +20,30 @@
 use writer_uniffi::WriterAppService;
 
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 use writer_platform_api::{FileConfigStore, HttpRequest, HttpResponse, NetworkState, PlatformInit, PlatformKind, PlatformServices, SecureStorage, SyncTransport, TransportError};
 
 const APP_NAMESPACE: &str = "sujian";
+
+static CACHED_NETWORK_STATE: OnceLock<Mutex<NetworkState>> = OnceLock::new();
+
+fn get_or_init_cache() -> &'static Mutex<NetworkState> {
+    CACHED_NETWORK_STATE.get_or_init(|| Mutex::new(NetworkState::default()))
+}
+
+fn cache_network_state(state: &NetworkState) {
+    if let Ok(mut guard) = get_or_init_cache().lock() {
+        *guard = state.clone();
+    }
+}
+
+pub fn get_cached_network_state() -> NetworkState {
+    CACHED_NETWORK_STATE
+        .get()
+        .and_then(|m| m.lock().ok())
+        .map(|g| g.clone())
+        .unwrap_or_default()
+}
 
 pub fn resolve_platform_init() -> PlatformInit {
     let config_dir = xdg_config_dir();
@@ -67,11 +88,14 @@ pub fn create_platform_services() -> PlatformServices {
 
     let secure_storage: Option<Box<dyn SecureStorage>> = create_secure_storage();
 
+    let network_state = detect_network_state();
+    cache_network_state(&network_state);
+
     PlatformServices {
         init,
         config_store,
         secure_storage,
-        network_state: Some(detect_network_state()),
+        network_state: Some(network_state),
         sync_transport_factory,
     }
 }
@@ -162,7 +186,9 @@ pub fn init_default_config_store() {
 }
 
 pub fn refresh_network_state() -> NetworkState {
-    detect_network_state()
+    let state = detect_network_state();
+    cache_network_state(&state);
+    state
 }
 
 fn detect_network_state() -> NetworkState {

@@ -88,6 +88,10 @@ pub fn set_linux_secure_storage(storage: std::sync::Arc<dyn writer_platform_api:
     LINUX_SECURE_STORAGE.set(storage).ok();
 }
 
+pub(crate) fn current_network_state() -> writer_platform_api::NetworkState {
+    writer_platform_linux::get_cached_network_state()
+}
+
 pub(crate) fn create_core_api(path: &str) -> WriterCoreApi {
     let sync_transport = LINUX_SYNC_TRANSPORT_FACTORY.get().cloned();
     let secure_storage = LINUX_SECURE_STORAGE.get().cloned();

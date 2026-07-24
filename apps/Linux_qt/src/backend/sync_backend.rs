@@ -492,7 +492,8 @@ impl AppBackend {
                         };
                     }
                 };
-                config.has_network_permission = true;
+                let net = crate::backend::app_backend::current_network_state();
+                config.has_network_permission = net.is_connected;
                 config.has_network_state_permission = true;
 
                 match api.perform_sync_diagnostics(config) {
@@ -632,6 +633,7 @@ impl AppBackend {
         self.debug_log("sync", "save_sync_config_start", "");
         let mut error_state: Option<writer_core::api::SyncOperationStateDto> = None;
         if let Some(api) = self.core_api() {
+            let net = crate::backend::app_backend::current_network_state();
             let mut c = api
                 .load_sync_config()
                 .unwrap_or(writer_core::api::types::SyncConfigDto {
@@ -643,8 +645,8 @@ impl AppBackend {
                     auto_sync: false,
                     sync_interval_seconds: 300,
                     username: "".to_string(),
-                    has_network_permission: false,
-                    has_network_state_permission: false,
+                    has_network_permission: net.is_connected,
+                    has_network_state_permission: true,
                 });
 
             let raw_url = self.current_sync_remote_url.clone();

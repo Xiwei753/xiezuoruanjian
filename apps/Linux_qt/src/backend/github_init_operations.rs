@@ -136,6 +136,7 @@ impl AppBackend {
             Some(token.to_string())
         };
 
+        let net = crate::backend::app_backend::current_network_state();
         let config = SyncConfig {
             enabled: true,
             backend_type: BackendType::GithubApi,
@@ -145,7 +146,7 @@ impl AppBackend {
             auto_sync: false,
             sync_interval_seconds: 300,
             username: parsed.extracted_username.clone().unwrap_or_default(),
-            has_network_permission: true,
+            has_network_permission: net.is_connected,
             has_network_state_permission: true,
         };
 
