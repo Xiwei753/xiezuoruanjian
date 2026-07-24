@@ -33,7 +33,7 @@ pub use config_store::{ConfigStore, FileConfigStore};
 pub use network_state::NetworkState;
 pub use platform_capabilities::{PlatformCapabilities, PlatformCapabilitiesExt};
 pub use platform_init::{PlatformInit, PlatformKind, PlatformPaths};
-pub use platform_services::{PlatformServices, SyncTransportFactory};
+pub use platform_services::{PlatformServices, PlatformServicesResolver, SyncTransportFactory, register_platform_services_resolver, get_platform_services_resolver};
 pub use secure_storage::SecureStorage;
 pub use sync_transport::{HttpRequest, HttpResponse, SyncTransport, TransportError};
 

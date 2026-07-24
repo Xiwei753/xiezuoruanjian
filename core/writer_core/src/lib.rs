@@ -140,27 +140,32 @@ pub fn open_workspace_with_init(
 
     let platform_init: writer_platform_api::PlatformInit = init.clone().into();
     let network_state: writer_platform_api::NetworkState = init.into();
-    let config_dir = platform_init.app_data_dir.join("config");
-    let config_store: Option<Box<dyn writer_platform_api::ConfigStore>> =
-        Some(Box::new(writer_platform_api::FileConfigStore::new(config_dir)));
 
-    let no_backup_dir = platform_init.no_backup_dir.clone()
-        .unwrap_or_else(|| platform_init.app_data_dir.join("no_backup"));
-    let secure_storage: Option<Box<dyn writer_platform_api::SecureStorage>> =
-        Some(Box::new(crate::platform_secure_storage::FileSecureStorage::new(no_backup_dir)));
+    let services = if let Some(resolver) = writer_platform_api::get_platform_services_resolver() {
+        resolver.resolve(&platform_init, &network_state)
+    } else {
+        let config_dir = platform_init.app_data_dir.join("config");
+        let config_store: Option<Box<dyn writer_platform_api::ConfigStore>> =
+            Some(Box::new(writer_platform_api::FileConfigStore::new(config_dir)));
 
-    #[cfg(feature = "github-api")]
-    let sync_transport_factory: Option<writer_platform_api::SyncTransportFactory> =
-        Some(crate::sync::default_transport::DefaultSyncTransport::factory());
-    #[cfg(not(feature = "github-api"))]
-    let sync_transport_factory: Option<writer_platform_api::SyncTransportFactory> = None;
+        let no_backup_dir = platform_init.no_backup_dir.clone()
+            .unwrap_or_else(|| platform_init.app_data_dir.join("no_backup"));
+        let secure_storage: Option<Box<dyn writer_platform_api::SecureStorage>> =
+            Some(Box::new(crate::platform_secure_storage::FileSecureStorage::new(no_backup_dir)));
 
-    let services = writer_platform_api::PlatformServices {
-        init: platform_init,
-        config_store,
-        secure_storage,
-        network_state: Some(network_state),
-        sync_transport_factory,
+        #[cfg(feature = "github-api")]
+        let sync_transport_factory: Option<writer_platform_api::SyncTransportFactory> =
+            Some(crate::sync::default_transport::DefaultSyncTransport::factory());
+        #[cfg(not(feature = "github-api"))]
+        let sync_transport_factory: Option<writer_platform_api::SyncTransportFactory> = None;
+
+        writer_platform_api::PlatformServices {
+            init: platform_init,
+            config_store,
+            secure_storage,
+            network_state: Some(network_state),
+            sync_transport_factory,
+        }
     };
 
     Ok(std::sync::Arc::new(WriterAppService::with_platform_services(path, services)))

@@ -7,6 +7,7 @@
 //! - 接收 Kotlin 层传入的 Context 目录信息构造 `PlatformInit`
 //! - 使用 `writer_platform_api::FileConfigStore` 提供配置存储
 //! - 通过 `ReqwestSyncTransport` 提供同步 HTTP 传输
+//! - 通过 `AndroidFileSecureStorage` 提供安全存储（noBackup 目录）
 //! - 组装最终 `cdylib`：包含通用核心、Android 适配和 UniFFI 元数据
 //!
 //! ## 依赖方向
@@ -19,7 +20,29 @@
 use writer_uniffi::WriterAppService;
 
 use std::path::PathBuf;
-use writer_platform_api::{FileConfigStore, HttpRequest, HttpResponse, NetworkState, PlatformInit, PlatformKind, PlatformServices, SecureStorage, SyncTransport, TransportError};
+use std::sync::OnceLock;
+use writer_platform_api::{FileConfigStore, HttpRequest, HttpResponse, NetworkState, PlatformInit, PlatformKind, PlatformServices, PlatformServicesResolver, SecureStorage, SyncTransport, TransportError, register_platform_services_resolver};
+
+struct AndroidPlatformServicesResolver;
+
+impl PlatformServicesResolver for AndroidPlatformServicesResolver {
+    fn resolve(&self, init: &PlatformInit, network_state: &NetworkState) -> PlatformServices {
+        create_platform_services(init.clone(), network_state.is_connected, network_state.is_metered)
+    }
+}
+
+static ANDROID_RESOLVER_REGISTERED: OnceLock<()> = OnceLock::new();
+
+pub fn ensure_android_resolver_registered() {
+    ANDROID_RESOLVER_REGISTERED.get_or_init(|| {
+        register_platform_services_resolver(Box::new(AndroidPlatformServicesResolver));
+    });
+}
+
+#[::ctor::ctor]
+fn auto_register_android_resolver() {
+    ensure_android_resolver_registered();
+}
 
 pub fn create_platform_init(
     files_dir: PathBuf,
