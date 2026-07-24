@@ -4,11 +4,13 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
-import android.net.NetworkRequest
+import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import java.util.Locale
 import java.util.TimeZone
 
 object BridgeProvider {
+    private const val TAG = "BridgeProvider"
+
     @Volatile
     private var appServiceInstance: AppServiceBridge? = null
 
@@ -52,22 +54,41 @@ object BridgeProvider {
 
     private fun registerNetworkCallback(context: Context, bridge: AppServiceBridge) {
         if (networkCallbackRegistered) return
-        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
-        val request = NetworkRequest.Builder()
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .build()
-        val callback = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) {
+        val cm = context.getSystemService(ConnectivityManager::class.java)
+            ?: run {
+                DiagnosticsLogger.w(TAG, "ConnectivityManager not available, network monitoring disabled")
+                return
             }
+        try {
+            val callback = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    refreshNetworkState(context, bridge)
+                }
 
-            override fun onLost(network: Network) {
-            }
+                override fun onLost(network: Network) {
+                    refreshNetworkState(context, bridge)
+                }
 
-            override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+                override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+                    refreshNetworkState(context, bridge)
+                }
             }
+            cm.registerDefaultNetworkCallback(callback)
+            networkCallbackRegistered = true
+            DiagnosticsLogger.i(TAG, "Default network callback registered")
+        } catch (e: Exception) {
+            DiagnosticsLogger.e(TAG, "Failed to register default network callback", e)
         }
-        cm.registerNetworkCallback(request, callback)
-        networkCallbackRegistered = true
+    }
+
+    private fun refreshNetworkState(context: Context, bridge: AppServiceBridge) {
+        val (isConnected, isMetered) = detectNetworkState(context)
+        try {
+            bridge.holder.service.updateNetworkState(isConnected, isMetered, null, null)
+            DiagnosticsLogger.d(TAG, "Network state updated: connected=$isConnected, metered=$isMetered")
+        } catch (e: Exception) {
+            DiagnosticsLogger.e(TAG, "Failed to update network state", e)
+        }
     }
 
     fun detectNetworkState(context: Context): Pair<Boolean, Boolean> {
