@@ -28,6 +28,8 @@ pub mod backends;
 pub mod config_store;
 pub mod conflict;
 pub mod diagnostics;
+#[cfg(feature = "github-api")]
+pub mod default_transport;
 #[cfg(feature = "git-https")]
 pub mod git_backend;
 #[cfg(feature = "github-api")]

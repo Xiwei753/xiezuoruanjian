@@ -4,18 +4,28 @@ use crate::api::{
 use crate::sync::{SyncConfig, SyncSecrets};
 
 impl super::WriterAppService {
+    fn refresh_secrets_override(&self) {
+        if self.secure_storage.is_some() {
+            let secrets = self.load_sync_secrets_with_secure_storage();
+            self.api.set_secrets_override(Some(secrets));
+        }
+    }
+
     pub fn perform_sync_diagnostics(
         &self,
         config: SyncConfigDto,
     ) -> Result<SyncDiagnosticsResultDto, WriterError> {
+        self.refresh_secrets_override();
         self.api.perform_sync_diagnostics(config)
     }
 
     pub fn perform_sync_dry_run(&self, config: SyncConfigDto) -> Result<SyncPlanDto, WriterError> {
+        self.refresh_secrets_override();
         self.api.perform_sync_dry_run(config)
     }
 
     pub fn perform_sync(&self, config: SyncConfigDto, force_sync: bool) -> Result<SyncResultDto, WriterError> {
+        self.refresh_secrets_override();
         self.api.perform_sync(config, force_sync)
     }
 
@@ -61,6 +71,16 @@ impl super::WriterAppService {
                 token: Some(token),
                 ssh_private_key: None,
             }
+        } else if let Some(storage) = &self.secure_storage {
+            let file_secrets = self.api.core().load_sync_secrets().unwrap_or_default();
+            if let Some(token) = &file_secrets.token {
+                if !token.is_empty() {
+                    let _ = storage.set_secret("sync_token", token.as_bytes());
+                    let secrets_path = self.api.workspace_path.join("app-meta/sync/sync_secrets.local.json");
+                    let _ = std::fs::remove_file(&secrets_path);
+                }
+            }
+            file_secrets
         } else {
             self.api.core().load_sync_secrets().unwrap_or_default()
         }

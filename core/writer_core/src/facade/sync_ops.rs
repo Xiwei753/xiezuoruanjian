@@ -80,6 +80,9 @@ impl super::WriterCore {
     }
 
     pub fn load_sync_secrets(&self) -> crate::error::Result<crate::sync::SyncSecrets> {
+        if let Some(ref override_secrets) = self.secrets_override {
+            return Ok(override_secrets.clone());
+        }
         let secrets_path = self
             .workspace_path
             .join("app-meta/sync/sync_secrets.local.json");

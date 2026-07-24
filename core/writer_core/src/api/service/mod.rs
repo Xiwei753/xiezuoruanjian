@@ -26,6 +26,7 @@ pub type ApiResult<T> = Result<T, WriterError>;
 pub struct WriterCoreApi {
     pub(crate) workspace_path: PathBuf,
     pub(crate) sync_transport: Option<Arc<dyn Fn() -> Box<dyn writer_platform_api::SyncTransport> + Send + Sync>>,
+    secrets_override: std::sync::Mutex<Option<crate::sync::SyncSecrets>>,
 }
 
 impl WriterCoreApi {
@@ -35,6 +36,7 @@ impl WriterCoreApi {
         Self {
             workspace_path: workspace_path.as_ref().to_path_buf(),
             sync_transport: None,
+            secrets_override: std::sync::Mutex::new(None),
         }
     }
 
@@ -45,12 +47,22 @@ impl WriterCoreApi {
         Self {
             workspace_path: workspace_path.as_ref().to_path_buf(),
             sync_transport: Some(transport_factory),
+            secrets_override: std::sync::Mutex::new(None),
+        }
+    }
+
+    pub fn set_secrets_override(&self, secrets: Option<crate::sync::SyncSecrets>) {
+        if let Ok(mut guard) = self.secrets_override.lock() {
+            *guard = secrets;
         }
     }
 
     pub(crate) fn core(&self) -> WriterCore {
         let mut core = WriterCore::new(&self.workspace_path);
         core.sync_transport = self.sync_transport.clone();
+        if let Ok(guard) = self.secrets_override.lock() {
+            core.secrets_override = guard.clone();
+        }
         core
     }
 

@@ -52,6 +52,7 @@ pub struct WriterCore {
     pub(crate) workspace_path: PathBuf,
     pub(crate) stats_api: OnceLock<StatsApi>,
     pub(crate) sync_transport: Option<Arc<dyn Fn() -> Box<dyn writer_platform_api::SyncTransport> + Send + Sync>>,
+    pub(crate) secrets_override: Option<crate::sync::SyncSecrets>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -66,6 +67,7 @@ impl WriterCore {
             workspace_path: workspace_path.as_ref().to_path_buf(),
             stats_api: OnceLock::new(),
             sync_transport: None,
+            secrets_override: None,
         }
     }
 

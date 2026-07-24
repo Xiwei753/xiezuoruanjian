@@ -149,12 +149,18 @@ pub fn open_workspace_with_init(
     let secure_storage: Option<Box<dyn writer_platform_api::SecureStorage>> =
         Some(Box::new(crate::platform_secure_storage::FileSecureStorage::new(no_backup_dir)));
 
+    #[cfg(feature = "github-api")]
+    let sync_transport_factory: Option<writer_platform_api::SyncTransportFactory> =
+        Some(crate::sync::default_transport::DefaultSyncTransport::factory());
+    #[cfg(not(feature = "github-api"))]
+    let sync_transport_factory: Option<writer_platform_api::SyncTransportFactory> = None;
+
     let services = writer_platform_api::PlatformServices {
         init: platform_init,
         config_store,
         secure_storage,
         network_state: Some(network_state),
-        sync_transport_factory: None,
+        sync_transport_factory,
     };
 
     Ok(std::sync::Arc::new(WriterAppService::with_platform_services(path, services)))
