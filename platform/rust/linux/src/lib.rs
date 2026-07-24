@@ -161,11 +161,15 @@ pub fn init_default_config_store() {
     writer_core::app_config::set_default_config_store(Box::new(store));
 }
 
+pub fn refresh_network_state() -> NetworkState {
+    detect_network_state()
+}
+
 fn detect_network_state() -> NetworkState {
-    let is_connected = check_network_connectivity();
+    let (is_connected, is_metered) = detect_connectivity_and_metered();
     NetworkState {
         is_connected,
-        is_metered: false,
+        is_metered,
         proxy_host: std::env::var("http_proxy")
             .or_else(|_| std::env::var("HTTP_PROXY"))
             .or_else(|_| std::env::var("https_proxy"))
@@ -199,6 +203,39 @@ fn detect_network_state() -> NetworkState {
                     .and_then(|s| s.trim().parse::<u16>().ok())
             }),
     }
+}
+
+fn detect_connectivity_and_metered() -> (bool, bool) {
+    if let Ok(output) = std::process::Command::new("nmcli")
+        .args(["-t", "-f", "STATE", "general", "status"])
+        .output()
+    {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let is_connected = stdout.lines().any(|line| line.trim() == "connected" || line.starts_with("connected"));
+            let is_metered = check_nmcli_metered();
+            return (is_connected, is_metered);
+        }
+    }
+    (check_network_connectivity(), false)
+}
+
+fn check_nmcli_metered() -> bool {
+    if let Ok(output) = std::process::Command::new("nmcli")
+        .args(["-t", "-f", "METERED", "dev", "show"])
+        .output()
+    {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                if let Some(value) = line.strip_prefix("METERED:") {
+                    let v = value.trim();
+                    return v == "yes" || v == "guess-yes";
+                }
+            }
+        }
+    }
+    false
 }
 
 fn check_network_connectivity() -> bool {

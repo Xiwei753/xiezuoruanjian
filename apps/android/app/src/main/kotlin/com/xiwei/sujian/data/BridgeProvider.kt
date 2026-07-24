@@ -2,13 +2,18 @@ package com.xiwei.sujian.data
 
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import java.util.Locale
 import java.util.TimeZone
 
 object BridgeProvider {
     @Volatile
     private var appServiceInstance: AppServiceBridge? = null
+
+    @Volatile
+    private var networkCallbackRegistered = false
 
     fun getAppServiceBridge(context: Context): AppServiceBridge {
         return appServiceInstance ?: synchronized(this) {
@@ -28,7 +33,9 @@ object BridgeProvider {
                     isConnected = isConnected,
                     isMetered = isMetered,
                 )
-                AppServiceBridge(holder).also { appServiceInstance = it }
+                val bridge = AppServiceBridge(holder)
+                registerNetworkCallback(appContext, bridge)
+                bridge
             }
         }
     }
@@ -41,10 +48,41 @@ object BridgeProvider {
     fun getSyncBridge(context: Context): SyncBridge = getAppServiceBridge(context).syncBridge
     fun getActionBridge(context: Context): ActionBridge = ActionBridge(getAppServiceBridge(context))
     fun getLayoutPolicyBridge(context: Context): LayoutPolicyBridge = getAppServiceBridge(context).layoutPolicyBridge
-    fun getScreenPolicyBridge(context: Context): ScreenPolicyBridge = ScreenPolicyBridge(getAppServiceBridge(context))
+    fun getScreenPolicyBridge(context: Context): ScreenPolicyBridge = getAppServiceBridge(context).screenPolicyBridge
     fun getAiStatus(context: Context): Boolean = getAppServiceBridge(context).aiAvailable()
 
-    private fun detectNetworkState(context: Context): Pair<Boolean, Boolean> {
+    private fun registerNetworkCallback(context: Context, bridge: AppServiceBridge) {
+        if (networkCallbackRegistered) return
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                updateNetworkStateFromSystem(context, bridge)
+            }
+
+            override fun onLost(network: Network) {
+                updateNetworkStateFromSystem(context, bridge)
+            }
+
+            override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+                updateNetworkStateFromSystem(context, bridge)
+            }
+        }
+        cm.registerNetworkCallback(request, callback)
+        networkCallbackRegistered = true
+    }
+
+    private fun updateNetworkStateFromSystem(context: Context, bridge: AppServiceBridge) {
+        val (isConnected, isMetered) = detectNetworkState(context)
+        try {
+            bridge.holder.service.updateNetworkState(isConnected, isMetered, null, null)
+        } catch (_: Exception) {
+        }
+    }
+
+    fun detectNetworkState(context: Context): Pair<Boolean, Boolean> {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
             ?: return Pair(false, false)
         val network = cm.activeNetwork ?: return Pair(false, false)

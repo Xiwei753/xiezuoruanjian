@@ -1132,6 +1132,17 @@ interface WriterAppService {
 
     void update_network_state(boolean is_connected, boolean is_metered, string? proxy_host, u16? proxy_port);
 
+    [Throws=WriterError]
+    sequence<u8>? secure_storage_get(string key);
+
+    [Throws=WriterError]
+    void secure_storage_set(string key, sequence<u8> value);
+
+    [Throws=WriterError]
+    void secure_storage_delete(string key);
+
+    boolean secure_storage_available();
+
     // ── Palette Catalog ──
 
     [Throws=WriterError]

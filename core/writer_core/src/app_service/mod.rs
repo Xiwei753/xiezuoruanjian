@@ -156,6 +156,34 @@ impl WriterAppService {
         self.platform_init.as_ref().map(|init| init.device_id.as_str())
     }
 
+    pub fn secure_storage_available(&self) -> bool {
+        self.api.secure_storage.is_some()
+    }
+
+    pub fn secure_storage_get(&self, key: String) -> Result<Option<Vec<u8>>, WriterError> {
+        if let Some(storage) = &self.api.secure_storage {
+            storage.get_secret(&key).map_err(WriterError::Other)
+        } else {
+            Err(WriterError::Other("Secure storage not available".to_string()))
+        }
+    }
+
+    pub fn secure_storage_set(&self, key: String, value: Vec<u8>) -> Result<(), WriterError> {
+        if let Some(storage) = &self.api.secure_storage {
+            storage.set_secret(&key, &value).map_err(WriterError::Other)
+        } else {
+            Err(WriterError::Other("Secure storage not available".to_string()))
+        }
+    }
+
+    pub fn secure_storage_delete(&self, key: String) -> Result<(), WriterError> {
+        if let Some(storage) = &self.api.secure_storage {
+            storage.delete_secret(&key).map_err(WriterError::Other)
+        } else {
+            Err(WriterError::Other("Secure storage not available".to_string()))
+        }
+    }
+
     // ── Actions ──
 
     pub fn list_registered_actions(
