@@ -18,7 +18,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.NavKey
@@ -26,6 +25,8 @@ import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
 import com.xiwei.sujian.R
 import com.xiwei.sujian.designsystem.theme.LocalSujianMotion
+import com.xiwei.sujian.platform.api.WindowSizeClass
+import com.xiwei.sujian.ui.compose.LocalAndroidCapabilities
 import com.xiwei.sujian.ui.compose.SujianAppState
 import com.xiwei.sujian.ui.compose.settings.SettingsRoute
 import com.xiwei.sujian.ui.compose.starmap.StarMapScreen
@@ -85,8 +86,8 @@ fun SujianNavigationSuite(
     val currentRoute = backStack.lastOrNull() as? SujianRoute ?: SujianRoute.Works
     val currentTopDestination = currentRoute.toTopDestination()
     val motion = LocalSujianMotion.current
-    val configuration = LocalConfiguration.current
-    val isWideScreen = configuration.screenWidthDp >= 600
+    val capabilities = LocalAndroidCapabilities.current
+    val isWideScreen = capabilities.windowSizeClass != WindowSizeClass.Compact
 
     NavigationSuiteScaffold(
         navigationSuiteItems = {
