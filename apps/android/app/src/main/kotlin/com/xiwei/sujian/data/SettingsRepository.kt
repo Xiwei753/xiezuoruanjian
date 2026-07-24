@@ -23,7 +23,7 @@ import com.xiwei.sujian.model.SyncableSettings
  * - Compose SettingsRoute 保存用户设置
  * - SyncPage 加载/保存同步配置
  */
-class SettingsRepository(context: Context) {
+open class SettingsRepository(context: Context) {
     private val appContext = context.applicationContext
     private val settingsBridge = BridgeProvider.getSettingsBridge(context)
     private val syncBridge = BridgeProvider.getSyncBridge(context)
@@ -64,16 +64,16 @@ class SettingsRepository(context: Context) {
     }
 
     fun saveLocalSettings(settings: LocalSettings): SettingsSaveResult {
-        val effectiveVerbose = if (settings.diagnosticsEnabled) settings.diagnosticsVerbose else false
-        diagPrefs.edit()
-            .putBoolean("diagnostics_enabled", settings.diagnosticsEnabled)
-            .putBoolean("diagnostics_verbose", effectiveVerbose)
-            .putBoolean("use_self_render_editor_on_android", settings.useSelfRenderEditorOnAndroid)
-            .putBoolean("experimental_fullscreen_mode", settings.experimentalFullscreenMode)
-            .apply()
         val coreSettings = settings.copy(diagnosticsEnabled = false, diagnosticsVerbose = false, useSelfRenderEditorOnAndroid = false, experimentalFullscreenMode = false)
         return when (val result = settingsBridge.saveLocalSettings(coreSettings)) {
             is BridgeResult.Success -> {
+                val effectiveVerbose = if (settings.diagnosticsEnabled) settings.diagnosticsVerbose else false
+                diagPrefs.edit()
+                    .putBoolean("diagnostics_enabled", settings.diagnosticsEnabled)
+                    .putBoolean("diagnostics_verbose", effectiveVerbose)
+                    .putBoolean("use_self_render_editor_on_android", settings.useSelfRenderEditorOnAndroid)
+                    .putBoolean("experimental_fullscreen_mode", settings.experimentalFullscreenMode)
+                    .apply()
                 CoreSettingsEvents.record(result.envelope)
                 SettingsSaveResult.Success
             }

@@ -65,61 +65,135 @@ sealed interface SettingsIntent {
     data class DeletePalette(val deviceId: String, val fingerprint: String) : SettingsIntent
 }
 
+sealed interface SettingsSaveCommand {
+    data class Local(
+        val settings: LocalSettings,
+        val revision: Long,
+    ) : SettingsSaveCommand
+
+    data class FontSize(
+        val fontSize: Float,
+        val revision: Long,
+    ) : SettingsSaveCommand
+
+    data class SyncConfig(
+        val config: com.xiwei.sujian.model.SyncConfig,
+        val revision: Long,
+    ) : SettingsSaveCommand
+
+    data class SyncSecrets(
+        val secrets: com.xiwei.sujian.model.SyncSecrets,
+        val revision: Long,
+    ) : SettingsSaveCommand
+}
+
+private data class PendingCommands(
+    val local: SettingsSaveCommand.Local? = null,
+    val fontSize: SettingsSaveCommand.FontSize? = null,
+    val syncConfig: SettingsSaveCommand.SyncConfig? = null,
+    val syncSecrets: SettingsSaveCommand.SyncSecrets? = null,
+)
+
 class SettingsViewModel : ViewModel() {
     private var settingsRepo: SettingsRepository? = null
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
 
-    private val saveChannel = Channel<SettingsUiState>(Channel.UNLIMITED)
+    private val saveChannel = Channel<SettingsSaveCommand>(Channel.UNLIMITED)
     private val _saveFailureEvents = Channel<Int>(Channel.BUFFERED)
     val saveFailureEvents = _saveFailureEvents.receiveAsFlow()
+
+    private var localRevision = 0L
+    private var fontSizeRevision = 0L
+    private var syncConfigRevision = 0L
+    private var syncSecretsRevision = 0L
+
+    private var pendingCommands = PendingCommands()
+
+    init {
+        viewModelScope.launch {
+            for (command in saveChannel) {
+                mergeCommand(command)
+                while (true) {
+                    val next = saveChannel.tryReceive().getOrNull() ?: break
+                    mergeCommand(next)
+                }
+                flushPending()
+            }
+        }
+    }
+
+    private fun mergeCommand(command: SettingsSaveCommand) {
+        pendingCommands = when (command) {
+            is SettingsSaveCommand.Local -> pendingCommands.copy(local = command)
+            is SettingsSaveCommand.FontSize -> pendingCommands.copy(fontSize = command)
+            is SettingsSaveCommand.SyncConfig -> pendingCommands.copy(syncConfig = command)
+            is SettingsSaveCommand.SyncSecrets -> pendingCommands.copy(syncSecrets = command)
+        }
+    }
 
     fun initialize(repo: SettingsRepository) {
         settingsRepo = repo
         refresh()
         viewModelScope.launch {
-            for (snapshot in saveChannel) {
-                var latest = snapshot
-                while (true) {
-                    val next = saveChannel.tryReceive().getOrNull() ?: break
-                    latest = next
-                }
-                executeSave(latest)
-            }
+            flushPending()
         }
     }
 
-    private suspend fun executeSave(snapshot: SettingsUiState) {
+    private suspend fun flushPending() {
         val repo = settingsRepo ?: return
+        val cmds = pendingCommands
+        if (cmds.local == null && cmds.fontSize == null && cmds.syncConfig == null && cmds.syncSecrets == null) return
+        pendingCommands = PendingCommands()
+        executeSave(repo, cmds.local, cmds.fontSize, cmds.syncConfig, cmds.syncSecrets)
+    }
+
+    private suspend fun executeSave(
+        repo: SettingsRepository,
+        local: SettingsSaveCommand.Local?,
+        fontSize: SettingsSaveCommand.FontSize?,
+        syncConfig: SettingsSaveCommand.SyncConfig?,
+        syncSecrets: SettingsSaveCommand.SyncSecrets?,
+    ) {
         var failedField: SaveField? = null
 
-        val settingsResult = withContext(Dispatchers.IO) { repo.saveLocalSettings(snapshot.settings) }
-        when (settingsResult) {
-            is SettingsSaveResult.Success -> {
-                com.xiwei.sujian.ui.compose.theme.ThemeStore.reload()
+        if (local != null) {
+            val result = withContext(Dispatchers.IO) { repo.saveLocalSettings(local.settings) }
+            when (result) {
+                is SettingsSaveResult.Success -> {
+                    com.xiwei.sujian.ui.compose.theme.ThemeStore.reload()
+                }
+                is SettingsSaveResult.Failed -> {
+                    if (failedField == null && localRevision == local.revision) {
+                        failedField = SaveField.LOCAL_SETTINGS
+                    }
+                }
             }
-            is SettingsSaveResult.Failed -> {
-                if (failedField == null) failedField = settingsResult.field
+        }
+
+        if (fontSize != null) {
+            val result = withContext(Dispatchers.IO) { repo.setFontSize(fontSize.fontSize) }
+            if (failedField == null && result is SettingsSaveResult.Failed && fontSizeRevision == fontSize.revision) {
+                failedField = SaveField.FONT_SIZE
             }
         }
 
-        val fontSizeResult = withContext(Dispatchers.IO) { repo.setFontSize(snapshot.fontSize) }
-        if (failedField == null && fontSizeResult is SettingsSaveResult.Failed) {
-            failedField = fontSizeResult.field
+        if (syncConfig != null) {
+            val result = withContext(Dispatchers.IO) { repo.saveSyncConfig(syncConfig.config) }
+            if (failedField == null && result is SettingsSaveResult.Failed && syncConfigRevision == syncConfig.revision) {
+                failedField = SaveField.SYNC_CONFIG
+            }
         }
 
-        val syncConfigResult = withContext(Dispatchers.IO) { repo.saveSyncConfig(snapshot.syncConfig) }
-        if (failedField == null && syncConfigResult is SettingsSaveResult.Failed) {
-            failedField = syncConfigResult.field
-        }
-
-        val syncSecretsResult = withContext(Dispatchers.IO) { repo.saveSyncSecrets(snapshot.syncSecrets) }
-        if (failedField == null && syncSecretsResult is SettingsSaveResult.Failed) {
-            failedField = syncSecretsResult.field
+        if (syncSecrets != null) {
+            val result = withContext(Dispatchers.IO) { repo.saveSyncSecrets(syncSecrets.secrets) }
+            if (failedField == null && result is SettingsSaveResult.Failed && syncSecretsRevision == syncSecrets.revision) {
+                failedField = SaveField.SYNC_SECRETS
+            }
         }
 
         if (failedField != null) {
-            refreshSaveableFieldsFromRepository()
+            rollbackField(repo, failedField)
             val errorResId = when (failedField) {
                 SaveField.LOCAL_SETTINGS -> R.string.save_local_settings_failed
                 SaveField.FONT_SIZE -> R.string.save_font_size_failed
@@ -128,24 +202,33 @@ class SettingsViewModel : ViewModel() {
             }
             _uiState.update { it.copy(saveErrorResId = errorResId) }
             _saveFailureEvents.send(errorResId)
-        } else {
+        } else if (local != null || fontSize != null || syncConfig != null || syncSecrets != null) {
             _uiState.update { it.copy(saveErrorResId = null) }
         }
     }
 
-    private suspend fun refreshSaveableFieldsFromRepository() {
-        val repo = settingsRepo ?: return
-        val settings = withContext(Dispatchers.IO) { repo.getLocalSettings() }
-        val fontSize = withContext(Dispatchers.IO) { repo.getEffectiveFontSize() }
-        val syncConfig = withContext(Dispatchers.IO) { repo.loadSyncConfig() }
-        val syncSecrets = withContext(Dispatchers.IO) { repo.loadSyncSecrets() }
-        _uiState.update { current ->
-            current.copy(
-                settings = settings,
-                fontSize = fontSize,
-                syncConfig = syncConfig,
-                syncSecrets = syncSecrets,
-            )
+    private suspend fun rollbackField(repo: SettingsRepository, field: SaveField) {
+        when (field) {
+            SaveField.LOCAL_SETTINGS -> {
+                if (localRevision == 0L) return
+                val settings = withContext(Dispatchers.IO) { repo.getLocalSettings() }
+                _uiState.update { it.copy(settings = settings) }
+            }
+            SaveField.FONT_SIZE -> {
+                if (fontSizeRevision == 0L) return
+                val fontSize = withContext(Dispatchers.IO) { repo.getEffectiveFontSize() }
+                _uiState.update { it.copy(fontSize = fontSize) }
+            }
+            SaveField.SYNC_CONFIG -> {
+                if (syncConfigRevision == 0L) return
+                val config = withContext(Dispatchers.IO) { repo.loadSyncConfig() }
+                _uiState.update { it.copy(syncConfig = config) }
+            }
+            SaveField.SYNC_SECRETS -> {
+                if (syncSecretsRevision == 0L) return
+                val secrets = withContext(Dispatchers.IO) { repo.loadSyncSecrets() }
+                _uiState.update { it.copy(syncSecrets = secrets) }
+            }
         }
     }
 
@@ -156,22 +239,25 @@ class SettingsViewModel : ViewModel() {
     fun handleIntent(intent: SettingsIntent) {
         when (intent) {
             is SettingsIntent.UpdateLocal -> {
-                _uiState.update { current ->
-                    current.copy(settings = intent.transform(current.settings))
-                }
-                saveChannel.trySend(_uiState.value)
+                val newSettings = intent.transform(_uiState.value.settings)
+                _uiState.update { it.copy(settings = newSettings) }
+                val rev = ++localRevision
+                saveChannel.trySend(SettingsSaveCommand.Local(newSettings, rev))
             }
             is SettingsIntent.UpdateFontSize -> {
                 _uiState.update { it.copy(fontSize = intent.fontSize) }
-                saveChannel.trySend(_uiState.value)
+                val rev = ++fontSizeRevision
+                saveChannel.trySend(SettingsSaveCommand.FontSize(intent.fontSize, rev))
             }
             is SettingsIntent.UpdateSyncConfig -> {
                 _uiState.update { it.copy(syncConfig = intent.config) }
-                saveChannel.trySend(_uiState.value)
+                val rev = ++syncConfigRevision
+                saveChannel.trySend(SettingsSaveCommand.SyncConfig(intent.config, rev))
             }
             is SettingsIntent.UpdateSyncSecrets -> {
                 _uiState.update { it.copy(syncSecrets = intent.secrets) }
-                saveChannel.trySend(_uiState.value)
+                val rev = ++syncSecretsRevision
+                saveChannel.trySend(SettingsSaveCommand.SyncSecrets(intent.secrets, rev))
             }
             is SettingsIntent.Refresh -> refresh()
             is SettingsIntent.CaptureDynamicColor -> {
