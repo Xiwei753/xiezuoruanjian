@@ -63,6 +63,7 @@ data class SettingsUiState(
     val testConnectionState: SyncCommandState = SyncCommandState.IDLE,
     val performSyncState: SyncCommandState = SyncCommandState.IDLE,
     val syncCommandResult: String? = null,
+    val lastCommandType: SyncCommandType? = null,
 )
 
 sealed interface SettingsIntent {
@@ -107,7 +108,7 @@ private data class PendingCommands(
     val syncSecrets: SettingsSaveCommand.SyncSecrets? = null,
 )
 
-private enum class SyncCommandType { DRY_RUN, TEST_CONNECTION, PERFORM_SYNC }
+enum class SyncCommandType { DRY_RUN, TEST_CONNECTION, PERFORM_SYNC }
 
 class SettingsViewModel : ViewModel() {
     private var settingsRepo: SettingsRepository? = null
@@ -397,17 +398,17 @@ class SettingsViewModel : ViewModel() {
 
         when (type) {
             SyncCommandType.DRY_RUN -> {
-                runningStateField = { copy(dryRunState = SyncCommandState.RUNNING, syncCommandResult = null) }
+                runningStateField = { copy(dryRunState = SyncCommandState.RUNNING, syncCommandResult = null, lastCommandType = SyncCommandType.DRY_RUN) }
                 successStateField = { copy(dryRunState = SyncCommandState.SUCCESS) }
                 failureStateField = { copy(dryRunState = SyncCommandState.FAILURE) }
             }
             SyncCommandType.TEST_CONNECTION -> {
-                runningStateField = { copy(testConnectionState = SyncCommandState.RUNNING, syncCommandResult = null) }
+                runningStateField = { copy(testConnectionState = SyncCommandState.RUNNING, syncCommandResult = null, lastCommandType = SyncCommandType.TEST_CONNECTION) }
                 successStateField = { copy(testConnectionState = SyncCommandState.SUCCESS) }
                 failureStateField = { copy(testConnectionState = SyncCommandState.FAILURE) }
             }
             SyncCommandType.PERFORM_SYNC -> {
-                runningStateField = { copy(performSyncState = SyncCommandState.RUNNING, syncCommandResult = null) }
+                runningStateField = { copy(performSyncState = SyncCommandState.RUNNING, syncCommandResult = null, lastCommandType = SyncCommandType.PERFORM_SYNC) }
                 successStateField = { copy(performSyncState = SyncCommandState.SUCCESS) }
                 failureStateField = { copy(performSyncState = SyncCommandState.FAILURE) }
             }
@@ -534,6 +535,7 @@ class SettingsViewModel : ViewModel() {
                     testConnectionState = current.testConnectionState,
                     performSyncState = current.performSyncState,
                     syncCommandResult = current.syncCommandResult,
+                    lastCommandType = current.lastCommandType,
                 )
             }
         }

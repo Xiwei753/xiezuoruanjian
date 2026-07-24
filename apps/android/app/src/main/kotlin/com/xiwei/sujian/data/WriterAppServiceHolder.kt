@@ -15,6 +15,7 @@ class WriterAppServiceHolder(
     platformInit: PlatformInitDto? = null,
     secureStorageProvider: uniffi.writer_core.SecureStorageProvider? = null,
     val secureStorageError: String? = null,
+    private val keystoreStorage: com.xiwei.sujian.platform.AndroidKeystoreSecureStorage? = null,
 ) {
     val service: WriterAppService by lazy {
         if (platformInit != null && secureStorageProvider != null) {
@@ -38,6 +39,7 @@ class WriterAppServiceHolder(
 
     fun dismissMigrationWarning() {
         _migrationWarningDismissed = true
+        keystoreStorage?.markMigrationCompleted()
     }
 
     companion object {
@@ -78,9 +80,9 @@ class WriterAppServiceHolder(
                 return WriterAppServiceHolder(workspacePath, init, null, secureStorageError = "keystore_init_failed")
             }
             if (secureStorage.migrationError != null) {
-                return WriterAppServiceHolder(workspacePath, init, secureStorage, secureStorageError = "migration_failed:${secureStorage.migrationError}")
+                return WriterAppServiceHolder(workspacePath, init, secureStorage, secureStorageError = "migration_failed:${secureStorage.migrationError}", keystoreStorage = secureStorage)
             }
-            return WriterAppServiceHolder(workspacePath, init, secureStorage)
+            return WriterAppServiceHolder(workspacePath, init, secureStorage, keystoreStorage = secureStorage)
         }
     }
 

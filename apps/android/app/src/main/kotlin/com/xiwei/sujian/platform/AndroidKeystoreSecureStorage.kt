@@ -161,6 +161,16 @@ class AndroidKeystoreSecureStorage(
     var migrationError: String? = null
         private set
 
+    fun markMigrationCompleted() {
+        migrationMarker.createNewFile()
+        val oldKeyFile = File(context.noBackupFilesDir, OLD_KEY_FILE)
+        val oldSecretsDir = File(context.noBackupFilesDir, OLD_SECRETS_DIR)
+        if (oldKeyFile.exists()) oldKeyFile.delete()
+        if (oldSecretsDir.exists() && oldSecretsDir.isDirectory) oldSecretsDir.deleteRecursively()
+        migrationError = null
+        DiagnosticsLogger.i(TAG, "Migration marked as completed by user, old files cleaned up")
+    }
+
     private fun migrateOldEncKey() {
         if (migrationMarker.exists()) {
             val oldKeyFile = File(context.noBackupFilesDir, OLD_KEY_FILE)

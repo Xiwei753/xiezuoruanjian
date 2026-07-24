@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -39,6 +40,11 @@ fun SyncSettings(
     var branch by rememberSaveable { mutableStateOf(syncConfig.branch ?: "main") }
     var token by rememberSaveable { mutableStateOf(syncSecrets.token ?: "") }
     var syncInterval by rememberSaveable { mutableFloatStateOf((syncConfig.syncIntervalSeconds ?: 300).toFloat()) }
+
+    LaunchedEffect(syncConfig.remoteUrl) { remoteUrl = syncConfig.remoteUrl ?: "" }
+    LaunchedEffect(syncConfig.branch) { branch = syncConfig.branch ?: "main" }
+    LaunchedEffect(syncSecrets.token) { token = syncSecrets.token ?: "" }
+    LaunchedEffect(syncConfig.syncIntervalSeconds) { syncInterval = (syncConfig.syncIntervalSeconds ?: 300).toFloat() }
 
     androidx.compose.foundation.layout.Column(
         modifier = modifier.padding(dims.space16),
@@ -170,9 +176,12 @@ fun SyncSettings(
 
                 if (state.syncCommandResult != null) {
                     Spacer(modifier = Modifier.height(dims.space8))
-                    val isSuccess = state.dryRunState == SyncCommandState.SUCCESS
-                        || state.testConnectionState == SyncCommandState.SUCCESS
-                        || state.performSyncState == SyncCommandState.SUCCESS
+                    val isSuccess = when (state.lastCommandType) {
+                        SyncCommandType.DRY_RUN -> state.dryRunState == SyncCommandState.SUCCESS
+                        SyncCommandType.TEST_CONNECTION -> state.testConnectionState == SyncCommandState.SUCCESS
+                        SyncCommandType.PERFORM_SYNC -> state.performSyncState == SyncCommandState.SUCCESS
+                        null -> false
+                    }
                     Text(
                         text = state.syncCommandResult,
                         color = if (isSuccess) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
