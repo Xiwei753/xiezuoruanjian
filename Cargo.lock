@@ -3808,6 +3808,7 @@ checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 name = "writer-platform-android"
 version = "0.1.0"
 dependencies = [
+ "reqwest",
  "writer_core",
  "writer_platform_api",
  "writer_uniffi",
@@ -3817,6 +3818,7 @@ dependencies = [
 name = "writer-platform-linux"
 version = "0.1.0"
 dependencies = [
+ "reqwest",
  "uuid",
  "writer_core",
  "writer_platform_api",
