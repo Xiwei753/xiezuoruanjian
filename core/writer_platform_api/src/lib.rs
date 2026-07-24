@@ -25,6 +25,7 @@ mod network_state;
 mod platform_capabilities;
 mod platform_init;
 mod platform_paths;
+mod platform_services;
 mod secure_storage;
 mod sync_transport;
 
@@ -32,6 +33,7 @@ pub use config_store::{ConfigStore, FileConfigStore};
 pub use network_state::NetworkState;
 pub use platform_capabilities::{PlatformCapabilities, PlatformCapabilitiesExt};
 pub use platform_init::{PlatformInit, PlatformKind, PlatformPaths};
+pub use platform_services::{PlatformServices, SyncTransportFactory};
 pub use secure_storage::SecureStorage;
 pub use sync_transport::{HttpRequest, HttpResponse, SyncTransport, TransportError};
 
@@ -177,5 +179,76 @@ mod tests {
         let restored: HttpRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.method, "GET");
         assert_eq!(restored.headers.len(), 1);
+    }
+
+    #[test]
+    fn platform_services_minimal_construction() {
+        let init = PlatformInit {
+            platform: PlatformKind::Desktop,
+            app_data_dir: "/data".into(),
+            cache_dir: "/cache".into(),
+            log_dir: "/log".into(),
+            no_backup_dir: None,
+            device_id: "dev-1".to_string(),
+            app_version: "1.0".to_string(),
+            locale: "en_US".to_string(),
+            timezone: "UTC".to_string(),
+        };
+        let services = PlatformServices {
+            init,
+            config_store: None,
+            secure_storage: None,
+            network_state: None,
+            sync_transport_factory: None,
+        };
+        assert_eq!(services.init.device_id, "dev-1");
+        assert!(services.config_store.is_none());
+        assert!(services.secure_storage.is_none());
+        assert!(services.network_state.is_none());
+        assert!(services.sync_transport_factory.is_none());
+    }
+
+    #[test]
+    fn platform_services_with_all_components() {
+        let init = PlatformInit {
+            platform: PlatformKind::Android,
+            app_data_dir: "/data".into(),
+            cache_dir: "/cache".into(),
+            log_dir: "/log".into(),
+            no_backup_dir: Some("/nobackup".into()),
+            device_id: "dev-2".to_string(),
+            app_version: "2.0".to_string(),
+            locale: "zh_CN".to_string(),
+            timezone: "Asia/Shanghai".to_string(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let config_store: Box<dyn ConfigStore> = Box::new(FileConfigStore::new(dir.path().to_path_buf()));
+        let secure_storage: Box<dyn SecureStorage> = Box::new(TestSecureStorage);
+        let network_state = NetworkState {
+            is_connected: true,
+            is_metered: false,
+            proxy_host: None,
+            proxy_port: None,
+        };
+        let services = PlatformServices {
+            init,
+            config_store: Some(config_store),
+            secure_storage: Some(secure_storage),
+            network_state: Some(network_state),
+            sync_transport_factory: None,
+        };
+        assert_eq!(services.init.platform, PlatformKind::Android);
+        assert!(services.config_store.is_some());
+        assert!(services.secure_storage.is_some());
+        assert!(services.network_state.is_some());
+        assert!(services.network_state.unwrap().is_connected);
+    }
+
+    struct TestSecureStorage;
+
+    impl SecureStorage for TestSecureStorage {
+        fn get_secret(&self, _key: &str) -> Result<Option<Vec<u8>>, String> { Ok(None) }
+        fn set_secret(&self, _key: &str, _value: &[u8]) -> Result<(), String> { Ok(()) }
+        fn delete_secret(&self, _key: &str) -> Result<(), String> { Ok(()) }
     }
 }

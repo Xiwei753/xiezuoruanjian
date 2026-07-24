@@ -7,7 +7,7 @@
 //! - 按 XDG Base Directory 规范解析应用目录
 //! - 构造 `PlatformInit` 并注入 Core
 //! - 使用 `writer_platform_api::FileConfigStore` 提供配置存储
-//! - 通过 `ReqwestSyncTransport` 提供同步 HTTP 传输
+//! - 通过 `ReqwestSyncTransport` 提供同步 HTTP 传输（尊重系统/环境代理）
 //! - 组装最终 `cdylib`：包含通用核心、Linux 适配和 UniFFI 元数据
 //!
 //! ## 依赖方向
@@ -20,7 +20,9 @@
 use writer_uniffi::WriterAppService;
 
 use std::path::PathBuf;
-use writer_platform_api::{FileConfigStore, HttpRequest, HttpResponse, PlatformInit, PlatformKind, SyncTransport, TransportError};
+use writer_platform_api::{FileConfigStore, HttpRequest, HttpResponse, NetworkState, PlatformInit, PlatformKind, PlatformServices, SecureStorage, SyncTransport, TransportError};
+
+const APP_NAMESPACE: &str = "sujian";
 
 pub fn resolve_platform_init() -> PlatformInit {
     let config_dir = xdg_config_dir();
@@ -34,7 +36,7 @@ pub fn resolve_platform_init() -> PlatformInit {
         cache_dir,
         log_dir,
         no_backup_dir: None,
-        device_id: derive_device_id(),
+        device_id: derive_or_load_device_id(),
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         locale: std::env::var("LANG")
             .unwrap_or_else(|_| "en_US.UTF-8".to_string())
@@ -43,6 +45,34 @@ pub fn resolve_platform_init() -> PlatformInit {
             .unwrap_or("en_US")
             .to_string(),
         timezone: local_timezone(),
+    }
+}
+
+pub fn create_platform_services() -> PlatformServices {
+    let init = resolve_platform_init();
+    let config_dir = xdg_config_dir();
+    let config_store: Option<Box<dyn writer_platform_api::ConfigStore>> =
+        Some(Box::new(FileConfigStore::new(config_dir)));
+
+    #[cfg(feature = "github-api")]
+    let sync_transport_factory: Option<writer_platform_api::SyncTransportFactory> = {
+        let factory: writer_platform_api::SyncTransportFactory =
+            std::sync::Arc::new(|| -> Box<dyn SyncTransport> {
+                let transport = ReqwestSyncTransport::new()
+                    .unwrap_or_else(|e| panic!("Failed to create Linux SyncTransport: {}", e.message));
+                Box::new(transport)
+            });
+        Some(factory)
+    };
+    #[cfg(not(feature = "github-api"))]
+    let sync_transport_factory: Option<writer_platform_api::SyncTransportFactory> = None;
+
+    PlatformServices {
+        init,
+        config_store,
+        secure_storage: Some(Box::new(LinuxFileSecureStorage::new(xdg_config_dir()))),
+        network_state: Some(detect_network_state()),
+        sync_transport_factory,
     }
 }
 
@@ -66,15 +96,36 @@ pub fn xdg_cache_dir() -> PathBuf {
     }
 }
 
-fn derive_device_id() -> String {
-    let machine_id = std::fs::read_to_string("/etc/machine-id")
-        .or_else(|_| std::fs::read_to_string("/var/lib/dbus/machine-id"))
-        .unwrap_or_default();
-    let trimmed = machine_id.trim().to_string();
-    if !trimmed.is_empty() {
-        return trimmed;
+fn xdg_state_dir() -> PathBuf {
+    if let Some(state_home) = std::env::var_os("XDG_STATE_HOME") {
+        PathBuf::from(state_home).join(APP_NAMESPACE)
+    } else {
+        std::env::var_os("HOME")
+            .map(|home| PathBuf::from(home).join(".local/state").join(APP_NAMESPACE))
+            .unwrap_or_else(|| PathBuf::from(".local/state").join(APP_NAMESPACE))
     }
-    uuid::Uuid::new_v4().to_string()
+}
+
+fn derive_or_load_device_id() -> String {
+    let state_dir = xdg_state_dir();
+    let device_id_path = state_dir.join("device_id");
+
+    if let Ok(existing) = std::fs::read_to_string(&device_id_path) {
+        let trimmed = existing.trim().to_string();
+        if !trimmed.is_empty() {
+            return trimmed;
+        }
+    }
+
+    let new_id = uuid::Uuid::new_v4().to_string();
+    if let Some(parent) = device_id_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let tmp_path = device_id_path.with_extension("tmp");
+    if std::fs::write(&tmp_path, &new_id).is_ok() {
+        let _ = std::fs::rename(&tmp_path, &device_id_path);
+    }
+    new_id
 }
 
 fn local_timezone() -> String {
@@ -93,6 +144,88 @@ pub fn init_default_config_store() {
     writer_core::app_config::set_default_config_store(Box::new(store));
 }
 
+fn detect_network_state() -> NetworkState {
+    NetworkState {
+        is_connected: true,
+        is_metered: false,
+        proxy_host: std::env::var("http_proxy")
+            .or_else(|_| std::env::var("HTTP_PROXY"))
+            .or_else(|_| std::env::var("https_proxy"))
+            .or_else(|_| std::env::var("HTTPS_PROXY"))
+            .ok()
+            .and_then(|url| {
+                let url = url.strip_prefix("http://")
+                    .or_else(|| url.strip_prefix("https://"))
+                    .unwrap_or(&url);
+                let without_auth = url.split('@').next_back().unwrap_or(url);
+                let host = without_auth.split(':').next().unwrap_or("");
+                let host = host.trim();
+                if host.is_empty() {
+                    None
+                } else {
+                    Some(host.to_string())
+                }
+            }),
+        proxy_port: std::env::var("http_proxy")
+            .or_else(|_| std::env::var("HTTP_PROXY"))
+            .or_else(|_| std::env::var("https_proxy"))
+            .or_else(|_| std::env::var("HTTPS_PROXY"))
+            .ok()
+            .and_then(|url| {
+                let url = url.strip_prefix("http://")
+                    .or_else(|| url.strip_prefix("https://"))
+                    .unwrap_or(&url);
+                let without_auth = url.split('@').next_back().unwrap_or(url);
+                without_auth.split(':')
+                    .nth(1)
+                    .and_then(|s| s.trim().parse::<u16>().ok())
+            }),
+    }
+}
+
+struct LinuxFileSecureStorage {
+    storage_dir: PathBuf,
+}
+
+impl LinuxFileSecureStorage {
+    fn new(storage_dir: PathBuf) -> Self {
+        Self { storage_dir }
+    }
+
+    fn secret_path(&self, key: &str) -> PathBuf {
+        self.storage_dir.join("secrets").join(format!("{}.bin", key))
+    }
+}
+
+impl SecureStorage for LinuxFileSecureStorage {
+    fn get_secret(&self, key: &str) -> Result<Option<Vec<u8>>, String> {
+        let path = self.secret_path(key);
+        if !path.exists() {
+            return Ok(None);
+        }
+        std::fs::read(&path).map(Some).map_err(|e| e.to_string())
+    }
+
+    fn set_secret(&self, key: &str, value: &[u8]) -> Result<(), String> {
+        let path = self.secret_path(key);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let tmp_path = path.with_extension("tmp");
+        std::fs::write(&tmp_path, value).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp_path, &path).map_err(|e| e.to_string())
+    }
+
+    fn delete_secret(&self, key: &str) -> Result<(), String> {
+        let path = self.secret_path(key);
+        if path.exists() {
+            std::fs::remove_file(&path).map_err(|e| e.to_string())
+        } else {
+            Ok(())
+        }
+    }
+}
+
 #[cfg(feature = "github-api")]
 pub struct ReqwestSyncTransport {
     client: reqwest::blocking::Client,
@@ -104,7 +237,6 @@ impl ReqwestSyncTransport {
         let client = reqwest::blocking::Client::builder()
             .user_agent("WriterApp/1.0")
             .timeout(std::time::Duration::from_secs(15))
-            .no_proxy()
             .build()
             .map_err(|e| TransportError::new("init", format!("Failed to build HTTP client: {}", e)))?;
         Ok(Self { client })

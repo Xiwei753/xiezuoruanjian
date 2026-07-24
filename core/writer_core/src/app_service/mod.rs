@@ -41,6 +41,7 @@ struct EditorSession {
 ///
 /// - `secure_storage`：安全存储（令牌、凭据），由平台端注入 Keychain/Keystore 实现
 /// - `network_state`：网络状态（联网、代理、计费），由平台端注入系统网络信息
+/// - `sync_transport_factory`：同步传输工厂，由平台端注入 HTTP 客户端实现
 ///
 /// 同步操作优先使用 `SecureStorage` 获取 token，不再将凭据作为普通 JSON 存在工作区。
 pub struct WriterAppService {
@@ -83,12 +84,49 @@ impl WriterAppService {
         }
     }
 
+    pub fn with_platform_services(
+        workspace_path: String,
+        services: writer_platform_api::PlatformServices,
+    ) -> Self {
+        let api = if let Some(factory) = &services.sync_transport_factory {
+            WriterCoreApi::with_sync_transport(&workspace_path, factory.clone())
+        } else {
+            WriterCoreApi::new(&workspace_path)
+        };
+
+        if let Some(config_store) = services.config_store {
+            crate::app_config::set_default_config_store(config_store);
+        }
+
+        Self {
+            api,
+            editor_session: Mutex::new(EditorSession {
+                kernel: crate::editor::EditorKernel::new(),
+                chapter_id: None,
+                generation: 0,
+            }),
+            session_registry: Mutex::new(crate::editor::TextEditSessionRegistry::new()),
+            platform_init: Some(services.init),
+            secure_storage: services.secure_storage,
+            network_state: services.network_state,
+        }
+    }
+
     pub fn set_secure_storage(&mut self, storage: Box<dyn writer_platform_api::SecureStorage>) {
         self.secure_storage = Some(storage);
     }
 
     pub fn set_network_state(&mut self, state: writer_platform_api::NetworkState) {
         self.network_state = Some(state);
+    }
+
+    pub fn set_platform_init(&mut self, init: writer_platform_api::PlatformInit) {
+        self.platform_init = Some(init);
+    }
+
+    pub fn set_sync_transport_factory(&mut self, factory: writer_platform_api::SyncTransportFactory) {
+        let workspace_path = self.api.workspace_path.clone();
+        self.api = WriterCoreApi::with_sync_transport(workspace_path, factory);
     }
 
     pub fn network_state(&self) -> Option<&writer_platform_api::NetworkState> {

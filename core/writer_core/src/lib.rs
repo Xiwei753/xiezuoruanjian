@@ -117,6 +117,17 @@ pub fn open_workspace(
     Ok(std::sync::Arc::new(WriterAppService::new(path)))
 }
 
+pub fn open_workspace_with_platform_services(
+    path: String,
+    services: writer_platform_api::PlatformServices,
+) -> std::result::Result<std::sync::Arc<WriterAppService>, WriterError> {
+    let p = Path::new(&path);
+    if !crate::workspace::validate_workspace(p).map_err(WriterError::from)? {
+        return Err(WriterError::InvalidWorkspace);
+    }
+    Ok(std::sync::Arc::new(WriterAppService::with_platform_services(path, services)))
+}
+
 pub fn repair_workspace(path: String) -> std::result::Result<bool, WriterError> {
     let p = Path::new(&path);
     crate::workspace::create_workspace(p).map_err(WriterError::from)?;
