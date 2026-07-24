@@ -22,7 +22,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
-import com.xiwei.sujian.data.SettingsRepositoryimport com.xiwei.sujian.designsystem.component.SujianListItem
+import com.xiwei.sujian.data.SettingsRepository
+import com.xiwei.sujian.designsystem.component.SujianListItem
 import com.xiwei.sujian.designsystem.layout.SujianListDetailScaffold
 import com.xiwei.sujian.model.LocalSettings
 import com.xiwei.sujian.ui.compose.navigation.SettingsSection
@@ -61,13 +62,10 @@ sealed interface SettingsIntent {
     data class DeletePalette(val deviceId: String, val fingerprint: String) : SettingsIntent
 }
 
-class SettingsViewModel(private val application: android.app.Application) : ViewModel() {
+class SettingsViewModel : ViewModel() {
     private var settingsRepo: SettingsRepository? = null
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
-
-    private val _snackbarEvents = Channel<String>(Channel.BUFFERED)
-    val snackbarEvents = _snackbarEvents.receiveAsFlow()
 
     private sealed interface SaveCommand {
         data class SaveLocalSettings(val settings: LocalSettings, val previous: LocalSettings) : SaveCommand
@@ -76,10 +74,8 @@ class SettingsViewModel(private val application: android.app.Application) : View
         data class SaveSyncSecrets(val secrets: com.xiwei.sujian.model.SyncSecrets, val previous: com.xiwei.sujian.model.SyncSecrets) : SaveCommand
     }
 
-    private data class SaveFailure(val errorResId: Int, val messageResId: Int)
-
     private val saveChannel = Channel<SaveCommand>(Channel.UNLIMITED)
-    private val _saveFailureEvents = Channel<SaveFailure>(Channel.BUFFERED)
+    private val _saveFailureEvents = Channel<Int>(Channel.BUFFERED)
     val saveFailureEvents = _saveFailureEvents.receiveAsFlow()
 
     fun initialize(repo: SettingsRepository) {
@@ -102,36 +98,36 @@ class SettingsViewModel(private val application: android.app.Application) : View
                 if (success) {
                     com.xiwei.sujian.ui.compose.theme.ThemeStore.reload()
                 } else {
-                    _uiState.update { it.copy(settings = cmd.previous, saveError = application.getString(R.string.save_local_settings_failed)) }
-                    _snackbarEvents.send(application.getString(R.string.save_local_settings_failed))
+                    _uiState.update { it.copy(settings = cmd.previous, saveErrorResId = R.string.save_local_settings_failed) }
+                    _saveFailureEvents.send(R.string.save_local_settings_failed)
                 }
             }
             is SaveCommand.SaveFontSize -> {
                 val success = withContext(Dispatchers.IO) { repo.setFontSize(cmd.fontSize) }
                 if (!success) {
-                    _uiState.update { it.copy(fontSize = cmd.previous, saveError = application.getString(R.string.save_font_size_failed)) }
-                    _snackbarEvents.send(application.getString(R.string.save_font_size_failed))
+                    _uiState.update { it.copy(fontSize = cmd.previous, saveErrorResId = R.string.save_font_size_failed) }
+                    _saveFailureEvents.send(R.string.save_font_size_failed)
                 }
             }
             is SaveCommand.SaveSyncConfig -> {
                 val success = withContext(Dispatchers.IO) { repo.saveSyncConfig(cmd.config) }
                 if (!success) {
-                    _uiState.update { it.copy(syncConfig = cmd.previous, saveError = application.getString(R.string.save_sync_config_failed)) }
-                    _snackbarEvents.send(application.getString(R.string.save_sync_config_failed))
+                    _uiState.update { it.copy(syncConfig = cmd.previous, saveErrorResId = R.string.save_sync_config_failed) }
+                    _saveFailureEvents.send(R.string.save_sync_config_failed)
                 }
             }
             is SaveCommand.SaveSyncSecrets -> {
                 val success = withContext(Dispatchers.IO) { repo.saveSyncSecrets(cmd.secrets) }
                 if (!success) {
-                    _uiState.update { it.copy(syncSecrets = cmd.previous, saveError = application.getString(R.string.save_sync_secrets_failed)) }
-                    _snackbarEvents.send(application.getString(R.string.save_sync_secrets_failed))
+                    _uiState.update { it.copy(syncSecrets = cmd.previous, saveErrorResId = R.string.save_sync_secrets_failed) }
+                    _saveFailureEvents.send(R.string.save_sync_secrets_failed)
                 }
             }
         }
     }
 
     fun consumeSaveError() {
-        _uiState.update { it.copy(saveError = null) }
+        _uiState.update { it.copy(saveErrorResId = null) }
     }
 
     fun handleIntent(intent: SettingsIntent) {
@@ -235,14 +231,7 @@ fun SettingsRoute(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val vm: SettingsViewModel = viewModel(
-        factory = object : androidx.lifecycle.ViewModelProvider.Factory {
-            override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
-                @Suppress("UNCHECKED_CAST")
-                return SettingsViewModel(context.applicationContext as android.app.Application) as T
-            }
-        }
-    )
+    val vm: SettingsViewModel = viewModel()
     val uiState by vm.uiState.collectAsState()
     val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
 
@@ -251,8 +240,8 @@ fun SettingsRoute(
     }
 
     LaunchedEffect(Unit) {
-        vm.snackbarEvents.collect { message ->
-            snackbarHostState.showSnackbar(message)
+        vm.saveFailureEvents.collect { errorResId ->
+            snackbarHostState.showSnackbar(context.getString(errorResId))
         }
     }
 

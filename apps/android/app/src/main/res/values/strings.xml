@@ -417,4 +417,8 @@
     <string name="action_collapse">折叠</string>
     <string name="action_expand">展开</string>
     <string name="pref_category_font_layout">字体与排版</string>
+    <string name="save_local_settings_failed">保存本地设置失败</string>
+    <string name="save_font_size_failed">保存字体大小失败</string>
+    <string name="save_sync_config_failed">保存同步配置失败</string>
+    <string name="save_sync_secrets_failed">保存同步密钥失败</string>
 </resources>
