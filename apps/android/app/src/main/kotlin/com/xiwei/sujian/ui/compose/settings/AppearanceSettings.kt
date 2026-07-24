@@ -124,7 +124,7 @@ fun AppearanceSettings(
                 },
                 valueRange = 1f..3f,
                 steps = 19,
-                valueLabel = String.format("%.1fx", lineSpacing),
+                valueLabel = String.format(java.util.Locale.ROOT, "%.1fx", lineSpacing),
                 modifier = Modifier.fillMaxWidth(),
             )
         }

@@ -5,6 +5,16 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
+import android.os.Build
+
+private fun Canvas.clipOutRectCompat(left: Float, top: Float, right: Float, bottom: Float) {
+    if (Build.VERSION.SDK_INT >= 26) {
+        clipOutRect(left, top, right, bottom)
+    } else {
+        @Suppress("DEPRECATION")
+        clipRect(left, top, right, bottom, android.graphics.Region.Op.DIFFERENCE)
+    }
+}
 
 class AndroidTextRenderer(
     private val textPaint: Paint = Paint().apply {
@@ -64,7 +74,7 @@ class AndroidTextRenderer(
         drawSearchHighlightsUnshifted(canvas, layout, unshiftedHighlights)
         canvas.save()
         for (shift in blockShifts) {
-            canvas.clipOutRect(shift.left, shift.top, shift.right, shift.bottom)
+            canvas.clipOutRectCompat(shift.left, shift.top, shift.right, shift.bottom)
         }
         drawSearchHighlightsUnshifted(canvas, layout, shiftedHighlights)
         canvas.restore()
@@ -114,7 +124,7 @@ class AndroidTextRenderer(
         }
         canvas.save()
         for (shift in blockShifts) {
-            canvas.clipOutRect(shift.left, shift.top, shift.right, shift.bottom)
+            canvas.clipOutRectCompat(shift.left, shift.top, shift.right, shift.bottom)
         }
         drawSelectionHighlightUnshifted(canvas, layout, selStart, selEnd)
         canvas.restore()
@@ -194,10 +204,10 @@ class AndroidTextRenderer(
         }
         canvas.save()
         for (region in holes) {
-            canvas.clipOutRect(region.left, region.top, region.right, region.bottom)
+            canvas.clipOutRectCompat(region.left, region.top, region.right, region.bottom)
         }
         for (shift in blockShifts) {
-            canvas.clipOutRect(
+            canvas.clipOutRectCompat(
                 shift.left, shift.top,
                 shift.right, shift.bottom
             )
@@ -242,7 +252,7 @@ class AndroidTextRenderer(
         }
         canvas.save()
         for (shift in blockShifts) {
-            canvas.clipOutRect(shift.left, shift.top, shift.right, shift.bottom)
+            canvas.clipOutRectCompat(shift.left, shift.top, shift.right, shift.bottom)
         }
         drawPreeditUnderlineUnshifted(canvas, layout, compStart, compEnd)
         canvas.restore()

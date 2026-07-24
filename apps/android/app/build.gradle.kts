@@ -196,5 +196,6 @@ dependencies {
 android {
     lint {
         disable.addAll(listOf("MissingTranslation"))
+        baseline = file("lint-baseline.xml")
     }
 }

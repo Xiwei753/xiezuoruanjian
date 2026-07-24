@@ -3,6 +3,7 @@ package com.xiwei.sujian.editor.v2.layout
 import android.text.DynamicLayout
 import android.text.Layout
 import android.text.TextPaint
+import android.os.Build
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap
 import com.xiwei.sujian.editor.v2.projection.DisplayTextProjection
@@ -44,11 +45,21 @@ class AndroidLayoutEngine(
         val currentConfigFp = computeConfigFingerprint()
 
         if (currentConfigFp != lastConfigFingerprint || layout == null) {
-            layout = DynamicLayout.Builder.obtain(effectiveText, textPaint, width.toInt())
-                .setAlignment(Layout.Alignment.ALIGN_NORMAL)
-                .setLineSpacing(0f, lineSpacingMultiplier)
-                .setIncludePad(false)
-                .build()
+            layout = if (Build.VERSION.SDK_INT >= 28) {
+                DynamicLayout.Builder.obtain(effectiveText, textPaint, width.toInt())
+                    .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+                    .setLineSpacing(0f, lineSpacingMultiplier)
+                    .setIncludePad(false)
+                    .build()
+            } else {
+                @Suppress("DEPRECATION")
+                DynamicLayout(
+                    effectiveText, textPaint, width.toInt(),
+                    Layout.Alignment.ALIGN_NORMAL,
+                    0f, lineSpacingMultiplier,
+                    false
+                )
+            }
             lastConfigFingerprint = currentConfigFp
         }
 
