@@ -12,6 +12,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -128,7 +131,28 @@ fun SujianApp(
             LocalAndroidCapabilities provides capabilities,
             LocalAnimatedTextEditorCoordinator provides coordinator,
         ) {
-            Box(modifier = Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(capabilityProvider) {
+                        awaitPointerEventScope {
+                            while (true) {
+                                val event = awaitPointerEvent(PointerEventPass.Initial)
+                                val changes = event.changes
+                                if (changes.isNotEmpty()) {
+                                    val type = changes.first().type
+                                    val kind = when (type) {
+                                        PointerType.Mouse -> PointerKind.Mouse
+                                        PointerType.Stylus -> PointerKind.Stylus
+                                        PointerType.Eraser -> PointerKind.Stylus
+                                        else -> PointerKind.Touch
+                                    }
+                                    capabilityProvider.updateActivePointerKind(kind)
+                                }
+                            }
+                        }
+                    }
+            ) {
                 SujianNavigationSuite(
                     appState = appState,
                     initialDestination = initialDestination,

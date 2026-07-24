@@ -1,6 +1,7 @@
 package com.xiwei.sujian.ui.compose.settings
 
 import android.os.Parcelable
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -67,14 +68,7 @@ class SettingsViewModel : ViewModel() {
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
 
-    private sealed interface SaveCommand {
-        data class SaveLocalSettings(val settings: LocalSettings, val previous: LocalSettings) : SaveCommand
-        data class SaveFontSize(val fontSize: Float, val previous: Float) : SaveCommand
-        data class SaveSyncConfig(val config: com.xiwei.sujian.model.SyncConfig, val previous: com.xiwei.sujian.model.SyncConfig) : SaveCommand
-        data class SaveSyncSecrets(val secrets: com.xiwei.sujian.model.SyncSecrets, val previous: com.xiwei.sujian.model.SyncSecrets) : SaveCommand
-    }
-
-    private val saveChannel = Channel<SaveCommand>(Channel.UNLIMITED)
+    private val saveChannel = Channel<SettingsUiState>(Channel.UNLIMITED)
     private val _saveFailureEvents = Channel<Int>(Channel.BUFFERED)
     val saveFailureEvents = _saveFailureEvents.receiveAsFlow()
 
@@ -82,47 +76,65 @@ class SettingsViewModel : ViewModel() {
         settingsRepo = repo
         refresh()
         viewModelScope.launch {
-            for (cmd in saveChannel) {
-                executeSave(cmd)
+            for (snapshot in saveChannel) {
+                var latest = snapshot
+                while (true) {
+                    val next = saveChannel.tryReceive().getOrNull() ?: break
+                    latest = next
+                }
+                executeSave(latest)
             }
         }
     }
 
-    private suspend fun executeSave(cmd: SaveCommand) {
+    private suspend fun executeSave(snapshot: SettingsUiState) {
         val repo = settingsRepo ?: return
-        when (cmd) {
-            is SaveCommand.SaveLocalSettings -> {
-                val success = withContext(Dispatchers.IO) {
-                    repo.saveLocalSettings(cmd.settings)
-                }
-                if (success) {
-                    com.xiwei.sujian.ui.compose.theme.ThemeStore.reload()
-                } else {
-                    _uiState.update { it.copy(settings = cmd.previous, saveErrorResId = R.string.save_local_settings_failed) }
-                    _saveFailureEvents.send(R.string.save_local_settings_failed)
-                }
-            }
-            is SaveCommand.SaveFontSize -> {
-                val success = withContext(Dispatchers.IO) { repo.setFontSize(cmd.fontSize) }
-                if (!success) {
-                    _uiState.update { it.copy(fontSize = cmd.previous, saveErrorResId = R.string.save_font_size_failed) }
-                    _saveFailureEvents.send(R.string.save_font_size_failed)
-                }
-            }
-            is SaveCommand.SaveSyncConfig -> {
-                val success = withContext(Dispatchers.IO) { repo.saveSyncConfig(cmd.config) }
-                if (!success) {
-                    _uiState.update { it.copy(syncConfig = cmd.previous, saveErrorResId = R.string.save_sync_config_failed) }
-                    _saveFailureEvents.send(R.string.save_sync_config_failed)
-                }
-            }
-            is SaveCommand.SaveSyncSecrets -> {
-                val success = withContext(Dispatchers.IO) { repo.saveSyncSecrets(cmd.secrets) }
-                if (!success) {
-                    _uiState.update { it.copy(syncSecrets = cmd.previous, saveErrorResId = R.string.save_sync_secrets_failed) }
-                    _saveFailureEvents.send(R.string.save_sync_secrets_failed)
-                }
-            }
+        var failedResId: Int? = null
+
+        val settingsOk = withContext(Dispatchers.IO) { repo.saveLocalSettings(snapshot.settings) }
+        if (settingsOk) {
+            com.xiwei.sujian.ui.compose.theme.ThemeStore.reload()
+        } else {
+            failedResId = R.string.save_local_settings_failed
+        }
+
+        val fontSizeOk = withContext(Dispatchers.IO) { repo.setFontSize(snapshot.fontSize) }
+        if (!fontSizeOk && failedResId == null) {
+            failedResId = R.string.save_font_size_failed
+        }
+
+        val syncConfigOk = withContext(Dispatchers.IO) { repo.saveSyncConfig(snapshot.syncConfig) }
+        if (!syncConfigOk && failedResId == null) {
+            failedResId = R.string.save_sync_config_failed
+        }
+
+        val syncSecretsOk = withContext(Dispatchers.IO) { repo.saveSyncSecrets(snapshot.syncSecrets) }
+        if (!syncSecretsOk && failedResId == null) {
+            failedResId = R.string.save_sync_secrets_failed
+        }
+
+        if (failedResId != null) {
+            refreshSaveableFieldsFromRepository()
+            _uiState.update { it.copy(saveErrorResId = failedResId) }
+            _saveFailureEvents.send(failedResId)
+        } else {
+            _uiState.update { it.copy(saveErrorResId = null) }
+        }
+    }
+
+    private suspend fun refreshSaveableFieldsFromRepository() {
+        val repo = settingsRepo ?: return
+        val settings = withContext(Dispatchers.IO) { repo.getLocalSettings() }
+        val fontSize = withContext(Dispatchers.IO) { repo.getEffectiveFontSize() }
+        val syncConfig = withContext(Dispatchers.IO) { repo.loadSyncConfig() }
+        val syncSecrets = withContext(Dispatchers.IO) { repo.loadSyncSecrets() }
+        _uiState.update { current ->
+            current.copy(
+                settings = settings,
+                fontSize = fontSize,
+                syncConfig = syncConfig,
+                syncSecrets = syncSecrets,
+            )
         }
     }
 
@@ -136,25 +148,19 @@ class SettingsViewModel : ViewModel() {
                 val current = _uiState.value.settings
                 val updated = intent.transform(current)
                 _uiState.update { it.copy(settings = updated) }
-                saveChannel.trySend(SaveCommand.SaveLocalSettings(updated, current))
+                saveChannel.trySend(_uiState.value)
             }
             is SettingsIntent.UpdateFontSize -> {
-                val previous = _uiState.value.fontSize
-                val fontSize = intent.fontSize
-                _uiState.update { it.copy(fontSize = fontSize) }
-                saveChannel.trySend(SaveCommand.SaveFontSize(fontSize, previous))
+                _uiState.update { it.copy(fontSize = intent.fontSize) }
+                saveChannel.trySend(_uiState.value)
             }
             is SettingsIntent.UpdateSyncConfig -> {
-                val previous = _uiState.value.syncConfig
-                val config = intent.config
-                _uiState.update { it.copy(syncConfig = config) }
-                saveChannel.trySend(SaveCommand.SaveSyncConfig(config, previous))
+                _uiState.update { it.copy(syncConfig = intent.config) }
+                saveChannel.trySend(_uiState.value)
             }
             is SettingsIntent.UpdateSyncSecrets -> {
-                val previous = _uiState.value.syncSecrets
-                val secrets = intent.secrets
-                _uiState.update { it.copy(syncSecrets = secrets) }
-                saveChannel.trySend(SaveCommand.SaveSyncSecrets(secrets, previous))
+                _uiState.update { it.copy(syncSecrets = intent.secrets) }
+                saveChannel.trySend(_uiState.value)
             }
             is SettingsIntent.Refresh -> refresh()
             is SettingsIntent.CaptureDynamicColor -> {
@@ -256,6 +262,9 @@ fun SettingsRoute(
     }
 
     if (initialSection != null) {
+        BackHandler(enabled = onNavigateBack != null) {
+            onNavigateBack?.invoke()
+        }
         SettingsDetailPane(
             section = initialSection,
             state = uiState,
@@ -282,6 +291,9 @@ fun SettingsRoute(
                     state = uiState,
                     onIntent = vm::handleIntent,
                 )
+            }
+            BackHandler(enabled = selection != null && onNavigateBack != null) {
+                navigateBack()
             }
         },
     )

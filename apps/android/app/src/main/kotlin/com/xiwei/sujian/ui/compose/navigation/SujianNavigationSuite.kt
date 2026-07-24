@@ -11,6 +11,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
@@ -169,37 +170,61 @@ fun SujianNavigationSuite(
                                         backStack.add(SujianRoute.Chapter(projectId, volumeId, chapterId))
                                     },
                                 )
-                                is SujianRoute.Project -> ProjectWorkspaceScreen(
-                                    appState = appState,
-                                    projectIdOverride = route.projectId,
-                                    onNavigateToProject = { projectId ->
-                                        backStack.add(SujianRoute.Project(projectId))
-                                    },
-                                    onNavigateToChapter = { projectId, volumeId, chapterId ->
-                                        backStack.add(SujianRoute.Chapter(projectId, volumeId, chapterId))
-                                    },
-                                )
-                                is SujianRoute.Chapter -> ProjectWorkspaceScreen(
-                                    appState = appState,
-                                    projectIdOverride = route.projectId,
-                                    volumeIdOverride = route.volumeId,
-                                    chapterIdOverride = route.chapterId,
-                                    onNavigateToProject = { projectId ->
-                                        backStack.add(SujianRoute.Project(projectId))
-                                    },
-                                    onNavigateToChapter = { projectId, volumeId, chapterId ->
-                                        backStack.add(SujianRoute.Chapter(projectId, volumeId, chapterId))
-                                    },
-                                )
+                                is SujianRoute.Project -> {
+                                    LaunchedEffect(route.projectId) {
+                                        appState.selectProject(route.projectId)
+                                        appState.clearChapterSelection()
+                                    }
+                                    ProjectWorkspaceScreen(
+                                        appState = appState,
+                                        projectIdOverride = route.projectId,
+                                        onNavigateToProject = { projectId ->
+                                            backStack.add(SujianRoute.Project(projectId))
+                                        },
+                                        onNavigateToChapter = { projectId, volumeId, chapterId ->
+                                            backStack.add(SujianRoute.Chapter(projectId, volumeId, chapterId))
+                                        },
+                                    )
+                                }
+                                is SujianRoute.Chapter -> {
+                                    LaunchedEffect(route.projectId, route.volumeId, route.chapterId) {
+                                        appState.selectProject(route.projectId)
+                                        appState.selectChapter(route.volumeId, route.chapterId)
+                                    }
+                                    ProjectWorkspaceScreen(
+                                        appState = appState,
+                                        projectIdOverride = route.projectId,
+                                        volumeIdOverride = route.volumeId,
+                                        chapterIdOverride = route.chapterId,
+                                        onNavigateToProject = { projectId ->
+                                            backStack.add(SujianRoute.Project(projectId))
+                                        },
+                                        onNavigateToChapter = { projectId, volumeId, chapterId ->
+                                            backStack.add(SujianRoute.Chapter(projectId, volumeId, chapterId))
+                                        },
+                                    )
+                                }
                                 is SujianRoute.StarMap -> StarMapScreen()
                                 is SujianRoute.Stats -> StatsScreen()
                                 is SujianRoute.Settings -> SettingsRoute(
-                                    onNavigateToDetail = if (!isWideScreen) { section ->
+                                    onNavigateToDetail = { section ->
                                         backStack.add(SujianRoute.SettingsDetail(section))
-                                    } else null,
+                                    },
+                                    onNavigateBack = {
+                                        if (backStack.size > 1) {
+                                            backStack.removeLastOrNull()
+                                        }
+                                    },
                                 )
                                 is SujianRoute.SettingsDetail -> SettingsRoute(
-                                    onNavigateToDetail = null,
+                                    onNavigateToDetail = if (isWideScreen) { section ->
+                                        backStack.add(SujianRoute.SettingsDetail(section))
+                                    } else null,
+                                    onNavigateBack = {
+                                        if (backStack.size > 1) {
+                                            backStack.removeLastOrNull()
+                                        }
+                                    },
                                     initialSection = route.section,
                                 )
                             }
