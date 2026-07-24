@@ -68,7 +68,7 @@
     <string name="theme_dark">深色模式</string>
 
     <string name="pref_category_about">关于</string>
-    <string name="pref_workspace_path">工作区路径</string>
+    <string name="pref_workspace_path">工作区路径：%1$s</string>
     <string name="pref_version_info">版本信息</string>
     <string name="pref_version_desc">Android Native 客户端</string>
 

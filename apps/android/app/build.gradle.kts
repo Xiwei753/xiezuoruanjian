@@ -140,8 +140,7 @@ dependencies {
     implementation(project(":core-platform"))
 
     implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.appcompat)
-    implementation(libs.androidx.material.view)
+
     implementation(libs.gson)
 
     implementation(libs.androidx.lifecycle.viewmodel.ktx)
@@ -196,6 +195,6 @@ dependencies {
 
 android {
     lint {
-        disable.addAll(listOf("MissingTranslation", "SetTextI18n", "HardcodedText", "NewApi"))
+        disable.addAll(listOf("MissingTranslation"))
     }
 }

@@ -1,33 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- FAB styles: Primary for main create, Secondary for secondary create -->
-    <style name="Widget.Sujian.FAB.Primary" parent="Widget.Material3.FloatingActionButton.Primary">
-        <item name="shapeAppearance">@style/ShapeAppearance.Sujian.FAB</item>
-        <item name="elevation">@dimen/elevation_2</item>
+    <style name="Widget.Sujian.FAB.Primary" parent="android:Widget.Material.Button">
+        <item name="android:elevation">2dp</item>
     </style>
-    <style name="Widget.Sujian.FAB.Secondary" parent="Widget.Material3.FloatingActionButton.Secondary">
-        <item name="shapeAppearance">@style/ShapeAppearance.Sujian.FAB</item>
-        <item name="elevation">@dimen/elevation_2</item>
-    </style>
-
-    <!-- Card style -->
-    <style name="Widget.Sujian.Card" parent="Widget.Material3.CardView.Filled">
-        <item name="shapeAppearance">@style/ShapeAppearance.Sujian.Card</item>
-        <item name="cardElevation">@dimen/elevation_0</item>
-    </style>
-
-    <!-- Dialog style -->
-    <style name="Widget.Sujian.Dialog" parent="MaterialAlertDialog.Material3">
-        <item name="shapeAppearance">@style/ShapeAppearance.Sujian.Dialog</item>
-    </style>
-
-    <!-- BottomNavigationView style -->
-    <style name="Widget.Sujian.BottomNavigationView" parent="Widget.Material3.BottomNavigationView">
-        <item name="elevation">@dimen/elevation_2</item>
-    </style>
-
-    <!-- Toolbar style -->
-    <style name="Widget.Sujian.Toolbar" parent="Widget.Material3.Toolbar">
-        <item name="elevation">@dimen/elevation_0</item>
+    <style name="Widget.Sujian.FAB.Secondary" parent="android:Widget.Material.Button">
+        <item name="android:elevation">2dp</item>
     </style>
 </resources>
