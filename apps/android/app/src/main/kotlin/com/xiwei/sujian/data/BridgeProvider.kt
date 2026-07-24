@@ -48,7 +48,6 @@ object BridgeProvider {
     fun getSyncBridge(context: Context): SyncBridge = getAppServiceBridge(context).syncBridge
     fun getActionBridge(context: Context): ActionBridge = ActionBridge(getAppServiceBridge(context))
     fun getLayoutPolicyBridge(context: Context): LayoutPolicyBridge = getAppServiceBridge(context).layoutPolicyBridge
-    fun getScreenPolicyBridge(context: Context): ScreenPolicyBridge = getAppServiceBridge(context).screenPolicyBridge
     fun getAiStatus(context: Context): Boolean = getAppServiceBridge(context).aiAvailable()
 
     private fun registerNetworkCallback(context: Context, bridge: AppServiceBridge) {
