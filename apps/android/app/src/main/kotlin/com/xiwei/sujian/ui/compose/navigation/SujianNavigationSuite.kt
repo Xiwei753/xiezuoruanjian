@@ -11,9 +11,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.NavKey
@@ -80,27 +80,8 @@ fun SujianNavigationSuite(
     val currentRoute = backStack.lastOrNull() as? SujianRoute ?: SujianRoute.Works
     val currentTopDestination = currentRoute.toTopDestination()
     val motion = LocalSujianMotion.current
-
-    LaunchedEffect(appState.currentProjectId, appState.currentChapterId) {
-        val projectId = appState.currentProjectId
-        val chapterId = appState.currentChapterId
-        val volumeId = appState.currentVolumeId
-        val topRoute = backStack.lastOrNull() as? SujianRoute
-        if (projectId != null && chapterId != null && volumeId != null) {
-            val target = SujianRoute.Chapter(projectId, volumeId, chapterId)
-            if (topRoute != target) {
-                backStack.removeAll { (it as? SujianRoute)?.toTopDestination() != SujianDestination.Works }
-                backStack.add(SujianRoute.Project(projectId))
-                backStack.add(target)
-            }
-        } else if (projectId != null) {
-            val target = SujianRoute.Project(projectId)
-            if (topRoute != target) {
-                backStack.removeAll { (it as? SujianRoute)?.toTopDestination() != SujianDestination.Works }
-                backStack.add(target)
-            }
-        }
-    }
+    val configuration = LocalConfiguration.current
+    val isWideScreen = configuration.screenWidthDp >= 600
 
     NavigationSuiteScaffold(
         navigationSuiteItems = {
@@ -114,11 +95,11 @@ fun SujianNavigationSuite(
                             SujianDestination.Stats -> SujianRoute.Stats
                             SujianDestination.Settings -> SujianRoute.Settings
                         }
-                        backStack.removeAll { (it as? SujianRoute)?.toTopDestination() != destination }
-                        val existing = backStack.lastOrNull() as? SujianRoute
-                        if (existing != targetRoute) {
-                            backStack.add(targetRoute)
+                        if (destination == SujianDestination.Works) {
+                            appState.clearProjectSelection()
                         }
+                        backStack.clear()
+                        backStack.add(targetRoute)
                     },
                     icon = {
                         Icon(
@@ -146,14 +127,16 @@ fun SujianNavigationSuite(
                     val newTop = backStack.lastOrNull() as? SujianRoute
                     when {
                         newTop is SujianRoute.Chapter -> {
-                            appState.selectChapter(newTop.volumeId, newTop.chapterId, "")
+                            appState.selectChapter(newTop.volumeId, newTop.chapterId)
                         }
                         newTop is SujianRoute.Project -> {
-                            appState.selectProject(newTop.projectId, "")
+                            appState.selectProject(newTop.projectId)
                             appState.clearChapterSelection()
                         }
                         newTop is SujianRoute.Works -> {
                             appState.clearProjectSelection()
+                        }
+                        newTop is SujianRoute.Settings -> {
                         }
                         newTop is SujianRoute.SettingsDetail -> {
                         }
@@ -176,23 +159,48 @@ fun SujianNavigationSuite(
                             label = "nav-transition",
                         ) { route ->
                             when (route) {
-                                is SujianRoute.Works -> ProjectWorkspaceScreen(appState = appState)
-                                is SujianRoute.Project -> ProjectWorkspaceScreen(appState = appState)
-                                is SujianRoute.Chapter -> ProjectWorkspaceScreen(appState = appState)
+                                is SujianRoute.Works -> ProjectWorkspaceScreen(
+                                    appState = appState,
+                                    onNavigateToProject = { projectId ->
+                                        backStack.add(SujianRoute.Project(projectId))
+                                    },
+                                    onNavigateToChapter = { projectId, volumeId, chapterId ->
+                                        backStack.add(SujianRoute.Project(projectId))
+                                        backStack.add(SujianRoute.Chapter(projectId, volumeId, chapterId))
+                                    },
+                                )
+                                is SujianRoute.Project -> ProjectWorkspaceScreen(
+                                    appState = appState,
+                                    projectIdOverride = route.projectId,
+                                    onNavigateToProject = { projectId ->
+                                        backStack.add(SujianRoute.Project(projectId))
+                                    },
+                                    onNavigateToChapter = { projectId, volumeId, chapterId ->
+                                        backStack.add(SujianRoute.Chapter(projectId, volumeId, chapterId))
+                                    },
+                                )
+                                is SujianRoute.Chapter -> ProjectWorkspaceScreen(
+                                    appState = appState,
+                                    projectIdOverride = route.projectId,
+                                    volumeIdOverride = route.volumeId,
+                                    chapterIdOverride = route.chapterId,
+                                    onNavigateToProject = { projectId ->
+                                        backStack.add(SujianRoute.Project(projectId))
+                                    },
+                                    onNavigateToChapter = { projectId, volumeId, chapterId ->
+                                        backStack.add(SujianRoute.Chapter(projectId, volumeId, chapterId))
+                                    },
+                                )
                                 is SujianRoute.StarMap -> StarMapScreen()
                                 is SujianRoute.Stats -> StatsScreen()
                                 is SujianRoute.Settings -> SettingsRoute(
-                                    onNavigateBack = {
-                                        backStack.removeAll { (it as? SujianRoute)?.toTopDestination() != SujianDestination.Works }
-                                        if (backStack.lastOrNull() as? SujianRoute != SujianRoute.Works) {
-                                            backStack.add(SujianRoute.Works)
-                                        }
-                                    },
+                                    onNavigateToDetail = if (!isWideScreen) { section ->
+                                        backStack.add(SujianRoute.SettingsDetail(section))
+                                    } else null,
                                 )
                                 is SujianRoute.SettingsDetail -> SettingsRoute(
-                                    onNavigateBack = {
-                                        backStack.removeAll { it is SujianRoute.SettingsDetail }
-                                    },
+                                    onNavigateToDetail = null,
+                                    initialSection = route.section,
                                 )
                             }
                         }

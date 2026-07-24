@@ -51,7 +51,7 @@ use crate::writing_stats::api::StatsApi;
 pub struct WriterCore {
     pub(crate) workspace_path: PathBuf,
     pub(crate) stats_api: OnceLock<StatsApi>,
-    pub(crate) sync_transport: Option<Arc<dyn Fn() -> Result<Box<dyn writer_platform_api::SyncTransport>, writer_platform_api::TransportError> + Send + Sync>>,
+    pub(crate) sync_transport: Option<writer_platform_api::SyncTransportFactory>,
     pub(crate) secure_storage: Option<Arc<dyn writer_platform_api::SecureStorage>>,
     pub(crate) secrets_override: Option<crate::sync::SyncSecrets>,
 }

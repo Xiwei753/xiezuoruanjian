@@ -4,7 +4,9 @@ import android.app.ActivityManager
 import android.content.Context
 import android.content.res.Configuration
 import android.hardware.SensorManager
+import android.hardware.input.InputManager
 import android.os.Build
+import android.view.InputDevice
 import android.view.WindowManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -14,6 +16,8 @@ open class CapabilityProvider(private val context: Context) {
 
     private val _capabilities = MutableStateFlow(detectCapabilities())
     val capabilities: StateFlow<AndroidCapabilities> = _capabilities.asStateFlow()
+
+    private var inputDeviceListener: InputManager.InputDeviceListener? = null
 
     fun updateFromConfiguration(config: Configuration) {
         val current = _capabilities.value
@@ -31,6 +35,68 @@ open class CapabilityProvider(private val context: Context) {
         _capabilities.value = current.copy(foldPosture = foldPosture)
     }
 
+    fun registerInputDeviceListener() {
+        val inputManager = context.getSystemService(Context.INPUT_SERVICE) as? InputManager ?: return
+        val listener = object : InputManager.InputDeviceListener {
+            override fun onInputDeviceAdded(deviceId: Int) {
+                rescanInputDevices()
+            }
+            override fun onInputDeviceRemoved(deviceId: Int) {
+                rescanInputDevices()
+            }
+            override fun onInputDeviceChanged(deviceId: Int) {
+                rescanInputDevices()
+            }
+        }
+        inputDeviceListener = listener
+        inputManager.registerInputDeviceListener(listener, null)
+    }
+
+    fun unregisterInputDeviceListener() {
+        val inputManager = context.getSystemService(Context.INPUT_SERVICE) as? InputManager ?: return
+        val listener = inputDeviceListener ?: return
+        inputManager.unregisterInputDeviceListener(listener)
+        inputDeviceListener = null
+    }
+
+    private fun rescanInputDevices() {
+        val availableKinds = com.xiwei.sujian.platform.window.detectPointerKindsFromInputDevices(context)
+        val current = _capabilities.value
+        val activeKind = chooseActivePointerKind(availableKinds, current.activePointerKind)
+        _capabilities.value = current.copy(
+            availablePointerKinds = availableKinds,
+            activePointerKind = activeKind,
+        )
+    }
+
+    fun updateActivePointerKind(kind: PointerKind) {
+        val current = _capabilities.value
+        if (current.availablePointerKinds.contains(kind)) {
+            _capabilities.value = current.copy(activePointerKind = kind)
+        }
+    }
+
+    fun updateFromInputDevices(inputDeviceSources: Set<PointerKind>) {
+        val current = _capabilities.value
+        val activeKind = chooseActivePointerKind(inputDeviceSources, current.activePointerKind)
+        _capabilities.value = current.copy(
+            availablePointerKinds = inputDeviceSources,
+            activePointerKind = activeKind,
+        )
+    }
+
+    private fun chooseActivePointerKind(
+        available: Set<PointerKind>,
+        currentActive: PointerKind
+    ): PointerKind {
+        if (available.contains(currentActive)) return currentActive
+        val priority = listOf(PointerKind.Stylus, PointerKind.Mouse, PointerKind.Trackpad)
+        for (kind in priority) {
+            if (available.contains(kind)) return kind
+        }
+        return PointerKind.Touch
+    }
+
     private fun detectCapabilities(): AndroidCapabilities {
         val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
         val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
@@ -40,13 +106,16 @@ open class CapabilityProvider(private val context: Context) {
         val hasAccelerometer = sensorManager?.getDefaultSensor(android.hardware.Sensor.TYPE_ACCELEROMETER) != null
         val isLowRamDevice = activityManager?.isLowRamDevice == true
 
-        val refreshRate = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        val (currentRefreshRate, maxRefreshRate) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             windowManager?.defaultDisplay?.let { display ->
-                if (display.supportedModes.isNotEmpty()) {
-                    display.supportedModes.maxOfOrNull { it.refreshRate } ?: 60f
-                } else 60f
-            } ?: 60f
-        } else 60f
+                val mode = display.mode
+                val current = mode.refreshRate
+                val max = if (display.supportedModes.isNotEmpty()) {
+                    display.supportedModes.maxOfOrNull { it.refreshRate } ?: current
+                } else current
+                current to max
+            } ?: (60f to 60f)
+        } else (60f to 60f)
 
         val hasHaptics = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             context.getSystemService(Context.VIBRATOR_SERVICE)?.let {
@@ -59,15 +128,18 @@ open class CapabilityProvider(private val context: Context) {
 
         val config = context.resources.configuration
         val supportsDynamicColor = Build.VERSION.SDK_INT >= 31
-        val pointerKinds = com.xiwei.sujian.platform.window.detectPointerKindsFromInputDevices(context)
+        val availablePointerKinds = com.xiwei.sujian.platform.window.detectPointerKindsFromInputDevices(context)
+        val activePointerKind = chooseActivePointerKind(availablePointerKinds, PointerKind.Touch)
 
         return AndroidCapabilities(
             sdkInt = Build.VERSION.SDK_INT,
             windowSizeClass = config.toWindowSizeClass(),
             foldPosture = FoldPosture.None,
             hasHardwareKeyboard = config.keyboard != Configuration.KEYBOARD_NOKEYS,
-            pointerKinds = pointerKinds,
-            refreshRateHz = refreshRate,
+            availablePointerKinds = availablePointerKinds,
+            activePointerKind = activePointerKind,
+            currentRefreshRateHz = currentRefreshRate,
+            maxRefreshRateHz = maxRefreshRate,
             isLowRamDevice = isLowRamDevice,
             hasGyroscope = hasGyroscope,
             hasAccelerometer = hasAccelerometer,
@@ -84,11 +156,6 @@ open class CapabilityProvider(private val context: Context) {
             screenWidthDp >= 600 -> WindowSizeClass.Medium
             else -> WindowSizeClass.Compact
         }
-    }
-
-    fun updateFromInputDevices(inputDeviceSources: Set<PointerKind>) {
-        val current = _capabilities.value
-        _capabilities.value = current.copy(pointerKinds = inputDeviceSources)
     }
 
     private fun List<androidx.window.layout.DisplayFeature>.toFoldPosture(): FoldPosture {

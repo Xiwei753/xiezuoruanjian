@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -28,9 +29,12 @@ import com.xiwei.sujian.model.LocalSettings
 import com.xiwei.sujian.ui.compose.navigation.SettingsSection
 import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.parcelize.Parcelize
@@ -45,6 +49,7 @@ data class SettingsUiState(
     val aiAvailable: Boolean = false,
     val workspacePath: String = "",
     val versionInfo: String = "",
+    val saveError: String? = null,
 )
 
 sealed interface SettingsIntent {
@@ -62,55 +67,102 @@ class SettingsViewModel : ViewModel() {
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
 
+    private val _snackbarEvents = Channel<String>(Channel.BUFFERED)
+    val snackbarEvents = _snackbarEvents.receiveAsFlow()
+
+    private sealed interface SaveCommand {
+        data class SaveLocalSettings(val settings: LocalSettings, val previous: LocalSettings) : SaveCommand
+        data class SaveFontSize(val fontSize: Float, val previous: Float) : SaveCommand
+        data class SaveSyncConfig(val config: com.xiwei.sujian.model.SyncConfig, val previous: com.xiwei.sujian.model.SyncConfig) : SaveCommand
+        data class SaveSyncSecrets(val secrets: com.xiwei.sujian.model.SyncSecrets, val previous: com.xiwei.sujian.model.SyncSecrets) : SaveCommand
+    }
+
+    private val saveChannel = Channel<SaveCommand>(Channel.UNLIMITED)
+
     fun initialize(repo: SettingsRepository) {
         settingsRepo = repo
         refresh()
+        viewModelScope.launch {
+            for (cmd in saveChannel) {
+                executeSave(cmd)
+            }
+        }
+    }
+
+    private suspend fun executeSave(cmd: SaveCommand) {
+        val repo = settingsRepo ?: return
+        when (cmd) {
+            is SaveCommand.SaveLocalSettings -> {
+                val success = withContext(Dispatchers.IO) {
+                    repo.saveLocalSettings(cmd.settings)
+                }
+                if (success) {
+                    com.xiwei.sujian.ui.compose.theme.ThemeStore.reload()
+                } else {
+                    _uiState.update { it.copy(settings = cmd.previous, saveError = "保存本地设置失败") }
+                    _snackbarEvents.send("保存本地设置失败")
+                }
+            }
+            is SaveCommand.SaveFontSize -> {
+                val success = withContext(Dispatchers.IO) { repo.setFontSize(cmd.fontSize) }
+                if (!success) {
+                    _uiState.update { it.copy(fontSize = cmd.previous, saveError = "保存字体大小失败") }
+                    _snackbarEvents.send("保存字体大小失败")
+                }
+            }
+            is SaveCommand.SaveSyncConfig -> {
+                val success = withContext(Dispatchers.IO) { repo.saveSyncConfig(cmd.config) }
+                if (!success) {
+                    _uiState.update { it.copy(syncConfig = cmd.previous, saveError = "保存同步配置失败") }
+                    _snackbarEvents.send("保存同步配置失败")
+                }
+            }
+            is SaveCommand.SaveSyncSecrets -> {
+                val success = withContext(Dispatchers.IO) { repo.saveSyncSecrets(cmd.secrets) }
+                if (!success) {
+                    _uiState.update { it.copy(syncSecrets = cmd.previous, saveError = "保存同步密钥失败") }
+                    _snackbarEvents.send("保存同步密钥失败")
+                }
+            }
+        }
+    }
+
+    fun consumeSaveError() {
+        _uiState.update { it.copy(saveError = null) }
     }
 
     fun handleIntent(intent: SettingsIntent) {
         when (intent) {
             is SettingsIntent.UpdateLocal -> {
-                val repo = settingsRepo ?: return
                 val current = _uiState.value.settings
                 val updated = intent.transform(current)
-                viewModelScope.launch {
-                    withContext(Dispatchers.IO) {
-                        repo.saveLocalSettings(updated)
-                        com.xiwei.sujian.ui.compose.theme.ThemeStore.reload()
-                    }
-                    _uiState.value = _uiState.value.copy(settings = updated)
-                }
+                _uiState.update { it.copy(settings = updated) }
+                saveChannel.trySend(SaveCommand.SaveLocalSettings(updated, current))
             }
             is SettingsIntent.UpdateFontSize -> {
-                val repo = settingsRepo ?: return
+                val previous = _uiState.value.fontSize
                 val fontSize = intent.fontSize
-                viewModelScope.launch {
-                    withContext(Dispatchers.IO) { repo.setFontSize(fontSize) }
-                    _uiState.value = _uiState.value.copy(fontSize = fontSize)
-                }
+                _uiState.update { it.copy(fontSize = fontSize) }
+                saveChannel.trySend(SaveCommand.SaveFontSize(fontSize, previous))
             }
             is SettingsIntent.UpdateSyncConfig -> {
-                val repo = settingsRepo ?: return
+                val previous = _uiState.value.syncConfig
                 val config = intent.config
-                viewModelScope.launch {
-                    withContext(Dispatchers.IO) { repo.saveSyncConfig(config) }
-                    _uiState.value = _uiState.value.copy(syncConfig = config)
-                }
+                _uiState.update { it.copy(syncConfig = config) }
+                saveChannel.trySend(SaveCommand.SaveSyncConfig(config, previous))
             }
             is SettingsIntent.UpdateSyncSecrets -> {
-                val repo = settingsRepo ?: return
+                val previous = _uiState.value.syncSecrets
                 val secrets = intent.secrets
-                viewModelScope.launch {
-                    withContext(Dispatchers.IO) { repo.saveSyncSecrets(secrets) }
-                    _uiState.value = _uiState.value.copy(syncSecrets = secrets)
-                }
+                _uiState.update { it.copy(syncSecrets = secrets) }
+                saveChannel.trySend(SaveCommand.SaveSyncSecrets(secrets, previous))
             }
             is SettingsIntent.Refresh -> refresh()
             is SettingsIntent.CaptureDynamicColor -> {
                 val repo = settingsRepo ?: return
                 viewModelScope.launch {
                     val records = withContext(Dispatchers.IO) { repo.listPaletteRecords() }
-                    _uiState.value = _uiState.value.copy(paletteRecords = records)
+                    _uiState.update { it.copy(paletteRecords = records) }
                 }
             }
             is SettingsIntent.DeletePalette -> {
@@ -118,7 +170,7 @@ class SettingsViewModel : ViewModel() {
                 viewModelScope.launch {
                     withContext(Dispatchers.IO) { repo.deletePaletteRecord(intent.deviceId, intent.fingerprint) }
                     val records = withContext(Dispatchers.IO) { repo.listPaletteRecords() }
-                    _uiState.value = _uiState.value.copy(paletteRecords = records)
+                    _uiState.update { it.copy(paletteRecords = records) }
                 }
             }
         }
@@ -135,16 +187,18 @@ class SettingsViewModel : ViewModel() {
             val paletteRecords = withContext(Dispatchers.IO) { repo.listPaletteRecords() }
             val aiAvailable = withContext(Dispatchers.IO) { repo.aiAvailable() }
             val workspacePath = withContext(Dispatchers.IO) { repo.workspaceDir() }
-            _uiState.value = SettingsUiState(
-                settings = settings,
-                fontSize = fontSize,
-                syncConfig = syncConfig,
-                syncSecrets = syncSecrets,
-                builtinThemes = builtinThemes,
-                paletteRecords = paletteRecords,
-                aiAvailable = aiAvailable,
-                workspacePath = workspacePath,
-            )
+            _uiState.update {
+                SettingsUiState(
+                    settings = settings,
+                    fontSize = fontSize,
+                    syncConfig = syncConfig,
+                    syncSecrets = syncSecrets,
+                    builtinThemes = builtinThemes,
+                    paletteRecords = paletteRecords,
+                    aiAvailable = aiAvailable,
+                    workspacePath = workspacePath,
+                )
+            }
         }
     }
 }
@@ -173,14 +227,44 @@ private data class SettingsSelection(val section: SettingsSection) : Parcelable
 @Composable
 fun SettingsRoute(
     onNavigateBack: (() -> Unit)? = null,
+    onNavigateToDetail: ((SettingsSection) -> Unit)? = null,
+    initialSection: SettingsSection? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val vm: SettingsViewModel = viewModel()
     val uiState by vm.uiState.collectAsState()
+    val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
 
     LaunchedEffect(Unit) {
         vm.initialize(SettingsRepository(context))
+    }
+
+    LaunchedEffect(Unit) {
+        vm.snackbarEvents.collect { message ->
+            snackbarHostState.showSnackbar(message)
+        }
+    }
+
+    if (onNavigateToDetail != null) {
+        SettingsListPane(
+            onNavigateToDetail = onNavigateToDetail,
+            selectedSection = null,
+            modifier = modifier,
+        )
+        androidx.compose.material3.SnackbarHost(hostState = snackbarHostState)
+        return
+    }
+
+    if (initialSection != null) {
+        SettingsDetailPane(
+            section = initialSection,
+            state = uiState,
+            onIntent = vm::handleIntent,
+            modifier = modifier,
+        )
+        androidx.compose.material3.SnackbarHost(hostState = snackbarHostState)
+        return
     }
 
     SujianListDetailScaffold<SettingsSelection>(
@@ -202,6 +286,7 @@ fun SettingsRoute(
             }
         },
     )
+    androidx.compose.material3.SnackbarHost(hostState = snackbarHostState)
 }
 
 @Composable

@@ -28,7 +28,6 @@ import com.xiwei.sujian.model.WindowMetrics
 import com.xiwei.sujian.platform.api.AndroidCapabilities
 import com.xiwei.sujian.platform.api.PointerKind
 import com.xiwei.sujian.platform.aosp.AospCapabilityProvider
-import com.xiwei.sujian.platform.window.detectPointerKindsFromInputDevices
 import com.xiwei.sujian.platform.window.WindowFoldFeatureCollector
 import com.xiwei.sujian.ui.compose.navigation.SujianNavigationSuite
 import com.xiwei.sujian.ui.compose.theme.SujianTheme
@@ -53,6 +52,13 @@ fun SujianApp(
 
     val capabilityProvider = remember { AospCapabilityProvider(context.applicationContext) }
     val capabilities by capabilityProvider.capabilities.collectAsState()
+
+    DisposableEffect(capabilityProvider) {
+        capabilityProvider.registerInputDeviceListener()
+        onDispose {
+            capabilityProvider.unregisterInputDeviceListener()
+        }
+    }
 
     val coordinator = remember {
         val bridge = BridgeProvider.getAppServiceBridge(context)
@@ -87,8 +93,6 @@ fun SujianApp(
     LaunchedEffect(foldingFeatures, configuration.screenWidthDp, configuration.screenHeightDp) {
         capabilityProvider.updateFromFoldFeatures(foldingFeatures)
         capabilityProvider.updateFromConfiguration(configuration)
-        val pointerKinds = detectPointerKindsFromInputDevices(context)
-        capabilityProvider.updateFromInputDevices(pointerKinds)
 
         vm.updateFoldFeaturesFromAdaptive(foldingFeatures, density)
 
@@ -101,7 +105,7 @@ fun SujianApp(
     }
 
     LaunchedEffect(capabilities) {
-        val pointerKind = capabilities.pointerKinds.firstOrNull() ?: PointerKind.Touch
+        val pointerKind = capabilities.activePointerKind
         val metrics = WindowMetrics(
             widthDp = configuration.screenWidthDp.toFloat(),
             heightDp = configuration.screenHeightDp.toFloat(),

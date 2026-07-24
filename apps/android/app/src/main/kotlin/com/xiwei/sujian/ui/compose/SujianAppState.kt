@@ -86,6 +86,22 @@ class SujianAppViewModel(
         savedStateHandle["currentProjectTitle"] = projectTitle
     }
 
+    fun selectProject(projectId: String) {
+        currentProjectId = projectId
+        savedStateHandle["currentProjectId"] = projectId
+        viewModelScope.launch {
+            val title = withContext(Dispatchers.IO) {
+                try {
+                    workspaceUseCase?.getProjectTitle(projectId) ?: ""
+                } catch (_: Exception) {
+                    ""
+                }
+            }
+            currentProjectTitle = title
+            savedStateHandle["currentProjectTitle"] = title
+        }
+    }
+
     fun selectChapter(volumeId: String, chapterId: String, chapterTitle: String) {
         currentVolumeId = volumeId
         currentChapterId = chapterId
@@ -93,6 +109,24 @@ class SujianAppViewModel(
         savedStateHandle["currentVolumeId"] = volumeId
         savedStateHandle["currentChapterId"] = chapterId
         savedStateHandle["currentChapterTitle"] = chapterTitle
+    }
+
+    fun selectChapter(volumeId: String, chapterId: String) {
+        currentVolumeId = volumeId
+        currentChapterId = chapterId
+        savedStateHandle["currentVolumeId"] = volumeId
+        savedStateHandle["currentChapterId"] = chapterId
+        viewModelScope.launch {
+            val title = withContext(Dispatchers.IO) {
+                try {
+                    workspaceUseCase?.getChapterTitle(chapterId) ?: ""
+                } catch (_: Exception) {
+                    ""
+                }
+            }
+            currentChapterTitle = title
+            savedStateHandle["currentChapterTitle"] = title
+        }
     }
 
     fun clearChapterSelection() {
@@ -230,7 +264,9 @@ class SujianAppState(
     val isLoading: Boolean get() = viewModel.isLoading
 
     fun selectProject(projectId: String, projectTitle: String) = viewModel.selectProject(projectId, projectTitle)
+    fun selectProject(projectId: String) = viewModel.selectProject(projectId)
     fun selectChapter(volumeId: String, chapterId: String, chapterTitle: String) = viewModel.selectChapter(volumeId, chapterId, chapterTitle)
+    fun selectChapter(volumeId: String, chapterId: String) = viewModel.selectChapter(volumeId, chapterId)
     fun clearChapterSelection() = viewModel.clearChapterSelection()
     fun clearProjectSelection() = viewModel.clearProjectSelection()
     fun updateFoldFeaturesFromAdaptive(features: List<FoldingFeature>, density: Float = 1f) = viewModel.updateFoldFeaturesFromAdaptive(features, density)

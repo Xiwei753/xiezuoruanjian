@@ -34,15 +34,20 @@ import kotlinx.coroutines.launch
 @Composable
 fun ProjectWorkspaceScreen(
     appState: SujianAppState,
+    projectIdOverride: String? = null,
+    volumeIdOverride: String? = null,
+    chapterIdOverride: String? = null,
+    onNavigateToProject: ((projectId: String) -> Unit)? = null,
+    onNavigateToChapter: ((projectId: String, volumeId: String, chapterId: String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val workspaceRepository = remember { WorkspaceRepository(context) }
     val coroutineScope = rememberCoroutineScope()
 
-    val currentProjectId = appState.currentProjectId
-    val currentVolumeId = appState.currentVolumeId
-    val currentChapterId = appState.currentChapterId
+    val currentProjectId = projectIdOverride ?: appState.currentProjectId
+    val currentVolumeId = volumeIdOverride ?: appState.currentVolumeId
+    val currentChapterId = chapterIdOverride ?: appState.currentChapterId
     val currentChapterTitle = appState.currentChapterTitle
     val layoutPlan = appState.currentLayoutPlan
 
@@ -50,7 +55,12 @@ fun ProjectWorkspaceScreen(
         ProjectListScreen(
             appState = appState,
             onSelectProject = { projectId, projectTitle ->
-                appState.selectProject(projectId, projectTitle)
+                if (onNavigateToProject != null) {
+                    appState.selectProject(projectId, projectTitle)
+                    onNavigateToProject(projectId)
+                } else {
+                    appState.selectProject(projectId, projectTitle)
+                }
             },
             modifier = modifier
         )
@@ -75,17 +85,19 @@ fun ProjectWorkspaceScreen(
 
     val isDetailExpanded = navigator.scaffoldValue[androidx.compose.material3.adaptive.layout.ThreePaneScaffoldRole.Secondary] == androidx.compose.material3.adaptive.layout.PaneAdaptedValue.Expanded
 
-    BackHandler(enabled = navigator.canNavigateBack()) {
-        coroutineScope.launch {
-            navigator.navigateBack()
+    if (onNavigateToChapter == null) {
+        BackHandler(enabled = navigator.canNavigateBack()) {
+            coroutineScope.launch {
+                navigator.navigateBack()
+            }
+            if (appState.currentChapterId != null) {
+                appState.clearChapterSelection()
+            }
         }
-        if (appState.currentChapterId != null) {
-            appState.clearChapterSelection()
-        }
-    }
 
-    BackHandler(enabled = !navigator.canNavigateBack()) {
-        appState.clearProjectSelection()
+        BackHandler(enabled = !navigator.canNavigateBack()) {
+            appState.clearProjectSelection()
+        }
     }
 
     LaunchedEffect(currentChapterId) {
@@ -128,15 +140,19 @@ fun ProjectWorkspaceScreen(
                     workspaceRepository = workspaceRepository,
                     onSelectChapter = { volumeId, chapterId, chapterTitle ->
                         appState.selectChapter(volumeId, chapterId, chapterTitle)
-                        coroutineScope.launch {
-                            navigator.navigateTo(
-                                androidx.compose.material3.adaptive.layout.ThreePaneScaffoldRole.Secondary,
-                                WorkspaceDetailConfig(
-                                    volumeId = volumeId,
-                                    chapterId = chapterId,
-                                    chapterTitle = chapterTitle
+                        if (onNavigateToChapter != null) {
+                            onNavigateToChapter(currentProjectId, volumeId, chapterId)
+                        } else {
+                            coroutineScope.launch {
+                                navigator.navigateTo(
+                                    androidx.compose.material3.adaptive.layout.ThreePaneScaffoldRole.Secondary,
+                                    WorkspaceDetailConfig(
+                                        volumeId = volumeId,
+                                        chapterId = chapterId,
+                                        chapterTitle = chapterTitle
+                                    )
                                 )
-                            )
+                            }
                         }
                     },
                     onBackToProjects = {

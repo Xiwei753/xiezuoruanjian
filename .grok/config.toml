@@ -1,0 +1,17 @@
+[mcp_servers.codebase-memory-mcp]
+command = "/home/xiwei/.local/bin/codebase-memory-mcp"
+args = []
+enabled = true
+
+[mcp_servers.qt-docs-mcp]
+url = "https://qt-docs-mcp.qt.io/mcp"
+enabled = true
+
+[mcp_servers.maestro-mcp]
+command = "/home/xiwei/.local/bin/maestro"
+args = ["mcp"]
+enabled = true
+
+[mcp_servers.maestro-mcp.env]
+MAESTRO_CLI_ANALYSIS_NOTIFICATION_DISABLED = "true"
+MAESTRO_CLI_NO_ANALYTICS = "1"

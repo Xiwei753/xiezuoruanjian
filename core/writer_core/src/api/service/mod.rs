@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use serde::Serialize;
 
@@ -12,27 +11,14 @@ use crate::facade::WriterCore;
 
 pub type ApiResult<T> = Result<T, WriterError>;
 
-/// 跨平台 API 入口 — 所有平台（Android/Linux/Harmony/Windows）通过此结构体访问 Core 功能。
-///
-/// `workspace_path` 是工作区根目录，Core 内部所有路径均基于此解析。
-/// 此结构体无内部可变状态，每次调用通过 `core()` 创建无状态 `WriterCore` 实例。
-///
-/// 线程安全：WriterCoreApi 本身是 Send 的（PathBuf: Send），
-/// 但 UniFFI 导出的 WriterAppService 通过 Mutex 保护 editor_session 和 session_registry，
-/// 保证同一时刻只有一个线程访问编辑器状态。API 层的无状态设计使得
-/// 项目/卷/章节/同步等只读操作天然线程安全。
-///
-/// 调用链：平台端 → WriterAppService（Mutex 保护）→ WriterCoreApi → WriterCore（无状态 Facade）→ 子模块
 pub struct WriterCoreApi {
     pub(crate) workspace_path: PathBuf,
-    pub(crate) sync_transport: Option<Arc<dyn Fn() -> Result<Box<dyn writer_platform_api::SyncTransport>, writer_platform_api::TransportError> + Send + Sync>>,
-    pub(crate) secure_storage: Option<Arc<dyn writer_platform_api::SecureStorage>>,
+    pub(crate) sync_transport: Option<writer_platform_api::SyncTransportFactory>,
+    pub(crate) secure_storage: Option<std::sync::Arc<dyn writer_platform_api::SecureStorage>>,
     secrets_override: std::sync::Mutex<Option<crate::sync::SyncSecrets>>,
 }
 
 impl WriterCoreApi {
-    /// 创建 API 实例。`workspace_path` 无需预先存在——部分 API（如 workspace 诊断）
-    /// 会检测路径有效性并返回结构化错误。
     pub fn new<P: AsRef<Path>>(workspace_path: P) -> Self {
         Self {
             workspace_path: workspace_path.as_ref().to_path_buf(),
@@ -44,7 +30,7 @@ impl WriterCoreApi {
 
     pub fn with_sync_transport<P: AsRef<Path>>(
         workspace_path: P,
-        transport_factory: Arc<dyn Fn() -> Result<Box<dyn writer_platform_api::SyncTransport>, writer_platform_api::TransportError> + Send + Sync>,
+        transport_factory: writer_platform_api::SyncTransportFactory,
     ) -> Self {
         Self {
             workspace_path: workspace_path.as_ref().to_path_buf(),
@@ -56,8 +42,8 @@ impl WriterCoreApi {
 
     pub fn with_platform_services<P: AsRef<Path>>(
         workspace_path: P,
-        sync_transport_factory: Option<Arc<dyn Fn() -> Result<Box<dyn writer_platform_api::SyncTransport>, writer_platform_api::TransportError> + Send + Sync>>,
-        secure_storage: Option<Arc<dyn writer_platform_api::SecureStorage>>,
+        sync_transport_factory: Option<writer_platform_api::SyncTransportFactory>,
+        secure_storage: Option<std::sync::Arc<dyn writer_platform_api::SecureStorage>>,
     ) -> Self {
         Self {
             workspace_path: workspace_path.as_ref().to_path_buf(),
