@@ -402,7 +402,12 @@ class SettingsViewModel : ViewModel() {
         val config = _uiState.value.syncConfig
         val secrets = _uiState.value.syncSecrets
 
-        if (!SyncSession.lock.compareAndSet(false, true)) return
+        if (!SyncSession.lock.compareAndSet(false, true)) {
+            _uiState.update { it.copy(syncCommandResult = "sync_already_running", lastCommandType = type) }
+            return
+        }
+
+        val taskId = SyncSession.currentTaskId.incrementAndGet()
 
         val runningStateField: SettingsUiState.() -> SettingsUiState
         val successStateField: SettingsUiState.() -> SettingsUiState
@@ -435,10 +440,13 @@ class SettingsViewModel : ViewModel() {
                     if (saveResult is SettingsSaveResult.Failed) {
                         return@withContext "save_config_failed" to false
                     }
+                    syncConfigPersistedRevision = syncConfigRevision
+
                     val secretsResult = repo.saveSyncSecrets(secrets)
                     if (secretsResult is SettingsSaveResult.Failed) {
                         return@withContext "save_secrets_failed" to false
                     }
+                    syncSecretsPersistedRevision = syncSecretsRevision
 
                     val capability = repo.getSyncCapability()
                     if (!capability.canRun) {
@@ -497,6 +505,11 @@ class SettingsViewModel : ViewModel() {
                     }
                 }
 
+                if (SyncSession.currentTaskId.get() != taskId) {
+                    _uiState.update { it.failureStateField() }
+                    return@launch
+                }
+
                 _uiState.update { current ->
                     val (message, success) = result
                     if (success) {
@@ -508,7 +521,8 @@ class SettingsViewModel : ViewModel() {
             } finally {
                 SyncSession.lock.set(false)
                 val refreshedCapability = withContext(Dispatchers.IO) { repo.getSyncCapability() }
-                _uiState.update { it.copy(syncCapability = refreshedCapability) }
+                val refreshedWarning = withContext(Dispatchers.IO) { repo.getSecureStorageWarning() }
+                _uiState.update { it.copy(syncCapability = refreshedCapability, secureStorageWarning = refreshedWarning) }
             }
         }
     }

@@ -185,8 +185,9 @@ fun SyncSettings(
                         SyncCommandType.PERFORM_SYNC -> state.performSyncState == SyncCommandState.SUCCESS
                         null -> false
                     }
+                    val displayResult = resolveCommandResult(state.syncCommandResult)
                     Text(
-                        text = state.syncCommandResult,
+                        text = displayResult,
                         color = if (isSuccess) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodyMedium,
                     )
@@ -203,6 +204,17 @@ private fun resolveBlockMessage(blockReasonCode: String, blockMessageKey: String
         "SECURE_STORAGE_UNAVAILABLE" -> stringResource(id = R.string.sync_block_secure_storage_unavailable)
         "REMOTE_URL_MISSING" -> stringResource(id = R.string.sync_block_remote_url_missing)
         "TOKEN_MISSING" -> stringResource(id = R.string.sync_block_token_missing)
+        "sync_already_running" -> stringResource(id = R.string.sync_already_running)
         else -> blockMessageKey ?: blockReasonCode
+    }
+}
+
+@Composable
+private fun resolveCommandResult(raw: String): String {
+    return when (raw) {
+        "sync_already_running" -> stringResource(id = R.string.sync_already_running)
+        "save_config_failed" -> stringResource(id = R.string.save_sync_config_failed)
+        "save_secrets_failed" -> stringResource(id = R.string.save_sync_secrets_failed)
+        else -> raw
     }
 }

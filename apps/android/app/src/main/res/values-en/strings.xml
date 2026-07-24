@@ -278,6 +278,7 @@
     <string name="sync_block_token_missing">Token not configured</string>
     <string name="sync_block_secure_storage_unavailable">Secure storage unavailable, cannot save sync credentials</string>
     <string name="sync_migration_warning">Legacy credential migration failed, please re-enter sync token</string>
+    <string name="sync_already_running">Sync is already running, please try again later</string>
 
     <!-- WorkspaceRepository Exception messages -->
     <string name="repo_workspace_init_failed">Workspace initialization failed: %1$s</string>
