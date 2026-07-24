@@ -1,6 +1,5 @@
 package com.xiwei.sujian.ui.compose
 
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -15,18 +14,14 @@ import com.xiwei.sujian.model.FoldState
 import com.xiwei.sujian.model.FoldOrientation
 import com.xiwei.sujian.model.FoldOcclusion
 import com.xiwei.sujian.model.LayoutPlan
-import com.xiwei.sujian.model.Orientation
-import com.xiwei.sujian.model.PointerKind
 import com.xiwei.sujian.model.Project
 import com.xiwei.sujian.model.RecentEdit
-import com.xiwei.sujian.model.ShellMode
 import com.xiwei.sujian.model.WindowMetrics
 import com.xiwei.sujian.platform.api.FoldPosture
 import com.xiwei.sujian.platform.api.FoldOrientation as PlatformFoldOrientation
 import com.xiwei.sujian.platform.api.OcclusionType
-import com.xiwei.sujian.ui.compose.adaptive.AndroidAdaptiveWindowAdapter
-import com.xiwei.sujian.ui.compose.adaptive.AndroidFoldFeatureInfo
-import com.xiwei.sujian.ui.compose.navigation.SujianDestination
+import com.xiwei.sujian.platform.window.WindowFoldFeatureCollector
+import com.xiwei.sujian.platform.window.AospFoldFeatureInfo
 import androidx.window.layout.FoldingFeature
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -36,11 +31,6 @@ import kotlinx.coroutines.withContext
 class SujianAppViewModel(
     private val savedStateHandle: SavedStateHandle
 ) : ViewModel() {
-
-    var currentDestination by mutableStateOf(
-        savedStateHandle["currentDestination"] ?: SujianDestination.Works.name
-    )
-        private set
 
     var projects by mutableStateOf<List<Project>>(emptyList())
         private set
@@ -89,11 +79,6 @@ class SujianAppViewModel(
         refreshRecentEdits()
     }
 
-    fun navigateTo(destination: SujianDestination) {
-        currentDestination = destination.name
-        savedStateHandle["currentDestination"] = destination.name
-    }
-
     fun selectProject(projectId: String, projectTitle: String) {
         currentProjectId = projectId
         currentProjectTitle = projectTitle
@@ -139,7 +124,7 @@ class SujianAppViewModel(
     fun updateFoldFeaturesFromAdaptive(features: List<FoldingFeature>, density: Float = 1f) {
         val coreFoldInfo = if (features.isNotEmpty()) {
             val feature = features.first()
-            val info = AndroidAdaptiveWindowAdapter.toFoldFeatureInfo(feature)
+            val info = WindowFoldFeatureCollector.toFoldFeatureInfo(feature)
             FoldFeatureInfo(
                 state = when (info.state) {
                     FoldPosture.Flat -> FoldState.Flat
@@ -227,21 +212,12 @@ class SujianAppViewModel(
             refreshProjects()
         }
     }
-
-    fun getCurrentDestination(): SujianDestination {
-        return try {
-            SujianDestination.valueOf(currentDestination)
-        } catch (_: Exception) {
-            SujianDestination.Works
-        }
-    }
 }
 
 @Stable
 class SujianAppState(
     val viewModel: SujianAppViewModel
 ) {
-    val currentDestination: SujianDestination get() = viewModel.getCurrentDestination()
     val projects: List<Project> get() = viewModel.projects
     val recentEdits: List<RecentEdit> get() = viewModel.recentEdits
     val currentProjectId: String? get() = viewModel.currentProjectId
@@ -253,7 +229,6 @@ class SujianAppState(
     val foldFeatureInfo: FoldFeatureInfo get() = viewModel.foldFeatureInfo
     val isLoading: Boolean get() = viewModel.isLoading
 
-    fun navigateTo(destination: SujianDestination) = viewModel.navigateTo(destination)
     fun selectProject(projectId: String, projectTitle: String) = viewModel.selectProject(projectId, projectTitle)
     fun selectChapter(volumeId: String, chapterId: String, chapterTitle: String) = viewModel.selectChapter(volumeId, chapterId, chapterTitle)
     fun clearChapterSelection() = viewModel.clearChapterSelection()

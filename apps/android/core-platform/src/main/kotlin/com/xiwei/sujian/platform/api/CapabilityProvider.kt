@@ -19,11 +19,9 @@ open class CapabilityProvider(private val context: Context) {
         val current = _capabilities.value
         val windowSizeClass = config.toWindowSizeClass()
         val hasHardwareKeyboard = config.keyboard != Configuration.KEYBOARD_NOKEYS
-        val pointerKinds = config.toPointerKinds()
         _capabilities.value = current.copy(
             windowSizeClass = windowSizeClass,
             hasHardwareKeyboard = hasHardwareKeyboard,
-            pointerKinds = pointerKinds,
         )
     }
 
@@ -61,13 +59,14 @@ open class CapabilityProvider(private val context: Context) {
 
         val config = context.resources.configuration
         val supportsDynamicColor = Build.VERSION.SDK_INT >= 31
+        val pointerKinds = com.xiwei.sujian.platform.window.detectPointerKindsFromInputDevices(context)
 
         return AndroidCapabilities(
             sdkInt = Build.VERSION.SDK_INT,
             windowSizeClass = config.toWindowSizeClass(),
             foldPosture = FoldPosture.None,
             hasHardwareKeyboard = config.keyboard != Configuration.KEYBOARD_NOKEYS,
-            pointerKinds = config.toPointerKinds(),
+            pointerKinds = pointerKinds,
             refreshRateHz = refreshRate,
             isLowRamDevice = isLowRamDevice,
             hasGyroscope = hasGyroscope,
@@ -85,17 +84,6 @@ open class CapabilityProvider(private val context: Context) {
             screenWidthDp >= 600 -> WindowSizeClass.Medium
             else -> WindowSizeClass.Compact
         }
-    }
-
-    private fun Configuration.toPointerKinds(): Set<PointerKind> {
-        val kinds = mutableSetOf(PointerKind.Touch)
-        if (keyboard != Configuration.KEYBOARD_NOKEYS) {
-            kinds.add(PointerKind.Mouse)
-        }
-        if (touchscreen == Configuration.TOUCHSCREEN_STYLUS) {
-            kinds.add(PointerKind.Stylus)
-        }
-        return kinds
     }
 
     fun updateFromInputDevices(inputDeviceSources: Set<PointerKind>) {

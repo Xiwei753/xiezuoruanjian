@@ -4,10 +4,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -23,12 +26,10 @@ import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
 import com.xiwei.sujian.model.Orientation
 import com.xiwei.sujian.model.WindowMetrics
 import com.xiwei.sujian.platform.api.AndroidCapabilities
-import com.xiwei.sujian.platform.api.FoldPosture
 import com.xiwei.sujian.platform.api.PointerKind
 import com.xiwei.sujian.platform.aosp.AospCapabilityProvider
 import com.xiwei.sujian.platform.window.detectPointerKindsFromInputDevices
-import com.xiwei.sujian.ui.compose.adaptive.rememberAdaptiveWindowState
-import com.xiwei.sujian.ui.compose.navigation.SujianDestination
+import com.xiwei.sujian.platform.window.WindowFoldFeatureCollector
 import com.xiwei.sujian.ui.compose.navigation.SujianNavigationSuite
 import com.xiwei.sujian.ui.compose.theme.SujianTheme
 import com.xiwei.sujian.ui.compose.theme.ThemeStore
@@ -63,25 +64,36 @@ fun SujianApp(
         val settingsRepo = SettingsRepository(context)
         val workspaceUC = WorkspaceUseCase(workspaceRepo)
         vm.initialize(workspaceRepo, workspaceUC, settingsRepo, context)
-        if (initialDestination == "settings") {
-            vm.navigateTo(SujianDestination.Settings)
+    }
+
+    val activity = LocalContext.current as? androidx.activity.ComponentActivity
+    var foldingFeatures by remember { mutableStateOf<List<androidx.window.layout.FoldingFeature>>(emptyList()) }
+
+    if (activity != null) {
+        val foldCollector = remember { WindowFoldFeatureCollector(activity) }
+        DisposableEffect(foldCollector) {
+            foldCollector.startCollecting { features ->
+                foldingFeatures = features
+            }
+            onDispose {
+                foldCollector.stopCollecting()
+            }
         }
     }
 
-    val windowState = rememberAdaptiveWindowState()
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current.density
 
-    LaunchedEffect(windowState.foldingFeatures, configuration.screenWidthDp, configuration.screenHeightDp) {
-        capabilityProvider.updateFromFoldFeatures(windowState.foldingFeatures)
+    LaunchedEffect(foldingFeatures, configuration.screenWidthDp, configuration.screenHeightDp) {
+        capabilityProvider.updateFromFoldFeatures(foldingFeatures)
         capabilityProvider.updateFromConfiguration(configuration)
         val pointerKinds = detectPointerKindsFromInputDevices(context)
         capabilityProvider.updateFromInputDevices(pointerKinds)
 
-        vm.updateFoldFeaturesFromAdaptive(windowState.foldingFeatures, density)
+        vm.updateFoldFeaturesFromAdaptive(foldingFeatures, density)
 
         val settingsRepo = SettingsRepository(context)
-        val hasFoldFeature = windowState.foldingFeatures.isNotEmpty()
+        val hasFoldFeature = foldingFeatures.isNotEmpty()
         val deviceClass = settingsRepo.detectDeviceClassFromFoldFeature(
             hasFoldFeature, configuration.smallestScreenWidthDp
         )
@@ -115,6 +127,7 @@ fun SujianApp(
             Box(modifier = Modifier.fillMaxSize()) {
                 SujianNavigationSuite(
                     appState = appState,
+                    initialDestination = initialDestination,
                     modifier = Modifier.fillMaxSize()
                 )
                 AnimatedTextEditorSlot(

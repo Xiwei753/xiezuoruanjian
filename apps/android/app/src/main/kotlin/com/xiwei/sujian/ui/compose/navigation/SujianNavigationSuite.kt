@@ -54,8 +54,6 @@ enum class SujianDestination(
     ),
 }
 
-private data class SujianNavKey(val destination: SujianDestination) : NavKey
-
 private fun SujianRoute.toTopDestination(): SujianDestination = when (this) {
     is SujianRoute.Works -> SujianDestination.Works
     is SujianRoute.Project -> SujianDestination.Works
@@ -69,27 +67,19 @@ private fun SujianRoute.toTopDestination(): SujianDestination = when (this) {
 @Composable
 fun SujianNavigationSuite(
     appState: SujianAppState,
+    initialDestination: String? = null,
     modifier: Modifier = Modifier,
 ) {
-    val backStack = rememberNavBackStack(SujianRoute.Works as NavKey)
+    val initialRoute = when (initialDestination) {
+        "settings" -> SujianRoute.Settings
+        "starmap" -> SujianRoute.StarMap
+        "stats" -> SujianRoute.Stats
+        else -> SujianRoute.Works
+    }
+    val backStack = rememberNavBackStack(initialRoute as NavKey)
     val currentRoute = backStack.lastOrNull() as? SujianRoute ?: SujianRoute.Works
     val currentTopDestination = currentRoute.toTopDestination()
     val motion = LocalSujianMotion.current
-
-    LaunchedEffect(appState.currentDestination) {
-        val target = appState.currentDestination
-        val topRoute = backStack.lastOrNull() as? SujianRoute
-        val topDest = topRoute?.toTopDestination()
-        if (topDest != target) {
-            backStack.removeAll { (it as? SujianRoute)?.toTopDestination() != target }
-            backStack.add(when (target) {
-                SujianDestination.Works -> SujianRoute.Works
-                SujianDestination.StarMap -> SujianRoute.StarMap
-                SujianDestination.Stats -> SujianRoute.Stats
-                SujianDestination.Settings -> SujianRoute.Settings
-            })
-        }
-    }
 
     LaunchedEffect(appState.currentProjectId, appState.currentChapterId) {
         val projectId = appState.currentProjectId
@@ -118,7 +108,17 @@ fun SujianNavigationSuite(
                 item(
                     selected = currentTopDestination == destination,
                     onClick = {
-                        appState.navigateTo(destination)
+                        val targetRoute = when (destination) {
+                            SujianDestination.Works -> SujianRoute.Works
+                            SujianDestination.StarMap -> SujianRoute.StarMap
+                            SujianDestination.Stats -> SujianRoute.Stats
+                            SujianDestination.Settings -> SujianRoute.Settings
+                        }
+                        backStack.removeAll { (it as? SujianRoute)?.toTopDestination() != destination }
+                        val existing = backStack.lastOrNull() as? SujianRoute
+                        if (existing != targetRoute) {
+                            backStack.add(targetRoute)
+                        }
                     },
                     icon = {
                         Icon(
@@ -156,7 +156,6 @@ fun SujianNavigationSuite(
                             appState.clearProjectSelection()
                         }
                         newTop is SujianRoute.SettingsDetail -> {
-                            // stay in settings
                         }
                         else -> {
                             appState.clearProjectSelection()
@@ -183,29 +182,17 @@ fun SujianNavigationSuite(
                                 is SujianRoute.StarMap -> StarMapScreen()
                                 is SujianRoute.Stats -> StatsScreen()
                                 is SujianRoute.Settings -> SettingsRoute(
-                                    onNavigateBack = { appState.navigateTo(SujianDestination.Works) },
+                                    onNavigateBack = {
+                                        backStack.removeAll { (it as? SujianRoute)?.toTopDestination() != SujianDestination.Works }
+                                        if (backStack.lastOrNull() as? SujianRoute != SujianRoute.Works) {
+                                            backStack.add(SujianRoute.Works)
+                                        }
+                                    },
                                 )
                                 is SujianRoute.SettingsDetail -> SettingsRoute(
-                                    onNavigateBack = { appState.navigateTo(SujianDestination.Works) },
-                                )
-                            }
-                        }
-                    }
-                    is SujianNavKey -> NavEntry(key) {
-                        AnimatedContent(
-                            targetState = key.destination,
-                            transitionSpec = {
-                                fadeIn(animationSpec = tween(motion.standardDurationMs, delayMillis = motion.quickDurationMs)) togetherWith
-                                    fadeOut(animationSpec = tween(motion.quickDurationMs))
-                            },
-                            label = "nav-transition",
-                        ) { destination ->
-                            when (destination) {
-                                SujianDestination.Works -> ProjectWorkspaceScreen(appState = appState)
-                                SujianDestination.StarMap -> StarMapScreen()
-                                SujianDestination.Stats -> StatsScreen()
-                                SujianDestination.Settings -> SettingsRoute(
-                                    onNavigateBack = { appState.navigateTo(SujianDestination.Works) },
+                                    onNavigateBack = {
+                                        backStack.removeAll { it is SujianRoute.SettingsDetail }
+                                    },
                                 )
                             }
                         }

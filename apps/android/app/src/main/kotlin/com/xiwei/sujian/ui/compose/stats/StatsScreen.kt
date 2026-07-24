@@ -29,6 +29,7 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.designsystem.component.SujianCard
 import com.xiwei.sujian.designsystem.layout.SujianScreenScaffold
+import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.model.ProjectWritingStatsItem
 import com.xiwei.sujian.model.WritingStatsSummary
 import kotlinx.coroutines.Dispatchers
@@ -41,6 +42,7 @@ fun StatsScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val dims = LocalSujianDimensions.current
     var summary by remember { mutableStateOf<WritingStatsSummary?>(null) }
     var projectItems by remember { mutableStateOf<List<ProjectWritingStatsItem>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
@@ -77,20 +79,20 @@ fun StatsScreen(
         }
 
         LazyColumn(
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            contentPadding = PaddingValues(horizontal = dims.space16, vertical = dims.space8),
             modifier = modifier.fillMaxSize().padding(paddingValues)
         ) {
         item {
             Text(stringResource(id = R.string.stats_recent_30_days), style = MaterialTheme.typography.titleMedium)
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(dims.space16))
         }
 
         summary?.let { s ->
             item {
                 SujianCard(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = dims.space12),
                 ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
+                    Column(modifier = Modifier.padding(dims.space16)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
@@ -99,7 +101,7 @@ fun StatsScreen(
                             StatItem(stringResource(id = R.string.stats_active_days), "${s.activeDays}")
                             StatItem(stringResource(id = R.string.stats_total_duration), formatDuration(s.totalTimeSeconds, context))
                         }
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(dims.space12))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
@@ -116,13 +118,13 @@ fun StatsScreen(
         if (projectItems.isNotEmpty()) {
             item {
                 Text(stringResource(id = R.string.stats_by_project), style = MaterialTheme.typography.titleSmall)
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(dims.space8))
             }
             items(projectItems, key = { it.projectId ?: "" }) { item ->
                 SujianCard(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = dims.space8),
                 ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
+                    Column(modifier = Modifier.padding(dims.space16)) {
                         Text(item.projectTitle ?: "", style = MaterialTheme.typography.titleSmall)
                         Text(stringResource(R.string.stats_project_item, item.netDeltaChars ?: 0, formatDuration(item.activeSeconds ?: 0, context)), style = MaterialTheme.typography.bodySmall)
                     }
@@ -132,7 +134,7 @@ fun StatsScreen(
 
         if (summary == null && projectItems.isEmpty()) {
             item {
-                Box(modifier = Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
+                Box(modifier = Modifier.fillMaxSize().padding(dims.space32), contentAlignment = Alignment.Center) {
                     Text(stringResource(id = R.string.stats_no_data), style = MaterialTheme.typography.bodyLarge)
                 }
             }

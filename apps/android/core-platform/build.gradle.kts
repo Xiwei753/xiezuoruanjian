@@ -24,6 +24,8 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.window)
     implementation(libs.androidx.window.core)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.activity.ktx)
 
     testImplementation(libs.junit)
 }

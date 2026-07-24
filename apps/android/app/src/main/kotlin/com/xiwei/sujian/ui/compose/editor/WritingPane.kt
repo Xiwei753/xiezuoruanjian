@@ -38,6 +38,7 @@ import com.xiwei.sujian.editor.v2.coordinator.SessionResetSource
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
 import com.xiwei.sujian.ui.EditorViewModel
 import com.xiwei.sujian.ui.SaveStatus
+import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import androidx.compose.ui.viewinterop.AndroidView
 
 /**
@@ -71,6 +72,8 @@ fun WritingPane(
             "WritingPane requires an AnimatedTextEditorCoordinator in the CompositionLocal. " +
             "Ensure the host Activity or Fragment provides one via CompositionLocalProvider."
         )
+
+    val dims = LocalSujianDimensions.current
 
     val targetId = remember(projectId, volumeId, chapterId) {
         "chapter-body:$projectId:$volumeId:$chapterId"
@@ -167,7 +170,7 @@ fun WritingPane(
 
     Column(modifier = modifier.fillMaxSize()) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = dims.space16, vertical = dims.space4),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
@@ -191,7 +194,7 @@ fun WritingPane(
             Text(
                 stringResource(R.string.word_count_format, uiState.wordCount),
                 style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
+                modifier = Modifier.padding(horizontal = dims.space16, vertical = dims.space2)
             )
         }
 

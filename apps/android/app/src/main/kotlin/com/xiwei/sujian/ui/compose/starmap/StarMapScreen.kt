@@ -31,6 +31,7 @@ import com.xiwei.sujian.designsystem.component.SujianFab
 import com.xiwei.sujian.designsystem.component.SujianIconButton
 import com.xiwei.sujian.designsystem.component.SujianTextButton
 import com.xiwei.sujian.designsystem.layout.SujianScreenScaffold
+import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -63,6 +64,7 @@ import kotlinx.coroutines.withContext
 fun StarMapScreen(
     modifier: Modifier = Modifier
 ) {
+    val dims = LocalSujianDimensions.current
     var selectedStarmapId by remember { mutableStateOf<String?>(null) }
 
     if (selectedStarmapId != null) {
@@ -88,6 +90,7 @@ private fun StarMapListScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val dims = LocalSujianDimensions.current
     var starMaps by remember { mutableStateOf<List<StarMapMeta>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var showCreateDialog by remember { mutableStateOf(false) }
@@ -131,25 +134,25 @@ private fun StarMapListScreen(
             }
         } else if (starMaps.isEmpty()) {
             Column(
-                modifier = Modifier.fillMaxSize().padding(paddingValues).padding(32.dp),
+                modifier = Modifier.fillMaxSize().padding(paddingValues).padding(dims.space32),
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(stringResource(id = R.string.starmap_empty), style = MaterialTheme.typography.titleMedium)
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(dims.space8))
                 Text(stringResource(id = R.string.starmap_empty_hint), style = MaterialTheme.typography.bodyMedium)
             }
         } else {
             LazyColumn(
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                contentPadding = PaddingValues(horizontal = dims.space16, vertical = dims.space8),
                 modifier = Modifier.fillMaxSize().padding(paddingValues)
             ) {
                 items(starMaps, key = { it.starmapId }) { meta ->
                     SujianCard(
                         onClick = { onSelectStarmap(meta.starmapId) },
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                        modifier = Modifier.fillMaxWidth().padding(bottom = dims.space8),
                     ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
+                        Column(modifier = Modifier.padding(dims.space16)) {
                             Text(meta.title, style = MaterialTheme.typography.titleMedium)
                             if (meta.description.isNotBlank()) {
                                 Text(meta.description, style = MaterialTheme.typography.bodySmall)
@@ -208,7 +211,7 @@ private fun StarMapListScreen(
                         label = { Text(stringResource(id = R.string.starmap_hint_title)) },
                         singleLine = true
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(dims.space8))
                     AnimatedTextArea(
                         targetId = "starmap-description:new",
                         value = description,
@@ -232,6 +235,7 @@ private fun StarMapEditorScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val dims = LocalSujianDimensions.current
     var starMapData by remember { mutableStateOf<StarMapData?>(null) }
     var isLoading by remember { mutableStateOf(true) }
     var showAddNodeDialog by remember { mutableStateOf(false) }
@@ -283,7 +287,7 @@ private fun StarMapEditorScreen(
                 stringResource(R.string.starmap_node_edge_count, starMapData?.graph?.nodes?.size ?: 0, starMapData?.graph?.edges?.size ?: 0),
                 style = MaterialTheme.typography.bodySmall
             )
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(dims.space8))
             SujianIconButton(
                 onClick = { showAddEdgeDialog = true },
                 icon = SujianIcons.Add,
@@ -481,8 +485,8 @@ private fun StarMapEditorScreen(
                         label = { Text(stringResource(id = R.string.starmap_hint_title)) },
                         singleLine = true
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Spacer(modifier = Modifier.height(dims.space8))
+                    Row(horizontalArrangement = Arrangement.spacedBy(dims.space4)) {
                         StarMapNodeKind.entries.take(6).forEach { kind ->
                             SujianTextButton(
                                 text = kind.name,
@@ -537,7 +541,7 @@ private fun StarMapEditorScreen(
                             )
                         }
                     }
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(dims.space8))
                     Text(stringResource(id = R.string.starmap_to_node), style = MaterialTheme.typography.bodySmall)
                     LazyColumn(modifier = Modifier.height(120.dp)) {
                         items(nodes) { node ->
@@ -562,6 +566,7 @@ private fun NodeEditPanel(
     onDelete: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    val dims = LocalSujianDimensions.current
     var editTitle by remember { mutableStateOf(node.title) }
     var editKind by remember { mutableStateOf(node.kind) }
 
@@ -594,7 +599,7 @@ private fun NodeEditPanel(
                     label = { Text(stringResource(id = R.string.starmap_hint_title)) },
                     singleLine = true
                 )
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(dims.space8))
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     StarMapNodeKind.entries.take(6).forEach { kind ->
                         SujianTextButton(
@@ -603,7 +608,7 @@ private fun NodeEditPanel(
                         )
                     }
                 }
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(dims.space16))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End
