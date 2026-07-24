@@ -423,8 +423,13 @@ fn install_translator() {
 }
 
 fn main() {
-    // ===== 平台适配层初始化：注入配置存储 =====
+    // ===== 平台适配层初始化：注入配置存储和同步传输 =====
     writer_platform_linux::init_default_config_store();
+    if let Ok(services) = std::panic::catch_unwind(writer_platform_linux::create_platform_services) {
+        if let Some(factory) = services.sync_transport_factory {
+            crate::backend::app_backend::set_linux_sync_transport_factory(factory);
+        }
+    }
 
     // ===== 最早期初始化：确保崩溃/错误能写入日志文件 =====
     // 这两行必须在所有其他代码之前执行

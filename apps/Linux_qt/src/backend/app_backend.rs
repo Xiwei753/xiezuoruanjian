@@ -77,6 +77,12 @@ struct DebugConfig {
 /// 选择 OnceLock 而非 LazyLock/OnceCell：标准库稳定、无需额外依赖。
 static DEBUG_CONFIG: OnceLock<DebugConfig> = OnceLock::new();
 
+static LINUX_SYNC_TRANSPORT_FACTORY: OnceLock<writer_platform_api::SyncTransportFactory> = OnceLock::new();
+
+pub fn set_linux_sync_transport_factory(factory: writer_platform_api::SyncTransportFactory) {
+    LINUX_SYNC_TRANSPORT_FACTORY.set(factory).ok();
+}
+
 fn get_debug_config() -> &'static DebugConfig {
     DEBUG_CONFIG.get_or_init(|| {
         let enabled = std::env::var("WRITER_DEBUG")
@@ -434,7 +440,14 @@ impl AppBackend {
 
     pub(crate) fn core_api(&self) -> Option<WriterCoreApi> {
         if self.current_has_workspace && !self.current_workspace.is_empty() {
-            Some(WriterCoreApi::new(&self.current_workspace))
+            if let Some(factory) = LINUX_SYNC_TRANSPORT_FACTORY.get() {
+                Some(WriterCoreApi::with_sync_transport(
+                    &self.current_workspace,
+                    factory.clone(),
+                ))
+            } else {
+                Some(WriterCoreApi::new(&self.current_workspace))
+            }
         } else {
             None
         }

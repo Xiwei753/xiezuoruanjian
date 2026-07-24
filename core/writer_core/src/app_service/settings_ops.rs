@@ -32,11 +32,22 @@ impl super::WriterAppService {
     }
 
     pub fn load_sync_secrets(&self) -> Result<SyncSecretsDto, WriterError> {
-        self.api.load_sync_secrets()
+        if self.secure_storage.is_some() {
+            let secrets = self.load_sync_secrets_with_secure_storage();
+            Ok(secrets.into())
+        } else {
+            self.api.load_sync_secrets()
+        }
     }
 
     pub fn save_sync_secrets(&self, secrets: SyncSecretsDto) -> Result<bool, WriterError> {
-        self.api.save_sync_secrets(secrets)
+        if self.secure_storage.is_some() {
+            let core_secrets: crate::sync::SyncSecrets = secrets.into();
+            self.save_sync_secrets_via_secure_storage(&core_secrets)?;
+            Ok(true)
+        } else {
+            self.api.save_sync_secrets(secrets)
+        }
     }
 
     pub fn load_sync_state(&self) -> Result<SyncStateDto, WriterError> {

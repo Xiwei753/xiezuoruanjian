@@ -1,19 +1,64 @@
 package com.xiwei.sujian.data
 
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
+import uniffi.writer_core.PlatformDto
+import uniffi.writer_core.PlatformInitDto
 import uniffi.writer_core.WriterAppService
 import uniffi.writer_core.WriterException
+import uniffi.writer_core.openWorkspaceWithInit
 
 /**
  * 底层 WriterAppService 持有者 + 公共错误包装能力。
  *
  * 所有领域 Bridge 通过此类获取 service 实例和统一的 wrapResult 错误处理。
+ *
+ * 服务通过 [openWorkspaceWithInit] 创建，注入平台初始化参数（目录、设备 ID、
+ * 网络状态等），Core 不再自行猜测平台目录。
  */
-class WriterAppServiceHolder(workspacePath: String) {
-    val service: WriterAppService by lazy { WriterAppService(workspacePath) }
+class WriterAppServiceHolder(
+    workspacePath: String,
+    platformInit: PlatformInitDto? = null,
+) {
+    val service: WriterAppService by lazy {
+        if (platformInit != null) {
+            openWorkspaceWithInit(workspacePath, platformInit)
+        } else {
+            WriterAppService(workspacePath)
+        }
+    }
 
     companion object {
         private const val TAG = "WriterAppServiceHolder"
+
+        fun createFromContext(
+            workspacePath: String,
+            filesDir: String,
+            cacheDir: String,
+            noBackupDir: String,
+            deviceId: String,
+            appVersion: String,
+            locale: String,
+            timezone: String,
+            isConnected: Boolean,
+            isMetered: Boolean,
+        ): WriterAppServiceHolder {
+            val init = PlatformInitDto(
+                platform = PlatformDto.ANDROID,
+                appDataDir = filesDir,
+                cacheDir = cacheDir,
+                logDir = "$cacheDir/log",
+                noBackupDir = noBackupDir,
+                deviceId = deviceId,
+                appVersion = appVersion,
+                locale = locale,
+                timezone = timezone,
+                isConnected = isConnected,
+                isMetered = isMetered,
+                proxyHost = null,
+                proxyPort = null,
+            )
+            return WriterAppServiceHolder(workspacePath, init)
+        }
     }
 
     /**

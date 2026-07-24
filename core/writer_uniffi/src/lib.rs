@@ -28,6 +28,7 @@ pub use writer_core::app_service::WriterAppService;
 pub use writer_core::error::{Error, Result};
 pub use writer_core::init_workspace;
 pub use writer_core::open_workspace;
+pub use writer_core::open_workspace_with_init;
 pub use writer_core::open_workspace_with_platform_services;
 pub use writer_core::repair_workspace;
 pub use writer_core::create_project_in_workspace;

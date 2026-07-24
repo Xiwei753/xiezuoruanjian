@@ -35,8 +35,8 @@ import uniffi.writer_core.ShellModeDto
  *
  * 新代码应直接使用领域 Bridge，不再依赖此门面类。
  */
-class AppServiceBridge(workspacePath: String) {
-    private val holder = WriterAppServiceHolder(workspacePath)
+class AppServiceBridge private constructor(val holder: WriterAppServiceHolder) {
+    constructor(workspacePath: String) : this(WriterAppServiceHolder(workspacePath))
 
     // ── 领域 Bridge ──
     val projectBridge: ProjectBridge by lazy { ProjectBridge(holder) }

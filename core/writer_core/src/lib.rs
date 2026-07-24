@@ -53,6 +53,7 @@ pub mod error;
 pub mod history;
 pub mod index;
 pub mod platform_interaction;
+mod platform_secure_storage;
 
 #[cfg(feature = "harmony-ffi")]
 pub mod ffi;
@@ -125,6 +126,37 @@ pub fn open_workspace_with_platform_services(
     if !crate::workspace::validate_workspace(p).map_err(WriterError::from)? {
         return Err(WriterError::InvalidWorkspace);
     }
+    Ok(std::sync::Arc::new(WriterAppService::with_platform_services(path, services)))
+}
+
+pub fn open_workspace_with_init(
+    path: String,
+    init: crate::api::types::PlatformInitDto,
+) -> std::result::Result<std::sync::Arc<WriterAppService>, WriterError> {
+    let p = Path::new(&path);
+    if !crate::workspace::validate_workspace(p).map_err(WriterError::from)? {
+        return Err(WriterError::InvalidWorkspace);
+    }
+
+    let platform_init: writer_platform_api::PlatformInit = init.clone().into();
+    let network_state: writer_platform_api::NetworkState = init.into();
+    let config_dir = platform_init.app_data_dir.join("config");
+    let config_store: Option<Box<dyn writer_platform_api::ConfigStore>> =
+        Some(Box::new(writer_platform_api::FileConfigStore::new(config_dir)));
+
+    let no_backup_dir = platform_init.no_backup_dir.clone()
+        .unwrap_or_else(|| platform_init.app_data_dir.join("no_backup"));
+    let secure_storage: Option<Box<dyn writer_platform_api::SecureStorage>> =
+        Some(Box::new(crate::platform_secure_storage::FileSecureStorage::new(no_backup_dir)));
+
+    let services = writer_platform_api::PlatformServices {
+        init: platform_init,
+        config_store,
+        secure_storage,
+        network_state: Some(network_state),
+        sync_transport_factory: None,
+    };
+
     Ok(std::sync::Arc::new(WriterAppService::with_platform_services(path, services)))
 }
 

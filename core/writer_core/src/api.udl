@@ -6,6 +6,9 @@ namespace writer_core {
     WriterAppService open_workspace(string path);
 
     [Throws=WriterError]
+    WriterAppService open_workspace_with_init(string path, PlatformInitDto init);
+
+    [Throws=WriterError]
     boolean repair_workspace(string path);
 
     [Throws=WriterError]
@@ -336,6 +339,22 @@ enum PlatformDto {
     "Windows",
     "Harmony",
     "Apple",
+};
+
+dictionary PlatformInitDto {
+    PlatformDto platform;
+    string app_data_dir;
+    string cache_dir;
+    string log_dir;
+    string? no_backup_dir;
+    string device_id;
+    string app_version;
+    string locale;
+    string timezone;
+    boolean is_connected;
+    boolean is_metered;
+    string? proxy_host;
+    u16? proxy_port;
 };
 
 dictionary WorkspaceSummaryDto {
