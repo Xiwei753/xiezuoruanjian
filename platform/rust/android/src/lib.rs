@@ -7,7 +7,7 @@
 //! - 接收 Kotlin 层传入的 Context 目录信息构造 `PlatformInit`
 //! - 使用 `writer_platform_api::FileConfigStore` 提供配置存储
 //! - 通过 `ReqwestSyncTransport` 提供同步 HTTP 传输
-//! - 安全存储由 Kotlin 层通过 `SecureStorageCallback` 注入（基于 Android Keystore）
+//! - 通过 `AndroidEncryptedSecureStorage` 提供 AES‑256‑GCM 加密的安全存储
 //! - 组装最终 `cdylib`：包含通用核心、Android 适配和 UniFFI 元数据
 //!
 //! ## 依赖方向
@@ -21,7 +21,11 @@ use writer_uniffi::WriterAppService;
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
-use writer_platform_api::{FileConfigStore, HttpRequest, HttpResponse, NetworkState, PlatformInit, PlatformKind, PlatformServices, PlatformServicesResolver, SyncTransport, TransportError, register_platform_services_resolver};
+use writer_platform_api::{
+    FileConfigStore, HttpRequest, HttpResponse, NetworkState, PlatformInit, PlatformKind,
+    PlatformServices, PlatformServicesResolver, SecureStorage, SyncTransport, TransportError,
+    register_platform_services_resolver,
+};
 
 struct AndroidPlatformServicesResolver;
 
@@ -67,6 +71,95 @@ pub fn create_platform_init(
     }
 }
 
+/// AES‑256‑GCM 加密的安全存储。
+///
+/// 加密密钥存储在 `no_backup_dir/.enc_key`，密文存储在 `no_backup_dir/secrets/`。
+/// 每个 secret 使用独立的随机 12 字节 nonce。
+struct AndroidEncryptedSecureStorage {
+    storage_dir: PathBuf,
+    key: [u8; 32],
+}
+
+impl AndroidEncryptedSecureStorage {
+    fn new(no_backup_dir: PathBuf) -> Result<Self, String> {
+        std::fs::create_dir_all(no_backup_dir.join("secrets"))
+            .map_err(|e| format!("create secrets dir: {}", e))?;
+        let key_path = no_backup_dir.join(".enc_key");
+        let key = if key_path.exists() {
+            let data = std::fs::read(&key_path)
+                .map_err(|e| format!("read enc_key: {}", e))?;
+            if data.len() != 32 {
+                return Err(format!("enc_key has unexpected length: {}", data.len()));
+            }
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&data);
+            arr
+        } else {
+            let mut arr = [0u8; 32];
+            rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut arr);
+            std::fs::write(&key_path, arr)
+                .map_err(|e| format!("write enc_key: {}", e))?;
+            arr
+        };
+        Ok(Self { storage_dir: no_backup_dir.join("secrets"), key })
+    }
+}
+
+impl writer_platform_api::SecureStorage for AndroidEncryptedSecureStorage {
+    fn get_secret(&self, key: &str) -> Result<Option<Vec<u8>>, String> {
+        use aes_gcm::aead::Aead;
+        use aes_gcm::{Aes256Gcm, Key, KeyInit, Nonce};
+
+        let path = self.storage_dir.join(format!("{}.enc", key));
+        let data = match std::fs::read(&path) {
+            Ok(d) => d,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(format!("read secret: {}", e)),
+        };
+        if data.len() < 12 {
+            return Err("truncated ciphertext".into());
+        }
+        let (nonce_bytes, ciphertext) = data.split_at(12);
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.key));
+        let nonce = Nonce::from_slice(nonce_bytes);
+        let plaintext = cipher
+            .decrypt(nonce, ciphertext)
+            .map_err(|e| format!("decrypt failed: {}", e))?;
+        Ok(Some(plaintext))
+    }
+
+    fn set_secret(&self, key: &str, value: &[u8]) -> Result<(), String> {
+        use aes_gcm::aead::Aead;
+        use aes_gcm::{Aes256Gcm, Key, KeyInit, Nonce};
+
+        let mut nonce_bytes = [0u8; 12];
+        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut nonce_bytes);
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.key));
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let ciphertext = cipher
+            .encrypt(nonce, value)
+            .map_err(|e| format!("encrypt failed: {}", e))?;
+        let mut out = Vec::with_capacity(12 + ciphertext.len());
+        out.extend_from_slice(&nonce_bytes);
+        out.extend_from_slice(&ciphertext);
+        std::fs::create_dir_all(&self.storage_dir)
+            .map_err(|e| format!("create secrets dir: {}", e))?;
+        let path = self.storage_dir.join(format!("{}.enc", key));
+        std::fs::write(&path, &out)
+            .map_err(|e| format!("write secret: {}", e))?;
+        Ok(())
+    }
+
+    fn delete_secret(&self, key: &str) -> Result<(), String> {
+        let path = self.storage_dir.join(format!("{}.enc", key));
+        match std::fs::remove_file(&path) {
+            Ok(_) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(format!("delete secret: {}", e)),
+        }
+    }
+}
+
 pub fn create_platform_services(
     platform_init: PlatformInit,
     is_connected: bool,
@@ -88,10 +181,16 @@ pub fn create_platform_services(
     #[cfg(not(feature = "github-api"))]
     let sync_transport_factory: Option<writer_platform_api::SyncTransportFactory> = None;
 
+    let secure_storage: Option<Box<dyn SecureStorage>> = platform_init
+        .no_backup_dir
+        .as_ref()
+        .and_then(|dir| AndroidEncryptedSecureStorage::new(dir.clone()).ok())
+        .map(|s| Box::new(s) as Box<dyn SecureStorage>);
+
     PlatformServices {
         init: platform_init,
         config_store,
-        secure_storage: None,
+        secure_storage,
         network_state: Some(NetworkState {
             is_connected,
             is_metered,
