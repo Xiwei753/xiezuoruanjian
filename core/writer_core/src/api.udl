@@ -334,10 +334,11 @@ enum WriterError {
 };
 
 [Error]
-enum SecureStorageError {
-    "KeystoreKeyInvalidated",
-    "KeystoreError",
-    "StorageError",
+interface SecureStorageError {
+    KeystoreKeyInvalidated();
+    KeystoreError();
+    StorageError();
+    MigrationError(string reason);
 };
 
 enum PlatformDto {

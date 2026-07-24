@@ -92,15 +92,15 @@ class AndroidKeystoreSecureStorage(
             return cipher.doFinal(ciphertext)
         } catch (e: UnrecoverableKeyException) {
             DiagnosticsLogger.e(TAG, "Keystore key invalidated for key=$key", e)
-            throw SecureStorageException.KeystoreKeyInvalidated(e.message ?: "Keystore key invalidated")
+            throw SecureStorageException.KeystoreKeyInvalidated()
         } catch (e: CertificateException) {
             DiagnosticsLogger.e(TAG, "Keystore certificate error for key=$key", e)
-            throw SecureStorageException.KeystoreException(e.message ?: "Keystore certificate error")
+            throw SecureStorageException.KeystoreException()
         } catch (e: SecureStorageException) {
             throw e
         } catch (e: Exception) {
             DiagnosticsLogger.e(TAG, "Failed to get secret for key=$key", e)
-            throw SecureStorageException.StorageException(e.message ?: "Unknown storage error")
+            throw SecureStorageException.StorageException()
         }
     }
 
@@ -118,12 +118,12 @@ class AndroidKeystoreSecureStorage(
             atomicWrite(File(secretsDir, "$key.bin"), output)
         } catch (e: UnrecoverableKeyException) {
             DiagnosticsLogger.e(TAG, "Keystore key invalidated for key=$key", e)
-            throw SecureStorageException.KeystoreKeyInvalidated(e.message ?: "Keystore key invalidated")
+            throw SecureStorageException.KeystoreKeyInvalidated()
         } catch (e: SecureStorageException) {
             throw e
         } catch (e: Exception) {
             DiagnosticsLogger.e(TAG, "Failed to set secret for key=$key", e)
-            throw SecureStorageException.StorageException(e.message ?: "Unknown storage error")
+            throw SecureStorageException.StorageException()
         }
     }
 
@@ -137,7 +137,7 @@ class AndroidKeystoreSecureStorage(
             throw e
         } catch (e: Exception) {
             DiagnosticsLogger.e(TAG, "Failed to delete secret for key=$key", e)
-            throw SecureStorageException.StorageException(e.message ?: "Unknown storage error")
+            throw SecureStorageException.StorageException()
         }
     }
 
@@ -158,14 +158,21 @@ class AndroidKeystoreSecureStorage(
     }
 
     private fun migrateOldEncKey() {
+        val migrationError = migrateOldEncKeyInternal()
+        if (migrationError != null) {
+            throw SecureStorageException.MigrationException(migrationError)
+        }
+    }
+
+    private fun migrateOldEncKeyInternal(): String? {
         val oldKeyFile = File(context.noBackupFilesDir, OLD_KEY_FILE)
-        if (!oldKeyFile.exists()) return
+        if (!oldKeyFile.exists()) return null
 
         val oldSecretsDir = File(context.noBackupFilesDir, OLD_SECRETS_DIR)
         if (!oldSecretsDir.exists() || !oldSecretsDir.isDirectory) {
             oldKeyFile.delete()
             DiagnosticsLogger.i(TAG, "Migrated old .enc_key: no old secrets dir, deleted key file")
-            return
+            return null
         }
 
         val encFiles = oldSecretsDir.listFiles()?.filter { it.extension == "enc" } ?: emptyList()
@@ -173,19 +180,19 @@ class AndroidKeystoreSecureStorage(
             oldSecretsDir.deleteRecursively()
             oldKeyFile.delete()
             DiagnosticsLogger.i(TAG, "Migrated old .enc_key: no .enc files, cleaned up")
-            return
+            return null
         }
 
         val oldKeyData = try {
             oldKeyFile.readBytes()
         } catch (e: Exception) {
             DiagnosticsLogger.e(TAG, "Failed to read old .enc_key for migration", e)
-            return
+            return "Failed to read old .enc_key: ${e.message}"
         }
 
         if (oldKeyData.size != 32) {
             DiagnosticsLogger.e(TAG, "Old .enc_key is not 32 bytes (got ${oldKeyData.size}), cannot migrate secrets. Old data preserved.")
-            return
+            return "Old .enc_key is not 32 bytes (got ${oldKeyData.size})"
         }
 
         val oldAesKey = SecretKeySpec(oldKeyData, "AES")
@@ -230,8 +237,17 @@ class AndroidKeystoreSecureStorage(
             oldSecretsDir.deleteRecursively()
             oldKeyFile.delete()
             DiagnosticsLogger.i(TAG, "Migrated ${migratedSecrets.size} old secrets to Keystore successfully")
+            return null
         } else {
-            DiagnosticsLogger.e(TAG, "Migration failed: ${migratedSecrets.size} succeeded, $failedCount failed. All old data preserved.")
+            for ((name, _) in migratedSecrets) {
+                try {
+                    deleteSecret(name)
+                } catch (e: Exception) {
+                    DiagnosticsLogger.e(TAG, "Failed to roll back migrated secret $name", e)
+                }
+            }
+            DiagnosticsLogger.e(TAG, "Migration failed: ${migratedSecrets.size} rolled back, $failedCount failed. All old data preserved.")
+            return "Migration failed: $failedCount secrets could not be migrated, ${migratedSecrets.size} rolled back"
         }
     }
 }

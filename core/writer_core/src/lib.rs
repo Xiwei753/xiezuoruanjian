@@ -213,6 +213,7 @@ pub enum SecureStorageError {
     KeystoreKeyInvalidated,
     KeystoreError,
     StorageError,
+    MigrationError { reason: String },
 }
 
 impl std::fmt::Display for SecureStorageError {
@@ -221,6 +222,7 @@ impl std::fmt::Display for SecureStorageError {
             SecureStorageError::KeystoreKeyInvalidated => write!(f, "Keystore key invalidated"),
             SecureStorageError::KeystoreError => write!(f, "Keystore error"),
             SecureStorageError::StorageError => write!(f, "Storage error"),
+            SecureStorageError::MigrationError { reason } => write!(f, "Migration error: {reason}"),
         }
     }
 }
