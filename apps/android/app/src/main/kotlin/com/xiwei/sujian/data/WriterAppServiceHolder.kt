@@ -14,6 +14,7 @@ class WriterAppServiceHolder(
     workspacePath: String,
     platformInit: PlatformInitDto? = null,
     secureStorageProvider: uniffi.writer_core.SecureStorageProvider? = null,
+    val secureStorageError: String? = null,
 ) {
     val service: WriterAppService by lazy {
         if (platformInit != null && secureStorageProvider != null) {
@@ -61,6 +62,9 @@ class WriterAppServiceHolder(
             } catch (e: Exception) {
                 DiagnosticsLogger.e(TAG, "Failed to initialize Android Keystore secure storage", e)
                 null
+            }
+            if (secureStorage == null) {
+                return WriterAppServiceHolder(workspacePath, init, null, secureStorageError = "keystore_init_failed")
             }
             return WriterAppServiceHolder(workspacePath, init, secureStorage)
         }

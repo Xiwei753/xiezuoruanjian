@@ -107,15 +107,14 @@ else
     exit 1
 fi
 
-echo "生成 UniFFI Kotlin 绑定..."
+echo "生成 UniFFI Kotlin 绑定 (library mode)..."
 cd "$WORKSPACE_ROOT"
 UNIFFI_OUT_DIR="apps/android/app/src/main/kotlin/com/xiwei/sujian/uniffi/uniffi/writer_core"
 rm -rf "$UNIFFI_OUT_DIR"
 cargo run --bin uniffi-bindgen -p writer_uniffi -- generate \
-    core/writer_core/src/api.udl \
+    --library "$LIB_DIR/libuniffi_writer_core.so" \
     --language kotlin \
     --out-dir apps/android/app/src/main/kotlin/com/xiwei/sujian/uniffi \
-    --config core/writer_uniffi/uniffi.toml \
     --no-format
 
 if [ $? -ne 0 ]; then

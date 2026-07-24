@@ -333,6 +333,13 @@ enum WriterError {
     "Other"
 };
 
+[Error]
+enum SecureStorageError {
+    "KeystoreKeyInvalidated",
+    "KeystoreError",
+    "StorageError",
+};
+
 enum PlatformDto {
     "Desktop",
     "Android",

@@ -44,8 +44,16 @@ jobs:
       - name: Test Rust core
         run: cargo test -p writer_core
 
-      - name: Generate UniFFI Kotlin bindings
-        run: cargo run --bin uniffi-bindgen -p writer_uniffi -- generate core/writer_core/src/api.udl --language kotlin --out-dir apps/android/app/src/main/kotlin/com/xiwei/sujian/uniffi --config core/writer_uniffi/uniffi.toml --no-format
+      - name: Build Rust native library for host (for library-mode binding generation)
+        run: |
+          export ANDROID_NDK_HOME=$ANDROID_NDK_ROOT
+          cd platform/rust/android
+          cargo ndk -t arm64-v8a -o ../../../apps/android/app/src/main/jniLibs build --release
+          LIB_DIR="../../../apps/android/app/src/main/jniLibs/arm64-v8a"
+          mv "$LIB_DIR/libwriter_platform_android.so" "$LIB_DIR/libuniffi_writer_core.so"
+
+      - name: Generate UniFFI Kotlin bindings (library mode)
+        run: cargo run --bin uniffi-bindgen -p writer_uniffi -- generate --library apps/android/app/src/main/jniLibs/arm64-v8a/libuniffi_writer_core.so --language kotlin --out-dir apps/android/app/src/main/kotlin/com/xiwei/sujian/uniffi --no-format
 
       - name: Test Android no-ai Debug unit tests
         working-directory: apps/android
@@ -124,8 +132,16 @@ jobs:
       - name: Test Rust core
         run: cargo test -p writer_core --features ai
 
-      - name: Generate UniFFI Kotlin bindings
-        run: cargo run --bin uniffi-bindgen -p writer_uniffi -- generate core/writer_core/src/api.udl --language kotlin --out-dir apps/android/app/src/main/kotlin/com/xiwei/sujian/uniffi --config core/writer_uniffi/uniffi.toml --no-format
+      - name: Build Rust native library for host (for library-mode binding generation)
+        run: |
+          export ANDROID_NDK_HOME=$ANDROID_NDK_ROOT
+          cd platform/rust/android
+          cargo ndk -t arm64-v8a -o ../../../apps/android/app/src/main/jniLibs build --release --features ai
+          LIB_DIR="../../../apps/android/app/src/main/jniLibs/arm64-v8a"
+          mv "$LIB_DIR/libwriter_platform_android.so" "$LIB_DIR/libuniffi_writer_core.so"
+
+      - name: Generate UniFFI Kotlin bindings (library mode)
+        run: cargo run --bin uniffi-bindgen -p writer_uniffi -- generate --library apps/android/app/src/main/jniLibs/arm64-v8a/libuniffi_writer_core.so --language kotlin --out-dir apps/android/app/src/main/kotlin/com/xiwei/sujian/uniffi --no-format
 
       - name: Test Android ai Debug unit tests
         working-directory: apps/android

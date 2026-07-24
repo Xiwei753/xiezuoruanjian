@@ -110,7 +110,17 @@ class SettingsViewModel : ViewModel() {
     private var syncConfigRevision = 0L
     private var syncSecretsRevision = 0L
 
+    private var localPersistedRevision = 0L
+    private var fontSizePersistedRevision = 0L
+    private var syncConfigPersistedRevision = 0L
+    private var syncSecretsPersistedRevision = 0L
+
     private var pendingCommands = PendingCommands()
+
+    private fun hasUnsavedLocal() = localRevision != localPersistedRevision
+    private fun hasUnsavedFontSize() = fontSizeRevision != fontSizePersistedRevision
+    private fun hasUnsavedSyncConfig() = syncConfigRevision != syncConfigPersistedRevision
+    private fun hasUnsavedSyncSecrets() = syncSecretsRevision != syncSecretsPersistedRevision
 
     init {
         viewModelScope.launch {
@@ -150,6 +160,11 @@ class SettingsViewModel : ViewModel() {
     private fun loadInitial() {
         val repo = settingsRepo ?: return
         viewModelScope.launch {
+            val snapshotLocalRev = localRevision
+            val snapshotFontSizeRev = fontSizeRevision
+            val snapshotSyncConfigRev = syncConfigRevision
+            val snapshotSyncSecretsRev = syncSecretsRevision
+
             val settings = withContext(Dispatchers.IO) { repo.getLocalSettings() }
             val fontSize = withContext(Dispatchers.IO) { repo.getEffectiveFontSize() }
             val syncConfig = withContext(Dispatchers.IO) { repo.loadSyncConfig() }
@@ -158,12 +173,13 @@ class SettingsViewModel : ViewModel() {
             val paletteRecords = withContext(Dispatchers.IO) { repo.listPaletteRecords() }
             val aiAvailable = withContext(Dispatchers.IO) { repo.aiAvailable() }
             val workspacePath = withContext(Dispatchers.IO) { repo.workspaceDir() }
-            _uiState.update {
+
+            _uiState.update { current ->
                 SettingsUiState(
-                    settings = settings,
-                    fontSize = fontSize,
-                    syncConfig = syncConfig,
-                    syncSecrets = syncSecrets,
+                    settings = if (localRevision == snapshotLocalRev) settings else current.settings,
+                    fontSize = if (fontSizeRevision == snapshotFontSizeRev) fontSize else current.fontSize,
+                    syncConfig = if (syncConfigRevision == snapshotSyncConfigRev) syncConfig else current.syncConfig,
+                    syncSecrets = if (syncSecretsRevision == snapshotSyncSecretsRev) syncSecrets else current.syncSecrets,
                     builtinThemes = builtinThemes,
                     paletteRecords = paletteRecords,
                     aiAvailable = aiAvailable,
@@ -194,6 +210,7 @@ class SettingsViewModel : ViewModel() {
             val result = withContext(Dispatchers.IO) { repo.saveLocalSettings(local.settings) }
             when (result) {
                 is SettingsSaveResult.Success -> {
+                    localPersistedRevision = local.revision
                     com.xiwei.sujian.ui.compose.theme.ThemeStore.reload()
                 }
                 is SettingsSaveResult.Failed -> {
@@ -206,22 +223,43 @@ class SettingsViewModel : ViewModel() {
 
         if (fontSize != null) {
             val result = withContext(Dispatchers.IO) { repo.setFontSize(fontSize.fontSize) }
-            if (result is SettingsSaveResult.Failed && fontSizeRevision == fontSize.revision) {
-                failures.add(SaveFailure(SaveField.FONT_SIZE, fontSize.revision))
+            when (result) {
+                is SettingsSaveResult.Success -> {
+                    fontSizePersistedRevision = fontSize.revision
+                }
+                is SettingsSaveResult.Failed -> {
+                    if (fontSizeRevision == fontSize.revision) {
+                        failures.add(SaveFailure(SaveField.FONT_SIZE, fontSize.revision))
+                    }
+                }
             }
         }
 
         if (syncConfig != null) {
             val result = withContext(Dispatchers.IO) { repo.saveSyncConfig(syncConfig.config) }
-            if (result is SettingsSaveResult.Failed && syncConfigRevision == syncConfig.revision) {
-                failures.add(SaveFailure(SaveField.SYNC_CONFIG, syncConfig.revision))
+            when (result) {
+                is SettingsSaveResult.Success -> {
+                    syncConfigPersistedRevision = syncConfig.revision
+                }
+                is SettingsSaveResult.Failed -> {
+                    if (syncConfigRevision == syncConfig.revision) {
+                        failures.add(SaveFailure(SaveField.SYNC_CONFIG, syncConfig.revision))
+                    }
+                }
             }
         }
 
         if (syncSecrets != null) {
             val result = withContext(Dispatchers.IO) { repo.saveSyncSecrets(syncSecrets.secrets) }
-            if (result is SettingsSaveResult.Failed && syncSecretsRevision == syncSecrets.revision) {
-                failures.add(SaveFailure(SaveField.SYNC_SECRETS, syncSecrets.revision))
+            when (result) {
+                is SettingsSaveResult.Success -> {
+                    syncSecretsPersistedRevision = syncSecrets.revision
+                }
+                is SettingsSaveResult.Failed -> {
+                    if (syncSecretsRevision == syncSecrets.revision) {
+                        failures.add(SaveFailure(SaveField.SYNC_SECRETS, syncSecrets.revision))
+                    }
+                }
             }
         }
 
@@ -251,21 +289,25 @@ class SettingsViewModel : ViewModel() {
             SaveField.LOCAL_SETTINGS -> {
                 if (localRevision != failure.revision) return
                 val settings = withContext(Dispatchers.IO) { repo.getLocalSettings() }
+                if (localRevision != failure.revision) return
                 _uiState.update { it.copy(settings = settings) }
             }
             SaveField.FONT_SIZE -> {
                 if (fontSizeRevision != failure.revision) return
                 val fontSize = withContext(Dispatchers.IO) { repo.getEffectiveFontSize() }
+                if (fontSizeRevision != failure.revision) return
                 _uiState.update { it.copy(fontSize = fontSize) }
             }
             SaveField.SYNC_CONFIG -> {
                 if (syncConfigRevision != failure.revision) return
                 val config = withContext(Dispatchers.IO) { repo.loadSyncConfig() }
+                if (syncConfigRevision != failure.revision) return
                 _uiState.update { it.copy(syncConfig = config) }
             }
             SaveField.SYNC_SECRETS -> {
                 if (syncSecretsRevision != failure.revision) return
                 val secrets = withContext(Dispatchers.IO) { repo.loadSyncSecrets() }
+                if (syncSecretsRevision != failure.revision) return
                 _uiState.update { it.copy(syncSecrets = secrets) }
             }
         }
@@ -331,10 +373,10 @@ class SettingsViewModel : ViewModel() {
             val workspacePath = withContext(Dispatchers.IO) { repo.workspaceDir() }
             _uiState.update {
                 SettingsUiState(
-                    settings = if (localRevision == 0L) settings else current.settings,
-                    fontSize = if (fontSizeRevision == 0L) fontSize else current.fontSize,
-                    syncConfig = if (syncConfigRevision == 0L) syncConfig else current.syncConfig,
-                    syncSecrets = if (syncSecretsRevision == 0L) syncSecrets else current.syncSecrets,
+                    settings = if (!hasUnsavedLocal()) settings else current.settings,
+                    fontSize = if (!hasUnsavedFontSize()) fontSize else current.fontSize,
+                    syncConfig = if (!hasUnsavedSyncConfig()) syncConfig else current.syncConfig,
+                    syncSecrets = if (!hasUnsavedSyncSecrets()) syncSecrets else current.syncSecrets,
                     builtinThemes = builtinThemes,
                     paletteRecords = paletteRecords,
                     aiAvailable = aiAvailable,

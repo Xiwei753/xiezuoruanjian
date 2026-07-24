@@ -32,6 +32,7 @@ pub use writer_core::open_workspace_with_init;
 pub use writer_core::open_workspace_with_secure_storage;
 pub use writer_core::open_workspace_with_platform_services;
 pub use writer_core::SecureStorageProvider;
+pub use writer_core::SecureStorageError;
 pub use writer_core::repair_workspace;
 pub use writer_core::create_project_in_workspace;
 pub use writer_core::load_workspace_summary;

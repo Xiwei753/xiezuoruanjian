@@ -1,13 +1,13 @@
 package com.xiwei.sujian.platform
 
 import android.content.Context
-import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
+import uniffi.writer_core.SecureStorageException
 import uniffi.writer_core.SecureStorageProvider
 import java.io.File
-import java.io.IOException
+import java.io.FileOutputStream
 import java.security.KeyStore
 import java.security.KeyStoreException
 import java.security.UnrecoverableKeyException
@@ -16,6 +16,7 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 private const val TAG = "AndroidKeystoreSecureStorage"
 private const val KEYSTORE_ALIAS = "com.xiwei.sujian.secure_storage_v1"
@@ -24,6 +25,8 @@ private const val SECRETS_DIR = "keystore_secrets"
 private const val TRANSFORMATION = "AES/GCM/NoPadding"
 private const val GCM_IV_LENGTH = 12
 private const val GCM_TAG_LENGTH = 128
+private const val OLD_KEY_FILE = ".enc_key"
+private const val OLD_SECRETS_DIR = "secrets"
 
 class AndroidKeystoreSecureStorage(
     private val context: Context,
@@ -71,67 +74,189 @@ class AndroidKeystoreSecureStorage(
         return (entry as KeyStore.SecretKeyEntry).secretKey
     }
 
-    override fun getSecret(key: String): List<UByte>? {
-        val file = File(secretsDir, "$key.bin")
-        if (!file.exists()) return null
-        val data = file.readBytes()
-        if (data.size < GCM_IV_LENGTH) {
-            DiagnosticsLogger.w(TAG, "Truncated ciphertext for key=$key")
-            return null
-        }
-        val iv = data.copyOfRange(0, GCM_IV_LENGTH)
-        val ciphertext = data.copyOfRange(GCM_IV_LENGTH, data.size)
-        return try {
+    override fun getSecret(key: String): ByteArray? {
+        try {
+            val file = File(secretsDir, "$key.bin")
+            if (!file.exists()) return null
+            val data = file.readBytes()
+            if (data.size < GCM_IV_LENGTH) {
+                DiagnosticsLogger.w(TAG, "Truncated ciphertext for key=$key")
+                return null
+            }
+            val iv = data.copyOfRange(0, GCM_IV_LENGTH)
+            val ciphertext = data.copyOfRange(GCM_IV_LENGTH, data.size)
             val secretKey = getKey()
             val cipher = Cipher.getInstance(TRANSFORMATION)
             val spec = GCMParameterSpec(GCM_TAG_LENGTH, iv)
             cipher.init(Cipher.DECRYPT_MODE, secretKey, spec)
-            val plaintext = cipher.doFinal(ciphertext)
-            plaintext.toList().map { it.toUByte() }
+            return cipher.doFinal(ciphertext)
         } catch (e: UnrecoverableKeyException) {
             DiagnosticsLogger.e(TAG, "Keystore key invalidated for key=$key", e)
-            throw RuntimeException("keystore_key_invalidated")
+            throw SecureStorageException.KeystoreKeyInvalidated(e.message ?: "Keystore key invalidated")
         } catch (e: CertificateException) {
             DiagnosticsLogger.e(TAG, "Keystore certificate error for key=$key", e)
-            throw RuntimeException("keystore_error")
+            throw SecureStorageException.KeystoreException(e.message ?: "Keystore certificate error")
+        } catch (e: SecureStorageException) {
+            throw e
+        } catch (e: Exception) {
+            DiagnosticsLogger.e(TAG, "Failed to get secret for key=$key", e)
+            throw SecureStorageException.StorageException(e.message ?: "Unknown storage error")
         }
     }
 
-    override fun setSecret(key: String, value: List<UByte>) {
+    override fun setSecret(key: String, value: ByteArray) {
         try {
             val secretKey = getKey()
             val cipher = Cipher.getInstance(TRANSFORMATION)
             cipher.init(Cipher.ENCRYPT_MODE, secretKey)
             val iv = cipher.iv
-            val plaintext = ByteArray(value.size) { value[it].toByte() }
-            val ciphertext = cipher.doFinal(plaintext)
+            val ciphertext = cipher.doFinal(value)
             val output = ByteArray(iv.size + ciphertext.size)
             System.arraycopy(iv, 0, output, 0, iv.size)
             System.arraycopy(ciphertext, 0, output, iv.size, ciphertext.size)
             if (!secretsDir.exists()) secretsDir.mkdirs()
-            File(secretsDir, "$key.bin").writeBytes(output)
+            atomicWrite(File(secretsDir, "$key.bin"), output)
         } catch (e: UnrecoverableKeyException) {
             DiagnosticsLogger.e(TAG, "Keystore key invalidated for key=$key", e)
-            throw RuntimeException("keystore_key_invalidated")
+            throw SecureStorageException.KeystoreKeyInvalidated(e.message ?: "Keystore key invalidated")
+        } catch (e: SecureStorageException) {
+            throw e
+        } catch (e: Exception) {
+            DiagnosticsLogger.e(TAG, "Failed to set secret for key=$key", e)
+            throw SecureStorageException.StorageException(e.message ?: "Unknown storage error")
         }
     }
 
     override fun deleteSecret(key: String) {
-        val file = File(secretsDir, "$key.bin")
-        if (file.exists()) {
-            file.delete()
+        try {
+            val file = File(secretsDir, "$key.bin")
+            if (file.exists()) {
+                file.delete()
+            }
+        } catch (e: SecureStorageException) {
+            throw e
+        } catch (e: Exception) {
+            DiagnosticsLogger.e(TAG, "Failed to delete secret for key=$key", e)
+            throw SecureStorageException.StorageException(e.message ?: "Unknown storage error")
+        }
+    }
+
+    private fun atomicWrite(target: File, data: ByteArray) {
+        val tempFile = File(target.parent, "${target.name}.tmp")
+        try {
+            FileOutputStream(tempFile).use { fos ->
+                fos.write(data)
+                fos.fd.sync()
+            }
+            if (tempFile.renameTo(target)) {
+                return
+            }
+            target.writeBytes(data)
+        } finally {
+            tempFile.delete()
         }
     }
 
     private fun migrateOldEncKey() {
-        val oldKeyFile = File(context.noBackupFilesDir, ".enc_key")
+        val oldKeyFile = File(context.noBackupFilesDir, OLD_KEY_FILE)
         if (!oldKeyFile.exists()) return
-        val oldSecretsDir = File(context.noBackupFilesDir, "secrets")
-        if (oldSecretsDir.exists() && oldSecretsDir.isDirectory) {
-            oldSecretsDir.deleteRecursively()
-            DiagnosticsLogger.i(TAG, "Migrated old .enc_key secrets: deleted old secrets dir")
+
+        val oldSecretsDir = File(context.noBackupFilesDir, OLD_SECRETS_DIR)
+        if (!oldSecretsDir.exists() || !oldSecretsDir.isDirectory) {
+            oldKeyFile.delete()
+            DiagnosticsLogger.i(TAG, "Migrated old .enc_key: no old secrets dir, deleted key file")
+            return
         }
-        oldKeyFile.delete()
-        DiagnosticsLogger.i(TAG, "Migrated old .enc_key: deleted key file")
+
+        val encFiles = oldSecretsDir.listFiles()?.filter { it.extension == "enc" } ?: emptyList()
+        if (encFiles.isEmpty()) {
+            oldSecretsDir.deleteRecursively()
+            oldKeyFile.delete()
+            DiagnosticsLogger.i(TAG, "Migrated old .enc_key: no .enc files, cleaned up")
+            return
+        }
+
+        val oldKeyData = try {
+            oldKeyFile.readBytes()
+        } catch (e: Exception) {
+            DiagnosticsLogger.e(TAG, "Failed to read old .enc_key for migration", e)
+            return
+        }
+
+        if (oldKeyData.size < GCM_IV_LENGTH + 1) {
+            DiagnosticsLogger.w(TAG, "Old .enc_key too short, cannot migrate secrets")
+            oldSecretsDir.deleteRecursively()
+            oldKeyFile.delete()
+            return
+        }
+
+        try {
+            val iv = oldKeyData.copyOfRange(0, GCM_IV_LENGTH)
+            val keyCiphertext = oldKeyData.copyOfRange(GCM_IV_LENGTH, oldKeyData.size)
+
+            val oldKeySpec = KeyGenParameterSpec.Builder(
+                "__migration_temp__",
+                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+            )
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setKeySize(256)
+                .build()
+            val oldKeyGenerator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE_TYPE)
+            oldKeyGenerator.init(oldKeySpec)
+            val oldSecretKey = oldKeyGenerator.generateKey()
+
+            val oldCipher = Cipher.getInstance(TRANSFORMATION)
+            val oldSpec = GCMParameterSpec(GCM_TAG_LENGTH, iv)
+            oldCipher.init(Cipher.DECRYPT_MODE, oldSecretKey, oldSpec)
+            val decryptedKey = oldCipher.doFinal(keyCiphertext)
+
+            var migratedCount = 0
+            var failedCount = 0
+
+            for (encFile in encFiles) {
+                try {
+                    val secretName = encFile.nameWithoutExtension
+                    val encData = encFile.readBytes()
+                    if (encData.size < GCM_IV_LENGTH) {
+                        failedCount++
+                        continue
+                    }
+                    val secretIv = encData.copyOfRange(0, GCM_IV_LENGTH)
+                    val secretCiphertext = encData.copyOfRange(GCM_IV_LENGTH, encData.size)
+
+                    val secretKeySpec = SecretKeySpec(decryptedKey, "AES")
+                    val secretCipher = Cipher.getInstance(TRANSFORMATION)
+                    val secretSpec = GCMParameterSpec(GCM_TAG_LENGTH, secretIv)
+                    secretCipher.init(Cipher.DECRYPT_MODE, secretKeySpec, secretSpec)
+                    val plaintext = secretCipher.doFinal(secretCiphertext)
+
+                    setSecret(secretName, plaintext)
+                    migratedCount++
+                } catch (e: Exception) {
+                    DiagnosticsLogger.e(TAG, "Failed to migrate secret ${encFile.name}", e)
+                    failedCount++
+                }
+            }
+
+            if (failedCount == 0) {
+                oldSecretsDir.deleteRecursively()
+                oldKeyFile.delete()
+                DiagnosticsLogger.i(TAG, "Migrated $migratedCount old secrets to Keystore successfully")
+            } else {
+                DiagnosticsLogger.e(TAG, "Migration partially failed: $migratedCount succeeded, $failedCount failed. Old data preserved.")
+            }
+
+            try {
+                val keyStore = KeyStore.getInstance(KEYSTORE_TYPE)
+                keyStore.load(null)
+                if (keyStore.containsAlias("__migration_temp__")) {
+                    keyStore.deleteEntry("__migration_temp__")
+                }
+            } catch (_: Exception) {}
+
+        } catch (e: Exception) {
+            DiagnosticsLogger.e(TAG, "Failed to decrypt old .enc_key for migration, preserving old data", e)
+        }
     }
 }

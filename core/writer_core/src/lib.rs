@@ -208,28 +208,45 @@ uniffi::include_scaffolding!("api");
 pub mod app_service;
 pub use app_service::WriterAppService;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SecureStorageError {
+    KeystoreKeyInvalidated,
+    KeystoreError,
+    StorageError,
+}
+
+impl std::fmt::Display for SecureStorageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SecureStorageError::KeystoreKeyInvalidated => write!(f, "Keystore key invalidated"),
+            SecureStorageError::KeystoreError => write!(f, "Keystore error"),
+            SecureStorageError::StorageError => write!(f, "Storage error"),
+        }
+    }
+}
+
+impl std::error::Error for SecureStorageError {}
+
 #[uniffi::export(callback_interface)]
 pub trait SecureStorageProvider: Send + Sync {
-    fn get_secret(&self, key: String) -> Option<Vec<u8>>;
-    fn set_secret(&self, key: String, value: Vec<u8>);
-    fn delete_secret(&self, key: String);
+    fn get_secret(&self, key: String) -> std::result::Result<Option<Vec<u8>>, SecureStorageError>;
+    fn set_secret(&self, key: String, value: Vec<u8>) -> std::result::Result<(), SecureStorageError>;
+    fn delete_secret(&self, key: String) -> std::result::Result<(), SecureStorageError>;
 }
 
 struct CallbackSecureStorage(Box<dyn SecureStorageProvider>);
 
 impl writer_platform_api::SecureStorage for CallbackSecureStorage {
     fn get_secret(&self, key: &str) -> std::result::Result<Option<Vec<u8>>, String> {
-        Ok(self.0.get_secret(key.to_string()))
+        self.0.get_secret(key.to_string()).map_err(|e| e.to_string())
     }
 
     fn set_secret(&self, key: &str, value: &[u8]) -> std::result::Result<(), String> {
-        self.0.set_secret(key.to_string(), value.to_vec());
-        Ok(())
+        self.0.set_secret(key.to_string(), value.to_vec()).map_err(|e| e.to_string())
     }
 
     fn delete_secret(&self, key: &str) -> std::result::Result<(), String> {
-        self.0.delete_secret(key.to_string());
-        Ok(())
+        self.0.delete_secret(key.to_string()).map_err(|e| e.to_string())
     }
 }
 
