@@ -5,7 +5,10 @@ DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 WORKSPACE_ROOT="$( cd "$DIR/../.." && pwd )"
 
 VALID_ABIS=("arm64-v8a" "x86_64")
-ALL_ABIS="arm64-v8a,x86_64"
+ABI_TO_TARGET=(
+    "arm64-v8a:aarch64-linux-android"
+    "x86_64:x86_64-linux-android"
+)
 
 VARIANT=""
 ABIS=""
@@ -79,6 +82,25 @@ if ! command -v cargo-ndk &> /dev/null; then
     exit 1
 fi
 
+for abi in "${ABI_ARRAY[@]}"; do
+    abi_trimmed=$(echo "$abi" | xargs)
+    target=""
+    for mapping in "${ABI_TO_TARGET[@]}"; do
+        map_abi="${mapping%%:*}"
+        map_target="${mapping##*:}"
+        if [ "$abi_trimmed" = "$map_abi" ]; then
+            target="$map_target"
+            break
+        fi
+    done
+    if [ -n "$target" ]; then
+        if ! rustup target list --installed 2>/dev/null | grep -q "$target"; then
+            echo "错误: Rust target $target 未安装。请运行: rustup target add $target"
+            exit 1
+        fi
+    fi
+done
+
 if [ -z "${ANDROID_NDK_HOME:-}" ]; then
     if [ -n "${ANDROID_NDK_ROOT:-}" ]; then
         ANDROID_NDK_HOME="$ANDROID_NDK_ROOT"
@@ -97,8 +119,7 @@ echo "  Rust features: ${RUST_FEATURES:-<无>}"
 for abi in "${ABI_ARRAY[@]}"; do
     abi_trimmed=$(echo "$abi" | xargs)
     abi_dir="$OUTPUT_DIR/$abi_trimmed"
-    echo "清理旧产物: $abi_dir/libwriter_platform_android.so $abi_dir/libuniffi_writer_core.so"
-    rm -f "$abi_dir/libwriter_platform_android.so"
+    echo "清理旧产物: $abi_dir/libuniffi_writer_core.so"
     rm -f "$abi_dir/libuniffi_writer_core.so"
 done
 
@@ -118,26 +139,17 @@ cd "$WORKSPACE_ROOT/platform/rust/android"
 
 cargo ndk "${CARGO_NDK_TARGETS[@]}" -o "$OUTPUT_DIR" build --release "${FEATURE_ARGS[@]}"
 
-echo "重命名 .so 文件并验证..."
+echo "验证产物..."
 for abi in "${ABI_ARRAY[@]}"; do
     abi_trimmed=$(echo "$abi" | xargs)
-    abi_dir="$OUTPUT_DIR/$abi_trimmed"
-    src="$abi_dir/libwriter_platform_android.so"
-    dst="$abi_dir/libuniffi_writer_core.so"
+    so_path="$OUTPUT_DIR/$abi_trimmed/libuniffi_writer_core.so"
 
-    if [ ! -f "$src" ]; then
-        echo "错误: $abi_trimmed 的 libwriter_platform_android.so 未生成"
+    if [ ! -f "$so_path" ]; then
+        echo "错误: $abi_trimmed 的 libuniffi_writer_core.so 未生成"
         exit 1
     fi
 
-    mv "$src" "$dst"
-
-    if [ ! -f "$dst" ]; then
-        echo "错误: $abi_trimmed 的 libuniffi_writer_core.so 重命名失败"
-        exit 1
-    fi
-
-    echo "  $abi_trimmed: $dst ✓"
+    echo "  $abi_trimmed: $so_path ✓"
 done
 
 echo "Rust 原生库构建完成。"

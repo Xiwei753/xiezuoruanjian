@@ -8,8 +8,7 @@ VALID_ABIS=("arm64-v8a" "x86_64")
 DEFAULT_ABI="arm64-v8a"
 
 RUST_FEATURES=""
-GRADLE_FLAVOR="noAiDebug"
-APK_VARIANT="noAiDebug"
+FLAVOR_NAME="noAi"
 REQUESTED_ABI=""
 
 usage() {
@@ -34,14 +33,12 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         --ai)
             RUST_FEATURES="ai"
-            GRADLE_FLAVOR="aiDebug"
-            APK_VARIANT="aiDebug"
+            FLAVOR_NAME="ai"
             shift
             ;;
         --no-ai)
             RUST_FEATURES=""
-            GRADLE_FLAVOR="noAiDebug"
-            APK_VARIANT="noAiDebug"
+            FLAVOR_NAME="noAi"
             shift
             ;;
         --abi)
@@ -87,6 +84,7 @@ GENERATED_DIR="$WORKSPACE_ROOT/apps/android/app/build/generated/writer-native/$V
 
 echo "素笺写作 Android 构建"
 echo "  变体: $VARIANT_NAME"
+echo "  Flavor: $FLAVOR_NAME"
 echo "  ABI: $ABI_LIST"
 echo "  Rust features: ${RUST_FEATURES:-<无>}"
 echo "  产物目录: $GENERATED_DIR"
@@ -131,7 +129,7 @@ if [ ! -f "$UNIFFI_SO_PATH" ]; then
     exit 1
 fi
 
-UNIFFI_OUT_DIR="$WORKSPACE_ROOT/apps/android/app/build/generated/writer-uniffi/$VARIANT_NAME/kotlin"
+UNIFFI_OUT_DIR="$WORKSPACE_ROOT/apps/android/app/build/generated/writer-uniffi/$FLAVOR_NAME/kotlin"
 mkdir -p "$UNIFFI_OUT_DIR"
 rm -rf "$UNIFFI_OUT_DIR/uniffi"
 
@@ -149,21 +147,22 @@ cd "$WORKSPACE_ROOT/apps/android"
 
 GRADLE_ABI_PROP="$ABI_LIST"
 
-echo "Gradle 构建: assemble${GRADLE_FLAVOR^}"
+GRADLE_TASK="assemble${VARIANT_NAME^}"
+echo "Gradle 构建: $GRADLE_TASK"
 echo "  ABI property: $GRADLE_ABI_PROP"
 echo "  Native dir: $GENERATED_DIR"
 
-./gradlew "assemble${GRADLE_FLAVOR^}" \
+./gradlew "$GRADLE_TASK" \
     -Psujian.android.abis="$GRADLE_ABI_PROP" \
     -Psujian.android.nativeDir="$GENERATED_DIR"
 
 echo ""
 echo "=== 步骤 4: 验证 APK ==="
-APK_DIR="app/build/outputs/apk/${APK_VARIANT%Debug}/debug"
-APK_PATH=$(find "$APK_DIR" -name "sujian-android-*.apk" -type f 2>/dev/null | head -1)
+APK_DIR="app/build/outputs/apk/$FLAVOR_NAME/debug"
+APK_PATH=$(ls -t "$APK_DIR"/sujian-android-*.apk 2>/dev/null | head -1)
 
 if [ -z "$APK_PATH" ]; then
-    APK_PATH="app/build/outputs/apk/${APK_VARIANT%Debug}/debug/app-${APK_VARIANT}.apk"
+    APK_PATH="$APK_DIR/app-$VARIANT_NAME.apk"
 fi
 
 if [ ! -f "$APK_PATH" ]; then

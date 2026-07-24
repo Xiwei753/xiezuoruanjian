@@ -76,7 +76,7 @@ check_elf_arch() {
 
     if command -v readelf &> /dev/null; then
         local machine
-        machine=$(readelf -h "$so_path" 2>/dev/null | grep "Machine:" | head -1 || true)
+        machine=$(LANG=C readelf -h "$so_path" 2>/dev/null | grep -i "machine\|架构" | head -1 || true)
         if [ -z "$machine" ]; then
             echo "  警告: 无法读取 ELF header: $so_path"
             return 1
@@ -131,15 +131,22 @@ check_abi_in_apk() {
     local should_exist="$2"
     local so_path="lib/$abi/libuniffi_writer_core.so"
 
+    local found=false
+    local listing
+    listing=$(unzip -l "$APK_PATH" 2>/dev/null || true)
+    if echo "$listing" | grep -q "$so_path"; then
+        found=true
+    fi
+
     if [ "$should_exist" = "true" ]; then
-        if unzip -l "$APK_PATH" | grep -q "$so_path"; then
+        if [ "$found" = "true" ]; then
             echo "  ✓ $so_path 存在"
         else
             echo "  ✗ 错误: $so_path 应存在但未找到"
             ALL_ERRORS=$((ALL_ERRORS + 1))
         fi
     else
-        if unzip -l "$APK_PATH" | grep -q "$so_path"; then
+        if [ "$found" = "true" ]; then
             echo "  ✗ 错误: $so_path 不应存在但找到了"
             ALL_ERRORS=$((ALL_ERRORS + 1))
         else
@@ -150,6 +157,30 @@ check_abi_in_apk() {
 
 check_abi_in_apk "arm64-v8a" "$EXPECTED_ARM64"
 check_abi_in_apk "x86_64" "$EXPECTED_X86"
+
+echo ""
+echo "检查非预期 ABI..."
+APK_LISTING=$(unzip -l "$APK_PATH" 2>/dev/null || true)
+ALL_SO_ENTRIES=$(echo "$APK_LISTING" | grep -oP 'lib/\K[^/]+(?=/libuniffi_writer_core\.so)' || true)
+if [ -n "$ALL_SO_ENTRIES" ]; then
+    while IFS= read -r abi_found; do
+        if [ -z "$abi_found" ]; then
+            continue
+        fi
+        is_expected=false
+        for expected_abi in "${EXPECTED_ARRAY[@]}"; do
+            expected_trimmed=$(echo "$expected_abi" | xargs)
+            if [ "$abi_found" = "$expected_trimmed" ]; then
+                is_expected=true
+                break
+            fi
+        done
+        if [ "$is_expected" = false ]; then
+            echo "  ✗ 错误: 发现非预期 ABI: $abi_found"
+            ALL_ERRORS=$((ALL_ERRORS + 1))
+        fi
+    done <<< "$ALL_SO_ENTRIES"
+fi
 
 echo ""
 if [ "$ALL_ERRORS" -eq 0 ]; then

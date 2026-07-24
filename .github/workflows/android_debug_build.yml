@@ -17,9 +17,19 @@ jobs:
       matrix:
         flavor: [no-ai, ai]
         abi: [arm64-v8a, x86_64]
+        include:
+          - flavor: no-ai
+            abi: universal
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Read NDK version
+        id: ndk
+        run: |
+          source tools/android/ndk.env
+          echo "ndk_version=$NDK_VERSION" >> "$GITHUB_OUTPUT"
+          echo "ndk_version_numeric=$NDK_VERSION_NUMERIC" >> "$GITHUB_OUTPUT"
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
@@ -35,10 +45,15 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk
 
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.flavor }}-${{ matrix.abi }}
+
       - name: Setup Android NDK
         uses: nttld/setup-ndk@v1
         with:
-          ndk-version: r25c
+          ndk-version: ${{ steps.ndk.outputs.ndk_version }}
 
       - name: Make gradlew executable
         run: chmod +x apps/android/gradlew
@@ -79,13 +94,14 @@ jobs:
           ./tools/build_android.sh --${{ matrix.flavor }} --abi ${{ matrix.abi }}
 
       - name: Test Android ${{ matrix.flavor }} Debug unit tests
+        if: matrix.abi != 'universal'
         working-directory: apps/android
         run: ./gradlew test${{ matrix.flavor == 'no-ai' && 'NoAi' || 'Ai' }}DebugUnitTest
 
       - name: Verify APK ABI
         run: |
           FLAVOR_DIR="${{ matrix.flavor == 'no-ai' && 'noAi' || 'ai' }}"
-          APK_PATH=$(find apps/android/app/build/outputs/apk/$FLAVOR_DIR/debug -name "sujian-android-*.apk" -type f 2>/dev/null | head -1)
+          APK_PATH=$(ls apps/android/app/build/outputs/apk/$FLAVOR_DIR/debug/sujian-android-*.apk 2>/dev/null | head -1)
           if [ -z "$APK_PATH" ]; then
             echo "Warning: APK not found for ABI verification"
           else
@@ -97,3 +113,42 @@ jobs:
         with:
           name: sujian-android-${{ matrix.flavor }}-${{ matrix.abi }}-debug
           path: apps/android/app/build/outputs/apk/${{ matrix.flavor == 'no-ai' && 'noAi' || 'ai' }}/debug/sujian-android-*.apk
+
+  emulator-test:
+    runs-on: ubuntu-24.04
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        flavor: [no-ai]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download x86_64 APK
+        uses: actions/download-artifact@v4
+        with:
+          name: sujian-android-${{ matrix.flavor }}-x86_64-debug
+          path: apk/
+
+      - name: Enable KVM group permissions
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run instrumented tests on x86_64 emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          profile: pixel_6
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          disable-animations: true
+          script: |
+            adb shell getprop ro.product.cpu.abi
+            APK_PATH=$(ls apk/sujian-android-*.apk | head -1)
+            adb install "$APK_PATH"
+            cd apps/android
+            chmod +x gradlew
+            ./gradlew connected${{ matrix.flavor == 'no-ai' && 'NoAi' || 'Ai' }}DebugAndroidTest

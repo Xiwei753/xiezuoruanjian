@@ -38,6 +38,8 @@ val gitCommitSha = queryGitCommitShortSha()
 val appVersionCode = gitCommitCount
 val appVersionName = "0.1.1"
 
+val ndkVersionValue = "25.2.9519653"
+
 val requestedAndroidAbis: List<String> = providers
     .gradleProperty("sujian.android.abis")
     .orElse("arm64-v8a")
@@ -55,6 +57,13 @@ require(invalidAbis.isEmpty()) {
     "Invalid Android ABI(s): $invalidAbis. Only ${validAbis.joinToString(", ")} are allowed."
 }
 
+val abisSorted = requestedAndroidAbis.sorted()
+val abiSuffix = when {
+    abisSorted.size > 1 -> "universal"
+    abisSorted.size == 1 -> abisSorted.first()
+    else -> throw GradleException("No valid ABI specified. At least one ABI must be specified via -Psujian.android.abis")
+}
+
 val nativeDir = providers
     .gradleProperty("sujian.android.nativeDir")
     .orElse(layout.buildDirectory.dir("generated/writer-native").map { it.asFile.absolutePath })
@@ -62,7 +71,7 @@ val nativeDir = providers
 android {
     namespace = "com.xiwei.sujian"
     compileSdk = 36
-    ndkVersion = "25.2.9519653"
+    ndkVersion = ndkVersionValue
 
     signingConfigs {
         create("stable") {
@@ -108,10 +117,10 @@ android {
             jniLibs.srcDirs(nativeDir)
         }
         getByName("noAi") {
-            kotlin.srcDirs(layout.buildDirectory.dir("generated/writer-uniffi/noAiDebug/kotlin"))
+            kotlin.srcDirs(layout.buildDirectory.dir("generated/writer-uniffi/noAi/kotlin"))
         }
         getByName("ai") {
-            kotlin.srcDirs(layout.buildDirectory.dir("generated/writer-uniffi/aiDebug/kotlin"))
+            kotlin.srcDirs(layout.buildDirectory.dir("generated/writer-uniffi/ai/kotlin"))
         }
     }
 
@@ -145,29 +154,22 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+}
 
-    val abisSorted = requestedAndroidAbis.sorted()
-    val abiSuffix = when {
-        abisSorted.size > 1 -> "universal"
-        abisSorted.size == 1 -> abisSorted.first()
-        else -> "all"
-    }
-
-    applicationVariants.all {
-        val variant = this
-        variant.outputs.all {
-            val output = this
-            if (output is com.android.build.gradle.api.ApkVariantOutput) {
-                variant.packageApplicationProvider.configure {
-                    doLast {
-                        val defaultApk = output.outputFile
-                        if (defaultApk.exists()) {
-                            val flavorName = variant.productFlavors.firstOrNull()?.name ?: variant.name
-                            val customName = "sujian-android-${flavorName}-${appVersionName}-${appVersionCode}-${gitCommitSha}-${abiSuffix}.apk"
-                            val destFile = File(defaultApk.parentFile, customName)
-                            defaultApk.copyTo(destFile, overwrite = true)
-                            println("Successfully copied custom-named APK to ${destFile.absolutePath}")
-                        }
+android.applicationVariants.all {
+    val variant = this
+    variant.outputs.all {
+        val output = this
+        if (output is com.android.build.gradle.api.ApkVariantOutput) {
+            variant.packageApplicationProvider.configure {
+                doLast {
+                    val defaultApk = output.outputFile
+                    if (defaultApk.exists()) {
+                        val flavorName = variant.productFlavors.firstOrNull()?.name ?: variant.name
+                        val customName = "sujian-android-${flavorName}-${appVersionName}-${appVersionCode}-${gitCommitSha}-${abiSuffix}.apk"
+                        val destFile = File(defaultApk.parentFile, customName)
+                        defaultApk.copyTo(destFile, overwrite = true)
+                        defaultApk.delete()
                     }
                 }
             }
@@ -187,25 +189,41 @@ android.applicationVariants.all {
 
     val buildNativeTask = tasks.register(buildNativeTaskName) {
         group = "build"
-        description = "Validate Rust native libraries exist for $variantCapitalized"
+        description = "Build Rust native libraries for $variantCapitalized"
 
-        val nativeOutputDir = layout.buildDirectory.dir("generated/writer-native/${variant.name}")
+        val nativeOutputDir = file(nativeDir)
         outputs.dir(nativeOutputDir)
 
         doLast {
-            val outDir = nativeOutputDir.get().asFile
-            if (!outDir.exists()) {
-                throw GradleException(
-                    "Rust native libraries not found at ${outDir.absolutePath}.\n" +
-                    "Run: ./tools/build_android.sh --${if (variant.name.startsWith("ai")) "ai" else "no-ai"} --abi <abi>"
-                )
+            val outDir = nativeOutputDir
+            val variantArg = variant.name
+            val abiArg = requestedAndroidAbis.joinToString(",")
+            val featuresArg = if (variant.name.startsWith("ai")) "ai" else ""
+            val scriptPath = file("${project.projectDir}/../../../tools/android/build_native.sh")
+
+            if (!scriptPath.exists()) {
+                throw GradleException("build_native.sh not found at ${scriptPath.absolutePath}")
             }
+
+            val command = mutableListOf(
+                scriptPath.absolutePath,
+                "--variant", variantArg,
+                "--abis", abiArg,
+                "--output", outDir.absolutePath
+            )
+            if (featuresArg.isNotEmpty()) {
+                command.addAll(listOf("--features", featuresArg))
+            }
+
+            exec {
+                commandLine(command)
+            }
+
             for (abi in requestedAndroidAbis) {
                 val soFile = File(outDir, "$abi/libuniffi_writer_core.so")
                 if (!soFile.exists()) {
                     throw GradleException(
-                        "Rust native library for ABI '$abi' not found at ${soFile.absolutePath}.\n" +
-                        "Run: ./tools/build_android.sh --${if (variant.name.startsWith("ai")) "ai" else "no-ai"} --abi $abi"
+                        "Rust native library for ABI '$abi' not found at ${soFile.absolutePath} after build."
                     )
                 }
             }
@@ -216,8 +234,9 @@ android.applicationVariants.all {
         dependsOn(buildNativeTask)
     }
 
-    val preBuildTask = tasks.findByName("pre${variantCapitalized}Build")
-    preBuildTask?.dependsOn(buildNativeTask)
+    tasks.named("pre${variantCapitalized}Build").configure {
+        dependsOn(buildNativeTask)
+    }
 }
 
 dependencies {
