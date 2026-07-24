@@ -147,7 +147,8 @@ cd "$WORKSPACE_ROOT/apps/android"
 
 GRADLE_ABI_PROP="$ABI_LIST"
 
-GRADLE_TASK="assemble${VARIANT_NAME^}"
+VARIANT_CAPITALIZED="$(echo "$VARIANT_NAME" | cut -c1 | tr '[:lower:]' '[:upper:]')$(echo "$VARIANT_NAME" | cut -c2-)"
+GRADLE_TASK="assemble${VARIANT_CAPITALIZED}"
 echo "Gradle 构建: $GRADLE_TASK"
 echo "  ABI property: $GRADLE_ABI_PROP"
 echo "  Native dir: $GENERATED_DIR"

@@ -200,35 +200,51 @@ android.applicationVariants.all {
 
         doLast {
             val outDir = variantNativeDir
-            val variantArg = variant.name
-            val abiArg = requestedAndroidAbis.joinToString(",")
-            val featuresArg = if (variant.name.startsWith("ai")) "ai" else ""
-            val scriptPath = file("${project.projectDir}/../../../tools/android/build_native.sh")
-
-            if (!scriptPath.exists()) {
-                throw GradleException("build_native.sh not found at ${scriptPath.absolutePath}")
-            }
-
-            val command = mutableListOf(
-                scriptPath.absolutePath,
-                "--variant", variantArg,
-                "--abis", abiArg,
-                "--output", outDir.absolutePath
-            )
-            if (featuresArg.isNotEmpty()) {
-                command.addAll(listOf("--features", featuresArg))
-            }
-
-            exec {
-                commandLine(command)
-            }
 
             for (abi in requestedAndroidAbis) {
                 val soFile = File(outDir, "$abi/libuniffi_writer_core.so")
-                if (!soFile.exists()) {
-                    throw GradleException(
-                        "Rust native library for ABI '$abi' not found at ${soFile.absolutePath} after build."
-                    )
+                if (soFile.exists()) {
+                    logger.lifecycle("Rust native library for ABI '$abi' already present at ${soFile.absolutePath}, skipping build.")
+                }
+            }
+
+            val allPresent = requestedAndroidAbis.all { abi ->
+                File(outDir, "$abi/libuniffi_writer_core.so").exists()
+            }
+
+            if (allPresent) {
+                logger.lifecycle("All requested ABI native libraries present, skipping Rust build.")
+            } else {
+                val variantArg = variant.name
+                val abiArg = requestedAndroidAbis.joinToString(",")
+                val featuresArg = if (variant.name.startsWith("ai")) "ai" else ""
+                val scriptPath = file("${project.projectDir}/../../../tools/android/build_native.sh")
+
+                if (!scriptPath.exists()) {
+                    throw GradleException("build_native.sh not found at ${scriptPath.absolutePath}")
+                }
+
+                val command = mutableListOf(
+                    scriptPath.absolutePath,
+                    "--variant", variantArg,
+                    "--abis", abiArg,
+                    "--output", outDir.absolutePath
+                )
+                if (featuresArg.isNotEmpty()) {
+                    command.addAll(listOf("--features", featuresArg))
+                }
+
+                exec {
+                    commandLine(command)
+                }
+
+                for (abi in requestedAndroidAbis) {
+                    val soFile = File(outDir, "$abi/libuniffi_writer_core.so")
+                    if (!soFile.exists()) {
+                        throw GradleException(
+                            "Rust native library for ABI '$abi' not found at ${soFile.absolutePath} after build."
+                        )
+                    }
                 }
             }
         }
