@@ -67,10 +67,6 @@ val abiSuffix = when {
     else -> throw GradleException("No valid ABI specified. At least one ABI must be specified via -Psujian.android.abis")
 }
 
-val nativeDir = providers
-    .gradleProperty("sujian.android.nativeDir")
-    .orElse(layout.buildDirectory.dir("generated/writer-native").map { it.asFile.absolutePath })
-
 android {
     namespace = "com.xiwei.sujian"
     compileSdk = 36
@@ -116,13 +112,12 @@ android {
     }
 
     sourceSets {
-        getByName("main") {
-            jniLibs.srcDirs(nativeDir)
-        }
         getByName("noAi") {
+            jniLibs.srcDirs(layout.buildDirectory.dir("generated/writer-native/noAiDebug"))
             kotlin.srcDirs(layout.buildDirectory.dir("generated/writer-uniffi/noAi/kotlin"))
         }
         getByName("ai") {
+            jniLibs.srcDirs(layout.buildDirectory.dir("generated/writer-native/aiDebug"))
             kotlin.srcDirs(layout.buildDirectory.dir("generated/writer-uniffi/ai/kotlin"))
         }
     }
@@ -190,15 +185,21 @@ android.applicationVariants.all {
     val variantCapitalized = variant.name.replaceFirstChar { it.uppercase() }
     val buildNativeTaskName = "build${variantCapitalized}WriterNative"
 
+    val nativeDirOverride = providers.gradleProperty("sujian.android.nativeDir").orNull
+    val variantNativeDir = if (nativeDirOverride != null) {
+        file(nativeDirOverride)
+    } else {
+        layout.buildDirectory.dir("generated/writer-native/${variant.name}").get().asFile
+    }
+
     val buildNativeTask = tasks.register(buildNativeTaskName) {
         group = "build"
         description = "Build Rust native libraries for $variantCapitalized"
 
-        val nativeOutputDir = file(nativeDir)
-        outputs.dir(nativeOutputDir)
+        outputs.dir(variantNativeDir)
 
         doLast {
-            val outDir = nativeOutputDir
+            val outDir = variantNativeDir
             val variantArg = variant.name
             val abiArg = requestedAndroidAbis.joinToString(",")
             val featuresArg = if (variant.name.startsWith("ai")) "ai" else ""

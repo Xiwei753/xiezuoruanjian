@@ -152,4 +152,23 @@ for abi in "${ABI_ARRAY[@]}"; do
     echo "  $abi_trimmed: $so_path ✓"
 done
 
+echo "清理非请求 ABI 的旧产物..."
+for abi_dir in "$OUTPUT_DIR"/*/; do
+    [ -d "$abi_dir" ] || continue
+    abi_name=$(basename "$abi_dir")
+    is_requested=false
+    for req_abi in "${ABI_ARRAY[@]}"; do
+        req_abi_trimmed=$(echo "$req_abi" | xargs)
+        if [ "$abi_name" = "$req_abi_trimmed" ]; then
+            is_requested=true
+            break
+        fi
+    done
+    if [ "$is_requested" = false ]; then
+        echo "  删除旧产物: $abi_dir/libuniffi_writer_core.so"
+        rm -f "$abi_dir/libuniffi_writer_core.so"
+        rmdir "$abi_dir" 2>/dev/null || true
+    fi
+done
+
 echo "Rust 原生库构建完成。"
