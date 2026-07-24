@@ -38,7 +38,10 @@ val gitCommitSha = queryGitCommitShortSha()
 val appVersionCode = gitCommitCount
 val appVersionName = "0.1.1"
 
-val ndkVersionValue = "25.2.9519653"
+val ndkVersionValue = providers
+    .gradleProperty("sujian.android.ndkVersion")
+    .orElse("25.2.9519653")
+    .get()
 
 val requestedAndroidAbis: List<String> = providers
     .gradleProperty("sujian.android.abis")
