@@ -209,13 +209,3 @@ pub fn create_sync_transport() -> Result<Box<dyn SyncTransport>, TransportError>
     Ok(Box::new(transport))
 }
 
-pub fn init_platform(platform_init: PlatformInit, config_dir: PathBuf) {
-    init_default_config_store(config_dir);
-    crate::GLOBAL_PLATFORM_INIT.set(platform_init).ok();
-}
-
-static GLOBAL_PLATFORM_INIT: std::sync::OnceLock<PlatformInit> = std::sync::OnceLock::new();
-
-pub fn get_platform_init() -> Option<&'static PlatformInit> {
-    GLOBAL_PLATFORM_INIT.get()
-}

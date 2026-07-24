@@ -429,6 +429,9 @@ fn main() {
         if let Some(factory) = services.sync_transport_factory {
             crate::backend::app_backend::set_linux_sync_transport_factory(factory);
         }
+        if let Some(secure_storage) = services.secure_storage {
+            crate::backend::app_backend::set_linux_secure_storage(std::sync::Arc::from(secure_storage));
+        }
     }
 
     // ===== 最早期初始化：确保崩溃/错误能写入日志文件 =====

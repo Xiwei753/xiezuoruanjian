@@ -238,7 +238,7 @@ pub fn save_sync_configs(
     config: &SyncConfig,
     secrets: &SyncSecrets,
 ) -> Result<(), String> {
-    let api = WriterCoreApi::new(path);
+    let api = crate::backend::app_backend::create_core_api(path);
     let config_result = api.save_sync_config(config.clone().into());
     let config_envelope = match config_result {
         Ok(data) => writer_core::api::ResultEnvelope::success_with_changes(

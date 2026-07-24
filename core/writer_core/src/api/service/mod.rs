@@ -26,6 +26,7 @@ pub type ApiResult<T> = Result<T, WriterError>;
 pub struct WriterCoreApi {
     pub(crate) workspace_path: PathBuf,
     pub(crate) sync_transport: Option<Arc<dyn Fn() -> Box<dyn writer_platform_api::SyncTransport> + Send + Sync>>,
+    pub(crate) secure_storage: Option<Arc<dyn writer_platform_api::SecureStorage>>,
     secrets_override: std::sync::Mutex<Option<crate::sync::SyncSecrets>>,
 }
 
@@ -36,6 +37,7 @@ impl WriterCoreApi {
         Self {
             workspace_path: workspace_path.as_ref().to_path_buf(),
             sync_transport: None,
+            secure_storage: None,
             secrets_override: std::sync::Mutex::new(None),
         }
     }
@@ -47,6 +49,20 @@ impl WriterCoreApi {
         Self {
             workspace_path: workspace_path.as_ref().to_path_buf(),
             sync_transport: Some(transport_factory),
+            secure_storage: None,
+            secrets_override: std::sync::Mutex::new(None),
+        }
+    }
+
+    pub fn with_platform_services<P: AsRef<Path>>(
+        workspace_path: P,
+        sync_transport_factory: Option<Arc<dyn Fn() -> Box<dyn writer_platform_api::SyncTransport> + Send + Sync>>,
+        secure_storage: Option<Arc<dyn writer_platform_api::SecureStorage>>,
+    ) -> Self {
+        Self {
+            workspace_path: workspace_path.as_ref().to_path_buf(),
+            sync_transport: sync_transport_factory,
+            secure_storage,
             secrets_override: std::sync::Mutex::new(None),
         }
     }
@@ -60,6 +76,7 @@ impl WriterCoreApi {
     pub(crate) fn core(&self) -> WriterCore {
         let mut core = WriterCore::new(&self.workspace_path);
         core.sync_transport = self.sync_transport.clone();
+        core.secure_storage = self.secure_storage.clone();
         if let Ok(guard) = self.secrets_override.lock() {
             core.secrets_override = guard.clone();
         }

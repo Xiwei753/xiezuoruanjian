@@ -78,9 +78,24 @@ struct DebugConfig {
 static DEBUG_CONFIG: OnceLock<DebugConfig> = OnceLock::new();
 
 static LINUX_SYNC_TRANSPORT_FACTORY: OnceLock<writer_platform_api::SyncTransportFactory> = OnceLock::new();
+static LINUX_SECURE_STORAGE: OnceLock<std::sync::Arc<dyn writer_platform_api::SecureStorage>> = OnceLock::new();
 
 pub fn set_linux_sync_transport_factory(factory: writer_platform_api::SyncTransportFactory) {
     LINUX_SYNC_TRANSPORT_FACTORY.set(factory).ok();
+}
+
+pub fn set_linux_secure_storage(storage: std::sync::Arc<dyn writer_platform_api::SecureStorage>) {
+    LINUX_SECURE_STORAGE.set(storage).ok();
+}
+
+pub(crate) fn create_core_api(path: &str) -> WriterCoreApi {
+    let sync_transport = LINUX_SYNC_TRANSPORT_FACTORY.get().cloned();
+    let secure_storage = LINUX_SECURE_STORAGE.get().cloned();
+    if sync_transport.is_some() || secure_storage.is_some() {
+        WriterCoreApi::with_platform_services(path, sync_transport, secure_storage)
+    } else {
+        WriterCoreApi::new(path)
+    }
 }
 
 fn get_debug_config() -> &'static DebugConfig {
@@ -440,14 +455,7 @@ impl AppBackend {
 
     pub(crate) fn core_api(&self) -> Option<WriterCoreApi> {
         if self.current_has_workspace && !self.current_workspace.is_empty() {
-            if let Some(factory) = LINUX_SYNC_TRANSPORT_FACTORY.get() {
-                Some(WriterCoreApi::with_sync_transport(
-                    &self.current_workspace,
-                    factory.clone(),
-                ))
-            } else {
-                Some(WriterCoreApi::new(&self.current_workspace))
-            }
+            Some(create_core_api(&self.current_workspace))
         } else {
             None
         }

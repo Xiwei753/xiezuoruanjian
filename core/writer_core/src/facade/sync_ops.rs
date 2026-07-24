@@ -83,6 +83,31 @@ impl super::WriterCore {
         if let Some(ref override_secrets) = self.secrets_override {
             return Ok(override_secrets.clone());
         }
+        if let Some(ref storage) = self.secure_storage {
+            if let Ok(Some(bytes)) = storage.get_secret("sync_token") {
+                if let Ok(token) = String::from_utf8(bytes) {
+                    if !token.is_empty() {
+                        return Ok(crate::sync::SyncSecrets {
+                            token: Some(token),
+                            ssh_private_key: None,
+                        });
+                    }
+                }
+            }
+            let file_secrets = self.load_sync_secrets_from_file()?;
+            if let Some(token) = &file_secrets.token {
+                if !token.is_empty() {
+                    let _ = storage.set_secret("sync_token", token.as_bytes());
+                    let secrets_path = self.workspace_path.join("app-meta/sync/sync_secrets.local.json");
+                    let _ = std::fs::remove_file(&secrets_path);
+                }
+            }
+            return Ok(file_secrets);
+        }
+        self.load_sync_secrets_from_file()
+    }
+
+    fn load_sync_secrets_from_file(&self) -> crate::error::Result<crate::sync::SyncSecrets> {
         let secrets_path = self
             .workspace_path
             .join("app-meta/sync/sync_secrets.local.json");
@@ -96,6 +121,23 @@ impl super::WriterCore {
     }
 
     pub fn save_sync_secrets(
+        &self,
+        secrets: &crate::sync::SyncSecrets,
+    ) -> crate::error::Result<()> {
+        if let Some(ref storage) = self.secure_storage {
+            if let Some(token) = &secrets.token {
+                storage.set_secret("sync_token", token.as_bytes())
+                    .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+            } else {
+                storage.delete_secret("sync_token")
+                    .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+            }
+            return Ok(());
+        }
+        self.save_sync_secrets_to_file(secrets)
+    }
+
+    fn save_sync_secrets_to_file(
         &self,
         secrets: &crate::sync::SyncSecrets,
     ) -> crate::error::Result<()> {

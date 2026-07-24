@@ -49,7 +49,6 @@ pub struct WriterAppService {
     editor_session: Mutex<EditorSession>,
     session_registry: Mutex<crate::editor::TextEditSessionRegistry>,
     platform_init: Option<writer_platform_api::PlatformInit>,
-    secure_storage: Option<Box<dyn writer_platform_api::SecureStorage>>,
     network_state: Option<writer_platform_api::NetworkState>,
 }
 
@@ -64,7 +63,6 @@ impl WriterAppService {
             }),
             session_registry: Mutex::new(crate::editor::TextEditSessionRegistry::new()),
             platform_init: None,
-            secure_storage: None,
             network_state: None,
         }
     }
@@ -79,7 +77,6 @@ impl WriterAppService {
             }),
             session_registry: Mutex::new(crate::editor::TextEditSessionRegistry::new()),
             platform_init: Some(init),
-            secure_storage: None,
             network_state: None,
         }
     }
@@ -88,11 +85,13 @@ impl WriterAppService {
         workspace_path: String,
         services: writer_platform_api::PlatformServices,
     ) -> Self {
-        let api = if let Some(factory) = &services.sync_transport_factory {
-            WriterCoreApi::with_sync_transport(&workspace_path, factory.clone())
-        } else {
-            WriterCoreApi::new(&workspace_path)
-        };
+        let secure_storage_arc: Option<std::sync::Arc<dyn writer_platform_api::SecureStorage>> =
+            services.secure_storage.map(std::sync::Arc::from);
+        let api = WriterCoreApi::with_platform_services(
+            &workspace_path,
+            services.sync_transport_factory,
+            secure_storage_arc,
+        );
 
         if let Some(config_store) = services.config_store {
             crate::app_config::set_default_config_store(config_store);
@@ -107,13 +106,8 @@ impl WriterAppService {
             }),
             session_registry: Mutex::new(crate::editor::TextEditSessionRegistry::new()),
             platform_init: Some(services.init),
-            secure_storage: services.secure_storage,
             network_state: services.network_state,
         }
-    }
-
-    pub fn set_secure_storage(&mut self, storage: Box<dyn writer_platform_api::SecureStorage>) {
-        self.secure_storage = Some(storage);
     }
 
     pub fn set_network_state(&mut self, state: writer_platform_api::NetworkState) {

@@ -67,13 +67,28 @@ pub fn create_platform_services() -> PlatformServices {
     #[cfg(not(feature = "github-api"))]
     let sync_transport_factory: Option<writer_platform_api::SyncTransportFactory> = None;
 
+    let secure_storage: Option<Box<dyn SecureStorage>> = create_secure_storage();
+
     PlatformServices {
         init,
         config_store,
-        secure_storage: Some(Box::new(LinuxFileSecureStorage::new(xdg_config_dir()))),
+        secure_storage,
         network_state: Some(detect_network_state()),
         sync_transport_factory,
     }
+}
+
+fn create_secure_storage() -> Option<Box<dyn SecureStorage>> {
+    #[cfg(feature = "secret-service")]
+    {
+        match KeyringSecureStorage::new() {
+            Ok(storage) => return Some(Box::new(storage)),
+            Err(e) => {
+                eprintln!("Warning: Secret Service unavailable, falling back to file storage: {}", e);
+            }
+        }
+    }
+    Some(Box::new(LinuxFileSecureStorage::new(xdg_config_dir())))
 }
 
 pub fn xdg_config_dir() -> PathBuf {
@@ -180,6 +195,48 @@ fn detect_network_state() -> NetworkState {
                     .nth(1)
                     .and_then(|s| s.trim().parse::<u16>().ok())
             }),
+    }
+}
+
+#[cfg(feature = "secret-service")]
+struct KeyringSecureStorage;
+
+#[cfg(feature = "secret-service")]
+impl KeyringSecureStorage {
+    fn new() -> Result<Self, String> {
+        let test_entry = keyring::Entry::new("com.xiwei.sujian", "sujian.__availability_check__")
+            .map_err(|e| format!("Secret Service unavailable: {}", e))?;
+        let _ = test_entry.get_password();
+        Ok(Self)
+    }
+
+    fn entry_for_key(&self, key: &str) -> Result<keyring::Entry, String> {
+        keyring::Entry::new("com.xiwei.sujian", &format!("sujian.{}", key))
+            .map_err(|e| format!("Failed to create keyring entry: {}", e))
+    }
+}
+
+#[cfg(feature = "secret-service")]
+impl SecureStorage for KeyringSecureStorage {
+    fn get_secret(&self, key: &str) -> Result<Option<Vec<u8>>, String> {
+        let entry = self.entry_for_key(key)?;
+        match entry.get_secret() {
+            Ok(secret) => Ok(Some(secret)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(format!("Failed to get secret: {}", e)),
+        }
+    }
+
+    fn set_secret(&self, key: &str, value: &[u8]) -> Result<(), String> {
+        let entry = self.entry_for_key(key)?;
+        entry.set_secret(value)
+            .map_err(|e| format!("Failed to set secret: {}", e))
+    }
+
+    fn delete_secret(&self, key: &str) -> Result<(), String> {
+        let entry = self.entry_for_key(key)?;
+        entry.delete_credential()
+            .map_err(|e| format!("Failed to delete secret: {}", e))
     }
 }
 

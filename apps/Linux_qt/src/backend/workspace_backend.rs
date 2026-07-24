@@ -271,7 +271,7 @@ impl AppBackend {
 
     // AppBackend::get_workspace_diagnostics
     pub(crate) fn get_workspace_diagnostics(&self) -> QString {
-        let api = WriterCoreApi::new(&self.current_workspace);
+        let api = crate::backend::app_backend::create_core_api(&self.current_workspace);
         match api
             .get_workspace_diagnostics(self.current_has_workspace, self.cached_tree.len() as u64)
         {
@@ -291,7 +291,7 @@ impl AppBackend {
                 "try_restore_last_workspace_path_found",
                 &format!("path={}", path),
             );
-            let api = WriterCoreApi::new(&path);
+            let api = crate::backend::app_backend::create_core_api(&path);
             let val_res = api.validate_workspace().unwrap_or(false);
             self.debug_log(
                 "workspace",
@@ -350,7 +350,7 @@ impl AppBackend {
             "internal_open_workspace_start",
             &format!("path={}, initialize={}", path, initialize),
         );
-        let api = WriterCoreApi::new(path);
+        let api = crate::backend::app_backend::create_core_api(path);
         let is_valid = api.validate_workspace().unwrap_or(false);
         self.debug_log(
             "workspace",

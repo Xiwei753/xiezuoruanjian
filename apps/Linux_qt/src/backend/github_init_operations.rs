@@ -123,7 +123,7 @@ impl AppBackend {
         };
 
         let has_workspace = || -> bool {
-            WriterCoreApi::new(path)
+            crate::backend::app_backend::create_core_api(path)
                 .validate_workspace()
                 .unwrap_or(false)
         };
@@ -162,7 +162,7 @@ impl AppBackend {
             match backend.sync(path_obj, &config, &secrets, true) {
                 Ok(result) => {
                     if result.status == writer_core::sync::SyncStatus::Success {
-                        let api = WriterCoreApi::new(path);
+                        let api = crate::backend::app_backend::create_core_api(path);
                         if !api.validate_workspace().unwrap_or(false) {
                             if let Err(e) = api.create_workspace_if_needed() {
                                 return SyncTaskOutcome {
