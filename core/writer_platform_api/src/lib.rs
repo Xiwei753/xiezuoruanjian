@@ -36,6 +36,7 @@ pub use secure_storage::SecureStorage;
 pub use sync_transport::{HttpRequest, HttpResponse, SyncTransport, TransportError};
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
