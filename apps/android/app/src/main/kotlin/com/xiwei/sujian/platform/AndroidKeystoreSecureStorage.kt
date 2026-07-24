@@ -183,80 +183,55 @@ class AndroidKeystoreSecureStorage(
             return
         }
 
-        if (oldKeyData.size < GCM_IV_LENGTH + 1) {
-            DiagnosticsLogger.w(TAG, "Old .enc_key too short, cannot migrate secrets")
-            oldSecretsDir.deleteRecursively()
-            oldKeyFile.delete()
+        if (oldKeyData.size != 32) {
+            DiagnosticsLogger.e(TAG, "Old .enc_key is not 32 bytes (got ${oldKeyData.size}), cannot migrate secrets. Old data preserved.")
             return
         }
 
-        try {
-            val iv = oldKeyData.copyOfRange(0, GCM_IV_LENGTH)
-            val keyCiphertext = oldKeyData.copyOfRange(GCM_IV_LENGTH, oldKeyData.size)
+        val oldAesKey = SecretKeySpec(oldKeyData, "AES")
 
-            val oldKeySpec = KeyGenParameterSpec.Builder(
-                "__migration_temp__",
-                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
-            )
-                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                .setKeySize(256)
-                .build()
-            val oldKeyGenerator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE_TYPE)
-            oldKeyGenerator.init(oldKeySpec)
-            val oldSecretKey = oldKeyGenerator.generateKey()
+        val migratedSecrets = mutableListOf<Pair<String, ByteArray>>()
+        var failedCount = 0
 
-            val oldCipher = Cipher.getInstance(TRANSFORMATION)
-            val oldSpec = GCMParameterSpec(GCM_TAG_LENGTH, iv)
-            oldCipher.init(Cipher.DECRYPT_MODE, oldSecretKey, oldSpec)
-            val decryptedKey = oldCipher.doFinal(keyCiphertext)
-
-            var migratedCount = 0
-            var failedCount = 0
-
-            for (encFile in encFiles) {
-                try {
-                    val secretName = encFile.nameWithoutExtension
-                    val encData = encFile.readBytes()
-                    if (encData.size < GCM_IV_LENGTH) {
-                        failedCount++
-                        continue
-                    }
-                    val secretIv = encData.copyOfRange(0, GCM_IV_LENGTH)
-                    val secretCiphertext = encData.copyOfRange(GCM_IV_LENGTH, encData.size)
-
-                    val secretKeySpec = SecretKeySpec(decryptedKey, "AES")
-                    val secretCipher = Cipher.getInstance(TRANSFORMATION)
-                    val secretSpec = GCMParameterSpec(GCM_TAG_LENGTH, secretIv)
-                    secretCipher.init(Cipher.DECRYPT_MODE, secretKeySpec, secretSpec)
-                    val plaintext = secretCipher.doFinal(secretCiphertext)
-
-                    setSecret(secretName, plaintext)
-                    migratedCount++
-                } catch (e: Exception) {
-                    DiagnosticsLogger.e(TAG, "Failed to migrate secret ${encFile.name}", e)
-                    failedCount++
-                }
-            }
-
-            if (failedCount == 0) {
-                oldSecretsDir.deleteRecursively()
-                oldKeyFile.delete()
-                DiagnosticsLogger.i(TAG, "Migrated $migratedCount old secrets to Keystore successfully")
-            } else {
-                DiagnosticsLogger.e(TAG, "Migration partially failed: $migratedCount succeeded, $failedCount failed. Old data preserved.")
-            }
-
+        for (encFile in encFiles) {
             try {
-                val keyStore = KeyStore.getInstance(KEYSTORE_TYPE)
-                keyStore.load(null)
-                if (keyStore.containsAlias("__migration_temp__")) {
-                    keyStore.deleteEntry("__migration_temp__")
+                val secretName = encFile.nameWithoutExtension
+                val encData = encFile.readBytes()
+                if (encData.size < GCM_IV_LENGTH) {
+                    DiagnosticsLogger.e(TAG, "Old .enc file ${encFile.name} too short, skipping")
+                    failedCount++
+                    continue
                 }
-            } catch (_: Exception) {}
+                val nonce = encData.copyOfRange(0, GCM_IV_LENGTH)
+                val ciphertext = encData.copyOfRange(GCM_IV_LENGTH, encData.size)
 
-        } catch (e: Exception) {
-            DiagnosticsLogger.e(TAG, "Failed to decrypt old .enc_key for migration, preserving old data", e)
+                val cipher = Cipher.getInstance(TRANSFORMATION)
+                val spec = GCMParameterSpec(GCM_TAG_LENGTH, nonce)
+                cipher.init(Cipher.DECRYPT_MODE, oldAesKey, spec)
+                val plaintext = cipher.doFinal(ciphertext)
+
+                setSecret(secretName, plaintext)
+
+                val readBack = getSecret(secretName)
+                if (readBack == null || !readBack.contentEquals(plaintext)) {
+                    DiagnosticsLogger.e(TAG, "Migration verification failed for secret $secretName: read-back mismatch")
+                    failedCount++
+                    continue
+                }
+
+                migratedSecrets.add(secretName to plaintext)
+            } catch (e: Exception) {
+                DiagnosticsLogger.e(TAG, "Failed to migrate secret ${encFile.name}", e)
+                failedCount++
+            }
+        }
+
+        if (failedCount == 0) {
+            oldSecretsDir.deleteRecursively()
+            oldKeyFile.delete()
+            DiagnosticsLogger.i(TAG, "Migrated ${migratedSecrets.size} old secrets to Keystore successfully")
+        } else {
+            DiagnosticsLogger.e(TAG, "Migration failed: ${migratedSecrets.size} succeeded, $failedCount failed. All old data preserved.")
         }
     }
 }

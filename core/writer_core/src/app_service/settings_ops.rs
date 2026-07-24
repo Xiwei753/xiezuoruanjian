@@ -56,6 +56,10 @@ impl super::WriterAppService {
             can_run = false;
             block_reason_code = Some("DISABLED".to_string());
             block_message_key = Some("sync.block.disabled".to_string());
+        } else if !self.secure_storage_available() {
+            can_run = false;
+            block_reason_code = Some("SECURE_STORAGE_UNAVAILABLE".to_string());
+            block_message_key = Some("sync.block.secure_storage_unavailable".to_string());
         } else if config.remote_url.is_empty() {
             can_run = false;
             block_reason_code = Some("REMOTE_URL_MISSING".to_string());

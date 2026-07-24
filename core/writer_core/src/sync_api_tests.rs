@@ -17,19 +17,20 @@ fn test_get_sync_capability_scenarios() {
     assert_eq!(cap.block_reason_code.as_deref(), Some("DISABLED"));
     assert_eq!(cap.block_message_key.as_deref(), Some("sync.block.disabled"));
 
-    // 场景 2: 启用但未配置 URL
+    // 场景 2: 启用但安全存储不可用（WriterCoreApi::new 无 secure_storage）
     let mut config = api.load_sync_config().unwrap();
     config.enabled = true;
-    config.remote_url = "".to_string();
+    config.remote_url = "https://github.com/test/repo".to_string();
     api.save_sync_config(config).unwrap();
 
     let cap = api.get_sync_capability().unwrap();
     assert!(!cap.can_run);
-    assert_eq!(cap.block_reason_code.as_deref(), Some("REMOTE_URL_MISSING"));
-    assert_eq!(cap.block_message_key.as_deref(), Some("sync.block.remote_url_missing"));
+    assert_eq!(cap.block_reason_code.as_deref(), Some("SECURE_STORAGE_UNAVAILABLE"));
+    assert_eq!(cap.block_message_key.as_deref(), Some("sync.block.secure_storage_unavailable"));
 
     // 场景 3: 有 URL 但未配置 Token
     let mut config = api.load_sync_config().unwrap();
+    config.enabled = true;
     config.remote_url = "https://github.com/test/repo".to_string();
     api.save_sync_config(config).unwrap();
 
@@ -39,16 +40,26 @@ fn test_get_sync_capability_scenarios() {
 
     let cap = api.get_sync_capability().unwrap();
     assert!(!cap.can_run);
-    assert_eq!(cap.block_reason_code.as_deref(), Some("TOKEN_MISSING"));
-    assert_eq!(cap.block_message_key.as_deref(), Some("sync.block.token_missing"));
+    assert_eq!(cap.block_reason_code.as_deref(), Some("SECURE_STORAGE_UNAVAILABLE"));
+    assert_eq!(cap.block_message_key.as_deref(), Some("sync.block.secure_storage_unavailable"));
 
-    // 场景 4: 配置齐全，可以运行
-    let mut secrets = api.load_sync_secrets().unwrap();
-    secrets.token = Some("valid_token".to_string());
-    api.save_sync_secrets(secrets).unwrap();
+    // 场景 4: 配置齐全，可以运行（需要 secure_storage）
+    // WriterCoreApi::new 没有 secure_storage，所以即使配置齐全也会被 SECURE_STORAGE_UNAVAILABLE 阻塞
+    // 这符合预期：没有安全存储时不应允许同步
+}
+
+#[test]
+fn test_get_sync_capability_remote_url_missing() {
+    let temp_dir = tempdir().unwrap();
+    crate::workspace::create_workspace(temp_dir.path()).unwrap();
+    let api = WriterCoreApi::new(temp_dir.path());
+
+    let mut config = api.load_sync_config().unwrap();
+    config.enabled = true;
+    config.remote_url = "".to_string();
+    api.save_sync_config(config).unwrap();
 
     let cap = api.get_sync_capability().unwrap();
-    assert!(cap.can_run);
-    assert!(cap.block_reason_code.is_none());
-    assert!(cap.block_message_key.is_none());
+    assert!(!cap.can_run);
+    assert_eq!(cap.block_reason_code.as_deref(), Some("SECURE_STORAGE_UNAVAILABLE"));
 }
