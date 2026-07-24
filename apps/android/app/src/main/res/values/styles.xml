@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <style name="Widget.Sujian.FAB.Primary" parent="android:Widget.Material.Button">
-        <item name="android:elevation">2dp</item>
-    </style>
-    <style name="Widget.Sujian.FAB.Secondary" parent="android:Widget.Material.Button">
-        <item name="android:elevation">2dp</item>
-    </style>
-</resources>
