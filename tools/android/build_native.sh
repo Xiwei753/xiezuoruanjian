@@ -108,16 +108,15 @@ for abi in "${ABI_ARRAY[@]}"; do
     CARGO_NDK_TARGETS+=("-t" "$abi_trimmed")
 done
 
-FEATURE_ARGS=""
+FEATURE_ARGS=()
 if [ -n "$RUST_FEATURES" ]; then
-    FEATURE_ARGS="--features $RUST_FEATURES"
+    FEATURE_ARGS+=(--features "$RUST_FEATURES")
 fi
 
 echo "编译 Rust 原生库 (cargo-ndk)..."
 cd "$WORKSPACE_ROOT/platform/rust/android"
 
-# shellcheck disable=SC2086
-cargo ndk "${CARGO_NDK_TARGETS[@]}" -o "$OUTPUT_DIR" build --release $FEATURE_ARGS
+cargo ndk "${CARGO_NDK_TARGETS[@]}" -o "$OUTPUT_DIR" build --release "${FEATURE_ARGS[@]}"
 
 echo "重命名 .so 文件并验证..."
 for abi in "${ABI_ARRAY[@]}"; do

@@ -38,6 +38,27 @@ val gitCommitSha = queryGitCommitShortSha()
 val appVersionCode = gitCommitCount
 val appVersionName = "0.1.1"
 
+val requestedAndroidAbis: List<String> = providers
+    .gradleProperty("sujian.android.abis")
+    .orElse("arm64-v8a")
+    .map { value ->
+        value.split(',')
+            .map(String::trim)
+            .filter(String::isNotEmpty)
+            .distinct()
+    }
+    .get()
+
+val validAbis = setOf("arm64-v8a", "x86_64")
+val invalidAbis = requestedAndroidAbis.filter { it !in validAbis }
+require(invalidAbis.isEmpty()) {
+    "Invalid Android ABI(s): $invalidAbis. Only ${validAbis.joinToString(", ")} are allowed."
+}
+
+val nativeDir = providers
+    .gradleProperty("sujian.android.nativeDir")
+    .orElse(layout.buildDirectory.dir("generated/writer-native").map { it.asFile.absolutePath })
+
 android {
     namespace = "com.xiwei.sujian"
     compileSdk = 36
@@ -64,23 +85,6 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        val requestedAndroidAbis = providers
-            .gradleProperty("sujian.android.abis")
-            .orElse("arm64-v8a")
-            .map { value ->
-                value.split(',')
-                    .map(String::trim)
-                    .filter(String::isNotEmpty)
-                    .distinct()
-            }
-            .get()
-
-        val validAbis = setOf("arm64-v8a", "x86_64")
-        val invalidAbis = requestedAndroidAbis.filter { it !in validAbis }
-        require(invalidAbis.isEmpty()) {
-            "Invalid Android ABI(s): $invalidAbis. Only ${validAbis.joinToString(", ")} are allowed."
-        }
-
         ndk {
             abiFilters.addAll(requestedAndroidAbis)
         }
@@ -99,16 +103,15 @@ android {
         }
     }
 
-    val nativeDir = providers
-        .gradleProperty("sujian.android.nativeDir")
-        .orElse(layout.buildDirectory.dir("generated/writer-native").map { it.asFile.absolutePath })
-
-    val uniffiKotlinDir = layout.buildDirectory.dir("generated/writer-uniffi")
-
     sourceSets {
         getByName("main") {
             jniLibs.srcDirs(nativeDir)
-            kotlin.srcDirs(uniffiKotlinDir)
+        }
+        getByName("noAi") {
+            kotlin.srcDirs(layout.buildDirectory.dir("generated/writer-uniffi/noAiDebug/kotlin"))
+        }
+        getByName("ai") {
+            kotlin.srcDirs(layout.buildDirectory.dir("generated/writer-uniffi/aiDebug/kotlin"))
         }
     }
 
@@ -143,25 +146,15 @@ android {
         jvmTarget = "17"
     }
 
-    val requestedAbisForNaming = providers
-        .gradleProperty("sujian.android.abis")
-        .orElse("arm64-v8a")
-        .map { value ->
-            value.split(',')
-                .map(String::trim)
-                .filter(String::isNotEmpty)
-                .distinct()
-                .sorted()
-        }
+    val abisSorted = requestedAndroidAbis.sorted()
+    val abiSuffix = when {
+        abisSorted.size > 1 -> "universal"
+        abisSorted.size == 1 -> abisSorted.first()
+        else -> "all"
+    }
 
     applicationVariants.all {
         val variant = this
-        val abis = requestedAbisForNaming.get()
-        val abiSuffix = when {
-            abis.size > 1 -> "universal"
-            abis.size == 1 -> abis.first()
-            else -> "all"
-        }
         variant.outputs.all {
             val output = this
             if (output is com.android.build.gradle.api.ApkVariantOutput) {
@@ -180,6 +173,51 @@ android {
             }
         }
     }
+}
+
+tasks.register("buildWriterNative") {
+    group = "build"
+    description = "Build Rust native libraries for writer core (lifecycle task)"
+}
+
+android.applicationVariants.all {
+    val variant = this
+    val variantCapitalized = variant.name.replaceFirstChar { it.uppercase() }
+    val buildNativeTaskName = "build${variantCapitalized}WriterNative"
+
+    val buildNativeTask = tasks.register(buildNativeTaskName) {
+        group = "build"
+        description = "Validate Rust native libraries exist for $variantCapitalized"
+
+        val nativeOutputDir = layout.buildDirectory.dir("generated/writer-native/${variant.name}")
+        outputs.dir(nativeOutputDir)
+
+        doLast {
+            val outDir = nativeOutputDir.get().asFile
+            if (!outDir.exists()) {
+                throw GradleException(
+                    "Rust native libraries not found at ${outDir.absolutePath}.\n" +
+                    "Run: ./tools/build_android.sh --${if (variant.name.startsWith("ai")) "ai" else "no-ai"} --abi <abi>"
+                )
+            }
+            for (abi in requestedAndroidAbis) {
+                val soFile = File(outDir, "$abi/libuniffi_writer_core.so")
+                if (!soFile.exists()) {
+                    throw GradleException(
+                        "Rust native library for ABI '$abi' not found at ${soFile.absolutePath}.\n" +
+                        "Run: ./tools/build_android.sh --${if (variant.name.startsWith("ai")) "ai" else "no-ai"} --abi $abi"
+                    )
+                }
+            }
+        }
+    }
+
+    tasks.named("buildWriterNative").configure {
+        dependsOn(buildNativeTask)
+    }
+
+    val preBuildTask = tasks.findByName("pre${variantCapitalized}Build")
+    preBuildTask?.dependsOn(buildNativeTask)
 }
 
 dependencies {

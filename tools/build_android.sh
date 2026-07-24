@@ -131,16 +131,15 @@ if [ ! -f "$UNIFFI_SO_PATH" ]; then
     exit 1
 fi
 
-UNIFFI_OUT_DIR="$WORKSPACE_ROOT/apps/android/app/build/generated/writer-uniffi"
+UNIFFI_OUT_DIR="$WORKSPACE_ROOT/apps/android/app/build/generated/writer-uniffi/$VARIANT_NAME/kotlin"
 mkdir -p "$UNIFFI_OUT_DIR"
-rm -rf "$UNIFFI_OUT_DIR/uniffi/writer_core"
+rm -rf "$UNIFFI_OUT_DIR/uniffi"
 
 cd "$WORKSPACE_ROOT"
 cargo run --bin uniffi-bindgen -p writer_uniffi -- generate \
     --library "$UNIFFI_SO_PATH" \
     --language kotlin \
-    --out-dir "$UNIFFI_OUT_DIR" \
-    --no-format
+    --out-dir "$UNIFFI_OUT_DIR"
 
 echo "UniFFI Kotlin 绑定生成成功。"
 

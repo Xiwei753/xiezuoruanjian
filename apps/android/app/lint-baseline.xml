@@ -7,7 +7,7 @@
         errorLine1="    val cleaner = java.lang.ref.Cleaner.create()"
         errorLine2="                                        ~~~~~~">
         <location
-            file="src/main/kotlin/com/xiwei/sujian/uniffi/uniffi/writer_core/writer_core.kt"
+            file="build/generated/writer-uniffi/uniffi/writer_core/writer_core.kt"
             line="2735"
             column="41"/>
     </issue>
@@ -18,7 +18,7 @@
         errorLine1="        JavaLangRefCleanable(cleaner.register(value, cleanUpTask))"
         errorLine2="                                     ~~~~~~~~">
         <location
-            file="src/main/kotlin/com/xiwei/sujian/uniffi/uniffi/writer_core/writer_core.kt"
+            file="build/generated/writer-uniffi/uniffi/writer_core/writer_core.kt"
             line="2738"
             column="38"/>
     </issue>
@@ -29,7 +29,7 @@
         errorLine1="    override fun clean() = cleanable.clean()"
         errorLine2="                                     ~~~~~">
         <location
-            file="src/main/kotlin/com/xiwei/sujian/uniffi/uniffi/writer_core/writer_core.kt"
+            file="build/generated/writer-uniffi/uniffi/writer_core/writer_core.kt"
             line="2744"
             column="38"/>
     </issue>
