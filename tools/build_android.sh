@@ -98,16 +98,16 @@ fi
 
 echo ""
 echo "=== 步骤 1: 构建 Rust 原生库 ==="
-FEATURE_ARG=""
+BUILD_NATIVE_ARGS=(
+    --variant "$VARIANT_NAME"
+    --abis "$ABI_LIST"
+    --output "$GENERATED_DIR"
+)
 if [ -n "$RUST_FEATURES" ]; then
-    FEATURE_ARG="--features $RUST_FEATURES"
+    BUILD_NATIVE_ARGS+=(--features "$RUST_FEATURES")
 fi
 
-"$DIR/android/build_native.sh" \
-    --variant "$VARIANT_NAME" \
-    --abis "$ABI_LIST" \
-    --output "$GENERATED_DIR" \
-    ${FEATURE_ARG:+$FEATURE_ARG}
+"$DIR/android/build_native.sh" "${BUILD_NATIVE_ARGS[@]}"
 
 echo ""
 echo "=== 步骤 2: 生成 UniFFI Kotlin 绑定 ==="
@@ -131,8 +131,9 @@ if [ ! -f "$UNIFFI_SO_PATH" ]; then
     exit 1
 fi
 
-UNIFFI_OUT_DIR="apps/android/app/src/main/kotlin/com/xiwei/sujian/uniffi"
-rm -rf "$WORKSPACE_ROOT/$UNIFFI_OUT_DIR/uniffi/writer_core"
+UNIFFI_OUT_DIR="$WORKSPACE_ROOT/apps/android/app/build/generated/writer-uniffi"
+mkdir -p "$UNIFFI_OUT_DIR"
+rm -rf "$UNIFFI_OUT_DIR/uniffi/writer_core"
 
 cd "$WORKSPACE_ROOT"
 cargo run --bin uniffi-bindgen -p writer_uniffi -- generate \
@@ -141,10 +142,6 @@ cargo run --bin uniffi-bindgen -p writer_uniffi -- generate \
     --out-dir "$UNIFFI_OUT_DIR" \
     --no-format
 
-if [ $? -ne 0 ]; then
-    echo "错误: UniFFI Kotlin 绑定生成失败"
-    exit 1
-fi
 echo "UniFFI Kotlin 绑定生成成功。"
 
 echo ""
@@ -160,11 +157,6 @@ echo "  Native dir: $GENERATED_DIR"
 ./gradlew "assemble${GRADLE_FLAVOR^}" \
     -Psujian.android.abis="$GRADLE_ABI_PROP" \
     -Psujian.android.nativeDir="$GENERATED_DIR"
-
-if [ $? -ne 0 ]; then
-    echo "错误: Android APK 构建失败"
-    exit 1
-fi
 
 echo ""
 echo "=== 步骤 4: 验证 APK ==="

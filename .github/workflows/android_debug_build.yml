@@ -49,29 +49,6 @@ jobs:
       - name: Test Rust core
         run: cargo test -p writer_core ${{ matrix.flavor == 'ai' && '--features ai' || '' }}
 
-      - name: Build Rust native library and generate UniFFI bindings
-        run: |
-          export ANDROID_NDK_HOME=$ANDROID_NDK_ROOT
-          cd platform/rust/android
-          if [ "${{ matrix.flavor }}" = "ai" ]; then
-            cargo ndk -t ${{ matrix.abi }} -o ../../../apps/android/app/build/generated/writer-native/${{ matrix.flavor }}Debug build --release --features ai
-          else
-            cargo ndk -t ${{ matrix.abi }} -o ../../../apps/android/app/build/generated/writer-native/${{ matrix.flavor }}Debug build --release
-          fi
-          LIB_DIR="../../../apps/android/app/build/generated/writer-native/${{ matrix.flavor }}Debug/${{ matrix.abi }}"
-          mv "$LIB_DIR/libwriter_platform_android.so" "$LIB_DIR/libuniffi_writer_core.so"
-
-      - name: Generate UniFFI Kotlin bindings (library mode)
-        run: cargo run --bin uniffi-bindgen -p writer_uniffi -- generate --library apps/android/app/build/generated/writer-native/${{ matrix.flavor }}Debug/${{ matrix.abi }}/libuniffi_writer_core.so --language kotlin --out-dir apps/android/app/src/main/kotlin/com/xiwei/sujian/uniffi --no-format
-
-      - name: Test Android ${{ matrix.flavor }} Debug unit tests
-        working-directory: apps/android
-        run: ./gradlew test${{ matrix.flavor == 'no-ai' && 'NoAi' || 'Ai' }}DebugUnitTest
-
-      - name: Compile Android ${{ matrix.flavor }} Debug Kotlin
-        working-directory: apps/android
-        run: ./gradlew :app:compile${{ matrix.flavor == 'no-ai' && 'NoAi' || 'Ai' }}DebugKotlin
-
       - name: Decode Android Keystore
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -100,6 +77,10 @@ jobs:
         run: |
           export ANDROID_NDK_HOME=$ANDROID_NDK_ROOT
           ./tools/build_android.sh --${{ matrix.flavor }} --abi ${{ matrix.abi }}
+
+      - name: Test Android ${{ matrix.flavor }} Debug unit tests
+        working-directory: apps/android
+        run: ./gradlew test${{ matrix.flavor == 'no-ai' && 'NoAi' || 'Ai' }}DebugUnitTest
 
       - name: Verify APK ABI
         run: |

@@ -119,11 +119,6 @@ cd "$WORKSPACE_ROOT/platform/rust/android"
 # shellcheck disable=SC2086
 cargo ndk "${CARGO_NDK_TARGETS[@]}" -o "$OUTPUT_DIR" build --release $FEATURE_ARGS
 
-if [ $? -ne 0 ]; then
-    echo "错误: cargo-ndk 构建失败"
-    exit 1
-fi
-
 echo "重命名 .so 文件并验证..."
 for abi in "${ABI_ARRAY[@]}"; do
     abi_trimmed=$(echo "$abi" | xargs)

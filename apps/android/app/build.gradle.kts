@@ -41,6 +41,7 @@ val appVersionName = "0.1.1"
 android {
     namespace = "com.xiwei.sujian"
     compileSdk = 36
+    ndkVersion = "25.2.9519653"
 
     signingConfigs {
         create("stable") {
@@ -101,11 +102,13 @@ android {
     val nativeDir = providers
         .gradleProperty("sujian.android.nativeDir")
         .orElse(layout.buildDirectory.dir("generated/writer-native").map { it.asFile.absolutePath })
-        .get()
+
+    val uniffiKotlinDir = layout.buildDirectory.dir("generated/writer-uniffi")
 
     sourceSets {
         getByName("main") {
             jniLibs.srcDirs(nativeDir)
+            kotlin.srcDirs(uniffiKotlinDir)
         }
     }
 
