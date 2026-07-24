@@ -43,7 +43,19 @@ class ThemePaletteHelperTest {
             onErrorContainer = "#410002",
             outline = "#72787E",
             outlineVariant = "#C2C8CE",
-            scrim = "#000000"
+            scrim = "#000000",
+            primaryFixed = "#C9E6FF",
+            primaryFixedDim = "#A5CCF0",
+            onPrimaryFixed = "#001E2F",
+            onPrimaryFixedVariant = "#004B6E",
+            secondaryFixed = "#D3E5F5",
+            secondaryFixedDim = "#B7C9D8",
+            onSecondaryFixed = "#0C1D29",
+            onSecondaryFixedVariant = "#384956",
+            tertiaryFixed = "#EBDDFF",
+            tertiaryFixedDim = "#CFC0E7",
+            onTertiaryFixed = "#201634",
+            onTertiaryFixedVariant = "#4D4462",
         )
         assertEquals("#006497", dto.primary)
         assertEquals("#FFFFFF", dto.onPrimary)
@@ -81,6 +93,18 @@ class ThemePaletteHelperTest {
         assertEquals("#72787E", dto.outline)
         assertEquals("#C2C8CE", dto.outlineVariant)
         assertEquals("#000000", dto.scrim)
+        assertEquals("#C9E6FF", dto.primaryFixed)
+        assertEquals("#A5CCF0", dto.primaryFixedDim)
+        assertEquals("#001E2F", dto.onPrimaryFixed)
+        assertEquals("#004B6E", dto.onPrimaryFixedVariant)
+        assertEquals("#D3E5F5", dto.secondaryFixed)
+        assertEquals("#B7C9D8", dto.secondaryFixedDim)
+        assertEquals("#0C1D29", dto.onSecondaryFixed)
+        assertEquals("#384956", dto.onSecondaryFixedVariant)
+        assertEquals("#EBDDFF", dto.tertiaryFixed)
+        assertEquals("#CFC0E7", dto.tertiaryFixedDim)
+        assertEquals("#201634", dto.onTertiaryFixed)
+        assertEquals("#4D4462", dto.onTertiaryFixedVariant)
     }
 
     @Test
@@ -121,7 +145,19 @@ class ThemePaletteHelperTest {
             onErrorContainer = "#410002",
             outline = "#72787E",
             outlineVariant = "#C2C8CE",
-            scrim = "#000000"
+            scrim = "#000000",
+            primaryFixed = "#C9E6FF",
+            primaryFixedDim = "#A5CCF0",
+            onPrimaryFixed = "#001E2F",
+            onPrimaryFixedVariant = "#004B6E",
+            secondaryFixed = "#D3E5F5",
+            secondaryFixedDim = "#B7C9D8",
+            onSecondaryFixed = "#0C1D29",
+            onSecondaryFixedVariant = "#384956",
+            tertiaryFixed = "#EBDDFF",
+            tertiaryFixedDim = "#CFC0E7",
+            onTertiaryFixed = "#201634",
+            onTertiaryFixedVariant = "#4D4462",
         )
         val record = uniffi.writer_core.ThemePaletteRecordDto(
             schemaVersion = 1u,
@@ -187,7 +223,19 @@ class ThemePaletteHelperTest {
             onErrorContainer = "#410002",
             outline = "#72787E",
             outlineVariant = "#C2C8CE",
-            scrim = "#000000"
+            scrim = "#000000",
+            primaryFixed = "#C9E6FF",
+            primaryFixedDim = "#A5CCF0",
+            onPrimaryFixed = "#001E2F",
+            onPrimaryFixedVariant = "#004B6E",
+            secondaryFixed = "#D3E5F5",
+            secondaryFixedDim = "#B7C9D8",
+            onSecondaryFixed = "#0C1D29",
+            onSecondaryFixedVariant = "#384956",
+            tertiaryFixed = "#EBDDFF",
+            tertiaryFixedDim = "#CFC0E7",
+            onTertiaryFixed = "#201634",
+            onTertiaryFixedVariant = "#4D4462",
         )
         val result = ThemePaletteHelper.DynamicColorResult(
             lightScheme = scheme,
