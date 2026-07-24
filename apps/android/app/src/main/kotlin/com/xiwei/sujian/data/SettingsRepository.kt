@@ -217,6 +217,10 @@ open class SettingsRepository(context: Context) {
         }
     }
 
+    fun getSecureStorageWarning(): String? {
+        return settingsBridge.getSecureStorageWarning()
+    }
+
     /**
      * 保存设备信息到本地 SharedPreferences。
      * 包含 deviceId、deviceClass、platform，供同步和统计使用。

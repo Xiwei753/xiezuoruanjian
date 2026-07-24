@@ -46,6 +46,8 @@ class AppServiceBridge(val holder: WriterAppServiceHolder) {
     val statsBridge: StatsBridge by lazy { StatsBridge(holder) }
     val starMapBridge: StarMapBridge by lazy { StarMapBridge(holder) }
     val layoutPolicyBridge: LayoutPolicyBridge by lazy { LayoutPolicyBridge(holder) }
+    val secureStorageWarning: String? get() = holder.secureStorageError
+
     companion object {
         private const val TAG = "AppServiceBridge"
     }

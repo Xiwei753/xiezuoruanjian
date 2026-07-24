@@ -102,4 +102,9 @@ class SettingsBridge internal constructor(private val holder: WriterAppServiceHo
     fun listBuiltinThemes(): List<uniffi.writer_core.BuiltinThemeDto> {
         return holder.service.listBuiltinThemes()
     }
+
+    fun getSecureStorageWarning(): String? {
+        val error = holder.secureStorageError ?: return null
+        return if (error.startsWith("migration_failed:")) error else null
+    }
 }

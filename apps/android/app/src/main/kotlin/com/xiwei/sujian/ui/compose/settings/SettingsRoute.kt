@@ -49,6 +49,7 @@ data class SettingsUiState(
     val syncConfig: com.xiwei.sujian.model.SyncConfig = com.xiwei.sujian.model.SyncConfig(),
     val syncSecrets: com.xiwei.sujian.model.SyncSecrets = com.xiwei.sujian.model.SyncSecrets(),
     val syncCapability: com.xiwei.sujian.model.SyncCapabilityData = com.xiwei.sujian.model.SyncCapabilityData(),
+    val secureStorageWarning: String? = null,
     val builtinThemes: List<uniffi.writer_core.BuiltinThemeDto> = emptyList(),
     val paletteRecords: List<uniffi.writer_core.ThemePaletteRecordDto> = emptyList(),
     val aiAvailable: Boolean = false,
@@ -171,6 +172,7 @@ class SettingsViewModel : ViewModel() {
             val syncConfig = withContext(Dispatchers.IO) { repo.loadSyncConfig() }
             val syncSecrets = withContext(Dispatchers.IO) { repo.loadSyncSecrets() }
             val syncCapability = withContext(Dispatchers.IO) { repo.getSyncCapability() }
+            val secureStorageWarning = withContext(Dispatchers.IO) { repo.getSecureStorageWarning() }
             val builtinThemes = withContext(Dispatchers.IO) { repo.listBuiltinThemes() }
             val paletteRecords = withContext(Dispatchers.IO) { repo.listPaletteRecords() }
             val aiAvailable = withContext(Dispatchers.IO) { repo.aiAvailable() }
@@ -183,6 +185,7 @@ class SettingsViewModel : ViewModel() {
                     syncConfig = if (syncConfigRevision == snapshotSyncConfigRev) syncConfig else current.syncConfig,
                     syncSecrets = if (syncSecretsRevision == snapshotSyncSecretsRev) syncSecrets else current.syncSecrets,
                     syncCapability = syncCapability,
+                    secureStorageWarning = secureStorageWarning,
                     builtinThemes = builtinThemes,
                     paletteRecords = paletteRecords,
                     aiAvailable = aiAvailable,
@@ -371,6 +374,7 @@ class SettingsViewModel : ViewModel() {
             val syncConfig = withContext(Dispatchers.IO) { repo.loadSyncConfig() }
             val syncSecrets = withContext(Dispatchers.IO) { repo.loadSyncSecrets() }
             val syncCapability = withContext(Dispatchers.IO) { repo.getSyncCapability() }
+            val secureStorageWarning = withContext(Dispatchers.IO) { repo.getSecureStorageWarning() }
             val builtinThemes = withContext(Dispatchers.IO) { repo.listBuiltinThemes() }
             val paletteRecords = withContext(Dispatchers.IO) { repo.listPaletteRecords() }
             val aiAvailable = withContext(Dispatchers.IO) { repo.aiAvailable() }
@@ -382,6 +386,7 @@ class SettingsViewModel : ViewModel() {
                     syncConfig = if (!hasUnsavedSyncConfig()) syncConfig else current.syncConfig,
                     syncSecrets = if (!hasUnsavedSyncSecrets()) syncSecrets else current.syncSecrets,
                     syncCapability = syncCapability,
+                    secureStorageWarning = secureStorageWarning,
                     builtinThemes = builtinThemes,
                     paletteRecords = paletteRecords,
                     aiAvailable = aiAvailable,

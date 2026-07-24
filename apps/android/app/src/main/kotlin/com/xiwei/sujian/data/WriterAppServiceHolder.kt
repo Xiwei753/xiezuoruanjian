@@ -61,10 +61,10 @@ class WriterAppServiceHolder(
                 AndroidKeystoreSecureStorage(context)
             } catch (e: Exception) {
                 DiagnosticsLogger.e(TAG, "Failed to initialize Android Keystore secure storage", e)
-                null
-            }
-            if (secureStorage == null) {
                 return WriterAppServiceHolder(workspacePath, init, null, secureStorageError = "keystore_init_failed")
+            }
+            if (secureStorage.migrationError != null) {
+                return WriterAppServiceHolder(workspacePath, init, secureStorage, secureStorageError = "migration_failed:${secureStorage.migrationError}")
             }
             return WriterAppServiceHolder(workspacePath, init, secureStorage)
         }

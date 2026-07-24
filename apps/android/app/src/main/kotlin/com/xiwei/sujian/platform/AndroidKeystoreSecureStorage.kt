@@ -157,10 +157,13 @@ class AndroidKeystoreSecureStorage(
         }
     }
 
+    var migrationError: String? = null
+        private set
+
     private fun migrateOldEncKey() {
-        val migrationError = migrateOldEncKeyInternal()
+        migrationError = migrateOldEncKeyInternal()
         if (migrationError != null) {
-            throw SecureStorageException.MigrationException(migrationError)
+            DiagnosticsLogger.e(TAG, "Keystore migration failed (Keystore still usable for new secrets): $migrationError")
         }
     }
 
@@ -197,7 +200,7 @@ class AndroidKeystoreSecureStorage(
 
         val oldAesKey = SecretKeySpec(oldKeyData, "AES")
 
-        val migratedSecrets = mutableListOf<Pair<String, ByteArray>>()
+        val setSecretNames = mutableListOf<String>()
         var failedCount = 0
 
         for (encFile in encFiles) {
@@ -218,6 +221,7 @@ class AndroidKeystoreSecureStorage(
                 val plaintext = cipher.doFinal(ciphertext)
 
                 setSecret(secretName, plaintext)
+                setSecretNames.add(secretName)
 
                 val readBack = getSecret(secretName)
                 if (readBack == null || !readBack.contentEquals(plaintext)) {
@@ -225,8 +229,6 @@ class AndroidKeystoreSecureStorage(
                     failedCount++
                     continue
                 }
-
-                migratedSecrets.add(secretName to plaintext)
             } catch (e: Exception) {
                 DiagnosticsLogger.e(TAG, "Failed to migrate secret ${encFile.name}", e)
                 failedCount++
@@ -236,18 +238,18 @@ class AndroidKeystoreSecureStorage(
         if (failedCount == 0) {
             oldSecretsDir.deleteRecursively()
             oldKeyFile.delete()
-            DiagnosticsLogger.i(TAG, "Migrated ${migratedSecrets.size} old secrets to Keystore successfully")
+            DiagnosticsLogger.i(TAG, "Migrated ${setSecretNames.size} old secrets to Keystore successfully")
             return null
         } else {
-            for ((name, _) in migratedSecrets) {
+            for (name in setSecretNames) {
                 try {
                     deleteSecret(name)
                 } catch (e: Exception) {
                     DiagnosticsLogger.e(TAG, "Failed to roll back migrated secret $name", e)
                 }
             }
-            DiagnosticsLogger.e(TAG, "Migration failed: ${migratedSecrets.size} rolled back, $failedCount failed. All old data preserved.")
-            return "Migration failed: $failedCount secrets could not be migrated, ${migratedSecrets.size} rolled back"
+            DiagnosticsLogger.e(TAG, "Migration failed: ${setSecretNames.size} rolled back, $failedCount failed. All old data preserved.")
+            return "Migration failed: $failedCount secrets could not be migrated, ${setSecretNames.size} rolled back"
         }
     }
 }

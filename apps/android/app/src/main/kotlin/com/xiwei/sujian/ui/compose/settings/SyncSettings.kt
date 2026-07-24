@@ -41,6 +41,16 @@ fun SyncSettings(
             }
         }
 
+        if (state.secureStorageWarning != null) {
+            SujianSection(title = stringResource(id = R.string.pref_category_sync)) {
+                Text(
+                    text = stringResource(id = R.string.sync_migration_warning),
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+        }
+
         SujianSection(title = stringResource(id = R.string.pref_category_sync)) {
             SujianSwitchRow(
                 title = stringResource(id = R.string.pref_enable_sync),
