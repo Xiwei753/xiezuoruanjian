@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import com.xiwei.sujian.designsystem.icon.SujianIcons
 import com.xiwei.sujian.designsystem.component.SujianListItem
+import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import androidx.compose.material3.MaterialTheme
 import com.xiwei.sujian.editor.v2.compose.AnimatedTextField
 import androidx.compose.material3.Text
@@ -31,7 +32,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
 import com.xiwei.sujian.R
 import com.xiwei.sujian.model.Project
@@ -46,42 +46,43 @@ fun ProjectListScreen(
 ) {
     var showCreateDialog by remember { mutableStateOf(false) }
     var showMenuForProject by remember { mutableStateOf<Project?>(null) }
+    val dims = LocalSujianDimensions.current
 
     Box(modifier = modifier.fillMaxSize()) {
         if (appState.projects.isEmpty()) {
             Column(
-                modifier = Modifier.fillMaxSize().padding(32.dp),
+                modifier = Modifier.fillMaxSize().padding(dims.space32),
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(stringResource(id = R.string.project_list_empty), style = MaterialTheme.typography.titleMedium)
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(dims.space8))
                 Text(stringResource(id = R.string.project_list_empty_hint), style = MaterialTheme.typography.bodyMedium)
             }
         } else {
             LazyColumn(
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                contentPadding = PaddingValues(horizontal = dims.space16, vertical = dims.space8),
                 modifier = Modifier.fillMaxSize()
             ) {
                 if (appState.recentEdits.isNotEmpty()) {
                     item {
-                        Text(stringResource(id = R.string.recent_edits), style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(bottom = 8.dp))
+                        Text(stringResource(id = R.string.recent_edits), style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(bottom = dims.space8))
                     }
                     items(appState.recentEdits) { edit ->
                         val project = appState.projects.find { it.id == edit.projectId }
                         SujianCard(
                             onClick = { onSelectProject(edit.projectId, project?.title ?: "") },
-                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                            modifier = Modifier.fillMaxWidth().padding(bottom = dims.space8),
                         ) {
-                            Column(modifier = Modifier.padding(16.dp)) {
+                            Column(modifier = Modifier.padding(dims.space16)) {
                                 Text(project?.title ?: stringResource(id = R.string.unknown_project), style = MaterialTheme.typography.titleMedium)
                                 Text(stringResource(id = R.string.continue_writing_action), style = MaterialTheme.typography.bodySmall)
                             }
                         }
                     }
                     item {
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(stringResource(id = R.string.all_projects), style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(bottom = 8.dp))
+                        Spacer(modifier = Modifier.height(dims.space16))
+                        Text(stringResource(id = R.string.all_projects), style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(bottom = dims.space8))
                     }
                 }
                 items(appState.projects) { project ->
@@ -98,7 +99,7 @@ fun ProjectListScreen(
             onClick = { showCreateDialog = true },
             icon = SujianIcons.Add,
             contentDescription = stringResource(id = R.string.action_new_project),
-            modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp)
+            modifier = Modifier.align(Alignment.BottomEnd).padding(dims.space16)
         )
     }
 
@@ -151,12 +152,13 @@ private fun ProjectCard(
     onSelect: () -> Unit,
     onMoreActions: () -> Unit
 ) {
+    val dims = LocalSujianDimensions.current
     SujianCard(
         onClick = onSelect,
-        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+        modifier = Modifier.fillMaxWidth().padding(bottom = dims.space8),
     ) {
         Row(
-            modifier = Modifier.padding(16.dp).fillMaxWidth(),
+            modifier = Modifier.padding(dims.space16).fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {

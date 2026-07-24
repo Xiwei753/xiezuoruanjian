@@ -24,7 +24,9 @@ import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.semantics.editableText
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setText
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
 import com.xiwei.sujian.editor.v2.coordinator.EditableTextTarget
 import com.xiwei.sujian.editor.v2.coordinator.EditingState
@@ -51,6 +53,7 @@ fun AnimatedTextArea(
             "AnimatedTextArea($targetId) requires an AnimatedTextEditorCoordinator. " +
             "Every Activity must provide one via CompositionLocal or the coordinator parameter."
         )
+    val dims = LocalSujianDimensions.current
 
     AnimatedTextAreaWithCoordinator(
         targetId = targetId,
@@ -64,7 +67,8 @@ fun AnimatedTextArea(
         enabled = enabled,
         minLines = minLines,
         maxLines = maxLines,
-        coordinator = effectiveCoordinator
+        coordinator = effectiveCoordinator,
+        minLineHeight = dims.bodyLineHeight
     )
 }
 
@@ -82,7 +86,8 @@ private fun AnimatedTextAreaWithCoordinator(
     enabled: Boolean,
     @Suppress("UNUSED_PARAMETER") minLines: Int,
     @Suppress("UNUSED_PARAMETER") maxLines: Int,
-    coordinator: AnimatedTextEditorCoordinator
+    coordinator: AnimatedTextEditorCoordinator,
+    minLineHeight: Dp
 ) {
     var localValue by remember(value) { mutableStateOf(value) }
     var isEditing by remember { mutableStateOf(false) }
@@ -130,7 +135,7 @@ private fun AnimatedTextAreaWithCoordinator(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .heightIn(min = (minLines * 24).dp)
+            .heightIn(min = minLineHeight * minLines)
             .onGloballyPositioned { coordinates ->
                 val position = coordinates.positionInWindow()
                 val size = coordinates.size

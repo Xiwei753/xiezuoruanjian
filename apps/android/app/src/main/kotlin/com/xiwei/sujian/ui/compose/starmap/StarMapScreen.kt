@@ -532,7 +532,7 @@ private fun StarMapEditorScreen(
             body = {
                 Column {
                     Text(stringResource(id = R.string.starmap_from_node), style = MaterialTheme.typography.bodySmall)
-                    LazyColumn(modifier = Modifier.height(120.dp)) {
+                    LazyColumn(modifier = Modifier.height(dims.dialogListHeight)) {
                         items(nodes) { node ->
                             SujianTextButton(
                                 text = node.title,
@@ -543,7 +543,7 @@ private fun StarMapEditorScreen(
                     }
                     Spacer(modifier = Modifier.height(dims.space8))
                     Text(stringResource(id = R.string.starmap_to_node), style = MaterialTheme.typography.bodySmall)
-                    LazyColumn(modifier = Modifier.height(120.dp)) {
+                    LazyColumn(modifier = Modifier.height(dims.dialogListHeight)) {
                         items(nodes) { node ->
                             SujianTextButton(
                                 text = node.title,
@@ -600,7 +600,7 @@ private fun NodeEditPanel(
                     singleLine = true
                 )
                 Spacer(modifier = Modifier.height(dims.space8))
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(dims.space4)) {
                     StarMapNodeKind.entries.take(6).forEach { kind ->
                         SujianTextButton(
                             text = kind.name,

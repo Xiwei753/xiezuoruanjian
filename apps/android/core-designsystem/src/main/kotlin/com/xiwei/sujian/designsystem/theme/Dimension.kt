@@ -27,6 +27,8 @@ data class SujianDimensions(
     val iconSizeSmall: Dp = 18.dp,
     val iconSizeMedium: Dp = 24.dp,
     val iconSizeLarge: Dp = 36.dp,
+    val bodyLineHeight: Dp = 24.dp,
+    val dialogListHeight: Dp = 120.dp,
 )
 
 val LocalSujianDimensions = staticCompositionLocalOf { SujianDimensions() }
