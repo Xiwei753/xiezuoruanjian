@@ -20,6 +20,4 @@ writer_core = { path = "../../../core/writer_core" }
 writer_platform_api = { path = "../../../core/writer_platform_api" }
 writer_uniffi = { path = "../../../core/writer_uniffi", features = ["github-api"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"], optional = true }
-aes-gcm = "0.10"
-rand = "0.8"
 ctor = "0.2"

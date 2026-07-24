@@ -79,9 +79,9 @@ open class SettingsRepository(context: Context) {
             }
             is BridgeResult.Error -> {
                 warn("Failed to save local settings: ${result.message}")
-                SettingsSaveResult.Failed(SaveField.LOCAL_SETTINGS)
+                SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.LOCAL_SETTINGS, 0L)))
             }
-            BridgeResult.NotLoaded -> SettingsSaveResult.Failed(SaveField.LOCAL_SETTINGS)
+            BridgeResult.NotLoaded -> SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.LOCAL_SETTINGS, 0L)))
         }
     }
 
@@ -105,9 +105,9 @@ open class SettingsRepository(context: Context) {
             }
             is BridgeResult.Error -> {
                 warn("Failed to save syncable settings: ${result.message}")
-                SettingsSaveResult.Failed(SaveField.FONT_SIZE)
+                SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.FONT_SIZE, 0L)))
             }
-            BridgeResult.NotLoaded -> SettingsSaveResult.Failed(SaveField.FONT_SIZE)
+            BridgeResult.NotLoaded -> SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.FONT_SIZE, 0L)))
         }
     }
 
@@ -158,9 +158,9 @@ open class SettingsRepository(context: Context) {
             }
             is BridgeResult.Error -> {
                 warn("Failed to save sync config: ${result.message}")
-                SettingsSaveResult.Failed(SaveField.SYNC_CONFIG)
+                SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_CONFIG, 0L)))
             }
-            BridgeResult.NotLoaded -> SettingsSaveResult.Failed(SaveField.SYNC_CONFIG)
+            BridgeResult.NotLoaded -> SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_CONFIG, 0L)))
         }
     }
 
@@ -180,9 +180,9 @@ open class SettingsRepository(context: Context) {
             is BridgeResult.Success -> SettingsSaveResult.Success
             is BridgeResult.Error -> {
                 warn("Failed to save sync secrets: ${result.message}")
-                SettingsSaveResult.Failed(SaveField.SYNC_SECRETS)
+                SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_SECRETS, 0L)))
             }
-            BridgeResult.NotLoaded -> SettingsSaveResult.Failed(SaveField.SYNC_SECRETS)
+            BridgeResult.NotLoaded -> SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_SECRETS, 0L)))
         }
     }
 

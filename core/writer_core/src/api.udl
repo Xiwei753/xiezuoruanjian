@@ -1539,5 +1539,5 @@ dictionary EditorSessionSnapshotDto {
     u32 cursor;
     u32 selection_anchor;
     u64 generation;
-    string chapter_id;
+     string chapter_id;
 };

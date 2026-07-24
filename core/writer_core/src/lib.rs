@@ -207,3 +207,68 @@ pub fn load_workspace_summary(
 uniffi::include_scaffolding!("api");
 pub mod app_service;
 pub use app_service::WriterAppService;
+
+#[uniffi::export(callback_interface)]
+pub trait SecureStorageProvider: Send + Sync {
+    fn get_secret(&self, key: String) -> Option<Vec<u8>>;
+    fn set_secret(&self, key: String, value: Vec<u8>);
+    fn delete_secret(&self, key: String);
+}
+
+struct CallbackSecureStorage(Box<dyn SecureStorageProvider>);
+
+impl writer_platform_api::SecureStorage for CallbackSecureStorage {
+    fn get_secret(&self, key: &str) -> std::result::Result<Option<Vec<u8>>, String> {
+        Ok(self.0.get_secret(key.to_string()))
+    }
+
+    fn set_secret(&self, key: &str, value: &[u8]) -> std::result::Result<(), String> {
+        self.0.set_secret(key.to_string(), value.to_vec());
+        Ok(())
+    }
+
+    fn delete_secret(&self, key: &str) -> std::result::Result<(), String> {
+        self.0.delete_secret(key.to_string());
+        Ok(())
+    }
+}
+
+#[::uniffi::export]
+pub fn open_workspace_with_secure_storage(
+    path: String,
+    init: crate::api::types::PlatformInitDto,
+    secure_storage: Option<Box<dyn SecureStorageProvider>>,
+) -> std::result::Result<std::sync::Arc<WriterAppService>, WriterError> {
+    let p = Path::new(&path);
+    if !crate::workspace::validate_workspace(p).map_err(WriterError::from)? {
+        return Err(WriterError::InvalidWorkspace);
+    }
+
+    let platform_init: writer_platform_api::PlatformInit = init.clone().into();
+    let network_state: writer_platform_api::NetworkState = init.into();
+
+    let secure_storage_impl: Option<Box<dyn writer_platform_api::SecureStorage>> =
+        secure_storage.map(|p| Box::new(CallbackSecureStorage(p)) as Box<dyn writer_platform_api::SecureStorage>);
+
+    let config_dir = platform_init.app_data_dir.join("config");
+    let config_store: Option<Box<dyn writer_platform_api::ConfigStore>> =
+        Some(Box::new(writer_platform_api::FileConfigStore::new(config_dir)));
+
+    let services = if let Some(resolver) = writer_platform_api::get_platform_services_resolver() {
+        let mut resolved = resolver.resolve(&platform_init, &network_state);
+        if secure_storage_impl.is_some() {
+            resolved.secure_storage = secure_storage_impl;
+        }
+        resolved
+    } else {
+        writer_platform_api::PlatformServices {
+            init: platform_init,
+            config_store,
+            secure_storage: secure_storage_impl,
+            network_state: Some(network_state),
+            sync_transport_factory: None,
+        }
+    };
+
+    Ok(std::sync::Arc::new(WriterAppService::with_platform_services(path, services)))
+}

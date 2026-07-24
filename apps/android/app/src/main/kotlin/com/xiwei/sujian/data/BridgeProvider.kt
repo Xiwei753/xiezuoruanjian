@@ -24,6 +24,7 @@ object BridgeProvider {
                 val workspacePath = WorkspaceManager.getWorkspaceDir(appContext).absolutePath
                 val (isConnected, isMetered) = detectNetworkState(appContext)
                 val holder = WriterAppServiceHolder.createFromContext(
+                    context = appContext,
                     workspacePath = workspacePath,
                     filesDir = appContext.filesDir.absolutePath,
                     cacheDir = appContext.cacheDir.absolutePath,
