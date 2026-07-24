@@ -3,20 +3,22 @@ package com.xiwei.sujian.data
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
-/**
- * SyncSession — 同步会话状态管理
- *
- * 使用原子操作管理同步任务的并发锁和任务 ID。
- *
- * ## 架构定位
- * - 全局单例，管理同步任务的并发访问
- * - 防止多个同步任务同时执行
- *
- * ## 使用场景
- * - Compose SettingsRoute 中的同步按钮状态管理
- * - 防止重复点击导致的并发同步问题
- */
+sealed class ExclusiveResult<out T> {
+    object Busy : ExclusiveResult<Nothing>()
+    data class Success<out T>(val taskId: Int, val value: T) : ExclusiveResult<T>()
+}
+
 object SyncSession {
-    val lock = AtomicBoolean(false)
-    val currentTaskId = AtomicInteger(0)
+    private val lock = AtomicBoolean(false)
+    private val currentTaskId = AtomicInteger(0)
+
+    suspend fun <T> runExclusive(block: suspend (taskId: Int) -> T): ExclusiveResult<T> {
+        if (!lock.compareAndSet(false, true)) return ExclusiveResult.Busy
+        val taskId = currentTaskId.incrementAndGet()
+        return try {
+            ExclusiveResult.Success(taskId, block(taskId))
+        } finally {
+            lock.set(false)
+        }
+    }
 }

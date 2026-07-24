@@ -43,10 +43,8 @@ class AutoSyncWorker(
             null
         }
         if (elapsed != null && elapsed < interval) return Result.success()
-        if (!SyncSession.lock.compareAndSet(false, true)) return Result.retry()
 
-        val taskId = SyncSession.currentTaskId.incrementAndGet()
-        return try {
+        val exclusiveResult = SyncSession.runExclusive { taskId ->
             when (val result = settingsRepository.performSync(config)) {
                 is BridgeResult.Error -> {
                     DiagnosticsLogger.w(TAG, "AutoSync failed: ${result.message}")
@@ -58,17 +56,17 @@ class AutoSyncWorker(
                 }
                 is BridgeResult.Success -> {
                     val status = result.data.status
-                    if (SyncSession.currentTaskId.get() == taskId && isSuccessfulStatus(status)) {
+                    if (isSuccessfulStatus(status)) {
                         SyncChangeBus.notifyChanged()
                     }
                     Result.success()
                 }
             }
-        } catch (e: Exception) {
-            DiagnosticsLogger.w(TAG, "AutoSync exception", e)
-            Result.retry()
-        } finally {
-            SyncSession.lock.set(false)
+        }
+
+        return when (exclusiveResult) {
+            is ExclusiveResult.Busy -> Result.retry()
+            is ExclusiveResult.Success -> exclusiveResult.value
         }
     }
 

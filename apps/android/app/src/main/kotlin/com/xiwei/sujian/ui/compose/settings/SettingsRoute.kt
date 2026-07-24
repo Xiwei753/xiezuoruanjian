@@ -43,6 +43,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.parcelize.Parcelize
+import com.xiwei.sujian.data.ExclusiveResult
 import com.xiwei.sujian.data.SyncSession
 
 enum class SyncCommandState { IDLE, RUNNING, SUCCESS, FAILURE }
@@ -402,13 +403,6 @@ class SettingsViewModel : ViewModel() {
         val config = _uiState.value.syncConfig
         val secrets = _uiState.value.syncSecrets
 
-        if (!SyncSession.lock.compareAndSet(false, true)) {
-            _uiState.update { it.copy(syncCommandResult = "sync_already_running", lastCommandType = type) }
-            return
-        }
-
-        val taskId = SyncSession.currentTaskId.incrementAndGet()
-
         val runningStateField: SettingsUiState.() -> SettingsUiState
         val successStateField: SettingsUiState.() -> SettingsUiState
         val failureStateField: SettingsUiState.() -> SettingsUiState
@@ -431,11 +425,10 @@ class SettingsViewModel : ViewModel() {
             }
         }
 
-        _uiState.update { it.runningStateField() }
-
         viewModelScope.launch {
-            try {
-                val result = withContext(Dispatchers.IO) {
+            val exclusiveResult = SyncSession.runExclusive { _ ->
+                _uiState.update { it.runningStateField() }
+                withContext(Dispatchers.IO) {
                     val saveResult = repo.saveSyncConfig(config)
                     if (saveResult is SettingsSaveResult.Failed) {
                         return@withContext "save_config_failed" to false
@@ -504,26 +497,27 @@ class SettingsViewModel : ViewModel() {
                         }
                     }
                 }
+            }
 
-                if (SyncSession.currentTaskId.get() != taskId) {
-                    _uiState.update { it.failureStateField() }
-                    return@launch
+            when (exclusiveResult) {
+                is ExclusiveResult.Busy -> {
+                    _uiState.update { it.copy(syncCommandResult = "sync_already_running", lastCommandType = type) }
                 }
-
-                _uiState.update { current ->
-                    val (message, success) = result
-                    if (success) {
-                        current.successStateField().copy(syncCommandResult = message)
-                    } else {
-                        current.failureStateField().copy(syncCommandResult = message)
+                is ExclusiveResult.Success -> {
+                    val (message, success) = exclusiveResult.value
+                    _uiState.update { current ->
+                        if (success) {
+                            current.successStateField().copy(syncCommandResult = message)
+                        } else {
+                            current.failureStateField().copy(syncCommandResult = message)
+                        }
                     }
                 }
-            } finally {
-                SyncSession.lock.set(false)
-                val refreshedCapability = withContext(Dispatchers.IO) { repo.getSyncCapability() }
-                val refreshedWarning = withContext(Dispatchers.IO) { repo.getSecureStorageWarning() }
-                _uiState.update { it.copy(syncCapability = refreshedCapability, secureStorageWarning = refreshedWarning) }
             }
+
+            val refreshedCapability = withContext(Dispatchers.IO) { repo.getSyncCapability() }
+            val refreshedWarning = withContext(Dispatchers.IO) { repo.getSecureStorageWarning() }
+            _uiState.update { it.copy(syncCapability = refreshedCapability, secureStorageWarning = refreshedWarning) }
         }
     }
 
