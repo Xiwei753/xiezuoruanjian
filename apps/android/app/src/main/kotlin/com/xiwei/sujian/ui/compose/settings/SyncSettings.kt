@@ -149,13 +149,16 @@ fun SyncSettings(
         }
 
         if (syncConfig.enabled == true) {
+            val anySyncRunning = state.dryRunState == SyncCommandState.RUNNING ||
+                state.testConnectionState == SyncCommandState.RUNNING ||
+                state.performSyncState == SyncCommandState.RUNNING
             SujianSection(title = stringResource(id = R.string.pref_category_sync)) {
                 SujianOutlinedButton(
                     text = stringResource(id = R.string.btn_dry_run),
                     onClick = { onIntent(SettingsIntent.DryRun) },
                     modifier = Modifier.fillMaxWidth(),
                     loading = state.dryRunState == SyncCommandState.RUNNING,
-                    enabled = syncCapability.canRun && state.dryRunState != SyncCommandState.RUNNING,
+                    enabled = syncCapability.canRun && !anySyncRunning,
                 )
                 Spacer(modifier = Modifier.height(dims.space8))
                 SujianOutlinedButton(
@@ -163,7 +166,7 @@ fun SyncSettings(
                     onClick = { onIntent(SettingsIntent.TestConnection) },
                     modifier = Modifier.fillMaxWidth(),
                     loading = state.testConnectionState == SyncCommandState.RUNNING,
-                    enabled = syncCapability.canRun && state.testConnectionState != SyncCommandState.RUNNING,
+                    enabled = syncCapability.canRun && !anySyncRunning,
                 )
                 Spacer(modifier = Modifier.height(dims.space8))
                 SujianOutlinedButton(
@@ -171,7 +174,7 @@ fun SyncSettings(
                     onClick = { onIntent(SettingsIntent.PerformSync) },
                     modifier = Modifier.fillMaxWidth(),
                     loading = state.performSyncState == SyncCommandState.RUNNING,
-                    enabled = syncCapability.canRun && state.performSyncState != SyncCommandState.RUNNING,
+                    enabled = syncCapability.canRun && !anySyncRunning,
                 )
 
                 if (state.syncCommandResult != null) {
