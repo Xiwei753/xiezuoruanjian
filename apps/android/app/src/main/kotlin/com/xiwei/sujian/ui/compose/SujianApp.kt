@@ -20,6 +20,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.data.SettingsRepository
+import com.xiwei.sujian.data.SyncChangeBus
 import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.data.WorkspaceUseCase
 import com.xiwei.sujian.data.BridgeProvider
@@ -77,6 +78,24 @@ fun SujianApp(
 
     val activity = LocalContext.current as? androidx.activity.ComponentActivity
     var foldingFeatures by remember { mutableStateOf<List<androidx.window.layout.FoldingFeature>>(emptyList()) }
+
+    if (activity != null) {
+        val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+        DisposableEffect(lifecycleOwner) {
+            val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+                if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                    if (SyncChangeBus.consumeChanged()) {
+                        vm.refreshProjects()
+                        vm.refreshRecentEdits()
+                    }
+                }
+            }
+            lifecycleOwner.lifecycle.addObserver(observer)
+            onDispose {
+                lifecycleOwner.lifecycle.removeObserver(observer)
+            }
+        }
+    }
 
     if (activity != null) {
         val foldCollector = remember { WindowFoldFeatureCollector(activity) }

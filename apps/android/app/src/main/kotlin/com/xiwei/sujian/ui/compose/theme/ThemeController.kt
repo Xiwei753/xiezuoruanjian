@@ -77,7 +77,8 @@ fun rememberThemeController(context: Context): ThemeController {
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                if (com.xiwei.sujian.data.CoreSettingsEvents.consumeChanged()) {
+                if (com.xiwei.sujian.data.CoreSettingsEvents.consumeChanged() ||
+                    com.xiwei.sujian.data.SyncChangeBus.consumeChanged()) {
                     ThemeStore.onSyncCompleted()
                 }
                 controller.reload()
