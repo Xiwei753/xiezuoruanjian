@@ -13,9 +13,9 @@ data class PointerAndKeyboardState(
 )
 
 fun detectPointerKindsFromInputDevices(context: Context): Set<PointerKind> {
-    val kinds = mutableSetOf(PointerKind.Touch)
+    val kinds = mutableSetOf<PointerKind>()
     val inputManager = context.getSystemService(Context.INPUT_SERVICE) as? InputManager
-    val deviceIds = inputManager?.inputDeviceIds ?: return kinds
+    val deviceIds = inputManager?.inputDeviceIds ?: return setOf(PointerKind.Touch)
     for (id in deviceIds) {
         val device = inputManager.getInputDevice(id) ?: continue
         val sources = device.sources
@@ -32,6 +32,9 @@ fun detectPointerKindsFromInputDevices(context: Context): Set<PointerKind> {
         ) {
             kinds.add(PointerKind.Stylus)
         }
+        if (sources and InputDevice.SOURCE_TOUCHSCREEN == InputDevice.SOURCE_TOUCHSCREEN) {
+            kinds.add(PointerKind.Touch)
+        }
     }
-    return kinds
+    return kinds.ifEmpty { setOf(PointerKind.Touch) }
 }

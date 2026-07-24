@@ -89,16 +89,22 @@ class SujianAppViewModel(
     fun selectProject(projectId: String) {
         currentProjectId = projectId
         savedStateHandle["currentProjectId"] = projectId
-        viewModelScope.launch {
-            val title = withContext(Dispatchers.IO) {
-                try {
-                    workspaceUseCase?.getProjectTitle(projectId) ?: ""
-                } catch (_: Exception) {
-                    ""
+        val cachedProject = projects.find { it.id == projectId }
+        if (cachedProject != null) {
+            currentProjectTitle = cachedProject.title
+            savedStateHandle["currentProjectTitle"] = cachedProject.title
+        } else {
+            viewModelScope.launch {
+                val title = withContext(Dispatchers.IO) {
+                    try {
+                        workspaceUseCase?.getProjectTitle(projectId) ?: ""
+                    } catch (_: Exception) {
+                        ""
+                    }
                 }
+                currentProjectTitle = title
+                savedStateHandle["currentProjectTitle"] = title
             }
-            currentProjectTitle = title
-            savedStateHandle["currentProjectTitle"] = title
         }
     }
 

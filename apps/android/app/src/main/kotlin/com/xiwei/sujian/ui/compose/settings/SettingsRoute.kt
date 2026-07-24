@@ -23,7 +23,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
+import com.xiwei.sujian.data.SaveField
 import com.xiwei.sujian.data.SettingsRepository
+import com.xiwei.sujian.data.SettingsSaveResult
 import com.xiwei.sujian.designsystem.component.SujianListItem
 import com.xiwei.sujian.designsystem.layout.SujianListDetailScaffold
 import com.xiwei.sujian.model.LocalSettings
@@ -89,34 +91,43 @@ class SettingsViewModel : ViewModel() {
 
     private suspend fun executeSave(snapshot: SettingsUiState) {
         val repo = settingsRepo ?: return
-        var failedResId: Int? = null
+        var failedField: SaveField? = null
 
-        val settingsOk = withContext(Dispatchers.IO) { repo.saveLocalSettings(snapshot.settings) }
-        if (settingsOk) {
-            com.xiwei.sujian.ui.compose.theme.ThemeStore.reload()
-        } else {
-            failedResId = R.string.save_local_settings_failed
+        val settingsResult = withContext(Dispatchers.IO) { repo.saveLocalSettings(snapshot.settings) }
+        when (settingsResult) {
+            is SettingsSaveResult.Success -> {
+                com.xiwei.sujian.ui.compose.theme.ThemeStore.reload()
+            }
+            is SettingsSaveResult.Failed -> {
+                if (failedField == null) failedField = settingsResult.field
+            }
         }
 
-        val fontSizeOk = withContext(Dispatchers.IO) { repo.setFontSize(snapshot.fontSize) }
-        if (!fontSizeOk && failedResId == null) {
-            failedResId = R.string.save_font_size_failed
+        val fontSizeResult = withContext(Dispatchers.IO) { repo.setFontSize(snapshot.fontSize) }
+        if (failedField == null && fontSizeResult is SettingsSaveResult.Failed) {
+            failedField = fontSizeResult.field
         }
 
-        val syncConfigOk = withContext(Dispatchers.IO) { repo.saveSyncConfig(snapshot.syncConfig) }
-        if (!syncConfigOk && failedResId == null) {
-            failedResId = R.string.save_sync_config_failed
+        val syncConfigResult = withContext(Dispatchers.IO) { repo.saveSyncConfig(snapshot.syncConfig) }
+        if (failedField == null && syncConfigResult is SettingsSaveResult.Failed) {
+            failedField = syncConfigResult.field
         }
 
-        val syncSecretsOk = withContext(Dispatchers.IO) { repo.saveSyncSecrets(snapshot.syncSecrets) }
-        if (!syncSecretsOk && failedResId == null) {
-            failedResId = R.string.save_sync_secrets_failed
+        val syncSecretsResult = withContext(Dispatchers.IO) { repo.saveSyncSecrets(snapshot.syncSecrets) }
+        if (failedField == null && syncSecretsResult is SettingsSaveResult.Failed) {
+            failedField = syncSecretsResult.field
         }
 
-        if (failedResId != null) {
+        if (failedField != null) {
             refreshSaveableFieldsFromRepository()
-            _uiState.update { it.copy(saveErrorResId = failedResId) }
-            _saveFailureEvents.send(failedResId)
+            val errorResId = when (failedField) {
+                SaveField.LOCAL_SETTINGS -> R.string.save_local_settings_failed
+                SaveField.FONT_SIZE -> R.string.save_font_size_failed
+                SaveField.SYNC_CONFIG -> R.string.save_sync_config_failed
+                SaveField.SYNC_SECRETS -> R.string.save_sync_secrets_failed
+            }
+            _uiState.update { it.copy(saveErrorResId = errorResId) }
+            _saveFailureEvents.send(errorResId)
         } else {
             _uiState.update { it.copy(saveErrorResId = null) }
         }
@@ -145,9 +156,9 @@ class SettingsViewModel : ViewModel() {
     fun handleIntent(intent: SettingsIntent) {
         when (intent) {
             is SettingsIntent.UpdateLocal -> {
-                val current = _uiState.value.settings
-                val updated = intent.transform(current)
-                _uiState.update { it.copy(settings = updated) }
+                _uiState.update { current ->
+                    current.copy(settings = intent.transform(current.settings))
+                }
                 saveChannel.trySend(_uiState.value)
             }
             is SettingsIntent.UpdateFontSize -> {
@@ -234,6 +245,8 @@ fun SettingsRoute(
     onNavigateBack: (() -> Unit)? = null,
     onNavigateToDetail: ((SettingsSection) -> Unit)? = null,
     initialSection: SettingsSection? = null,
+    selectedSection: SettingsSection? = null,
+    onSectionChange: ((SettingsSection) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -261,7 +274,7 @@ fun SettingsRoute(
         return
     }
 
-    if (initialSection != null) {
+    if (initialSection != null && selectedSection == null) {
         BackHandler(enabled = onNavigateBack != null) {
             onNavigateBack?.invoke()
         }
@@ -270,6 +283,27 @@ fun SettingsRoute(
             state = uiState,
             onIntent = vm::handleIntent,
             modifier = modifier,
+        )
+        androidx.compose.material3.SnackbarHost(hostState = snackbarHostState)
+        return
+    }
+
+    if (selectedSection != null && onSectionChange != null) {
+        SujianListDetailScaffold<SettingsSelection>(
+            modifier = modifier,
+            listPane = {
+                SettingsListPane(
+                    onNavigateToDetail = onSectionChange,
+                    selectedSection = selectedSection,
+                )
+            },
+            detailPane = {
+                SettingsDetailPane(
+                    section = selectedSection,
+                    state = uiState,
+                    onIntent = vm::handleIntent,
+                )
+            },
         )
         androidx.compose.material3.SnackbarHost(hostState = snackbarHostState)
         return

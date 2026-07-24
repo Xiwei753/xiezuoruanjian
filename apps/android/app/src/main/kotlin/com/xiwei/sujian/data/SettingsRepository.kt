@@ -63,7 +63,7 @@ class SettingsRepository(context: Context) {
         )
     }
 
-    fun saveLocalSettings(settings: LocalSettings): Boolean {
+    fun saveLocalSettings(settings: LocalSettings): SettingsSaveResult {
         val effectiveVerbose = if (settings.diagnosticsEnabled) settings.diagnosticsVerbose else false
         diagPrefs.edit()
             .putBoolean("diagnostics_enabled", settings.diagnosticsEnabled)
@@ -75,13 +75,13 @@ class SettingsRepository(context: Context) {
         return when (val result = settingsBridge.saveLocalSettings(coreSettings)) {
             is BridgeResult.Success -> {
                 CoreSettingsEvents.record(result.envelope)
-                result.data
+                SettingsSaveResult.Success
             }
             is BridgeResult.Error -> {
                 warn("Failed to save local settings: ${result.message}")
-                false
+                SettingsSaveResult.Failed(SaveField.LOCAL_SETTINGS)
             }
-            BridgeResult.NotLoaded -> false
+            BridgeResult.NotLoaded -> SettingsSaveResult.Failed(SaveField.LOCAL_SETTINGS)
         }
     }
 
@@ -97,17 +97,17 @@ class SettingsRepository(context: Context) {
         }
     }
 
-    fun saveSyncableSettings(settings: SyncableSettings): Boolean {
+    fun saveSyncableSettings(settings: SyncableSettings): SettingsSaveResult {
         return when (val result = settingsBridge.saveSyncableSettings(settings)) {
             is BridgeResult.Success -> {
                 CoreSettingsEvents.record(result.envelope)
-                result.data
+                SettingsSaveResult.Success
             }
             is BridgeResult.Error -> {
                 warn("Failed to save syncable settings: ${result.message}")
-                false
+                SettingsSaveResult.Failed(SaveField.FONT_SIZE)
             }
-            BridgeResult.NotLoaded -> false
+            BridgeResult.NotLoaded -> SettingsSaveResult.Failed(SaveField.FONT_SIZE)
         }
     }
 
@@ -123,7 +123,7 @@ class SettingsRepository(context: Context) {
         return 16f
     }
 
-    fun setFontSize(fontSize: Float): Boolean {
+    fun setFontSize(fontSize: Float): SettingsSaveResult {
         val syncable = getSyncableSettings()
         return saveSyncableSettings(syncable.copy(fontSize = fontSize.toDouble()))
     }
@@ -150,17 +150,17 @@ class SettingsRepository(context: Context) {
         }
     }
 
-    fun saveSyncConfig(config: SyncConfig): Boolean {
+    fun saveSyncConfig(config: SyncConfig): SettingsSaveResult {
         return when (val result = syncBridge.saveSyncConfig(config)) {
             is BridgeResult.Success -> {
                 AutoSyncScheduler.scheduleFromSettings(appContext)
-                result.data
+                SettingsSaveResult.Success
             }
             is BridgeResult.Error -> {
                 warn("Failed to save sync config: ${result.message}")
-                false
+                SettingsSaveResult.Failed(SaveField.SYNC_CONFIG)
             }
-            BridgeResult.NotLoaded -> false
+            BridgeResult.NotLoaded -> SettingsSaveResult.Failed(SaveField.SYNC_CONFIG)
         }
     }
 
@@ -175,14 +175,14 @@ class SettingsRepository(context: Context) {
         }
     }
 
-    fun saveSyncSecrets(secrets: SyncSecrets): Boolean {
+    fun saveSyncSecrets(secrets: SyncSecrets): SettingsSaveResult {
         return when (val result = syncBridge.saveSyncSecrets(secrets)) {
-            is BridgeResult.Success -> result.data
+            is BridgeResult.Success -> SettingsSaveResult.Success
             is BridgeResult.Error -> {
                 warn("Failed to save sync secrets: ${result.message}")
-                false
+                SettingsSaveResult.Failed(SaveField.SYNC_SECRETS)
             }
-            BridgeResult.NotLoaded -> false
+            BridgeResult.NotLoaded -> SettingsSaveResult.Failed(SaveField.SYNC_SECRETS)
         }
     }
 

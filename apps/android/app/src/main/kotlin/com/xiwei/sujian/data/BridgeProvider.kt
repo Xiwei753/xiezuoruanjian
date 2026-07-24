@@ -58,27 +58,16 @@ object BridgeProvider {
             .build()
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                updateNetworkStateFromSystem(context, bridge)
             }
 
             override fun onLost(network: Network) {
-                updateNetworkStateFromSystem(context, bridge)
             }
 
             override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
-                updateNetworkStateFromSystem(context, bridge)
             }
         }
         cm.registerNetworkCallback(request, callback)
         networkCallbackRegistered = true
-    }
-
-    private fun updateNetworkStateFromSystem(context: Context, bridge: AppServiceBridge) {
-        val (isConnected, isMetered) = detectNetworkState(context)
-        try {
-            bridge.holder.service.updateNetworkState(isConnected, isMetered, null, null)
-        } catch (_: Exception) {
-        }
     }
 
     fun detectNetworkState(context: Context): Pair<Boolean, Boolean> {

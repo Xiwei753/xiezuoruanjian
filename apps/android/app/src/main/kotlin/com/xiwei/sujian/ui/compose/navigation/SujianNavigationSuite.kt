@@ -12,6 +12,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
@@ -206,27 +210,50 @@ fun SujianNavigationSuite(
                                 }
                                 is SujianRoute.StarMap -> StarMapScreen()
                                 is SujianRoute.Stats -> StatsScreen()
-                                is SujianRoute.Settings -> SettingsRoute(
-                                    onNavigateToDetail = { section ->
-                                        backStack.add(SujianRoute.SettingsDetail(section))
-                                    },
-                                    onNavigateBack = {
-                                        if (backStack.size > 1) {
-                                            backStack.removeLastOrNull()
-                                        }
-                                    },
-                                )
-                                is SujianRoute.SettingsDetail -> SettingsRoute(
-                                    onNavigateToDetail = if (isWideScreen) { section ->
-                                        backStack.add(SujianRoute.SettingsDetail(section))
-                                    } else null,
-                                    onNavigateBack = {
-                                        if (backStack.size > 1) {
-                                            backStack.removeLastOrNull()
-                                        }
-                                    },
-                                    initialSection = route.section,
-                                )
+                                is SujianRoute.Settings -> {
+                                    if (isWideScreen) {
+                                        var section by remember { mutableStateOf(SettingsSection.Appearance) }
+                                        SettingsRoute(
+                                            selectedSection = section,
+                                            onSectionChange = { section = it },
+                                            onNavigateBack = {
+                                                if (backStack.size > 1) {
+                                                    backStack.removeLastOrNull()
+                                                }
+                                            },
+                                        )
+                                    } else {
+                                        SettingsRoute(
+                                            onNavigateToDetail = { section ->
+                                                backStack.add(SujianRoute.SettingsDetail(section))
+                                            },
+                                            onNavigateBack = {
+                                                if (backStack.size > 1) {
+                                                    backStack.removeLastOrNull()
+                                                }
+                                            },
+                                        )
+                                    }
+                                }
+                                is SujianRoute.SettingsDetail -> {
+                                    if (isWideScreen) {
+                                        var section by remember { mutableStateOf(route.section) }
+                                        SettingsRoute(
+                                            selectedSection = section,
+                                            onSectionChange = { section = it },
+                                            initialSection = route.section,
+                                        )
+                                    } else {
+                                        SettingsRoute(
+                                            onNavigateBack = {
+                                                if (backStack.size > 1) {
+                                                    backStack.removeLastOrNull()
+                                                }
+                                            },
+                                            initialSection = route.section,
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
