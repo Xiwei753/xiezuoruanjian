@@ -15,8 +15,8 @@ import org.junit.Assert
 import org.junit.rules.TestRule
 import org.junit.runners.model.Statement
 import org.junit.runner.Description
-import java.io.File
 import java.util.UUID
+import java.io.File
 
 class TestSession private constructor(
     val testRootDir: File,
@@ -88,6 +88,7 @@ class TestSession private constructor(
     }
 
     fun restartRuntimeAndActivity() {
+        closeActivity()
         depsHolder.releaseRuntime()
         depsHolder = TestSujianAppDependencies(
             context,
@@ -96,6 +97,7 @@ class TestSession private constructor(
             prefsSuffix = prefsSuffix
         )
         SujianAppDependencies.setTestProvider { _ -> depsHolder }
+        launchActivity()
     }
 
     fun release() {

@@ -1,20 +1,24 @@
 package com.xiwei.sujian.workspace
 
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
+import androidx.test.espresso.Espresso
+import androidx.test.espresso.matcher.ViewMatchers
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.xiwei.sujian.ui.MainActivity
+import com.xiwei.sujian.R
 import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import com.xiwei.sujian.support.AndroidTestEnvironment
 import com.xiwei.sujian.support.ComposeWait
+import com.xiwei.sujian.support.EditorCommitTextAction
 import com.xiwei.sujian.support.TestSession
-import com.xiwei.sujian.R
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
@@ -23,7 +27,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class ChapterLifecycleTest {
 
-    private val _composeTestRule = createAndroidComposeRule<MainActivity>()
+    private val _composeTestRule = createEmptyComposeRule()
 
     @get:Rule
     val ruleChain: RuleChain = RuleChain
@@ -32,7 +36,13 @@ class ChapterLifecycleTest {
 
     private val composeTestRule get() = _composeTestRule
 
-    private fun getSession(): TestSession = AndroidTestEnvironment.requireCurrentSession()
+    private lateinit var session: TestSession
+
+    @Before
+    fun setUp() {
+        session = AndroidTestEnvironment.requireCurrentSession()
+        session.launchActivity()
+    }
 
     private fun initTestData(): AndroidTestEnvironment.TestProjectData {
         return AndroidTestEnvironment.ensureTestProjectAndVolume(
@@ -90,9 +100,7 @@ class ChapterLifecycleTest {
 
     @Test
     fun createTwoChapters_canSwitchBetween() {
-        val session = getSession()
         val testData = initTestData()
-        val repo = session.deps.workspaceRepository
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationWorks)
         composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationWorks).performClick()
@@ -133,7 +141,7 @@ class ChapterLifecycleTest {
 
         composeTestRule.onNodeWithText("交替章节A").assertIsDisplayed()
 
-        androidx.test.espresso.Espresso.pressBack()
+        Espresso.pressBack()
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList, timeoutMs = 5_000)
 
@@ -152,6 +160,94 @@ class ChapterLifecycleTest {
         assertNotEquals("Chapters A and B should have different target IDs", targetIdA, targetIdB)
     }
 
+    @Test
+    fun twoChapters_textIsolation_noCrossContamination() {
+        val testData = initTestData()
+
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationWorks)
+        composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationWorks).performClick()
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList)
+        navigateToTestVolume(testData)
+
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceCreateChapter, timeoutMs = 15_000)
+        composeTestRule.onNodeWithTag(SujianSemanticIds.WorkspaceCreateChapter).performClick()
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.ChapterTitleInput)
+        composeTestRule.onNodeWithTag(SujianSemanticIds.ChapterTitleInput).performTextInput("正文隔离A")
+        composeTestRule.onNodeWithTag(SujianSemanticIds.DialogConfirm).performClick()
+        val chapterAId = waitForChapterByTitle("正文隔离A", testData)
+
+        composeTestRule.onNodeWithTag(SujianSemanticIds.WorkspaceCreateChapter).performClick()
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.ChapterTitleInput)
+        composeTestRule.onNodeWithTag(SujianSemanticIds.ChapterTitleInput).performTextInput("正文隔离B")
+        composeTestRule.onNodeWithTag(SujianSemanticIds.DialogConfirm).performClick()
+        val chapterBId = waitForChapterByTitle("正文隔离B", testData)
+
+        composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterAId)).performClick()
+        waitForEditorBoundToChapter(testData.projectId, testData.volumeId, chapterAId, "正文隔离A")
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("正文-A"))
+        ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
+
+        Espresso.pressBack()
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList, timeoutMs = 5_000)
+
+        composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterBId)).performClick()
+        waitForEditorBoundToChapter(testData.projectId, testData.volumeId, chapterBId, "正文隔离B")
+
+        val viewB = session.withActivity { it.findViewById<SujianEditorView>(R.id.editor_content) }
+        assertEquals(
+            "Chapter B should have empty content when first opened",
+            "",
+            viewB.getDisplayText()
+        )
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("正文-B"))
+        ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
+
+        Espresso.pressBack()
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList, timeoutMs = 5_000)
+
+        composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterAId)).performClick()
+        waitForEditorBoundToChapter(testData.projectId, testData.volumeId, chapterAId, "正文隔离A")
+
+        val viewAReopened = session.withActivity { it.findViewById<SujianEditorView>(R.id.editor_content) }
+        assertEquals(
+            "Chapter A content should still be 正文-A after switching back",
+            "正文-A",
+            viewAReopened.getDisplayText()
+        )
+
+        val coordinator = session.deps.coordinator
+        val targetIdA = "chapter-body:${testData.projectId}:${testData.volumeId}:$chapterAId"
+        assertEquals(
+            "activeTargetId should point to chapter A",
+            targetIdA,
+            coordinator.activeTargetId
+        )
+
+        Espresso.pressBack()
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList, timeoutMs = 5_000)
+
+        composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterBId)).performClick()
+        waitForEditorBoundToChapter(testData.projectId, testData.volumeId, chapterBId, "正文隔离B")
+
+        val viewBReopened = session.withActivity { it.findViewById<SujianEditorView>(R.id.editor_content) }
+        assertEquals(
+            "Chapter B content should still be 正文-B after switching back",
+            "正文-B",
+            viewBReopened.getDisplayText()
+        )
+
+        val targetIdB = "chapter-body:${testData.projectId}:${testData.volumeId}:$chapterBId"
+        assertEquals(
+            "activeTargetId should point to chapter B",
+            targetIdB,
+            coordinator.activeTargetId
+        )
+    }
+
     private fun waitForEditorBoundToChapter(
         projectId: String,
         volumeId: String,
@@ -162,7 +258,7 @@ class ChapterLifecycleTest {
         var lastState = "editor missing"
         ComposeWait.waitUntil(composeTestRule, {
             try {
-                val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
+                val view = session.withActivity { it.findViewById<SujianEditorView>(R.id.editor_content) }
                 when {
                     view == null -> { lastState = "editor missing"; false }
                     view.visibility != android.view.View.VISIBLE -> { lastState = "editor not visible"; false }
@@ -177,7 +273,7 @@ class ChapterLifecycleTest {
 
         var lastTargetId: String? = null
         ComposeWait.waitUntil(composeTestRule, {
-            val coordinator = getSession().deps.coordinator
+            val coordinator = AndroidTestEnvironment.requireCurrentSession().deps.coordinator
             lastTargetId = coordinator.activeTargetId
             coordinator.activeTargetId == expectedTargetId
         }, timeoutMs = 10_000, message = { "activeTargetId should be $expectedTargetId but was $lastTargetId for chapter $chapterId" })
@@ -186,8 +282,8 @@ class ChapterLifecycleTest {
     }
 
     private fun waitForChapterByTitle(title: String, testData: AndroidTestEnvironment.TestProjectData): String {
-        val session = getSession()
-        val repo = session.deps.workspaceRepository
+        val s = AndroidTestEnvironment.requireCurrentSession()
+        val repo = s.deps.workspaceRepository
         var chapterId = ""
         ComposeWait.waitUntil(composeTestRule, {
             val chapters = repo.getChapters(testData.projectId, testData.volumeId)

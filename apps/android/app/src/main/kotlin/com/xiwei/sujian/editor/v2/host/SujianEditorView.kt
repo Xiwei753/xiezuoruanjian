@@ -183,6 +183,8 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun getSelectionStart(): Int = pipeline.getSelectionStartUtf8()
     fun getSelectionEnd(): Int = pipeline.getSelectionEndUtf8()
+    fun getSelectionStartUtf16(): Int = pipeline.getSelectionStartUtf16()
+    fun getSelectionEndUtf16(): Int = pipeline.getSelectionEndUtf16()
 
     fun setSelectionRange(start: Int, end: Int) {
         setSelectionTyped(start, end)
