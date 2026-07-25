@@ -18,10 +18,6 @@ import java.util.UUID
 class TestSession private constructor(
     val testRootDir: File,
     val workspaceDir: File,
-    val appDataDir: File,
-    val cacheDir: File,
-    val logDir: File,
-    val noBackupDir: File,
     val deps: TestSujianAppDependencies
 ) {
     companion object {
@@ -33,31 +29,15 @@ class TestSession private constructor(
 
             val workspaceDir = File(testRootDir, "workspace")
             workspaceDir.mkdirs()
-            val appDataDir = File(testRootDir, "app_data")
-            appDataDir.mkdirs()
-            val cacheDir = File(testRootDir, "cache")
-            cacheDir.mkdirs()
-            val logDir = File(testRootDir, "log")
-            logDir.mkdirs()
-            val noBackupDir = File(testRootDir, "no_backup")
-            noBackupDir.mkdirs()
 
             val deps = TestSujianAppDependencies(
                 appContext,
-                workspaceDir.absolutePath,
-                appDataDir.absolutePath,
-                cacheDir.absolutePath,
-                logDir.absolutePath,
-                noBackupDir.absolutePath
+                workspaceDir.absolutePath
             )
 
             return TestSession(
                 testRootDir = testRootDir,
                 workspaceDir = workspaceDir,
-                appDataDir = appDataDir,
-                cacheDir = cacheDir,
-                logDir = logDir,
-                noBackupDir = noBackupDir,
                 deps = deps
             )
         }
