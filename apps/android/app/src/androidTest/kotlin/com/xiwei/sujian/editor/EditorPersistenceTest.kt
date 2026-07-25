@@ -1,6 +1,6 @@
 package com.xiwei.sujian.editor
 
-import androidx.compose.ui.test.junit4.AndroidComposeTestRule
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -8,6 +8,7 @@ import androidx.compose.ui.test.performTextInput
 import androidx.test.espresso.Espresso
 import androidx.test.espresso.matcher.ViewMatchers
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.xiwei.sujian.ui.MainActivity
 import com.xiwei.sujian.R
 import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
@@ -15,20 +16,16 @@ import com.xiwei.sujian.support.AndroidTestEnvironment
 import com.xiwei.sujian.support.ComposeWait
 import com.xiwei.sujian.support.EditorCommitTextAction
 import com.xiwei.sujian.support.TestSession
-import com.xiwei.sujian.ui.MainActivity
 import org.junit.Assert.assertEquals
-import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
-import org.junit.rules.TestRule
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class EditorPersistenceTest {
 
-    private val _composeTestRule: AndroidComposeTestRule<TestRule, MainActivity> =
-        AndroidTestEnvironment.createSessionOwnedComposeRule()
+    private val _composeTestRule = createAndroidComposeRule<MainActivity>()
 
     @get:Rule
     val ruleChain: RuleChain = RuleChain
@@ -37,13 +34,7 @@ class EditorPersistenceTest {
 
     private val composeTestRule get() = _composeTestRule
 
-    private lateinit var session: TestSession
-
-    @Before
-    fun setUp() {
-        session = AndroidTestEnvironment.requireCurrentSession()
-        session.launchActivity()
-    }
+    private fun getSession(): TestSession = AndroidTestEnvironment.requireCurrentSession()
 
     private fun initTestData(): AndroidTestEnvironment.TestProjectData {
         return AndroidTestEnvironment.ensureTestProjectAndVolume(
@@ -53,6 +44,7 @@ class EditorPersistenceTest {
 
     @Test
     fun commitText_persistsAfterReopen() {
+        val session = getSession()
         val testData = initTestData()
         val chapterId = openTestChapter("编辑器持久化章节A", testData)
 
@@ -75,7 +67,7 @@ class EditorPersistenceTest {
 
         ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
 
-        val viewAfterAppend = session.withActivity { it.findViewById<SujianEditorView>(R.id.editor_content) }
+        val viewAfterAppend = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
         assertEquals("第一段测试正文，继续写作", viewAfterAppend.getDisplayText())
 
         session.restartRuntimeAndActivity()
@@ -87,6 +79,7 @@ class EditorPersistenceTest {
 
     @Test
     fun commitText_persistsAfterColdRestart() {
+        val session = getSession()
         val testData = initTestData()
         val chapterId = openTestChapter("编辑器持久化章节B", testData)
 
@@ -104,6 +97,7 @@ class EditorPersistenceTest {
 
     @Test
     fun commitText_unicodeAndMultiline_persists() {
+        val session = getSession()
         val testData = initTestData()
         val chapterId = openTestChapter("编辑器持久化章节C", testData)
 
@@ -113,7 +107,7 @@ class EditorPersistenceTest {
 
         ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
 
-        val viewAfterInput = session.withActivity { it.findViewById<SujianEditorView>(R.id.editor_content) }
+        val viewAfterInput = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
         assertEquals(testText, viewAfterInput.getDisplayText())
 
         session.restartRuntimeAndActivity()
@@ -122,12 +116,13 @@ class EditorPersistenceTest {
 
         waitForEditorContent(testText, testData, chapterId)
 
-        val viewAfterRestart = session.withActivity { it.findViewById<SujianEditorView>(R.id.editor_content) }
+        val viewAfterRestart = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
         assertEquals(testText, viewAfterRestart.getDisplayText())
     }
 
     @Test
     fun commitText_middleInsert_persists() {
+        val session = getSession()
         val testData = initTestData()
         val chapterId = openTestChapter("编辑器中间插入章节", testData)
 
@@ -137,7 +132,7 @@ class EditorPersistenceTest {
 
         ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
 
-        val view = session.withActivity { it.findViewById<SujianEditorView>(R.id.editor_content) }
+        val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
         assertEquals(initialText, view.getDisplayText())
 
         val prefix = "AB"
@@ -178,12 +173,13 @@ class EditorPersistenceTest {
 
         waitForEditorContent(expectedAfterInsert, testData, chapterId)
 
-        val viewAfterRestart = session.withActivity { it.findViewById<SujianEditorView>(R.id.editor_content) }
+        val viewAfterRestart = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
         assertEquals(expectedAfterInsert, viewAfterRestart.getDisplayText())
     }
 
     @Test
     fun commitText_unicodeMiddleInsert_persistsWithOffsets() {
+        val session = getSession()
         val testData = initTestData()
         val chapterId = openTestChapter("编辑器Unicode中间插入章节", testData)
 
@@ -193,7 +189,7 @@ class EditorPersistenceTest {
 
         ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
 
-        val view = session.withActivity { it.findViewById<SujianEditorView>(R.id.editor_content) }
+        val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
         assertEquals(initialText, view.getDisplayText())
 
         val prefix = "你好🙂"
@@ -251,7 +247,7 @@ class EditorPersistenceTest {
 
         waitForEditorContent(expectedAfterInsert, testData, chapterId)
 
-        val viewAfterRestart = session.withActivity { it.findViewById<SujianEditorView>(R.id.editor_content) }
+        val viewAfterRestart = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
         assertEquals(expectedAfterInsert, viewAfterRestart.getDisplayText())
 
         val byteLengthAfterRestart = viewAfterRestart.getDisplayText().toByteArray(Charsets.UTF_8).size
@@ -300,7 +296,7 @@ class EditorPersistenceTest {
         var lastState = "editor missing"
         ComposeWait.waitUntil(composeTestRule, {
             try {
-                val view = session.withActivity { it.findViewById<SujianEditorView>(R.id.editor_content) }
+                val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
                 when {
                     view == null -> { lastState = "editor missing"; false }
                     view.visibility != android.view.View.VISIBLE -> { lastState = "editor not visible"; false }
@@ -329,7 +325,7 @@ class EditorPersistenceTest {
         var lastContent = ""
         ComposeWait.waitUntil(composeTestRule, {
             try {
-                val view = session.withActivity { it.findViewById<SujianEditorView>(R.id.editor_content) }
+                val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
                 if (view == null || !view.isSessionBound) {
                     lastContent = "editor not bound"
                     false

@@ -3,31 +3,28 @@ package com.xiwei.sujian.settings
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
-import androidx.compose.ui.test.junit4.AndroidComposeTestRule
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.xiwei.sujian.ui.MainActivity
 import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.support.AndroidTestEnvironment
 import com.xiwei.sujian.support.ComposeWait
 import com.xiwei.sujian.support.TestSession
-import com.xiwei.sujian.ui.MainActivity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
-import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
-import org.junit.rules.TestRule
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class SettingsPersistenceTest {
 
-    private val _composeTestRule: AndroidComposeTestRule<TestRule, MainActivity> =
-        AndroidTestEnvironment.createSessionOwnedComposeRule()
+    private val _composeTestRule = createAndroidComposeRule<MainActivity>()
 
     @get:Rule
     val ruleChain: RuleChain = RuleChain
@@ -36,13 +33,7 @@ class SettingsPersistenceTest {
 
     private val composeTestRule get() = _composeTestRule
 
-    private lateinit var session: TestSession
-
-    @Before
-    fun setUp() {
-        session = AndroidTestEnvironment.requireCurrentSession()
-        session.launchActivity()
-    }
+    private fun getSession(): TestSession = AndroidTestEnvironment.requireCurrentSession()
 
     private fun navigateToEditorSettings() {
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationSettings)
@@ -58,6 +49,8 @@ class SettingsPersistenceTest {
 
     @Test
     fun typingAnimationToggle_persistsAfterColdRestart() {
+        val session = getSession()
+
         navigateToEditorSettings()
 
         val toggleNode = composeTestRule.onNodeWithTag(SujianSemanticIds.SettingsTypingAnimation)
@@ -106,6 +99,7 @@ class SettingsPersistenceTest {
 
     @Test
     fun fontSizeSlider_persistsAfterColdRestart() {
+        val session = getSession()
         val targetFontSize = 22f
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationSettings)
