@@ -162,6 +162,13 @@ jobs:
       - name: Make build scripts executable
         run: chmod +x tools/build_android.sh tools/android/build_native.sh tools/android/verify_apk_abis.sh
 
+      - name: Generate UniFFI Kotlin bindings
+        run: |
+          UNIFFI_OUT_DIR="apps/android/app/build/generated/writer-uniffi/noAi/kotlin"
+          mkdir -p "$UNIFFI_OUT_DIR"
+          rm -rf "$UNIFFI_OUT_DIR/uniffi"
+          cp -r apps/android/app/src/main/kotlin/com/xiwei/sujian/uniffi/uniffi "$UNIFFI_OUT_DIR/"
+
       - name: Enable KVM group permissions
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
