@@ -545,7 +545,8 @@ class SujianEditorView @JvmOverloads constructor(
 
     // ── #541: Session lifecycle for shared host ──
 
-    private var isSessionBound: Boolean = false
+    var isSessionBound: Boolean = false
+        internal set
     private var currentProfile: TextEditorProfile = TextEditorProfile.DocumentBody
     private val isSecretMode: Boolean
         get() = currentProfile.secretPolicy == com.xiwei.sujian.editor.v2.coordinator.SecretPolicy.MASK_AND_CLEAR_ON_COMMIT

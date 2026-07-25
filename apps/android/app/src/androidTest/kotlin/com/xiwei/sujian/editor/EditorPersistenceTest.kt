@@ -11,9 +11,12 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.xiwei.sujian.ui.MainActivity
 import com.xiwei.sujian.R
 import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
+import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import com.xiwei.sujian.support.AndroidTestEnvironment
 import com.xiwei.sujian.support.ComposeWait
 import com.xiwei.sujian.support.EditorCommitTextAction
+import com.xiwei.sujian.support.TestSession
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
@@ -31,12 +34,22 @@ class EditorPersistenceTest {
 
     private val composeTestRule get() = _composeTestRule
 
+    private fun getSession(): TestSession = AndroidTestEnvironment.requireCurrentSession()
+
     private fun initTestData(): AndroidTestEnvironment.TestProjectData {
+        return AndroidTestEnvironment.ensureTestProjectAndVolume(
+            androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
+        )
+    }
+
+    private fun restartRuntime() {
+        val session = getSession()
+        composeTestRule.activityRule.scenario.close()
+        session.deps.coordinator.releaseHost()
         val ctx = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
-        val provider = com.xiwei.sujian.runtime.SujianAppDependencies.getTestProvider()
-        val testDeps = provider?.invoke(ctx) as? com.xiwei.sujian.support.TestSujianAppDependencies
-            ?: com.xiwei.sujian.support.TestSujianAppDependencies(ctx)
-        return AndroidTestEnvironment.ensureTestProjectAndVolume(ctx, testDeps)
+        val newSession = AndroidTestEnvironment.createSession(ctx)
+        com.xiwei.sujian.runtime.SujianAppDependencies.setTestProvider { _ -> newSession.deps }
+        androidx.test.core.app.ActivityScenario.launch(MainActivity::class.java)
     }
 
     @Test
@@ -47,15 +60,7 @@ class EditorPersistenceTest {
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("第一段测试正文"))
 
-        ComposeWait.waitUntil(composeTestRule, {
-            try {
-                val node = composeTestRule.onNodeWithTag(SujianSemanticIds.EditorSaveStatus)
-                node.assertExists()
-                true
-            } catch (_: Exception) {
-                false
-            }
-        }, timeoutMs = 15_000)
+        ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
 
         Espresso.pressBack()
 
@@ -65,8 +70,8 @@ class EditorPersistenceTest {
 
         ComposeWait.waitUntil(composeTestRule, {
             try {
-                val view = composeTestRule.activity.findViewById<com.xiwei.sujian.editor.v2.host.SujianEditorView>(R.id.editor_content)
-                view != null && view.getDisplayText().contains("第一段测试正文")
+                val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
+                view != null && view.getDisplayText() == "第一段测试正文"
             } catch (_: Exception) {
                 false
             }
@@ -75,22 +80,23 @@ class EditorPersistenceTest {
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("，继续写作"))
 
+        ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
+
+        val viewAfterAppend = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
+        assertEquals("第一段测试正文，继续写作", viewAfterAppend.getDisplayText())
+
+        restartRuntime()
+
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationWorks, timeoutMs = 15_000)
+        composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationWorks).performClick()
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList)
+        navigateToTestVolume(testData)
+        composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterId)).performClick()
+
         ComposeWait.waitUntil(composeTestRule, {
             try {
-                val view = composeTestRule.activity.findViewById<com.xiwei.sujian.editor.v2.host.SujianEditorView>(R.id.editor_content)
-                view != null && view.getDisplayText().contains("第一段测试正文，继续写作")
-            } catch (_: Exception) {
-                false
-            }
-        }, timeoutMs = 15_000)
-
-        val scenario = composeTestRule.activityRule.scenario
-        scenario.recreate()
-
-        ComposeWait.waitUntil(composeTestRule, {
-            try {
-                val view = composeTestRule.activity.findViewById<com.xiwei.sujian.editor.v2.host.SujianEditorView>(R.id.editor_content)
-                view != null && view.getDisplayText().contains("第一段测试正文，继续写作")
+                val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
+                view != null && view.isSessionBound && view.getDisplayText() == "第一段测试正文，继续写作"
             } catch (_: Exception) {
                 false
             }
@@ -98,30 +104,27 @@ class EditorPersistenceTest {
     }
 
     @Test
-    fun commitText_persistsAcrossRecreate() {
+    fun commitText_persistsAfterRestart() {
         val testData = initTestData()
-        openTestChapter("编辑器持久化章节B", testData)
+        val chapterId = openTestChapter("编辑器持久化章节B", testData)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
-            .perform(EditorCommitTextAction.commitText("重建测试正文"))
+            .perform(EditorCommitTextAction.commitText("重启测试正文"))
+
+        ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
+
+        restartRuntime()
+
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationWorks, timeoutMs = 15_000)
+        composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationWorks).performClick()
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList)
+        navigateToTestVolume(testData)
+        composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterId)).performClick()
 
         ComposeWait.waitUntil(composeTestRule, {
             try {
-                val node = composeTestRule.onNodeWithTag(SujianSemanticIds.EditorSaveStatus)
-                node.assertExists()
-                true
-            } catch (_: Exception) {
-                false
-            }
-        }, timeoutMs = 15_000)
-
-        val scenario = composeTestRule.activityRule.scenario
-        scenario.recreate()
-
-        ComposeWait.waitUntil(composeTestRule, {
-            try {
-                val view = composeTestRule.activity.findViewById<com.xiwei.sujian.editor.v2.host.SujianEditorView>(R.id.editor_content)
-                view != null && view.getDisplayText().contains("重建测试正文")
+                val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
+                view != null && view.isSessionBound && view.getDisplayText() == "重启测试正文"
             } catch (_: Exception) {
                 false
             }
@@ -131,28 +134,72 @@ class EditorPersistenceTest {
     @Test
     fun commitText_unicodeAndMultiline_persists() {
         val testData = initTestData()
-        openTestChapter("编辑器持久化章节C", testData)
+        val chapterId = openTestChapter("编辑器持久化章节C", testData)
 
         val testText = "你好，素笺。\n第二行🙂"
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText(testText))
 
+        ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
+
+        val viewAfterInput = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
+        assertEquals(testText, viewAfterInput.getDisplayText())
+
+        restartRuntime()
+
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationWorks, timeoutMs = 15_000)
+        composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationWorks).performClick()
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList)
+        navigateToTestVolume(testData)
+        composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterId)).performClick()
+
         ComposeWait.waitUntil(composeTestRule, {
             try {
-                val view = composeTestRule.activity.findViewById<com.xiwei.sujian.editor.v2.host.SujianEditorView>(R.id.editor_content)
-                view != null && view.getDisplayText().contains("素笺") && view.getDisplayText().contains("🙂")
+                val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
+                view != null && view.isSessionBound && view.getDisplayText() == testText
             } catch (_: Exception) {
                 false
             }
         }, timeoutMs = 15_000)
 
-        val scenario = composeTestRule.activityRule.scenario
-        scenario.recreate()
+        val viewAfterRestart = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
+        assertEquals(testText, viewAfterRestart.getDisplayText())
+    }
+
+    @Test
+    fun commitText_middleInsert_persists() {
+        val testData = initTestData()
+        val chapterId = openTestChapter("编辑器中间插入章节", testData)
+
+        val initialText = "ABCDE"
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText(initialText))
+
+        ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
+
+        val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
+        assertEquals(initialText, view.getDisplayText())
+
+        val insertOffset = "AB".toByteArray(Charsets.UTF_8).size
+        view.replaceRangeTyped(insertOffset, insertOffset, "XY", "", uniffi.writer_core.EditorTransactionCauseDto.TYPING)
+
+        ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
+
+        val expectedAfterInsert = "ABXYCDE"
+        assertEquals(expectedAfterInsert, view.getDisplayText())
+
+        restartRuntime()
+
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationWorks, timeoutMs = 15_000)
+        composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationWorks).performClick()
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList)
+        navigateToTestVolume(testData)
+        composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterId)).performClick()
 
         ComposeWait.waitUntil(composeTestRule, {
             try {
-                val view = composeTestRule.activity.findViewById<com.xiwei.sujian.editor.v2.host.SujianEditorView>(R.id.editor_content)
-                view != null && view.getDisplayText().contains("素笺") && view.getDisplayText().contains("🙂")
+                val v = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
+                v != null && v.isSessionBound && v.getDisplayText() == expectedAfterInsert
             } catch (_: Exception) {
                 false
             }
@@ -180,8 +227,8 @@ class EditorPersistenceTest {
 
         ComposeWait.waitUntil(composeTestRule, {
             try {
-                val view = composeTestRule.activity.findViewById<com.xiwei.sujian.editor.v2.host.SujianEditorView>(R.id.editor_content)
-                view != null && view.visibility == android.view.View.VISIBLE
+                val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
+                view != null && view.visibility == android.view.View.VISIBLE && view.isSessionBound
             } catch (_: Exception) {
                 false
             }
@@ -191,11 +238,8 @@ class EditorPersistenceTest {
     }
 
     private fun waitForChapterByTitle(title: String, testData: AndroidTestEnvironment.TestProjectData): String {
-        val ctx = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
-        val provider = com.xiwei.sujian.runtime.SujianAppDependencies.getTestProvider()
-        val testDeps = provider?.invoke(ctx) as? com.xiwei.sujian.support.TestSujianAppDependencies
-            ?: com.xiwei.sujian.support.TestSujianAppDependencies(ctx)
-        val repo = testDeps.workspaceRepository
+        val session = getSession()
+        val repo = session.deps.workspaceRepository
         var chapterId = ""
         ComposeWait.waitUntil(composeTestRule, {
             val chapters = repo.getChapters(testData.projectId, testData.volumeId)
@@ -215,11 +259,13 @@ class EditorPersistenceTest {
                 composeTestRule.onNodeWithTag(volumeTag).assertExists()
                 true
             } catch (_: AssertionError) {
-                val projectTitle = testData.projectTitle
                 try {
-                    composeTestRule.onNodeWithText(projectTitle).performClick()
-                } catch (_: Exception) { }
-                Thread.sleep(500)
+                    composeTestRule.onNodeWithText(testData.projectTitle).performClick()
+                } catch (e: Exception) {
+                    throw AssertionError(
+                        "navigateToTestVolume: Failed to click project '${testData.projectTitle}': ${e.message}"
+                    )
+                }
                 try {
                     composeTestRule.onNodeWithTag(volumeTag).assertExists()
                     true
@@ -228,8 +274,6 @@ class EditorPersistenceTest {
                 }
             }
         }, timeoutMs = 15_000)
-        try {
-            composeTestRule.onNodeWithTag(volumeTag).performClick()
-        } catch (_: Exception) { }
+        composeTestRule.onNodeWithTag(volumeTag).performClick()
     }
 }

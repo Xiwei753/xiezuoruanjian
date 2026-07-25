@@ -21,10 +21,31 @@ object ComposeWait {
                 return node
             } catch (e: AssertionError) {
                 lastException = e
-                Thread.sleep(100)
+                rule.mainClock.advanceTimeByFrame()
             }
         }
         throw lastException ?: AssertionError("Timed out waiting for tag: $tag")
+    }
+
+    fun waitForSaveStatus(
+        rule: ComposeTestRule,
+        expectedState: String,
+        timeoutMs: Long = 15_000L
+    ) {
+        waitUntil(rule, {
+            try {
+                val node = rule.onNode(androidx.compose.ui.test.hasTestTag(
+                    com.xiwei.sujian.designsystem.testing.SujianSemanticIds.EditorSaveStatus
+                ))
+                node.assertExists()
+                val stateDesc = node.fetchSemanticsNode().config[
+                    androidx.compose.ui.semantics.SemanticsProperties.StateDescription
+                ]
+                stateDesc == expectedState
+            } catch (_: Exception) {
+                false
+            }
+        }, timeoutMs)
     }
 
     fun waitUntil(

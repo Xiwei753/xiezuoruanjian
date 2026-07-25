@@ -11,6 +11,7 @@ import com.xiwei.sujian.ui.MainActivity
 import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.support.AndroidTestEnvironment
 import com.xiwei.sujian.support.ComposeWait
+import com.xiwei.sujian.support.TestSession
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
@@ -28,10 +29,20 @@ class SettingsPersistenceTest {
 
     private val composeTestRule get() = _composeTestRule
 
-    @Test
-    fun typingAnimationToggle_persistsAcrossRecreate() {
-        val scenario = composeTestRule.activityRule.scenario
+    private fun getSession(): TestSession = AndroidTestEnvironment.requireCurrentSession()
 
+    private fun restartRuntime() {
+        val session = getSession()
+        composeTestRule.activityRule.scenario.close()
+        session.deps.coordinator.releaseHost()
+        val ctx = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
+        val newSession = AndroidTestEnvironment.createSession(ctx)
+        com.xiwei.sujian.runtime.SujianAppDependencies.setTestProvider { _ -> newSession.deps }
+        androidx.test.core.app.ActivityScenario.launch(MainActivity::class.java)
+    }
+
+    @Test
+    fun typingAnimationToggle_persistsAfterRestart() {
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationSettings)
         composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationSettings).performClick()
 
@@ -72,7 +83,15 @@ class SettingsPersistenceTest {
             }
         }, timeoutMs = 5_000)
 
-        scenario.recreate()
+        restartRuntime()
+
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationSettings, timeoutMs = 15_000)
+        composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationSettings).performClick()
+
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.SettingsScreen)
+
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.SettingsNavEditor)
+        composeTestRule.onNodeWithTag(SujianSemanticIds.SettingsNavEditor).performClick()
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.SettingsTypingAnimation, timeoutMs = 15_000)
         val restoredNode = composeTestRule.onNodeWithTag(SujianSemanticIds.SettingsTypingAnimation)
@@ -85,8 +104,9 @@ class SettingsPersistenceTest {
     }
 
     @Test
-    fun fontSizeSlider_persistsAcrossRecreate() {
-        val scenario = composeTestRule.activityRule.scenario
+    fun fontSizeSlider_persistsAfterRestart() {
+        val session = getSession()
+        val initialFontSize = session.deps.settingsRepository.getEffectiveFontSize()
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationSettings)
         composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationSettings).performClick()
@@ -99,9 +119,24 @@ class SettingsPersistenceTest {
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.SettingsFontSize)
         composeTestRule.onNodeWithTag(SujianSemanticIds.SettingsFontSize).assertIsDisplayed()
 
-        scenario.recreate()
+        val targetFontSize = 22f
+        assert(initialFontSize != targetFontSize) {
+            "Initial font size ($initialFontSize) should differ from target ($targetFontSize) for a meaningful test"
+        }
 
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.SettingsFontSize, timeoutMs = 15_000)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.SettingsFontSize).assertIsDisplayed()
+        session.deps.settingsRepository.setFontSize(targetFontSize)
+
+        ComposeWait.waitUntil(composeTestRule, {
+            val currentFontSize = session.deps.settingsRepository.getEffectiveFontSize()
+            currentFontSize == targetFontSize
+        }, timeoutMs = 5_000)
+
+        restartRuntime()
+
+        val newSession = AndroidTestEnvironment.requireCurrentSession()
+        val restoredFontSize = newSession.deps.settingsRepository.getEffectiveFontSize()
+        assert(restoredFontSize == targetFontSize) {
+            "Font size after restart should be $targetFontSize but was $restoredFontSize"
+        }
     }
 }

@@ -27,6 +27,8 @@ import androidx.compose.ui.layout.positionInWindow
 
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
@@ -184,6 +186,13 @@ fun WritingPane(
                 style = MaterialTheme.typography.titleSmall,
                 modifier = Modifier.weight(1f)
             )
+            val statusSemanticValue = when (uiState.saveStatus) {
+                SaveStatus.Idle -> "idle"
+                SaveStatus.Unsaved -> "unsaved"
+                SaveStatus.Saving -> "saving"
+                SaveStatus.Saved -> "saved"
+                SaveStatus.SaveFailed -> "failed"
+            }
             val statusText = when (uiState.saveStatus) {
                 SaveStatus.Idle -> ""
                 SaveStatus.Unsaved -> stringResource(id = R.string.status_unsaved)
@@ -191,9 +200,13 @@ fun WritingPane(
                 SaveStatus.Saved -> stringResource(id = R.string.status_saved)
                 SaveStatus.SaveFailed -> stringResource(id = R.string.status_save_failed)
             }
-            if (statusText.isNotEmpty()) {
-                Text(statusText, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag(SujianSemanticIds.EditorSaveStatus))
-            }
+            Text(
+                text = statusText,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier
+                    .testTag(SujianSemanticIds.EditorSaveStatus)
+                    .semantics { this.stateDescription = statusSemanticValue }
+            )
         }
 
         if (uiState.wordCount > 0) {

@@ -15,19 +15,87 @@ import org.junit.runner.Description
 import java.io.File
 import java.util.UUID
 
+class TestSession private constructor(
+    val testRootDir: File,
+    val workspaceDir: File,
+    val appDataDir: File,
+    val cacheDir: File,
+    val logDir: File,
+    val noBackupDir: File,
+    val deps: TestSujianAppDependencies
+) {
+    companion object {
+        fun create(context: Context): TestSession {
+            val appContext = context.applicationContext
+            val sessionId = UUID.randomUUID().toString()
+            val testRootDir = File(appContext.cacheDir, "test_session_$sessionId")
+            testRootDir.mkdirs()
+
+            val workspaceDir = File(testRootDir, "workspace")
+            workspaceDir.mkdirs()
+            val appDataDir = File(testRootDir, "app_data")
+            appDataDir.mkdirs()
+            val cacheDir = File(testRootDir, "cache")
+            cacheDir.mkdirs()
+            val logDir = File(testRootDir, "log")
+            logDir.mkdirs()
+            val noBackupDir = File(testRootDir, "no_backup")
+            noBackupDir.mkdirs()
+
+            val deps = TestSujianAppDependencies(
+                appContext,
+                workspaceDir.absolutePath,
+                appDataDir.absolutePath,
+                cacheDir.absolutePath,
+                logDir.absolutePath,
+                noBackupDir.absolutePath
+            )
+
+            return TestSession(
+                testRootDir = testRootDir,
+                workspaceDir = workspaceDir,
+                appDataDir = appDataDir,
+                cacheDir = cacheDir,
+                logDir = logDir,
+                noBackupDir = noBackupDir,
+                deps = deps
+            )
+        }
+    }
+
+    fun release() {
+        deps.release()
+        try {
+            testRootDir.deleteRecursively()
+        } catch (_: Exception) { }
+    }
+}
+
 class TestSujianAppDependencies(
-    context: Context
+    context: Context,
+    workspacePath: String? = null,
+    appDataPath: String? = null,
+    cachePath: String? = null,
+    logPath: String? = null,
+    noBackupPath: String? = null
 ) : SujianAppDependencies {
     private val appContext = context.applicationContext
-    private val testWorkspaceDir = File(appContext.cacheDir, "test_workspace_${UUID.randomUUID()}")
+    private val testWorkspaceDir = File(
+        workspacePath ?: "${appContext.cacheDir}/test_workspace_${UUID.randomUUID()}"
+    )
+    private val testAppDataDir = appDataPath ?: appContext.filesDir.absolutePath
+    private val testCacheDir = cachePath ?: appContext.cacheDir.absolutePath
+    private val testLogDir = logPath ?: "${appContext.cacheDir.absolutePath}/log"
+    private val testNoBackupDir = noBackupPath ?: appContext.noBackupFilesDir.absolutePath
+
     private val testHolder: WriterAppServiceHolder = WriterAppServiceHolder(
         workspacePath = testWorkspaceDir.absolutePath,
         platformInit = PlatformInitDto(
             platform = PlatformDto.ANDROID,
-            appDataDir = appContext.filesDir.absolutePath,
-            cacheDir = appContext.cacheDir.absolutePath,
-            logDir = "${appContext.cacheDir.absolutePath}/log",
-            noBackupDir = appContext.noBackupFilesDir.absolutePath,
+            appDataDir = testAppDataDir,
+            cacheDir = testCacheDir,
+            logDir = testLogDir,
+            noBackupDir = testNoBackupDir,
             deviceId = "test-${UUID.randomUUID()}",
             appVersion = "test",
             locale = java.util.Locale.getDefault().toLanguageTag(),
@@ -57,18 +125,23 @@ class TestSujianAppDependencies(
 }
 
 object AndroidTestEnvironment {
-    fun create(context: Context): TestSujianAppDependencies {
-        return TestSujianAppDependencies(context)
+    @Volatile
+    private var currentSession: TestSession? = null
+
+    fun requireCurrentSession(): TestSession {
+        return currentSession
+            ?: throw IllegalStateException("No TestSession active. Ensure TestDependenciesRule is applied.")
     }
 
-    fun installTestDependencies() {
-        SujianAppDependencies.setTestProvider { ctx ->
-            TestSujianAppDependencies(ctx)
-        }
+    fun createSession(context: Context): TestSession {
+        val session = TestSession.create(context)
+        currentSession = session
+        return session
     }
 
-    fun clearTestDependencies() {
-        SujianAppDependencies.setTestProvider(null)
+    fun releaseSession() {
+        currentSession?.release()
+        currentSession = null
     }
 
     data class TestProjectData(
@@ -78,8 +151,9 @@ object AndroidTestEnvironment {
         val volumeTitle: String,
     )
 
-    fun ensureTestProjectAndVolume(context: Context, deps: TestSujianAppDependencies? = null): TestProjectData {
-        val repo = deps?.workspaceRepository ?: WorkspaceRepository(context)
+    fun ensureTestProjectAndVolume(context: Context, session: TestSession? = null): TestProjectData {
+        val s = session ?: requireCurrentSession()
+        val repo = s.deps.workspaceRepository
         val projects = repo.getProjects()
         val existing = projects.firstOrNull { it.title == "自动化测试作品" }
         if (existing != null) {
@@ -99,12 +173,13 @@ object AndroidTestEnvironment {
             return object : Statement() {
                 override fun evaluate() {
                     val ctx = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
-                    val testDeps = TestSujianAppDependencies(ctx)
-                    SujianAppDependencies.setTestProvider { _ -> testDeps }
+                    val session = createSession(ctx)
+                    SujianAppDependencies.setTestProvider { _ -> session.deps }
                     try {
                         base.evaluate()
                     } finally {
                         SujianAppDependencies.setTestProvider(null)
+                        releaseSession()
                     }
                 }
             }

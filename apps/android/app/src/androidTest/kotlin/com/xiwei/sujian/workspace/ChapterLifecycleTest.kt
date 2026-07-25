@@ -9,8 +9,12 @@ import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.xiwei.sujian.ui.MainActivity
 import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
+import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
+import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import com.xiwei.sujian.support.AndroidTestEnvironment
 import com.xiwei.sujian.support.ComposeWait
+import com.xiwei.sujian.support.TestSession
+import com.xiwei.sujian.R
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
@@ -28,12 +32,12 @@ class ChapterLifecycleTest {
 
     private val composeTestRule get() = _composeTestRule
 
+    private fun getSession(): TestSession = AndroidTestEnvironment.requireCurrentSession()
+
     private fun initTestData(): AndroidTestEnvironment.TestProjectData {
-        val ctx = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
-        val provider = com.xiwei.sujian.runtime.SujianAppDependencies.getTestProvider()
-        val testDeps = provider?.invoke(ctx) as? com.xiwei.sujian.support.TestSujianAppDependencies
-            ?: com.xiwei.sujian.support.TestSujianAppDependencies(ctx)
-        return AndroidTestEnvironment.ensureTestProjectAndVolume(ctx, testDeps)
+        return AndroidTestEnvironment.ensureTestProjectAndVolume(
+            androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
+        )
     }
 
     @Test
@@ -81,12 +85,14 @@ class ChapterLifecycleTest {
         val chapterId = waitForChapterByTitle("打开测试章节", testData)
         composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterId)).performClick()
 
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.EditorSaveStatus, timeoutMs = 15_000)
+        waitForEditorBoundToChapter(testData.projectId, testData.volumeId, chapterId)
     }
 
     @Test
     fun createTwoChapters_canSwitchBetween() {
         val testData = initTestData()
+        val session = getSession()
+        val repo = session.deps.workspaceRepository
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationWorks)
         composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationWorks).performClick()
@@ -115,22 +121,60 @@ class ChapterLifecycleTest {
         val chapterBId = waitForChapterByTitle("交替章节B", testData)
 
         composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterAId)).performClick()
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.EditorSaveStatus, timeoutMs = 15_000)
+        waitForEditorBoundToChapter(testData.projectId, testData.volumeId, chapterAId)
 
-        Espresso.pressBack()
+        val coordinator = session.deps.coordinator
+        val targetIdA = "chapter-body:${testData.projectId}:${testData.volumeId}:$chapterAId"
+        ComposeWait.waitUntil(composeTestRule, {
+            coordinator.activeTargetId == targetIdA
+        }, timeoutMs = 10_000)
+
+        androidx.test.espresso.Espresso.pressBack()
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList, timeoutMs = 5_000)
 
         composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterBId)).performClick()
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.EditorSaveStatus, timeoutMs = 15_000)
+        waitForEditorBoundToChapter(testData.projectId, testData.volumeId, chapterBId)
+
+        val targetIdB = "chapter-body:${testData.projectId}:${testData.volumeId}:$chapterBId"
+        ComposeWait.waitUntil(composeTestRule, {
+            coordinator.activeTargetId == targetIdB
+        }, timeoutMs = 10_000)
+
+        assert(targetIdA != targetIdB) {
+            "Chapters A and B should have different target IDs"
+        }
+    }
+
+    private fun waitForEditorBoundToChapter(projectId: String, volumeId: String, chapterId: String) {
+        val expectedTargetId = "chapter-body:$projectId:$volumeId:$chapterId"
+        ComposeWait.waitUntil(composeTestRule, {
+            try {
+                val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
+                view != null && view.visibility == android.view.View.VISIBLE && view.isSessionBound
+            } catch (_: Exception) {
+                false
+            }
+        }, timeoutMs = 15_000)
+
+        ComposeWait.waitUntil(composeTestRule, {
+            try {
+                val coordinator = getSession().deps.coordinator
+                coordinator.activeTargetId == expectedTargetId
+            } catch (_: Exception) {
+                false
+            }
+        }, timeoutMs = 10_000)
+
+        composeTestRule.onNodeWithText(
+            getSession().deps.workspaceRepository.getChapters(projectId, volumeId)
+                .firstOrNull { it.id == chapterId }?.title ?: chapterId
+        )
     }
 
     private fun waitForChapterByTitle(title: String, testData: AndroidTestEnvironment.TestProjectData): String {
-        val ctx = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
-        val provider = com.xiwei.sujian.runtime.SujianAppDependencies.getTestProvider()
-        val testDeps = provider?.invoke(ctx) as? com.xiwei.sujian.support.TestSujianAppDependencies
-            ?: com.xiwei.sujian.support.TestSujianAppDependencies(ctx)
-        val repo = testDeps.workspaceRepository
+        val session = getSession()
+        val repo = session.deps.workspaceRepository
         var chapterId = ""
         ComposeWait.waitUntil(composeTestRule, {
             val chapters = repo.getChapters(testData.projectId, testData.volumeId)
@@ -150,11 +194,13 @@ class ChapterLifecycleTest {
                 composeTestRule.onNodeWithTag(volumeTag).assertExists()
                 true
             } catch (_: AssertionError) {
-                val projectTitle = testData.projectTitle
                 try {
-                    composeTestRule.onNodeWithText(projectTitle).performClick()
-                } catch (_: Exception) { }
-                Thread.sleep(500)
+                    composeTestRule.onNodeWithText(testData.projectTitle).performClick()
+                } catch (e: Exception) {
+                    throw AssertionError(
+                        "navigateToTestVolume: Failed to click project '${testData.projectTitle}': ${e.message}"
+                    )
+                }
                 try {
                     composeTestRule.onNodeWithTag(volumeTag).assertExists()
                     true
@@ -163,14 +209,6 @@ class ChapterLifecycleTest {
                 }
             }
         }, timeoutMs = 15_000)
-        try {
-            composeTestRule.onNodeWithTag(volumeTag).performClick()
-        } catch (_: Exception) { }
-    }
-}
-
-private object Espresso {
-    fun pressBack() {
-        androidx.test.espresso.Espresso.pressBack()
+        composeTestRule.onNodeWithTag(volumeTag).performClick()
     }
 }
