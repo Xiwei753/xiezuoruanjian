@@ -178,5 +178,4 @@ jobs:
           disable-animations: true
           script: |
             adb shell getprop ro.product.cpu.abi
-            cd apps/android
-            ANDROID_NDK_HOME=$ANDROID_NDK_ROOT ./gradlew connected${{ matrix.flavor == 'no-ai' && 'NoAi' || 'Ai' }}DebugAndroidTest -Psujian.android.abis=x86_64
+            cd apps/android && ANDROID_NDK_HOME=$ANDROID_NDK_ROOT ./gradlew connected${{ matrix.flavor == 'no-ai' && 'NoAi' || 'Ai' }}DebugAndroidTest -Psujian.android.abis=x86_64
