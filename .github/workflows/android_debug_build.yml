@@ -162,12 +162,6 @@ jobs:
       - name: Make build scripts executable
         run: chmod +x tools/build_android.sh tools/android/build_native.sh tools/android/verify_apk_abis.sh
 
-      - name: Build native library and generate UniFFI bindings
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_ROOT }}
-        run: |
-          ./tools/build_android.sh --${{ matrix.flavor }} --abi x86_64 --skip-gradle
-
       - name: Enable KVM group permissions
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
