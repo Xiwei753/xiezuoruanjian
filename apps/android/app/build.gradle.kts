@@ -316,7 +316,7 @@ android {
     }
 }
 dependencies {
-    implementation(libs.jna)
+    implementation("${libs.jna.get().group}:${libs.jna.get().name}:${libs.jna.get().version}@aar")
     testImplementation(libs.jna)
     androidTestImplementation(libs.jna)
 }
