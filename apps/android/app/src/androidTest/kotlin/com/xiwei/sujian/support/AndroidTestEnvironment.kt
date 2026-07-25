@@ -88,7 +88,6 @@ class TestSession private constructor(
     }
 
     fun restartRuntimeAndActivity() {
-        closeActivity()
         depsHolder.releaseRuntime()
         depsHolder = TestSujianAppDependencies(
             context,
@@ -97,7 +96,6 @@ class TestSession private constructor(
             prefsSuffix = prefsSuffix
         )
         SujianAppDependencies.setTestProvider { _ -> depsHolder }
-        launchActivity()
     }
 
     fun release() {

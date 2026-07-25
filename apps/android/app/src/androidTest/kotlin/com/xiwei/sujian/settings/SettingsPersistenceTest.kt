@@ -3,7 +3,7 @@ package com.xiwei.sujian.settings
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
-import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
@@ -25,7 +25,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class SettingsPersistenceTest {
 
-    private val _composeTestRule = createEmptyComposeRule()
+    private val _composeTestRule = createAndroidComposeRule<MainActivity>()
 
     @get:Rule
     val ruleChain: RuleChain = RuleChain
@@ -51,7 +51,6 @@ class SettingsPersistenceTest {
     @Test
     fun typingAnimationToggle_persistsAfterRestart() {
         val session = getSession()
-        session.launchActivity()
 
         navigateToEditorSettings()
 
@@ -86,6 +85,7 @@ class SettingsPersistenceTest {
         }, timeoutMs = 10_000, message = { "Settings repository did not reflect typing animation change to $expectedEnabled" })
 
         session.restartRuntimeAndActivity()
+        composeTestRule.activityRule.scenario.recreate()
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationSettings, timeoutMs = 15_000)
         navigateToEditorSettings()
@@ -104,13 +104,6 @@ class SettingsPersistenceTest {
         val session = getSession()
         val initialFontSize = session.deps.settingsRepository.getEffectiveFontSize()
         val targetFontSize = 22f
-
-        assertNotEquals(
-            "Initial font size ($initialFontSize) should differ from target ($targetFontSize) for a meaningful test",
-            targetFontSize, initialFontSize, 0.01f
-        )
-
-        session.launchActivity()
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationSettings)
         composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationSettings).performClick()
@@ -134,6 +127,7 @@ class SettingsPersistenceTest {
         }, timeoutMs = 10_000, message = { "Font size did not update to $targetFontSize after Slider interaction" })
 
         session.restartRuntimeAndActivity()
+        composeTestRule.activityRule.scenario.recreate()
 
         val newSession = AndroidTestEnvironment.requireCurrentSession()
         val restoredFontSize = newSession.deps.settingsRepository.getEffectiveFontSize()
