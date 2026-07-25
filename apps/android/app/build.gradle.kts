@@ -318,6 +318,7 @@ android {
 dependencies {
     implementation(libs.jna)
     testImplementation(libs.jna)
+    androidTestImplementation(libs.jna)
 }
 
 android {
