@@ -10,9 +10,10 @@ DEFAULT_ABI="arm64-v8a"
 RUST_FEATURES=""
 FLAVOR_NAME="noAi"
 REQUESTED_ABI=""
+SKIP_GRADLE=false
 
 usage() {
-    echo "用法: $0 [--ai|--no-ai] [--abi <abi>]"
+    echo "用法: $0 [--ai|--no-ai] [--abi <abi>] [--skip-gradle]"
     echo ""
     echo "参数:"
     echo "  --ai       启用 AI 构建变体"
@@ -20,12 +21,14 @@ usage() {
     echo "  --abi <abi>  目标 ABI: arm64-v8a, x86_64, universal"
     echo "               默认: arm64-v8a"
     echo "               universal = arm64-v8a + x86_64"
+    echo "  --skip-gradle  只构建原生库和 UniFFI 绑定，跳过 Gradle APK 构建"
     echo ""
     echo "示例:"
     echo "  $0 --no-ai --abi arm64-v8a"
     echo "  $0 --no-ai --abi x86_64"
     echo "  $0 --no-ai --abi universal"
     echo "  $0 --ai --abi arm64-v8a"
+    echo "  $0 --no-ai --abi x86_64 --skip-gradle"
     exit 1
 }
 
@@ -44,6 +47,10 @@ while [[ $# -gt 0 ]]; do
         --abi)
             REQUESTED_ABI="$2"
             shift 2
+            ;;
+        --skip-gradle)
+            SKIP_GRADLE=true
+            shift
             ;;
         *)
             echo "未知参数: $1"
@@ -140,6 +147,12 @@ cargo run --bin uniffi-bindgen -p writer_uniffi -- generate \
     --out-dir "$UNIFFI_OUT_DIR"
 
 echo "UniFFI Kotlin 绑定生成成功。"
+
+if [ "$SKIP_GRADLE" = true ]; then
+    echo ""
+    echo "=== 跳过 Gradle 构建 (--skip-gradle) ==="
+    exit 0
+fi
 
 echo ""
 echo "=== 步骤 3: 构建 Android APK ==="
