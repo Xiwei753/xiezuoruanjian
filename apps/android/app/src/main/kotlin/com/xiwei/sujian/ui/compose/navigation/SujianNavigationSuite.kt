@@ -19,12 +19,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.testTag
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
 import com.xiwei.sujian.R
 import com.xiwei.sujian.designsystem.theme.LocalSujianMotion
+import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.platform.api.WindowSizeClass
 import com.xiwei.sujian.ui.compose.LocalAndroidCapabilities
 import com.xiwei.sujian.ui.compose.SujianAppState
@@ -108,14 +110,23 @@ fun SujianNavigationSuite(
                         backStack.add(targetRoute)
                     },
                     icon = {
-                        Icon(
-                            imageVector = if (currentTopDestination == destination) {
-                                destination.selectedIcon
-                            } else {
-                                destination.unselectedIcon
-                            },
-                            contentDescription = stringResource(id = destination.labelResId),
-                        )
+                        val semanticTag = when (destination) {
+                            SujianDestination.Works -> SujianSemanticIds.NavigationWorks
+                            SujianDestination.Settings -> SujianSemanticIds.NavigationSettings
+                            else -> null
+                        }
+                        androidx.compose.foundation.layout.Box(
+                            modifier = if (semanticTag != null) Modifier.testTag(semanticTag) else Modifier
+                        ) {
+                            Icon(
+                                imageVector = if (currentTopDestination == destination) {
+                                    destination.selectedIcon
+                                } else {
+                                    destination.unselectedIcon
+                                },
+                                contentDescription = stringResource(id = destination.labelResId),
+                            )
+                        }
                     },
                     label = {
                         Text(text = stringResource(id = destination.labelResId))

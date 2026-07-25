@@ -74,7 +74,7 @@ Thumbs.db
 
 # Data Safety & Workspace
 writer_app_workspace/
-workspace/
+/workspace/
 # data/   # DO NOT IGNORE apps/android/app/src/main/kotlin/com/xiwei/writerapp/data
 /data/
 backups/

@@ -15,7 +15,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.window.DialogProperties
+import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 
 @Composable
 fun SujianDialog(
@@ -43,14 +45,17 @@ fun SujianDialog(
         } else null,
         confirmButton = {
             if (dangerous) {
-                SujianDangerButton(text = confirmText, onClick = onConfirm)
+                SujianDangerButton(text = confirmText, onClick = onConfirm, modifier = Modifier.testTag(SujianSemanticIds.DialogConfirm))
             } else {
-                TextButton(onClick = onConfirm) { Text(confirmText) }
+                TextButton(onClick = onConfirm, modifier = Modifier.testTag(SujianSemanticIds.DialogConfirm)) { Text(confirmText) }
             }
         },
         dismissButton = if (dismissText != null) {
             {
-                TextButton(onClick = { onDismiss?.invoke() ?: onDismissRequest() }) {
+                TextButton(
+                    onClick = { onDismiss?.invoke() ?: onDismissRequest() },
+                    modifier = Modifier.testTag(SujianSemanticIds.DialogCancel),
+                ) {
                     Text(dismissText)
                 }
             }

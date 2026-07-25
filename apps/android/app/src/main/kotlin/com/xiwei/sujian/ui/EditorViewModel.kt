@@ -105,8 +105,16 @@ class EditorViewModel(
     application: Application
 ) : AndroidViewModel(application) {
 
-    private val workspaceRepository = WorkspaceRepository(application)
-    private val settingsRepository = SettingsRepository(application)
+    private var _workspaceRepository: WorkspaceRepository? = null
+    private var _settingsRepository: SettingsRepository? = null
+    private val workspaceRepository: WorkspaceRepository get() = _workspaceRepository ?: WorkspaceRepository(getApplication())
+    private val settingsRepository: SettingsRepository get() = _settingsRepository ?: SettingsRepository(getApplication())
+
+    fun initialize(workspaceRepo: WorkspaceRepository, settingsRepo: SettingsRepository) {
+        if (_workspaceRepository != null) return
+        _workspaceRepository = workspaceRepo
+        _settingsRepository = settingsRepo
+    }
 
     private val _uiState = MutableStateFlow(EditorUiState())
     val uiState: StateFlow<EditorUiState> = _uiState.asStateFlow()

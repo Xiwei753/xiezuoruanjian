@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 
@@ -31,6 +32,7 @@ fun SujianListItem(
     selected: Boolean = false,
     enabled: Boolean = true,
     onClick: (() -> Unit)? = null,
+    semanticId: String? = null,
 ) {
     val dimensions = LocalSujianDimensions.current
     val contentColor = if (enabled) {
@@ -42,6 +44,7 @@ fun SujianListItem(
     Row(
         modifier = modifier
             .fillMaxWidth()
+            .then(if (semanticId != null) Modifier.testTag(semanticId) else Modifier)
             .then(
                 if (onClick != null && enabled) {
                     Modifier.clip(MaterialTheme.shapes.medium).clickable(role = Role.Button, onClick = onClick)

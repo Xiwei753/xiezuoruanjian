@@ -17,6 +17,7 @@ import com.xiwei.sujian.designsystem.component.SujianSection
 import com.xiwei.sujian.designsystem.component.SujianSlider
 import com.xiwei.sujian.designsystem.component.SujianSwitchRow
 import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
+import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 
 @Composable
 fun EditorSettings(
@@ -34,7 +35,7 @@ fun EditorSettings(
         modifier = modifier.padding(dims.space16),
         verticalArrangement = Arrangement.spacedBy(dims.space16),
     ) {
-        SujianSection(title = stringResource(id = R.string.pref_category_editor)) {
+        SujianSection(title = stringResource(id = R.string.pref_category_editor), semanticId = SujianSemanticIds.SettingsEditorSection) {
             SujianSwitchRow(
                 title = stringResource(id = R.string.pref_auto_indent),
                 checked = settings.autoIndentEnabled,
@@ -64,6 +65,7 @@ fun EditorSettings(
                 onCheckedChange = { checked ->
                     onIntent(SettingsIntent.UpdateLocal { it.copy(editorTypingAnimationEnabled = checked) })
                 },
+                semanticId = SujianSemanticIds.SettingsTypingAnimation,
             )
             Spacer(modifier = Modifier.height(dims.space8))
             SujianSlider(

@@ -23,6 +23,7 @@ import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.semantics.editableText
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setText
+import androidx.compose.ui.platform.testTag
 import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
 import com.xiwei.sujian.editor.v2.coordinator.EditableTextTarget
 import com.xiwei.sujian.editor.v2.coordinator.EditingState
@@ -126,6 +127,7 @@ private fun AnimatedTextFieldWithCoordinator(
     Box(
         modifier = modifier
             .fillMaxWidth()
+            .testTag(targetId)
             .onGloballyPositioned { coordinates ->
                 val position = coordinates.positionInWindow()
                 val size = coordinates.size

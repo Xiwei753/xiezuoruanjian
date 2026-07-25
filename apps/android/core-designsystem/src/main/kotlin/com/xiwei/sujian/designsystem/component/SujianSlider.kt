@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 
@@ -34,11 +35,12 @@ fun SujianSlider(
     valueFormatter: ((Float) -> String)? = null,
     icon: ImageVector? = null,
     enabled: Boolean = true,
+    semanticId: String? = null,
 ) {
     val dimensions = LocalSujianDimensions.current
     val displayLabel = valueLabel ?: valueFormatter?.invoke(value) ?: String.format("%.1f", value)
 
-    Column(modifier = modifier.fillMaxWidth()) {
+    Column(modifier = modifier.fillMaxWidth().then(if (semanticId != null) Modifier.testTag(semanticId) else Modifier)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,

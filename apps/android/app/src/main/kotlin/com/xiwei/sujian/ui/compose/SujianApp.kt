@@ -19,14 +19,10 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.data.SyncChangeBus
-import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.data.WorkspaceUseCase
-import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.editor.v2.compose.AnimatedTextEditorSlot
 import com.xiwei.sujian.editor.v2.compose.LocalAnimatedTextEditorCoordinator
-import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
 import com.xiwei.sujian.model.Orientation
 import com.xiwei.sujian.model.WindowMetrics
 import com.xiwei.sujian.platform.api.AndroidCapabilities
@@ -39,6 +35,9 @@ import com.xiwei.sujian.ui.compose.theme.ThemeStore
 import com.xiwei.sujian.ui.compose.theme.rememberThemeController
 import com.xiwei.sujian.platform.aosp.VendorAdapterSetup
 import com.xiwei.sujian.platform.vendor.VendorAdapterRegistry
+import com.xiwei.sujian.runtime.DefaultSujianAppDependencies
+import com.xiwei.sujian.runtime.LocalSujianAppDependencies
+import com.xiwei.sujian.runtime.SujianAppDependencies
 
 val LocalAndroidCapabilities = androidx.compose.runtime.compositionLocalOf<AndroidCapabilities> {
     AndroidCapabilities()
@@ -51,7 +50,11 @@ fun SujianApp(
     val context = LocalContext.current
     val vm: SujianAppViewModel = viewModel()
     val appState = remember { SujianAppState(vm) }
-    val themeController = rememberThemeController(context)
+    val deps = remember {
+        val testProvider = SujianAppDependencies.getTestProvider()
+        testProvider?.invoke(context) ?: DefaultSujianAppDependencies(context)
+    }
+    val themeController = rememberThemeController(context, deps.settingsRepository)
     val vendorRegistry = remember { VendorAdapterRegistry().also { VendorAdapterSetup.ensureInitialized(it) } }
 
     val capabilityProvider = remember { AospCapabilityProvider(context.applicationContext) }
@@ -64,19 +67,29 @@ fun SujianApp(
         }
     }
 
-    val coordinator = remember {
-        val bridge = BridgeProvider.getAppServiceBridge(context)
-        AnimatedTextEditorCoordinator(context, bridge)
+    val activityRef = androidx.activity.compose.LocalActivity.current as? androidx.activity.ComponentActivity
+    DisposableEffect(deps, activityRef) {
+        val act = activityRef ?: return@DisposableEffect onDispose { }
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_DESTROY) {
+                if (!act.isChangingConfigurations) {
+                    deps.release()
+                }
+            }
+        }
+        act.lifecycle.addObserver(observer)
+        onDispose {
+            act.lifecycle.removeObserver(observer)
+        }
     }
+    val coordinator = deps.coordinator
 
     LaunchedEffect(Unit) {
-        val workspaceRepo = WorkspaceRepository(context)
-        val settingsRepo = SettingsRepository(context)
-        val workspaceUC = WorkspaceUseCase(workspaceRepo)
-        vm.initialize(workspaceRepo, workspaceUC, settingsRepo, context)
+        val workspaceUC = WorkspaceUseCase(deps.workspaceRepository)
+        vm.initialize(deps.workspaceRepository, workspaceUC, deps.settingsRepository, context)
     }
 
-    val activity = androidx.activity.compose.LocalActivity.current as? androidx.activity.ComponentActivity
+    val activity = activityRef
     var foldingFeatures by remember { mutableStateOf<List<androidx.window.layout.FoldingFeature>>(emptyList()) }
 
     if (activity != null) {
@@ -118,7 +131,7 @@ fun SujianApp(
 
         vm.updateFoldFeaturesFromAdaptive(foldingFeatures, density)
 
-        val settingsRepo = SettingsRepository(context)
+        val settingsRepo = deps.settingsRepository
         val hasFoldFeature = foldingFeatures.isNotEmpty()
         val deviceClass = settingsRepo.detectDeviceClassFromFoldFeature(
             hasFoldFeature, configuration.smallestScreenWidthDp
@@ -149,6 +162,7 @@ fun SujianApp(
         CompositionLocalProvider(
             LocalAndroidCapabilities provides capabilities,
             LocalAnimatedTextEditorCoordinator provides coordinator,
+            LocalSujianAppDependencies provides deps,
         ) {
             Box(
                 modifier = Modifier

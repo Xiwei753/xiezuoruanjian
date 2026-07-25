@@ -23,11 +23,12 @@ import com.xiwei.sujian.model.SyncableSettings
  * - Compose SettingsRoute 保存用户设置
  * - SyncPage 加载/保存同步配置
  */
-open class SettingsRepository(context: Context) {
+open class SettingsRepository(context: Context, bridge: AppServiceBridge? = null) {
     private val appContext = context.applicationContext
-    private val settingsBridge = BridgeProvider.getSettingsBridge(context)
-    private val syncBridge = BridgeProvider.getSyncBridge(context)
-    private val statsBridge = BridgeProvider.getStatsBridge(context)
+    private val appBridge = bridge ?: BridgeProvider.getAppServiceBridge(context)
+    private val settingsBridge = appBridge.settingsBridge
+    private val syncBridge = appBridge.syncBridge
+    private val statsBridge = appBridge.statsBridge
     private val diagPrefs = appContext.getSharedPreferences("sujian_diagnostics", android.content.Context.MODE_PRIVATE)
     private val devicePrefs = appContext.getSharedPreferences("sujian_device", android.content.Context.MODE_PRIVATE)
 

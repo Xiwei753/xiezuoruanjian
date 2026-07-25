@@ -16,6 +16,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import androidx.compose.material3.Icon
@@ -112,10 +113,11 @@ fun SujianTextButton(
     icon: ImageVector? = null,
     loading: Boolean = false,
     enabled: Boolean = true,
+    semanticId: String? = null,
 ) {
     TextButton(
         onClick = onClick,
-        modifier = modifier,
+        modifier = modifier.then(if (semanticId != null) Modifier.testTag(semanticId) else Modifier),
         enabled = enabled && !loading,
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
     ) {
@@ -132,12 +134,14 @@ fun SujianIconButton(
     enabled: Boolean = true,
     tonal: Boolean = false,
     outlined: Boolean = false,
+    semanticId: String? = null,
 ) {
     val dimensions = LocalSujianDimensions.current
+    val tagModifier = modifier.then(if (semanticId != null) Modifier.testTag(semanticId) else Modifier)
     when {
         outlined -> androidx.compose.material3.OutlinedIconButton(
             onClick = onClick,
-            modifier = modifier.size(dimensions.minTouchTarget),
+            modifier = tagModifier.size(dimensions.minTouchTarget),
             enabled = enabled,
         ) {
             if (icon != null) {
@@ -150,7 +154,7 @@ fun SujianIconButton(
         }
         tonal -> androidx.compose.material3.FilledTonalIconButton(
             onClick = onClick,
-            modifier = modifier.size(dimensions.minTouchTarget),
+            modifier = tagModifier.size(dimensions.minTouchTarget),
             enabled = enabled,
         ) {
             if (icon != null) {
@@ -163,7 +167,7 @@ fun SujianIconButton(
         }
         else -> androidx.compose.material3.IconButton(
             onClick = onClick,
-            modifier = modifier.size(dimensions.minTouchTarget),
+            modifier = tagModifier.size(dimensions.minTouchTarget),
             enabled = enabled,
         ) {
             if (icon != null) {

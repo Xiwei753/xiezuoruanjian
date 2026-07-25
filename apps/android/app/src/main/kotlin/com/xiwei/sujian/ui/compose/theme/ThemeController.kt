@@ -64,8 +64,7 @@ class ThemeController(private val settingsRepository: SettingsRepository) {
 }
 
 @Composable
-fun rememberThemeController(context: Context): ThemeController {
-    val settingsRepository = remember { SettingsRepository(context) }
+fun rememberThemeController(context: Context, settingsRepository: SettingsRepository): ThemeController {
     val controller = remember { ThemeController(settingsRepository) }
 
     DisposableEffect(Unit) {

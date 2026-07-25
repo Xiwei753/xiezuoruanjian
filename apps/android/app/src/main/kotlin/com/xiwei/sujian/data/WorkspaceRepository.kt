@@ -5,10 +5,11 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.model.*
 
-class WorkspaceRepository(private val context: Context) {
-    private val workspaceBridge = BridgeProvider.getWorkspaceBridge(context)
-    private val writingBridge = BridgeProvider.getWritingBridge(context)
-    private val statsBridge = BridgeProvider.getStatsBridge(context)
+class WorkspaceRepository(private val context: Context, bridge: AppServiceBridge? = null) {
+    private val appBridge = bridge ?: BridgeProvider.getAppServiceBridge(context)
+    private val workspaceBridge = WorkspaceBridge(appBridge)
+    private val writingBridge = WritingBridge(appBridge)
+    private val statsBridge = appBridge.statsBridge
 
     private fun BridgeResult.Error.localizedMessage(): String {
         return MessageKeyMapper.resolveMessage(context, envelope.messageKey, envelope.messageArgs, envelope.errorCode)

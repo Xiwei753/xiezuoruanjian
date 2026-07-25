@@ -21,6 +21,7 @@ import com.xiwei.sujian.designsystem.component.SujianSection
 import com.xiwei.sujian.designsystem.component.SujianSlider
 import com.xiwei.sujian.designsystem.component.SujianSwitchRow
 import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
+import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 
 @Composable
 fun AppearanceSettings(
@@ -112,6 +113,7 @@ fun AppearanceSettings(
                 valueRange = 12f..72f,
                 steps = 59,
                 valueLabel = "${fontSize.toInt()}sp",
+                semanticId = SujianSemanticIds.SettingsFontSize,
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(modifier = Modifier.height(dims.space8))

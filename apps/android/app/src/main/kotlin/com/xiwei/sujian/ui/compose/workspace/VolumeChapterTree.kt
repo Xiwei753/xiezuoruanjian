@@ -21,6 +21,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
@@ -29,6 +30,7 @@ import com.xiwei.sujian.designsystem.component.SujianIconButton
 import com.xiwei.sujian.designsystem.component.SujianListItem
 import com.xiwei.sujian.designsystem.component.SujianDangerButton
 import com.xiwei.sujian.designsystem.component.SujianTextButton
+import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 
 sealed class WorkspaceDialogState {
     data object None : WorkspaceDialogState()
@@ -101,6 +103,7 @@ fun VolumeChapterTree(
                 },
                 icon = SujianIcons.Add,
                 contentDescription = stringResource(id = R.string.action_new_volume_short),
+                semanticId = SujianSemanticIds.WorkspaceCreateVolume,
             )
         }
 
@@ -120,6 +123,7 @@ fun VolumeChapterTree(
             )
         } else {
             LazyColumn(
+                modifier = Modifier.testTag(SujianSemanticIds.WorkspaceVolumeList),
                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
             ) {
                 items(flatItems, key = { item ->
@@ -152,7 +156,8 @@ fun VolumeChapterTree(
                                 },
                                 onMoreActions = {
                                     dialogState = WorkspaceDialogState.ChapterActions(item.volumeId, item.chapter)
-                                }
+                                },
+                                volumeId = item.volumeId,
                             )
                         }
                         is VolumeChapterListItem.EmptyChapterHint -> {
@@ -320,7 +325,7 @@ private fun CreateChapterDialog(
         onDismiss = onDismiss,
         body = {
             AnimatedTextField(
-                targetId = "chapter-title:new",
+                targetId = SujianSemanticIds.ChapterTitleInput,
                 value = title,
                 onValueChange = { title = it },
                 onCommit = { },
@@ -468,12 +473,14 @@ fun VolumeRow(
         headline = volume.title,
         leadingIcon = if (volume.isExpanded) SujianIcons.KeyboardArrowDown else SujianIcons.KeyboardArrowRight,
         onClick = onToggleExpand,
+        semanticId = SujianSemanticIds.volume(volume.id),
         trailingContent = {
             Row {
                 SujianIconButton(
                     onClick = onCreateChapter,
                     icon = SujianIcons.Add,
                     contentDescription = stringResource(id = R.string.action_new_chapter),
+                    semanticId = SujianSemanticIds.WorkspaceCreateChapter,
                 )
                 SujianIconButton(
                     onClick = onMoreActions,
@@ -492,6 +499,7 @@ fun ChapterRow(
     isSelected: Boolean,
     onSelect: () -> Unit,
     onMoreActions: () -> Unit,
+    volumeId: String = "",
     modifier: Modifier = Modifier
 ) {
     SujianListItem(
@@ -499,6 +507,7 @@ fun ChapterRow(
         supportingText = if (chapter.wordCount > 0) stringResource(R.string.word_count_format, chapter.wordCount) else null,
         selected = isSelected,
         onClick = onSelect,
+        semanticId = if (volumeId.isNotEmpty()) SujianSemanticIds.chapter(volumeId, chapter.id) else null,
         trailingContent = {
             SujianIconButton(
                 onClick = onMoreActions,

@@ -14,11 +14,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.R
-import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.designsystem.layout.SujianListDetailScope
 import com.xiwei.sujian.designsystem.layout.SujianListDetailScaffoldWithNavigator
 import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
@@ -41,9 +39,9 @@ fun ProjectWorkspaceScreen(
     onNavigateToChapter: ((projectId: String, volumeId: String, chapterId: String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
-    val workspaceRepository = remember { WorkspaceRepository(context) }
     val coroutineScope = rememberCoroutineScope()
+    val deps = com.xiwei.sujian.runtime.LocalSujianAppDependencies.current
+    val workspaceRepository = deps.workspaceRepository
 
     val currentProjectId = projectIdOverride ?: appState.currentProjectId
     val currentVolumeId = volumeIdOverride ?: appState.currentVolumeId

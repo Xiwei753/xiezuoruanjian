@@ -18,6 +18,7 @@ import com.xiwei.sujian.editor.v2.pipeline.PipelineOutput
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
 import com.xiwei.sujian.editor.v2.coordinator.NewlinePolicy
 import com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock
+import com.xiwei.sujian.R
 import uniffi.writer_core.EditorTransactionCauseDto
 
 class SujianEditorView @JvmOverloads constructor(
@@ -62,6 +63,9 @@ class SujianEditorView @JvmOverloads constructor(
             scrollY = scrollY.coerceIn(0f, maxScrollY)
             invalidate()
         }
+        id = R.id.editor_content
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
+        isFocusable = true
     }
 
     fun loadText(text: String, cursorUtf8: Int) {
@@ -302,6 +306,32 @@ class SujianEditorView @JvmOverloads constructor(
         super.onInitializeAccessibilityNodeInfo(info)
         info?.isEditable = true
         info?.text = getDisplayText()
+        info?.className = android.widget.EditText::class.java.name
+        info?.viewIdResourceName = context.packageName + ":id/editor_content"
+        info?.isFocusable = true
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.JELLY_BEAN_MR2) {
+            val selStart = pipeline.getSelectionStartUtf16()
+            val selEnd = pipeline.getSelectionEndUtf16()
+            if (selStart >= 0 && selEnd >= 0) {
+                info?.setTextSelection(selStart, selEnd)
+            }
+        }
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+            info?.addAction(android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_TEXT)
+        }
+    }
+
+    override fun performAccessibilityAction(action: Int, arguments: android.os.Bundle?): Boolean {
+        if (action == android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_TEXT) {
+            val text = arguments?.getCharSequence(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE)?.toString()
+            if (text != null && isSessionBound) {
+                val currentText = pipeline.getText()
+                val byteLen = currentText.toByteArray(Charsets.UTF_8).size
+                replaceRangeTyped(0, byteLen, text, currentText, EditorTransactionCauseDto.PROGRAMMATIC)
+                return true
+            }
+        }
+        return super.performAccessibilityAction(action, arguments)
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {

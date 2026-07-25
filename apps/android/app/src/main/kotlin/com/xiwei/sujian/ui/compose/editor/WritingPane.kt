@@ -26,10 +26,10 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
-import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.editor.v2.compose.LocalAnimatedTextEditorCoordinator
 import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
 import com.xiwei.sujian.editor.v2.coordinator.EditableTextTarget
@@ -38,7 +38,9 @@ import com.xiwei.sujian.editor.v2.coordinator.SessionResetSource
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
 import com.xiwei.sujian.ui.EditorViewModel
 import com.xiwei.sujian.ui.SaveStatus
+import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
+import com.xiwei.sujian.runtime.LocalSujianAppDependencies
 import androidx.compose.ui.viewinterop.AndroidView
 
 /**
@@ -66,6 +68,10 @@ fun WritingPane(
     modifier: Modifier = Modifier
 ) {
     val viewModel: EditorViewModel = viewModel()
+    val deps = LocalSujianAppDependencies.current
+    LaunchedEffect(Unit) {
+        viewModel.initialize(deps.workspaceRepository, deps.settingsRepository)
+    }
 
     val coordinator = LocalAnimatedTextEditorCoordinator.current
         ?: throw IllegalStateException(
@@ -186,7 +192,7 @@ fun WritingPane(
                 SaveStatus.SaveFailed -> stringResource(id = R.string.status_save_failed)
             }
             if (statusText.isNotEmpty()) {
-                Text(statusText, style = MaterialTheme.typography.bodySmall)
+                Text(statusText, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag(SujianSemanticIds.EditorSaveStatus))
             }
         }
 
