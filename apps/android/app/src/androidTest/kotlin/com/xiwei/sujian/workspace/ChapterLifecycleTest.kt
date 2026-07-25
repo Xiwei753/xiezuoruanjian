@@ -32,7 +32,7 @@ class ChapterLifecycleTest {
 
     private val _composeTestRule = AndroidComposeTestRule(
         activityRule, activityRule::getActivity
-    )
+    ).also { activityRule.setComposeTestRule(it) }
 
     @get:Rule
     val ruleChain: RuleChain = RuleChain

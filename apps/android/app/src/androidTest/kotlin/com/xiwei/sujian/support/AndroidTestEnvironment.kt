@@ -170,6 +170,11 @@ class RestartableMainActivityRule(
     private val sessionProvider: () -> TestSession
 ) : TestRule {
     private var scenario: ActivityScenario<MainActivity>? = null
+    private var composeTestRule: androidx.compose.ui.test.junit4.ComposeTestRule? = null
+
+    fun setComposeTestRule(rule: androidx.compose.ui.test.junit4.ComposeTestRule) {
+        composeTestRule = rule
+    }
 
     fun getActivity(): MainActivity {
         val sc = scenario ?: throw IllegalStateException("No active ActivityScenario. Call launchActivity() first.")
@@ -216,25 +221,23 @@ class RestartableMainActivityRule(
         SujianAppDependencies.setTestProvider { _ -> session.deps }
         scenario = ActivityScenario.launch(MainActivity::class.java)
 
-        val resumed = arrayOf(false)
+        val resumeLatch = CountDownLatch(1)
         val maxWaitMs = 10_000L
         val resumeStartMs = System.currentTimeMillis()
-        while (!resumed[0] && (System.currentTimeMillis() - resumeStartMs) < maxWaitMs) {
-            try {
-                scenario!!.onActivity { activity ->
-                    resumed[0] = activity.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
+        while (!resumeLatch.await(0, TimeUnit.MILLISECONDS) && (System.currentTimeMillis() - resumeStartMs) < maxWaitMs) {
+            scenario!!.onActivity { activity ->
+                if (activity.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+                    resumeLatch.countDown()
                 }
-            } catch (_: Exception) {
-            }
-            if (!resumed[0]) {
-                Thread.sleep(100)
             }
         }
 
         Assert.assertTrue(
             "New Activity did not reach RESUMED state within ${maxWaitMs}ms after cold restart",
-            resumed[0]
+            resumeLatch.await(0, TimeUnit.MILLISECONDS)
         )
+
+        composeTestRule?.waitForIdle()
     }
 
     fun closeActivity() {
