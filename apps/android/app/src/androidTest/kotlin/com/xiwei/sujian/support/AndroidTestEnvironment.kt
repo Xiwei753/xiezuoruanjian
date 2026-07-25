@@ -1,6 +1,8 @@
 package com.xiwei.sujian.support
 
 import android.content.Context
+import androidx.compose.ui.test.junit4.AndroidComposeTestRule
+import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.test.core.app.ActivityScenario
 import com.xiwei.sujian.data.AppServiceBridge
 import com.xiwei.sujian.data.SettingsRepository
@@ -85,6 +87,13 @@ class TestSession private constructor(
         sc.onActivity { result = block(it) }
         @Suppress("UNCHECKED_CAST")
         return result as T
+    }
+
+    fun getActivity(): MainActivity {
+        val sc = scenario ?: throw IllegalStateException("No active ActivityScenario. Call launchActivity() first.")
+        var result: MainActivity? = null
+        sc.onActivity { result = it }
+        return result ?: throw IllegalStateException("ActivityScenario.onActivity did not provide an Activity")
     }
 
     fun restartRuntimeAndActivity() {
@@ -249,5 +258,14 @@ object AndroidTestEnvironment {
                 }
             }
         }
+    }
+
+    fun createSessionOwnedComposeRule(): AndroidComposeTestRule<TestRule, MainActivity> {
+        return AndroidComposeTestRule(
+            activityRule = TestRule { base, _ -> base },
+            activityProvider = {
+                requireCurrentSession().getActivity()
+            }
+        )
     }
 }
