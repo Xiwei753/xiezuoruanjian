@@ -51,15 +51,12 @@ class TestSession private constructor(
 
             val prefsSuffix = sessionId.take(8)
 
-            lateinit var deps: TestSujianAppDependencies
-            androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().runOnMainSync {
-                deps = TestSujianAppDependencies(
-                    appContext,
-                    testRootDir = testRootDir,
-                    workspaceDir = workspaceDir,
-                    prefsSuffix = prefsSuffix
-                )
-            }
+            val deps = TestSujianAppDependencies(
+                appContext,
+                testRootDir = testRootDir,
+                workspaceDir = workspaceDir,
+                prefsSuffix = prefsSuffix
+            )
 
             return TestSession(
                 testRootDir = testRootDir,
@@ -92,16 +89,13 @@ class TestSession private constructor(
 
     fun restartRuntimeAndActivity() {
         closeActivity()
-        val instrumentation = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
-        instrumentation.runOnMainSync {
-            depsHolder.releaseRuntime()
-            depsHolder = TestSujianAppDependencies(
-                context,
-                testRootDir = testRootDir,
-                workspaceDir = workspaceDir,
-                prefsSuffix = prefsSuffix
-            )
-        }
+        depsHolder.releaseRuntime()
+        depsHolder = TestSujianAppDependencies(
+            context,
+            testRootDir = testRootDir,
+            workspaceDir = workspaceDir,
+            prefsSuffix = prefsSuffix
+        )
         SujianAppDependencies.setTestProvider { _ -> depsHolder }
         launchActivity()
     }
@@ -173,10 +167,13 @@ class TestSujianAppDependencies(
     override val appServiceBridge: AppServiceBridge = AppServiceBridge(testHolder)
     override val workspaceRepository: WorkspaceRepository = WorkspaceRepository(appContext, appServiceBridge)
     override val settingsRepository: SettingsRepository = SettingsRepository(appContext, appServiceBridge, prefsSuffix)
-    override val coordinator: AnimatedTextEditorCoordinator = AnimatedTextEditorCoordinator(appContext, appServiceBridge)
+    private val _coordinator = lazy { AnimatedTextEditorCoordinator(appContext, appServiceBridge) }
+    override val coordinator: AnimatedTextEditorCoordinator get() = _coordinator.value
 
     fun releaseRuntime() {
-        coordinator.releaseHost()
+        if (_coordinator.isInitialized()) {
+            coordinator.releaseHost()
+        }
     }
 
     override fun release() {
@@ -241,10 +238,7 @@ object AndroidTestEnvironment {
                 override fun evaluate() {
                     val instrumentation = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
                     val ctx = instrumentation.targetContext
-                    lateinit var session: TestSession
-                    instrumentation.runOnMainSync {
-                        session = createSession(ctx)
-                    }
+                    val session = createSession(ctx)
                     SujianAppDependencies.setTestProvider { _ -> session.deps }
                     try {
                         base.evaluate()
