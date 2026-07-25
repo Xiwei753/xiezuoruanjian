@@ -28,8 +28,6 @@ class TestSession private constructor(
     val deps: TestSujianAppDependencies
         get() = depsHolder
 
-    private var scenario: ActivityScenario<MainActivity>? = null
-
     companion object {
         fun create(context: Context): TestSession {
             val appContext = context.applicationContext
@@ -68,28 +66,7 @@ class TestSession private constructor(
         }
     }
 
-    fun launchActivity() {
-        scenario?.close()
-        SujianAppDependencies.setTestProvider { _ -> depsHolder }
-        scenario = ActivityScenario.launch(MainActivity::class.java)
-    }
-
-    fun closeActivity() {
-        scenario?.close()
-        scenario = null
-    }
-
-    fun <T> withActivity(block: (MainActivity) -> T): T {
-        val sc = scenario ?: throw IllegalStateException("No active ActivityScenario. Call launchActivity() first.")
-        var result: Any? = null
-        sc.onActivity { result = block(it) }
-        @Suppress("UNCHECKED_CAST")
-        return result as T
-    }
-
-    fun restartRuntimeAndActivity() {
-        closeActivity()
-        depsHolder.releaseRuntime()
+    fun recreateDeps(): TestSujianAppDependencies {
         depsHolder = TestSujianAppDependencies(
             context,
             testRootDir = testRootDir,
@@ -97,17 +74,16 @@ class TestSession private constructor(
             prefsSuffix = prefsSuffix
         )
         SujianAppDependencies.setTestProvider { _ -> depsHolder }
-        launchActivity()
+        return depsHolder
     }
 
-    fun release() {
-        closeActivity()
+    fun releaseSession() {
         depsHolder.releaseRuntime()
         try {
             testRootDir.deleteRecursively()
         } catch (e: Exception) {
             throw AssertionError(
-                "TestSession.release: Failed to delete test root directory ${testRootDir.absolutePath}: ${e.message}"
+                "TestSession.releaseSession: Failed to delete test root directory ${testRootDir.absolutePath}: ${e.message}"
             )
         }
     }
@@ -178,12 +154,94 @@ class TestSujianAppDependencies(
 
     override fun release() {
         releaseRuntime()
-        try {
-            resolvedTestRoot.deleteRecursively()
-        } catch (e: Exception) {
-            throw AssertionError(
-                "TestSujianAppDependencies.release: Failed to delete test directory ${resolvedTestRoot.absolutePath}: ${e.message}"
-            )
+    }
+}
+
+class RestartableMainActivityRule(
+    private val sessionProvider: () -> TestSession
+) : TestRule {
+    private var scenario: ActivityScenario<MainActivity>? = null
+
+    fun getActivity(): MainActivity {
+        val sc = scenario ?: throw IllegalStateException("No active ActivityScenario. Call launchActivity() first.")
+        var activity: MainActivity? = null
+        sc.onActivity { activity = it }
+        return activity ?: throw IllegalStateException("ActivityScenario.onActivity did not provide activity.")
+    }
+
+    fun launchActivity() {
+        scenario?.close()
+        val session = sessionProvider()
+        SujianAppDependencies.setTestProvider { _ -> session.deps }
+        scenario = ActivityScenario.launch(MainActivity::class.java)
+        scenario!!.onActivity { }
+    }
+
+    fun restartRuntimeAndActivity() {
+        val sc = scenario
+        if (sc != null) {
+            sc.close()
+            scenario = null
+        }
+
+        val destroyed = arrayOf(false)
+        val maxWaitMs = 10_000L
+        val startMs = System.currentTimeMillis()
+        while (!destroyed[0] && (System.currentTimeMillis() - startMs) < maxWaitMs) {
+            try {
+                sc?.onActivity { activity ->
+                    destroyed[0] = !activity.isDestroyed
+                }
+            } catch (_: Exception) {
+                destroyed[0] = true
+            }
+            if (!destroyed[0]) {
+                Thread.sleep(100)
+            }
+        }
+
+        val session = sessionProvider()
+        session.deps.releaseRuntime()
+        session.recreateDeps()
+
+        SujianAppDependencies.setTestProvider { _ -> session.deps }
+        scenario = ActivityScenario.launch(MainActivity::class.java)
+
+        val resumed = arrayOf(false)
+        val resumeStartMs = System.currentTimeMillis()
+        while (!resumed[0] && (System.currentTimeMillis() - resumeStartMs) < maxWaitMs) {
+            try {
+                scenario!!.onActivity { activity ->
+                    resumed[0] = activity.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
+                }
+            } catch (_: Exception) {
+            }
+            if (!resumed[0]) {
+                Thread.sleep(100)
+            }
+        }
+
+        Assert.assertTrue(
+            "New Activity did not reach RESUMED state within ${maxWaitMs}ms after cold restart",
+            resumed[0]
+        )
+    }
+
+    fun closeActivity() {
+        scenario?.close()
+        scenario = null
+    }
+
+    override fun apply(base: Statement, description: Description): Statement {
+        return object : Statement() {
+            override fun evaluate() {
+                try {
+                    launchActivity()
+                    base.evaluate()
+                } finally {
+                    closeActivity()
+                }
+            }
         }
     }
 }
@@ -204,7 +262,7 @@ object AndroidTestEnvironment {
     }
 
     fun releaseSession() {
-        currentSession?.release()
+        currentSession?.releaseSession()
         currentSession = null
     }
 

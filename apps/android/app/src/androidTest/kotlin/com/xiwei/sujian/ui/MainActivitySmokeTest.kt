@@ -2,7 +2,7 @@ package com.xiwei.sujian.ui
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.xiwei.sujian.support.AndroidTestEnvironment
-import com.xiwei.sujian.support.TestSession
+import com.xiwei.sujian.support.RestartableMainActivityRule
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -12,17 +12,16 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class MainActivitySmokeTest {
 
-    private val testRule = AndroidTestEnvironment.TestDependenciesRule()
+    private val activityRule = RestartableMainActivityRule { AndroidTestEnvironment.requireCurrentSession() }
 
     @get:Rule
     val ruleChain: RuleChain = RuleChain
-        .outerRule(testRule)
+        .outerRule(AndroidTestEnvironment.TestDependenciesRule())
+        .around(activityRule)
 
     @Test
     fun testMainActivityLaunch() {
-        val session = AndroidTestEnvironment.requireCurrentSession()
-        session.launchActivity()
-        val activity = session.withActivity { it }
-        assertNotNull("Activity should be launched via TestSession", activity)
+        val activity = activityRule.getActivity()
+        assertNotNull("Activity should be launched via RestartableMainActivityRule", activity)
     }
 }

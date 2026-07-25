@@ -318,21 +318,10 @@ class SujianEditorView @JvmOverloads constructor(
                 info?.setTextSelection(selStart, selEnd)
             }
         }
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-            info?.addAction(android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_TEXT)
-        }
+
     }
 
     override fun performAccessibilityAction(action: Int, arguments: android.os.Bundle?): Boolean {
-        if (action == android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_TEXT) {
-            val text = arguments?.getCharSequence(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE)?.toString()
-            if (text != null && isSessionBound) {
-                val currentText = pipeline.getText()
-                val byteLen = currentText.toByteArray(Charsets.UTF_8).size
-                replaceRangeTyped(0, byteLen, text, currentText, EditorTransactionCauseDto.PROGRAMMATIC)
-                return true
-            }
-        }
         return super.performAccessibilityAction(action, arguments)
     }
 
