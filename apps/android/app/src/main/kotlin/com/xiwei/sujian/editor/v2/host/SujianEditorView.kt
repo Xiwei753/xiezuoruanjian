@@ -322,6 +322,9 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     override fun performAccessibilityAction(action: Int, arguments: android.os.Bundle?): Boolean {
+        if (action == android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_TEXT) {
+            return false
+        }
         return super.performAccessibilityAction(action, arguments)
     }
 

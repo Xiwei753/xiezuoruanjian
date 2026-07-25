@@ -145,8 +145,11 @@ class TestSujianAppDependencies(
     override val settingsRepository: SettingsRepository = SettingsRepository(appContext, appServiceBridge, prefsSuffix)
     private val _coordinator = lazy { AnimatedTextEditorCoordinator(appContext, appServiceBridge) }
     override val coordinator: AnimatedTextEditorCoordinator get() = _coordinator.value
+    private var runtimeReleased = false
 
     fun releaseRuntime() {
+        if (runtimeReleased) return
+        runtimeReleased = true
         if (_coordinator.isInitialized()) {
             coordinator.releaseHost()
         }
