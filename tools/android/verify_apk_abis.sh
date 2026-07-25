@@ -182,9 +182,8 @@ if [ -n "$ALL_SO_ENTRIES" ]; then
             continue
         fi
         is_expected=false
-        for expected_abi in "${EXPECTED_ARRAY[@]}"; do
-            expected_trimmed=$(echo "$expected_abi" | xargs)
-            if [ "$abi_found" = "$expected_trimmed" ]; then
+        for expected_abi in "${ELF_VERIFY_ABIS[@]}"; do
+            if [ "$abi_found" = "$expected_abi" ]; then
                 is_expected=true
                 break
             fi
