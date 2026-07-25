@@ -1,7 +1,7 @@
 package com.xiwei.sujian.workspace
 
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -23,7 +23,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class ChapterLifecycleTest {
 
-    private val _composeTestRule = createAndroidComposeRule<MainActivity>()
+    private val _composeTestRule = createEmptyComposeRule()
 
     @get:Rule
     val ruleChain: RuleChain = RuleChain
@@ -42,6 +42,8 @@ class ChapterLifecycleTest {
 
     @Test
     fun createChapter_appearsInList() {
+        val session = getSession()
+        session.launchActivity()
         val testData = initTestData()
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationWorks)
@@ -65,6 +67,8 @@ class ChapterLifecycleTest {
 
     @Test
     fun createChapter_canOpenInEditor() {
+        val session = getSession()
+        session.launchActivity()
         val testData = initTestData()
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationWorks)
@@ -90,8 +94,9 @@ class ChapterLifecycleTest {
 
     @Test
     fun createTwoChapters_canSwitchBetween() {
-        val testData = initTestData()
         val session = getSession()
+        session.launchActivity()
+        val testData = initTestData()
         val repo = session.deps.workspaceRepository
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationWorks)
@@ -162,7 +167,9 @@ class ChapterLifecycleTest {
         var lastState = "editor missing"
         ComposeWait.waitUntil(composeTestRule, {
             try {
-                val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
+                val view = getSession().withActivity { activity ->
+                    activity.findViewById<SujianEditorView>(R.id.editor_content)
+                }
                 when {
                     view == null -> { lastState = "editor missing"; false }
                     view.visibility != android.view.View.VISIBLE -> { lastState = "editor not visible"; false }

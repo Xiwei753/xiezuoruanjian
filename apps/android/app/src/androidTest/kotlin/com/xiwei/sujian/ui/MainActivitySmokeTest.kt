@@ -1,8 +1,8 @@
 package com.xiwei.sujian.ui
 
-import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.xiwei.sujian.support.AndroidTestEnvironment
+import com.xiwei.sujian.support.TestSession
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -12,14 +12,17 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class MainActivitySmokeTest {
 
+    private val testRule = AndroidTestEnvironment.TestDependenciesRule()
+
     @get:Rule
     val ruleChain: RuleChain = RuleChain
-        .outerRule(AndroidTestEnvironment.TestDependenciesRule())
+        .outerRule(testRule)
 
     @Test
     fun testMainActivityLaunch() {
-        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
-            assertNotNull("ActivityScenario should launch MainActivity", scenario)
-        }
+        val session = AndroidTestEnvironment.requireCurrentSession()
+        session.launchActivity()
+        val activity = session.withActivity { it }
+        assertNotNull("Activity should be launched via TestSession", activity)
     }
 }
