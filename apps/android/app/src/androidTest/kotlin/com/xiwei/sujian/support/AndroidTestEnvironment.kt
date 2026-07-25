@@ -30,6 +30,10 @@ class TestSession private constructor(
     private var depsHolder: TestSujianAppDependencies,
     private val context: Context
 ) {
+    private val prefsFileNames = listOf(
+        "sujian_diagnostics_$prefsSuffix",
+        "sujian_device_$prefsSuffix"
+    )
     val deps: TestSujianAppDependencies
         get() = depsHolder
 
@@ -84,6 +88,23 @@ class TestSession private constructor(
 
     fun releaseSession() {
         depsHolder.releaseRuntime()
+        val appContext = context.applicationContext
+        for (name in prefsFileNames) {
+            val prefs = appContext.getSharedPreferences(name, android.content.Context.MODE_PRIVATE)
+            prefs.edit().clear().apply()
+        }
+        val prefsDir = File(appContext.filesDir.parentFile, "shared_prefs")
+        for (name in prefsFileNames) {
+            val prefsFile = File(prefsDir, "$name.xml")
+            if (prefsFile.exists()) {
+                val deleted = prefsFile.delete()
+                if (!deleted) {
+                    throw AssertionError(
+                        "TestSession.releaseSession: Failed to delete SharedPreferences file ${prefsFile.absolutePath}"
+                    )
+                }
+            }
+        }
         try {
             testRootDir.deleteRecursively()
         } catch (e: Exception) {
