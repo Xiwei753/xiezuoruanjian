@@ -35,7 +35,6 @@ class EditorPersistenceTest {
     @get:Rule
     val ruleChain: RuleChain = RuleChain
         .outerRule(AndroidTestEnvironment.TestDependenciesRule())
-        .around(activityRule)
         .around(_composeTestRule)
 
     private val composeTestRule get() = _composeTestRule
