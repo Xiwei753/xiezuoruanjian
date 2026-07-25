@@ -6,6 +6,8 @@ import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.geometry.Offset
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.xiwei.sujian.ui.MainActivity
 import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
@@ -34,15 +36,12 @@ class SettingsPersistenceTest {
     private fun restartRuntime() {
         val session = getSession()
         composeTestRule.activityRule.scenario.close()
-        session.deps.coordinator.releaseHost()
-        val ctx = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
-        val newSession = AndroidTestEnvironment.createSession(ctx)
-        com.xiwei.sujian.runtime.SujianAppDependencies.setTestProvider { _ -> newSession.deps }
+        session.restartRuntime()
+        com.xiwei.sujian.runtime.SujianAppDependencies.setTestProvider { _ -> session.deps }
         androidx.test.core.app.ActivityScenario.launch(MainActivity::class.java)
     }
 
-    @Test
-    fun typingAnimationToggle_persistsAfterRestart() {
+    private fun navigateToEditorSettings() {
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationSettings)
         composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationSettings).performClick()
 
@@ -52,6 +51,12 @@ class SettingsPersistenceTest {
         composeTestRule.onNodeWithTag(SujianSemanticIds.SettingsNavEditor).performClick()
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.SettingsTypingAnimation)
+    }
+
+    @Test
+    fun typingAnimationToggle_persistsAfterRestart() {
+        navigateToEditorSettings()
+
         val toggleNode = composeTestRule.onNodeWithTag(SujianSemanticIds.SettingsTypingAnimation)
         toggleNode.assertIsDisplayed()
 
@@ -78,22 +83,16 @@ class SettingsPersistenceTest {
                     composeTestRule.onNodeWithTag(SujianSemanticIds.SettingsTypingAnimation).assertIsOn()
                 }
                 true
-            } catch (_: AssertionError) {
-                false
+            } catch (e: AssertionError) {
+                throw AssertionError("Typing animation toggle did not reflect expected state after click: ${e.message}")
             }
         }, timeoutMs = 5_000)
 
         restartRuntime()
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationSettings, timeoutMs = 15_000)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationSettings).performClick()
+        navigateToEditorSettings()
 
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.SettingsScreen)
-
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.SettingsNavEditor)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.SettingsNavEditor).performClick()
-
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.SettingsTypingAnimation, timeoutMs = 15_000)
         val restoredNode = composeTestRule.onNodeWithTag(SujianSemanticIds.SettingsTypingAnimation)
         restoredNode.assertIsDisplayed()
         if (wasOn) {
@@ -107,6 +106,11 @@ class SettingsPersistenceTest {
     fun fontSizeSlider_persistsAfterRestart() {
         val session = getSession()
         val initialFontSize = session.deps.settingsRepository.getEffectiveFontSize()
+        val targetFontSize = 22f
+
+        assert(initialFontSize != targetFontSize) {
+            "Initial font size ($initialFontSize) should differ from target ($targetFontSize) for a meaningful test"
+        }
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationSettings)
         composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationSettings).performClick()
@@ -117,19 +121,22 @@ class SettingsPersistenceTest {
         composeTestRule.onNodeWithTag(SujianSemanticIds.SettingsNavAppearance).performClick()
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.SettingsFontSize)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.SettingsFontSize).assertIsDisplayed()
+        val sliderNode = composeTestRule.onNodeWithTag(SujianSemanticIds.SettingsFontSize)
+        sliderNode.assertIsDisplayed()
 
-        val targetFontSize = 22f
-        assert(initialFontSize != targetFontSize) {
-            "Initial font size ($initialFontSize) should differ from target ($targetFontSize) for a meaningful test"
+        val valueRange = 12f..72f
+        val targetProgress = (targetFontSize - valueRange.start) / (valueRange.endInclusive - valueRange.start)
+
+        sliderNode.performTouchInput {
+            val targetX = width * targetProgress
+            down(Offset(targetX, height / 2f))
+            up()
         }
-
-        session.deps.settingsRepository.setFontSize(targetFontSize)
 
         ComposeWait.waitUntil(composeTestRule, {
             val currentFontSize = session.deps.settingsRepository.getEffectiveFontSize()
             currentFontSize == targetFontSize
-        }, timeoutMs = 5_000)
+        }, timeoutMs = 10_000, message = "Font size did not update to $targetFontSize after Slider interaction")
 
         restartRuntime()
 
@@ -137,6 +144,24 @@ class SettingsPersistenceTest {
         val restoredFontSize = newSession.deps.settingsRepository.getEffectiveFontSize()
         assert(restoredFontSize == targetFontSize) {
             "Font size after restart should be $targetFontSize but was $restoredFontSize"
+        }
+
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationSettings, timeoutMs = 15_000)
+        composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationSettings).performClick()
+
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.SettingsScreen)
+
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.SettingsNavAppearance)
+        composeTestRule.onNodeWithTag(SujianSemanticIds.SettingsNavAppearance).performClick()
+
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.SettingsFontSize, timeoutMs = 15_000)
+        val restoredSliderNode = composeTestRule.onNodeWithTag(SujianSemanticIds.SettingsFontSize)
+        restoredSliderNode.assertIsDisplayed()
+        val restoredStateDesc = restoredSliderNode.fetchSemanticsNode().config[
+            androidx.compose.ui.semantics.SemanticsProperties.StateDescription
+        ]
+        assert(restoredStateDesc.contains("22")) {
+            "Slider state description should contain '22' after restart but was '$restoredStateDesc'"
         }
     }
 }

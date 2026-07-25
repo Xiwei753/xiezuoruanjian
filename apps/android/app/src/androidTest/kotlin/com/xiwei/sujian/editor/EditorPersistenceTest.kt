@@ -45,10 +45,8 @@ class EditorPersistenceTest {
     private fun restartRuntime() {
         val session = getSession()
         composeTestRule.activityRule.scenario.close()
-        session.deps.coordinator.releaseHost()
-        val ctx = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
-        val newSession = AndroidTestEnvironment.createSession(ctx)
-        com.xiwei.sujian.runtime.SujianAppDependencies.setTestProvider { _ -> newSession.deps }
+        session.restartRuntime()
+        com.xiwei.sujian.runtime.SujianAppDependencies.setTestProvider { _ -> session.deps }
         androidx.test.core.app.ActivityScenario.launch(MainActivity::class.java)
     }
 
@@ -68,14 +66,7 @@ class EditorPersistenceTest {
 
         composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterId)).performClick()
 
-        ComposeWait.waitUntil(composeTestRule, {
-            try {
-                val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
-                view != null && view.getDisplayText() == "第一段测试正文"
-            } catch (_: Exception) {
-                false
-            }
-        }, timeoutMs = 15_000)
+        waitForEditorContent("第一段测试正文", testData, chapterId)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("，继续写作"))
@@ -87,20 +78,9 @@ class EditorPersistenceTest {
 
         restartRuntime()
 
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationWorks, timeoutMs = 15_000)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationWorks).performClick()
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList)
-        navigateToTestVolume(testData)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterId)).performClick()
+        navigateToChapterAfterRestart(testData, chapterId)
 
-        ComposeWait.waitUntil(composeTestRule, {
-            try {
-                val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
-                view != null && view.isSessionBound && view.getDisplayText() == "第一段测试正文，继续写作"
-            } catch (_: Exception) {
-                false
-            }
-        }, timeoutMs = 15_000)
+        waitForEditorContent("第一段测试正文，继续写作", testData, chapterId)
     }
 
     @Test
@@ -115,20 +95,9 @@ class EditorPersistenceTest {
 
         restartRuntime()
 
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationWorks, timeoutMs = 15_000)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationWorks).performClick()
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList)
-        navigateToTestVolume(testData)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterId)).performClick()
+        navigateToChapterAfterRestart(testData, chapterId)
 
-        ComposeWait.waitUntil(composeTestRule, {
-            try {
-                val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
-                view != null && view.isSessionBound && view.getDisplayText() == "重启测试正文"
-            } catch (_: Exception) {
-                false
-            }
-        }, timeoutMs = 15_000)
+        waitForEditorContent("重启测试正文", testData, chapterId)
     }
 
     @Test
@@ -147,20 +116,9 @@ class EditorPersistenceTest {
 
         restartRuntime()
 
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationWorks, timeoutMs = 15_000)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationWorks).performClick()
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList)
-        navigateToTestVolume(testData)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterId)).performClick()
+        navigateToChapterAfterRestart(testData, chapterId)
 
-        ComposeWait.waitUntil(composeTestRule, {
-            try {
-                val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
-                view != null && view.isSessionBound && view.getDisplayText() == testText
-            } catch (_: Exception) {
-                false
-            }
-        }, timeoutMs = 15_000)
+        waitForEditorContent(testText, testData, chapterId)
 
         val viewAfterRestart = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
         assertEquals(testText, viewAfterRestart.getDisplayText())
@@ -180,30 +138,68 @@ class EditorPersistenceTest {
         val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
         assertEquals(initialText, view.getDisplayText())
 
-        val insertOffset = "AB".toByteArray(Charsets.UTF_8).size
-        view.replaceRangeTyped(insertOffset, insertOffset, "XY", "", uniffi.writer_core.EditorTransactionCauseDto.TYPING)
+        val insertByteOffset = "AB".toByteArray(Charsets.UTF_8).size
+        view.replaceRangeTyped(insertByteOffset, insertByteOffset, "XY", "", uniffi.writer_core.EditorTransactionCauseDto.TYPING)
 
         ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
 
         val expectedAfterInsert = "ABXYCDE"
         assertEquals(expectedAfterInsert, view.getDisplayText())
 
+        val utf8Length = expectedAfterInsert.toByteArray(Charsets.UTF_8).size
+        assertEquals(
+            "UTF-8 byte length mismatch",
+            "ABXYCDE".toByteArray(Charsets.UTF_8).size,
+            utf8Length
+        )
+
+        val utf16Length = expectedAfterInsert.length
+        assertEquals(
+            "UTF-16 code unit length mismatch",
+            "ABXYCDE".length,
+            utf16Length
+        )
+
         restartRuntime()
 
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationWorks, timeoutMs = 15_000)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationWorks).performClick()
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList)
-        navigateToTestVolume(testData)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterId)).performClick()
+        navigateToChapterAfterRestart(testData, chapterId)
 
-        ComposeWait.waitUntil(composeTestRule, {
-            try {
-                val v = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
-                v != null && v.isSessionBound && v.getDisplayText() == expectedAfterInsert
-            } catch (_: Exception) {
-                false
-            }
-        }, timeoutMs = 15_000)
+        waitForEditorContent(expectedAfterInsert, testData, chapterId)
+
+        val viewAfterRestart = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
+        assertEquals(expectedAfterInsert, viewAfterRestart.getDisplayText())
+    }
+
+    @Test
+    fun commitText_unicodeMiddleInsert_persists() {
+        val testData = initTestData()
+        val chapterId = openTestChapter("编辑器Unicode中间插入章节", testData)
+
+        val initialText = "你好世界"
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText(initialText))
+
+        ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
+
+        val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
+        assertEquals(initialText, view.getDisplayText())
+
+        val insertByteOffset = "你好".toByteArray(Charsets.UTF_8).size
+        view.replaceRangeTyped(insertByteOffset, insertByteOffset, "中间", "", uniffi.writer_core.EditorTransactionCauseDto.TYPING)
+
+        ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
+
+        val expectedAfterInsert = "你好中间世界"
+        assertEquals(expectedAfterInsert, view.getDisplayText())
+
+        restartRuntime()
+
+        navigateToChapterAfterRestart(testData, chapterId)
+
+        waitForEditorContent(expectedAfterInsert, testData, chapterId)
+
+        val viewAfterRestart = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
+        assertEquals(expectedAfterInsert, viewAfterRestart.getDisplayText())
     }
 
     private fun openTestChapter(chapterTitle: String, testData: AndroidTestEnvironment.TestProjectData): String {
@@ -225,16 +221,67 @@ class EditorPersistenceTest {
         val chapterId = waitForChapterByTitle(chapterTitle, testData)
         composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterId)).performClick()
 
+        waitForEditorReady(testData.projectId, testData.volumeId, chapterId)
+
+        return chapterId
+    }
+
+    private fun navigateToChapterAfterRestart(testData: AndroidTestEnvironment.TestProjectData, chapterId: String) {
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationWorks, timeoutMs = 15_000)
+        composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationWorks).performClick()
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList)
+        navigateToTestVolume(testData)
+        composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterId)).performClick()
+        waitForEditorReady(testData.projectId, testData.volumeId, chapterId)
+    }
+
+    private fun waitForEditorReady(projectId: String, volumeId: String, chapterId: String) {
+        val expectedTargetId = "chapter-body:$projectId:$volumeId:$chapterId"
         ComposeWait.waitUntil(composeTestRule, {
             try {
                 val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
-                view != null && view.visibility == android.view.View.VISIBLE && view.isSessionBound
-            } catch (_: Exception) {
-                false
+                if (view == null || view.visibility != android.view.View.VISIBLE || !view.isSessionBound) {
+                    throw AssertionError("Editor not visible or session not bound")
+                }
+                true
+            } catch (e: Exception) {
+                throw AssertionError("waitForEditorReady: Editor not ready for chapter $chapterId: ${e.message}")
             }
         }, timeoutMs = 15_000)
 
-        return chapterId
+        ComposeWait.waitUntil(composeTestRule, {
+            val coordinator = getSession().deps.coordinator
+            if (coordinator.activeTargetId != expectedTargetId) {
+                throw AssertionError(
+                    "waitForEditorReady: Expected activeTargetId=$expectedTargetId but was ${coordinator.activeTargetId}"
+                )
+            }
+            true
+        }, timeoutMs = 10_000)
+    }
+
+    private fun waitForEditorContent(
+        expectedContent: String,
+        testData: AndroidTestEnvironment.TestProjectData,
+        chapterId: String
+    ) {
+        ComposeWait.waitUntil(composeTestRule, {
+            try {
+                val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
+                if (view == null || !view.isSessionBound) {
+                    throw AssertionError("Editor not bound")
+                }
+                val actual = view.getDisplayText()
+                if (actual != expectedContent) {
+                    throw AssertionError("Expected content '$expectedContent' but was '$actual'")
+                }
+                true
+            } catch (e: Exception) {
+                throw AssertionError(
+                    "waitForEditorContent: Content mismatch for chapter $chapterId: ${e.message}"
+                )
+            }
+        }, timeoutMs = 15_000)
     }
 
     private fun waitForChapterByTitle(title: String, testData: AndroidTestEnvironment.TestProjectData): String {
@@ -247,7 +294,9 @@ class EditorPersistenceTest {
             if (found != null) {
                 chapterId = found.id
                 true
-            } else false
+            } else {
+                throw AssertionError("Chapter '$title' not found in volume ${testData.volumeId}")
+            }
         }, timeoutMs = 15_000)
         return chapterId
     }
@@ -259,18 +308,14 @@ class EditorPersistenceTest {
                 composeTestRule.onNodeWithTag(volumeTag).assertExists()
                 true
             } catch (_: AssertionError) {
-                try {
-                    composeTestRule.onNodeWithText(testData.projectTitle).performClick()
-                } catch (e: Exception) {
-                    throw AssertionError(
-                        "navigateToTestVolume: Failed to click project '${testData.projectTitle}': ${e.message}"
-                    )
-                }
+                composeTestRule.onNodeWithText(testData.projectTitle).performClick()
                 try {
                     composeTestRule.onNodeWithTag(volumeTag).assertExists()
                     true
-                } catch (_: AssertionError) {
-                    false
+                } catch (e: AssertionError) {
+                    throw AssertionError(
+                        "navigateToTestVolume: Volume tag '$volumeTag' not found after clicking project '${testData.projectTitle}': ${e.message}"
+                    )
                 }
             }
         }, timeoutMs = 15_000)

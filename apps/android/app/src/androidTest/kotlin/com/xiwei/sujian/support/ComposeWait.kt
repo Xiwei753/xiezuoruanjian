@@ -32,6 +32,8 @@ object ComposeWait {
         expectedState: String,
         timeoutMs: Long = 15_000L
     ) {
+        var lastObservedState: String? = null
+        var lastError: String? = null
         waitUntil(rule, {
             try {
                 val node = rule.onNode(androidx.compose.ui.test.hasTestTag(
@@ -41,18 +43,28 @@ object ComposeWait {
                 val stateDesc = node.fetchSemanticsNode().config[
                     androidx.compose.ui.semantics.SemanticsProperties.StateDescription
                 ]
+                lastObservedState = stateDesc
                 stateDesc == expectedState
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                lastError = "Exception while checking save status: ${e.message}"
                 false
             }
-        }, timeoutMs)
+        }, timeoutMs, "Expected save status '$expectedState' but last observed was '$lastObservedState'. Last error: $lastError")
     }
 
     fun waitUntil(
         rule: ComposeTestRule,
         condition: () -> Boolean,
-        timeoutMs: Long = DEFAULT_TIMEOUT_MS
+        timeoutMs: Long = DEFAULT_TIMEOUT_MS,
+        message: String? = null
     ) {
-        rule.waitUntil(timeoutMs, condition)
+        try {
+            rule.waitUntil(timeoutMs, condition)
+        } catch (e: AssertionError) {
+            if (message != null) {
+                throw AssertionError("$message. Original: ${e.message}", e)
+            }
+            throw e
+        }
     }
 }

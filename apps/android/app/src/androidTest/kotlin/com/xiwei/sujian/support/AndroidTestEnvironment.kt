@@ -18,8 +18,13 @@ import java.util.UUID
 class TestSession private constructor(
     val testRootDir: File,
     val workspaceDir: File,
-    val deps: TestSujianAppDependencies
+    val prefsSuffix: String,
+    private var depsHolder: TestSujianAppDependencies,
+    private val context: Context
 ) {
+    val deps: TestSujianAppDependencies
+        get() = depsHolder
+
     companion object {
         fun create(context: Context): TestSession {
             val appContext = context.applicationContext
@@ -39,52 +44,90 @@ class TestSession private constructor(
                 manifest.writeText("{\"version\": 1}")
             }
 
+            val prefsSuffix = sessionId.take(8)
+
             val deps = TestSujianAppDependencies(
                 appContext,
-                workspaceDir.absolutePath
+                testRootDir = testRootDir,
+                workspaceDir = workspaceDir,
+                prefsSuffix = prefsSuffix
             )
 
             return TestSession(
                 testRootDir = testRootDir,
                 workspaceDir = workspaceDir,
-                deps = deps
+                prefsSuffix = prefsSuffix,
+                depsHolder = deps,
+                context = appContext
             )
         }
     }
 
+    fun restartRuntime(): TestSession {
+        depsHolder.releaseRuntime()
+        val newDeps = TestSujianAppDependencies(
+            context,
+            testRootDir = testRootDir,
+            workspaceDir = workspaceDir,
+            prefsSuffix = prefsSuffix
+        )
+        depsHolder = newDeps
+        return this
+    }
+
     fun release() {
-        deps.release()
+        depsHolder.releaseRuntime()
         try {
             testRootDir.deleteRecursively()
-        } catch (_: Exception) { }
+        } catch (e: Exception) {
+            throw AssertionError(
+                "TestSession.release: Failed to delete test root directory ${testRootDir.absolutePath}: ${e.message}"
+            )
+        }
     }
 }
 
 class TestSujianAppDependencies(
     context: Context,
-    workspacePath: String? = null,
-    appDataPath: String? = null,
-    cachePath: String? = null,
-    logPath: String? = null,
-    noBackupPath: String? = null
+    testRootDir: File? = null,
+    workspaceDir: File? = null,
+    prefsSuffix: String = ""
 ) : SujianAppDependencies {
     private val appContext = context.applicationContext
-    private val testWorkspaceDir = File(
-        workspacePath ?: "${appContext.cacheDir}/test_workspace_${UUID.randomUUID()}"
-    )
-    private val testAppDataDir = appDataPath ?: appContext.filesDir.absolutePath
-    private val testCacheDir = cachePath ?: appContext.cacheDir.absolutePath
-    private val testLogDir = logPath ?: "${appContext.cacheDir.absolutePath}/log"
-    private val testNoBackupDir = noBackupPath ?: appContext.noBackupFilesDir.absolutePath
+    private val resolvedTestRoot = testRootDir ?: File(appContext.cacheDir, "test_workspace_${UUID.randomUUID()}")
+    private val testWorkspaceDir = workspaceDir ?: File(resolvedTestRoot, "workspace")
+    private val testAppDataDir = File(resolvedTestRoot, "app_data")
+    private val testCacheDir = File(resolvedTestRoot, "cache")
+    private val testLogDir = File(resolvedTestRoot, "logs")
+    private val testNoBackupDir = File(resolvedTestRoot, "no_backup")
+
+    init {
+        testAppDataDir.mkdirs()
+        testCacheDir.mkdirs()
+        testLogDir.mkdirs()
+        testNoBackupDir.mkdirs()
+        if (!testWorkspaceDir.exists()) {
+            testWorkspaceDir.mkdirs()
+            File(testWorkspaceDir, "projects").mkdirs()
+            File(testWorkspaceDir, "app-meta/settings").mkdirs()
+            File(testWorkspaceDir, "app-meta/logs").mkdirs()
+            File(testWorkspaceDir, "trash").mkdirs()
+            File(testWorkspaceDir, "sqlite_cache").mkdirs()
+            val manifest = File(testWorkspaceDir, "workspace_manifest.json")
+            if (!manifest.exists()) {
+                manifest.writeText("{\"version\": 1}")
+            }
+        }
+    }
 
     private val testHolder: WriterAppServiceHolder = WriterAppServiceHolder(
         workspacePath = testWorkspaceDir.absolutePath,
         platformInit = PlatformInitDto(
             platform = PlatformDto.ANDROID,
-            appDataDir = testAppDataDir,
-            cacheDir = testCacheDir,
-            logDir = testLogDir,
-            noBackupDir = testNoBackupDir,
+            appDataDir = testAppDataDir.absolutePath,
+            cacheDir = testCacheDir.absolutePath,
+            logDir = testLogDir.absolutePath,
+            noBackupDir = testNoBackupDir.absolutePath,
             deviceId = "test-${UUID.randomUUID()}",
             appVersion = "test",
             locale = java.util.Locale.getDefault().toLanguageTag(),
@@ -97,19 +140,22 @@ class TestSujianAppDependencies(
     )
     override val appServiceBridge: AppServiceBridge = AppServiceBridge(testHolder)
     override val workspaceRepository: WorkspaceRepository = WorkspaceRepository(appContext, appServiceBridge)
-    override val settingsRepository: SettingsRepository = SettingsRepository(appContext, appServiceBridge)
+    override val settingsRepository: SettingsRepository = SettingsRepository(appContext, appServiceBridge, prefsSuffix)
     override val coordinator: AnimatedTextEditorCoordinator = AnimatedTextEditorCoordinator(appContext, appServiceBridge)
 
-    private val settingsSnapshot = settingsRepository.getLocalSettings()
+    fun releaseRuntime() {
+        coordinator.releaseHost()
+    }
 
     override fun release() {
-        coordinator.releaseHost()
+        releaseRuntime()
         try {
-            settingsRepository.saveLocalSettings(settingsSnapshot)
-        } catch (_: Exception) { }
-        try {
-            testWorkspaceDir.deleteRecursively()
-        } catch (_: Exception) { }
+            resolvedTestRoot.deleteRecursively()
+        } catch (e: Exception) {
+            throw AssertionError(
+                "TestSujianAppDependencies.release: Failed to delete test directory ${resolvedTestRoot.absolutePath}: ${e.message}"
+            )
+        }
     }
 }
 
