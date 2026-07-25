@@ -1,6 +1,7 @@
 [versions]
 agp = "8.9.2"
 kotlin = "2.0.21"
+kotlinxSerialization = "1.7.3"
 ksp = "2.0.21-1.0.28"
 composeBom = "2026.06.00"
 material3 = "1.4.0"
@@ -56,6 +57,7 @@ androidx-window-core = { group = "androidx.window", name = "window-core", versio
 
 desugar = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugar" }
 jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
+kotlinx-serialization-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-core", version.ref = "kotlinxSerialization" }
 
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
@@ -68,3 +70,4 @@ android-library = { id = "com.android.library", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-parcelize = { id = "org.jetbrains.kotlin.plugin.parcelize", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
