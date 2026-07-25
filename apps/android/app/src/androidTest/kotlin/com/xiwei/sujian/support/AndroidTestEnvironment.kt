@@ -29,6 +29,15 @@ class TestSession private constructor(
 
             val workspaceDir = File(testRootDir, "workspace")
             workspaceDir.mkdirs()
+            File(workspaceDir, "projects").mkdirs()
+            File(workspaceDir, "app-meta/settings").mkdirs()
+            File(workspaceDir, "app-meta/logs").mkdirs()
+            File(workspaceDir, "trash").mkdirs()
+            File(workspaceDir, "sqlite_cache").mkdirs()
+            val manifest = File(workspaceDir, "workspace_manifest.json")
+            if (!manifest.exists()) {
+                manifest.writeText("{\"version\": 1}")
+            }
 
             val deps = TestSujianAppDependencies(
                 appContext,
