@@ -17,6 +17,11 @@ import org.junit.runners.model.Statement
 import org.junit.runner.Description
 import java.util.UUID
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import androidx.test.runner.lifecycle.ActivityLifecycleCallback
+import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+import androidx.test.runner.lifecycle.Stage
 
 class TestSession private constructor(
     val testRootDir: File,
@@ -153,6 +158,7 @@ class TestSujianAppDependencies(
         if (_coordinator.isInitialized()) {
             coordinator.releaseHost()
         }
+        testHolder.close()
     }
 
     override fun release() {
@@ -183,24 +189,24 @@ class RestartableMainActivityRule(
     fun restartRuntimeAndActivity() {
         val sc = scenario
         if (sc != null) {
+            val destroyLatch = CountDownLatch(1)
+            val lifecycleCallback = ActivityLifecycleCallback { activity, stage ->
+                if (stage == Stage.DESTROYED && activity is MainActivity) {
+                    destroyLatch.countDown()
+                }
+            }
+            ActivityLifecycleMonitorRegistry.addLifecycleCallback(lifecycleCallback)
+
             sc.close()
             scenario = null
-        }
 
-        val destroyed = arrayOf(false)
-        val maxWaitMs = 10_000L
-        val startMs = System.currentTimeMillis()
-        while (!destroyed[0] && (System.currentTimeMillis() - startMs) < maxWaitMs) {
-            try {
-                sc?.onActivity { activity ->
-                    destroyed[0] = !activity.isDestroyed
-                }
-            } catch (_: Exception) {
-                destroyed[0] = true
-            }
-            if (!destroyed[0]) {
-                Thread.sleep(100)
-            }
+            val destroyed = destroyLatch.await(10, TimeUnit.SECONDS)
+            ActivityLifecycleMonitorRegistry.removeLifecycleCallback(lifecycleCallback)
+
+            Assert.assertTrue(
+                "Old Activity was not destroyed within 10 seconds after scenario.close()",
+                destroyed
+            )
         }
 
         val session = sessionProvider()
@@ -211,6 +217,7 @@ class RestartableMainActivityRule(
         scenario = ActivityScenario.launch(MainActivity::class.java)
 
         val resumed = arrayOf(false)
+        val maxWaitMs = 10_000L
         val resumeStartMs = System.currentTimeMillis()
         while (!resumed[0] && (System.currentTimeMillis() - resumeStartMs) < maxWaitMs) {
             try {

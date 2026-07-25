@@ -17,13 +17,20 @@ class WriterAppServiceHolder(
     val secureStorageError: String? = null,
     private val keystoreStorage: com.xiwei.sujian.platform.AndroidKeystoreSecureStorage? = null,
 ) {
-    val service: WriterAppService by lazy {
+    private val serviceLazy = lazy {
         if (platformInit != null && secureStorageProvider != null) {
             openWorkspaceWithSecureStorage(workspacePath, platformInit, secureStorageProvider)
         } else if (platformInit != null) {
             openWorkspaceWithInit(workspacePath, platformInit)
         } else {
             WriterAppService(workspacePath)
+        }
+    }
+    val service: WriterAppService by serviceLazy
+
+    fun close() {
+        if (serviceLazy.isInitialized()) {
+            service.close()
         }
     }
 
