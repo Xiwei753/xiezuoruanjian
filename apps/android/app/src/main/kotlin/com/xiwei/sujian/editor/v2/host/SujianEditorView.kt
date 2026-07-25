@@ -318,7 +318,11 @@ class SujianEditorView @JvmOverloads constructor(
                 info?.setTextSelection(selStart, selEnd)
             }
         }
-
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+            info?.removeAction(
+                android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_TEXT
+            )
+        }
     }
 
     override fun performAccessibilityAction(action: Int, arguments: android.os.Bundle?): Boolean {
