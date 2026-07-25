@@ -161,8 +161,12 @@ object AndroidTestEnvironment {
         override fun apply(base: Statement, description: Description): Statement {
             return object : Statement() {
                 override fun evaluate() {
-                    val ctx = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
-                    val session = createSession(ctx)
+                    val instrumentation = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
+                    val ctx = instrumentation.targetContext
+                    lateinit var session: TestSession
+                    instrumentation.runOnMainSync {
+                        session = createSession(ctx)
+                    }
                     SujianAppDependencies.setTestProvider { _ -> session.deps }
                     try {
                         base.evaluate()
