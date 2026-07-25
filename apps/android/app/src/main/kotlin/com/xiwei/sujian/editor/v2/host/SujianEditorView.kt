@@ -319,7 +319,7 @@ class SujianEditorView @JvmOverloads constructor(
             }
         }
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-            info?.removeAction(
+            info?.addAction(
                 android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_TEXT
             )
         }
@@ -327,6 +327,31 @@ class SujianEditorView @JvmOverloads constructor(
 
     override fun performAccessibilityAction(action: Int, arguments: android.os.Bundle?): Boolean {
         if (action == android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_TEXT) {
+            if (!isSessionBound) return false
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                val text = arguments?.getCharSequence(
+                    android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE
+                )?.toString() ?: return false
+                val currentText = pipeline.getText()
+                val currentByteLen = currentText.toByteArray(Charsets.UTF_8).size
+                replaceRangeTyped(0, currentByteLen, text, currentText, EditorTransactionCauseDto.PROGRAMMATIC)
+                val endByteOffset = text.toByteArray(Charsets.UTF_8).size
+                setSelectionTyped(endByteOffset, endByteOffset)
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.JELLY_BEAN_MR2) {
+                    val event = android.view.accessibility.AccessibilityEvent.obtain(
+                        android.view.accessibility.AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
+                    )
+                    event.text.add(text)
+                    event.fromIndex = 0
+                    event.removedCount = currentText.length
+                    event.addedCount = text.length
+                    event.className = android.widget.EditText::class.java.name
+                    event.packageName = context.packageName
+                    event.source = this
+                    parent?.requestSendAccessibilityEvent(this, event)
+                }
+                return true
+            }
             return false
         }
         return super.performAccessibilityAction(action, arguments)
