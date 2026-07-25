@@ -49,20 +49,22 @@ object ComposeWait {
                 lastError = "Exception while checking save status: ${e.message}"
                 false
             }
-        }, timeoutMs, "Expected save status '$expectedState' but last observed was '$lastObservedState'. Last error: $lastError")
+        }, timeoutMs) {
+            "Expected save status '$expectedState' but last observed was '$lastObservedState'. Last error: $lastError"
+        }
     }
 
     fun waitUntil(
         rule: ComposeTestRule,
         condition: () -> Boolean,
         timeoutMs: Long = DEFAULT_TIMEOUT_MS,
-        message: String? = null
+        message: (() -> String)? = null
     ) {
         try {
             rule.waitUntil(timeoutMs, condition)
         } catch (e: AssertionError) {
             if (message != null) {
-                throw AssertionError("$message. Original: ${e.message}", e)
+                throw AssertionError("${message()}. Original: ${e.message}", e)
             }
             throw e
         }

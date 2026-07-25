@@ -8,6 +8,7 @@ import androidx.test.espresso.matcher.ViewMatchers
 import com.xiwei.sujian.R
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import org.hamcrest.Matcher
+import org.junit.Assert
 
 object EditorCommitTextAction {
     fun commitText(text: String): ViewAction {
@@ -24,35 +25,41 @@ object EditorCommitTextAction {
                         "EditorCommitTextAction: View with id editor_content is not a SujianEditorView, got ${view.javaClass.simpleName}"
                     )
 
-                assert(editorView.visibility == View.VISIBLE) {
-                    "EditorCommitTextAction: SujianEditorView is not VISIBLE (visibility=${editorView.visibility})"
-                }
+                Assert.assertTrue(
+                    "EditorCommitTextAction: SujianEditorView is not VISIBLE (visibility=${editorView.visibility})",
+                    editorView.visibility == View.VISIBLE
+                )
 
-                assert(editorView.isEnabled) {
-                    "EditorCommitTextAction: SujianEditorView is not enabled"
-                }
+                Assert.assertTrue(
+                    "EditorCommitTextAction: SujianEditorView is not enabled",
+                    editorView.isEnabled
+                )
 
-                assert(editorView.isSessionBound) {
-                    "EditorCommitTextAction: SujianEditorView does not have an editing session bound"
-                }
+                Assert.assertTrue(
+                    "EditorCommitTextAction: SujianEditorView does not have an editing session bound",
+                    editorView.isSessionBound
+                )
 
                 val focusOk = editorView.requestFocus()
-                assert(focusOk) {
-                    "EditorCommitTextAction: requestFocus() returned false"
-                }
+                Assert.assertTrue(
+                    "EditorCommitTextAction: requestFocus() returned false",
+                    focusOk
+                )
 
                 uiController.loopMainThreadUntilIdle()
 
                 val outAttrs = EditorInfo()
                 val ic = editorView.onCreateInputConnection(outAttrs)
-                assert(ic != null) {
-                    "EditorCommitTextAction: onCreateInputConnection returned null"
-                }
+                Assert.assertNotNull(
+                    "EditorCommitTextAction: onCreateInputConnection returned null",
+                    ic
+                )
 
                 val commitOk = ic!!.commitText(text, 1)
-                assert(commitOk) {
-                    "EditorCommitTextAction: commitText returned false"
-                }
+                Assert.assertTrue(
+                    "EditorCommitTextAction: commitText returned false",
+                    commitOk
+                )
 
                 uiController.loopMainThreadUntilIdle()
             }

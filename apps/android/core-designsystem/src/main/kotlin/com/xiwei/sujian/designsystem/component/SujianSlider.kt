@@ -16,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
@@ -40,7 +41,12 @@ fun SujianSlider(
     val dimensions = LocalSujianDimensions.current
     val displayLabel = valueLabel ?: valueFormatter?.invoke(value) ?: String.format("%.1f", value)
 
-    Column(modifier = modifier.fillMaxWidth().then(if (semanticId != null) Modifier.testTag(semanticId) else Modifier)) {
+    Column(modifier = modifier.fillMaxWidth().then(
+        if (semanticId != null) Modifier.semantics(mergeDescendants = true) {
+            set(SemanticsProperties.TestTag, semanticId)
+        }
+        else Modifier
+    )) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,

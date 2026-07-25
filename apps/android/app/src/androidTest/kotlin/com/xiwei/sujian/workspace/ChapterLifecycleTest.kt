@@ -14,6 +14,7 @@ import com.xiwei.sujian.support.AndroidTestEnvironment
 import com.xiwei.sujian.support.ComposeWait
 import com.xiwei.sujian.support.TestSession
 import com.xiwei.sujian.R
+import org.junit.Assert.assertNotEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
@@ -124,9 +125,11 @@ class ChapterLifecycleTest {
 
         val coordinator = session.deps.coordinator
         val targetIdA = "chapter-body:${testData.projectId}:${testData.volumeId}:$chapterAId"
+        var lastTargetId: String? = null
         ComposeWait.waitUntil(composeTestRule, {
+            lastTargetId = coordinator.activeTargetId
             coordinator.activeTargetId == targetIdA
-        }, timeoutMs = 10_000, message = "activeTargetId should be $targetIdA after opening chapter A")
+        }, timeoutMs = 10_000, message = { "activeTargetId should be $targetIdA but was $lastTargetId after opening chapter A" })
 
         composeTestRule.onNodeWithText("交替章节A").assertIsDisplayed()
 
@@ -138,15 +141,15 @@ class ChapterLifecycleTest {
         waitForEditorBoundToChapter(testData.projectId, testData.volumeId, chapterBId, "交替章节B")
 
         val targetIdB = "chapter-body:${testData.projectId}:${testData.volumeId}:$chapterBId"
+        var lastTargetIdB: String? = null
         ComposeWait.waitUntil(composeTestRule, {
+            lastTargetIdB = coordinator.activeTargetId
             coordinator.activeTargetId == targetIdB
-        }, timeoutMs = 10_000, message = "activeTargetId should be $targetIdB after opening chapter B")
+        }, timeoutMs = 10_000, message = { "activeTargetId should be $targetIdB but was $lastTargetIdB after opening chapter B" })
 
         composeTestRule.onNodeWithText("交替章节B").assertIsDisplayed()
 
-        assert(targetIdA != targetIdB) {
-            "Chapters A and B should have different target IDs"
-        }
+        assertNotEquals("Chapters A and B should have different target IDs", targetIdA, targetIdB)
     }
 
     private fun waitForEditorBoundToChapter(
@@ -156,35 +159,28 @@ class ChapterLifecycleTest {
         expectedTitle: String
     ) {
         val expectedTargetId = "chapter-body:$projectId:$volumeId:$chapterId"
+        var lastState = "editor missing"
         ComposeWait.waitUntil(composeTestRule, {
             try {
                 val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
-                if (view == null || view.visibility != android.view.View.VISIBLE || !view.isSessionBound) {
-                    throw AssertionError("Editor view not visible or session not bound")
+                when {
+                    view == null -> { lastState = "editor missing"; false }
+                    view.visibility != android.view.View.VISIBLE -> { lastState = "editor not visible"; false }
+                    !view.isSessionBound -> { lastState = "editor not bound"; false }
+                    else -> true
                 }
-                true
             } catch (e: Exception) {
-                throw AssertionError(
-                    "waitForEditorBoundToChapter: Editor not ready for chapter $chapterId: ${e.message}"
-                )
+                lastState = "exception: ${e.message}"
+                false
             }
-        }, timeoutMs = 15_000)
+        }, timeoutMs = 15_000, message = { "Editor did not become ready for chapter $chapterId. Last state: $lastState" })
 
+        var lastTargetId: String? = null
         ComposeWait.waitUntil(composeTestRule, {
-            try {
-                val coordinator = getSession().deps.coordinator
-                if (coordinator.activeTargetId != expectedTargetId) {
-                    throw AssertionError(
-                        "Expected activeTargetId=$expectedTargetId but was ${coordinator.activeTargetId}"
-                    )
-                }
-                true
-            } catch (e: Exception) {
-                throw AssertionError(
-                    "waitForEditorBoundToChapter: activeTargetId mismatch for chapter $chapterId: ${e.message}"
-                )
-            }
-        }, timeoutMs = 10_000)
+            val coordinator = getSession().deps.coordinator
+            lastTargetId = coordinator.activeTargetId
+            coordinator.activeTargetId == expectedTargetId
+        }, timeoutMs = 10_000, message = { "activeTargetId should be $expectedTargetId but was $lastTargetId for chapter $chapterId" })
 
         composeTestRule.onNodeWithText(expectedTitle).assertIsDisplayed()
     }
@@ -200,30 +196,27 @@ class ChapterLifecycleTest {
                 chapterId = found.id
                 true
             } else {
-                throw AssertionError("Chapter '$title' not found in volume ${testData.volumeId}")
+                false
             }
-        }, timeoutMs = 15_000)
+        }, timeoutMs = 15_000, message = { "Chapter '$title' not found in volume ${testData.volumeId}" })
         return chapterId
     }
 
     private fun navigateToTestVolume(testData: AndroidTestEnvironment.TestProjectData) {
         val volumeTag = SujianSemanticIds.volume(testData.volumeId)
+        var clickedProject = false
         ComposeWait.waitUntil(composeTestRule, {
             try {
                 composeTestRule.onNodeWithTag(volumeTag).assertExists()
                 true
             } catch (_: AssertionError) {
-                composeTestRule.onNodeWithText(testData.projectTitle).performClick()
-                try {
-                    composeTestRule.onNodeWithTag(volumeTag).assertExists()
-                    true
-                } catch (e: AssertionError) {
-                    throw AssertionError(
-                        "navigateToTestVolume: Volume tag '$volumeTag' not found after clicking project '${testData.projectTitle}': ${e.message}"
-                    )
+                if (!clickedProject) {
+                    composeTestRule.onNodeWithText(testData.projectTitle).performClick()
+                    clickedProject = true
                 }
+                false
             }
-        }, timeoutMs = 15_000)
+        }, timeoutMs = 15_000, message = { "Volume tag '$volumeTag' not found after clicking project '${testData.projectTitle}'" })
         composeTestRule.onNodeWithTag(volumeTag).performClick()
     }
 }

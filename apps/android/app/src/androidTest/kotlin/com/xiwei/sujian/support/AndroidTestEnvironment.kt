@@ -1,14 +1,17 @@
 package com.xiwei.sujian.support
 
 import android.content.Context
+import androidx.test.core.app.ActivityScenario
 import com.xiwei.sujian.data.AppServiceBridge
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.data.WriterAppServiceHolder
 import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
 import com.xiwei.sujian.runtime.SujianAppDependencies
+import com.xiwei.sujian.ui.MainActivity
 import uniffi.writer_core.PlatformDto
 import uniffi.writer_core.PlatformInitDto
+import org.junit.Assert
 import org.junit.rules.TestRule
 import org.junit.runners.model.Statement
 import org.junit.runner.Description
@@ -24,6 +27,8 @@ class TestSession private constructor(
 ) {
     val deps: TestSujianAppDependencies
         get() = depsHolder
+
+    private var scenario: ActivityScenario<MainActivity>? = null
 
     companion object {
         fun create(context: Context): TestSession {
@@ -46,12 +51,15 @@ class TestSession private constructor(
 
             val prefsSuffix = sessionId.take(8)
 
-            val deps = TestSujianAppDependencies(
-                appContext,
-                testRootDir = testRootDir,
-                workspaceDir = workspaceDir,
-                prefsSuffix = prefsSuffix
-            )
+            lateinit var deps: TestSujianAppDependencies
+            androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                deps = TestSujianAppDependencies(
+                    appContext,
+                    testRootDir = testRootDir,
+                    workspaceDir = workspaceDir,
+                    prefsSuffix = prefsSuffix
+                )
+            }
 
             return TestSession(
                 testRootDir = testRootDir,
@@ -63,19 +71,43 @@ class TestSession private constructor(
         }
     }
 
-    fun restartRuntime(): TestSession {
-        depsHolder.releaseRuntime()
-        val newDeps = TestSujianAppDependencies(
-            context,
-            testRootDir = testRootDir,
-            workspaceDir = workspaceDir,
-            prefsSuffix = prefsSuffix
-        )
-        depsHolder = newDeps
-        return this
+    fun launchActivity() {
+        scenario?.close()
+        SujianAppDependencies.setTestProvider { _ -> depsHolder }
+        scenario = ActivityScenario.launch(MainActivity::class.java)
+    }
+
+    fun closeActivity() {
+        scenario?.close()
+        scenario = null
+    }
+
+    fun <T> withActivity(block: (MainActivity) -> T): T {
+        val sc = scenario ?: throw IllegalStateException("No active ActivityScenario. Call launchActivity() first.")
+        var result: Any? = null
+        sc.onActivity { result = block(it) }
+        @Suppress("UNCHECKED_CAST")
+        return result as T
+    }
+
+    fun restartRuntimeAndActivity() {
+        closeActivity()
+        val instrumentation = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
+        instrumentation.runOnMainSync {
+            depsHolder.releaseRuntime()
+            depsHolder = TestSujianAppDependencies(
+                context,
+                testRootDir = testRootDir,
+                workspaceDir = workspaceDir,
+                prefsSuffix = prefsSuffix
+            )
+        }
+        SujianAppDependencies.setTestProvider { _ -> depsHolder }
+        launchActivity()
     }
 
     fun release() {
+        closeActivity()
         depsHolder.releaseRuntime()
         try {
             testRootDir.deleteRecursively()
