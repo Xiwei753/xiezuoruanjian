@@ -462,9 +462,9 @@ class SettingsViewModel : ViewModel() {
                                         val plan = r.data
                                         val msg = buildString {
                                             append("↑${plan.filesToUpload.size} ↓${plan.filesToDownload.size}")
-                                            if (plan.filesToDeleteRemote.isNotEmpty()) append(" 远端删${plan.filesToDeleteRemote.size}")
-                                            if (plan.filesToDeleteLocal.isNotEmpty()) append(" 本地删${plan.filesToDeleteLocal.size}")
-                                            if (plan.conflicts.isNotEmpty()) append(" ⚠冲突${plan.conflicts.size}")
+                                            if (plan.filesToDeleteRemote.isNotEmpty()) append(" del-r${plan.filesToDeleteRemote.size}")
+                                            if (plan.filesToDeleteLocal.isNotEmpty()) append(" del-l${plan.filesToDeleteLocal.size}")
+                                            if (plan.conflicts.isNotEmpty()) append(" conflict${plan.conflicts.size}")
                                         }
                                         msg to true
                                     }
@@ -477,12 +477,12 @@ class SettingsViewModel : ViewModel() {
                                     is BridgeResult.Success -> {
                                         val diag = r.data
                                         val msg = buildString {
-                                            append(if (diag.success) "✓" else "✗")
-                                            append(" 网络:${if (diag.networkOk) "✓" else "✗"}")
-                                            append(" 认证:${if (diag.authOk) "✓" else "✗"}")
-                                            append(" 仓库:${if (diag.repoOk) "✓" else "✗"}")
-                                            append(" 分支:${if (diag.branchOk) "✓" else "✗"}")
-                                            if (!diag.success && diag.rawError != null) append(" 错误:${diag.rawError}")
+                                            append(if (diag.success) "OK" else "FAIL")
+                                            append(" net:${if (diag.networkOk) "ok" else "fail"}")
+                                            append(" auth:${if (diag.authOk) "ok" else "fail"}")
+                                            append(" repo:${if (diag.repoOk) "ok" else "fail"}")
+                                            append(" branch:${if (diag.branchOk) "ok" else "fail"}")
+                                            if (!diag.success && diag.rawError != null) append(" err:${diag.rawError}")
                                         }
                                         msg to diag.success
                                     }
@@ -496,7 +496,7 @@ class SettingsViewModel : ViewModel() {
                                         val sync = r.data
                                         val msg = buildString {
                                             append("↑${sync.uploadedFiles.size} ↓${sync.downloadedFiles.size}")
-                                            if (sync.error != null) append(" 错误:${sync.error}")
+                                            if (sync.error != null) append(" err:${sync.error}")
                                         }
                                         msg to (sync.error == null)
                                     }
