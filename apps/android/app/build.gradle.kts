@@ -167,7 +167,6 @@ android.applicationVariants.all {
                         val customName = "sujian-android-${flavorName}-${appVersionName}-${appVersionCode}-${gitCommitSha}-${abiSuffix}.apk"
                         val destFile = File(defaultApk.parentFile, customName)
                         defaultApk.copyTo(destFile, overwrite = true)
-                        defaultApk.delete()
                     }
                 }
             }
