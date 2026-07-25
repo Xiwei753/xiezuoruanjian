@@ -41,14 +41,10 @@ jobs:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         run: |
           MISSING=""
-          if [ -z "${GITEE_USERNAME:-}" ]; then MISSING="GITEE_USERNAME"; fi
-          if [ -z "${GITEE_REPO:-}" ]; then
-            if [ -n "$MISSING" ]; then MISSING="$MISSING, "; fi
-            MISSING="${MISSING}GITEE_REPO"
-          fi
+          GITEE_USERNAME_RESOLVED="${GITEE_USERNAME:-${{ github.repository_owner }}}"
+          GITEE_REPO_RESOLVED="${GITEE_REPO:-${{ github.event.repository.name }}}"
           if [ -z "${GITEE_TOKEN:-}" ]; then
-            if [ -n "$MISSING" ]; then MISSING="$MISSING, "; fi
-            MISSING="${MISSING}GITEE_TOKEN"
+            MISSING="GITEE_TOKEN"
           fi
           if [ -n "$MISSING" ]; then
             echo "## ⚠️ Gitee 同步未执行" >> "$GITHUB_STEP_SUMMARY"
@@ -59,14 +55,16 @@ jobs:
             echo "::error::Gitee sync aborted: missing required secret(s): ${MISSING}"
             exit 1
           fi
-          echo "Gitee credentials validated: username=${GITEE_USERNAME}, repo=${GITEE_REPO}"
+          echo "gitee_username=${GITEE_USERNAME_RESOLVED}" >> "$GITHUB_OUTPUT"
+          echo "gitee_repo=${GITEE_REPO_RESOLVED}" >> "$GITHUB_OUTPUT"
+          echo "Gitee credentials validated: username=${GITEE_USERNAME_RESOLVED}, repo=${GITEE_REPO_RESOLVED}"
           echo "skip=false" >> "$GITHUB_OUTPUT"
 
       - name: Build orphan snapshot and push to Gitee
         if: steps.validate_gitee.outputs.skip != 'true'
         env:
-          GITEE_USERNAME: ${{ secrets.GITEE_USERNAME }}
-          GITEE_REPO: ${{ secrets.GITEE_REPO }}
+          GITEE_USERNAME: ${{ steps.validate_gitee.outputs.gitee_username }}
+          GITEE_REPO: ${{ steps.validate_gitee.outputs.gitee_repo }}
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         run: |
           set -euo pipefail

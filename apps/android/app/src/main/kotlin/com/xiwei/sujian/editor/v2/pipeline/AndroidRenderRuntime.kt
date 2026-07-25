@@ -73,7 +73,7 @@ class AndroidRenderRuntime(
         }
     }
 
-    fun setThemeColors(textColor: Int, cursorColor: Int, selectionColor: Int, preeditColor: Int, bgColor: Int, searchHighlightColor: Int = android.graphics.Color.argb(40, 255, 200, 0)) {
+    fun setThemeColors(textColor: Int, cursorColor: Int, selectionColor: Int, preeditColor: Int, bgColor: Int, searchHighlightColor: Int = 0) {
         textRenderer.setThemeColors(textColor, cursorColor, selectionColor, preeditColor, bgColor, searchHighlightColor)
     }
 }

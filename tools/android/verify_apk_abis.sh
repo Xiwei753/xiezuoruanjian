@@ -27,7 +27,7 @@ if [ ! -f "$APK_PATH" ]; then
 fi
 
 IFS=',' read -ra EXPECTED_ARRAY <<< "$EXPECTED_ABIS"
-VALID_ABIS=("arm64-v8a" "x86_64")
+VALID_ABIS=("arm64-v8a" "x86_64" "universal")
 
 for abi in "${EXPECTED_ARRAY[@]}"; do
     abi_trimmed=$(echo "$abi" | xargs)
@@ -51,11 +51,16 @@ ALL_ERRORS=0
 
 EXPECTED_ARM64=false
 EXPECTED_X86=false
+IS_UNIVERSAL=false
 for abi in "${EXPECTED_ARRAY[@]}"; do
     abi_trimmed=$(echo "$abi" | xargs)
     if [ "$abi_trimmed" = "arm64-v8a" ]; then
         EXPECTED_ARM64=true
     elif [ "$abi_trimmed" = "x86_64" ]; then
+        EXPECTED_X86=true
+    elif [ "$abi_trimmed" = "universal" ]; then
+        IS_UNIVERSAL=true
+        EXPECTED_ARM64=true
         EXPECTED_X86=true
     fi
 done
@@ -113,11 +118,20 @@ TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
 echo "提取 .so 文件进行 ELF 验证..."
+ELF_VERIFY_ABIS=()
 for abi in "${EXPECTED_ARRAY[@]}"; do
     abi_trimmed=$(echo "$abi" | xargs)
-    so_in_apk="lib/$abi_trimmed/libuniffi_writer_core.so"
+    if [ "$abi_trimmed" = "universal" ]; then
+        ELF_VERIFY_ABIS+=("arm64-v8a" "x86_64")
+    else
+        ELF_VERIFY_ABIS+=("$abi_trimmed")
+    fi
+done
+
+for abi in "${ELF_VERIFY_ABIS[@]}"; do
+    so_in_apk="lib/$abi/libuniffi_writer_core.so"
     if unzip -o "$APK_PATH" "$so_in_apk" -d "$TMPDIR" &>/dev/null; then
-        check_elf_arch "$TMPDIR/$so_in_apk" "$abi_trimmed" || ALL_ERRORS=$((ALL_ERRORS + 1))
+        check_elf_arch "$TMPDIR/$so_in_apk" "$abi" || ALL_ERRORS=$((ALL_ERRORS + 1))
     else
         echo "  警告: 无法从 APK 提取 $so_in_apk"
     fi

@@ -634,7 +634,7 @@ class AndroidEditorPipeline private constructor(
         layoutRuntime.setLineSpacingMultiplier(multiplier)
     }
 
-    fun setThemeColors(textColor: Int, cursorColor: Int, selectionColor: Int, preeditColor: Int, bgColor: Int = Color.WHITE, searchHighlightColor: Int = Color.argb(40, 255, 200, 0)) {
+    fun setThemeColors(textColor: Int, cursorColor: Int, selectionColor: Int, preeditColor: Int, bgColor: Int = Color.WHITE, searchHighlightColor: Int = 0) {
         renderRuntime.setThemeColors(textColor, cursorColor, selectionColor, preeditColor, bgColor, searchHighlightColor)
     }
 
@@ -773,7 +773,7 @@ class AndroidEditorPipeline private constructor(
         visualRuntime.release()
     }
 
-    fun setRendererThemeColors(textColor: Int, cursorColor: Int, selectionColor: Int, preeditColor: Int, bgColor: Int = Color.WHITE, searchHighlightColor: Int = android.graphics.Color.argb(40, 255, 200, 0)) {
+    fun setRendererThemeColors(textColor: Int, cursorColor: Int, selectionColor: Int, preeditColor: Int, bgColor: Int = Color.WHITE, searchHighlightColor: Int = 0) {
         renderRuntime.setThemeColors(textColor, cursorColor, selectionColor, preeditColor, bgColor, searchHighlightColor)
     }
 }
