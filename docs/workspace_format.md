@@ -15,7 +15,7 @@ workspace/
 │  │  ├─ settings.local.json     # 设备特定设置（不同步）
 │  │  └─ settings.sync.json      # 跨设备设置（同步）
 │  ├─ sync/                      # 同步状态与配置
-│  │  ├─ sync_config.json        # 同步配置（remote_url、branch、auto_sync、proxy）
+│  │  ├─ sync_config.json        # 同步配置（enabled、backend_type、remote_url、transport、branch）
 │  │  ├─ sync_secrets.local.json # 敏感信息（GitHub Token、SSH 私钥，不同步）
 │  │  ├─ sync_state.json         # 同步状态（不同步）
 │  │  ├─ state.local.json        # 本地同步状态（不同步）
