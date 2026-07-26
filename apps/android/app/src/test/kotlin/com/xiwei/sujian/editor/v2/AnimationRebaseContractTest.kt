@@ -1107,7 +1107,7 @@ class AnimationRebaseContractTest {
         )
         method.isAccessible = true
         val result = method.invoke(planner, visualIntent, oldRev, newRev)
-            as AndroidVisualPlanner.AffectedLinesResult
+            as AffectedLinesResult
         assertTrue("Paragraph 0 extra line (new index 2) must be included in newLineIndices",
             result.newLineIndices.contains(2))
         assertTrue("Subsequent paragraph must produce a blockShift for Y geometry change",
@@ -1739,7 +1739,7 @@ class AnimationRebaseContractTest {
         )
         method.isAccessible = true
         val result = method.invoke(planner, visualIntent, oldRev, newRev)
-            as AndroidVisualPlanner.AffectedLinesResult
+            as AffectedLinesResult
         assertTrue("Subsequent paragraphs must produce blockShifts",
             result.blockShifts.isNotEmpty())
         val shift = result.blockShifts.first()
@@ -1957,7 +1957,7 @@ class AnimationRebaseContractTest {
         )
         method.isAccessible = true
         val result = method.invoke(planner, visualIntent, oldRev, newRev)
-            as AndroidVisualPlanner.AffectedLinesResult
+            as AffectedLinesResult
         val hasBlockShiftForSecondParagraph = result.blockShifts.any {
             it.deltaY > 0f
         }
@@ -2050,7 +2050,7 @@ class AnimationRebaseContractTest {
         )
         method.isAccessible = true
         val result = method.invoke(planner, visualIntent, oldRev, newRev)
-            as AndroidVisualPlanner.AffectedLinesResult
+            as AffectedLinesResult
         assertTrue("oldLineIndices must only contain valid old revision line indices",
             result.oldLineIndices.all { it < oldRev.lineRanges.size })
         assertTrue("newLineIndices must only contain valid new revision line indices",
@@ -2255,7 +2255,7 @@ class AnimationRebaseContractTest {
         )
         method.isAccessible = true
         val result = method.invoke(planner, visualIntent, oldRev, newRev)
-            as AndroidVisualPlanner.AffectedLinesResult
+            as AffectedLinesResult
         assertTrue("Must have blockShifts when paragraph geometry changes",
             result.blockShifts.isNotEmpty())
         for (shift in result.blockShifts) {
@@ -2404,7 +2404,7 @@ class AnimationRebaseContractTest {
         )
         method.isAccessible = true
         val result = method.invoke(planner, visualIntent, oldRev, newRev)
-            as AndroidVisualPlanner.AffectedLinesResult
+            as AffectedLinesResult
         assertTrue("Must have blockShifts", result.blockShifts.isNotEmpty())
         val sameDeltaYCount = result.blockShifts.count { kotlin.math.abs(it.deltaY - 20f) < 0.01f }
         assertTrue("Adjacent paragraphs with same deltaY must be merged into one blockShift",
@@ -2548,7 +2548,7 @@ class AnimationRebaseContractTest {
         )
         method.isAccessible = true
         val result = method.invoke(planner, visualIntent, oldRev, newRev)
-            as AndroidVisualPlanner.AffectedLinesResult
+            as AffectedLinesResult
         assertTrue("Both new paragraph IDs must be in affected new lines (split paragraph coverage)",
             result.newLineIndices.isNotEmpty())
         assertTrue("Old paragraph lines must be in affected old lines",
@@ -2769,7 +2769,7 @@ class AnimationRebaseContractTest {
         )
         method.isAccessible = true
         val result = method.invoke(planner, visualIntent, oldRev, newRev)
-            as AndroidVisualPlanner.AffectedLinesResult
+            as AffectedLinesResult
         assertTrue("New paragraph 1 (split-off) must be in affected new lines",
             result.newLineIndices.any { idx -> newRev.lineRanges[idx].paragraphId == 1 })
         assertTrue("New paragraph 0 (first half of split) must be in affected new lines",
@@ -2840,7 +2840,7 @@ class AnimationRebaseContractTest {
         )
         method.isAccessible = true
         val result = method.invoke(planner, visualIntent, oldRev, newRev)
-            as AndroidVisualPlanner.AffectedLinesResult
+            as AffectedLinesResult
         assertTrue("Old paragraph 0 (before deleted break) must be in affected old lines",
             result.oldLineIndices.any { idx -> oldRev.lineRanges[idx].paragraphId == 0 })
         assertTrue("Old paragraph 1 (after deleted break) must be in affected old lines",
@@ -3659,7 +3659,7 @@ class AnimationRebaseContractTest {
         )
         method.isAccessible = true
         val result = method.invoke(planner, visualIntent, oldRev, newRev)
-            as AndroidVisualPlanner.AffectedLinesResult
+            as AffectedLinesResult
         assertTrue("lineIndices must be empty when both revisions exist (force split field usage)",
             result.lineIndices.isEmpty())
         assertTrue("oldLineIndices must be populated",
