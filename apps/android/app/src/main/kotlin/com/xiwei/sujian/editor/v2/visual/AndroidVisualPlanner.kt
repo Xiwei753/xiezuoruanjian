@@ -4,6 +4,10 @@ import com.xiwei.sujian.editor.v2.mirror.VisualIntent
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutRevision
 import com.xiwei.sujian.editor.v2.layout.LineClusterSnapshot
 import com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot
+import com.xiwei.sujian.editor.v2.visual.planner.AffectedLayoutPlanner
+import com.xiwei.sujian.editor.v2.visual.planner.RebasePlanner
+import com.xiwei.sujian.editor.v2.visual.planner.BlockShiftPlanner
+import com.xiwei.sujian.editor.v2.visual.planner.SnapshotPlanner
 import uniffi.writer_core.AnimationModeDto
 
 /**
@@ -17,7 +21,12 @@ import uniffi.writer_core.AnimationModeDto
  * grouping; retained text whose position changed always gets Move (if shaping identity
  * is confident) or Crossfade (if not), regardless of mode.
  */
-class AndroidVisualPlanner {
+class AndroidVisualPlanner(
+    internal val affectedLayoutPlanner: AffectedLayoutPlanner = AffectedLayoutPlanner(),
+    internal val rebasePlanner: RebasePlanner = RebasePlanner(),
+    internal val blockShiftPlanner: BlockShiftPlanner = BlockShiftPlanner(),
+    internal val snapshotPlanner: SnapshotPlanner = SnapshotPlanner()
+) {
 
     private companion object {
         // BlockShift deltaY threshold: shifts below this value are considered sub-pixel
@@ -336,8 +345,8 @@ class AndroidVisualPlanner {
                     addMoveSlicesForShiftedClustersCrossLine(
                         preCapturedOldSnapshots, preCapturedNewSnapshots,
                         visualIntent, oldRev, newRev,
-                        collectExcludedNewByteRanges(animatedSlices),
-                        collectExcludedOldByteRanges(animatedSlices),
+                        snapshotPlanner.collectExcludedNewByteRanges(animatedSlices),
+                        snapshotPlanner.collectExcludedOldByteRanges(animatedSlices),
                         animatedSlices
                     )
                 }
@@ -349,8 +358,8 @@ class AndroidVisualPlanner {
                     addMoveSlicesForShiftedClustersCrossLine(
                         preCapturedOldSnapshots, preCapturedNewSnapshots,
                         visualIntent, oldRev, newRev,
-                        collectExcludedNewByteRanges(animatedSlices),
-                        collectExcludedOldByteRanges(animatedSlices),
+                        snapshotPlanner.collectExcludedNewByteRanges(animatedSlices),
+                        snapshotPlanner.collectExcludedOldByteRanges(animatedSlices),
                         animatedSlices
                     )
                 }
@@ -415,7 +424,7 @@ class AndroidVisualPlanner {
         }
 
         val finalSlices = if (rebaseSnapshot != null && rebaseSnapshot.sliceVisualStates.isNotEmpty()) {
-            applyRebaseToSlices(animatedSlices, rebaseSnapshot, snapshotLookup)
+            rebasePlanner.applyRebaseToSlices(animatedSlices, rebaseSnapshot, snapshotLookup)
         } else {
             animatedSlices
         }
@@ -429,7 +438,7 @@ class AndroidVisualPlanner {
         } else null
 
         val finalBlockShifts = if (rebaseSnapshot != null && rebaseSnapshot.blockShiftStates.isNotEmpty()) {
-            applyRebaseToBlockShifts(blockShifts, rebaseSnapshot, offsetMapperForRebase, reverseMapperForRebase)
+            blockShiftPlanner.applyRebaseToBlockShifts(blockShifts, rebaseSnapshot, offsetMapperForRebase, reverseMapperForRebase)
         } else {
             blockShifts
         }
@@ -453,8 +462,8 @@ class AndroidVisualPlanner {
             animatedSlices = finalSlices,
             ownedSnapshotIds = ownedSnapshotIds,
             referencedSnapshotIds = referencedSnapshotIds,
-            selectionDecoration = buildSelectionDecoration(newRev),
-            preeditDecoration = buildPreeditDecoration(newRev),
+            selectionDecoration = snapshotPlanner.buildSelectionDecoration(newRev),
+            preeditDecoration = snapshotPlanner.buildPreeditDecoration(newRev),
             cursorTransition = cursorTransition,
             durationMs = durationMs,
             blockShifts = finalBlockShifts

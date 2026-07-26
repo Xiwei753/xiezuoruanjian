@@ -35,7 +35,7 @@ class VisualResourceStore {
         var owner: SnapshotOwner
     )
 
-    fun put(snapshot: AndroidLineSnapshot, owner: SnapshotOwner = SnapshotOwner.OwnedByTransaction(System.nanoTime())) {
+    fun put(snapshot: AndroidLineSnapshot, owner: SnapshotOwner = SnapshotOwner.OwnedBySession("default")) {
         snapshots[snapshot.snapshotId] = OwnedSnapshot(snapshot, owner)
     }
 

@@ -20,7 +20,9 @@ import com.xiwei.sujian.editor.v2.mirror.VisualIntent
  */
 class AndroidTextAnimationEngine(
     private val visualPlanner: AndroidVisualPlanner,
-    private val resourceStore: VisualResourceStore
+    private val resourceStore: VisualResourceStore,
+    private val timeSource: AnimationTimeSource = ChoreographerAnimationTimeSource(),
+    private val transactionIdSource: TransactionIdSource = TransactionIdSource()
 ) {
     private var activeTransaction: PreparedVisualTransaction? = null
     private var timeline: AnimationTimeline? = null
@@ -46,13 +48,7 @@ class AndroidTextAnimationEngine(
         newSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         rebaseFrame: VisualFrameSnapshot? = null
     ): PreparedVisualTransaction {
-        // System.nanoTime() as transaction key: monotonic guarantee is essential because
-        // the key doubles as SnapshotOwner.OwnedByTransaction(transactionKey) — two
-        // transactions with the same key would cause release() to free the wrong Bitmaps.
-        // System.nanoTime() is monotonic (unlike currentTimeMillis, which can regress on
-        // NTP adjustments) and has nanosecond granularity (collisions are practically
-        // impossible between sequential prepare() calls on the same thread).
-        val transactionKey = System.nanoTime()
+        val transactionKey = transactionIdSource.nextId()
         val owner = SnapshotOwner.OwnedByTransaction(transactionKey)
         val ownedSnapshotIds = mutableSetOf<Long>()
         val snapshotLookup = mutableMapOf<Long, AndroidLineSnapshot>()
@@ -176,13 +172,12 @@ class AndroidTextAnimationEngine(
      * that would otherwise be visible alongside the old-snapshot animation during the
      * brief window between mirror update and first animation frame).
      *
-     * Timestamp: [System.nanoTime] / 1_000_000 provides a monotonic millisecond clock
-     * consistent with [AnimationTimeline]'s internal time base. Sub-millisecond precision
+     * Timestamp: [AnimationTimeSource.nowNanos] / 1_000_000 provides a monotonic millisecond
+     * clock consistent with [AnimationTimeline]'s internal time base. Sub-millisecond precision
      * is intentionally discarded — [AnimationTimeline.progress] operates in whole milliseconds.
-     * Must use [System.nanoTime] rather than [System.currentTimeMillis]: the latter can jump
-     * backwards on NTP clock adjustments or wall-clock changes, which would cause
-     * [AnimationTimeline.progress] to return values < 0 or regress from a previously
-     * returned value, breaking the monotonic progress invariant that animation depends on.
+     * The default [ChoreographerAnimationTimeSource] delegates to [System.nanoTime], which is
+     * monotonic (unlike [System.currentTimeMillis], which can jump backwards on NTP adjustments).
+     * Tests inject [ManualAnimationTimeSource] to control time precisely.
      */
     fun prepareAndSubmit(
         visualIntent: VisualIntent,
@@ -201,7 +196,7 @@ class AndroidTextAnimationEngine(
             layoutEngine.requestLayout()
             return
         }
-        val frameTimeMs = System.nanoTime() / 1_000_000
+        val frameTimeMs = timeSource.nowNanos() / 1_000_000
         val rebaseSnapshot = captureRebaseSnapshot(frameTimeMs)
 
         val oldRevision = layoutEngine.captureImmutableRevision()
@@ -325,6 +320,42 @@ class AndroidTextAnimationEngine(
     fun getAnimationPolicy(): TextAnimationPolicy = animationPolicy
 
     fun getActiveTransaction(): PreparedVisualTransaction? = activeTransaction
+
+    fun captureStateSnapshot(frameTimeMs: Long): AnimationStateSnapshot? {
+        val transaction = activeTransaction ?: return null
+        val tl = timeline ?: return null
+        val p = tl.progress(frameTimeMs)
+        return AnimationStateSnapshot(
+            transactionId = transaction.transactionId,
+            operationKind = transaction.oldRevision?.let { "edit" } ?: "unknown",
+            animationMode = if (transaction.durationMs == 0L) "instant" else "animated",
+            oldAffectedRanges = transaction.animatedSlices
+                .filter { it.role == SliceRole.Delete || it.role == SliceRole.CrossfadeOld }
+                .mapNotNull { slice ->
+                    val start = slice.clusterByteStart
+                    val end = slice.clusterByteEndExclusive
+                    if (start >= 0 && end > start) Pair(start, end) else null
+                },
+            newAffectedRanges = transaction.animatedSlices
+                .filter { it.role == SliceRole.Insert || it.role == SliceRole.CrossfadeNew || it.role == SliceRole.Move }
+                .mapNotNull { slice ->
+                    val start = slice.clusterByteStart
+                    val end = slice.clusterByteEndExclusive
+                    if (start >= 0 && end > start) Pair(start, end) else null
+                },
+            progress = p,
+            sliceRoles = transaction.animatedSlices.map { it.role },
+            cursorTransition = transaction.cursorTransition?.let { ct ->
+                CursorTransitionSnapshot(
+                    fromX = ct.fromX, fromY = ct.fromY, fromHeight = ct.fromHeight,
+                    toX = ct.toX, toY = ct.toY, toHeight = ct.toHeight,
+                    shouldAnimate = ct.shouldAnimate
+                )
+            },
+            ownedResourceCount = transaction.ownedSnapshotIds.size,
+            transactionState = tl.getState()
+        )
+    }
 
     fun getTimelineProgress(frameTimeMs: Long): Float {
         val tl = timeline ?: return 0f

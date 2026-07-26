@@ -13,14 +13,30 @@ class AndroidVisualRuntime(
     private val animationEngine: AndroidTextAnimationEngine,
     private val resourceStore: VisualResourceStore
 ) {
-    constructor() : this(
+    constructor(
+        timeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource = com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
+        transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource = com.xiwei.sujian.editor.v2.visual.TransactionIdSource()
+    ) : this(
         AndroidVisualPlanner(),
-        VisualResourceStore()
+        VisualResourceStore(),
+        timeSource,
+        transactionIdSource
     )
 
     constructor(visualPlanner: AndroidVisualPlanner, resourceStore: VisualResourceStore) : this(
         visualPlanner,
         AndroidTextAnimationEngine(visualPlanner, resourceStore),
+        resourceStore
+    )
+
+    constructor(
+        visualPlanner: AndroidVisualPlanner,
+        resourceStore: VisualResourceStore,
+        timeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource,
+        transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource
+    ) : this(
+        visualPlanner,
+        AndroidTextAnimationEngine(visualPlanner, resourceStore, timeSource, transactionIdSource),
         resourceStore
     )
 

@@ -277,6 +277,7 @@ class SujianEditorView @JvmOverloads constructor(
     override fun needsFrame(): Boolean = pipeline.hasActiveAnimation()
 
     override fun onFrame(frameTimeNanos: Long) {
+        pipeline.setFrameTimeNanos(frameTimeNanos)
         invalidate()
     }
 

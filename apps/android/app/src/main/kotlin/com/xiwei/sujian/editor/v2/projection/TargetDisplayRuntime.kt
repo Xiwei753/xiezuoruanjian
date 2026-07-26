@@ -17,7 +17,8 @@ import androidx.compose.runtime.setValue
 
 class TargetDisplayRuntime(
     private val mirror: DisplayTextMirror,
-    private val textPaint: TextPaint
+    private val textPaint: TextPaint,
+    private val timeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource = com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource()
 ) : WindowDisplayFrameClock.FrameListener {
     private val layoutEngine: AndroidLayoutEngine = AndroidLayoutEngine(mirror, textPaint)
     private val visualRuntime: AndroidVisualRuntime = AndroidVisualRuntime()
@@ -235,7 +236,7 @@ class TargetDisplayRuntime(
             renderRuntime.drawFromFrameState(canvas, cached)
             return
         }
-        val frameTimeMs = System.nanoTime() / 1_000_000
+        val frameTimeMs = timeSource.nowNanos() / 1_000_000
         val layout = layoutEngine.getLayout() ?: return
         val highlightsUtf16 = getSearchHighlightsUtf16()
         val cursorDisplayUtf16 = projection.realUtf8ToDisplayUtf16(mirror.getCursorUtf8())

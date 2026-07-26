@@ -69,6 +69,7 @@ data class SettingsUiState(
     val testConnectionState: SyncCommandState = SyncCommandState.IDLE,
     val performSyncState: SyncCommandState = SyncCommandState.IDLE,
     val syncCommandResult: String? = null,
+    val structuredSyncResult: StructuredSyncResult? = null,
     val lastCommandType: SyncCommandType? = null,
 )
 
@@ -120,6 +121,7 @@ private data class SyncCommandIoResult(
     val configSaved: Boolean,
     val secretsSaved: Boolean,
     val result: Pair<String, Boolean>,
+    val structuredResult: StructuredSyncResult? = null,
 )
 
 class SettingsViewModel : ViewModel() {
@@ -460,16 +462,28 @@ class SettingsViewModel : ViewModel() {
                                 when (val r = repo.performSyncDryRun(config)) {
                                     is BridgeResult.Success -> {
                                         val plan = r.data
+                                        val counts = SyncCounts(
+                                            uploaded = plan.filesToUpload.size,
+                                            downloaded = plan.filesToDownload.size,
+                                            deletedRemote = plan.filesToDeleteRemote.size,
+                                            deletedLocal = plan.filesToDeleteLocal.size,
+                                            conflicts = plan.conflicts.size
+                                        )
                                         val msg = buildString {
-                                            append("↑${plan.filesToUpload.size} ↓${plan.filesToDownload.size}")
-                                            if (plan.filesToDeleteRemote.isNotEmpty()) append(" del-r${plan.filesToDeleteRemote.size}")
-                                            if (plan.filesToDeleteLocal.isNotEmpty()) append(" del-l${plan.filesToDeleteLocal.size}")
-                                            if (plan.conflicts.isNotEmpty()) append(" conflict${plan.conflicts.size}")
+                                            append("↑${counts.uploaded} ↓${counts.downloaded}")
+                                            if (counts.deletedRemote > 0) append(" del-r${counts.deletedRemote}")
+                                            if (counts.deletedLocal > 0) append(" del-l${counts.deletedLocal}")
+                                            if (counts.conflicts > 0) append(" conflict${counts.conflicts}")
                                         }
-                                        msg to true
+                                        val structured = StructuredSyncResult(
+                                            statusCode = "ok",
+                                            messageKey = "sync_dry_run_result",
+                                            counts = counts
+                                        )
+                                        SyncCommandIoResult(true, true, msg to true, structured)
                                     }
-                                    is BridgeResult.Error -> (r.message ?: "dry_run_error") to false
-                                    BridgeResult.NotLoaded -> "core_not_loaded" to false
+                                    is BridgeResult.Error -> SyncCommandIoResult(true, true, (r.message ?: "dry_run_error") to false, StructuredSyncResult(statusCode = "error", messageKey = "dry_run_error", sanitizedDiagnostic = r.message))
+                                    BridgeResult.NotLoaded -> SyncCommandIoResult(true, true, "core_not_loaded" to false, StructuredSyncResult(statusCode = "error", messageKey = "core_not_loaded"))
                                 }
                             }
                             SyncCommandType.TEST_CONNECTION -> {
@@ -482,26 +496,45 @@ class SettingsViewModel : ViewModel() {
                                             append(" auth:${if (diag.authOk) "ok" else "fail"}")
                                             append(" repo:${if (diag.repoOk) "ok" else "fail"}")
                                             append(" branch:${if (diag.branchOk) "ok" else "fail"}")
-                                            if (!diag.success && diag.rawError != null) append(" err:${diag.rawError}")
                                         }
-                                        msg to diag.success
+                                        val structured = StructuredSyncResult(
+                                            statusCode = if (diag.success) "ok" else "fail",
+                                            messageKey = "sync_test_connection_result",
+                                            messageArgs = mapOf(
+                                                "network" to if (diag.networkOk) "ok" else "fail",
+                                                "auth" to if (diag.authOk) "ok" else "fail",
+                                                "repo" to if (diag.repoOk) "ok" else "fail",
+                                                "branch" to if (diag.branchOk) "ok" else "fail"
+                                            ),
+                                            sanitizedDiagnostic = if (!diag.success) "connection_failed" else null
+                                        )
+                                        SyncCommandIoResult(true, true, msg to diag.success, structured)
                                     }
-                                    is BridgeResult.Error -> (r.message ?: "diagnostics_error") to false
-                                    BridgeResult.NotLoaded -> "core_not_loaded" to false
+                                    is BridgeResult.Error -> SyncCommandIoResult(true, true, (r.message ?: "diagnostics_error") to false, StructuredSyncResult(statusCode = "error", messageKey = "diagnostics_error", sanitizedDiagnostic = r.message))
+                                    BridgeResult.NotLoaded -> SyncCommandIoResult(true, true, "core_not_loaded" to false, StructuredSyncResult(statusCode = "error", messageKey = "core_not_loaded"))
                                 }
                             }
                             SyncCommandType.PERFORM_SYNC -> {
                                 when (val r = repo.performSync(config)) {
                                     is BridgeResult.Success -> {
                                         val sync = r.data
+                                        val counts = SyncCounts(
+                                            uploaded = sync.uploadedFiles.size,
+                                            downloaded = sync.downloadedFiles.size
+                                        )
                                         val msg = buildString {
-                                            append("↑${sync.uploadedFiles.size} ↓${sync.downloadedFiles.size}")
-                                            if (sync.error != null) append(" err:${sync.error}")
+                                            append("↑${counts.uploaded} ↓${counts.downloaded}")
                                         }
-                                        msg to (sync.error == null)
+                                        val structured = StructuredSyncResult(
+                                            statusCode = if (sync.error == null) "ok" else "error",
+                                            messageKey = "sync_perform_result",
+                                            counts = counts,
+                                            sanitizedDiagnostic = if (sync.error != null) "sync_failed" else null
+                                        )
+                                        SyncCommandIoResult(true, true, msg to (sync.error == null), structured)
                                     }
-                                    is BridgeResult.Error -> (r.message ?: "sync_error") to false
-                                    BridgeResult.NotLoaded -> "core_not_loaded" to false
+                                    is BridgeResult.Error -> SyncCommandIoResult(true, true, (r.message ?: "sync_error") to false, StructuredSyncResult(statusCode = "error", messageKey = "sync_error", sanitizedDiagnostic = r.message))
+                                    BridgeResult.NotLoaded -> SyncCommandIoResult(true, true, "core_not_loaded" to false, StructuredSyncResult(statusCode = "error", messageKey = "core_not_loaded"))
                                 }
                             }
                         }
@@ -511,7 +544,7 @@ class SettingsViewModel : ViewModel() {
 
                 when (exclusiveResult) {
                     is ExclusiveResult.Busy -> {
-                        _uiState.update { it.copy(syncCommandResult = "sync_already_running", lastCommandType = type) }
+                        _uiState.update { it.copy(syncCommandResult = "sync_already_running", structuredSyncResult = StructuredSyncResult(statusCode = "busy", messageKey = "sync_already_running"), lastCommandType = type) }
                     }
                     is ExclusiveResult.Success -> {
                         val ioResult = exclusiveResult.value
@@ -520,9 +553,9 @@ class SettingsViewModel : ViewModel() {
                         val (message, success) = ioResult.result
                         _uiState.update { current ->
                             if (success) {
-                                current.successStateField().copy(syncCommandResult = message)
+                                current.successStateField().copy(syncCommandResult = message, structuredSyncResult = ioResult.structuredResult)
                             } else {
-                                current.failureStateField().copy(syncCommandResult = message)
+                                current.failureStateField().copy(syncCommandResult = message, structuredSyncResult = ioResult.structuredResult)
                             }
                         }
                     }
@@ -530,7 +563,7 @@ class SettingsViewModel : ViewModel() {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _uiState.update { it.failureStateField().copy(syncCommandResult = e.message ?: "unexpected_error") }
+                _uiState.update { it.failureStateField().copy(syncCommandResult = e.message ?: "unexpected_error", structuredSyncResult = StructuredSyncResult(statusCode = "error", messageKey = "unexpected_error", sanitizedDiagnostic = e.message)) }
             }
 
             try {
