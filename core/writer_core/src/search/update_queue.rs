@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use super::types::SearchIndexUpdate;
+use super::types::{SearchIndexAction, SearchIndexUpdate};
 
 pub struct SearchUpdateQueue {
     queue: VecDeque<SearchIndexUpdate>,
@@ -18,12 +18,23 @@ impl SearchUpdateQueue {
     pub fn enqueue(&mut self, update: SearchIndexUpdate) {
         if self.pending_object_ids.contains(&update.object_id) {
             if let Some(existing) = self.queue.iter_mut().find(|u| u.object_id == update.object_id) {
+                let should_remove = matches!(update.action, SearchIndexAction::Delete)
+                    && matches!(existing.action, SearchIndexAction::Upsert);
                 *existing = update;
+                if should_remove {
+                    self.pending_object_ids.remove(&existing.object_id);
+                }
                 return;
             }
         }
+        let is_delete = matches!(update.action, SearchIndexAction::Delete);
         self.pending_object_ids.insert(update.object_id.clone());
         self.queue.push_back(update);
+        if is_delete {
+            self.pending_object_ids.remove(
+                self.queue.back().map(|u| &u.object_id).unwrap_or(&String::new()),
+            );
+        }
     }
 
     pub fn drain(&mut self) -> Vec<SearchIndexUpdate> {

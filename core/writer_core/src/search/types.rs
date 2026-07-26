@@ -36,6 +36,7 @@ impl SearchScope {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchResult {
+    pub object_id: String,
     pub title: String,
     pub path: String,
     pub summary: String,
@@ -85,14 +86,25 @@ pub struct SearchIndexStatus {
     pub is_rebuilding: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SearchIndexAction {
+    Upsert,
+    Delete,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchIndexUpdate {
+    pub action: SearchIndexAction,
     pub object_id: String,
     pub scope: SearchScope,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub body: String,
-    pub target: SearchTarget,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<SearchTarget>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -81,6 +81,7 @@ pub struct StarMapStore {
     nodes: HashMap<String, StarMapNode>,
     edges: HashMap<String, StarMapEdge>,
     embeds: HashMap<String, StarMapEmbed>,
+    links: HashMap<String, StarMapLink>,
     hyperlinks: HashMap<String, StarMapHyperlink>,
     layout: Option<StarMapLayout>,
     viewport: Option<StarMapViewport>,
@@ -88,12 +89,14 @@ pub struct StarMapStore {
     dirty_nodes: HashSet<String>,
     dirty_edges: HashSet<String>,
     dirty_embeds: HashSet<String>,
+    dirty_links: HashSet<String>,
     dirty_hyperlinks: HashSet<String>,
     dirty_layout: bool,
     dirty_graph_meta: bool,
     deleted_node_ids: HashSet<String>,
     deleted_edge_ids: HashSet<String>,
     deleted_embed_ids: HashSet<String>,
+    deleted_link_ids: HashSet<String>,
     deleted_hyperlink_ids: HashSet<String>,
     package_revision: u64,
     recovery_log: Vec<LoadDiagnostic>,
@@ -108,6 +111,7 @@ pub struct GraphMeta {
     pub node_ids: Vec<String>,
     pub edge_ids: Vec<String>,
     pub embed_instance_ids: Vec<String>,
+    pub link_ids: Vec<String>,
     pub hyperlink_ids: Vec<String>,
     pub package_revision: u64,
     pub updated_at: u64,
@@ -121,6 +125,7 @@ impl StarMapStore {
             nodes: HashMap::new(),
             edges: HashMap::new(),
             embeds: HashMap::new(),
+            links: HashMap::new(),
             hyperlinks: HashMap::new(),
             layout: None,
             viewport: None,
@@ -128,12 +133,14 @@ impl StarMapStore {
             dirty_nodes: HashSet::new(),
             dirty_edges: HashSet::new(),
             dirty_embeds: HashSet::new(),
+            dirty_links: HashSet::new(),
             dirty_hyperlinks: HashSet::new(),
             dirty_layout: false,
             dirty_graph_meta: false,
             deleted_node_ids: HashSet::new(),
             deleted_edge_ids: HashSet::new(),
             deleted_embed_ids: HashSet::new(),
+            deleted_link_ids: HashSet::new(),
             deleted_hyperlink_ids: HashSet::new(),
             package_revision: 0,
             recovery_log: Vec::new(),
@@ -212,6 +219,7 @@ impl StarMapStore {
         !self.dirty_nodes.is_empty()
             || !self.dirty_edges.is_empty()
             || !self.dirty_embeds.is_empty()
+            || !self.dirty_links.is_empty()
             || !self.dirty_hyperlinks.is_empty()
             || self.dirty_layout
             || self.dirty_graph_meta
@@ -355,6 +363,12 @@ impl StarMapStore {
         self.dirty_hyperlinks.insert(hl_id);
     }
 
+    pub fn upsert_link(&mut self, link: StarMapLink) {
+        let link_id = link.link_id.clone();
+        self.links.insert(link_id.clone(), link);
+        self.dirty_links.insert(link_id);
+    }
+
     pub fn remove_hyperlink(&mut self, hyperlink_id: &str) {
         self.hyperlinks.remove(hyperlink_id);
         self.dirty_hyperlinks.remove(hyperlink_id);
@@ -368,6 +382,270 @@ impl StarMapStore {
 
     pub fn set_viewport(&mut self, viewport: StarMapViewport) {
         self.viewport = Some(viewport);
+    }
+
+    pub fn add_node(
+        &mut self,
+        node: StarMapNode,
+        default_x: f32,
+        default_y: f32,
+    ) -> StarMapNode {
+        let result = node.clone();
+        self.upsert_node(node);
+        if let Some(ref mut layout) = self.layout {
+            layout.nodes.push(StarMapLayoutNode {
+                node_id: result.id.clone(),
+                x: default_x,
+                y: default_y,
+                width: 150.0,
+                height: 60.0,
+                radius: 30.0,
+                collapsed: false,
+                z_index: 0,
+                scale: 1.0,
+                depth: 0.0,
+                focus_weight: 0.0,
+                orbit_group: None,
+            });
+            self.dirty_layout = true;
+        }
+        result
+    }
+
+    pub fn update_node(&mut self, node_id: &str, patch: &StarMapNodePatch) -> Result<StarMapNode> {
+        let node = self.nodes.get_mut(node_id).ok_or_else(|| {
+            crate::error::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Node not found",
+            ))
+        })?;
+        if let Some(ref t) = patch.title { node.title = t.clone(); }
+        if let Some(ref k) = patch.kind { node.kind = k.clone(); }
+        if let Some(ref p) = patch.payload { node.payload = p.clone(); }
+        if let Some(ref t) = patch.tags { node.tags = t.clone(); }
+        if let Some(ref c) = patch.content { node.content = c.clone(); }
+        if let Some(ref a) = patch.anchors { node.anchors = a.clone(); }
+        if let Some(ref p) = patch.portal { node.portal = p.clone(); }
+        if let Some(ref dp) = patch.display_policy { node.display_policy = dp.clone(); }
+        if let Some(ref ob) = patch.open_behavior { node.open_behavior = ob.clone(); }
+        if let Some(ref p) = patch.provenance { node.provenance = p.clone(); }
+        node.updated_at = crate::starmap::now_epoch();
+        let updated = node.clone();
+        self.dirty_nodes.insert(node_id.to_string());
+        Ok(updated)
+    }
+
+    pub fn delete_node(&mut self, node_id: &str) -> Result<()> {
+        if !self.nodes.contains_key(node_id) {
+            return Err(crate::error::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Node not found",
+            )));
+        }
+        self.remove_node(node_id);
+
+        let edge_ids_to_remove: Vec<String> = self.edges.values()
+            .filter(|e| {
+                let from_matches = e.from.as_ref() == Some(&node_id.to_string())
+                    || e.from_endpoint.as_ref().map_or(false, |ep| match ep {
+                        StarMapEdgeEndpoint::Node { node_id: id } => id == node_id,
+                        StarMapEdgeEndpoint::Anchor { node_id: id, .. } => id == node_id,
+                        _ => false,
+                    });
+                let to_matches = e.to.as_ref() == Some(&node_id.to_string())
+                    || e.to_endpoint.as_ref().map_or(false, |ep| match ep {
+                        StarMapEdgeEndpoint::Node { node_id: id } => id == node_id,
+                        StarMapEdgeEndpoint::Anchor { node_id: id, .. } => id == node_id,
+                        _ => false,
+                    });
+                from_matches || to_matches
+            })
+            .map(|e| e.id.clone())
+            .collect();
+        for eid in &edge_ids_to_remove {
+            self.remove_edge(eid);
+        }
+
+        let embed_ids_to_remove: Vec<String> = self.embeds.values()
+            .filter(|e| {
+                e.source_node_id.as_ref() == Some(&node_id.to_string())
+                    || e.host_endpoint.as_ref().map_or(false, |ep| match ep {
+                        StarMapEndpoint::Node { node_id: id } => id == node_id,
+                        StarMapEndpoint::Anchor { node_id: id, .. } => id == node_id,
+                        _ => false,
+                    })
+            })
+            .map(|e| e.instance_id.clone())
+            .collect();
+        for iid in &embed_ids_to_remove {
+            self.remove_embed(iid);
+        }
+
+        if let Some(ref mut layout) = self.layout {
+            layout.nodes.retain(|n| n.node_id != node_id);
+            self.dirty_layout = true;
+        }
+
+        Ok(())
+    }
+
+    pub fn add_edge(&mut self, edge: StarMapEdge) -> Result<StarMapEdge> {
+        let from_valid = edge.from_target.is_some()
+            || edge.from_endpoint.is_some()
+            || edge.from_endpoint_path.is_some()
+            || edge.from.as_ref()
+                .map(|id| self.nodes.contains_key(id))
+                .unwrap_or(false);
+        let to_valid = edge.to_target.is_some()
+            || edge.to_endpoint.is_some()
+            || edge.to_endpoint_path.is_some()
+            || edge.to.as_ref()
+                .map(|id| self.nodes.contains_key(id))
+                .unwrap_or(false);
+
+        if !from_valid || !to_valid {
+            return Err(crate::error::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Edge nodes do not exist and no deep target is provided",
+            )));
+        }
+
+        let result = edge.clone();
+        self.upsert_edge(edge);
+        Ok(result)
+    }
+
+    pub fn update_edge(&mut self, edge_id: &str, patch: &StarMapEdgePatch) -> Result<StarMapEdge> {
+        let edge = self.edges.get_mut(edge_id).ok_or_else(|| {
+            crate::error::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Edge not found",
+            ))
+        })?;
+        if let Some(ref k) = patch.kind { edge.kind = k.clone(); }
+        if let Some(ref l) = patch.label { edge.label = l.clone(); }
+        if let Some(ref p) = patch.payload { edge.payload = p.clone(); }
+        if let Some(ref ft) = patch.from_target { edge.from_target = ft.clone(); }
+        if let Some(ref tt) = patch.to_target { edge.to_target = tt.clone(); }
+        if let Some(ref fe) = patch.from_endpoint { edge.from_endpoint = fe.clone(); }
+        if let Some(ref te) = patch.to_endpoint { edge.to_endpoint = te.clone(); }
+        if let Some(ref fep) = patch.from_endpoint_path { edge.from_endpoint_path = fep.clone(); }
+        if let Some(ref tep) = patch.to_endpoint_path { edge.to_endpoint_path = tep.clone(); }
+        edge.updated_at = crate::starmap::now_epoch();
+        let updated = edge.clone();
+        self.dirty_edges.insert(edge_id.to_string());
+        Ok(updated)
+    }
+
+    pub fn delete_edge(&mut self, edge_id: &str) -> Result<()> {
+        if !self.edges.contains_key(edge_id) {
+            return Err(crate::error::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Edge not found",
+            )));
+        }
+        self.remove_edge(edge_id);
+        Ok(())
+    }
+
+    pub fn add_embed(&mut self, embed: StarMapEmbed) -> Result<StarMapEmbed> {
+        if self.embeds.contains_key(&embed.instance_id) {
+            return Err(crate::error::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Duplicate embed instance_id",
+            )));
+        }
+        let result = embed.clone();
+        self.upsert_embed(embed);
+        Ok(result)
+    }
+
+    pub fn update_embed(&mut self, instance_id: &str, patch: &StarMapEmbedPatch) -> Result<StarMapEmbed> {
+        let embed = self.embeds.get_mut(instance_id).ok_or_else(|| {
+            crate::error::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Embed not found",
+            ))
+        })?;
+        if let Some(ref l) = patch.label { embed.label = l.clone(); }
+        if let Some(ref dp) = patch.display_policy { embed.display_policy = dp.clone(); }
+        if let Some(ref ob) = patch.open_behavior { embed.open_behavior = ob.clone(); }
+        if let Some(Some(ref pl)) = patch.placement { embed.placement = pl.clone(); }
+        if let Some(Some(ref vp)) = patch.target_viewport { embed.target_viewport = vp.clone(); }
+        if let Some(Some(ref vp)) = patch.viewport {
+            embed.placement.width = vp.width;
+            embed.placement.height = vp.height;
+            embed.target_viewport.scale = vp.scale;
+            embed.target_viewport.offset_x = vp.offset_x;
+            embed.target_viewport.offset_y = vp.offset_y;
+        }
+        if let Some(ref sni) = patch.source_node_id { embed.source_node_id = sni.clone(); }
+        if let Some(ref ep) = patch.host_endpoint { embed.host_endpoint = ep.clone(); }
+        if let Some(Some(ref anchor_id)) = patch.host_anchor {
+            if let Some(ref node_id) = embed.source_node_id {
+                embed.host_endpoint = Some(StarMapEndpoint::Anchor {
+                    node_id: node_id.clone(),
+                    anchor_id: anchor_id.clone(),
+                });
+            }
+        }
+        embed.updated_at = crate::starmap::now_epoch();
+        let updated = embed.clone();
+        self.dirty_embeds.insert(instance_id.to_string());
+        Ok(updated)
+    }
+
+    pub fn delete_embed(&mut self, instance_id: &str) -> Result<()> {
+        if !self.embeds.contains_key(instance_id) {
+            return Err(crate::error::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Embed not found",
+            )));
+        }
+        self.remove_embed(instance_id);
+        Ok(())
+    }
+
+    pub fn add_link(&mut self, link: StarMapLink) -> Result<StarMapLink> {
+        if self.links.contains_key(&link.link_id) {
+            return Err(crate::error::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Duplicate link_id",
+            )));
+        }
+        let result = link.clone();
+        self.links.insert(link.link_id.clone(), link);
+        self.dirty_links.insert(result.link_id.clone());
+        Ok(result)
+    }
+
+    pub fn update_link(&mut self, link_id: &str, patch: &StarMapLinkPatch) -> Result<StarMapLink> {
+        let link = self.links.get_mut(link_id).ok_or_else(|| {
+            crate::error::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Link not found",
+            ))
+        })?;
+        if let Some(ref s) = patch.source { link.source = s.clone(); }
+        if let Some(ref t) = patch.target { link.target = t.clone(); }
+        if let Some(ref l) = patch.label { link.label = l.clone(); }
+        link.updated_at = crate::starmap::now_epoch();
+        let updated = link.clone();
+        self.dirty_links.insert(link_id.to_string());
+        Ok(updated)
+    }
+
+    pub fn delete_link(&mut self, link_id: &str) -> Result<()> {
+        if !self.links.contains_key(link_id) {
+            return Err(crate::error::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Link not found",
+            )));
+        }
+        self.links.remove(link_id);
+        self.dirty_links.remove(link_id);
+        self.deleted_link_ids.insert(link_id.to_string());
+        Ok(())
     }
 
     pub fn flush(&mut self) -> Result<()> {
@@ -388,6 +666,12 @@ impl StarMapStore {
         for instance_id in &self.dirty_embeds {
             if let Some(embed) = self.embeds.get(instance_id) {
                 package_storage::save_embed(&self.workspace, &self.starmap_id, embed)?;
+            }
+        }
+
+        for link_id in &self.dirty_links {
+            if let Some(link) = self.links.get(link_id) {
+                package_storage::save_link(&self.workspace, &self.starmap_id, link)?;
             }
         }
 
@@ -415,21 +699,43 @@ impl StarMapStore {
             let _ = package_storage::delete_embed_file(&self.workspace, &self.starmap_id, instance_id);
         }
 
+        for link_id in &self.deleted_link_ids {
+            let _ = package_storage::delete_link_file(&self.workspace, &self.starmap_id, link_id);
+        }
+
         for hl_id in &self.deleted_hyperlink_ids {
             let _ = package_storage::delete_hyperlink_file(&self.workspace, &self.starmap_id, hl_id);
         }
 
         self.update_graph_meta_file()?;
 
+        let node_count = self.nodes.len() as u32;
+        let edge_count = self.edges.len() as u32;
+        let mut linked_chapters = 0u32;
+        for node in self.nodes.values() {
+            if node.kind == StarMapNodeKind::Chapter {
+                linked_chapters += 1;
+            }
+        }
+        crate::starmap::update_starmap_stats(
+            &self.workspace,
+            &self.starmap_id,
+            node_count,
+            edge_count,
+            linked_chapters,
+        )?;
+
         self.dirty_nodes.clear();
         self.dirty_edges.clear();
         self.dirty_embeds.clear();
+        self.dirty_links.clear();
         self.dirty_hyperlinks.clear();
         self.dirty_layout = false;
         self.dirty_graph_meta = false;
         self.deleted_node_ids.clear();
         self.deleted_edge_ids.clear();
         self.deleted_embed_ids.clear();
+        self.deleted_link_ids.clear();
         self.deleted_hyperlink_ids.clear();
 
         Ok(())
@@ -647,6 +953,7 @@ impl StarMapStore {
         let edge_ids: Vec<String> = self.edges.keys().cloned().collect();
         let embed_instance_ids: Vec<String> = self.embeds.keys().cloned().collect();
         let hyperlink_ids: Vec<String> = self.hyperlinks.keys().cloned().collect();
+        let link_ids: Vec<String> = self.links.keys().cloned().collect();
 
         let title = self.graph_meta.as_ref()
             .map(|m| m.title.clone())
@@ -659,6 +966,7 @@ impl StarMapStore {
             node_ids,
             edge_ids,
             embed_instance_ids,
+            link_ids,
             hyperlink_ids,
             package_revision: self.package_revision,
             updated_at: crate::starmap::now_epoch(),
@@ -680,7 +988,7 @@ impl StarMapStore {
             nodes: self.nodes.values().cloned().collect(),
             edges: self.edges.values().cloned().collect(),
             embeds: self.embeds.values().cloned().collect(),
-            links: Vec::new(),
+            links: self.links.values().cloned().collect(),
             created_at: 0,
             updated_at: crate::starmap::now_epoch(),
         }
@@ -746,15 +1054,10 @@ mod tests {
     #[test]
     fn flush_increments_package_revision() {
         let dir = TempDir::new().unwrap();
-        let starmap_dir = dir.path().join("app-meta").join("starmaps").join("test-id");
-        std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
-        std::fs::create_dir_all(starmap_dir.join("edges")).unwrap();
-        std::fs::create_dir_all(starmap_dir.join("child_starmaps")).unwrap();
-        std::fs::create_dir_all(starmap_dir.join("hyperlinks")).unwrap();
-        std::fs::create_dir_all(starmap_dir.join("layouts")).unwrap();
-        std::fs::create_dir_all(starmap_dir.join("metadata")).unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
-        let mut store = StarMapStore::new(dir.path(), "test-id");
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
         store.upsert_node(make_test_node("n1", "Test Node"));
         store.flush().unwrap();
         assert_eq!(store.package_revision(), 1);
@@ -777,6 +1080,7 @@ mod tests {
             node_ids: vec!["missing-node".to_string()],
             edge_ids: vec![],
             embed_instance_ids: vec![],
+            link_ids: vec![],
             hyperlink_ids: vec![],
             package_revision: 1,
             updated_at: 0,

@@ -9,7 +9,7 @@ mod link_ops;
 mod node_ops;
 mod ops;
 pub mod resolve;
-mod validation;
+pub mod validation;
 
 pub use edge_ops::*;
 pub use embed_ops::*;

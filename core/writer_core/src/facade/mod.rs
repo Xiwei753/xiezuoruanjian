@@ -26,6 +26,7 @@
 
 mod action_ops;
 mod project_ops;
+mod search_ops;
 mod service_ops;
 mod settings_ops;
 mod starmap_ops;

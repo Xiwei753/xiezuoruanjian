@@ -50,13 +50,27 @@ impl SearchIndexService {
     pub fn process_updates(&mut self) {
         let updates = self.update_queue.drain();
         for update in updates {
-            self.backend.insert(IndexEntry {
-                object_id: update.object_id,
-                scope: update.scope,
-                title: update.title,
-                body: update.body,
-                target: update.target,
-            });
+            match update.action {
+                SearchIndexAction::Delete => {
+                    self.backend.remove(&update.object_id);
+                }
+                SearchIndexAction::Upsert => {
+                    self.backend.insert(IndexEntry {
+                        object_id: update.object_id,
+                        scope: update.scope,
+                        title: update.title,
+                        body: update.body,
+                        target: update.target.unwrap_or(SearchTarget {
+                            project_id: None,
+                            volume_id: None,
+                            chapter_id: None,
+                            starmap_id: None,
+                            node_id: None,
+                            setting_key: None,
+                        }),
+                    });
+                }
+            }
         }
     }
 

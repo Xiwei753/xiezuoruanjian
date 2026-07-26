@@ -1,4 +1,7 @@
 use crate::error::Result;
+use crate::starmap::store::StarMapStore;
+use crate::starmap::types::*;
+use crate::starmap::graph::validation;
 
 impl super::WriterCore {
     pub fn list_starmaps(&self) -> Result<Vec<crate::starmap::StarMapMeta>> {
@@ -76,7 +79,9 @@ impl super::WriterCore {
         &self,
         starmap_id: &str,
     ) -> Result<crate::starmap::types::StarMapGraph> {
-        crate::starmap::graph::get_starmap_graph(&self.workspace_path, starmap_id)
+        let mut store = StarMapStore::new(&self.workspace_path, starmap_id);
+        store.load_full()?;
+        Ok(store.to_starmap_graph())
     }
 
     pub fn save_starmap_graph(
@@ -84,7 +89,23 @@ impl super::WriterCore {
         starmap_id: &str,
         graph: &crate::starmap::types::StarMapGraph,
     ) -> Result<()> {
-        crate::starmap::graph::save_starmap_graph(&self.workspace_path, starmap_id, graph)
+        validation::validate_graph(&self.workspace_path, graph)?;
+
+        let mut store = StarMapStore::new(&self.workspace_path, starmap_id);
+        for node in &graph.nodes {
+            store.upsert_node(node.clone());
+        }
+        for edge in &graph.edges {
+            store.upsert_edge(edge.clone());
+        }
+        for embed in &graph.embeds {
+            store.upsert_embed(embed.clone());
+        }
+        for link in &graph.links {
+            store.upsert_link(link.clone());
+        }
+        store.flush()?;
+        Ok(())
     }
 
     pub fn add_starmap_node(
@@ -94,13 +115,11 @@ impl super::WriterCore {
         default_x: f32,
         default_y: f32,
     ) -> Result<crate::starmap::types::StarMapNode> {
-        crate::starmap::graph::add_starmap_node(
-            &self.workspace_path,
-            starmap_id,
-            node,
-            default_x,
-            default_y,
-        )
+        let mut store = StarMapStore::new(&self.workspace_path, starmap_id);
+        store.load_full()?;
+        let result = store.add_node(node, default_x, default_y);
+        store.flush()?;
+        Ok(result)
     }
 
     pub fn update_starmap_node(
@@ -109,11 +128,19 @@ impl super::WriterCore {
         node_id: &str,
         patch: crate::starmap::types::StarMapNodePatch,
     ) -> Result<crate::starmap::types::StarMapNode> {
-        crate::starmap::graph::update_starmap_node(&self.workspace_path, starmap_id, node_id, patch)
+        let mut store = StarMapStore::new(&self.workspace_path, starmap_id);
+        store.load_full()?;
+        let result = store.update_node(node_id, &patch)?;
+        store.flush()?;
+        Ok(result)
     }
 
     pub fn delete_starmap_node(&self, starmap_id: &str, node_id: &str) -> Result<()> {
-        crate::starmap::graph::delete_starmap_node(&self.workspace_path, starmap_id, node_id)
+        let mut store = StarMapStore::new(&self.workspace_path, starmap_id);
+        store.load_full()?;
+        store.delete_node(node_id)?;
+        store.flush()?;
+        Ok(())
     }
 
     pub fn add_starmap_edge(
@@ -121,7 +148,11 @@ impl super::WriterCore {
         starmap_id: &str,
         edge: crate::starmap::types::StarMapEdge,
     ) -> Result<crate::starmap::types::StarMapEdge> {
-        crate::starmap::graph::add_starmap_edge(&self.workspace_path, starmap_id, edge)
+        let mut store = StarMapStore::new(&self.workspace_path, starmap_id);
+        store.load_full()?;
+        let result = store.add_edge(edge)?;
+        store.flush()?;
+        Ok(result)
     }
 
     pub fn update_starmap_edge(
@@ -130,18 +161,28 @@ impl super::WriterCore {
         edge_id: &str,
         patch: crate::starmap::types::StarMapEdgePatch,
     ) -> Result<crate::starmap::types::StarMapEdge> {
-        crate::starmap::graph::update_starmap_edge(&self.workspace_path, starmap_id, edge_id, patch)
+        let mut store = StarMapStore::new(&self.workspace_path, starmap_id);
+        store.load_full()?;
+        let result = store.update_edge(edge_id, &patch)?;
+        store.flush()?;
+        Ok(result)
     }
 
     pub fn delete_starmap_edge(&self, starmap_id: &str, edge_id: &str) -> Result<()> {
-        crate::starmap::graph::delete_starmap_edge(&self.workspace_path, starmap_id, edge_id)
+        let mut store = StarMapStore::new(&self.workspace_path, starmap_id);
+        store.load_full()?;
+        store.delete_edge(edge_id)?;
+        store.flush()?;
+        Ok(())
     }
 
     pub fn get_starmap_layout(
         &self,
         starmap_id: &str,
     ) -> Result<crate::starmap::types::StarMapLayout> {
-        crate::starmap::graph::get_starmap_layout(&self.workspace_path, starmap_id)
+        let mut store = StarMapStore::new(&self.workspace_path, starmap_id);
+        store.load_full()?;
+        Ok(store.get_layout().cloned().unwrap_or_default())
     }
 
     pub fn save_starmap_layout(
@@ -149,14 +190,22 @@ impl super::WriterCore {
         starmap_id: &str,
         layout: &crate::starmap::types::StarMapLayout,
     ) -> Result<()> {
-        crate::starmap::graph::save_starmap_layout(&self.workspace_path, starmap_id, layout)
+        validation::validate_layout(layout)?;
+
+        let mut store = StarMapStore::new(&self.workspace_path, starmap_id);
+        store.load_full()?;
+        store.set_layout(layout.clone());
+        store.flush()?;
+        Ok(())
     }
 
     pub fn get_starmap_viewport(
         &self,
         starmap_id: &str,
     ) -> Result<crate::starmap::types::StarMapViewport> {
-        crate::starmap::graph::get_starmap_viewport(&self.workspace_path, starmap_id)
+        let mut store = StarMapStore::new(&self.workspace_path, starmap_id);
+        store.load_full()?;
+        Ok(store.get_viewport().cloned().unwrap_or_default())
     }
 
     pub fn save_starmap_viewport(
@@ -164,7 +213,13 @@ impl super::WriterCore {
         starmap_id: &str,
         viewport: &crate::starmap::types::StarMapViewport,
     ) -> Result<()> {
-        crate::starmap::graph::save_starmap_viewport(&self.workspace_path, starmap_id, viewport)
+        validation::validate_viewport(viewport)?;
+
+        let mut store = StarMapStore::new(&self.workspace_path, starmap_id);
+        store.load_full()?;
+        store.set_viewport(viewport.clone());
+        store.flush_viewport()?;
+        Ok(())
     }
 
     pub fn add_starmap_embed(
@@ -172,7 +227,11 @@ impl super::WriterCore {
         starmap_id: &str,
         embed: crate::starmap::types::StarMapEmbed,
     ) -> Result<crate::starmap::types::StarMapEmbed> {
-        crate::starmap::graph::add_starmap_embed(&self.workspace_path, starmap_id, embed)
+        let mut store = StarMapStore::new(&self.workspace_path, starmap_id);
+        store.load_full()?;
+        let result = store.add_embed(embed)?;
+        store.flush()?;
+        Ok(result)
     }
 
     pub fn update_starmap_embed(
@@ -181,16 +240,19 @@ impl super::WriterCore {
         instance_id: &str,
         patch: crate::starmap::types::StarMapEmbedPatch,
     ) -> Result<crate::starmap::types::StarMapEmbed> {
-        crate::starmap::graph::update_starmap_embed(
-            &self.workspace_path,
-            starmap_id,
-            instance_id,
-            patch,
-        )
+        let mut store = StarMapStore::new(&self.workspace_path, starmap_id);
+        store.load_full()?;
+        let result = store.update_embed(instance_id, &patch)?;
+        store.flush()?;
+        Ok(result)
     }
 
     pub fn delete_starmap_embed(&self, starmap_id: &str, instance_id: &str) -> Result<()> {
-        crate::starmap::graph::delete_starmap_embed(&self.workspace_path, starmap_id, instance_id)
+        let mut store = StarMapStore::new(&self.workspace_path, starmap_id);
+        store.load_full()?;
+        store.delete_embed(instance_id)?;
+        store.flush()?;
+        Ok(())
     }
 
     pub fn add_starmap_link(
@@ -198,7 +260,11 @@ impl super::WriterCore {
         starmap_id: &str,
         link: crate::starmap::types::StarMapLink,
     ) -> Result<crate::starmap::types::StarMapLink> {
-        crate::starmap::graph::add_starmap_link(&self.workspace_path, starmap_id, link)
+        let mut store = StarMapStore::new(&self.workspace_path, starmap_id);
+        store.load_full()?;
+        let result = store.add_link(link)?;
+        store.flush()?;
+        Ok(result)
     }
 
     pub fn update_starmap_link(
@@ -207,11 +273,19 @@ impl super::WriterCore {
         link_id: &str,
         patch: crate::starmap::types::StarMapLinkPatch,
     ) -> Result<crate::starmap::types::StarMapLink> {
-        crate::starmap::graph::update_starmap_link(&self.workspace_path, starmap_id, link_id, patch)
+        let mut store = StarMapStore::new(&self.workspace_path, starmap_id);
+        store.load_full()?;
+        let result = store.update_link(link_id, &patch)?;
+        store.flush()?;
+        Ok(result)
     }
 
     pub fn delete_starmap_link(&self, starmap_id: &str, link_id: &str) -> Result<()> {
-        crate::starmap::graph::delete_starmap_link(&self.workspace_path, starmap_id, link_id)
+        let mut store = StarMapStore::new(&self.workspace_path, starmap_id);
+        store.load_full()?;
+        store.delete_link(link_id)?;
+        store.flush()?;
+        Ok(())
     }
 
     pub fn find_starmap_references(

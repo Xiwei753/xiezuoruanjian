@@ -134,6 +134,7 @@ impl WriterCoreApi {
 mod action_ops;
 mod editor_ops;
 mod project_ops;
+mod search_ops;
 mod starmap_ops;
 mod workspace_ops;
 mod writing_stats_ops;
