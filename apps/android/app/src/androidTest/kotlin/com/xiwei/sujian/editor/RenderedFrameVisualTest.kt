@@ -11,8 +11,10 @@ import com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import com.xiwei.sujian.editor.v2.visual.CaptureMethod
 import com.xiwei.sujian.editor.v2.visual.ColorDistance
+import com.xiwei.sujian.editor.v2.visual.AnimationStateSnapshot
 import com.xiwei.sujian.editor.v2.visual.ManualAnimationTimeSource
 import com.xiwei.sujian.editor.v2.visual.TransactionIdSource
+import com.xiwei.sujian.editor.v2.visual.TransactionState
 import com.xiwei.sujian.editor.v2.visual.VisualFrameSnapshot
 import com.xiwei.sujian.support.AndroidTestEnvironment
 import com.xiwei.sujian.support.ComposeWait
@@ -103,6 +105,17 @@ class RenderedFrameVisualTest {
                 startTimeMs = editorView.getActiveAnimationStartTimeMs() ?: 0L
             }
         return startTimeMs
+    }
+
+    private fun captureAnimationStateSnapshot(): AnimationStateSnapshot? {
+        var snapshot: AnimationStateSnapshot? = null
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check { view, _ ->
+                val editorView = view as? SujianEditorView
+                    ?: throw AssertionError("View is not a SujianEditorView")
+                snapshot = editorView.captureAnimationSnapshot()
+            }
+        return snapshot
     }
 
     @Test
@@ -904,6 +917,18 @@ class RenderedFrameVisualTest {
         assertTrue(
             "captureFiveProgressPoints requires an active animation: startTimeMs=$startTimeMs must be >= 0",
             startTimeMs >= 0
+        )
+
+        val stateSnapshot = captureAnimationStateSnapshot()
+        assertNotNull(
+            "captureFiveProgressPoints requires an active animation state snapshot",
+            stateSnapshot
+        )
+        assertTrue(
+            "captureFiveProgressPoints requires transaction state to be Rendering, but was ${stateSnapshot!!.transactionState}",
+            stateSnapshot.transactionState == TransactionState.Rendering
+                    || stateSnapshot.transactionState == TransactionState.Prepared
+                    || stateSnapshot.transactionState == TransactionState.Pending
         )
 
         manualTimeSource.advanceToProgress(0f, durationMs, startTimeMs)
