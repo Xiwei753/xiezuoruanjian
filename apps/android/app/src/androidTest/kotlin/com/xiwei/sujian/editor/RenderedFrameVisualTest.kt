@@ -388,11 +388,13 @@ class RenderedFrameVisualTest {
 
         val frames = captureFiveProgressPoints()
 
-        assertAllFramesHaveContent(frames, listOf("start", "25%", "50%", "75%", "end"))
-        assertContentBoundsProgression(frames, listOf("start", "25%", "50%", "75%", "end"))
+        val labels = listOf("start", "25%", "50%", "75%", "end")
+        assertAllFramesHaveContent(frames, labels)
+        assertContentBoundsProgression(frames, labels)
         assertMidFrameContentRegionHasPixels(frames)
         assertBackgroundRegionIsEmpty(frames)
         assertContentAlphaIsOpaque(frames)
+        assertCrossFrameAlphaProgression(frames, labels)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("Test"))
@@ -421,7 +423,8 @@ class RenderedFrameVisualTest {
 
         val frames = captureFiveProgressPoints()
 
-        assertAllFramesHaveContent(frames, listOf("start", "25%", "50%", "75%", "end"))
+        val deleteLabels = listOf("start", "25%", "50%", "75%", "end")
+        assertAllFramesHaveContent(frames, deleteLabels)
 
         val endBounds = frames[4].contentBounds()
         assertTrue(
@@ -432,6 +435,7 @@ class RenderedFrameVisualTest {
         assertDeleteProgressionWidthShrinks(frames)
         assertBackgroundRegionIsEmpty(frames)
         assertContentAlphaIsOpaque(frames)
+        assertCrossFrameAlphaProgression(frames, deleteLabels)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("ABE"))
@@ -449,11 +453,13 @@ class RenderedFrameVisualTest {
 
         val frames = captureFiveProgressPoints()
 
-        assertAllFramesHaveContent(frames, listOf("start", "25%", "50%", "75%", "end"))
-        assertContentBoundsProgression(frames, listOf("start", "25%", "50%", "75%", "end"))
+        val compLabels = listOf("start", "25%", "50%", "75%", "end")
+        assertAllFramesHaveContent(frames, compLabels)
+        assertContentBoundsProgression(frames, compLabels)
         assertMidFrameContentRegionHasPixels(frames)
         assertBackgroundRegionIsEmpty(frames)
         assertContentAlphaIsOpaque(frames)
+        assertCrossFrameAlphaProgression(frames, compLabels)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("预输入"))
@@ -472,11 +478,13 @@ class RenderedFrameVisualTest {
 
         val frames = captureFiveProgressPoints()
 
-        assertAllFramesHaveContent(frames, listOf("start", "25%", "50%", "75%", "end"))
-        assertContentBoundsProgression(frames, listOf("start", "25%", "50%", "75%", "end"))
+        val uniLabels = listOf("start", "25%", "50%", "75%", "end")
+        assertAllFramesHaveContent(frames, uniLabels)
+        assertContentBoundsProgression(frames, uniLabels)
         assertMidFrameContentRegionHasPixels(frames)
         assertBackgroundRegionIsEmpty(frames)
         assertContentAlphaIsOpaque(frames)
+        assertCrossFrameAlphaProgression(frames, uniLabels)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText(testText))
@@ -495,9 +503,10 @@ class RenderedFrameVisualTest {
 
         val frames = captureFiveProgressPoints()
 
-        assertAllFramesHaveContent(frames, listOf("start", "25%", "50%", "75%", "end"))
+        val mlLabels = listOf("start", "25%", "50%", "75%", "end")
+        assertAllFramesHaveContent(frames, mlLabels)
 
-        for ((i, label) in listOf("start", "25%", "50%", "75%", "end").withIndex()) {
+        for ((i, label) in mlLabels.withIndex()) {
             val bounds = frames[i].contentBounds()
             assertTrue("Multiline at $label should have non-zero height", bounds.height() > 0)
             assertTrue("Multiline at $label should have non-zero width", bounds.width() > 0)
@@ -506,6 +515,7 @@ class RenderedFrameVisualTest {
         assertMidFrameContentRegionHasPixels(frames)
         assertBackgroundRegionIsEmpty(frames)
         assertContentAlphaIsOpaque(frames)
+        assertCrossFrameAlphaProgression(frames, mlLabels)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText(testText))
@@ -580,6 +590,7 @@ class RenderedFrameVisualTest {
         val frames = listOf(frame1, frame2, frame3, frame4, frame5, frame6)
         assertContentAlphaIsOpaque(frames)
         assertBackgroundRegionIsEmpty(frames)
+        assertCrossFrameAlphaProgression(frames, listOf("after-A", "0%", "25%", "50%", "75%", "end"))
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("AB"))
@@ -1042,6 +1053,39 @@ class RenderedFrameVisualTest {
             assertTrue(
                 "Content pixel must be visually distinct from background: RGB distance²=$rgbDistSq must be > ${ColorDistance.BACKGROUND_TOLERANCE * ColorDistance.BACKGROUND_TOLERANCE} at (${first.first},${first.second})",
                 rgbDistSq > ColorDistance.BACKGROUND_TOLERANCE * ColorDistance.BACKGROUND_TOLERANCE
+            )
+        }
+    }
+
+    private fun assertCrossFrameAlphaProgression(frames: List<CapturedFrame>, labels: List<String>) {
+        if (frames.size < 3 || labels.size < 3) return
+        val startBounds = frames[0].contentBounds()
+        val midBounds = frames[frames.size / 2].contentBounds()
+        val endBounds = frames[frames.size - 1].contentBounds()
+        assertTrue("Start frame must have content for cross-frame check", startBounds.width() > 0 && startBounds.height() > 0)
+        assertTrue("Mid frame must have content for cross-frame check", midBounds.width() > 0 && midBounds.height() > 0)
+        assertTrue("End frame must have content for cross-frame check", endBounds.width() > 0 && endBounds.height() > 0)
+
+        val startCount = frames[0].countNonBackgroundPixels(startBounds.left, startBounds.top, startBounds.right, startBounds.bottom)
+        val midCount = frames[frames.size / 2].countNonBackgroundPixels(midBounds.left, midBounds.top, midBounds.right, midBounds.bottom)
+        val endCount = frames[frames.size - 1].countNonBackgroundPixels(endBounds.left, endBounds.top, endBounds.right, endBounds.bottom)
+        assertTrue(
+            "Cross-frame pixel count must vary: start=$startCount, mid=$midCount, end=$endCount at ${labels[0]}/${labels[frames.size / 2]}/${labels[frames.size - 1]} — animation should change coverage",
+            !(startCount == midCount && midCount == endCount) || startCount == 0
+        )
+
+        val midFrame = frames[frames.size / 2]
+        val midFirst = midFrame.findFirstNonBackgroundPixel()
+        if (midFirst != null) {
+            val midPixel = midFrame.bitmap.getPixel(midFirst.first, midFirst.second)
+            val midBg = midFrame.backgroundColor
+            val midDr = ColorDistance.red(midPixel) - ColorDistance.red(midBg)
+            val midDg = ColorDistance.green(midPixel) - ColorDistance.green(midBg)
+            val midDb = ColorDistance.blue(midPixel) - ColorDistance.blue(midBg)
+            val midRgbDistSq = midDr * midDr + midDg * midDg + midDb * midDb
+            assertTrue(
+                "Mid-frame content pixel must be visually distinct from background: RGB distance²=$midRgbDistSq at ${labels[frames.size / 2]}",
+                midRgbDistSq > ColorDistance.BACKGROUND_TOLERANCE * ColorDistance.BACKGROUND_TOLERANCE
             )
         }
     }
