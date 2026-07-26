@@ -1254,6 +1254,26 @@ mod tests {
     }
 
     #[test]
+    fn delete_project_determines_starmap_list_before_deletion() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        let project = api.create_project("OrderP").unwrap();
+        let meta = api.create_starmap("BoundMap", "desc", None).unwrap();
+        api.bind_starmap_to_project(&meta.starmap_id, &project.id).unwrap();
+
+        let before = api.search_service_search("BoundMap", SearchScope::StarmapTitle, 10, None);
+        assert_eq!(before.len(), 1);
+        assert_eq!(before[0].target.project_id.as_deref(), Some(project.id.as_str()));
+
+        api.delete_project(&project.id).unwrap();
+
+        let after = api.search_service_search("BoundMap", SearchScope::StarmapTitle, 10, None);
+        assert!(after.is_empty(),
+            "bound starmap index must be removed even though starmap list is determined before deletion");
+    }
+
+    #[test]
     fn bind_unbind_updates_embed_and_hyperlink_project_id() {
         let dir = TempDir::new().unwrap();
         crate::workspace::create_workspace(dir.path()).unwrap();
