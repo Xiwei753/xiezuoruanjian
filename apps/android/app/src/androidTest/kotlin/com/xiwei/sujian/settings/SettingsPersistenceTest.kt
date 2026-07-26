@@ -63,7 +63,7 @@ class SettingsPersistenceTest {
         toggleNode.assertIsDisplayed()
 
         val toggleSemantics = toggleNode.fetchSemanticsNode()
-        val wasOn = toggleSemantics.config.getOrElse(
+        val wasOn = toggleSemantics.config.getOrElseNullable(
             androidx.compose.ui.semantics.SemanticsProperties.ToggleableState
         ) { null } == androidx.compose.ui.state.ToggleableState.On
 
@@ -72,7 +72,7 @@ class SettingsPersistenceTest {
         val expectedEnabled = !wasOn
         ComposeWait.waitUntil(composeTestRule, {
             val node = composeTestRule.onNodeWithTag(SujianSemanticIds.SettingsTypingAnimation)
-            val state = node.fetchSemanticsNode().config.getOrElse(
+            val state = node.fetchSemanticsNode().config.getOrElseNullable(
                 androidx.compose.ui.semantics.SemanticsProperties.ToggleableState
             ) { null }
             if (wasOn) state == androidx.compose.ui.state.ToggleableState.Off
