@@ -9,6 +9,7 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
+import com.xiwei.sujian.editor.v2.visual.CaptureMethod
 import com.xiwei.sujian.editor.v2.visual.ManualAnimationTimeSource
 import com.xiwei.sujian.editor.v2.visual.TransactionIdSource
 import com.xiwei.sujian.editor.v2.visual.VisualFrameSnapshot
@@ -830,6 +831,7 @@ class RenderedFrameVisualTest {
         dispatchManualFrame()
 
         val pixelCopyFrame = EditorBitmapCapture.capturePixelCopyBitmap()
+        assertEquals("PixelCopy frame must use PIXEL_COPY capture method", CaptureMethod.PIXEL_COPY, pixelCopyFrame.captureMethod)
         EditorBitmapCapture.assertBitmapHasContent(pixelCopyFrame, "PixelCopy frame must have content")
 
         val pcBounds = pixelCopyFrame.contentBounds()
@@ -853,6 +855,7 @@ class RenderedFrameVisualTest {
         dispatchManualFrame()
 
         val softwareFrame = EditorBitmapCapture.captureSoftwareBitmap()
+        assertEquals("Software frame must use SOFTWARE_DRAW capture method", CaptureMethod.SOFTWARE_DRAW, softwareFrame.captureMethod)
         EditorBitmapCapture.assertBitmapHasContent(softwareFrame, "Software-drawn frame must have content")
 
         val swBounds = softwareFrame.contentBounds()

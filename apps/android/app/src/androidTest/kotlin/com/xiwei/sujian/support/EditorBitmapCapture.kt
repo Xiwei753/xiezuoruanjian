@@ -13,7 +13,9 @@ import androidx.test.espresso.Espresso
 import androidx.test.espresso.matcher.ViewMatchers
 import com.xiwei.sujian.R
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
+import com.xiwei.sujian.editor.v2.visual.CaptureMethod
 import com.xiwei.sujian.editor.v2.visual.ColorDistance
+import com.xiwei.sujian.editor.v2.visual.PixelCopyResult
 import org.junit.Assert
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -24,7 +26,8 @@ object EditorBitmapCapture {
         val bitmap: Bitmap,
         val width: Int,
         val height: Int,
-        val backgroundColor: Int
+        val backgroundColor: Int,
+        val captureMethod: CaptureMethod = CaptureMethod.SOFTWARE_DRAW
     ) {
         fun pixel(x: Int, y: Int): Int = bitmap.getPixel(x, y)
 
@@ -140,28 +143,13 @@ object EditorBitmapCapture {
         val backgroundColor = view.getThemeBackgroundColor()
         val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val ctx = view.context
-            if (ctx is android.app.Activity && view.windowToken != null) {
-                val srcRect = computeSrcRect(view)
-                val latch = CountDownLatch(1)
-                var captureSucceeded = false
-                try {
-                    PixelCopy.request(ctx.window, srcRect, bitmap, { result ->
-                        captureSucceeded = result == PixelCopy.SUCCESS
-                        latch.countDown()
-                    }, Handler(Looper.getMainLooper()))
-                    val awaited = latch.await(3, TimeUnit.SECONDS)
-                    if (awaited && captureSucceeded) {
-                        return CapturedFrame(bitmap = bitmap, width = view.width, height = view.height, backgroundColor = backgroundColor)
-                    }
-                } catch (_: Exception) {
-                }
-            }
+        val pixelCopyResult = tryPixelCopy(view, bitmap)
+        if (pixelCopyResult == PixelCopyResult.SUCCESS) {
+            return CapturedFrame(bitmap = bitmap, width = view.width, height = view.height, backgroundColor = backgroundColor, captureMethod = CaptureMethod.PIXEL_COPY)
         }
 
         drawViewToBitmap(view, bitmap)
-        return CapturedFrame(bitmap = bitmap, width = view.width, height = view.height, backgroundColor = backgroundColor)
+        return CapturedFrame(bitmap = bitmap, width = view.width, height = view.height, backgroundColor = backgroundColor, captureMethod = CaptureMethod.SOFTWARE_DRAW)
     }
 
     fun capturePixelCopyOnly(view: SujianEditorView): CapturedFrame {
@@ -173,28 +161,18 @@ object EditorBitmapCapture {
         val ctx = view.context
         Assert.assertTrue("View must be attached to an Activity", ctx is android.app.Activity && view.windowToken != null)
 
-        val srcRect = computeSrcRect(view)
-        val latch = CountDownLatch(1)
-        var captureSucceeded = false
-        var captureResult: Int = -1
-        try {
-            PixelCopy.request(ctx.window, srcRect, bitmap, { result ->
-                captureResult = result
-                captureSucceeded = result == PixelCopy.SUCCESS
-                latch.countDown()
-            }, Handler(Looper.getMainLooper()))
-            val awaited = latch.await(3, TimeUnit.SECONDS)
-            if (!awaited) {
+        val result = tryPixelCopy(view, bitmap)
+        when (result) {
+            PixelCopyResult.TIMED_OUT ->
                 Assert.fail("PixelCopy timed out: callback never executed on main thread. Ensure this method is called from the test (instrumentation) thread, not from an Espresso .check callback on the main thread.")
-            }
-            if (!captureSucceeded) {
-                Assert.fail("PixelCopy failed with result code $captureResult. Hardware window capture did not succeed.")
-            }
-        } catch (e: Exception) {
-            Assert.fail("PixelCopy threw exception: ${e.message}")
+            PixelCopyResult.FAILED ->
+                Assert.fail("PixelCopy failed. Hardware window capture did not succeed.")
+            PixelCopyResult.NOT_SUPPORTED ->
+                Assert.fail("PixelCopy not supported on this device/API level.")
+            PixelCopyResult.SUCCESS -> {}
         }
 
-        return CapturedFrame(bitmap = bitmap, width = view.width, height = view.height, backgroundColor = backgroundColor)
+        return CapturedFrame(bitmap = bitmap, width = view.width, height = view.height, backgroundColor = backgroundColor, captureMethod = CaptureMethod.PIXEL_COPY)
     }
 
     fun captureSoftwareBitmap(view: SujianEditorView): CapturedFrame {
@@ -202,7 +180,37 @@ object EditorBitmapCapture {
         val backgroundColor = view.getThemeBackgroundColor()
         val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
         drawViewToBitmap(view, bitmap)
-        return CapturedFrame(bitmap = bitmap, width = view.width, height = view.height, backgroundColor = backgroundColor)
+        return CapturedFrame(bitmap = bitmap, width = view.width, height = view.height, backgroundColor = backgroundColor, captureMethod = CaptureMethod.SOFTWARE_DRAW)
+    }
+
+    private fun tryPixelCopy(view: SujianEditorView, bitmap: Bitmap): PixelCopyResult {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            return PixelCopyResult.NOT_SUPPORTED
+        }
+        val ctx = view.context
+        if (ctx !is android.app.Activity || view.windowToken == null) {
+            return PixelCopyResult.NOT_SUPPORTED
+        }
+
+        val srcRect = computeSrcRect(view)
+        val latch = CountDownLatch(1)
+        var captureSucceeded = false
+        try {
+            PixelCopy.request(ctx.window, srcRect, bitmap, { result ->
+                captureSucceeded = result == PixelCopy.SUCCESS
+                latch.countDown()
+            }, Handler(Looper.getMainLooper()))
+            val awaited = latch.await(3, TimeUnit.SECONDS)
+            if (!awaited) {
+                return PixelCopyResult.TIMED_OUT
+            }
+            if (!captureSucceeded) {
+                return PixelCopyResult.FAILED
+            }
+            return PixelCopyResult.SUCCESS
+        } catch (_: Exception) {
+            return PixelCopyResult.FAILED
+        }
     }
 
     private fun computeSrcRect(view: View): Rect {
