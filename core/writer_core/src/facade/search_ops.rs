@@ -9,7 +9,7 @@ impl super::WriterCore {
         limit: usize,
         cursor: Option<&str>,
     ) -> Vec<SearchResult> {
-        let service = self.search_service.lock().unwrap_or_else(|e| e.into_inner());
+        let mut service = self.search_service.lock().unwrap_or_else(|e| e.into_inner());
         service.search(query, scope, limit, cursor)
     }
 
@@ -33,5 +33,10 @@ impl super::WriterCore {
     pub fn process_pending_search_updates(&self) {
         let mut service = self.search_service.lock().unwrap_or_else(|e| e.into_inner());
         service.process_updates();
+    }
+
+    pub fn remove_search_index_by_prefix(&self, prefix: &str) {
+        let mut service = self.search_service.lock().unwrap_or_else(|e| e.into_inner());
+        service.remove_by_prefix(prefix);
     }
 }

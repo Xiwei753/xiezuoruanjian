@@ -49,6 +49,17 @@ impl SearchBackend {
         }
     }
 
+    pub fn remove_by_prefix(&mut self, prefix: &str) {
+        let ids_to_remove: Vec<String> = self.entries
+            .keys()
+            .filter(|id| id.starts_with(prefix))
+            .cloned()
+            .collect();
+        for id in ids_to_remove {
+            self.remove(&id);
+        }
+    }
+
     pub fn search(
         &self,
         query: &str,

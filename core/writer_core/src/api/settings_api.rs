@@ -12,20 +12,15 @@ impl WriterCoreApi {
     pub fn save_local_settings(&self, settings: LocalSettingsDto) -> ApiResult<bool> {
         self.core()
             .save_local_settings(&settings.clone().into())?;
+        let body = serde_json::to_string(&settings).unwrap_or_default();
+        let entry = crate::search::extractor::extract_setting_entry("local", &body);
         self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
-            object_id: "settings:local".to_string(),
-            scope: crate::search::SearchScope::Setting,
-            title: "local_settings".to_string(),
-            body: serde_json::to_string(&settings).unwrap_or_default(),
-            target: Some(crate::search::SearchTarget {
-                project_id: None,
-                volume_id: None,
-                chapter_id: None,
-                starmap_id: None,
-                node_id: None,
-                setting_key: Some("local".to_string()),
-            }),
+            object_id: entry.object_id.clone(),
+            scope: entry.scope,
+            title: entry.title.clone(),
+            body: entry.body.clone(),
+            target: Some(entry.target.clone()),
         });
         Ok(true)
     }
@@ -40,20 +35,15 @@ impl WriterCoreApi {
     pub fn save_syncable_settings(&self, settings: SyncableSettingsDto) -> ApiResult<bool> {
         self.core()
             .save_syncable_settings(&settings.clone().into())?;
+        let body = serde_json::to_string(&settings).unwrap_or_default();
+        let entry = crate::search::extractor::extract_setting_entry("syncable", &body);
         self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
-            object_id: "settings:syncable".to_string(),
-            scope: crate::search::SearchScope::Setting,
-            title: "syncable_settings".to_string(),
-            body: serde_json::to_string(&settings).unwrap_or_default(),
-            target: Some(crate::search::SearchTarget {
-                project_id: None,
-                volume_id: None,
-                chapter_id: None,
-                starmap_id: None,
-                node_id: None,
-                setting_key: Some("syncable".to_string()),
-            }),
+            object_id: entry.object_id.clone(),
+            scope: entry.scope,
+            title: entry.title.clone(),
+            body: entry.body.clone(),
+            target: Some(entry.target.clone()),
         });
         Ok(true)
     }

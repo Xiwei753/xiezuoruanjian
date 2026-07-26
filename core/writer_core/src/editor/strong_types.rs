@@ -61,25 +61,6 @@ impl Utf8ByteOffset {
         Ok(Self(offset))
     }
 
-    pub fn clamp(text: &str, offset: usize) -> Self {
-        let clamped = if offset > text.len() {
-            text.len()
-        } else {
-            let mut safe = offset;
-            while safe > 0 && !text.is_char_boundary(safe) {
-                safe -= 1;
-            }
-            safe
-        };
-        Self(clamped)
-    }
-
-    /// # Safety
-    ///
-    /// Caller must guarantee that `offset` is a valid UTF-8 char boundary
-    /// within the target text and does not exceed the text's byte length.
-    /// This constructor is `pub(super)` — restricted to the `editor` module
-    /// where values have already been validated by the editing kernel.
     pub(super) fn unchecked(offset: usize) -> Self {
         Self(offset)
     }
@@ -111,15 +92,6 @@ impl Utf8ByteRange {
         let e = Utf8ByteOffset::try_new(text, end)
             .map_err(InvalidUtf8RangeError::InvalidEnd)?;
         Ok(Self { start: s, end: e })
-    }
-
-    pub fn clamp(text: &str, start: usize, end: usize) -> Option<Self> {
-        if start > end {
-            return None;
-        }
-        let s = Utf8ByteOffset::clamp(text, start);
-        let e = Utf8ByteOffset::clamp(text, end);
-        Some(Self { start: s, end: e })
     }
 
     pub(super) fn from_values(start: usize, end: usize) -> Option<Self> {
@@ -261,16 +233,6 @@ mod tests {
     }
 
     #[test]
-    fn utf8_byte_offset_clamp_to_char_boundary() {
-        let text = "你好";
-        assert_eq!(Utf8ByteOffset::clamp(text, 0).value(), 0);
-        assert_eq!(Utf8ByteOffset::clamp(text, 1).value(), 0);
-        assert_eq!(Utf8ByteOffset::clamp(text, 3).value(), 3);
-        assert_eq!(Utf8ByteOffset::clamp(text, 6).value(), 6);
-        assert_eq!(Utf8ByteOffset::clamp(text, 100).value(), 6);
-    }
-
-    #[test]
     fn utf8_byte_range_try_new_valid() {
         let text = "你好世界";
         assert!(Utf8ByteRange::try_new(text, 0, 6).is_ok());
@@ -291,11 +253,9 @@ mod tests {
     }
 
     #[test]
-    fn utf8_byte_range_clamp_validates_order() {
+    fn utf8_byte_range_try_new_rejects_beyond_end() {
         let text = "abc";
-        assert!(Utf8ByteRange::clamp(text, 0, 3).is_some());
-        assert!(Utf8ByteRange::clamp(text, 3, 0).is_none());
-        assert!(Utf8ByteRange::clamp(text, 0, 0).is_some());
+        assert!(Utf8ByteRange::try_new(text, 0, 5).is_err());
     }
 
     #[test]
@@ -310,15 +270,5 @@ mod tests {
         let gen = EditorSessionGeneration::initial();
         assert_eq!(gen.value(), 0);
         assert_eq!(gen.next().value(), 1);
-    }
-
-    #[test]
-    fn utf8_byte_range_clamp_clamps() {
-        let text = "abc";
-        let range = Utf8ByteRange::clamp(text, 0, 5);
-        assert!(range.is_some());
-        let r = range.unwrap();
-        assert_eq!(r.start().value(), 0);
-        assert_eq!(r.end().value(), 3);
     }
 }

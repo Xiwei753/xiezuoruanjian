@@ -58,21 +58,16 @@ impl WriterCoreApi {
     ) -> ApiResult<bool> {
         self.core()
             .rename_chapter(project_id, volume_id, chapter_id, new_title)?;
-        let object_id = format!("chapter_title:{}:{}:{}", project_id, volume_id, chapter_id);
+        let entry = crate::search::extractor::extract_chapter_title_entry(
+            project_id, volume_id, chapter_id, new_title,
+        );
         self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
-            object_id,
-            scope: crate::search::SearchScope::ChapterTitle,
-            title: new_title.to_string(),
-            body: new_title.to_string(),
-            target: Some(crate::search::SearchTarget {
-                project_id: Some(project_id.to_string()),
-                volume_id: Some(volume_id.to_string()),
-                chapter_id: Some(chapter_id.to_string()),
-                starmap_id: None,
-                node_id: None,
-                setting_key: None,
-            }),
+            object_id: entry.object_id.clone(),
+            scope: entry.scope,
+            title: entry.title.clone(),
+            body: entry.body.clone(),
+            target: Some(entry.target.clone()),
         });
         Ok(true)
     }
@@ -140,21 +135,16 @@ impl WriterCoreApi {
         let receipt: ChapterSaveReceiptDto = self.core()
             .write_chapter_verified(project_id, volume_id, chapter_id, content)
             .map(Into::into)?;
-        let object_id = format!("chapter_body:{}:{}:{}", project_id, volume_id, chapter_id);
+        let entry = crate::search::extractor::extract_chapter_body_entry(
+            project_id, volume_id, chapter_id, "", content,
+        );
         self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
-            object_id,
-            scope: crate::search::SearchScope::ChapterBody,
-            title: String::new(),
-            body: content.to_string(),
-            target: Some(crate::search::SearchTarget {
-                project_id: Some(project_id.to_string()),
-                volume_id: Some(volume_id.to_string()),
-                chapter_id: Some(chapter_id.to_string()),
-                starmap_id: None,
-                node_id: None,
-                setting_key: None,
-            }),
+            object_id: entry.object_id.clone(),
+            scope: entry.scope,
+            title: entry.title.clone(),
+            body: entry.body.clone(),
+            target: Some(entry.target.clone()),
         });
         Ok(receipt)
     }
@@ -203,21 +193,16 @@ impl WriterCoreApi {
     ) -> ApiResult<bool> {
         self.core()
             .update_chapter_note(project_id, volume_id, chapter_id, note)?;
-        let object_id = format!("chapter_note:{}:{}:{}", project_id, volume_id, chapter_id);
+        let entry = crate::search::extractor::extract_chapter_note_entry(
+            project_id, volume_id, chapter_id, "", note,
+        );
         self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
-            object_id,
-            scope: crate::search::SearchScope::ChapterNote,
-            title: String::new(),
-            body: note.to_string(),
-            target: Some(crate::search::SearchTarget {
-                project_id: Some(project_id.to_string()),
-                volume_id: Some(volume_id.to_string()),
-                chapter_id: Some(chapter_id.to_string()),
-                starmap_id: None,
-                node_id: None,
-                setting_key: None,
-            }),
+            object_id: entry.object_id.clone(),
+            scope: entry.scope,
+            title: entry.title.clone(),
+            body: entry.body.clone(),
+            target: Some(entry.target.clone()),
         });
         Ok(true)
     }

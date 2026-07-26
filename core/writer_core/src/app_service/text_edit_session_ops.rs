@@ -77,8 +77,12 @@ impl super::WriterAppService {
         let core_cause: crate::editor::EditorTransactionCause = cause.into();
         self.with_session_in_registry(session_id, |s| {
             let current_text = s.kernel.text();
+            let offset = match Utf8ByteOffset::try_new(current_text, byte_offset as usize) {
+                Ok(o) => o,
+                Err(_) => return EditorEditResultDto::invalid_offset_fallback(),
+            };
             let result = s.kernel.apply(EditorCommand::Insert {
-                byte_offset: Utf8ByteOffset::clamp(current_text, byte_offset as usize),
+                byte_offset: offset,
                 text,
                 cause: core_cause,
                 expected_revision: EditorRevision::new(expected_revision),
@@ -101,8 +105,12 @@ impl super::WriterAppService {
         let core_cause: crate::editor::EditorTransactionCause = cause.into();
         self.with_session_in_registry(session_id, |s| {
             let current_text = s.kernel.text();
+            let byte_range = match Utf8ByteRange::try_new(current_text, byte_start as usize, byte_end_exclusive as usize) {
+                Ok(r) => r,
+                Err(_) => return EditorEditResultDto::invalid_range_fallback(),
+            };
             let result = s.kernel.apply(EditorCommand::Delete {
-                byte_range: Utf8ByteRange::clamp(current_text, byte_start as usize, byte_end_exclusive as usize).unwrap_or_else(|| Utf8ByteRange::try_new("", 0, 0).unwrap()),
+                byte_range,
                 deleted_text: String::new(),
                 cause: core_cause,
                 expected_revision: EditorRevision::new(expected_revision),
@@ -128,8 +136,12 @@ impl super::WriterAppService {
         let core_cause: crate::editor::EditorTransactionCause = cause.into();
         self.with_session_in_registry(session_id, |s| {
             let current_text = s.kernel.text();
+            let byte_range = match Utf8ByteRange::try_new(current_text, byte_start as usize, byte_end_exclusive as usize) {
+                Ok(r) => r,
+                Err(_) => return EditorEditResultDto::invalid_range_fallback(),
+            };
             let result = s.kernel.apply(EditorCommand::Replace {
-                byte_range: Utf8ByteRange::clamp(current_text, byte_start as usize, byte_end_exclusive as usize).unwrap_or_else(|| Utf8ByteRange::try_new("", 0, 0).unwrap()),
+                byte_range,
                 replacement_text,
                 original_text,
                 cause: core_cause,
@@ -151,9 +163,17 @@ impl super::WriterAppService {
             use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset};
         self.with_session_in_registry(session_id, |s| {
             let current_text = s.kernel.text();
+            let anchor = match Utf8ByteOffset::try_new(current_text, anchor_byte_offset as usize) {
+                Ok(o) => o,
+                Err(_) => return EditorEditResultDto::invalid_offset_fallback(),
+            };
+            let head = match Utf8ByteOffset::try_new(current_text, head_byte_offset as usize) {
+                Ok(o) => o,
+                Err(_) => return EditorEditResultDto::invalid_offset_fallback(),
+            };
             let result = s.kernel.apply(EditorCommand::SetSelection {
-                anchor: Utf8ByteOffset::clamp(current_text, anchor_byte_offset as usize),
-                head: Utf8ByteOffset::clamp(current_text, head_byte_offset as usize),
+                anchor,
+                head,
                 expected_revision: EditorRevision::new(expected_revision),
             });
             result.into_result().into()
@@ -167,7 +187,7 @@ impl super::WriterAppService {
         expected_revision: u64,
     ) -> EditorEditResultDto {
         use crate::editor::EditorCommand;
-            use crate::editor::strong_types::EditorRevision;
+        use crate::editor::strong_types::EditorRevision;
         self.with_session_in_registry(session_id, |s| {
             let result = s.kernel.apply(EditorCommand::Undo { expected_revision: EditorRevision::new(expected_revision) });
             result.into_result().into()
@@ -181,7 +201,7 @@ impl super::WriterAppService {
         expected_revision: u64,
     ) -> EditorEditResultDto {
         use crate::editor::EditorCommand;
-            use crate::editor::strong_types::EditorRevision;
+        use crate::editor::strong_types::EditorRevision;
         self.with_session_in_registry(session_id, |s| {
             let result = s.kernel.apply(EditorCommand::Redo { expected_revision: EditorRevision::new(expected_revision) });
             result.into_result().into()
@@ -223,11 +243,23 @@ impl super::WriterAppService {
         let core_cause: crate::editor::EditorTransactionCause = cause.into();
         self.with_session_in_registry(session_id, |s| {
             let current_text = s.kernel.text();
+            let byte_range = match Utf8ByteRange::try_new(current_text, byte_start as usize, byte_end_exclusive as usize) {
+                Ok(r) => r,
+                Err(_) => return EditorEditResultDto::invalid_range_fallback(),
+            };
+            let anchor = match Utf8ByteOffset::try_new(current_text, resulting_selection_anchor as usize) {
+                Ok(o) => o,
+                Err(_) => return EditorEditResultDto::invalid_offset_fallback(),
+            };
+            let head = match Utf8ByteOffset::try_new(current_text, resulting_selection_head as usize) {
+                Ok(o) => o,
+                Err(_) => return EditorEditResultDto::invalid_offset_fallback(),
+            };
             let result = s.kernel.apply(EditorCommand::CommitText {
-                byte_range: Utf8ByteRange::clamp(current_text, byte_start as usize, byte_end_exclusive as usize).unwrap_or_else(|| Utf8ByteRange::try_new("", 0, 0).unwrap()),
+                byte_range,
                 replacement_text,
-                resulting_selection_anchor: Utf8ByteOffset::clamp(current_text, resulting_selection_anchor as usize),
-                resulting_selection_head: Utf8ByteOffset::clamp(current_text, resulting_selection_head as usize),
+                resulting_selection_anchor: anchor,
+                resulting_selection_head: head,
                 composition_session_id: EditorSessionId::new(composition_session_id),
                 composition_base_revision: EditorRevision::new(composition_base_revision),
                 composition_generation: EditorSessionGeneration::new(composition_generation),
@@ -255,9 +287,17 @@ impl super::WriterAppService {
         let core_cause: crate::editor::EditorTransactionCause = cause.into();
         self.with_session_in_registry(session_id, |s| {
             let current_text = s.kernel.text();
+            let before_byte_range = match Utf8ByteRange::try_new(current_text, before_byte_start as usize, before_byte_end_exclusive as usize) {
+                Ok(r) => r,
+                Err(_) => return EditorEditResultDto::invalid_range_fallback(),
+            };
+            let after_byte_range = match Utf8ByteRange::try_new(current_text, after_byte_start as usize, after_byte_end_exclusive as usize) {
+                Ok(r) => r,
+                Err(_) => return EditorEditResultDto::invalid_range_fallback(),
+            };
             let result = s.kernel.apply(EditorCommand::DeleteSurrounding {
-                before_byte_range: Utf8ByteRange::clamp(current_text, before_byte_start as usize, before_byte_end_exclusive as usize).unwrap_or_else(|| Utf8ByteRange::try_new("", 0, 0).unwrap()),
-                after_byte_range: Utf8ByteRange::clamp(current_text, after_byte_start as usize, after_byte_end_exclusive as usize).unwrap_or_else(|| Utf8ByteRange::try_new("", 0, 0).unwrap()),
+                before_byte_range,
+                after_byte_range,
                 cause: core_cause,
                 expected_revision: EditorRevision::new(expected_revision),
             });
@@ -277,8 +317,12 @@ impl super::WriterAppService {
             use crate::editor::strong_types::{EditorRevision, Utf8ByteRange};
         self.with_session_in_registry(session_id, |s| {
             let current_text = s.kernel.text();
+            let replace_range = match Utf8ByteRange::try_new(current_text, replace_start as usize, replace_end_exclusive as usize) {
+                Ok(r) => r,
+                Err(_) => return EditorEditResultDto::invalid_range_fallback(),
+            };
             let result = s.kernel.apply(EditorCommand::BeginComposition {
-                replace_range: Utf8ByteRange::clamp(current_text, replace_start as usize, replace_end_exclusive as usize).unwrap_or_else(|| Utf8ByteRange::try_new("", 0, 0).unwrap()),
+                replace_range,
                 expected_revision: EditorRevision::new(expected_revision),
             });
             let mut dto: EditorEditResultDto = result.into();
@@ -311,11 +355,15 @@ impl super::WriterAppService {
             use crate::editor::strong_types::{EditorRevision, EditorSessionId, EditorSessionGeneration, Utf8ByteOffset};
         self.with_session_in_registry(session_id, |s| {
             let current_text = s.kernel.text();
+            let cursor_offset = match Utf8ByteOffset::try_new(current_text, new_preedit_cursor_offset as usize) {
+                Ok(o) => o,
+                Err(_) => return EditorEditResultDto::invalid_offset_fallback(),
+            };
             let result = s.kernel.apply(EditorCommand::UpdateComposition {
                 composition_session_id: EditorSessionId::new(composition_session_id),
                 composition_generation: EditorSessionGeneration::new(composition_generation),
                 new_preedit_text,
-                new_preedit_cursor_offset: Utf8ByteOffset::clamp(current_text, new_preedit_cursor_offset as usize),
+                new_preedit_cursor_offset: cursor_offset,
                 expected_revision: EditorRevision::new(expected_revision),
             });
             result.into()
@@ -476,8 +524,12 @@ impl super::WriterAppService {
         let core_cause: crate::editor::EditorTransactionCause = cause.into();
         self.with_session_in_registry(session_id, |s| {
             let current_text = s.kernel.text();
+            let offset = match Utf8ByteOffset::try_new(current_text, byte_offset as usize) {
+                Ok(o) => o,
+                Err(_) => return EditorEditResultDto::invalid_offset_fallback(),
+            };
             let result = s.kernel.apply(EditorCommand::InsertLineBreak {
-                byte_offset: Utf8ByteOffset::clamp(current_text, byte_offset as usize),
+                byte_offset: offset,
                 auto_indent_prefix,
                 cause: core_cause,
                 expected_revision: EditorRevision::new(expected_revision),

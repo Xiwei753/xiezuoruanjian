@@ -20,12 +20,13 @@ impl SearchIndexService {
     }
 
     pub fn search(
-        &self,
+        &mut self,
         query: &str,
         scope: SearchScope,
         limit: usize,
         cursor: Option<&str>,
     ) -> Vec<SearchResult> {
+        self.process_updates();
         self.backend.search(query, scope, limit, cursor)
     }
 
@@ -45,9 +46,10 @@ impl SearchIndexService {
 
     pub fn enqueue_update(&mut self, update: SearchIndexUpdate) {
         self.update_queue.enqueue(update);
+        self.apply_queue();
     }
 
-    pub fn process_updates(&mut self) {
+    fn apply_queue(&mut self) {
         let updates = self.update_queue.drain();
         for update in updates {
             match update.action {
@@ -72,6 +74,14 @@ impl SearchIndexService {
                 }
             }
         }
+    }
+
+    pub fn process_updates(&mut self) {
+        self.apply_queue();
+    }
+
+    pub fn remove_by_prefix(&mut self, prefix: &str) {
+        self.backend.remove_by_prefix(prefix);
     }
 
     pub fn rebuild_from_entries(&mut self, entries: Vec<IndexEntry>) {

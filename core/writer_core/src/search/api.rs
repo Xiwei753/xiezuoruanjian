@@ -14,7 +14,7 @@ mod tests {
         Ok(service.status())
     }
 
-    fn search_with_service(service: &SearchIndexService, query: &str, scope: SearchScope, limit: usize, cursor: Option<&str>) -> Vec<SearchResult> {
+    fn search_with_service(service: &mut SearchIndexService, query: &str, scope: SearchScope, limit: usize, cursor: Option<&str>) -> Vec<SearchResult> {
         service.search(query, scope, limit, cursor)
     }
 
@@ -22,8 +22,8 @@ mod tests {
     fn search_empty_query_returns_nothing() {
         let dir = TempDir::new().unwrap();
         let _ = rebuild_index(dir.path(), None);
-        let service = SearchIndexService::new();
-        let results = search_with_service(&service, "", SearchScope::All, 10, None);
+        let mut service = SearchIndexService::new();
+        let results = search_with_service(&mut service, "", SearchScope::All, 10, None);
         assert!(results.is_empty());
     }
 
@@ -31,8 +31,8 @@ mod tests {
     fn search_nonexistent_query_returns_nothing() {
         let dir = TempDir::new().unwrap();
         let _ = rebuild_index(dir.path(), None);
-        let service = SearchIndexService::new();
-        let results = search_with_service(&service, "nonexistent", SearchScope::All, 10, None);
+        let mut service = SearchIndexService::new();
+        let results = search_with_service(&mut service, "nonexistent", SearchScope::All, 10, None);
         assert!(results.is_empty());
     }
 
@@ -61,9 +61,8 @@ mod tests {
                 setting_key: None,
             }),
         });
-        service.process_updates();
 
-        let results = search_with_service(&service, "Test", SearchScope::ChapterTitle, 10, None);
+        let results = search_with_service(&mut service, "Test", SearchScope::ChapterTitle, 10, None);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "Test Chapter");
         assert_eq!(results[0].object_id, "test:1");
@@ -87,9 +86,8 @@ mod tests {
                 setting_key: None,
             }),
         });
-        service.process_updates();
 
-        let results = search_with_service(&service, "Delete", SearchScope::ChapterTitle, 10, None);
+        let results = search_with_service(&mut service, "Delete", SearchScope::ChapterTitle, 10, None);
         assert_eq!(results.len(), 1);
 
         service.enqueue_update(SearchIndexUpdate {
@@ -100,9 +98,8 @@ mod tests {
             body: String::new(),
             target: None,
         });
-        service.process_updates();
 
-        let results = search_with_service(&service, "Delete", SearchScope::ChapterTitle, 10, None);
+        let results = search_with_service(&mut service, "Delete", SearchScope::ChapterTitle, 10, None);
         assert!(results.is_empty());
     }
 
@@ -124,9 +121,8 @@ mod tests {
                 setting_key: None,
             }),
         });
-        service.process_updates();
 
-        let results = search_with_service(&service, "中文", SearchScope::ChapterBody, 10, None);
+        let results = search_with_service(&mut service, "中文", SearchScope::ChapterBody, 10, None);
         assert!(!results.is_empty());
         assert!(results[0].summary.contains("中文"));
     }
@@ -151,13 +147,12 @@ mod tests {
                 }),
             });
         }
-        service.process_updates();
 
-        let page1 = search_with_service(&service, "Alpha", SearchScope::ChapterTitle, 2, None);
+        let page1 = search_with_service(&mut service, "Alpha", SearchScope::ChapterTitle, 2, None);
         assert_eq!(page1.len(), 2);
 
         let cursor = page1.last().unwrap().object_id.clone();
-        let page2 = search_with_service(&service, "Alpha", SearchScope::ChapterTitle, 2, Some(&cursor));
+        let page2 = search_with_service(&mut service, "Alpha", SearchScope::ChapterTitle, 2, Some(&cursor));
         assert_eq!(page2.len(), 2);
 
         let all_ids: Vec<String> = page1.iter().chain(page2.iter()).map(|r| r.object_id.clone()).collect();
@@ -184,10 +179,9 @@ mod tests {
                     setting_key: None,
                 }),
             });
-            service.process_updates();
         }
 
-        let results = search_with_service(&service, "Duplicate", SearchScope::ChapterTitle, 10, None);
+        let results = search_with_service(&mut service, "Duplicate", SearchScope::ChapterTitle, 10, None);
         assert_eq!(results.len(), 1);
     }
 
@@ -209,11 +203,10 @@ mod tests {
                 setting_key: None,
             }),
         });
-        service.process_updates();
 
-        let title_results = search_with_service(&service, "ScopeTest", SearchScope::ChapterTitle, 10, None);
+        let title_results = search_with_service(&mut service, "ScopeTest", SearchScope::ChapterTitle, 10, None);
         assert_eq!(title_results.len(), 1);
-        let body_results = search_with_service(&service, "ScopeTest", SearchScope::ChapterBody, 10, None);
+        let body_results = search_with_service(&mut service, "ScopeTest", SearchScope::ChapterBody, 10, None);
         assert!(body_results.is_empty());
 
         service.enqueue_update(SearchIndexUpdate {
@@ -231,11 +224,10 @@ mod tests {
                 setting_key: None,
             }),
         });
-        service.process_updates();
 
-        let title_results_after = search_with_service(&service, "ScopeTest", SearchScope::ChapterTitle, 10, None);
+        let title_results_after = search_with_service(&mut service, "ScopeTest", SearchScope::ChapterTitle, 10, None);
         assert!(title_results_after.is_empty());
-        let body_results_after = search_with_service(&service, "ScopeTest", SearchScope::ChapterBody, 10, None);
+        let body_results_after = search_with_service(&mut service, "ScopeTest", SearchScope::ChapterBody, 10, None);
         assert_eq!(body_results_after.len(), 1);
     }
 
@@ -257,9 +249,8 @@ mod tests {
                 setting_key: None,
             }),
         });
-        service.process_updates();
 
-        let results = search_with_service(&service, "ChapterRef", SearchScope::StarmapLink, 10, None);
+        let results = search_with_service(&mut service, "ChapterRef", SearchScope::StarmapLink, 10, None);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].scope, SearchScope::StarmapLink);
     }
@@ -287,5 +278,88 @@ mod tests {
         let link_entries: Vec<_> = entries.iter().filter(|e| e.scope == SearchScope::StarmapLink).collect();
         assert_eq!(link_entries.len(), 1);
         assert_eq!(link_entries[0].title, "MyLink");
+    }
+
+    #[test]
+    fn enqueue_update_applies_immediately() {
+        let mut service = SearchIndexService::new();
+        service.enqueue_update(SearchIndexUpdate {
+            action: SearchIndexAction::Upsert,
+            object_id: "imm:1".to_string(),
+            scope: SearchScope::ChapterTitle,
+            title: "Immediate".to_string(),
+            body: "Immediate".to_string(),
+            target: Some(SearchTarget {
+                project_id: Some("p1".to_string()),
+                volume_id: None,
+                chapter_id: Some("c1".to_string()),
+                starmap_id: None,
+                node_id: None,
+                setting_key: None,
+            }),
+        });
+        let results = search_with_service(&mut service, "Immediate", SearchScope::ChapterTitle, 10, None);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Immediate");
+    }
+
+    #[test]
+    fn remove_by_prefix_deletes_matching_entries() {
+        let mut service = SearchIndexService::new();
+        service.enqueue_update(SearchIndexUpdate {
+            action: SearchIndexAction::Upsert,
+            object_id: "starmap:s1".to_string(),
+            scope: SearchScope::StarmapTitle,
+            title: "Map1".to_string(),
+            body: "Map1".to_string(),
+            target: Some(SearchTarget {
+                project_id: None,
+                volume_id: None,
+                chapter_id: None,
+                starmap_id: Some("s1".to_string()),
+                node_id: None,
+                setting_key: None,
+            }),
+        });
+        service.enqueue_update(SearchIndexUpdate {
+            action: SearchIndexAction::Upsert,
+            object_id: "starmap_node:s1:n1".to_string(),
+            scope: SearchScope::StarmapNode,
+            title: "Node1".to_string(),
+            body: "Node1".to_string(),
+            target: Some(SearchTarget {
+                project_id: None,
+                volume_id: None,
+                chapter_id: None,
+                starmap_id: Some("s1".to_string()),
+                node_id: Some("n1".to_string()),
+                setting_key: None,
+            }),
+        });
+        service.enqueue_update(SearchIndexUpdate {
+            action: SearchIndexAction::Upsert,
+            object_id: "starmap:s2".to_string(),
+            scope: SearchScope::StarmapTitle,
+            title: "Map2".to_string(),
+            body: "Map2".to_string(),
+            target: Some(SearchTarget {
+                project_id: None,
+                volume_id: None,
+                chapter_id: None,
+                starmap_id: Some("s2".to_string()),
+                node_id: None,
+                setting_key: None,
+            }),
+        });
+
+        let results = search_with_service(&mut service, "Map", SearchScope::All, 10, None);
+        assert_eq!(results.len(), 2);
+
+        service.remove_by_prefix("starmap_node:s1:");
+        let node_results = search_with_service(&mut service, "Node", SearchScope::StarmapNode, 10, None);
+        assert!(node_results.is_empty());
+
+        let map_results = search_with_service(&mut service, "Map", SearchScope::StarmapTitle, 10, None);
+        assert_eq!(map_results.len(), 2);
     }
 }

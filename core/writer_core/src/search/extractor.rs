@@ -301,6 +301,204 @@ pub fn extract_setting_entries(workspace: &Path) -> Result<Vec<IndexEntry>> {
     Ok(entries)
 }
 
+pub fn extract_starmap_node_entry(
+    starmap_id: &str,
+    node_id: &str,
+    project_id: Option<&str>,
+    title: &str,
+    content: &str,
+) -> IndexEntry {
+    let body = if content.is_empty() { title.to_string() } else { content.to_string() };
+    IndexEntry {
+        object_id: format!("starmap_node:{}:{}", starmap_id, node_id),
+        scope: SearchScope::StarmapNode,
+        title: title.to_string(),
+        body,
+        target: SearchTarget {
+            project_id: project_id.map(|s| s.to_string()),
+            volume_id: None,
+            chapter_id: None,
+            starmap_id: Some(starmap_id.to_string()),
+            node_id: Some(node_id.to_string()),
+            setting_key: None,
+        },
+    }
+}
+
+pub fn extract_starmap_edge_entry(
+    starmap_id: &str,
+    edge_id: &str,
+    project_id: Option<&str>,
+    label: &str,
+) -> IndexEntry {
+    IndexEntry {
+        object_id: format!("starmap_edge:{}:{}", starmap_id, edge_id),
+        scope: SearchScope::StarmapEdgeLabel,
+        title: label.to_string(),
+        body: label.to_string(),
+        target: SearchTarget {
+            project_id: project_id.map(|s| s.to_string()),
+            volume_id: None,
+            chapter_id: None,
+            starmap_id: Some(starmap_id.to_string()),
+            node_id: None,
+            setting_key: None,
+        },
+    }
+}
+
+pub fn extract_starmap_link_entry(
+    starmap_id: &str,
+    link_id: &str,
+    project_id: Option<&str>,
+    label: &str,
+) -> IndexEntry {
+    IndexEntry {
+        object_id: format!("starmap_link:{}:{}", starmap_id, link_id),
+        scope: SearchScope::StarmapLink,
+        title: label.to_string(),
+        body: label.to_string(),
+        target: SearchTarget {
+            project_id: project_id.map(|s| s.to_string()),
+            volume_id: None,
+            chapter_id: None,
+            starmap_id: Some(starmap_id.to_string()),
+            node_id: None,
+            setting_key: None,
+        },
+    }
+}
+
+pub fn extract_starmap_hyperlink_entry(
+    starmap_id: &str,
+    hyperlink_id: &str,
+    project_id: Option<&str>,
+    title: &str,
+    url: &str,
+) -> IndexEntry {
+    let body = if url.is_empty() { title.to_string() } else { format!("{} {}", title, url) };
+    IndexEntry {
+        object_id: format!("starmap_hyperlink:{}:{}", starmap_id, hyperlink_id),
+        scope: SearchScope::StarmapHyperlink,
+        title: title.to_string(),
+        body,
+        target: SearchTarget {
+            project_id: project_id.map(|s| s.to_string()),
+            volume_id: None,
+            chapter_id: None,
+            starmap_id: Some(starmap_id.to_string()),
+            node_id: None,
+            setting_key: None,
+        },
+    }
+}
+
+pub fn extract_starmap_title_entry(
+    starmap_id: &str,
+    project_id: Option<&str>,
+    title: &str,
+) -> IndexEntry {
+    IndexEntry {
+        object_id: format!("starmap:{}", starmap_id),
+        scope: SearchScope::StarmapTitle,
+        title: title.to_string(),
+        body: title.to_string(),
+        target: SearchTarget {
+            project_id: project_id.map(|s| s.to_string()),
+            volume_id: None,
+            chapter_id: None,
+            starmap_id: Some(starmap_id.to_string()),
+            node_id: None,
+            setting_key: None,
+        },
+    }
+}
+
+pub fn extract_chapter_title_entry(
+    project_id: &str,
+    volume_id: &str,
+    chapter_id: &str,
+    title: &str,
+) -> IndexEntry {
+    IndexEntry {
+        object_id: format!("chapter_title:{}:{}:{}", project_id, volume_id, chapter_id),
+        scope: SearchScope::ChapterTitle,
+        title: title.to_string(),
+        body: title.to_string(),
+        target: SearchTarget {
+            project_id: Some(project_id.to_string()),
+            volume_id: Some(volume_id.to_string()),
+            chapter_id: Some(chapter_id.to_string()),
+            starmap_id: None,
+            node_id: None,
+            setting_key: None,
+        },
+    }
+}
+
+pub fn extract_chapter_body_entry(
+    project_id: &str,
+    volume_id: &str,
+    chapter_id: &str,
+    title: &str,
+    body: &str,
+) -> IndexEntry {
+    IndexEntry {
+        object_id: format!("chapter_body:{}:{}:{}", project_id, volume_id, chapter_id),
+        scope: SearchScope::ChapterBody,
+        title: title.to_string(),
+        body: body.to_string(),
+        target: SearchTarget {
+            project_id: Some(project_id.to_string()),
+            volume_id: Some(volume_id.to_string()),
+            chapter_id: Some(chapter_id.to_string()),
+            starmap_id: None,
+            node_id: None,
+            setting_key: None,
+        },
+    }
+}
+
+pub fn extract_chapter_note_entry(
+    project_id: &str,
+    volume_id: &str,
+    chapter_id: &str,
+    title: &str,
+    note: &str,
+) -> IndexEntry {
+    IndexEntry {
+        object_id: format!("chapter_note:{}:{}:{}", project_id, volume_id, chapter_id),
+        scope: SearchScope::ChapterNote,
+        title: title.to_string(),
+        body: note.to_string(),
+        target: SearchTarget {
+            project_id: Some(project_id.to_string()),
+            volume_id: Some(volume_id.to_string()),
+            chapter_id: Some(chapter_id.to_string()),
+            starmap_id: None,
+            node_id: None,
+            setting_key: None,
+        },
+    }
+}
+
+pub fn extract_setting_entry(key: &str, content: &str) -> IndexEntry {
+    IndexEntry {
+        object_id: format!("setting:{}", key),
+        scope: SearchScope::Setting,
+        title: key.to_string(),
+        body: content.to_string(),
+        target: SearchTarget {
+            project_id: None,
+            volume_id: None,
+            chapter_id: None,
+            starmap_id: None,
+            node_id: None,
+            setting_key: Some(key.to_string()),
+        },
+    }
+}
+
 pub fn now_epoch() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

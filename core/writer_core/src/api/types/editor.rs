@@ -704,6 +704,38 @@ impl EditorEditResultDto {
             composition_session: None,
         }
     }
+
+    pub fn invalid_offset_fallback() -> Self {
+        Self {
+            outcome: EditorEditOutcomeDto::InvalidOffset,
+            transaction_id: 0,
+            base_revision: 0,
+            new_revision: 0,
+            display_patches: vec![],
+            old_selection_start: 0,
+            old_selection_end: 0,
+            new_selection_start: 0,
+            new_selection_end: 0,
+            visual_intent: EditorVisualIntentDto::default_fallback(),
+            composition_session: None,
+        }
+    }
+
+    pub fn invalid_range_fallback() -> Self {
+        Self {
+            outcome: EditorEditOutcomeDto::InvalidRange,
+            transaction_id: 0,
+            base_revision: 0,
+            new_revision: 0,
+            display_patches: vec![],
+            old_selection_start: 0,
+            old_selection_end: 0,
+            new_selection_start: 0,
+            new_selection_end: 0,
+            visual_intent: EditorVisualIntentDto::default_fallback(),
+            composition_session: None,
+        }
+    }
 }
 
 /// 编辑结果分类 DTO — 平台必须区分不同结果走不同恢复路径。
@@ -1277,7 +1309,7 @@ mod tests {
     fn editor_edit_result_dto_from_kernel() {
         let mut kernel = crate::editor::EditorKernel::with_text("ab".to_string(), 2).unwrap();
         let result = kernel.apply(crate::editor::EditorCommand::Insert {
-            byte_offset: crate::editor::strong_types::Utf8ByteOffset::clamp("ab", 2),
+            byte_offset: crate::editor::strong_types::Utf8ByteOffset::try_new("ab", 2).unwrap(),
             text: "c".to_string(),
             cause: crate::editor::EditorTransactionCause::Typing,
             expected_revision: crate::editor::strong_types::EditorRevision::new(0),
@@ -1317,8 +1349,8 @@ mod tests {
             animation_mode: crate::editor::AnimationMode::GlyphAnimation,
             duration_ms: 160,
             coordinated_cursor: crate::editor::CoordinatedCursor {
-                old_offset: crate::editor::strong_types::Utf8ByteOffset::clamp("ab", 2),
-                new_offset: crate::editor::strong_types::Utf8ByteOffset::clamp("abcdef", 5),
+                old_offset: crate::editor::strong_types::Utf8ByteOffset::try_new("ab", 2).unwrap(),
+                new_offset: crate::editor::strong_types::Utf8ByteOffset::try_new("abcdef", 5).unwrap(),
                 should_animate: true,
             },
         };
@@ -1333,7 +1365,7 @@ mod tests {
     fn editor_edit_result_dto_json_camel_case() {
         let mut kernel = crate::editor::EditorKernel::with_text("ab".to_string(), 2).unwrap();
         let result = kernel.apply(crate::editor::EditorCommand::Insert {
-            byte_offset: crate::editor::strong_types::Utf8ByteOffset::clamp("ab", 2),
+            byte_offset: crate::editor::strong_types::Utf8ByteOffset::try_new("ab", 2).unwrap(),
             text: "c".to_string(),
             cause: crate::editor::EditorTransactionCause::Typing,
             expected_revision: crate::editor::strong_types::EditorRevision::new(0),
