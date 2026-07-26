@@ -1,5 +1,6 @@
 package com.xiwei.sujian.editor
 
+import android.graphics.RectF
 import androidx.compose.ui.test.junit4.AndroidComposeTestRule
 import androidx.test.espresso.Espresso
 import androidx.test.espresso.matcher.ViewMatchers
@@ -7,8 +8,10 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.xiwei.sujian.R
 import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock
+import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import com.xiwei.sujian.editor.v2.visual.ManualAnimationTimeSource
 import com.xiwei.sujian.editor.v2.visual.TransactionIdSource
+import com.xiwei.sujian.editor.v2.visual.VisualFrameSnapshot
 import com.xiwei.sujian.support.AndroidTestEnvironment
 import com.xiwei.sujian.support.ComposeWait
 import com.xiwei.sujian.support.EditorBitmapCapture
@@ -65,6 +68,28 @@ class RenderedFrameVisualTest {
             manualTimeSource.advanceByMs(16)
             dispatchManualFrame()
         }
+    }
+
+    private fun captureVisualFrameSnapshot(): VisualFrameSnapshot? {
+        var snapshot: VisualFrameSnapshot? = null
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check { view, _ ->
+                val editorView = view as? SujianEditorView
+                    ?: throw AssertionError("View is not a SujianEditorView")
+                snapshot = editorView.captureVisualFrameSnapshot()
+            }
+        return snapshot
+    }
+
+    private fun getActiveAnimationDurationMs(): Long {
+        var durationMs = 0L
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check { view, _ ->
+                val editorView = view as? SujianEditorView
+                    ?: throw AssertionError("View is not a SujianEditorView")
+                durationMs = editorView.getActiveAnimationDurationMs()
+            }
+        return durationMs
     }
 
     @Test
@@ -478,22 +503,24 @@ class RenderedFrameVisualTest {
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("B"))
 
-        manualTimeSource.advanceByMs(16)
+        val durationMs = getActiveAnimationDurationMs().let { if (it > 0) it else 200L }
+
+        manualTimeSource.advanceToProgress(0f, durationMs)
         dispatchManualFrame()
         val frame2 = EditorBitmapCapture.captureEditorBitmap()
-        EditorBitmapCapture.assertBitmapHasContent(frame2, "Frame after 'AB' start must have content")
+        EditorBitmapCapture.assertBitmapHasContent(frame2, "Frame at 0% must have content")
 
-        manualTimeSource.advanceByMs(50)
+        manualTimeSource.advanceToProgress(0.25f, durationMs)
         dispatchManualFrame()
         val frame3 = EditorBitmapCapture.captureEditorBitmap()
         EditorBitmapCapture.assertBitmapHasContent(frame3, "Frame at 25% must have content")
 
-        manualTimeSource.advanceByMs(50)
+        manualTimeSource.advanceToProgress(0.5f, durationMs)
         dispatchManualFrame()
         val frame4 = EditorBitmapCapture.captureEditorBitmap()
         EditorBitmapCapture.assertBitmapHasContent(frame4, "Frame at 50% must have content")
 
-        manualTimeSource.advanceByMs(50)
+        manualTimeSource.advanceToProgress(0.75f, durationMs)
         dispatchManualFrame()
         val frame5 = EditorBitmapCapture.captureEditorBitmap()
         EditorBitmapCapture.assertBitmapHasContent(frame5, "Frame at 75% must have content")
@@ -538,38 +565,26 @@ class RenderedFrameVisualTest {
         val startFrame = EditorBitmapCapture.captureEditorBitmap()
         EditorBitmapCapture.assertBitmapHasContent(startFrame, "Start frame must have content")
 
-        val bounds = startFrame.contentBounds()
-        assertTrue("Content must exist for cursor check", bounds.width() > 0 && bounds.height() > 0)
-
-        val cursorRegionLeft = bounds.right
-        val cursorRegionRight = minOf(cursorRegionLeft + 20, startFrame.width)
-        val cursorRegionTop = bounds.top
-        val cursorRegionBottom = bounds.bottom
-        assertTrue(
-            "Cursor region must be valid for pixel check: right=$cursorRegionRight > left=$cursorRegionLeft && bottom=$cursorRegionBottom > top=$cursorRegionTop",
-            cursorRegionRight > cursorRegionLeft && cursorRegionBottom > cursorRegionTop
-        )
-        EditorBitmapCapture.assertBitmapRegionHasContent(
-            startFrame, cursorRegionLeft, cursorRegionTop, cursorRegionRight, cursorRegionBottom,
-            "Cursor region right after content should have rendered pixels (cursor line)"
-        )
+        val startSnapshot = captureVisualFrameSnapshot()
+        val cursorRect = startSnapshot?.cursorRect
+        if (cursorRect != null) {
+            assertCursorRegionFromSnapshotRect(startFrame, cursorRect, "Start frame cursor from snapshot")
+        } else {
+            assertCursorRegionFromContentBounds(startFrame, "Start frame cursor from content bounds fallback")
+        }
 
         manualTimeSource.advanceByMs(50)
         dispatchManualFrame()
         val midFrame = EditorBitmapCapture.captureEditorBitmap()
         EditorBitmapCapture.assertBitmapHasContent(midFrame, "Mid-frame must have content during animation")
 
-        val midBounds = midFrame.contentBounds()
-        val midCursorLeft = midBounds.right
-        val midCursorRight = minOf(midCursorLeft + 20, midFrame.width)
-        assertTrue(
-            "Mid-frame cursor region must be valid: right=$midCursorRight > left=$midCursorLeft && bottom=${midBounds.bottom} > top=${midBounds.top}",
-            midCursorRight > midCursorLeft && midBounds.bottom > midBounds.top
-        )
-        EditorBitmapCapture.assertBitmapRegionHasContent(
-            midFrame, midCursorLeft, midBounds.top, midCursorRight, midBounds.bottom,
-            "Cursor region at mid-frame should have rendered pixels"
-        )
+        val midSnapshot = captureVisualFrameSnapshot()
+        val midCursorRect = midSnapshot?.cursorRect
+        if (midCursorRect != null) {
+            assertCursorRegionFromSnapshotRect(midFrame, midCursorRect, "Mid-frame cursor from snapshot")
+        } else {
+            assertCursorRegionFromContentBounds(midFrame, "Mid-frame cursor from content bounds fallback")
+        }
 
         advanceClockToEnd()
     }
@@ -676,15 +691,14 @@ class RenderedFrameVisualTest {
         val frame = EditorBitmapCapture.captureEditorBitmap()
         EditorBitmapCapture.assertBitmapHasContent(frame, "Frame must have content for cursor layer check")
 
-        val bounds = frame.contentBounds()
-        assertTrue("Content must have width > 0", bounds.width() > 0)
-        assertTrue("Content must have height > 0", bounds.height() > 0)
-
-        val cursorX = bounds.right + 2
-        val cursorY = (bounds.top + bounds.bottom) / 2
+        val snapshot = captureVisualFrameSnapshot()
+        val cursorRect = snapshot?.cursorRect
+        assertNotNull("Visual frame snapshot must provide cursorRect for cursor layer check", cursorRect)
+        val cursorX = cursorRect!!.left.toInt()
+        val cursorY = ((cursorRect.top + cursorRect.bottom) / 2).toInt()
         assertTrue(
             "Cursor position must be within bitmap: x=$cursorX < ${frame.width} && y=$cursorY < ${frame.height}",
-            cursorX < frame.width && cursorY < frame.height
+            cursorX in 0 until frame.width && cursorY in 0 until frame.height
         )
         assertTrue(
             "Cursor pixel at ($cursorX, $cursorY) must be non-background (cursor drawn above text)",
@@ -696,12 +710,14 @@ class RenderedFrameVisualTest {
         val midFrame = EditorBitmapCapture.captureEditorBitmap()
         EditorBitmapCapture.assertBitmapHasContent(midFrame, "Mid-frame must have content for cursor layer check")
 
-        val midBounds = midFrame.contentBounds()
-        val midCursorX = midBounds.right + 2
-        val midCursorY = (midBounds.top + midBounds.bottom) / 2
+        val midSnapshot = captureVisualFrameSnapshot()
+        val midCursorRect = midSnapshot?.cursorRect
+        assertNotNull("Mid-frame visual snapshot must provide cursorRect", midCursorRect)
+        val midCursorX = midCursorRect!!.left.toInt()
+        val midCursorY = ((midCursorRect.top + midCursorRect.bottom) / 2).toInt()
         assertTrue(
             "Mid-frame cursor position must be within bitmap: x=$midCursorX < ${midFrame.width} && y=$midCursorY < ${midFrame.height}",
-            midCursorX < midFrame.width && midCursorY < midFrame.height
+            midCursorX in 0 until midFrame.width && midCursorY in 0 until midFrame.height
         )
         assertTrue(
             "Mid-frame cursor pixel must be non-background (cursor visible during animation)",
@@ -777,18 +793,50 @@ class RenderedFrameVisualTest {
         val midFrame = EditorBitmapCapture.captureEditorBitmap()
         EditorBitmapCapture.assertBitmapHasContent(midFrame, "Delete mid-frame must have content")
 
-        val midBounds = midFrame.contentBounds()
-        assertTrue("Delete mid-frame content must have width > 0", midBounds.width() > 0)
-        val midCursorX = midBounds.right + 2
-        val midCursorY = (midBounds.top + midBounds.bottom) / 2
+        val midSnapshot = captureVisualFrameSnapshot()
+        val midCursorRect = midSnapshot?.cursorRect
+        assertNotNull("Delete mid-frame snapshot must provide cursorRect", midCursorRect)
+        val midCursorX = midCursorRect!!.left.toInt()
+        val midCursorY = ((midCursorRect.top + midCursorRect.bottom) / 2).toInt()
         assertTrue(
             "Delete mid-frame cursor position must be within bitmap",
-            midCursorX < midFrame.width && midCursorY < midFrame.height
+            midCursorX in 0 until midFrame.width && midCursorY in 0 until midFrame.height
         )
         assertTrue(
             "Cursor must remain visible during delete animation at mid-frame",
             midFrame.isPixelNonBackground(midCursorX, midCursorY)
         )
+
+        advanceClockToEnd()
+    }
+
+    @Test
+    fun insertText_softwareDraw_matchesPixelCopyContent() {
+        val testData = initTestData()
+        openTestChapter("渲染帧软件绘制测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("AB"))
+
+        manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
+
+        var softwareFrame: CapturedFrame? = null
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check { view, _ ->
+                val editorView = view as? SujianEditorView
+                    ?: throw AssertionError("View is not a SujianEditorView")
+                softwareFrame = EditorBitmapCapture.captureSoftwareBitmap(editorView)
+            }
+
+        assertNotNull("Software bitmap must be captured", softwareFrame)
+        EditorBitmapCapture.assertBitmapHasContent(softwareFrame!!, "Software-drawn frame must have content")
+
+        val swBounds = softwareFrame!!.contentBounds()
+        assertTrue("Software content should have non-zero width", swBounds.width() > 0)
+        assertTrue("Software content should have non-zero height", swBounds.height() > 0)
 
         advanceClockToEnd()
     }
@@ -800,15 +848,17 @@ class RenderedFrameVisualTest {
         dispatchManualFrame()
         frames.add(EditorBitmapCapture.captureEditorBitmap())
 
-        manualTimeSource.advanceByMs(50)
+        val durationMs = getActiveAnimationDurationMs().let { if (it > 0) it else 200L }
+
+        manualTimeSource.advanceToProgress(0.25f, durationMs)
         dispatchManualFrame()
         frames.add(EditorBitmapCapture.captureEditorBitmap())
 
-        manualTimeSource.advanceByMs(50)
+        manualTimeSource.advanceToProgress(0.5f, durationMs)
         dispatchManualFrame()
         frames.add(EditorBitmapCapture.captureEditorBitmap())
 
-        manualTimeSource.advanceByMs(50)
+        manualTimeSource.advanceToProgress(0.75f, durationMs)
         dispatchManualFrame()
         frames.add(EditorBitmapCapture.captureEditorBitmap())
 
@@ -816,6 +866,38 @@ class RenderedFrameVisualTest {
         frames.add(EditorBitmapCapture.captureEditorBitmap())
 
         return frames
+    }
+
+    private fun assertCursorRegionFromSnapshotRect(frame: CapturedFrame, cursorRect: RectF, messagePrefix: String) {
+        val cursorLeft = cursorRect.left.toInt()
+        val cursorRight = minOf(cursorRect.right.toInt() + 4, frame.width)
+        val cursorTop = cursorRect.top.toInt()
+        val cursorBottom = cursorRect.bottom.toInt()
+        assertTrue(
+            "$messagePrefix: cursor region must be valid: right=$cursorRight > left=$cursorLeft && bottom=$cursorBottom > top=$cursorTop",
+            cursorRight > cursorLeft && cursorBottom > cursorTop
+        )
+        EditorBitmapCapture.assertBitmapRegionHasContent(
+            frame, cursorLeft, cursorTop, cursorRight, cursorBottom,
+            "$messagePrefix: cursor region should have rendered pixels"
+        )
+    }
+
+    private fun assertCursorRegionFromContentBounds(frame: CapturedFrame, messagePrefix: String) {
+        val bounds = frame.contentBounds()
+        assertTrue("$messagePrefix: content must exist for cursor check", bounds.width() > 0 && bounds.height() > 0)
+        val cursorRegionLeft = bounds.right
+        val cursorRegionRight = minOf(cursorRegionLeft + 20, frame.width)
+        val cursorRegionTop = bounds.top
+        val cursorRegionBottom = bounds.bottom
+        assertTrue(
+            "$messagePrefix: cursor region must be valid: right=$cursorRegionRight > left=$cursorRegionLeft && bottom=$cursorRegionBottom > top=$cursorRegionTop",
+            cursorRegionRight > cursorRegionLeft && cursorRegionBottom > cursorRegionTop
+        )
+        EditorBitmapCapture.assertBitmapRegionHasContent(
+            frame, cursorRegionLeft, cursorRegionTop, cursorRegionRight, cursorRegionBottom,
+            "$messagePrefix: cursor region right after content should have rendered pixels (cursor line)"
+        )
     }
 
     private fun assertAllFramesHaveContent(frames: List<CapturedFrame>, labels: List<String>) {

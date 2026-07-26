@@ -56,7 +56,9 @@ class SujianEditorView @JvmOverloads constructor(
         get() = pipeline.kernelBridge
         set(value) { pipeline.kernelBridge = value }
 
-    private var themeBackgroundColor: Int = Color.WHITE
+    private var _themeBackgroundColor: Int = Color.WHITE
+
+    fun getThemeBackgroundColor(): Int = _themeBackgroundColor
     private var lastAppliedThemeColors: com.xiwei.sujian.ui.compose.theme.EditorThemeColors? = null
 
     init {
@@ -283,6 +285,8 @@ class SujianEditorView @JvmOverloads constructor(
     fun captureAnimationSnapshot(): com.xiwei.sujian.editor.v2.visual.AnimationStateSnapshot? = pipeline.captureAnimationSnapshot()
 
     fun captureVisualFrameSnapshot(): com.xiwei.sujian.editor.v2.visual.VisualFrameSnapshot? = pipeline.captureVisualFrameSnapshot()
+
+    fun getActiveAnimationDurationMs(): Long = pipeline.getActiveAnimationDurationMs()
 
     override fun onFrame(frameTimeNanos: Long) {
         invalidate()
@@ -538,7 +542,7 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun applyThemeColorsFromAdapter(colors: com.xiwei.sujian.ui.compose.theme.EditorThemeColors) {
         lastAppliedThemeColors = colors
-        themeBackgroundColor = colors.background
+        _themeBackgroundColor = colors.background
         textPaint.color = colors.text
         pipeline.setRendererThemeColors(
             textColor = colors.text,

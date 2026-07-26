@@ -523,6 +523,8 @@ class AndroidEditorPipeline private constructor(
 
     fun captureVisualFrameSnapshot(): com.xiwei.sujian.editor.v2.visual.VisualFrameSnapshot? = visualRuntime.captureVisualFrameSnapshot()
 
+    fun getActiveAnimationDurationMs(): Long = visualRuntime.getActiveAnimationDurationMs()
+
     fun updateLayout(width: Float) {
         layoutRuntime.setWidth(width)
         layoutRuntime.requestLayout()

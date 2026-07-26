@@ -69,6 +69,10 @@ class AndroidVisualRuntime(
         return animationEngine.captureFrame(currentTimeNanos() / 1_000_000)
     }
 
+    fun getActiveAnimationDurationMs(): Long {
+        return animationEngine.getActiveTransaction()?.durationMs ?: 0L
+    }
+
     fun setAnimationPolicy(policy: TextAnimationPolicy) {
         animationEngine.setAnimationPolicy(policy)
     }
