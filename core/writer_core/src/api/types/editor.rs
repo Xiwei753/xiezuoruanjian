@@ -1295,9 +1295,9 @@ mod tests {
         let patch = crate::editor::DisplayPatch {
             base_revision: crate::editor::strong_types::EditorRevision::new(0),
             new_revision: crate::editor::strong_types::EditorRevision::new(1),
-            replace_byte_range: crate::editor::strong_types::Utf8ByteRange::from_values(2, 2).unwrap(),
+            replace_byte_range: crate::editor::strong_types::Utf8ByteRange::try_new("abc", 2, 2).unwrap(),
             inserted_text: "c".to_string(),
-            resulting_selection_byte_range: crate::editor::strong_types::Utf8ByteRange::from_values(3, 3).unwrap(),
+            resulting_selection_byte_range: crate::editor::strong_types::Utf8ByteRange::try_new("abc", 3, 3).unwrap(),
         };
         let dto: DisplayPatchDto = patch.into();
         assert_eq!(dto.base_revision, 0);
@@ -1313,7 +1313,7 @@ mod tests {
             cause: crate::editor::EditorTransactionCause::Typing,
             operation_kind: crate::editor::EditorOperationKind::Insert,
             old_affected_byte_ranges: vec![],
-            new_affected_byte_ranges: vec![crate::editor::strong_types::Utf8ByteRange::from_values(2, 5).unwrap()],
+            new_affected_byte_ranges: vec![crate::editor::strong_types::Utf8ByteRange::try_new("abcde", 2, 5).unwrap()],
             animation_mode: crate::editor::AnimationMode::GlyphAnimation,
             duration_ms: 160,
             coordinated_cursor: crate::editor::CoordinatedCursor {

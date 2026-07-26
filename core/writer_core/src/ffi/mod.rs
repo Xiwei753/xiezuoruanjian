@@ -13,6 +13,7 @@
 mod layout_ops;
 mod project_ops;
 mod screen_policy_ops;
+mod search_ops;
 mod settings_ops;
 mod starmap_ops;
 mod sync_ops;

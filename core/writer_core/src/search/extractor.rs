@@ -239,6 +239,31 @@ pub fn extract_starmap_entries(workspace: &Path, project_id: Option<&str>) -> Re
                 }
             }
         }
+
+        let links_dir = starmap_path.join("links");
+        if links_dir.exists() {
+            if let Ok(link_files) = scan_json_files(&links_dir) {
+                for (lid, link_file) in link_files {
+                    let link_label = load_json_string_field(&link_file, "label");
+                    if !link_label.is_empty() {
+                        entries.push(IndexEntry {
+                            object_id: format!("starmap_link:{}:{}", sid, lid),
+                            scope: SearchScope::StarmapLink,
+                            title: link_label.clone(),
+                            body: link_label,
+                            target: SearchTarget {
+                                project_id: if bound_project.is_empty() { None } else { Some(bound_project.clone()) },
+                                volume_id: None,
+                                chapter_id: None,
+                                starmap_id: Some(sid.clone()),
+                                node_id: None,
+                                setting_key: None,
+                            },
+                        });
+                    }
+                }
+            }
+        }
     }
 
     Ok(entries)

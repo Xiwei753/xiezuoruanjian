@@ -238,4 +238,54 @@ mod tests {
         let body_results_after = search_with_service(&service, "ScopeTest", SearchScope::ChapterBody, 10, None);
         assert_eq!(body_results_after.len(), 1);
     }
+
+    #[test]
+    fn search_starmap_link_scope_works() {
+        let mut service = SearchIndexService::new();
+        service.enqueue_update(SearchIndexUpdate {
+            action: SearchIndexAction::Upsert,
+            object_id: "link:1".to_string(),
+            scope: SearchScope::StarmapLink,
+            title: "ChapterRef".to_string(),
+            body: "ChapterRef".to_string(),
+            target: Some(SearchTarget {
+                project_id: Some("p1".to_string()),
+                volume_id: None,
+                chapter_id: None,
+                starmap_id: Some("sm1".to_string()),
+                node_id: None,
+                setting_key: None,
+            }),
+        });
+        service.process_updates();
+
+        let results = search_with_service(&service, "ChapterRef", SearchScope::StarmapLink, 10, None);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].scope, SearchScope::StarmapLink);
+    }
+
+    #[test]
+    fn extract_starmap_link_entries() {
+        use crate::search::extractor::extract_starmap_entries;
+        let dir = TempDir::new().unwrap();
+        let starmap_dir = dir.path().join("app-meta").join("starmaps").join("sm1");
+        std::fs::create_dir_all(starmap_dir.join("links")).unwrap();
+        std::fs::write(
+            starmap_dir.join("graph.json"),
+            serde_json::json!({"title": "TestMap", "linkIds": []}).to_string(),
+        ).unwrap();
+        std::fs::write(
+            starmap_dir.join("sm1.meta.json"),
+            serde_json::json!({"projectId": "p1"}).to_string(),
+        ).unwrap();
+        std::fs::write(
+            starmap_dir.join("links").join("l1.json"),
+            serde_json::json!({"linkId": "l1", "label": "MyLink"}).to_string(),
+        ).unwrap();
+
+        let entries = extract_starmap_entries(dir.path(), None).unwrap();
+        let link_entries: Vec<_> = entries.iter().filter(|e| e.scope == SearchScope::StarmapLink).collect();
+        assert_eq!(link_entries.len(), 1);
+        assert_eq!(link_entries[0].title, "MyLink");
+    }
 }

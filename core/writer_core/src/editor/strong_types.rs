@@ -122,7 +122,7 @@ impl Utf8ByteRange {
         Some(Self { start: s, end: e })
     }
 
-    pub(crate) fn from_values(start: usize, end: usize) -> Option<Self> {
+    pub(super) fn from_values(start: usize, end: usize) -> Option<Self> {
         if start > end {
             return None;
         }
