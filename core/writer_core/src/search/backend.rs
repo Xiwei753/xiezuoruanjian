@@ -172,6 +172,17 @@ impl SearchBackend {
         self.scope_index.get(&scope).map(|ids| ids.len()).unwrap_or(0)
     }
 
+    pub fn remove_by_target_project_id(&mut self, project_id: &str) {
+        let ids_to_remove: Vec<String> = self.entries
+            .iter()
+            .filter(|(_, entry)| entry.target.project_id.as_deref() == Some(project_id))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in ids_to_remove {
+            self.remove(&id);
+        }
+    }
+
     pub fn clear(&mut self) {
         self.entries.clear();
         self.scope_index.clear();

@@ -1454,4 +1454,86 @@ mod tests {
         assert_eq!(embed_entries[0].title, "EmbedLabel");
         assert_eq!(embed_entries[0].target.project_id.as_deref(), Some("p1"));
     }
+
+    #[test]
+    fn remove_by_target_project_id_removes_only_matching_entries() {
+        let mut service = SearchIndexService::new();
+        service.enqueue_update(SearchIndexUpdate {
+            action: SearchIndexAction::Upsert,
+            object_id: "project:p1".to_string(),
+            scope: SearchScope::ProjectTitle,
+            title: "P1".to_string(),
+            body: "P1".to_string(),
+            target: Some(SearchTarget {
+                project_id: Some("p1".to_string()),
+                volume_id: None,
+                chapter_id: None,
+                starmap_id: None,
+                node_id: None,
+                setting_key: None,
+            }),
+        });
+        service.enqueue_update(SearchIndexUpdate {
+            action: SearchIndexAction::Upsert,
+            object_id: "project:p2".to_string(),
+            scope: SearchScope::ProjectTitle,
+            title: "P2".to_string(),
+            body: "P2".to_string(),
+            target: Some(SearchTarget {
+                project_id: Some("p2".to_string()),
+                volume_id: None,
+                chapter_id: None,
+                starmap_id: None,
+                node_id: None,
+                setting_key: None,
+            }),
+        });
+        service.enqueue_update(SearchIndexUpdate {
+            action: SearchIndexAction::Upsert,
+            object_id: "starmap:s1".to_string(),
+            scope: SearchScope::StarmapTitle,
+            title: "S1".to_string(),
+            body: "S1".to_string(),
+            target: Some(SearchTarget {
+                project_id: None,
+                volume_id: None,
+                chapter_id: None,
+                starmap_id: Some("s1".to_string()),
+                node_id: None,
+                setting_key: None,
+            }),
+        });
+        assert_eq!(service.backend().entry_count(), 3);
+        service.remove_by_prefix("___never_match___");
+        service.backend_mut().remove_by_target_project_id("p1");
+        let results = service.search("P1", SearchScope::All, 10, None);
+        assert!(results.is_empty(), "p1 entry should be removed");
+        let results_p2 = service.search("P2", SearchScope::All, 10, None);
+        assert_eq!(results_p2.len(), 1, "p2 entry should remain");
+        let results_s1 = service.search("S1", SearchScope::All, 10, None);
+        assert_eq!(results_s1.len(), 1, "unbound starmap entry should remain");
+    }
+
+    #[test]
+    fn project_rebuild_removes_stale_starmap_indices_from_previously_bound() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        let project_a = api.create_project("ProjectA").unwrap();
+
+        let meta = api.create_starmap("StaleMap", "", None).unwrap();
+        api.bind_starmap_to_project(&meta.starmap_id, &project_a.id).unwrap();
+
+        let node_before = api.search_service_search("StaleMap", SearchScope::StarmapTitle, 10, None);
+        assert_eq!(node_before.len(), 1);
+        assert_eq!(node_before[0].target.project_id.as_deref(), Some(project_a.id.as_str()));
+
+        api.core().unbind_starmap_from_project(&meta.starmap_id).unwrap();
+
+        api.search_service_rebuild(Some(&project_a.id)).unwrap();
+
+        let stale_after = api.search_service_search("StaleMap", SearchScope::StarmapTitle, 10, None);
+        assert!(stale_after.is_empty(),
+            "stale starmap index with old project_id must be removed by per-project rebuild");
+    }
 }
