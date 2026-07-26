@@ -260,21 +260,20 @@ class ControllableFrameAnimationTest {
         manualTimeSource.advanceByMs(16)
         dispatchManualFrame()
         val snapshot = captureEditorSnapshot()
-        if (snapshot != null) {
-            assertTrue(
-                "Animation progress ${snapshot.progress} should be >= $expectedMinProgress",
-                snapshot.progress >= expectedMinProgress
+        assertNotNull("Animation snapshot must exist during active animation", snapshot)
+        assertTrue(
+            "Animation progress ${snapshot!!.progress} should be >= $expectedMinProgress",
+            snapshot.progress >= expectedMinProgress
+        )
+        assertTrue(
+            "Animation progress ${snapshot.progress} should be <= $expectedMaxProgress",
+            snapshot.progress <= expectedMaxProgress
+        )
+        if (verifyCursorVisible) {
+            assertNotNull(
+                "Cursor transition should exist during animation",
+                snapshot.cursorTransition
             )
-            assertTrue(
-                "Animation progress ${snapshot.progress} should be <= $expectedMaxProgress",
-                snapshot.progress <= expectedMaxProgress
-            )
-            if (verifyCursorVisible) {
-                assertNotNull(
-                    "Cursor transition should exist during animation",
-                    snapshot.cursorTransition
-                )
-            }
         }
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText(expectedText))
@@ -303,9 +302,8 @@ class ControllableFrameAnimationTest {
         advanceClockToEnd()
 
         val endSnapshot = captureEditorSnapshot()
-        if (endSnapshot != null) {
-            assertTrue("End progress should be >= 1.0", endSnapshot.progress >= 1.0f)
-        }
+        assertNotNull("Animation snapshot must exist at end", endSnapshot)
+        assertTrue("End progress should be >= 1.0", endSnapshot!!.progress >= 1.0f)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("Hello"))
@@ -808,18 +806,16 @@ class ControllableFrameAnimationTest {
         manualTimeSource.advanceByMs(16)
         dispatchManualFrame()
         val midFrame1 = captureVisualFrame()
-        if (midFrame1 != null) {
-            verifySliceVisualProperties(midFrame1, 0.1f, 0.6f, SliceRole.Insert)
-            verifyInsertSliceFadesIn(midFrame1.sliceVisualStates, midFrame1.progress)
-        }
+        assertNotNull("Mid-frame 1 visual snapshot must exist during animation", midFrame1)
+        verifySliceVisualProperties(midFrame1!!, 0.1f, 0.6f, SliceRole.Insert)
+        verifyInsertSliceFadesIn(midFrame1.sliceVisualStates, midFrame1.progress)
 
         manualTimeSource.advanceByMs(16)
         dispatchManualFrame()
         val midFrame2 = captureVisualFrame()
-        if (midFrame2 != null) {
-            verifySliceVisualProperties(midFrame2, 0.2f, 0.8f, SliceRole.Insert)
-            verifyInsertSliceFadesIn(midFrame2.sliceVisualStates, midFrame2.progress)
-        }
+        assertNotNull("Mid-frame 2 visual snapshot must exist during animation", midFrame2)
+        verifySliceVisualProperties(midFrame2!!, 0.2f, 0.8f, SliceRole.Insert)
+        verifyInsertSliceFadesIn(midFrame2.sliceVisualStates, midFrame2.progress)
 
         advanceClockToEnd()
 
@@ -859,10 +855,9 @@ class ControllableFrameAnimationTest {
         manualTimeSource.advanceByMs(16)
         dispatchManualFrame()
         val midFrame = captureVisualFrame()
-        if (midFrame != null) {
-            verifySliceVisualProperties(midFrame, 0.1f, 0.6f, SliceRole.Delete)
-            verifyDeleteSliceFadesOut(midFrame.sliceVisualStates, midFrame.progress)
-        }
+        assertNotNull("Mid-frame visual snapshot must exist during delete animation", midFrame)
+        verifySliceVisualProperties(midFrame!!, 0.1f, 0.6f, SliceRole.Delete)
+        verifyDeleteSliceFadesOut(midFrame.sliceVisualStates, midFrame.progress)
 
         advanceClockToEnd()
 
@@ -881,36 +876,36 @@ class ControllableFrameAnimationTest {
             .perform(EditorCommitTextAction.commitText("Hi"))
 
         val startFrame = captureVisualFrame()
-        if (startFrame != null && startFrame.cursorRect != null) {
-            val cursorRect = startFrame.cursorRect!!
-            assertTrue(
-                "Cursor rect left ${cursorRect.left} should be >= 0",
-                cursorRect.left >= 0f
-            )
-            assertTrue(
-                "Cursor rect top ${cursorRect.top} should be >= 0",
-                cursorRect.top >= 0f
-            )
-            assertTrue(
-                "Cursor rect should have non-zero height",
-                cursorRect.height() > 0f
-            )
-        }
+        assertNotNull("Visual frame must exist after insert for cursor test", startFrame)
+        assertNotNull("Cursor rect must exist in start frame during animation", startFrame!!.cursorRect)
+        val startCursorRect = startFrame.cursorRect!!
+        assertTrue(
+            "Cursor rect left ${startCursorRect.left} should be >= 0",
+            startCursorRect.left >= 0f
+        )
+        assertTrue(
+            "Cursor rect top ${startCursorRect.top} should be >= 0",
+            startCursorRect.top >= 0f
+        )
+        assertTrue(
+            "Cursor rect should have non-zero height",
+            startCursorRect.height() > 0f
+        )
 
         manualTimeSource.advanceByMs(16)
         dispatchManualFrame()
         val midFrame = captureVisualFrame()
-        if (midFrame != null && midFrame.cursorRect != null) {
-            val cursorRect = midFrame.cursorRect!!
-            assertTrue(
-                "Mid-frame cursor rect left ${cursorRect.left} should be >= 0",
-                cursorRect.left >= 0f
-            )
-            assertTrue(
-                "Mid-frame cursor rect should have non-zero height",
-                cursorRect.height() > 0f
-            )
-        }
+        assertNotNull("Visual frame must exist at mid-frame for cursor test", midFrame)
+        assertNotNull("Cursor rect must exist in mid-frame during animation", midFrame!!.cursorRect)
+        val midCursorRect = midFrame.cursorRect!!
+        assertTrue(
+            "Mid-frame cursor rect left ${midCursorRect.left} should be >= 0",
+            midCursorRect.left >= 0f
+        )
+        assertTrue(
+            "Mid-frame cursor rect should have non-zero height",
+            midCursorRect.height() > 0f
+        )
 
         advanceClockToEnd()
 
@@ -940,21 +935,19 @@ class ControllableFrameAnimationTest {
         verifySliceVisualProperties(startFrame!!, 0f, 0.3f, SliceRole.Insert)
 
         val insertSlices = startFrame.sliceVisualStates.filter { it.role == SliceRole.Insert }
-        if (insertSlices.isNotEmpty()) {
-            for (slice in insertSlices) {
-                assertTrue(
-                    "Insert slice should be at a position > 0 (middle of text)",
-                    slice.destinationLeft >= 0f
-                )
-            }
+        assertTrue("Insert slices must exist in start frame", insertSlices.isNotEmpty())
+        for (slice in insertSlices) {
+            assertTrue(
+                "Insert slice should be at a position > 0 (middle of text)",
+                slice.destinationLeft >= 0f
+            )
         }
 
         manualTimeSource.advanceByMs(16)
         dispatchManualFrame()
         val midFrame = captureVisualFrame()
-        if (midFrame != null) {
-            verifySliceVisualProperties(midFrame, 0.1f, 0.6f, SliceRole.Insert)
-        }
+        assertNotNull("Mid-frame visual snapshot must exist during middle insert", midFrame)
+        verifySliceVisualProperties(midFrame!!, 0.1f, 0.6f, SliceRole.Insert)
 
         advanceClockToEnd()
 
@@ -982,13 +975,13 @@ class ControllableFrameAnimationTest {
             .perform(EditorCommitTextAction.commitText("\n第二行"))
 
         val frame = captureVisualFrame()
-        if (frame != null && frame.blockShiftStates.isNotEmpty()) {
-            for (block in frame.blockShiftStates) {
-                assertTrue(
-                    "Block shift currentTranslateY ${block.currentTranslateY} should be finite",
-                    java.lang.Float.isFinite(block.currentTranslateY)
-                )
-            }
+        assertNotNull("Visual frame must exist after multiline insert", frame)
+        assertTrue("Block shift states must exist for multiline insert", frame!!.blockShiftStates.isNotEmpty())
+        for (block in frame.blockShiftStates) {
+            assertTrue(
+                "Block shift currentTranslateY ${block.currentTranslateY} should be finite",
+                java.lang.Float.isFinite(block.currentTranslateY)
+            )
         }
 
         advanceClockToEnd()
@@ -1009,25 +1002,24 @@ class ControllableFrameAnimationTest {
 
         val startFrame = captureVisualFrame()
         assertNotNull("Visual frame should exist after composition update", startFrame)
-        if (startFrame!!.sliceVisualStates.isNotEmpty()) {
-            for (slice in startFrame.sliceVisualStates) {
-                assertTrue(
-                    "Composition slice alpha ${slice.currentAlpha} should be in [0,1]",
-                    slice.currentAlpha >= 0f && slice.currentAlpha <= 1f
-                )
-            }
+        assertTrue("Start frame must have slice visual states after composition", startFrame!!.sliceVisualStates.isNotEmpty())
+        for (slice in startFrame.sliceVisualStates) {
+            assertTrue(
+                "Composition slice alpha ${slice.currentAlpha} should be in [0,1]",
+                slice.currentAlpha >= 0f && slice.currentAlpha <= 1f
+            )
         }
 
         manualTimeSource.advanceByMs(16)
         dispatchManualFrame()
         val midFrame = captureVisualFrame()
-        if (midFrame != null && midFrame.sliceVisualStates.isNotEmpty()) {
-            for (slice in midFrame.sliceVisualStates) {
-                assertTrue(
-                    "Mid-frame composition slice alpha should be in [0,1]",
-                    slice.currentAlpha >= 0f && slice.currentAlpha <= 1f
-                )
-            }
+        assertNotNull("Mid-frame visual snapshot must exist during composition", midFrame)
+        assertTrue("Mid-frame must have slice visual states during composition", midFrame!!.sliceVisualStates.isNotEmpty())
+        for (slice in midFrame.sliceVisualStates) {
+            assertTrue(
+                "Mid-frame composition slice alpha should be in [0,1]",
+                slice.currentAlpha >= 0f && slice.currentAlpha <= 1f
+            )
         }
 
         advanceClockToEnd()
@@ -1154,21 +1146,20 @@ class ControllableFrameAnimationTest {
 
         val startFrame = captureVisualFrame()
         assertNotNull("Visual frame should exist after composition update", startFrame)
-        if (startFrame!!.sliceVisualStates.isNotEmpty()) {
-            for (slice in startFrame.sliceVisualStates) {
-                assertTrue(
-                    "Composition slice alpha ${slice.currentAlpha} should be in [0,1]",
-                    slice.currentAlpha >= 0f && slice.currentAlpha <= 1f
-                )
-                assertTrue(
-                    "Composition slice left ${slice.currentLeft} should be >= 0",
-                    slice.currentLeft >= 0f
-                )
-                assertTrue(
-                    "Composition slice top ${slice.currentTop} should be >= 0",
-                    slice.currentTop >= 0f
-                )
-            }
+        assertTrue("Start frame must have slice visual states for composition decoration", startFrame!!.sliceVisualStates.isNotEmpty())
+        for (slice in startFrame.sliceVisualStates) {
+            assertTrue(
+                "Composition slice alpha ${slice.currentAlpha} should be in [0,1]",
+                slice.currentAlpha >= 0f && slice.currentAlpha <= 1f
+            )
+            assertTrue(
+                "Composition slice left ${slice.currentLeft} should be >= 0",
+                slice.currentLeft >= 0f
+            )
+            assertTrue(
+                "Composition slice top ${slice.currentTop} should be >= 0",
+                slice.currentTop >= 0f
+            )
         }
 
         manualTimeSource.advanceByMs(16)
@@ -1180,13 +1171,13 @@ class ControllableFrameAnimationTest {
         manualTimeSource.advanceByMs(16)
         dispatchManualFrame()
         val midFrame = captureVisualFrame()
-        if (midFrame != null && midFrame.sliceVisualStates.isNotEmpty()) {
-            for (slice in midFrame.sliceVisualStates) {
-                assertTrue(
-                    "Mid-frame composition slice alpha should be in [0,1]",
-                    slice.currentAlpha >= 0f && slice.currentAlpha <= 1f
-                )
-            }
+        assertNotNull("Mid-frame visual snapshot must exist during composition decoration", midFrame)
+        assertTrue("Mid-frame must have slice visual states for composition decoration", midFrame!!.sliceVisualStates.isNotEmpty())
+        for (slice in midFrame.sliceVisualStates) {
+            assertTrue(
+                "Mid-frame composition slice alpha should be in [0,1]",
+                slice.currentAlpha >= 0f && slice.currentAlpha <= 1f
+            )
         }
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -1222,10 +1213,9 @@ class ControllableFrameAnimationTest {
         manualTimeSource.advanceByMs(16)
         dispatchManualFrame()
         val midFrame = captureVisualFrame()
-        if (midFrame != null) {
-            verifySliceVisualProperties(midFrame, 0.1f, 0.6f, SliceRole.Delete)
-            verifyDeleteSliceFadesOut(midFrame.sliceVisualStates, midFrame.progress)
-        }
+        assertNotNull("Mid-frame visual snapshot must exist during single char delete", midFrame)
+        verifySliceVisualProperties(midFrame!!, 0.1f, 0.6f, SliceRole.Delete)
+        verifyDeleteSliceFadesOut(midFrame.sliceVisualStates, midFrame.progress)
 
         advanceClockToEnd()
 
@@ -1255,25 +1245,25 @@ class ControllableFrameAnimationTest {
             .perform(EditorReplaceRangeAction.replaceRange(deleteStart, deleteEnd, "", "\n$line2"))
 
         val startFrame = captureVisualFrame()
-        if (startFrame != null && startFrame.blockShiftStates.isNotEmpty()) {
-            for (block in startFrame.blockShiftStates) {
-                assertTrue(
-                    "Block shift currentTranslateY should be finite",
-                    java.lang.Float.isFinite(block.currentTranslateY)
-                )
-            }
+        assertNotNull("Visual frame must exist after cross-line delete", startFrame)
+        assertTrue("Start frame must have block shift states for cross-line delete", startFrame!!.blockShiftStates.isNotEmpty())
+        for (block in startFrame.blockShiftStates) {
+            assertTrue(
+                "Block shift currentTranslateY should be finite",
+                java.lang.Float.isFinite(block.currentTranslateY)
+            )
         }
 
         manualTimeSource.advanceByMs(16)
         dispatchManualFrame()
         val midFrame = captureVisualFrame()
-        if (midFrame != null && midFrame.blockShiftStates.isNotEmpty()) {
-            for (block in midFrame.blockShiftStates) {
-                assertTrue(
-                    "Mid-frame block shift currentTranslateY should be finite",
-                    java.lang.Float.isFinite(block.currentTranslateY)
-                )
-            }
+        assertNotNull("Mid-frame visual snapshot must exist during cross-line delete", midFrame)
+        assertTrue("Mid-frame must have block shift states for cross-line delete", midFrame!!.blockShiftStates.isNotEmpty())
+        for (block in midFrame.blockShiftStates) {
+            assertTrue(
+                "Mid-frame block shift currentTranslateY should be finite",
+                java.lang.Float.isFinite(block.currentTranslateY)
+            )
         }
 
         advanceClockToEnd()
