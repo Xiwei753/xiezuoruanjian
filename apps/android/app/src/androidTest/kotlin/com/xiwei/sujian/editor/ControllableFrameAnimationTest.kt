@@ -269,6 +269,16 @@ class ControllableFrameAnimationTest {
             "Animation progress ${snapshot.progress} should be <= $expectedMaxProgress",
             snapshot.progress <= expectedMaxProgress
         )
+        assertTrue(
+            "Transaction state must be Rendering/Prepared/Pending during active animation, but was ${snapshot.transactionState}",
+            snapshot.transactionState == TransactionState.Rendering
+                    || snapshot.transactionState == TransactionState.Prepared
+                    || snapshot.transactionState == TransactionState.Pending
+        )
+        assertTrue(
+            "Owned resource count must be > 0 during active animation, but was ${snapshot.ownedResourceCount}",
+            snapshot.ownedResourceCount > 0
+        )
         if (verifyCursorVisible) {
             assertNotNull(
                 "Cursor transition should exist during animation",
@@ -430,6 +440,66 @@ class ControllableFrameAnimationTest {
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText(testText))
+    }
+
+    @Test
+    fun emojiInsert_fiveProgressPoints_intermediateFramesShowVisualState() {
+        val testData = initTestData()
+        openTestChapter("Emoji五进度点测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        val emojiText = "🙂🎉"
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText(emojiText))
+
+        val startSnapshot = captureEditorSnapshot()
+        assertNotNull("Animation must be active after emoji insert", startSnapshot)
+        assertEquals("insert", startSnapshot!!.operationKind)
+        assertTrue("Start ownedResourceCount must be > 0", startSnapshot.ownedResourceCount > 0)
+
+        val startVisual = captureVisualFrame()
+        assertNotNull("Visual frame must exist at start for emoji insert", startVisual)
+        assertTrue(
+            "Start progress must be < 0.3, was ${startVisual!!.progress}",
+            startVisual.progress < 0.3f
+        )
+
+        advanceToProgressAndVerify(0.2f, 0.6f, emojiText)
+        val midVisual1 = captureVisualFrame()
+        assertNotNull("Visual frame must exist at 25% for emoji insert", midVisual1)
+        for (slice in midVisual1!!.sliceVisualStates) {
+            assertTrue(
+                "Slice alpha ${slice.currentAlpha} must be in [0,1] at 25% for role ${slice.role}",
+                slice.currentAlpha in 0f..1f
+            )
+        }
+
+        advanceToProgressAndVerify(0.4f, 0.8f, emojiText)
+        val midVisual2 = captureVisualFrame()
+        assertNotNull("Visual frame must exist at 50% for emoji insert", midVisual2)
+        for (slice in midVisual2!!.sliceVisualStates) {
+            assertTrue(
+                "Slice alpha ${slice.currentAlpha} must be in [0,1] at 50% for role ${slice.role}",
+                slice.currentAlpha in 0f..1f
+            )
+        }
+
+        manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
+        advanceToProgressAndVerify(0.6f, 1.0f, emojiText)
+
+        advanceClockToEnd()
+
+        val endVisual = captureVisualFrame()
+        assertNull("Visual frame must be null after emoji animation completes", endVisual)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText(emojiText))
+
+        val emojiByteLen = emojiText.toByteArray(Charsets.UTF_8).size
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasSelectionUtf8(emojiByteLen, emojiByteLen))
     }
 
     @Test
