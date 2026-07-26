@@ -75,8 +75,4 @@ impl WriterCoreApi {
         Ok(true)
     }
 
-    pub fn process_pending_search_updates(&self) -> ApiResult<bool> {
-        self.core().process_pending_search_updates();
-        Ok(true)
-    }
 }

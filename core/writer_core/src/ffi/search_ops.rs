@@ -144,15 +144,3 @@ pub unsafe extern "C" fn writer_core_enqueue_search_update(
     }
 }
 
-/// # Safety
-/// Returns 1 on success, 0 on error.
-#[no_mangle]
-pub unsafe extern "C" fn writer_core_process_pending_search_updates() -> i32 {
-    match with_core(|core| {
-        core.process_pending_search_updates();
-        Ok(true)
-    }) {
-        Ok(_) => 1,
-        Err(_) => 0,
-    }
-}

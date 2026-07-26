@@ -33,7 +33,4 @@ impl super::WriterAppService {
         self.api.enqueue_search_index_update(&action, &object_id, &scope, &title, &body, None)
     }
 
-    pub fn process_pending_search_updates(&self) -> Result<bool, WriterError> {
-        self.api.process_pending_search_updates()
-    }
 }

@@ -1248,9 +1248,6 @@ interface WriterAppService {
 
     [Throws=WriterError]
     boolean enqueue_search_update(string action, string object_id, string scope, string title, string body);
-
-    [Throws=WriterError]
-    boolean process_pending_search_updates();
 };
 
 // ── Layout Policy DTOs ──

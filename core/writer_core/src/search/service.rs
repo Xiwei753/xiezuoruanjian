@@ -26,7 +26,6 @@ impl SearchIndexService {
         limit: usize,
         cursor: Option<&str>,
     ) -> Vec<SearchResult> {
-        self.process_updates();
         self.backend.search(query, scope, limit, cursor)
     }
 
@@ -74,10 +73,6 @@ impl SearchIndexService {
                 }
             }
         }
-    }
-
-    pub fn process_updates(&mut self) {
-        self.apply_queue();
     }
 
     pub fn remove_by_prefix(&mut self, prefix: &str) {
