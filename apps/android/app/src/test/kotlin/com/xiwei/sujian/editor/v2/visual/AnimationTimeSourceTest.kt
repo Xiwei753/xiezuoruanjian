@@ -66,6 +66,54 @@ class AnimationTimeSourceTest {
         }
         assertEquals(listOf(16L, 32L, 48L, 64L, 80L, 96L, 112L, 128L, 144L, 160L), frames)
     }
+
+    @Test
+    fun manualTimeSourceAdvanceToProgress25Percent() {
+        val source = ManualAnimationTimeSource()
+        val durationMs = 200L
+        source.advanceByMs(durationMs / 4)
+        val progress = source.nowNanos() / 1_000_000.toFloat() / durationMs
+        assertEquals(0.25f, progress, 0.01f)
+    }
+
+    @Test
+    fun manualTimeSourceAdvanceToProgress50Percent() {
+        val source = ManualAnimationTimeSource()
+        val durationMs = 200L
+        source.advanceByMs(durationMs / 2)
+        val progress = source.nowNanos() / 1_000_000.toFloat() / durationMs
+        assertEquals(0.5f, progress, 0.01f)
+    }
+
+    @Test
+    fun manualTimeSourceAdvanceToProgress75Percent() {
+        val source = ManualAnimationTimeSource()
+        val durationMs = 200L
+        source.advanceByMs((durationMs * 3) / 4)
+        val progress = source.nowNanos() / 1_000_000.toFloat() / durationMs
+        assertEquals(0.75f, progress, 0.01f)
+    }
+
+    @Test
+    fun manualTimeSourceAdvanceToEnd() {
+        val source = ManualAnimationTimeSource()
+        val durationMs = 200L
+        source.advanceByMs(durationMs)
+        val progress = source.nowNanos() / 1_000_000.toFloat() / durationMs
+        assertEquals(1.0f, progress, 0.01f)
+    }
+
+    @Test
+    fun manualTimeSourceSimulatesRapidConsecutiveInput() {
+        val source = ManualAnimationTimeSource()
+        val durations = listOf(16L, 16L, 16L, 16L, 16L)
+        val timestamps = mutableListOf<Long>()
+        for (d in durations) {
+            source.advanceByMs(d)
+            timestamps.add(source.nowNanos() / 1_000_000)
+        }
+        assertEquals(listOf(16L, 32L, 48L, 64L, 80L), timestamps)
+    }
 }
 
 class TransactionIdSourceTest {
@@ -88,6 +136,139 @@ class TransactionIdSourceTest {
         val source = TransactionIdSource()
         val ids = (1..1000).map { source.nextId() }
         assertEquals(ids.size, ids.toSet().size)
+    }
+
+    @Test
+    fun transactionIdsAreIndependentOfTimeSource() {
+        val timeSource = ManualAnimationTimeSource()
+        val idSource = TransactionIdSource()
+        timeSource.advanceByMs(0)
+        val id1 = idSource.nextId()
+        timeSource.advanceByMs(0)
+        val id2 = idSource.nextId()
+        assertNotEquals(id1, id2)
+    }
+}
+
+class AnimationTimelineControlledFrameTest {
+
+    @Test
+    fun timelineProgressAtStartFrame() {
+        val timeline = AnimationTimeline(200L)
+        timeline.markFirstVisibleFrame(0)
+        assertEquals(0f, timeline.progress(0), 0.01f)
+    }
+
+    @Test
+    fun timelineProgressAt25Percent() {
+        val timeline = AnimationTimeline(200L)
+        timeline.markFirstVisibleFrame(0)
+        assertEquals(0.25f, timeline.progress(50), 0.01f)
+    }
+
+    @Test
+    fun timelineProgressAt50Percent() {
+        val timeline = AnimationTimeline(200L)
+        timeline.markFirstVisibleFrame(0)
+        assertEquals(0.5f, timeline.progress(100), 0.01f)
+    }
+
+    @Test
+    fun timelineProgressAt75Percent() {
+        val timeline = AnimationTimeline(200L)
+        timeline.markFirstVisibleFrame(0)
+        assertEquals(0.75f, timeline.progress(150), 0.01f)
+    }
+
+    @Test
+    fun timelineProgressAtEndFrame() {
+        val timeline = AnimationTimeline(200L)
+        timeline.markFirstVisibleFrame(0)
+        assertEquals(1f, timeline.progress(200), 0.01f)
+    }
+
+    @Test
+    fun timelineProgressWithManualTimeSource() {
+        val timeSource = ManualAnimationTimeSource()
+        val timeline = AnimationTimeline(200L)
+        timeSource.advanceByMs(0)
+        timeline.markFirstVisibleFrame(timeSource.nowNanos() / 1_000_000)
+        timeSource.advanceByMs(50)
+        assertEquals(0.25f, timeline.progress(timeSource.nowNanos() / 1_000_000), 0.01f)
+        timeSource.advanceByMs(50)
+        assertEquals(0.5f, timeline.progress(timeSource.nowNanos() / 1_000_000), 0.01f)
+        timeSource.advanceByMs(50)
+        assertEquals(0.75f, timeline.progress(timeSource.nowNanos() / 1_000_000), 0.01f)
+        timeSource.advanceByMs(50)
+        assertEquals(1f, timeline.progress(timeSource.nowNanos() / 1_000_000), 0.01f)
+    }
+
+    @Test
+    fun timelineStateTransitionsPendingToRendering() {
+        val timeline = AnimationTimeline(200L)
+        assertEquals(TransactionState.Pending, timeline.getState())
+        timeline.markFirstVisibleFrame(0)
+        assertEquals(TransactionState.Rendering, timeline.getState())
+    }
+
+    @Test
+    fun timelineStateTransitionsToCompleted() {
+        val timeline = AnimationTimeline(200L)
+        timeline.markFirstVisibleFrame(0)
+        timeline.complete()
+        assertEquals(TransactionState.Completed, timeline.getState())
+    }
+
+    @Test
+    fun timelineStateTransitionsToCancelled() {
+        val timeline = AnimationTimeline(200L)
+        timeline.markFirstVisibleFrame(0)
+        timeline.cancel()
+        assertEquals(TransactionState.Cancelled, timeline.getState())
+    }
+
+    @Test
+    fun timelinePauseAndResume() {
+        val timeline = AnimationTimeline(200L)
+        timeline.markFirstVisibleFrame(0)
+        timeline.pause(50)
+        assertEquals(TransactionState.Paused, timeline.getState())
+        assertEquals(0.25f, timeline.progress(50), 0.01f)
+        timeline.resume(100)
+        assertEquals(TransactionState.Rendering, timeline.getState())
+    }
+
+    @Test
+    fun timelineZeroDurationCompletesInstantly() {
+        val timeline = AnimationTimeline(0L)
+        timeline.markFirstVisibleFrame(0)
+        assertEquals(1f, timeline.progress(0), 0.01f)
+    }
+
+    @Test
+    fun timelineIsCompletedWhenProgressReachesOne() {
+        val timeline = AnimationTimeline(200L)
+        timeline.markFirstVisibleFrame(0)
+        assertFalse(timeline.isCompleted(100))
+        assertTrue(timeline.isCompleted(200))
+    }
+
+    @Test
+    fun timelineSimulateRapidConsecutiveInput() {
+        val timeSource = ManualAnimationTimeSource()
+        val timeline1 = AnimationTimeline(160L)
+        timeSource.advanceByMs(0)
+        timeline1.markFirstVisibleFrame(timeSource.nowNanos() / 1_000_000)
+        timeSource.advanceByMs(80)
+        val progress1 = timeline1.progress(timeSource.nowNanos() / 1_000_000)
+        assertEquals(0.5f, progress1, 0.01f)
+        timeline1.complete()
+        val timeline2 = AnimationTimeline(160L)
+        timeSource.advanceByMs(0)
+        timeline2.markFirstVisibleFrame(timeSource.nowNanos() / 1_000_000)
+        timeSource.advanceByMs(160)
+        val progress2 = timeline2.progress(timeSource.nowNanos() / 1_000_000)
+        assertEquals(1f, progress2, 0.01f)
     }
 }
 
@@ -123,5 +304,312 @@ class AnimationStateSnapshotTest {
         assertEquals(0f, timeline.progress(0), 0.01f)
         assertEquals(0.5f, timeline.progress(100), 0.01f)
         assertEquals(1f, timeline.progress(200), 0.01f)
+    }
+
+    @Test
+    fun engineCurrentTimeNanosUsesInjectedTimeSource() {
+        val timeSource = ManualAnimationTimeSource()
+        val engine = AndroidTextAnimationEngine(
+            AndroidVisualPlanner(),
+            VisualResourceStore(),
+            timeSource
+        )
+        assertEquals(0L, engine.currentTimeNanos())
+        timeSource.advanceByMs(16)
+        assertEquals(16_000_000L, engine.currentTimeNanos())
+    }
+
+    @Test
+    fun engineCurrentTimeNanosDefaultUsesChoreographerSource() {
+        val engine = AndroidTextAnimationEngine(
+            AndroidVisualPlanner(),
+            VisualResourceStore()
+        )
+        val before = System.nanoTime()
+        val result = engine.currentTimeNanos()
+        val after = System.nanoTime()
+        assertTrue(result in before..after)
+    }
+}
+
+class AnimationStateSnapshotDataTest {
+
+    @Test
+    fun snapshotContainsAllRequiredFields() {
+        val snapshot = AnimationStateSnapshot(
+            transactionId = 42L,
+            operationKind = "insert",
+            animationMode = "animated",
+            oldAffectedRanges = listOf(Pair(0, 5)),
+            newAffectedRanges = listOf(Pair(0, 10)),
+            progress = 0.5f,
+            sliceRoles = listOf(SliceRole.Insert),
+            cursorTransition = CursorTransitionSnapshot(
+                fromX = 0f, fromY = 0f, fromHeight = 20f,
+                toX = 10f, toY = 0f, toHeight = 20f,
+                shouldAnimate = true
+            ),
+            ownedResourceCount = 3,
+            transactionState = TransactionState.Rendering
+        )
+        assertEquals(42L, snapshot.transactionId)
+        assertEquals("insert", snapshot.operationKind)
+        assertEquals("animated", snapshot.animationMode)
+        assertEquals(listOf(Pair(0, 5)), snapshot.oldAffectedRanges)
+        assertEquals(listOf(Pair(0, 10)), snapshot.newAffectedRanges)
+        assertEquals(0.5f, snapshot.progress, 0.01f)
+        assertEquals(listOf(SliceRole.Insert), snapshot.sliceRoles)
+        assertNotNull(snapshot.cursorTransition)
+        assertEquals(3, snapshot.ownedResourceCount)
+        assertEquals(TransactionState.Rendering, snapshot.transactionState)
+    }
+
+    @Test
+    fun snapshotOperationKindDistinguishesInsertDeleteReplace() {
+        val insertSnapshot = AnimationStateSnapshot(
+            transactionId = 1L, operationKind = "insert", animationMode = "animated",
+            oldAffectedRanges = emptyList(), newAffectedRanges = listOf(Pair(0, 3)),
+            progress = 0f, sliceRoles = listOf(SliceRole.Insert), cursorTransition = null,
+            ownedResourceCount = 1, transactionState = TransactionState.Pending
+        )
+        val deleteSnapshot = insertSnapshot.copy(
+            operationKind = "delete", newAffectedRanges = emptyList(),
+            oldAffectedRanges = listOf(Pair(0, 3)), sliceRoles = listOf(SliceRole.Delete)
+        )
+        val replaceSnapshot = insertSnapshot.copy(
+            operationKind = "replace",
+            oldAffectedRanges = listOf(Pair(0, 3)), newAffectedRanges = listOf(Pair(0, 5)),
+            sliceRoles = listOf(SliceRole.CrossfadeOld, SliceRole.CrossfadeNew)
+        )
+        assertNotEquals(insertSnapshot.operationKind, deleteSnapshot.operationKind)
+        assertNotEquals(insertSnapshot.operationKind, replaceSnapshot.operationKind)
+        assertNotEquals(deleteSnapshot.operationKind, replaceSnapshot.operationKind)
+    }
+
+    @Test
+    fun snapshotOperationKindDistinguishesCompositionOperations() {
+        val updateSnapshot = AnimationStateSnapshot(
+            transactionId = 1L, operationKind = "composition_update", animationMode = "animated",
+            oldAffectedRanges = listOf(Pair(0, 3)), newAffectedRanges = listOf(Pair(0, 6)),
+            progress = 0f, sliceRoles = listOf(SliceRole.CrossfadeOld, SliceRole.CrossfadeNew),
+            cursorTransition = null, ownedResourceCount = 2, transactionState = TransactionState.Pending
+        )
+        val commitSnapshot = updateSnapshot.copy(operationKind = "composition_commit")
+        val cancelSnapshot = updateSnapshot.copy(
+            operationKind = "composition_cancel",
+            newAffectedRanges = emptyList(), sliceRoles = listOf(SliceRole.Delete)
+        )
+        assertEquals("composition_update", updateSnapshot.operationKind)
+        assertEquals("composition_commit", commitSnapshot.operationKind)
+        assertEquals("composition_cancel", cancelSnapshot.operationKind)
+    }
+
+    @Test
+    fun cursorTransitionSnapshotCapturesFromAndTo() {
+        val ct = CursorTransitionSnapshot(
+            fromX = 10f, fromY = 20f, fromHeight = 30f,
+            toX = 40f, toY = 50f, toHeight = 60f,
+            shouldAnimate = true
+        )
+        assertEquals(10f, ct.fromX, 0.01f)
+        assertEquals(20f, ct.fromY, 0.01f)
+        assertEquals(30f, ct.fromHeight, 0.01f)
+        assertEquals(40f, ct.toX, 0.01f)
+        assertEquals(50f, ct.toY, 0.01f)
+        assertEquals(60f, ct.toHeight, 0.01f)
+        assertTrue(ct.shouldAnimate)
+    }
+
+    @Test
+    fun cursorTransitionSnapshotNoAnimation() {
+        val ct = CursorTransitionSnapshot(
+            fromX = 10f, fromY = 20f, fromHeight = 30f,
+            toX = 10f, toY = 20f, toHeight = 30f,
+            shouldAnimate = false
+        )
+        assertFalse(ct.shouldAnimate)
+    }
+}
+
+class DeterministicFrameProgressTest {
+
+    @Test
+    fun frameProgressSequenceForTypicalInsert() {
+        val timeSource = ManualAnimationTimeSource()
+        val durationMs = 200L
+        val timeline = AnimationTimeline(durationMs)
+        timeSource.advanceByMs(0)
+        timeline.markFirstVisibleFrame(timeSource.nowNanos() / 1_000_000)
+        val progressPoints = mutableListOf<Float>()
+        val checkpoints = listOf(0L, 50L, 100L, 150L, 200L)
+        for (checkpoint in checkpoints) {
+            timeSource.advanceTo(checkpoint * 1_000_000L)
+            progressPoints.add(timeline.progress(timeSource.nowNanos() / 1_000_000))
+        }
+        assertEquals(0f, progressPoints[0], 0.01f)
+        assertEquals(0.25f, progressPoints[1], 0.01f)
+        assertEquals(0.5f, progressPoints[2], 0.01f)
+        assertEquals(0.75f, progressPoints[3], 0.01f)
+        assertEquals(1f, progressPoints[4], 0.01f)
+    }
+
+    @Test
+    fun frameProgressSequenceForDelete() {
+        val timeSource = ManualAnimationTimeSource()
+        val durationMs = 160L
+        val timeline = AnimationTimeline(durationMs)
+        timeSource.advanceByMs(0)
+        timeline.markFirstVisibleFrame(timeSource.nowNanos() / 1_000_000)
+        val progressPoints = mutableListOf<Float>()
+        val checkpoints = listOf(0L, 40L, 80L, 120L, 160L)
+        for (checkpoint in checkpoints) {
+            timeSource.advanceTo(checkpoint * 1_000_000L)
+            progressPoints.add(timeline.progress(timeSource.nowNanos() / 1_000_000))
+        }
+        assertEquals(0f, progressPoints[0], 0.01f)
+        assertEquals(0.25f, progressPoints[1], 0.01f)
+        assertEquals(0.5f, progressPoints[2], 0.01f)
+        assertEquals(0.75f, progressPoints[3], 0.01f)
+        assertEquals(1f, progressPoints[4], 0.01f)
+    }
+
+    @Test
+    fun frameProgressSequenceForCompositionUpdate() {
+        val timeSource = ManualAnimationTimeSource()
+        val durationMs = 160L
+        val timeline = AnimationTimeline(durationMs)
+        timeSource.advanceByMs(0)
+        timeline.markFirstVisibleFrame(timeSource.nowNanos() / 1_000_000)
+        val progressPoints = mutableListOf<Float>()
+        val checkpoints = listOf(0L, 40L, 80L, 120L, 160L)
+        for (checkpoint in checkpoints) {
+            timeSource.advanceTo(checkpoint * 1_000_000L)
+            progressPoints.add(timeline.progress(timeSource.nowNanos() / 1_000_000))
+        }
+        assertEquals(0f, progressPoints[0], 0.01f)
+        assertEquals(0.25f, progressPoints[1], 0.01f)
+        assertEquals(0.5f, progressPoints[2], 0.01f)
+        assertEquals(0.75f, progressPoints[3], 0.01f)
+        assertEquals(1f, progressPoints[4], 0.01f)
+    }
+
+    @Test
+    fun frameProgressSequenceForRapidConsecutiveInput() {
+        val timeSource = ManualAnimationTimeSource()
+        val durationMs = 160L
+        val timeline1 = AnimationTimeline(durationMs)
+        timeSource.advanceByMs(0)
+        timeline1.markFirstVisibleFrame(timeSource.nowNanos() / 1_000_000)
+        timeSource.advanceByMs(80)
+        val midProgress = timeline1.progress(timeSource.nowNanos() / 1_000_000)
+        assertTrue(midProgress in 0.49f..0.51f)
+        timeline1.complete()
+        val timeline2 = AnimationTimeline(durationMs)
+        timeSource.advanceByMs(0)
+        timeline2.markFirstVisibleFrame(timeSource.nowNanos() / 1_000_000)
+        timeSource.advanceByMs(160)
+        val finalProgress = timeline2.progress(timeSource.nowNanos() / 1_000_000)
+        assertEquals(1f, finalProgress, 0.01f)
+    }
+
+    @Test
+    fun frameProgressForCjkInput() {
+        val timeSource = ManualAnimationTimeSource()
+        val durationMs = 200L
+        val timeline = AnimationTimeline(durationMs)
+        timeSource.advanceByMs(0)
+        timeline.markFirstVisibleFrame(timeSource.nowNanos() / 1_000_000)
+        timeSource.advanceByMs(50)
+        assertEquals(0.25f, timeline.progress(timeSource.nowNanos() / 1_000_000), 0.01f)
+        timeSource.advanceByMs(50)
+        assertEquals(0.5f, timeline.progress(timeSource.nowNanos() / 1_000_000), 0.01f)
+        timeSource.advanceByMs(100)
+        assertEquals(1f, timeline.progress(timeSource.nowNanos() / 1_000_000), 0.01f)
+    }
+
+    @Test
+    fun frameProgressForEmojiInput() {
+        val timeSource = ManualAnimationTimeSource()
+        val durationMs = 200L
+        val timeline = AnimationTimeline(durationMs)
+        timeSource.advanceByMs(0)
+        timeline.markFirstVisibleFrame(timeSource.nowNanos() / 1_000_000)
+        timeSource.advanceByMs(100)
+        assertEquals(0.5f, timeline.progress(timeSource.nowNanos() / 1_000_000), 0.01f)
+    }
+
+    @Test
+    fun frameProgressForCompositionCommit() {
+        val timeSource = ManualAnimationTimeSource()
+        val durationMs = 200L
+        val timeline = AnimationTimeline(durationMs)
+        timeSource.advanceByMs(0)
+        timeline.markFirstVisibleFrame(timeSource.nowNanos() / 1_000_000)
+        timeSource.advanceByMs(50)
+        assertEquals(0.25f, timeline.progress(timeSource.nowNanos() / 1_000_000), 0.01f)
+        timeSource.advanceByMs(150)
+        assertEquals(1f, timeline.progress(timeSource.nowNanos() / 1_000_000), 0.01f)
+    }
+
+    @Test
+    fun frameProgressForCompositionCancel() {
+        val timeSource = ManualAnimationTimeSource()
+        val durationMs = 160L
+        val timeline = AnimationTimeline(durationMs)
+        timeSource.advanceByMs(0)
+        timeline.markFirstVisibleFrame(timeSource.nowNanos() / 1_000_000)
+        timeSource.advanceByMs(40)
+        assertEquals(0.25f, timeline.progress(timeSource.nowNanos() / 1_000_000), 0.01f)
+        timeline.cancel()
+        assertEquals(TransactionState.Cancelled, timeline.getState())
+    }
+
+    @Test
+    fun frameProgressForCrossLineDelete() {
+        val timeSource = ManualAnimationTimeSource()
+        val durationMs = 250L
+        val timeline = AnimationTimeline(durationMs)
+        timeSource.advanceByMs(0)
+        timeline.markFirstVisibleFrame(timeSource.nowNanos() / 1_000_000)
+        val progressPoints = mutableListOf<Float>()
+        for (ms in listOf(0L, 62L, 125L, 187L, 250L)) {
+            timeSource.advanceTo(ms * 1_000_000L)
+            progressPoints.add(timeline.progress(timeSource.nowNanos() / 1_000_000))
+        }
+        assertEquals(0f, progressPoints[0], 0.02f)
+        assertEquals(0.25f, progressPoints[1], 0.02f)
+        assertEquals(0.5f, progressPoints[2], 0.02f)
+        assertEquals(0.75f, progressPoints[3], 0.02f)
+        assertEquals(1f, progressPoints[4], 0.02f)
+    }
+
+    @Test
+    fun frameProgressForMidlineInsert() {
+        val timeSource = ManualAnimationTimeSource()
+        val durationMs = 200L
+        val timeline = AnimationTimeline(durationMs)
+        timeSource.advanceByMs(0)
+        timeline.markFirstVisibleFrame(timeSource.nowNanos() / 1_000_000)
+        timeSource.advanceByMs(50)
+        assertEquals(0.25f, timeline.progress(timeSource.nowNanos() / 1_000_000), 0.01f)
+        timeSource.advanceByMs(150)
+        assertEquals(1f, timeline.progress(timeSource.nowNanos() / 1_000_000), 0.01f)
+    }
+
+    @Test
+    fun pausedTransactionResumesFromCorrectProgress() {
+        val timeSource = ManualAnimationTimeSource()
+        val durationMs = 200L
+        val timeline = AnimationTimeline(durationMs)
+        timeSource.advanceByMs(0)
+        timeline.markFirstVisibleFrame(timeSource.nowNanos() / 1_000_000)
+        timeSource.advanceByMs(60)
+        val progressBeforePause = timeline.progress(timeSource.nowNanos() / 1_000_000)
+        timeline.pause(timeSource.nowNanos() / 1_000_000)
+        assertEquals(TransactionState.Paused, timeline.getState())
+        timeSource.advanceByMs(40)
+        assertEquals(progressBeforePause, timeline.progress(timeSource.nowNanos() / 1_000_000), 0.01f)
+        timeline.resume(timeSource.nowNanos() / 1_000_000)
+        assertEquals(TransactionState.Rendering, timeline.getState())
     }
 }

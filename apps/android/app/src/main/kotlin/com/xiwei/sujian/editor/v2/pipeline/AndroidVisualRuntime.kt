@@ -59,6 +59,8 @@ class AndroidVisualRuntime(
 
     fun hasActiveAnimation(): Boolean = animationEngine.hasActiveAnimation()
 
+    fun currentTimeNanos(): Long = animationEngine.currentTimeNanos()
+
     fun setAnimationPolicy(policy: TextAnimationPolicy) {
         animationEngine.setAnimationPolicy(policy)
     }

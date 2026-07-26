@@ -454,20 +454,21 @@ class AndroidVisualPlanner(
             referencedSnapshotIds.add(patch.newSnapshotId)
         }
 
-        return PreparedVisualTransaction(
-            transactionId = transactionKey,
-            oldRevision = oldRev,
-            newRevision = newRev,
-            staticPatches = staticPatches,
-            animatedSlices = finalSlices,
-            ownedSnapshotIds = ownedSnapshotIds,
-            referencedSnapshotIds = referencedSnapshotIds,
-            selectionDecoration = snapshotPlanner.buildSelectionDecoration(newRev),
-            preeditDecoration = snapshotPlanner.buildPreeditDecoration(newRev),
-            cursorTransition = cursorTransition,
-            durationMs = durationMs,
-            blockShifts = finalBlockShifts
-        )
+         return PreparedVisualTransaction(
+             transactionId = transactionKey,
+             oldRevision = oldRev,
+             newRevision = newRev,
+             staticPatches = staticPatches,
+             animatedSlices = finalSlices,
+             ownedSnapshotIds = ownedSnapshotIds,
+             referencedSnapshotIds = referencedSnapshotIds,
+             selectionDecoration = snapshotPlanner.buildSelectionDecoration(newRev),
+             preeditDecoration = snapshotPlanner.buildPreeditDecoration(newRev),
+             cursorTransition = cursorTransition,
+             durationMs = durationMs,
+             blockShifts = finalBlockShifts,
+             operationKind = visualIntent.operationKind
+         )
     }
 
     private fun planClusterLevelAnimation(

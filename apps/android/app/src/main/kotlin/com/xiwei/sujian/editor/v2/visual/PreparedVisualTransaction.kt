@@ -2,6 +2,7 @@ package com.xiwei.sujian.editor.v2.visual
 
 import com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutRevision
+import uniffi.writer_core.EditorOperationKindDto
 
 data class PreparedVisualTransaction(
     val transactionId: Long,
@@ -9,22 +10,14 @@ data class PreparedVisualTransaction(
     val newRevision: AndroidLayoutRevision?,
     val staticPatches: List<StaticPatch>,
     val animatedSlices: List<AnimatedSlice>,
-    /** Snapshot IDs whose Bitmap lifecycle this transaction owns (will release on complete/cancel). */
     val ownedSnapshotIds: Set<Long>,
-    /** All snapshot IDs referenced by slices or static patches (superset of ownedSnapshotIds;
-     *  may include IDs inherited from a prior transaction via rebase ownership transfer). */
     val referencedSnapshotIds: Set<Long>,
     val selectionDecoration: SelectionDecoration?,
     val preeditDecoration: PreeditDecoration?,
     val cursorTransition: CursorTransition?,
     val durationMs: Long,
-    /** Block-level vertical shifts for paragraphs after the edit paragraph whose Y geometry
-     *  changed but whose text content is identical. These paragraphs do NOT need per-line
-     *  Bitmap snapshots — the renderer applies a uniform Y translation to the visible
-     *  portion of the static new-layout text. This prevents unbounded Bitmap allocation
-     *  when editing near the top of a long document (every input would otherwise capture
-     *  all lines from the edit point to the document end). */
-    val blockShifts: List<BlockShift> = emptyList()
+    val blockShifts: List<BlockShift> = emptyList(),
+    val operationKind: EditorOperationKindDto = EditorOperationKindDto.INSERT
 ) {
     data class StaticPatch(
         val newSnapshotId: Long,

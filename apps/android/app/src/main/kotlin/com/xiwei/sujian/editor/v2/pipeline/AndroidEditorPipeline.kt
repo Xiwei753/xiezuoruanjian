@@ -477,7 +477,7 @@ class AndroidEditorPipeline private constructor(
      * → preedit underline → static cursor.
      */
     fun drawFrame(canvas: android.graphics.Canvas, searchHighlightsUtf16: List<Pair<Int, Int>>, viewportWidth: Int, viewportHeight: Int, scrollX: Float, scrollY: Float) {
-        val frameTimeNanos = pendingFrameTimeNanos ?: System.nanoTime()
+        val frameTimeNanos = pendingFrameTimeNanos ?: visualRuntime.currentTimeNanos()
         pendingFrameTimeNanos = null
         val frameTimeMs = frameTimeNanos / 1_000_000
         val projection = layoutRuntime.getCurrentProjection()

@@ -291,6 +291,8 @@ class AndroidTextAnimationEngine(
 
     fun hasActiveAnimation(): Boolean = activeTransaction != null && timeline != null
 
+    fun currentTimeNanos(): Long = timeSource.nowNanos()
+
     fun cancel() {
         val transaction = activeTransaction ?: return
         cancelTransaction(transaction)
@@ -327,7 +329,7 @@ class AndroidTextAnimationEngine(
         val p = tl.progress(frameTimeMs)
         return AnimationStateSnapshot(
             transactionId = transaction.transactionId,
-            operationKind = transaction.oldRevision?.let { "edit" } ?: "unknown",
+            operationKind = transaction.operationKind.name.lowercase(),
             animationMode = if (transaction.durationMs == 0L) "instant" else "animated",
             oldAffectedRanges = transaction.animatedSlices
                 .filter { it.role == SliceRole.Delete || it.role == SliceRole.CrossfadeOld }
