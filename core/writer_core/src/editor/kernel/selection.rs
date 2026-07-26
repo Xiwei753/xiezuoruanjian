@@ -25,7 +25,7 @@ impl EditorKernel {
         self.selection_anchor = Utf8ByteOffset::unchecked(anchor);
         self.cursor = Utf8ByteOffset::unchecked(head);
 
-        let new_selection = Utf8ByteRange::new(anchor, head).unwrap();
+        let new_selection = Utf8ByteRange::from_values(anchor, head).unwrap();
 
         let visual_intent = EditorVisualIntent {
             cause: EditorTransactionCause::Programmatic,

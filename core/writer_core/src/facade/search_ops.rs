@@ -9,22 +9,29 @@ impl super::WriterCore {
         limit: usize,
         cursor: Option<&str>,
     ) -> Vec<SearchResult> {
-        crate::search::api::global_search(query, scope, limit, cursor)
+        let service = self.search_service.lock().unwrap_or_else(|e| e.into_inner());
+        service.search(query, scope, limit, cursor)
     }
 
     pub fn rebuild_search_index(&self, project_id: Option<&str>) -> Result<SearchIndexStatus> {
-        crate::search::api::rebuild_search_index(&self.workspace_path, project_id)
+        let entries = super::super::search::rebuild::rebuild_index(&self.workspace_path, project_id)?;
+        let mut service = self.search_service.lock().unwrap_or_else(|e| e.into_inner());
+        service.rebuild_from_entries(entries);
+        Ok(service.status())
     }
 
     pub fn get_search_index_status(&self) -> SearchIndexStatus {
-        crate::search::api::get_search_index_status()
+        let service = self.search_service.lock().unwrap_or_else(|e| e.into_inner());
+        service.status()
     }
 
     pub fn enqueue_search_index_update(&self, update: SearchIndexUpdate) {
-        crate::search::api::enqueue_search_index_update(update);
+        let mut service = self.search_service.lock().unwrap_or_else(|e| e.into_inner());
+        service.enqueue_update(update);
     }
 
     pub fn process_pending_search_updates(&self) {
-        crate::search::api::process_pending_updates();
+        let mut service = self.search_service.lock().unwrap_or_else(|e| e.into_inner());
+        service.process_updates();
     }
 }

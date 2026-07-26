@@ -1,88 +1,52 @@
-use std::path::Path;
-use std::sync::{Mutex, OnceLock};
-
-use crate::error::Result;
-use super::types::*;
-use super::service::SearchIndexService;
-
-static GLOBAL_SEARCH_SERVICE: OnceLock<Mutex<SearchIndexService>> = OnceLock::new();
-
-fn get_or_init_service() -> &'static Mutex<SearchIndexService> {
-    GLOBAL_SEARCH_SERVICE.get_or_init(|| Mutex::new(SearchIndexService::new()))
-}
-
-pub fn global_search(
-    query: &str,
-    scope: SearchScope,
-    limit: usize,
-    cursor: Option<&str>,
-) -> Vec<SearchResult> {
-    let service = get_or_init_service();
-    let guard = service.lock().unwrap_or_else(|e| e.into_inner());
-    guard.search(query, scope, limit, cursor)
-}
-
-pub fn rebuild_search_index(workspace: &Path, project_id: Option<&str>) -> Result<SearchIndexStatus> {
-    let entries = super::rebuild::rebuild_index(workspace, project_id)?;
-    let service = get_or_init_service();
-    let mut guard = service.lock().unwrap_or_else(|e| e.into_inner());
-    guard.rebuild_from_entries(entries);
-    Ok(guard.status())
-}
-
-pub fn get_search_index_status() -> SearchIndexStatus {
-    let service = get_or_init_service();
-    let guard = service.lock().unwrap_or_else(|e| e.into_inner());
-    guard.status()
-}
-
-pub fn enqueue_search_index_update(update: SearchIndexUpdate) {
-    let service = get_or_init_service();
-    let mut guard = service.lock().unwrap_or_else(|e| e.into_inner());
-    guard.enqueue_update(update);
-}
-
-pub fn process_pending_updates() {
-    let service = get_or_init_service();
-    let mut guard = service.lock().unwrap_or_else(|e| e.into_inner());
-    guard.process_updates();
-}
+//! 搜索 API 已迁移到 per-WriterCore 实例持有。
+//! 本文件仅保留测试用例。
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::search::service::SearchIndexService;
+    use crate::search::types::*;
     use tempfile::TempDir;
+
+    fn rebuild_index(workspace: &std::path::Path, project_id: Option<&str>) -> crate::error::Result<SearchIndexStatus> {
+        let entries = crate::search::rebuild::rebuild_index(workspace, project_id)?;
+        let mut service = SearchIndexService::new();
+        service.rebuild_from_entries(entries);
+        Ok(service.status())
+    }
+
+    fn search_with_service(service: &SearchIndexService, query: &str, scope: SearchScope, limit: usize, cursor: Option<&str>) -> Vec<SearchResult> {
+        service.search(query, scope, limit, cursor)
+    }
 
     #[test]
     fn search_empty_query_returns_nothing() {
         let dir = TempDir::new().unwrap();
-        let _ = rebuild_search_index(dir.path(), None);
-        let results = global_search("", SearchScope::All, 10, None);
+        let _ = rebuild_index(dir.path(), None);
+        let service = SearchIndexService::new();
+        let results = search_with_service(&service, "", SearchScope::All, 10, None);
         assert!(results.is_empty());
     }
 
     #[test]
     fn search_nonexistent_query_returns_nothing() {
         let dir = TempDir::new().unwrap();
-        let _ = rebuild_search_index(dir.path(), None);
-        let results = global_search("nonexistent", SearchScope::All, 10, None);
+        let _ = rebuild_index(dir.path(), None);
+        let service = SearchIndexService::new();
+        let results = search_with_service(&service, "nonexistent", SearchScope::All, 10, None);
         assert!(results.is_empty());
     }
 
     #[test]
     fn search_index_status_default() {
-        let dir = TempDir::new().unwrap();
-        let _ = rebuild_search_index(dir.path(), None);
-        let status = get_search_index_status();
+        let service = SearchIndexService::new();
+        let status = service.status();
         assert_eq!(status.total_entries, 0);
     }
 
     #[test]
     fn enqueue_and_search_update() {
-        let dir = TempDir::new().unwrap();
-        let _ = rebuild_search_index(dir.path(), None);
-
-        enqueue_search_index_update(SearchIndexUpdate {
+        let mut service = SearchIndexService::new();
+        service.enqueue_update(SearchIndexUpdate {
             action: SearchIndexAction::Upsert,
             object_id: "test:1".to_string(),
             scope: SearchScope::ChapterTitle,
@@ -97,9 +61,9 @@ mod tests {
                 setting_key: None,
             }),
         });
-        process_pending_updates();
+        service.process_updates();
 
-        let results = global_search("Test", SearchScope::ChapterTitle, 10, None);
+        let results = search_with_service(&service, "Test", SearchScope::ChapterTitle, 10, None);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "Test Chapter");
         assert_eq!(results[0].object_id, "test:1");
@@ -107,10 +71,8 @@ mod tests {
 
     #[test]
     fn search_delete_removes_entry() {
-        let dir = TempDir::new().unwrap();
-        let _ = rebuild_search_index(dir.path(), None);
-
-        enqueue_search_index_update(SearchIndexUpdate {
+        let mut service = SearchIndexService::new();
+        service.enqueue_update(SearchIndexUpdate {
             action: SearchIndexAction::Upsert,
             object_id: "del:1".to_string(),
             scope: SearchScope::ChapterTitle,
@@ -125,12 +87,12 @@ mod tests {
                 setting_key: None,
             }),
         });
-        process_pending_updates();
+        service.process_updates();
 
-        let results = global_search("Delete", SearchScope::ChapterTitle, 10, None);
+        let results = search_with_service(&service, "Delete", SearchScope::ChapterTitle, 10, None);
         assert_eq!(results.len(), 1);
 
-        enqueue_search_index_update(SearchIndexUpdate {
+        service.enqueue_update(SearchIndexUpdate {
             action: SearchIndexAction::Delete,
             object_id: "del:1".to_string(),
             scope: SearchScope::ChapterTitle,
@@ -138,18 +100,16 @@ mod tests {
             body: String::new(),
             target: None,
         });
-        process_pending_updates();
+        service.process_updates();
 
-        let results = global_search("Delete", SearchScope::ChapterTitle, 10, None);
+        let results = search_with_service(&service, "Delete", SearchScope::ChapterTitle, 10, None);
         assert!(results.is_empty());
     }
 
     #[test]
     fn search_chinese_text_no_panic() {
-        let dir = TempDir::new().unwrap();
-        let _ = rebuild_search_index(dir.path(), None);
-
-        enqueue_search_index_update(SearchIndexUpdate {
+        let mut service = SearchIndexService::new();
+        service.enqueue_update(SearchIndexUpdate {
             action: SearchIndexAction::Upsert,
             object_id: "zh:1".to_string(),
             scope: SearchScope::ChapterBody,
@@ -164,20 +124,18 @@ mod tests {
                 setting_key: None,
             }),
         });
-        process_pending_updates();
+        service.process_updates();
 
-        let results = global_search("中文", SearchScope::ChapterBody, 10, None);
+        let results = search_with_service(&service, "中文", SearchScope::ChapterBody, 10, None);
         assert!(!results.is_empty());
         assert!(results[0].summary.contains("中文"));
     }
 
     #[test]
     fn search_stable_pagination() {
-        let dir = TempDir::new().unwrap();
-        let _ = rebuild_search_index(dir.path(), None);
-
+        let mut service = SearchIndexService::new();
         for i in 0..5 {
-            enqueue_search_index_update(SearchIndexUpdate {
+            service.enqueue_update(SearchIndexUpdate {
                 action: SearchIndexAction::Upsert,
                 object_id: format!("page:{}", i),
                 scope: SearchScope::ChapterTitle,
@@ -193,13 +151,13 @@ mod tests {
                 }),
             });
         }
-        process_pending_updates();
+        service.process_updates();
 
-        let page1 = global_search("Alpha", SearchScope::ChapterTitle, 2, None);
+        let page1 = search_with_service(&service, "Alpha", SearchScope::ChapterTitle, 2, None);
         assert_eq!(page1.len(), 2);
 
         let cursor = page1.last().unwrap().object_id.clone();
-        let page2 = global_search("Alpha", SearchScope::ChapterTitle, 2, Some(&cursor));
+        let page2 = search_with_service(&service, "Alpha", SearchScope::ChapterTitle, 2, Some(&cursor));
         assert_eq!(page2.len(), 2);
 
         let all_ids: Vec<String> = page1.iter().chain(page2.iter()).map(|r| r.object_id.clone()).collect();
@@ -209,11 +167,9 @@ mod tests {
 
     #[test]
     fn search_reinsert_dedup_scope_index() {
-        let dir = TempDir::new().unwrap();
-        let _ = rebuild_search_index(dir.path(), None);
-
+        let mut service = SearchIndexService::new();
         for _ in 0..3 {
-            enqueue_search_index_update(SearchIndexUpdate {
+            service.enqueue_update(SearchIndexUpdate {
                 action: SearchIndexAction::Upsert,
                 object_id: "dup:1".to_string(),
                 scope: SearchScope::ChapterTitle,
@@ -228,10 +184,58 @@ mod tests {
                     setting_key: None,
                 }),
             });
-            process_pending_updates();
+            service.process_updates();
         }
 
-        let results = global_search("Duplicate", SearchScope::ChapterTitle, 10, None);
+        let results = search_with_service(&service, "Duplicate", SearchScope::ChapterTitle, 10, None);
         assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn search_scope_change_removes_old_scope_entry() {
+        let mut service = SearchIndexService::new();
+        service.enqueue_update(SearchIndexUpdate {
+            action: SearchIndexAction::Upsert,
+            object_id: "scope:1".to_string(),
+            scope: SearchScope::ChapterTitle,
+            title: "ScopeTest".to_string(),
+            body: "ScopeTest".to_string(),
+            target: Some(SearchTarget {
+                project_id: Some("p1".to_string()),
+                volume_id: None,
+                chapter_id: Some("c1".to_string()),
+                starmap_id: None,
+                node_id: None,
+                setting_key: None,
+            }),
+        });
+        service.process_updates();
+
+        let title_results = search_with_service(&service, "ScopeTest", SearchScope::ChapterTitle, 10, None);
+        assert_eq!(title_results.len(), 1);
+        let body_results = search_with_service(&service, "ScopeTest", SearchScope::ChapterBody, 10, None);
+        assert!(body_results.is_empty());
+
+        service.enqueue_update(SearchIndexUpdate {
+            action: SearchIndexAction::Upsert,
+            object_id: "scope:1".to_string(),
+            scope: SearchScope::ChapterBody,
+            title: "ScopeTest".to_string(),
+            body: "ScopeTest".to_string(),
+            target: Some(SearchTarget {
+                project_id: Some("p1".to_string()),
+                volume_id: None,
+                chapter_id: Some("c1".to_string()),
+                starmap_id: None,
+                node_id: None,
+                setting_key: None,
+            }),
+        });
+        service.process_updates();
+
+        let title_results_after = search_with_service(&service, "ScopeTest", SearchScope::ChapterTitle, 10, None);
+        assert!(title_results_after.is_empty());
+        let body_results_after = search_with_service(&service, "ScopeTest", SearchScope::ChapterBody, 10, None);
+        assert_eq!(body_results_after.len(), 1);
     }
 }

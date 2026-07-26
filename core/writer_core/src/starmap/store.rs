@@ -72,6 +72,7 @@ pub struct StarMapStoreResult {
     pub loaded_node_count: usize,
     pub loaded_edge_count: usize,
     pub loaded_embed_count: usize,
+    pub loaded_link_count: usize,
     pub loaded_hyperlink_count: usize,
 }
 
@@ -115,6 +116,17 @@ pub struct GraphMeta {
     pub hyperlink_ids: Vec<String>,
     pub package_revision: u64,
     pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacyGraphMeta {
+    schema_version: u32,
+    id: String,
+    starmap_id: String,
+    title: String,
+    created_at: u64,
+    updated_at: u64,
 }
 
 impl StarMapStore {
@@ -171,6 +183,10 @@ impl StarMapStore {
         self.hyperlinks.len()
     }
 
+    pub fn link_count(&self) -> usize {
+        self.links.len()
+    }
+
     pub fn get_node(&self, node_id: &str) -> Option<&StarMapNode> {
         self.nodes.get(node_id)
     }
@@ -185,6 +201,10 @@ impl StarMapStore {
 
     pub fn get_hyperlink(&self, hyperlink_id: &str) -> Option<&StarMapHyperlink> {
         self.hyperlinks.get(hyperlink_id)
+    }
+
+    pub fn get_link(&self, link_id: &str) -> Option<&StarMapLink> {
+        self.links.get(link_id)
     }
 
     pub fn get_layout(&self) -> Option<&StarMapLayout> {
@@ -209,6 +229,10 @@ impl StarMapStore {
 
     pub fn all_hyperlinks(&self) -> impl Iterator<Item = &StarMapHyperlink> {
         self.hyperlinks.values()
+    }
+
+    pub fn all_links(&self) -> impl Iterator<Item = &StarMapLink> {
+        self.links.values()
     }
 
     pub fn diagnostics(&self) -> &[LoadDiagnostic] {
@@ -393,6 +417,7 @@ impl StarMapStore {
             loaded_node_count: self.nodes.len(),
             loaded_edge_count: self.edges.len(),
             loaded_embed_count: self.embeds.len(),
+            loaded_link_count: self.links.len(),
             loaded_hyperlink_count: self.hyperlinks.len(),
         })
     }
@@ -443,6 +468,12 @@ impl StarMapStore {
         let link_id = link.link_id.clone();
         self.links.insert(link_id.clone(), link);
         self.dirty_links.insert(link_id);
+    }
+
+    pub fn remove_link(&mut self, link_id: &str) {
+        self.links.remove(link_id);
+        self.dirty_links.remove(link_id);
+        self.deleted_link_ids.insert(link_id.to_string());
     }
 
     pub fn remove_hyperlink(&mut self, hyperlink_id: &str) {
@@ -856,7 +887,7 @@ impl StarMapStore {
                             updated_at: graph.updated_at,
                         });
                     }
-                    let meta: package_storage::GraphMeta = serde_json::from_str(&content)?;
+                    let meta: LegacyGraphMeta = serde_json::from_str(&content)?;
                     return Ok(GraphMeta {
                         schema_version: "2".to_string(),
                         starmap_id: meta.starmap_id.clone(),
@@ -998,10 +1029,27 @@ impl StarMapStore {
         let dir = self.starmap_dir().join("links");
         let path = dir.join(format!("{}.json", link_id));
         if !path.exists() {
+            self.recovery_log.push(LoadDiagnostic {
+                kind: LoadDiagnosticKind::Missing,
+                object_type: "link".to_string(),
+                object_id: link_id.to_string(),
+                detail: format!("link file not found: {}", path.display()),
+            });
             return None;
         }
         let content = std::fs::read_to_string(&path).ok()?;
-        serde_json::from_str(&content).ok()
+        match serde_json::from_str::<StarMapLink>(&content) {
+            Ok(link) => Some(link),
+            Err(e) => {
+                self.recovery_log.push(LoadDiagnostic {
+                    kind: LoadDiagnosticKind::Corrupt,
+                    object_type: "link".to_string(),
+                    object_id: link_id.to_string(),
+                    detail: format!("parse error: {}", e),
+                });
+                None
+            }
+        }
     }
 
     fn try_load_viewport(&self) -> Option<StarMapViewport> {
@@ -1068,6 +1116,21 @@ impl StarMapStore {
                     if !id.is_empty() {
                         if let Some(hl) = self.try_load_hyperlink(&id) {
                             self.hyperlinks.insert(id, hl);
+                        }
+                    }
+                }
+            }
+        }
+
+        let links_dir = self.starmap_dir().join("links");
+        if let Ok(entries) = std::fs::read_dir(&links_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                    let id = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+                    if !id.is_empty() {
+                        if let Some(link) = self.try_load_link(&id) {
+                            self.links.insert(id, link);
                         }
                     }
                 }
@@ -1201,6 +1264,7 @@ mod tests {
         std::fs::create_dir_all(starmap_dir.join("edges")).unwrap();
         std::fs::create_dir_all(starmap_dir.join("child_starmaps")).unwrap();
         std::fs::create_dir_all(starmap_dir.join("hyperlinks")).unwrap();
+        std::fs::create_dir_all(starmap_dir.join("links")).unwrap();
 
         let meta = GraphMeta {
             schema_version: "2".to_string(),
@@ -1222,5 +1286,97 @@ mod tests {
         assert_eq!(result.loaded_node_count, 0);
         assert!(!result.diagnostics.is_empty());
         assert_eq!(result.diagnostics[0].kind, LoadDiagnosticKind::Missing);
+    }
+
+    fn make_test_link(link_id: &str, label: &str) -> StarMapLink {
+        use crate::starmap::semantic::{StarMapDeepTarget, StarMapTargetDetail};
+        StarMapLink {
+            link_id: link_id.to_string(),
+            source: StarMapEndpoint::Starmap,
+            target: StarMapDeepTarget {
+                starmap_id: "other".to_string(),
+                path: vec![],
+                target: StarMapTargetDetail::Starmap,
+            },
+            label: Some(label.to_string()),
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    #[test]
+    fn link_save_reload_update_delete_round_trip() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        let link = make_test_link("l1", "Test Link");
+        store.upsert_link(link.clone());
+        store.flush().unwrap();
+        assert_eq!(store.link_count(), 1);
+        assert!(store.get_link("l1").is_some());
+
+        let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        let result = store2.load_full().unwrap();
+        assert_eq!(result.loaded_link_count, 1);
+        assert!(store2.get_link("l1").is_some());
+        assert_eq!(store2.get_link("l1").unwrap().label.as_deref(), Some("Test Link"));
+
+        let patch = StarMapLinkPatch {
+            source: None,
+            target: None,
+            label: Some(Some("Updated Link".to_string())),
+        };
+        store2.update_link("l1", &patch).unwrap();
+        store2.flush().unwrap();
+
+        let mut store3 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store3.load_full().unwrap();
+        assert_eq!(store3.link_count(), 1);
+        assert_eq!(store3.get_link("l1").unwrap().label.as_deref(), Some("Updated Link"));
+
+        store3.delete_link("l1").unwrap();
+        store3.flush().unwrap();
+
+        let mut store4 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        let result4 = store4.load_full().unwrap();
+        assert_eq!(result4.loaded_link_count, 0);
+        assert!(store4.get_link("l1").is_none());
+    }
+
+    #[test]
+    fn load_full_returns_diagnostics_for_missing_link() {
+        let dir = TempDir::new().unwrap();
+        let starmap_dir = dir.path().join("app-meta").join("starmaps").join("test-id");
+        std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
+        std::fs::create_dir_all(starmap_dir.join("edges")).unwrap();
+        std::fs::create_dir_all(starmap_dir.join("child_starmaps")).unwrap();
+        std::fs::create_dir_all(starmap_dir.join("hyperlinks")).unwrap();
+        std::fs::create_dir_all(starmap_dir.join("links")).unwrap();
+
+        let meta = GraphMeta {
+            schema_version: "2".to_string(),
+            starmap_id: "test-id".to_string(),
+            title: "Test".to_string(),
+            node_ids: vec![],
+            edge_ids: vec![],
+            embed_instance_ids: vec![],
+            link_ids: vec!["missing-link".to_string()],
+            hyperlink_ids: vec![],
+            package_revision: 1,
+            updated_at: 0,
+        };
+        let json = serde_json::to_string_pretty(&meta).unwrap();
+        std::fs::write(starmap_dir.join("graph.json"), json).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), "test-id");
+        let result = store.load_full().unwrap();
+        assert_eq!(result.loaded_link_count, 0);
+        let link_diag: Vec<_> = result.diagnostics.iter()
+            .filter(|d| d.object_type == "link")
+            .collect();
+        assert!(!link_diag.is_empty());
+        assert_eq!(link_diag[0].kind, LoadDiagnosticKind::Missing);
     }
 }

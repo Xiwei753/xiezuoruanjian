@@ -21,4 +21,3 @@ pub mod api;
 
 pub use types::*;
 pub use service::SearchIndexService;
-pub use api::{global_search, rebuild_search_index, get_search_index_status, enqueue_search_index_update};

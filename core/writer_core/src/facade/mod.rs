@@ -41,6 +41,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::chapter::Chapter;
 use crate::writing_stats::api::StatsApi;
+use crate::search::service::SearchIndexService;
 
 /// Core 内部统一入口——薄 Facade，只做参数转发和类型转换。
 ///
@@ -55,6 +56,7 @@ pub struct WriterCore {
     pub(crate) sync_transport: Option<writer_platform_api::SyncTransportFactory>,
     pub(crate) secure_storage: Option<Arc<dyn writer_platform_api::SecureStorage>>,
     pub(crate) secrets_override: Option<crate::sync::SyncSecrets>,
+    pub(crate) search_service: std::sync::Mutex<SearchIndexService>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -71,6 +73,7 @@ impl WriterCore {
             sync_transport: None,
             secure_storage: None,
             secrets_override: None,
+            search_service: std::sync::Mutex::new(SearchIndexService::new()),
         }
     }
 

@@ -31,11 +31,11 @@ impl EditorKernel {
 
         let new_cursor_val = self.cursor;
         let new_revision = self.revision;
-        let new_selection = Utf8ByteRange::new(new_cursor_val.value(), new_cursor_val.value()).unwrap();
+        let new_selection = Utf8ByteRange::from_values(new_cursor_val.value(), new_cursor_val.value()).unwrap();
 
         let (replace_range, inserted_text) = Self::compute_single_patch(&old_text, &self.text);
 
-        let display_patches = if replace_range.start.value() < replace_range.end.value() || !inserted_text.is_empty() {
+        let display_patches = if replace_range.start().value() < replace_range.end().value() || !inserted_text.is_empty() {
             vec![DisplayPatch {
                 base_revision,
                 new_revision,
@@ -103,11 +103,11 @@ impl EditorKernel {
 
         let new_cursor_val = self.cursor;
         let new_revision = self.revision;
-        let new_selection = Utf8ByteRange::new(new_cursor_val.value(), new_cursor_val.value()).unwrap();
+        let new_selection = Utf8ByteRange::from_values(new_cursor_val.value(), new_cursor_val.value()).unwrap();
 
         let (replace_range, inserted_text) = Self::compute_single_patch(&old_text, &self.text);
 
-        let display_patches = if replace_range.start.value() < replace_range.end.value() || !inserted_text.is_empty() {
+        let display_patches = if replace_range.start().value() < replace_range.end().value() || !inserted_text.is_empty() {
             vec![DisplayPatch {
                 base_revision,
                 new_revision,

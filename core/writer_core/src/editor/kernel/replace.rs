@@ -40,7 +40,7 @@ impl EditorKernel {
         self.redo_stack.clear();
 
         let new_revision = self.revision;
-        let new_selection = Utf8ByteRange::new(new_cursor_val, new_cursor_val).unwrap();
+        let new_selection = Utf8ByteRange::from_values(new_cursor_val, new_cursor_val).unwrap();
 
         let (replace_range, inserted_text) = Self::compute_single_patch(&old_text, &self.text);
 

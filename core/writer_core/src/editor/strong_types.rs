@@ -3,7 +3,7 @@ use std::fmt;
 use std::ops::Range;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct Utf8ByteOffset(pub usize);
+pub struct Utf8ByteOffset(usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum InvalidUtf8OffsetError {
@@ -61,7 +61,7 @@ impl Utf8ByteOffset {
         Ok(Self(offset))
     }
 
-    pub fn new(text: &str, offset: usize) -> Self {
+    pub fn clamp(text: &str, offset: usize) -> Self {
         let clamped = if offset > text.len() {
             text.len()
         } else {
@@ -91,8 +91,8 @@ impl fmt::Display for Utf8ByteOffset {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Utf8ByteRange {
-    pub start: Utf8ByteOffset,
-    pub end: Utf8ByteOffset,
+    start: Utf8ByteOffset,
+    end: Utf8ByteOffset,
 }
 
 impl Utf8ByteRange {
@@ -107,7 +107,16 @@ impl Utf8ByteRange {
         Ok(Self { start: s, end: e })
     }
 
-    pub fn new(start: usize, end: usize) -> Option<Self> {
+    pub fn clamp(text: &str, start: usize, end: usize) -> Option<Self> {
+        if start > end {
+            return None;
+        }
+        let s = Utf8ByteOffset::clamp(text, start);
+        let e = Utf8ByteOffset::clamp(text, end);
+        Some(Self { start: s, end: e })
+    }
+
+    pub(crate) fn from_values(start: usize, end: usize) -> Option<Self> {
         if start > end {
             return None;
         }
@@ -117,13 +126,12 @@ impl Utf8ByteRange {
         })
     }
 
-    pub fn new_checked(text: &str, start: usize, end: usize) -> Option<Self> {
-        if start > end {
-            return None;
-        }
-        let s = Utf8ByteOffset::new(text, start);
-        let e = Utf8ByteOffset::new(text, end);
-        Some(Self { start: s, end: e })
+    pub fn start(self) -> Utf8ByteOffset {
+        self.start
+    }
+
+    pub fn end(self) -> Utf8ByteOffset {
+        self.end
     }
 
     pub fn is_empty(self) -> bool {
@@ -131,16 +139,16 @@ impl Utf8ByteRange {
     }
 
     pub fn len(self) -> usize {
-        self.end.0.saturating_sub(self.start.0)
+        self.end.value().saturating_sub(self.start.value())
     }
 
     pub fn to_std_range(self) -> Range<usize> {
-        self.start.0..self.end.0
+        self.start.value()..self.end.value()
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct EditorRevision(pub u64);
+pub struct EditorRevision(u64);
 
 impl EditorRevision {
     pub fn new(revision: u64) -> Self {
@@ -167,7 +175,7 @@ impl fmt::Display for EditorRevision {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct EditorSessionId(pub u64);
+pub struct EditorSessionId(u64);
 
 impl EditorSessionId {
     pub fn new(id: u64) -> Self {
@@ -186,7 +194,7 @@ impl fmt::Display for EditorSessionId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct EditorSessionGeneration(pub u64);
+pub struct EditorSessionGeneration(u64);
 
 impl EditorSessionGeneration {
     pub fn new(gen: u64) -> Self {
@@ -247,13 +255,13 @@ mod tests {
     }
 
     #[test]
-    fn utf8_byte_offset_new_clamps_to_char_boundary() {
+    fn utf8_byte_offset_clamp_to_char_boundary() {
         let text = "你好";
-        assert_eq!(Utf8ByteOffset::new(text, 0).value(), 0);
-        assert_eq!(Utf8ByteOffset::new(text, 1).value(), 0);
-        assert_eq!(Utf8ByteOffset::new(text, 3).value(), 3);
-        assert_eq!(Utf8ByteOffset::new(text, 6).value(), 6);
-        assert_eq!(Utf8ByteOffset::new(text, 100).value(), 6);
+        assert_eq!(Utf8ByteOffset::clamp(text, 0).value(), 0);
+        assert_eq!(Utf8ByteOffset::clamp(text, 1).value(), 0);
+        assert_eq!(Utf8ByteOffset::clamp(text, 3).value(), 3);
+        assert_eq!(Utf8ByteOffset::clamp(text, 6).value(), 6);
+        assert_eq!(Utf8ByteOffset::clamp(text, 100).value(), 6);
     }
 
     #[test]
@@ -277,10 +285,11 @@ mod tests {
     }
 
     #[test]
-    fn utf8_byte_range_validates_order() {
-        assert!(Utf8ByteRange::new(0, 3).is_some());
-        assert!(Utf8ByteRange::new(3, 0).is_none());
-        assert!(Utf8ByteRange::new(0, 0).is_some());
+    fn utf8_byte_range_clamp_validates_order() {
+        let text = "abc";
+        assert!(Utf8ByteRange::clamp(text, 0, 3).is_some());
+        assert!(Utf8ByteRange::clamp(text, 3, 0).is_none());
+        assert!(Utf8ByteRange::clamp(text, 0, 0).is_some());
     }
 
     #[test]
@@ -298,12 +307,12 @@ mod tests {
     }
 
     #[test]
-    fn utf8_byte_range_checked_clamps() {
+    fn utf8_byte_range_clamp_clamps() {
         let text = "abc";
-        let range = Utf8ByteRange::new_checked(text, 0, 5);
+        let range = Utf8ByteRange::clamp(text, 0, 5);
         assert!(range.is_some());
         let r = range.unwrap();
-        assert_eq!(r.start.value(), 0);
-        assert_eq!(r.end.value(), 3);
+        assert_eq!(r.start().value(), 0);
+        assert_eq!(r.end().value(), 3);
     }
 }

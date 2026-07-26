@@ -1,6 +1,7 @@
 use crate::error::Result;
 use crate::starmap::types::*;
 use crate::starmap::{load_starmap_meta, now_epoch, starmaps_dir, update_starmap_stats};
+use crate::starmap::store::StarMapStore;
 use crate::storage::atomic_write_string;
 use std::fs;
 use std::path::Path;
@@ -50,18 +51,69 @@ pub(crate) fn get_starmap_graph(workspace: &Path, starmap_id: &str) -> Result<St
     Ok(graph)
 }
 
-/// 保存星图数据到 `graph.json`（迁移兼容入口，新代码应使用 StarMapStore）。
+/// 保存星图数据（迁移兼容入口，新代码应使用 StarMapStore）。
 ///
 /// 保存前调用 `validate_graph` 校验引用完整性；校验失败阻止写入。
 /// 写入后同步更新 `starmap.json` 中的 `node_count`/`edge_count`/`linked_chapters`
-/// 统计字段——这些统计是 `list_starmaps` 列表视图的唯一数据来源，
-/// 必须与 `graph.json` 保持一致，否则列表显示的节点/边数会过时。
+/// 统计字段。
+///
+/// 先加载现有 Store 计算新旧 ID 差异，被新图省略的旧对象走明确删除事务，
+/// 不留孤儿文件。
 #[allow(clippy::cast_possible_truncation)]
 pub(crate) fn save_starmap_graph(workspace: &Path, starmap_id: &str, graph: &StarMapGraph) -> Result<()> {
     super::validation::validate_graph(workspace, graph)?;
 
     let starmap_dir = starmaps_dir(workspace).join(starmap_id);
     fs::create_dir_all(&starmap_dir)?;
+
+    let mut store = StarMapStore::new(workspace, starmap_id);
+    let _ = store.load_full();
+
+    let old_node_ids: std::collections::HashSet<String> = store.all_nodes().map(|n| n.id.clone()).collect();
+    let old_edge_ids: std::collections::HashSet<String> = store.all_edges().map(|e| e.id.clone()).collect();
+    let old_embed_ids: std::collections::HashSet<String> = store.all_embeds().map(|e| e.instance_id.clone()).collect();
+    let old_link_ids: std::collections::HashSet<String> = store.all_links().map(|l| l.link_id.clone()).collect();
+
+    let new_node_ids: std::collections::HashSet<String> = graph.nodes.iter().map(|n| n.id.clone()).collect();
+    let new_edge_ids: std::collections::HashSet<String> = graph.edges.iter().map(|e| e.id.clone()).collect();
+    let new_embed_ids: std::collections::HashSet<String> = graph.embeds.iter().map(|e| e.instance_id.clone()).collect();
+    let new_link_ids: std::collections::HashSet<String> = graph.links.iter().map(|l| l.link_id.clone()).collect();
+
+    for node in &graph.nodes {
+        store.upsert_node(node.clone());
+    }
+    for edge in &graph.edges {
+        store.upsert_edge(edge.clone());
+    }
+    for embed in &graph.embeds {
+        store.upsert_embed(embed.clone());
+    }
+    for link in &graph.links {
+        store.upsert_link(link.clone());
+    }
+
+    for old_id in &old_node_ids {
+        if !new_node_ids.contains(old_id) {
+            store.remove_node(old_id);
+        }
+    }
+    for old_id in &old_edge_ids {
+        if !new_edge_ids.contains(old_id) {
+            store.remove_edge(old_id);
+        }
+    }
+    for old_id in &old_embed_ids {
+        if !new_embed_ids.contains(old_id) {
+            store.remove_embed(old_id);
+        }
+    }
+    for old_id in &old_link_ids {
+        if !new_link_ids.contains(old_id) {
+            store.remove_link(old_id);
+        }
+    }
+
+    store.flush()?;
 
     let json_str = serde_json::to_string_pretty(graph)?;
     atomic_write_string(&graph_path(workspace, starmap_id), &json_str)?;

@@ -137,8 +137,8 @@ pub fn extract_starmap_entries(workspace: &Path, project_id: Option<&str>) -> Re
 
     let starmap_dirs = scan_dirs(&starmaps_dir)?;
     for (sid, starmap_path) in starmap_dirs {
-        let graph_path = starmap_path.join("graph.json");
-        let bound_project = load_json_string_field(&graph_path, "project_id");
+        let meta_path = starmap_path.join(format!("{}.meta.json", sid));
+        let bound_project = load_json_string_field(&meta_path, "project_id");
 
         if let Some(filter_id) = project_id {
             if bound_project != filter_id {
@@ -146,6 +146,7 @@ pub fn extract_starmap_entries(workspace: &Path, project_id: Option<&str>) -> Re
             }
         }
 
+        let graph_path = starmap_path.join("graph.json");
         let title = load_json_string_field(&graph_path, "title");
         entries.push(IndexEntry {
             object_id: format!("starmap:{}", sid),
@@ -164,29 +165,25 @@ pub fn extract_starmap_entries(workspace: &Path, project_id: Option<&str>) -> Re
 
         let nodes_dir = starmap_path.join("nodes");
         if nodes_dir.exists() {
-            if let Ok(node_buckets) = scan_dirs(&nodes_dir) {
-                for (_, bucket_path) in node_buckets {
-                    if let Ok(node_files) = scan_json_files(&bucket_path) {
-                        for (nid, node_file) in node_files {
-                            let node_title = load_json_string_field(&node_file, "title");
-                            let node_body = load_json_string_field(&node_file, "content");
-                            if !node_title.is_empty() || !node_body.is_empty() {
-                                entries.push(IndexEntry {
-                                    object_id: format!("starmap_node:{}:{}", sid, nid),
-                                    scope: SearchScope::StarmapNode,
-                                    title: node_title.clone(),
-                                    body: if node_body.is_empty() { node_title } else { node_body },
-                                    target: SearchTarget {
-                                        project_id: if bound_project.is_empty() { None } else { Some(bound_project.clone()) },
-                                        volume_id: None,
-                                        chapter_id: None,
-                                        starmap_id: Some(sid.clone()),
-                                        node_id: Some(nid),
-                                        setting_key: None,
-                                    },
-                                });
-                            }
-                        }
+            if let Ok(node_files) = scan_json_files(&nodes_dir) {
+                for (nid, node_file) in node_files {
+                    let node_title = load_json_string_field(&node_file, "title");
+                    let node_body = load_json_string_field(&node_file, "content");
+                    if !node_title.is_empty() || !node_body.is_empty() {
+                        entries.push(IndexEntry {
+                            object_id: format!("starmap_node:{}:{}", sid, nid),
+                            scope: SearchScope::StarmapNode,
+                            title: node_title.clone(),
+                            body: if node_body.is_empty() { node_title } else { node_body },
+                            target: SearchTarget {
+                                project_id: if bound_project.is_empty() { None } else { Some(bound_project.clone()) },
+                                volume_id: None,
+                                chapter_id: None,
+                                starmap_id: Some(sid.clone()),
+                                node_id: Some(nid),
+                                setting_key: None,
+                            },
+                        });
                     }
                 }
             }
@@ -194,28 +191,24 @@ pub fn extract_starmap_entries(workspace: &Path, project_id: Option<&str>) -> Re
 
         let edges_dir = starmap_path.join("edges");
         if edges_dir.exists() {
-            if let Ok(edge_buckets) = scan_dirs(&edges_dir) {
-                for (_, bucket_path) in edge_buckets {
-                    if let Ok(edge_files) = scan_json_files(&bucket_path) {
-                        for (eid, edge_file) in edge_files {
-                            let label = load_json_string_field(&edge_file, "label");
-                            if !label.is_empty() {
-                                entries.push(IndexEntry {
-                                    object_id: format!("starmap_edge:{}:{}", sid, eid),
-                                    scope: SearchScope::StarmapEdgeLabel,
-                                    title: label.clone(),
-                                    body: label,
-                                    target: SearchTarget {
-                                        project_id: if bound_project.is_empty() { None } else { Some(bound_project.clone()) },
-                                        volume_id: None,
-                                        chapter_id: None,
-                                        starmap_id: Some(sid.clone()),
-                                        node_id: None,
-                                        setting_key: None,
-                                    },
-                                });
-                            }
-                        }
+            if let Ok(edge_files) = scan_json_files(&edges_dir) {
+                for (eid, edge_file) in edge_files {
+                    let label = load_json_string_field(&edge_file, "label");
+                    if !label.is_empty() {
+                        entries.push(IndexEntry {
+                            object_id: format!("starmap_edge:{}:{}", sid, eid),
+                            scope: SearchScope::StarmapEdgeLabel,
+                            title: label.clone(),
+                            body: label,
+                            target: SearchTarget {
+                                project_id: if bound_project.is_empty() { None } else { Some(bound_project.clone()) },
+                                volume_id: None,
+                                chapter_id: None,
+                                starmap_id: Some(sid.clone()),
+                                node_id: None,
+                                setting_key: None,
+                            },
+                        });
                     }
                 }
             }
@@ -223,29 +216,25 @@ pub fn extract_starmap_entries(workspace: &Path, project_id: Option<&str>) -> Re
 
         let hyperlinks_dir = starmap_path.join("hyperlinks");
         if hyperlinks_dir.exists() {
-            if let Ok(hl_buckets) = scan_dirs(&hyperlinks_dir) {
-                for (_, bucket_path) in hl_buckets {
-                    if let Ok(hl_files) = scan_json_files(&bucket_path) {
-                        for (hid, hl_file) in hl_files {
-                            let hl_title = load_json_string_field(&hl_file, "title");
-                            let hl_url = load_json_string_field(&hl_file, "url");
-                            if !hl_title.is_empty() || !hl_url.is_empty() {
-                                entries.push(IndexEntry {
-                                    object_id: format!("starmap_hyperlink:{}:{}", sid, hid),
-                                    scope: SearchScope::StarmapHyperlink,
-                                    title: hl_title.clone(),
-                                    body: if hl_url.is_empty() { hl_title } else { format!("{} {}", hl_title, hl_url) },
-                                    target: SearchTarget {
-                                        project_id: if bound_project.is_empty() { None } else { Some(bound_project.clone()) },
-                                        volume_id: None,
-                                        chapter_id: None,
-                                        starmap_id: Some(sid.clone()),
-                                        node_id: None,
-                                        setting_key: None,
-                                    },
-                                });
-                            }
-                        }
+            if let Ok(hl_files) = scan_json_files(&hyperlinks_dir) {
+                for (hid, hl_file) in hl_files {
+                    let hl_title = load_json_string_field(&hl_file, "title");
+                    let hl_url = load_json_string_field(&hl_file, "url");
+                    if !hl_title.is_empty() || !hl_url.is_empty() {
+                        entries.push(IndexEntry {
+                            object_id: format!("starmap_hyperlink:{}:{}", sid, hid),
+                            scope: SearchScope::StarmapHyperlink,
+                            title: hl_title.clone(),
+                            body: if hl_url.is_empty() { hl_title } else { format!("{} {}", hl_title, hl_url) },
+                            target: SearchTarget {
+                                project_id: if bound_project.is_empty() { None } else { Some(bound_project.clone()) },
+                                volume_id: None,
+                                chapter_id: None,
+                                starmap_id: Some(sid.clone()),
+                                node_id: None,
+                                setting_key: None,
+                            },
+                        });
                     }
                 }
             }
@@ -257,7 +246,7 @@ pub fn extract_starmap_entries(workspace: &Path, project_id: Option<&str>) -> Re
 
 pub fn extract_setting_entries(workspace: &Path) -> Result<Vec<IndexEntry>> {
     let mut entries = Vec::new();
-    let settings_dir = workspace.join("settings");
+    let settings_dir = workspace.join("app-meta").join("settings");
 
     if !settings_dir.exists() {
         return Ok(entries);
