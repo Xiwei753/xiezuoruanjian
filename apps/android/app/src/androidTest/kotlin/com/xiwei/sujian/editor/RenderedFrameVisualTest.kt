@@ -10,6 +10,7 @@ import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import com.xiwei.sujian.editor.v2.visual.CaptureMethod
+import com.xiwei.sujian.editor.v2.visual.ColorDistance
 import com.xiwei.sujian.editor.v2.visual.ManualAnimationTimeSource
 import com.xiwei.sujian.editor.v2.visual.TransactionIdSource
 import com.xiwei.sujian.editor.v2.visual.VisualFrameSnapshot
@@ -515,8 +516,16 @@ class RenderedFrameVisualTest {
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("B"))
 
-        val durationMs = getActiveAnimationDurationMs().let { if (it > 0) it else 200L }
+        val durationMs = getActiveAnimationDurationMs()
         val startTimeMs = getActiveAnimationStartTimeMs()
+        assertTrue(
+            "Rapid input must produce an active animation: durationMs=$durationMs must be > 0",
+            durationMs > 0
+        )
+        assertTrue(
+            "Rapid input animation startTimeMs=$startTimeMs must be >= 0",
+            startTimeMs >= 0
+        )
 
         manualTimeSource.advanceToProgress(0f, durationMs, startTimeMs)
         dispatchManualFrame()
@@ -760,10 +769,24 @@ class RenderedFrameVisualTest {
                 "Content center at $label ($centerX, $centerY) must be non-background (background not covering text)",
                 frame.isPixelNonBackground(centerX, centerY)
             )
-            val alpha = frame.alpha(centerX, centerY)
+            val pixel = frame.bitmap.getPixel(centerX, centerY)
+            val bg = frame.backgroundColor
+            val dr = ColorDistance.red(pixel) - ColorDistance.red(bg)
+            val dg = ColorDistance.green(pixel) - ColorDistance.green(bg)
+            val db = ColorDistance.blue(pixel) - ColorDistance.blue(bg)
+            val rgbDistSq = dr * dr + dg * dg + db * db
             assertTrue(
-                "Content center alpha at $label must be opaque (>200), got $alpha (background not covering text)",
-                alpha > 200
+                "Content center at $label must be visually distinct from background: RGB distance²=$rgbDistSq must be > ${ColorDistance.BACKGROUND_TOLERANCE * ColorDistance.BACKGROUND_TOLERANCE} (background not covering text)",
+                rgbDistSq > ColorDistance.BACKGROUND_TOLERANCE * ColorDistance.BACKGROUND_TOLERANCE
+            )
+        }
+
+        val snapshot = captureVisualFrameSnapshot()
+        assertNotNull("Visual frame snapshot must exist for logical alpha check", snapshot)
+        for (slice in snapshot!!.sliceVisualStates) {
+            assertTrue(
+                "Slice logical alpha ${slice.currentAlpha} must be in [0,1] for role ${slice.role}",
+                slice.currentAlpha >= 0f && slice.currentAlpha <= 1f
             )
         }
 
@@ -872,8 +895,16 @@ class RenderedFrameVisualTest {
         manualTimeSource.advanceByMs(1)
         dispatchManualFrame()
 
-        val durationMs = getActiveAnimationDurationMs().let { if (it > 0) it else 200L }
+        val durationMs = getActiveAnimationDurationMs()
         val startTimeMs = getActiveAnimationStartTimeMs()
+        assertTrue(
+            "captureFiveProgressPoints requires an active animation: durationMs=$durationMs must be > 0",
+            durationMs > 0
+        )
+        assertTrue(
+            "captureFiveProgressPoints requires an active animation: startTimeMs=$startTimeMs must be >= 0",
+            startTimeMs >= 0
+        )
 
         manualTimeSource.advanceToProgress(0f, durationMs, startTimeMs)
         dispatchManualFrame()
@@ -977,10 +1008,15 @@ class RenderedFrameVisualTest {
         for (frame in frames) {
             val first = frame.findFirstNonBackgroundPixel()
             assertNotNull("Frame must have content pixel for alpha check", first)
-            val alpha = frame.alpha(first!!.first, first.second)
+            val pixel = frame.bitmap.getPixel(first!!.first, first.second)
+            val bg = frame.backgroundColor
+            val dr = ColorDistance.red(pixel) - ColorDistance.red(bg)
+            val dg = ColorDistance.green(pixel) - ColorDistance.green(bg)
+            val db = ColorDistance.blue(pixel) - ColorDistance.blue(bg)
+            val rgbDistSq = dr * dr + dg * dg + db * db
             assertTrue(
-                "Content pixel alpha should be opaque (>200), got $alpha at (${first.first},${first.second})",
-                alpha > 200
+                "Content pixel must be visually distinct from background: RGB distance²=$rgbDistSq must be > ${ColorDistance.BACKGROUND_TOLERANCE * ColorDistance.BACKGROUND_TOLERANCE} at (${first.first},${first.second})",
+                rgbDistSq > ColorDistance.BACKGROUND_TOLERANCE * ColorDistance.BACKGROUND_TOLERANCE
             )
         }
     }

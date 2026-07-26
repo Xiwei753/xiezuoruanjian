@@ -11,6 +11,7 @@ import android.view.PixelCopy
 import android.view.View
 import androidx.test.espresso.Espresso
 import androidx.test.espresso.matcher.ViewMatchers
+import androidx.test.platform.app.InstrumentationRegistry
 import com.xiwei.sujian.R
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import com.xiwei.sujian.editor.v2.visual.CaptureMethod
@@ -109,7 +110,7 @@ object EditorBitmapCapture {
                     }
                 }
             }
-            return Rect(minX, minY, maxX, maxY)
+            return Rect(minX, minY, maxX + 1, maxY + 1)
         }
     }
 
@@ -253,7 +254,16 @@ object EditorBitmapCapture {
 
     private fun drawViewToBitmap(view: View, bitmap: Bitmap) {
         val canvas = Canvas(bitmap)
-        view.draw(canvas)
+        val latch = CountDownLatch(1)
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.runOnMainSync {
+            try {
+                view.draw(canvas)
+            } finally {
+                latch.countDown()
+            }
+        }
+        latch.await(5, TimeUnit.SECONDS)
     }
 
     fun assertBitmapHasContent(
