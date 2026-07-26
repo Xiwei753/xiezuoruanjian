@@ -1234,6 +1234,23 @@ interface WriterAppService {
     EditorSessionSnapshotDto text_edit_session_snapshot(u64 session_id);
     EditorEditResultDto text_edit_session_replace_all(u64 session_id, string search, string replacement, u64 expected_revision);
     EditorEditResultDto text_edit_session_insert_line_break(u64 session_id, u32 byte_offset, string auto_indent_prefix, EditorTransactionCauseDto cause, u64 expected_revision);
+
+    // ── Search Index ──
+
+    [Throws=WriterError]
+    string global_search(string query, string scope, u32 limit, string? cursor);
+
+    [Throws=WriterError]
+    string rebuild_search_index(string? project_id);
+
+    [Throws=WriterError]
+    string get_search_index_status();
+
+    [Throws=WriterError]
+    boolean enqueue_search_update(string action, string object_id, string scope, string title, string body);
+
+    [Throws=WriterError]
+    boolean process_pending_search_updates();
 };
 
 // ── Layout Policy DTOs ──

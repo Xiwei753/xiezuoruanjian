@@ -11,9 +11,23 @@ impl WriterCoreApi {
 
     pub fn save_local_settings(&self, settings: LocalSettingsDto) -> ApiResult<bool> {
         self.core()
-            .save_local_settings(&settings.into())
-            .map(|_| true)
-            .map_err(Into::into)
+            .save_local_settings(&settings.clone().into())?;
+        self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
+            action: crate::search::SearchIndexAction::Upsert,
+            object_id: "settings:local".to_string(),
+            scope: crate::search::SearchScope::Setting,
+            title: "local_settings".to_string(),
+            body: serde_json::to_string(&settings).unwrap_or_default(),
+            target: Some(crate::search::SearchTarget {
+                project_id: None,
+                volume_id: None,
+                chapter_id: None,
+                starmap_id: None,
+                node_id: None,
+                setting_key: Some("local".to_string()),
+            }),
+        });
+        Ok(true)
     }
 
     pub fn load_syncable_settings(&self) -> ApiResult<SyncableSettingsDto> {
@@ -25,9 +39,23 @@ impl WriterCoreApi {
 
     pub fn save_syncable_settings(&self, settings: SyncableSettingsDto) -> ApiResult<bool> {
         self.core()
-            .save_syncable_settings(&settings.into())
-            .map(|_| true)
-            .map_err(Into::into)
+            .save_syncable_settings(&settings.clone().into())?;
+        self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
+            action: crate::search::SearchIndexAction::Upsert,
+            object_id: "settings:syncable".to_string(),
+            scope: crate::search::SearchScope::Setting,
+            title: "syncable_settings".to_string(),
+            body: serde_json::to_string(&settings).unwrap_or_default(),
+            target: Some(crate::search::SearchTarget {
+                project_id: None,
+                volume_id: None,
+                chapter_id: None,
+                starmap_id: None,
+                node_id: None,
+                setting_key: Some("syncable".to_string()),
+            }),
+        });
+        Ok(true)
     }
 
     pub fn ensure_device_info(&self, platform: &str, device_class: &str) -> ApiResult<bool> {

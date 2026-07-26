@@ -92,6 +92,18 @@ impl super::WriterCore {
         validation::validate_graph(&self.workspace_path, graph)?;
 
         let mut store = StarMapStore::new(&self.workspace_path, starmap_id);
+        let _ = store.load_full();
+
+        let old_node_ids: std::collections::HashSet<String> = store.all_nodes().map(|n| n.id.clone()).collect();
+        let old_edge_ids: std::collections::HashSet<String> = store.all_edges().map(|e| e.id.clone()).collect();
+        let old_embed_ids: std::collections::HashSet<String> = store.all_embeds().map(|e| e.instance_id.clone()).collect();
+        let old_link_ids: std::collections::HashSet<String> = store.all_links().map(|l| l.link_id.clone()).collect();
+
+        let new_node_ids: std::collections::HashSet<String> = graph.nodes.iter().map(|n| n.id.clone()).collect();
+        let new_edge_ids: std::collections::HashSet<String> = graph.edges.iter().map(|e| e.id.clone()).collect();
+        let new_embed_ids: std::collections::HashSet<String> = graph.embeds.iter().map(|e| e.instance_id.clone()).collect();
+        let new_link_ids: std::collections::HashSet<String> = graph.links.iter().map(|l| l.link_id.clone()).collect();
+
         for node in &graph.nodes {
             store.upsert_node(node.clone());
         }
@@ -104,6 +116,28 @@ impl super::WriterCore {
         for link in &graph.links {
             store.upsert_link(link.clone());
         }
+
+        for old_id in &old_node_ids {
+            if !new_node_ids.contains(old_id) {
+                store.remove_node(old_id);
+            }
+        }
+        for old_id in &old_edge_ids {
+            if !new_edge_ids.contains(old_id) {
+                store.remove_edge(old_id);
+            }
+        }
+        for old_id in &old_embed_ids {
+            if !new_embed_ids.contains(old_id) {
+                store.remove_embed(old_id);
+            }
+        }
+        for old_id in &old_link_ids {
+            if !new_link_ids.contains(old_id) {
+                store.remove_link(old_id);
+            }
+        }
+
         store.flush()?;
         Ok(())
     }
