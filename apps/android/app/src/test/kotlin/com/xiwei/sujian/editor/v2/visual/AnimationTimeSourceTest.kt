@@ -173,6 +173,37 @@ class AnimationTimeSourceTest {
     }
 
     @Test
+    fun manualTimeSourceAdvanceToProgressWithStartTime() {
+        val source = ManualAnimationTimeSource()
+        source.advanceToProgress(0.25f, 200L, startTimeMs = 16L)
+        assertEquals(66_000_000L, source.nowNanos())
+    }
+
+    @Test
+    fun manualTimeSourceAdvanceToProgressWithStartTimeSequence() {
+        val source = ManualAnimationTimeSource()
+        val durationMs = 200L
+        val startTimeMs = 16L
+        source.advanceToProgress(0f, durationMs, startTimeMs)
+        assertEquals(16_000_000L, source.nowNanos())
+        source.advanceToProgress(0.25f, durationMs, startTimeMs)
+        assertEquals(66_000_000L, source.nowNanos())
+        source.advanceToProgress(0.5f, durationMs, startTimeMs)
+        assertEquals(116_000_000L, source.nowNanos())
+        source.advanceToProgress(0.75f, durationMs, startTimeMs)
+        assertEquals(166_000_000L, source.nowNanos())
+        source.advanceToProgress(1f, durationMs, startTimeMs)
+        assertEquals(216_000_000L, source.nowNanos())
+    }
+
+    @Test
+    fun manualTimeSourceAdvanceToEndWithStartTime() {
+        val source = ManualAnimationTimeSource()
+        source.advanceToEnd(200L, startTimeMs = 16L)
+        assertEquals(216_000_000L, source.nowNanos())
+    }
+
+    @Test
     fun manualTimeSourceAdvanceToProgressSequence() {
         val source = ManualAnimationTimeSource()
         val durationMs = 200L
@@ -224,6 +255,19 @@ class TransactionIdSourceTest {
 }
 
 class AnimationTimelineControlledFrameTest {
+
+    @Test
+    fun timelineFirstVisibleFrameTimeIsNullBeforeMark() {
+        val timeline = AnimationTimeline(200L)
+        assertNull(timeline.getFirstVisibleFrameTimeMs())
+    }
+
+    @Test
+    fun timelineFirstVisibleFrameTimeAfterMark() {
+        val timeline = AnimationTimeline(200L)
+        timeline.markFirstVisibleFrame(16)
+        assertEquals(16L, timeline.getFirstVisibleFrameTimeMs())
+    }
 
     @Test
     fun timelineProgressAtStartFrame() {

@@ -134,4 +134,22 @@ class AnimationTimeSourceInjectionTest {
         assertNull(stateSnapshot)
         assertNull(visualSnapshot)
     }
+
+    @Test
+    fun visualRuntime_getActiveAnimationStartTimeMsIsNullWithoutActiveTransaction() {
+        val manualTimeSource = ManualAnimationTimeSource()
+        val transactionIdSource = TransactionIdSource()
+        val runtime = AndroidVisualRuntime(manualTimeSource, transactionIdSource)
+
+        assertNull(runtime.getActiveAnimationStartTimeMs())
+    }
+
+    @Test
+    fun visualRuntime_getActiveAnimationDurationMsIsZeroWithoutActiveTransaction() {
+        val manualTimeSource = ManualAnimationTimeSource()
+        val transactionIdSource = TransactionIdSource()
+        val runtime = AndroidVisualRuntime(manualTimeSource, transactionIdSource)
+
+        assertEquals(0L, runtime.getActiveAnimationDurationMs())
+    }
 }

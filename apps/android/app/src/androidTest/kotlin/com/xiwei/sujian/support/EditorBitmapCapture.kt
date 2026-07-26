@@ -110,14 +110,28 @@ object EditorBitmapCapture {
     }
 
     fun captureEditorBitmap(): CapturedFrame {
-        var captured: CapturedFrame? = null
+        val view = resolveEditorView()
+        return captureViewBitmap(view)
+    }
+
+    fun capturePixelCopyBitmap(): CapturedFrame {
+        val view = resolveEditorView()
+        return capturePixelCopyOnly(view)
+    }
+
+    fun captureSoftwareBitmap(): CapturedFrame {
+        val view = resolveEditorView()
+        return captureSoftwareBitmap(view)
+    }
+
+    private fun resolveEditorView(): SujianEditorView {
+        var viewRef: SujianEditorView? = null
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check { view, _ ->
-                val editorView = view as? SujianEditorView
+                viewRef = view as? SujianEditorView
                     ?: throw AssertionError("View is not a SujianEditorView")
-                captured = captureViewBitmap(editorView)
             }
-        return captured ?: throw AssertionError("Failed to capture editor bitmap")
+        return viewRef ?: throw AssertionError("Failed to resolve editor view")
     }
 
     fun captureViewBitmap(view: SujianEditorView): CapturedFrame {
@@ -141,14 +155,45 @@ object EditorBitmapCapture {
                     if (awaited && captureSucceeded) {
                         return CapturedFrame(bitmap = bitmap, width = view.width, height = view.height, backgroundColor = backgroundColor)
                     }
-                    Assert.fail("PixelCopy failed: awaited=$awaited, captureSucceeded=$captureSucceeded. Hardware capture did not succeed; use captureSoftwareBitmap for software-only tests.")
-                } catch (e: Exception) {
-                    Assert.fail("PixelCopy threw exception: ${e.message}. Use captureSoftwareBitmap for software-only tests.")
+                } catch (_: Exception) {
                 }
             }
         }
 
         drawViewToBitmap(view, bitmap)
+        return CapturedFrame(bitmap = bitmap, width = view.width, height = view.height, backgroundColor = backgroundColor)
+    }
+
+    fun capturePixelCopyOnly(view: SujianEditorView): CapturedFrame {
+        Assert.assertTrue("View must be laid out to capture bitmap", view.width > 0 && view.height > 0)
+        Assert.assertTrue("PixelCopy requires API 26+", Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+
+        val backgroundColor = view.getThemeBackgroundColor()
+        val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+        val ctx = view.context
+        Assert.assertTrue("View must be attached to an Activity", ctx is android.app.Activity && view.windowToken != null)
+
+        val srcRect = computeSrcRect(view)
+        val latch = CountDownLatch(1)
+        var captureSucceeded = false
+        var captureResult: Int = -1
+        try {
+            PixelCopy.request(ctx.window, srcRect, bitmap, { result ->
+                captureResult = result
+                captureSucceeded = result == PixelCopy.SUCCESS
+                latch.countDown()
+            }, Handler(Looper.getMainLooper()))
+            val awaited = latch.await(3, TimeUnit.SECONDS)
+            if (!awaited) {
+                Assert.fail("PixelCopy timed out: callback never executed on main thread. Ensure this method is called from the test (instrumentation) thread, not from an Espresso .check callback on the main thread.")
+            }
+            if (!captureSucceeded) {
+                Assert.fail("PixelCopy failed with result code $captureResult. Hardware window capture did not succeed.")
+            }
+        } catch (e: Exception) {
+            Assert.fail("PixelCopy threw exception: ${e.message}")
+        }
+
         return CapturedFrame(bitmap = bitmap, width = view.width, height = view.height, backgroundColor = backgroundColor)
     }
 

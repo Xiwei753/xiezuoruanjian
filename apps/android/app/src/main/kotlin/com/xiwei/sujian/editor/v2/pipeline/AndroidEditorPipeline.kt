@@ -525,6 +525,8 @@ class AndroidEditorPipeline private constructor(
 
     fun getActiveAnimationDurationMs(): Long = visualRuntime.getActiveAnimationDurationMs()
 
+    fun getActiveAnimationStartTimeMs(): Long? = visualRuntime.getActiveAnimationStartTimeMs()
+
     fun updateLayout(width: Float) {
         layoutRuntime.setWidth(width)
         layoutRuntime.requestLayout()

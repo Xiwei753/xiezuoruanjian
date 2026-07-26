@@ -83,6 +83,8 @@ class AnimationTimeline(
 
     fun getState(): TransactionState = state
 
+    fun getFirstVisibleFrameTimeMs(): Long? = firstVisibleFrameTimeMs
+
     /**
      * Minimal frame snapshot containing only progress and state — no slice/cursor/block data.
      *

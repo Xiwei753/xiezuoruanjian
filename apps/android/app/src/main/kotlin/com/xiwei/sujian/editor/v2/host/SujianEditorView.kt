@@ -288,6 +288,8 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun getActiveAnimationDurationMs(): Long = pipeline.getActiveAnimationDurationMs()
 
+    fun getActiveAnimationStartTimeMs(): Long? = pipeline.getActiveAnimationStartTimeMs()
+
     override fun onFrame(frameTimeNanos: Long) {
         invalidate()
     }

@@ -323,6 +323,8 @@ class AndroidTextAnimationEngine(
 
     fun getActiveTransaction(): PreparedVisualTransaction? = activeTransaction
 
+    fun getActiveAnimationStartTimeMs(): Long? = timeline?.getFirstVisibleFrameTimeMs()
+
     fun captureStateSnapshot(frameTimeMs: Long): AnimationStateSnapshot? {
         val transaction = activeTransaction ?: return null
         val tl = timeline ?: return null
