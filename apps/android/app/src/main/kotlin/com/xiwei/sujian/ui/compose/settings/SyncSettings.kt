@@ -177,7 +177,8 @@ fun SyncSettings(
                     enabled = syncCapability.canRun && !anySyncRunning,
                 )
 
-                if (state.syncCommandResult != null) {
+                val structured = state.structuredSyncResult
+                if (structured != null) {
                     Spacer(modifier = Modifier.height(dims.space8))
                     val isSuccess = when (state.lastCommandType) {
                         SyncCommandType.DRY_RUN -> state.dryRunState == SyncCommandState.SUCCESS
@@ -185,7 +186,7 @@ fun SyncSettings(
                         SyncCommandType.PERFORM_SYNC -> state.performSyncState == SyncCommandState.SUCCESS
                         null -> false
                     }
-                    val displayResult = resolveCommandResult(state.syncCommandResult)
+                    val displayResult = resolveStructuredResult(structured)
                     Text(
                         text = displayResult,
                         color = if (isSuccess) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
@@ -210,11 +211,45 @@ private fun resolveBlockMessage(blockReasonCode: String, blockMessageKey: String
 }
 
 @Composable
-private fun resolveCommandResult(raw: String): String {
-    return when (raw) {
+private fun resolveStructuredResult(result: StructuredSyncResult): String {
+    return when (result.messageKey) {
+        "sync_dry_run_result" -> stringResource(
+            id = R.string.sync_dry_run_result,
+            result.counts.uploaded,
+            result.counts.downloaded,
+            result.counts.deletedRemote,
+            result.counts.deletedLocal,
+            result.counts.conflicts
+        )
+        "sync_test_connection_result" -> {
+            val net = result.messageArgs["network"] ?: ""
+            val auth = result.messageArgs["auth"] ?: ""
+            val repo = result.messageArgs["repo"] ?: ""
+            val branch = result.messageArgs["branch"] ?: ""
+            stringResource(
+                id = R.string.sync_test_connection_result,
+                translateStatusComponent(net),
+                translateStatusComponent(auth),
+                translateStatusComponent(repo),
+                translateStatusComponent(branch)
+            )
+        }
+        "sync_perform_result" -> stringResource(id = R.string.sync_perform_result, result.counts.uploaded, result.counts.downloaded)
+        "dry_run_error" -> stringResource(id = R.string.dry_run_error)
+        "diagnostics_error" -> stringResource(id = R.string.diagnostics_error)
+        "sync_error" -> stringResource(id = R.string.sync_error)
+        "core_not_loaded" -> stringResource(id = R.string.core_not_loaded)
+        "unexpected_error" -> stringResource(id = R.string.unexpected_error)
         "sync_already_running" -> stringResource(id = R.string.sync_already_running)
-        "save_config_failed" -> stringResource(id = R.string.save_sync_config_failed)
-        "save_secrets_failed" -> stringResource(id = R.string.save_sync_secrets_failed)
-        else -> raw
+        else -> result.statusCode
+    }
+}
+
+@Composable
+private fun translateStatusComponent(value: String): String {
+    return when (value) {
+        "ok" -> stringResource(id = R.string.sync_diag_ok)
+        "fail" -> stringResource(id = R.string.sync_diag_fail)
+        else -> value
     }
 }

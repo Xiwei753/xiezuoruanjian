@@ -424,4 +424,21 @@
     <string name="save_font_size_failed">保存字体大小失败</string>
     <string name="save_sync_config_failed">保存同步配置失败</string>
     <string name="save_sync_secrets_failed">保存同步密钥失败</string>
+    <string name="sync_test_connection_result">网络: %1$s 认证: %2$s 仓库: %3$s 分支: %4$s</string>
+    <string name="sync_perform_result">上传: %1$d 下载: %2$d</string>
+    <string name="dry_run_error">检查同步计划失败</string>
+    <string name="diagnostics_error">连接诊断失败</string>
+    <string name="sync_error">同步失败</string>
+    <string name="core_not_loaded">Native Core 未加载</string>
+    <string name="unexpected_error">未知错误</string>
+    <string name="sync_status_ok">成功</string>
+    <string name="sync_status_fail">失败</string>
+    <string name="sync_status_error">错误</string>
+    <string name="sync_status_busy">正在执行</string>
+    <string name="sync_diag_network">网络</string>
+    <string name="sync_diag_auth">认证</string>
+    <string name="sync_diag_repo">仓库</string>
+    <string name="sync_diag_branch">分支</string>
+    <string name="sync_diag_ok">正常</string>
+    <string name="sync_diag_fail">异常</string>
 </resources>

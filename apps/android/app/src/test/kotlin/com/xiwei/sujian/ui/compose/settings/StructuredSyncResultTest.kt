@@ -64,4 +64,98 @@ class StructuredSyncResultTest {
         assertEquals(0, counts.deletedLocal)
         assertEquals(0, counts.conflicts)
     }
+
+    @Test
+    fun performSyncResultContainsCounts() {
+        val result = StructuredSyncResult(
+            statusCode = "ok",
+            messageKey = "sync_perform_result",
+            counts = SyncCounts(
+                uploaded = 5,
+                downloaded = 3
+            )
+        )
+        assertEquals("ok", result.statusCode)
+        assertEquals("sync_perform_result", result.messageKey)
+        assertEquals(5, result.counts.uploaded)
+        assertEquals(3, result.counts.downloaded)
+    }
+
+    @Test
+    fun errorResultsUseMessageKeyNotRawString() {
+        val errorKeys = listOf("dry_run_error", "diagnostics_error", "sync_error", "core_not_loaded", "unexpected_error")
+        for (key in errorKeys) {
+            val result = StructuredSyncResult(
+                statusCode = "error",
+                messageKey = key
+            )
+            assertEquals("error", result.statusCode)
+            assertEquals(key, result.messageKey)
+            assertNull(result.messageArgs["rawError"])
+        }
+    }
+
+    @Test
+    fun busyResultUsesMessageKey() {
+        val result = StructuredSyncResult(
+            statusCode = "busy",
+            messageKey = "sync_already_running"
+        )
+        assertEquals("busy", result.statusCode)
+        assertEquals("sync_already_running", result.messageKey)
+    }
+
+    @Test
+    fun blockedResultUsesBlockMessageKey() {
+        val result = StructuredSyncResult(
+            statusCode = "blocked",
+            messageKey = "sync_not_ready"
+        )
+        assertEquals("blocked", result.statusCode)
+        assertEquals("sync_not_ready", result.messageKey)
+    }
+
+    @Test
+    fun sanitizedDiagnosticDoesNotLeakRawError() {
+        val result = StructuredSyncResult(
+            statusCode = "error",
+            messageKey = "sync_error",
+            sanitizedDiagnostic = "connection_refused"
+        )
+        assertEquals("connection_refused", result.sanitizedDiagnostic)
+        assertNull(result.messageArgs["rawError"])
+    }
+
+    @Test
+    fun testConnectionResultAllComponentsOk() {
+        val result = StructuredSyncResult(
+            statusCode = "ok",
+            messageKey = "sync_test_connection_result",
+            messageArgs = mapOf(
+                "network" to "ok",
+                "auth" to "ok",
+                "repo" to "ok",
+                "branch" to "ok"
+            )
+        )
+        assertEquals("ok", result.statusCode)
+        assertEquals("ok", result.messageArgs["network"])
+        assertEquals("ok", result.messageArgs["auth"])
+        assertEquals("ok", result.messageArgs["repo"])
+        assertEquals("ok", result.messageArgs["branch"])
+    }
+
+    @Test
+    fun dryRunResultWithConflicts() {
+        val result = StructuredSyncResult(
+            statusCode = "ok",
+            messageKey = "sync_dry_run_result",
+            counts = SyncCounts(
+                uploaded = 1,
+                downloaded = 0,
+                conflicts = 2
+            )
+        )
+        assertEquals(2, result.counts.conflicts)
+    }
 }
