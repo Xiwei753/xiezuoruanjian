@@ -200,7 +200,7 @@ class AffectedLayoutPlanner {
         return affectedLines
     }
 
-    internal fun computeAffectedLines(
+    fun computeAffectedLines(
         visualIntent: VisualIntent,
         oldRev: AndroidLayoutRevision,
         newRev: AndroidLayoutRevision
@@ -517,7 +517,7 @@ class AffectedLayoutPlanner {
         }
     }
 
-    internal fun mergeAdjacentBlockShifts(
+    fun mergeAdjacentBlockShifts(
         shifts: List<PreparedVisualTransaction.BlockShift>
     ): List<PreparedVisualTransaction.BlockShift> {
         if (shifts.size <= 1) return shifts

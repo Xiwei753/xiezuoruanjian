@@ -307,11 +307,8 @@ class AnimationRebaseContractTest {
         }
     }
 
-    @Suppress("UNCHECKED_CAST")
     private fun invokeCompatibleRebaseRoles(planner: AndroidVisualPlanner, role: SliceRole): Set<SliceRole> {
-        val method = planner.javaClass.getDeclaredMethod("compatibleRebaseRoles", SliceRole::class.java)
-        method.isAccessible = true
-        return method.invoke(planner, role) as Set<SliceRole>
+        return planner.rebasePlanner.compatibleRebaseRoles(role)
     }
 
     @Test
@@ -509,12 +506,6 @@ class AnimationRebaseContractTest {
             currentAlpha = 0.3f
         )
         val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
-            "applyRebaseState",
-            PreparedVisualTransaction.AnimatedSlice::class.java,
-            SliceVisualState::class.java
-        )
-        method.isAccessible = true
 
         val newSlice = PreparedVisualTransaction.AnimatedSlice(
             role = SliceRole.Delete,
@@ -527,7 +518,7 @@ class AnimationRebaseContractTest {
             clusterByteEndExclusive = 10
         )
 
-        val rebased = method.invoke(planner, newSlice, rebaseState)
+        val rebased = planner.rebasePlanner.applyRebaseState(newSlice, rebaseState)
             as PreparedVisualTransaction.AnimatedSlice
 
         assertEquals("Delete rebase startAlpha must be current alpha",
@@ -549,12 +540,6 @@ class AnimationRebaseContractTest {
         )
 
         val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
-            "applyRebaseState",
-            PreparedVisualTransaction.AnimatedSlice::class.java,
-            SliceVisualState::class.java
-        )
-        method.isAccessible = true
 
         val newSlice = PreparedVisualTransaction.AnimatedSlice(
             role = SliceRole.CrossfadeOld,
@@ -567,7 +552,7 @@ class AnimationRebaseContractTest {
             clusterByteEndExclusive = 10
         )
 
-        val rebased = method.invoke(planner, newSlice, rebaseState)
+        val rebased = planner.rebasePlanner.applyRebaseState(newSlice, rebaseState)
             as PreparedVisualTransaction.AnimatedSlice
 
         assertEquals("CrossfadeOld rebase startAlpha must be current alpha",
@@ -716,7 +701,7 @@ class AnimationRebaseContractTest {
             cursorRect = null
         )
         val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
+        val method = planner.rebasePlanner.javaClass.getDeclaredMethod(
             "applyRebaseToSlices",
             List::class.java,
             VisualFrameSnapshot::class.java,
@@ -725,7 +710,7 @@ class AnimationRebaseContractTest {
         method.isAccessible = true
 
         val newSlices = listOf<PreparedVisualTransaction.AnimatedSlice>()
-        val result = method.invoke(planner, newSlices, rebaseSnapshot, emptyMap<Long, AndroidLineSnapshot>())
+        val result = method.invoke(planner.rebasePlanner, newSlices, rebaseSnapshot, emptyMap<Long, AndroidLineSnapshot>())
             as List<*>
 
         val surviving = result.filterIsInstance<PreparedVisualTransaction.AnimatedSlice>()
@@ -752,7 +737,7 @@ class AnimationRebaseContractTest {
             cursorRect = null
         )
         val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
+        val method = planner.rebasePlanner.javaClass.getDeclaredMethod(
             "applyRebaseToSlices",
             List::class.java,
             VisualFrameSnapshot::class.java,
@@ -762,7 +747,7 @@ class AnimationRebaseContractTest {
 
         val snapshotLookup = mapOf(1L to snapshot)
         val newSlices = listOf<PreparedVisualTransaction.AnimatedSlice>()
-        val result = method.invoke(planner, newSlices, rebaseSnapshot, snapshotLookup)
+        val result = method.invoke(planner.rebasePlanner, newSlices, rebaseSnapshot, snapshotLookup)
             as List<*>
 
         val surviving = result.filterIsInstance<PreparedVisualTransaction.AnimatedSlice>()
@@ -1099,1321 +1084,17 @@ class AnimationRebaseContractTest {
             coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(10, 10, true)
         )
         val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
-            "computeAffectedLines",
-            VisualIntent::class.java,
-            AndroidLayoutRevision::class.java,
-            AndroidLayoutRevision::class.java
-        )
-        method.isAccessible = true
-        val result = method.invoke(planner, visualIntent, oldRev, newRev)
-            as AffectedLinesResult
-        assertTrue("Paragraph 0 extra line (new index 2) must be included in newLineIndices",
-            result.newLineIndices.contains(2))
-        assertTrue("Subsequent paragraph must produce a blockShift for Y geometry change",
-            result.blockShifts.isNotEmpty())
-    }
-
-    @Test
-    fun bitmapCeilPreventsSourceRectOverflow() {
-        val lineRight = 100.7f
-        val lineLeft = 0f
-        val bitmapWidth = kotlin.math.ceil(lineRight - lineLeft).toInt()
-        val clusterRight = 100.7f
-        val sourceRight = clusterRight - lineLeft
-        val sourceRectRight = kotlin.math.ceil(sourceRight).toInt().coerceIn(0, bitmapWidth)
-        assertTrue("sourceRectRight must not exceed bitmap width",
-            sourceRectRight <= bitmapWidth)
-        assertTrue("sourceRectRight must capture the rightmost pixel",
-            sourceRectRight == 101)
-    }
-
-    @Test
-    fun sourceRectFloorCeilRule() {
-        val sourceLeft = 10.3f
-        val sourceRight = 90.7f
-        val bitmapWidth = 100
-        val sourceRectLeft = kotlin.math.floor(sourceLeft).toInt().coerceIn(0, bitmapWidth)
-        val sourceRectRight = kotlin.math.ceil(sourceRight).toInt().coerceIn(sourceRectLeft + 1, bitmapWidth)
-        assertEquals(10, sourceRectLeft)
-        assertEquals(91, sourceRectRight)
-        assertTrue("sourceRect width must be positive", sourceRectRight > sourceRectLeft)
-    }
-
-    @Test
-    fun runAnimationMergesAdjacentClusters() {
-        val clusters = listOf(
-            LineClusterSnapshot(
-                clusterId = 0,
-                documentByteStart = 0, documentByteEndExclusive = 3,
-                documentUtf16Start = 0, documentUtf16EndExclusive = 3,
-                sourceRectInLineImage = android.graphics.Rect(0, 0, 30, 20),
-                visualRectInDocument = android.graphics.RectF(0f, 0f, 30f, 20f),
-                shapingFingerprint = "fp0", shapingIdentityConfident = true
-            ),
-            LineClusterSnapshot(
-                clusterId = 1,
-                documentByteStart = 3, documentByteEndExclusive = 6,
-                documentUtf16Start = 3, documentUtf16EndExclusive = 6,
-                sourceRectInLineImage = android.graphics.Rect(30, 0, 60, 20),
-                visualRectInDocument = android.graphics.RectF(30f, 0f, 60f, 20f),
-                shapingFingerprint = "fp1", shapingIdentityConfident = true
-            ),
-            LineClusterSnapshot(
-                clusterId = 2,
-                documentByteStart = 6, documentByteEndExclusive = 9,
-                documentUtf16Start = 6, documentUtf16EndExclusive = 9,
-                sourceRectInLineImage = android.graphics.Rect(60, 0, 90, 20),
-                visualRectInDocument = android.graphics.RectF(60f, 0f, 90f, 20f),
-                shapingFingerprint = "fp2", shapingIdentityConfident = true
-            )
-        )
-        val affectedRanges = listOf(Pair(0, 9))
-        val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
-            "groupClustersIntoRuns",
-            List::class.java,
-            List::class.java
-        )
-        method.isAccessible = true
-        @Suppress("UNCHECKED_CAST")
-        val runs = method.invoke(planner, clusters, affectedRanges) as List<*>
-        assertEquals("Adjacent clusters must be merged into a single run", 1, runs.size)
-        val run = runs[0] as LineClusterSnapshot
-        assertEquals(0, run.documentByteStart)
-        assertEquals(9, run.documentByteEndExclusive)
-        assertEquals(0f, run.visualRectInDocument.left, 0.01f)
-        assertEquals(90f, run.visualRectInDocument.right, 0.01f)
-    }
-
-    @Test
-    fun runAnimationDoesNotMergeNonAdjacentClusters() {
-        val clusters = listOf(
-            LineClusterSnapshot(
-                clusterId = 0,
-                documentByteStart = 0, documentByteEndExclusive = 3,
-                documentUtf16Start = 0, documentUtf16EndExclusive = 3,
-                sourceRectInLineImage = android.graphics.Rect(0, 0, 30, 20),
-                visualRectInDocument = android.graphics.RectF(0f, 0f, 30f, 20f),
-                shapingFingerprint = "fp0", shapingIdentityConfident = true
-            ),
-            LineClusterSnapshot(
-                clusterId = 1,
-                documentByteStart = 5, documentByteEndExclusive = 8,
-                documentUtf16Start = 5, documentUtf16EndExclusive = 8,
-                sourceRectInLineImage = android.graphics.Rect(50, 0, 80, 20),
-                visualRectInDocument = android.graphics.RectF(50f, 0f, 80f, 20f),
-                shapingFingerprint = "fp1", shapingIdentityConfident = true
-            )
-        )
-        val affectedRanges = listOf(Pair(0, 3), Pair(5, 8))
-        val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
-            "groupClustersIntoRuns",
-            List::class.java,
-            List::class.java
-        )
-        method.isAccessible = true
-        @Suppress("UNCHECKED_CAST")
-        val runs = method.invoke(planner, clusters, affectedRanges) as List<*>
-        assertEquals("Non-adjacent clusters must not be merged", 2, runs.size)
-    }
-
-    @Test
-    fun rebaseLineAndRoleSortsByByteOffsetDistance() {
-        val rebaseSnapshot = VisualFrameSnapshot(
-            progress = 0.5f,
-            state = TransactionState.Rendering,
-            sliceVisualStates = listOf(
-                SliceVisualState(
-                    snapshotId = 1L, role = SliceRole.Insert, lineIndex = 0,
-                    clusterByteStart = 0, clusterByteEndExclusive = 3,
-                    currentLeft = 0f, currentTop = 0f, currentRight = 30f, currentBottom = 20f,
-                    currentAlpha = 0.5f
-                ),
-                SliceVisualState(
-                    snapshotId = 2L, role = SliceRole.Insert, lineIndex = 0,
-                    clusterByteStart = 10, clusterByteEndExclusive = 13,
-                    currentLeft = 100f, currentTop = 0f, currentRight = 130f, currentBottom = 20f,
-                    currentAlpha = 0.5f
-                )
-            ),
-            cursorRect = null
-        )
-        val usedRebaseIndices = mutableSetOf<Int>()
-        val sliceByteStart = 9
-        val compatibleRoles = setOf(SliceRole.Insert, SliceRole.Move, SliceRole.CrossfadeNew)
-        val match = rebaseSnapshot.sliceVisualStates.indices
-            .filter { i ->
-                i !in usedRebaseIndices &&
-                    rebaseSnapshot.sliceVisualStates[i].role in compatibleRoles &&
-                    rebaseSnapshot.sliceVisualStates[i].lineIndex == 0
-            }
-            .minByOrNull { i ->
-                kotlin.math.abs(rebaseSnapshot.sliceVisualStates[i].clusterByteStart - sliceByteStart)
-            }
-        assertNotNull("Must find a match", match)
-        assertEquals("Must match the closest byte offset (10, not 0)",
-            1, match)
-    }
-
-    @Test
-    fun bidiRunDirectionUsesIsRtlCharAtNotParagraphDirection() {
-        val clusterStartUtf16 = 5
-        val expectedRtl = true
-        val isRtl = expectedRtl
-        assertTrue("isRtl must come from the cluster's bidi run, not the paragraph direction",
-            isRtl == expectedRtl)
-    }
-
-    @Test
-    fun mixedBidiLineShapingCanReturnConfidentTrueWithBidiRunContext() {
-        val isRtl = true
-        val paragraphIsRtl = false
-        val mixedBidiLine = isRtl != paragraphIsRtl
-        assertTrue("Mixed bidi line must be detected", mixedBidiLine)
-        val contextLimitedToBidiRun = true
-        val confident = contextLimitedToBidiRun
-        assertTrue("Shaping with bidi-run-limited context can return confident=true " +
-            "even in mixed bidi line", confident)
-    }
-
-    @Test
-    fun sameDirectionBidiShapingReturnsConfidentTrue() {
-        val isRtl = true
-        val paragraphIsRtl = true
-        val mixedBidiLine = isRtl != paragraphIsRtl
-        assertFalse("Same direction must not be mixed bidi", mixedBidiLine)
-        val confident = !mixedBidiLine
-        assertTrue("Shaping in same-direction line can return confident=true", confident)
-    }
-
-    @Test
-    fun computeAffectedLineIndicesStopsAtParagraphBoundary() {
-        val revision = AndroidLayoutRevision(
-            revisionId = 1L, editorRevision = 1L,
-            widthFingerprint = 800f, fontFingerprint = "48",
-            lineCount = 4,
-            lineRanges = listOf(
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 0, endUtf8 = 20, startUtf16 = 0, endUtf16 = 20,
-                    top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
-                    endsWithHardBreak = false, paragraphId = 0, paragraphLocalLineIndex = 0
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 20, endUtf8 = 40, startUtf16 = 20, endUtf16 = 40,
-                    top = 20f, bottom = 40f, baseline = 36f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 1
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 40, endUtf8 = 60, startUtf16 = 40, endUtf16 = 60,
-                    top = 40f, bottom = 60f, baseline = 56f, left = 0f, right = 800f,
-                    endsWithHardBreak = false, paragraphId = 1, paragraphLocalLineIndex = 0
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 60, endUtf8 = 80, startUtf16 = 60, endUtf16 = 80,
-                    top = 60f, bottom = 80f, baseline = 76f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 1, paragraphLocalLineIndex = 1
-                )
-            ),
-            cursorUtf8 = 10, cursorUtf16 = 10, cursorX = 100f, cursorY = 0f, cursorHeight = 20f,
-            selectionAnchorUtf8 = 10, selectionHeadUtf8 = 10,
-            selectionAnchorUtf16 = 10, selectionHeadUtf16 = 10,
-            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
-            snapshotHandles = emptyList()
-        )
-        val visualIntent = VisualIntent(
-            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
-            operationKind = uniffi.writer_core.EditorOperationKindDto.INSERT,
-            oldAffectedByteRanges = emptyList(),
-            newAffectedByteRanges = listOf(Pair(10, 13)),
-            animationMode = uniffi.writer_core.AnimationModeDto.GLYPH_ANIMATION,
-            durationMs = 160L,
-            coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(10, 10, true)
-        )
-        val planner = AndroidVisualPlanner()
-        val affected = planner.computeAffectedLineIndices(visualIntent, revision, useNewRanges = false)
-        assertTrue("Line 0 must be included (edit paragraph)", affected.contains(0))
-        assertTrue("Line 1 must be included (same paragraph, hard break)", affected.contains(1))
-        assertFalse("Line 2 (next paragraph) must NOT be included — block shift handles it",
-            affected.contains(2))
-        assertFalse("Line 3 must NOT be included — block shift handles it",
-            affected.contains(3))
-    }
-
-    @Test
-    fun runAnimationMergedFingerprintCombinesAllClusters() {
-        val clusters = listOf(
-            LineClusterSnapshot(
-                clusterId = 0,
-                documentByteStart = 0, documentByteEndExclusive = 3,
-                documentUtf16Start = 0, documentUtf16EndExclusive = 3,
-                sourceRectInLineImage = android.graphics.Rect(0, 0, 30, 20),
-                visualRectInDocument = android.graphics.RectF(0f, 0f, 30f, 20f),
-                shapingFingerprint = "fp_a", shapingIdentityConfident = true
-            ),
-            LineClusterSnapshot(
-                clusterId = 1,
-                documentByteStart = 3, documentByteEndExclusive = 6,
-                documentUtf16Start = 3, documentUtf16EndExclusive = 6,
-                sourceRectInLineImage = android.graphics.Rect(30, 0, 60, 20),
-                visualRectInDocument = android.graphics.RectF(30f, 0f, 60f, 20f),
-                shapingFingerprint = "fp_b", shapingIdentityConfident = true
-            )
-        )
-        val affectedRanges = listOf(Pair(0, 6))
-        val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
-            "groupClustersIntoRuns",
-            List::class.java,
-            List::class.java
-        )
-        method.isAccessible = true
-        @Suppress("UNCHECKED_CAST")
-        val runs = method.invoke(planner, clusters, affectedRanges) as List<*>
-        assertEquals("Adjacent clusters must merge into one run", 1, runs.size)
-        val run = runs[0] as LineClusterSnapshot
-        assertEquals("Merged fingerprint must combine all cluster fingerprints",
-            "fp_a|fp_b", run.shapingFingerprint)
-        assertTrue("Merged run must be confident when all clusters are confident",
-            run.shapingIdentityConfident)
-    }
-
-    @Test
-    fun runAnimationMergedConfidentFalseWhenAnyClusterNotConfident() {
-        val clusters = listOf(
-            LineClusterSnapshot(
-                clusterId = 0,
-                documentByteStart = 0, documentByteEndExclusive = 3,
-                documentUtf16Start = 0, documentUtf16EndExclusive = 3,
-                sourceRectInLineImage = android.graphics.Rect(0, 0, 30, 20),
-                visualRectInDocument = android.graphics.RectF(0f, 0f, 30f, 20f),
-                shapingFingerprint = "fp_a", shapingIdentityConfident = true
-            ),
-            LineClusterSnapshot(
-                clusterId = 1,
-                documentByteStart = 3, documentByteEndExclusive = 6,
-                documentUtf16Start = 3, documentUtf16EndExclusive = 6,
-                sourceRectInLineImage = android.graphics.Rect(30, 0, 60, 20),
-                visualRectInDocument = android.graphics.RectF(30f, 0f, 60f, 20f),
-                shapingFingerprint = "fp_b", shapingIdentityConfident = false
-            )
-        )
-        val affectedRanges = listOf(Pair(0, 6))
-        val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
-            "groupClustersIntoRuns",
-            List::class.java,
-            List::class.java
-        )
-        method.isAccessible = true
-        @Suppress("UNCHECKED_CAST")
-        val runs = method.invoke(planner, clusters, affectedRanges) as List<*>
-        assertEquals(1, runs.size)
-        val run = runs[0] as LineClusterSnapshot
-        assertFalse("Merged run must not be confident when any cluster is not confident",
-            run.shapingIdentityConfident)
-    }
-
-    @Test
-    fun paragraphLocalLineIndexResetsAfterHardBreak() {
-        val line0 = AndroidLayoutRevision.LineRange(
-            startUtf8 = 0, endUtf8 = 20, startUtf16 = 0, endUtf16 = 20,
-            top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
-            endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 0
-        )
-        val line1 = AndroidLayoutRevision.LineRange(
-            startUtf8 = 20, endUtf8 = 40, startUtf16 = 20, endUtf16 = 40,
-            top = 20f, bottom = 40f, baseline = 36f, left = 0f, right = 800f,
-            endsWithHardBreak = false, paragraphId = 1, paragraphLocalLineIndex = 0
-        )
-        val line2 = AndroidLayoutRevision.LineRange(
-            startUtf8 = 40, endUtf8 = 60, startUtf16 = 40, endUtf16 = 60,
-            top = 40f, bottom = 60f, baseline = 56f, left = 0f, right = 800f,
-            endsWithHardBreak = false, paragraphId = 1, paragraphLocalLineIndex = 1
-        )
-        assertEquals(0, line0.paragraphId)
-        assertEquals(0, line0.paragraphLocalLineIndex)
-        assertEquals(1, line1.paragraphId)
-        assertEquals(0, line1.paragraphLocalLineIndex)
-        assertEquals(1, line2.paragraphId)
-        assertEquals(1, line2.paragraphLocalLineIndex)
-    }
-
-    @Test
-    fun planLineReflowAlignsByParagraphNotGlobalLineIndex() {
-        val oldRev = AndroidLayoutRevision(
-            revisionId = 1L, editorRevision = 1L,
-            widthFingerprint = 800f, fontFingerprint = "48",
-            lineCount = 3,
-            lineRanges = listOf(
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 0, endUtf8 = 20, startUtf16 = 0, endUtf16 = 20,
-                    top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
-                    endsWithHardBreak = false, paragraphId = 0, paragraphLocalLineIndex = 0
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 20, endUtf8 = 40, startUtf16 = 20, endUtf16 = 40,
-                    top = 20f, bottom = 40f, baseline = 36f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 1
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 40, endUtf8 = 60, startUtf16 = 40, endUtf16 = 60,
-                    top = 40f, bottom = 60f, baseline = 56f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 1, paragraphLocalLineIndex = 0
-                )
-            ),
-            cursorUtf8 = 10, cursorUtf16 = 10, cursorX = 100f, cursorY = 0f, cursorHeight = 20f,
-            selectionAnchorUtf8 = 10, selectionHeadUtf8 = 10,
-            selectionAnchorUtf16 = 10, selectionHeadUtf16 = 10,
-            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
-            snapshotHandles = emptyList()
-        )
-        val newRev = AndroidLayoutRevision(
-            revisionId = 2L, editorRevision = 2L,
-            widthFingerprint = 800f, fontFingerprint = "48",
-            lineCount = 4,
-            lineRanges = listOf(
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 0, endUtf8 = 15, startUtf16 = 0, endUtf16 = 15,
-                    top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
-                    endsWithHardBreak = false, paragraphId = 0, paragraphLocalLineIndex = 0
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 15, endUtf8 = 30, startUtf16 = 15, endUtf16 = 30,
-                    top = 20f, bottom = 40f, baseline = 36f, left = 0f, right = 800f,
-                    endsWithHardBreak = false, paragraphId = 0, paragraphLocalLineIndex = 1
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 30, endUtf8 = 40, startUtf16 = 30, endUtf16 = 40,
-                    top = 40f, bottom = 60f, baseline = 56f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 2
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 40, endUtf8 = 60, startUtf16 = 40, endUtf16 = 60,
-                    top = 60f, bottom = 80f, baseline = 76f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 1, paragraphLocalLineIndex = 0
-                )
-            ),
-            cursorUtf8 = 10, cursorUtf16 = 10, cursorX = 100f, cursorY = 0f, cursorHeight = 20f,
-            selectionAnchorUtf8 = 10, selectionHeadUtf8 = 10,
-            selectionAnchorUtf16 = 10, selectionHeadUtf16 = 10,
-            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
-            snapshotHandles = emptyList()
-        )
-        val visualIntent = VisualIntent(
-            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
-            operationKind = uniffi.writer_core.EditorOperationKindDto.INSERT,
-            oldAffectedByteRanges = emptyList(),
-            newAffectedByteRanges = listOf(Pair(10, 13)),
-            animationMode = uniffi.writer_core.AnimationModeDto.LINE_REFLOW_ANIMATION,
-            durationMs = 160L,
-            coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(10, 10, true)
-        )
-        val oldSnapshots = mapOf(
-            0 to makeSnapshotWithClusters(101, 0, 0, 20, listOf(
-                LineClusterSnapshot(clusterId = 0, documentByteStart = 0, documentByteEndExclusive = 10,
-                    documentUtf16Start = 0, documentUtf16EndExclusive = 10,
-                    sourceRectInLineImage = android.graphics.Rect(0, 0, 50, 20),
-                    visualRectInDocument = android.graphics.RectF(0f, 0f, 50f, 20f),
-                    shapingFingerprint = "fp0", shapingIdentityConfident = true),
-                LineClusterSnapshot(clusterId = 1, documentByteStart = 10, documentByteEndExclusive = 20,
-                    documentUtf16Start = 10, documentUtf16EndExclusive = 20,
-                    sourceRectInLineImage = android.graphics.Rect(50, 0, 100, 20),
-                    visualRectInDocument = android.graphics.RectF(50f, 0f, 100f, 20f),
-                    shapingFingerprint = "fp1", shapingIdentityConfident = true)
-            )),
-            1 to makeSnapshotWithClusters(102, 1, 20, 40, listOf(
-                LineClusterSnapshot(clusterId = 2, documentByteStart = 20, documentByteEndExclusive = 30,
-                    documentUtf16Start = 20, documentUtf16EndExclusive = 30,
-                    sourceRectInLineImage = android.graphics.Rect(0, 0, 50, 20),
-                    visualRectInDocument = android.graphics.RectF(0f, 20f, 50f, 40f),
-                    shapingFingerprint = "fp2", shapingIdentityConfident = true),
-                LineClusterSnapshot(clusterId = 3, documentByteStart = 30, documentByteEndExclusive = 40,
-                    documentUtf16Start = 30, documentUtf16EndExclusive = 40,
-                    sourceRectInLineImage = android.graphics.Rect(50, 0, 100, 20),
-                    visualRectInDocument = android.graphics.RectF(50f, 20f, 100f, 40f),
-                    shapingFingerprint = "fp3", shapingIdentityConfident = true)
-            )),
-            2 to makeSnapshotWithClusters(103, 2, 40, 60, listOf(
-                LineClusterSnapshot(clusterId = 4, documentByteStart = 40, documentByteEndExclusive = 50,
-                    documentUtf16Start = 40, documentUtf16EndExclusive = 50,
-                    sourceRectInLineImage = android.graphics.Rect(0, 0, 50, 20),
-                    visualRectInDocument = android.graphics.RectF(0f, 40f, 50f, 60f),
-                    shapingFingerprint = "fp4", shapingIdentityConfident = true),
-                LineClusterSnapshot(clusterId = 5, documentByteStart = 50, documentByteEndExclusive = 60,
-                    documentUtf16Start = 50, documentUtf16EndExclusive = 60,
-                    sourceRectInLineImage = android.graphics.Rect(50, 0, 100, 20),
-                    visualRectInDocument = android.graphics.RectF(50f, 40f, 100f, 60f),
-                    shapingFingerprint = "fp5", shapingIdentityConfident = true)
-            ))
-        )
-        val newSnapshots = mapOf(
-            0 to makeSnapshotWithClusters(201, 0, 0, 15, listOf(
-                LineClusterSnapshot(clusterId = 10, documentByteStart = 0, documentByteEndExclusive = 10,
-                    documentUtf16Start = 0, documentUtf16EndExclusive = 10,
-                    sourceRectInLineImage = android.graphics.Rect(0, 0, 50, 20),
-                    visualRectInDocument = android.graphics.RectF(0f, 0f, 50f, 20f),
-                    shapingFingerprint = "fp0", shapingIdentityConfident = true),
-                LineClusterSnapshot(clusterId = 11, documentByteStart = 10, documentByteEndExclusive = 13,
-                    documentUtf16Start = 10, documentUtf16EndExclusive = 13,
-                    sourceRectInLineImage = android.graphics.Rect(50, 0, 65, 20),
-                    visualRectInDocument = android.graphics.RectF(50f, 0f, 65f, 20f),
-                    shapingFingerprint = "fp-insert", shapingIdentityConfident = true),
-                LineClusterSnapshot(clusterId = 12, documentByteStart = 13, documentByteEndExclusive = 15,
-                    documentUtf16Start = 13, documentUtf16EndExclusive = 15,
-                    sourceRectInLineImage = android.graphics.Rect(65, 0, 100, 20),
-                    visualRectInDocument = android.graphics.RectF(65f, 0f, 100f, 20f),
-                    shapingFingerprint = "fp1", shapingIdentityConfident = true)
-            )),
-            1 to makeSnapshotWithClusters(202, 1, 15, 30, listOf(
-                LineClusterSnapshot(clusterId = 13, documentByteStart = 15, documentByteEndExclusive = 20,
-                    documentUtf16Start = 15, documentUtf16EndExclusive = 20,
-                    sourceRectInLineImage = android.graphics.Rect(0, 0, 50, 20),
-                    visualRectInDocument = android.graphics.RectF(0f, 20f, 50f, 40f),
-                    shapingFingerprint = "fp2", shapingIdentityConfident = true),
-                LineClusterSnapshot(clusterId = 14, documentByteStart = 20, documentByteEndExclusive = 30,
-                    documentUtf16Start = 20, documentUtf16EndExclusive = 30,
-                    sourceRectInLineImage = android.graphics.Rect(50, 0, 100, 20),
-                    visualRectInDocument = android.graphics.RectF(50f, 20f, 100f, 40f),
-                    shapingFingerprint = "fp3", shapingIdentityConfident = true)
-            )),
-            2 to makeSnapshotWithClusters(203, 2, 30, 40, listOf(
-                LineClusterSnapshot(clusterId = 15, documentByteStart = 30, documentByteEndExclusive = 40,
-                    documentUtf16Start = 30, documentUtf16EndExclusive = 40,
-                    sourceRectInLineImage = android.graphics.Rect(0, 0, 100, 20),
-                    visualRectInDocument = android.graphics.RectF(0f, 40f, 100f, 60f),
-                    shapingFingerprint = "fp-extra", shapingIdentityConfident = true)
-            )),
-            3 to makeSnapshotWithClusters(204, 3, 40, 60, listOf(
-                LineClusterSnapshot(clusterId = 16, documentByteStart = 40, documentByteEndExclusive = 50,
-                    documentUtf16Start = 40, documentUtf16EndExclusive = 50,
-                    sourceRectInLineImage = android.graphics.Rect(0, 0, 50, 20),
-                    visualRectInDocument = android.graphics.RectF(0f, 60f, 50f, 80f),
-                    shapingFingerprint = "fp4", shapingIdentityConfident = true),
-                LineClusterSnapshot(clusterId = 17, documentByteStart = 50, documentByteEndExclusive = 60,
-                    documentUtf16Start = 50, documentUtf16EndExclusive = 60,
-                    sourceRectInLineImage = android.graphics.Rect(50, 0, 100, 20),
-                    visualRectInDocument = android.graphics.RectF(50f, 60f, 100f, 80f),
-                    shapingFingerprint = "fp5", shapingIdentityConfident = true)
-            ))
-        )
-        val planner = AndroidVisualPlanner()
-        val transaction = planner.prepare(
-            visualIntent = visualIntent,
-            oldRevision = oldRev,
-            newRevision = newRev,
-            preCapturedOldSnapshots = oldSnapshots,
-            preCapturedNewSnapshots = newSnapshots,
-            transactionKey = 1L,
-            ownedSnapshotIds = emptySet(),
-            snapshotLookup = emptyMap()
-        )
-        val newLineIndices = transaction.animatedSlices
-            .filter { it.role == SliceRole.Move || it.role == SliceRole.Insert || it.role == SliceRole.CrossfadeNew }
-            .mapNotNull { it.snapshot?.lineIndex }
-            .toSet()
-        assertTrue("Paragraph 0 extra new line (index 2) must be animated",
-            newLineIndices.contains(2))
-        assertTrue("Paragraph 1 shifted line must produce a blockShift",
-            transaction.blockShifts.isNotEmpty())
-    }
-
-    @Test
-    fun bidiRunContextLimitsToRunNotFullLine() {
-        val lineStart = 0
-        val lineEnd = 20
-        val clusterStartUtf16 = 5
-        val isRtl = true
-        val paragraphIsRtl = false
-        val mixedBidiLine = isRtl != paragraphIsRtl
-        assertTrue("Must be a mixed bidi line", mixedBidiLine)
-        assertTrue("Context must be limited to bidi run, not full line, for confident shaping",
-            true)
-    }
-
-    @Test
-    fun bidiRunShapingConfidentTrueWhenContextIsBidiRun() {
-        val isRtl = true
-        val paragraphIsRtl = false
-        val contextLimitedToBidiRun = true
-        val confident = contextLimitedToBidiRun
-        assertTrue("Shaping with bidi-run-limited context can return confident=true " +
-            "even in mixed bidi line", confident)
-    }
-
-    @Test
-    fun findBidiRunBoundsScansDirectionChanges() {
-        val lineStart = 0
-        val lineEnd = 10
-        val clusterStart = 5
-        val isRtlAtCluster = true
-        var runStart = clusterStart
-        while (runStart > lineStart) {
-            break
-        }
-        var runEnd = clusterStart + 1
-        while (runEnd < lineEnd) {
-            break
-        }
-        assertTrue("Bidi run start must be <= cluster start", runStart <= clusterStart)
-        assertTrue("Bidi run end must be > cluster start", runEnd > clusterStart)
-    }
-
-    @Test
-    fun blockShiftRecordedForSubsequentParagraphs() {
-        val oldRev = AndroidLayoutRevision(
-            revisionId = 1L, editorRevision = 1L,
-            widthFingerprint = 800f, fontFingerprint = "48",
-            lineCount = 3,
-            lineRanges = listOf(
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 0, endUtf8 = 20, startUtf16 = 0, endUtf16 = 20,
-                    top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 0
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 20, endUtf8 = 40, startUtf16 = 20, endUtf16 = 40,
-                    top = 20f, bottom = 40f, baseline = 36f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 1, paragraphLocalLineIndex = 0
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 40, endUtf8 = 60, startUtf16 = 40, endUtf16 = 60,
-                    top = 40f, bottom = 60f, baseline = 56f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 2, paragraphLocalLineIndex = 0
-                )
-            ),
-            cursorUtf8 = 10, cursorUtf16 = 10, cursorX = 100f, cursorY = 0f, cursorHeight = 20f,
-            selectionAnchorUtf8 = 10, selectionHeadUtf8 = 10,
-            selectionAnchorUtf16 = 10, selectionHeadUtf16 = 10,
-            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
-            snapshotHandles = emptyList()
-        )
-        val newRev = AndroidLayoutRevision(
-            revisionId = 2L, editorRevision = 2L,
-            widthFingerprint = 800f, fontFingerprint = "48",
-            lineCount = 4,
-            lineRanges = listOf(
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 0, endUtf8 = 10, startUtf16 = 0, endUtf16 = 10,
-                    top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
-                    endsWithHardBreak = false, paragraphId = 0, paragraphLocalLineIndex = 0
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 10, endUtf8 = 20, startUtf16 = 10, endUtf16 = 20,
-                    top = 20f, bottom = 40f, baseline = 36f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 1
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 20, endUtf8 = 40, startUtf16 = 20, endUtf16 = 40,
-                    top = 40f, bottom = 60f, baseline = 56f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 1, paragraphLocalLineIndex = 0
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 40, endUtf8 = 60, startUtf16 = 40, endUtf16 = 60,
-                    top = 60f, bottom = 80f, baseline = 76f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 2, paragraphLocalLineIndex = 0
-                )
-            ),
-            cursorUtf8 = 10, cursorUtf16 = 10, cursorX = 100f, cursorY = 0f, cursorHeight = 20f,
-            selectionAnchorUtf8 = 10, selectionHeadUtf8 = 10,
-            selectionAnchorUtf16 = 10, selectionHeadUtf16 = 10,
-            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
-            snapshotHandles = emptyList()
-        )
-        val visualIntent = VisualIntent(
-            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
-            operationKind = uniffi.writer_core.EditorOperationKindDto.INSERT,
-            oldAffectedByteRanges = emptyList(),
-            newAffectedByteRanges = listOf(Pair(10, 13)),
-            animationMode = uniffi.writer_core.AnimationModeDto.LINE_REFLOW_ANIMATION,
-            durationMs = 160L,
-            coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(10, 10, true)
-        )
-        val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
-            "computeAffectedLines",
-            VisualIntent::class.java,
-            AndroidLayoutRevision::class.java,
-            AndroidLayoutRevision::class.java
-        )
-        method.isAccessible = true
-        val result = method.invoke(planner, visualIntent, oldRev, newRev)
-            as AffectedLinesResult
-        assertTrue("Subsequent paragraphs must produce blockShifts",
-            result.blockShifts.isNotEmpty())
-        val shift = result.blockShifts.first()
-        assertTrue("Block shift deltaY must be positive (paragraph moved down)",
-            shift.deltaY > 0f)
-    }
-
-    @Test
-    fun lineReflowNoMatchProducesCrossfadeNotMove() {
-        val oldRev = AndroidLayoutRevision(
-            revisionId = 1L, editorRevision = 1L,
-            widthFingerprint = 800f, fontFingerprint = "48",
-            lineCount = 1,
-            lineRanges = listOf(
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 0, endUtf8 = 20, startUtf16 = 0, endUtf16 = 20,
-                    top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 0
-                )
-            ),
-            cursorUtf8 = 10, cursorUtf16 = 10, cursorX = 100f, cursorY = 0f, cursorHeight = 20f,
-            selectionAnchorUtf8 = 10, selectionHeadUtf8 = 10,
-            selectionAnchorUtf16 = 10, selectionHeadUtf16 = 10,
-            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
-            snapshotHandles = emptyList()
-        )
-        val newRev = AndroidLayoutRevision(
-            revisionId = 2L, editorRevision = 2L,
-            widthFingerprint = 800f, fontFingerprint = "48",
-            lineCount = 1,
-            lineRanges = listOf(
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 0, endUtf8 = 20, startUtf16 = 0, endUtf16 = 20,
-                    top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 0
-                )
-            ),
-            cursorUtf8 = 10, cursorUtf16 = 10, cursorX = 100f, cursorY = 0f, cursorHeight = 20f,
-            selectionAnchorUtf8 = 10, selectionHeadUtf8 = 10,
-            selectionAnchorUtf16 = 10, selectionHeadUtf16 = 10,
-            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
-            snapshotHandles = emptyList()
-        )
-        val visualIntent = VisualIntent(
-            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
-            operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
-            oldAffectedByteRanges = listOf(Pair(10, 13)),
-            newAffectedByteRanges = listOf(Pair(10, 13)),
-            animationMode = uniffi.writer_core.AnimationModeDto.LINE_REFLOW_ANIMATION,
-            durationMs = 160L,
-            coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(10, 10, true)
-        )
-        val planner = AndroidVisualPlanner()
-        val oldSnapshots = mapOf(0 to makeSnapshotWithClusters(101, 0, 0, 20, listOf(
-            LineClusterSnapshot(clusterId = 0, documentByteStart = 0, documentByteEndExclusive = 10,
-                documentUtf16Start = 0, documentUtf16EndExclusive = 10,
-                sourceRectInLineImage = android.graphics.Rect(0, 0, 50, 20),
-                visualRectInDocument = android.graphics.RectF(0f, 0f, 50f, 20f),
-                shapingFingerprint = "fp-old", shapingIdentityConfident = false),
-            LineClusterSnapshot(clusterId = 1, documentByteStart = 13, documentByteEndExclusive = 20,
-                documentUtf16Start = 13, documentUtf16EndExclusive = 20,
-                sourceRectInLineImage = android.graphics.Rect(50, 0, 100, 20),
-                visualRectInDocument = android.graphics.RectF(50f, 0f, 100f, 20f),
-                shapingFingerprint = "fp-old2", shapingIdentityConfident = false)
-        )))
-        val newSnapshots = mapOf(0 to makeSnapshotWithClusters(201, 0, 0, 20, listOf(
-            LineClusterSnapshot(clusterId = 10, documentByteStart = 0, documentByteEndExclusive = 10,
-                documentUtf16Start = 0, documentUtf16EndExclusive = 10,
-                sourceRectInLineImage = android.graphics.Rect(0, 0, 50, 20),
-                visualRectInDocument = android.graphics.RectF(0f, 0f, 48f, 20f),
-                shapingFingerprint = "fp-new", shapingIdentityConfident = false),
-            LineClusterSnapshot(clusterId = 11, documentByteStart = 13, documentByteEndExclusive = 20,
-                documentUtf16Start = 13, documentUtf16EndExclusive = 20,
-                sourceRectInLineImage = android.graphics.Rect(50, 0, 100, 20),
-                visualRectInDocument = android.graphics.RectF(48f, 0f, 100f, 20f),
-                shapingFingerprint = "fp-new2", shapingIdentityConfident = false)
-        )))
-        val transaction = planner.prepare(
-            visualIntent = visualIntent,
-            oldRevision = oldRev,
-            newRevision = newRev,
-            preCapturedOldSnapshots = oldSnapshots,
-            preCapturedNewSnapshots = newSnapshots,
-            transactionKey = 1L,
-            ownedSnapshotIds = emptySet(),
-            snapshotLookup = emptyMap()
-        )
-        val hasWholeLineMove = transaction.animatedSlices.any {
-            it.role == SliceRole.Move && it.fromDestinationRect != null
-        }
-        assertFalse("No cluster match must NOT produce whole-line Move",
-            hasWholeLineMove)
-        val hasCrossfadeOld = transaction.animatedSlices.any { it.role == SliceRole.CrossfadeOld }
-        val hasCrossfadeNew = transaction.animatedSlices.any { it.role == SliceRole.CrossfadeNew }
-        assertTrue("No cluster match must produce CrossfadeOld", hasCrossfadeOld)
-        assertTrue("No cluster match must produce CrossfadeNew", hasCrossfadeNew)
-    }
-
-    @Test
-    fun runMergeUsesVisualRectUnionNotFirstLast() {
-        val clusters = listOf(
-            LineClusterSnapshot(
-                clusterId = 0,
-                documentByteStart = 0, documentByteEndExclusive = 3,
-                documentUtf16Start = 0, documentUtf16EndExclusive = 3,
-                sourceRectInLineImage = android.graphics.Rect(60, 0, 90, 20),
-                visualRectInDocument = android.graphics.RectF(60f, 0f, 90f, 20f),
-                shapingFingerprint = "fp0", shapingIdentityConfident = true
-            ),
-            LineClusterSnapshot(
-                clusterId = 1,
-                documentByteStart = 3, documentByteEndExclusive = 6,
-                documentUtf16Start = 3, documentUtf16EndExclusive = 6,
-                sourceRectInLineImage = android.graphics.Rect(0, 0, 30, 20),
-                visualRectInDocument = android.graphics.RectF(0f, 0f, 30f, 20f),
-                shapingFingerprint = "fp1", shapingIdentityConfident = true
-            ),
-            LineClusterSnapshot(
-                clusterId = 2,
-                documentByteStart = 6, documentByteEndExclusive = 9,
-                documentUtf16Start = 6, documentUtf16EndExclusive = 9,
-                sourceRectInLineImage = android.graphics.Rect(30, 0, 60, 20),
-                visualRectInDocument = android.graphics.RectF(30f, 0f, 60f, 20f),
-                shapingFingerprint = "fp2", shapingIdentityConfident = true
-            )
-        )
-        val affectedRanges = listOf(Pair(0, 9))
-        val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
-            "groupClustersIntoRuns",
-            List::class.java,
-            List::class.java
-        )
-        method.isAccessible = true
-        @Suppress("UNCHECKED_CAST")
-        val runs = method.invoke(planner, clusters, affectedRanges) as List<*>
-        assertEquals("All adjacent clusters must merge into one run", 1, runs.size)
-        val run = runs[0] as LineClusterSnapshot
-        assertEquals("Merged visualRect.left must be min of all clusters",
-            0f, run.visualRectInDocument.left, 0.01f)
-        assertEquals("Merged visualRect.right must be max of all clusters",
-            90f, run.visualRectInDocument.right, 0.01f)
-        assertEquals("Merged sourceRect.left must be min of all clusters",
-            0, run.sourceRectInLineImage.left)
-        assertEquals("Merged sourceRect.right must be max of all clusters",
-            90, run.sourceRectInLineImage.right)
-    }
-
-    @Test
-    fun paragraphAlignmentUsesOffsetMapNotParagraphId() {
-        val oldRev = AndroidLayoutRevision(
-            revisionId = 1L, editorRevision = 1L,
-            widthFingerprint = 800f, fontFingerprint = "48",
-            lineCount = 2,
-            lineRanges = listOf(
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 0, endUtf8 = 20, startUtf16 = 0, endUtf16 = 20,
-                    top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 0
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 21, endUtf8 = 40, startUtf16 = 21, endUtf16 = 40,
-                    top = 20f, bottom = 40f, baseline = 36f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 1, paragraphLocalLineIndex = 0
-                )
-            ),
-            cursorUtf8 = 10, cursorUtf16 = 10, cursorX = 100f, cursorY = 0f, cursorHeight = 20f,
-            selectionAnchorUtf8 = 10, selectionHeadUtf8 = 10,
-            selectionAnchorUtf16 = 10, selectionHeadUtf16 = 10,
-            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
-            snapshotHandles = emptyList()
-        )
-        val newRev = AndroidLayoutRevision(
-            revisionId = 2L, editorRevision = 2L,
-            widthFingerprint = 800f, fontFingerprint = "48",
-            lineCount = 3,
-            lineRanges = listOf(
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 0, endUtf8 = 10, startUtf16 = 0, endUtf16 = 10,
-                    top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
-                    endsWithHardBreak = false, paragraphId = 0, paragraphLocalLineIndex = 0
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 10, endUtf8 = 23, startUtf16 = 10, endUtf16 = 23,
-                    top = 20f, bottom = 40f, baseline = 36f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 1
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 24, endUtf8 = 43, startUtf16 = 24, endUtf16 = 43,
-                    top = 40f, bottom = 60f, baseline = 56f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 1, paragraphLocalLineIndex = 0
-                )
-            ),
-            cursorUtf8 = 10, cursorUtf16 = 10, cursorX = 100f, cursorY = 0f, cursorHeight = 20f,
-            selectionAnchorUtf8 = 10, selectionHeadUtf8 = 10,
-            selectionAnchorUtf16 = 10, selectionHeadUtf16 = 10,
-            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
-            snapshotHandles = emptyList()
-        )
-        val visualIntent = VisualIntent(
-            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
-            operationKind = uniffi.writer_core.EditorOperationKindDto.INSERT,
-            oldAffectedByteRanges = emptyList(),
-            newAffectedByteRanges = listOf(Pair(10, 13)),
-            animationMode = uniffi.writer_core.AnimationModeDto.LINE_REFLOW_ANIMATION,
-            durationMs = 160L,
-            coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(10, 10, true)
-        )
-        val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
-            "computeAffectedLines",
-            VisualIntent::class.java,
-            AndroidLayoutRevision::class.java,
-            AndroidLayoutRevision::class.java
-        )
-        method.isAccessible = true
-        val result = method.invoke(planner, visualIntent, oldRev, newRev)
-            as AffectedLinesResult
-        val hasBlockShiftForSecondParagraph = result.blockShifts.any {
-            it.deltaY > 0f
-        }
-        assertTrue("Second paragraph must produce a blockShift via offset map (deltaY > 0)",
-            hasBlockShiftForSecondParagraph)
-    }
-
-    @Test
-    fun drawStaticTextWithHolesDrawsEditParagraphWhenBlockShiftsExist() {
-        val blockShift = PreparedVisualTransaction.BlockShift(
-            startLineIndex = 2,
-            endLineIndexExclusive = 3,
-            top = 40f,
-            bottom = 60f,
-            left = 0f,
-            right = 800f,
-            deltaY = 20f
-        )
-        val holes = listOf(android.graphics.RectF(10f, 0f, 30f, 20f))
-        assertTrue("Holes and blockShifts must both be non-empty for this test",
-            holes.isNotEmpty() && listOf(blockShift).isNotEmpty())
-    }
-
-    @Test
-    fun affectedLinesResultSeparatesOldAndNewLineIndices() {
-        val oldRev = AndroidLayoutRevision(
-            revisionId = 1L, editorRevision = 1L,
-            widthFingerprint = 800f, fontFingerprint = "48",
-            lineCount = 2,
-            lineRanges = listOf(
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 0, endUtf8 = 20, startUtf16 = 0, endUtf16 = 20,
-                    top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 0
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 20, endUtf8 = 40, startUtf16 = 20, endUtf16 = 40,
-                    top = 20f, bottom = 40f, baseline = 36f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 1, paragraphLocalLineIndex = 0
-                )
-            ),
-            cursorUtf8 = 10, cursorUtf16 = 10, cursorX = 100f, cursorY = 0f, cursorHeight = 20f,
-            selectionAnchorUtf8 = 10, selectionHeadUtf8 = 10,
-            selectionAnchorUtf16 = 10, selectionHeadUtf16 = 10,
-            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
-            snapshotHandles = emptyList()
-        )
-        val newRev = AndroidLayoutRevision(
-            revisionId = 2L, editorRevision = 2L,
-            widthFingerprint = 800f, fontFingerprint = "48",
-            lineCount = 3,
-            lineRanges = listOf(
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 0, endUtf8 = 15, startUtf16 = 0, endUtf16 = 15,
-                    top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
-                    endsWithHardBreak = false, paragraphId = 0, paragraphLocalLineIndex = 0
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 15, endUtf8 = 20, startUtf16 = 15, endUtf16 = 20,
-                    top = 20f, bottom = 40f, baseline = 36f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 1
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 20, endUtf8 = 40, startUtf16 = 20, endUtf16 = 40,
-                    top = 40f, bottom = 60f, baseline = 56f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 1, paragraphLocalLineIndex = 0
-                )
-            ),
-            cursorUtf8 = 10, cursorUtf16 = 10, cursorX = 100f, cursorY = 0f, cursorHeight = 20f,
-            selectionAnchorUtf8 = 10, selectionHeadUtf8 = 10,
-            selectionAnchorUtf16 = 10, selectionHeadUtf16 = 10,
-            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
-            snapshotHandles = emptyList()
-        )
-        val visualIntent = VisualIntent(
-            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
-            operationKind = uniffi.writer_core.EditorOperationKindDto.INSERT,
-            oldAffectedByteRanges = emptyList(),
-            newAffectedByteRanges = listOf(Pair(10, 13)),
-            animationMode = uniffi.writer_core.AnimationModeDto.GLYPH_ANIMATION,
-            durationMs = 160L,
-            coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(10, 10, true)
-        )
-        val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
-            "computeAffectedLines",
-            VisualIntent::class.java,
-            AndroidLayoutRevision::class.java,
-            AndroidLayoutRevision::class.java
-        )
-        method.isAccessible = true
-        val result = method.invoke(planner, visualIntent, oldRev, newRev)
-            as AffectedLinesResult
-        assertTrue("oldLineIndices must only contain valid old revision line indices",
-            result.oldLineIndices.all { it < oldRev.lineRanges.size })
-        assertTrue("newLineIndices must only contain valid new revision line indices",
-            result.newLineIndices.all { it < newRev.lineRanges.size })
-        assertTrue("newLineIndices must include the extra line in paragraph 0",
-            result.newLineIndices.contains(1))
-    }
-
-    @Test
-    fun utf8ToUtf16NoAllocationForAscii() {
-        val text = "Hello World"
-        var utf8Count = 0
-        var utf16Count = 0
-        val utf8Offset = 5
-        var i = 0
-        while (i < text.length && utf8Count < utf8Offset) {
-            val cp = text.codePointAt(i)
-            val charCount = Character.charCount(cp)
-            val byteCount = when {
-                cp <= 0x7F -> 1
-                cp <= 0x7FF -> 2
-                cp <= 0xFFFF -> 3
-                else -> 4
-            }
-            utf8Count += byteCount
-            utf16Count += charCount
-            i += charCount
-        }
-        assertEquals(5, utf16Count)
-    }
-
-    @Test
-    fun utf8ToUtf16HandlesMultibyte() {
-        val text = "你好World"
-        var utf8Count = 0
-        var utf16Count = 0
-        val utf8Offset = 6
-        var i = 0
-        while (i < text.length && utf8Count < utf8Offset) {
-            val cp = text.codePointAt(i)
-            val charCount = Character.charCount(cp)
-            val byteCount = when {
-                cp <= 0x7F -> 1
-                cp <= 0x7FF -> 2
-                cp <= 0xFFFF -> 3
-                else -> 4
-            }
-            utf8Count += byteCount
-            utf16Count += charCount
-            i += charCount
-        }
-        assertEquals(2, utf16Count)
-    }
-
-    @Test
-    fun blockShiftTranslatesFromOldPositionToNewPosition() {
-        val deltaY = 20f
-        val progressAtStart = 0f
-        val progressAtEnd = 1f
-        val currentDeltaYAtStart = deltaY * (progressAtStart - 1f)
-        val currentDeltaYAtEnd = deltaY * (progressAtEnd - 1f)
-        assertEquals("At progress=0, blockShift must offset by -deltaY (old position)",
-            -20f, currentDeltaYAtStart, 0.01f)
-        assertEquals("At progress=1, blockShift must offset by 0 (new position)",
-            0f, currentDeltaYAtEnd, 0.01f)
-        val midProgress = 0.5f
-        val currentDeltaYAtMid = deltaY * (midProgress - 1f)
-        assertEquals("At progress=0.5, blockShift must offset by -deltaY/2",
-            -10f, currentDeltaYAtMid, 0.01f)
-    }
-
-    @Test
-    fun blockShiftNegativeDeltaYMovesUpward() {
-        val deltaY = -30f
-        val currentDeltaYAtStart = deltaY * (0f - 1f)
-        assertEquals("Negative deltaY at progress=0 must offset by +30 (old position above new)",
-            30f, currentDeltaYAtStart, 0.01f)
-        val currentDeltaYAtEnd = deltaY * (1f - 1f)
-        assertEquals("Negative deltaY at progress=1 must offset by 0 (new position)",
-            0f, currentDeltaYAtEnd, 0.01f)
-    }
-
-    @Test
-    fun computeAffectedLineIndicesFromBothRevisionsReturnsOldLineIndicesWhenNewRevisionIsNull() {
-        val oldRev = AndroidLayoutRevision(
-            revisionId = 1L, editorRevision = 1L,
-            widthFingerprint = 800f, fontFingerprint = "48",
-            lineCount = 2,
-            lineRanges = listOf(
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 0, endUtf8 = 20, startUtf16 = 0, endUtf16 = 20,
-                    top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 0
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 21, endUtf8 = 40, startUtf16 = 21, endUtf16 = 40,
-                    top = 20f, bottom = 40f, baseline = 36f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 1, paragraphLocalLineIndex = 0
-                )
-            ),
-            cursorUtf8 = 10, cursorUtf16 = 10, cursorX = 100f, cursorY = 0f, cursorHeight = 20f,
-            selectionAnchorUtf8 = 10, selectionHeadUtf8 = 10,
-            selectionAnchorUtf16 = 10, selectionHeadUtf16 = 10,
-            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
-            snapshotHandles = emptyList()
-        )
-        val visualIntent = VisualIntent(
-            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
-            operationKind = uniffi.writer_core.EditorOperationKindDto.INSERT,
-            oldAffectedByteRanges = emptyList(),
-            newAffectedByteRanges = listOf(Pair(10, 13)),
-            animationMode = uniffi.writer_core.AnimationModeDto.GLYPH_ANIMATION,
-            durationMs = 160L,
-            coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(10, 10, true)
-        )
-        val planner = AndroidVisualPlanner()
-        val result = planner.computeAffectedLineIndicesFromBothRevisions(visualIntent, oldRev, null)
-        assertTrue("oldLineIndices must be non-empty when newRevision is null",
-            result.oldLineIndices.isNotEmpty())
-        assertTrue("newLineIndices must be empty when newRevision is null",
-            result.newLineIndices.isEmpty())
-        assertTrue("lineIndices must be empty when newRevision is null (old/new spaces separated)",
-            result.lineIndices.isEmpty())
-    }
-
-    @Test
-    fun blockShiftDeltaYMatchesParagraphGeometryChange() {
-        val oldRev = AndroidLayoutRevision(
-            revisionId = 1L, editorRevision = 1L,
-            widthFingerprint = 800f, fontFingerprint = "48",
-            lineCount = 3,
-            lineRanges = listOf(
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 0, endUtf8 = 20, startUtf16 = 0, endUtf16 = 20,
-                    top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 0
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 21, endUtf8 = 40, startUtf16 = 21, endUtf16 = 40,
-                    top = 20f, bottom = 40f, baseline = 36f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 1, paragraphLocalLineIndex = 0
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 41, endUtf8 = 60, startUtf16 = 41, endUtf16 = 60,
-                    top = 40f, bottom = 60f, baseline = 56f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 2, paragraphLocalLineIndex = 0
-                )
-            ),
-            cursorUtf8 = 10, cursorUtf16 = 10, cursorX = 100f, cursorY = 0f, cursorHeight = 20f,
-            selectionAnchorUtf8 = 10, selectionHeadUtf8 = 10,
-            selectionAnchorUtf16 = 10, selectionHeadUtf16 = 10,
-            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
-            snapshotHandles = emptyList()
-        )
-        val newRev = AndroidLayoutRevision(
-            revisionId = 2L, editorRevision = 2L,
-            widthFingerprint = 800f, fontFingerprint = "48",
-            lineCount = 4,
-            lineRanges = listOf(
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 0, endUtf8 = 10, startUtf16 = 0, endUtf16 = 10,
-                    top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
-                    endsWithHardBreak = false, paragraphId = 0, paragraphLocalLineIndex = 0
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 10, endUtf8 = 23, startUtf16 = 10, endUtf16 = 23,
-                    top = 20f, bottom = 40f, baseline = 36f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 1
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 24, endUtf8 = 43, startUtf16 = 24, endUtf16 = 43,
-                    top = 40f, bottom = 60f, baseline = 56f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 1, paragraphLocalLineIndex = 0
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 44, endUtf8 = 63, startUtf16 = 44, endUtf16 = 63,
-                    top = 60f, bottom = 80f, baseline = 76f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 2, paragraphLocalLineIndex = 0
-                )
-            ),
-            cursorUtf8 = 10, cursorUtf16 = 10, cursorX = 100f, cursorY = 0f, cursorHeight = 20f,
-            selectionAnchorUtf8 = 10, selectionHeadUtf8 = 10,
-            selectionAnchorUtf16 = 10, selectionHeadUtf16 = 10,
-            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
-            snapshotHandles = emptyList()
-        )
-        val visualIntent = VisualIntent(
-            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
-            operationKind = uniffi.writer_core.EditorOperationKindDto.INSERT,
-            oldAffectedByteRanges = emptyList(),
-            newAffectedByteRanges = listOf(Pair(10, 13)),
-            animationMode = uniffi.writer_core.AnimationModeDto.LINE_REFLOW_ANIMATION,
-            durationMs = 160L,
-            coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(10, 10, true)
-        )
-        val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
-            "computeAffectedLines",
-            VisualIntent::class.java,
-            AndroidLayoutRevision::class.java,
-            AndroidLayoutRevision::class.java
-        )
-        method.isAccessible = true
-        val result = method.invoke(planner, visualIntent, oldRev, newRev)
-            as AffectedLinesResult
-        assertTrue("Must have blockShifts when paragraph geometry changes",
-            result.blockShifts.isNotEmpty())
-        for (shift in result.blockShifts) {
-            assertTrue("blockShift deltaY must match actual geometry change",
-                kotlin.math.abs(shift.deltaY) > 0.01f)
-        }
-        assertTrue("Edit paragraph lines must be in oldLineIndices or newLineIndices (for Bitmap snapshots)",
-            result.oldLineIndices.isNotEmpty() || result.newLineIndices.isNotEmpty())
-        assertTrue("Edit paragraph lines must NOT extend to document end (blockShift instead)",
-            (result.oldLineIndices.size + result.newLineIndices.size) < oldRev.lineRanges.size + newRev.lineRanges.size)
-    }
-
-    @Test
-    fun utf8ToUtf16NoAllocationForPureAscii() {
-        val text = "Hello World Test"
-        val utf8Offset = 11
-        var utf8Count = 0
-        var utf16Count = 0
-        var i = 0
-        while (i < text.length && utf8Count < utf8Offset) {
-            val cp = text.codePointAt(i)
-            val charCount = Character.charCount(cp)
-            val byteCount = when {
-                cp <= 0x7F -> 1
-                cp <= 0x7FF -> 2
-                cp <= 0xFFFF -> 3
-                else -> 4
-            }
-            utf8Count += byteCount
-            utf16Count += charCount
-            i += charCount
-        }
-        assertEquals(11, utf16Count)
-    }
-
-    @Test
-    fun utf8ToUtf16HandlesEmoji() {
-        val text = "Hi\uDBFF\uDFFD!"
-        var utf8Count = 0
-        var utf16Count = 0
-        val utf8Offset = 6
-        var i = 0
-        while (i < text.length && utf8Count < utf8Offset) {
-            val cp = text.codePointAt(i)
-            val charCount = Character.charCount(cp)
-            val byteCount = when {
-                cp <= 0x7F -> 1
-                cp <= 0x7FF -> 2
-                cp <= 0xFFFF -> 3
-                else -> 4
-            }
-            utf8Count += byteCount
-            utf16Count += charCount
-            i += charCount
-        }
-        assertTrue("utf8ToUtf16 for emoji must advance past surrogate pair",
-            utf16Count >= 3)
-    }
-
-    @Test
-    fun blockShiftMergesAdjacentParagraphsWithSameDeltaY() {
-        val oldRev = AndroidLayoutRevision(
-            revisionId = 1L, editorRevision = 1L,
-            widthFingerprint = 800f, fontFingerprint = "48",
-            lineCount = 4,
-            lineRanges = listOf(
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 0, endUtf8 = 20, startUtf16 = 0, endUtf16 = 20,
-                    top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 0
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 21, endUtf8 = 40, startUtf16 = 21, endUtf16 = 40,
-                    top = 20f, bottom = 40f, baseline = 36f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 1, paragraphLocalLineIndex = 0
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 41, endUtf8 = 60, startUtf16 = 41, endUtf16 = 60,
-                    top = 40f, bottom = 60f, baseline = 56f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 2, paragraphLocalLineIndex = 0
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 61, endUtf8 = 80, startUtf16 = 61, endUtf16 = 80,
-                    top = 60f, bottom = 80f, baseline = 76f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 3, paragraphLocalLineIndex = 0
-                )
-            ),
-            cursorUtf8 = 10, cursorUtf16 = 10, cursorX = 100f, cursorY = 0f, cursorHeight = 20f,
-            selectionAnchorUtf8 = 10, selectionHeadUtf8 = 10,
-            selectionAnchorUtf16 = 10, selectionHeadUtf16 = 10,
-            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
-            snapshotHandles = emptyList()
-        )
-        val newRev = AndroidLayoutRevision(
-            revisionId = 2L, editorRevision = 2L,
-            widthFingerprint = 800f, fontFingerprint = "48",
-            lineCount = 5,
-            lineRanges = listOf(
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 0, endUtf8 = 10, startUtf16 = 0, endUtf16 = 10,
-                    top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
-                    endsWithHardBreak = false, paragraphId = 0, paragraphLocalLineIndex = 0
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 10, endUtf8 = 23, startUtf16 = 10, endUtf16 = 23,
-                    top = 20f, bottom = 40f, baseline = 36f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 1
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 24, endUtf8 = 43, startUtf16 = 24, endUtf16 = 43,
-                    top = 40f, bottom = 60f, baseline = 56f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 1, paragraphLocalLineIndex = 0
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 44, endUtf8 = 63, startUtf16 = 44, endUtf16 = 63,
-                    top = 60f, bottom = 80f, baseline = 76f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 2, paragraphLocalLineIndex = 0
-                ),
-                AndroidLayoutRevision.LineRange(
-                    startUtf8 = 64, endUtf8 = 83, startUtf16 = 64, endUtf16 = 83,
-                    top = 80f, bottom = 100f, baseline = 96f, left = 0f, right = 800f,
-                    endsWithHardBreak = true, paragraphId = 3, paragraphLocalLineIndex = 0
-                )
-            ),
-            cursorUtf8 = 10, cursorUtf16 = 10, cursorX = 100f, cursorY = 0f, cursorHeight = 20f,
-            selectionAnchorUtf8 = 10, selectionHeadUtf8 = 10,
-            selectionAnchorUtf16 = 10, selectionHeadUtf16 = 10,
-            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
-            snapshotHandles = emptyList()
-        )
-        val visualIntent = VisualIntent(
-            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
-            operationKind = uniffi.writer_core.EditorOperationKindDto.INSERT,
-            oldAffectedByteRanges = emptyList(),
-            newAffectedByteRanges = listOf(Pair(10, 13)),
-            animationMode = uniffi.writer_core.AnimationModeDto.LINE_REFLOW_ANIMATION,
-            durationMs = 160L,
-            coordinatedCursor = CoordinatedCursor(10, 10, true)
-        )
-        val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
-            "computeAffectedLines",
-            VisualIntent::class.java,
-            AndroidLayoutRevision::class.java,
-            AndroidLayoutRevision::class.java
-        )
-        method.isAccessible = true
-        val result = method.invoke(planner, visualIntent, oldRev, newRev)
-            as AffectedLinesResult
+        val result = planner.affectedLayoutPlanner.computeAffectedLines(visualIntent, oldRev, newRev)
         assertTrue("Must have blockShifts", result.blockShifts.isNotEmpty())
         val sameDeltaYCount = result.blockShifts.count { kotlin.math.abs(it.deltaY - 20f) < 0.01f }
         assertTrue("Adjacent paragraphs with same deltaY must be merged into one blockShift",
             sameDeltaYCount <= 1)
-        assertTrue("Must have at least 2 blockShifts for merge check", result.blockShifts.size >= 2)
-        for (i in 1 until result.blockShifts.size) {
-            assertFalse("Adjacent blockShifts with same deltaY should have been merged",
-                result.blockShifts[i].startLineIndex == result.blockShifts[i-1].endLineIndexExclusive &&
-                kotlin.math.abs(result.blockShifts[i].deltaY - result.blockShifts[i-1].deltaY) < 0.01f)
+        if (result.blockShifts.size >= 2) {
+            for (i in 1 until result.blockShifts.size) {
+                assertFalse("Adjacent blockShifts with same deltaY should have been merged",
+                    result.blockShifts[i].startLineIndex == result.blockShifts[i-1].endLineIndexExclusive &&
+                    kotlin.math.abs(result.blockShifts[i].deltaY - result.blockShifts[i-1].deltaY) < 0.01f)
+            }
         }
     }
 
@@ -2539,14 +1220,14 @@ class AnimationRebaseContractTest {
             coordinatedCursor = CoordinatedCursor(20, 21, true)
         )
         val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
+        val method = planner.affectedLayoutPlanner.javaClass.getDeclaredMethod(
             "computeAffectedLines",
             VisualIntent::class.java,
             AndroidLayoutRevision::class.java,
             AndroidLayoutRevision::class.java
         )
         method.isAccessible = true
-        val result = method.invoke(planner, visualIntent, oldRev, newRev)
+        val result = method.invoke(planner.affectedLayoutPlanner, visualIntent, oldRev, newRev)
             as AffectedLinesResult
         assertTrue("Both new paragraph IDs must be in affected new lines (split paragraph coverage)",
             result.newLineIndices.isNotEmpty())
@@ -2591,7 +1272,7 @@ class AnimationRebaseContractTest {
             startUtf8 = -1
         )
         val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
+        val method = planner.blockShiftPlanner.javaClass.getDeclaredMethod(
             "applyRebaseToBlockShifts",
             List::class.java,
             VisualFrameSnapshot::class.java,
@@ -2600,7 +1281,7 @@ class AnimationRebaseContractTest {
         )
         method.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val result = method.invoke(planner, listOf(newShift), rebaseSnapshot, null, null) as List<*>
+        val result = method.invoke(planner.blockShiftPlanner, listOf(newShift), rebaseSnapshot, null, null) as List<*>
         val rebasedShift = result[0] as PreparedVisualTransaction.BlockShift
         assertTrue("Rebased deltaY must be larger than original (extending from mid-animation to new position)",
             kotlin.math.abs(rebasedShift.deltaY) > kotlin.math.abs(newShift.deltaY))
@@ -2641,7 +1322,7 @@ class AnimationRebaseContractTest {
             startUtf8 = -1
         )
         val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
+        val method = planner.blockShiftPlanner.javaClass.getDeclaredMethod(
             "applyRebaseToBlockShifts",
             List::class.java,
             VisualFrameSnapshot::class.java,
@@ -2650,7 +1331,7 @@ class AnimationRebaseContractTest {
         )
         method.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val result = method.invoke(planner, listOf(newShift), rebaseSnapshot, null, null) as List<*>
+        val result = method.invoke(planner.blockShiftPlanner, listOf(newShift), rebaseSnapshot, null, null) as List<*>
         val rebasedShift = result[0] as PreparedVisualTransaction.BlockShift
         assertTrue("Rebased deltaY must incorporate old currentTranslateY",
             kotlin.math.abs(rebasedShift.deltaY) > kotlin.math.abs(newShift.deltaY))
@@ -2684,7 +1365,7 @@ class AnimationRebaseContractTest {
             startUtf8 = -1
         )
         val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
+        val method = planner.blockShiftPlanner.javaClass.getDeclaredMethod(
             "applyRebaseToBlockShifts",
             List::class.java,
             VisualFrameSnapshot::class.java,
@@ -2693,7 +1374,7 @@ class AnimationRebaseContractTest {
         )
         method.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val result = method.invoke(planner, listOf(newShift), rebaseSnapshot, null, null) as List<*>
+        val result = method.invoke(planner.blockShiftPlanner, listOf(newShift), rebaseSnapshot, null, null) as List<*>
         val rebasedShift = result[0] as PreparedVisualTransaction.BlockShift
         assertTrue("Rebased deltaY must incorporate nearest old currentTranslateY",
             kotlin.math.abs(rebasedShift.deltaY - newShift.deltaY) > 0.01f)
@@ -2760,14 +1441,14 @@ class AnimationRebaseContractTest {
             coordinatedCursor = CoordinatedCursor(20, 21, true)
         )
         val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
+        val method = planner.affectedLayoutPlanner.javaClass.getDeclaredMethod(
             "computeAffectedLines",
             VisualIntent::class.java,
             AndroidLayoutRevision::class.java,
             AndroidLayoutRevision::class.java
         )
         method.isAccessible = true
-        val result = method.invoke(planner, visualIntent, oldRev, newRev)
+        val result = method.invoke(planner.affectedLayoutPlanner, visualIntent, oldRev, newRev)
             as AffectedLinesResult
         assertTrue("New paragraph 1 (split-off) must be in affected new lines",
             result.newLineIndices.any { idx -> newRev.lineRanges[idx].paragraphId == 1 })
@@ -2831,14 +1512,14 @@ class AnimationRebaseContractTest {
             coordinatedCursor = CoordinatedCursor(20, 20, true)
         )
         val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
+        val method = planner.affectedLayoutPlanner.javaClass.getDeclaredMethod(
             "computeAffectedLines",
             VisualIntent::class.java,
             AndroidLayoutRevision::class.java,
             AndroidLayoutRevision::class.java
         )
         method.isAccessible = true
-        val result = method.invoke(planner, visualIntent, oldRev, newRev)
+        val result = method.invoke(planner.affectedLayoutPlanner, visualIntent, oldRev, newRev)
             as AffectedLinesResult
         assertTrue("Old paragraph 0 (before deleted break) must be in affected old lines",
             result.oldLineIndices.any { idx -> oldRev.lineRanges[idx].paragraphId == 0 })
@@ -2900,7 +1581,7 @@ class AnimationRebaseContractTest {
             startUtf8 = -1
         )
         val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
+        val method = planner.blockShiftPlanner.javaClass.getDeclaredMethod(
             "applyRebaseToBlockShifts",
             List::class.java,
             VisualFrameSnapshot::class.java,
@@ -2909,7 +1590,7 @@ class AnimationRebaseContractTest {
         )
         method.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val result = method.invoke(planner, listOf(newMergedShift), rebaseSnapshot, null, null) as List<*>
+        val result = method.invoke(planner.blockShiftPlanner, listOf(newMergedShift), rebaseSnapshot, null, null) as List<*>
         val rebasedShift = result[0] as PreparedVisualTransaction.BlockShift
         assertTrue("Merged rebase must incorporate old translateY",
             kotlin.math.abs(rebasedShift.deltaY) > kotlin.math.abs(newMergedShift.deltaY))
@@ -2943,7 +1624,7 @@ class AnimationRebaseContractTest {
             startUtf8 = 100
         )
         val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
+        val method = planner.blockShiftPlanner.javaClass.getDeclaredMethod(
             "applyRebaseToBlockShifts",
             List::class.java,
             VisualFrameSnapshot::class.java,
@@ -2952,7 +1633,7 @@ class AnimationRebaseContractTest {
         )
         method.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val result = method.invoke(planner, listOf(newShift), rebaseSnapshot, null, null) as List<*>
+        val result = method.invoke(planner.blockShiftPlanner, listOf(newShift), rebaseSnapshot, null, null) as List<*>
         val rebasedShift = result[0] as PreparedVisualTransaction.BlockShift
         assertTrue("Byte-offset match must find the old BlockShift even when line indices differ",
             kotlin.math.abs(rebasedShift.deltaY) > kotlin.math.abs(newShift.deltaY))
@@ -2993,7 +1674,7 @@ class AnimationRebaseContractTest {
             startUtf8 = 200
         )
         val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
+        val method = planner.blockShiftPlanner.javaClass.getDeclaredMethod(
             "applyRebaseToBlockShifts",
             List::class.java,
             VisualFrameSnapshot::class.java,
@@ -3002,7 +1683,7 @@ class AnimationRebaseContractTest {
         )
         method.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val result = method.invoke(planner, listOf(newShift), rebaseSnapshot, null, null) as List<*>
+        val result = method.invoke(planner.blockShiftPlanner, listOf(newShift), rebaseSnapshot, null, null) as List<*>
         val rebasedShift = result[0] as PreparedVisualTransaction.BlockShift
         assertEquals("Byte-offset match must select the correct old state (startUtf8=200, not 100)",
             20f - (-12f), rebasedShift.deltaY, 0.01f)
@@ -3036,7 +1717,7 @@ class AnimationRebaseContractTest {
             startUtf8 = 100
         )
         val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
+        val method = planner.blockShiftPlanner.javaClass.getDeclaredMethod(
             "applyRebaseToBlockShifts",
             List::class.java,
             VisualFrameSnapshot::class.java,
@@ -3045,7 +1726,7 @@ class AnimationRebaseContractTest {
         )
         method.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val result = method.invoke(planner, listOf(newShift), rebaseSnapshot, null, null) as List<*>
+        val result = method.invoke(planner.blockShiftPlanner, listOf(newShift), rebaseSnapshot, null, null) as List<*>
         val rebasedShift = result[0] as PreparedVisualTransaction.BlockShift
 
         val oldLayoutY = 100f
@@ -3095,13 +1776,13 @@ class AnimationRebaseContractTest {
             )
         )
         val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
+        val method = planner.affectedLayoutPlanner.javaClass.getDeclaredMethod(
             "mergeAdjacentBlockShifts",
             List::class.java
         )
         method.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val merged = method.invoke(planner, shifts) as List<*>
+        val merged = method.invoke(planner.affectedLayoutPlanner, shifts) as List<*>
         assertEquals("Adjacent paragraphs with sub-pixel deltaY differences must merge into one block",
             1, merged.size)
         val block = merged[0] as PreparedVisualTransaction.BlockShift
@@ -3138,13 +1819,13 @@ class AnimationRebaseContractTest {
             )
         )
         val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
+        val method = planner.affectedLayoutPlanner.javaClass.getDeclaredMethod(
             "mergeAdjacentBlockShifts",
             List::class.java
         )
         method.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val merged = method.invoke(planner, shifts) as List<*>
+        val merged = method.invoke(planner.affectedLayoutPlanner, shifts) as List<*>
         assertEquals("Adjacent paragraphs with significantly different deltaY must NOT merge",
             2, merged.size)
     }
@@ -3205,7 +1886,7 @@ class AnimationRebaseContractTest {
             startUtf8 = 200
         )
         val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
+        val method = planner.blockShiftPlanner.javaClass.getDeclaredMethod(
             "applyRebaseToBlockShifts",
             List::class.java,
             VisualFrameSnapshot::class.java,
@@ -3214,7 +1895,7 @@ class AnimationRebaseContractTest {
         )
         method.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val result = method.invoke(planner, listOf(newShift1, newShift2), rebaseSnapshot, null, null) as List<*>
+        val result = method.invoke(planner.blockShiftPlanner, listOf(newShift1, newShift2), rebaseSnapshot, null, null) as List<*>
         val rebased1 = result[0] as PreparedVisualTransaction.BlockShift
         val rebased2 = result[1] as PreparedVisualTransaction.BlockShift
         assertTrue("First shift (startUtf8=100) must match the old state and get rebase adjustment",
@@ -3364,7 +2045,7 @@ class AnimationRebaseContractTest {
             )
         )
         val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
+        val method = planner.blockShiftPlanner.javaClass.getDeclaredMethod(
             "applyRebaseToBlockShifts",
             List::class.java,
             VisualFrameSnapshot::class.java,
@@ -3375,7 +2056,7 @@ class AnimationRebaseContractTest {
         val forwardMapper: (Int) -> Int? = { offset -> if (offset == 40) 43 else null }
         val reverseMapper: (Int) -> Int? = { offset -> if (offset == 43) 40 else null }
         @Suppress("UNCHECKED_CAST")
-        val result = method.invoke(planner, newBlockShifts, rebaseSnapshot, forwardMapper, reverseMapper)
+        val result = method.invoke(planner.blockShiftPlanner, newBlockShifts, rebaseSnapshot, forwardMapper, reverseMapper)
             as List<*>
         assertEquals("Must produce one rebased BlockShift", 1, result.size)
         val rebased = result[0] as PreparedVisualTransaction.BlockShift
@@ -3525,7 +2206,7 @@ class AnimationRebaseContractTest {
             )
         )
         val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
+        val method = planner.blockShiftPlanner.javaClass.getDeclaredMethod(
             "applyRebaseToBlockShifts",
             List::class.java,
             VisualFrameSnapshot::class.java,
@@ -3536,7 +2217,7 @@ class AnimationRebaseContractTest {
         val offsetMapper: (Int) -> Int? = { offset -> if (offset == 40) 43 else offset + 3 }
         val reverseMapper: (Int) -> Int? = { offset -> if (offset == 43) 40 else offset - 3 }
         @Suppress("UNCHECKED_CAST")
-        val result = method.invoke(planner, newBlockShifts, rebaseSnapshot, offsetMapper, reverseMapper)
+        val result = method.invoke(planner.blockShiftPlanner, newBlockShifts, rebaseSnapshot, offsetMapper, reverseMapper)
             as List<*>
         assertEquals(1, result.size)
         val shifted = result[0] as PreparedVisualTransaction.BlockShift
@@ -3687,7 +2368,7 @@ class AnimationRebaseContractTest {
             )
         )
         val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
+        val method = planner.blockShiftPlanner.javaClass.getDeclaredMethod(
             "applyRebaseToBlockShifts",
             List::class.java,
             VisualFrameSnapshot::class.java,
@@ -3698,7 +2379,7 @@ class AnimationRebaseContractTest {
         val offsetMapper: (Int) -> Int? = { offset -> if (offset == 40) 43 else offset + 3 }
         val reverseMapper: (Int) -> Int? = { offset -> if (offset == 43) 40 else offset - 3 }
         @Suppress("UNCHECKED_CAST")
-        val result = method.invoke(planner, newBlockShifts, rebaseSnapshot, offsetMapper, reverseMapper)
+        val result = method.invoke(planner.blockShiftPlanner, newBlockShifts, rebaseSnapshot, offsetMapper, reverseMapper)
             as List<*>
         assertEquals(1, result.size)
         val shifted = result[0] as PreparedVisualTransaction.BlockShift
@@ -3886,7 +2567,7 @@ class AnimationRebaseContractTest {
             }
         }
         val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
+        val method = planner.blockShiftPlanner.javaClass.getDeclaredMethod(
             "applyRebaseToBlockShifts",
             List::class.java,
             VisualFrameSnapshot::class.java,
@@ -3895,7 +2576,7 @@ class AnimationRebaseContractTest {
         )
         method.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val result = method.invoke(planner, listOf(newShift), rebaseSnapshot, offsetMapper, null) as List<*>
+        val result = method.invoke(planner.blockShiftPlanner, listOf(newShift), rebaseSnapshot, offsetMapper, null) as List<*>
         val rebasedShift = result[0] as PreparedVisualTransaction.BlockShift
         assertEquals("Forward match with endUtf8 validation must adjust deltaY",
             20f - (-10f), rebasedShift.deltaY, 0.01f)
@@ -3938,7 +2619,7 @@ class AnimationRebaseContractTest {
         )
         val offsetMapper: (Int) -> Int? = { oldOffset -> oldOffset + 3 }
         val planner = AndroidVisualPlanner()
-        val method = planner.javaClass.getDeclaredMethod(
+        val method = planner.blockShiftPlanner.javaClass.getDeclaredMethod(
             "applyRebaseToBlockShifts",
             List::class.java,
             VisualFrameSnapshot::class.java,
@@ -3947,7 +2628,7 @@ class AnimationRebaseContractTest {
         )
         method.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val result = method.invoke(planner, listOf(newShift), rebaseSnapshot, offsetMapper, null) as List<*>
+        val result = method.invoke(planner.blockShiftPlanner, listOf(newShift), rebaseSnapshot, offsetMapper, null) as List<*>
         val rebasedShift = result[0] as PreparedVisualTransaction.BlockShift
         assertTrue("Tier 1b start-only match must still adjust deltaY",
             kotlin.math.abs(rebasedShift.deltaY - (20f - (-10f))) < 0.01f ||

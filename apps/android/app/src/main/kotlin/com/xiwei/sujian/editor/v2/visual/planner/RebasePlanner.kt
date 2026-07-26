@@ -11,7 +11,7 @@ class RebasePlanner {
     fun applyRebaseToSlices(
         newSlices: List<PreparedVisualTransaction.AnimatedSlice>,
         rebaseSnapshot: VisualFrameSnapshot,
-        snapshotLookup: Map<Long, AndroidLineSnapshot>
+        snapshotLookup: Map<Long, AndroidLineSnapshot> = emptyMap()
     ): List<PreparedVisualTransaction.AnimatedSlice> {
         if (rebaseSnapshot.sliceVisualStates.isEmpty()) return newSlices
 
@@ -36,24 +36,75 @@ class RebasePlanner {
             }
         }
 
-        for ((idx, state) in rebaseSnapshot.sliceVisualStates.withIndex()) {
-            if (idx in usedRebaseIndices) continue
+        for ((stateIdx, state) in rebaseSnapshot.sliceVisualStates.withIndex()) {
+            if (stateIdx in usedRebaseIndices) continue
+            val isFadingOut = state.role == SliceRole.Delete || state.role == SliceRole.CrossfadeOld
             val snapshot = snapshotLookup[state.snapshotId]
-            if (snapshot != null) {
+            val sourceRect = if (snapshot != null) {
+                val cluster = snapshot.clusters.firstOrNull {
+                    it.documentByteStart == state.clusterByteStart && it.documentByteEndExclusive == state.clusterByteEndExclusive
+                }
+                cluster?.sourceRectInLineImage ?: snapshot.sourceRect
+            } else {
+                android.graphics.Rect(0, 0, 0, 0)
+            }
+            if (isFadingOut && state.currentAlpha > 0.01f) {
                 result.add(PreparedVisualTransaction.AnimatedSlice(
                     role = state.role,
                     snapshot = snapshot,
-                    sourceRect = snapshot.sourceRect,
+                    sourceRect = sourceRect,
                     destinationRect = android.graphics.RectF(
-                        state.destinationLeft, state.destinationTop,
-                        state.destinationRight, state.destinationBottom
-                    ),
-                    startAlpha = state.currentAlpha,
-                    endAlpha = if (state.role == SliceRole.Delete || state.role == SliceRole.CrossfadeOld) 0f else 1f,
-                    fromDestinationRect = android.graphics.RectF(
                         state.currentLeft, state.currentTop,
                         state.currentRight, state.currentBottom
                     ),
+                    startAlpha = state.currentAlpha,
+                    endAlpha = 0f,
+                    clusterByteStart = state.clusterByteStart,
+                    clusterByteEndExclusive = state.clusterByteEndExclusive
+                ))
+            } else if (state.role == SliceRole.Move) {
+                val currentRect = android.graphics.RectF(
+                    state.currentLeft, state.currentTop,
+                    state.currentRight, state.currentBottom
+                )
+                val destRect = android.graphics.RectF(
+                    state.destinationLeft, state.destinationTop,
+                    state.destinationRight, state.destinationBottom
+                )
+                if (currentRect != destRect || state.currentAlpha < 0.99f) {
+                    result.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.Move,
+                        snapshot = snapshot,
+                        sourceRect = sourceRect,
+                        destinationRect = destRect,
+                        startAlpha = state.currentAlpha,
+                        endAlpha = 1f,
+                        fromDestinationRect = currentRect,
+                        clusterByteStart = state.clusterByteStart,
+                        clusterByteEndExclusive = state.clusterByteEndExclusive
+                    ))
+                }
+            } else if (!isFadingOut && state.currentAlpha < 0.99f) {
+                val currentRect = android.graphics.RectF(
+                    state.currentLeft, state.currentTop,
+                    state.currentRight, state.currentBottom
+                )
+                val originalDestRect = android.graphics.RectF(
+                    state.destinationLeft, state.destinationTop,
+                    state.destinationRight, state.destinationBottom
+                )
+                val endAlpha = when (state.role) {
+                    SliceRole.Insert, SliceRole.CrossfadeNew, SliceRole.Move -> 1f
+                    else -> state.currentAlpha
+                }
+                result.add(PreparedVisualTransaction.AnimatedSlice(
+                    role = state.role,
+                    snapshot = snapshot,
+                    sourceRect = sourceRect,
+                    destinationRect = originalDestRect,
+                    startAlpha = state.currentAlpha,
+                    endAlpha = endAlpha,
+                    fromDestinationRect = currentRect,
                     clusterByteStart = state.clusterByteStart,
                     clusterByteEndExclusive = state.clusterByteEndExclusive
                 ))
@@ -80,14 +131,19 @@ class RebasePlanner {
         }
     }
 
-    private fun compatibleRebaseRoles(newRole: SliceRole, rebaseRole: SliceRole): Boolean {
-        val appearing = setOf(SliceRole.Insert, SliceRole.CrossfadeNew, SliceRole.Move)
-        val disappearing = setOf(SliceRole.Delete, SliceRole.CrossfadeOld)
-        return when (newRole) {
-            in appearing -> rebaseRole in appearing
-            in disappearing -> rebaseRole in disappearing
-            else -> newRole == rebaseRole
+    fun compatibleRebaseRoles(role: SliceRole): Set<SliceRole> {
+        return when (role) {
+            SliceRole.Move -> setOf(SliceRole.Move, SliceRole.Insert, SliceRole.CrossfadeNew)
+            SliceRole.Insert -> setOf(SliceRole.Insert, SliceRole.Move, SliceRole.CrossfadeNew)
+            SliceRole.CrossfadeNew -> setOf(SliceRole.CrossfadeNew, SliceRole.Move, SliceRole.Insert)
+            SliceRole.Delete -> setOf(SliceRole.Delete, SliceRole.CrossfadeOld)
+            SliceRole.CrossfadeOld -> setOf(SliceRole.CrossfadeOld, SliceRole.Delete)
+            SliceRole.Static -> setOf(SliceRole.Static)
         }
+    }
+
+    private fun compatibleRebaseRoles(newRole: SliceRole, rebaseRole: SliceRole): Boolean {
+        return rebaseRole in compatibleRebaseRoles(newRole)
     }
 
     private fun findRebaseIndexByLineAndRole(
@@ -129,19 +185,53 @@ class RebasePlanner {
             }
     }
 
-    private fun applyRebaseState(
+    fun applyRebaseState(
         slice: PreparedVisualTransaction.AnimatedSlice,
         rebaseState: SliceVisualState,
-        snapshotLookup: Map<Long, AndroidLineSnapshot>
+        snapshotLookup: Map<Long, AndroidLineSnapshot> = emptyMap()
     ): PreparedVisualTransaction.AnimatedSlice {
         val snapshot = slice.snapshot ?: snapshotLookup[rebaseState.snapshotId]
-        return slice.copy(
-            snapshot = snapshot,
-            fromDestinationRect = android.graphics.RectF(
-                rebaseState.currentLeft, rebaseState.currentTop,
-                rebaseState.currentRight, rebaseState.currentBottom
-            ),
-            startAlpha = rebaseState.currentAlpha
+        val fromRect = android.graphics.RectF(
+            rebaseState.currentLeft, rebaseState.currentTop,
+            rebaseState.currentRight, rebaseState.currentBottom
         )
+        return when (slice.role) {
+            SliceRole.Move -> {
+                slice.copy(
+                    snapshot = snapshot,
+                    fromDestinationRect = fromRect,
+                    startAlpha = rebaseState.currentAlpha
+                )
+            }
+            SliceRole.Insert -> {
+                if (rebaseState.role == SliceRole.Move) {
+                    slice.copy(
+                        snapshot = snapshot,
+                        startAlpha = rebaseState.currentAlpha,
+                        fromDestinationRect = fromRect
+                    )
+                } else {
+                    slice.copy(snapshot = snapshot, startAlpha = rebaseState.currentAlpha)
+                }
+            }
+            SliceRole.Delete -> {
+                slice.copy(snapshot = snapshot, startAlpha = rebaseState.currentAlpha, endAlpha = 0f)
+            }
+            SliceRole.CrossfadeOld -> {
+                slice.copy(snapshot = snapshot, startAlpha = rebaseState.currentAlpha, endAlpha = 0f)
+            }
+            SliceRole.CrossfadeNew -> {
+                if (rebaseState.role == SliceRole.Move) {
+                    slice.copy(
+                        snapshot = snapshot,
+                        startAlpha = rebaseState.currentAlpha,
+                        fromDestinationRect = fromRect
+                    )
+                } else {
+                    slice.copy(snapshot = snapshot, startAlpha = rebaseState.currentAlpha)
+                }
+            }
+            SliceRole.Static -> slice
+        }
     }
 }
