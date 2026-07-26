@@ -97,7 +97,7 @@ impl SearchIndexService {
         for entry in entries {
             self.backend.insert(entry);
         }
-        self.update_queue.clear();
+        self.update_queue.clear_by_project_id(project_id);
         self.last_rebuild_at = super::extractor::now_epoch();
         self.is_rebuilding = false;
     }

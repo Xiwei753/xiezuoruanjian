@@ -1536,4 +1536,71 @@ mod tests {
         assert!(stale_after.is_empty(),
             "stale starmap index with old project_id must be removed by per-project rebuild");
     }
+
+    #[test]
+    fn update_queue_clear_by_project_id_preserves_other_projects() {
+        use crate::search::update_queue::SearchUpdateQueue;
+        let mut queue = SearchUpdateQueue::new();
+        queue.enqueue(SearchIndexUpdate {
+            action: SearchIndexAction::Upsert,
+            object_id: "chapter_body:p1:c1".to_string(),
+            scope: SearchScope::ChapterBody,
+            title: "P1 Chapter".to_string(),
+            body: "content".to_string(),
+            target: Some(SearchTarget {
+                project_id: Some("p1".to_string()),
+                volume_id: None,
+                chapter_id: Some("c1".to_string()),
+                starmap_id: None,
+                node_id: None,
+                setting_key: None,
+            }),
+        });
+        queue.enqueue(SearchIndexUpdate {
+            action: SearchIndexAction::Upsert,
+            object_id: "chapter_body:p2:c2".to_string(),
+            scope: SearchScope::ChapterBody,
+            title: "P2 Chapter".to_string(),
+            body: "content".to_string(),
+            target: Some(SearchTarget {
+                project_id: Some("p2".to_string()),
+                volume_id: None,
+                chapter_id: Some("c2".to_string()),
+                starmap_id: None,
+                node_id: None,
+                setting_key: None,
+            }),
+        });
+        queue.enqueue(SearchIndexUpdate {
+            action: SearchIndexAction::Upsert,
+            object_id: "starmap:s1".to_string(),
+            scope: SearchScope::StarmapTitle,
+            title: "Unbound Map".to_string(),
+            body: String::new(),
+            target: Some(SearchTarget {
+                project_id: None,
+                volume_id: None,
+                chapter_id: None,
+                starmap_id: Some("s1".to_string()),
+                node_id: None,
+                setting_key: None,
+            }),
+        });
+        assert_eq!(queue.len(), 3);
+        queue.clear_by_project_id("p1");
+        assert_eq!(queue.len(), 2, "only p1 entry should be removed");
+        let remaining: Vec<_> = queue.drain();
+        let ids: Vec<_> = remaining.iter().map(|u| u.object_id.as_str()).collect();
+        assert!(ids.contains(&"chapter_body:p2:c2"), "p2 entry should remain");
+        assert!(ids.contains(&"starmap:s1"), "unbound starmap entry should remain");
+    }
+
+    #[test]
+    fn starmap_embed_scope_mapping_in_api() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        let result = api.global_search_json("test", "starmapEmbed", 10, None);
+        assert!(result.is_ok(), "starmapEmbed scope should be recognized");
+    }
 }

@@ -19,6 +19,7 @@ impl WriterCoreApi {
             "starmapEdgeLabel" => crate::search::SearchScope::StarmapEdgeLabel,
             "starmapHyperlink" => crate::search::SearchScope::StarmapHyperlink,
             "starmapLink" => crate::search::SearchScope::StarmapLink,
+            "starmapEmbed" => crate::search::SearchScope::StarmapEmbed,
             "setting" => crate::search::SearchScope::Setting,
             _ => crate::search::SearchScope::All,
         };
@@ -60,6 +61,7 @@ impl WriterCoreApi {
             "starmapEdgeLabel" => crate::search::SearchScope::StarmapEdgeLabel,
             "starmapHyperlink" => crate::search::SearchScope::StarmapHyperlink,
             "starmapLink" => crate::search::SearchScope::StarmapLink,
+            "starmapEmbed" => crate::search::SearchScope::StarmapEmbed,
             "setting" => crate::search::SearchScope::Setting,
             _ => crate::search::SearchScope::All,
         };

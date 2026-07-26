@@ -47,6 +47,20 @@ impl SearchUpdateQueue {
         self.queue.clear();
     }
 
+    pub fn clear_by_project_id(&mut self, project_id: &str) {
+        let keep: Vec<SearchIndexUpdate> = self.queue
+            .drain(..)
+            .filter(|u| {
+                u.target
+                    .as_ref()
+                    .and_then(|t| t.project_id.as_deref())
+                    .map_or(true, |pid| pid != project_id)
+            })
+            .collect();
+        self.queue = keep.into_iter().collect();
+        self.pending_object_ids = self.queue.iter().map(|u| u.object_id.clone()).collect();
+    }
+
     pub fn len(&self) -> usize {
         self.queue.len()
     }
