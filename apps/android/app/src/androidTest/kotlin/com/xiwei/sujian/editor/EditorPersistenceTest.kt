@@ -154,16 +154,21 @@ class EditorPersistenceTest {
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText(expectedAfterInsert))
 
+        val expectedCursorUtf8 =
+            insertByteOffset + "XY".toByteArray(Charsets.UTF_8).size
+        val expectedCursorUtf16 =
+            expectedUtf16InsertOffset + "XY".length
+
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasSelectionUtf8(
-                expectedAfterInsert.toByteArray(Charsets.UTF_8).size,
-                expectedAfterInsert.toByteArray(Charsets.UTF_8).size
+                expectedCursorUtf8,
+                expectedCursorUtf8
             ))
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasSelectionUtf16(
-                expectedAfterInsert.length,
-                expectedAfterInsert.length
+                expectedCursorUtf16,
+                expectedCursorUtf16
             ))
 
         activityRule.restartRuntimeAndActivity()
