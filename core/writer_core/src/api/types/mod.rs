@@ -10,12 +10,16 @@ mod editor;
 mod platform;
 mod platform_interaction;
 mod project;
+#[cfg(test)]
+mod project_tests;
 pub mod screen_policy;
 mod settings;
 mod starmap;
 mod stats;
 mod sync;
 mod volume;
+#[cfg(test)]
+mod volume_tests;
 mod workspace;
 
 pub use action::*;
