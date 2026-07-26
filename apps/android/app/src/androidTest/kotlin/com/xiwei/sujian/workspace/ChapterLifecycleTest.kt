@@ -54,11 +54,6 @@ class ChapterLifecycleTest {
     fun createChapter_appearsInList() {
         val testData = initTestData()
 
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationWorks)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationWorks).performClick()
-
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList)
-
         navigateToTestVolume(testData)
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceCreateChapter, timeoutMs = 15_000)
@@ -76,11 +71,6 @@ class ChapterLifecycleTest {
     @Test
     fun createChapter_canOpenInEditor() {
         val testData = initTestData()
-
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationWorks)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationWorks).performClick()
-
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList)
 
         navigateToTestVolume(testData)
 
@@ -102,11 +92,6 @@ class ChapterLifecycleTest {
     fun createTwoChapters_canSwitchBetween() {
         val testData = initTestData()
         val session = getSession()
-
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationWorks)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationWorks).performClick()
-
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList)
 
         navigateToTestVolume(testData)
 
@@ -166,9 +151,6 @@ class ChapterLifecycleTest {
         val session = getSession()
         val testData = initTestData()
 
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationWorks)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationWorks).performClick()
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList)
         navigateToTestVolume(testData)
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceCreateChapter, timeoutMs = 15_000)
@@ -285,14 +267,17 @@ class ChapterLifecycleTest {
     }
 
     private fun navigateToTestVolume(testData: AndroidTestEnvironment.TestProjectData) {
-        val volumeTag = SujianSemanticIds.volume(testData.volumeId)
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationWorks, timeoutMs = 15_000)
+        composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationWorks).performClick()
+
         val projectTag = SujianSemanticIds.project(testData.projectId)
-        val volumeNodes = composeTestRule.onAllNodes(androidx.compose.ui.test.hasTestTag(volumeTag))
-        if (volumeNodes.fetchSemanticsNodes().isEmpty()) {
-            ComposeWait.waitForTag(composeTestRule, projectTag)
-            composeTestRule.onNodeWithTag(projectTag).performClick()
-        }
-        ComposeWait.waitForTag(composeTestRule, volumeTag)
+        ComposeWait.waitForTag(composeTestRule, projectTag, timeoutMs = 15_000)
+        composeTestRule.onNodeWithTag(projectTag).performClick()
+
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList, timeoutMs = 15_000)
+
+        val volumeTag = SujianSemanticIds.volume(testData.volumeId)
+        ComposeWait.waitForTag(composeTestRule, volumeTag, timeoutMs = 15_000)
         composeTestRule.onNodeWithTag(volumeTag).performClick()
     }
 }
