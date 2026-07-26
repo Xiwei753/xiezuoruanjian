@@ -2,7 +2,7 @@ use super::types::{CoordinatedCursor, DisplayPatch, EditorOperationKind, EditorV
 use super::result::{EditorEditOutcome, EditorEditResult};
 use super::{EditorKernel, CompositionSessionState, UndoEntry};
 
-use crate::editor::strong_types::{EditorRevision, EditorSessionId, EditorSessionGeneration, Utf8ByteOffset};
+use crate::editor::strong_types::{EditorRevision, EditorSessionId, EditorSessionGeneration, Utf8ByteOffset, Utf8ByteRange};
 use crate::editor::transaction::{
     choose_animation_mode, count_grapheme_clusters,
     text_contains_complex_grapheme, CompositionVisualRevision,
@@ -15,9 +15,9 @@ impl EditorKernel {
         &mut self,
         replace_start: usize,
         replace_end_exclusive: usize,
-        base_revision: u64,
-        old_cursor: usize,
-        old_selection: (usize, usize),
+        base_revision: EditorRevision,
+        old_cursor: Utf8ByteOffset,
+        old_selection: Utf8ByteRange,
     ) -> EditorEditOutcome {
         if self.composition_session.is_some() {
             return EditorEditOutcome::InvalidRange(self.noop_result(base_revision, old_cursor, old_selection));
@@ -37,7 +37,7 @@ impl EditorKernel {
 
         self.composition_session = Some(CompositionSessionState {
             session_id,
-            base_revision: EditorRevision::new(base_revision),
+            base_revision,
             generation: EditorSessionGeneration::initial(),
             replace_start,
             replace_end_exclusive,
@@ -45,11 +45,12 @@ impl EditorKernel {
             preedit_cursor_utf16: 0,
         });
 
-        let new_selection = (self.selection_anchor.value(), self.cursor.value());
+        let new_selection = Utf8ByteRange::new(self.selection_anchor.value(), self.cursor.value())
+            .unwrap_or(Utf8ByteRange::new(0, 0).unwrap());
         EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
-            new_revision: self.revision.value(),
+            new_revision: self.revision,
             display_patches: vec![],
             old_selection_byte_range: old_selection,
             new_selection_byte_range: new_selection,
@@ -61,8 +62,8 @@ impl EditorKernel {
                 animation_mode: AnimationMode::SystemSuppressed,
                 duration_ms: 0,
                 coordinated_cursor: CoordinatedCursor {
-                    old_byte_offset: old_cursor,
-                    new_byte_offset: self.cursor.value(),
+                    old_offset: old_cursor,
+                    new_offset: self.cursor,
                     should_animate: false,
                 },
             },
@@ -76,14 +77,14 @@ impl EditorKernel {
         composition_generation: u64,
         new_preedit_text: &str,
         new_preedit_cursor_offset: usize,
-        base_revision: u64,
-        old_cursor: usize,
-        old_selection: (usize, usize),
+        base_revision: EditorRevision,
+        old_cursor: Utf8ByteOffset,
+        old_selection: Utf8ByteRange,
     ) -> EditorEditOutcome {
         let session = match &mut self.composition_session {
             Some(s) if s.session_id.value() == composition_session_id
                 && s.generation.value() == composition_generation
-                && s.base_revision.value() == base_revision => s,
+                && s.base_revision == base_revision => s,
             _ => return EditorEditOutcome::StaleRevision(self.stale_session_result()),
         };
 
@@ -97,12 +98,12 @@ impl EditorKernel {
         let old_affected = if old_preedit_text.is_empty() {
             vec![]
         } else {
-            vec![(replace_start, replace_start + old_preedit_text.len())]
+            vec![Utf8ByteRange::new(replace_start, replace_start + old_preedit_text.len()).unwrap()]
         };
         let new_affected = if new_preedit_text.is_empty() {
             vec![]
         } else {
-            vec![(replace_start, replace_start + new_preedit_text.len())]
+            vec![Utf8ByteRange::new(replace_start, replace_start + new_preedit_text.len()).unwrap()]
         };
 
         let changed_text: &str = if new_preedit_text.len() >= old_preedit_text.len() {
@@ -125,11 +126,12 @@ impl EditorKernel {
             )
         };
 
-        let new_selection = (self.selection_anchor.value(), self.cursor.value());
+        let new_selection = Utf8ByteRange::new(self.selection_anchor.value(), self.cursor.value())
+            .unwrap_or(Utf8ByteRange::new(0, 0).unwrap());
         EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
-            new_revision: self.revision.value(),
+            new_revision: self.revision,
             display_patches: vec![],
             old_selection_byte_range: old_selection,
             new_selection_byte_range: new_selection,
@@ -141,9 +143,9 @@ impl EditorKernel {
                 animation_mode,
                 duration_ms: self.animation_duration_ms,
                 coordinated_cursor: CoordinatedCursor {
-                    old_byte_offset: old_cursor,
-                    new_byte_offset: self.cursor.value(),
-                    should_animate: self.animation_enabled && old_cursor != self.cursor.value(),
+                    old_offset: old_cursor,
+                    new_offset: self.cursor,
+                    should_animate: self.animation_enabled && old_cursor != self.cursor,
                 },
             },
         })
@@ -153,24 +155,25 @@ impl EditorKernel {
         &mut self,
         composition_session_id: u64,
         composition_generation: u64,
-        base_revision: u64,
-        old_cursor: usize,
-        old_selection: (usize, usize),
+        base_revision: EditorRevision,
+        old_cursor: Utf8ByteOffset,
+        old_selection: Utf8ByteRange,
     ) -> EditorEditOutcome {
         let session = match &self.composition_session {
             Some(s) if s.session_id.value() == composition_session_id
                 && s.generation.value() == composition_generation
-                && s.base_revision.value() == base_revision => s.clone(),
+                && s.base_revision == base_revision => s.clone(),
             _ => return EditorEditOutcome::StaleRevision(self.stale_session_result()),
         };
 
         if session.preedit_text.is_empty() {
             self.composition_session = None;
-            let new_selection = (self.selection_anchor.value(), self.cursor.value());
+            let new_selection = Utf8ByteRange::new(self.selection_anchor.value(), self.cursor.value())
+                .unwrap_or(Utf8ByteRange::new(0, 0).unwrap());
             return EditorEditOutcome::Applied(EditorEditResult {
                 transaction_id: self.take_transaction_id(),
                 base_revision,
-                new_revision: self.revision.value(),
+                new_revision: self.revision,
                 display_patches: vec![],
                 old_selection_byte_range: old_selection,
                 new_selection_byte_range: new_selection,
@@ -182,8 +185,8 @@ impl EditorKernel {
                     animation_mode: AnimationMode::SystemSuppressed,
                     duration_ms: 0,
                     coordinated_cursor: CoordinatedCursor {
-                        old_byte_offset: old_cursor,
-                        new_byte_offset: self.cursor.value(),
+                        old_offset: old_cursor,
+                        new_offset: self.cursor,
                         should_animate: false,
                     },
                 },
@@ -232,18 +235,18 @@ impl EditorKernel {
         self.undo_stack.push(UndoEntry {
             old_text: old_text.clone(),
             new_text: self.text.clone(),
-            old_cursor,
+            old_cursor: old_cursor.value(),
             new_cursor: resulting_cursor,
         });
         self.redo_stack.clear();
 
-        let new_revision = self.revision.value();
-        let new_selection = (resulting_cursor, resulting_cursor);
+        let new_revision = self.revision;
+        let new_selection = Utf8ByteRange::new(resulting_cursor, resulting_cursor).unwrap();
 
         let display_patches = vec![DisplayPatch {
             base_revision,
             new_revision,
-            replace_byte_range: (replace_start, replace_end),
+            replace_byte_range: Utf8ByteRange::new(replace_start, replace_end).unwrap(),
             inserted_text: committed_text.clone(),
             resulting_selection_byte_range: new_selection,
         }];
@@ -273,14 +276,14 @@ impl EditorKernel {
             visual_intent: EditorVisualIntent {
                 cause: EditorTransactionCause::TypingCommit,
                 operation_kind: EditorOperationKind::CompositionCommit,
-                old_affected_byte_ranges: vec![(replace_start, replace_start + committed_text.len())],
-                new_affected_byte_ranges: vec![(replace_start, replace_start + committed_text.len())],
+                old_affected_byte_ranges: vec![Utf8ByteRange::new(replace_start, replace_start + committed_text.len()).unwrap()],
+                new_affected_byte_ranges: vec![Utf8ByteRange::new(replace_start, replace_start + committed_text.len()).unwrap()],
                 animation_mode,
                 duration_ms: self.animation_duration_ms,
                 coordinated_cursor: CoordinatedCursor {
-                    old_byte_offset: old_cursor,
-                    new_byte_offset: resulting_cursor,
-                    should_animate: self.animation_enabled && old_cursor != resulting_cursor,
+                    old_offset: old_cursor,
+                    new_offset: Utf8ByteOffset::unchecked(resulting_cursor),
+                    should_animate: self.animation_enabled && old_cursor.value() != resulting_cursor,
                 },
             },
         };
@@ -296,14 +299,14 @@ impl EditorKernel {
         &mut self,
         composition_session_id: u64,
         composition_generation: u64,
-        base_revision: u64,
-        old_cursor: usize,
-        old_selection: (usize, usize),
+        base_revision: EditorRevision,
+        old_cursor: Utf8ByteOffset,
+        old_selection: Utf8ByteRange,
     ) -> EditorEditOutcome {
         let session = match &self.composition_session {
             Some(s) if s.session_id.value() == composition_session_id
                 && s.generation.value() == composition_generation
-                && s.base_revision.value() == base_revision => s.clone(),
+                && s.base_revision == base_revision => s.clone(),
             _ => return EditorEditOutcome::StaleRevision(self.stale_session_result()),
         };
 
@@ -319,9 +322,9 @@ impl EditorKernel {
 
         let preedit_byte_len = session.preedit_text.len();
         let old_affected = if preedit_byte_len > 0 {
-            vec![(replace_start, replace_start + preedit_byte_len)]
+            vec![Utf8ByteRange::new(replace_start, replace_start + preedit_byte_len).unwrap()]
         } else if replace_start != replace_end {
-            vec![(replace_start, replace_end)]
+            vec![Utf8ByteRange::new(replace_start, replace_end).unwrap()]
         } else {
             vec![]
         };
@@ -332,11 +335,12 @@ impl EditorKernel {
             AnimationMode::ClusterAnimation
         };
 
-        let new_selection = (self.selection_anchor.value(), self.cursor.value());
+        let new_selection = Utf8ByteRange::new(self.selection_anchor.value(), self.cursor.value())
+            .unwrap_or(Utf8ByteRange::new(0, 0).unwrap());
         EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
-            new_revision: self.revision.value(),
+            new_revision: self.revision,
             display_patches: vec![],
             old_selection_byte_range: old_selection,
             new_selection_byte_range: new_selection,
@@ -348,9 +352,9 @@ impl EditorKernel {
                 animation_mode,
                 duration_ms: self.animation_duration_ms,
                 coordinated_cursor: CoordinatedCursor {
-                    old_byte_offset: old_cursor,
-                    new_byte_offset: self.cursor.value(),
-                    should_animate: self.animation_enabled && old_cursor != self.cursor.value(),
+                    old_offset: old_cursor,
+                    new_offset: self.cursor,
+                    should_animate: self.animation_enabled && old_cursor != self.cursor,
                 },
             },
         })
@@ -415,18 +419,18 @@ impl EditorKernel {
             old_affected_byte_ranges: if old_preedit_text.is_empty() {
                 vec![]
             } else {
-                vec![(replace_start, replace_start + old_preedit_text.len())]
+                vec![Utf8ByteRange::new(replace_start, replace_start + old_preedit_text.len()).unwrap()]
             },
             new_affected_byte_ranges: if new_preedit_text.is_empty() {
                 vec![]
             } else {
-                vec![(replace_start, new_end)]
+                vec![Utf8ByteRange::new(replace_start, new_end).unwrap()]
             },
             animation_mode,
             duration_ms: self.animation_duration_ms,
             coordinated_cursor: CoordinatedCursor {
-                old_byte_offset: self.cursor.value(),
-                new_byte_offset: new_end,
+                old_offset: self.cursor,
+                new_offset: Utf8ByteOffset::unchecked(new_end),
                 should_animate: self.animation_enabled,
             },
         }

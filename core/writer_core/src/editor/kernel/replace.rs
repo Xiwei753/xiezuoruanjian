@@ -2,7 +2,7 @@ use super::types::{CoordinatedCursor, DisplayPatch, EditorOperationKind, EditorV
 use super::result::{EditorEditOutcome, EditorEditResult};
 use super::{EditorKernel, UndoEntry};
 
-use crate::editor::strong_types::Utf8ByteOffset;
+use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset, Utf8ByteRange};
 use crate::editor::transaction::{
     diff_plain_text,
     AnimationMode, EditorTransactionCause,
@@ -13,9 +13,9 @@ impl EditorKernel {
         &mut self,
         search: &str,
         replacement: &str,
-        base_revision: u64,
-        old_cursor: usize,
-        old_selection: (usize, usize),
+        base_revision: EditorRevision,
+        old_cursor: Utf8ByteOffset,
+        old_selection: Utf8ByteRange,
     ) -> EditorEditOutcome {
         let old_text = self.text.clone();
         let new_text = old_text.replace(search, replacement);
@@ -34,13 +34,13 @@ impl EditorKernel {
         self.undo_stack.push(UndoEntry {
             old_text: old_text.clone(),
             new_text: self.text.clone(),
-            old_cursor,
+            old_cursor: old_cursor.value(),
             new_cursor: new_cursor_val,
         });
         self.redo_stack.clear();
 
-        let new_revision = self.revision.value();
-        let new_selection = (new_cursor_val, new_cursor_val);
+        let new_revision = self.revision;
+        let new_selection = Utf8ByteRange::new(new_cursor_val, new_cursor_val).unwrap();
 
         let (replace_range, inserted_text) = Self::compute_single_patch(&old_text, &self.text);
 
@@ -63,8 +63,8 @@ impl EditorKernel {
             animation_mode: AnimationMode::SystemSuppressed,
             duration_ms: 0,
             coordinated_cursor: CoordinatedCursor {
-                old_byte_offset: old_cursor,
-                new_byte_offset: new_cursor_val,
+                old_offset: old_cursor,
+                new_offset: Utf8ByteOffset::unchecked(new_cursor_val),
                 should_animate: false,
             },
         };

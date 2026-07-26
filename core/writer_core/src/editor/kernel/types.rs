@@ -1,141 +1,108 @@
 use serde::{Deserialize, Serialize};
 
+use crate::editor::strong_types::{EditorRevision, EditorSessionId, EditorSessionGeneration, Utf8ByteOffset, Utf8ByteRange};
 use crate::editor::transaction::{AnimationMode, EditorTransactionCause};
 
 pub enum EditorCommand {
     Insert {
-        byte_offset: usize,
+        byte_offset: Utf8ByteOffset,
         text: String,
         cause: EditorTransactionCause,
-        expected_revision: u64,
+        expected_revision: EditorRevision,
     },
     Delete {
-        byte_start: usize,
-        byte_end_exclusive: usize,
+        byte_range: Utf8ByteRange,
         deleted_text: String,
         cause: EditorTransactionCause,
-        expected_revision: u64,
+        expected_revision: EditorRevision,
     },
     Replace {
-        byte_start: usize,
-        byte_end_exclusive: usize,
+        byte_range: Utf8ByteRange,
         replacement_text: String,
         original_text: String,
         cause: EditorTransactionCause,
-        expected_revision: u64,
+        expected_revision: EditorRevision,
     },
     SetSelection {
-        anchor_byte_offset: usize,
-        head_byte_offset: usize,
-        expected_revision: u64,
+        anchor: Utf8ByteOffset,
+        head: Utf8ByteOffset,
+        expected_revision: EditorRevision,
     },
-    Undo { expected_revision: u64 },
-    Redo { expected_revision: u64 },
+    Undo { expected_revision: EditorRevision },
+    Redo { expected_revision: EditorRevision },
     ReplaceAll {
         search: String,
         replacement: String,
-        expected_revision: u64,
+        expected_revision: EditorRevision,
     },
     InsertLineBreak {
-        byte_offset: usize,
+        byte_offset: Utf8ByteOffset,
         auto_indent_prefix: String,
         cause: EditorTransactionCause,
-        expected_revision: u64,
+        expected_revision: EditorRevision,
     },
     CommitText {
-        byte_start: usize,
-        byte_end_exclusive: usize,
+        byte_range: Utf8ByteRange,
         replacement_text: String,
-        resulting_selection_anchor: usize,
-        resulting_selection_head: usize,
-        composition_session_id: u64,
-        composition_base_revision: u64,
-        composition_generation: u64,
+        resulting_selection_anchor: Utf8ByteOffset,
+        resulting_selection_head: Utf8ByteOffset,
+        composition_session_id: EditorSessionId,
+        composition_base_revision: EditorRevision,
+        composition_generation: EditorSessionGeneration,
         cause: EditorTransactionCause,
-        expected_revision: u64,
+        expected_revision: EditorRevision,
     },
     DeleteSurrounding {
-        before_byte_start: usize,
-        before_byte_end_exclusive: usize,
-        after_byte_start: usize,
-        after_byte_end_exclusive: usize,
+        before_byte_range: Utf8ByteRange,
+        after_byte_range: Utf8ByteRange,
         cause: EditorTransactionCause,
-        expected_revision: u64,
+        expected_revision: EditorRevision,
     },
     BeginComposition {
-        replace_start: usize,
-        replace_end_exclusive: usize,
-        expected_revision: u64,
+        replace_range: Utf8ByteRange,
+        expected_revision: EditorRevision,
     },
     UpdateComposition {
-        composition_session_id: u64,
-        composition_generation: u64,
+        composition_session_id: EditorSessionId,
+        composition_generation: EditorSessionGeneration,
         new_preedit_text: String,
-        new_preedit_cursor_offset: usize,
-        expected_revision: u64,
+        new_preedit_cursor_offset: Utf8ByteOffset,
+        expected_revision: EditorRevision,
     },
     FinishComposition {
-        composition_session_id: u64,
-        composition_generation: u64,
-        expected_revision: u64,
+        composition_session_id: EditorSessionId,
+        composition_generation: EditorSessionGeneration,
+        expected_revision: EditorRevision,
     },
     CancelComposition {
-        composition_session_id: u64,
-        composition_generation: u64,
-        expected_revision: u64,
+        composition_session_id: EditorSessionId,
+        composition_generation: EditorSessionGeneration,
+        expected_revision: EditorRevision,
     },
 }
 
-/// 显示补丁 — 平台显示镜像唯一允许消费的正文变化。
-///
-/// DisplayTextMirror 按 DisplayPatch 增量更新 SpannableStringBuilder，
-/// 不得根据 old/new 全文重新 diff，也不得先本地改 Buffer 再通知 Core。
-///
-/// `replace_byte_range` 为半开区间 `[start, end)`（UTF-8 byte offset），
-/// 表示要被替换的范围。`inserted_text` 为替换后的新文本。
-/// `resulting_selection_byte_range` 为替换完成后的选区（半开区间）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DisplayPatch {
-    /// 基础 revision ID
-    pub base_revision: u64,
-    /// 新 revision ID
-    pub new_revision: u64,
-    /// 替换范围（UTF-8 byte offset）
-    pub replace_byte_range: (usize, usize),
-    /// 插入的文本
+    pub base_revision: EditorRevision,
+    pub new_revision: EditorRevision,
+    pub replace_byte_range: Utf8ByteRange,
     pub inserted_text: String,
-    /// 替换后的选区（UTF-8 byte offset）
-    pub resulting_selection_byte_range: (usize, usize),
+    pub resulting_selection_byte_range: Utf8ByteRange,
 }
 
-/// 视觉意图 — Core 告诉平台层应该做什么动画。
-///
-/// Rust 决定动画模式和时长（产品规则）；
-/// glyph、cluster、line、rect、stable suffix 和 snapshot 属于平台排版事实，
-/// 由平台 Planner 决定。
-///
-/// VisualIntent 不包含平台渲染结构（QImage / RenderNode / Bitmap 等）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorVisualIntent {
-    /// 触发原因
     pub cause: EditorTransactionCause,
-    /// 操作类型
     pub operation_kind: EditorOperationKind,
-    /// 旧文本中受影响的 UTF-8 byte range 列表
-    pub old_affected_byte_ranges: Vec<(usize, usize)>,
-    /// 新文本中受影响的 UTF-8 byte range 列表
-    pub new_affected_byte_ranges: Vec<(usize, usize)>,
-    /// 动画模式
+    pub old_affected_byte_ranges: Vec<Utf8ByteRange>,
+    pub new_affected_byte_ranges: Vec<Utf8ByteRange>,
     pub animation_mode: AnimationMode,
-    /// 动画时长（毫秒）
     pub duration_ms: u64,
-    /// 光标协同信息
     pub coordinated_cursor: CoordinatedCursor,
 }
 
-/// 操作类型 — 区分不同编辑操作的视觉语义
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum EditorOperationKind {
@@ -150,14 +117,10 @@ pub enum EditorOperationKind {
     Format,
 }
 
-/// 光标协同 — 描述光标移动的视觉语义
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CoordinatedCursor {
-    /// 旧光标位置（UTF-8 byte offset）
-    pub old_byte_offset: usize,
-    /// 新光标位置（UTF-8 byte offset）
-    pub new_byte_offset: usize,
-    /// 是否需要动画
+    pub old_offset: Utf8ByteOffset,
+    pub new_offset: Utf8ByteOffset,
     pub should_animate: bool,
 }

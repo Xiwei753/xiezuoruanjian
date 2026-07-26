@@ -512,8 +512,8 @@ pub struct CoordinatedCursorDto {
 impl From<crate::editor::CoordinatedCursor> for CoordinatedCursorDto {
     fn from(c: crate::editor::CoordinatedCursor) -> Self {
         Self {
-            old_byte_offset: c.old_byte_offset as u32,
-            new_byte_offset: c.new_byte_offset as u32,
+            old_byte_offset: c.old_offset.value() as u32,
+            new_byte_offset: c.new_offset.value() as u32,
             should_animate: c.should_animate,
         }
     }
@@ -539,6 +539,16 @@ impl From<(usize, usize)> for EditorByteRangeDto {
         Self {
             start: start as u32,
             end_exclusive: end as u32,
+        }
+    }
+}
+
+#[allow(clippy::cast_possible_truncation)]
+impl From<crate::editor::strong_types::Utf8ByteRange> for EditorByteRangeDto {
+    fn from(r: crate::editor::strong_types::Utf8ByteRange) -> Self {
+        Self {
+            start: r.start.value() as u32,
+            end_exclusive: r.end.value() as u32,
         }
     }
 }
@@ -630,13 +640,13 @@ pub struct DisplayPatchDto {
 impl From<crate::editor::DisplayPatch> for DisplayPatchDto {
     fn from(p: crate::editor::DisplayPatch) -> Self {
         Self {
-            base_revision: p.base_revision,
-            new_revision: p.new_revision,
-            replace_byte_start: p.replace_byte_range.0 as u32,
-            replace_byte_end_exclusive: p.replace_byte_range.1 as u32,
+            base_revision: p.base_revision.value(),
+            new_revision: p.new_revision.value(),
+            replace_byte_start: p.replace_byte_range.start.value() as u32,
+            replace_byte_end_exclusive: p.replace_byte_range.end.value() as u32,
             inserted_text: p.inserted_text,
-            resulting_selection_start: p.resulting_selection_byte_range.0 as u32,
-            resulting_selection_end: p.resulting_selection_byte_range.1 as u32,
+            resulting_selection_start: p.resulting_selection_byte_range.start.value() as u32,
+            resulting_selection_end: p.resulting_selection_byte_range.end.value() as u32,
         }
     }
 }
@@ -730,13 +740,13 @@ impl From<crate::editor::EditorEditOutcome> for EditorEditResultDto {
         Self {
             outcome: outcome_dto,
             transaction_id: r.transaction_id,
-            base_revision: r.base_revision,
-            new_revision: r.new_revision,
+            base_revision: r.base_revision.value(),
+            new_revision: r.new_revision.value(),
             display_patches: r.display_patches.into_iter().map(Into::into).collect(),
-            old_selection_start: r.old_selection_byte_range.0 as u32,
-            old_selection_end: r.old_selection_byte_range.1 as u32,
-            new_selection_start: r.new_selection_byte_range.0 as u32,
-            new_selection_end: r.new_selection_byte_range.1 as u32,
+            old_selection_start: r.old_selection_byte_range.start.value() as u32,
+            old_selection_end: r.old_selection_byte_range.end.value() as u32,
+            new_selection_start: r.new_selection_byte_range.start.value() as u32,
+            new_selection_end: r.new_selection_byte_range.end.value() as u32,
             visual_intent: r.visual_intent.into(),
             composition_session: None,
         }
@@ -750,13 +760,13 @@ impl From<crate::editor::EditorEditResult> for EditorEditResultDto {
         Self {
             outcome: EditorEditOutcomeDto::Applied,
             transaction_id: r.transaction_id,
-            base_revision: r.base_revision,
-            new_revision: r.new_revision,
+            base_revision: r.base_revision.value(),
+            new_revision: r.new_revision.value(),
             display_patches: r.display_patches.into_iter().map(Into::into).collect(),
-            old_selection_start: r.old_selection_byte_range.0 as u32,
-            old_selection_end: r.old_selection_byte_range.1 as u32,
-            new_selection_start: r.new_selection_byte_range.0 as u32,
-            new_selection_end: r.new_selection_byte_range.1 as u32,
+            old_selection_start: r.old_selection_byte_range.start.value() as u32,
+            old_selection_end: r.old_selection_byte_range.end.value() as u32,
+            new_selection_start: r.new_selection_byte_range.start.value() as u32,
+            new_selection_end: r.new_selection_byte_range.end.value() as u32,
             visual_intent: r.visual_intent.into(),
             composition_session: None,
         }
@@ -1267,10 +1277,10 @@ mod tests {
     fn editor_edit_result_dto_from_kernel() {
         let mut kernel = crate::editor::EditorKernel::with_text("ab".to_string(), 2).unwrap();
         let result = kernel.apply(crate::editor::EditorCommand::Insert {
-            byte_offset: 2,
+            byte_offset: crate::editor::strong_types::Utf8ByteOffset::unchecked(2),
             text: "c".to_string(),
             cause: crate::editor::EditorTransactionCause::Typing,
-            expected_revision: 0,
+            expected_revision: crate::editor::strong_types::EditorRevision::new(0),
         });
         let dto: EditorEditResultDto = result.into();
         assert!(dto.transaction_id > 0);
@@ -1283,11 +1293,11 @@ mod tests {
     #[test]
     fn display_patch_dto_from_core() {
         let patch = crate::editor::DisplayPatch {
-            base_revision: 0,
-            new_revision: 1,
-            replace_byte_range: (2, 2),
+            base_revision: crate::editor::strong_types::EditorRevision::new(0),
+            new_revision: crate::editor::strong_types::EditorRevision::new(1),
+            replace_byte_range: crate::editor::strong_types::Utf8ByteRange::new(2, 2).unwrap(),
             inserted_text: "c".to_string(),
-            resulting_selection_byte_range: (3, 3),
+            resulting_selection_byte_range: crate::editor::strong_types::Utf8ByteRange::new(3, 3).unwrap(),
         };
         let dto: DisplayPatchDto = patch.into();
         assert_eq!(dto.base_revision, 0);
@@ -1303,12 +1313,12 @@ mod tests {
             cause: crate::editor::EditorTransactionCause::Typing,
             operation_kind: crate::editor::EditorOperationKind::Insert,
             old_affected_byte_ranges: vec![],
-            new_affected_byte_ranges: vec![(2, 5)],
+            new_affected_byte_ranges: vec![crate::editor::strong_types::Utf8ByteRange::new(2, 5).unwrap()],
             animation_mode: crate::editor::AnimationMode::GlyphAnimation,
             duration_ms: 160,
             coordinated_cursor: crate::editor::CoordinatedCursor {
-                old_byte_offset: 2,
-                new_byte_offset: 5,
+                old_offset: crate::editor::strong_types::Utf8ByteOffset::unchecked(2),
+                new_offset: crate::editor::strong_types::Utf8ByteOffset::unchecked(5),
                 should_animate: true,
             },
         };
@@ -1323,10 +1333,10 @@ mod tests {
     fn editor_edit_result_dto_json_camel_case() {
         let mut kernel = crate::editor::EditorKernel::with_text("ab".to_string(), 2).unwrap();
         let result = kernel.apply(crate::editor::EditorCommand::Insert {
-            byte_offset: 2,
+            byte_offset: crate::editor::strong_types::Utf8ByteOffset::unchecked(2),
             text: "c".to_string(),
             cause: crate::editor::EditorTransactionCause::Typing,
-            expected_revision: 0,
+            expected_revision: crate::editor::strong_types::EditorRevision::new(0),
         });
         let dto: EditorEditResultDto = result.into();
         let json = serde_json::to_string(&dto).unwrap();

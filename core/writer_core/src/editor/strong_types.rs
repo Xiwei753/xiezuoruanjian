@@ -1,7 +1,8 @@
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::ops::Range;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Utf8ByteOffset(pub usize);
 
 impl Utf8ByteOffset {
@@ -33,7 +34,7 @@ impl fmt::Display for Utf8ByteOffset {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Utf8ByteRange {
     pub start: Utf8ByteOffset,
     pub end: Utf8ByteOffset,
@@ -72,7 +73,7 @@ impl Utf8ByteRange {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct EditorRevision(pub u64);
 
 impl EditorRevision {
@@ -99,7 +100,7 @@ impl fmt::Display for EditorRevision {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct EditorSessionId(pub u64);
 
 impl EditorSessionId {
@@ -118,7 +119,7 @@ impl fmt::Display for EditorSessionId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct EditorSessionGeneration(pub u64);
 
 impl EditorSessionGeneration {

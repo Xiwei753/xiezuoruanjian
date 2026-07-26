@@ -4,6 +4,7 @@ mod composition;
 mod rebase;
 mod engine;
 mod platform;
+#[cfg(test)]
 mod tests;
 
 pub use types::{

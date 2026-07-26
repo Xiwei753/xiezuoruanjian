@@ -98,6 +98,28 @@ pub fn extract_chapter_entries(workspace: &Path, project_id: Option<&str>) -> Re
                         });
                     }
                 }
+
+                let note_path = chapter_path.join("chapter.note.md");
+                if note_path.exists() {
+                    if let Ok(note) = std::fs::read_to_string(&note_path) {
+                        if !note.is_empty() {
+                            entries.push(IndexEntry {
+                                object_id: format!("chapter_note:{}:{}:{}", pid, vid, cid),
+                                scope: SearchScope::ChapterNote,
+                                title: ch_title.clone(),
+                                body: note,
+                                target: SearchTarget {
+                                    project_id: Some(pid.clone()),
+                                    volume_id: Some(vid.clone()),
+                                    chapter_id: Some(cid.clone()),
+                                    starmap_id: None,
+                                    node_id: None,
+                                    setting_key: None,
+                                },
+                            });
+                        }
+                    }
+                }
             }
         }
     }
@@ -113,10 +135,10 @@ pub fn extract_starmap_entries(workspace: &Path, project_id: Option<&str>) -> Re
         return Ok(entries);
     }
 
-    let meta_files = scan_meta_files(&starmaps_dir)?;
-    for (sid, meta_path) in meta_files {
-        let title = load_json_string_field(&meta_path, "title");
-        let bound_project = load_json_string_field(&meta_path, "project_id");
+    let starmap_dirs = scan_dirs(&starmaps_dir)?;
+    for (sid, starmap_path) in starmap_dirs {
+        let graph_path = starmap_path.join("graph.json");
+        let bound_project = load_json_string_field(&graph_path, "project_id");
 
         if let Some(filter_id) = project_id {
             if bound_project != filter_id {
@@ -124,13 +146,14 @@ pub fn extract_starmap_entries(workspace: &Path, project_id: Option<&str>) -> Re
             }
         }
 
+        let title = load_json_string_field(&graph_path, "title");
         entries.push(IndexEntry {
             object_id: format!("starmap:{}", sid),
             scope: SearchScope::StarmapTitle,
             title: title.clone(),
             body: title,
             target: SearchTarget {
-                project_id: if bound_project.is_empty() { None } else { Some(bound_project) },
+                project_id: if bound_project.is_empty() { None } else { Some(bound_project.clone()) },
                 volume_id: None,
                 chapter_id: None,
                 starmap_id: Some(sid.clone()),
@@ -138,6 +161,127 @@ pub fn extract_starmap_entries(workspace: &Path, project_id: Option<&str>) -> Re
                 setting_key: None,
             },
         });
+
+        let nodes_dir = starmap_path.join("nodes");
+        if nodes_dir.exists() {
+            if let Ok(node_buckets) = scan_dirs(&nodes_dir) {
+                for (_, bucket_path) in node_buckets {
+                    if let Ok(node_files) = scan_json_files(&bucket_path) {
+                        for (nid, node_file) in node_files {
+                            let node_title = load_json_string_field(&node_file, "title");
+                            let node_body = load_json_string_field(&node_file, "content");
+                            if !node_title.is_empty() || !node_body.is_empty() {
+                                entries.push(IndexEntry {
+                                    object_id: format!("starmap_node:{}:{}", sid, nid),
+                                    scope: SearchScope::StarmapNode,
+                                    title: node_title.clone(),
+                                    body: if node_body.is_empty() { node_title } else { node_body },
+                                    target: SearchTarget {
+                                        project_id: if bound_project.is_empty() { None } else { Some(bound_project.clone()) },
+                                        volume_id: None,
+                                        chapter_id: None,
+                                        starmap_id: Some(sid.clone()),
+                                        node_id: Some(nid),
+                                        setting_key: None,
+                                    },
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let edges_dir = starmap_path.join("edges");
+        if edges_dir.exists() {
+            if let Ok(edge_buckets) = scan_dirs(&edges_dir) {
+                for (_, bucket_path) in edge_buckets {
+                    if let Ok(edge_files) = scan_json_files(&bucket_path) {
+                        for (eid, edge_file) in edge_files {
+                            let label = load_json_string_field(&edge_file, "label");
+                            if !label.is_empty() {
+                                entries.push(IndexEntry {
+                                    object_id: format!("starmap_edge:{}:{}", sid, eid),
+                                    scope: SearchScope::StarmapEdgeLabel,
+                                    title: label.clone(),
+                                    body: label,
+                                    target: SearchTarget {
+                                        project_id: if bound_project.is_empty() { None } else { Some(bound_project.clone()) },
+                                        volume_id: None,
+                                        chapter_id: None,
+                                        starmap_id: Some(sid.clone()),
+                                        node_id: None,
+                                        setting_key: None,
+                                    },
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let hyperlinks_dir = starmap_path.join("hyperlinks");
+        if hyperlinks_dir.exists() {
+            if let Ok(hl_buckets) = scan_dirs(&hyperlinks_dir) {
+                for (_, bucket_path) in hl_buckets {
+                    if let Ok(hl_files) = scan_json_files(&bucket_path) {
+                        for (hid, hl_file) in hl_files {
+                            let hl_title = load_json_string_field(&hl_file, "title");
+                            let hl_url = load_json_string_field(&hl_file, "url");
+                            if !hl_title.is_empty() || !hl_url.is_empty() {
+                                entries.push(IndexEntry {
+                                    object_id: format!("starmap_hyperlink:{}:{}", sid, hid),
+                                    scope: SearchScope::StarmapHyperlink,
+                                    title: hl_title.clone(),
+                                    body: if hl_url.is_empty() { hl_title } else { format!("{} {}", hl_title, hl_url) },
+                                    target: SearchTarget {
+                                        project_id: if bound_project.is_empty() { None } else { Some(bound_project.clone()) },
+                                        volume_id: None,
+                                        chapter_id: None,
+                                        starmap_id: Some(sid.clone()),
+                                        node_id: None,
+                                        setting_key: None,
+                                    },
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(entries)
+}
+
+pub fn extract_setting_entries(workspace: &Path) -> Result<Vec<IndexEntry>> {
+    let mut entries = Vec::new();
+    let settings_dir = workspace.join("settings");
+
+    if !settings_dir.exists() {
+        return Ok(entries);
+    }
+
+    if let Ok(files) = scan_json_files(&settings_dir) {
+        for (key, file_path) in files {
+            if let Ok(content) = std::fs::read_to_string(&file_path) {
+                entries.push(IndexEntry {
+                    object_id: format!("setting:{}", key),
+                    scope: SearchScope::Setting,
+                    title: key.clone(),
+                    body: content,
+                    target: SearchTarget {
+                        project_id: None,
+                        volume_id: None,
+                        chapter_id: None,
+                        starmap_id: None,
+                        node_id: None,
+                        setting_key: Some(key),
+                    },
+                });
+            }
+        }
     }
 
     Ok(entries)
@@ -165,15 +309,17 @@ fn scan_dirs(dir: &Path) -> Result<Vec<(String, std::path::PathBuf)>> {
     Ok(result)
 }
 
-fn scan_meta_files(dir: &Path) -> Result<Vec<(String, std::path::PathBuf)>> {
+fn scan_json_files(dir: &Path) -> Result<Vec<(String, std::path::PathBuf)>> {
     let mut result = Vec::new();
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if name.ends_with(".meta.json") {
-                    let sid = name.trim_end_matches(".meta.json").to_string();
-                    result.push((sid, path));
+            if path.is_file() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name.ends_with(".json") {
+                        let id = name.trim_end_matches(".json").to_string();
+                        result.push((id, path));
+                    }
                 }
             }
         }

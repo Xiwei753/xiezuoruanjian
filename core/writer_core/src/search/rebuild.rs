@@ -9,6 +9,7 @@ pub fn rebuild_index(workspace: &Path, project_id: Option<&str>) -> Result<Vec<I
 
     entries.extend(extractor::extract_chapter_entries(workspace, project_id)?);
     entries.extend(extractor::extract_starmap_entries(workspace, project_id)?);
+    entries.extend(extractor::extract_setting_entries(workspace)?);
 
     Ok(entries)
 }
