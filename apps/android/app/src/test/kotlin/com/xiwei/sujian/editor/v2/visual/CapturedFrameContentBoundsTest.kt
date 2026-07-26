@@ -28,6 +28,9 @@ class ContentBoundsExclusiveBoundaryTest {
                 }
             }
         }
+        if (maxX < minX || maxY < minY) {
+            return Bounds(0, 0, 0, 0)
+        }
         return Bounds(minX, minY, maxX + 1, maxY + 1)
     }
 
@@ -101,5 +104,21 @@ class ContentBoundsExclusiveBoundaryTest {
         val pixel = ColorDistance.rgb(250, 250, 250)
         val bg = ColorDistance.rgb(255, 255, 255)
         assertTrue(ColorDistance.isClose(pixel, bg))
+    }
+
+    @Test
+    fun allBackground_returnsEmptyBounds() {
+        val bounds = computeExclusiveBounds(10, 10, BG, makePixels(10, 10, emptySet()))
+        assertEquals(Bounds(0, 0, 0, 0), bounds)
+        assertEquals(0, bounds.width)
+        assertEquals(0, bounds.height)
+    }
+
+    @Test
+    fun singlePixel_widthAndHeightAreOne() {
+        val bounds = computeExclusiveBounds(1, 1, BG, makePixels(1, 1, setOf(Pair(0, 0))))
+        assertEquals(Bounds(0, 0, 1, 1), bounds)
+        assertEquals(1, bounds.width)
+        assertEquals(1, bounds.height)
     }
 }

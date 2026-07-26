@@ -393,7 +393,7 @@ class RenderedFrameVisualTest {
         assertContentBoundsProgression(frames, labels)
         assertMidFrameContentRegionHasPixels(frames)
         assertBackgroundRegionIsEmpty(frames)
-        assertContentAlphaIsOpaque(frames)
+        assertContentPixelsVisuallyDistinctFromBackground(frames)
         assertCrossFrameAlphaProgression(frames, labels)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -434,7 +434,7 @@ class RenderedFrameVisualTest {
 
         assertDeleteProgressionWidthShrinks(frames)
         assertBackgroundRegionIsEmpty(frames)
-        assertContentAlphaIsOpaque(frames)
+        assertContentPixelsVisuallyDistinctFromBackground(frames)
         assertCrossFrameAlphaProgression(frames, deleteLabels)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -458,7 +458,7 @@ class RenderedFrameVisualTest {
         assertContentBoundsProgression(frames, compLabels)
         assertMidFrameContentRegionHasPixels(frames)
         assertBackgroundRegionIsEmpty(frames)
-        assertContentAlphaIsOpaque(frames)
+        assertContentPixelsVisuallyDistinctFromBackground(frames)
         assertCrossFrameAlphaProgression(frames, compLabels)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -483,7 +483,7 @@ class RenderedFrameVisualTest {
         assertContentBoundsProgression(frames, uniLabels)
         assertMidFrameContentRegionHasPixels(frames)
         assertBackgroundRegionIsEmpty(frames)
-        assertContentAlphaIsOpaque(frames)
+        assertContentPixelsVisuallyDistinctFromBackground(frames)
         assertCrossFrameAlphaProgression(frames, uniLabels)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -514,7 +514,7 @@ class RenderedFrameVisualTest {
 
         assertMidFrameContentRegionHasPixels(frames)
         assertBackgroundRegionIsEmpty(frames)
-        assertContentAlphaIsOpaque(frames)
+        assertContentPixelsVisuallyDistinctFromBackground(frames)
         assertCrossFrameAlphaProgression(frames, mlLabels)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -588,7 +588,7 @@ class RenderedFrameVisualTest {
         )
 
         val frames = listOf(frame1, frame2, frame3, frame4, frame5, frame6)
-        assertContentAlphaIsOpaque(frames)
+        assertContentPixelsVisuallyDistinctFromBackground(frames)
         assertBackgroundRegionIsEmpty(frames)
         assertCrossFrameAlphaProgression(frames, listOf("after-A", "0%", "25%", "50%", "75%", "end"))
 
@@ -1040,10 +1040,17 @@ class RenderedFrameVisualTest {
         }
     }
 
-    private fun assertContentAlphaIsOpaque(frames: List<CapturedFrame>) {
+    private fun assertContentPixelsVisuallyDistinctFromBackground(frames: List<CapturedFrame>) {
         for (frame in frames) {
+            val bounds = frame.contentBounds()
+            assertTrue("Frame must have non-zero content bounds for visual distinctness check", bounds.width() > 0 && bounds.height() > 0)
+            val coverageCount = frame.countNonBackgroundPixels(bounds.left, bounds.top, bounds.right, bounds.bottom)
+            assertTrue(
+                "Content region must have non-background pixels: coverageCount=$coverageCount must be > 0",
+                coverageCount > 0
+            )
             val first = frame.findFirstNonBackgroundPixel()
-            assertNotNull("Frame must have content pixel for alpha check", first)
+            assertNotNull("Frame must have content pixel for RGB distance check", first)
             val pixel = frame.bitmap.getPixel(first!!.first, first.second)
             val bg = frame.backgroundColor
             val dr = ColorDistance.red(pixel) - ColorDistance.red(bg)

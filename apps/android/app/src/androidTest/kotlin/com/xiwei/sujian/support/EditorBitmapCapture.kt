@@ -118,6 +118,9 @@ object EditorBitmapCapture {
                     }
                 }
             }
+            if (maxX < minX || maxY < minY) {
+                return Rect(0, 0, 0, 0)
+            }
             return Rect(minX, minY, maxX + 1, maxY + 1)
         }
     }
