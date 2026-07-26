@@ -3,6 +3,8 @@ package com.xiwei.sujian.editor.v2.coordinator
 import android.view.Choreographer
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import org.junit.Before
 import org.junit.Test
 
@@ -217,7 +219,7 @@ class WindowDisplayFrameClockTest {
         val listener = object : WindowDisplayFrameClock.FrameListener {
             override fun needsFrame(): Boolean {
                 needsFrameCount++
-                return needsFrameCount <= 2
+                return needsFrameCount <= 1
             }
             override fun onFrame(frameTimeNanos: Long) { frameCount++ }
         }

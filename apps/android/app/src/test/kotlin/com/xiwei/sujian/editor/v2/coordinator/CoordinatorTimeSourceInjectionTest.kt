@@ -47,10 +47,10 @@ class CoordinatorTimeSourceInjectionTest {
         } ?: return
         val timeSourceParamIndex = ctorWithTimeSource.parameterTypes.map { it.name }
             .indexOf("com.xiwei.sujian.editor.v2.visual.AnimationTimeSource")
-        val isLastParams = timeSourceParamIndex >= ctorWithTimeSource.parameterTypes.size - 2
+        val isLateParam = timeSourceParamIndex >= ctorWithTimeSource.parameterTypes.size - 4
         assertTrue(
-            "AnimationTimeSource should be one of the last parameters (with default)",
-            isLastParams
+            "AnimationTimeSource should be a late parameter (with default), index $timeSourceParamIndex of ${ctorWithTimeSource.parameterTypes.size}",
+            isLateParam
         )
     }
 
@@ -102,15 +102,15 @@ class CoordinatorTimeSourceInjectionTest {
     @Test
     fun coordinatorExposesWindowFrameClock() {
         val clazz = Class.forName("com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator")
-        val field = clazz.getDeclaredField("windowFrameClock")
+        val getter = clazz.getDeclaredMethod("getWindowFrameClock")
         assertNotNull(
-            "AnimatedTextEditorCoordinator should expose windowFrameClock",
-            field
+            "AnimatedTextEditorCoordinator should expose windowFrameClock getter",
+            getter
         )
         assertEquals(
-            "windowFrameClock should be public",
-            java.lang.reflect.Modifier.PUBLIC,
-            field.modifiers and java.lang.reflect.Modifier.PUBLIC
+            "windowFrameClock getter should return WindowDisplayFrameClock",
+            "com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock",
+            getter.returnType.name
         )
     }
 

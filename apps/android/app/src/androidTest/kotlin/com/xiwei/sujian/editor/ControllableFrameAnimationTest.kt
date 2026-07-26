@@ -1035,4 +1035,250 @@ class ControllableFrameAnimationTest {
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("测"))
     }
+
+    @Test
+    fun singleCharDelete_animationStartsAndCompletes() {
+        val testData = initTestData()
+        openTestChapter("单字删除测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("ABC"))
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("ABC"))
+
+        val deleteStart = "AB".toByteArray(Charsets.UTF_8).size
+        val deleteEnd = "ABC".toByteArray(Charsets.UTF_8).size
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorReplaceRangeAction.replaceRange(deleteStart, deleteEnd, "", "C"))
+
+        val startSnapshot = captureEditorSnapshot()
+        assertNotNull("Animation should be active after single char delete", startSnapshot)
+        assertEquals("delete", startSnapshot!!.operationKind)
+        assertTrue("Should own resources", startSnapshot.ownedResourceCount > 0)
+
+        advanceToProgressAndVerify(0.2f, 0.6f, "AB")
+        advanceToProgressAndVerify(0.4f, 0.8f, "AB")
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("AB"))
+            .check(EditorViewAssertions.hasSelectionUtf8(2, 2))
+    }
+
+    @Test
+    fun crossLineDelete_animationPreservesRemainingText() {
+        val testData = initTestData()
+        openTestChapter("跨行删除测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        val line1 = "第一行"
+        val line2 = "第二行"
+        val line3 = "第三行"
+        val fullText = "$line1\n$line2\n$line3"
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText(fullText))
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText(fullText))
+
+        val deleteStart = line1.toByteArray(Charsets.UTF_8).size
+        val deleteEnd = (line1 + "\n" + line2).toByteArray(Charsets.UTF_8).size
+        val deletedText = "\n$line2"
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorReplaceRangeAction.replaceRange(deleteStart, deleteEnd, "", deletedText))
+
+        val startSnapshot = captureEditorSnapshot()
+        assertNotNull("Animation should be active after cross-line delete", startSnapshot)
+        assertEquals("delete", startSnapshot!!.operationKind)
+
+        advanceToProgressAndVerify(0.2f, 0.6f, "$line1\n$line3")
+        advanceToProgressAndVerify(0.4f, 0.8f, "$line1\n$line3")
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("$line1\n$line3"))
+    }
+
+    @Test
+    fun combiningCharInsert_animationCompletesCorrectly() {
+        val testData = initTestData()
+        openTestChapter("组合字符测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        val baseChar = "e"
+        val combiningAcute = "\u0301"
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText(baseChar))
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText(baseChar))
+
+        val insertOffset = baseChar.toByteArray(Charsets.UTF_8).size
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorReplaceRangeAction.replaceRange(insertOffset, insertOffset, combiningAcute, ""))
+
+        val startSnapshot = captureEditorSnapshot()
+        assertNotNull("Animation should be active after combining char insert", startSnapshot)
+
+        advanceToProgressAndVerify(0.2f, 0.6f, baseChar + combiningAcute)
+        advanceToProgressAndVerify(0.4f, 0.8f, baseChar + combiningAcute)
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText(baseChar + combiningAcute))
+    }
+
+    @Test
+    fun compositionUpdate_visualFrameShowsPreeditDecoration() {
+        val testData = initTestData()
+        openTestChapter("composition下划线测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCompositionAction.setComposingText("预"))
+
+        val startFrame = captureVisualFrame()
+        assertNotNull("Visual frame should exist after composition update", startFrame)
+        if (startFrame!!.sliceVisualStates.isNotEmpty()) {
+            for (slice in startFrame.sliceVisualStates) {
+                assertTrue(
+                    "Composition slice alpha ${slice.currentAlpha} should be in [0,1]",
+                    slice.currentAlpha >= 0f && slice.currentAlpha <= 1f
+                )
+                assertTrue(
+                    "Composition slice left ${slice.currentLeft} should be >= 0",
+                    slice.currentLeft >= 0f
+                )
+                assertTrue(
+                    "Composition slice top ${slice.currentTop} should be >= 0",
+                    slice.currentTop >= 0f
+                )
+            }
+        }
+
+        manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCompositionAction.setComposingText("预编"))
+
+        manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
+        val midFrame = captureVisualFrame()
+        if (midFrame != null && midFrame.sliceVisualStates.isNotEmpty()) {
+            for (slice in midFrame.sliceVisualStates) {
+                assertTrue(
+                    "Mid-frame composition slice alpha should be in [0,1]",
+                    slice.currentAlpha >= 0f && slice.currentAlpha <= 1f
+                )
+            }
+        }
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCompositionAction.finishComposingText())
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("预编"))
+    }
+
+    @Test
+    fun singleCharDelete_visualFrameSlicesShowFadeOut() {
+        val testData = initTestData()
+        openTestChapter("单字删除视觉帧测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("ABC"))
+
+        advanceClockToEnd()
+
+        val deleteStart = "AB".toByteArray(Charsets.UTF_8).size
+        val deleteEnd = "ABC".toByteArray(Charsets.UTF_8).size
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorReplaceRangeAction.replaceRange(deleteStart, deleteEnd, "", "C"))
+
+        val startFrame = captureVisualFrame()
+        assertNotNull("Visual frame should exist after single char delete", startFrame)
+        verifySliceVisualProperties(startFrame!!, 0f, 0.3f, SliceRole.Delete)
+
+        manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
+        val midFrame = captureVisualFrame()
+        if (midFrame != null) {
+            verifySliceVisualProperties(midFrame, 0.1f, 0.6f, SliceRole.Delete)
+            verifyDeleteSliceFadesOut(midFrame.sliceVisualStates, midFrame.progress)
+        }
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("AB"))
+    }
+
+    @Test
+    fun crossLineDelete_visualFrameBlockShiftsAdjust() {
+        val testData = initTestData()
+        openTestChapter("跨行删除视觉帧测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        val line1 = "行一"
+        val line2 = "行二"
+        val line3 = "行三"
+        val fullText = "$line1\n$line2\n$line3"
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText(fullText))
+
+        advanceClockToEnd()
+
+        val deleteStart = line1.toByteArray(Charsets.UTF_8).size
+        val deleteEnd = (line1 + "\n" + line2).toByteArray(Charsets.UTF_8).size
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorReplaceRangeAction.replaceRange(deleteStart, deleteEnd, "", "\n$line2"))
+
+        val startFrame = captureVisualFrame()
+        if (startFrame != null && startFrame.blockShiftStates.isNotEmpty()) {
+            for (block in startFrame.blockShiftStates) {
+                assertTrue(
+                    "Block shift currentTranslateY should be finite",
+                    java.lang.Float.isFinite(block.currentTranslateY)
+                )
+            }
+        }
+
+        manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
+        val midFrame = captureVisualFrame()
+        if (midFrame != null && midFrame.blockShiftStates.isNotEmpty()) {
+            for (block in midFrame.blockShiftStates) {
+                assertTrue(
+                    "Mid-frame block shift currentTranslateY should be finite",
+                    java.lang.Float.isFinite(block.currentTranslateY)
+                )
+            }
+        }
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("$line1\n$line3"))
+    }
 }

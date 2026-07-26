@@ -3,7 +3,8 @@ package com.xiwei.sujian.editor.v2.visual
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutRevision
 import com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot
 import com.xiwei.sujian.editor.v2.layout.LineClusterSnapshot
-import com.xiwei.sujian.editor.v2.layout.LineRange
+import com.xiwei.sujian.editor.v2.layout.AndroidLayoutRevision.LineRange
+import com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor
 import com.xiwei.sujian.editor.v2.mirror.VisualIntent
 import org.junit.Assert.*
 import org.junit.Test
@@ -30,7 +31,9 @@ class DeterministicFrameSnapshotTest {
     private fun makeLayoutRevision(
         lineCount: Int,
         text: String = "Hello world",
-        paragraphIds: List<Int> = List(lineCount) { 0 }
+        paragraphIds: List<Int> = List(lineCount) { 0 },
+        compositionStartUtf16: Int = -1,
+        compositionEndUtf16: Int = -1
     ): AndroidLayoutRevision {
         val lineRanges = mutableListOf<LineRange>()
         var byteOffset = 0
@@ -40,6 +43,8 @@ class DeterministicFrameSnapshotTest {
             lineRanges.add(LineRange(
                 startUtf8 = byteOffset,
                 endUtf8 = byteOffset + lineBytes,
+                startUtf16 = byteOffset,
+                endUtf16 = byteOffset + lineBytes,
                 top = i * LINE_HEIGHT.toFloat(),
                 bottom = (i + 1) * LINE_HEIGHT.toFloat(),
                 left = 0f,
@@ -50,15 +55,24 @@ class DeterministicFrameSnapshotTest {
             byteOffset += lineBytes
         }
         return AndroidLayoutRevision(
+            revisionId = 1L,
+            editorRevision = 1L,
+            widthFingerprint = EDITOR_WIDTH.toFloat(),
+            fontFingerprint = "test",
+            lineCount = lineRanges.size,
             lineRanges = lineRanges,
+            cursorUtf8 = byteOffset,
+            cursorUtf16 = text.length,
             cursorX = byteOffset.toFloat(),
             cursorY = 0f,
             cursorHeight = LINE_HEIGHT.toFloat(),
-            selectionStartUtf16 = -1,
-            selectionEndUtf16 = -1,
-            preeditStartUtf16 = -1,
-            preeditEndUtf16 = -1,
-            preeditUnderlineColor = 0
+            selectionAnchorUtf8 = -1,
+            selectionHeadUtf8 = -1,
+            selectionAnchorUtf16 = -1,
+            selectionHeadUtf16 = -1,
+            compositionStartUtf16 = compositionStartUtf16,
+            compositionEndUtf16 = compositionEndUtf16,
+            snapshotHandles = emptyList()
         )
     }
 
@@ -95,37 +109,45 @@ class DeterministicFrameSnapshotTest {
         )
     }
 
+    private val defaultCoordinatedCursor = CoordinatedCursor(0, 0, true)
+
     private fun makeInsertVisualIntent(
         oldRanges: List<Pair<Int, Int>> = emptyList(),
         newRanges: List<Pair<Int, Int>> = listOf(Pair(5, 8))
     ): VisualIntent = VisualIntent(
+        cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+        operationKind = uniffi.writer_core.EditorOperationKindDto.INSERT,
         oldAffectedByteRanges = oldRanges,
         newAffectedByteRanges = newRanges,
         animationMode = uniffi.writer_core.AnimationModeDto.CLUSTER_ANIMATION,
         durationMs = DURATION_MS,
-        operationKind = "insert"
+        coordinatedCursor = defaultCoordinatedCursor
     )
 
     private fun makeDeleteVisualIntent(
         oldRanges: List<Pair<Int, Int>> = listOf(Pair(5, 8)),
         newRanges: List<Pair<Int, Int>> = emptyList()
     ): VisualIntent = VisualIntent(
+        cause = uniffi.writer_core.EditorTransactionCauseDto.DELETE,
+        operationKind = uniffi.writer_core.EditorOperationKindDto.DELETE,
         oldAffectedByteRanges = oldRanges,
         newAffectedByteRanges = newRanges,
         animationMode = uniffi.writer_core.AnimationModeDto.CLUSTER_ANIMATION,
         durationMs = DURATION_MS,
-        operationKind = "delete"
+        coordinatedCursor = defaultCoordinatedCursor
     )
 
     private fun makeReplaceVisualIntent(
         oldRanges: List<Pair<Int, Int>> = listOf(Pair(5, 8)),
         newRanges: List<Pair<Int, Int>> = listOf(Pair(5, 10))
     ): VisualIntent = VisualIntent(
+        cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+        operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
         oldAffectedByteRanges = oldRanges,
         newAffectedByteRanges = newRanges,
         animationMode = uniffi.writer_core.AnimationModeDto.CLUSTER_ANIMATION,
         durationMs = DURATION_MS,
-        operationKind = "replace"
+        coordinatedCursor = defaultCoordinatedCursor
     )
 
     private fun computeInterpolatedAlpha(startAlpha: Float, endAlpha: Float, progress: Float): Float {
@@ -370,11 +392,13 @@ class DeterministicFrameSnapshotTest {
         val oldRev = makeLayoutRevision(1, "ni hao")
         val newRev = makeLayoutRevision(1, "nihao")
         val visualIntent = VisualIntent(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.COMPOSITION_UPDATE,
             oldAffectedByteRanges = listOf(Pair(0, 6)),
             newAffectedByteRanges = listOf(Pair(0, 5)),
             animationMode = uniffi.writer_core.AnimationModeDto.CLUSTER_ANIMATION,
             durationMs = DURATION_MS,
-            operationKind = "composition_update"
+            coordinatedCursor = defaultCoordinatedCursor
         )
 
         val oldSnapshot = makeSnapshot(1L, 0, 0, 6)
@@ -587,6 +611,87 @@ class DeterministicFrameSnapshotTest {
             for (slice in deleteSlices) {
                 val alpha = computeInterpolatedAlpha(slice.startAlpha, slice.endAlpha, progress)
                 assertTrue("Delete alpha at $progress should be in [0,1]", alpha in -0.01f..1.01f)
+            }
+        }
+    }
+
+    @Test
+    fun compositionPreeditDecorationPresentInTransaction() {
+        val planner = AndroidVisualPlanner()
+        val oldRev = makeLayoutRevision(1, "Hello")
+        val newRev = oldRev.copy(
+            compositionStartUtf16 = 0,
+            compositionEndUtf16 = 3
+        )
+        val visualIntent = VisualIntent(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.COMPOSITION_UPDATE,
+            oldAffectedByteRanges = listOf(Pair(0, 5)),
+            newAffectedByteRanges = listOf(Pair(0, 5)),
+            animationMode = uniffi.writer_core.AnimationModeDto.CLUSTER_ANIMATION,
+            durationMs = DURATION_MS,
+            coordinatedCursor = defaultCoordinatedCursor
+        )
+
+        val newSnapshot = makeSnapshot(1L, 0, 0, 5)
+        val transaction = planner.prepare(
+            visualIntent = visualIntent,
+            oldRevision = oldRev,
+            newRevision = newRev,
+            preCapturedNewSnapshots = mapOf(0 to newSnapshot),
+            transactionKey = 1L,
+            ownedSnapshotIds = setOf(1L)
+        )
+
+        val preeditDecoration = transaction.preeditDecoration
+        assertNotNull(
+            "Composition transaction should carry preedit decoration when preedit range is active",
+            preeditDecoration
+        )
+        if (preeditDecoration != null) {
+            assertTrue(
+                "Preedit decoration startUtf16 ${preeditDecoration.startUtf16} should be >= 0",
+                preeditDecoration.startUtf16 >= 0
+            )
+            assertTrue(
+                "Preedit decoration endUtf16 ${preeditDecoration.endUtf16} should be > startUtf16 ${preeditDecoration.startUtf16}",
+                preeditDecoration.endUtf16 > preeditDecoration.startUtf16
+            )
+            assertTrue(
+                "Preedit decoration underlineColor should be non-zero",
+                preeditDecoration.underlineColor != 0
+            )
+        }
+    }
+
+    @Test
+    fun combiningCharInsertSliceAlphaAtProgressPoints() {
+        val planner = AndroidVisualPlanner()
+        val oldRev = makeLayoutRevision(1, "e")
+        val newRev = makeLayoutRevision(1, "e\u0301")
+        val visualIntent = makeInsertVisualIntent(
+            oldRanges = listOf(Pair(1, 1)),
+            newRanges = listOf(Pair(1, 3))
+        )
+
+        val newSnapshot = makeSnapshot(1L, 0, 1, 3)
+        val transaction = planner.prepare(
+            visualIntent = visualIntent,
+            oldRevision = oldRev,
+            newRevision = newRev,
+            preCapturedNewSnapshots = mapOf(0 to newSnapshot),
+            transactionKey = 1L,
+            ownedSnapshotIds = setOf(1L)
+        )
+
+        val insertSlices = transaction.animatedSlices.filter { it.role == SliceRole.Insert }
+        assertTrue("Combining char insert should produce insert slices", insertSlices.isNotEmpty())
+
+        val progressPoints = listOf(0f, 0.25f, 0.5f, 0.75f, 1f)
+        for (progress in progressPoints) {
+            for (slice in insertSlices) {
+                val alpha = computeInterpolatedAlpha(slice.startAlpha, slice.endAlpha, progress)
+                assertTrue("Combining char insert alpha at $progress should be in [0,1]", alpha in -0.01f..1.01f)
             }
         }
     }

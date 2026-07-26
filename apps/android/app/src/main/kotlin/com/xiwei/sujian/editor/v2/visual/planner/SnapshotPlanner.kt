@@ -35,12 +35,12 @@ class SnapshotPlanner {
     fun buildPreeditDecoration(
         newRev: AndroidLayoutRevision
     ): PreparedVisualTransaction.PreeditDecoration? {
-        if (newRev.preeditStartUtf16 < 0 || newRev.preeditEndUtf16 < 0) return null
-        if (newRev.preeditStartUtf16 == newRev.preeditEndUtf16) return null
+        if (newRev.compositionStartUtf16 < 0 || newRev.compositionEndUtf16 < 0) return null
+        if (newRev.compositionStartUtf16 == newRev.compositionEndUtf16) return null
         return PreparedVisualTransaction.PreeditDecoration(
-            startUtf16 = newRev.preeditStartUtf16,
-            endUtf16 = newRev.preeditEndUtf16,
-            underlineColor = newRev.preeditUnderlineColor
+            startUtf16 = newRev.compositionStartUtf16,
+            endUtf16 = newRev.compositionEndUtf16,
+            underlineColor = 0xFF000000.toInt()
         )
     }
 
