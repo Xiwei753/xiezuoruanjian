@@ -13,5 +13,7 @@ data class SyncCounts(
     val downloaded: Int = 0,
     val deletedRemote: Int = 0,
     val deletedLocal: Int = 0,
-    val conflicts: Int = 0
+    val conflicts: Int = 0,
+    val overwritten: Int = 0,
+    val ignored: Int = 0
 )

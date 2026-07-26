@@ -229,7 +229,14 @@ private fun resolveStructuredResult(result: StructuredSyncResult): String {
                 translateStatusComponent(branch)
             )
         }
-        "sync_perform_result" -> stringResource(id = R.string.sync_perform_result, result.counts.uploaded, result.counts.downloaded)
+        "sync_perform_result" -> stringResource(
+            id = R.string.sync_perform_result,
+            result.counts.uploaded,
+            result.counts.downloaded,
+            result.counts.deletedRemote,
+            result.counts.deletedLocal,
+            result.counts.conflicts
+        )
         "dry_run_error" -> stringResource(id = R.string.dry_run_error)
         "diagnostics_error" -> stringResource(id = R.string.diagnostics_error)
         "sync_error" -> stringResource(id = R.string.sync_error)

@@ -467,7 +467,8 @@ class SettingsViewModel : ViewModel() {
                                             downloaded = plan.filesToDownload.size,
                                             deletedRemote = plan.filesToDeleteRemote.size,
                                             deletedLocal = plan.filesToDeleteLocal.size,
-                                            conflicts = plan.conflicts.size
+                                            conflicts = plan.conflicts.size,
+                                            ignored = plan.ignoredFiles.size
                                         )
                                         SyncCommandIoResult(true, true, StructuredSyncResult(
                                             statusCode = "ok",
@@ -505,7 +506,12 @@ class SettingsViewModel : ViewModel() {
                                         val sync = r.data
                                         val counts = SyncCounts(
                                             uploaded = sync.uploadedFiles.size,
-                                            downloaded = sync.downloadedFiles.size
+                                            downloaded = sync.downloadedFiles.size,
+                                            deletedRemote = sync.remoteDeletes.size,
+                                            deletedLocal = sync.localDeletes.size,
+                                            conflicts = sync.conflicts.size,
+                                            overwritten = sync.overwrittenFiles.size,
+                                            ignored = sync.ignoredFiles.size
                                         )
                                         SyncCommandIoResult(true, true, StructuredSyncResult(
                                             statusCode = if (sync.error == null) "ok" else "error",

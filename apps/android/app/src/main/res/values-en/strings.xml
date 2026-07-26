@@ -357,4 +357,13 @@
     <string name="save_sync_config_failed">Failed to save sync config</string>
     <string name="save_sync_secrets_failed">Failed to save sync credentials</string>
     <string name="sync_block_not_ready">Sync not ready</string>
+    <string name="sync_test_connection_result">Network: %1$s Auth: %2$s Repo: %3$s Branch: %4$s</string>
+    <string name="sync_perform_result">Uploaded: %1$d Downloaded: %2$d Remote deleted: %3$d Local moved to trash: %4$d Conflicts: %5$d</string>
+    <string name="dry_run_error">Dry run failed</string>
+    <string name="diagnostics_error">Connection diagnostics failed</string>
+    <string name="sync_error">Sync failed</string>
+    <string name="core_not_loaded">Native Core not loaded</string>
+    <string name="unexpected_error">Unexpected error</string>
+    <string name="sync_diag_ok">OK</string>
+    <string name="sync_diag_fail">Fail</string>
 </resources>

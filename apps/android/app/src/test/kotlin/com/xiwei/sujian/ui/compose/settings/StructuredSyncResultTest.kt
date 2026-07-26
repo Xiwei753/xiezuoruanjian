@@ -63,6 +63,8 @@ class StructuredSyncResultTest {
         assertEquals(0, counts.deletedRemote)
         assertEquals(0, counts.deletedLocal)
         assertEquals(0, counts.conflicts)
+        assertEquals(0, counts.overwritten)
+        assertEquals(0, counts.ignored)
     }
 
     @Test
@@ -72,13 +74,23 @@ class StructuredSyncResultTest {
             messageKey = "sync_perform_result",
             counts = SyncCounts(
                 uploaded = 5,
-                downloaded = 3
+                downloaded = 3,
+                deletedRemote = 1,
+                deletedLocal = 2,
+                conflicts = 0,
+                overwritten = 4,
+                ignored = 6
             )
         )
         assertEquals("ok", result.statusCode)
         assertEquals("sync_perform_result", result.messageKey)
         assertEquals(5, result.counts.uploaded)
         assertEquals(3, result.counts.downloaded)
+        assertEquals(1, result.counts.deletedRemote)
+        assertEquals(2, result.counts.deletedLocal)
+        assertEquals(0, result.counts.conflicts)
+        assertEquals(4, result.counts.overwritten)
+        assertEquals(6, result.counts.ignored)
     }
 
     @Test
