@@ -4,14 +4,9 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.ui.compose.SujianApp
 
 class MainActivity : ComponentActivity() {
-
-    val textEditorCoordinator by lazy {
-        com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator(this, BridgeProvider.getAppServiceBridge(this))
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
