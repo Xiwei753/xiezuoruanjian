@@ -459,7 +459,9 @@ pub fn find_starmap_references(
     let idx = load_index(workspace)?;
 
     for m in &idx.starmaps {
-        if let Ok(graph) = crate::starmap::graph::get_starmap_graph(workspace, &m.starmap_id) {
+        let mut store = crate::starmap::store::StarMapStore::new(workspace, &m.starmap_id);
+        if store.load_full().is_ok() {
+            let graph = store.to_starmap_graph();
             // 1. Check embeds
             for embed in &graph.embeds {
                 if embed.target_starmap_id == target_starmap_id {
@@ -668,9 +670,29 @@ mod tests {
         let parent = create_starmap(dir.path(), "Parent", "", None).unwrap();
         let child = create_starmap(dir.path(), "Child", "", None).unwrap();
 
+        let use_store_get = |ws: &Path, sid: &str| -> crate::starmap::types::StarMapGraph {
+            let mut s = crate::starmap::store::StarMapStore::new(ws, sid);
+            s.load_full().unwrap();
+            s.to_starmap_graph()
+        };
+        let use_store_save = |ws: &Path, sid: &str, g: &crate::starmap::types::StarMapGraph| {
+            let mut s = crate::starmap::store::StarMapStore::new(ws, sid);
+            s.load_full().unwrap();
+            for node in &g.nodes { s.upsert_node(node.clone()); }
+            for edge in &g.edges { s.upsert_edge(edge.clone()); }
+            for embed in &g.embeds { s.upsert_embed(embed.clone()); }
+            for link in &g.links { s.upsert_link(link.clone()); }
+            s.flush().unwrap();
+        };
+        let use_store_delete_edge = |ws: &Path, sid: &str, eid: &str| {
+            let mut s = crate::starmap::store::StarMapStore::new(ws, sid);
+            s.load_full().unwrap();
+            s.delete_edge(eid).unwrap();
+            s.flush().unwrap();
+        };
+
         // 1. Add internal edge -> shouldn't block delete
-        let mut parent_graph =
-            crate::starmap::graph::get_starmap_graph(dir.path(), &parent.starmap_id).unwrap();
+        let mut parent_graph = use_store_get(dir.path(), &parent.starmap_id);
         let internal_edge = crate::starmap::types::StarMapEdge {
             id: "internal_e".to_string(),
             from: None,
@@ -694,15 +716,13 @@ mod tests {
             updated_at: 0,
         };
         parent_graph.edges.push(internal_edge);
-        crate::starmap::graph::save_starmap_graph(dir.path(), &parent.starmap_id, &parent_graph)
-            .unwrap();
+        use_store_save(dir.path(), &parent.starmap_id, &parent_graph);
 
         // Deleting parent should still work since it's an internal reference,
         // but we won't delete parent yet, we need it.
 
         // 2. Add external edge in parent pointing to child
-        let mut parent_graph =
-            crate::starmap::graph::get_starmap_graph(dir.path(), &parent.starmap_id).unwrap();
+        let mut parent_graph = use_store_get(dir.path(), &parent.starmap_id);
         let external_edge = crate::starmap::types::StarMapEdge {
             id: "external_e".to_string(),
             from: None,
@@ -726,8 +746,7 @@ mod tests {
             updated_at: 0,
         };
         parent_graph.edges.push(external_edge);
-        crate::starmap::graph::save_starmap_graph(dir.path(), &parent.starmap_id, &parent_graph)
-            .unwrap();
+        use_store_save(dir.path(), &parent.starmap_id, &parent_graph);
 
         // Check find_starmap_references discovers it
         let refs = find_starmap_references(dir.path(), &child.starmap_id).unwrap();
@@ -739,12 +758,10 @@ mod tests {
         assert!(delete_starmap(dir.path(), &child.starmap_id).is_err());
 
         // Delete the external edge
-        crate::starmap::graph::delete_starmap_edge(dir.path(), &parent.starmap_id, "external_e")
-            .unwrap();
+        use_store_delete_edge(dir.path(), &parent.starmap_id, "external_e");
 
         // 3. Add external edge with from_endpoint and EnterChild path
-        let mut parent_graph =
-            crate::starmap::graph::get_starmap_graph(dir.path(), &parent.starmap_id).unwrap();
+        let mut parent_graph = use_store_get(dir.path(), &parent.starmap_id);
         let external_edge_2 = crate::starmap::types::StarMapEdge {
             id: "external_e2".to_string(),
             from: None,
@@ -770,8 +787,7 @@ mod tests {
             updated_at: 0,
         };
         parent_graph.edges.push(external_edge_2);
-        crate::starmap::graph::save_starmap_graph(dir.path(), &parent.starmap_id, &parent_graph)
-            .unwrap();
+        use_store_save(dir.path(), &parent.starmap_id, &parent_graph);
 
         // Check find_starmap_references discovers the EnterChild path from from_endpoint
         let refs2 = find_starmap_references(dir.path(), &child.starmap_id).unwrap();
@@ -783,8 +799,7 @@ mod tests {
         assert!(delete_starmap(dir.path(), &child.starmap_id).is_err());
 
         // Delete external edge 2
-        crate::starmap::graph::delete_starmap_edge(dir.path(), &parent.starmap_id, "external_e2")
-            .unwrap();
+        use_store_delete_edge(dir.path(), &parent.starmap_id, "external_e2");
 
         // Try deleting child again -> should succeed
         assert!(delete_starmap(dir.path(), &child.starmap_id).is_ok());

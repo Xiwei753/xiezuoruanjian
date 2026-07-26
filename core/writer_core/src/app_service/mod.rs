@@ -7,6 +7,7 @@ mod theme_ops;
 mod starmap_ops;
 mod editor_session_ops;
 mod text_edit_session_ops;
+mod search_ops;
 
 use crate::api::{WriterCoreApi, WriterError};
 

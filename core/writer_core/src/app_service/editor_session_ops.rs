@@ -22,8 +22,9 @@ impl super::WriterAppService {
             use crate::editor::strong_types::{EditorRevision, EditorSessionId, EditorSessionGeneration, Utf8ByteOffset, Utf8ByteRange};
         let core_cause: crate::editor::EditorTransactionCause = cause.into();
         self.with_session(|s| {
+            let current_text = s.kernel.text();
             let result = s.kernel.apply(EditorCommand::Insert {
-                byte_offset: Utf8ByteOffset::unchecked(byte_offset as usize),
+                byte_offset: Utf8ByteOffset::new(current_text, byte_offset as usize),
                 text,
                 cause: core_cause,
                 expected_revision: EditorRevision::new(expected_revision),
@@ -43,8 +44,9 @@ impl super::WriterAppService {
             use crate::editor::strong_types::{EditorRevision, EditorSessionId, EditorSessionGeneration, Utf8ByteOffset, Utf8ByteRange};
         let core_cause: crate::editor::EditorTransactionCause = cause.into();
         self.with_session(|s| {
+            let current_text = s.kernel.text();
             let result = s.kernel.apply(EditorCommand::Delete {
-                byte_range: Utf8ByteRange::new(byte_start as usize, byte_end_exclusive as usize).unwrap_or(Utf8ByteRange::new(0, 0).unwrap()),
+                byte_range: Utf8ByteRange::new_checked(current_text, byte_start as usize, byte_end_exclusive as usize).unwrap_or(Utf8ByteRange::new(0, 0).unwrap()),
                 deleted_text: String::new(),
                 cause: core_cause,
                 expected_revision: EditorRevision::new(expected_revision),
@@ -66,8 +68,9 @@ impl super::WriterAppService {
             use crate::editor::strong_types::{EditorRevision, EditorSessionId, EditorSessionGeneration, Utf8ByteOffset, Utf8ByteRange};
         let core_cause: crate::editor::EditorTransactionCause = cause.into();
         self.with_session(|s| {
+            let current_text = s.kernel.text();
             let result = s.kernel.apply(EditorCommand::Replace {
-                byte_range: Utf8ByteRange::new(byte_start as usize, byte_end_exclusive as usize).unwrap_or(Utf8ByteRange::new(0, 0).unwrap()),
+                byte_range: Utf8ByteRange::new_checked(current_text, byte_start as usize, byte_end_exclusive as usize).unwrap_or(Utf8ByteRange::new(0, 0).unwrap()),
                 replacement_text,
                 original_text,
                 cause: core_cause,
@@ -86,9 +89,10 @@ impl super::WriterAppService {
         use crate::editor::EditorCommand;
             use crate::editor::strong_types::{EditorRevision, EditorSessionId, EditorSessionGeneration, Utf8ByteOffset, Utf8ByteRange};
         self.with_session(|s| {
+            let current_text = s.kernel.text();
             let result = s.kernel.apply(EditorCommand::SetSelection {
-                anchor: Utf8ByteOffset::unchecked(anchor_byte_offset as usize),
-                head: Utf8ByteOffset::unchecked(head_byte_offset as usize),
+                anchor: Utf8ByteOffset::new(current_text, anchor_byte_offset as usize),
+                head: Utf8ByteOffset::new(current_text, head_byte_offset as usize),
                 expected_revision: EditorRevision::new(expected_revision),
             });
             result.into_result().into()
@@ -165,11 +169,12 @@ impl super::WriterAppService {
             use crate::editor::strong_types::{EditorRevision, EditorSessionId, EditorSessionGeneration, Utf8ByteOffset, Utf8ByteRange};
         let core_cause: crate::editor::EditorTransactionCause = cause.into();
         self.with_session(|s| {
+            let current_text = s.kernel.text();
             let result = s.kernel.apply(EditorCommand::CommitText {
-                byte_range: Utf8ByteRange::new(byte_start as usize, byte_end_exclusive as usize).unwrap_or(Utf8ByteRange::new(0, 0).unwrap()),
+                byte_range: Utf8ByteRange::new_checked(current_text, byte_start as usize, byte_end_exclusive as usize).unwrap_or(Utf8ByteRange::new(0, 0).unwrap()),
                 replacement_text,
-                resulting_selection_anchor: Utf8ByteOffset::unchecked(resulting_selection_anchor as usize),
-                resulting_selection_head: Utf8ByteOffset::unchecked(resulting_selection_head as usize),
+                resulting_selection_anchor: Utf8ByteOffset::new(current_text, resulting_selection_anchor as usize),
+                resulting_selection_head: Utf8ByteOffset::new(current_text, resulting_selection_head as usize),
                 composition_session_id: EditorSessionId::new(composition_session_id),
                 composition_base_revision: EditorRevision::new(composition_base_revision),
                 composition_generation: EditorSessionGeneration::new(composition_generation),
@@ -193,9 +198,10 @@ impl super::WriterAppService {
             use crate::editor::strong_types::{EditorRevision, EditorSessionId, EditorSessionGeneration, Utf8ByteOffset, Utf8ByteRange};
         let core_cause: crate::editor::EditorTransactionCause = cause.into();
         self.with_session(|s| {
+            let current_text = s.kernel.text();
             let result = s.kernel.apply(EditorCommand::DeleteSurrounding {
-                before_byte_range: Utf8ByteRange::new(before_byte_start as usize, before_byte_end_exclusive as usize).unwrap_or(Utf8ByteRange::new(0, 0).unwrap()),
-                after_byte_range: Utf8ByteRange::new(after_byte_start as usize, after_byte_end_exclusive as usize).unwrap_or(Utf8ByteRange::new(0, 0).unwrap()),
+                before_byte_range: Utf8ByteRange::new_checked(current_text, before_byte_start as usize, before_byte_end_exclusive as usize).unwrap_or(Utf8ByteRange::new(0, 0).unwrap()),
+                after_byte_range: Utf8ByteRange::new_checked(current_text, after_byte_start as usize, after_byte_end_exclusive as usize).unwrap_or(Utf8ByteRange::new(0, 0).unwrap()),
                 cause: core_cause,
                 expected_revision: EditorRevision::new(expected_revision),
             });
@@ -212,8 +218,9 @@ impl super::WriterAppService {
         use crate::editor::EditorCommand;
             use crate::editor::strong_types::{EditorRevision, EditorSessionId, EditorSessionGeneration, Utf8ByteOffset, Utf8ByteRange};
         self.with_session(|s| {
+            let current_text = s.kernel.text();
             let result = s.kernel.apply(EditorCommand::BeginComposition {
-                replace_range: Utf8ByteRange::new(replace_start as usize, replace_end_exclusive as usize).unwrap_or(Utf8ByteRange::new(0, 0).unwrap()),
+                replace_range: Utf8ByteRange::new_checked(current_text, replace_start as usize, replace_end_exclusive as usize).unwrap_or(Utf8ByteRange::new(0, 0).unwrap()),
                 expected_revision: EditorRevision::new(expected_revision),
             });
             let mut dto: EditorEditResultDto = result.into();
@@ -243,11 +250,12 @@ impl super::WriterAppService {
         use crate::editor::EditorCommand;
             use crate::editor::strong_types::{EditorRevision, EditorSessionId, EditorSessionGeneration, Utf8ByteOffset, Utf8ByteRange};
         self.with_session(|s| {
+            let current_text = s.kernel.text();
             let result = s.kernel.apply(EditorCommand::UpdateComposition {
                 composition_session_id: EditorSessionId::new(composition_session_id),
                 composition_generation: EditorSessionGeneration::new(composition_generation),
                 new_preedit_text,
-                new_preedit_cursor_offset: Utf8ByteOffset::unchecked(new_preedit_cursor_offset as usize),
+                new_preedit_cursor_offset: Utf8ByteOffset::new(current_text, new_preedit_cursor_offset as usize),
                 expected_revision: EditorRevision::new(expected_revision),
             });
             result.into()
@@ -383,8 +391,9 @@ impl super::WriterAppService {
             use crate::editor::strong_types::{EditorRevision, EditorSessionId, EditorSessionGeneration, Utf8ByteOffset, Utf8ByteRange};
         let core_cause: crate::editor::EditorTransactionCause = cause.into();
         self.with_session(|s| {
+            let current_text = s.kernel.text();
             let result = s.kernel.apply(EditorCommand::InsertLineBreak {
-                byte_offset: Utf8ByteOffset::unchecked(byte_offset as usize),
+                byte_offset: Utf8ByteOffset::new(current_text, byte_offset as usize),
                 auto_indent_prefix,
                 cause: core_cause,
                 expected_revision: EditorRevision::new(expected_revision),

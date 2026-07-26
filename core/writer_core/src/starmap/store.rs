@@ -233,19 +233,73 @@ impl StarMapStore {
         let graph_json_path = graph_dir.join("graph.json");
 
         if graph_json_path.exists() {
-            match self.load_graph_meta_from_file(&graph_json_path) {
-                Ok(meta) => {
-                    self.graph_meta = Some(meta);
-                }
-                Err(e) => {
-                    diagnostics.push(LoadDiagnostic {
-                        kind: LoadDiagnosticKind::Corrupt,
-                        object_type: "graph".to_string(),
-                        object_id: self.starmap_id.clone(),
-                        detail: format!("graph.json parse failed: {}", e),
+            let content = std::fs::read_to_string(&graph_json_path).unwrap_or_default();
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) {
+                let is_new_format = value.get("schemaVersion")
+                    .or_else(|| value.get("schema_version"))
+                    .and_then(|v| v.as_str())
+                    .map_or(false, |s| s == "2");
+
+                if is_new_format {
+                    match serde_json::from_str::<GraphMeta>(&content) {
+                        Ok(meta) => { self.graph_meta = Some(meta); }
+                        Err(e) => {
+                            diagnostics.push(LoadDiagnostic {
+                                kind: LoadDiagnosticKind::Corrupt,
+                                object_type: "graph".to_string(),
+                                object_id: self.starmap_id.clone(),
+                                detail: format!("graph.json v2 parse failed: {}", e),
+                            });
+                            self.scan_objects_from_disk(&mut diagnostics);
+                        }
+                    }
+                } else if let Ok(graph) = serde_json::from_str::<StarMapGraph>(&content) {
+                    self.graph_meta = Some(GraphMeta {
+                        schema_version: "2".to_string(),
+                        starmap_id: graph.starmap_id.clone(),
+                        title: graph.title.clone(),
+                        node_ids: graph.nodes.iter().map(|n| n.id.clone()).collect(),
+                        edge_ids: graph.edges.iter().map(|e| e.id.clone()).collect(),
+                        embed_instance_ids: graph.embeds.iter().map(|e| e.instance_id.clone()).collect(),
+                        link_ids: graph.links.iter().map(|l| l.link_id.clone()).collect(),
+                        hyperlink_ids: vec![],
+                        package_revision: 0,
+                        updated_at: graph.updated_at,
                     });
-                    self.scan_objects_from_disk(&mut diagnostics);
+                    for node in &graph.nodes {
+                        self.nodes.insert(node.id.clone(), node.clone());
+                    }
+                    for edge in &graph.edges {
+                        self.edges.insert(edge.id.clone(), edge.clone());
+                    }
+                    for embed in &graph.embeds {
+                        self.embeds.insert(embed.instance_id.clone(), embed.clone());
+                    }
+                    for link in &graph.links {
+                        self.links.insert(link.link_id.clone(), link.clone());
+                    }
+                } else {
+                    match self.load_graph_meta_from_file(&graph_json_path) {
+                        Ok(meta) => { self.graph_meta = Some(meta); }
+                        Err(e) => {
+                            diagnostics.push(LoadDiagnostic {
+                                kind: LoadDiagnosticKind::Corrupt,
+                                object_type: "graph".to_string(),
+                                object_id: self.starmap_id.clone(),
+                                detail: format!("graph.json parse failed: {}", e),
+                            });
+                            self.scan_objects_from_disk(&mut diagnostics);
+                        }
+                    }
                 }
+            } else {
+                diagnostics.push(LoadDiagnostic {
+                    kind: LoadDiagnosticKind::Corrupt,
+                    object_type: "graph".to_string(),
+                    object_id: self.starmap_id.clone(),
+                    detail: "graph.json is not valid JSON".to_string(),
+                });
+                self.scan_objects_from_disk(&mut diagnostics);
             }
         } else {
             self.scan_objects_from_disk(&mut diagnostics);
@@ -256,8 +310,10 @@ impl StarMapStore {
             .unwrap_or_default();
 
         for node_id in &node_ids {
-            if let Some(node) = self.try_load_node(node_id) {
-                self.nodes.insert(node_id.clone(), node);
+            if !self.nodes.contains_key(node_id) {
+                if let Some(node) = self.try_load_node(node_id) {
+                    self.nodes.insert(node_id.clone(), node);
+                }
             }
         }
 
@@ -266,8 +322,10 @@ impl StarMapStore {
             .unwrap_or_default();
 
         for edge_id in &edge_ids {
-            if let Some(edge) = self.try_load_edge(edge_id) {
-                self.edges.insert(edge_id.clone(), edge);
+            if !self.edges.contains_key(edge_id) {
+                if let Some(edge) = self.try_load_edge(edge_id) {
+                    self.edges.insert(edge_id.clone(), edge);
+                }
             }
         }
 
@@ -276,8 +334,10 @@ impl StarMapStore {
             .unwrap_or_default();
 
         for instance_id in &embed_ids {
-            if let Some(embed) = self.try_load_embed(instance_id) {
-                self.embeds.insert(instance_id.clone(), embed);
+            if !self.embeds.contains_key(instance_id) {
+                if let Some(embed) = self.try_load_embed(instance_id) {
+                    self.embeds.insert(instance_id.clone(), embed);
+                }
             }
         }
 
@@ -286,8 +346,22 @@ impl StarMapStore {
             .unwrap_or_default();
 
         for hl_id in &hl_ids {
-            if let Some(hl) = self.try_load_hyperlink(hl_id) {
-                self.hyperlinks.insert(hl_id.clone(), hl);
+            if !self.hyperlinks.contains_key(hl_id) {
+                if let Some(hl) = self.try_load_hyperlink(hl_id) {
+                    self.hyperlinks.insert(hl_id.clone(), hl);
+                }
+            }
+        }
+
+        let link_ids = self.graph_meta.as_ref()
+            .map(|m| m.link_ids.clone())
+            .unwrap_or_default();
+
+        for link_id in &link_ids {
+            if !self.links.contains_key(link_id) {
+                if let Some(link_path) = self.try_load_link(link_id) {
+                    self.links.insert(link_id.clone(), link_path);
+                }
             }
         }
 
@@ -302,11 +376,13 @@ impl StarMapStore {
         self.dirty_edges.clear();
         self.dirty_embeds.clear();
         self.dirty_hyperlinks.clear();
+        self.dirty_links.clear();
         self.dirty_layout = false;
         self.dirty_graph_meta = false;
         self.deleted_node_ids.clear();
         self.deleted_edge_ids.clear();
         self.deleted_embed_ids.clear();
+        self.deleted_link_ids.clear();
         self.deleted_hyperlink_ids.clear();
 
         diagnostics.extend(self.recovery_log.drain(..));
@@ -754,6 +830,49 @@ impl StarMapStore {
 
     fn load_graph_meta_from_file(&self, path: &Path) -> Result<GraphMeta> {
         let content = std::fs::read_to_string(path)?;
+        let value: serde_json::Value = serde_json::from_str(&content)?;
+
+        if let Some(schema_version) = value.get("schemaVersion").or_else(|| value.get("schema_version")) {
+            if let Some(sv_str) = schema_version.as_str() {
+                if sv_str == "2" {
+                    let meta: GraphMeta = serde_json::from_str(&content)?;
+                    return Ok(meta);
+                }
+            }
+            if let Some(sv_num) = schema_version.as_u64() {
+                if sv_num == 1 {
+                    if value.get("nodes").is_some() && value.get("nodes").and_then(|v| v.as_array()).is_some() {
+                        let graph: StarMapGraph = serde_json::from_str(&content)?;
+                        return Ok(GraphMeta {
+                            schema_version: "2".to_string(),
+                            starmap_id: graph.starmap_id.clone(),
+                            title: graph.title.clone(),
+                            node_ids: graph.nodes.iter().map(|n| n.id.clone()).collect(),
+                            edge_ids: graph.edges.iter().map(|e| e.id.clone()).collect(),
+                            embed_instance_ids: graph.embeds.iter().map(|e| e.instance_id.clone()).collect(),
+                            link_ids: graph.links.iter().map(|l| l.link_id.clone()).collect(),
+                            hyperlink_ids: vec![],
+                            package_revision: 0,
+                            updated_at: graph.updated_at,
+                        });
+                    }
+                    let meta: package_storage::GraphMeta = serde_json::from_str(&content)?;
+                    return Ok(GraphMeta {
+                        schema_version: "2".to_string(),
+                        starmap_id: meta.starmap_id.clone(),
+                        title: meta.title.clone(),
+                        node_ids: vec![],
+                        edge_ids: vec![],
+                        embed_instance_ids: vec![],
+                        link_ids: vec![],
+                        hyperlink_ids: vec![],
+                        package_revision: 0,
+                        updated_at: meta.updated_at,
+                    });
+                }
+            }
+        }
+
         let meta: GraphMeta = serde_json::from_str(&content)?;
         Ok(meta)
     }
@@ -868,6 +987,16 @@ impl StarMapStore {
 
     fn try_load_layout(&self) -> Option<StarMapLayout> {
         let path = self.starmap_dir().join("layouts").join("default.json");
+        if !path.exists() {
+            return None;
+        }
+        let content = std::fs::read_to_string(&path).ok()?;
+        serde_json::from_str(&content).ok()
+    }
+
+    fn try_load_link(&mut self, link_id: &str) -> Option<StarMapLink> {
+        let dir = self.starmap_dir().join("links");
+        let path = dir.join(format!("{}.json", link_id));
         if !path.exists() {
             return None;
         }

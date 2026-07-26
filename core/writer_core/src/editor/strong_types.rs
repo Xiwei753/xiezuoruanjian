@@ -74,7 +74,7 @@ impl Utf8ByteOffset {
         Self(clamped)
     }
 
-    pub(crate) fn unchecked(offset: usize) -> Self {
+    pub(super) fn unchecked(offset: usize) -> Self {
         Self(offset)
     }
 

@@ -57,9 +57,24 @@ impl WriterCoreApi {
         new_title: &str,
     ) -> ApiResult<bool> {
         self.core()
-            .rename_chapter(project_id, volume_id, chapter_id, new_title)
-            .map(|_| true)
-            .map_err(Into::into)
+            .rename_chapter(project_id, volume_id, chapter_id, new_title)?;
+        let object_id = format!("chapter_title:{}:{}:{}", project_id, volume_id, chapter_id);
+        self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
+            action: crate::search::SearchIndexAction::Upsert,
+            object_id,
+            scope: crate::search::SearchScope::ChapterTitle,
+            title: new_title.to_string(),
+            body: new_title.to_string(),
+            target: Some(crate::search::SearchTarget {
+                project_id: Some(project_id.to_string()),
+                volume_id: Some(volume_id.to_string()),
+                chapter_id: Some(chapter_id.to_string()),
+                starmap_id: None,
+                node_id: None,
+                setting_key: None,
+            }),
+        });
+        Ok(true)
     }
 
     /// 删除章节（磁盘文件移至 trash，非立即删除）。
@@ -70,9 +85,22 @@ impl WriterCoreApi {
         chapter_id: &str,
     ) -> ApiResult<bool> {
         self.core()
-            .delete_chapter(project_id, volume_id, chapter_id)
-            .map(|_| true)
-            .map_err(Into::into)
+            .delete_chapter(project_id, volume_id, chapter_id)?;
+        for prefix in &[
+            format!("chapter_title:{}:{}:{}", project_id, volume_id, chapter_id),
+            format!("chapter_body:{}:{}:{}", project_id, volume_id, chapter_id),
+            format!("chapter_note:{}:{}:{}", project_id, volume_id, chapter_id),
+        ] {
+            self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                action: crate::search::SearchIndexAction::Delete,
+                object_id: prefix.clone(),
+                scope: crate::search::SearchScope::All,
+                title: String::new(),
+                body: String::new(),
+                target: None,
+            });
+        }
+        Ok(true)
     }
 
     /// 重排章节顺序。`ordered_chapter_ids` 必须包含该卷下所有章节 ID。
@@ -109,10 +137,26 @@ impl WriterCoreApi {
         chapter_id: &str,
         content: &str,
     ) -> ApiResult<ChapterSaveReceiptDto> {
-        self.core()
+        let receipt: ChapterSaveReceiptDto = self.core()
             .write_chapter_verified(project_id, volume_id, chapter_id, content)
-            .map(Into::into)
-            .map_err(Into::into)
+            .map(Into::into)?;
+        let object_id = format!("chapter_body:{}:{}:{}", project_id, volume_id, chapter_id);
+        self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
+            action: crate::search::SearchIndexAction::Upsert,
+            object_id,
+            scope: crate::search::SearchScope::ChapterBody,
+            title: String::new(),
+            body: content.to_string(),
+            target: Some(crate::search::SearchTarget {
+                project_id: Some(project_id.to_string()),
+                volume_id: Some(volume_id.to_string()),
+                chapter_id: Some(chapter_id.to_string()),
+                starmap_id: None,
+                node_id: None,
+                setting_key: None,
+            }),
+        });
+        Ok(receipt)
     }
 
     /// 保存章节正文（带空覆盖控制）。`allow_empty_overwrite=true` 绕过安全拦截。
@@ -158,9 +202,24 @@ impl WriterCoreApi {
         note: &str,
     ) -> ApiResult<bool> {
         self.core()
-            .update_chapter_note(project_id, volume_id, chapter_id, note)
-            .map(|_| true)
-            .map_err(Into::into)
+            .update_chapter_note(project_id, volume_id, chapter_id, note)?;
+        let object_id = format!("chapter_note:{}:{}:{}", project_id, volume_id, chapter_id);
+        self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
+            action: crate::search::SearchIndexAction::Upsert,
+            object_id,
+            scope: crate::search::SearchScope::ChapterNote,
+            title: String::new(),
+            body: note.to_string(),
+            target: Some(crate::search::SearchTarget {
+                project_id: Some(project_id.to_string()),
+                volume_id: Some(volume_id.to_string()),
+                chapter_id: Some(chapter_id.to_string()),
+                starmap_id: None,
+                node_id: None,
+                setting_key: None,
+            }),
+        });
+        Ok(true)
     }
 
 }

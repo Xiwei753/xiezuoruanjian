@@ -1277,7 +1277,7 @@ mod tests {
     fn editor_edit_result_dto_from_kernel() {
         let mut kernel = crate::editor::EditorKernel::with_text("ab".to_string(), 2).unwrap();
         let result = kernel.apply(crate::editor::EditorCommand::Insert {
-            byte_offset: crate::editor::strong_types::Utf8ByteOffset::unchecked(2),
+            byte_offset: crate::editor::strong_types::Utf8ByteOffset::new("ab", 2),
             text: "c".to_string(),
             cause: crate::editor::EditorTransactionCause::Typing,
             expected_revision: crate::editor::strong_types::EditorRevision::new(0),
@@ -1317,8 +1317,8 @@ mod tests {
             animation_mode: crate::editor::AnimationMode::GlyphAnimation,
             duration_ms: 160,
             coordinated_cursor: crate::editor::CoordinatedCursor {
-                old_offset: crate::editor::strong_types::Utf8ByteOffset::unchecked(2),
-                new_offset: crate::editor::strong_types::Utf8ByteOffset::unchecked(5),
+                old_offset: crate::editor::strong_types::Utf8ByteOffset::new("ab", 2),
+                new_offset: crate::editor::strong_types::Utf8ByteOffset::new("abcdef", 5),
                 should_animate: true,
             },
         };
@@ -1333,7 +1333,7 @@ mod tests {
     fn editor_edit_result_dto_json_camel_case() {
         let mut kernel = crate::editor::EditorKernel::with_text("ab".to_string(), 2).unwrap();
         let result = kernel.apply(crate::editor::EditorCommand::Insert {
-            byte_offset: crate::editor::strong_types::Utf8ByteOffset::unchecked(2),
+            byte_offset: crate::editor::strong_types::Utf8ByteOffset::new("ab", 2),
             text: "c".to_string(),
             cause: crate::editor::EditorTransactionCause::Typing,
             expected_revision: crate::editor::strong_types::EditorRevision::new(0),

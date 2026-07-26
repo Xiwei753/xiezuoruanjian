@@ -29,13 +29,12 @@ impl SearchBackend {
     pub fn insert(&mut self, entry: IndexEntry) {
         let id = entry.object_id.clone();
         let scope = entry.scope;
-        let is_reinsert = self.entries.contains_key(&id);
-        self.entries.insert(id.clone(), entry);
-        if is_reinsert {
-            if let Some(ids) = self.scope_index.get_mut(&scope) {
-                if !ids.contains(&id) {
-                    ids.push(id);
+        if let Some(old_entry) = self.entries.insert(id.clone(), entry) {
+            if old_entry.scope != scope {
+                if let Some(ids) = self.scope_index.get_mut(&old_entry.scope) {
+                    ids.retain(|i| i != &id);
                 }
+                self.scope_index.entry(scope).or_default().push(id);
             }
         } else {
             self.scope_index.entry(scope).or_default().push(id);

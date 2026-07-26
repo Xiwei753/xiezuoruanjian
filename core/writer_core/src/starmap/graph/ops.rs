@@ -22,9 +22,11 @@ pub(crate) fn viewport_path(workspace: &Path, starmap_id: &str) -> std::path::Pa
         .join("viewport.json")
 }
 
-/// 获取星图数据。若 `graph.json` 不存在，返回空图（保留 meta 标题），
+/// 获取星图数据（迁移兼容入口，新代码应使用 StarMapStore）。
+///
+/// 若 `graph.json` 不存在，返回空图（保留 meta 标题），
 /// 不返回错误——首次创建节点/边时 `save_starmap_graph` 会写入文件。
-pub fn get_starmap_graph(workspace: &Path, starmap_id: &str) -> Result<StarMapGraph> {
+pub(crate) fn get_starmap_graph(workspace: &Path, starmap_id: &str) -> Result<StarMapGraph> {
     let meta = load_starmap_meta(workspace, starmap_id)?;
 
     let path = graph_path(workspace, starmap_id);
@@ -48,14 +50,14 @@ pub fn get_starmap_graph(workspace: &Path, starmap_id: &str) -> Result<StarMapGr
     Ok(graph)
 }
 
-/// 保存星图数据到 `graph.json`，同时更新 `starmap_stats`（双写语义）。
+/// 保存星图数据到 `graph.json`（迁移兼容入口，新代码应使用 StarMapStore）。
 ///
 /// 保存前调用 `validate_graph` 校验引用完整性；校验失败阻止写入。
 /// 写入后同步更新 `starmap.json` 中的 `node_count`/`edge_count`/`linked_chapters`
 /// 统计字段——这些统计是 `list_starmaps` 列表视图的唯一数据来源，
 /// 必须与 `graph.json` 保持一致，否则列表显示的节点/边数会过时。
 #[allow(clippy::cast_possible_truncation)]
-pub fn save_starmap_graph(workspace: &Path, starmap_id: &str, graph: &StarMapGraph) -> Result<()> {
+pub(crate) fn save_starmap_graph(workspace: &Path, starmap_id: &str, graph: &StarMapGraph) -> Result<()> {
     super::validation::validate_graph(workspace, graph)?;
 
     let starmap_dir = starmaps_dir(workspace).join(starmap_id);
