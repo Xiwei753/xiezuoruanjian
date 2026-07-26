@@ -904,6 +904,8 @@ class RenderedFrameVisualTest {
 
     private fun captureFiveProgressPoints(): List<CapturedFrame> {
         val frames = mutableListOf<CapturedFrame>()
+        val progressLabels = listOf("0%", "25%", "50%", "75%", "100%")
+        val progressValues = listOf(0f, 0.25f, 0.5f, 0.75f, 1f)
 
         manualTimeSource.advanceByMs(1)
         dispatchManualFrame()
@@ -925,31 +927,29 @@ class RenderedFrameVisualTest {
             stateSnapshot
         )
         assertTrue(
-            "captureFiveProgressPoints requires transaction state to be Rendering, but was ${stateSnapshot!!.transactionState}",
+            "captureFiveProgressPoints requires transaction state to be Rendering/Prepared/Pending, but was ${stateSnapshot!!.transactionState}",
             stateSnapshot.transactionState == TransactionState.Rendering
                     || stateSnapshot.transactionState == TransactionState.Prepared
                     || stateSnapshot.transactionState == TransactionState.Pending
         )
 
-        manualTimeSource.advanceToProgress(0f, durationMs, startTimeMs)
-        dispatchManualFrame()
-        frames.add(EditorBitmapCapture.captureEditorBitmap())
+        for ((i, progress) in progressValues.withIndex()) {
+            manualTimeSource.advanceToProgress(progress, durationMs, startTimeMs)
+            dispatchManualFrame()
+            frames.add(EditorBitmapCapture.captureEditorBitmap())
 
-        manualTimeSource.advanceToProgress(0.25f, durationMs, startTimeMs)
-        dispatchManualFrame()
-        frames.add(EditorBitmapCapture.captureEditorBitmap())
-
-        manualTimeSource.advanceToProgress(0.5f, durationMs, startTimeMs)
-        dispatchManualFrame()
-        frames.add(EditorBitmapCapture.captureEditorBitmap())
-
-        manualTimeSource.advanceToProgress(0.75f, durationMs, startTimeMs)
-        dispatchManualFrame()
-        frames.add(EditorBitmapCapture.captureEditorBitmap())
-
-        manualTimeSource.advanceToProgress(1f, durationMs, startTimeMs)
-        dispatchManualFrame()
-        frames.add(EditorBitmapCapture.captureEditorBitmap())
+            val visualSnapshot = captureVisualFrameSnapshot()
+            assertNotNull(
+                "Visual frame snapshot must exist at ${progressLabels[i]} for logical alpha check",
+                visualSnapshot
+            )
+            for (slice in visualSnapshot!!.sliceVisualStates) {
+                assertTrue(
+                    "Slice logical alpha ${slice.currentAlpha} must be in [0,1] at ${progressLabels[i]} for role ${slice.role}",
+                    slice.currentAlpha >= 0f && slice.currentAlpha <= 1f
+                )
+            }
+        }
 
         return frames
     }

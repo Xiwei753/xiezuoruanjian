@@ -48,9 +48,13 @@ object EditorBitmapCapture {
         fun regionHasNonBackgroundPixels(
             left: Int, top: Int, right: Int, bottom: Int
         ): Boolean {
-            for (y in top until bottom) {
-                for (x in left until right) {
-                    if (x < width && y < height && !ColorDistance.isClose(bitmap.getPixel(x, y), backgroundColor)) {
+            val clippedLeft = left.coerceIn(0, width)
+            val clippedTop = top.coerceIn(0, height)
+            val clippedRight = right.coerceIn(0, width)
+            val clippedBottom = bottom.coerceIn(0, height)
+            for (y in clippedTop until clippedBottom) {
+                for (x in clippedLeft until clippedRight) {
+                    if (!ColorDistance.isClose(bitmap.getPixel(x, y), backgroundColor)) {
                         return true
                     }
                 }
@@ -61,10 +65,14 @@ object EditorBitmapCapture {
         fun countNonBackgroundPixels(
             left: Int, top: Int, right: Int, bottom: Int
         ): Int {
+            val clippedLeft = left.coerceIn(0, width)
+            val clippedTop = top.coerceIn(0, height)
+            val clippedRight = right.coerceIn(0, width)
+            val clippedBottom = bottom.coerceIn(0, height)
             var count = 0
-            for (y in top until bottom) {
-                for (x in left until right) {
-                    if (x < width && y < height && !ColorDistance.isClose(bitmap.getPixel(x, y), backgroundColor)) {
+            for (y in clippedTop until clippedBottom) {
+                for (x in clippedLeft until clippedRight) {
+                    if (!ColorDistance.isClose(bitmap.getPixel(x, y), backgroundColor)) {
                         count++
                     }
                 }
