@@ -36,7 +36,9 @@ import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
  */
 class AnimatedTextEditorCoordinator(
     private val context: Context,
-    private val appServiceBridge: AppServiceBridge
+    private val appServiceBridge: AppServiceBridge,
+    private val animationTimeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource = com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
+    private val transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource = com.xiwei.sujian.editor.v2.visual.TransactionIdSource()
 ) : SessionCommandPort {
     private val targets = mutableMapOf<String, EditableTextTarget>()
     private var activeSessionId: ULong? = null
@@ -629,7 +631,7 @@ class AnimatedTextEditorCoordinator(
                 textSize = target.profile.fontSizePx.coerceAtLeast(1f)
                 isAntiAlias = true
             }
-            val projection = TargetDisplayRuntime(mirror, textPaint)
+            val projection = TargetDisplayRuntime(mirror, textPaint, animationTimeSource, transactionIdSource)
             projection.setFrameClock(windowFrameClock)
             if (target.profile.secretPolicy == SecretPolicy.MASK_AND_CLEAR_ON_COMMIT) {
                 projection.setSecretMasked(true)
@@ -639,7 +641,7 @@ class AnimatedTextEditorCoordinator(
     }
 
     private fun getOrCreateEditorView(): SujianEditorView {
-        return sharedEditorView ?: SujianEditorView(context).also {
+        return sharedEditorView ?: SujianEditorView(context, animationTimeSource = animationTimeSource, transactionIdSource = transactionIdSource).also {
             it.setFrameClock(windowFrameClock)
             sharedEditorView = it
         }

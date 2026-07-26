@@ -521,7 +521,7 @@ class SettingsViewModel : ViewModel() {
                                 }
                             }
                         }
-                        SyncCommandIoResult(true, true, syncResult)
+                        syncResult
                     }
                 }
 

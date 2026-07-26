@@ -56,10 +56,15 @@ class AndroidEditorPipeline private constructor(
         set(value) { editPipeline.setKernelBridge(value) }
 
     companion object {
-        fun create(mirror: DisplayTextMirror, textPaint: TextPaint): AndroidEditorPipeline {
+        fun create(
+            mirror: DisplayTextMirror,
+            textPaint: TextPaint,
+            timeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource = com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
+            transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource = com.xiwei.sujian.editor.v2.visual.TransactionIdSource()
+        ): AndroidEditorPipeline {
             val editPipeline = EditPipeline(mirror)
             val layoutRuntime = AndroidLayoutRuntime(mirror, textPaint)
-            val visualRuntime = AndroidVisualRuntime()
+            val visualRuntime = AndroidVisualRuntime(timeSource, transactionIdSource)
             val renderRuntime = AndroidRenderRuntime()
             return AndroidEditorPipeline(editPipeline, renderRuntime, layoutRuntime, visualRuntime)
         }

@@ -18,10 +18,11 @@ import androidx.compose.runtime.setValue
 class TargetDisplayRuntime(
     private val mirror: DisplayTextMirror,
     private val textPaint: TextPaint,
-    private val timeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource = com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource()
+    private val timeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource = com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
+    private val transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource = com.xiwei.sujian.editor.v2.visual.TransactionIdSource(),
 ) : WindowDisplayFrameClock.FrameListener {
     private val layoutEngine: AndroidLayoutEngine = AndroidLayoutEngine(mirror, textPaint)
-    private val visualRuntime: AndroidVisualRuntime = AndroidVisualRuntime()
+    private val visualRuntime: AndroidVisualRuntime = AndroidVisualRuntime(timeSource, transactionIdSource)
     private val renderRuntime: AndroidRenderRuntime = AndroidRenderRuntime()
     private var projection: DisplayTextProjection = DisplayTextProjection.identity("")
     private var secretDisplayMode: Boolean = false

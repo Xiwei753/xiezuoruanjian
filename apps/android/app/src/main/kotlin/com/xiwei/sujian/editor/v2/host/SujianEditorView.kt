@@ -24,7 +24,9 @@ import uniffi.writer_core.EditorTransactionCauseDto
 class SujianEditorView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
-    defStyleAttr: Int = 0
+    defStyleAttr: Int = 0,
+    animationTimeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource = com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
+    transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource = com.xiwei.sujian.editor.v2.visual.TransactionIdSource()
 ) : View(context, attrs, defStyleAttr), WindowDisplayFrameClock.FrameListener {
 
     private val textPaint = TextPaint().apply {
@@ -33,7 +35,9 @@ class SujianEditorView @JvmOverloads constructor(
     }
     private val pipeline = AndroidEditorPipeline.create(
         com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror(),
-        textPaint
+        textPaint,
+        animationTimeSource,
+        transactionIdSource
     )
     private val inputAdapter = AndroidInputAdapter(pipeline.mirror, pipeline) { pipeline.getCurrentProjection() }
 
