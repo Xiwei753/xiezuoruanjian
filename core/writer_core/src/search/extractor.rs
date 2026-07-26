@@ -138,7 +138,7 @@ pub fn extract_starmap_entries(workspace: &Path, project_id: Option<&str>) -> Re
     let starmap_dirs = scan_dirs(&starmaps_dir)?;
     for (sid, starmap_path) in starmap_dirs {
         let meta_path = starmap_path.join(format!("{}.meta.json", sid));
-        let bound_project = load_json_string_field(&meta_path, "project_id");
+        let bound_project = load_json_string_field(&meta_path, "projectId");
 
         if let Some(filter_id) = project_id {
             if bound_project != filter_id {
@@ -415,6 +415,47 @@ pub fn extract_starmap_title_entry(
             volume_id: None,
             chapter_id: None,
             starmap_id: Some(starmap_id.to_string()),
+            node_id: None,
+            setting_key: None,
+        },
+    }
+}
+
+pub fn extract_project_title_entry(
+    project_id: &str,
+    title: &str,
+) -> IndexEntry {
+    IndexEntry {
+        object_id: format!("project:{}", project_id),
+        scope: SearchScope::ProjectTitle,
+        title: title.to_string(),
+        body: title.to_string(),
+        target: SearchTarget {
+            project_id: Some(project_id.to_string()),
+            volume_id: None,
+            chapter_id: None,
+            starmap_id: None,
+            node_id: None,
+            setting_key: None,
+        },
+    }
+}
+
+pub fn extract_volume_title_entry(
+    project_id: &str,
+    volume_id: &str,
+    title: &str,
+) -> IndexEntry {
+    IndexEntry {
+        object_id: format!("volume:{}:{}", project_id, volume_id),
+        scope: SearchScope::VolumeTitle,
+        title: title.to_string(),
+        body: title.to_string(),
+        target: SearchTarget {
+            project_id: Some(project_id.to_string()),
+            volume_id: Some(volume_id.to_string()),
+            chapter_id: None,
+            starmap_id: None,
             node_id: None,
             setting_key: None,
         },

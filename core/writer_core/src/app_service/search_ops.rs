@@ -30,7 +30,7 @@ impl super::WriterAppService {
         title: String,
         body: String,
     ) -> Result<bool, WriterError> {
-        self.api.enqueue_search_index_update(&action, &object_id, &scope, &title, &body, None)
+        self.api.enqueue_search_index_update_public(&action, &object_id, &scope, &title, &body, None)
     }
 
 }

@@ -22,21 +22,21 @@ impl WriterCoreApi {
             "setting" => crate::search::SearchScope::Setting,
             _ => crate::search::SearchScope::All,
         };
-        let results = self.core().global_search(query, scope, limit as usize, cursor);
+        let results = self.search_service_search(query, scope, limit as usize, cursor);
         Self::json_string(&results)
     }
 
     pub fn rebuild_search_index_json(&self, project_id: Option<&str>) -> ApiResult<String> {
-        let status = self.core().rebuild_search_index(project_id).map_err(WriterError::from)?;
+        let status = self.search_service_rebuild(project_id).map_err(WriterError::from)?;
         Self::json_string(&status)
     }
 
     pub fn get_search_index_status_json(&self) -> ApiResult<String> {
-        let status = self.core().get_search_index_status();
+        let status = self.search_service_status();
         Self::json_string(&status)
     }
 
-    pub fn enqueue_search_index_update(
+    pub fn enqueue_search_index_update_public(
         &self,
         action: &str,
         object_id: &str,
@@ -64,7 +64,7 @@ impl WriterCoreApi {
             _ => crate::search::SearchScope::All,
         };
         let target = target.cloned();
-        self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action,
             object_id: object_id.to_string(),
             scope,

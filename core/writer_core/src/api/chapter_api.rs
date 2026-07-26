@@ -1,5 +1,15 @@
 use super::service::{ApiResult, WriterCoreApi};
 use super::types::*;
+use crate::api::error::WriterError;
+
+fn get_chapter_title(api: &WriterCoreApi, project_id: &str, volume_id: &str, chapter_id: &str) -> String {
+    api.core()
+        .list_chapters(project_id, volume_id)
+        .ok()
+        .and_then(|chapters| chapters.into_iter().find(|c| c.id == chapter_id))
+        .map(|c| c.title)
+        .unwrap_or_default()
+}
 
 /// 章节 API — 跨平台章节 CRUD 契约。
 ///
@@ -26,10 +36,22 @@ impl WriterCoreApi {
         volume_id: &str,
         title: &str,
     ) -> ApiResult<ChapterMetaDto> {
-        self.core()
+        let chapter: ChapterMetaDto = self.core()
             .create_chapter(project_id, volume_id, title)
             .map(Into::into)
-            .map_err(Into::into)
+            .map_err(WriterError::from)?;
+        let title_entry = crate::search::extractor::extract_chapter_title_entry(
+            project_id, volume_id, &chapter.id, title,
+        );
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+            action: crate::search::SearchIndexAction::Upsert,
+            object_id: title_entry.object_id.clone(),
+            scope: title_entry.scope,
+            title: title_entry.title.clone(),
+            body: title_entry.body.clone(),
+            target: Some(title_entry.target.clone()),
+        });
+        Ok(chapter)
     }
 
     /// 在项目中创建章节——若项目无卷则自动创建"第一卷"。
@@ -61,7 +83,7 @@ impl WriterCoreApi {
         let entry = crate::search::extractor::extract_chapter_title_entry(
             project_id, volume_id, chapter_id, new_title,
         );
-        self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
             scope: entry.scope,
@@ -86,7 +108,7 @@ impl WriterCoreApi {
             format!("chapter_body:{}:{}:{}", project_id, volume_id, chapter_id),
             format!("chapter_note:{}:{}:{}", project_id, volume_id, chapter_id),
         ] {
-            self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
+            self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
                 action: crate::search::SearchIndexAction::Delete,
                 object_id: prefix.clone(),
                 scope: crate::search::SearchScope::All,
@@ -135,10 +157,11 @@ impl WriterCoreApi {
         let receipt: ChapterSaveReceiptDto = self.core()
             .write_chapter_verified(project_id, volume_id, chapter_id, content)
             .map(Into::into)?;
+        let ch_title = get_chapter_title(self, project_id, volume_id, chapter_id);
         let entry = crate::search::extractor::extract_chapter_body_entry(
-            project_id, volume_id, chapter_id, "", content,
+            project_id, volume_id, chapter_id, &ch_title, content,
         );
-        self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
             scope: entry.scope,
@@ -158,7 +181,7 @@ impl WriterCoreApi {
         content: &str,
         allow_empty_overwrite: bool,
     ) -> ApiResult<ChapterSaveReceiptDto> {
-        self.core()
+        let receipt: ChapterSaveReceiptDto = self.core()
             .write_chapter_verified_with_allow_empty_overwrite(
                 project_id,
                 volume_id,
@@ -166,8 +189,20 @@ impl WriterCoreApi {
                 content,
                 allow_empty_overwrite,
             )
-            .map(Into::into)
-            .map_err(Into::into)
+            .map(Into::into)?;
+        let ch_title = get_chapter_title(self, project_id, volume_id, chapter_id);
+        let entry = crate::search::extractor::extract_chapter_body_entry(
+            project_id, volume_id, chapter_id, &ch_title, content,
+        );
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+            action: crate::search::SearchIndexAction::Upsert,
+            object_id: entry.object_id.clone(),
+            scope: entry.scope,
+            title: entry.title.clone(),
+            body: entry.body.clone(),
+            target: Some(entry.target.clone()),
+        });
+        Ok(receipt)
     }
 
     /// 清空章节正文（等价于 `save_chapter_content_with_options(..., true)`）。
@@ -177,10 +212,18 @@ impl WriterCoreApi {
         volume_id: &str,
         chapter_id: &str,
     ) -> ApiResult<ChapterSaveReceiptDto> {
-        self.core()
+        let receipt: ChapterSaveReceiptDto = self.core()
             .clear_chapter_content_verified(project_id, volume_id, chapter_id)
-            .map(Into::into)
-            .map_err(Into::into)
+            .map(Into::into)?;
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+            action: crate::search::SearchIndexAction::Delete,
+            object_id: format!("chapter_body:{}:{}:{}", project_id, volume_id, chapter_id),
+            scope: crate::search::SearchScope::All,
+            title: String::new(),
+            body: String::new(),
+            target: None,
+        });
+        Ok(receipt)
     }
 
     /// 更新章节备注（note 字段，独立于正文）。
@@ -193,10 +236,11 @@ impl WriterCoreApi {
     ) -> ApiResult<bool> {
         self.core()
             .update_chapter_note(project_id, volume_id, chapter_id, note)?;
+        let ch_title = get_chapter_title(self, project_id, volume_id, chapter_id);
         let entry = crate::search::extractor::extract_chapter_note_entry(
-            project_id, volume_id, chapter_id, "", note,
+            project_id, volume_id, chapter_id, &ch_title, note,
         );
-        self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
             scope: entry.scope,

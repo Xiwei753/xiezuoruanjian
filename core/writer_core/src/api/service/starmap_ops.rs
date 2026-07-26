@@ -50,6 +50,10 @@ fn extract_node_dto_search_body(content: &crate::api::types::StarMapNodeContentD
     parts.join(" ")
 }
 
+fn get_starmap_project_id(api: &WriterCoreApi, starmap_id: &str) -> Option<String> {
+    api.core().get_starmap(starmap_id).ok().and_then(|meta| meta.project_id)
+}
+
 impl WriterCoreApi {
     pub fn list_starmaps_json(&self) -> ApiResult<String> {
         let value = self.core().list_starmaps().map_err(WriterError::from)?;
@@ -80,14 +84,15 @@ impl WriterCoreApi {
         let result = self.core()
             .add_starmap_embed(starmap_id, embed.into())
             .map_err(WriterError::from)?;
-        self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        let project_id = get_starmap_project_id(self, starmap_id);
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: format!("starmap_embed:{}:{}", starmap_id, result.instance_id),
             scope: crate::search::SearchScope::StarmapNode,
             title: result.label.clone().unwrap_or_default(),
             body: result.label.clone().unwrap_or_default(),
             target: Some(crate::search::SearchTarget {
-                project_id: None,
+                project_id,
                 volume_id: None,
                 chapter_id: None,
                 starmap_id: Some(starmap_id.to_string()),
@@ -107,14 +112,15 @@ impl WriterCoreApi {
         let result = self.core()
             .update_starmap_embed(starmap_id, instance_id, patch.into())
             .map_err(WriterError::from)?;
-        self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        let project_id = get_starmap_project_id(self, starmap_id);
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: format!("starmap_embed:{}:{}", starmap_id, instance_id),
             scope: crate::search::SearchScope::StarmapNode,
             title: result.label.clone().unwrap_or_default(),
             body: result.label.clone().unwrap_or_default(),
             target: Some(crate::search::SearchTarget {
-                project_id: None,
+                project_id,
                 volume_id: None,
                 chapter_id: None,
                 starmap_id: Some(starmap_id.to_string()),
@@ -128,7 +134,7 @@ impl WriterCoreApi {
     pub fn delete_starmap_embed(&self, starmap_id: &str, instance_id: &str) -> ApiResult<bool> {
         self.core()
             .delete_starmap_embed(starmap_id, instance_id)?;
-        self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Delete,
             object_id: format!("starmap_embed:{}:{}", starmap_id, instance_id),
             scope: crate::search::SearchScope::All,
@@ -148,10 +154,11 @@ impl WriterCoreApi {
             .add_starmap_link(starmap_id, link.into())
             .map_err(WriterError::from)?;
         let label = result.label.clone().unwrap_or_default();
+        let project_id = get_starmap_project_id(self, starmap_id);
         let entry = crate::search::extractor::extract_starmap_link_entry(
-            starmap_id, &result.link_id, None, &label,
+            starmap_id, &result.link_id, project_id.as_deref(), &label,
         );
-        self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
             scope: entry.scope,
@@ -172,10 +179,11 @@ impl WriterCoreApi {
             .update_starmap_link(starmap_id, link_id, patch.into())
             .map_err(WriterError::from)?;
         let label = result.label.clone().unwrap_or_default();
+        let project_id = get_starmap_project_id(self, starmap_id);
         let entry = crate::search::extractor::extract_starmap_link_entry(
-            starmap_id, link_id, None, &label,
+            starmap_id, link_id, project_id.as_deref(), &label,
         );
-        self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
             scope: entry.scope,
@@ -189,7 +197,7 @@ impl WriterCoreApi {
     pub fn delete_starmap_link(&self, starmap_id: &str, link_id: &str) -> ApiResult<bool> {
         self.core()
             .delete_starmap_link(starmap_id, link_id)?;
-        self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Delete,
             object_id: format!("starmap_link:{}:{}", starmap_id, link_id),
             scope: crate::search::SearchScope::All,
@@ -277,10 +285,23 @@ impl WriterCoreApi {
         desc: &str,
         template_id: Option<&str>,
     ) -> ApiResult<crate::api::types::StarMapMetaDto> {
-        self.core()
+        let result: crate::api::types::StarMapMetaDto = self.core()
             .create_starmap(title, desc, template_id)
             .map(Into::into)
-            .map_err(Into::into)
+            .map_err(WriterError::from)?;
+        let project_id = result.project_id.as_deref();
+        let entry = crate::search::extractor::extract_starmap_title_entry(
+            &result.starmap_id, project_id, title,
+        );
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+            action: crate::search::SearchIndexAction::Upsert,
+            object_id: entry.object_id.clone(),
+            scope: entry.scope,
+            title: entry.title.clone(),
+            body: entry.body.clone(),
+            target: Some(entry.target.clone()),
+        });
+        Ok(result)
     }
 
     pub fn add_starmap_node(
@@ -294,10 +315,11 @@ impl WriterCoreApi {
             .add_starmap_node(starmap_id, node.into(), x, y)
             .map_err(WriterError::from)?;
         let node_content = extract_node_search_body(&result.content, &result.tags);
+        let project_id = get_starmap_project_id(self, starmap_id);
         let entry = crate::search::extractor::extract_starmap_node_entry(
-            starmap_id, &result.id, None, &result.title, &node_content,
+            starmap_id, &result.id, project_id.as_deref(), &result.title, &node_content,
         );
-        self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
             scope: entry.scope,
@@ -398,10 +420,11 @@ impl WriterCoreApi {
         let result = self.core()
             .rename_starmap(starmap_id, new_title)
             .map_err(WriterError::from)?;
+        let project_id = get_starmap_project_id(self, starmap_id);
         let entry = crate::search::extractor::extract_starmap_title_entry(
-            starmap_id, None, new_title,
+            starmap_id, project_id.as_deref(), new_title,
         );
-        self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
             scope: entry.scope,
@@ -423,7 +446,7 @@ impl WriterCoreApi {
             format!("starmap_link:{}:", starmap_id),
             format!("starmap_embed:{}:", starmap_id),
         ] {
-            self.core().remove_search_index_by_prefix(prefix);
+            self.remove_search_index_by_prefix(prefix);
         }
         Ok(true)
     }
@@ -470,10 +493,23 @@ impl WriterCoreApi {
         desc: &str,
         accent_color: Option<&str>,
     ) -> ApiResult<crate::api::types::StarMapMetaDto> {
-        self.core()
+        let result: crate::api::types::StarMapMetaDto = self.core()
             .create_child_starmap(parent_id, title, desc, accent_color)
             .map(Into::into)
-            .map_err(Into::into)
+            .map_err(WriterError::from)?;
+        let project_id = result.project_id.as_deref();
+        let entry = crate::search::extractor::extract_starmap_title_entry(
+            &result.starmap_id, project_id, title,
+        );
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+            action: crate::search::SearchIndexAction::Upsert,
+            object_id: entry.object_id.clone(),
+            scope: entry.scope,
+            title: entry.title.clone(),
+            body: entry.body.clone(),
+            target: Some(entry.target.clone()),
+        });
+        Ok(result)
     }
 
     pub fn update_starmap_node(
@@ -486,10 +522,11 @@ impl WriterCoreApi {
             .update_starmap_node(starmap_id, node_id, patch.into())
             .map_err(WriterError::from)?;
         let node_content = extract_node_search_body(&result.content, &result.tags);
+        let project_id = get_starmap_project_id(self, starmap_id);
         let entry = crate::search::extractor::extract_starmap_node_entry(
-            starmap_id, node_id, None, &result.title, &node_content,
+            starmap_id, node_id, project_id.as_deref(), &result.title, &node_content,
         );
-        self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
             scope: entry.scope,
@@ -503,7 +540,7 @@ impl WriterCoreApi {
     pub fn delete_starmap_node(&self, starmap_id: &str, node_id: &str) -> ApiResult<bool> {
         self.core()
             .delete_starmap_node(starmap_id, node_id)?;
-        self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Delete,
             object_id: format!("starmap_node:{}:{}", starmap_id, node_id),
             scope: crate::search::SearchScope::All,
@@ -523,10 +560,11 @@ impl WriterCoreApi {
             .add_starmap_edge(starmap_id, edge.into())
             .map_err(WriterError::from)?;
         let label = result.label.clone().unwrap_or_default();
+        let project_id = get_starmap_project_id(self, starmap_id);
         let entry = crate::search::extractor::extract_starmap_edge_entry(
-            starmap_id, &result.id, None, &label,
+            starmap_id, &result.id, project_id.as_deref(), &label,
         );
-        self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
             scope: entry.scope,
@@ -547,10 +585,11 @@ impl WriterCoreApi {
             .update_starmap_edge(starmap_id, edge_id, patch.into())
             .map_err(WriterError::from)?;
         let label = result.label.clone().unwrap_or_default();
+        let project_id = get_starmap_project_id(self, starmap_id);
         let entry = crate::search::extractor::extract_starmap_edge_entry(
-            starmap_id, edge_id, None, &label,
+            starmap_id, edge_id, project_id.as_deref(), &label,
         );
-        self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
             scope: entry.scope,
@@ -564,7 +603,7 @@ impl WriterCoreApi {
     pub fn delete_starmap_edge(&self, starmap_id: &str, edge_id: &str) -> ApiResult<bool> {
         self.core()
             .delete_starmap_edge(starmap_id, edge_id)?;
-        self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Delete,
             object_id: format!("starmap_edge:{}:{}", starmap_id, edge_id),
             scope: crate::search::SearchScope::All,
@@ -580,14 +619,37 @@ impl WriterCoreApi {
         starmap_id: &str,
         graph: &crate::api::types::StarMapGraphDto,
     ) -> ApiResult<bool> {
+        let old_graph = self.core().get_starmap_graph(starmap_id).ok();
+        let old_node_ids: std::collections::HashSet<String> = old_graph
+            .as_ref()
+            .map(|g| g.nodes.iter().map(|n| n.id.clone()).collect())
+            .unwrap_or_default();
+        let old_edge_ids: std::collections::HashSet<String> = old_graph
+            .as_ref()
+            .map(|g| g.edges.iter().map(|e| e.id.clone()).collect())
+            .unwrap_or_default();
+        let old_link_ids: std::collections::HashSet<String> = old_graph
+            .as_ref()
+            .map(|g| g.links.iter().map(|l| l.link_id.clone()).collect())
+            .unwrap_or_default();
+        let old_embed_ids: std::collections::HashSet<String> = old_graph
+            .as_ref()
+            .map(|g| g.embeds.iter().map(|e| e.instance_id.clone()).collect())
+            .unwrap_or_default();
+
         self.core()
             .save_starmap_graph(starmap_id, &graph.clone().into())?;
+
+        let project_id = get_starmap_project_id(self, starmap_id);
+
+        let new_node_ids: std::collections::HashSet<String> =
+            graph.nodes.iter().map(|n| n.id.clone()).collect();
         for node in &graph.nodes {
             let node_content = extract_node_dto_search_body(&node.content, &node.tags);
             let entry = crate::search::extractor::extract_starmap_node_entry(
-                starmap_id, &node.id, None, &node.title, &node_content,
+                starmap_id, &node.id, project_id.as_deref(), &node.title, &node_content,
             );
-            self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
+            self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
                 action: crate::search::SearchIndexAction::Upsert,
                 object_id: entry.object_id.clone(),
                 scope: entry.scope,
@@ -596,12 +658,25 @@ impl WriterCoreApi {
                 target: Some(entry.target.clone()),
             });
         }
+        for old_id in &old_node_ids - &new_node_ids {
+            self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                action: crate::search::SearchIndexAction::Delete,
+                object_id: format!("starmap_node:{}:{}", starmap_id, old_id),
+                scope: crate::search::SearchScope::All,
+                title: String::new(),
+                body: String::new(),
+                target: None,
+            });
+        }
+
+        let new_edge_ids: std::collections::HashSet<String> =
+            graph.edges.iter().map(|e| e.id.clone()).collect();
         for edge in &graph.edges {
             let label = edge.label.clone().unwrap_or_default();
             let entry = crate::search::extractor::extract_starmap_edge_entry(
-                starmap_id, &edge.id, None, &label,
+                starmap_id, &edge.id, project_id.as_deref(), &label,
             );
-            self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
+            self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
                 action: crate::search::SearchIndexAction::Upsert,
                 object_id: entry.object_id.clone(),
                 scope: entry.scope,
@@ -610,12 +685,25 @@ impl WriterCoreApi {
                 target: Some(entry.target.clone()),
             });
         }
+        for old_id in &old_edge_ids - &new_edge_ids {
+            self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                action: crate::search::SearchIndexAction::Delete,
+                object_id: format!("starmap_edge:{}:{}", starmap_id, old_id),
+                scope: crate::search::SearchScope::All,
+                title: String::new(),
+                body: String::new(),
+                target: None,
+            });
+        }
+
+        let new_link_ids: std::collections::HashSet<String> =
+            graph.links.iter().map(|l| l.link_id.clone()).collect();
         for link in &graph.links {
             let label = link.label.clone().unwrap_or_default();
             let entry = crate::search::extractor::extract_starmap_link_entry(
-                starmap_id, &link.link_id, None, &label,
+                starmap_id, &link.link_id, project_id.as_deref(), &label,
             );
-            self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
+            self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
                 action: crate::search::SearchIndexAction::Upsert,
                 object_id: entry.object_id.clone(),
                 scope: entry.scope,
@@ -624,10 +712,52 @@ impl WriterCoreApi {
                 target: Some(entry.target.clone()),
             });
         }
+        for old_id in &old_link_ids - &new_link_ids {
+            self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                action: crate::search::SearchIndexAction::Delete,
+                object_id: format!("starmap_link:{}:{}", starmap_id, old_id),
+                scope: crate::search::SearchScope::All,
+                title: String::new(),
+                body: String::new(),
+                target: None,
+            });
+        }
+
+        let new_embed_ids: std::collections::HashSet<String> =
+            graph.embeds.iter().map(|e| e.instance_id.clone()).collect();
+        for embed in &graph.embeds {
+            let embed_label = embed.label.clone().unwrap_or_default();
+            self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                action: crate::search::SearchIndexAction::Upsert,
+                object_id: format!("starmap_embed:{}:{}", starmap_id, embed.instance_id),
+                scope: crate::search::SearchScope::StarmapNode,
+                title: embed_label.clone(),
+                body: embed_label,
+                target: Some(crate::search::SearchTarget {
+                    project_id: project_id.clone(),
+                    volume_id: None,
+                    chapter_id: None,
+                    starmap_id: Some(starmap_id.to_string()),
+                    node_id: None,
+                    setting_key: None,
+                }),
+            });
+        }
+        for old_id in &old_embed_ids - &new_embed_ids {
+            self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                action: crate::search::SearchIndexAction::Delete,
+                object_id: format!("starmap_embed:{}:{}", starmap_id, old_id),
+                scope: crate::search::SearchScope::All,
+                title: String::new(),
+                body: String::new(),
+                target: None,
+            });
+        }
+
         let entry = crate::search::extractor::extract_starmap_title_entry(
-            starmap_id, None, &graph.title,
+            starmap_id, project_id.as_deref(), &graph.title,
         );
-        self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
             scope: entry.scope,

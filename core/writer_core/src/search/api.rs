@@ -507,4 +507,210 @@ mod tests {
         assert!(node_entries[0].body.contains("标签A"));
         assert!(node_entries[0].body.contains("标签B"));
     }
+
+    #[test]
+    fn cross_entry_create_project_then_search() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        let project = api.create_project("MyProject").unwrap();
+        let results = api.search_service_search("MyProject", SearchScope::ProjectTitle, 10, None);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "MyProject");
+        assert_eq!(results[0].target.project_id.as_deref(), Some(project.id.as_str()));
+    }
+
+    #[test]
+    fn cross_entry_rename_project_then_search() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        let project = api.create_project("OldName").unwrap();
+        api.rename_project(&project.id, "NewName").unwrap();
+        let old_results = api.search_service_search("OldName", SearchScope::ProjectTitle, 10, None);
+        assert!(old_results.is_empty());
+        let new_results = api.search_service_search("NewName", SearchScope::ProjectTitle, 10, None);
+        assert_eq!(new_results.len(), 1);
+        assert_eq!(new_results[0].title, "NewName");
+    }
+
+    #[test]
+    fn cross_entry_delete_project_removes_index() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        let project = api.create_project("ToDelete").unwrap();
+        let before = api.search_service_search("ToDelete", SearchScope::ProjectTitle, 10, None);
+        assert_eq!(before.len(), 1);
+        api.delete_project(&project.id).unwrap();
+        let after = api.search_service_search("ToDelete", SearchScope::ProjectTitle, 10, None);
+        assert!(after.is_empty());
+    }
+
+    #[test]
+    fn cross_entry_create_volume_then_search() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        let project = api.create_project("P1").unwrap();
+        let volume = api.create_volume(&project.id, "MyVolume").unwrap();
+        let results = api.search_service_search("MyVolume", SearchScope::VolumeTitle, 10, None);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "MyVolume");
+        assert_eq!(results[0].target.volume_id.as_deref(), Some(volume.id.as_str()));
+    }
+
+    #[test]
+    fn cross_entry_create_chapter_then_search() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        let project = api.create_project("P1").unwrap();
+        let volume = api.create_volume(&project.id, "V1").unwrap();
+        let chapter = api.create_chapter(&project.id, &volume.id, "MyChapter").unwrap();
+        let results = api.search_service_search("MyChapter", SearchScope::ChapterTitle, 10, None);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "MyChapter");
+        assert_eq!(results[0].target.chapter_id.as_deref(), Some(chapter.id.as_str()));
+    }
+
+    #[test]
+    fn cross_entry_save_chapter_content_searchable() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        let project = api.create_project("P1").unwrap();
+        let volume = api.create_volume(&project.id, "V1").unwrap();
+        let chapter = api.create_chapter(&project.id, &volume.id, "Ch1").unwrap();
+        api.save_chapter_content(&project.id, &volume.id, &chapter.id, "Hello World").unwrap();
+        let results = api.search_service_search("Hello", SearchScope::ChapterBody, 10, None);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Ch1");
+    }
+
+    #[test]
+    fn cross_entry_clear_chapter_content_removes_body_index() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        let project = api.create_project("P1").unwrap();
+        let volume = api.create_volume(&project.id, "V1").unwrap();
+        let chapter = api.create_chapter(&project.id, &volume.id, "Ch1").unwrap();
+        api.save_chapter_content(&project.id, &volume.id, &chapter.id, "UniqueContent").unwrap();
+        let before = api.search_service_search("UniqueContent", SearchScope::ChapterBody, 10, None);
+        assert_eq!(before.len(), 1);
+        api.clear_chapter_content(&project.id, &volume.id, &chapter.id).unwrap();
+        let after = api.search_service_search("UniqueContent", SearchScope::ChapterBody, 10, None);
+        assert!(after.is_empty());
+    }
+
+    #[test]
+    fn cross_entry_rename_chapter_updates_search() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        let project = api.create_project("P1").unwrap();
+        let volume = api.create_volume(&project.id, "V1").unwrap();
+        let chapter = api.create_chapter(&project.id, &volume.id, "OldTitle").unwrap();
+        api.rename_chapter(&project.id, &volume.id, &chapter.id, "NewTitle").unwrap();
+        let old_results = api.search_service_search("OldTitle", SearchScope::ChapterTitle, 10, None);
+        assert!(old_results.is_empty());
+        let new_results = api.search_service_search("NewTitle", SearchScope::ChapterTitle, 10, None);
+        assert_eq!(new_results.len(), 1);
+    }
+
+    #[test]
+    fn cross_entry_create_starmap_then_search() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        let meta = api.create_starmap("MyStarMap", "desc", None).unwrap();
+        let results = api.search_service_search("MyStarMap", SearchScope::StarmapTitle, 10, None);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "MyStarMap");
+        assert_eq!(results[0].target.starmap_id.as_deref(), Some(meta.starmap_id.as_str()));
+    }
+
+    #[test]
+    fn cross_entry_rebuild_matches_incremental() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        let project = api.create_project("RebuildP").unwrap();
+        let volume = api.create_volume(&project.id, "V1").unwrap();
+        let chapter = api.create_chapter(&project.id, &volume.id, "RebuildCh").unwrap();
+        api.save_chapter_content(&project.id, &volume.id, &chapter.id, "RebuildContent").unwrap();
+
+        let incremental_title = api.search_service_search("RebuildCh", SearchScope::ChapterTitle, 10, None);
+        let incremental_body = api.search_service_search("RebuildContent", SearchScope::ChapterBody, 10, None);
+        assert_eq!(incremental_title.len(), 1);
+        assert_eq!(incremental_body.len(), 1);
+        assert_eq!(incremental_title[0].title, "RebuildCh");
+        assert_eq!(incremental_body[0].title, "RebuildCh");
+
+        api.search_service_rebuild(None).unwrap();
+        let rebuild_title = api.search_service_search("RebuildCh", SearchScope::ChapterTitle, 10, None);
+        let rebuild_body = api.search_service_search("RebuildContent", SearchScope::ChapterBody, 10, None);
+        assert_eq!(rebuild_title.len(), 1);
+        assert_eq!(rebuild_body.len(), 1);
+        assert_eq!(rebuild_title[0].title, "RebuildCh");
+        assert_eq!(rebuild_body[0].title, "RebuildCh");
+    }
+
+    #[test]
+    fn cross_entry_starmap_project_id_in_incremental() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        let project = api.create_project("P1").unwrap();
+        let meta = api.create_starmap("BoundMap", "desc", None).unwrap();
+        api.bind_starmap_to_project(&meta.starmap_id, &project.id).unwrap();
+
+        let node = crate::api::types::StarMapNodeDto {
+            id: String::new(),
+            title: "BoundNode".to_string(),
+            kind: crate::api::types::StarMapNodeKindDto::Note,
+            payload: None,
+            tags: vec![],
+            content: crate::api::types::StarMapNodeContentDto {
+                kind: "inline".to_string(),
+                summary: Some("node summary".to_string()),
+                body: None,
+                ..Default::default()
+            },
+            anchors: vec![],
+            portal: None,
+            display_policy: Default::default(),
+            open_behavior: Default::default(),
+            provenance: Default::default(),
+            created_at: 0,
+            updated_at: 0,
+        };
+        let _ = api.add_starmap_node(&meta.starmap_id, node, 0.0, 0.0);
+
+        let results = api.search_service_search("BoundNode", SearchScope::StarmapNode, 10, None);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].target.project_id.as_deref(), Some(project.id.as_str()));
+    }
+
+    #[test]
+    fn cross_entry_rebuild_reads_camel_case_project_id() {
+        use crate::search::extractor::extract_starmap_entries;
+        let dir = TempDir::new().unwrap();
+        let starmap_dir = dir.path().join("app-meta").join("starmaps").join("sm1");
+        std::fs::create_dir_all(&starmap_dir).unwrap();
+        std::fs::write(
+            starmap_dir.join("graph.json"),
+            serde_json::json!({"title": "CamelMap"}).to_string(),
+        ).unwrap();
+        std::fs::write(
+            starmap_dir.join("sm1.meta.json"),
+            serde_json::json!({"starmapId": "sm1", "projectId": "p1", "title": "CamelMap", "createdAt": 0, "updatedAt": 0}).to_string(),
+        ).unwrap();
+
+        let entries = extract_starmap_entries(dir.path(), None).unwrap();
+        let title_entries: Vec<_> = entries.iter().filter(|e| e.scope == SearchScope::StarmapTitle).collect();
+        assert_eq!(title_entries.len(), 1);
+        assert_eq!(title_entries[0].target.project_id.as_deref(), Some("p1"));
+    }
 }

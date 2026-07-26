@@ -14,7 +14,7 @@ impl WriterCoreApi {
             .save_local_settings(&settings.clone().into())?;
         let body = serde_json::to_string(&settings).unwrap_or_default();
         let entry = crate::search::extractor::extract_setting_entry("local", &body);
-        self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
             scope: entry.scope,
@@ -37,7 +37,7 @@ impl WriterCoreApi {
             .save_syncable_settings(&settings.clone().into())?;
         let body = serde_json::to_string(&settings).unwrap_or_default();
         let entry = crate::search::extractor::extract_setting_entry("syncable", &body);
-        self.core().enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
             scope: entry.scope,
