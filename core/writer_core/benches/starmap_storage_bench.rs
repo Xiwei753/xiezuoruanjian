@@ -2,7 +2,7 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use std::fs;
 use tempfile::tempdir;
-use writer_core::starmap::package_storage::*;
+use writer_core::starmap::store::{GraphMeta, StarMapStore};
 use writer_core::starmap::semantic::{
     StarMapDisplayPolicy, StarMapNodeContent, StarMapOpenBehavior, StarMapProvenance,
 };
@@ -11,18 +11,20 @@ use writer_core::starmap::types::*;
 fn bench_load_starmap(c: &mut Criterion) {
     let dir = tempdir().unwrap();
     let workspace = dir.path();
-    // Initialize workspace and starmap properly using core APIs
     let meta = writer_core::starmap::create_starmap(workspace, "Bench", "", None).unwrap();
     let real_id = meta.starmap_id.clone();
     let starmap_dir = workspace.join("app-meta").join("starmaps").join(&real_id);
 
-    // create graph.json
     let gmeta = GraphMeta {
-        schema_version: 1,
-        id: "g1".to_string(),
+        schema_version: "2".to_string(),
         starmap_id: real_id.clone(),
         title: "Bench".to_string(),
-        created_at: 0,
+        node_ids: (0..1000).map(|i| format!("node_{}", i)).collect(),
+        edge_ids: vec![],
+        embed_instance_ids: vec![],
+        link_ids: vec![],
+        hyperlink_ids: vec![],
+        package_revision: 0,
         updated_at: 0,
     };
     fs::create_dir_all(&starmap_dir).unwrap();
@@ -32,7 +34,6 @@ fn bench_load_starmap(c: &mut Criterion) {
     )
     .unwrap();
 
-    // Let's create many nodes directly
     let nodes_dir = starmap_dir.join("nodes");
     fs::create_dir_all(&nodes_dir).unwrap();
     for i in 0..1000 {
@@ -57,7 +58,8 @@ fn bench_load_starmap(c: &mut Criterion) {
 
     c.bench_function("load_starmap_1000_nodes_baseline", |b| {
         b.iter(|| {
-            let _ = load_starmap_document(workspace, &real_id).unwrap();
+            let mut store = StarMapStore::new(workspace, &real_id);
+            let _ = store.load_full();
         })
     });
 }
