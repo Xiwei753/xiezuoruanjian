@@ -479,6 +479,54 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
+        if let Ok(graph) = self.core().get_starmap_graph(starmap_id) {
+            for node in &graph.nodes {
+                let node_content = extract_node_search_body(&node.content, &node.tags);
+                let entry = crate::search::extractor::extract_starmap_node_entry(
+                    starmap_id, &node.id, Some(project_id), &node.title, &node_content,
+                );
+                self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                    action: crate::search::SearchIndexAction::Upsert,
+                    object_id: entry.object_id.clone(),
+                    scope: entry.scope,
+                    title: entry.title.clone(),
+                    body: entry.body.clone(),
+                    target: Some(entry.target.clone()),
+                });
+            }
+            for edge in &graph.edges {
+                let label = edge.label.as_deref().unwrap_or("");
+                if !label.is_empty() {
+                    let entry = crate::search::extractor::extract_starmap_edge_entry(
+                        starmap_id, &edge.id, Some(project_id), label,
+                    );
+                    self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                        action: crate::search::SearchIndexAction::Upsert,
+                        object_id: entry.object_id.clone(),
+                        scope: entry.scope,
+                        title: entry.title.clone(),
+                        body: entry.body.clone(),
+                        target: Some(entry.target.clone()),
+                    });
+                }
+            }
+            for link in &graph.links {
+                let label = link.label.as_deref().unwrap_or("");
+                if !label.is_empty() {
+                    let entry = crate::search::extractor::extract_starmap_link_entry(
+                        starmap_id, &link.link_id, Some(project_id), label,
+                    );
+                    self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                        action: crate::search::SearchIndexAction::Upsert,
+                        object_id: entry.object_id.clone(),
+                        scope: entry.scope,
+                        title: entry.title.clone(),
+                        body: entry.body.clone(),
+                        target: Some(entry.target.clone()),
+                    });
+                }
+            }
+        }
         Ok(true)
     }
 
@@ -497,6 +545,54 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
+        if let Ok(graph) = self.core().get_starmap_graph(starmap_id) {
+            for node in &graph.nodes {
+                let node_content = extract_node_search_body(&node.content, &node.tags);
+                let entry = crate::search::extractor::extract_starmap_node_entry(
+                    starmap_id, &node.id, None, &node.title, &node_content,
+                );
+                self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                    action: crate::search::SearchIndexAction::Upsert,
+                    object_id: entry.object_id.clone(),
+                    scope: entry.scope,
+                    title: entry.title.clone(),
+                    body: entry.body.clone(),
+                    target: Some(entry.target.clone()),
+                });
+            }
+            for edge in &graph.edges {
+                let label = edge.label.as_deref().unwrap_or("");
+                if !label.is_empty() {
+                    let entry = crate::search::extractor::extract_starmap_edge_entry(
+                        starmap_id, &edge.id, None, label,
+                    );
+                    self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                        action: crate::search::SearchIndexAction::Upsert,
+                        object_id: entry.object_id.clone(),
+                        scope: entry.scope,
+                        title: entry.title.clone(),
+                        body: entry.body.clone(),
+                        target: Some(entry.target.clone()),
+                    });
+                }
+            }
+            for link in &graph.links {
+                let label = link.label.as_deref().unwrap_or("");
+                if !label.is_empty() {
+                    let entry = crate::search::extractor::extract_starmap_link_entry(
+                        starmap_id, &link.link_id, None, label,
+                    );
+                    self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                        action: crate::search::SearchIndexAction::Upsert,
+                        object_id: entry.object_id.clone(),
+                        scope: entry.scope,
+                        title: entry.title.clone(),
+                        body: entry.body.clone(),
+                        target: Some(entry.target.clone()),
+                    });
+                }
+            }
+        }
         Ok(true)
     }
 

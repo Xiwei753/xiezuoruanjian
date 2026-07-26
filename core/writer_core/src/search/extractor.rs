@@ -19,21 +19,11 @@ pub fn extract_chapter_entries(workspace: &Path, project_id: Option<&str>) -> Re
             }
         }
 
-        let title = load_json_string_field(&project_path.join("project.json"), "title");
-        entries.push(IndexEntry {
-            object_id: format!("project:{}", pid),
-            scope: SearchScope::ProjectTitle,
-            title: title.clone(),
-            body: title,
-            target: SearchTarget {
-                project_id: Some(pid.clone()),
-                volume_id: None,
-                chapter_id: None,
-                starmap_id: None,
-                node_id: None,
-                setting_key: None,
-            },
-        });
+        let proj: Option<crate::project::Project> = std::fs::read_to_string(project_path.join("project.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok());
+        let proj_title = proj.as_ref().map(|p| p.title.as_str()).unwrap_or("");
+        entries.push(extract_project_title_entry(&pid, proj_title));
 
         let volumes_dir = project_path.join("volumes");
         if !volumes_dir.exists() {
@@ -41,21 +31,11 @@ pub fn extract_chapter_entries(workspace: &Path, project_id: Option<&str>) -> Re
         }
         let volumes = scan_dirs(&volumes_dir)?;
         for (vid, volume_path) in volumes {
-            let vol_title = load_json_string_field(&volume_path.join("volume.json"), "title");
-            entries.push(IndexEntry {
-                object_id: format!("volume:{}:{}", pid, vid),
-                scope: SearchScope::VolumeTitle,
-                title: vol_title.clone(),
-                body: vol_title,
-                target: SearchTarget {
-                    project_id: Some(pid.clone()),
-                    volume_id: Some(vid.clone()),
-                    chapter_id: None,
-                    starmap_id: None,
-                    node_id: None,
-                    setting_key: None,
-                },
-            });
+            let vol: Option<crate::volume::Volume> = std::fs::read_to_string(volume_path.join("volume.json"))
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok());
+            let vol_title = vol.as_ref().map(|v| v.title.as_str()).unwrap_or("");
+            entries.push(extract_volume_title_entry(&pid, &vid, vol_title));
 
             let chapters_dir = volume_path.join("chapters");
             if !chapters_dir.exists() {
@@ -63,39 +43,13 @@ pub fn extract_chapter_entries(workspace: &Path, project_id: Option<&str>) -> Re
             }
             let chapters = scan_dirs(&chapters_dir)?;
             for (cid, chapter_path) in chapters {
-                let ch_title = load_json_string_field(&chapter_path.join("chapter.meta.json"), "title");
-                entries.push(IndexEntry {
-                    object_id: format!("chapter_title:{}:{}:{}", pid, vid, cid),
-                    scope: SearchScope::ChapterTitle,
-                    title: ch_title.clone(),
-                    body: ch_title.clone(),
-                    target: SearchTarget {
-                        project_id: Some(pid.clone()),
-                        volume_id: Some(vid.clone()),
-                        chapter_id: Some(cid.clone()),
-                        starmap_id: None,
-                        node_id: None,
-                        setting_key: None,
-                    },
-                });
+                let ch_title = load_chapter_title(&chapter_path);
+                entries.push(extract_chapter_title_entry(&pid, &vid, &cid, &ch_title));
 
                 let md_path = chapter_path.join("chapter.md");
                 if md_path.exists() {
                     if let Ok(body) = std::fs::read_to_string(&md_path) {
-                        entries.push(IndexEntry {
-                            object_id: format!("chapter_body:{}:{}:{}", pid, vid, cid),
-                            scope: SearchScope::ChapterBody,
-                            title: ch_title.clone(),
-                            body,
-                            target: SearchTarget {
-                                project_id: Some(pid.clone()),
-                                volume_id: Some(vid.clone()),
-                                chapter_id: Some(cid.clone()),
-                                starmap_id: None,
-                                node_id: None,
-                                setting_key: None,
-                            },
-                        });
+                        entries.push(extract_chapter_body_entry(&pid, &vid, &cid, &ch_title, &body));
                     }
                 }
 
@@ -103,20 +57,7 @@ pub fn extract_chapter_entries(workspace: &Path, project_id: Option<&str>) -> Re
                 if note_path.exists() {
                     if let Ok(note) = std::fs::read_to_string(&note_path) {
                         if !note.is_empty() {
-                            entries.push(IndexEntry {
-                                object_id: format!("chapter_note:{}:{}:{}", pid, vid, cid),
-                                scope: SearchScope::ChapterNote,
-                                title: ch_title.clone(),
-                                body: note,
-                                target: SearchTarget {
-                                    project_id: Some(pid.clone()),
-                                    volume_id: Some(vid.clone()),
-                                    chapter_id: Some(cid.clone()),
-                                    starmap_id: None,
-                                    node_id: None,
-                                    setting_key: None,
-                                },
-                            });
+                            entries.push(extract_chapter_note_entry(&pid, &vid, &cid, &ch_title, &note));
                         }
                     }
                 }
@@ -138,62 +79,35 @@ pub fn extract_starmap_entries(workspace: &Path, project_id: Option<&str>) -> Re
     let starmap_dirs = scan_dirs(&starmaps_dir)?;
     for (sid, starmap_path) in starmap_dirs {
         let meta_path = starmaps_dir.join(format!("{}.meta.json", sid));
-        let bound_project = load_json_string_field(&meta_path, "projectId");
+        let meta: Option<crate::starmap::StarMapMeta> = std::fs::read_to_string(&meta_path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok());
+
+        let bound_project: Option<&str> = meta.as_ref().and_then(|m| m.project_id.as_deref());
 
         if let Some(filter_id) = project_id {
-            if bound_project != filter_id {
+            if bound_project != Some(filter_id) {
                 continue;
             }
         }
 
-        let graph_path = starmap_path.join("graph.json");
-        let mut title = load_json_string_field(&graph_path, "title");
-        if title.is_empty() {
-            title = load_json_string_field(&meta_path, "title");
-        }
-        entries.push(IndexEntry {
-            object_id: format!("starmap:{}", sid),
-            scope: SearchScope::StarmapTitle,
-            title: title.clone(),
-            body: title,
-            target: SearchTarget {
-                project_id: if bound_project.is_empty() { None } else { Some(bound_project.clone()) },
-                volume_id: None,
-                chapter_id: None,
-                starmap_id: Some(sid.clone()),
-                node_id: None,
-                setting_key: None,
-            },
-        });
+        let title = meta.as_ref().map(|m| m.title.as_str()).unwrap_or("");
+        entries.push(extract_starmap_title_entry(&sid, bound_project, title));
 
         let nodes_dir = starmap_path.join("nodes");
         if nodes_dir.exists() {
             if let Ok(node_files) = scan_json_files(&nodes_dir) {
                 for (nid, node_file) in node_files {
-                    let node_title = load_json_string_field(&node_file, "title");
-                    let node_body = load_node_content_search_text(&node_file);
-                    let node_tags = load_json_string_array_field(&node_file, "tags");
-                    let mut search_parts = Vec::new();
-                    if !node_body.is_empty() { search_parts.push(node_body); }
-                    for tag in &node_tags {
-                        if !tag.is_empty() { search_parts.push(tag.clone()); }
-                    }
-                    let search_body = search_parts.join(" ");
-                    if !node_title.is_empty() || !search_body.is_empty() {
-                        entries.push(IndexEntry {
-                            object_id: format!("starmap_node:{}:{}", sid, nid),
-                            scope: SearchScope::StarmapNode,
-                            title: node_title.clone(),
-                            body: if search_body.is_empty() { node_title } else { search_body },
-                            target: SearchTarget {
-                                project_id: if bound_project.is_empty() { None } else { Some(bound_project.clone()) },
-                                volume_id: None,
-                                chapter_id: None,
-                                starmap_id: Some(sid.clone()),
-                                node_id: Some(nid),
-                                setting_key: None,
-                            },
-                        });
+                    let node: Option<crate::starmap::types::StarMapNode> = std::fs::read_to_string(&node_file)
+                        .ok()
+                        .and_then(|s| serde_json::from_str(&s).ok());
+                    if let Some(n) = node {
+                        let content = extract_node_search_text(&n.content, &n.tags);
+                        if !n.title.is_empty() || !content.is_empty() {
+                            entries.push(extract_starmap_node_entry(
+                                &sid, &nid, bound_project, &n.title, &content,
+                            ));
+                        }
                     }
                 }
             }
@@ -203,22 +117,14 @@ pub fn extract_starmap_entries(workspace: &Path, project_id: Option<&str>) -> Re
         if edges_dir.exists() {
             if let Ok(edge_files) = scan_json_files(&edges_dir) {
                 for (eid, edge_file) in edge_files {
-                    let label = load_json_string_field(&edge_file, "label");
-                    if !label.is_empty() {
-                        entries.push(IndexEntry {
-                            object_id: format!("starmap_edge:{}:{}", sid, eid),
-                            scope: SearchScope::StarmapEdgeLabel,
-                            title: label.clone(),
-                            body: label,
-                            target: SearchTarget {
-                                project_id: if bound_project.is_empty() { None } else { Some(bound_project.clone()) },
-                                volume_id: None,
-                                chapter_id: None,
-                                starmap_id: Some(sid.clone()),
-                                node_id: None,
-                                setting_key: None,
-                            },
-                        });
+                    let edge: Option<crate::starmap::types::StarMapEdge> = std::fs::read_to_string(&edge_file)
+                        .ok()
+                        .and_then(|s| serde_json::from_str(&s).ok());
+                    if let Some(e) = edge {
+                        let label = e.label.as_deref().unwrap_or("");
+                        if !label.is_empty() {
+                            entries.push(extract_starmap_edge_entry(&sid, &eid, bound_project, label));
+                        }
                     }
                 }
             }
@@ -228,23 +134,16 @@ pub fn extract_starmap_entries(workspace: &Path, project_id: Option<&str>) -> Re
         if hyperlinks_dir.exists() {
             if let Ok(hl_files) = scan_json_files(&hyperlinks_dir) {
                 for (hid, hl_file) in hl_files {
-                    let hl_title = load_json_string_field(&hl_file, "title");
-                    let hl_url = load_json_string_field(&hl_file, "url");
-                    if !hl_title.is_empty() || !hl_url.is_empty() {
-                        entries.push(IndexEntry {
-                            object_id: format!("starmap_hyperlink:{}:{}", sid, hid),
-                            scope: SearchScope::StarmapHyperlink,
-                            title: hl_title.clone(),
-                            body: if hl_url.is_empty() { hl_title } else { format!("{} {}", hl_title, hl_url) },
-                            target: SearchTarget {
-                                project_id: if bound_project.is_empty() { None } else { Some(bound_project.clone()) },
-                                volume_id: None,
-                                chapter_id: None,
-                                starmap_id: Some(sid.clone()),
-                                node_id: None,
-                                setting_key: None,
-                            },
-                        });
+                    let hl: Option<crate::starmap::types::StarMapHyperlink> = std::fs::read_to_string(&hl_file)
+                        .ok()
+                        .and_then(|s| serde_json::from_str(&s).ok());
+                    if let Some(h) = hl {
+                        let hl_title = h.label.as_deref().unwrap_or("");
+                        if !hl_title.is_empty() || !h.target_uri.is_empty() {
+                            entries.push(extract_starmap_hyperlink_entry(
+                                &sid, &hid, bound_project, hl_title, &h.target_uri,
+                            ));
+                        }
                     }
                 }
             }
@@ -254,22 +153,14 @@ pub fn extract_starmap_entries(workspace: &Path, project_id: Option<&str>) -> Re
         if links_dir.exists() {
             if let Ok(link_files) = scan_json_files(&links_dir) {
                 for (lid, link_file) in link_files {
-                    let link_label = load_json_string_field(&link_file, "label");
-                    if !link_label.is_empty() {
-                        entries.push(IndexEntry {
-                            object_id: format!("starmap_link:{}:{}", sid, lid),
-                            scope: SearchScope::StarmapLink,
-                            title: link_label.clone(),
-                            body: link_label,
-                            target: SearchTarget {
-                                project_id: if bound_project.is_empty() { None } else { Some(bound_project.clone()) },
-                                volume_id: None,
-                                chapter_id: None,
-                                starmap_id: Some(sid.clone()),
-                                node_id: None,
-                                setting_key: None,
-                            },
-                        });
+                    let link: Option<crate::starmap::types::StarMapLink> = std::fs::read_to_string(&link_file)
+                        .ok()
+                        .and_then(|s| serde_json::from_str(&s).ok());
+                    if let Some(l) = link {
+                        let label = l.label.as_deref().unwrap_or("");
+                        if !label.is_empty() {
+                            entries.push(extract_starmap_link_entry(&sid, &lid, bound_project, label));
+                        }
                     }
                 }
             }
@@ -590,37 +481,20 @@ fn scan_json_files(dir: &Path) -> Result<Vec<(String, std::path::PathBuf)>> {
     Ok(result)
 }
 
-fn load_json_string_field(path: &Path, field: &str) -> String {
-    std::fs::read_to_string(path)
+fn load_chapter_title(chapter_path: &Path) -> String {
+    std::fs::read_to_string(chapter_path.join("chapter.meta.json"))
         .ok()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .and_then(|v| v.get(field).and_then(|f| f.as_str()).map(|s| s.to_string()))
+        .and_then(|v| v.get("title").and_then(|f| f.as_str()).map(|s| s.to_string()))
         .unwrap_or_default()
 }
 
-fn load_json_string_array_field(path: &Path, field: &str) -> Vec<String> {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .and_then(|v| v.get(field).and_then(|f| f.as_array()).map(|arr| {
-            arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
-        }))
-        .unwrap_or_default()
-}
-
-fn load_node_content_search_text(path: &Path) -> String {
-    let content_value = std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .and_then(|v| v.get("content").cloned());
-    match content_value {
-        Some(v) => {
-            if let Ok(content) = serde_json::from_value::<crate::starmap::semantic::StarMapNodeContent>(v) {
-                content.search_text()
-            } else {
-                String::new()
-            }
-        }
-        None => String::new(),
+fn extract_node_search_text(content: &crate::starmap::semantic::StarMapNodeContent, tags: &[String]) -> String {
+    let mut parts = Vec::new();
+    let text = content.search_text();
+    if !text.is_empty() { parts.push(text); }
+    for tag in tags {
+        if !tag.is_empty() { parts.push(tag.clone()); }
     }
+    parts.join(" ")
 }

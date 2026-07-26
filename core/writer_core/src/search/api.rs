@@ -268,11 +268,23 @@ mod tests {
         ).unwrap();
         std::fs::write(
             starmaps_root.join("sm1.meta.json"),
-            serde_json::json!({"projectId": "p1"}).to_string(),
+            serde_json::json!({"starmapId": "sm1", "projectId": "p1", "title": "TestMap", "createdAt": 0, "updatedAt": 0}).to_string(),
         ).unwrap();
+        let link = crate::starmap::types::StarMapLink {
+            link_id: "l1".to_string(),
+            source: crate::starmap::types::StarMapEndpoint::Node { node_id: "n1".to_string() },
+            target: crate::starmap::semantic::StarMapDeepTarget {
+                starmap_id: "sm1".to_string(),
+                path: vec![],
+                target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
+            },
+            label: Some("MyLink".to_string()),
+            created_at: 0,
+            updated_at: 0,
+        };
         std::fs::write(
             starmap_dir.join("links").join("l1.json"),
-            serde_json::json!({"linkId": "l1", "label": "MyLink"}).to_string(),
+            serde_json::to_string(&link).unwrap(),
         ).unwrap();
 
         let entries = extract_starmap_entries(dir.path(), None).unwrap();
@@ -488,15 +500,18 @@ mod tests {
         ).unwrap();
         std::fs::write(
             starmaps_root.join("sm1.meta.json"),
-            serde_json::json!({"projectId": "p1"}).to_string(),
+            serde_json::json!({"starmapId": "sm1", "projectId": "p1", "title": "TestMap", "createdAt": 0, "updatedAt": 0}).to_string(),
         ).unwrap();
         std::fs::write(
-            starmap_dir.join("nodes").join("n1.json"),
+&starmap_dir.join("nodes").join("n1.json"),
             serde_json::json!({
                 "id": "n1",
                 "title": "MyNode",
+                "kind": "note",
                 "content": {"type": "inline", "summary": "节点摘要", "body": "节点正文"},
-                "tags": ["标签A", "标签B"]
+                "tags": ["标签A", "标签B"],
+                "createdAt": 0,
+                "updatedAt": 0
             }).to_string(),
         ).unwrap();
 
@@ -950,5 +965,263 @@ mod tests {
 
         assert_eq!(inc_starmap[0].target.project_id, rb_starmap[0].target.project_id, "starmap project_id mismatch after rebuild");
         assert_eq!(inc_node[0].target.project_id, rb_node[0].target.project_id, "node project_id mismatch after rebuild");
+    }
+
+    #[test]
+    fn cross_entry_rename_chapter_syncs_body_note_title() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        let project = api.create_project("P1").unwrap();
+        let volume = api.create_volume(&project.id, "V1").unwrap();
+        let chapter = api.create_chapter(&project.id, &volume.id, "OldTitle").unwrap();
+        api.save_chapter_content(&project.id, &volume.id, &chapter.id, "SomeBody").unwrap();
+        api.update_chapter_note(&project.id, &volume.id, &chapter.id, "SomeNote").unwrap();
+
+        let body_before = api.search_service_search("SomeBody", SearchScope::ChapterBody, 10, None);
+        assert_eq!(body_before.len(), 1);
+        assert_eq!(body_before[0].title, "OldTitle");
+
+        api.rename_chapter(&project.id, &volume.id, &chapter.id, "NewTitle").unwrap();
+
+        let title_after = api.search_service_search("NewTitle", SearchScope::ChapterTitle, 10, None);
+        assert_eq!(title_after.len(), 1);
+        let body_after = api.search_service_search("SomeBody", SearchScope::ChapterBody, 10, None);
+        assert_eq!(body_after.len(), 1);
+        assert_eq!(body_after[0].title, "NewTitle");
+        let note_after = api.search_service_search("SomeNote", SearchScope::ChapterNote, 10, None);
+        assert_eq!(note_after.len(), 1);
+        assert_eq!(note_after[0].title, "NewTitle");
+    }
+
+    #[test]
+    fn cross_entry_bind_starmap_updates_child_project_id() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        let project = api.create_project("P1").unwrap();
+        let meta = api.create_starmap("UnboundMap", "desc", None).unwrap();
+
+        let node = crate::api::types::StarMapNodeDto {
+            id: String::new(),
+            title: "MapNode".to_string(),
+            kind: crate::api::types::StarMapNodeKindDto::Note,
+            payload: None,
+            tags: vec![],
+            content: crate::api::types::StarMapNodeContentDto {
+                kind: "inline".to_string(),
+                summary: Some("node text".to_string()),
+                body: None,
+                ..Default::default()
+            },
+            anchors: vec![],
+            portal: None,
+            display_policy: Default::default(),
+            open_behavior: Default::default(),
+            provenance: Default::default(),
+            created_at: 0,
+            updated_at: 0,
+        };
+        let _ = api.add_starmap_node(&meta.starmap_id, node, 0.0, 0.0);
+
+        let node_before = api.search_service_search("MapNode", SearchScope::StarmapNode, 10, None);
+        assert_eq!(node_before.len(), 1);
+        assert!(node_before[0].target.project_id.is_none());
+
+        api.bind_starmap_to_project(&meta.starmap_id, &project.id).unwrap();
+
+        let node_after = api.search_service_search("MapNode", SearchScope::StarmapNode, 10, None);
+        assert_eq!(node_after.len(), 1);
+        assert_eq!(node_after[0].target.project_id.as_deref(), Some(project.id.as_str()));
+    }
+
+    #[test]
+    fn cross_entry_unbind_starmap_clears_child_project_id() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        let project = api.create_project("P1").unwrap();
+        let meta = api.create_starmap("BoundMap", "desc", None).unwrap();
+        api.bind_starmap_to_project(&meta.starmap_id, &project.id).unwrap();
+
+        let node = crate::api::types::StarMapNodeDto {
+            id: String::new(),
+            title: "BoundNode".to_string(),
+            kind: crate::api::types::StarMapNodeKindDto::Note,
+            payload: None,
+            tags: vec![],
+            content: crate::api::types::StarMapNodeContentDto {
+                kind: "inline".to_string(),
+                summary: Some("node text".to_string()),
+                body: None,
+                ..Default::default()
+            },
+            anchors: vec![],
+            portal: None,
+            display_policy: Default::default(),
+            open_behavior: Default::default(),
+            provenance: Default::default(),
+            created_at: 0,
+            updated_at: 0,
+        };
+        let _ = api.add_starmap_node(&meta.starmap_id, node, 0.0, 0.0);
+
+        let node_before = api.search_service_search("BoundNode", SearchScope::StarmapNode, 10, None);
+        assert_eq!(node_before.len(), 1);
+        assert_eq!(node_before[0].target.project_id.as_deref(), Some(project.id.as_str()));
+
+        api.unbind_starmap_from_project(&meta.starmap_id).unwrap();
+
+        let node_after = api.search_service_search("BoundNode", SearchScope::StarmapNode, 10, None);
+        assert_eq!(node_after.len(), 1);
+        assert!(node_after[0].target.project_id.is_none());
+    }
+
+    #[test]
+    fn cross_entry_rebuild_hyperlink_uses_target_uri() {
+        use crate::search::extractor::extract_starmap_entries;
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        let meta = api.create_starmap("HLMap", "desc", None).unwrap();
+
+        let hl = crate::starmap::types::StarMapHyperlink {
+            hyperlink_id: "hl1".to_string(),
+            source: crate::starmap::types::StarMapEndpointPath {
+                segments: vec![],
+                endpoint: crate::starmap::types::StarMapEdgeEndpoint::Starmap,
+            },
+            target_uri: "https://example.com/docs".to_string(),
+            label: Some("ExampleDoc".to_string()),
+            target_starmap_id: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+        let starmap_dir = dir.path().join("app-meta").join("starmaps").join(&meta.starmap_id).join("hyperlinks");
+        std::fs::create_dir_all(&starmap_dir).unwrap();
+        std::fs::write(starmap_dir.join("hl1.json"), serde_json::to_string(&hl).unwrap()).unwrap();
+
+        let entries = extract_starmap_entries(dir.path(), None).unwrap();
+        let hl_entries: Vec<_> = entries.iter().filter(|e| e.scope == SearchScope::StarmapHyperlink).collect();
+        assert_eq!(hl_entries.len(), 1);
+        assert_eq!(hl_entries[0].title, "ExampleDoc");
+        assert!(hl_entries[0].body.contains("example.com"));
+    }
+
+    #[test]
+    fn cross_entry_save_starmap_graph_removes_old_edge_index() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        let meta = api.create_starmap("EdgeMap", "desc", None).unwrap();
+
+        let node_a = crate::api::types::StarMapNodeDto {
+            id: "na".to_string(),
+            title: "NodeA".to_string(),
+            kind: crate::api::types::StarMapNodeKindDto::Note,
+            payload: None,
+            tags: vec![],
+            content: crate::api::types::StarMapNodeContentDto {
+                kind: "inline".to_string(),
+                summary: None,
+                body: None,
+                ..Default::default()
+            },
+            anchors: vec![],
+            portal: None,
+            display_policy: Default::default(),
+            open_behavior: Default::default(),
+            provenance: Default::default(),
+            created_at: 0,
+            updated_at: 0,
+        };
+        let node_b = crate::api::types::StarMapNodeDto {
+            id: "nb".to_string(),
+            title: "NodeB".to_string(),
+            kind: crate::api::types::StarMapNodeKindDto::Note,
+            payload: None,
+            tags: vec![],
+            content: crate::api::types::StarMapNodeContentDto {
+                kind: "inline".to_string(),
+                summary: None,
+                body: None,
+                ..Default::default()
+            },
+            anchors: vec![],
+            portal: None,
+            display_policy: Default::default(),
+            open_behavior: Default::default(),
+            provenance: Default::default(),
+            created_at: 0,
+            updated_at: 0,
+        };
+        let edge_ab = crate::api::types::StarMapEdgeDto {
+            id: "e1".to_string(),
+            from: Some("na".to_string()),
+            to: Some("nb".to_string()),
+            kind: crate::api::types::StarMapEdgeKindDto::RelatedTo,
+            label: Some("EdgeLabel".to_string()),
+            payload: None,
+            from_target: None,
+            to_target: None,
+            from_endpoint: None,
+            to_endpoint: None,
+            from_endpoint_path: None,
+            to_endpoint_path: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+
+        let old_graph = crate::api::types::StarMapGraphDto {
+            schema_version: 1,
+            id: "g1".to_string(),
+            starmap_id: meta.starmap_id.clone(),
+            title: "EdgeMap".to_string(),
+            nodes: vec![node_a, node_b],
+            edges: vec![edge_ab],
+            embeds: vec![],
+            links: vec![],
+            created_at: 0,
+            updated_at: 0,
+        };
+        api.save_starmap_graph(&meta.starmap_id, &old_graph).unwrap();
+        assert!(!api.search_service_search("EdgeLabel", SearchScope::StarmapEdgeLabel, 10, None).is_empty());
+
+        let node_a_only = crate::api::types::StarMapNodeDto {
+            id: "na".to_string(),
+            title: "NodeA".to_string(),
+            kind: crate::api::types::StarMapNodeKindDto::Note,
+            payload: None,
+            tags: vec![],
+            content: crate::api::types::StarMapNodeContentDto {
+                kind: "inline".to_string(),
+                summary: None,
+                body: None,
+                ..Default::default()
+            },
+            anchors: vec![],
+            portal: None,
+            display_policy: Default::default(),
+            open_behavior: Default::default(),
+            provenance: Default::default(),
+            created_at: 0,
+            updated_at: 0,
+        };
+        let new_graph = crate::api::types::StarMapGraphDto {
+            schema_version: 1,
+            id: "g1".to_string(),
+            starmap_id: meta.starmap_id.clone(),
+            title: "EdgeMap".to_string(),
+            nodes: vec![node_a_only],
+            edges: vec![],
+            embeds: vec![],
+            links: vec![],
+            created_at: 0,
+            updated_at: 0,
+        };
+        api.save_starmap_graph(&meta.starmap_id, &new_graph).unwrap();
+
+        assert!(api.search_service_search("EdgeLabel", SearchScope::StarmapEdgeLabel, 10, None).is_empty());
+        assert!(api.search_service_search("NodeB", SearchScope::StarmapNode, 10, None).is_empty());
     }
 }

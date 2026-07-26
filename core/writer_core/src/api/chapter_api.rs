@@ -80,17 +80,52 @@ impl WriterCoreApi {
     ) -> ApiResult<bool> {
         self.core()
             .rename_chapter(project_id, volume_id, chapter_id, new_title)?;
-        let entry = crate::search::extractor::extract_chapter_title_entry(
+        let title_entry = crate::search::extractor::extract_chapter_title_entry(
             project_id, volume_id, chapter_id, new_title,
         );
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
-            object_id: entry.object_id.clone(),
-            scope: entry.scope,
-            title: entry.title.clone(),
-            body: entry.body.clone(),
-            target: Some(entry.target.clone()),
+            object_id: title_entry.object_id.clone(),
+            scope: title_entry.scope,
+            title: title_entry.title.clone(),
+            body: title_entry.body.clone(),
+            target: Some(title_entry.target.clone()),
         });
+        if let Ok(content) = self.core().open_chapter(project_id, volume_id, chapter_id) {
+            if !content.content.is_empty() {
+                let body_entry = crate::search::extractor::extract_chapter_body_entry(
+                    project_id, volume_id, chapter_id, new_title, &content.content,
+                );
+                self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                    action: crate::search::SearchIndexAction::Upsert,
+                    object_id: body_entry.object_id.clone(),
+                    scope: body_entry.scope,
+                    title: body_entry.title.clone(),
+                    body: body_entry.body.clone(),
+                    target: Some(body_entry.target.clone()),
+                });
+            }
+        }
+        let ch_note = self.core()
+            .list_chapters(project_id, volume_id)
+            .ok()
+            .and_then(|chapters| chapters.into_iter().find(|c| c.id == chapter_id))
+            .and_then(|c| c.note);
+        if let Some(ref note) = ch_note {
+            if !note.is_empty() {
+                let note_entry = crate::search::extractor::extract_chapter_note_entry(
+                    project_id, volume_id, chapter_id, new_title, note,
+                );
+                self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                    action: crate::search::SearchIndexAction::Upsert,
+                    object_id: note_entry.object_id.clone(),
+                    scope: note_entry.scope,
+                    title: note_entry.title.clone(),
+                    body: note_entry.body.clone(),
+                    target: Some(note_entry.target.clone()),
+                });
+            }
+        }
         Ok(true)
     }
 
