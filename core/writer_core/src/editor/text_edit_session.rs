@@ -9,7 +9,7 @@
 //! - 临时草稿会话：项目名、搜索词等短文本，编辑时创建，确认/取消后关闭。
 
 use super::EditorKernel;
-use super::editor_kernel::EditorInputError;
+use super::kernel::result::EditorInputError;
 
 /// 文字编辑会话 ID — 全局唯一，标识一次独立的文字事务环境。
 /// 内部类型 u64 对应平台端 Kotlin ULong，通过 FFI 边界传递时保持无符号语义。
