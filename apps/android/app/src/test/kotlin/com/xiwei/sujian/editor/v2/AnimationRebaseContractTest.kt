@@ -2409,12 +2409,11 @@ class AnimationRebaseContractTest {
         val sameDeltaYCount = result.blockShifts.count { kotlin.math.abs(it.deltaY - 20f) < 0.01f }
         assertTrue("Adjacent paragraphs with same deltaY must be merged into one blockShift",
             sameDeltaYCount <= 1)
-        if (result.blockShifts.size >= 2) {
-            for (i in 1 until result.blockShifts.size) {
-                assertFalse("Adjacent blockShifts with same deltaY should have been merged",
-                    result.blockShifts[i].startLineIndex == result.blockShifts[i-1].endLineIndexExclusive &&
-                    kotlin.math.abs(result.blockShifts[i].deltaY - result.blockShifts[i-1].deltaY) < 0.01f)
-            }
+        assertTrue("Must have at least 2 blockShifts for merge check", result.blockShifts.size >= 2)
+        for (i in 1 until result.blockShifts.size) {
+            assertFalse("Adjacent blockShifts with same deltaY should have been merged",
+                result.blockShifts[i].startLineIndex == result.blockShifts[i-1].endLineIndexExclusive &&
+                kotlin.math.abs(result.blockShifts[i].deltaY - result.blockShifts[i-1].deltaY) < 0.01f)
         }
     }
 

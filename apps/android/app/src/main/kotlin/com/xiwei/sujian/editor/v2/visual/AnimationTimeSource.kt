@@ -30,6 +30,17 @@ class ManualAnimationTimeSource : AnimationTimeSource {
         advanceBy(deltaMs * 1_000_000L)
     }
 
+    fun advanceToProgress(progress: Float, durationMs: Long) {
+        require(progress in 0f..1f) { "progress must be in [0, 1]: $progress" }
+        require(durationMs >= 0) { "durationMs must be non-negative: $durationMs" }
+        val targetMs = (durationMs * progress).toLong()
+        advanceTo(targetMs * 1_000_000L)
+    }
+
+    fun advanceToEnd(durationMs: Long) {
+        advanceToProgress(1f, durationMs)
+    }
+
     override fun nowNanos(): Long = currentTimeNanos
 }
 

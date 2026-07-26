@@ -114,6 +114,79 @@ class AnimationTimeSourceTest {
         }
         assertEquals(listOf(16L, 32L, 48L, 64L, 80L), timestamps)
     }
+
+    @Test
+    fun manualTimeSourceAdvanceToProgressAt25() {
+        val source = ManualAnimationTimeSource()
+        source.advanceToProgress(0.25f, 200L)
+        assertEquals(50_000_000L, source.nowNanos())
+    }
+
+    @Test
+    fun manualTimeSourceAdvanceToProgressAt50() {
+        val source = ManualAnimationTimeSource()
+        source.advanceToProgress(0.5f, 200L)
+        assertEquals(100_000_000L, source.nowNanos())
+    }
+
+    @Test
+    fun manualTimeSourceAdvanceToProgressAt75() {
+        val source = ManualAnimationTimeSource()
+        source.advanceToProgress(0.75f, 200L)
+        assertEquals(150_000_000L, source.nowNanos())
+    }
+
+    @Test
+    fun manualTimeSourceAdvanceToProgressAtZero() {
+        val source = ManualAnimationTimeSource()
+        source.advanceToProgress(0f, 200L)
+        assertEquals(0L, source.nowNanos())
+    }
+
+    @Test
+    fun manualTimeSourceAdvanceToProgressAtOne() {
+        val source = ManualAnimationTimeSource()
+        source.advanceToProgress(1f, 200L)
+        assertEquals(200_000_000L, source.nowNanos())
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun manualTimeSourceAdvanceToProgressRejectsNegativeProgress() {
+        ManualAnimationTimeSource().advanceToProgress(-0.1f, 200L)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun manualTimeSourceAdvanceToProgressRejectsProgressAboveOne() {
+        ManualAnimationTimeSource().advanceToProgress(1.1f, 200L)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun manualTimeSourceAdvanceToProgressRejectsNegativeDuration() {
+        ManualAnimationTimeSource().advanceToProgress(0.5f, -1L)
+    }
+
+    @Test
+    fun manualTimeSourceAdvanceToEndConvenience() {
+        val source = ManualAnimationTimeSource()
+        source.advanceToEnd(200L)
+        assertEquals(200_000_000L, source.nowNanos())
+    }
+
+    @Test
+    fun manualTimeSourceAdvanceToProgressSequence() {
+        val source = ManualAnimationTimeSource()
+        val durationMs = 200L
+        source.advanceToProgress(0f, durationMs)
+        assertEquals(0L, source.nowNanos())
+        source.advanceToProgress(0.25f, durationMs)
+        assertEquals(50_000_000L, source.nowNanos())
+        source.advanceToProgress(0.5f, durationMs)
+        assertEquals(100_000_000L, source.nowNanos())
+        source.advanceToProgress(0.75f, durationMs)
+        assertEquals(150_000_000L, source.nowNanos())
+        source.advanceToProgress(1f, durationMs)
+        assertEquals(200_000_000L, source.nowNanos())
+    }
 }
 
 class TransactionIdSourceTest {
