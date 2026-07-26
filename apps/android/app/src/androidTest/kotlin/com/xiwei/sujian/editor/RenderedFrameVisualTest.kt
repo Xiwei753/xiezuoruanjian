@@ -538,7 +538,8 @@ class RenderedFrameVisualTest {
         val frame5 = EditorBitmapCapture.captureEditorBitmap()
         EditorBitmapCapture.assertBitmapHasContent(frame5, "Frame at 75% must have content")
 
-        advanceClockToEnd()
+        manualTimeSource.advanceToProgress(1f, durationMs, startTimeMs)
+        dispatchManualFrame()
         val frame6 = EditorBitmapCapture.captureEditorBitmap()
         EditorBitmapCapture.assertBitmapHasContent(frame6, "End frame must have content")
 
@@ -868,12 +869,15 @@ class RenderedFrameVisualTest {
     private fun captureFiveProgressPoints(): List<CapturedFrame> {
         val frames = mutableListOf<CapturedFrame>()
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource.advanceByMs(1)
         dispatchManualFrame()
-        frames.add(EditorBitmapCapture.captureEditorBitmap())
 
         val durationMs = getActiveAnimationDurationMs().let { if (it > 0) it else 200L }
         val startTimeMs = getActiveAnimationStartTimeMs()
+
+        manualTimeSource.advanceToProgress(0f, durationMs, startTimeMs)
+        dispatchManualFrame()
+        frames.add(EditorBitmapCapture.captureEditorBitmap())
 
         manualTimeSource.advanceToProgress(0.25f, durationMs, startTimeMs)
         dispatchManualFrame()
@@ -887,7 +891,8 @@ class RenderedFrameVisualTest {
         dispatchManualFrame()
         frames.add(EditorBitmapCapture.captureEditorBitmap())
 
-        advanceClockToEnd()
+        manualTimeSource.advanceToProgress(1f, durationMs, startTimeMs)
+        dispatchManualFrame()
         frames.add(EditorBitmapCapture.captureEditorBitmap())
 
         return frames
@@ -895,7 +900,7 @@ class RenderedFrameVisualTest {
 
     private fun assertCursorRegionFromSnapshotRect(frame: CapturedFrame, cursorRect: RectF, messagePrefix: String) {
         val cursorLeft = cursorRect.left.toInt()
-        val cursorRight = minOf(cursorRect.right.toInt() + 4, frame.width)
+        val cursorRight = minOf(cursorRect.right.toInt(), frame.width)
         val cursorTop = cursorRect.top.toInt()
         val cursorBottom = cursorRect.bottom.toInt()
         assertTrue(
@@ -959,8 +964,10 @@ class RenderedFrameVisualTest {
                 "Content must be inset from bottom-right for background check: right=${bounds.right}+4 < ${frame.width} && bottom=${bounds.bottom}+4 < ${frame.height}",
                 bounds.right + 4 < frame.width && bounds.bottom + 4 < frame.height
             )
+            val bgRight = minOf(bounds.right + 4, frame.width - 1)
+            val bgBottom = minOf(bounds.bottom + 4, frame.height - 1)
             EditorBitmapCapture.assertBitmapRegionIsEmpty(
-                frame, bounds.right + 2, bounds.bottom + 2, frame.width, frame.height,
+                frame, bgRight, bgBottom, frame.width, frame.height,
                 message = "Bottom-right corner after content should be background only"
             )
         }

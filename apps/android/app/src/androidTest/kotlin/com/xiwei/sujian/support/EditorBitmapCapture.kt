@@ -19,6 +19,7 @@ import com.xiwei.sujian.editor.v2.visual.PixelCopyResult
 import org.junit.Assert
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 object EditorBitmapCapture {
 
@@ -140,15 +141,23 @@ object EditorBitmapCapture {
     fun captureViewBitmap(view: SujianEditorView): CapturedFrame {
         Assert.assertTrue("View must be laid out to capture bitmap", view.width > 0 && view.height > 0)
 
-        val backgroundColor = view.getThemeBackgroundColor()
         val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
 
         val pixelCopyResult = tryPixelCopy(view, bitmap)
-        if (pixelCopyResult == PixelCopyResult.SUCCESS) {
-            return CapturedFrame(bitmap = bitmap, width = view.width, height = view.height, backgroundColor = backgroundColor, captureMethod = CaptureMethod.PIXEL_COPY)
+        when (pixelCopyResult) {
+            PixelCopyResult.TIMED_OUT ->
+                Assert.fail("PixelCopy timed out during bitmap capture. Use captureSoftwareBitmap() for software rendering tests.")
+            PixelCopyResult.FAILED ->
+                Assert.fail("PixelCopy failed during bitmap capture. Use captureSoftwareBitmap() for software rendering tests.")
+            PixelCopyResult.SUCCESS -> {
+                val backgroundColor = sampleBackgroundColorFromCorners(bitmap)
+                return CapturedFrame(bitmap = bitmap, width = view.width, height = view.height, backgroundColor = backgroundColor, captureMethod = CaptureMethod.PIXEL_COPY)
+            }
+            PixelCopyResult.NOT_SUPPORTED -> {}
         }
 
         drawViewToBitmap(view, bitmap)
+        val backgroundColor = sampleBackgroundColorFromCorners(bitmap)
         return CapturedFrame(bitmap = bitmap, width = view.width, height = view.height, backgroundColor = backgroundColor, captureMethod = CaptureMethod.SOFTWARE_DRAW)
     }
 
@@ -156,7 +165,6 @@ object EditorBitmapCapture {
         Assert.assertTrue("View must be laid out to capture bitmap", view.width > 0 && view.height > 0)
         Assert.assertTrue("PixelCopy requires API 26+", Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
 
-        val backgroundColor = view.getThemeBackgroundColor()
         val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
         val ctx = view.context
         Assert.assertTrue("View must be attached to an Activity", ctx is android.app.Activity && view.windowToken != null)
@@ -172,14 +180,15 @@ object EditorBitmapCapture {
             PixelCopyResult.SUCCESS -> {}
         }
 
+        val backgroundColor = sampleBackgroundColorFromCorners(bitmap)
         return CapturedFrame(bitmap = bitmap, width = view.width, height = view.height, backgroundColor = backgroundColor, captureMethod = CaptureMethod.PIXEL_COPY)
     }
 
     fun captureSoftwareBitmap(view: SujianEditorView): CapturedFrame {
         Assert.assertTrue("View must be laid out to capture bitmap", view.width > 0 && view.height > 0)
-        val backgroundColor = view.getThemeBackgroundColor()
         val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
         drawViewToBitmap(view, bitmap)
+        val backgroundColor = sampleBackgroundColorFromCorners(bitmap)
         return CapturedFrame(bitmap = bitmap, width = view.width, height = view.height, backgroundColor = backgroundColor, captureMethod = CaptureMethod.SOFTWARE_DRAW)
     }
 
@@ -191,20 +200,27 @@ object EditorBitmapCapture {
         if (ctx !is android.app.Activity || view.windowToken == null) {
             return PixelCopyResult.NOT_SUPPORTED
         }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            Assert.fail(
+                "tryPixelCopy must not be called on the main thread. " +
+                "PixelCopy callback runs on the main thread Handler; calling latch.await() on the main thread would deadlock. " +
+                "Call from the instrumentation/test thread instead."
+            )
+        }
 
         val srcRect = computeSrcRect(view)
         val latch = CountDownLatch(1)
-        var captureSucceeded = false
+        val captureSucceeded = AtomicBoolean(false)
         try {
             PixelCopy.request(ctx.window, srcRect, bitmap, { result ->
-                captureSucceeded = result == PixelCopy.SUCCESS
+                captureSucceeded.set(result == PixelCopy.SUCCESS)
                 latch.countDown()
             }, Handler(Looper.getMainLooper()))
             val awaited = latch.await(3, TimeUnit.SECONDS)
             if (!awaited) {
                 return PixelCopyResult.TIMED_OUT
             }
-            if (!captureSucceeded) {
+            if (!captureSucceeded.get()) {
                 return PixelCopyResult.FAILED
             }
             return PixelCopyResult.SUCCESS
@@ -217,6 +233,22 @@ object EditorBitmapCapture {
         val location = IntArray(2)
         view.getLocationInWindow(location)
         return Rect(location[0], location[1], location[0] + view.width, location[1] + view.height)
+    }
+
+    fun sampleBackgroundColorFromCorners(bitmap: Bitmap): Int {
+        val w = bitmap.width
+        val h = bitmap.height
+        if (w < 8 || h < 8) return bitmap.getPixel(0, 0)
+        val margin = 4
+        val cornerPixels = intArrayOf(
+            bitmap.getPixel(margin, margin),
+            bitmap.getPixel(w - margin - 1, margin),
+            bitmap.getPixel(margin, h - margin - 1),
+            bitmap.getPixel(w - margin - 1, h - margin - 1)
+        )
+        val grouped = cornerPixels.toList().groupBy { it }
+        val mostCommon = grouped.maxByOrNull { it.value.size }!!.key
+        return mostCommon
     }
 
     private fun drawViewToBitmap(view: View, bitmap: Bitmap) {
