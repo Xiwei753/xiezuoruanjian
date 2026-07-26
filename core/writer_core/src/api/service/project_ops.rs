@@ -47,14 +47,29 @@ impl WriterCoreApi {
     pub fn delete_project(&self, project_id: &str) -> ApiResult<bool> {
         self.core()
             .delete_project(project_id)?;
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
-            action: crate::search::SearchIndexAction::Delete,
-            object_id: format!("project:{}", project_id),
-            scope: crate::search::SearchScope::All,
-            title: String::new(),
-            body: String::new(),
-            target: None,
-        });
+        for prefix in &[
+            format!("project:{}", project_id),
+            format!("volume:{}:", project_id),
+            format!("chapter_title:{}:", project_id),
+            format!("chapter_body:{}:", project_id),
+            format!("chapter_note:{}:", project_id),
+        ] {
+            self.remove_search_index_by_prefix(prefix);
+        }
+        if let Ok(starmaps) = self.core().list_starmaps_for_project(project_id) {
+            for sm in &starmaps {
+                for prefix in &[
+                    format!("starmap:{}", sm.starmap_id),
+                    format!("starmap_node:{}:", sm.starmap_id),
+                    format!("starmap_edge:{}:", sm.starmap_id),
+                    format!("starmap_hyperlink:{}:", sm.starmap_id),
+                    format!("starmap_link:{}:", sm.starmap_id),
+                    format!("starmap_embed:{}:", sm.starmap_id),
+                ] {
+                    self.remove_search_index_by_prefix(prefix);
+                }
+            }
+        }
         Ok(true)
     }
 
@@ -116,14 +131,14 @@ impl WriterCoreApi {
     pub fn delete_volume(&self, project_id: &str, volume_id: &str) -> ApiResult<bool> {
         self.core()
             .delete_volume(project_id, volume_id)?;
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
-            action: crate::search::SearchIndexAction::Delete,
-            object_id: format!("volume:{}:{}", project_id, volume_id),
-            scope: crate::search::SearchScope::All,
-            title: String::new(),
-            body: String::new(),
-            target: None,
-        });
+        for prefix in &[
+            format!("volume:{}:{}", project_id, volume_id),
+            format!("chapter_title:{}:{}:", project_id, volume_id),
+            format!("chapter_body:{}:{}:", project_id, volume_id),
+            format!("chapter_note:{}:{}:", project_id, volume_id),
+        ] {
+            self.remove_search_index_by_prefix(prefix);
+        }
         Ok(true)
     }
 

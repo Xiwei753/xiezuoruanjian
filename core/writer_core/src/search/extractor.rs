@@ -19,7 +19,7 @@ pub fn extract_chapter_entries(workspace: &Path, project_id: Option<&str>) -> Re
             }
         }
 
-        let title = load_json_string_field(&project_path.join("project.meta.json"), "title");
+        let title = load_json_string_field(&project_path.join("project.json"), "title");
         entries.push(IndexEntry {
             object_id: format!("project:{}", pid),
             scope: SearchScope::ProjectTitle,
@@ -41,7 +41,7 @@ pub fn extract_chapter_entries(workspace: &Path, project_id: Option<&str>) -> Re
         }
         let volumes = scan_dirs(&volumes_dir)?;
         for (vid, volume_path) in volumes {
-            let vol_title = load_json_string_field(&volume_path.join("volume.meta.json"), "title");
+            let vol_title = load_json_string_field(&volume_path.join("volume.json"), "title");
             entries.push(IndexEntry {
                 object_id: format!("volume:{}:{}", pid, vid),
                 scope: SearchScope::VolumeTitle,
@@ -137,7 +137,7 @@ pub fn extract_starmap_entries(workspace: &Path, project_id: Option<&str>) -> Re
 
     let starmap_dirs = scan_dirs(&starmaps_dir)?;
     for (sid, starmap_path) in starmap_dirs {
-        let meta_path = starmap_path.join(format!("{}.meta.json", sid));
+        let meta_path = starmaps_dir.join(format!("{}.meta.json", sid));
         let bound_project = load_json_string_field(&meta_path, "projectId");
 
         if let Some(filter_id) = project_id {
@@ -147,7 +147,10 @@ pub fn extract_starmap_entries(workspace: &Path, project_id: Option<&str>) -> Re
         }
 
         let graph_path = starmap_path.join("graph.json");
-        let title = load_json_string_field(&graph_path, "title");
+        let mut title = load_json_string_field(&graph_path, "title");
+        if title.is_empty() {
+            title = load_json_string_field(&meta_path, "title");
+        }
         entries.push(IndexEntry {
             object_id: format!("starmap:{}", sid),
             scope: SearchScope::StarmapTitle,

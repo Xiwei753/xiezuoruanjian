@@ -65,6 +65,19 @@ impl WriterCoreApi {
             .core()
             .create_starmap(title, desc, None)
             .map_err(WriterError::from)?;
+        let starmap_id = value.starmap_id.clone();
+        let project_id = value.project_id.as_deref().map(|s| s.to_string());
+        let entry = crate::search::extractor::extract_starmap_title_entry(
+            &starmap_id, project_id.as_deref(), title,
+        );
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+            action: crate::search::SearchIndexAction::Upsert,
+            object_id: entry.object_id.clone(),
+            scope: entry.scope,
+            title: entry.title.clone(),
+            body: entry.body.clone(),
+            target: Some(entry.target.clone()),
+        });
         Self::json_string(&value)
     }
 
@@ -453,16 +466,38 @@ impl WriterCoreApi {
 
     pub fn bind_starmap_to_project(&self, starmap_id: &str, project_id: &str) -> ApiResult<bool> {
         self.core()
-            .bind_starmap_to_project(starmap_id, project_id)
-            .map(|_| true)
-            .map_err(Into::into)
+            .bind_starmap_to_project(starmap_id, project_id)?;
+        let meta = self.core().get_starmap(starmap_id).map_err(WriterError::from)?;
+        let entry = crate::search::extractor::extract_starmap_title_entry(
+            starmap_id, Some(project_id), &meta.title,
+        );
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+            action: crate::search::SearchIndexAction::Upsert,
+            object_id: entry.object_id.clone(),
+            scope: entry.scope,
+            title: entry.title.clone(),
+            body: entry.body.clone(),
+            target: Some(entry.target.clone()),
+        });
+        Ok(true)
     }
 
     pub fn unbind_starmap_from_project(&self, starmap_id: &str) -> ApiResult<bool> {
         self.core()
-            .unbind_starmap_from_project(starmap_id)
-            .map(|_| true)
-            .map_err(Into::into)
+            .unbind_starmap_from_project(starmap_id)?;
+        let meta = self.core().get_starmap(starmap_id).map_err(WriterError::from)?;
+        let entry = crate::search::extractor::extract_starmap_title_entry(
+            starmap_id, None, &meta.title,
+        );
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+            action: crate::search::SearchIndexAction::Upsert,
+            object_id: entry.object_id.clone(),
+            scope: entry.scope,
+            title: entry.title.clone(),
+            body: entry.body.clone(),
+            target: Some(entry.target.clone()),
+        });
+        Ok(true)
     }
 
     pub fn set_main_starmap_for_project(

@@ -42,6 +42,11 @@ impl SearchUpdateQueue {
         self.queue.drain(..).collect()
     }
 
+    pub fn clear(&mut self) {
+        self.pending_object_ids.clear();
+        self.queue.clear();
+    }
+
     pub fn len(&self) -> usize {
         self.queue.len()
     }

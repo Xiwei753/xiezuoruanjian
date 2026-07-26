@@ -83,6 +83,7 @@ impl SearchIndexService {
     pub fn rebuild_from_entries(&mut self, entries: Vec<IndexEntry>) {
         self.is_rebuilding = true;
         self.backend.clear();
+        self.update_queue.clear();
         for entry in entries {
             self.backend.insert(entry);
         }

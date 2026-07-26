@@ -259,14 +259,15 @@ mod tests {
     fn extract_starmap_link_entries() {
         use crate::search::extractor::extract_starmap_entries;
         let dir = TempDir::new().unwrap();
-        let starmap_dir = dir.path().join("app-meta").join("starmaps").join("sm1");
+        let starmaps_root = dir.path().join("app-meta").join("starmaps");
+        let starmap_dir = starmaps_root.join("sm1");
         std::fs::create_dir_all(starmap_dir.join("links")).unwrap();
         std::fs::write(
             starmap_dir.join("graph.json"),
             serde_json::json!({"title": "TestMap", "linkIds": []}).to_string(),
         ).unwrap();
         std::fs::write(
-            starmap_dir.join("sm1.meta.json"),
+            starmaps_root.join("sm1.meta.json"),
             serde_json::json!({"projectId": "p1"}).to_string(),
         ).unwrap();
         std::fs::write(
@@ -478,14 +479,15 @@ mod tests {
     fn rebuild_extractor_uses_structured_node_content() {
         use crate::search::extractor::extract_starmap_entries;
         let dir = TempDir::new().unwrap();
-        let starmap_dir = dir.path().join("app-meta").join("starmaps").join("sm1");
+        let starmaps_root = dir.path().join("app-meta").join("starmaps");
+        let starmap_dir = starmaps_root.join("sm1");
         std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
         std::fs::write(
             starmap_dir.join("graph.json"),
             serde_json::json!({"title": "TestMap"}).to_string(),
         ).unwrap();
         std::fs::write(
-            starmap_dir.join("sm1.meta.json"),
+            starmaps_root.join("sm1.meta.json"),
             serde_json::json!({"projectId": "p1"}).to_string(),
         ).unwrap();
         std::fs::write(
@@ -697,14 +699,15 @@ mod tests {
     fn cross_entry_rebuild_reads_camel_case_project_id() {
         use crate::search::extractor::extract_starmap_entries;
         let dir = TempDir::new().unwrap();
-        let starmap_dir = dir.path().join("app-meta").join("starmaps").join("sm1");
+        let starmaps_root = dir.path().join("app-meta").join("starmaps");
+        let starmap_dir = starmaps_root.join("sm1");
         std::fs::create_dir_all(&starmap_dir).unwrap();
         std::fs::write(
             starmap_dir.join("graph.json"),
             serde_json::json!({"title": "CamelMap"}).to_string(),
         ).unwrap();
         std::fs::write(
-            starmap_dir.join("sm1.meta.json"),
+            starmaps_root.join("sm1.meta.json"),
             serde_json::json!({"starmapId": "sm1", "projectId": "p1", "title": "CamelMap", "createdAt": 0, "updatedAt": 0}).to_string(),
         ).unwrap();
 
@@ -712,5 +715,240 @@ mod tests {
         let title_entries: Vec<_> = entries.iter().filter(|e| e.scope == SearchScope::StarmapTitle).collect();
         assert_eq!(title_entries.len(), 1);
         assert_eq!(title_entries[0].target.project_id.as_deref(), Some("p1"));
+    }
+
+    #[test]
+    fn cross_entry_delete_project_cascades_to_volumes_chapters_starmaps() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        let project = api.create_project("CascadeProject").unwrap();
+        let volume = api.create_volume(&project.id, "CascadeVol").unwrap();
+        let chapter = api.create_chapter(&project.id, &volume.id, "CascadeCh").unwrap();
+        api.save_chapter_content(&project.id, &volume.id, &chapter.id, "CascadeBody").unwrap();
+        let meta = api.create_starmap("CascadeMap", "desc", None).unwrap();
+        api.bind_starmap_to_project(&meta.starmap_id, &project.id).unwrap();
+
+        assert!(!api.search_service_search("CascadeVol", SearchScope::VolumeTitle, 10, None).is_empty());
+        assert!(!api.search_service_search("CascadeCh", SearchScope::ChapterTitle, 10, None).is_empty());
+        assert!(!api.search_service_search("CascadeBody", SearchScope::ChapterBody, 10, None).is_empty());
+        assert!(!api.search_service_search("CascadeMap", SearchScope::StarmapTitle, 10, None).is_empty());
+
+        api.delete_project(&project.id).unwrap();
+
+        assert!(api.search_service_search("CascadeProject", SearchScope::ProjectTitle, 10, None).is_empty());
+        assert!(api.search_service_search("CascadeVol", SearchScope::VolumeTitle, 10, None).is_empty());
+        assert!(api.search_service_search("CascadeCh", SearchScope::ChapterTitle, 10, None).is_empty());
+        assert!(api.search_service_search("CascadeBody", SearchScope::ChapterBody, 10, None).is_empty());
+        assert!(api.search_service_search("CascadeMap", SearchScope::StarmapTitle, 10, None).is_empty());
+    }
+
+    #[test]
+    fn cross_entry_delete_volume_cascades_to_chapters() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        let project = api.create_project("P1").unwrap();
+        let volume = api.create_volume(&project.id, "VolWithChapters").unwrap();
+        let chapter = api.create_chapter(&project.id, &volume.id, "ChapterInVol").unwrap();
+        api.save_chapter_content(&project.id, &volume.id, &chapter.id, "BodyInVol").unwrap();
+
+        assert!(!api.search_service_search("ChapterInVol", SearchScope::ChapterTitle, 10, None).is_empty());
+        assert!(!api.search_service_search("BodyInVol", SearchScope::ChapterBody, 10, None).is_empty());
+
+        api.delete_volume(&project.id, &volume.id).unwrap();
+
+        assert!(api.search_service_search("VolWithChapters", SearchScope::VolumeTitle, 10, None).is_empty());
+        assert!(api.search_service_search("ChapterInVol", SearchScope::ChapterTitle, 10, None).is_empty());
+        assert!(api.search_service_search("BodyInVol", SearchScope::ChapterBody, 10, None).is_empty());
+    }
+
+    #[test]
+    fn cross_entry_create_starmap_json_then_search() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        let _json = api.create_starmap_json("JsonMap", "desc").unwrap();
+        let results = api.search_service_search("JsonMap", SearchScope::StarmapTitle, 10, None);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "JsonMap");
+    }
+
+    #[test]
+    fn cross_entry_save_starmap_graph_removes_old_node_index() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        let meta = api.create_starmap("GraphMap", "desc", None).unwrap();
+
+        let node_a = crate::api::types::StarMapNodeDto {
+            id: "node-a".to_string(),
+            title: "NodeA".to_string(),
+            kind: crate::api::types::StarMapNodeKindDto::Note,
+            payload: None,
+            tags: vec![],
+            content: crate::api::types::StarMapNodeContentDto {
+                kind: "inline".to_string(),
+                summary: Some("content a".to_string()),
+                body: None,
+                ..Default::default()
+            },
+            anchors: vec![],
+            portal: None,
+            display_policy: Default::default(),
+            open_behavior: Default::default(),
+            provenance: Default::default(),
+            created_at: 0,
+            updated_at: 0,
+        };
+        let node_b = crate::api::types::StarMapNodeDto {
+            id: "node-b".to_string(),
+            title: "NodeB".to_string(),
+            kind: crate::api::types::StarMapNodeKindDto::Note,
+            payload: None,
+            tags: vec![],
+            content: crate::api::types::StarMapNodeContentDto {
+                kind: "inline".to_string(),
+                summary: Some("content b".to_string()),
+                body: None,
+                ..Default::default()
+            },
+            anchors: vec![],
+            portal: None,
+            display_policy: Default::default(),
+            open_behavior: Default::default(),
+            provenance: Default::default(),
+            created_at: 0,
+            updated_at: 0,
+        };
+
+        let old_graph = crate::api::types::StarMapGraphDto {
+            schema_version: 1,
+            id: "g1".to_string(),
+            starmap_id: meta.starmap_id.clone(),
+            title: "GraphMap".to_string(),
+            nodes: vec![node_a, node_b],
+            edges: vec![],
+            embeds: vec![],
+            links: vec![],
+            created_at: 0,
+            updated_at: 0,
+        };
+        api.save_starmap_graph(&meta.starmap_id, &old_graph).unwrap();
+        assert!(!api.search_service_search("NodeA", SearchScope::StarmapNode, 10, None).is_empty());
+        assert!(!api.search_service_search("NodeB", SearchScope::StarmapNode, 10, None).is_empty());
+
+        let node_a_only = crate::api::types::StarMapNodeDto {
+            id: "node-a".to_string(),
+            title: "NodeA".to_string(),
+            kind: crate::api::types::StarMapNodeKindDto::Note,
+            payload: None,
+            tags: vec![],
+            content: crate::api::types::StarMapNodeContentDto {
+                kind: "inline".to_string(),
+                summary: Some("content a".to_string()),
+                body: None,
+                ..Default::default()
+            },
+            anchors: vec![],
+            portal: None,
+            display_policy: Default::default(),
+            open_behavior: Default::default(),
+            provenance: Default::default(),
+            created_at: 0,
+            updated_at: 0,
+        };
+        let new_graph = crate::api::types::StarMapGraphDto {
+            schema_version: 1,
+            id: "g1".to_string(),
+            starmap_id: meta.starmap_id.clone(),
+            title: "GraphMap".to_string(),
+            nodes: vec![node_a_only],
+            edges: vec![],
+            embeds: vec![],
+            links: vec![],
+            created_at: 0,
+            updated_at: 0,
+        };
+        api.save_starmap_graph(&meta.starmap_id, &new_graph).unwrap();
+
+        assert!(!api.search_service_search("NodeA", SearchScope::StarmapNode, 10, None).is_empty());
+        assert!(api.search_service_search("NodeB", SearchScope::StarmapNode, 10, None).is_empty());
+    }
+
+    #[test]
+    fn cross_entry_rebuild_after_incremental_matches() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        let project = api.create_project("RebuildP2").unwrap();
+        let volume = api.create_volume(&project.id, "V1").unwrap();
+        let chapter = api.create_chapter(&project.id, &volume.id, "RebuildCh2").unwrap();
+        api.save_chapter_content(&project.id, &volume.id, &chapter.id, "RebuildContent2").unwrap();
+
+        let incremental_title = api.search_service_search("RebuildCh2", SearchScope::ChapterTitle, 10, None);
+        let incremental_body = api.search_service_search("RebuildContent2", SearchScope::ChapterBody, 10, None);
+        assert_eq!(incremental_title.len(), 1);
+        assert_eq!(incremental_body.len(), 1);
+
+        api.search_service_rebuild(None).unwrap();
+
+        let rebuild_title = api.search_service_search("RebuildCh2", SearchScope::ChapterTitle, 10, None);
+        let rebuild_body = api.search_service_search("RebuildContent2", SearchScope::ChapterBody, 10, None);
+        let rebuild_project = api.search_service_search("RebuildP2", SearchScope::ProjectTitle, 10, None);
+        let rebuild_volume = api.search_service_search("V1", SearchScope::VolumeTitle, 10, None);
+        assert_eq!(rebuild_title.len(), 1);
+        assert_eq!(rebuild_body.len(), 1);
+        assert_eq!(rebuild_project.len(), 1);
+        assert_eq!(rebuild_volume.len(), 1);
+        assert_eq!(rebuild_title[0].title, "RebuildCh2");
+        assert_eq!(rebuild_body[0].title, "RebuildCh2");
+    }
+
+    #[test]
+    fn cross_entry_rebuild_starmap_matches_incremental() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        let project = api.create_project("P1").unwrap();
+        let meta = api.create_starmap("RebuildStarMap", "desc", None).unwrap();
+        api.bind_starmap_to_project(&meta.starmap_id, &project.id).unwrap();
+
+        let node = crate::api::types::StarMapNodeDto {
+            id: String::new(),
+            title: "RebuildNode".to_string(),
+            kind: crate::api::types::StarMapNodeKindDto::Note,
+            payload: None,
+            tags: vec![],
+            content: crate::api::types::StarMapNodeContentDto {
+                kind: "inline".to_string(),
+                summary: Some("rebuild node summary".to_string()),
+                body: None,
+                ..Default::default()
+            },
+            anchors: vec![],
+            portal: None,
+            display_policy: Default::default(),
+            open_behavior: Default::default(),
+            provenance: Default::default(),
+            created_at: 0,
+            updated_at: 0,
+        };
+        let _ = api.add_starmap_node(&meta.starmap_id, node, 0.0, 0.0);
+
+        let inc_starmap = api.search_service_search("RebuildStarMap", SearchScope::StarmapTitle, 10, None);
+        let inc_node = api.search_service_search("RebuildNode", SearchScope::StarmapNode, 10, None);
+        assert_eq!(inc_starmap.len(), 1);
+        assert_eq!(inc_node.len(), 1);
+
+        api.search_service_rebuild(None).unwrap();
+
+        let rb_starmap = api.search_service_search("RebuildStarMap", SearchScope::StarmapTitle, 10, None);
+        let rb_node = api.search_service_search("RebuildNode", SearchScope::StarmapNode, 10, None);
+        assert_eq!(rb_starmap.len(), 1);
+        assert_eq!(rb_node.len(), 1);
+
+        assert_eq!(inc_starmap[0].target.project_id, rb_starmap[0].target.project_id, "starmap project_id mismatch after rebuild");
+        assert_eq!(inc_node[0].target.project_id, rb_node[0].target.project_id, "node project_id mismatch after rebuild");
     }
 }
