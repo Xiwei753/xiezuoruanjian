@@ -32,8 +32,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import com.xiwei.sujian.R
+import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.model.Project
 import com.xiwei.sujian.model.RecentEdit
 import com.xiwei.sujian.ui.compose.SujianAppState
@@ -89,7 +91,8 @@ fun ProjectListScreen(
                     ProjectCard(
                         project = project,
                         onSelect = { onSelectProject(project.id, project.title) },
-                        onMoreActions = { showMenuForProject = project }
+                        onMoreActions = { showMenuForProject = project },
+                        modifier = Modifier.testTag(SujianSemanticIds.project(project.id)),
                     )
                 }
             }
@@ -150,12 +153,13 @@ fun ProjectListScreen(
 private fun ProjectCard(
     project: Project,
     onSelect: () -> Unit,
-    onMoreActions: () -> Unit
+    onMoreActions: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val dims = LocalSujianDimensions.current
     SujianCard(
         onClick = onSelect,
-        modifier = Modifier.fillMaxWidth().padding(bottom = dims.space8),
+        modifier = modifier.fillMaxWidth().padding(bottom = dims.space8),
     ) {
         Row(
             modifier = Modifier.padding(dims.space16).fillMaxWidth(),

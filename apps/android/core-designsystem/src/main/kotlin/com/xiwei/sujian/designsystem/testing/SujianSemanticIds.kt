@@ -27,6 +27,7 @@ object SujianSemanticIds {
     const val EditorContent = "editor.content"
     const val EditorSaveStatus = "editor.save_status"
 
+    fun project(projectId: String) = "workspace.project.$projectId"
     fun volume(id: String) = "workspace.volume.$id"
     fun chapter(volumeId: String, chapterId: String) =
         "workspace.chapter.$volumeId.$chapterId"

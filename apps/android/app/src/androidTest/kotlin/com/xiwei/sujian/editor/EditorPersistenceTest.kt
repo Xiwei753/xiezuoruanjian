@@ -2,7 +2,6 @@ package com.xiwei.sujian.editor
 
 import androidx.compose.ui.test.junit4.AndroidComposeTestRule
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.test.espresso.Espresso
@@ -372,12 +371,14 @@ class EditorPersistenceTest {
                 true
             } catch (_: AssertionError) {
                 if (!clickedProject) {
-                    composeTestRule.onNodeWithText(testData.projectTitle).performClick()
+                    composeTestRule.onNodeWithTag(
+                        SujianSemanticIds.project(testData.projectId)
+                    ).performClick()
                     clickedProject = true
                 }
                 false
             }
-        }, timeoutMs = 15_000, message = { "Volume tag '$volumeTag' not found after clicking project '${testData.projectTitle}'" })
+        }, timeoutMs = 15_000, message = { "Volume tag '$volumeTag' not found after clicking project '${testData.projectId}'" })
         composeTestRule.onNodeWithTag(volumeTag).performClick()
     }
 }

@@ -91,19 +91,10 @@ class TestSession private constructor(
         val appContext = context.applicationContext
         for (name in prefsFileNames) {
             val prefs = appContext.getSharedPreferences(name, android.content.Context.MODE_PRIVATE)
-            prefs.edit().clear().apply()
-        }
-        val prefsDir = File(appContext.filesDir.parentFile, "shared_prefs")
-        for (name in prefsFileNames) {
-            val prefsFile = File(prefsDir, "$name.xml")
-            if (prefsFile.exists()) {
-                val deleted = prefsFile.delete()
-                if (!deleted) {
-                    throw AssertionError(
-                        "TestSession.releaseSession: Failed to delete SharedPreferences file ${prefsFile.absolutePath}"
-                    )
-                }
-            }
+            val cleared = prefs.edit().clear().commit()
+            Assert.assertTrue("Failed to clear test SharedPreferences: $name", cleared)
+            val deleted = appContext.deleteSharedPreferences(name)
+            Assert.assertTrue("Failed to delete test SharedPreferences: $name", deleted)
         }
         try {
             testRootDir.deleteRecursively()

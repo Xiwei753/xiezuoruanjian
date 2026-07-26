@@ -157,7 +157,7 @@ class AccessibilitySetTextTest {
     }
 
     @Test
-    fun actionSetText_notFromAiToolInterface() {
+    fun actionSetText_isExposedAsAccessibilityAction() {
         val testData = initTestData()
         openTestChapter("无障碍SET_TEXT来源测试章节", testData)
 
@@ -276,12 +276,14 @@ class AccessibilitySetTextTest {
                 true
             } catch (_: AssertionError) {
                 if (!clickedProject) {
-                    composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationWorks).performClick()
+                    composeTestRule.onNodeWithTag(
+                        SujianSemanticIds.project(testData.projectId)
+                    ).performClick()
                     clickedProject = true
                 }
                 false
             }
-        }, timeoutMs = 15_000, message = { "Volume tag '$volumeTag' not found after clicking project '${testData.projectTitle}'" })
+        }, timeoutMs = 15_000, message = { "Volume tag '$volumeTag' not found after clicking project '${testData.projectId}'" })
         composeTestRule.onNodeWithTag(volumeTag).performClick()
     }
 }

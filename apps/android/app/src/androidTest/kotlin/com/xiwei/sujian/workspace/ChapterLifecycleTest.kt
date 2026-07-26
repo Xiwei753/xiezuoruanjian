@@ -308,12 +308,14 @@ class ChapterLifecycleTest {
                 true
             } catch (_: AssertionError) {
                 if (!clickedProject) {
-                    composeTestRule.onNodeWithText(testData.projectTitle).performClick()
+                    composeTestRule.onNodeWithTag(
+                        SujianSemanticIds.project(testData.projectId)
+                    ).performClick()
                     clickedProject = true
                 }
                 false
             }
-        }, timeoutMs = 15_000, message = { "Volume tag '$volumeTag' not found after clicking project '${testData.projectTitle}'" })
+        }, timeoutMs = 15_000, message = { "Volume tag '$volumeTag' not found after clicking project '${testData.projectId}'" })
         composeTestRule.onNodeWithTag(volumeTag).performClick()
     }
 }
