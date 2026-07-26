@@ -1281,6 +1281,25 @@ mod tests {
         };
         let _ = api.add_starmap_embed(&meta.starmap_id, embed);
 
+        let hl = crate::starmap::types::StarMapHyperlink {
+            hyperlink_id: "hl1".to_string(),
+            source: crate::starmap::types::StarMapEndpointPath {
+                segments: vec![],
+                endpoint: crate::starmap::types::StarMapEdgeEndpoint::Starmap,
+            },
+            target_uri: "https://example.com".to_string(),
+            label: Some("MyHL".to_string()),
+            target_starmap_id: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+        {
+            let mut store = crate::starmap::store::StarMapStore::new(dir.path(), &meta.starmap_id);
+            store.load_full().unwrap();
+            store.upsert_hyperlink(hl);
+            store.flush().unwrap();
+        }
+
         let embed_before = api.search_service_search("MyEmbed", SearchScope::StarmapEmbed, 10, None);
         assert_eq!(embed_before.len(), 1);
         assert!(embed_before[0].target.project_id.is_none());
@@ -1291,11 +1310,21 @@ mod tests {
         assert_eq!(embed_after_bind.len(), 1);
         assert_eq!(embed_after_bind[0].target.project_id.as_deref(), Some(project.id.as_str()));
 
+        let hl_after_bind = api.search_service_search("MyHL", SearchScope::StarmapHyperlink, 10, None);
+        assert_eq!(hl_after_bind.len(), 1, "hyperlink index should exist after bind");
+        assert_eq!(hl_after_bind[0].target.project_id.as_deref(), Some(project.id.as_str()),
+            "hyperlink project_id must match bound project after bind");
+
         api.unbind_starmap_from_project(&meta.starmap_id).unwrap();
 
         let embed_after_unbind = api.search_service_search("MyEmbed", SearchScope::StarmapEmbed, 10, None);
         assert_eq!(embed_after_unbind.len(), 1);
         assert!(embed_after_unbind[0].target.project_id.is_none());
+
+        let hl_after_unbind = api.search_service_search("MyHL", SearchScope::StarmapHyperlink, 10, None);
+        assert_eq!(hl_after_unbind.len(), 1, "hyperlink index should exist after unbind");
+        assert!(hl_after_unbind[0].target.project_id.is_none(),
+            "hyperlink project_id must be None after unbind");
     }
 
     #[test]
@@ -1323,12 +1352,75 @@ mod tests {
     }
 
     #[test]
+    fn delete_project_cascades_to_embed_and_hyperlink_indices() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        let project = api.create_project("CascadeP").unwrap();
+        let meta = api.create_starmap("CascadeMap", "desc", None).unwrap();
+        api.bind_starmap_to_project(&meta.starmap_id, &project.id).unwrap();
+
+        let embed = crate::api::types::StarMapEmbedDto {
+            instance_id: String::new(),
+            target_starmap_id: "sm_child".to_string(),
+            label: Some("CascadeEmbed".to_string()),
+            display_policy: Default::default(),
+            open_behavior: Default::default(),
+            placement: crate::api::types::StarMapEmbedPlacementDto {
+                x: 0.0, y: 0.0, width: 100.0, height: 100.0, scale: 1.0, z_index: 0, collapsed: false,
+            },
+            target_viewport: crate::api::types::StarMapEmbedViewportDto {
+                scale: 1.0, offset_x: 0.0, offset_y: 0.0,
+            },
+            source_node_id: None,
+            host_endpoint: None,
+            provenance: Default::default(),
+            created_at: 0,
+            updated_at: 0,
+        };
+        let _ = api.add_starmap_embed(&meta.starmap_id, embed);
+
+        let hl = crate::starmap::types::StarMapHyperlink {
+            hyperlink_id: "hl1".to_string(),
+            source: crate::starmap::types::StarMapEndpointPath {
+                segments: vec![],
+                endpoint: crate::starmap::types::StarMapEdgeEndpoint::Starmap,
+            },
+            target_uri: "https://example.com".to_string(),
+            label: Some("CascadeHL".to_string()),
+            target_starmap_id: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+        {
+            let mut store = crate::starmap::store::StarMapStore::new(dir.path(), &meta.starmap_id);
+            store.load_full().unwrap();
+            store.upsert_hyperlink(hl);
+            store.flush().unwrap();
+        }
+
+        api.search_service_rebuild(None).unwrap();
+
+        let embed_before = api.search_service_search("CascadeEmbed", SearchScope::StarmapEmbed, 10, None);
+        assert_eq!(embed_before.len(), 1, "embed index should exist before delete");
+        let hl_before = api.search_service_search("CascadeHL", SearchScope::StarmapHyperlink, 10, None);
+        assert_eq!(hl_before.len(), 1, "hyperlink index should exist before delete");
+
+        api.delete_project(&project.id).unwrap();
+
+        let embed_after = api.search_service_search("CascadeEmbed", SearchScope::StarmapEmbed, 10, None);
+        assert_eq!(embed_after.len(), 0, "embed index must be removed when project is deleted");
+        let hl_after = api.search_service_search("CascadeHL", SearchScope::StarmapHyperlink, 10, None);
+        assert_eq!(hl_after.len(), 0, "hyperlink index must be removed when project is deleted");
+    }
+
+    #[test]
     fn rebuild_extracts_starmap_embeds() {
         use crate::search::extractor::extract_starmap_entries;
         let dir = TempDir::new().unwrap();
         let starmaps_root = dir.path().join("app-meta").join("starmaps");
         let starmap_dir = starmaps_root.join("sm1");
-        std::fs::create_dir_all(starmap_dir.join("embeds")).unwrap();
+        std::fs::create_dir_all(starmap_dir.join("child_starmaps")).unwrap();
         std::fs::write(
             starmap_dir.join("graph.json"),
             serde_json::json!({"title": "EmbedMap"}).to_string(),
@@ -1352,7 +1444,7 @@ mod tests {
             updated_at: 0,
         };
         std::fs::write(
-            starmap_dir.join("embeds").join("em1.json"),
+            starmap_dir.join("child_starmaps").join("em1.json"),
             serde_json::to_string(&embed).unwrap(),
         ).unwrap();
 

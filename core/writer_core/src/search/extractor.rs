@@ -166,7 +166,7 @@ pub fn extract_starmap_entries(workspace: &Path, project_id: Option<&str>) -> Re
             }
         }
 
-        let embeds_dir = starmap_path.join("embeds");
+        let embeds_dir = starmap_path.join("child_starmaps");
         if embeds_dir.exists() {
             if let Ok(embed_files) = scan_json_files(&embeds_dir) {
                 for (eid, embed_file) in embed_files {
