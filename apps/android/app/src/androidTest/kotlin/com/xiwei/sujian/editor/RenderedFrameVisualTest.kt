@@ -386,7 +386,8 @@ class RenderedFrameVisualTest {
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("Test"))
 
-        val frames = captureFiveProgressPoints()
+        val result = captureFiveProgressPoints()
+        val frames = result.frames
 
         val labels = listOf("start", "25%", "50%", "75%", "end")
         assertAllFramesHaveContent(frames, labels)
@@ -395,6 +396,7 @@ class RenderedFrameVisualTest {
         assertBackgroundRegionIsEmpty(frames)
         assertContentPixelsVisuallyDistinctFromBackground(frames)
         assertCrossFrameAlphaProgression(frames, labels)
+        assertCrossFrameLogicalAlphaProgression(result.visualSnapshots, labels)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("Test"))
@@ -421,7 +423,8 @@ class RenderedFrameVisualTest {
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorReplaceRangeAction.replaceRange(deleteStart, deleteEnd, "", "CD"))
 
-        val frames = captureFiveProgressPoints()
+        val result = captureFiveProgressPoints()
+        val frames = result.frames
 
         val deleteLabels = listOf("start", "25%", "50%", "75%", "end")
         assertAllFramesHaveContent(frames, deleteLabels)
@@ -436,6 +439,7 @@ class RenderedFrameVisualTest {
         assertBackgroundRegionIsEmpty(frames)
         assertContentPixelsVisuallyDistinctFromBackground(frames)
         assertCrossFrameAlphaProgression(frames, deleteLabels)
+        assertCrossFrameLogicalAlphaProgression(result.visualSnapshots, deleteLabels)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("ABE"))
@@ -451,7 +455,8 @@ class RenderedFrameVisualTest {
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCompositionAction.setComposingText("预输入"))
 
-        val frames = captureFiveProgressPoints()
+        val result = captureFiveProgressPoints()
+        val frames = result.frames
 
         val compLabels = listOf("start", "25%", "50%", "75%", "end")
         assertAllFramesHaveContent(frames, compLabels)
@@ -460,6 +465,7 @@ class RenderedFrameVisualTest {
         assertBackgroundRegionIsEmpty(frames)
         assertContentPixelsVisuallyDistinctFromBackground(frames)
         assertCrossFrameAlphaProgression(frames, compLabels)
+        assertCrossFrameLogicalAlphaProgression(result.visualSnapshots, compLabels)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("预输入"))
@@ -476,7 +482,8 @@ class RenderedFrameVisualTest {
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText(testText))
 
-        val frames = captureFiveProgressPoints()
+        val result = captureFiveProgressPoints()
+        val frames = result.frames
 
         val uniLabels = listOf("start", "25%", "50%", "75%", "end")
         assertAllFramesHaveContent(frames, uniLabels)
@@ -485,6 +492,7 @@ class RenderedFrameVisualTest {
         assertBackgroundRegionIsEmpty(frames)
         assertContentPixelsVisuallyDistinctFromBackground(frames)
         assertCrossFrameAlphaProgression(frames, uniLabels)
+        assertCrossFrameLogicalAlphaProgression(result.visualSnapshots, uniLabels)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText(testText))
@@ -501,7 +509,8 @@ class RenderedFrameVisualTest {
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText(testText))
 
-        val frames = captureFiveProgressPoints()
+        val result = captureFiveProgressPoints()
+        val frames = result.frames
 
         val mlLabels = listOf("start", "25%", "50%", "75%", "end")
         assertAllFramesHaveContent(frames, mlLabels)
@@ -516,6 +525,7 @@ class RenderedFrameVisualTest {
         assertBackgroundRegionIsEmpty(frames)
         assertContentPixelsVisuallyDistinctFromBackground(frames)
         assertCrossFrameAlphaProgression(frames, mlLabels)
+        assertCrossFrameLogicalAlphaProgression(result.visualSnapshots, mlLabels)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText(testText))
@@ -778,7 +788,8 @@ class RenderedFrameVisualTest {
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("Test"))
 
-        val frames = captureFiveProgressPoints()
+        val result = captureFiveProgressPoints()
+        val frames = result.frames
 
         for ((i, label) in listOf("start", "25%", "50%", "75%", "end").withIndex()) {
             val frame = frames[i]
@@ -813,6 +824,7 @@ class RenderedFrameVisualTest {
                 slice.currentAlpha >= 0f && slice.currentAlpha <= 1f
             )
         }
+        assertCrossFrameLogicalAlphaProgression(result.visualSnapshots, listOf("start", "25%", "50%", "75%", "end"))
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("Test"))
@@ -913,8 +925,14 @@ class RenderedFrameVisualTest {
         advanceClockToEnd()
     }
 
-    private fun captureFiveProgressPoints(): List<CapturedFrame> {
+    private data class FiveProgressResult(
+        val frames: List<CapturedFrame>,
+        val visualSnapshots: List<VisualFrameSnapshot>
+    )
+
+    private fun captureFiveProgressPoints(): FiveProgressResult {
         val frames = mutableListOf<CapturedFrame>()
+        val visualSnapshots = mutableListOf<VisualFrameSnapshot>()
         val progressLabels = listOf("0%", "25%", "50%", "75%", "100%")
         val progressValues = listOf(0f, 0.25f, 0.5f, 0.75f, 1f)
 
@@ -954,7 +972,8 @@ class RenderedFrameVisualTest {
                 "Visual frame snapshot must exist at ${progressLabels[i]} for logical alpha check",
                 visualSnapshot
             )
-            for (slice in visualSnapshot!!.sliceVisualStates) {
+            visualSnapshots.add(visualSnapshot!!)
+            for (slice in visualSnapshot.sliceVisualStates) {
                 assertTrue(
                     "Slice logical alpha ${slice.currentAlpha} must be in [0,1] at ${progressLabels[i]} for role ${slice.role}",
                     slice.currentAlpha >= 0f && slice.currentAlpha <= 1f
@@ -962,7 +981,7 @@ class RenderedFrameVisualTest {
             }
         }
 
-        return frames
+        return FiveProgressResult(frames, visualSnapshots)
     }
 
     private fun assertCursorRegionFromSnapshotRect(frame: CapturedFrame, cursorRect: RectF, messagePrefix: String) {
@@ -1066,35 +1085,75 @@ class RenderedFrameVisualTest {
 
     private fun assertCrossFrameAlphaProgression(frames: List<CapturedFrame>, labels: List<String>) {
         if (frames.size < 3 || labels.size < 3) return
-        val startBounds = frames[0].contentBounds()
-        val midBounds = frames[frames.size / 2].contentBounds()
-        val endBounds = frames[frames.size - 1].contentBounds()
-        assertTrue("Start frame must have content for cross-frame check", startBounds.width() > 0 && startBounds.height() > 0)
-        assertTrue("Mid frame must have content for cross-frame check", midBounds.width() > 0 && midBounds.height() > 0)
-        assertTrue("End frame must have content for cross-frame check", endBounds.width() > 0 && endBounds.height() > 0)
+        val perFrameBounds = frames.map { it.contentBounds() }
+        for (i in perFrameBounds.indices) {
+            assertTrue(
+                "Frame at ${labels[i]} must have content for cross-frame check",
+                perFrameBounds[i].width() > 0 && perFrameBounds[i].height() > 0
+            )
+        }
 
-        val startCount = frames[0].countNonBackgroundPixels(startBounds.left, startBounds.top, startBounds.right, startBounds.bottom)
-        val midCount = frames[frames.size / 2].countNonBackgroundPixels(midBounds.left, midBounds.top, midBounds.right, midBounds.bottom)
-        val endCount = frames[frames.size - 1].countNonBackgroundPixels(endBounds.left, endBounds.top, endBounds.right, endBounds.bottom)
+        val unionLeft = perFrameBounds.minOf { it.left }
+        val unionTop = perFrameBounds.minOf { it.top }
+        val unionRight = perFrameBounds.maxOf { it.right }
+        val unionBottom = perFrameBounds.maxOf { it.bottom }
         assertTrue(
-            "Cross-frame pixel count must vary: start=$startCount, mid=$midCount, end=$endCount at ${labels[0]}/${labels[frames.size / 2]}/${labels[frames.size - 1]} — animation should change coverage",
+            "Union region must have non-zero area for same-region cross-frame comparison",
+            unionRight > unionLeft && unionBottom > unionTop
+        )
+
+        val countsInUnion = frames.map { frame ->
+            frame.countNonBackgroundPixels(unionLeft, unionTop, unionRight, unionBottom)
+        }
+        val startCount = countsInUnion.first()
+        val midCount = countsInUnion[countsInUnion.size / 2]
+        val endCount = countsInUnion.last()
+        assertTrue(
+            "Cross-frame pixel count in same region must vary: start=$startCount, mid=$midCount, end=$endCount at ${labels[0]}/${labels[frames.size / 2]}/${labels[frames.size - 1]} — animation should change coverage",
             !(startCount == midCount && midCount == endCount) || startCount == 0
         )
 
-        val midFrame = frames[frames.size / 2]
-        val midFirst = midFrame.findFirstNonBackgroundPixel()
-        if (midFirst != null) {
-            val midPixel = midFrame.bitmap.getPixel(midFirst.first, midFirst.second)
-            val midBg = midFrame.backgroundColor
-            val midDr = ColorDistance.red(midPixel) - ColorDistance.red(midBg)
-            val midDg = ColorDistance.green(midPixel) - ColorDistance.green(midBg)
-            val midDb = ColorDistance.blue(midPixel) - ColorDistance.blue(midBg)
-            val midRgbDistSq = midDr * midDr + midDg * midDg + midDb * midDb
+        val rgbDistancesInUnion = frames.mapIndexed { i, frame ->
+            val first = frame.findFirstNonBackgroundPixel()
+            if (first != null && first.first in unionLeft until unionRight && first.second in unionTop until unionBottom) {
+                val pixel = frame.bitmap.getPixel(first.first, first.second)
+                val bg = frame.backgroundColor
+                val dr = ColorDistance.red(pixel) - ColorDistance.red(bg)
+                val dg = ColorDistance.green(pixel) - ColorDistance.green(bg)
+                val db = ColorDistance.blue(pixel) - ColorDistance.blue(bg)
+                dr * dr + dg * dg + db * db
+            } else {
+                0
+            }
+        }
+        for (i in rgbDistancesInUnion.indices) {
             assertTrue(
-                "Mid-frame content pixel must be visually distinct from background: RGB distance²=$midRgbDistSq at ${labels[frames.size / 2]}",
-                midRgbDistSq > ColorDistance.BACKGROUND_TOLERANCE * ColorDistance.BACKGROUND_TOLERANCE
+                "Frame at ${labels[i]} content pixel must be visually distinct from background in same region: RGB distance²=${rgbDistancesInUnion[i]}",
+                rgbDistancesInUnion[i] > ColorDistance.BACKGROUND_TOLERANCE * ColorDistance.BACKGROUND_TOLERANCE
             )
         }
+    }
+
+    private fun assertCrossFrameLogicalAlphaProgression(
+        visualSnapshots: List<VisualFrameSnapshot>,
+        labels: List<String>
+    ) {
+        if (visualSnapshots.size < 2 || labels.size < 2) return
+        val allAlphas = visualSnapshots.mapIndexed { i, snapshot ->
+            val alphas = snapshot.sliceVisualStates.map { it.currentAlpha }
+            for (slice in snapshot.sliceVisualStates) {
+                assertTrue(
+                    "Slice logical alpha ${slice.currentAlpha} must be in [0,1] at ${labels[i]} for role ${slice.role}",
+                    slice.currentAlpha >= 0f && slice.currentAlpha <= 1f
+                )
+            }
+            alphas
+        }
+        val hasAlphaVariation = allAlphas.flatMap { it }.distinct().size > 1
+        assertTrue(
+            "Cross-frame logical alpha must vary across frames — animation should change slice transparency",
+            hasAlphaVariation
+        )
     }
 
     private fun assertDeleteProgressionWidthShrinks(frames: List<CapturedFrame>) {
