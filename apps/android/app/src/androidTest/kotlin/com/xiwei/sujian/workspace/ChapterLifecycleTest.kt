@@ -295,16 +295,17 @@ class ChapterLifecycleTest {
 
     private fun navigateToTestVolume(testData: AndroidTestEnvironment.TestProjectData) {
         val volumeTag = SujianSemanticIds.volume(testData.volumeId)
+        val projectTag = SujianSemanticIds.project(testData.projectId)
         var clickedProject = false
         ComposeWait.waitUntil(composeTestRule, {
             try {
                 composeTestRule.onNodeWithTag(volumeTag).assertExists()
                 true
-            } catch (_: AssertionError) {
+            } catch (e: AssertionError) {
                 if (!clickedProject) {
-                    composeTestRule.onNodeWithTag(
-                        SujianSemanticIds.project(testData.projectId)
-                    ).performClick()
+                    composeTestRule.onNodeWithTag(projectTag)
+                        .assertExists("Project node '$projectTag' not found when trying to expand for volume '$volumeTag'")
+                    composeTestRule.onNodeWithTag(projectTag).performClick()
                     clickedProject = true
                 }
                 false
