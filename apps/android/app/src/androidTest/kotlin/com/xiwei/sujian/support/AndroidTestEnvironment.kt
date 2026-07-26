@@ -296,6 +296,13 @@ class RestartableMainActivityRule(
         return result ?: throw IllegalStateException("onActivity did not produce a result.")
     }
 
+    fun simulateBackgroundRecovery() {
+        val sc = scenario ?: throw IllegalStateException("No active ActivityScenario. Call launchActivity() first.")
+        sc.moveToState(androidx.lifecycle.Lifecycle.State.STARTED)
+        sc.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        composeTestRule?.waitForIdle()
+    }
+
     fun isActivityLaunched(): Boolean {
         return scenario != null
     }

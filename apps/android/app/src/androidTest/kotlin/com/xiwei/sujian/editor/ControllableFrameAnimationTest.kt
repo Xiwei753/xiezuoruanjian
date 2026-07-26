@@ -1271,4 +1271,105 @@ class ControllableFrameAnimationTest {
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("$line1\n$line3"))
     }
+
+    @Test
+    fun backToChapterList_animationCleared() {
+        val testData = initTestData()
+        val chapterId = openTestChapter("返回列表动画测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("返回测试"))
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("返回测试"))
+
+        Espresso.pressBack()
+
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList, timeoutMs = 5_000)
+
+        composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterId)).performClick()
+
+        waitForEditorReady(testData.projectId, testData.volumeId, chapterId)
+
+        manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
+
+        val snapshot = captureEditorSnapshot()
+        assertNull("No animation should be active after returning to chapter list and back", snapshot)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("返回测试"))
+    }
+
+    @Test
+    fun backgroundRecover_animationCleared() {
+        val testData = initTestData()
+        openTestChapter("后台恢复动画测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("后台测试"))
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("后台测试"))
+
+        val snapshotBefore = captureEditorSnapshot()
+        assertNull("No animation should be active before background", snapshotBefore)
+
+        activityRule.simulateBackgroundRecovery()
+
+        manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
+
+        val snapshotAfter = captureEditorSnapshot()
+        assertNull("No animation should be active after background recovery", snapshotAfter)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("后台测试"))
+    }
+
+    @Test
+    fun coldRestart_animationCleared() {
+        val testData = initTestData()
+        val chapterId = openTestChapter("冷重启动画测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("重启测试"))
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("重启测试"))
+
+        ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
+
+        activityRule.restartRuntimeAndActivity()
+
+        navigateToChapterAfterRestart(testData, chapterId)
+
+        manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
+
+        val snapshot = captureEditorSnapshot()
+        assertNull("No animation should be active after cold restart", snapshot)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("重启测试"))
+    }
+
+    private fun navigateToChapterAfterRestart(testData: AndroidTestEnvironment.TestProjectData, chapterId: String) {
+        navigateToTestVolume(testData)
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.chapter(testData.volumeId, chapterId), timeoutMs = 15_000)
+        composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterId)).performClick()
+        waitForEditorReady(testData.projectId, testData.volumeId, chapterId)
+    }
 }
