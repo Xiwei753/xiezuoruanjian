@@ -1,23 +1,21 @@
 package com.xiwei.sujian.editor
 
-import android.os.Build
-import android.os.Bundle
-import android.view.accessibility.AccessibilityNodeInfo
 import androidx.compose.ui.test.junit4.AndroidComposeTestRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
 import androidx.test.espresso.Espresso
 import androidx.test.espresso.matcher.ViewMatchers
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.xiwei.sujian.R
 import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
-import com.xiwei.sujian.editor.v2.host.SujianEditorView
+import com.xiwei.sujian.support.AccessibilitySetTextAction
 import com.xiwei.sujian.support.AndroidTestEnvironment
 import com.xiwei.sujian.support.ComposeWait
+import com.xiwei.sujian.support.EditorViewAssertions
 import com.xiwei.sujian.support.RestartableMainActivityRule
 import com.xiwei.sujian.support.TestSession
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
+import com.xiwei.sujian.ui.MainActivity
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
@@ -29,8 +27,8 @@ class AccessibilitySetTextTest {
     private val activityRule = RestartableMainActivityRule { AndroidTestEnvironment.requireCurrentSession() }
 
     private val _composeTestRule = AndroidComposeTestRule(
-        activityRule, activityRule::getActivity
-    ).also { activityRule.setComposeTestRule(it) }
+        activityRule
+    ) { it.getActivity() }.also { activityRule.setComposeTestRule(it) }
 
     @get:Rule
     val ruleChain: RuleChain = RuleChain
@@ -52,22 +50,21 @@ class AccessibilitySetTextTest {
         val testData = initTestData()
         val chapterId = openTestChapter("无障碍SET_TEXT测试章节A", testData)
 
-        val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
-        assertTrue("Editor should be session bound", view.isSessionBound)
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.isSessionBound())
 
         val testText = "无障碍输入测试正文"
-        performActionSetText(view, testText)
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(AccessibilitySetTextAction.setText(testText))
 
         ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
 
-        assertEquals(testText, view.getDisplayText())
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText(testText))
 
         val endByteOffset = testText.toByteArray(Charsets.UTF_8).size
-        assertEquals(
-            "Cursor should be at end of text after ACTION_SET_TEXT",
-            endByteOffset,
-            view.getSelectionEnd()
-        )
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasSelectionUtf8(endByteOffset, endByteOffset))
     }
 
     @Test
@@ -75,22 +72,24 @@ class AccessibilitySetTextTest {
         val testData = initTestData()
         val chapterId = openTestChapter("无障碍SET_TEXT测试章节B", testData)
 
-        val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
-        assertTrue("Editor should be session bound", view.isSessionBound)
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.isSessionBound())
 
         val testText = "重启后持久化正文"
-        performActionSetText(view, testText)
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(AccessibilitySetTextAction.setText(testText))
 
         ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
 
-        assertEquals(testText, view.getDisplayText())
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText(testText))
 
         activityRule.restartRuntimeAndActivity()
 
         navigateToChapterAfterRestart(testData, chapterId)
 
-        val viewAfterRestart = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
-        assertEquals(testText, viewAfterRestart.getDisplayText())
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText(testText))
     }
 
     @Test
@@ -98,38 +97,28 @@ class AccessibilitySetTextTest {
         val testData = initTestData()
         val chapterId = openTestChapter("无障碍SET_TEXT测试章节C", testData)
 
-        val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
-        assertTrue("Editor should be session bound", view.isSessionBound)
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.isSessionBound())
 
         val testText = "你好，素笺。\n第二行🙂"
-        performActionSetText(view, testText)
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(AccessibilitySetTextAction.setText(testText))
 
         ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
 
-        assertEquals(testText, view.getDisplayText())
-
-        val expectedByteLength = testText.toByteArray(Charsets.UTF_8).size
-        val actualByteLength = view.getDisplayText().toByteArray(Charsets.UTF_8).size
-        assertEquals(
-            "UTF-8 byte length mismatch after ACTION_SET_TEXT",
-            expectedByteLength,
-            actualByteLength
-        )
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText(testText))
 
         val expectedUtf16Length = testText.length
-        val actualUtf16Length = view.getDisplayText().length
-        assertEquals(
-            "UTF-16 code unit length mismatch after ACTION_SET_TEXT",
-            expectedUtf16Length,
-            actualUtf16Length
-        )
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasSelectionUtf16(expectedUtf16Length, expectedUtf16Length))
 
         activityRule.restartRuntimeAndActivity()
 
         navigateToChapterAfterRestart(testData, chapterId)
 
-        val viewAfterRestart = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
-        assertEquals(testText, viewAfterRestart.getDisplayText())
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText(testText))
     }
 
     @Test
@@ -137,23 +126,27 @@ class AccessibilitySetTextTest {
         val testData = initTestData()
         val chapterId = openTestChapter("无障碍SET_TEXT替换测试章节", testData)
 
-        val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
-        assertTrue("Editor should be session bound", view.isSessionBound)
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.isSessionBound())
 
-        performActionSetText(view, "初始内容")
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(AccessibilitySetTextAction.setText("初始内容"))
         ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
-        assertEquals("初始内容", view.getDisplayText())
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("初始内容"))
 
-        performActionSetText(view, "替换后的内容")
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(AccessibilitySetTextAction.setText("替换后的内容"))
         ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
-        assertEquals("替换后的内容", view.getDisplayText())
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("替换后的内容"))
 
         activityRule.restartRuntimeAndActivity()
 
         navigateToChapterAfterRestart(testData, chapterId)
 
-        val viewAfterRestart = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
-        assertEquals("替换后的内容", viewAfterRestart.getDisplayText())
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("替换后的内容"))
     }
 
     @Test
@@ -161,33 +154,11 @@ class AccessibilitySetTextTest {
         val testData = initTestData()
         openTestChapter("无障碍SET_TEXT来源测试章节", testData)
 
-        val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
-        assertTrue("Editor should be session bound", view.isSessionBound)
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.isSessionBound())
 
-        val nodeInfo = view.createAccessibilityNodeInfo()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            val hasSetTextAction = nodeInfo.actionList.any {
-                it.id == AccessibilityNodeInfo.ACTION_SET_TEXT
-            }
-            assertTrue(
-                "SujianEditorView should expose ACTION_SET_TEXT as standard Android accessibility action",
-                hasSetTextAction
-            )
-        }
-        nodeInfo.recycle()
-    }
-
-    private fun performActionSetText(view: SujianEditorView, text: String) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
-            throw AssertionError("ACTION_SET_TEXT requires API 21+")
-        }
-        val args = Bundle()
-        args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
-        val result = view.performAccessibilityAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-        assertTrue(
-            "performAccessibilityAction(ACTION_SET_TEXT) returned false for text='$text'",
-            result
-        )
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasActionSetText())
     }
 
     private fun openTestChapter(chapterTitle: String, testData: AndroidTestEnvironment.TestProjectData): String {
@@ -226,16 +197,15 @@ class AccessibilitySetTextTest {
 
     private fun waitForEditorReady(projectId: String, volumeId: String, chapterId: String) {
         val expectedTargetId = "chapter-body:$projectId:$volumeId:$chapterId"
-        var lastState = "editor missing"
+        var lastState = "editor not ready"
         ComposeWait.waitUntil(composeTestRule, {
             try {
-                val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
-                when {
-                    view == null -> { lastState = "editor missing"; false }
-                    view.visibility != android.view.View.VISIBLE -> { lastState = "editor not visible"; false }
-                    !view.isSessionBound -> { lastState = "editor not bound"; false }
-                    else -> true
-                }
+                Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+                    .check(EditorViewAssertions.isEditorReady())
+                true
+            } catch (e: AssertionError) {
+                lastState = "editor not ready: ${e.message}"
+                false
             } catch (e: Exception) {
                 lastState = "exception: ${e.message}"
                 false

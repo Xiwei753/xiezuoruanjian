@@ -212,13 +212,14 @@ class RestartableMainActivityRule(
                     destroyLatch.countDown()
                 }
             }
-            ActivityLifecycleMonitorRegistry.addLifecycleCallback(lifecycleCallback)
+            val lifecycleMonitor = ActivityLifecycleMonitorRegistry.getInstance()
+            lifecycleMonitor.addLifecycleCallback(lifecycleCallback)
 
             sc.close()
             scenario = null
 
             val destroyed = destroyLatch.await(10, TimeUnit.SECONDS)
-            ActivityLifecycleMonitorRegistry.removeLifecycleCallback(lifecycleCallback)
+            lifecycleMonitor.removeLifecycleCallback(lifecycleCallback)
 
             Assert.assertTrue(
                 "Old Activity was not destroyed within 10 seconds after scenario.close()",
@@ -250,6 +251,15 @@ class RestartableMainActivityRule(
         )
 
         composeTestRule?.waitForIdle()
+    }
+
+    fun <T> onActivity(action: (MainActivity) -> T): T {
+        val sc = scenario ?: throw IllegalStateException("No active ActivityScenario. Call launchActivity() first.")
+        var result: T? = null
+        sc.onActivity { activity ->
+            result = action(activity)
+        }
+        return result ?: throw IllegalStateException("onActivity did not produce a result.")
     }
 
     fun closeActivity() {

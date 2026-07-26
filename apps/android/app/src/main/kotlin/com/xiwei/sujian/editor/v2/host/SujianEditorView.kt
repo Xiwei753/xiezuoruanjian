@@ -347,7 +347,7 @@ class SujianEditorView @JvmOverloads constructor(
                     event.addedCount = text.length
                     event.className = android.widget.EditText::class.java.name
                     event.packageName = context.packageName
-                    event.source = this
+                    event.setSource(this)
                     parent?.requestSendAccessibilityEvent(this, event)
                 }
                 return true

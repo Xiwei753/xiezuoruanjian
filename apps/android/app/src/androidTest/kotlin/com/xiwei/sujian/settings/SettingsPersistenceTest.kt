@@ -28,8 +28,8 @@ class SettingsPersistenceTest {
     private val activityRule = RestartableMainActivityRule { AndroidTestEnvironment.requireCurrentSession() }
 
     private val _composeTestRule = AndroidComposeTestRule(
-        activityRule, activityRule::getActivity
-    ).also { activityRule.setComposeTestRule(it) }
+        activityRule
+    ) { it.getActivity() }.also { activityRule.setComposeTestRule(it) }
 
     @get:Rule
     val ruleChain: RuleChain = RuleChain

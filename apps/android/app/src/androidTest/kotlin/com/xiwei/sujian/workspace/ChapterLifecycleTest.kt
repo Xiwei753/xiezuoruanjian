@@ -9,15 +9,15 @@ import androidx.compose.ui.test.performTextInput
 import androidx.test.espresso.Espresso
 import androidx.test.espresso.matcher.ViewMatchers
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.xiwei.sujian.ui.MainActivity
 import com.xiwei.sujian.R
 import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
-import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import com.xiwei.sujian.support.AndroidTestEnvironment
 import com.xiwei.sujian.support.ComposeWait
 import com.xiwei.sujian.support.EditorCommitTextAction
+import com.xiwei.sujian.support.EditorViewAssertions
 import com.xiwei.sujian.support.RestartableMainActivityRule
 import com.xiwei.sujian.support.TestSession
+import com.xiwei.sujian.ui.MainActivity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Rule
@@ -31,8 +31,8 @@ class ChapterLifecycleTest {
     private val activityRule = RestartableMainActivityRule { AndroidTestEnvironment.requireCurrentSession() }
 
     private val _composeTestRule = AndroidComposeTestRule(
-        activityRule, activityRule::getActivity
-    ).also { activityRule.setComposeTestRule(it) }
+        activityRule
+    ) { it.getActivity() }.also { activityRule.setComposeTestRule(it) }
 
     @get:Rule
     val ruleChain: RuleChain = RuleChain
@@ -196,12 +196,8 @@ class ChapterLifecycleTest {
         composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterBId)).performClick()
         waitForEditorBoundToChapter(testData.projectId, testData.volumeId, chapterBId, "正文隔离B")
 
-        val viewB = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
-        assertEquals(
-            "Chapter B should have empty content when first opened",
-            "",
-            viewB.getDisplayText()
-        )
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText(""))
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("正文-B"))
@@ -213,12 +209,8 @@ class ChapterLifecycleTest {
         composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterAId)).performClick()
         waitForEditorBoundToChapter(testData.projectId, testData.volumeId, chapterAId, "正文隔离A")
 
-        val viewAReopened = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
-        assertEquals(
-            "Chapter A content should still be 正文-A after switching back",
-            "正文-A",
-            viewAReopened.getDisplayText()
-        )
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("正文-A"))
 
         val coordinator = session.deps.coordinator
         val targetIdA = "chapter-body:${testData.projectId}:${testData.volumeId}:$chapterAId"
@@ -234,12 +226,8 @@ class ChapterLifecycleTest {
         composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterBId)).performClick()
         waitForEditorBoundToChapter(testData.projectId, testData.volumeId, chapterBId, "正文隔离B")
 
-        val viewBReopened = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
-        assertEquals(
-            "Chapter B content should still be 正文-B after switching back",
-            "正文-B",
-            viewBReopened.getDisplayText()
-        )
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("正文-B"))
 
         val targetIdB = "chapter-body:${testData.projectId}:${testData.volumeId}:$chapterBId"
         assertEquals(
@@ -256,16 +244,15 @@ class ChapterLifecycleTest {
         expectedTitle: String
     ) {
         val expectedTargetId = "chapter-body:$projectId:$volumeId:$chapterId"
-        var lastState = "editor missing"
+        var lastState = "editor not ready"
         ComposeWait.waitUntil(composeTestRule, {
             try {
-                val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
-                when {
-                    view == null -> { lastState = "editor missing"; false }
-                    view.visibility != android.view.View.VISIBLE -> { lastState = "editor not visible"; false }
-                    !view.isSessionBound -> { lastState = "editor not bound"; false }
-                    else -> true
-                }
+                Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+                    .check(EditorViewAssertions.isEditorReady())
+                true
+            } catch (e: AssertionError) {
+                lastState = "editor not ready: ${e.message}"
+                false
             } catch (e: Exception) {
                 lastState = "exception: ${e.message}"
                 false

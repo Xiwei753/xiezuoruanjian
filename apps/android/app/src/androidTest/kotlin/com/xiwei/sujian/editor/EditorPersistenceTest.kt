@@ -7,16 +7,16 @@ import androidx.compose.ui.test.performTextInput
 import androidx.test.espresso.Espresso
 import androidx.test.espresso.matcher.ViewMatchers
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.xiwei.sujian.ui.MainActivity
 import com.xiwei.sujian.R
 import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
-import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import com.xiwei.sujian.support.AndroidTestEnvironment
 import com.xiwei.sujian.support.ComposeWait
 import com.xiwei.sujian.support.EditorCommitTextAction
+import com.xiwei.sujian.support.EditorReplaceRangeAction
+import com.xiwei.sujian.support.EditorViewAssertions
 import com.xiwei.sujian.support.RestartableMainActivityRule
 import com.xiwei.sujian.support.TestSession
-import org.junit.Assert.assertEquals
+import com.xiwei.sujian.ui.MainActivity
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
@@ -28,8 +28,8 @@ class EditorPersistenceTest {
     private val activityRule = RestartableMainActivityRule { AndroidTestEnvironment.requireCurrentSession() }
 
     private val _composeTestRule = AndroidComposeTestRule(
-        activityRule, activityRule::getActivity
-    ).also { activityRule.setComposeTestRule(it) }
+        activityRule
+    ) { it.getActivity() }.also { activityRule.setComposeTestRule(it) }
 
     @get:Rule
     val ruleChain: RuleChain = RuleChain
@@ -48,7 +48,6 @@ class EditorPersistenceTest {
 
     @Test
     fun commitText_persistsAfterReopen() {
-        val session = getSession()
         val testData = initTestData()
         val chapterId = openTestChapter("编辑器持久化章节A", testData)
 
@@ -64,26 +63,25 @@ class EditorPersistenceTest {
         composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterId)).performClick()
 
         waitForEditorReady(testData.projectId, testData.volumeId, chapterId)
-        waitForEditorContent("第一段测试正文", testData, chapterId)
+        waitForEditorContent("第一段测试正文")
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("，继续写作"))
 
         ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
 
-        val viewAfterAppend = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
-        assertEquals("第一段测试正文，继续写作", viewAfterAppend.getDisplayText())
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("第一段测试正文，继续写作"))
 
         activityRule.restartRuntimeAndActivity()
 
         navigateToChapterAfterRestart(testData, chapterId)
 
-        waitForEditorContent("第一段测试正文，继续写作", testData, chapterId)
+        waitForEditorContent("第一段测试正文，继续写作")
     }
 
     @Test
     fun commitText_persistsAfterColdRestart() {
-        val session = getSession()
         val testData = initTestData()
         val chapterId = openTestChapter("编辑器持久化章节B", testData)
 
@@ -96,12 +94,11 @@ class EditorPersistenceTest {
 
         navigateToChapterAfterRestart(testData, chapterId)
 
-        waitForEditorContent("重启测试正文", testData, chapterId)
+        waitForEditorContent("重启测试正文")
     }
 
     @Test
     fun commitText_unicodeAndMultiline_persists() {
-        val session = getSession()
         val testData = initTestData()
         val chapterId = openTestChapter("编辑器持久化章节C", testData)
 
@@ -111,22 +108,21 @@ class EditorPersistenceTest {
 
         ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
 
-        val viewAfterInput = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
-        assertEquals(testText, viewAfterInput.getDisplayText())
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText(testText))
 
         activityRule.restartRuntimeAndActivity()
 
         navigateToChapterAfterRestart(testData, chapterId)
 
-        waitForEditorContent(testText, testData, chapterId)
+        waitForEditorContent(testText)
 
-        val viewAfterRestart = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
-        assertEquals(testText, viewAfterRestart.getDisplayText())
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText(testText))
     }
 
     @Test
     fun commitText_middleInsert_persists() {
-        val session = getSession()
         val testData = initTestData()
         val chapterId = openTestChapter("编辑器中间插入章节", testData)
 
@@ -136,54 +132,51 @@ class EditorPersistenceTest {
 
         ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
 
-        val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
-        assertEquals(initialText, view.getDisplayText())
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText(initialText))
 
         val prefix = "AB"
         val insertByteOffset = prefix.toByteArray(Charsets.UTF_8).size
         val expectedUtf16InsertOffset = prefix.length
-        assertEquals(
+        org.junit.Assert.assertEquals(
             "ASCII text: UTF-8 byte offset should equal UTF-16 offset",
             expectedUtf16InsertOffset,
             insertByteOffset
         )
 
-        view.replaceRangeTyped(insertByteOffset, insertByteOffset, "XY", "", uniffi.writer_core.EditorTransactionCauseDto.TYPING)
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorReplaceRangeAction.replaceRange(insertByteOffset, insertByteOffset, "XY", ""))
 
         ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
 
         val expectedAfterInsert = "ABXYCDE"
-        assertEquals(expectedAfterInsert, view.getDisplayText())
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText(expectedAfterInsert))
 
-        val expectedByteLength = expectedAfterInsert.toByteArray(Charsets.UTF_8).size
-        val actualByteLength = view.getDisplayText().toByteArray(Charsets.UTF_8).size
-        assertEquals(
-            "UTF-8 byte length mismatch: expected $expectedByteLength but got $actualByteLength",
-            expectedByteLength,
-            actualByteLength
-        )
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasSelectionUtf8(
+                expectedAfterInsert.toByteArray(Charsets.UTF_8).size,
+                expectedAfterInsert.toByteArray(Charsets.UTF_8).size
+            ))
 
-        val expectedUtf16Length = expectedAfterInsert.length
-        val actualUtf16Length = view.getDisplayText().length
-        assertEquals(
-            "UTF-16 code unit length mismatch: expected $expectedUtf16Length but got $actualUtf16Length",
-            expectedUtf16Length,
-            actualUtf16Length
-        )
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasSelectionUtf16(
+                expectedAfterInsert.length,
+                expectedAfterInsert.length
+            ))
 
         activityRule.restartRuntimeAndActivity()
 
         navigateToChapterAfterRestart(testData, chapterId)
 
-        waitForEditorContent(expectedAfterInsert, testData, chapterId)
+        waitForEditorContent(expectedAfterInsert)
 
-        val viewAfterRestart = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
-        assertEquals(expectedAfterInsert, viewAfterRestart.getDisplayText())
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText(expectedAfterInsert))
     }
 
     @Test
     fun commitText_unicodeMiddleInsert_persistsWithOffsets() {
-        val session = getSession()
         val testData = initTestData()
         val chapterId = openTestChapter("编辑器Unicode中间插入章节", testData)
 
@@ -193,73 +186,40 @@ class EditorPersistenceTest {
 
         ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
 
-        val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
-        assertEquals(initialText, view.getDisplayText())
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText(initialText))
 
         val prefix = "你好🙂"
         val expectedByteOffset = prefix.toByteArray(Charsets.UTF_8).size
         val expectedUtf16Offset = prefix.length
 
-        view.replaceRangeTyped(expectedByteOffset, expectedByteOffset, "中间", "", uniffi.writer_core.EditorTransactionCauseDto.TYPING)
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorReplaceRangeAction.replaceRange(expectedByteOffset, expectedByteOffset, "中间", ""))
 
         ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
 
         val expectedAfterInsert = "你好🙂中间世界"
-        assertEquals(expectedAfterInsert, view.getDisplayText())
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText(expectedAfterInsert))
 
-        val actualByteLength = view.getDisplayText().toByteArray(Charsets.UTF_8).size
-        val expectedByteLength = expectedAfterInsert.toByteArray(Charsets.UTF_8).size
-        assertEquals(
-            "UTF-8 byte length after Unicode insert: expected $expectedByteLength but got $actualByteLength",
-            expectedByteLength,
-            actualByteLength
-        )
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasSelectionUtf16(
+                expectedUtf16Offset + "中间".length,
+                expectedUtf16Offset + "中间".length
+            ))
 
-        val actualUtf16Length = view.getDisplayText().length
-        val expectedUtf16Length = expectedAfterInsert.length
-        assertEquals(
-            "UTF-16 code unit length after Unicode insert: expected $expectedUtf16Length but got $actualUtf16Length",
-            expectedUtf16Length,
-            actualUtf16Length
-        )
-
-        val actualCursorUtf8 = view.getSelectionEnd()
         val insertEndByteOffset = expectedByteOffset + "中间".toByteArray(Charsets.UTF_8).size
-        assertEquals(
-            "UTF-8 cursor offset after Unicode insert",
-            insertEndByteOffset,
-            actualCursorUtf8
-        )
-
-        val actualSelectionStartUtf16 = view.getSelectionStartUtf16()
-        val actualSelectionEndUtf16 = view.getSelectionEndUtf16()
-        val expectedUtf16CursorAfterInsert = expectedUtf16Offset + "中间".length
-        assertEquals(
-            "UTF-16 selection start after Unicode insert",
-            expectedUtf16CursorAfterInsert,
-            actualSelectionStartUtf16
-        )
-        assertEquals(
-            "UTF-16 selection end after Unicode insert",
-            expectedUtf16CursorAfterInsert,
-            actualSelectionEndUtf16
-        )
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasSelectionUtf8(insertEndByteOffset, insertEndByteOffset))
 
         activityRule.restartRuntimeAndActivity()
 
         navigateToChapterAfterRestart(testData, chapterId)
 
-        waitForEditorContent(expectedAfterInsert, testData, chapterId)
+        waitForEditorContent(expectedAfterInsert)
 
-        val viewAfterRestart = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
-        assertEquals(expectedAfterInsert, viewAfterRestart.getDisplayText())
-
-        val byteLengthAfterRestart = viewAfterRestart.getDisplayText().toByteArray(Charsets.UTF_8).size
-        assertEquals(
-            "UTF-8 byte length after cold restart",
-            expectedByteLength,
-            byteLengthAfterRestart
-        )
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText(expectedAfterInsert))
     }
 
     private fun openTestChapter(chapterTitle: String, testData: AndroidTestEnvironment.TestProjectData): String {
@@ -297,16 +257,15 @@ class EditorPersistenceTest {
 
     private fun waitForEditorReady(projectId: String, volumeId: String, chapterId: String) {
         val expectedTargetId = "chapter-body:$projectId:$volumeId:$chapterId"
-        var lastState = "editor missing"
+        var lastState = "editor not ready"
         ComposeWait.waitUntil(composeTestRule, {
             try {
-                val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
-                when {
-                    view == null -> { lastState = "editor missing"; false }
-                    view.visibility != android.view.View.VISIBLE -> { lastState = "editor not visible"; false }
-                    !view.isSessionBound -> { lastState = "editor not bound"; false }
-                    else -> true
-                }
+                Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+                    .check(EditorViewAssertions.isEditorReady())
+                true
+            } catch (e: AssertionError) {
+                lastState = "editor not ready: ${e.message}"
+                false
             } catch (e: Exception) {
                 lastState = "exception: ${e.message}"
                 false
@@ -321,28 +280,22 @@ class EditorPersistenceTest {
         }, timeoutMs = 10_000, message = { "activeTargetId should be $expectedTargetId but was $lastTargetId for chapter $chapterId" })
     }
 
-    private fun waitForEditorContent(
-        expectedContent: String,
-        testData: AndroidTestEnvironment.TestProjectData,
-        chapterId: String
-    ) {
+    private fun waitForEditorContent(expectedContent: String) {
         var lastContent = ""
         ComposeWait.waitUntil(composeTestRule, {
             try {
-                val view = composeTestRule.activity.findViewById<SujianEditorView>(R.id.editor_content)
-                if (view == null || !view.isSessionBound) {
-                    lastContent = "editor not bound"
-                    false
-                } else {
-                    val actual = view.getDisplayText()
-                    lastContent = actual
-                    actual == expectedContent
-                }
+                Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+                    .check(EditorViewAssertions.hasDisplayText(expectedContent))
+                lastContent = expectedContent
+                true
+            } catch (e: AssertionError) {
+                lastContent = "content mismatch: ${e.message}"
+                false
             } catch (e: Exception) {
                 lastContent = "exception: ${e.message}"
                 false
             }
-        }, timeoutMs = 15_000, message = { "Content mismatch for chapter $chapterId: expected '$expectedContent' but was '$lastContent'" })
+        }, timeoutMs = 15_000, message = { "Content mismatch: expected '$expectedContent' but was '$lastContent'" })
     }
 
     private fun waitForChapterByTitle(title: String, testData: AndroidTestEnvironment.TestProjectData): String {
