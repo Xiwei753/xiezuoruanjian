@@ -84,4 +84,78 @@ class CoordinatorTimeSourceInjectionTest {
         val ids = (1..10).map { source.nextId() }.toSet()
         assertEquals(10, ids.size)
     }
+
+    @Test
+    fun coordinatorConstructorAcceptsFrameClock() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator")
+        val constructors = clazz.constructors
+        val matchingConstructor = constructors.firstOrNull { ctor ->
+            val paramTypes = ctor.parameterTypes.map { it.name }
+            paramTypes.contains("com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock")
+        }
+        assertNotNull(
+            "AnimatedTextEditorCoordinator should have a constructor accepting WindowDisplayFrameClock",
+            matchingConstructor
+        )
+    }
+
+    @Test
+    fun coordinatorExposesWindowFrameClock() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator")
+        val field = clazz.getDeclaredField("windowFrameClock")
+        assertNotNull(
+            "AnimatedTextEditorCoordinator should expose windowFrameClock",
+            field
+        )
+        assertEquals(
+            "windowFrameClock should be public",
+            java.lang.reflect.Modifier.PUBLIC,
+            field.modifiers and java.lang.reflect.Modifier.PUBLIC
+        )
+    }
+
+    @Test
+    fun coordinatorHasObtainSharedEditorViewMethod() {
+        val clazz = Class.forName("com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator")
+        val method = clazz.getDeclaredMethod("obtainSharedEditorView")
+        assertNotNull(
+            "AnimatedTextEditorCoordinator should have obtainSharedEditorView() method",
+            method
+        )
+        assertEquals(
+            "obtainSharedEditorView should return SujianEditorView",
+            "com.xiwei.sujian.editor.v2.host.SujianEditorView",
+            method.returnType.name
+        )
+    }
+
+    @Test
+    fun manualFrameClockImplementsFrameCallbackPoster() {
+        val manualClock = WindowDisplayFrameClock.ManualFrameClock()
+        assertTrue(
+            "ManualFrameClock should implement FrameCallbackPoster",
+            manualClock is WindowDisplayFrameClock.FrameCallbackPoster
+        )
+    }
+
+    @Test
+    fun manualFrameClockHasDispatchFrameMethod() {
+        val manualClock = WindowDisplayFrameClock.ManualFrameClock()
+        val method = manualClock.javaClass.getDeclaredMethod("dispatchFrame", Long::class.javaPrimitiveType)
+        assertNotNull(
+            "ManualFrameClock should have dispatchFrame(Long) method",
+            method
+        )
+    }
+
+    @Test
+    fun manualFrameClockHasHasPendingFrameMethod() {
+        val manualClock = WindowDisplayFrameClock.ManualFrameClock()
+        val method = manualClock.javaClass.getDeclaredMethod("hasPendingFrame")
+        assertNotNull(
+            "ManualFrameClock should have hasPendingFrame() method",
+            method
+        )
+        assertFalse("No pending frame initially", manualClock.hasPendingFrame())
+    }
 }

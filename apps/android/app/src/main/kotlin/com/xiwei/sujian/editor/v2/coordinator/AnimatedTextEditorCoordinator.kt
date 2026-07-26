@@ -38,14 +38,15 @@ class AnimatedTextEditorCoordinator(
     private val context: Context,
     private val appServiceBridge: AppServiceBridge,
     private val animationTimeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource = com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
-    private val transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource = com.xiwei.sujian.editor.v2.visual.TransactionIdSource()
+    private val transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource = com.xiwei.sujian.editor.v2.visual.TransactionIdSource(),
+    frameClock: WindowDisplayFrameClock? = null
 ) : SessionCommandPort {
     private val targets = mutableMapOf<String, EditableTextTarget>()
     private var activeSessionId: ULong? = null
     private var sharedEditorView: SujianEditorView? = null
     private val persistentSessionIds = mutableMapOf<String, ULong>()
     private val targetProjections = mutableMapOf<String, TargetDisplayRuntime>()
-    private val windowFrameClock = WindowDisplayFrameClock()
+    val windowFrameClock: WindowDisplayFrameClock = frameClock ?: WindowDisplayFrameClock()
 
     var targetDecorationsVersion by mutableStateOf(0L)
         private set
@@ -341,6 +342,10 @@ class AnimatedTextEditorCoordinator(
     fun getPersistentSessionId(targetId: String): ULong? = persistentSessionIds[targetId]
 
     fun getSharedEditorView(): SujianEditorView? = sharedEditorView
+
+    fun obtainSharedEditorView(): SujianEditorView {
+        return getOrCreateEditorView()
+    }
 
     fun setSharedEditorView(view: SujianEditorView) {
         sharedEditorView = view

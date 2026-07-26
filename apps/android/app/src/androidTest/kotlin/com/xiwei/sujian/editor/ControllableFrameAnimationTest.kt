@@ -6,6 +6,7 @@ import androidx.test.espresso.matcher.ViewMatchers
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.xiwei.sujian.R
 import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
+import com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import com.xiwei.sujian.editor.v2.visual.AnimationStateSnapshot
 import com.xiwei.sujian.editor.v2.visual.ManualAnimationTimeSource
@@ -31,6 +32,7 @@ class ControllableFrameAnimationTest {
 
     private val manualTimeSource = ManualAnimationTimeSource()
     private val transactionIdSource = TransactionIdSource()
+    private val manualFrameClock = WindowDisplayFrameClock.ManualFrameClock()
 
     private val activityRule = RestartableMainActivityRule { AndroidTestEnvironment.requireCurrentSession() }
 
@@ -41,7 +43,7 @@ class ControllableFrameAnimationTest {
 
     @get:Rule
     val ruleChain: RuleChain = RuleChain
-        .outerRule(AndroidTestEnvironment.TestDependenciesRule(manualTimeSource, transactionIdSource))
+        .outerRule(AndroidTestEnvironment.TestDependenciesRule(manualTimeSource, transactionIdSource, manualFrameClock))
         .around(_composeTestRule)
 
     private val composeTestRule get() = _composeTestRule
@@ -65,6 +67,7 @@ class ControllableFrameAnimationTest {
             .perform(EditorCommitTextAction.commitText("Hello"))
 
         manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("Hello"))
 
@@ -96,6 +99,7 @@ class ControllableFrameAnimationTest {
             .perform(EditorReplaceRangeAction.replaceRange(deleteStart, deleteEnd, "", "CD"))
 
         manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("ABE"))
@@ -123,6 +127,7 @@ class ControllableFrameAnimationTest {
             .perform(EditorReplaceRangeAction.replaceRange(insertOffset, insertOffset, "XY", ""))
 
         manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("ABXYCDE"))
@@ -146,6 +151,7 @@ class ControllableFrameAnimationTest {
             .perform(EditorCommitTextAction.commitText(testText))
 
         manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText(testText))
@@ -167,11 +173,13 @@ class ControllableFrameAnimationTest {
             .perform(EditorCommitTextAction.commitText("A"))
 
         manualTimeSource.advanceByMs(8)
+        dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("B"))
 
         manualTimeSource.advanceByMs(8)
+        dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("C"))
@@ -195,6 +203,7 @@ class ControllableFrameAnimationTest {
             .perform(EditorCommitTextAction.commitText(testText))
 
         manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText(testText))
@@ -205,9 +214,15 @@ class ControllableFrameAnimationTest {
             .check(EditorViewAssertions.hasDisplayText(testText))
     }
 
+    private fun dispatchManualFrame() {
+        val frameTimeNanos = manualTimeSource.nowNanos()
+        manualFrameClock.dispatchFrame(frameTimeNanos)
+    }
+
     private fun advanceClockToEnd() {
         for (i in 0 until 20) {
             manualTimeSource.advanceByMs(16)
+            dispatchManualFrame()
         }
     }
 
@@ -229,6 +244,7 @@ class ControllableFrameAnimationTest {
         verifyCursorVisible: Boolean = true
     ) {
         manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
         val snapshot = captureEditorSnapshot()
         if (snapshot != null) {
             assertTrue(
@@ -360,11 +376,13 @@ class ControllableFrameAnimationTest {
         assertNotNull("Animation should be active after first insert", snapshot1)
 
         manualTimeSource.advanceByMs(8)
+        dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("B"))
 
         manualTimeSource.advanceByMs(8)
+        dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("C"))
@@ -413,6 +431,7 @@ class ControllableFrameAnimationTest {
             .perform(EditorCompositionAction.setComposingText("你"))
 
         manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("你"))
@@ -421,6 +440,7 @@ class ControllableFrameAnimationTest {
             .perform(EditorCompositionAction.setComposingText("你好"))
 
         manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("你好"))
@@ -442,6 +462,7 @@ class ControllableFrameAnimationTest {
             .perform(EditorCompositionAction.setComposingText("测试"))
 
         manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCompositionAction.finishComposingText())
@@ -472,6 +493,7 @@ class ControllableFrameAnimationTest {
             .perform(EditorCompositionAction.setComposingText("XY"))
 
         manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("ABXY"))
@@ -480,6 +502,7 @@ class ControllableFrameAnimationTest {
             .perform(EditorCompositionAction.sendKeyDelete())
 
         manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
 
         advanceClockToEnd()
 
@@ -520,6 +543,7 @@ class ControllableFrameAnimationTest {
             .perform(EditorCompositionAction.setComposingText("文"))
 
         manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("文"))
@@ -528,6 +552,7 @@ class ControllableFrameAnimationTest {
             .perform(EditorCompositionAction.setComposingText("文字"))
 
         manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("文字"))
@@ -554,6 +579,7 @@ class ControllableFrameAnimationTest {
             .perform(EditorCommitTextAction.commitText(longText))
 
         manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText(longText))
@@ -605,6 +631,7 @@ class ControllableFrameAnimationTest {
         waitForEditorReady(testData.projectId, testData.volumeId, chapterId2)
 
         manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
 
         val snapshot = captureEditorSnapshot()
         assertNull("No animation should be active after switching chapter", snapshot)

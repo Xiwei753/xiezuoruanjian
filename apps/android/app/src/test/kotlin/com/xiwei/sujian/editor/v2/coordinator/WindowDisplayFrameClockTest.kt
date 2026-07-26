@@ -190,4 +190,71 @@ class WindowDisplayFrameClockTest {
         clock.requestFrame()
         assertEquals("still only one callback despite additional requestFrame calls", 1, postedCallbacks.size)
     }
+
+    @Test
+    fun manualFrameClock_dispatchFrameTriggersCallback() {
+        val manualClock = WindowDisplayFrameClock.ManualFrameClock()
+        val clock = WindowDisplayFrameClock(manualClock)
+        var receivedFrameTime = 0L
+        val listener = object : WindowDisplayFrameClock.FrameListener {
+            override fun needsFrame(): Boolean = false
+            override fun onFrame(frameTimeNanos: Long) { receivedFrameTime = frameTimeNanos }
+        }
+        clock.addListener(listener)
+        clock.requestFrame()
+        assertTrue("ManualFrameClock should have pending frame", manualClock.hasPendingFrame())
+        manualClock.dispatchFrame(1_000_000_000L)
+        assertEquals("Listener should receive dispatched frame time", 1_000_000_000L, receivedFrameTime)
+        clock.release()
+    }
+
+    @Test
+    fun manualFrameClock_dispatchFrameAutoRepostsWhenNeedsFrame() {
+        val manualClock = WindowDisplayFrameClock.ManualFrameClock()
+        val clock = WindowDisplayFrameClock(manualClock)
+        var frameCount = 0
+        var needsFrameCount = 0
+        val listener = object : WindowDisplayFrameClock.FrameListener {
+            override fun needsFrame(): Boolean {
+                needsFrameCount++
+                return needsFrameCount <= 2
+            }
+            override fun onFrame(frameTimeNanos: Long) { frameCount++ }
+        }
+        clock.addListener(listener)
+        clock.requestFrame()
+        manualClock.dispatchFrame(1_000_000_000L)
+        assertEquals("first frame received", 1, frameCount)
+        assertTrue("should have pending frame because needsFrame=true", manualClock.hasPendingFrame())
+        manualClock.dispatchFrame(2_000_000_000L)
+        assertEquals("second frame received", 2, frameCount)
+        assertFalse("no more pending frames because needsFrame=false", manualClock.hasPendingFrame())
+        clock.release()
+    }
+
+    @Test
+    fun isManualClock_returnsTrueForManualFrameClock() {
+        val manualClock = WindowDisplayFrameClock.ManualFrameClock()
+        val clock = WindowDisplayFrameClock(manualClock)
+        assertTrue(clock.isManualClock())
+        clock.release()
+    }
+
+    @Test
+    fun isManualClock_returnsFalseForStubPoster() {
+        assertFalse(clock.isManualClock())
+    }
+
+    @Test
+    fun dispatchFrame_onNonManualClockDoesNothing() {
+        var frameCount = 0
+        val listener = object : WindowDisplayFrameClock.FrameListener {
+            override fun needsFrame(): Boolean = false
+            override fun onFrame(frameTimeNanos: Long) { frameCount++ }
+        }
+        clock.addListener(listener)
+        clock.requestFrame()
+        clock.dispatchFrame(System.nanoTime())
+        assertEquals("dispatchFrame on non-manual clock should not trigger frame", 0, frameCount)
+    }
 }

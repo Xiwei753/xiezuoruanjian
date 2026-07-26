@@ -24,6 +24,28 @@ class WindowDisplayFrameClock(
         }
     }
 
+    class ManualFrameClock : FrameCallbackPoster {
+        private var pendingCallback: Choreographer.FrameCallback? = null
+
+        override fun postFrameCallback(callback: Choreographer.FrameCallback) {
+            pendingCallback = callback
+        }
+
+        override fun removeFrameCallback(callback: Choreographer.FrameCallback) {
+            if (pendingCallback === callback) {
+                pendingCallback = null
+            }
+        }
+
+        fun dispatchFrame(frameTimeNanos: Long) {
+            val cb = pendingCallback
+            pendingCallback = null
+            cb?.doFrame(frameTimeNanos)
+        }
+
+        fun hasPendingFrame(): Boolean = pendingCallback != null
+    }
+
     private val listeners = mutableListOf<FrameListener>()
     private var callbackPosted: Boolean = false
 
@@ -57,6 +79,15 @@ class WindowDisplayFrameClock(
         callbackPosted = true
         poster.postFrameCallback(frameCallback)
     }
+
+    fun dispatchFrame(frameTimeNanos: Long) {
+        val poster = this.poster
+        if (poster is ManualFrameClock) {
+            poster.dispatchFrame(frameTimeNanos)
+        }
+    }
+
+    fun isManualClock(): Boolean = poster is ManualFrameClock
 
     fun stop() {
         callbackPosted = false

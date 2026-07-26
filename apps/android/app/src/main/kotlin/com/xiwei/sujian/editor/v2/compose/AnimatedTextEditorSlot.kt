@@ -78,8 +78,7 @@ fun AnimatedTextEditorSlot(
     ) {
         AndroidView(
             factory = { ctx ->
-                val view = coordinator.getSharedEditorView()
-                    ?: SujianEditorView(ctx).also { coordinator.setSharedEditorView(it) }
+                val view = coordinator.obtainSharedEditorView()
                 EditorThemeAdapter.applyToView(view, themeColors)
                 view
             },
@@ -130,13 +129,16 @@ val LocalAnimatedTextEditorCoordinator = androidx.compose.runtime.compositionLoc
 }
 
 @Composable
-fun rememberAnimatedTextEditorCoordinator(): AnimatedTextEditorCoordinator {
+fun rememberAnimatedTextEditorCoordinator(
+    animationTimeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource = com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
+    transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource = com.xiwei.sujian.editor.v2.visual.TransactionIdSource()
+): AnimatedTextEditorCoordinator {
     val context = LocalContext.current
     val existing = LocalAnimatedTextEditorCoordinator.current
     return remember {
         existing ?: run {
             val bridge = BridgeProvider.getAppServiceBridge(context)
-            AnimatedTextEditorCoordinator(context, bridge)
+            AnimatedTextEditorCoordinator(context, bridge, animationTimeSource, transactionIdSource)
         }
     }
 }
