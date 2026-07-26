@@ -62,27 +62,21 @@ class SettingsPersistenceTest {
         val toggleNode = composeTestRule.onNodeWithTag(SujianSemanticIds.SettingsTypingAnimation)
         toggleNode.assertIsDisplayed()
 
-        val wasOn = try {
-            toggleNode.assertIsOn()
-            true
-        } catch (_: AssertionError) {
-            false
-        }
+        val toggleSemantics = toggleNode.fetchSemanticsNode()
+        val wasOn = toggleSemantics.config.getOrElse(
+            androidx.compose.ui.semantics.SemanticsProperties.ToggleableState
+        ) { null } == androidx.compose.ui.state.ToggleableState.On
 
         toggleNode.performClick()
 
         val expectedEnabled = !wasOn
         ComposeWait.waitUntil(composeTestRule, {
-            try {
-                if (wasOn) {
-                    composeTestRule.onNodeWithTag(SujianSemanticIds.SettingsTypingAnimation).assertIsOff()
-                } else {
-                    composeTestRule.onNodeWithTag(SujianSemanticIds.SettingsTypingAnimation).assertIsOn()
-                }
-                true
-            } catch (_: AssertionError) {
-                false
-            }
+            val node = composeTestRule.onNodeWithTag(SujianSemanticIds.SettingsTypingAnimation)
+            val state = node.fetchSemanticsNode().config.getOrElse(
+                androidx.compose.ui.semantics.SemanticsProperties.ToggleableState
+            ) { null }
+            if (wasOn) state == androidx.compose.ui.state.ToggleableState.Off
+            else state == androidx.compose.ui.state.ToggleableState.On
         }, timeoutMs = 5_000, message = { "Typing animation toggle did not reflect expected state after click" })
 
         ComposeWait.waitUntil(composeTestRule, {

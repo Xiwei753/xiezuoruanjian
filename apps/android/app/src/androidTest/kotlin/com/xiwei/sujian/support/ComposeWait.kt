@@ -12,13 +12,8 @@ object ComposeWait {
         timeoutMs: Long = DEFAULT_TIMEOUT_MS
     ): SemanticsNodeInteraction {
         waitUntil(rule, {
-            try {
-                val node = rule.onNode(androidx.compose.ui.test.hasTestTag(tag))
-                node.assertExists()
-                true
-            } catch (_: AssertionError) {
-                false
-            }
+            val nodes = rule.onAllNodes(androidx.compose.ui.test.hasTestTag(tag))
+            nodes.fetchSemanticsNodes().isNotEmpty()
         }, timeoutMs) {
             "Timed out waiting for tag: $tag"
         }
@@ -31,24 +26,50 @@ object ComposeWait {
         timeoutMs: Long = 15_000L
     ) {
         var lastObservedState: String? = null
-        var lastError: String? = null
         waitUntil(rule, {
-            try {
-                val node = rule.onNode(androidx.compose.ui.test.hasTestTag(
-                    com.xiwei.sujian.designsystem.testing.SujianSemanticIds.EditorSaveStatus
-                ))
-                node.assertExists()
-                val stateDesc = node.fetchSemanticsNode().config[
+            val nodes = rule.onAllNodes(androidx.compose.ui.test.hasTestTag(
+                com.xiwei.sujian.designsystem.testing.SujianSemanticIds.EditorSaveStatus
+            ))
+            val fetched = nodes.fetchSemanticsNodes()
+            if (fetched.isEmpty()) {
+                lastObservedState = null
+                false
+            } else {
+                val stateDesc = fetched.first().config.getOrElse(
                     androidx.compose.ui.semantics.SemanticsProperties.StateDescription
-                ]
+                ) { "" }
                 lastObservedState = stateDesc
                 stateDesc == expectedState
+            }
+        }, timeoutMs) {
+            "Expected save status '$expectedState' but last observed was '$lastObservedState'"
+        }
+    }
+
+    fun waitForEspressoViewCondition(
+        rule: ComposeTestRule,
+        viewAssertion: androidx.test.espresso.ViewAssertion,
+        timeoutMs: Long = 15_000L,
+        message: () -> String
+    ) {
+        var lastDiagnostic = "no result yet"
+        waitUntil(rule, {
+            try {
+                androidx.test.espresso.Espresso.onView(
+                    androidx.test.espresso.matcher.ViewMatchers.withId(
+                        com.xiwei.sujian.R.id.editor_content
+                    )
+                ).check(viewAssertion)
+                true
+            } catch (e: AssertionError) {
+                lastDiagnostic = e.message ?: "assertion failed"
+                false
             } catch (e: Exception) {
-                lastError = "Exception while checking save status: ${e.message}"
+                lastDiagnostic = "${e.javaClass.simpleName}: ${e.message}"
                 false
             }
         }, timeoutMs) {
-            "Expected save status '$expectedState' but last observed was '$lastObservedState'. Last error: $lastError"
+            "${message()}. Last diagnostic: $lastDiagnostic"
         }
     }
 

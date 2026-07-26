@@ -198,20 +198,11 @@ class AccessibilitySetTextTest {
 
     private fun waitForEditorReady(projectId: String, volumeId: String, chapterId: String) {
         val expectedTargetId = "chapter-body:$projectId:$volumeId:$chapterId"
-        var lastState = "editor not ready"
-        ComposeWait.waitUntil(composeTestRule, {
-            try {
-                Espresso.onView(ViewMatchers.withId(R.id.editor_content))
-                    .check(EditorViewAssertions.isEditorReady())
-                true
-            } catch (e: AssertionError) {
-                lastState = "editor not ready: ${e.message}"
-                false
-            } catch (e: Exception) {
-                lastState = "exception: ${e.message}"
-                false
-            }
-        }, timeoutMs = 15_000, message = { "Editor did not become ready for chapter $chapterId. Last state: $lastState" })
+        ComposeWait.waitForEspressoViewCondition(
+            composeTestRule,
+            EditorViewAssertions.isEditorReady(),
+            timeoutMs = 15_000
+        ) { "Editor did not become ready for chapter $chapterId" }
 
         var lastTargetId: String? = null
         ComposeWait.waitUntil(composeTestRule, {
@@ -241,21 +232,12 @@ class AccessibilitySetTextTest {
     private fun navigateToTestVolume(testData: AndroidTestEnvironment.TestProjectData) {
         val volumeTag = SujianSemanticIds.volume(testData.volumeId)
         val projectTag = SujianSemanticIds.project(testData.projectId)
-        var clickedProject = false
-        ComposeWait.waitUntil(composeTestRule, {
-            try {
-                composeTestRule.onNodeWithTag(volumeTag).assertExists()
-                true
-            } catch (e: AssertionError) {
-                if (!clickedProject) {
-                    composeTestRule.onNodeWithTag(projectTag)
-                        .assertExists("Project node '$projectTag' not found when trying to expand for volume '$volumeTag'")
-                    composeTestRule.onNodeWithTag(projectTag).performClick()
-                    clickedProject = true
-                }
-                false
-            }
-        }, timeoutMs = 15_000, message = { "Volume tag '$volumeTag' not found after clicking project '${testData.projectId}'" })
+        val volumeNodes = composeTestRule.onAllNodes(androidx.compose.ui.test.hasTestTag(volumeTag))
+        if (volumeNodes.fetchSemanticsNodes().isEmpty()) {
+            ComposeWait.waitForTag(composeTestRule, projectTag)
+            composeTestRule.onNodeWithTag(projectTag).performClick()
+        }
+        ComposeWait.waitForTag(composeTestRule, volumeTag)
         composeTestRule.onNodeWithTag(volumeTag).performClick()
     }
 }
