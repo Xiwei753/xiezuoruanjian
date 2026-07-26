@@ -180,12 +180,7 @@ fun SyncSettings(
                 val structured = state.structuredSyncResult
                 if (structured != null) {
                     Spacer(modifier = Modifier.height(dims.space8))
-                    val isSuccess = when (state.lastCommandType) {
-                        SyncCommandType.DRY_RUN -> state.dryRunState == SyncCommandState.SUCCESS
-                        SyncCommandType.TEST_CONNECTION -> state.testConnectionState == SyncCommandState.SUCCESS
-                        SyncCommandType.PERFORM_SYNC -> state.performSyncState == SyncCommandState.SUCCESS
-                        null -> false
-                    }
+                    val isSuccess = structured.statusCode == "ok"
                     val displayResult = resolveStructuredResult(structured)
                     Text(
                         text = displayResult,

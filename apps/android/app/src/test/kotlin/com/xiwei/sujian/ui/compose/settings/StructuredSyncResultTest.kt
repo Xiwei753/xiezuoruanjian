@@ -158,4 +158,61 @@ class StructuredSyncResultTest {
         )
         assertEquals(2, result.counts.conflicts)
     }
+
+    @Test
+    fun statusCodeOkIsTheOnlySuccessIndicator() {
+        val successCodes = listOf("ok")
+        val failureCodes = listOf("fail", "error", "blocked", "busy")
+        for (code in successCodes) {
+            assertTrue("statusCode=$code should be success", code == "ok")
+        }
+        for (code in failureCodes) {
+            assertFalse("statusCode=$code should not be success", code == "ok")
+        }
+    }
+
+    @Test
+    fun statusCodeDistinguishesAllSyncOutcomes() {
+        val allCodes = listOf("ok", "fail", "error", "blocked", "busy")
+        assertEquals(5, allCodes.size)
+        assertEquals(5, allCodes.toSet().size)
+    }
+
+    @Test
+    fun syncCommandIoResultIsSuccessDerivesFromStatusCode() {
+        val okResult = SyncCommandIoResultForTest(true, true, StructuredSyncResult(statusCode = "ok", messageKey = "sync_dry_run_result"))
+        assertTrue(okResult.isSuccess)
+
+        val failResult = SyncCommandIoResultForTest(true, true, StructuredSyncResult(statusCode = "fail", messageKey = "sync_test_connection_result"))
+        assertFalse(failResult.isSuccess)
+
+        val errorResult = SyncCommandIoResultForTest(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_error"))
+        assertFalse(errorResult.isSuccess)
+
+        val blockedResult = SyncCommandIoResultForTest(true, true, StructuredSyncResult(statusCode = "blocked", messageKey = "sync_not_ready"))
+        assertFalse(blockedResult.isSuccess)
+
+        val busyResult = SyncCommandIoResultForTest(false, false, StructuredSyncResult(statusCode = "busy", messageKey = "sync_already_running"))
+        assertFalse(busyResult.isSuccess)
+    }
+
+    @Test
+    fun syncCommandIoResultConfigSavedIndependentOfSuccess() {
+        val configFailed = SyncCommandIoResultForTest(false, false, StructuredSyncResult(statusCode = "error", messageKey = "save_config_failed"))
+        assertFalse(configFailed.configSaved)
+        assertFalse(configFailed.isSuccess)
+
+        val configOkSyncFailed = SyncCommandIoResultForTest(true, false, StructuredSyncResult(statusCode = "error", messageKey = "save_secrets_failed"))
+        assertTrue(configOkSyncFailed.configSaved)
+        assertFalse(configOkSyncFailed.secretsSaved)
+        assertFalse(configOkSyncFailed.isSuccess)
+    }
+
+    private data class SyncCommandIoResultForTest(
+        val configSaved: Boolean,
+        val secretsSaved: Boolean,
+        val structuredResult: StructuredSyncResult,
+    ) {
+        val isSuccess: Boolean get() = structuredResult.statusCode == "ok"
+    }
 }

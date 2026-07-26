@@ -517,6 +517,8 @@ class AndroidEditorPipeline private constructor(
 
     fun hasActiveAnimation(): Boolean = visualRuntime.hasActiveAnimation()
 
+    fun currentTimeNanos(): Long = visualRuntime.currentTimeNanos()
+
     fun captureAnimationSnapshot(): com.xiwei.sujian.editor.v2.visual.AnimationStateSnapshot? = visualRuntime.captureStateSnapshot()
 
     fun updateLayout(width: Float) {
