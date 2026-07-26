@@ -14,6 +14,7 @@ import com.xiwei.sujian.editor.v2.visual.TransactionState
 import com.xiwei.sujian.support.AndroidTestEnvironment
 import com.xiwei.sujian.support.ComposeWait
 import com.xiwei.sujian.support.EditorCommitTextAction
+import com.xiwei.sujian.support.EditorCompositionAction
 import com.xiwei.sujian.support.EditorReplaceRangeAction
 import com.xiwei.sujian.support.EditorViewAssertions
 import com.xiwei.sujian.support.RestartableMainActivityRule
@@ -399,6 +400,217 @@ class ControllableFrameAnimationTest {
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText(testText))
+    }
+
+    @Test
+    fun compositionUpdate_animatedAndCompletes() {
+        val testData = initTestData()
+        openTestChapter("可控帧composition更新测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCompositionAction.setComposingText("你"))
+
+        manualTimeSource.advanceByMs(16)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("你"))
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCompositionAction.setComposingText("你好"))
+
+        manualTimeSource.advanceByMs(16)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("你好"))
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("你好"))
+    }
+
+    @Test
+    fun compositionCommit_animatedAndCompletes() {
+        val testData = initTestData()
+        openTestChapter("可控帧composition提交测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCompositionAction.setComposingText("测试"))
+
+        manualTimeSource.advanceByMs(16)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCompositionAction.finishComposingText())
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("测试"))
+            .check(EditorViewAssertions.hasSelectionUtf8(6, 6))
+    }
+
+    @Test
+    fun compositionCancel_animatedAndRevertsText() {
+        val testData = initTestData()
+        openTestChapter("可控帧composition取消测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("AB"))
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("AB"))
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCompositionAction.setComposingText("XY"))
+
+        manualTimeSource.advanceByMs(16)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("ABXY"))
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCompositionAction.sendKeyDelete())
+
+        manualTimeSource.advanceByMs(16)
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("AB"))
+    }
+
+    @Test
+    fun compositionUpdate_intermediateFramesPreserveText() {
+        val testData = initTestData()
+        openTestChapter("中间帧composition测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCompositionAction.setComposingText("中"))
+
+        val startSnapshot = captureEditorSnapshot()
+        assertNotNull("Animation should be active after composition update", startSnapshot)
+
+        advanceToProgressAndVerify(0.2f, 0.6f, "中", verifyCursorVisible = true)
+        advanceToProgressAndVerify(0.4f, 0.8f, "中", verifyCursorVisible = true)
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("中"))
+    }
+
+    @Test
+    fun compositionUpdateThenCommit_intermediateFramesCorrect() {
+        val testData = initTestData()
+        openTestChapter("中间帧composition提交测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCompositionAction.setComposingText("文"))
+
+        manualTimeSource.advanceByMs(16)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("文"))
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCompositionAction.setComposingText("文字"))
+
+        manualTimeSource.advanceByMs(16)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("文字"))
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCompositionAction.finishComposingText())
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("文字"))
+            .check(EditorViewAssertions.hasSelectionUtf8(6, 6))
+    }
+
+    @Test
+    fun scrollDuringAnimation_textAndCursorPreserved() {
+        val testData = initTestData()
+        openTestChapter("滚动动画测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        val longText = (1..20).joinToString("\n") { "第${it}行内容" }
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText(longText))
+
+        manualTimeSource.advanceByMs(16)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText(longText))
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText(longText))
+    }
+
+    @Test
+    fun switchChapter_animationCleared() {
+        val testData = initTestData()
+        openTestChapter("切换章节动画测试A", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("章节A"))
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("章节A"))
+
+        composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationWorks).performClick()
+
+        val projectTag = SujianSemanticIds.project(testData.projectId)
+        ComposeWait.waitForTag(composeTestRule, projectTag, timeoutMs = 15_000)
+        composeTestRule.onNodeWithTag(projectTag).performClick()
+
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList, timeoutMs = 15_000)
+
+        val volumeTag = SujianSemanticIds.volume(testData.volumeId)
+        ComposeWait.waitForTag(composeTestRule, volumeTag, timeoutMs = 15_000)
+        composeTestRule.onNodeWithTag(volumeTag).performClick()
+
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceCreateChapter, timeoutMs = 15_000)
+        composeTestRule.onNodeWithTag(SujianSemanticIds.WorkspaceCreateChapter).performClick()
+
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.ChapterTitleInput)
+        composeTestRule.onNodeWithTag(SujianSemanticIds.ChapterTitleInput).performTextInput("切换章节动画测试B")
+
+        composeTestRule.onNodeWithTag(SujianSemanticIds.DialogConfirm).performClick()
+
+        val chapterId2 = waitForChapterByTitle("切换章节动画测试B", testData)
+        composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterId2)).performClick()
+
+        waitForEditorReady(testData.projectId, testData.volumeId, chapterId2)
+
+        manualTimeSource.advanceByMs(16)
+
+        val snapshot = captureEditorSnapshot()
+        assertNull("No animation should be active after switching chapter", snapshot)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText(""))
     }
 
     private fun openTestChapter(chapterTitle: String, testData: AndroidTestEnvironment.TestProjectData): String {
