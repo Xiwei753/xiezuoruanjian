@@ -154,11 +154,7 @@ pub fn list_starmaps(workspace: &Path) -> Result<Vec<StarMapMeta>> {
 }
 
 pub fn list_starmaps_for_project(workspace: &Path, project_id: &str) -> Result<Vec<StarMapMeta>> {
-    let all = list_starmaps(workspace)?;
-    Ok(all
-        .into_iter()
-        .filter(|m| m.project_id.as_deref() == Some(project_id) || m.project_id.is_none())
-        .collect())
+    list_starmaps_bound_to_project(workspace, project_id)
 }
 
 pub fn list_starmaps_bound_to_project(workspace: &Path, project_id: &str) -> Result<Vec<StarMapMeta>> {
@@ -837,5 +833,31 @@ mod tests {
         assert_eq!(policy.enabled, roundtrip.enabled);
         assert_eq!(policy.idle_wobble_enabled, roundtrip.idle_wobble_enabled);
         assert_eq!(policy.reduce_motion, roundtrip.reduce_motion);
+    }
+
+    #[test]
+    fn test_list_starmaps_for_project_excludes_unbound() {
+        let dir = setup_workspace();
+        let sm_bound = create_starmap(dir.path(), "Bound", "", None).unwrap();
+        let _sm_unbound = create_starmap(dir.path(), "Unbound", "", None).unwrap();
+        let _sm_other = create_starmap(dir.path(), "Other", "", None).unwrap();
+
+        bind_starmap_to_project(dir.path(), &sm_bound.starmap_id, "proj1").unwrap();
+        bind_starmap_to_project(dir.path(), &_sm_other.starmap_id, "proj2").unwrap();
+
+        let for_proj1 = list_starmaps_for_project(dir.path(), "proj1").unwrap();
+        assert_eq!(for_proj1.len(), 1);
+        assert_eq!(for_proj1[0].starmap_id, sm_bound.starmap_id);
+
+        let bound_proj1 = list_starmaps_bound_to_project(dir.path(), "proj1").unwrap();
+        assert_eq!(bound_proj1.len(), 1);
+        assert_eq!(bound_proj1[0].starmap_id, sm_bound.starmap_id);
+
+        let for_proj2 = list_starmaps_for_project(dir.path(), "proj2").unwrap();
+        assert_eq!(for_proj2.len(), 1);
+        assert_eq!(for_proj2[0].starmap_id, _sm_other.starmap_id);
+
+        let for_nonexistent = list_starmaps_for_project(dir.path(), "no_such_project").unwrap();
+        assert!(for_nonexistent.is_empty());
     }
 }
