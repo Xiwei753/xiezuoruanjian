@@ -188,12 +188,25 @@ class RestartableMainActivityRule(
         composeTestRule = rule
     }
 
+    @Deprecated(
+        message = "Holding Activity references outside the UI thread risks stale references after cold restart. " +
+            "Use onActivity { } for one-shot reads that return plain data snapshots, " +
+            "or use Espresso onView() / Compose test APIs for View interactions.",
+        replaceWith = ReplaceWith("onActivity { it }")
+    )
     fun getActivity(): MainActivity {
+        return provideActivity()
+    }
+
+    private fun provideActivity(): MainActivity {
         val sc = scenario ?: throw IllegalStateException("No active ActivityScenario. Call launchActivity() first.")
         var activity: MainActivity? = null
         sc.onActivity { activity = it }
         return activity ?: throw IllegalStateException("ActivityScenario.onActivity did not provide activity.")
     }
+
+    val composeActivityProvider: (RestartableMainActivityRule) -> MainActivity
+        get() = { _ -> provideActivity() }
 
     fun launchActivity() {
         scenario?.close()
@@ -260,6 +273,10 @@ class RestartableMainActivityRule(
             result = action(activity)
         }
         return result ?: throw IllegalStateException("onActivity did not produce a result.")
+    }
+
+    fun isActivityLaunched(): Boolean {
+        return scenario != null
     }
 
     fun closeActivity() {

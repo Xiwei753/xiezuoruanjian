@@ -21,7 +21,8 @@ class MainActivitySmokeTest {
 
     @Test
     fun testMainActivityLaunch() {
-        val activity = activityRule.getActivity()
-        assertNotNull("Activity should be launched via RestartableMainActivityRule", activity)
+        activityRule.onActivity { activity ->
+            assertNotNull("Activity should be launched via RestartableMainActivityRule", activity)
+        }
     }
 }

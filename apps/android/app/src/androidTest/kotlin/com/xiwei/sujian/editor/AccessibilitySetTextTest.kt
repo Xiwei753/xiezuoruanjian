@@ -27,8 +27,9 @@ class AccessibilitySetTextTest {
     private val activityRule = RestartableMainActivityRule { AndroidTestEnvironment.requireCurrentSession() }
 
     private val _composeTestRule = AndroidComposeTestRule(
-        activityRule
-    ) { it.getActivity() }.also { activityRule.setComposeTestRule(it) }
+        activityRule,
+        activityRule.composeActivityProvider
+    ).also { activityRule.setComposeTestRule(it) }
 
     @get:Rule
     val ruleChain: RuleChain = RuleChain
