@@ -1,8 +1,5 @@
 package com.xiwei.sujian.editor.v2.pipeline
 
-import android.text.TextPaint
-import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
-import com.xiwei.sujian.editor.v2.visual.AnimationTimeSource
 import com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource
 import com.xiwei.sujian.editor.v2.visual.ManualAnimationTimeSource
 import com.xiwei.sujian.editor.v2.visual.TransactionIdSource
@@ -12,34 +9,28 @@ import org.junit.Test
 class AnimationTimeSourceInjectionTest {
 
     @Test
-    fun pipelineCreateWithDefaultTimeSourceUsesChoreographer() {
-        val mirror = DisplayTextMirror()
-        val paint = TextPaint()
-        val pipeline = AndroidEditorPipeline.create(mirror, paint)
-        assertNotNull(pipeline)
+    fun visualRuntimeCreateWithDefaultTimeSourceUsesChoreographer() {
+        val runtime = AndroidVisualRuntime()
+        assertNotNull(runtime)
     }
 
     @Test
-    fun pipelineCreateWithManualTimeSourceAcceptsInjection() {
-        val mirror = DisplayTextMirror()
-        val paint = TextPaint()
+    fun visualRuntimeCreateWithManualTimeSourceAcceptsInjection() {
         val manualTimeSource = ManualAnimationTimeSource()
         val transactionIdSource = TransactionIdSource()
-        val pipeline = AndroidEditorPipeline.create(mirror, paint, manualTimeSource, transactionIdSource)
-        assertNotNull(pipeline)
+        val runtime = AndroidVisualRuntime(manualTimeSource, transactionIdSource)
+        assertNotNull(runtime)
     }
 
     @Test
-    fun pipelineCreateWithExplicitChoreographerTimeSource() {
-        val mirror = DisplayTextMirror()
-        val paint = TextPaint()
+    fun visualRuntimeCreateWithExplicitChoreographerTimeSource() {
         val choreographerSource = ChoreographerAnimationTimeSource()
-        val pipeline = AndroidEditorPipeline.create(mirror, paint, choreographerSource)
-        assertNotNull(pipeline)
+        val runtime = AndroidVisualRuntime(choreographerSource)
+        assertNotNull(runtime)
     }
 
     @Test
-    fun manualTimeSourceAdvancesIndependentlyOfPipeline() {
+    fun manualTimeSourceAdvancesIndependentlyOfRuntime() {
         val manualTimeSource = ManualAnimationTimeSource()
         manualTimeSource.advanceByMs(16)
         assertEquals(16_000_000L, manualTimeSource.nowNanos())
@@ -64,96 +55,82 @@ class AnimationTimeSourceInjectionTest {
     }
 
     @Test
-    fun pipelineWithManualTimeSource_reportsInjectedTime() {
-        val mirror = DisplayTextMirror()
-        val paint = TextPaint()
+    fun visualRuntimeWithManualTimeSource_reportsInjectedTime() {
         val manualTimeSource = ManualAnimationTimeSource()
         val transactionIdSource = TransactionIdSource()
-        val pipeline = AndroidEditorPipeline.create(mirror, paint, manualTimeSource, transactionIdSource)
+        val runtime = AndroidVisualRuntime(manualTimeSource, transactionIdSource)
 
-        assertEquals(0L, pipeline.currentTimeNanos())
-
-        manualTimeSource.advanceByMs(16)
-        assertEquals(16_000_000L, pipeline.currentTimeNanos())
+        assertEquals(0L, runtime.currentTimeNanos())
 
         manualTimeSource.advanceByMs(16)
-        assertEquals(32_000_000L, pipeline.currentTimeNanos())
+        assertEquals(16_000_000L, runtime.currentTimeNanos())
+
+        manualTimeSource.advanceByMs(16)
+        assertEquals(32_000_000L, runtime.currentTimeNanos())
     }
 
     @Test
-    fun pipelineWithManualTimeSource_snapshotIsNullWithoutActiveTransaction() {
-        val mirror = DisplayTextMirror()
-        val paint = TextPaint()
+    fun visualRuntimeWithManualTimeSource_snapshotIsNullWithoutActiveTransaction() {
         val manualTimeSource = ManualAnimationTimeSource()
         val transactionIdSource = TransactionIdSource()
-        val pipeline = AndroidEditorPipeline.create(mirror, paint, manualTimeSource, transactionIdSource)
+        val runtime = AndroidVisualRuntime(manualTimeSource, transactionIdSource)
 
         manualTimeSource.advanceByMs(100)
-        assertNull(pipeline.captureAnimationSnapshot())
+        assertNull(runtime.captureStateSnapshot())
     }
 
     @Test
-    fun pipelineWithManualTimeSource_noActiveAnimationInitially() {
-        val mirror = DisplayTextMirror()
-        val paint = TextPaint()
+    fun visualRuntimeWithManualTimeSource_noActiveAnimationInitially() {
         val manualTimeSource = ManualAnimationTimeSource()
         val transactionIdSource = TransactionIdSource()
-        val pipeline = AndroidEditorPipeline.create(mirror, paint, manualTimeSource, transactionIdSource)
+        val runtime = AndroidVisualRuntime(manualTimeSource, transactionIdSource)
 
-        assertFalse(pipeline.hasActiveAnimation())
+        assertFalse(runtime.hasActiveAnimation())
     }
 
     @Test
-    fun pipelineWithDefaultTimeSource_reportsSystemTime() {
-        val mirror = DisplayTextMirror()
-        val paint = TextPaint()
-        val pipeline = AndroidEditorPipeline.create(mirror, paint)
+    fun visualRuntimeWithDefaultTimeSource_reportsSystemTime() {
+        val runtime = AndroidVisualRuntime()
 
         val before = System.nanoTime()
-        val reported = pipeline.currentTimeNanos()
+        val reported = runtime.currentTimeNanos()
         val after = System.nanoTime()
         assertTrue("Reported time should be within system nanoTime range", reported in before..after)
     }
 
     @Test
-    fun pipelineWithManualTimeSource_timeAdvancesDeterministically() {
-        val mirror = DisplayTextMirror()
-        val paint = TextPaint()
+    fun visualRuntimeWithManualTimeSource_timeAdvancesDeterministically() {
         val manualTimeSource = ManualAnimationTimeSource()
         val transactionIdSource = TransactionIdSource()
-        val pipeline = AndroidEditorPipeline.create(mirror, paint, manualTimeSource, transactionIdSource)
+        val runtime = AndroidVisualRuntime(manualTimeSource, transactionIdSource)
 
         val timestamps = mutableListOf<Long>()
         for (i in 0 until 5) {
             manualTimeSource.advanceByMs(16)
-            timestamps.add(pipeline.currentTimeNanos() / 1_000_000)
+            timestamps.add(runtime.currentTimeNanos() / 1_000_000)
         }
         assertEquals(listOf(16L, 32L, 48L, 64L, 80L), timestamps)
     }
 
     @Test
-    fun pipelineWithManualTimeSource_visualFrameSnapshotIsNullWithoutActiveTransaction() {
-        val mirror = DisplayTextMirror()
-        val paint = TextPaint()
+    fun visualRuntimeWithManualTimeSource_visualFrameSnapshotIsNullWithoutActiveTransaction() {
         val manualTimeSource = ManualAnimationTimeSource()
         val transactionIdSource = TransactionIdSource()
-        val pipeline = AndroidEditorPipeline.create(mirror, paint, manualTimeSource, transactionIdSource)
+        val runtime = AndroidVisualRuntime(manualTimeSource, transactionIdSource)
 
         manualTimeSource.advanceByMs(100)
-        assertNull(pipeline.captureVisualFrameSnapshot())
+        assertNull(runtime.captureVisualFrameSnapshot())
     }
 
     @Test
-    fun pipelineWithManualTimeSource_stateAndVisualFrameSnapshotsConsistentWhenNoAnimation() {
-        val mirror = DisplayTextMirror()
-        val paint = TextPaint()
+    fun visualRuntimeWithManualTimeSource_stateAndVisualFrameSnapshotsConsistentWhenNoAnimation() {
         val manualTimeSource = ManualAnimationTimeSource()
         val transactionIdSource = TransactionIdSource()
-        val pipeline = AndroidEditorPipeline.create(mirror, paint, manualTimeSource, transactionIdSource)
+        val runtime = AndroidVisualRuntime(manualTimeSource, transactionIdSource)
 
         manualTimeSource.advanceByMs(100)
-        val stateSnapshot = pipeline.captureAnimationSnapshot()
-        val visualSnapshot = pipeline.captureVisualFrameSnapshot()
+        val stateSnapshot = runtime.captureStateSnapshot()
+        val visualSnapshot = runtime.captureVisualFrameSnapshot()
         assertNull(stateSnapshot)
         assertNull(visualSnapshot)
     }
