@@ -13,6 +13,7 @@ pub enum SearchScope {
     StarmapEdgeLabel,
     StarmapHyperlink,
     StarmapLink,
+    StarmapEmbed,
     Setting,
     All,
 }
@@ -30,6 +31,7 @@ impl SearchScope {
             SearchScope::StarmapEdgeLabel,
             SearchScope::StarmapHyperlink,
             SearchScope::StarmapLink,
+            SearchScope::StarmapEmbed,
             SearchScope::Setting,
         ]
     }

@@ -161,6 +161,14 @@ pub fn list_starmaps_for_project(workspace: &Path, project_id: &str) -> Result<V
         .collect())
 }
 
+pub fn list_starmaps_bound_to_project(workspace: &Path, project_id: &str) -> Result<Vec<StarMapMeta>> {
+    let all = list_starmaps(workspace)?;
+    Ok(all
+        .into_iter()
+        .filter(|m| m.project_id.as_deref() == Some(project_id))
+        .collect())
+}
+
 pub fn get_starmap(workspace: &Path, starmap_id: &str) -> Result<StarMapMeta> {
     load_starmap_meta(workspace, starmap_id)
 }

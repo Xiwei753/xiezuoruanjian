@@ -17,6 +17,21 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
+        if let Ok(volumes) = self.core().list_volumes(&project.id) {
+            if let Some(default_vol) = volumes.first() {
+                let vol_entry = crate::search::extractor::extract_volume_title_entry(
+                    &project.id, &default_vol.id, &default_vol.title,
+                );
+                self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                    action: crate::search::SearchIndexAction::Upsert,
+                    object_id: vol_entry.object_id.clone(),
+                    scope: vol_entry.scope,
+                    title: vol_entry.title.clone(),
+                    body: vol_entry.body.clone(),
+                    target: Some(vol_entry.target.clone()),
+                });
+            }
+        }
         Ok(project)
     }
 
@@ -56,7 +71,7 @@ impl WriterCoreApi {
         ] {
             self.remove_search_index_by_prefix(prefix);
         }
-        if let Ok(starmaps) = self.core().list_starmaps_for_project(project_id) {
+        if let Ok(starmaps) = self.core().list_starmaps_bound_to_project(project_id) {
             for sm in &starmaps {
                 for prefix in &[
                     format!("starmap:{}", sm.starmap_id),

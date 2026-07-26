@@ -97,7 +97,11 @@ impl WriterCoreApi {
     pub(crate) fn search_service_rebuild(&self, project_id: Option<&str>) -> crate::error::Result<crate::search::SearchIndexStatus> {
         let entries = crate::search::rebuild::rebuild_index(&self.workspace_path, project_id)?;
         let mut service = self.search_service.lock().unwrap_or_else(|e| e.into_inner());
-        service.rebuild_from_entries(entries);
+        if let Some(pid) = project_id {
+            service.rebuild_project_from_entries(pid, entries);
+        } else {
+            service.rebuild_from_entries(entries);
+        }
         Ok(service.status())
     }
 

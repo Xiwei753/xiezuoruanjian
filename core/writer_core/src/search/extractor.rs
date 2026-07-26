@@ -165,6 +165,21 @@ pub fn extract_starmap_entries(workspace: &Path, project_id: Option<&str>) -> Re
                 }
             }
         }
+
+        let embeds_dir = starmap_path.join("embeds");
+        if embeds_dir.exists() {
+            if let Ok(embed_files) = scan_json_files(&embeds_dir) {
+                for (eid, embed_file) in embed_files {
+                    let embed: Option<crate::starmap::types::StarMapEmbed> = std::fs::read_to_string(&embed_file)
+                        .ok()
+                        .and_then(|s| serde_json::from_str(&s).ok());
+                    if let Some(e) = embed {
+                        let label = e.label.as_deref().unwrap_or("");
+                        entries.push(extract_starmap_embed_entry(&sid, &eid, bound_project, label));
+                    }
+                }
+            }
+        }
     }
 
     Ok(entries)
@@ -283,6 +298,28 @@ pub fn extract_starmap_hyperlink_entry(
         scope: SearchScope::StarmapHyperlink,
         title: title.to_string(),
         body,
+        target: SearchTarget {
+            project_id: project_id.map(|s| s.to_string()),
+            volume_id: None,
+            chapter_id: None,
+            starmap_id: Some(starmap_id.to_string()),
+            node_id: None,
+            setting_key: None,
+        },
+    }
+}
+
+pub fn extract_starmap_embed_entry(
+    starmap_id: &str,
+    instance_id: &str,
+    project_id: Option<&str>,
+    label: &str,
+) -> IndexEntry {
+    IndexEntry {
+        object_id: format!("starmap_embed:{}:{}", starmap_id, instance_id),
+        scope: SearchScope::StarmapEmbed,
+        title: label.to_string(),
+        body: label.to_string(),
         target: SearchTarget {
             project_id: project_id.map(|s| s.to_string()),
             volume_id: None,

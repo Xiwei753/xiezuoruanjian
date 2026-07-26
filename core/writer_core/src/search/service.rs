@@ -91,6 +91,38 @@ impl SearchIndexService {
         self.is_rebuilding = false;
     }
 
+    pub fn rebuild_project_from_entries(&mut self, project_id: &str, entries: Vec<IndexEntry>) {
+        self.is_rebuilding = true;
+        self.backend.remove_by_prefix(&format!("project:{}", project_id));
+        self.backend.remove_by_prefix(&format!("volume:{}:", project_id));
+        self.backend.remove_by_prefix(&format!("chapter_title:{}:", project_id));
+        self.backend.remove_by_prefix(&format!("chapter_body:{}:", project_id));
+        self.backend.remove_by_prefix(&format!("chapter_note:{}:", project_id));
+        let starmap_ids: Vec<String> = entries.iter()
+            .filter_map(|e| {
+                if e.scope == SearchScope::StarmapTitle && e.target.project_id.as_deref() == Some(project_id) {
+                    e.target.starmap_id.clone()
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for sid in &starmap_ids {
+            self.backend.remove_by_prefix(&format!("starmap:{}", sid));
+            self.backend.remove_by_prefix(&format!("starmap_node:{}:", sid));
+            self.backend.remove_by_prefix(&format!("starmap_edge:{}:", sid));
+            self.backend.remove_by_prefix(&format!("starmap_hyperlink:{}:", sid));
+            self.backend.remove_by_prefix(&format!("starmap_link:{}:", sid));
+            self.backend.remove_by_prefix(&format!("starmap_embed:{}:", sid));
+        }
+        for entry in entries {
+            self.backend.insert(entry);
+        }
+        self.update_queue.clear();
+        self.last_rebuild_at = super::extractor::now_epoch();
+        self.is_rebuilding = false;
+    }
+
     pub fn backend(&self) -> &SearchBackend {
         &self.backend
     }

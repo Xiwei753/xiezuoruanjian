@@ -98,20 +98,17 @@ impl WriterCoreApi {
             .add_starmap_embed(starmap_id, embed.into())
             .map_err(WriterError::from)?;
         let project_id = get_starmap_project_id(self, starmap_id);
+        let entry = crate::search::extractor::extract_starmap_embed_entry(
+            starmap_id, &result.instance_id, project_id.as_deref(),
+            &result.label.clone().unwrap_or_default(),
+        );
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
-            object_id: format!("starmap_embed:{}:{}", starmap_id, result.instance_id),
-            scope: crate::search::SearchScope::StarmapNode,
-            title: result.label.clone().unwrap_or_default(),
-            body: result.label.clone().unwrap_or_default(),
-            target: Some(crate::search::SearchTarget {
-                project_id,
-                volume_id: None,
-                chapter_id: None,
-                starmap_id: Some(starmap_id.to_string()),
-                node_id: None,
-                setting_key: None,
-            }),
+            object_id: entry.object_id.clone(),
+            scope: entry.scope,
+            title: entry.title.clone(),
+            body: entry.body.clone(),
+            target: Some(entry.target.clone()),
         });
         Ok(result.into())
     }
@@ -126,20 +123,17 @@ impl WriterCoreApi {
             .update_starmap_embed(starmap_id, instance_id, patch.into())
             .map_err(WriterError::from)?;
         let project_id = get_starmap_project_id(self, starmap_id);
+        let entry = crate::search::extractor::extract_starmap_embed_entry(
+            starmap_id, instance_id, project_id.as_deref(),
+            &result.label.clone().unwrap_or_default(),
+        );
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
-            object_id: format!("starmap_embed:{}:{}", starmap_id, instance_id),
-            scope: crate::search::SearchScope::StarmapNode,
-            title: result.label.clone().unwrap_or_default(),
-            body: result.label.clone().unwrap_or_default(),
-            target: Some(crate::search::SearchTarget {
-                project_id,
-                volume_id: None,
-                chapter_id: None,
-                starmap_id: Some(starmap_id.to_string()),
-                node_id: None,
-                setting_key: None,
-            }),
+            object_id: entry.object_id.clone(),
+            scope: entry.scope,
+            title: entry.title.clone(),
+            body: entry.body.clone(),
+            target: Some(entry.target.clone()),
         });
         Ok(result.into())
     }
@@ -526,6 +520,36 @@ impl WriterCoreApi {
                     });
                 }
             }
+            for embed in &graph.embeds {
+                let label = embed.label.as_deref().unwrap_or("");
+                let entry = crate::search::extractor::extract_starmap_embed_entry(
+                    starmap_id, &embed.instance_id, Some(project_id), label,
+                );
+                self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                    action: crate::search::SearchIndexAction::Upsert,
+                    object_id: entry.object_id.clone(),
+                    scope: entry.scope,
+                    title: entry.title.clone(),
+                    body: entry.body.clone(),
+                    target: Some(entry.target.clone()),
+                });
+            }
+        }
+        if let Ok(hyperlinks) = self.core().list_starmap_hyperlinks(starmap_id) {
+            for hl in &hyperlinks {
+                let hl_title = hl.label.as_deref().unwrap_or("");
+                let entry = crate::search::extractor::extract_starmap_hyperlink_entry(
+                    starmap_id, &hl.hyperlink_id, Some(project_id), hl_title, &hl.target_uri,
+                );
+                self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                    action: crate::search::SearchIndexAction::Upsert,
+                    object_id: entry.object_id.clone(),
+                    scope: entry.scope,
+                    title: entry.title.clone(),
+                    body: entry.body.clone(),
+                    target: Some(entry.target.clone()),
+                });
+            }
         }
         Ok(true)
     }
@@ -591,6 +615,36 @@ impl WriterCoreApi {
                         target: Some(entry.target.clone()),
                     });
                 }
+            }
+            for embed in &graph.embeds {
+                let label = embed.label.as_deref().unwrap_or("");
+                let entry = crate::search::extractor::extract_starmap_embed_entry(
+                    starmap_id, &embed.instance_id, None, label,
+                );
+                self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                    action: crate::search::SearchIndexAction::Upsert,
+                    object_id: entry.object_id.clone(),
+                    scope: entry.scope,
+                    title: entry.title.clone(),
+                    body: entry.body.clone(),
+                    target: Some(entry.target.clone()),
+                });
+            }
+        }
+        if let Ok(hyperlinks) = self.core().list_starmap_hyperlinks(starmap_id) {
+            for hl in &hyperlinks {
+                let hl_title = hl.label.as_deref().unwrap_or("");
+                let entry = crate::search::extractor::extract_starmap_hyperlink_entry(
+                    starmap_id, &hl.hyperlink_id, None, hl_title, &hl.target_uri,
+                );
+                self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                    action: crate::search::SearchIndexAction::Upsert,
+                    object_id: entry.object_id.clone(),
+                    scope: entry.scope,
+                    title: entry.title.clone(),
+                    body: entry.body.clone(),
+                    target: Some(entry.target.clone()),
+                });
             }
         }
         Ok(true)
@@ -858,20 +912,16 @@ impl WriterCoreApi {
             graph.embeds.iter().map(|e| e.instance_id.clone()).collect();
         for embed in &graph.embeds {
             let embed_label = embed.label.clone().unwrap_or_default();
+            let entry = crate::search::extractor::extract_starmap_embed_entry(
+                starmap_id, &embed.instance_id, project_id.as_deref(), &embed_label,
+            );
             self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
                 action: crate::search::SearchIndexAction::Upsert,
-                object_id: format!("starmap_embed:{}:{}", starmap_id, embed.instance_id),
-                scope: crate::search::SearchScope::StarmapNode,
-                title: embed_label.clone(),
-                body: embed_label,
-                target: Some(crate::search::SearchTarget {
-                    project_id: project_id.clone(),
-                    volume_id: None,
-                    chapter_id: None,
-                    starmap_id: Some(starmap_id.to_string()),
-                    node_id: None,
-                    setting_key: None,
-                }),
+                object_id: entry.object_id.clone(),
+                scope: entry.scope,
+                title: entry.title.clone(),
+                body: entry.body.clone(),
+                target: Some(entry.target.clone()),
             });
         }
         for old_id in &old_embed_ids - &new_embed_ids {

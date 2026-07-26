@@ -14,6 +14,13 @@ impl super::WriterCore {
         crate::starmap::list_starmaps_for_project(&self.workspace_path, project_id)
     }
 
+    pub fn list_starmaps_bound_to_project(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<crate::starmap::StarMapMeta>> {
+        crate::starmap::list_starmaps_bound_to_project(&self.workspace_path, project_id)
+    }
+
     pub fn get_starmap(&self, starmap_id: &str) -> Result<crate::starmap::StarMapMeta> {
         crate::starmap::get_starmap(&self.workspace_path, starmap_id)
     }
@@ -319,6 +326,15 @@ impl super::WriterCore {
         store.delete_link(link_id)?;
         store.flush()?;
         Ok(())
+    }
+
+    pub fn list_starmap_hyperlinks(
+        &self,
+        starmap_id: &str,
+    ) -> Result<Vec<crate::starmap::types::StarMapHyperlink>> {
+        let mut store = StarMapStore::new(&self.workspace_path, starmap_id);
+        store.load_full()?;
+        Ok(store.all_hyperlinks().cloned().collect())
     }
 
     pub fn find_starmap_references(
