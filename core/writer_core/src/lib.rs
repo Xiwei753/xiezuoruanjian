@@ -62,6 +62,7 @@ pub mod screen_policy;
 pub mod settings;
 pub mod settings_presentation;
 pub mod starmap;
+pub mod search;
 pub mod storage;
 pub mod sync;
 pub mod trash;

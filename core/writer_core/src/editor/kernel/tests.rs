@@ -1,6 +1,9 @@
 #[cfg(test)]
 mod tests {
     use super::super::*;
+    use super::super::types::{EditorCommand, DisplayPatch, EditorVisualIntent, EditorOperationKind, CoordinatedCursor};
+    use super::super::result::{EditorEditOutcome, EditorEditResult, EditorInputError};
+    use crate::editor::transaction::{AnimationMode, EditorTransactionCause, EditorChange};
 
     #[test]
     fn insert_command_produces_display_patch() {

@@ -17,6 +17,7 @@ pub mod layout;
 pub mod package_storage;
 pub mod render;
 pub mod semantic;
+pub mod store;
 pub mod types;
 
 use crate::error::Result;
