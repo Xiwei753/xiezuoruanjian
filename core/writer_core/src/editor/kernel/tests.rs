@@ -1,9 +1,9 @@
 #[cfg(test)]
 mod tests {
     use super::super::*;
-    use super::super::types::{EditorCommand, DisplayPatch, EditorVisualIntent, EditorOperationKind, CoordinatedCursor};
-    use super::super::result::{EditorEditOutcome, EditorEditResult, EditorInputError};
-    use crate::editor::transaction::{AnimationMode, EditorTransactionCause, EditorChange};
+    use super::super::types::{EditorCommand, DisplayPatch, EditorOperationKind};
+    use super::super::result::{EditorEditOutcome, EditorInputError};
+    use crate::editor::transaction::{AnimationMode, EditorTransactionCause};
     use crate::editor::strong_types::{EditorRevision, EditorSessionId, EditorSessionGeneration, Utf8ByteOffset, Utf8ByteRange};
 
     #[test]

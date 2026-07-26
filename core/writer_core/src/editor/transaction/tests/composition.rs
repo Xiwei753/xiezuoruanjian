@@ -3,7 +3,6 @@ use crate::editor::transaction::visual::*;
 use crate::editor::transaction::composition::*;
 use crate::editor::transaction::rebase::*;
 use crate::editor::transaction::engine::*;
-use crate::editor::transaction::platform::*;
 
 # [allow(deprecated)]
 

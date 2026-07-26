@@ -1,6 +1,5 @@
 use crate::error::Result;
 use crate::starmap::store::StarMapStore;
-use crate::starmap::types::*;
 use crate::starmap::graph::validation;
 
 impl super::WriterCore {
