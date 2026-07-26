@@ -198,7 +198,7 @@ impl LinuxTextEditorCoordinator {
             self.cancel_active_edit();
         }
         if let Some(session_id_raw) = self.persistent_session_ids.remove(target_id) {
-            self.registry.close_session(TextEditSessionId(session_id_raw));
+            self.registry.close_session(TextEditSessionId::new(session_id_raw));
         }
         self.targets.remove(target_id);
     }
@@ -222,11 +222,11 @@ impl LinuxTextEditorCoordinator {
 
         let session_id_raw = if is_persistent {
             if let Some(&existing_raw) = self.persistent_session_ids.get(target_id) {
-                if self.registry.session_exists(TextEditSessionId(existing_raw)) {
+                if self.registry.session_exists(TextEditSessionId::new(existing_raw)) {
                     existing_raw
                 } else {
                     self.persistent_session_ids.remove(target_id);
-                    self.registry.close_session(TextEditSessionId(existing_raw));
+                    self.registry.close_session(TextEditSessionId::new(existing_raw));
                     match self.registry.create_session(target_id.to_string(), text, cursor, true) {
                         Ok(id) => {
                             let raw = id.as_u64();
@@ -260,7 +260,7 @@ impl LinuxTextEditorCoordinator {
 
     pub fn take_active_session_kernel(&mut self) -> Option<writer_core::editor::EditorKernel> {
         let session_id_raw = self.active_session_id?;
-        let session = self.registry.get_session_mut(TextEditSessionId(session_id_raw))?;
+        let session = self.registry.get_session_mut(TextEditSessionId::new(session_id_raw))?;
         Some(std::mem::replace(&mut session.kernel, writer_core::editor::EditorKernel::new()))
     }
 
@@ -269,7 +269,7 @@ impl LinuxTextEditorCoordinator {
             Some(id) => id,
             None => return false,
         };
-        let session = match self.registry.get_session_mut(TextEditSessionId(session_id_raw)) {
+        let session = match self.registry.get_session_mut(TextEditSessionId::new(session_id_raw)) {
             Some(s) => s,
             None => return false,
         };
@@ -291,7 +291,7 @@ impl LinuxTextEditorCoordinator {
 
         if !is_persistent {
             self.persistent_session_ids.remove(&target_id);
-            self.registry.close_session(TextEditSessionId(session_id_raw));
+            self.registry.close_session(TextEditSessionId::new(session_id_raw));
             if let Some(target) = self.targets.get_mut(&target_id) {
                 if target.profile.is_secret() {
                     target.current_text.clear();
@@ -312,19 +312,19 @@ impl LinuxTextEditorCoordinator {
             None => return false,
         };
 
-        self.registry.close_session(TextEditSessionId(session_id_raw));
+        self.registry.close_session(TextEditSessionId::new(session_id_raw));
         self.persistent_session_ids.remove(&target_id);
         true
     }
 
     pub fn get_active_session(&self) -> Option<&writer_core::editor::text_edit_session::TextEditSession> {
         let session_id_raw = self.active_session_id?;
-        self.registry.get_session(TextEditSessionId(session_id_raw))
+        self.registry.get_session(TextEditSessionId::new(session_id_raw))
     }
 
     pub fn get_active_session_mut(&mut self) -> Option<&mut writer_core::editor::text_edit_session::TextEditSession> {
         let session_id_raw = self.active_session_id?;
-        self.registry.get_session_mut(TextEditSessionId(session_id_raw))
+        self.registry.get_session_mut(TextEditSessionId::new(session_id_raw))
     }
 
     pub fn active_target_id(&self) -> Option<&str> {

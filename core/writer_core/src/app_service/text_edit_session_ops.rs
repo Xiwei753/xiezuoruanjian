@@ -14,7 +14,7 @@ impl super::WriterAppService {
         F: FnOnce(&mut crate::editor::TextEditSession) -> R,
     {
         let mut registry = self.session_registry.lock().unwrap_or_else(|e| e.into_inner());
-        registry.get_session_mut(crate::editor::TextEditSessionId(session_id)).map(f)
+        registry.get_session_mut(crate::editor::TextEditSessionId::new(session_id)).map(f)
     }
 
     pub fn text_edit_session_create(
@@ -33,14 +33,14 @@ impl super::WriterAppService {
             )
         });
         match result {
-            Ok(id) => Some(id.0),
+            Ok(id) => Some(id.as_u64()),
             Err(_) => None,
         }
     }
 
     pub fn text_edit_session_close(&self, session_id: u64) -> u8 {
         self.with_registry(|r| {
-            if r.close_session(crate::editor::TextEditSessionId(session_id)) {
+            if r.close_session(crate::editor::TextEditSessionId::new(session_id)) {
                 1u8
             } else {
                 0u8
@@ -102,7 +102,7 @@ impl super::WriterAppService {
         self.with_session_in_registry(session_id, |s| {
             let current_text = s.kernel.text();
             let result = s.kernel.apply(EditorCommand::Delete {
-                byte_range: Utf8ByteRange::clamp(current_text, byte_start as usize, byte_end_exclusive as usize).unwrap_or(Utf8ByteRange::from_values(0, 0).unwrap()),
+                byte_range: Utf8ByteRange::clamp(current_text, byte_start as usize, byte_end_exclusive as usize).unwrap_or_else(|| Utf8ByteRange::try_new("", 0, 0).unwrap()),
                 deleted_text: String::new(),
                 cause: core_cause,
                 expected_revision: EditorRevision::new(expected_revision),
@@ -129,7 +129,7 @@ impl super::WriterAppService {
         self.with_session_in_registry(session_id, |s| {
             let current_text = s.kernel.text();
             let result = s.kernel.apply(EditorCommand::Replace {
-                byte_range: Utf8ByteRange::clamp(current_text, byte_start as usize, byte_end_exclusive as usize).unwrap_or(Utf8ByteRange::from_values(0, 0).unwrap()),
+                byte_range: Utf8ByteRange::clamp(current_text, byte_start as usize, byte_end_exclusive as usize).unwrap_or_else(|| Utf8ByteRange::try_new("", 0, 0).unwrap()),
                 replacement_text,
                 original_text,
                 cause: core_cause,
@@ -224,7 +224,7 @@ impl super::WriterAppService {
         self.with_session_in_registry(session_id, |s| {
             let current_text = s.kernel.text();
             let result = s.kernel.apply(EditorCommand::CommitText {
-                byte_range: Utf8ByteRange::clamp(current_text, byte_start as usize, byte_end_exclusive as usize).unwrap_or(Utf8ByteRange::from_values(0, 0).unwrap()),
+                byte_range: Utf8ByteRange::clamp(current_text, byte_start as usize, byte_end_exclusive as usize).unwrap_or_else(|| Utf8ByteRange::try_new("", 0, 0).unwrap()),
                 replacement_text,
                 resulting_selection_anchor: Utf8ByteOffset::clamp(current_text, resulting_selection_anchor as usize),
                 resulting_selection_head: Utf8ByteOffset::clamp(current_text, resulting_selection_head as usize),
@@ -256,8 +256,8 @@ impl super::WriterAppService {
         self.with_session_in_registry(session_id, |s| {
             let current_text = s.kernel.text();
             let result = s.kernel.apply(EditorCommand::DeleteSurrounding {
-                before_byte_range: Utf8ByteRange::clamp(current_text, before_byte_start as usize, before_byte_end_exclusive as usize).unwrap_or(Utf8ByteRange::from_values(0, 0).unwrap()),
-                after_byte_range: Utf8ByteRange::clamp(current_text, after_byte_start as usize, after_byte_end_exclusive as usize).unwrap_or(Utf8ByteRange::from_values(0, 0).unwrap()),
+                before_byte_range: Utf8ByteRange::clamp(current_text, before_byte_start as usize, before_byte_end_exclusive as usize).unwrap_or_else(|| Utf8ByteRange::try_new("", 0, 0).unwrap()),
+                after_byte_range: Utf8ByteRange::clamp(current_text, after_byte_start as usize, after_byte_end_exclusive as usize).unwrap_or_else(|| Utf8ByteRange::try_new("", 0, 0).unwrap()),
                 cause: core_cause,
                 expected_revision: EditorRevision::new(expected_revision),
             });
@@ -278,7 +278,7 @@ impl super::WriterAppService {
         self.with_session_in_registry(session_id, |s| {
             let current_text = s.kernel.text();
             let result = s.kernel.apply(EditorCommand::BeginComposition {
-                replace_range: Utf8ByteRange::clamp(current_text, replace_start as usize, replace_end_exclusive as usize).unwrap_or(Utf8ByteRange::from_values(0, 0).unwrap()),
+                replace_range: Utf8ByteRange::clamp(current_text, replace_start as usize, replace_end_exclusive as usize).unwrap_or_else(|| Utf8ByteRange::try_new("", 0, 0).unwrap()),
                 expected_revision: EditorRevision::new(expected_revision),
             });
             let mut dto: EditorEditResultDto = result.into();

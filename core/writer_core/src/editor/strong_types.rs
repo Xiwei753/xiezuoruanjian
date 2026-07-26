@@ -74,6 +74,12 @@ impl Utf8ByteOffset {
         Self(clamped)
     }
 
+    /// # Safety
+    ///
+    /// Caller must guarantee that `offset` is a valid UTF-8 char boundary
+    /// within the target text and does not exceed the text's byte length.
+    /// This constructor is `pub(super)` — restricted to the `editor` module
+    /// where values have already been validated by the editing kernel.
     pub(super) fn unchecked(offset: usize) -> Self {
         Self(offset)
     }

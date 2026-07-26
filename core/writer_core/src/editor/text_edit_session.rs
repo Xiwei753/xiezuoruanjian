@@ -14,10 +14,13 @@ use super::kernel::result::EditorInputError;
 /// 文字编辑会话 ID — 全局唯一，标识一次独立的文字事务环境。
 /// 内部类型 u64 对应平台端 Kotlin ULong，通过 FFI 边界传递时保持无符号语义。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TextEditSessionId(pub u64);
+pub struct TextEditSessionId(u64);
 
 impl TextEditSessionId {
-    /// 提取内部 u64 值，用于 FFI 边界传递。
+    pub fn new(id: u64) -> Self {
+        Self(id)
+    }
+
     pub fn as_u64(&self) -> u64 {
         self.0
     }
@@ -115,17 +118,17 @@ impl TextEditSessionRegistry {
 
     /// 获取会话的不可变引用。不存在时返回 None。
     pub fn get_session(&self, session_id: TextEditSessionId) -> Option<&TextEditSession> {
-        self.sessions.get(&session_id.0)
+        self.sessions.get(&session_id.as_u64())
     }
 
     /// 获取会话的可变引用。不存在时返回 None。
     pub fn get_session_mut(&mut self, session_id: TextEditSessionId) -> Option<&mut TextEditSession> {
-        self.sessions.get_mut(&session_id.0)
+        self.sessions.get_mut(&session_id.as_u64())
     }
 
     /// 关闭会话并移除。返回 true 表示存在并已移除，false 表示不存在。
     pub fn close_session(&mut self, session_id: TextEditSessionId) -> bool {
-        self.sessions.remove(&session_id.0).is_some()
+        self.sessions.remove(&session_id.as_u64()).is_some()
     }
 
     /// Reset a session's text and cursor, incrementing generation first.
@@ -158,7 +161,7 @@ impl TextEditSessionRegistry {
 
     /// 检查会话是否存在。
     pub fn session_exists(&self, session_id: TextEditSessionId) -> bool {
-        self.sessions.contains_key(&session_id.0)
+        self.sessions.contains_key(&session_id.as_u64())
     }
 
     /// 当前活跃会话数量。
@@ -183,16 +186,16 @@ mod tests {
         let id = registry
             .create_session("project-title:1".to_string(), "Hello".to_string(), 5, false)
             .unwrap();
-        assert!(registry.session_exists(TextEditSessionId(id.0)));
+        assert!(registry.session_exists(TextEditSessionId::new(id.as_u64())));
         assert_eq!(registry.active_session_count(), 1);
 
-        let session = registry.get_session(TextEditSessionId(id.0)).unwrap();
+        let session = registry.get_session(TextEditSessionId::new(id.as_u64())).unwrap();
         assert_eq!(session.kernel.text(), "Hello");
         assert_eq!(session.target_id, "project-title:1");
         assert!(!session.is_persistent);
 
-        assert!(registry.close_session(TextEditSessionId(id.0)));
-        assert!(!registry.session_exists(TextEditSessionId(id.0)));
+        assert!(registry.close_session(TextEditSessionId::new(id.as_u64())));
+        assert!(!registry.session_exists(TextEditSessionId::new(id.as_u64())));
         assert_eq!(registry.active_session_count(), 0);
     }
 
@@ -202,7 +205,7 @@ mod tests {
         let id = registry
             .create_session("chapter-body:1:1:1".to_string(), "正文".to_string(), 6, true)
             .unwrap();
-        let session = registry.get_session(TextEditSessionId(id.0)).unwrap();
+        let session = registry.get_session(TextEditSessionId::new(id.as_u64())).unwrap();
         assert!(session.is_persistent);
     }
 
@@ -212,7 +215,7 @@ mod tests {
         let id = registry
             .create_session("search:1".to_string(), "".to_string(), 0, false)
             .unwrap();
-        let session = registry.get_session(TextEditSessionId(id.0)).unwrap();
+        let session = registry.get_session(TextEditSessionId::new(id.as_u64())).unwrap();
         assert_eq!(session.kernel.text(), "");
     }
 
@@ -223,9 +226,9 @@ mod tests {
             .create_session("volume-title:1".to_string(), "Old".to_string(), 3, false)
             .unwrap();
         registry
-            .reset_session(TextEditSessionId(id.0), "New".to_string(), 3)
+            .reset_session(TextEditSessionId::new(id.as_u64()), "New".to_string(), 3)
             .unwrap();
-        let session = registry.get_session(TextEditSessionId(id.0)).unwrap();
+        let session = registry.get_session(TextEditSessionId::new(id.as_u64())).unwrap();
         assert_eq!(session.kernel.text(), "New");
         assert_eq!(session.generation, 1);
     }
@@ -233,7 +236,7 @@ mod tests {
     #[test]
     fn close_nonexistent_session() {
         let mut registry = TextEditSessionRegistry::new();
-        assert!(!registry.close_session(TextEditSessionId(999)));
+        assert!(!registry.close_session(TextEditSessionId::new(999)));
     }
 
     #[test]
@@ -245,10 +248,10 @@ mod tests {
         let id2 = registry
             .create_session("chapter-title:1".to_string(), "Beta".to_string(), 4, false)
             .unwrap();
-        assert_ne!(id1.0, id2.0);
+        assert_ne!(id1.as_u64(), id2.as_u64());
 
-        let s1 = registry.get_session(TextEditSessionId(id1.0)).unwrap();
-        let s2 = registry.get_session(TextEditSessionId(id2.0)).unwrap();
+        let s1 = registry.get_session(TextEditSessionId::new(id1.as_u64())).unwrap();
+        let s2 = registry.get_session(TextEditSessionId::new(id2.as_u64())).unwrap();
         assert_eq!(s1.kernel.text(), "Alpha");
         assert_eq!(s2.kernel.text(), "Beta");
     }
