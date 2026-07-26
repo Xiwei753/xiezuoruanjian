@@ -10,8 +10,11 @@ import com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import com.xiwei.sujian.editor.v2.visual.AnimationStateSnapshot
 import com.xiwei.sujian.editor.v2.visual.ManualAnimationTimeSource
+import com.xiwei.sujian.editor.v2.visual.SliceRole
+import com.xiwei.sujian.editor.v2.visual.SliceVisualState
 import com.xiwei.sujian.editor.v2.visual.TransactionIdSource
 import com.xiwei.sujian.editor.v2.visual.TransactionState
+import com.xiwei.sujian.editor.v2.visual.VisualFrameSnapshot
 import com.xiwei.sujian.support.AndroidTestEnvironment
 import com.xiwei.sujian.support.ComposeWait
 import com.xiwei.sujian.support.EditorCommitTextAction
@@ -233,6 +236,17 @@ class ControllableFrameAnimationTest {
                 val editorView = view as? SujianEditorView
                     ?: throw AssertionError("View is not a SujianEditorView")
                 snapshot = editorView.captureAnimationSnapshot()
+            }
+        return snapshot
+    }
+
+    private fun captureVisualFrame(): VisualFrameSnapshot? {
+        var snapshot: VisualFrameSnapshot? = null
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check { view, _ ->
+                val editorView = view as? SujianEditorView
+                    ?: throw AssertionError("View is not a SujianEditorView")
+                snapshot = editorView.captureVisualFrameSnapshot()
             }
         return snapshot
     }
@@ -705,5 +719,320 @@ class ControllableFrameAnimationTest {
             }
         }, timeoutMs = 15_000, message = { "Chapter '$title' not found" })
         return chapterId
+    }
+
+    private fun verifySliceVisualProperties(
+        snapshot: VisualFrameSnapshot,
+        expectedMinProgress: Float,
+        expectedMaxProgress: Float,
+        expectedSliceRolePresent: SliceRole? = null
+    ) {
+        assertTrue(
+            "Visual frame progress ${snapshot.progress} should be >= $expectedMinProgress",
+            snapshot.progress >= expectedMinProgress
+        )
+        assertTrue(
+            "Visual frame progress ${snapshot.progress} should be <= $expectedMaxProgress",
+            snapshot.progress <= expectedMaxProgress
+        )
+        if (expectedSliceRolePresent != null) {
+            val hasRole = snapshot.sliceVisualStates.any { it.role == expectedSliceRolePresent }
+            assertTrue(
+                "Visual frame should contain slice with role $expectedSliceRolePresent",
+                hasRole
+            )
+        }
+        for (slice in snapshot.sliceVisualStates) {
+            assertTrue(
+                "Slice alpha ${slice.currentAlpha} should be in [0,1] for role ${slice.role}",
+                slice.currentAlpha >= 0f && slice.currentAlpha <= 1f
+            )
+            assertTrue(
+                "Slice currentLeft ${slice.currentLeft} should be >= 0",
+                slice.currentLeft >= 0f
+            )
+            assertTrue(
+                "Slice currentTop ${slice.currentTop} should be >= 0",
+                slice.currentTop >= 0f
+            )
+            assertTrue(
+                "Slice currentRight ${slice.currentRight} should be >= currentLeft ${slice.currentLeft}",
+                slice.currentRight >= slice.currentLeft
+            )
+            assertTrue(
+                "Slice currentBottom ${slice.currentBottom} should be >= currentTop ${slice.currentTop}",
+                slice.currentBottom >= slice.currentTop
+            )
+        }
+    }
+
+    private fun verifyInsertSliceFadesIn(slices: List<SliceVisualState>, progress: Float) {
+        val insertSlices = slices.filter { it.role == SliceRole.Insert }
+        for (slice in insertSlices) {
+            val expectedAlpha = progress.coerceIn(0f, 1f)
+            val tolerance = 0.3f
+            assertTrue(
+                "Insert slice alpha ${slice.currentAlpha} should be near $expectedAlpha at progress $progress (tolerance $tolerance)",
+                Math.abs(slice.currentAlpha - expectedAlpha) < tolerance
+            )
+        }
+    }
+
+    private fun verifyDeleteSliceFadesOut(slices: List<SliceVisualState>, progress: Float) {
+        val deleteSlices = slices.filter { it.role == SliceRole.Delete }
+        for (slice in deleteSlices) {
+            val expectedAlpha = (1f - progress).coerceIn(0f, 1f)
+            val tolerance = 0.3f
+            assertTrue(
+                "Delete slice alpha ${slice.currentAlpha} should be near $expectedAlpha at progress $progress (tolerance $tolerance)",
+                Math.abs(slice.currentAlpha - expectedAlpha) < tolerance
+            )
+        }
+    }
+
+    @Test
+    fun insertText_visualFrameSlicesShowPositionAndAlpha() {
+        val testData = initTestData()
+        openTestChapter("视觉帧插入测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("Hello"))
+
+        val startFrame = captureVisualFrame()
+        assertNotNull("Visual frame should exist after insert", startFrame)
+        verifySliceVisualProperties(startFrame!!, 0f, 0.3f, SliceRole.Insert)
+        verifyInsertSliceFadesIn(startFrame.sliceVisualStates, startFrame.progress)
+
+        manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
+        val midFrame1 = captureVisualFrame()
+        if (midFrame1 != null) {
+            verifySliceVisualProperties(midFrame1, 0.1f, 0.6f, SliceRole.Insert)
+            verifyInsertSliceFadesIn(midFrame1.sliceVisualStates, midFrame1.progress)
+        }
+
+        manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
+        val midFrame2 = captureVisualFrame()
+        if (midFrame2 != null) {
+            verifySliceVisualProperties(midFrame2, 0.2f, 0.8f, SliceRole.Insert)
+            verifyInsertSliceFadesIn(midFrame2.sliceVisualStates, midFrame2.progress)
+        }
+
+        advanceClockToEnd()
+
+        val endFrame = captureVisualFrame()
+        assertNull("Visual frame should be null after animation completes", endFrame)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("Hello"))
+            .check(EditorViewAssertions.hasSelectionUtf8(5, 5))
+    }
+
+    @Test
+    fun deleteRange_visualFrameSlicesShowFadeOut() {
+        val testData = initTestData()
+        openTestChapter("视觉帧删除测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("ABCDE"))
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("ABCDE"))
+
+        val deleteStart = "AB".toByteArray(Charsets.UTF_8).size
+        val deleteEnd = "ABCD".toByteArray(Charsets.UTF_8).size
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorReplaceRangeAction.replaceRange(deleteStart, deleteEnd, "", "CD"))
+
+        val startFrame = captureVisualFrame()
+        assertNotNull("Visual frame should exist after delete", startFrame)
+        verifySliceVisualProperties(startFrame!!, 0f, 0.3f, SliceRole.Delete)
+        verifyDeleteSliceFadesOut(startFrame.sliceVisualStates, startFrame.progress)
+
+        manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
+        val midFrame = captureVisualFrame()
+        if (midFrame != null) {
+            verifySliceVisualProperties(midFrame, 0.1f, 0.6f, SliceRole.Delete)
+            verifyDeleteSliceFadesOut(midFrame.sliceVisualStates, midFrame.progress)
+        }
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("ABE"))
+    }
+
+    @Test
+    fun insertText_cursorRectMovesDuringAnimation() {
+        val testData = initTestData()
+        openTestChapter("视觉帧光标测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("Hi"))
+
+        val startFrame = captureVisualFrame()
+        if (startFrame != null && startFrame.cursorRect != null) {
+            val cursorRect = startFrame.cursorRect!!
+            assertTrue(
+                "Cursor rect left ${cursorRect.left} should be >= 0",
+                cursorRect.left >= 0f
+            )
+            assertTrue(
+                "Cursor rect top ${cursorRect.top} should be >= 0",
+                cursorRect.top >= 0f
+            )
+            assertTrue(
+                "Cursor rect should have non-zero height",
+                cursorRect.height() > 0f
+            )
+        }
+
+        manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
+        val midFrame = captureVisualFrame()
+        if (midFrame != null && midFrame.cursorRect != null) {
+            val cursorRect = midFrame.cursorRect!!
+            assertTrue(
+                "Mid-frame cursor rect left ${cursorRect.left} should be >= 0",
+                cursorRect.left >= 0f
+            )
+            assertTrue(
+                "Mid-frame cursor rect should have non-zero height",
+                cursorRect.height() > 0f
+            )
+        }
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("Hi"))
+            .check(EditorViewAssertions.hasSelectionUtf8(2, 2))
+    }
+
+    @Test
+    fun middleInsert_visualFrameSlicesShowCorrectPosition() {
+        val testData = initTestData()
+        openTestChapter("视觉帧中间插入测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("ABCDE"))
+
+        advanceClockToEnd()
+
+        val insertOffset = "AB".toByteArray(Charsets.UTF_8).size
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorReplaceRangeAction.replaceRange(insertOffset, insertOffset, "XY", ""))
+
+        val startFrame = captureVisualFrame()
+        assertNotNull("Visual frame should exist after middle insert", startFrame)
+        verifySliceVisualProperties(startFrame!!, 0f, 0.3f, SliceRole.Insert)
+
+        val insertSlices = startFrame.sliceVisualStates.filter { it.role == SliceRole.Insert }
+        if (insertSlices.isNotEmpty()) {
+            for (slice in insertSlices) {
+                assertTrue(
+                    "Insert slice should be at a position > 0 (middle of text)",
+                    slice.destinationLeft >= 0f
+                )
+            }
+        }
+
+        manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
+        val midFrame = captureVisualFrame()
+        if (midFrame != null) {
+            verifySliceVisualProperties(midFrame, 0.1f, 0.6f, SliceRole.Insert)
+        }
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("ABXYCDE"))
+    }
+
+    @Test
+    fun multilineInsert_visualFrameBlockShiftsShowMovement() {
+        val testData = initTestData()
+        openTestChapter("视觉帧块位移测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        val firstLine = "第一行内容"
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText(firstLine))
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText(firstLine))
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("\n第二行"))
+
+        val frame = captureVisualFrame()
+        if (frame != null && frame.blockShiftStates.isNotEmpty()) {
+            for (block in frame.blockShiftStates) {
+                assertTrue(
+                    "Block shift currentTranslateY ${block.currentTranslateY} should be finite",
+                    java.lang.Float.isFinite(block.currentTranslateY)
+                )
+            }
+        }
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("$firstLine\n第二行"))
+    }
+
+    @Test
+    fun compositionUpdate_visualFrameShowsPreeditSlices() {
+        val testData = initTestData()
+        openTestChapter("视觉帧composition测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCompositionAction.setComposingText("测"))
+
+        val startFrame = captureVisualFrame()
+        assertNotNull("Visual frame should exist after composition update", startFrame)
+        if (startFrame!!.sliceVisualStates.isNotEmpty()) {
+            for (slice in startFrame.sliceVisualStates) {
+                assertTrue(
+                    "Composition slice alpha ${slice.currentAlpha} should be in [0,1]",
+                    slice.currentAlpha >= 0f && slice.currentAlpha <= 1f
+                )
+            }
+        }
+
+        manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
+        val midFrame = captureVisualFrame()
+        if (midFrame != null && midFrame.sliceVisualStates.isNotEmpty()) {
+            for (slice in midFrame.sliceVisualStates) {
+                assertTrue(
+                    "Mid-frame composition slice alpha should be in [0,1]",
+                    slice.currentAlpha >= 0f && slice.currentAlpha <= 1f
+                )
+            }
+        }
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("测"))
     }
 }

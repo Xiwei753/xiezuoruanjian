@@ -65,6 +65,10 @@ class AndroidVisualRuntime(
         return animationEngine.captureStateSnapshot(currentTimeNanos() / 1_000_000)
     }
 
+    fun captureVisualFrameSnapshot(): com.xiwei.sujian.editor.v2.visual.VisualFrameSnapshot? {
+        return animationEngine.captureFrame(currentTimeNanos() / 1_000_000)
+    }
+
     fun setAnimationPolicy(policy: TextAnimationPolicy) {
         animationEngine.setAnimationPolicy(policy)
     }

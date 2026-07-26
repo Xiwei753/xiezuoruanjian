@@ -130,4 +130,31 @@ class AnimationTimeSourceInjectionTest {
         }
         assertEquals(listOf(16L, 32L, 48L, 64L, 80L), timestamps)
     }
+
+    @Test
+    fun pipelineWithManualTimeSource_visualFrameSnapshotIsNullWithoutActiveTransaction() {
+        val mirror = DisplayTextMirror()
+        val paint = TextPaint()
+        val manualTimeSource = ManualAnimationTimeSource()
+        val transactionIdSource = TransactionIdSource()
+        val pipeline = AndroidEditorPipeline.create(mirror, paint, manualTimeSource, transactionIdSource)
+
+        manualTimeSource.advanceByMs(100)
+        assertNull(pipeline.captureVisualFrameSnapshot())
+    }
+
+    @Test
+    fun pipelineWithManualTimeSource_stateAndVisualFrameSnapshotsConsistentWhenNoAnimation() {
+        val mirror = DisplayTextMirror()
+        val paint = TextPaint()
+        val manualTimeSource = ManualAnimationTimeSource()
+        val transactionIdSource = TransactionIdSource()
+        val pipeline = AndroidEditorPipeline.create(mirror, paint, manualTimeSource, transactionIdSource)
+
+        manualTimeSource.advanceByMs(100)
+        val stateSnapshot = pipeline.captureAnimationSnapshot()
+        val visualSnapshot = pipeline.captureVisualFrameSnapshot()
+        assertNull(stateSnapshot)
+        assertNull(visualSnapshot)
+    }
 }

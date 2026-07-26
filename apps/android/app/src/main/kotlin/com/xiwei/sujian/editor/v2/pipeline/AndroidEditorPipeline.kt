@@ -521,6 +521,8 @@ class AndroidEditorPipeline private constructor(
 
     fun captureAnimationSnapshot(): com.xiwei.sujian.editor.v2.visual.AnimationStateSnapshot? = visualRuntime.captureStateSnapshot()
 
+    fun captureVisualFrameSnapshot(): com.xiwei.sujian.editor.v2.visual.VisualFrameSnapshot? = visualRuntime.captureVisualFrameSnapshot()
+
     fun updateLayout(width: Float) {
         layoutRuntime.setWidth(width)
         layoutRuntime.requestLayout()

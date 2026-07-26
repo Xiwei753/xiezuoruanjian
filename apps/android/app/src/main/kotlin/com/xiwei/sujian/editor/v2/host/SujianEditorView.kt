@@ -282,6 +282,8 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun captureAnimationSnapshot(): com.xiwei.sujian.editor.v2.visual.AnimationStateSnapshot? = pipeline.captureAnimationSnapshot()
 
+    fun captureVisualFrameSnapshot(): com.xiwei.sujian.editor.v2.visual.VisualFrameSnapshot? = pipeline.captureVisualFrameSnapshot()
+
     override fun onFrame(frameTimeNanos: Long) {
         invalidate()
     }

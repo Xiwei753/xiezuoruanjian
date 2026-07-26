@@ -613,3 +613,82 @@ class DeterministicFrameProgressTest {
         assertEquals(TransactionState.Rendering, timeline.getState())
     }
 }
+
+class VisualFrameSnapshotDataTest {
+
+    @Test
+    fun visualFrameSnapshotContainsSliceVisualStates() {
+        val snapshot = VisualFrameSnapshot(
+            progress = 0.5f,
+            state = TransactionState.Rendering,
+            sliceVisualStates = listOf(
+                SliceVisualState(
+                    snapshotId = 1L,
+                    role = SliceRole.Insert,
+                    lineIndex = 0,
+                    currentLeft = 0f,
+                    currentTop = 0f,
+                    currentRight = 100f,
+                    currentBottom = 48f,
+                    currentAlpha = 0.5f,
+                    destinationLeft = 0f,
+                    destinationTop = 0f,
+                    destinationRight = 100f,
+                    destinationBottom = 48f
+                )
+            ),
+            cursorRect = android.graphics.RectF(50f, 0f, 51f, 48f),
+            blockShiftStates = emptyList()
+        )
+        assertEquals(0.5f, snapshot.progress, 0.01f)
+        assertEquals(TransactionState.Rendering, snapshot.state)
+        assertEquals(1, snapshot.sliceVisualStates.size)
+        assertEquals(SliceRole.Insert, snapshot.sliceVisualStates[0].role)
+        assertEquals(0.5f, snapshot.sliceVisualStates[0].currentAlpha, 0.01f)
+        assertNotNull(snapshot.cursorRect)
+    }
+
+    @Test
+    fun visualFrameSnapshotWithBlockShifts() {
+        val snapshot = VisualFrameSnapshot(
+            progress = 0.25f,
+            state = TransactionState.Rendering,
+            sliceVisualStates = emptyList(),
+            cursorRect = null,
+            blockShiftStates = listOf(
+                BlockShiftVisualState(
+                    startLineIndex = 2,
+                    endLineIndexExclusive = 4,
+                    startUtf8 = 10,
+                    endUtf8Exclusive = 30,
+                    currentTranslateY = -36f,
+                    targetTranslateY = 0f
+                )
+            )
+        )
+        assertEquals(1, snapshot.blockShiftStates.size)
+        assertEquals(-36f, snapshot.blockShiftStates[0].currentTranslateY, 0.01f)
+        assertEquals(0f, snapshot.blockShiftStates[0].targetTranslateY, 0.01f)
+    }
+
+    @Test
+    fun sliceVisualStatePositionAndAlphaInRange() {
+        val slice = SliceVisualState(
+            snapshotId = 1L,
+            role = SliceRole.Delete,
+            lineIndex = 0,
+            currentLeft = 10f,
+            currentTop = 0f,
+            currentRight = 50f,
+            currentBottom = 48f,
+            currentAlpha = 0.75f,
+            destinationLeft = 10f,
+            destinationTop = 0f,
+            destinationRight = 50f,
+            destinationBottom = 48f
+        )
+        assertTrue(slice.currentAlpha in 0f..1f)
+        assertTrue(slice.currentRight >= slice.currentLeft)
+        assertTrue(slice.currentBottom >= slice.currentTop)
+    }
+}
