@@ -1436,6 +1436,139 @@ class ControllableFrameAnimationTest {
             .check(EditorViewAssertions.hasDisplayText("重启测试"))
     }
 
+    @Test
+    fun lineEndInsert_animationStartsAndCompletes() {
+        val testData = initTestData()
+        openTestChapter("行末输入测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("AB"))
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("AB"))
+            .check(EditorViewAssertions.hasSelectionUtf8(2, 2))
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("CD"))
+
+        val startSnapshot = captureEditorSnapshot()
+        assertNotNull("Animation should be active after line-end insert", startSnapshot)
+        assertEquals("insert", startSnapshot!!.operationKind)
+        assertTrue("Start ownedResourceCount must be > 0", startSnapshot.ownedResourceCount > 0)
+
+        advanceToProgressAndVerify(0.2f, 0.6f, "ABCD")
+        advanceToProgressAndVerify(0.4f, 0.8f, "ABCD")
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("ABCD"))
+            .check(EditorViewAssertions.hasSelectionUtf8(4, 4))
+    }
+
+    @Test
+    fun lineEndInsert_intermediateFramesShowProgressAndPreserveText() {
+        val testData = initTestData()
+        openTestChapter("行末插入中间帧测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("X"))
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("X"))
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("Y"))
+
+        val startFrame = captureVisualFrame()
+        assertNotNull("Visual frame should exist after line-end insert", startFrame)
+        verifySliceVisualProperties(startFrame!!, 0f, 0.3f, SliceRole.Insert)
+
+        manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
+        val midFrame = captureVisualFrame()
+        assertNotNull("Mid-frame visual snapshot must exist during line-end insert animation", midFrame)
+        verifySliceVisualProperties(midFrame!!, 0.1f, 0.6f, SliceRole.Insert)
+
+        advanceClockToEnd()
+
+        val endFrame = captureVisualFrame()
+        assertNull("Visual frame should be null after line-end animation completes", endFrame)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("XY"))
+            .check(EditorViewAssertions.hasSelectionUtf8(2, 2))
+    }
+
+    @Test
+    fun previousTransactionNotFinished_continueInput_rebasesCorrectly() {
+        val testData = initTestData()
+        openTestChapter("未完成事务继续输入测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("A"))
+
+        val snapshot1 = captureEditorSnapshot()
+        assertNotNull("First insert must start an animation", snapshot1)
+        val firstTransactionId = snapshot1!!.transactionId
+        assertTrue("First transaction must own resources", snapshot1.ownedResourceCount > 0)
+        assertEquals(TransactionState.Rendering, snapshot1.transactionState)
+
+        manualTimeSource.advanceByMs(4)
+        dispatchManualFrame()
+
+        val midSnapshot1 = captureEditorSnapshot()
+        assertNotNull("Animation must still be active before second insert", midSnapshot1)
+        assertTrue(
+            "First animation progress must be < 1.0 before second insert: ${midSnapshot1!!.progress}",
+            midSnapshot1.progress < 1.0f
+        )
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("B"))
+
+        val snapshot2 = captureEditorSnapshot()
+        assertNotNull("Second insert must start a new animation (rebase)", snapshot2)
+        val secondTransactionId = snapshot2!!.transactionId
+        assertTrue(
+            "Rebased transaction ID must differ from first: second=$secondTransactionId vs first=$firstTransactionId",
+            secondTransactionId != firstTransactionId
+        )
+        assertEquals("insert", snapshot2.operationKind)
+        assertTrue("Rebased transaction must own resources", snapshot2.ownedResourceCount > 0)
+        assertTrue(
+            "Rebased transaction state must be Rendering/Prepared/Pending, was ${snapshot2.transactionState}",
+            snapshot2.transactionState == TransactionState.Rendering
+                    || snapshot2.transactionState == TransactionState.Prepared
+                    || snapshot2.transactionState == TransactionState.Pending
+        )
+
+        manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("AB"))
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("AB"))
+            .check(EditorViewAssertions.hasSelectionUtf8(2, 2))
+
+        val endSnapshot = captureEditorSnapshot()
+        assertNull("No animation should be active after rebase completes", endSnapshot)
+    }
+
     private fun navigateToChapterAfterRestart(testData: AndroidTestEnvironment.TestProjectData, chapterId: String) {
         navigateToTestVolume(testData)
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.chapter(testData.volumeId, chapterId), timeoutMs = 15_000)

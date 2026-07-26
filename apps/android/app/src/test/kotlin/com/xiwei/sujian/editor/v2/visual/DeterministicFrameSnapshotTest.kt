@@ -695,4 +695,160 @@ class DeterministicFrameSnapshotTest {
             }
         }
     }
+
+    @Test
+    fun animatedSliceDestinationRectWithinViewportBounds() {
+        val planner = AndroidVisualPlanner()
+        val oldRev = makeLayoutRevision(2, "Hello world")
+        val newRev = makeLayoutRevision(2, "Hello beautiful world")
+        val visualIntent = makeInsertVisualIntent(
+            oldRanges = listOf(Pair(6, 11)),
+            newRanges = listOf(Pair(6, 16))
+        )
+
+        val oldSnapshot = makeSnapshot(1L, 0, 6, 11)
+        val newSnapshot = makeSnapshot(2L, 0, 6, 16)
+        val transaction = planner.prepare(
+            visualIntent = visualIntent,
+            oldRevision = oldRev,
+            newRevision = newRev,
+            preCapturedOldSnapshots = mapOf(0 to oldSnapshot),
+            preCapturedNewSnapshots = mapOf(0 to newSnapshot),
+            transactionKey = 1L,
+            ownedSnapshotIds = setOf(1L, 2L)
+        )
+
+        for (slice in transaction.animatedSlices) {
+            val dest = slice.destinationRect
+            assertTrue(
+                "Slice destinationRect left ${dest.left} should be >= 0 for role ${slice.role}",
+                dest.left >= 0f
+            )
+            assertTrue(
+                "Slice destinationRect top ${dest.top} should be >= 0 for role ${slice.role}",
+                dest.top >= 0f
+            )
+            assertTrue(
+                "Slice destinationRect right ${dest.right} should be <= editor width $EDITOR_WIDTH for role ${slice.role}",
+                dest.right <= EDITOR_WIDTH.toFloat()
+            )
+            assertTrue(
+                "Slice destinationRect bottom ${dest.bottom} should be <= editor height $EDITOR_HEIGHT for role ${slice.role}",
+                dest.bottom <= EDITOR_HEIGHT.toFloat()
+            )
+        }
+
+        for (patch in transaction.staticPatches) {
+            assertTrue(
+                "Static patch destinationRect left should be >= 0",
+                patch.destinationRect.left >= 0f
+            )
+            assertTrue(
+                "Static patch destinationRect top should be >= 0",
+                patch.destinationRect.top >= 0f
+            )
+            assertTrue(
+                "Static patch destinationRect right should be <= editor width",
+                patch.destinationRect.right <= EDITOR_WIDTH.toFloat()
+            )
+            assertTrue(
+                "Static patch destinationRect bottom should be <= editor height",
+                patch.destinationRect.bottom <= EDITOR_HEIGHT.toFloat()
+            )
+        }
+    }
+
+    @Test
+    fun deleteSliceDestinationRectWithinViewportBounds() {
+        val planner = AndroidVisualPlanner()
+        val oldRev = makeLayoutRevision(2, "Hello beautiful world")
+        val newRev = makeLayoutRevision(2, "Hello world")
+        val visualIntent = makeDeleteVisualIntent(
+            oldRanges = listOf(Pair(6, 16)),
+            newRanges = listOf(Pair(6, 11))
+        )
+
+        val oldSnapshot = makeSnapshot(1L, 0, 6, 16)
+        val newSnapshot = makeSnapshot(2L, 0, 6, 11)
+        val transaction = planner.prepare(
+            visualIntent = visualIntent,
+            oldRevision = oldRev,
+            newRevision = newRev,
+            preCapturedOldSnapshots = mapOf(0 to oldSnapshot),
+            preCapturedNewSnapshots = mapOf(0 to newSnapshot),
+            transactionKey = 1L,
+            ownedSnapshotIds = setOf(1L, 2L)
+        )
+
+        for (slice in transaction.animatedSlices) {
+            val dest = slice.destinationRect
+            assertTrue(
+                "Delete slice destinationRect left ${dest.left} should be >= 0 for role ${slice.role}",
+                dest.left >= 0f
+            )
+            assertTrue(
+                "Delete slice destinationRect top ${dest.top} should be >= 0 for role ${slice.role}",
+                dest.top >= 0f
+            )
+            assertTrue(
+                "Delete slice destinationRect right ${dest.right} should be <= editor width $EDITOR_WIDTH for role ${slice.role}",
+                dest.right <= EDITOR_WIDTH.toFloat()
+            )
+            assertTrue(
+                "Delete slice destinationRect bottom ${dest.bottom} should be <= editor height $EDITOR_HEIGHT for role ${slice.role}",
+                dest.bottom <= EDITOR_HEIGHT.toFloat()
+            )
+        }
+    }
+
+    @Test
+    fun moveSliceFromDestinationRectWithinViewportBounds() {
+        val planner = AndroidVisualPlanner()
+        val oldRev = makeLayoutRevision(2, "Hello world")
+        val newRev = makeLayoutRevision(2, "Hello world")
+        val visualIntent = makeReplaceVisualIntent(
+            oldRanges = listOf(Pair(6, 11)),
+            newRanges = listOf(Pair(6, 11))
+        )
+
+        val oldSnapshot = makeSnapshot(1L, 0, 6, 11)
+        val newSnapshot = makeSnapshot(2L, 0, 6, 11)
+        val transaction = planner.prepare(
+            visualIntent = visualIntent,
+            oldRevision = oldRev,
+            newRevision = newRev,
+            preCapturedOldSnapshots = mapOf(0 to oldSnapshot),
+            preCapturedNewSnapshots = mapOf(0 to newSnapshot),
+            transactionKey = 1L,
+            ownedSnapshotIds = setOf(1L, 2L)
+        )
+
+        for (slice in transaction.animatedSlices) {
+            val dest = slice.destinationRect
+            assertTrue(
+                "Slice destinationRect should be within viewport for role ${slice.role}",
+                dest.left >= 0f && dest.top >= 0f &&
+                dest.right <= EDITOR_WIDTH.toFloat() && dest.bottom <= EDITOR_HEIGHT.toFloat()
+            )
+            if (slice.fromDestinationRect != null) {
+                val from = slice.fromDestinationRect!!
+                assertTrue(
+                    "Slice fromDestinationRect left ${from.left} should be >= 0 for Move role",
+                    from.left >= 0f
+                )
+                assertTrue(
+                    "Slice fromDestinationRect top ${from.top} should be >= 0 for Move role",
+                    from.top >= 0f
+                )
+                assertTrue(
+                    "Slice fromDestinationRect right ${from.right} should be <= editor width for Move role",
+                    from.right <= EDITOR_WIDTH.toFloat()
+                )
+                assertTrue(
+                    "Slice fromDestinationRect bottom ${from.bottom} should be <= editor height for Move role",
+                    from.bottom <= EDITOR_HEIGHT.toFloat()
+                )
+            }
+        }
+    }
 }

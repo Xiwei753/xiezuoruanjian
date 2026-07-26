@@ -20,7 +20,7 @@ class InsertDeletePlanner {
         preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         createSnapshotFromRevision: (AndroidLayoutRevision, Int, Boolean) -> AndroidLineSnapshot?,
-        planClusterReplaceAnimation: () -> Unit
+        offsetMapper: (Int) -> Int?
     ) {
         val isInsert = visualIntent.isInsert()
         val isDelete = visualIntent.isDelete() || visualIntent.isCompositionCancel()
@@ -29,7 +29,13 @@ class InsertDeletePlanner {
             || visualIntent.isCompositionUpdate()
 
         if (isReplace) {
-            planClusterReplaceAnimation()
+            planClusterReplaceAnimation(
+                visualIntent, oldRev, newRev,
+                affectedOldLineIndices, affectedNewLineIndices,
+                animatedSlices, staticPatches,
+                preCapturedOldSnapshots, preCapturedNewSnapshots,
+                createSnapshotFromRevision, offsetMapper
+            )
             return
         }
 
@@ -89,8 +95,7 @@ class InsertDeletePlanner {
         preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         createSnapshotFromRevision: (AndroidLayoutRevision, Int, Boolean) -> AndroidLineSnapshot?,
-        planRunReplaceAnimation: () -> Unit,
-        groupClustersIntoRuns: (List<LineClusterSnapshot>, List<Pair<Int, Int>>) -> List<LineClusterSnapshot>
+        offsetMapper: (Int) -> Int?
     ) {
         val isInsert = visualIntent.isInsert()
         val isDelete = visualIntent.isDelete() || visualIntent.isCompositionCancel()
@@ -99,7 +104,13 @@ class InsertDeletePlanner {
             || visualIntent.isCompositionUpdate()
 
         if (isReplace) {
-            planRunReplaceAnimation()
+            planRunReplaceAnimation(
+                visualIntent, oldRev, newRev,
+                affectedOldLineIndices, affectedNewLineIndices,
+                animatedSlices, staticPatches,
+                preCapturedOldSnapshots, preCapturedNewSnapshots,
+                createSnapshotFromRevision, offsetMapper
+            )
             return
         }
 
@@ -204,5 +215,318 @@ class InsertDeletePlanner {
             }
         }
         return runs
+    }
+
+    fun planClusterReplaceAnimation(
+        visualIntent: VisualIntent,
+        oldRev: AndroidLayoutRevision,
+        newRev: AndroidLayoutRevision,
+        affectedOldLineIndices: Set<Int>,
+        affectedNewLineIndices: Set<Int>,
+        animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
+        staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>,
+        preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
+        preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
+        createSnapshotFromRevision: (AndroidLayoutRevision, Int, Boolean) -> AndroidLineSnapshot?,
+        offsetMapper: (Int) -> Int?
+    ) {
+        val allOldAffectedClusters = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
+        val allNewAffectedClusters = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
+
+        for (lineIndex in affectedOldLineIndices) {
+            val oldLineRange = oldRev.lineRanges.getOrNull(lineIndex) ?: continue
+            val oldSnapshot = createSnapshotFromRevision(oldRev, lineIndex, false) ?: continue
+            if (oldSnapshot.clusters.isNotEmpty()) {
+                for (cluster in oldSnapshot.clusters) {
+                    val inOldRange = visualIntent.oldAffectedByteRanges.any { (start, end) ->
+                        cluster.documentByteStart < end && cluster.documentByteEndExclusive > start
+                    }
+                    if (inOldRange) {
+                        allOldAffectedClusters.add(Pair(cluster, oldSnapshot))
+                    }
+                }
+            } else {
+                animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                    role = SliceRole.Delete,
+                    snapshot = oldSnapshot,
+                    sourceRect = oldSnapshot.sourceRect,
+                    destinationRect = android.graphics.RectF(
+                        oldLineRange.left, oldLineRange.top,
+                        oldLineRange.right, oldLineRange.bottom
+                    ),
+                    startAlpha = 1f,
+                    endAlpha = 0f
+                ))
+            }
+        }
+
+        for (lineIndex in affectedNewLineIndices) {
+            val newLineRange = newRev.lineRanges.getOrNull(lineIndex) ?: continue
+            val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, true) ?: continue
+            if (newSnapshot.clusters.isNotEmpty()) {
+                for (cluster in newSnapshot.clusters) {
+                    val inNewRange = visualIntent.newAffectedByteRanges.any { (start, end) ->
+                        cluster.documentByteStart < end && cluster.documentByteEndExclusive > start
+                    }
+                    if (inNewRange) {
+                        allNewAffectedClusters.add(Pair(cluster, newSnapshot))
+                    }
+                }
+            } else {
+                animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                    role = SliceRole.Insert,
+                    snapshot = newSnapshot,
+                    sourceRect = newSnapshot.sourceRect,
+                    destinationRect = android.graphics.RectF(
+                        newLineRange.left, newLineRange.top,
+                        newLineRange.right, newLineRange.bottom
+                    ),
+                    startAlpha = 0f,
+                    endAlpha = 1f
+                ))
+            }
+        }
+
+        val newMatched = mutableSetOf<Int>()
+        var lastMatchedNewStart = 0
+        for ((oldCluster, oldSnapshot) in allOldAffectedClusters) {
+            val mappedStart = offsetMapper(oldCluster.documentByteStart)
+            val mappedEnd = offsetMapper(oldCluster.documentByteEndExclusive)
+            var matchIdx: Int? = null
+            if (mappedStart != null) {
+                matchIdx = allNewAffectedClusters.indices.firstOrNull { i ->
+                    i !in newMatched && allNewAffectedClusters[i].first.documentByteStart == mappedStart &&
+                        (mappedEnd == null || allNewAffectedClusters[i].first.documentByteEndExclusive == mappedEnd) &&
+                        allNewAffectedClusters[i].first.documentByteStart >= lastMatchedNewStart
+                }
+            }
+            if (matchIdx == null) {
+                val referenceStart = maxOf(mappedStart ?: lastMatchedNewStart, lastMatchedNewStart)
+                val candidates = allNewAffectedClusters.indices.filter { i ->
+                    val candidate = allNewAffectedClusters[i].first
+                    i !in newMatched &&
+                        candidate.shapingFingerprint == oldCluster.shapingFingerprint &&
+                        candidate.documentByteEndExclusive - candidate.documentByteStart ==
+                        oldCluster.documentByteEndExclusive - oldCluster.documentByteStart &&
+                        candidate.documentByteStart >= referenceStart
+                }
+                val target = mappedStart ?: lastMatchedNewStart
+                matchIdx = candidates.minByOrNull { i ->
+                    kotlin.math.abs(allNewAffectedClusters[i].first.documentByteStart - target)
+                }
+            }
+            if (matchIdx != null) {
+                newMatched.add(matchIdx)
+                lastMatchedNewStart = allNewAffectedClusters[matchIdx].first.documentByteStart
+                val (newCluster, newSnapshot) = allNewAffectedClusters[matchIdx]
+                val positionChanged = oldCluster.visualRectInDocument != newCluster.visualRectInDocument
+                val fingerprintChanged = oldCluster.shapingFingerprint != newCluster.shapingFingerprint
+                val identityConfident = oldCluster.shapingIdentityConfident && newCluster.shapingIdentityConfident
+                if (!positionChanged && identityConfident && !fingerprintChanged) {
+                    continue
+                } else if (identityConfident && !fingerprintChanged && positionChanged) {
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.Move,
+                        snapshot = newSnapshot,
+                        sourceRect = newCluster.sourceRectInLineImage,
+                        destinationRect = newCluster.visualRectInDocument,
+                        startAlpha = 1f,
+                        endAlpha = 1f,
+                        fromDestinationRect = oldCluster.visualRectInDocument,
+                        clusterByteStart = newCluster.documentByteStart,
+                        clusterByteEndExclusive = newCluster.documentByteEndExclusive
+                    ))
+                } else {
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.CrossfadeOld,
+                        snapshot = oldSnapshot,
+                        sourceRect = oldCluster.sourceRectInLineImage,
+                        destinationRect = oldCluster.visualRectInDocument,
+                        startAlpha = 1f,
+                        endAlpha = 0f,
+                        clusterByteStart = oldCluster.documentByteStart,
+                        clusterByteEndExclusive = oldCluster.documentByteEndExclusive
+                    ))
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.CrossfadeNew,
+                        snapshot = newSnapshot,
+                        sourceRect = newCluster.sourceRectInLineImage,
+                        destinationRect = newCluster.visualRectInDocument,
+                        startAlpha = 0f,
+                        endAlpha = 1f,
+                        clusterByteStart = newCluster.documentByteStart,
+                        clusterByteEndExclusive = newCluster.documentByteEndExclusive
+                    ))
+                }
+            } else {
+                animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                    role = SliceRole.Delete,
+                    snapshot = oldSnapshot,
+                    sourceRect = oldCluster.sourceRectInLineImage,
+                    destinationRect = oldCluster.visualRectInDocument,
+                    startAlpha = 1f,
+                    endAlpha = 0f,
+                    clusterByteStart = oldCluster.documentByteStart,
+                    clusterByteEndExclusive = oldCluster.documentByteEndExclusive
+                ))
+            }
+        }
+
+        for ((i, pair) in allNewAffectedClusters.withIndex()) {
+            if (i in newMatched) continue
+            val (newCluster, newSnapshot) = pair
+            animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                role = SliceRole.Insert,
+                snapshot = newSnapshot,
+                sourceRect = newCluster.sourceRectInLineImage,
+                destinationRect = newCluster.visualRectInDocument,
+                startAlpha = 0f,
+                endAlpha = 1f,
+                clusterByteStart = newCluster.documentByteStart,
+                clusterByteEndExclusive = newCluster.documentByteEndExclusive
+            ))
+        }
+    }
+
+    fun planRunReplaceAnimation(
+        visualIntent: VisualIntent,
+        oldRev: AndroidLayoutRevision,
+        newRev: AndroidLayoutRevision,
+        affectedOldLineIndices: Set<Int>,
+        affectedNewLineIndices: Set<Int>,
+        animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
+        staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>,
+        preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
+        preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
+        createSnapshotFromRevision: (AndroidLayoutRevision, Int, Boolean) -> AndroidLineSnapshot?,
+        offsetMapper: (Int) -> Int?
+    ) {
+        val allOldAffectedClusters = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
+        val allNewAffectedClusters = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
+
+        for (lineIndex in affectedOldLineIndices) {
+            val oldLineRange = oldRev.lineRanges.getOrNull(lineIndex) ?: continue
+            val oldSnapshot = createSnapshotFromRevision(oldRev, lineIndex, false) ?: continue
+            if (visualIntent.oldAffectedByteRanges.isNotEmpty()) {
+                val oldRunClusters = groupClustersIntoRuns(oldSnapshot.clusters, visualIntent.oldAffectedByteRanges)
+                for (cluster in oldRunClusters) {
+                    allOldAffectedClusters.add(Pair(cluster, oldSnapshot))
+                }
+            }
+        }
+
+        for (lineIndex in affectedNewLineIndices) {
+            val newLineRange = newRev.lineRanges.getOrNull(lineIndex) ?: continue
+            val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, true) ?: continue
+            if (visualIntent.newAffectedByteRanges.isNotEmpty()) {
+                val newRunClusters = groupClustersIntoRuns(newSnapshot.clusters, visualIntent.newAffectedByteRanges)
+                for (cluster in newRunClusters) {
+                    allNewAffectedClusters.add(Pair(cluster, newSnapshot))
+                }
+            }
+        }
+
+        val newMatched = mutableSetOf<Int>()
+        var lastMatchedNewStart = 0
+        for ((oldCluster, oldSnapshot) in allOldAffectedClusters) {
+            val mappedStart = offsetMapper(oldCluster.documentByteStart)
+            val mappedEnd = offsetMapper(oldCluster.documentByteEndExclusive)
+            var matchIdx: Int? = null
+            if (mappedStart != null) {
+                matchIdx = allNewAffectedClusters.indices.firstOrNull { i ->
+                    i !in newMatched && allNewAffectedClusters[i].first.documentByteStart == mappedStart &&
+                        (mappedEnd == null || allNewAffectedClusters[i].first.documentByteEndExclusive == mappedEnd) &&
+                        allNewAffectedClusters[i].first.documentByteStart >= lastMatchedNewStart
+                }
+            }
+            if (matchIdx == null) {
+                val referenceStart = maxOf(mappedStart ?: lastMatchedNewStart, lastMatchedNewStart)
+                val candidates = allNewAffectedClusters.indices.filter { i ->
+                    val candidate = allNewAffectedClusters[i].first
+                    i !in newMatched &&
+                        candidate.shapingFingerprint == oldCluster.shapingFingerprint &&
+                        candidate.documentByteEndExclusive - candidate.documentByteStart ==
+                        oldCluster.documentByteEndExclusive - oldCluster.documentByteStart &&
+                        candidate.documentByteStart >= referenceStart &&
+                        visualIntent.newAffectedByteRanges.none { (start, end) ->
+                            candidate.documentByteStart < end && candidate.documentByteEndExclusive > start
+                        }
+                }
+                val target = mappedStart ?: lastMatchedNewStart
+                matchIdx = candidates.minByOrNull { i ->
+                    kotlin.math.abs(allNewAffectedClusters[i].first.documentByteStart - target)
+                }
+            }
+            if (matchIdx != null) {
+                newMatched.add(matchIdx)
+                lastMatchedNewStart = allNewAffectedClusters[matchIdx].first.documentByteStart
+                val (newCluster, newSnapshot) = allNewAffectedClusters[matchIdx]
+                val positionChanged = oldCluster.visualRectInDocument != newCluster.visualRectInDocument
+                val fingerprintChanged = oldCluster.shapingFingerprint != newCluster.shapingFingerprint
+                val identityConfident = oldCluster.shapingIdentityConfident && newCluster.shapingIdentityConfident
+                if (!positionChanged && identityConfident && !fingerprintChanged) {
+                    continue
+                } else if (identityConfident && !fingerprintChanged && positionChanged) {
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.Move,
+                        snapshot = newSnapshot,
+                        sourceRect = newCluster.sourceRectInLineImage,
+                        destinationRect = newCluster.visualRectInDocument,
+                        startAlpha = 1f,
+                        endAlpha = 1f,
+                        fromDestinationRect = oldCluster.visualRectInDocument,
+                        clusterByteStart = newCluster.documentByteStart,
+                        clusterByteEndExclusive = newCluster.documentByteEndExclusive
+                    ))
+                } else {
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.CrossfadeOld,
+                        snapshot = oldSnapshot,
+                        sourceRect = oldCluster.sourceRectInLineImage,
+                        destinationRect = oldCluster.visualRectInDocument,
+                        startAlpha = 1f,
+                        endAlpha = 0f,
+                        clusterByteStart = oldCluster.documentByteStart,
+                        clusterByteEndExclusive = oldCluster.documentByteEndExclusive
+                    ))
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.CrossfadeNew,
+                        snapshot = newSnapshot,
+                        sourceRect = newCluster.sourceRectInLineImage,
+                        destinationRect = newCluster.visualRectInDocument,
+                        startAlpha = 0f,
+                        endAlpha = 1f,
+                        clusterByteStart = newCluster.documentByteStart,
+                        clusterByteEndExclusive = newCluster.documentByteEndExclusive
+                    ))
+                }
+            } else {
+                animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                    role = SliceRole.Delete,
+                    snapshot = oldSnapshot,
+                    sourceRect = oldCluster.sourceRectInLineImage,
+                    destinationRect = oldCluster.visualRectInDocument,
+                    startAlpha = 1f,
+                    endAlpha = 0f,
+                    clusterByteStart = oldCluster.documentByteStart,
+                    clusterByteEndExclusive = oldCluster.documentByteEndExclusive
+                ))
+            }
+        }
+
+        for ((i, pair) in allNewAffectedClusters.withIndex()) {
+            if (i in newMatched) continue
+            val (newCluster, newSnapshot) = pair
+            animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                role = SliceRole.Insert,
+                snapshot = newSnapshot,
+                sourceRect = newCluster.sourceRectInLineImage,
+                destinationRect = newCluster.visualRectInDocument,
+                startAlpha = 0f,
+                endAlpha = 1f,
+                clusterByteStart = newCluster.documentByteStart,
+                clusterByteEndExclusive = newCluster.documentByteEndExclusive
+            ))
+        }
     }
 }
