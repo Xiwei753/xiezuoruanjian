@@ -95,7 +95,7 @@ class ChapterLifecycleTest {
         val chapterId = waitForChapterByTitle("打开测试章节", testData)
         composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterId)).performClick()
 
-        waitForEditorBoundToChapter(testData.projectId, testData.volumeId, chapterId, "打开测试章节")
+        waitForEditorBoundToChapter(testData.projectId, testData.volumeId, chapterId, "打开测试章节", expectedContent = "")
     }
 
     @Test
@@ -242,7 +242,8 @@ class ChapterLifecycleTest {
         projectId: String,
         volumeId: String,
         chapterId: String,
-        expectedTitle: String
+        expectedTitle: String,
+        expectedContent: String? = null
     ) {
         val expectedTargetId = "chapter-body:$projectId:$volumeId:$chapterId"
         var lastState = "editor not ready"
@@ -268,6 +269,11 @@ class ChapterLifecycleTest {
         }, timeoutMs = 10_000, message = { "activeTargetId should be $expectedTargetId but was $lastTargetId for chapter $chapterId" })
 
         composeTestRule.onNodeWithText(expectedTitle).assertIsDisplayed()
+
+        if (expectedContent != null) {
+            Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+                .check(EditorViewAssertions.hasDisplayText(expectedContent))
+        }
     }
 
     private fun waitForChapterByTitle(title: String, testData: AndroidTestEnvironment.TestProjectData): String {
