@@ -234,3 +234,52 @@ impl WriterAppService {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn editor_kernel_load_text_rejects_invalid_offset() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let svc = WriterAppService::new(dir.path().to_string_lossy().to_string());
+        let result = svc.editor_kernel_load_text("你好".to_string(), 4);
+        assert_eq!(result.outcome, crate::api::EditorEditOutcomeDto::InvalidOffset);
+    }
+
+    #[test]
+    fn editor_kernel_load_text_accepts_valid_offset() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let svc = WriterAppService::new(dir.path().to_string_lossy().to_string());
+        let result = svc.editor_kernel_load_text("你好".to_string(), 3);
+        assert_eq!(result.outcome, crate::api::EditorEditOutcomeDto::Applied);
+    }
+
+    #[test]
+    fn text_edit_session_load_text_rejects_invalid_offset() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let svc = WriterAppService::new(dir.path().to_string_lossy().to_string());
+        let session_id = svc.text_edit_session_create(
+            "test".to_string(),
+            String::new(),
+            0,
+            0,
+        ).unwrap();
+        let result = svc.text_edit_session_load_text(session_id, "你好".to_string(), 4);
+        assert_eq!(result.outcome, crate::api::EditorEditOutcomeDto::InvalidOffset);
+    }
+
+    #[test]
+    fn text_edit_session_reset_rejects_invalid_offset() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let svc = WriterAppService::new(dir.path().to_string_lossy().to_string());
+        let session_id = svc.text_edit_session_create(
+            "test".to_string(),
+            String::new(),
+            0,
+            0,
+        ).unwrap();
+        let result = svc.text_edit_session_reset(session_id, "你好".to_string(), 4);
+        assert_eq!(result, 0);
+    }
+}

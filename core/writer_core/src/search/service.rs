@@ -26,6 +26,7 @@ impl SearchIndexService {
         limit: usize,
         cursor: Option<&str>,
     ) -> Vec<SearchResult> {
+        self.apply_queue();
         self.backend.search(query, scope, limit, cursor)
     }
 

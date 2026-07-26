@@ -1,28 +1,51 @@
 use super::*;
 
-fn extract_node_search_body(content: &crate::starmap::semantic::StarMapNodeContent) -> String {
-    match content {
-        crate::starmap::semantic::StarMapNodeContent::Inline { summary, body } => {
-            let mut parts = Vec::new();
-            if let Some(ref s) = summary {
-                if !s.is_empty() { parts.push(s.clone()); }
-            }
-            if let Some(ref b) = body {
-                if !b.is_empty() { parts.push(b.clone()); }
-            }
-            parts.join(" ")
-        }
-        _ => String::new(),
+fn extract_node_search_body(content: &crate::starmap::semantic::StarMapNodeContent, tags: &[String]) -> String {
+    let mut parts = Vec::new();
+    let text = content.search_text();
+    if !text.is_empty() { parts.push(text); }
+    for tag in tags {
+        if !tag.is_empty() { parts.push(tag.clone()); }
     }
+    parts.join(" ")
 }
 
-fn extract_node_dto_search_body(content: &crate::api::types::StarMapNodeContentDto) -> String {
+fn extract_node_dto_search_body(content: &crate::api::types::StarMapNodeContentDto, tags: &[String]) -> String {
     let mut parts = Vec::new();
-    if let Some(ref s) = content.summary {
-        if !s.is_empty() { parts.push(s.clone()); }
+    match content.kind.as_str() {
+        "inline" => {
+            if let Some(ref s) = content.summary {
+                if !s.is_empty() { parts.push(s.clone()); }
+            }
+            if let Some(ref b) = content.body {
+                if !b.is_empty() { parts.push(b.clone()); }
+            }
+        }
+        "chapterRef" => {
+            if let Some(ref cid) = content.chapter_id {
+                if !cid.is_empty() { parts.push(cid.clone()); }
+            }
+        }
+        "entityRef" => {
+            if let Some(ref et) = content.entity_type {
+                if !et.is_empty() { parts.push(et.clone()); }
+            }
+            if let Some(ref eid) = content.entity_id {
+                if !eid.is_empty() { parts.push(eid.clone()); }
+            }
+        }
+        "externalRef" => {
+            if let Some(ref l) = content.label {
+                if !l.is_empty() { parts.push(l.clone()); }
+            }
+            if let Some(ref u) = content.uri {
+                if !u.is_empty() { parts.push(u.clone()); }
+            }
+        }
+        _ => {}
     }
-    if let Some(ref b) = content.body {
-        if !b.is_empty() { parts.push(b.clone()); }
+    for tag in tags {
+        if !tag.is_empty() { parts.push(tag.clone()); }
     }
     parts.join(" ")
 }
@@ -270,7 +293,7 @@ impl WriterCoreApi {
         let result = self.core()
             .add_starmap_node(starmap_id, node.into(), x, y)
             .map_err(WriterError::from)?;
-        let node_content = extract_node_search_body(&result.content);
+        let node_content = extract_node_search_body(&result.content, &result.tags);
         let entry = crate::search::extractor::extract_starmap_node_entry(
             starmap_id, &result.id, None, &result.title, &node_content,
         );
@@ -462,7 +485,7 @@ impl WriterCoreApi {
         let result = self.core()
             .update_starmap_node(starmap_id, node_id, patch.into())
             .map_err(WriterError::from)?;
-        let node_content = extract_node_search_body(&result.content);
+        let node_content = extract_node_search_body(&result.content, &result.tags);
         let entry = crate::search::extractor::extract_starmap_node_entry(
             starmap_id, node_id, None, &result.title, &node_content,
         );
@@ -560,7 +583,7 @@ impl WriterCoreApi {
         self.core()
             .save_starmap_graph(starmap_id, &graph.clone().into())?;
         for node in &graph.nodes {
-            let node_content = extract_node_dto_search_body(&node.content);
+            let node_content = extract_node_dto_search_body(&node.content, &node.tags);
             let entry = crate::search::extractor::extract_starmap_node_entry(
                 starmap_id, &node.id, None, &node.title, &node_content,
             );

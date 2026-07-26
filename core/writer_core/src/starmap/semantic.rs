@@ -36,6 +36,37 @@ pub enum StarMapNodeContent {
     },
 }
 
+impl StarMapNodeContent {
+    pub fn search_text(&self) -> String {
+        let mut parts = Vec::new();
+        match self {
+            StarMapNodeContent::Inline { summary, body } => {
+                if let Some(ref s) = summary {
+                    if !s.is_empty() { parts.push(s.clone()); }
+                }
+                if let Some(ref b) = body {
+                    if !b.is_empty() { parts.push(b.clone()); }
+                }
+            }
+            StarMapNodeContent::ChapterRef { chapter_id, .. } => {
+                if !chapter_id.is_empty() { parts.push(chapter_id.clone()); }
+            }
+            StarMapNodeContent::EntityRef { entity_type, entity_id } => {
+                if !entity_type.is_empty() { parts.push(entity_type.clone()); }
+                if !entity_id.is_empty() { parts.push(entity_id.clone()); }
+            }
+            StarMapNodeContent::ExternalRef { uri, label } => {
+                if let Some(ref l) = label {
+                    if !l.is_empty() { parts.push(l.clone()); }
+                }
+                if !uri.is_empty() { parts.push(uri.clone()); }
+            }
+            StarMapNodeContent::Empty => {}
+        }
+        parts.join(" ")
+    }
+}
+
 /// 锚点：节点内的可引用定位点。
 ///
 /// 锚点允许边精确连接到节点内部的特定位置（如章节段落、实体属性），

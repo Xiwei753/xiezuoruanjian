@@ -142,9 +142,14 @@ impl super::WriterAppService {
         text: String,
         cursor_byte_offset: u32,
     ) -> EditorEditResultDto {
+        use crate::editor::strong_types::Utf8ByteOffset;
         self.with_session(|s| {
+            let offset = match Utf8ByteOffset::try_new(&text, cursor_byte_offset as usize) {
+                Ok(o) => o,
+                Err(_) => return EditorEditResultDto::invalid_offset_fallback(),
+            };
             s.generation = s.generation.saturating_add(1);
-            let result = s.kernel.load_text(text, cursor_byte_offset as usize);
+            let result = s.kernel.load_text(text, offset.value());
             result.into_result().into()
         })
     }
@@ -156,9 +161,14 @@ impl super::WriterAppService {
         old_preedit_text: String,
         new_preedit_text: String,
     ) -> EditorVisualIntentDto {
+        use crate::editor::strong_types::Utf8ByteRange;
         self.with_session(|s| {
+            let current_text = s.kernel.text();
             let replace_range = if composition_replace_start < composition_replace_end_exclusive {
-                Some((composition_replace_start as usize, composition_replace_end_exclusive as usize))
+                match Utf8ByteRange::try_new(current_text, composition_replace_start as usize, composition_replace_end_exclusive as usize) {
+                    Ok(r) => Some((r.start().value(), r.end().value())),
+                    Err(_) => None,
+                }
             } else {
                 None
             };

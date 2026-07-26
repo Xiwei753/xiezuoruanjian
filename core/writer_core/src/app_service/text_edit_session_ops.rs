@@ -54,9 +54,14 @@ impl super::WriterAppService {
         text: String,
         cursor_byte_offset: u32,
     ) -> u8 {
+        use crate::editor::strong_types::Utf8ByteOffset;
         match self.with_session_in_registry(session_id, |s| {
+            let offset = match Utf8ByteOffset::try_new(&text, cursor_byte_offset as usize) {
+                Ok(o) => o,
+                Err(_) => return false,
+            };
             s.generation = s.generation.saturating_add(1);
-            let result = s.kernel.load_text(text, cursor_byte_offset as usize);
+            let result = s.kernel.load_text(text, offset.value());
             result.is_applied()
         }) {
             Some(true) => 1u8,
@@ -215,9 +220,14 @@ impl super::WriterAppService {
         text: String,
         cursor_byte_offset: u32,
     ) -> EditorEditResultDto {
+        use crate::editor::strong_types::Utf8ByteOffset;
         self.with_session_in_registry(session_id, |s| {
+            let offset = match Utf8ByteOffset::try_new(&text, cursor_byte_offset as usize) {
+                Ok(o) => o,
+                Err(_) => return EditorEditResultDto::invalid_offset_fallback(),
+            };
             s.generation = s.generation.saturating_add(1);
-            let result = s.kernel.load_text(text, cursor_byte_offset as usize);
+            let result = s.kernel.load_text(text, offset.value());
             result.into_result().into()
         })
         .unwrap_or_else(EditorEditResultDto::stale_fallback)

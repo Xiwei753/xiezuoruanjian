@@ -168,13 +168,20 @@ pub fn extract_starmap_entries(workspace: &Path, project_id: Option<&str>) -> Re
             if let Ok(node_files) = scan_json_files(&nodes_dir) {
                 for (nid, node_file) in node_files {
                     let node_title = load_json_string_field(&node_file, "title");
-                    let node_body = load_json_string_field(&node_file, "content");
-                    if !node_title.is_empty() || !node_body.is_empty() {
+                    let node_body = load_node_content_search_text(&node_file);
+                    let node_tags = load_json_string_array_field(&node_file, "tags");
+                    let mut search_parts = Vec::new();
+                    if !node_body.is_empty() { search_parts.push(node_body); }
+                    for tag in &node_tags {
+                        if !tag.is_empty() { search_parts.push(tag.clone()); }
+                    }
+                    let search_body = search_parts.join(" ");
+                    if !node_title.is_empty() || !search_body.is_empty() {
                         entries.push(IndexEntry {
                             object_id: format!("starmap_node:{}:{}", sid, nid),
                             scope: SearchScope::StarmapNode,
                             title: node_title.clone(),
-                            body: if node_body.is_empty() { node_title } else { node_body },
+                            body: if search_body.is_empty() { node_title } else { search_body },
                             target: SearchTarget {
                                 project_id: if bound_project.is_empty() { None } else { Some(bound_project.clone()) },
                                 volume_id: None,
@@ -545,4 +552,31 @@ fn load_json_string_field(path: &Path, field: &str) -> String {
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
         .and_then(|v| v.get(field).and_then(|f| f.as_str()).map(|s| s.to_string()))
         .unwrap_or_default()
+}
+
+fn load_json_string_array_field(path: &Path, field: &str) -> Vec<String> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get(field).and_then(|f| f.as_array()).map(|arr| {
+            arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
+        }))
+        .unwrap_or_default()
+}
+
+fn load_node_content_search_text(path: &Path) -> String {
+    let content_value = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get("content").cloned());
+    match content_value {
+        Some(v) => {
+            if let Ok(content) = serde_json::from_value::<crate::starmap::semantic::StarMapNodeContent>(v) {
+                content.search_text()
+            } else {
+                String::new()
+            }
+        }
+        None => String::new(),
+    }
 }

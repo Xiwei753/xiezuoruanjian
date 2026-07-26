@@ -362,4 +362,149 @@ mod tests {
         let map_results = search_with_service(&mut service, "Map", SearchScope::StarmapTitle, 10, None);
         assert_eq!(map_results.len(), 2);
     }
+
+    #[test]
+    fn delete_starmap_removes_all_child_indices_by_prefix() {
+        let mut service = SearchIndexService::new();
+        service.enqueue_update(SearchIndexUpdate {
+            action: SearchIndexAction::Upsert,
+            object_id: "starmap:s1".to_string(),
+            scope: SearchScope::StarmapTitle,
+            title: "Map1".to_string(),
+            body: "Map1".to_string(),
+            target: Some(SearchTarget { project_id: None, volume_id: None, chapter_id: None, starmap_id: Some("s1".to_string()), node_id: None, setting_key: None }),
+        });
+        service.enqueue_update(SearchIndexUpdate {
+            action: SearchIndexAction::Upsert,
+            object_id: "starmap_node:s1:n1".to_string(),
+            scope: SearchScope::StarmapNode,
+            title: "Node1".to_string(),
+            body: "Node1".to_string(),
+            target: Some(SearchTarget { project_id: None, volume_id: None, chapter_id: None, starmap_id: Some("s1".to_string()), node_id: Some("n1".to_string()), setting_key: None }),
+        });
+        service.enqueue_update(SearchIndexUpdate {
+            action: SearchIndexAction::Upsert,
+            object_id: "starmap_node:s1:n2".to_string(),
+            scope: SearchScope::StarmapNode,
+            title: "Node2".to_string(),
+            body: "Node2".to_string(),
+            target: Some(SearchTarget { project_id: None, volume_id: None, chapter_id: None, starmap_id: Some("s1".to_string()), node_id: Some("n2".to_string()), setting_key: None }),
+        });
+        service.enqueue_update(SearchIndexUpdate {
+            action: SearchIndexAction::Upsert,
+            object_id: "starmap_edge:s1:e1".to_string(),
+            scope: SearchScope::StarmapEdgeLabel,
+            title: "Edge1".to_string(),
+            body: "Edge1".to_string(),
+            target: Some(SearchTarget { project_id: None, volume_id: None, chapter_id: None, starmap_id: Some("s1".to_string()), node_id: None, setting_key: None }),
+        });
+        service.enqueue_update(SearchIndexUpdate {
+            action: SearchIndexAction::Upsert,
+            object_id: "starmap_link:s1:l1".to_string(),
+            scope: SearchScope::StarmapLink,
+            title: "Link1".to_string(),
+            body: "Link1".to_string(),
+            target: Some(SearchTarget { project_id: None, volume_id: None, chapter_id: None, starmap_id: Some("s1".to_string()), node_id: None, setting_key: None }),
+        });
+        service.enqueue_update(SearchIndexUpdate {
+            action: SearchIndexAction::Upsert,
+            object_id: "starmap_hyperlink:s1:h1".to_string(),
+            scope: SearchScope::StarmapHyperlink,
+            title: "HL1".to_string(),
+            body: "HL1".to_string(),
+            target: Some(SearchTarget { project_id: None, volume_id: None, chapter_id: None, starmap_id: Some("s1".to_string()), node_id: None, setting_key: None }),
+        });
+        service.enqueue_update(SearchIndexUpdate {
+            action: SearchIndexAction::Upsert,
+            object_id: "starmap_embed:s1:em1".to_string(),
+            scope: SearchScope::StarmapNode,
+            title: "Embed1".to_string(),
+            body: "Embed1".to_string(),
+            target: Some(SearchTarget { project_id: None, volume_id: None, chapter_id: None, starmap_id: Some("s1".to_string()), node_id: None, setting_key: None }),
+        });
+
+        assert_eq!(service.status().total_entries, 7);
+
+        for prefix in &[
+            "starmap:s1".to_string(),
+            "starmap_node:s1:".to_string(),
+            "starmap_edge:s1:".to_string(),
+            "starmap_hyperlink:s1:".to_string(),
+            "starmap_link:s1:".to_string(),
+            "starmap_embed:s1:".to_string(),
+        ] {
+            service.remove_by_prefix(prefix);
+        }
+
+        assert_eq!(service.status().total_entries, 0);
+    }
+
+    #[test]
+    fn node_content_search_text_handles_all_types() {
+        use crate::starmap::semantic::StarMapNodeContent;
+
+        let inline = StarMapNodeContent::Inline {
+            summary: Some("summary".to_string()),
+            body: Some("body text".to_string()),
+        };
+        assert_eq!(inline.search_text(), "summary body text");
+
+        let chapter_ref = StarMapNodeContent::ChapterRef {
+            project_id: "p1".to_string(),
+            volume_id: None,
+            chapter_id: "ch1".to_string(),
+            range_start: None,
+            range_end: None,
+        };
+        assert_eq!(chapter_ref.search_text(), "ch1");
+
+        let entity_ref = StarMapNodeContent::EntityRef {
+            entity_type: "character".to_string(),
+            entity_id: "e1".to_string(),
+        };
+        assert_eq!(entity_ref.search_text(), "character e1");
+
+        let external_ref = StarMapNodeContent::ExternalRef {
+            uri: "https://example.com".to_string(),
+            label: Some("Example".to_string()),
+        };
+        assert_eq!(external_ref.search_text(), "Example https://example.com");
+
+        let empty = StarMapNodeContent::Empty;
+        assert_eq!(empty.search_text(), "");
+    }
+
+    #[test]
+    fn rebuild_extractor_uses_structured_node_content() {
+        use crate::search::extractor::extract_starmap_entries;
+        let dir = TempDir::new().unwrap();
+        let starmap_dir = dir.path().join("app-meta").join("starmaps").join("sm1");
+        std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
+        std::fs::write(
+            starmap_dir.join("graph.json"),
+            serde_json::json!({"title": "TestMap"}).to_string(),
+        ).unwrap();
+        std::fs::write(
+            starmap_dir.join("sm1.meta.json"),
+            serde_json::json!({"projectId": "p1"}).to_string(),
+        ).unwrap();
+        std::fs::write(
+            starmap_dir.join("nodes").join("n1.json"),
+            serde_json::json!({
+                "id": "n1",
+                "title": "MyNode",
+                "content": {"type": "inline", "summary": "节点摘要", "body": "节点正文"},
+                "tags": ["标签A", "标签B"]
+            }).to_string(),
+        ).unwrap();
+
+        let entries = extract_starmap_entries(dir.path(), None).unwrap();
+        let node_entries: Vec<_> = entries.iter().filter(|e| e.scope == SearchScope::StarmapNode).collect();
+        assert_eq!(node_entries.len(), 1);
+        assert_eq!(node_entries[0].title, "MyNode");
+        assert!(node_entries[0].body.contains("节点摘要"));
+        assert!(node_entries[0].body.contains("节点正文"));
+        assert!(node_entries[0].body.contains("标签A"));
+        assert!(node_entries[0].body.contains("标签B"));
+    }
 }
