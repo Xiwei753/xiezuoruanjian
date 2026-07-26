@@ -6,9 +6,11 @@ import androidx.test.espresso.matcher.ViewMatchers
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.xiwei.sujian.R
 import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
+import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import com.xiwei.sujian.editor.v2.visual.AnimationStateSnapshot
 import com.xiwei.sujian.editor.v2.visual.ManualAnimationTimeSource
 import com.xiwei.sujian.editor.v2.visual.TransactionIdSource
+import com.xiwei.sujian.editor.v2.visual.TransactionState
 import com.xiwei.sujian.support.AndroidTestEnvironment
 import com.xiwei.sujian.support.ComposeWait
 import com.xiwei.sujian.support.EditorCommitTextAction
@@ -206,6 +208,197 @@ class ControllableFrameAnimationTest {
         for (i in 0 until 20) {
             manualTimeSource.advanceByMs(16)
         }
+    }
+
+    private fun captureEditorSnapshot(): AnimationStateSnapshot? {
+        var snapshot: AnimationStateSnapshot? = null
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check { view, _ ->
+                val editorView = view as? SujianEditorView
+                    ?: throw AssertionError("View is not a SujianEditorView")
+                snapshot = editorView.captureAnimationSnapshot()
+            }
+        return snapshot
+    }
+
+    private fun advanceToProgressAndVerify(
+        expectedMinProgress: Float,
+        expectedMaxProgress: Float,
+        expectedText: String,
+        verifyCursorVisible: Boolean = true
+    ) {
+        manualTimeSource.advanceByMs(16)
+        val snapshot = captureEditorSnapshot()
+        if (snapshot != null) {
+            assertTrue(
+                "Animation progress ${snapshot.progress} should be >= $expectedMinProgress",
+                snapshot.progress >= expectedMinProgress
+            )
+            assertTrue(
+                "Animation progress ${snapshot.progress} should be <= $expectedMaxProgress",
+                snapshot.progress <= expectedMaxProgress
+            )
+            if (verifyCursorVisible) {
+                assertNotNull(
+                    "Cursor transition should exist during animation",
+                    snapshot.cursorTransition
+                )
+            }
+        }
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText(expectedText))
+    }
+
+    @Test
+    fun insertText_intermediateFramesShowProgressAndPreserveText() {
+        val testData = initTestData()
+        openTestChapter("中间帧插入测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("Hello"))
+
+        val startSnapshot = captureEditorSnapshot()
+        assertNotNull("Animation should be active after insert", startSnapshot)
+        assertEquals("insert", startSnapshot!!.operationKind)
+        assertEquals(TransactionState.Rendering, startSnapshot.transactionState)
+        assertTrue("Start progress should be near 0", startSnapshot.progress < 0.3f)
+        assertTrue("Should own resources", startSnapshot.ownedResourceCount > 0)
+
+        advanceToProgressAndVerify(0.2f, 0.6f, "Hello")
+        advanceToProgressAndVerify(0.4f, 0.8f, "Hello")
+
+        advanceClockToEnd()
+
+        val endSnapshot = captureEditorSnapshot()
+        if (endSnapshot != null) {
+            assertTrue("End progress should be >= 1.0", endSnapshot.progress >= 1.0f)
+        }
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("Hello"))
+            .check(EditorViewAssertions.hasSelectionUtf8(5, 5))
+    }
+
+    @Test
+    fun deleteRange_intermediateFramesPreserveSurroundingText() {
+        val testData = initTestData()
+        openTestChapter("中间帧删除测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("ABCDE"))
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("ABCDE"))
+
+        val deleteStart = "AB".toByteArray(Charsets.UTF_8).size
+        val deleteEnd = "ABCD".toByteArray(Charsets.UTF_8).size
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorReplaceRangeAction.replaceRange(deleteStart, deleteEnd, "", "CD"))
+
+        val startSnapshot = captureEditorSnapshot()
+        assertNotNull("Animation should be active after delete", startSnapshot)
+        assertEquals("delete", startSnapshot!!.operationKind)
+
+        advanceToProgressAndVerify(0.2f, 0.6f, "ABE")
+        advanceToProgressAndVerify(0.4f, 0.8f, "ABE")
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("ABE"))
+    }
+
+    @Test
+    fun middleInsert_intermediateFramesShowCorrectPosition() {
+        val testData = initTestData()
+        openTestChapter("中间帧中间插入测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("ABCDE"))
+
+        advanceClockToEnd()
+
+        val insertOffset = "AB".toByteArray(Charsets.UTF_8).size
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorReplaceRangeAction.replaceRange(insertOffset, insertOffset, "XY", ""))
+
+        val startSnapshot = captureEditorSnapshot()
+        assertNotNull("Animation should be active after middle insert", startSnapshot)
+        assertEquals("insert", startSnapshot!!.operationKind)
+        assertTrue("New affected ranges should exist", startSnapshot.newAffectedRanges.isNotEmpty())
+
+        advanceToProgressAndVerify(0.2f, 0.6f, "ABXYCDE")
+        advanceToProgressAndVerify(0.4f, 0.8f, "ABXYCDE")
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("ABXYCDE"))
+            .check(EditorViewAssertions.hasSelectionUtf8(4, 4))
+    }
+
+    @Test
+    fun rapidInput_animationRebasesCorrectly() {
+        val testData = initTestData()
+        openTestChapter("中间帧连续输入测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("A"))
+
+        val snapshot1 = captureEditorSnapshot()
+        assertNotNull("Animation should be active after first insert", snapshot1)
+
+        manualTimeSource.advanceByMs(8)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("B"))
+
+        manualTimeSource.advanceByMs(8)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("C"))
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("ABC"))
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("ABC"))
+            .check(EditorViewAssertions.hasSelectionUtf8(3, 3))
+    }
+
+    @Test
+    fun unicodeInsert_intermediateFramesPreserveText() {
+        val testData = initTestData()
+        openTestChapter("中间帧Unicode测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        val testText = "你好🙂世界"
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText(testText))
+
+        val startSnapshot = captureEditorSnapshot()
+        assertNotNull("Animation should be active after unicode insert", startSnapshot)
+
+        advanceToProgressAndVerify(0.2f, 0.6f, testText)
+        advanceToProgressAndVerify(0.4f, 0.8f, testText)
+
+        advanceClockToEnd()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText(testText))
     }
 
     private fun openTestChapter(chapterTitle: String, testData: AndroidTestEnvironment.TestProjectData): String {
