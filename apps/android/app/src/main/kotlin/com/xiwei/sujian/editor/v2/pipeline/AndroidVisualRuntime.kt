@@ -61,6 +61,10 @@ class AndroidVisualRuntime(
 
     fun currentTimeNanos(): Long = animationEngine.currentTimeNanos()
 
+    fun captureStateSnapshot(): com.xiwei.sujian.editor.v2.visual.AnimationStateSnapshot? {
+        return animationEngine.captureStateSnapshot(currentTimeNanos() / 1_000_000)
+    }
+
     fun setAnimationPolicy(policy: TextAnimationPolicy) {
         animationEngine.setAnimationPolicy(policy)
     }

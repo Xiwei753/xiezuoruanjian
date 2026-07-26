@@ -73,11 +73,6 @@ class AndroidEditorPipeline private constructor(
     private var autoIndentEnabled: Boolean = false
     private var autoIndentWidthSp: Float = 2f
     private var maxLength: Int = 0
-    private var pendingFrameTimeNanos: Long? = null
-
-    fun setFrameTimeNanos(nanos: Long) {
-        pendingFrameTimeNanos = nanos
-    }
 
     fun loadText(text: String, cursorUtf8: Int, @Suppress("UNUSED_PARAMETER") applySecret: Boolean = true): LoadTextResult {
         val result = editPipeline.loadText(text, cursorUtf8)
@@ -482,8 +477,7 @@ class AndroidEditorPipeline private constructor(
      * → preedit underline → static cursor.
      */
     fun drawFrame(canvas: android.graphics.Canvas, searchHighlightsUtf16: List<Pair<Int, Int>>, viewportWidth: Int, viewportHeight: Int, scrollX: Float, scrollY: Float) {
-        val frameTimeNanos = pendingFrameTimeNanos ?: visualRuntime.currentTimeNanos()
-        pendingFrameTimeNanos = null
+        val frameTimeNanos = visualRuntime.currentTimeNanos()
         val frameTimeMs = frameTimeNanos / 1_000_000
         val projection = layoutRuntime.getCurrentProjection()
         val cursorDisplayUtf16 = projection.realUtf8ToDisplayUtf16(mirror.getCursorUtf8())
@@ -522,6 +516,8 @@ class AndroidEditorPipeline private constructor(
     }
 
     fun hasActiveAnimation(): Boolean = visualRuntime.hasActiveAnimation()
+
+    fun captureAnimationSnapshot(): com.xiwei.sujian.editor.v2.visual.AnimationStateSnapshot? = visualRuntime.captureStateSnapshot()
 
     fun updateLayout(width: Float) {
         layoutRuntime.setWidth(width)

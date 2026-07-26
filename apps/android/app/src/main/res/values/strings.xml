@@ -441,4 +441,5 @@
     <string name="sync_diag_branch">分支</string>
     <string name="sync_diag_ok">正常</string>
     <string name="sync_diag_fail">异常</string>
+    <string name="sync_block_not_ready">同步未就绪</string>
 </resources>

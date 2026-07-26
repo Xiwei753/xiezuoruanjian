@@ -241,6 +241,9 @@ private fun resolveStructuredResult(result: StructuredSyncResult): String {
         "core_not_loaded" -> stringResource(id = R.string.core_not_loaded)
         "unexpected_error" -> stringResource(id = R.string.unexpected_error)
         "sync_already_running" -> stringResource(id = R.string.sync_already_running)
+        "save_config_failed" -> stringResource(id = R.string.save_sync_config_failed)
+        "save_secrets_failed" -> stringResource(id = R.string.save_sync_secrets_failed)
+        "sync_not_ready" -> stringResource(id = R.string.sync_block_not_ready)
         else -> result.statusCode
     }
 }

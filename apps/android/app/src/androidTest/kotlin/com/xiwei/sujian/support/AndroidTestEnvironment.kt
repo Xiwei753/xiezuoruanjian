@@ -28,7 +28,9 @@ class TestSession private constructor(
     val workspaceDir: File,
     val prefsSuffix: String,
     private var depsHolder: TestSujianAppDependencies,
-    private val context: Context
+    private val context: Context,
+    private val animationTimeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource,
+    private val transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource
 ) {
     private val prefsFileNames = listOf(
         "sujian_diagnostics_$prefsSuffix",
@@ -38,7 +40,11 @@ class TestSession private constructor(
         get() = depsHolder
 
     companion object {
-        fun create(context: Context): TestSession {
+        fun create(
+            context: Context,
+            animationTimeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource = com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
+            transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource = com.xiwei.sujian.editor.v2.visual.TransactionIdSource()
+        ): TestSession {
             val appContext = context.applicationContext
             val sessionId = UUID.randomUUID().toString()
             val testRootDir = File(appContext.cacheDir, "test_session_$sessionId")
@@ -62,7 +68,9 @@ class TestSession private constructor(
                 appContext,
                 testRootDir = testRootDir,
                 workspaceDir = workspaceDir,
-                prefsSuffix = prefsSuffix
+                prefsSuffix = prefsSuffix,
+                animationTimeSource = animationTimeSource,
+                transactionIdSource = transactionIdSource
             )
 
             return TestSession(
@@ -70,7 +78,9 @@ class TestSession private constructor(
                 workspaceDir = workspaceDir,
                 prefsSuffix = prefsSuffix,
                 depsHolder = deps,
-                context = appContext
+                context = appContext,
+                animationTimeSource = animationTimeSource,
+                transactionIdSource = transactionIdSource
             )
         }
     }
@@ -80,7 +90,9 @@ class TestSession private constructor(
             context,
             testRootDir = testRootDir,
             workspaceDir = workspaceDir,
-            prefsSuffix = prefsSuffix
+            prefsSuffix = prefsSuffix,
+            animationTimeSource = animationTimeSource,
+            transactionIdSource = transactionIdSource
         )
         SujianAppDependencies.setTestProvider { _ -> depsHolder }
         return depsHolder
@@ -110,7 +122,9 @@ class TestSujianAppDependencies(
     context: Context,
     testRootDir: File? = null,
     workspaceDir: File? = null,
-    prefsSuffix: String = ""
+    prefsSuffix: String = "",
+    private val animationTimeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource = com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
+    private val transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource = com.xiwei.sujian.editor.v2.visual.TransactionIdSource()
 ) : SujianAppDependencies {
     private val appContext = context.applicationContext
     private val resolvedTestRoot = testRootDir ?: File(appContext.cacheDir, "test_workspace_${UUID.randomUUID()}")
@@ -160,7 +174,7 @@ class TestSujianAppDependencies(
     override val appServiceBridge: AppServiceBridge = AppServiceBridge(testHolder)
     override val workspaceRepository: WorkspaceRepository = WorkspaceRepository(appContext, appServiceBridge)
     override val settingsRepository: SettingsRepository = SettingsRepository(appContext, appServiceBridge, prefsSuffix)
-    private val _coordinator = lazy { AnimatedTextEditorCoordinator(appContext, appServiceBridge) }
+    private val _coordinator = lazy { AnimatedTextEditorCoordinator(appContext, appServiceBridge, animationTimeSource, transactionIdSource) }
     override val coordinator: AnimatedTextEditorCoordinator get() = _coordinator.value
     private var runtimeReleased = false
 
@@ -307,8 +321,12 @@ object AndroidTestEnvironment {
             ?: throw IllegalStateException("No TestSession active. Ensure TestDependenciesRule is applied.")
     }
 
-    fun createSession(context: Context): TestSession {
-        val session = TestSession.create(context)
+    fun createSession(
+        context: Context,
+        animationTimeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource = com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
+        transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource = com.xiwei.sujian.editor.v2.visual.TransactionIdSource()
+    ): TestSession {
+        val session = TestSession.create(context, animationTimeSource, transactionIdSource)
         currentSession = session
         return session
     }
@@ -342,13 +360,16 @@ object AndroidTestEnvironment {
         return TestProjectData(project.id, project.title, volume.id, volume.title)
     }
 
-    class TestDependenciesRule : TestRule {
+    class TestDependenciesRule(
+        private val animationTimeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource = com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
+        private val transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource = com.xiwei.sujian.editor.v2.visual.TransactionIdSource()
+    ) : TestRule {
         override fun apply(base: Statement, description: Description): Statement {
             return object : Statement() {
                 override fun evaluate() {
                     val instrumentation = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
                     val ctx = instrumentation.targetContext
-                    val session = createSession(ctx)
+                    val session = createSession(ctx, animationTimeSource, transactionIdSource)
                     SujianAppDependencies.setTestProvider { _ -> session.deps }
                     try {
                         base.evaluate()

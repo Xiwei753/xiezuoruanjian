@@ -49,7 +49,7 @@ class TargetDisplayRuntime(
 
     override fun onFrame(frameTimeNanos: Long) {
         val versionAtFrameStart = displayStateVersion
-        val frameTimeMs = frameTimeNanos / 1_000_000
+        val frameTimeMs = visualRuntime.currentTimeNanos() / 1_000_000
         val layout = layoutEngine.getLayout()
         if (layout != null) {
             val highlightsUtf16 = getSearchHighlightsUtf16()

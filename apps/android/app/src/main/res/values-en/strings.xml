@@ -354,4 +354,7 @@
     <string name="stats_week_data">This Week</string>
     <string name="stats_project_ranking_week">Project Ranking (This Week)</string>
     <string name="loading">Loading...</string>
+    <string name="save_sync_config_failed">Failed to save sync config</string>
+    <string name="save_sync_secrets_failed">Failed to save sync credentials</string>
+    <string name="sync_block_not_ready">Sync not ready</string>
 </resources>
