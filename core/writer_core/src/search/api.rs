@@ -755,7 +755,9 @@ mod tests {
         assert!(api.search_service_search("CascadeVol", SearchScope::VolumeTitle, 10, None).is_empty());
         assert!(api.search_service_search("CascadeCh", SearchScope::ChapterTitle, 10, None).is_empty());
         assert!(api.search_service_search("CascadeBody", SearchScope::ChapterBody, 10, None).is_empty());
-        assert!(api.search_service_search("CascadeMap", SearchScope::StarmapTitle, 10, None).is_empty());
+        assert!(api.search_service_search("CascadeMap", SearchScope::StarmapTitle, 10, None).len() == 1);
+        assert!(api.search_service_search("CascadeMap", SearchScope::StarmapTitle, 10, None)[0].target.project_id.is_none(),
+            "starmap must become unbound after project deletion");
     }
 
     #[test]
@@ -1269,8 +1271,57 @@ mod tests {
         api.delete_project(&project.id).unwrap();
 
         let after = api.search_service_search("BoundMap", SearchScope::StarmapTitle, 10, None);
-        assert!(after.is_empty(),
-            "bound starmap index must be removed even though starmap list is determined before deletion");
+        assert_eq!(after.len(), 1,
+            "bound starmap must remain searchable as unbound after project deletion");
+        assert!(after[0].target.project_id.is_none(),
+            "bound starmap project_id must be cleared after project deletion");
+    }
+
+    #[test]
+    fn delete_project_unbinds_starmap_and_updates_child_indices() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        let project = api.create_project("ProjWithMap").unwrap();
+        let meta = api.create_starmap("MapWithNodes", "desc", None).unwrap();
+        api.bind_starmap_to_project(&meta.starmap_id, &project.id).unwrap();
+
+        let node = crate::starmap::types::StarMapNode {
+            id: "n1".to_string(),
+            title: "NodeTitle".to_string(),
+            kind: crate::starmap::types::StarMapNodeKind::Character,
+            payload: None,
+            tags: vec![],
+            content: Default::default(),
+            anchors: vec![],
+            portal: None,
+            display_policy: Default::default(),
+            open_behavior: Default::default(),
+            provenance: Default::default(),
+            created_at: 0,
+            updated_at: 0,
+        };
+        api.add_starmap_node(&meta.starmap_id, node.into(), 0.0, 0.0).unwrap();
+
+        let before_node = api.search_service_search("NodeTitle", SearchScope::StarmapNode, 10, None);
+        assert_eq!(before_node.len(), 1);
+        assert_eq!(before_node[0].target.project_id.as_deref(), Some(project.id.as_str()));
+
+        api.delete_project(&project.id).unwrap();
+
+        let after_title = api.search_service_search("MapWithNodes", SearchScope::StarmapTitle, 10, None);
+        assert_eq!(after_title.len(), 1);
+        assert!(after_title[0].target.project_id.is_none());
+
+        let after_node = api.search_service_search("NodeTitle", SearchScope::StarmapNode, 10, None);
+        assert_eq!(after_node.len(), 1,
+            "node index must remain after project deletion with project_id cleared");
+        assert!(after_node[0].target.project_id.is_none(),
+            "node project_id must be None after project deletion");
+
+        let meta_after = api.core().get_starmap(&meta.starmap_id).unwrap();
+        assert!(meta_after.project_id.is_none(),
+            "starmap meta project_id must be cleared on disk after project deletion");
     }
 
     #[test]
@@ -1429,9 +1480,11 @@ mod tests {
         api.delete_project(&project.id).unwrap();
 
         let embed_after = api.search_service_search("CascadeEmbed", SearchScope::StarmapEmbed, 10, None);
-        assert_eq!(embed_after.len(), 0, "embed index must be removed when project is deleted");
+        assert_eq!(embed_after.len(), 1, "embed index must remain as unbound after project deletion");
+        assert!(embed_after[0].target.project_id.is_none(), "embed project_id must be cleared after project deletion");
         let hl_after = api.search_service_search("CascadeHL", SearchScope::StarmapHyperlink, 10, None);
-        assert_eq!(hl_after.len(), 0, "hyperlink index must be removed when project is deleted");
+        assert_eq!(hl_after.len(), 1, "hyperlink index must remain as unbound after project deletion");
+        assert!(hl_after[0].target.project_id.is_none(), "hyperlink project_id must be cleared after project deletion");
     }
 
     #[test]

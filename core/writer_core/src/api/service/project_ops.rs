@@ -74,16 +74,7 @@ impl WriterCoreApi {
             self.remove_search_index_by_prefix(prefix);
         }
         for sm in &bound_starmaps {
-            for prefix in &[
-                format!("starmap:{}", sm.starmap_id),
-                format!("starmap_node:{}:", sm.starmap_id),
-                format!("starmap_edge:{}:", sm.starmap_id),
-                format!("starmap_hyperlink:{}:", sm.starmap_id),
-                format!("starmap_link:{}:", sm.starmap_id),
-                format!("starmap_embed:{}:", sm.starmap_id),
-            ] {
-                self.remove_search_index_by_prefix(prefix);
-            }
+            let _ = self.unbind_starmap_from_project(&sm.starmap_id);
         }
         Ok(true)
     }
