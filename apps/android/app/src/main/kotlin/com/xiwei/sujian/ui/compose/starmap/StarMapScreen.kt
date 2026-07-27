@@ -33,6 +33,7 @@ import com.xiwei.sujian.designsystem.component.SujianTextButton
 import com.xiwei.sujian.designsystem.layout.SujianScreenScaffold
 import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -277,6 +278,16 @@ private fun StarMapEditorScreen(
 
     LaunchedEffect(starmapId) {
         loadStarMap()
+    }
+
+    DisposableEffect(starmapId) {
+        onDispose {
+            try {
+                val bridge = BridgeProvider.getStarmapBridge(context)
+                bridge.flushStarmapStore(starmapId)
+                bridge.closeStarmapStore(starmapId)
+            } catch (_: Exception) {}
+        }
     }
 
     SujianScreenScaffold(

@@ -535,8 +535,8 @@ impl WriterCoreApi {
                 });
             }
         }
-        if let Ok(hyperlinks) = self.core().list_starmap_hyperlinks(starmap_id) {
-            for hl in &hyperlinks {
+        if let Ok(result) = self.core().list_starmap_hyperlinks(starmap_id) {
+            for hl in &result.items {
                 let hl_title = hl.label.as_deref().unwrap_or("");
                 let entry = crate::search::extractor::extract_starmap_hyperlink_entry(
                     starmap_id, &hl.hyperlink_id, Some(project_id), hl_title, &hl.target_uri,
@@ -631,8 +631,8 @@ impl WriterCoreApi {
                 });
             }
         }
-        if let Ok(hyperlinks) = self.core().list_starmap_hyperlinks(starmap_id) {
-            for hl in &hyperlinks {
+        if let Ok(result) = self.core().list_starmap_hyperlinks(starmap_id) {
+            for hl in &result.items {
                 let hl_title = hl.label.as_deref().unwrap_or("");
                 let entry = crate::search::extractor::extract_starmap_hyperlink_entry(
                     starmap_id, &hl.hyperlink_id, None, hl_title, &hl.target_uri,
@@ -973,7 +973,7 @@ impl WriterCoreApi {
     pub fn list_starmap_links(&self, starmap_id: &str) -> ApiResult<Vec<crate::api::types::StarMapLinkDto>> {
         self.core()
             .list_starmap_links(starmap_id)
-            .map(|links| links.into_iter().map(crate::api::types::StarMapLinkDto::from).collect())
+            .map(|result| result.items.into_iter().map(crate::api::types::StarMapLinkDto::from).collect())
             .map_err(Into::into)
     }
 }

@@ -5,6 +5,7 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.xiwei.sujian.data.AutoSyncScheduler
+import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.diagnostics.EditorEventRingBuffer
@@ -64,5 +65,8 @@ class SujianApp : Application(), DefaultLifecycleObserver {
 
     override fun onStop(owner: LifecycleOwner) {
         autoSyncScheduler?.stop()
+        try {
+            BridgeProvider.getStarmapBridge(this).flushAllStarmapStores()
+        } catch (_: Exception) {}
     }
 }

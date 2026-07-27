@@ -412,31 +412,23 @@ impl super::WriterCore {
     pub fn list_starmap_hyperlinks(
         &self,
         starmap_id: &str,
-    ) -> Result<Vec<crate::starmap::types::StarMapHyperlink>> {
+    ) -> Result<crate::starmap::store::ListWithDiagnostics<crate::starmap::types::StarMapHyperlink>> {
         let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
         let store = stores.entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
-        store.ensure_loaded()?;
-        let hl_ids: Vec<String> = store.graph_meta_hyperlink_ids();
-        for hl_id in &hl_ids {
-            let _ = store.ensure_hyperlink_loaded(hl_id);
-        }
-        Ok(store.all_hyperlinks().cloned().collect())
+        store.ensure_fully_loaded()?;
+        Ok(store.list_hyperlinks_with_diagnostics())
     }
 
     pub fn list_starmap_links(
         &self,
         starmap_id: &str,
-    ) -> Result<Vec<crate::starmap::types::StarMapLink>> {
+    ) -> Result<crate::starmap::store::ListWithDiagnostics<crate::starmap::types::StarMapLink>> {
         let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
         let store = stores.entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
-        store.ensure_loaded()?;
-        let link_ids: Vec<String> = store.graph_meta_link_ids();
-        for link_id in &link_ids {
-            let _ = store.ensure_link_loaded(link_id);
-        }
-        Ok(store.all_links().cloned().collect())
+        store.ensure_fully_loaded()?;
+        Ok(store.list_links_with_diagnostics())
     }
 
     pub fn find_starmap_references(
@@ -452,11 +444,12 @@ impl super::WriterCore {
 
     pub fn close_starmap_store(&self, starmap_id: &str) -> Result<()> {
         let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(mut store) = stores.remove(starmap_id) {
-            if store.is_dirty() || store.has_pending_deletes() {
+        if let Some(store) = stores.get_mut(starmap_id) {
+            if store.is_dirty() || store.has_pending_deletes() || store.save_queue_len() > 0 {
                 store.flush()?;
             }
         }
+        stores.remove(starmap_id);
         Ok(())
     }
 

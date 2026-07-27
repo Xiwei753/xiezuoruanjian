@@ -269,6 +269,33 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
 
     fun getMotionPolicy(): BridgeResult<StarMapMotionPolicyData> = getStarMapMotionPolicy()
 
+    fun flushStarmapStore(starmapId: String): BridgeResult<Boolean> {
+        return try {
+            holder.service.flushStarmapStore(starmapId)
+            BridgeResult.Success(true)
+        } catch (e: Exception) {
+            BridgeResult.Error(ResultEnvelope.error("FLUSH_ERROR", "Failed to flush starmap store: ${e.message}"))
+        }
+    }
+
+    fun closeStarmapStore(starmapId: String): BridgeResult<Boolean> {
+        return try {
+            holder.service.closeStarmapStore(starmapId)
+            BridgeResult.Success(true)
+        } catch (e: Exception) {
+            BridgeResult.Error(ResultEnvelope.error("CLOSE_ERROR", "Failed to close starmap store: ${e.message}"))
+        }
+    }
+
+    fun flushAllStarmapStores(): BridgeResult<Boolean> {
+        return try {
+            holder.service.flushAllStarmapStores()
+            BridgeResult.Success(true)
+        } catch (e: Exception) {
+            BridgeResult.Error(ResultEnvelope.error("FLUSH_ALL_ERROR", "Failed to flush all starmap stores: ${e.message}"))
+        }
+    }
+
     // ── 内部缓存 ──
 
     private fun refreshRawCache(starmapId: String): BridgeResult<StarMapRawCache> {
@@ -560,16 +587,6 @@ private fun StarMapEdgeKind.toDto(): StarMapEdgeKindDto = when (this) {
     StarMapEdgeKind.Custom -> StarMapEdgeKindDto.CUSTOM
 }
 
-private fun defaultStarMapDisplayPolicy() = StarMapDisplayPolicyDto(
-    importance = 1f,
-    minVisibleScale = 0f,
-    titleScale = 1f,
-    summaryScale = 1f,
-    detailScale = 1f,
-    maxPreviewChars = 120u,
-    minReadablePx = 12f
-)
-
 @Suppress("UNCHECKED_CAST")
 private fun String?.toPayloadMap(): Map<String, Any>? {
     if (isNullOrBlank()) return null
@@ -579,3 +596,13 @@ private fun String?.toPayloadMap(): Map<String, Any>? {
         null
     }
 }
+
+private fun defaultStarMapDisplayPolicy() = StarMapDisplayPolicyDto(
+    importance = 1f,
+    minVisibleScale = 0f,
+    titleScale = 1f,
+    summaryScale = 1f,
+    detailScale = 1f,
+    maxPreviewChars = 120u,
+    minReadablePx = 12f
+)
