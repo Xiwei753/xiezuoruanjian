@@ -505,12 +505,14 @@ impl StarMapStore {
                 SaveQueueEntry::GraphMeta => {
                     if self.dirty_graph_meta {
                         self.reload_graph_meta_if_stale();
-                        if self.update_graph_meta_file().is_err() {
-                            succeeded = false;
-                        }
-                        if succeeded {
-                            self.dirty_graph_meta = false;
-                            self.package_revision = self.package_revision.saturating_add(1);
+                        match self.update_graph_meta_file() {
+                            Ok(written_revision) => {
+                                self.dirty_graph_meta = false;
+                                self.package_revision = written_revision;
+                            }
+                            Err(_) => {
+                                succeeded = false;
+                            }
                         }
                     }
                 }
@@ -1777,8 +1779,6 @@ impl StarMapStore {
     }
 
     pub fn flush(&mut self) -> Result<()> {
-        self.package_revision = self.package_revision.saturating_add(1);
-
         for node_id in &self.dirty_nodes {
             if let Some(node) = self.nodes.get(node_id) {
                 package_storage::save_node(&self.workspace, &self.starmap_id, node)?;
@@ -1875,7 +1875,8 @@ impl StarMapStore {
             }
         }
 
-        self.update_graph_meta_file()?;
+        let written_revision = self.update_graph_meta_file()?;
+        self.package_revision = written_revision;
 
         let node_count = self.nodes.len() as u32;
         let edge_count = self.edges.len() as u32;
@@ -2424,26 +2425,22 @@ impl StarMapStore {
         }
     }
 
-    fn update_graph_meta_file(&mut self) -> Result<()> {
+    fn update_graph_meta_file(&mut self) -> Result<u64> {
+        if self.graph_meta.is_none() {
+            self.reload_graph_meta_if_stale();
+        }
         if self.graph_meta.is_none() {
             self.graph_meta = Some(GraphMeta {
                 schema_version: "2".to_string(),
                 starmap_id: self.starmap_id.clone(),
                 title: String::new(),
-                node_ids: self.nodes.keys().cloned().collect(),
-                edge_ids: self.edges.keys().cloned().collect(),
-                embed_instance_ids: self.embeds.keys().cloned().collect(),
-                link_ids: self.links.keys().cloned().collect(),
-                hyperlink_ids: self.hyperlinks.keys().cloned().collect(),
-                edge_relation_index: self.edges.values().map(|e| EdgeRelationIndex {
-                    edge_id: e.id.clone(),
-                    from: e.from.clone().unwrap_or_default(),
-                    to: e.to.clone().unwrap_or_default(),
-                }).collect(),
-                embed_host_index: self.embeds.values().map(|e| EmbedHostIndex {
-                    instance_id: e.instance_id.clone(),
-                    host_node_id: e.source_node_id.clone().unwrap_or_default(),
-                }).collect(),
+                node_ids: Vec::new(),
+                edge_ids: Vec::new(),
+                embed_instance_ids: Vec::new(),
+                link_ids: Vec::new(),
+                hyperlink_ids: Vec::new(),
+                edge_relation_index: Vec::new(),
+                embed_host_index: Vec::new(),
                 package_revision: self.package_revision,
                 updated_at: crate::starmap::now_epoch(),
             });
@@ -2478,7 +2475,7 @@ impl StarMapStore {
         let path = self.starmap_dir().join("graph.json");
         atomic_write_string(&path, &json)?;
 
-        Ok(())
+        Ok(next_revision)
     }
 
     fn merge_memory_ids_into_graph_meta(&mut self) {
@@ -2490,8 +2487,13 @@ impl StarMapStore {
             }
         }
         for edge in self.edges.values() {
-            if !meta.edge_ids.contains(&edge.id) {
-                meta.edge_ids.push(edge.id.clone());
+            if let Some(eri) = meta.edge_relation_index.iter_mut().find(|eri| eri.edge_id == edge.id) {
+                eri.from = edge.from.clone().unwrap_or_default();
+                eri.to = edge.to.clone().unwrap_or_default();
+            } else {
+                if !meta.edge_ids.contains(&edge.id) {
+                    meta.edge_ids.push(edge.id.clone());
+                }
                 meta.edge_relation_index.push(EdgeRelationIndex {
                     edge_id: edge.id.clone(),
                     from: edge.from.clone().unwrap_or_default(),
@@ -2500,8 +2502,12 @@ impl StarMapStore {
             }
         }
         for embed in self.embeds.values() {
-            if !meta.embed_instance_ids.contains(&embed.instance_id) {
-                meta.embed_instance_ids.push(embed.instance_id.clone());
+            if let Some(ehi) = meta.embed_host_index.iter_mut().find(|ehi| ehi.instance_id == embed.instance_id) {
+                ehi.host_node_id = embed.source_node_id.clone().unwrap_or_default();
+            } else {
+                if !meta.embed_instance_ids.contains(&embed.instance_id) {
+                    meta.embed_instance_ids.push(embed.instance_id.clone());
+                }
                 meta.embed_host_index.push(EmbedHostIndex {
                     instance_id: embed.instance_id.clone(),
                     host_node_id: embed.source_node_id.clone().unwrap_or_default(),
@@ -3699,5 +3705,138 @@ mod tests {
 
         store.record_migration("test_migration", "test detail");
         assert!(migration_path.exists());
+    }
+
+    #[test]
+    fn flush_package_revision_memory_matches_disk() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.upsert_node(make_test_node("n1", "Test Node"));
+        store.flush().unwrap();
+        let mem_rev = store.package_revision();
+
+        let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        let result = store2.load_full();
+        assert!(result.is_ok());
+        let disk_rev = store2.package_revision();
+        assert_eq!(mem_rev, disk_rev, "memory and disk package_revision must match after flush");
+    }
+
+    #[test]
+    fn merge_memory_ids_updates_edge_endpoint_in_index() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.upsert_node(make_test_node("n1", "Node1"));
+        store.upsert_node(make_test_node("n2", "Node2"));
+        store.upsert_node(make_test_node("n3", "Node3"));
+
+        let edge = crate::starmap::types::StarMapEdge {
+            id: "e1".to_string(),
+            from: Some("n1".to_string()),
+            to: Some("n2".to_string()),
+            kind: crate::starmap::types::StarMapEdgeKind::RelatedTo,
+            label: None,
+            payload: None,
+            from_target: None,
+            to_target: None,
+            from_endpoint: None,
+            to_endpoint: None,
+            from_endpoint_path: None,
+            to_endpoint_path: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+        store.upsert_edge(edge.clone());
+        store.flush().unwrap();
+
+        let updated_edge = crate::starmap::types::StarMapEdge {
+            from: Some("n3".to_string()),
+            ..edge
+        };
+        store.upsert_edge(updated_edge);
+        store.flush().unwrap();
+
+        let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        let _ = store2.load_full();
+        let meta2 = store2.graph_meta.as_ref().unwrap();
+        let eri = meta2.edge_relation_index.iter().find(|e| e.edge_id == "e1").unwrap();
+        assert_eq!(eri.from, "n3", "edge_relation_index should reflect updated endpoint");
+        assert_eq!(eri.to, "n2");
+    }
+
+    #[test]
+    fn merge_memory_ids_updates_embed_host_in_index() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.upsert_node(make_test_node("n1", "Node1"));
+        store.upsert_node(make_test_node("n2", "Node2"));
+
+        let embed = crate::starmap::types::StarMapEmbed {
+            instance_id: "em1".to_string(),
+            target_starmap_id: String::new(),
+            label: None,
+            display_policy: crate::starmap::semantic::StarMapDisplayPolicy::default(),
+            open_behavior: crate::starmap::semantic::StarMapOpenBehavior::default(),
+            placement: crate::starmap::types::StarMapEmbedPlacement::default(),
+            target_viewport: crate::starmap::types::StarMapEmbedViewport::default(),
+            source_node_id: Some("n1".to_string()),
+            host_endpoint: None,
+            provenance: crate::starmap::semantic::StarMapProvenance::default(),
+            created_at: 0,
+            updated_at: 0,
+        };
+        store.upsert_embed(embed.clone());
+        store.flush().unwrap();
+
+        let updated_embed = crate::starmap::types::StarMapEmbed {
+            source_node_id: Some("n2".to_string()),
+            ..embed
+        };
+        store.upsert_embed(updated_embed);
+        store.flush().unwrap();
+
+        let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        let _ = store2.load_full();
+        let meta2 = store2.graph_meta.as_ref().unwrap();
+        let ehi = meta2.embed_host_index.iter().find(|e| e.instance_id == "em1").unwrap();
+        assert_eq!(ehi.host_node_id, "n2", "embed_host_index should reflect updated host");
+    }
+
+    #[test]
+    fn list_links_with_diagnostics_returns_missing_diagnostic() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        let graph_meta = GraphMeta {
+            schema_version: "2".to_string(),
+            starmap_id: meta.starmap_id.clone(),
+            title: "Test".to_string(),
+            node_ids: vec![],
+            edge_ids: vec![],
+            embed_instance_ids: vec![],
+            link_ids: vec!["missing-link".to_string()],
+            hyperlink_ids: vec![],
+            edge_relation_index: vec![],
+            embed_host_index: vec![],
+            package_revision: 0,
+            updated_at: 0,
+        };
+        store.graph_meta = Some(graph_meta);
+        store.flush().unwrap();
+
+        let result = store.list_links_with_diagnostics();
+        assert!(!result.diagnostics.is_empty(), "should report missing link as diagnostic");
+        assert_eq!(result.diagnostics[0].object_id, "missing-link");
     }
 }

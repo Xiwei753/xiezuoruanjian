@@ -12,6 +12,8 @@ pub use types::{
     EditorTransaction, EditorTransactionCause,
 };
 
+pub(crate) use types::clamp_to_char_boundary;
+
 pub use visual::{
     build_virtual_text, AnimatedSliceRole, CaretAffinity, ClusterRect, ClusterRun,
     CursorPath, CursorRect, DecorationSlice, DecorationSliceKind, EditorVisualTransaction,

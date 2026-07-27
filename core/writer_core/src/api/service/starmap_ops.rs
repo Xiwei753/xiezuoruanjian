@@ -970,10 +970,10 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
-    pub fn list_starmap_links(&self, starmap_id: &str) -> ApiResult<Vec<crate::api::types::StarMapLinkDto>> {
+    pub fn list_starmap_links(&self, starmap_id: &str) -> ApiResult<crate::api::types::StarMapLinkListWithDiagnosticsDto> {
         self.core()
             .list_starmap_links(starmap_id)
-            .map(|result| result.items.into_iter().map(crate::api::types::StarMapLinkDto::from).collect())
+            .map(crate::api::types::StarMapLinkListWithDiagnosticsDto::from)
             .map_err(Into::into)
     }
 }

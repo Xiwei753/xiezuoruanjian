@@ -646,6 +646,18 @@ dictionary StarMapLinkDto {
     u64 updated_at;
 };
 
+dictionary LoadDiagnosticDto {
+    string kind;
+    string object_type;
+    string object_id;
+    string? detail;
+};
+
+dictionary StarMapLinkListWithDiagnosticsDto {
+    sequence<StarMapLinkDto> items;
+    sequence<LoadDiagnosticDto> diagnostics;
+};
+
 dictionary StarMapLayoutDto {
     StarMapLayoutKindDto kind;
     sequence<StarMapLayoutNodeDto> nodes;
@@ -1140,7 +1152,7 @@ interface WriterAppService {
     boolean flush_all_starmap_stores();
 
     [Throws=WriterError]
-    sequence<StarMapLinkDto> list_starmap_links(string starmap_id);
+    StarMapLinkListWithDiagnosticsDto list_starmap_links(string starmap_id);
 
     [Throws=WriterError]
     sequence<ActionDescriptorDto> list_registered_actions();

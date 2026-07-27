@@ -80,6 +80,42 @@ impl From<StarMapLinkPatchDto> for crate::starmap::types::StarMapLinkPatch {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct LoadDiagnosticDto {
+    pub kind: String,
+    pub object_type: String,
+    pub object_id: String,
+    pub detail: Option<String>,
+}
+
+impl From<crate::starmap::store::LoadDiagnostic> for LoadDiagnosticDto {
+    fn from(d: crate::starmap::store::LoadDiagnostic) -> Self {
+        Self {
+            kind: format!("{:?}", d.kind),
+            object_type: d.object_type,
+            object_id: d.object_id,
+            detail: if d.detail.is_empty() { None } else { Some(d.detail) },
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StarMapLinkListWithDiagnosticsDto {
+    pub items: Vec<StarMapLinkDto>,
+    pub diagnostics: Vec<LoadDiagnosticDto>,
+}
+
+impl From<crate::starmap::store::ListWithDiagnostics<crate::starmap::types::StarMapLink>> for StarMapLinkListWithDiagnosticsDto {
+    fn from(r: crate::starmap::store::ListWithDiagnostics<crate::starmap::types::StarMapLink>) -> Self {
+        Self {
+            items: r.items.into_iter().map(StarMapLinkDto::from).collect(),
+            diagnostics: r.diagnostics.into_iter().map(LoadDiagnosticDto::from).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct StarMapEndpointDto {
     #[serde(rename = "type")]
     pub kind: String,

@@ -61,6 +61,15 @@ impl Utf8ByteOffset {
         Ok(Self(offset))
     }
 
+    pub fn clamp(text: &str, offset: usize) -> Self {
+        let clamped = if offset > text.len() {
+            text.len()
+        } else {
+            crate::editor::transaction::clamp_to_char_boundary(text, offset)
+        };
+        Self(clamped)
+    }
+
     pub(super) fn unchecked(offset: usize) -> Self {
         Self(offset)
     }
@@ -92,6 +101,16 @@ impl Utf8ByteRange {
         let e = Utf8ByteOffset::try_new(text, end)
             .map_err(InvalidUtf8RangeError::InvalidEnd)?;
         Ok(Self { start: s, end: e })
+    }
+
+    pub fn clamp(text: &str, start: usize, end: usize) -> Self {
+        let s = Utf8ByteOffset::clamp(text, start);
+        let e = Utf8ByteOffset::clamp(text, end);
+        if s.value() > e.value() {
+            Self { start: e, end: e }
+        } else {
+            Self { start: s, end: e }
+        }
     }
 
     pub(super) fn from_values(start: usize, end: usize) -> Option<Self> {
@@ -270,5 +289,51 @@ mod tests {
         let gen = EditorSessionGeneration::initial();
         assert_eq!(gen.value(), 0);
         assert_eq!(gen.next().value(), 1);
+    }
+
+    #[test]
+    fn utf8_byte_offset_clamp_valid() {
+        let text = "你好世界";
+        assert_eq!(Utf8ByteOffset::clamp(text, 0).value(), 0);
+        assert_eq!(Utf8ByteOffset::clamp(text, 3).value(), 3);
+        assert_eq!(Utf8ByteOffset::clamp(text, 6).value(), 6);
+    }
+
+    #[test]
+    fn utf8_byte_offset_clamp_mid_char() {
+        let text = "你好";
+        assert_eq!(Utf8ByteOffset::clamp(text, 1).value(), 0);
+        assert_eq!(Utf8ByteOffset::clamp(text, 2).value(), 0);
+        assert_eq!(Utf8ByteOffset::clamp(text, 4).value(), 3);
+    }
+
+    #[test]
+    fn utf8_byte_offset_clamp_beyond_end() {
+        let text = "abc";
+        assert_eq!(Utf8ByteOffset::clamp(text, 100).value(), 3);
+    }
+
+    #[test]
+    fn utf8_byte_range_clamp_valid() {
+        let text = "abc";
+        let range = Utf8ByteRange::clamp(text, 0, 2);
+        assert_eq!(range.start().value(), 0);
+        assert_eq!(range.end().value(), 2);
+    }
+
+    #[test]
+    fn utf8_byte_range_clamp_mid_char() {
+        let text = "你好";
+        let range = Utf8ByteRange::clamp(text, 1, 4);
+        assert_eq!(range.start().value(), 0);
+        assert_eq!(range.end().value(), 3);
+    }
+
+    #[test]
+    fn utf8_byte_range_clamp_start_after_end() {
+        let text = "abc";
+        let range = Utf8ByteRange::clamp(text, 2, 1);
+        assert_eq!(range.start().value(), 1);
+        assert_eq!(range.end().value(), 1);
     }
 }

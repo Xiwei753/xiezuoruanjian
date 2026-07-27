@@ -211,7 +211,7 @@ impl super::WriterAppService {
     pub fn list_starmap_links(
         &self,
         starmap_id: String,
-    ) -> Result<Vec<StarMapLinkDto>, WriterError> {
+    ) -> Result<crate::api::types::StarMapLinkListWithDiagnosticsDto, WriterError> {
         self.api.list_starmap_links(&starmap_id)
     }
 }

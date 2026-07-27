@@ -1,6 +1,7 @@
 use writer_core::editor::{
     EditorCommand, EditorEditOutcome, EditorEditResult, EditorKernel, EditorTransactionCause, CursorRect, PreeditVisualTransaction,
     EditorVisualTransaction, EditorSelection, EditorCursor, EditorAnimationKind,
+    Utf8ByteOffset, Utf8ByteRange, EditorRevision,
 };
 use super::buffer::{clamp_to_char_boundary, normalize_plain_text, EditorSnapshot};
 use super::animation_coordinator::LinuxEditorAnimationCoordinator;
@@ -99,13 +100,15 @@ impl CommittedTextMirror {
     /// 正文和选区与 kernel 状态同步。
     pub fn apply_edit_result(&mut self, result: &EditorEditResult) -> Result<(), String> {
         for patch in &result.display_patches {
-            if patch.base_revision != self.revision {
+            if patch.base_revision.value() != self.revision {
                 return Err(format!(
                     "CommittedTextMirror revision discontinuity: expected {}, got {}. Must reload from kernel snapshot.",
-                    self.revision, patch.base_revision
+                    self.revision, patch.base_revision.value()
                 ));
             }
-            let (start, end) = patch.replace_byte_range;
+            let range = patch.replace_byte_range.to_std_range();
+            let start = range.start;
+            let end = range.end;
             if start > self.text.len() || end > self.text.len() {
                 return Err(format!(
                     "CommittedTextMirror patch range out of bounds: [{}, {}) vs text len {}. Must reload from kernel snapshot.",
@@ -119,9 +122,11 @@ impl CommittedTextMirror {
                 ));
             }
             self.text.replace_range(start..end, &patch.inserted_text);
-            self.revision = patch.new_revision;
+            self.revision = patch.new_revision.value();
         }
-        let (anchor, head) = result.new_selection_byte_range;
+        let sel_range = result.new_selection_byte_range.to_std_range();
+        let anchor = sel_range.start;
+        let head = sel_range.end;
         if anchor > self.text.len() || head > self.text.len() {
             return Err(format!(
                 "CommittedTextMirror selection out of bounds: ({}, {}) vs text len {}. Must reload from kernel snapshot.",
@@ -519,10 +524,10 @@ impl LinuxEditorPipeline {
 
     pub fn insert_text(&mut self, byte_offset: usize, text: &str, cause: EditorTransactionCause) -> Option<EditorEditResult> {
         let command = EditorCommand::Insert {
-            byte_offset,
+            byte_offset: Utf8ByteOffset::clamp(self.kernel.text(), byte_offset),
             text: text.to_string(),
             cause,
-            expected_revision: self.mirror.revision(),
+            expected_revision: EditorRevision::new(self.mirror.revision()),
         };
         let outcome = self.kernel.apply(command);
         match outcome {
@@ -555,11 +560,10 @@ impl LinuxEditorPipeline {
 
     pub fn delete_range(&mut self, byte_start: usize, byte_end_exclusive: usize, cause: EditorTransactionCause) -> Option<EditorEditResult> {
         let command = EditorCommand::Delete {
-            byte_start,
-            byte_end_exclusive,
+            byte_range: Utf8ByteRange::clamp(self.kernel.text(), byte_start, byte_end_exclusive),
             deleted_text: String::new(),
             cause,
-            expected_revision: self.mirror.revision(),
+            expected_revision: EditorRevision::new(self.mirror.revision()),
         };
         let outcome = self.kernel.apply(command);
         match outcome {
@@ -592,12 +596,11 @@ impl LinuxEditorPipeline {
 
     pub fn replace_range(&mut self, byte_start: usize, byte_end_exclusive: usize, replacement: &str, cause: EditorTransactionCause) -> Option<EditorEditResult> {
         let command = EditorCommand::Replace {
-            byte_start,
-            byte_end_exclusive,
+            byte_range: Utf8ByteRange::clamp(self.kernel.text(), byte_start, byte_end_exclusive),
             replacement_text: replacement.to_string(),
             original_text: String::new(),
             cause,
-            expected_revision: self.mirror.revision(),
+            expected_revision: EditorRevision::new(self.mirror.revision()),
         };
         let outcome = self.kernel.apply(command);
         match outcome {
@@ -628,10 +631,11 @@ impl LinuxEditorPipeline {
     }
 
     pub fn set_selection(&mut self, anchor: usize, head: usize) -> Option<EditorEditResult> {
+        let text = self.kernel.text();
         let command = EditorCommand::SetSelection {
-            anchor_byte_offset: anchor,
-            head_byte_offset: head,
-            expected_revision: self.mirror.revision(),
+            anchor: Utf8ByteOffset::clamp(text, anchor),
+            head: Utf8ByteOffset::clamp(text, head),
+            expected_revision: EditorRevision::new(self.mirror.revision()),
         };
         let outcome = self.kernel.apply(command);
         match outcome {
@@ -663,7 +667,7 @@ impl LinuxEditorPipeline {
 
     pub fn perform_undo(&mut self) -> Option<EditorEditResult> {
         let command = EditorCommand::Undo {
-            expected_revision: self.mirror.revision(),
+            expected_revision: EditorRevision::new(self.mirror.revision()),
         };
         let outcome = self.kernel.apply(command);
         match outcome {
@@ -695,7 +699,7 @@ impl LinuxEditorPipeline {
 
     pub fn perform_redo(&mut self) -> Option<EditorEditResult> {
         let command = EditorCommand::Redo {
-            expected_revision: self.mirror.revision(),
+            expected_revision: EditorRevision::new(self.mirror.revision()),
         };
         let outcome = self.kernel.apply(command);
         match outcome {
@@ -743,10 +747,11 @@ impl LinuxEditorPipeline {
         let anchor = self.kernel.selection_anchor();
         self.kernel = EditorKernel::with_text(text, cursor).unwrap_or_else(|_| EditorKernel::new());
         if anchor != cursor {
+            let text = self.kernel.text();
             let _ = self.kernel.apply(EditorCommand::SetSelection {
-                anchor_byte_offset: anchor,
-                head_byte_offset: cursor,
-                expected_revision: self.kernel.revision(),
+                anchor: Utf8ByteOffset::clamp(text, anchor),
+                head: Utf8ByteOffset::clamp(text, cursor),
+                expected_revision: EditorRevision::new(self.kernel.revision()),
             });
         }
         self.mirror.load_from_snapshot(
