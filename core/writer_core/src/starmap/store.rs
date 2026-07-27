@@ -48,8 +48,17 @@ pub enum DirtyKind {
     Edge,
     Embed,
     Hyperlink,
+    Link,
     Layout,
     GraphMeta,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationEntry {
+    pub kind: String,
+    pub detail: String,
+    pub timestamp: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -82,7 +91,7 @@ pub struct StarMapStoreResult {
     pub loaded_hyperlink_count: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum LoadPhase {
     GraphMeta,
@@ -281,6 +290,18 @@ impl StarMapStore {
 
     pub fn all_links(&self) -> impl Iterator<Item = &StarMapLink> {
         self.links.values()
+    }
+
+    pub fn graph_meta_hyperlink_ids(&self) -> Vec<String> {
+        self.graph_meta.as_ref()
+            .map(|m| m.hyperlink_ids.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn graph_meta_link_ids(&self) -> Vec<String> {
+        self.graph_meta.as_ref()
+            .map(|m| m.link_ids.clone())
+            .unwrap_or_default()
     }
 
     pub fn diagnostics(&self) -> &[LoadDiagnostic] {
@@ -575,14 +596,6 @@ impl StarMapStore {
             .map(|m| m.package_revision)
             .unwrap_or(0);
 
-        self.dirty_nodes.clear();
-        self.dirty_edges.clear();
-        self.dirty_embeds.clear();
-        self.dirty_hyperlinks.clear();
-        self.dirty_links.clear();
-        self.dirty_layout = false;
-        self.dirty_graph_meta = false;
-
         diagnostics.extend(self.recovery_log.drain(..));
         self.recovery_log = diagnostics.clone();
 
@@ -648,16 +661,27 @@ impl StarMapStore {
                     });
                     for node in &graph.nodes {
                         self.nodes.insert(node.id.clone(), node.clone());
+                        self.dirty_nodes.insert(node.id.clone());
                     }
                     for edge in &graph.edges {
                         self.edges.insert(edge.id.clone(), edge.clone());
+                        self.dirty_edges.insert(edge.id.clone());
                     }
                     for embed in &graph.embeds {
                         self.embeds.insert(embed.instance_id.clone(), embed.clone());
+                        self.dirty_embeds.insert(embed.instance_id.clone());
                     }
                     for link in &graph.links {
                         self.links.insert(link.link_id.clone(), link.clone());
+                        self.dirty_links.insert(link.link_id.clone());
                     }
+                    self.dirty_graph_meta = true;
+                    self.enqueue_save(SaveQueueEntry::Node);
+                    self.enqueue_save(SaveQueueEntry::Edge);
+                    self.enqueue_save(SaveQueueEntry::Embed);
+                    self.enqueue_save(SaveQueueEntry::Link);
+                    self.enqueue_save(SaveQueueEntry::GraphMeta);
+                    self.record_migration("graph_v1_to_v2", "migrated inline v1 graph.json to v2 package format");
                 } else {
                     match self.load_graph_meta_from_file(&graph_json_path) {
                         Ok(meta) => { self.graph_meta = Some(meta); }
@@ -754,11 +778,17 @@ impl StarMapStore {
     }
 
     pub fn ensure_loaded(&mut self) -> Result<()> {
+        if self.current_load_phase >= Some(LoadPhase::PrefetchNearbyObjects) {
+            return Ok(());
+        }
         self.load_phased(LoadPhase::PrefetchNearbyObjects)?;
         Ok(())
     }
 
     pub fn ensure_fully_loaded(&mut self) -> Result<()> {
+        if self.current_load_phase >= Some(LoadPhase::BackgroundFullLoad) {
+            return Ok(());
+        }
         self.load_full()?;
         Ok(())
     }
@@ -769,6 +799,46 @@ impl StarMapStore {
         }
         if let Some(node) = self.try_load_node(node_id) {
             self.nodes.insert(node_id.to_string(), node);
+        }
+        Ok(())
+    }
+
+    pub fn ensure_edge_loaded(&mut self, edge_id: &str) -> Result<()> {
+        if self.edges.contains_key(edge_id) {
+            return Ok(());
+        }
+        if let Some(edge) = self.try_load_edge(edge_id) {
+            self.edges.insert(edge_id.to_string(), edge);
+        }
+        Ok(())
+    }
+
+    pub fn ensure_embed_loaded(&mut self, instance_id: &str) -> Result<()> {
+        if self.embeds.contains_key(instance_id) {
+            return Ok(());
+        }
+        if let Some(embed) = self.try_load_embed(instance_id) {
+            self.embeds.insert(instance_id.to_string(), embed);
+        }
+        Ok(())
+    }
+
+    pub fn ensure_link_loaded(&mut self, link_id: &str) -> Result<()> {
+        if self.links.contains_key(link_id) {
+            return Ok(());
+        }
+        if let Some(link) = self.try_load_link(link_id) {
+            self.links.insert(link_id.to_string(), link);
+        }
+        Ok(())
+    }
+
+    pub fn ensure_hyperlink_loaded(&mut self, hyperlink_id: &str) -> Result<()> {
+        if self.hyperlinks.contains_key(hyperlink_id) {
+            return Ok(());
+        }
+        if let Some(hl) = self.try_load_hyperlink(hyperlink_id) {
+            self.hyperlinks.insert(hyperlink_id.to_string(), hl);
         }
         Ok(())
     }
@@ -956,16 +1026,27 @@ impl StarMapStore {
                     });
                     for node in &graph.nodes {
                         self.nodes.insert(node.id.clone(), node.clone());
+                        self.dirty_nodes.insert(node.id.clone());
                     }
                     for edge in &graph.edges {
                         self.edges.insert(edge.id.clone(), edge.clone());
+                        self.dirty_edges.insert(edge.id.clone());
                     }
                     for embed in &graph.embeds {
                         self.embeds.insert(embed.instance_id.clone(), embed.clone());
+                        self.dirty_embeds.insert(embed.instance_id.clone());
                     }
                     for link in &graph.links {
                         self.links.insert(link.link_id.clone(), link.clone());
+                        self.dirty_links.insert(link.link_id.clone());
                     }
+                    self.dirty_graph_meta = true;
+                    self.enqueue_save(SaveQueueEntry::Node);
+                    self.enqueue_save(SaveQueueEntry::Edge);
+                    self.enqueue_save(SaveQueueEntry::Embed);
+                    self.enqueue_save(SaveQueueEntry::Link);
+                    self.enqueue_save(SaveQueueEntry::GraphMeta);
+                    self.record_migration("graph_v1_to_v2", "migrated inline v1 graph.json to v2 package format");
                 } else {
                     match self.load_graph_meta_from_file(&graph_json_path) {
                         Ok(meta) => { self.graph_meta = Some(meta); }
@@ -1062,14 +1143,6 @@ impl StarMapStore {
         self.package_revision = self.graph_meta.as_ref()
             .map(|m| m.package_revision)
             .unwrap_or(0);
-
-        self.dirty_nodes.clear();
-        self.dirty_edges.clear();
-        self.dirty_embeds.clear();
-        self.dirty_hyperlinks.clear();
-        self.dirty_links.clear();
-        self.dirty_layout = false;
-        self.dirty_graph_meta = false;
 
         self.current_load_phase = Some(LoadPhase::BackgroundFullLoad);
 
@@ -1723,6 +1796,11 @@ impl StarMapStore {
             return Some(layout);
         }
         if let Some(layout) = package_storage::load_legacy_layout(&dir) {
+            if package_storage::save_layout_sharded(&dir, &layout).is_ok() {
+                let legacy_path = dir.join("layouts").join("default.json");
+                let _ = std::fs::remove_file(&legacy_path);
+                self.record_migration("layout_sharded", "migrated legacy default.json to sharded format");
+            }
             return Some(layout);
         }
         None
@@ -1960,6 +2038,33 @@ impl StarMapStore {
         let path = dir.join("recovery.json");
         atomic_write_string(&path, &json)?;
         Ok(())
+    }
+
+    fn record_migration(&self, kind: &str, detail: &str) {
+        let dir = self.metadata_dir();
+        if std::fs::create_dir_all(&dir).is_err() {
+            return;
+        }
+        let path = dir.join("migration.json");
+        let mut entries: Vec<MigrationEntry> = if path.exists() {
+            std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|c| serde_json::from_str(&c).ok())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        entries.push(MigrationEntry {
+            kind: kind.to_string(),
+            detail: detail.to_string(),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        });
+        if let Ok(json) = serde_json::to_string_pretty(&entries) {
+            let _ = atomic_write_string(&path, &json);
+        }
     }
 
     fn update_graph_meta_file(&self) -> Result<()> {
@@ -3080,5 +3185,87 @@ mod tests {
 
         store.flush_save_queue().unwrap();
         assert!(!store.is_dirty());
+    }
+
+    #[test]
+    fn ensure_loaded_preserves_dirty_after_crud() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.upsert_node(make_test_node("n1", "Node1"));
+        store.enqueue_save(SaveQueueEntry::Node);
+        store.enqueue_save(SaveQueueEntry::GraphMeta);
+        store.flush().unwrap();
+
+        let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store2.ensure_loaded().unwrap();
+        store2.upsert_node(make_test_node("n2", "Node2"));
+        store2.enqueue_save(SaveQueueEntry::Node);
+        store2.enqueue_save(SaveQueueEntry::GraphMeta);
+        assert!(store2.is_dirty());
+
+        store2.ensure_loaded().unwrap();
+        assert!(store2.is_dirty());
+        assert!(store2.dirty_nodes.contains("n2"));
+    }
+
+    #[test]
+    fn ensure_object_loaded_for_edge_embed_link_hyperlink() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        let node = make_test_node("n1", "Node1");
+        store.upsert_node(node.clone());
+        let edge = StarMapEdge {
+            id: "e1".to_string(),
+            from: Some("n1".to_string()),
+            to: Some("n1".to_string()),
+            kind: StarMapEdgeKind::RelatedTo,
+            label: None,
+            payload: None,
+            from_target: None,
+            to_target: None,
+            from_endpoint: None,
+            to_endpoint: None,
+            from_endpoint_path: None,
+            to_endpoint_path: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+        store.upsert_edge(edge.clone());
+        store.enqueue_save(SaveQueueEntry::Node);
+        store.enqueue_save(SaveQueueEntry::Edge);
+        store.enqueue_save(SaveQueueEntry::GraphMeta);
+        store.flush().unwrap();
+
+        let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store2.load_phased(LoadPhase::GraphMeta).unwrap();
+        assert!(!store2.edges.contains_key("e1"));
+
+        store2.ensure_edge_loaded("e1").unwrap();
+        assert!(store2.edges.contains_key("e1"));
+    }
+
+    #[test]
+    fn migration_json_recorded_on_v1_load() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.upsert_node(make_test_node("n1", "Node1"));
+        store.enqueue_save(SaveQueueEntry::Node);
+        store.enqueue_save(SaveQueueEntry::GraphMeta);
+        store.flush().unwrap();
+
+        let migration_path = store.starmap_dir().join("metadata").join("migration.json");
+        assert!(!migration_path.exists());
+
+        store.record_migration("test_migration", "test detail");
+        assert!(migration_path.exists());
     }
 }

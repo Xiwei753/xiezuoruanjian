@@ -199,6 +199,7 @@ impl super::WriterCore {
         let store = stores.entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_loaded()?;
+        store.ensure_object_loaded(node_id)?;
         let result = store.update_node(node_id, &patch)?;
         store.enqueue_save(SaveQueueEntry::Node);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
@@ -210,6 +211,7 @@ impl super::WriterCore {
         let store = stores.entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_loaded()?;
+        store.ensure_object_loaded(node_id)?;
         store.delete_node(node_id)?;
         store.enqueue_save(SaveQueueEntry::DeleteNode);
         store.enqueue_save(SaveQueueEntry::DeleteEdge);
@@ -244,6 +246,7 @@ impl super::WriterCore {
         let store = stores.entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_loaded()?;
+        store.ensure_edge_loaded(edge_id)?;
         let result = store.update_edge(edge_id, &patch)?;
         store.enqueue_save(SaveQueueEntry::Edge);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
@@ -255,6 +258,7 @@ impl super::WriterCore {
         let store = stores.entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_loaded()?;
+        store.ensure_edge_loaded(edge_id)?;
         store.delete_edge(edge_id)?;
         store.enqueue_save(SaveQueueEntry::DeleteEdge);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
@@ -342,6 +346,7 @@ impl super::WriterCore {
         let store = stores.entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_loaded()?;
+        store.ensure_embed_loaded(instance_id)?;
         let result = store.update_embed(instance_id, &patch)?;
         store.enqueue_save(SaveQueueEntry::Embed);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
@@ -353,6 +358,7 @@ impl super::WriterCore {
         let store = stores.entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_loaded()?;
+        store.ensure_embed_loaded(instance_id)?;
         store.delete_embed(instance_id)?;
         store.enqueue_save(SaveQueueEntry::DeleteEmbed);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
@@ -384,6 +390,7 @@ impl super::WriterCore {
         let store = stores.entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_loaded()?;
+        store.ensure_link_loaded(link_id)?;
         let result = store.update_link(link_id, &patch)?;
         store.enqueue_save(SaveQueueEntry::Link);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
@@ -395,6 +402,7 @@ impl super::WriterCore {
         let store = stores.entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_loaded()?;
+        store.ensure_link_loaded(link_id)?;
         store.delete_link(link_id)?;
         store.enqueue_save(SaveQueueEntry::DeleteLink);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
@@ -409,6 +417,10 @@ impl super::WriterCore {
         let store = stores.entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_loaded()?;
+        let hl_ids: Vec<String> = store.graph_meta_hyperlink_ids();
+        for hl_id in &hl_ids {
+            let _ = store.ensure_hyperlink_loaded(hl_id);
+        }
         Ok(store.all_hyperlinks().cloned().collect())
     }
 

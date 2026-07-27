@@ -948,4 +948,25 @@ impl WriterCoreApi {
         });
         Ok(true)
     }
+
+    pub fn flush_starmap_store(&self, starmap_id: &str) -> ApiResult<bool> {
+        self.core()
+            .flush_starmap_store(starmap_id)
+            .map(|_| true)
+            .map_err(Into::into)
+    }
+
+    pub fn close_starmap_store(&self, starmap_id: &str) -> ApiResult<bool> {
+        self.core()
+            .close_starmap_store(starmap_id)
+            .map(|_| true)
+            .map_err(Into::into)
+    }
+
+    pub fn flush_all_starmap_stores(&self) -> ApiResult<bool> {
+        self.core()
+            .flush_all_starmap_stores()
+            .map(|_| true)
+            .map_err(Into::into)
+    }
 }
