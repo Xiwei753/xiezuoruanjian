@@ -2964,4 +2964,117 @@ mod tests {
         assert!(store2.get_node("n1").is_some());
         assert!(store2.get_node("n2").is_none());
     }
+
+    #[test]
+    fn deferred_save_merges_consecutive_operations() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.upsert_node(make_test_node("n1", "First"));
+        store.enqueue_save(SaveQueueEntry::Node);
+        store.enqueue_save(SaveQueueEntry::GraphMeta);
+
+        store.upsert_node(make_test_node("n2", "Second"));
+        store.enqueue_save(SaveQueueEntry::Node);
+        store.enqueue_save(SaveQueueEntry::GraphMeta);
+
+        store.upsert_node(make_test_node("n3", "Third"));
+        store.enqueue_save(SaveQueueEntry::Node);
+        store.enqueue_save(SaveQueueEntry::GraphMeta);
+
+        assert_eq!(store.save_queue_len(), 2);
+        assert!(store.is_dirty());
+
+        let node_file_1 = dir.path()
+            .join("app-meta").join("starmaps").join(&meta.starmap_id)
+            .join("nodes").join(package_storage::bucket_for_id("n1"))
+            .join("n1.json");
+        let node_file_3 = dir.path()
+            .join("app-meta").join("starmaps").join(&meta.starmap_id)
+            .join("nodes").join(package_storage::bucket_for_id("n3"))
+            .join("n3.json");
+        assert!(!node_file_1.exists());
+        assert!(!node_file_3.exists());
+
+        store.flush_save_queue().unwrap();
+
+        assert!(node_file_1.exists());
+        assert!(node_file_3.exists());
+        assert!(!store.is_dirty());
+        assert_eq!(store.save_queue_len(), 0);
+    }
+
+    #[test]
+    fn deferred_save_with_delete_merges_into_single_flush() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.upsert_node(make_test_node("n1", "Node1"));
+        store.upsert_node(make_test_node("n2", "Node2"));
+        store.flush().unwrap();
+
+        store.remove_node("n1");
+        store.enqueue_save(SaveQueueEntry::DeleteNode);
+        store.enqueue_save(SaveQueueEntry::GraphMeta);
+
+        store.upsert_node(make_test_node("n3", "Node3"));
+        store.enqueue_save(SaveQueueEntry::Node);
+        store.enqueue_save(SaveQueueEntry::GraphMeta);
+
+        assert_eq!(store.save_queue_len(), 3);
+        assert!(store.has_pending_deletes());
+
+        store.flush_save_queue().unwrap();
+
+        let node_file_1 = dir.path()
+            .join("app-meta").join("starmaps").join(&meta.starmap_id)
+            .join("nodes").join(package_storage::bucket_for_id("n1"))
+            .join("n1.json");
+        let node_file_3 = dir.path()
+            .join("app-meta").join("starmaps").join(&meta.starmap_id)
+            .join("nodes").join(package_storage::bucket_for_id("n3"))
+            .join("n3.json");
+        assert!(!node_file_1.exists());
+        assert!(node_file_3.exists());
+        assert!(!store.has_pending_deletes());
+        assert!(!store.is_dirty());
+    }
+
+    #[test]
+    fn layout_flush_only_on_explicit_save() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.upsert_node(make_test_node("n1", "Node1"));
+        store.flush().unwrap();
+
+        let mut layout = StarMapLayout::default();
+        layout.nodes.push(StarMapLayoutNode {
+            node_id: "n1".to_string(),
+            x: 10.0, y: 20.0, width: 100.0, height: 50.0,
+            radius: 25.0, collapsed: false, z_index: 0,
+            scale: 1.0, depth: 0.0, focus_weight: 0.0, orbit_group: None,
+        });
+        store.set_layout(layout);
+        store.enqueue_save(SaveQueueEntry::Layout);
+        store.enqueue_save(SaveQueueEntry::GraphMeta);
+
+        assert!(store.is_dirty());
+        assert_eq!(store.save_queue_len(), 2);
+
+        store.upsert_node(make_test_node("n2", "Node2"));
+        store.enqueue_save(SaveQueueEntry::Node);
+        store.enqueue_save(SaveQueueEntry::GraphMeta);
+
+        assert_eq!(store.save_queue_len(), 3);
+
+        store.flush_save_queue().unwrap();
+        assert!(!store.is_dirty());
+    }
 }

@@ -186,7 +186,6 @@ impl super::WriterCore {
         store.enqueue_save(SaveQueueEntry::Node);
         store.enqueue_save(SaveQueueEntry::Layout);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
-        store.flush_save_queue()?;
         Ok(result)
     }
 
@@ -203,7 +202,6 @@ impl super::WriterCore {
         let result = store.update_node(node_id, &patch)?;
         store.enqueue_save(SaveQueueEntry::Node);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
-        store.flush_save_queue()?;
         Ok(result)
     }
 
@@ -218,7 +216,6 @@ impl super::WriterCore {
         store.enqueue_save(SaveQueueEntry::DeleteEmbed);
         store.enqueue_save(SaveQueueEntry::Layout);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
-        store.flush_save_queue()?;
         Ok(())
     }
 
@@ -234,7 +231,6 @@ impl super::WriterCore {
         let result = store.add_edge(edge)?;
         store.enqueue_save(SaveQueueEntry::Edge);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
-        store.flush_save_queue()?;
         Ok(result)
     }
 
@@ -251,7 +247,6 @@ impl super::WriterCore {
         let result = store.update_edge(edge_id, &patch)?;
         store.enqueue_save(SaveQueueEntry::Edge);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
-        store.flush_save_queue()?;
         Ok(result)
     }
 
@@ -263,7 +258,6 @@ impl super::WriterCore {
         store.delete_edge(edge_id)?;
         store.enqueue_save(SaveQueueEntry::DeleteEdge);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
-        store.flush_save_queue()?;
         Ok(())
     }
 
@@ -335,7 +329,6 @@ impl super::WriterCore {
         let result = store.add_embed(embed)?;
         store.enqueue_save(SaveQueueEntry::Embed);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
-        store.flush_save_queue()?;
         Ok(result)
     }
 
@@ -352,7 +345,6 @@ impl super::WriterCore {
         let result = store.update_embed(instance_id, &patch)?;
         store.enqueue_save(SaveQueueEntry::Embed);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
-        store.flush_save_queue()?;
         Ok(result)
     }
 
@@ -364,7 +356,6 @@ impl super::WriterCore {
         store.delete_embed(instance_id)?;
         store.enqueue_save(SaveQueueEntry::DeleteEmbed);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
-        store.flush_save_queue()?;
         Ok(())
     }
 
@@ -380,7 +371,6 @@ impl super::WriterCore {
         let result = store.add_link(link)?;
         store.enqueue_save(SaveQueueEntry::Link);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
-        store.flush_save_queue()?;
         Ok(result)
     }
 
@@ -397,7 +387,6 @@ impl super::WriterCore {
         let result = store.update_link(link_id, &patch)?;
         store.enqueue_save(SaveQueueEntry::Link);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
-        store.flush_save_queue()?;
         Ok(result)
     }
 
@@ -409,7 +398,6 @@ impl super::WriterCore {
         store.delete_link(link_id)?;
         store.enqueue_save(SaveQueueEntry::DeleteLink);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
-        store.flush_save_queue()?;
         Ok(())
     }
 
@@ -440,6 +428,26 @@ impl super::WriterCore {
         if let Some(mut store) = stores.remove(starmap_id) {
             if store.is_dirty() || store.has_pending_deletes() {
                 store.flush()?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn flush_starmap_store(&self, starmap_id: &str) -> Result<()> {
+        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(store) = stores.get_mut(starmap_id) {
+            if store.is_dirty() || store.has_pending_deletes() || store.save_queue_len() > 0 {
+                store.flush_save_queue()?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn flush_all_starmap_stores(&self) -> Result<()> {
+        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
+        for store in stores.values_mut() {
+            if store.is_dirty() || store.has_pending_deletes() || store.save_queue_len() > 0 {
+                store.flush_save_queue()?;
             }
         }
         Ok(())

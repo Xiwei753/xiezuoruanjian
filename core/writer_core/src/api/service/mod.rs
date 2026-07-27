@@ -99,6 +99,10 @@ impl WriterCoreApi {
     }
 
     pub(crate) fn search_service_rebuild(&self, project_id: Option<&str>) -> crate::error::Result<crate::search::SearchIndexStatus> {
+        {
+            let core = self.core_instance.lock().unwrap_or_else(|e| e.into_inner());
+            core.flush_all_starmap_stores()?;
+        }
         let entries = crate::search::rebuild::rebuild_index(&self.workspace_path, project_id)?;
         let mut service = self.search_service.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(pid) = project_id {
