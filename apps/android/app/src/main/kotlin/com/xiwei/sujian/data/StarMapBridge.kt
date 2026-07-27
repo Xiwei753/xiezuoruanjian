@@ -202,12 +202,8 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
     }
 
     fun addStarmapNode(starmapId: String, node: StarMapGraphNode, x: Float = 0f, y: Float = 0f): BridgeResult<StarMapGraphNode> {
-        val cache = when (val cacheResult = refreshRawCache(starmapId)) {
-            is BridgeResult.Success -> cacheResult.data
-            is BridgeResult.Error -> return BridgeResult.Error(cacheResult.envelope)
-            BridgeResult.NotLoaded -> return BridgeResult.NotLoaded
-        }
-        return when (val result = addStarMapNode(starmapId, node.toDto(cache.nodes[node.id]), x, y)) {
+        val cache = rawCacheByStarmapId[starmapId]
+        return when (val result = addStarMapNode(starmapId, node.toDto(cache?.nodes?.get(node.id)), x, y)) {
             is BridgeResult.Success -> {
                 rawCacheByStarmapId.getOrPut(starmapId) { StarMapRawCache() }
                     .nodes[result.data.id] = result.data
@@ -219,11 +215,6 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
     }
 
     fun updateStarmapNode(starmapId: String, nodeId: String, title: String? = null, kind: StarMapNodeKind? = null, tags: List<String>? = null): BridgeResult<StarMapGraphNode> {
-        val cache = when (val cacheResult = refreshRawCache(starmapId)) {
-            is BridgeResult.Success -> cacheResult.data
-            is BridgeResult.Error -> return BridgeResult.Error(cacheResult.envelope)
-            BridgeResult.NotLoaded -> return BridgeResult.NotLoaded
-        }
         val patch = StarMapNodePatchInputDto(
             title = title,
             kind = kind?.toDto(),
@@ -233,7 +224,7 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
         )
         return when (val result = updateStarMapNode(starmapId, nodeId, patch)) {
             is BridgeResult.Success -> {
-                cache.nodes[result.data.id] = result.data
+                rawCacheByStarmapId[starmapId]?.nodes?.put(result.data.id, result.data)
                 BridgeResult.Success(result.data.toGraphNode())
             }
             is BridgeResult.Error -> BridgeResult.Error(result.envelope)
@@ -242,14 +233,9 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
     }
 
     fun deleteStarmapNode(starmapId: String, nodeId: String): BridgeResult<Boolean> {
-        val cache = when (val cacheResult = refreshRawCache(starmapId)) {
-            is BridgeResult.Success -> cacheResult.data
-            is BridgeResult.Error -> return BridgeResult.Error(cacheResult.envelope)
-            BridgeResult.NotLoaded -> return BridgeResult.NotLoaded
-        }
         return when (val result = deleteStarMapNode(starmapId, nodeId)) {
             is BridgeResult.Success -> {
-                cache.nodes.remove(nodeId)
+                rawCacheByStarmapId[starmapId]?.nodes?.remove(nodeId)
                 BridgeResult.Success(true)
             }
             is BridgeResult.Error -> BridgeResult.Error(result.envelope)
@@ -258,11 +244,6 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
     }
 
     fun addStarmapEdge(starmapId: String, from: String, to: String, kind: StarMapEdgeKind = StarMapEdgeKind.RelatedTo, label: String? = null): BridgeResult<StarMapGraphEdge> {
-        val cache = when (val cacheResult = refreshRawCache(starmapId)) {
-            is BridgeResult.Success -> cacheResult.data
-            is BridgeResult.Error -> return BridgeResult.Error(cacheResult.envelope)
-            BridgeResult.NotLoaded -> return BridgeResult.NotLoaded
-        }
         val now = System.currentTimeMillis()
         val edge = StarMapEdgeDto(
             id = java.util.UUID.randomUUID().toString(),
@@ -282,7 +263,7 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
         )
         return when (val result = addStarMapEdge(starmapId, edge)) {
             is BridgeResult.Success -> {
-                cache.edges[result.data.id] = result.data
+                rawCacheByStarmapId[starmapId]?.edges?.put(result.data.id, result.data)
                 BridgeResult.Success(result.data.toGraphEdge())
             }
             is BridgeResult.Error -> BridgeResult.Error(result.envelope)
@@ -291,14 +272,9 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
     }
 
     fun deleteStarmapEdge(starmapId: String, edgeId: String): BridgeResult<Boolean> {
-        val cache = when (val cacheResult = refreshRawCache(starmapId)) {
-            is BridgeResult.Success -> cacheResult.data
-            is BridgeResult.Error -> return BridgeResult.Error(cacheResult.envelope)
-            BridgeResult.NotLoaded -> return BridgeResult.NotLoaded
-        }
         return when (val result = deleteStarMapEdge(starmapId, edgeId)) {
             is BridgeResult.Success -> {
-                cache.edges.remove(edgeId)
+                rawCacheByStarmapId[starmapId]?.edges?.remove(edgeId)
                 BridgeResult.Success(true)
             }
             is BridgeResult.Error -> BridgeResult.Error(result.envelope)
@@ -307,11 +283,6 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
     }
 
     fun updateStarmapEdge(starmapId: String, edgeId: String, kind: StarMapEdgeKind? = null, label: String? = null): BridgeResult<StarMapGraphEdge> {
-        val cache = when (val cacheResult = refreshRawCache(starmapId)) {
-            is BridgeResult.Success -> cacheResult.data
-            is BridgeResult.Error -> return BridgeResult.Error(cacheResult.envelope)
-            BridgeResult.NotLoaded -> return BridgeResult.NotLoaded
-        }
         val patch = StarMapEdgePatchInputDto(
             kind = kind?.toDto(),
             label = label,
@@ -319,7 +290,7 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
         )
         return when (val result = updateStarMapEdge(starmapId, edgeId, patch)) {
             is BridgeResult.Success -> {
-                cache.edges[result.data.id] = result.data
+                rawCacheByStarmapId[starmapId]?.edges?.put(result.data.id, result.data)
                 BridgeResult.Success(result.data.toGraphEdge())
             }
             is BridgeResult.Error -> BridgeResult.Error(result.envelope)
@@ -328,11 +299,9 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
     }
 
     fun saveStarmapLayout(starmapId: String, layout: StarMapLayoutData): BridgeResult<Boolean> {
-        val cache = when (val cacheResult = refreshRawCache(starmapId)) {
-            is BridgeResult.Success -> cacheResult.data
-            is BridgeResult.Error -> return BridgeResult.Error(cacheResult.envelope)
-            BridgeResult.NotLoaded -> return BridgeResult.NotLoaded
-        }
+        val cache = rawCacheByStarmapId[starmapId] ?: return BridgeResult.Error(
+            ResultEnvelope.error("CACHE_NOT_INITIALIZED", "Starmap cache not initialized for $starmapId")
+        )
         val dto = layout.toDto(cache)
         return when (val result = saveStarMapLayout(starmapId, dto)) {
             is BridgeResult.Success -> {

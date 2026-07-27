@@ -288,6 +288,7 @@ private fun StarMapEditorScreen(
             val flushResult = bridge.flushStarmapStore(starmapId)
             if (flushResult is BridgeResult.Error) {
                 DiagnosticsLogger.e("StarMapScreen", "flushStarmapStore failed on dispose: ${flushResult.envelope.message}")
+                return@onDispose
             }
             val closeResult = bridge.closeStarmapStore(starmapId)
             if (closeResult is BridgeResult.Error) {
@@ -372,8 +373,15 @@ private fun StarMapEditorScreen(
                                         withContext(Dispatchers.IO) {
                                             try {
                                                 val bridge = BridgeProvider.getStarmapBridge(context)
-                                                bridge.updateStarmapNode(starmapId, geometry.nodeId, title = finalText.trim(), kind = null)
-                                            } catch (_: Exception) { }
+                                                val result = bridge.updateStarmapNode(starmapId, geometry.nodeId, title = finalText.trim(), kind = null)
+                                                if (result is BridgeResult.Error) {
+                                                    DiagnosticsLogger.e("StarMapScreen", "updateStarmapNode onCommit failed: ${result.envelope.message}")
+                                                    return@withContext
+                                                }
+                                            } catch (e: Exception) {
+                                                DiagnosticsLogger.e("StarMapScreen", "updateStarmapNode onCommit exception: ${e.message}")
+                                                return@withContext
+                                            }
                                         }
                                         loadStarMap()
                                     }
@@ -431,8 +439,15 @@ private fun StarMapEditorScreen(
                         withContext(Dispatchers.IO) {
                             try {
                                 val bridge = BridgeProvider.getStarmapBridge(context)
-                                bridge.updateStarmapNode(starmapId, nodeId, title = newTitle, kind = newKind)
-                            } catch (_: Exception) { }
+                                val result = bridge.updateStarmapNode(starmapId, nodeId, title = newTitle, kind = newKind)
+                                if (result is BridgeResult.Error) {
+                                    DiagnosticsLogger.e("StarMapScreen", "updateStarmapNode failed: ${result.envelope.message}")
+                                    return@withContext
+                                }
+                            } catch (e: Exception) {
+                                DiagnosticsLogger.e("StarMapScreen", "updateStarmapNode exception: ${e.message}")
+                                return@withContext
+                            }
                         }
                         selectedNodeId = null
                         loadStarMap()
@@ -443,8 +458,15 @@ private fun StarMapEditorScreen(
                         withContext(Dispatchers.IO) {
                             try {
                                 val bridge = BridgeProvider.getStarmapBridge(context)
-                                bridge.deleteStarmapNode(starmapId, nodeId)
-                            } catch (_: Exception) { }
+                                val result = bridge.deleteStarmapNode(starmapId, nodeId)
+                                if (result is BridgeResult.Error) {
+                                    DiagnosticsLogger.e("StarMapScreen", "deleteStarmapNode failed: ${result.envelope.message}")
+                                    return@withContext
+                                }
+                            } catch (e: Exception) {
+                                DiagnosticsLogger.e("StarMapScreen", "deleteStarmapNode exception: ${e.message}")
+                                return@withContext
+                            }
                         }
                         selectedNodeId = null
                         loadStarMap()
@@ -479,8 +501,15 @@ private fun StarMapEditorScreen(
                                     title = t,
                                     kind = nodeKind
                                 )
-                                bridge.addStarmapNode(starmapId, node)
-                            } catch (_: Exception) { }
+                                val result = bridge.addStarmapNode(starmapId, node)
+                                if (result is BridgeResult.Error) {
+                                    DiagnosticsLogger.e("StarMapScreen", "addStarmapNode failed: ${result.envelope.message}")
+                                    return@withContext
+                                }
+                            } catch (e: Exception) {
+                                DiagnosticsLogger.e("StarMapScreen", "addStarmapNode exception: ${e.message}")
+                                return@withContext
+                            }
                         }
                         loadStarMap()
                     }
@@ -534,8 +563,15 @@ private fun StarMapEditorScreen(
                         withContext(Dispatchers.IO) {
                             try {
                                 val bridge = BridgeProvider.getStarmapBridge(context)
-                                bridge.addStarmapEdge(starmapId, fromNodeId, toNodeId)
-                            } catch (_: Exception) { }
+                                val result = bridge.addStarmapEdge(starmapId, fromNodeId, toNodeId)
+                                if (result is BridgeResult.Error) {
+                                    DiagnosticsLogger.e("StarMapScreen", "addStarmapEdge failed: ${result.envelope.message}")
+                                    return@withContext
+                                }
+                            } catch (e: Exception) {
+                                DiagnosticsLogger.e("StarMapScreen", "addStarmapEdge exception: ${e.message}")
+                                return@withContext
+                            }
                         }
                         loadStarMap()
                     }

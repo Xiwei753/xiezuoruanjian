@@ -61,11 +61,15 @@ impl super::WriterCore {
     pub fn delete_starmap(&self, starmap_id: &str) -> Result<()> {
         {
             let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(mut store) = stores.remove(starmap_id) {
+            if let Some(store) = stores.get_mut(starmap_id) {
                 if store.is_dirty() || store.has_pending_deletes() {
                     store.flush()?;
                 }
             }
+        }
+        {
+            let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
+            stores.remove(starmap_id);
         }
         crate::starmap::delete_starmap(&self.workspace_path, starmap_id)
     }
