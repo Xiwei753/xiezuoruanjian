@@ -881,3 +881,39 @@ use tempfile::TempDir;
         assert!(!result.diagnostics.is_empty(), "should have diagnostics for corrupt link, got {} diagnostics", result.diagnostics.len());
         assert_eq!(result.diagnostics[0].kind, LoadDiagnosticKind::Corrupt, "should report Corrupt not Missing");
     }
+
+#[test]
+    fn prefetch_nearby_objects_no_infinite_recursion_when_no2_index() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "NoIndex", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.upsert_node(make_test_node("n1", "Node1"));
+        store.upsert_node(make_test_node("n2", "Node2"));
+
+        let edge = crate::starmap::types::StarMapEdge {
+            id: "e1".to_string(),
+            from: Some("n1".to_string()),
+            to: Some("n2".to_string()),
+            kind: crate::starmap::types::StarMapEdgeKind::RelatedTo,
+            label: None,
+            payload: None,
+            from_target: None,
+            to_target: None,
+            from_endpoint: None,
+            to_endpoint: None,
+            from_endpoint_path: None,
+            to_endpoint_path: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+        store.upsert_edge(edge);
+
+        store.flush_save_queue().unwrap();
+        store.update_graph_meta_file().unwrap();
+
+        let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        let result = store2.load_phased(LoadPhase::PrefetchNearbyObjects);
+        assert!(result.is_ok(), "load_phased must not stack overflow: {:?}", result);
+    }

@@ -577,7 +577,15 @@ impl StarMapStore {
             .map(|m| !m.edge_relation_index.is_empty() || m.edge_ids.is_empty())
             .unwrap_or(false);
 
-        if has_index {
+        let mut has_index_after_rebuild = has_index;
+        if !has_index {
+            self.rebuild_relation_indexes();
+            has_index_after_rebuild = self.graph_meta.as_ref()
+                .map(|m| !m.edge_relation_index.is_empty() || m.edge_ids.is_empty())
+                .unwrap_or(false);
+        }
+
+        if has_index_after_rebuild {
             let edge_relation_index = self.graph_meta.as_ref().unwrap().edge_relation_index.clone();
             for eri in &edge_relation_index {
                 let refs = extract_eri_node_refs(eri);
@@ -591,10 +599,6 @@ impl StarMapStore {
                     }
                 }
             }
-        } else {
-            self.rebuild_relation_indexes();
-            self.prefetch_nearby_objects(_diagnostics);
-            return;
         }
 
         for node_id in &adjacent_node_ids {
@@ -612,58 +616,40 @@ impl StarMapStore {
             .map(|m| !m.embed_host_index.is_empty() || m.embed_instance_ids.is_empty())
             .unwrap_or(false);
 
-        if has_edge_index {
-            let edge_relation_index = self.graph_meta.as_ref().unwrap().edge_relation_index.clone();
-            for eri in &edge_relation_index {
-                if !self.edges.contains_key(&eri.edge_id) {
-                    let refs = extract_eri_node_refs(eri);
-                    let any_loaded = refs.iter().any(|id| self.nodes.contains_key(*id));
-                    if any_loaded {
-                        if let Some(edge) = self.try_load_edge(&eri.edge_id) {
-                            self.edges.insert(eri.edge_id.clone(), edge);
-                        }
-                    }
-                }
+        if has_edge_index || self.graph_meta.is_some() {
+            if !has_edge_index {
+                self.rebuild_relation_indexes();
             }
-        } else {
-            self.rebuild_relation_indexes();
-            let edge_relation_index = self.graph_meta.as_ref().unwrap().edge_relation_index.clone();
-            for eri in &edge_relation_index {
-                if !self.edges.contains_key(&eri.edge_id) {
-                    let refs = extract_eri_node_refs(eri);
-                    let any_loaded = refs.iter().any(|id| self.nodes.contains_key(*id));
-                    if any_loaded {
-                        if let Some(edge) = self.try_load_edge(&eri.edge_id) {
-                            self.edges.insert(eri.edge_id.clone(), edge);
+            if let Some(ref meta) = self.graph_meta {
+                let edge_relation_index = meta.edge_relation_index.clone();
+                for eri in &edge_relation_index {
+                    if !self.edges.contains_key(&eri.edge_id) {
+                        let refs = extract_eri_node_refs(eri);
+                        let any_loaded = refs.iter().any(|id| self.nodes.contains_key(*id));
+                        if any_loaded {
+                            if let Some(edge) = self.try_load_edge(&eri.edge_id) {
+                                self.edges.insert(eri.edge_id.clone(), edge);
+                            }
                         }
                     }
                 }
             }
         }
 
-        if has_embed_index {
-            let embed_host_index = self.graph_meta.as_ref().unwrap().embed_host_index.clone();
-            for ehi in &embed_host_index {
-                if !self.embeds.contains_key(&ehi.instance_id) {
-                    let refs = extract_ehi_node_refs(ehi);
-                    let any_loaded = refs.iter().any(|id| self.nodes.contains_key(*id));
-                    if any_loaded {
-                        if let Some(embed) = self.try_load_embed(&ehi.instance_id) {
-                            self.embeds.insert(ehi.instance_id.clone(), embed);
-                        }
-                    }
-                }
+        if has_embed_index || self.graph_meta.is_some() {
+            if !has_embed_index {
+                self.rebuild_relation_indexes();
             }
-        } else {
-            self.rebuild_relation_indexes();
-            let embed_host_index = self.graph_meta.as_ref().unwrap().embed_host_index.clone();
-            for ehi in &embed_host_index {
-                if !self.embeds.contains_key(&ehi.instance_id) {
-                    let refs = extract_ehi_node_refs(ehi);
-                    let any_loaded = refs.iter().any(|id| self.nodes.contains_key(*id));
-                    if any_loaded {
-                        if let Some(embed) = self.try_load_embed(&ehi.instance_id) {
-                            self.embeds.insert(ehi.instance_id.clone(), embed);
+            if let Some(ref meta) = self.graph_meta {
+                let embed_host_index = meta.embed_host_index.clone();
+                for ehi in &embed_host_index {
+                    if !self.embeds.contains_key(&ehi.instance_id) {
+                        let refs = extract_ehi_node_refs(ehi);
+                        let any_loaded = refs.iter().any(|id| self.nodes.contains_key(*id));
+                        if any_loaded {
+                            if let Some(embed) = self.try_load_embed(&ehi.instance_id) {
+                                self.embeds.insert(ehi.instance_id.clone(), embed);
+                            }
                         }
                     }
                 }

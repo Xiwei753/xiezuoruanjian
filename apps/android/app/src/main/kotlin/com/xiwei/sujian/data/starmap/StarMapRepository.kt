@@ -24,8 +24,9 @@ internal class StarMapRepository(
         return when (val result = bridge.getStarMapGraph(starmapId)) {
             is BridgeResult.Success -> {
                 try {
-                    cache.put(starmapId, result.data.toRawCache())
-                    BridgeResult.Success(result.data.toModel())
+                    val rawCache = result.data.toRawCache()
+                    cache.put(starmapId, rawCache)
+                    BridgeResult.Success(result.data.toModel(rawCache))
                 } catch (e: Exception) {
                     BridgeResult.Error(ResultEnvelope.error("CONVERSION_ERROR", "Failed to convert starmap graph: ${e.message}"))
                 }

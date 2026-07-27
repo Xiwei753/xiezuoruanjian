@@ -71,7 +71,7 @@ internal fun StarMapGraphDto.toRawCache(): StarMapRawCache = StarMapRawCache(
     edges = edges.associateByTo(mutableMapOf()) { it.id }
 )
 
-internal fun StarMapGraphDto.toModel(): StarMapData = StarMapData(
+internal fun StarMapGraphDto.toModel(cache: StarMapRawCache? = null): StarMapData = StarMapData(
     graph = StarMapGraphData(
         schemaVersion = schemaVersion.toInt(),
         id = id,
@@ -82,10 +82,12 @@ internal fun StarMapGraphDto.toModel(): StarMapData = StarMapData(
         createdAt = createdAt.toLong(),
         updatedAt = updatedAt.toLong()
     ),
-    layout = StarMapLayoutData(
-        kind = StarMapLayoutKind.Freeform,
-        nodes = emptyList()
-    )
+    layout = cache?.let { c ->
+        val layoutNodes = c.layoutNodes.values.map { it.toModel() }
+        if (layoutNodes.isNotEmpty()) {
+            StarMapLayoutData(kind = StarMapLayoutKind.Freeform, nodes = layoutNodes)
+        } else null
+    } ?: StarMapLayoutData(kind = StarMapLayoutKind.Freeform, nodes = emptyList())
 )
 
 internal fun StarMapNodeDto.toGraphNode(): StarMapGraphNode = StarMapGraphNode(
