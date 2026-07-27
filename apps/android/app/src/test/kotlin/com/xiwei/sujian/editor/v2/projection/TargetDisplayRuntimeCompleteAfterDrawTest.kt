@@ -312,4 +312,140 @@ class TargetDisplayRuntimeCompleteAfterDrawTest {
             runtime.needsFrame()
         )
     }
+
+    @Test
+    fun drawFrame_completesTransactionInMaskedProjection() {
+        val manualTimeSource = ManualAnimationTimeSource()
+        val transactionIdSource = TransactionIdSource()
+        val runtime = createRuntime(manualTimeSource, transactionIdSource)
+        val visualRuntime = getVisualRuntime(runtime)
+
+        runtime.setSecretMasked(true)
+
+        manualTimeSource.advanceByMs(1)
+        submitInsertAnimation(visualRuntime)
+
+        assertTrue(
+            "After submit in masked projection, should have active animation",
+            runtime.hasActiveAnimation()
+        )
+
+        val startFrameNanos = manualTimeSource.nowNanos()
+        runtime.onFrame(startFrameNanos)
+
+        manualTimeSource.advanceByMs(DURATION_MS + 1)
+        val endFrameNanos = manualTimeSource.nowNanos()
+        runtime.onFrame(endFrameNanos)
+
+        assertTrue(
+            "After onFrame at 100% in masked projection, transaction must still be active",
+            runtime.hasActiveAnimation()
+        )
+
+        val bitmap = Bitmap.createBitmap(EDITOR_WIDTH, EDITOR_HEIGHT, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        runtime.drawFrame(canvas)
+
+        assertFalse(
+            "After drawFrame in masked projection, animation should be completed",
+            runtime.hasActiveAnimation()
+        )
+
+        assertFalse(
+            "After drawFrame completes transaction in masked projection, needsFrame should be false",
+            runtime.needsFrame()
+        )
+    }
+
+    @Test
+    fun drawFrame_completesRebasedTransactionWhenCompleteAfterDrawIsTrue() {
+        val manualTimeSource = ManualAnimationTimeSource()
+        val transactionIdSource = TransactionIdSource()
+        val runtime = createRuntime(manualTimeSource, transactionIdSource)
+        val visualRuntime = getVisualRuntime(runtime)
+
+        manualTimeSource.advanceByMs(1)
+        submitInsertAnimation(visualRuntime)
+
+        val startFrameNanos = manualTimeSource.nowNanos()
+        runtime.onFrame(startFrameNanos)
+
+        manualTimeSource.advanceByMs(50)
+        val midFrameNanos = manualTimeSource.nowNanos()
+        runtime.onFrame(midFrameNanos)
+
+        assertTrue(
+            "After onFrame at 50%, first animation should still be active",
+            runtime.hasActiveAnimation()
+        )
+
+        submitInsertAnimation(visualRuntime)
+
+        assertTrue(
+            "After rebase submit, should have active animation (new transaction)",
+            runtime.hasActiveAnimation()
+        )
+
+        val rebaseFrameNanos = manualTimeSource.nowNanos()
+        runtime.onFrame(rebaseFrameNanos)
+
+        manualTimeSource.advanceByMs(DURATION_MS + 1)
+        val endFrameNanos = manualTimeSource.nowNanos()
+        runtime.onFrame(endFrameNanos)
+
+        assertTrue(
+            "After onFrame at 100% of rebased animation, transaction must still be active",
+            runtime.hasActiveAnimation()
+        )
+
+        val bitmap = Bitmap.createBitmap(EDITOR_WIDTH, EDITOR_HEIGHT, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        runtime.drawFrame(canvas)
+
+        assertFalse(
+            "After drawFrame completes rebased transaction, animation should be completed",
+            runtime.hasActiveAnimation()
+        )
+
+        assertFalse(
+            "After drawFrame completes rebased transaction, needsFrame should be false",
+            runtime.needsFrame()
+        )
+    }
+
+    @Test
+    fun drawFrame_maskedProjectionFallbackPathCompletesTransaction() {
+        val manualTimeSource = ManualAnimationTimeSource()
+        val transactionIdSource = TransactionIdSource()
+        val runtime = createRuntime(manualTimeSource, transactionIdSource)
+        val visualRuntime = getVisualRuntime(runtime)
+
+        runtime.setSecretMasked(true)
+
+        manualTimeSource.advanceByMs(1)
+        submitInsertAnimation(visualRuntime)
+
+        val startFrameNanos = manualTimeSource.nowNanos()
+        runtime.onFrame(startFrameNanos)
+
+        manualTimeSource.advanceByMs(DURATION_MS + 1)
+        val endFrameNanos = manualTimeSource.nowNanos()
+        runtime.onFrame(endFrameNanos)
+
+        runtime.invalidateDisplayState()
+
+        val bitmap = Bitmap.createBitmap(EDITOR_WIDTH, EDITOR_HEIGHT, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        runtime.drawFrame(canvas)
+
+        assertFalse(
+            "drawFrame fallback path in masked projection must complete transaction",
+            runtime.hasActiveAnimation()
+        )
+
+        assertFalse(
+            "After fallback drawFrame in masked projection, needsFrame should be false",
+            runtime.needsFrame()
+        )
+    }
 }
