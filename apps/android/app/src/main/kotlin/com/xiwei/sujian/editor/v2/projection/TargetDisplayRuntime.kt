@@ -74,7 +74,7 @@ class TargetDisplayRuntime(
                 selEndDisplayUtf16
             )
             if (tickResult != null) {
-                cachedFrameState = FrameState(tickResult.renderInput, versionAtFrameStart)
+                cachedFrameState = FrameState(tickResult.renderInput, versionAtFrameStart, tickResult.completeAfterDraw)
             }
         }
         lastFrameTimeNanos = frameTimeNanos
@@ -237,14 +237,44 @@ class TargetDisplayRuntime(
         invalidateDisplayState()
     }
 
+    private fun computeCurrentFrameTimeMs(): Long {
+        val nanos = lastFrameTimeNanos
+        return if (nanos != Long.MIN_VALUE) nanos / 1_000_000 else timeSource.nowNanos() / 1_000_000
+    }
+
+    private fun tickStaticFrameState(frameTimeMs: Long): FrameState? {
+        val layout = layoutEngine.getLayout() ?: return null
+        val highlightsUtf16 = getSearchHighlightsUtf16()
+        val cursorDisplayUtf16 = projection.realUtf8ToDisplayUtf16(mirror.getCursorUtf8())
+        val selStartDisplayUtf16 = projection.realUtf8ToDisplayUtf16(selectionStartUtf8)
+        val selEndDisplayUtf16 = projection.realUtf8ToDisplayUtf16(selectionEndUtf8)
+        val tickResult = visualRuntime.tick(
+            frameTimeMs,
+            layout,
+            layoutEngine.getCurrentRevision(),
+            highlightsUtf16,
+            viewportWidth, viewportHeight,
+            scrollX, scrollY,
+            true, true,
+            cursorDisplayUtf16,
+            selStartDisplayUtf16,
+            selEndDisplayUtf16
+        )
+        return tickResult?.let { FrameState(it.renderInput, displayStateVersion, it.completeAfterDraw) }
+    }
+
     fun drawFrame(canvas: Canvas) {
         val cached = cachedFrameState
         if (cached != null && cached.displayStateVersion == displayStateVersion) {
             renderRuntime.drawFromFrameState(canvas, cached)
+            if (cached.completeAfterDraw) {
+                val frameTimeMs = computeCurrentFrameTimeMs()
+                visualRuntime.completeAfterDraw(frameTimeMs)
+                cachedFrameState = tickStaticFrameState(frameTimeMs)
+            }
             return
         }
-        val frameTimeNanos = lastFrameTimeNanos
-        val frameTimeMs = if (frameTimeNanos != Long.MIN_VALUE) frameTimeNanos / 1_000_000 else timeSource.nowNanos() / 1_000_000
+        val frameTimeMs = computeCurrentFrameTimeMs()
         val layout = layoutEngine.getLayout() ?: return
         val highlightsUtf16 = getSearchHighlightsUtf16()
         val cursorDisplayUtf16 = projection.realUtf8ToDisplayUtf16(mirror.getCursorUtf8())
@@ -263,9 +293,13 @@ class TargetDisplayRuntime(
             selEndDisplayUtf16
         )
         if (frameState != null) {
-            val versionedFrameState = FrameState(frameState.renderInput, displayStateVersion)
+            val versionedFrameState = FrameState(frameState.renderInput, displayStateVersion, frameState.completeAfterDraw)
             cachedFrameState = versionedFrameState
             renderRuntime.drawFromFrameState(canvas, versionedFrameState)
+            if (frameState.completeAfterDraw) {
+                visualRuntime.completeAfterDraw(frameTimeMs)
+                cachedFrameState = tickStaticFrameState(frameTimeMs)
+            }
         }
     }
 
