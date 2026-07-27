@@ -336,4 +336,45 @@ mod tests {
         assert_eq!(range.start().value(), 1);
         assert_eq!(range.end().value(), 1);
     }
+
+    #[test]
+    fn undo_entry_uses_strong_cursor_types() {
+        use crate::editor::kernel::UndoEntry;
+        let entry = UndoEntry {
+            old_text: "hello".to_string(),
+            new_text: "world".to_string(),
+            old_cursor: Utf8ByteOffset::unchecked(0),
+            new_cursor: Utf8ByteOffset::unchecked(5),
+        };
+        assert_eq!(entry.old_cursor.value(), 0);
+        assert_eq!(entry.new_cursor.value(), 5);
+    }
+
+    #[test]
+    fn composition_session_state_uses_strong_range_types() {
+        use crate::editor::kernel::CompositionSessionState;
+        let state = CompositionSessionState {
+            session_id: EditorSessionId::new(1),
+            base_revision: EditorRevision::initial(),
+            generation: EditorSessionGeneration::initial(),
+            replace_start: Utf8ByteOffset::unchecked(3),
+            replace_end_exclusive: Utf8ByteOffset::unchecked(6),
+            preedit_text: "你好".to_string(),
+            preedit_cursor_utf16: 1,
+        };
+        assert_eq!(state.replace_start.value(), 3);
+        assert_eq!(state.replace_end_exclusive.value(), 6);
+        assert_ne!(state.replace_start, state.replace_end_exclusive);
+    }
+
+    #[test]
+    fn strong_types_prevent_cross_assignment() {
+        let offset = Utf8ByteOffset::unchecked(42);
+        let revision = EditorRevision::new(42);
+        let session_id = EditorSessionId::new(42);
+        let generation = EditorSessionGeneration::new(42);
+        assert_eq!(offset.value() as u64, revision.value());
+        assert_eq!(revision.value(), session_id.value());
+        assert_eq!(session_id.value(), generation.value());
+    }
 }

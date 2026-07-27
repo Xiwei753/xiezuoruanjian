@@ -174,8 +174,8 @@ impl EditorKernel {
         self.undo_stack.push(UndoEntry {
             old_text: self.text[..byte_offset].to_string() + &self.text[byte_offset + text.len()..],
             new_text: self.text.clone(),
-            old_cursor: old_cursor.value(),
-            new_cursor: new_cursor_val,
+            old_cursor,
+            new_cursor: Utf8ByteOffset::unchecked(new_cursor_val),
         });
         self.redo_stack.clear();
 
@@ -269,8 +269,8 @@ impl EditorKernel {
         self.undo_stack.push(UndoEntry {
             old_text: old_text.clone(),
             new_text: self.text.clone(),
-            old_cursor: old_cursor.value(),
-            new_cursor: byte_start,
+            old_cursor,
+            new_cursor: Utf8ByteOffset::unchecked(byte_start),
         });
         self.redo_stack.clear();
 
@@ -365,8 +365,8 @@ impl EditorKernel {
         self.undo_stack.push(UndoEntry {
             old_text: old_text.clone(),
             new_text: self.text.clone(),
-            old_cursor: old_cursor.value(),
-            new_cursor: new_cursor_val,
+            old_cursor,
+            new_cursor: Utf8ByteOffset::unchecked(byte_start),
         });
         self.redo_stack.clear();
 
@@ -462,8 +462,8 @@ impl EditorKernel {
         self.undo_stack.push(UndoEntry {
             old_text: self.text[..byte_offset].to_string() + &self.text[byte_offset + text.len()..],
             new_text: self.text.clone(),
-            old_cursor: old_cursor.value(),
-            new_cursor: new_cursor_val,
+            old_cursor,
+            new_cursor: Utf8ByteOffset::unchecked(new_cursor_val),
         });
         self.redo_stack.clear();
 
@@ -552,7 +552,7 @@ impl EditorKernel {
         let (byte_start, byte_end_exclusive) = Self::normalize_range(byte_start, byte_end_exclusive);
 
         if let Some(ref session) = self.composition_session {
-            if byte_start != session.replace_start || byte_end_exclusive != session.replace_end_exclusive {
+            if byte_start != session.replace_start.value() || byte_end_exclusive != session.replace_end_exclusive.value() {
                 return EditorEditOutcome::InvalidRange(self.noop_result(base_revision, old_cursor, old_selection));
             }
         }
@@ -581,8 +581,8 @@ impl EditorKernel {
         self.undo_stack.push(UndoEntry {
             old_text: old_text.clone(),
             new_text: self.text.clone(),
-            old_cursor: old_cursor.value(),
-            new_cursor: sel_head,
+            old_cursor,
+            new_cursor: Utf8ByteOffset::unchecked(byte_start),
         });
         self.redo_stack.clear();
         let preedit_byte_len = self.composition_session.as_ref().map(|s| s.preedit_text.len()).unwrap_or(0);
@@ -734,8 +734,8 @@ impl EditorKernel {
         self.undo_stack.push(UndoEntry {
             old_text: old_text.clone(),
             new_text: self.text.clone(),
-            old_cursor: old_cursor.value(),
-            new_cursor: new_sel_head,
+            old_cursor,
+            new_cursor: Utf8ByteOffset::unchecked(new_sel_head),
         });
         self.redo_stack.clear();
 

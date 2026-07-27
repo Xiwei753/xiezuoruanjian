@@ -39,8 +39,8 @@ impl EditorKernel {
             session_id,
             base_revision,
             generation: EditorSessionGeneration::initial(),
-            replace_start,
-            replace_end_exclusive,
+            replace_start: Utf8ByteOffset::unchecked(replace_start),
+            replace_end_exclusive: Utf8ByteOffset::unchecked(replace_end_exclusive),
             preedit_text: String::new(),
             preedit_cursor_utf16: 0,
         });
@@ -89,7 +89,7 @@ impl EditorKernel {
         };
 
         let old_preedit_text = session.preedit_text.clone();
-        let replace_start = session.replace_start;
+        let replace_start = session.replace_start.value();
 
         session.preedit_text = new_preedit_text.to_string();
         session.preedit_cursor_utf16 = new_preedit_cursor_offset;
@@ -193,8 +193,8 @@ impl EditorKernel {
             });
         }
 
-        let replace_start = session.replace_start;
-        let replace_end = session.replace_end_exclusive;
+        let replace_start = session.replace_start.value();
+        let replace_end = session.replace_end_exclusive.value();
         let committed_text = session.preedit_text.clone();
         let preedit_cursor_utf16 = session.preedit_cursor_utf16;
 
@@ -235,8 +235,8 @@ impl EditorKernel {
         self.undo_stack.push(UndoEntry {
             old_text: old_text.clone(),
             new_text: self.text.clone(),
-            old_cursor: old_cursor.value(),
-            new_cursor: resulting_cursor,
+            old_cursor,
+            new_cursor: Utf8ByteOffset::unchecked(resulting_cursor),
         });
         self.redo_stack.clear();
 
@@ -310,8 +310,8 @@ impl EditorKernel {
             _ => return EditorEditOutcome::StaleRevision(self.stale_session_result()),
         };
 
-        let replace_start = session.replace_start;
-        let replace_end = session.replace_end_exclusive;
+        let replace_start = session.replace_start.value();
+        let replace_end = session.replace_end_exclusive.value();
 
         if replace_start != replace_end && (replace_start > self.text.len() || replace_end > self.text.len()) {
             self.composition_session = None;

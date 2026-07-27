@@ -34,8 +34,8 @@ impl EditorKernel {
         self.undo_stack.push(UndoEntry {
             old_text: old_text.clone(),
             new_text: self.text.clone(),
-            old_cursor: old_cursor.value(),
-            new_cursor: new_cursor_val,
+            old_cursor,
+            new_cursor: Utf8ByteOffset::unchecked(new_cursor_val),
         });
         self.redo_stack.clear();
 

@@ -22,8 +22,8 @@ impl EditorKernel {
 
         let old_text = self.text.clone();
         self.text = entry.old_text.clone();
-        self.cursor = Utf8ByteOffset::unchecked(entry.old_cursor);
-        self.selection_anchor = Utf8ByteOffset::unchecked(entry.old_cursor);
+        self.cursor = entry.old_cursor;
+        self.selection_anchor = entry.old_cursor;
         self.revision = self.revision.next();
         self.composition_session = None;
 
@@ -94,8 +94,8 @@ impl EditorKernel {
 
         let old_text = self.text.clone();
         self.text = entry.new_text.clone();
-        self.cursor = Utf8ByteOffset::unchecked(entry.new_cursor);
-        self.selection_anchor = Utf8ByteOffset::unchecked(entry.new_cursor);
+        self.cursor = entry.new_cursor;
+        self.selection_anchor = entry.new_cursor;
         self.revision = self.revision.next();
         self.composition_session = None;
 

@@ -34,8 +34,8 @@ pub(crate) struct CompositionSessionState {
     pub(crate) session_id: EditorSessionId,
     pub(crate) base_revision: EditorRevision,
     pub(crate) generation: EditorSessionGeneration,
-    pub(crate) replace_start: usize,
-    pub(crate) replace_end_exclusive: usize,
+    pub(crate) replace_start: Utf8ByteOffset,
+    pub(crate) replace_end_exclusive: Utf8ByteOffset,
     pub(crate) preedit_text: String,
     pub(crate) preedit_cursor_utf16: usize,
 }
@@ -44,8 +44,8 @@ pub(crate) struct CompositionSessionState {
 pub(crate) struct UndoEntry {
     pub(crate) old_text: String,
     pub(crate) new_text: String,
-    pub(crate) old_cursor: usize,
-    pub(crate) new_cursor: usize,
+    pub(crate) old_cursor: Utf8ByteOffset,
+    pub(crate) new_cursor: Utf8ByteOffset,
 }
 
 impl Default for EditorKernel {
