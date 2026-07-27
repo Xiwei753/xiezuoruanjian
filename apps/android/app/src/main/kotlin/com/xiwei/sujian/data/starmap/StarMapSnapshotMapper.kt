@@ -1,0 +1,67 @@
+package com.xiwei.sujian.data.starmap
+
+import com.xiwei.sujian.model.StarMapData
+import com.xiwei.sujian.model.StarMapGraphData
+import com.xiwei.sujian.model.StarMapLayoutData
+import com.xiwei.sujian.model.StarMapLayoutKind
+import com.xiwei.sujian.model.StarMapPhasedSnapshotResult
+import uniffi.writer_core.PhasedSnapshotRequestDto
+import uniffi.writer_core.StarMapGraphDto
+import uniffi.writer_core.StarMapPhasedSnapshotDto
+
+internal fun PhasedSnapshotRequestDto.Companion.create(
+    targetPhase: String = "PrefetchNearbyObjects",
+    sinceRevision: ULong = 0u
+): PhasedSnapshotRequestDto = PhasedSnapshotRequestDto(
+    targetPhase = targetPhase,
+    sinceRevision = sinceRevision
+)
+
+internal fun StarMapPhasedSnapshotDto.toRawCache(): StarMapRawCache = StarMapRawCache(
+    graph = StarMapGraphDto(
+        schemaVersion = 1u,
+        id = starmapId,
+        starmapId = starmapId,
+        title = title,
+        nodes = nodes,
+        edges = edges,
+        embeds = embeds,
+        links = links,
+        createdAt = 0u,
+        updatedAt = 0u
+    ),
+    nodes = nodes.associateByTo(mutableMapOf()) { it.id },
+    edges = edges.associateByTo(mutableMapOf()) { it.id },
+    layoutNodes = layout?.nodes?.associateByTo(mutableMapOf()) { it.nodeId } ?: mutableMapOf()
+)
+
+internal fun StarMapPhasedSnapshotDto.toSnapshotResult(): StarMapPhasedSnapshotResult {
+    val layoutData = layout?.toModel() ?: StarMapLayoutData(
+        kind = StarMapLayoutKind.Freeform,
+        nodes = emptyList()
+    )
+    val data = StarMapData(
+        graph = StarMapGraphData(
+            schemaVersion = 0,
+            id = starmapId,
+            starmapId = starmapId,
+            title = title,
+            nodes = nodes.map { it.toGraphNode() },
+            edges = edges.map { it.toGraphEdge() },
+            createdAt = 0L,
+            updatedAt = 0L
+        ),
+        layout = layoutData,
+        viewport = viewport?.toModel() ?: com.xiwei.sujian.model.StarMapViewportData(),
+        embeds = embeds.map { it.toModel() },
+        links = links.map { it.toModel() },
+        hyperlinks = hyperlinks.map { it.toModel() },
+        loadPhase = loadPhase,
+        packageRevision = packageRevision,
+        complete = complete
+    )
+    return StarMapPhasedSnapshotResult(
+        data = data,
+        diagnostics = diagnostics.map { it.toModel() }
+    )
+}

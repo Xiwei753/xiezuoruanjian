@@ -3,8 +3,8 @@ use std::collections::VecDeque;
 use crate::error::Result;
 use crate::starmap::package_storage;
 
-use super::types::*;
-use super::StarMapStore;
+use super::super::types::*;
+use super::super::StarMapStore;
 
 impl StarMapStore {
     pub fn save_queue_len(&self) -> usize {
@@ -223,7 +223,7 @@ impl StarMapStore {
         Ok(())
     }
 
-    pub(super) fn record_delete_failure(&mut self, object_type: &str, object_id: &str, error: &crate::error::Error) {
+    pub(in crate::starmap::store) fn record_delete_failure(&mut self, object_type: &str, object_id: &str, error: &crate::error::Error) {
         self.recovery_log.push(LoadDiagnostic {
             kind: LoadDiagnosticKind::Corrupt,
             object_type: object_type.to_string(),
@@ -240,7 +240,7 @@ impl StarMapStore {
             || !self.deleted_hyperlink_ids.is_empty()
     }
 
-    pub(super) fn has_pending_writes(&self) -> bool {
+    pub(in crate::starmap::store) fn has_pending_writes(&self) -> bool {
         self.is_dirty() || self.dirty_graph_meta
     }
 
