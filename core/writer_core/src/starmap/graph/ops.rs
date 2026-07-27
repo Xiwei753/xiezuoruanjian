@@ -44,7 +44,15 @@ pub(crate) fn save_starmap_graph(workspace: &Path, starmap_id: &str, graph: &Sta
     fs::create_dir_all(&starmap_dir)?;
 
     let mut store = StarMapStore::new(workspace, starmap_id);
-    let _load_result = store.load_full()?;
+    let graph_json_path = starmaps_dir(workspace).join(starmap_id).join("graph.json");
+    match store.load_full() {
+        Ok(_) => {}
+        Err(e) => {
+            if graph_json_path.exists() {
+                return Err(e);
+            }
+        }
+    }
 
     let old_node_ids: std::collections::HashSet<String> = store.all_nodes().map(|n| n.id.clone()).collect();
     let old_edge_ids: std::collections::HashSet<String> = store.all_edges().map(|e| e.id.clone()).collect();

@@ -63,7 +63,7 @@ impl super::WriterCore {
             let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(mut store) = stores.remove(starmap_id) {
                 if store.is_dirty() || store.has_pending_deletes() {
-                    let _ = store.flush();
+                    store.flush()?;
                 }
             }
         }
@@ -96,7 +96,7 @@ impl super::WriterCore {
         let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
         let store = stores.entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
-        store.ensure_loaded()?;
+        store.ensure_fully_loaded()?;
         Ok(store.to_starmap_graph())
     }
 
@@ -111,7 +111,7 @@ impl super::WriterCore {
         let store = stores.entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
 
-        store.ensure_loaded()?;
+        store.ensure_fully_loaded()?;
 
         let old_node_ids: std::collections::HashSet<String> = store.all_nodes().map(|n| n.id.clone()).collect();
         let old_edge_ids: std::collections::HashSet<String> = store.all_edges().map(|e| e.id.clone()).collect();
