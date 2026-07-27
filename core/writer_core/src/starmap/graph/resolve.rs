@@ -49,38 +49,22 @@ pub fn resolve_deep_target(
 
     match &dt.target {
         crate::starmap::semantic::StarMapTargetDetail::Node { node_id } => {
-            let target_graph_path =
-                crate::starmap::starmap_graph_path(workspace, &current_starmap_id);
-            if target_graph_path.exists() {
-                if let Ok(json_str) = std::fs::read_to_string(&target_graph_path) {
-                    if let Ok(target_graph) =
-                        serde_json::from_str::<crate::starmap::types::StarMapGraph>(&json_str)
-                    {
-                        if !target_graph.nodes.iter().any(|n| &n.id == node_id) {
-                            return MissingNode;
-                        }
-                    }
-                }
-            } else {
+            let mut store = crate::starmap::store::StarMapStore::new(workspace, &current_starmap_id);
+            if store.load_full().is_err() {
+                return MissingNode;
+            }
+            if store.get_node(node_id).is_none() {
                 return MissingNode;
             }
         }
         crate::starmap::semantic::StarMapTargetDetail::Anchor { node_id, anchor_id } => {
-            let target_graph_path =
-                crate::starmap::starmap_graph_path(workspace, &current_starmap_id);
-            if target_graph_path.exists() {
-                if let Ok(json_str) = std::fs::read_to_string(&target_graph_path) {
-                    if let Ok(target_graph) =
-                        serde_json::from_str::<crate::starmap::types::StarMapGraph>(&json_str)
-                    {
-                        if let Some(n) = target_graph.nodes.iter().find(|n| &n.id == node_id) {
-                            if !n.anchors.iter().any(|a| &a.anchor_id == anchor_id) {
-                                return MissingAnchor;
-                            }
-                        } else {
-                            return MissingNode;
-                        }
-                    }
+            let mut store = crate::starmap::store::StarMapStore::new(workspace, &current_starmap_id);
+            if store.load_full().is_err() {
+                return MissingNode;
+            }
+            if let Some(n) = store.get_node(node_id) {
+                if !n.anchors.iter().any(|a| &a.anchor_id == anchor_id) {
+                    return MissingAnchor;
                 }
             } else {
                 return MissingNode;

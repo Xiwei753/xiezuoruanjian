@@ -1,15 +1,10 @@
 use crate::error::Result;
 use crate::starmap::types::*;
-use crate::starmap::{load_starmap_meta, now_epoch, starmaps_dir, update_starmap_stats};
+use crate::starmap::{starmaps_dir, update_starmap_stats};
 use crate::starmap::store::StarMapStore;
 use crate::storage::atomic_write_string;
 use std::fs;
 use std::path::Path;
-
-/// 星图数据文件路径：`{starmaps_dir}/{starmap_id}/graph.json`
-pub(crate) fn graph_path(workspace: &Path, starmap_id: &str) -> std::path::PathBuf {
-    starmaps_dir(workspace).join(starmap_id).join("graph.json")
-}
 
 /// 星图布局文件路径：`{starmaps_dir}/{starmap_id}/layout.json`
 pub(crate) fn layout_path(workspace: &Path, starmap_id: &str) -> std::path::PathBuf {
@@ -25,30 +20,12 @@ pub(crate) fn viewport_path(workspace: &Path, starmap_id: &str) -> std::path::Pa
 
 /// 获取星图数据（迁移兼容入口，新代码应使用 StarMapStore）。
 ///
-/// 若 `graph.json` 不存在，返回空图（保留 meta 标题），
-/// 不返回错误——首次创建节点/边时 `save_starmap_graph` 会写入文件。
+/// 通过 StarMapStore 加载并转换为旧格式 StarMapGraph，
+/// 确保 v2 格式解析和诊断信息一致处理。
 pub(crate) fn get_starmap_graph(workspace: &Path, starmap_id: &str) -> Result<StarMapGraph> {
-    let meta = load_starmap_meta(workspace, starmap_id)?;
-
-    let path = graph_path(workspace, starmap_id);
-    if !path.exists() {
-        return Ok(StarMapGraph {
-            schema_version: 1,
-            id: starmap_id.to_string(),
-            starmap_id: starmap_id.to_string(),
-            title: meta.title.clone(),
-            nodes: vec![],
-            edges: vec![],
-            embeds: vec![],
-            links: vec![],
-            created_at: now_epoch(),
-            updated_at: now_epoch(),
-        });
-    }
-
-    let json_str = fs::read_to_string(&path)?;
-    let graph: StarMapGraph = serde_json::from_str(&json_str)?;
-    Ok(graph)
+    let mut store = StarMapStore::new(workspace, starmap_id);
+    store.load_full()?;
+    Ok(store.to_starmap_graph())
 }
 
 /// 保存星图数据（迁移兼容入口，新代码应使用 StarMapStore）。
@@ -114,9 +91,6 @@ pub(crate) fn save_starmap_graph(workspace: &Path, starmap_id: &str, graph: &Sta
     }
 
     store.flush()?;
-
-    let json_str = serde_json::to_string_pretty(graph)?;
-    atomic_write_string(&graph_path(workspace, starmap_id), &json_str)?;
 
     let node_count = graph.nodes.len() as u32;
     let edge_count = graph.edges.len() as u32;

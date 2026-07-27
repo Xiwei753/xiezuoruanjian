@@ -301,8 +301,10 @@ impl StarMapStore {
 
     pub fn flush_save_queue(&mut self) -> Result<()> {
         let mut remaining: VecDeque<SaveQueueEntry> = VecDeque::new();
+        let mut any_processed = false;
         while let Some(entry) = self.save_queue.pop_front() {
             let mut succeeded = true;
+            any_processed = true;
             match entry {
                 SaveQueueEntry::Node => {
                     let ids: Vec<String> = self.dirty_nodes.iter().cloned().collect();
@@ -457,9 +459,34 @@ impl StarMapStore {
             }
         }
         self.save_queue = remaining;
+
+        let all_flushed = !self.is_dirty() && !self.dirty_graph_meta && !self.has_pending_deletes();
+        if any_processed && all_flushed {
+            self.package_revision = self.package_revision.saturating_add(1);
+        }
+
         if self.has_pending_deletes() || self.has_pending_writes() {
             self.flush_recovery_to_disk()?;
         }
+
+        if any_processed && all_flushed {
+            let node_count = self.nodes.len() as u32;
+            let edge_count = self.edges.len() as u32;
+            let mut linked_chapters = 0u32;
+            for node in self.nodes.values() {
+                if node.kind == StarMapNodeKind::Chapter {
+                    linked_chapters += 1;
+                }
+            }
+            crate::starmap::update_starmap_stats(
+                &self.workspace,
+                &self.starmap_id,
+                node_count,
+                edge_count,
+                linked_chapters,
+            )?;
+        }
+
         Ok(())
     }
 
@@ -539,11 +566,6 @@ impl StarMapStore {
         self.dirty_links.clear();
         self.dirty_layout = false;
         self.dirty_graph_meta = false;
-        self.deleted_node_ids.clear();
-        self.deleted_edge_ids.clear();
-        self.deleted_embed_ids.clear();
-        self.deleted_link_ids.clear();
-        self.deleted_hyperlink_ids.clear();
 
         diagnostics.extend(self.recovery_log.drain(..));
         self.recovery_log = diagnostics.clone();
@@ -969,11 +991,6 @@ impl StarMapStore {
         self.dirty_links.clear();
         self.dirty_layout = false;
         self.dirty_graph_meta = false;
-        self.deleted_node_ids.clear();
-        self.deleted_edge_ids.clear();
-        self.deleted_embed_ids.clear();
-        self.deleted_link_ids.clear();
-        self.deleted_hyperlink_ids.clear();
 
         diagnostics.extend(self.recovery_log.drain(..));
         self.recovery_log = diagnostics.clone();
@@ -1362,32 +1379,42 @@ impl StarMapStore {
 
         let node_ids_to_delete: Vec<String> = self.deleted_node_ids.iter().cloned().collect();
         for node_id in &node_ids_to_delete {
-            package_storage::delete_node_file(&self.workspace, &self.starmap_id, node_id)?;
-            self.deleted_node_ids.remove(node_id);
+            match package_storage::delete_node_file(&self.workspace, &self.starmap_id, node_id) {
+                Ok(()) => { self.deleted_node_ids.remove(node_id); }
+                Err(e) => { self.record_delete_failure("node", node_id, &e); }
+            }
         }
 
         let edge_ids_to_delete: Vec<String> = self.deleted_edge_ids.iter().cloned().collect();
         for edge_id in &edge_ids_to_delete {
-            package_storage::delete_edge_file(&self.workspace, &self.starmap_id, edge_id)?;
-            self.deleted_edge_ids.remove(edge_id);
+            match package_storage::delete_edge_file(&self.workspace, &self.starmap_id, edge_id) {
+                Ok(()) => { self.deleted_edge_ids.remove(edge_id); }
+                Err(e) => { self.record_delete_failure("edge", edge_id, &e); }
+            }
         }
 
         let embed_ids_to_delete: Vec<String> = self.deleted_embed_ids.iter().cloned().collect();
         for instance_id in &embed_ids_to_delete {
-            package_storage::delete_embed_file(&self.workspace, &self.starmap_id, instance_id)?;
-            self.deleted_embed_ids.remove(instance_id);
+            match package_storage::delete_embed_file(&self.workspace, &self.starmap_id, instance_id) {
+                Ok(()) => { self.deleted_embed_ids.remove(instance_id); }
+                Err(e) => { self.record_delete_failure("embed", instance_id, &e); }
+            }
         }
 
         let link_ids_to_delete: Vec<String> = self.deleted_link_ids.iter().cloned().collect();
         for link_id in &link_ids_to_delete {
-            package_storage::delete_link_file(&self.workspace, &self.starmap_id, link_id)?;
-            self.deleted_link_ids.remove(link_id);
+            match package_storage::delete_link_file(&self.workspace, &self.starmap_id, link_id) {
+                Ok(()) => { self.deleted_link_ids.remove(link_id); }
+                Err(e) => { self.record_delete_failure("link", link_id, &e); }
+            }
         }
 
         let hl_ids_to_delete: Vec<String> = self.deleted_hyperlink_ids.iter().cloned().collect();
         for hl_id in &hl_ids_to_delete {
-            package_storage::delete_hyperlink_file(&self.workspace, &self.starmap_id, hl_id)?;
-            self.deleted_hyperlink_ids.remove(hl_id);
+            match package_storage::delete_hyperlink_file(&self.workspace, &self.starmap_id, hl_id) {
+                Ok(()) => { self.deleted_hyperlink_ids.remove(hl_id); }
+                Err(e) => { self.record_delete_failure("hyperlink", hl_id, &e); }
+            }
         }
 
         self.update_graph_meta_file()?;
@@ -2479,5 +2506,85 @@ mod tests {
         store.enqueue_save(SaveQueueEntry::DeleteLink);
         store.enqueue_save(SaveQueueEntry::DeleteHyperlink);
         assert_eq!(store.save_queue_len(), 5);
+    }
+
+    #[test]
+    fn flush_save_queue_increments_package_revision() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.upsert_node(make_test_node("n1", "Test Node"));
+        store.enqueue_save(SaveQueueEntry::Node);
+        store.enqueue_save(SaveQueueEntry::GraphMeta);
+        assert_eq!(store.package_revision(), 0);
+        store.flush_save_queue().unwrap();
+        assert_eq!(store.package_revision(), 1);
+    }
+
+    #[test]
+    fn flush_delete_failure_records_recovery_and_retains_id() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.upsert_node(make_test_node("n1", "Node1"));
+        store.flush().unwrap();
+
+        let node_path = dir.path()
+            .join("app-meta").join("starmaps").join(&meta.starmap_id)
+            .join("nodes").join("n1.json");
+        assert!(node_path.exists());
+
+        let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store2.load_full().unwrap();
+        store2.remove_node("n1");
+        assert!(store2.has_pending_deletes());
+
+        std::fs::remove_file(&node_path).unwrap();
+
+        let result = store2.flush();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn load_full_preserves_pending_deletes() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.upsert_node(make_test_node("n1", "Node1"));
+        store.upsert_node(make_test_node("n2", "Node2"));
+        store.flush().unwrap();
+
+        let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store2.load_full().unwrap();
+        store2.remove_node("n1");
+        assert!(store2.has_pending_deletes());
+
+        store2.load_full().unwrap();
+        assert!(store2.has_pending_deletes());
+    }
+
+    #[test]
+    fn load_phased_preserves_pending_deletes() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.upsert_node(make_test_node("n1", "Node1"));
+        store.flush().unwrap();
+
+        let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store2.load_phased(LoadPhase::CurrentViewportObjects).unwrap();
+        store2.remove_node("n1");
+        assert!(store2.has_pending_deletes());
+
+        store2.load_phased(LoadPhase::BackgroundFullLoad).unwrap();
+        assert!(store2.has_pending_deletes());
     }
 }
