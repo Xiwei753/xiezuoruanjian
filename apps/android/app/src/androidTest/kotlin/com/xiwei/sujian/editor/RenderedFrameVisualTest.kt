@@ -872,6 +872,13 @@ class RenderedFrameVisualTest {
             finalStateSnapshot == null
                     || finalStateSnapshot.transactionState == TransactionState.Completed
         )
+        if (finalStateSnapshot != null) {
+            assertEquals(
+                "After 100% insert frame draw, owned resources must be released",
+                0,
+                finalStateSnapshot.ownedResourceCount
+            )
+        }
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("Test"))
@@ -926,6 +933,13 @@ class RenderedFrameVisualTest {
             finalStateSnapshot == null
                     || finalStateSnapshot.transactionState == TransactionState.Completed
         )
+        if (finalStateSnapshot != null) {
+            assertEquals(
+                "After 100% delete frame draw, owned resources must be released",
+                0,
+                finalStateSnapshot.ownedResourceCount
+            )
+        }
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("ABE"))
@@ -973,6 +987,13 @@ class RenderedFrameVisualTest {
             finalStateSnapshot == null
                     || finalStateSnapshot.transactionState == TransactionState.Completed
         )
+        if (finalStateSnapshot != null) {
+            assertEquals(
+                "After 100% composition frame draw, owned resources must be released",
+                0,
+                finalStateSnapshot.ownedResourceCount
+            )
+        }
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("预输入"))
@@ -1032,6 +1053,13 @@ class RenderedFrameVisualTest {
             finalStateSnapshot == null
                     || finalStateSnapshot.transactionState == TransactionState.Completed
         )
+        if (finalStateSnapshot != null) {
+            assertEquals(
+                "After rapid input final frame draw, owned resources must be released",
+                0,
+                finalStateSnapshot.ownedResourceCount
+            )
+        }
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("ABC"))
@@ -1196,6 +1224,13 @@ class RenderedFrameVisualTest {
             finalStateSnapshot == null
                     || finalStateSnapshot.transactionState == TransactionState.Completed
         )
+        if (finalStateSnapshot != null) {
+            assertEquals(
+                "After 100% frame, owned resources must be released (ownedResourceCount must be 0)",
+                0,
+                finalStateSnapshot.ownedResourceCount
+            )
+        }
 
         return FiveProgressResult(frames, visualSnapshots)
     }
