@@ -21,7 +21,9 @@
 //! ├── child_starmaps/<bucket>/<instance_id>.json -- 子星图放置
 //! ├── hyperlinks/<bucket>/<hyperlink_id>.json    -- 超链接
 //! ├── links/<bucket>/<link_id>.json      -- 链接
-//! ├── layouts/default.json                -- 默认布局
+//! ├── layouts/default/
+//! │   ├── kind.json                       -- 布局类型
+//! │   └── nodes/<bucket>.json            -- 布局节点分片
 //! └── metadata/
 //!     ├── migration.json                  -- 迁移记录
 //!     └── recovery.json                  -- 解析失败对象的恢复记录
@@ -1716,12 +1718,14 @@ impl StarMapStore {
     }
 
     fn try_load_layout(&self) -> Option<StarMapLayout> {
-        let path = self.starmap_dir().join("layouts").join("default.json");
-        if !path.exists() {
-            return None;
+        let dir = self.starmap_dir();
+        if let Some(layout) = package_storage::load_layout_sharded(&dir) {
+            return Some(layout);
         }
-        let content = std::fs::read_to_string(&path).ok()?;
-        serde_json::from_str(&content).ok()
+        if let Some(layout) = package_storage::load_legacy_layout(&dir) {
+            return Some(layout);
+        }
+        None
     }
 
     fn try_load_link(&mut self, link_id: &str) -> Option<StarMapLink> {
