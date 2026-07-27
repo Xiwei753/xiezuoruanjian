@@ -2,22 +2,8 @@ package com.xiwei.sujian.data
 
 import com.xiwei.sujian.data.starmap.StarMapRepository
 import com.xiwei.sujian.data.starmap.StarMapSnapshotCache
-import com.xiwei.sujian.data.starmap.toModel
-import com.xiwei.sujian.data.starmap.toDto
-import com.xiwei.sujian.model.StarMapData
-import com.xiwei.sujian.model.StarMapEdgeKind
-import com.xiwei.sujian.model.StarMapEdgeRenderData
-import com.xiwei.sujian.model.StarMapGraphEdge
-import com.xiwei.sujian.model.StarMapGraphNode
-import com.xiwei.sujian.model.StarMapLayoutData
-import com.xiwei.sujian.model.StarMapMeta
-import com.xiwei.sujian.model.StarMapMotionPolicyData
-import com.xiwei.sujian.model.StarMapNodeKind
-import com.xiwei.sujian.model.StarMapPhasedSnapshotResult
 import uniffi.writer_core.PhasedSnapshotRequestDto
-import com.xiwei.sujian.model.StarMapViewportData
 import uniffi.writer_core.StarMapEdgeDto
-import uniffi.writer_core.StarMapEdgeKindDto
 import uniffi.writer_core.StarMapEdgePatchInputDto
 import uniffi.writer_core.StarMapEdgeRenderDto
 import uniffi.writer_core.StarMapEmbedDto
@@ -37,14 +23,10 @@ import uniffi.writer_core.StarMapReferenceDto
 import uniffi.writer_core.StarMapViewportDto
 
 /**
- * 星图 领域 Bridge。
+ * 星图领域 Bridge — 平台边界委托与统一错误封装。
  *
- * 从 AppServiceBridge 拆出，负责星图相关操作。
- * 通过 WriterAppServiceHolder 直接调用 Core 服务，不再依赖 AppServiceBridge。
- *
- * 提供两层 API：
- * - DTO 层（listStarMaps / getStarMapGraph 等）：返回原始 DTO，供 AppServiceBridge 门面委托
- * - Model 层（listStarmaps / getStarmapGraph 等）：返回 Android 端模型，供 UI 层使用
+ * 只负责 UniFFI 调用和 BridgeResult 包装，不做 DTO↔Model 转换。
+ * Model 层 API 由 [StarMapRepository] 提供。
  */
 class StarMapBridge internal constructor(private val holder: WriterAppServiceHolder) {
     companion object {
@@ -52,7 +34,7 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
     }
 
     private val cache = StarMapSnapshotCache()
-    private val repository = StarMapRepository(this, cache)
+    internal val repository = StarMapRepository(this, cache)
 
     // ── DTO 层 API（供 AppServiceBridge 门面委托） ──
 
@@ -140,20 +122,8 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
         holder.service.findStarmapReferences(targetStarmapId)
     }
 
-    fun getStarMapMotionPolicy(): BridgeResult<StarMapMotionPolicyData> {
-        return holder.wrapResult {
-            val dto = holder.service.getStarmapMotionPolicy()
-            StarMapMotionPolicyData(
-                enabled = dto.enabled,
-                idleWobbleEnabled = dto.idleWobbleEnabled,
-                idleAmplitudeVp = dto.idleAmplitudeVp,
-                idlePeriodMs = dto.idlePeriodMs.toInt(),
-                dragLiftScale = dto.dragLiftScale,
-                dragShadowBoost = dto.dragShadowBoost,
-                settleDurationMs = dto.settleDurationMs.toInt(),
-                reduceMotion = dto.reduceMotion
-            )
-        }
+    fun getStarMapMotionPolicy(): BridgeResult<StarMapMotionPolicyDto> = holder.wrapResult {
+        holder.service.getStarmapMotionPolicy()
     }
 
     fun updateStarMapNode(starmapId: String, nodeId: String, patch: StarMapNodePatchInputDto): BridgeResult<StarMapNodeDto> = holder.wrapResult {
@@ -175,60 +145,6 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
     fun updateStarMapEdge(starmapId: String, edgeId: String, patch: StarMapEdgePatchInputDto): BridgeResult<StarMapEdgeDto> = holder.wrapResult {
         holder.service.updateStarmapEdge(starmapId, edgeId, patch)
     }
-
-    // ── Model 层 API（供 UI 层使用，保留向后兼容） ──
-
-    fun listStarmaps(): BridgeResult<List<StarMapMeta>> {
-        return when (val result = listStarMaps()) {
-            is BridgeResult.Success -> BridgeResult.Success(result.data.map { it.toModel() })
-            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
-            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
-        }
-    }
-
-    fun createStarmap(title: String, desc: String): BridgeResult<StarMapMeta> {
-        return when (val result = createStarMap(title, desc)) {
-            is BridgeResult.Success -> BridgeResult.Success(result.data.toModel())
-            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
-            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
-        }
-    }
-
-    fun getStarmapPhasedSnapshot(starmapId: String, targetPhase: String = "CurrentViewportObjects", sinceRevision: ULong = 0u): BridgeResult<StarMapPhasedSnapshotResult> = repository.getStarmapPhasedSnapshot(starmapId, targetPhase, sinceRevision)
-
-    fun advanceLoadPhase(starmapId: String, targetPhase: String, currentRevision: ULong): BridgeResult<StarMapPhasedSnapshotResult> = repository.advanceLoadPhase(starmapId, targetPhase, currentRevision)
-
-    fun addStarmapNode(starmapId: String, node: StarMapGraphNode, x: Float = 0f, y: Float = 0f): BridgeResult<StarMapGraphNode> = repository.addStarmapNode(starmapId, node, x, y)
-
-    fun updateStarmapNode(starmapId: String, nodeId: String, title: String? = null, kind: StarMapNodeKind? = null, tags: List<String>? = null): BridgeResult<StarMapGraphNode> = repository.updateStarmapNode(starmapId, nodeId, title, kind, tags)
-
-    fun deleteStarmapNode(starmapId: String, nodeId: String): BridgeResult<Boolean> = repository.deleteStarmapNode(starmapId, nodeId)
-
-    fun addStarmapEdge(starmapId: String, from: String, to: String, kind: StarMapEdgeKind = StarMapEdgeKind.RelatedTo, label: String? = null): BridgeResult<StarMapGraphEdge> = repository.addStarmapEdge(starmapId, from, to, kind, label)
-
-    fun deleteStarmapEdge(starmapId: String, edgeId: String): BridgeResult<Boolean> = repository.deleteStarmapEdge(starmapId, edgeId)
-
-    fun updateStarmapEdge(starmapId: String, edgeId: String, kind: StarMapEdgeKind? = null, label: String? = null): BridgeResult<StarMapGraphEdge> = repository.updateStarmapEdge(starmapId, edgeId, kind, label)
-
-    fun saveStarmapLayout(starmapId: String, layout: StarMapLayoutData): BridgeResult<Boolean> = repository.saveStarmapLayout(starmapId, layout)
-
-    fun getStarmapViewport(starmapId: String): BridgeResult<StarMapViewportData> {
-        return when (val result = getStarMapViewport(starmapId)) {
-            is BridgeResult.Success -> BridgeResult.Success(result.data.toModel())
-            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
-            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
-        }
-    }
-
-    fun saveStarmapViewport(starmapId: String, viewport: StarMapViewportData): BridgeResult<Boolean> {
-        return saveStarMapViewport(starmapId, viewport.toDto())
-    }
-
-    fun computeEdgeRenders(data: StarMapData): BridgeResult<List<StarMapEdgeRenderData>> = repository.computeEdgeRenders(data)
-
-    fun hitTestStarmapNode(data: StarMapData, x: Float, y: Float): BridgeResult<String?> = repository.hitTestStarmapNode(data, x, y)
-
-    fun getMotionPolicy(): BridgeResult<StarMapMotionPolicyData> = getStarMapMotionPolicy()
 
     fun flushStarmapStore(starmapId: String): BridgeResult<Boolean> {
         return try {

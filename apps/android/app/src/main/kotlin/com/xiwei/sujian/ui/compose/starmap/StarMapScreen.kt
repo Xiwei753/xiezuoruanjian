@@ -27,7 +27,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import com.xiwei.sujian.R
-import com.xiwei.sujian.model.StarMapData
 import com.xiwei.sujian.model.StarMapViewportData
 
 @Composable
@@ -95,10 +94,7 @@ internal fun StarMapListContent(
 
 @Composable
 internal fun StarMapEditorContent(
-    starMapData: StarMapData?,
-    isLoading: Boolean,
-    editingNodeId: String?,
-    lastError: String? = null,
+    state: StarMapEditorUiState,
     onBack: () -> Unit,
     onAddNodeClick: () -> Unit,
     onAddEdgeClick: () -> Unit,
@@ -116,11 +112,11 @@ internal fun StarMapEditorContent(
         )
 
     SujianScreenScaffold(
-        title = starMapData?.graph?.title ?: stringResource(id = R.string.title_starmap),
+        title = state.starMapData?.graph?.title ?: stringResource(id = R.string.title_starmap),
         onNavigateBack = onBack,
         actions = {
             Text(
-                stringResource(R.string.starmap_node_edge_count, starMapData?.graph?.nodes?.size ?: 0, starMapData?.graph?.edges?.size ?: 0),
+                stringResource(R.string.starmap_node_edge_count, state.starMapData?.graph?.nodes?.size ?: 0, state.starMapData?.graph?.edges?.size ?: 0),
                 style = MaterialTheme.typography.bodySmall
             )
             Spacer(modifier = Modifier.width(dims.space8))
@@ -137,21 +133,21 @@ internal fun StarMapEditorContent(
         },
         modifier = modifier,
     ) { paddingValues ->
-        if (isLoading) {
+        if (state.isLoading) {
             Box(modifier = Modifier.fillMaxSize().padding(paddingValues), contentAlignment = Alignment.Center) {
                 Text(stringResource(id = R.string.loading), style = MaterialTheme.typography.bodyLarge)
             }
-        } else if (starMapData != null) {
-            if (lastError != null) {
-                Text(lastError, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        } else if (state.starMapData != null) {
+            if (state.lastError != null) {
+                Text(state.lastError, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
             StarMapCanvas(
-                data = starMapData,
+                data = state.starMapData,
                 onNodeDrag = onNodeDrag,
                 onViewportChange = onViewportChange,
                 onNodeTap = onNodeTap,
                 onNodeDoubleTap = onNodeDoubleTap,
-                editingNodeId = editingNodeId,
+                editingNodeId = state.editingNodeId,
                 modifier = Modifier.fillMaxSize().padding(paddingValues)
             )
         } else {

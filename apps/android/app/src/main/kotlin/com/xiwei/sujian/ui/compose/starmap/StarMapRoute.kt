@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.data.BridgeResult
+import com.xiwei.sujian.data.starmap.StarMapRepository
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.editor.v2.compose.LocalAnimatedTextEditorCoordinator
 import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
@@ -19,11 +20,8 @@ import com.xiwei.sujian.editor.v2.coordinator.EditableTextTarget
 import com.xiwei.sujian.editor.v2.coordinator.EditingState
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
 import com.xiwei.sujian.model.StarMapData
-import com.xiwei.sujian.model.StarMapGraphEdge
 import com.xiwei.sujian.model.StarMapGraphNode
-import com.xiwei.sujian.model.StarMapLayoutData
 import com.xiwei.sujian.model.StarMapNodeKind
-import com.xiwei.sujian.model.StarMapViewportData
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -72,8 +70,8 @@ private fun StarMapListScreen(
     suspend fun loadStarMaps() {
         val maps = withContext(Dispatchers.IO) {
             try {
-                val bridge = BridgeProvider.getStarmapBridge(context)
-                when (val result = bridge.listStarmaps()) {
+                val repository = BridgeProvider.getStarmapBridge(context).repository
+                when (val result = repository.listStarmaps()) {
                     is BridgeResult.Success -> result.data
                     else -> emptyList()
                 }
@@ -103,8 +101,8 @@ private fun StarMapListScreen(
                 coroutineScope.launch {
                     withContext(Dispatchers.IO) {
                         try {
-                            val bridge = BridgeProvider.getStarmapBridge(context)
-                            bridge.createStarmap(title, description)
+                            val repository = BridgeProvider.getStarmapBridge(context).repository
+                            repository.createStarmap(title, description)
                         } catch (_: Exception) { }
                     }
                     loadStarMaps()
@@ -123,14 +121,10 @@ private fun StarMapEditorScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    var starMapData by remember { mutableStateOf<StarMapData?>(null) }
-    var isLoading by remember { mutableStateOf(true) }
+    var editorState by remember { mutableStateOf(StarMapEditorUiState()) }
     var showAddNodeDialog by remember { mutableStateOf(false) }
     var showAddEdgeDialog by remember { mutableStateOf(false) }
-    var selectedNodeId by remember { mutableStateOf<String?>(null) }
     var viewportSaveJob by remember { mutableStateOf<Job?>(null) }
-    var canvasEditingNodeId by remember { mutableStateOf<String?>(null) }
-    var lastOperationError by remember { mutableStateOf<String?>(null) }
 
     val coordinator = LocalAnimatedTextEditorCoordinator.current
         ?: throw IllegalStateException(
@@ -138,15 +132,17 @@ private fun StarMapEditorScreen(
             "Ensure the host Activity provides one via CompositionLocalProvider."
         )
 
+    fun repository(): StarMapRepository = BridgeProvider.getStarmapBridge(context).repository
+
     suspend fun loadStarMap() {
         val data = withContext(Dispatchers.IO) {
             try {
-                val bridge = BridgeProvider.getStarmapBridge(context)
-                when (val result = bridge.getStarmapPhasedSnapshot(starmapId)) {
+                val repo = repository()
+                when (val result = repo.getStarmapPhasedSnapshot(starmapId)) {
                     is BridgeResult.Success -> {
                         val snapshotResult = result.data
                         val graphData = snapshotResult.data
-                        val edgeRenders = when (val er = bridge.computeEdgeRenders(graphData)) {
+                        val edgeRenders = when (val er = repo.computeEdgeRenders(graphData)) {
                             is BridgeResult.Success -> er.data
                             else -> emptyList()
                         }
@@ -156,16 +152,38 @@ private fun StarMapEditorScreen(
                 }
             } catch (_: Exception) { null }
         }
-        starMapData = data
-        isLoading = false
+        editorState = editorState.copy(starMapData = data, isLoading = false)
+    }
+
+    suspend fun executeOperation(label: String, block: suspend () -> BridgeResult<*>): Boolean {
+        return try {
+            val result = withContext(Dispatchers.IO) { block() }
+            when (result) {
+                is BridgeResult.Success -> {
+                    editorState = editorState.copy(lastError = null)
+                    true
+                }
+                is BridgeResult.Error -> {
+                    editorState = editorState.copy(lastError = "${label}失败: ${result.message}")
+                    false
+                }
+                BridgeResult.NotLoaded -> {
+                    editorState = editorState.copy(lastError = "${label}失败: 未加载")
+                    false
+                }
+            }
+        } catch (e: Exception) {
+            editorState = editorState.copy(lastError = "${label}异常: ${e.message}")
+            false
+        }
     }
 
     LaunchedEffect(starmapId) {
         loadStarMap()
     }
 
-    LaunchedEffect(starmapId, starMapData?.loadPhase, starMapData?.complete) {
-        val current = starMapData ?: return@LaunchedEffect
+    LaunchedEffect(starmapId, editorState.starMapData?.loadPhase, editorState.starMapData?.complete) {
+        val current = editorState.starMapData ?: return@LaunchedEffect
         if (current.complete) return@LaunchedEffect
         val nextPhase = when (current.loadPhase) {
             "CurrentViewportObjects" -> "PrefetchNearbyObjects"
@@ -176,12 +194,12 @@ private fun StarMapEditorScreen(
         delay(100)
         val advanced = withContext(Dispatchers.IO) {
             try {
-                val bridge = BridgeProvider.getStarmapBridge(context)
-                when (val result = bridge.advanceLoadPhase(starmapId, nextPhase, current.packageRevision)) {
+                val repo = repository()
+                when (val result = repo.advanceLoadPhase(starmapId, nextPhase, current.packageRevision)) {
                     is BridgeResult.Success -> {
                         val snapshotResult = result.data
                         val graphData = snapshotResult.data
-                        val edgeRenders = when (val er = bridge.computeEdgeRenders(graphData)) {
+                        val edgeRenders = when (val er = repo.computeEdgeRenders(graphData)) {
                             is BridgeResult.Success -> er.data
                             else -> emptyList()
                         }
@@ -192,19 +210,19 @@ private fun StarMapEditorScreen(
             } catch (_: Exception) { null }
         }
         if (advanced != null) {
-            starMapData = advanced
+            editorState = editorState.copy(starMapData = advanced)
         }
     }
 
     DisposableEffect(starmapId) {
         onDispose {
-            val bridge = BridgeProvider.getStarmapBridge(context)
-            val flushResult = bridge.flushStarmapStore(starmapId)
+            val repo = repository()
+            val flushResult = repo.flushStarmapStore(starmapId)
             if (flushResult is BridgeResult.Error) {
                 DiagnosticsLogger.e("StarMapScreen", "flushStarmapStore failed on dispose: ${flushResult.message}")
                 return@onDispose
             }
-            val closeResult = bridge.closeStarmapStore(starmapId)
+            val closeResult = repo.closeStarmapStore(starmapId)
             if (closeResult is BridgeResult.Error) {
                 DiagnosticsLogger.e("StarMapScreen", "closeStarmapStore failed on dispose: ${closeResult.message}")
             }
@@ -212,10 +230,7 @@ private fun StarMapEditorScreen(
     }
 
     StarMapEditorContent(
-        starMapData = starMapData,
-        isLoading = isLoading,
-        editingNodeId = canvasEditingNodeId,
-        lastError = lastOperationError,
+        state = editorState,
         onBack = onBack,
         onAddNodeClick = { showAddNodeDialog = true },
         onAddEdgeClick = { showAddEdgeDialog = true },
@@ -223,13 +238,13 @@ private fun StarMapEditorScreen(
             coroutineScope.launch {
                 withContext(Dispatchers.IO) {
                     try {
-                        val bridge = BridgeProvider.getStarmapBridge(context)
-                        val updatedNodes = starMapData!!.layout.nodes.map {
+                        val repo = repository()
+                        val updatedNodes = editorState.starMapData!!.layout.nodes.map {
                             if (it.nodeId == nodeId) it.copy(x = x, y = y) else it
                         }
-                        bridge.saveStarmapLayout(
+                        repo.saveStarmapLayout(
                             starmapId,
-                            starMapData!!.layout.copy(nodes = updatedNodes)
+                            editorState.starMapData!!.layout.copy(nodes = updatedNodes)
                         )
                     } catch (_: Exception) { }
                 }
@@ -241,19 +256,19 @@ private fun StarMapEditorScreen(
                 delay(500)
                 withContext(Dispatchers.IO) {
                     try {
-                        val bridge = BridgeProvider.getStarmapBridge(context)
-                        bridge.saveStarmapViewport(starmapId, viewport)
+                        val repo = repository()
+                        repo.saveStarmapViewport(starmapId, viewport)
                     } catch (_: Exception) { }
                 }
             }
         },
         onNodeTap = { nodeId ->
-            if (canvasEditingNodeId == null) {
-                selectedNodeId = nodeId
+            if (editorState.editingNodeId == null) {
+                editorState = editorState.copy(selectedNodeId = nodeId)
             }
         },
         onNodeDoubleTap = { geometry ->
-            val graphNode = starMapData?.graph?.nodes?.find { it.id == geometry.nodeId }
+            val graphNode = editorState.starMapData?.graph?.nodes?.find { it.id == geometry.nodeId }
             if (graphNode != null) {
                 val targetId = "starmap-node-title:${starmapId}:${geometry.nodeId}"
                 val target = EditableTextTarget(targetId = targetId)
@@ -263,38 +278,25 @@ private fun StarMapEditorScreen(
                     target.onCommit = { finalText ->
                         if (finalText.isNotBlank() && finalText.trim() != graphNode.title) {
                             coroutineScope.launch {
-                                var success = false
-                                withContext(Dispatchers.IO) {
-                                    try {
-                                        val bridge = BridgeProvider.getStarmapBridge(context)
-                                        val result = bridge.updateStarmapNode(starmapId, geometry.nodeId, title = finalText.trim(), kind = null)
-                                        success = result is BridgeResult.Success
-                                        if (!success) {
-                                            lastOperationError = "更新节点失败: ${(result as? BridgeResult.Error)?.message}"
-                                        }
-                                    } catch (e: Exception) {
-                                        lastOperationError = "更新节点异常: ${e.message}"
-                                    }
+                                val ok = executeOperation("更新节点") {
+                                    repository().updateStarmapNode(starmapId, geometry.nodeId, title = finalText.trim())
                                 }
-                                if (success) {
-                                    lastOperationError = null
-                                    loadStarMap()
-                                }
+                                if (ok) loadStarMap()
                             }
                         } else {
-                            canvasEditingNodeId = null
+                            editorState = editorState.copy(editingNodeId = null)
                             coordinator.unregisterTarget(targetId)
                         }
-                        canvasEditingNodeId = null
+                        editorState = editorState.copy(editingNodeId = null)
                         coordinator.unregisterTarget(targetId)
                     }
                 target.onCancel = {
-                        canvasEditingNodeId = null
+                        editorState = editorState.copy(editingNodeId = null)
                         coordinator.unregisterTarget(targetId)
                     }
                 target.onEditingStateChanged = { state ->
                         if (state == EditingState.IDLE || state == EditingState.RELEASED) {
-                            canvasEditingNodeId = null
+                            editorState = editorState.copy(editingNodeId = null)
                         }
                     }
                 coordinator.registerTarget(target)
@@ -309,64 +311,42 @@ private fun StarMapEditorScreen(
                     )
                 )
                 if (coordinator.beginEdit(targetId, graphNode.title.toByteArray(Charsets.UTF_8).size)) {
-                    canvasEditingNodeId = geometry.nodeId
+                    editorState = editorState.copy(editingNodeId = geometry.nodeId)
                 }
             }
         },
         modifier = modifier
     )
 
-    selectedNodeId?.let { nodeId ->
-        val graphNode = starMapData?.graph?.nodes?.find { it.id == nodeId }
+    editorState.selectedNodeId?.let { nodeId ->
+        val graphNode = editorState.starMapData?.graph?.nodes?.find { it.id == nodeId }
         if (graphNode != null) {
             NodeEditPanel(
                 node = graphNode,
                 coordinator = coordinator,
                 onUpdate = { newTitle, newKind ->
                     coroutineScope.launch {
-                        var success = false
-                        withContext(Dispatchers.IO) {
-                            try {
-                                val bridge = BridgeProvider.getStarmapBridge(context)
-                                val result = bridge.updateStarmapNode(starmapId, nodeId, title = newTitle, kind = newKind)
-                                success = result is BridgeResult.Success
-                                if (!success) {
-                                    lastOperationError = "更新节点失败: ${(result as? BridgeResult.Error)?.message}"
-                                }
-                            } catch (e: Exception) {
-                                lastOperationError = "更新节点异常: ${e.message}"
-                            }
+                        val ok = executeOperation("更新节点") {
+                            repository().updateStarmapNode(starmapId, nodeId, title = newTitle, kind = newKind)
                         }
-                        if (success) {
-                            lastOperationError = null
-                            selectedNodeId = null
+                        if (ok) {
+                            editorState = editorState.copy(selectedNodeId = null)
                             loadStarMap()
                         }
                     }
                 },
                 onDelete = {
                     coroutineScope.launch {
-                        var success = false
-                        withContext(Dispatchers.IO) {
-                            try {
-                                val bridge = BridgeProvider.getStarmapBridge(context)
-                                val result = bridge.deleteStarmapNode(starmapId, nodeId)
-                                success = result is BridgeResult.Success
-                                if (!success) {
-                                    lastOperationError = "删除节点失败: ${(result as? BridgeResult.Error)?.message}"
-                                }
-                            } catch (e: Exception) {
-                                lastOperationError = "删除节点异常: ${e.message}"
-                            }
+                        val ok = executeOperation("删除节点") {
+                            repository().deleteStarmapNode(starmapId, nodeId)
                         }
-                        if (success) {
-                            lastOperationError = null
-                            selectedNodeId = null
+                        if (ok) {
+                            editorState = editorState.copy(selectedNodeId = null)
                             loadStarMap()
                         }
                     }
                 },
-                onDismiss = { selectedNodeId = null }
+                onDismiss = { editorState = editorState.copy(selectedNodeId = null) }
             )
         }
     }
@@ -376,27 +356,16 @@ private fun StarMapEditorScreen(
             coordinator = coordinator,
             onConfirm = { title, kind ->
                 coroutineScope.launch {
-                    var success = false
-                    withContext(Dispatchers.IO) {
-                        try {
-                            val bridge = BridgeProvider.getStarmapBridge(context)
-                            val nodeId = java.util.UUID.randomUUID().toString()
-                            val node = StarMapGraphNode(
-                                id = nodeId,
-                                title = title,
-                                kind = kind
-                            )
-                            val result = bridge.addStarmapNode(starmapId, node)
-                            success = result is BridgeResult.Success
-                            if (!success) {
-                                lastOperationError = "添加节点失败: ${(result as? BridgeResult.Error)?.message}"
-                            }
-                        } catch (e: Exception) {
-                            lastOperationError = "添加节点异常: ${e.message}"
-                        }
+                    val ok = executeOperation("添加节点") {
+                        val nodeId = java.util.UUID.randomUUID().toString()
+                        val node = StarMapGraphNode(
+                            id = nodeId,
+                            title = title,
+                            kind = kind
+                        )
+                        repository().addStarmapNode(starmapId, node)
                     }
-                    if (success) {
-                        lastOperationError = null
+                    if (ok) {
                         showAddNodeDialog = false
                         loadStarMap()
                     }
@@ -406,26 +375,15 @@ private fun StarMapEditorScreen(
         )
     }
 
-    if (showAddEdgeDialog && starMapData != null) {
+    if (showAddEdgeDialog && editorState.starMapData != null) {
         StarMapAddEdgeDialog(
-            nodes = starMapData!!.graph.nodes,
+            nodes = editorState.starMapData!!.graph.nodes,
             onConfirm = { fromNodeId, toNodeId ->
                 coroutineScope.launch {
-                    var success = false
-                    withContext(Dispatchers.IO) {
-                        try {
-                            val bridge = BridgeProvider.getStarmapBridge(context)
-                            val result = bridge.addStarmapEdge(starmapId, fromNodeId, toNodeId)
-                            success = result is BridgeResult.Success
-                            if (!success) {
-                                lastOperationError = "添加连线失败: ${(result as? BridgeResult.Error)?.message}"
-                            }
-                        } catch (e: Exception) {
-                            lastOperationError = "添加连线异常: ${e.message}"
-                        }
+                    val ok = executeOperation("添加连线") {
+                        repository().addStarmapEdge(starmapId, fromNodeId, toNodeId)
                     }
-                    if (success) {
-                        lastOperationError = null
+                    if (ok) {
                         showAddEdgeDialog = false
                         loadStarMap()
                     }

@@ -66,7 +66,7 @@ class SujianApp : Application(), DefaultLifecycleObserver {
 
     override fun onStop(owner: LifecycleOwner) {
         autoSyncScheduler?.stop()
-        val result = BridgeProvider.getStarmapBridge(this).flushAllStarmapStores()
+        val result = BridgeProvider.getStarmapBridge(this).repository.flushAllStarmapStores()
         if (result is BridgeResult.Error) {
             DiagnosticsLogger.e("SujianApp", "flushAllStarmapStores failed: ${result.message}")
         }

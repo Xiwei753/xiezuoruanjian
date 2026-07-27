@@ -223,3 +223,15 @@ internal fun uniffi.writer_core.StarMapTargetDetailDto.toModel(): StarMapTargetD
     entityId = entityId,
     uri = uri
 )
+
+internal fun uniffi.writer_core.StarMapMotionPolicyDto.toModel(): com.xiwei.sujian.model.StarMapMotionPolicyData =
+    com.xiwei.sujian.model.StarMapMotionPolicyData(
+        enabled = enabled,
+        idleWobbleEnabled = idleWobbleEnabled,
+        idleAmplitudeVp = idleAmplitudeVp,
+        idlePeriodMs = idlePeriodMs.toInt(),
+        dragLiftScale = dragLiftScale,
+        dragShadowBoost = dragShadowBoost,
+        settleDurationMs = settleDurationMs.toInt(),
+        reduceMotion = reduceMotion
+    )

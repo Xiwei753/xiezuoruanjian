@@ -9,8 +9,11 @@ import com.xiwei.sujian.model.StarMapEdgeRenderData
 import com.xiwei.sujian.model.StarMapGraphEdge
 import com.xiwei.sujian.model.StarMapGraphNode
 import com.xiwei.sujian.model.StarMapLayoutData
+import com.xiwei.sujian.model.StarMapMeta
+import com.xiwei.sujian.model.StarMapMotionPolicyData
 import com.xiwei.sujian.model.StarMapNodeKind
 import com.xiwei.sujian.model.StarMapPhasedSnapshotResult
+import com.xiwei.sujian.model.StarMapViewportData
 import uniffi.writer_core.PhasedSnapshotRequestDto
 import uniffi.writer_core.StarMapEdgeDto
 import uniffi.writer_core.StarMapEdgePatchInputDto
@@ -20,6 +23,22 @@ internal class StarMapRepository(
     private val bridge: StarMapBridge,
     private val cache: StarMapSnapshotCache
 ) {
+    fun listStarmaps(): BridgeResult<List<StarMapMeta>> {
+        return when (val result = bridge.listStarMaps()) {
+            is BridgeResult.Success -> BridgeResult.Success(result.data.map { it.toModel() })
+            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
+            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
+        }
+    }
+
+    fun createStarmap(title: String, desc: String): BridgeResult<StarMapMeta> {
+        return when (val result = bridge.createStarMap(title, desc)) {
+            is BridgeResult.Success -> BridgeResult.Success(result.data.toModel())
+            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
+            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
+        }
+    }
+
     fun getStarmapPhasedSnapshot(
         starmapId: String,
         targetPhase: String = "CurrentViewportObjects",
@@ -162,6 +181,18 @@ internal class StarMapRepository(
         }
     }
 
+    fun getStarmapViewport(starmapId: String): BridgeResult<StarMapViewportData> {
+        return when (val result = bridge.getStarMapViewport(starmapId)) {
+            is BridgeResult.Success -> BridgeResult.Success(result.data.toModel())
+            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
+            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
+        }
+    }
+
+    fun saveStarmapViewport(starmapId: String, viewport: StarMapViewportData): BridgeResult<Boolean> {
+        return bridge.saveStarMapViewport(starmapId, viewport.toDto())
+    }
+
     fun computeEdgeRenders(data: StarMapData): BridgeResult<List<StarMapEdgeRenderData>> {
         val rawCache = cache.get(data.graph.starmapId) ?: return BridgeResult.Error(
             ResultEnvelope.error("SNAPSHOT_CACHE_NOT_INITIALIZED", "Starmap snapshot cache not initialized for ${data.graph.starmapId}. Call getStarmapPhasedSnapshot first.")
@@ -182,4 +213,18 @@ internal class StarMapRepository(
         )
         return bridge.hitTestStarMapNode(data.layout.toDto(rawCache), x, y)
     }
+
+    fun getMotionPolicy(): BridgeResult<StarMapMotionPolicyData> {
+        return when (val result = bridge.getStarMapMotionPolicy()) {
+            is BridgeResult.Success -> BridgeResult.Success(result.data.toModel())
+            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
+            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
+        }
+    }
+
+    fun flushStarmapStore(starmapId: String): BridgeResult<Boolean> = bridge.flushStarmapStore(starmapId)
+
+    fun closeStarmapStore(starmapId: String): BridgeResult<Boolean> = bridge.closeStarmapStore(starmapId)
+
+    fun flushAllStarmapStores(): BridgeResult<Boolean> = bridge.flushAllStarmapStores()
 }
