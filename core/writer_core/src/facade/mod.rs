@@ -34,6 +34,7 @@ mod sync_ops;
 mod workspace_ops;
 mod writing_stats_ops;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
@@ -42,6 +43,7 @@ use serde::{Deserialize, Serialize};
 use crate::chapter::Chapter;
 use crate::writing_stats::api::StatsApi;
 use crate::search::service::SearchIndexService;
+use crate::starmap::store::StarMapStore;
 
 /// Core 内部统一入口——薄 Facade，只做参数转发和类型转换。
 ///
@@ -57,6 +59,7 @@ pub struct WriterCore {
     pub(crate) secure_storage: Option<Arc<dyn writer_platform_api::SecureStorage>>,
     pub(crate) secrets_override: Option<crate::sync::SyncSecrets>,
     pub(crate) search_service: std::sync::Mutex<SearchIndexService>,
+    pub(crate) starmap_stores: std::sync::Mutex<HashMap<String, StarMapStore>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -74,6 +77,7 @@ impl WriterCore {
             secure_storage: None,
             secrets_override: None,
             search_service: std::sync::Mutex::new(SearchIndexService::new()),
+            starmap_stores: std::sync::Mutex::new(HashMap::new()),
         }
     }
 

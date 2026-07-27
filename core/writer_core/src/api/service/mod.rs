@@ -17,16 +17,19 @@ pub struct WriterCoreApi {
     pub(crate) secure_storage: Option<std::sync::Arc<dyn writer_platform_api::SecureStorage>>,
     secrets_override: std::sync::Mutex<Option<crate::sync::SyncSecrets>>,
     search_service: std::sync::Mutex<crate::search::service::SearchIndexService>,
+    core_instance: std::sync::Mutex<WriterCore>,
 }
 
 impl WriterCoreApi {
     pub fn new<P: AsRef<Path>>(workspace_path: P) -> Self {
+        let core = WriterCore::new(&workspace_path);
         Self {
             workspace_path: workspace_path.as_ref().to_path_buf(),
             sync_transport: None,
             secure_storage: None,
             secrets_override: std::sync::Mutex::new(None),
             search_service: std::sync::Mutex::new(crate::search::service::SearchIndexService::new()),
+            core_instance: std::sync::Mutex::new(core),
         }
     }
 
@@ -34,12 +37,15 @@ impl WriterCoreApi {
         workspace_path: P,
         transport_factory: writer_platform_api::SyncTransportFactory,
     ) -> Self {
+        let mut core = WriterCore::new(&workspace_path);
+        core.sync_transport = Some(transport_factory.clone());
         Self {
             workspace_path: workspace_path.as_ref().to_path_buf(),
             sync_transport: Some(transport_factory),
             secure_storage: None,
             secrets_override: std::sync::Mutex::new(None),
             search_service: std::sync::Mutex::new(crate::search::service::SearchIndexService::new()),
+            core_instance: std::sync::Mutex::new(core),
         }
     }
 
@@ -48,12 +54,16 @@ impl WriterCoreApi {
         sync_transport_factory: Option<writer_platform_api::SyncTransportFactory>,
         secure_storage: Option<std::sync::Arc<dyn writer_platform_api::SecureStorage>>,
     ) -> Self {
+        let mut core = WriterCore::new(&workspace_path);
+        core.sync_transport = sync_transport_factory.clone();
+        core.secure_storage = secure_storage.clone();
         Self {
             workspace_path: workspace_path.as_ref().to_path_buf(),
             sync_transport: sync_transport_factory,
             secure_storage,
             secrets_override: std::sync::Mutex::new(None),
             search_service: std::sync::Mutex::new(crate::search::service::SearchIndexService::new()),
+            core_instance: std::sync::Mutex::new(core),
         }
     }
 
@@ -63,14 +73,8 @@ impl WriterCoreApi {
         }
     }
 
-    pub(crate) fn core(&self) -> WriterCore {
-        let mut core = WriterCore::new(&self.workspace_path);
-        core.sync_transport = self.sync_transport.clone();
-        core.secure_storage = self.secure_storage.clone();
-        if let Ok(guard) = self.secrets_override.lock() {
-            core.secrets_override = guard.clone();
-        }
-        core
+    pub(crate) fn core(&self) -> std::sync::MutexGuard<'_, WriterCore> {
+        self.core_instance.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub(crate) fn enqueue_search_index_update(&self, update: crate::search::SearchIndexUpdate) {

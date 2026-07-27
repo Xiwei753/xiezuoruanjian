@@ -107,6 +107,11 @@ pub enum SaveQueueEntry {
     Hyperlink,
     Layout,
     GraphMeta,
+    DeleteNode,
+    DeleteEdge,
+    DeleteEmbed,
+    DeleteLink,
+    DeleteHyperlink,
 }
 
 pub struct StarMapStore {
@@ -295,66 +300,188 @@ impl StarMapStore {
     }
 
     pub fn flush_save_queue(&mut self) -> Result<()> {
-        let entries: Vec<SaveQueueEntry> = self.drain_save_queue();
-        for entry in entries {
+        let mut remaining: VecDeque<SaveQueueEntry> = VecDeque::new();
+        while let Some(entry) = self.save_queue.pop_front() {
+            let mut succeeded = true;
             match entry {
                 SaveQueueEntry::Node => {
-                    for node_id in &self.dirty_nodes {
+                    let ids: Vec<String> = self.dirty_nodes.iter().cloned().collect();
+                    for node_id in &ids {
                         if let Some(node) = self.nodes.get(node_id) {
-                            package_storage::save_node(&self.workspace, &self.starmap_id, node)?;
+                            if package_storage::save_node(&self.workspace, &self.starmap_id, node).is_err() {
+                                succeeded = false;
+                                break;
+                            }
                         }
+                        self.dirty_nodes.remove(node_id);
                     }
-                    self.dirty_nodes.clear();
                 }
                 SaveQueueEntry::Edge => {
-                    for edge_id in &self.dirty_edges {
+                    let ids: Vec<String> = self.dirty_edges.iter().cloned().collect();
+                    for edge_id in &ids {
                         if let Some(edge) = self.edges.get(edge_id) {
-                            package_storage::save_edge(&self.workspace, &self.starmap_id, edge)?;
+                            if package_storage::save_edge(&self.workspace, &self.starmap_id, edge).is_err() {
+                                succeeded = false;
+                                break;
+                            }
                         }
+                        self.dirty_edges.remove(edge_id);
                     }
-                    self.dirty_edges.clear();
                 }
                 SaveQueueEntry::Embed => {
-                    for instance_id in &self.dirty_embeds {
+                    let ids: Vec<String> = self.dirty_embeds.iter().cloned().collect();
+                    for instance_id in &ids {
                         if let Some(embed) = self.embeds.get(instance_id) {
-                            package_storage::save_embed(&self.workspace, &self.starmap_id, embed)?;
+                            if package_storage::save_embed(&self.workspace, &self.starmap_id, embed).is_err() {
+                                succeeded = false;
+                                break;
+                            }
                         }
+                        self.dirty_embeds.remove(instance_id);
                     }
-                    self.dirty_embeds.clear();
                 }
                 SaveQueueEntry::Link => {
-                    for link_id in &self.dirty_links {
+                    let ids: Vec<String> = self.dirty_links.iter().cloned().collect();
+                    for link_id in &ids {
                         if let Some(link) = self.links.get(link_id) {
-                            package_storage::save_link(&self.workspace, &self.starmap_id, link)?;
+                            if package_storage::save_link(&self.workspace, &self.starmap_id, link).is_err() {
+                                succeeded = false;
+                                break;
+                            }
                         }
+                        self.dirty_links.remove(link_id);
                     }
-                    self.dirty_links.clear();
                 }
                 SaveQueueEntry::Hyperlink => {
-                    for hl_id in &self.dirty_hyperlinks {
+                    let ids: Vec<String> = self.dirty_hyperlinks.iter().cloned().collect();
+                    for hl_id in &ids {
                         if let Some(hl) = self.hyperlinks.get(hl_id) {
-                            package_storage::save_hyperlink(&self.workspace, &self.starmap_id, hl)?;
+                            if package_storage::save_hyperlink(&self.workspace, &self.starmap_id, hl).is_err() {
+                                succeeded = false;
+                                break;
+                            }
                         }
+                        self.dirty_hyperlinks.remove(hl_id);
                     }
-                    self.dirty_hyperlinks.clear();
                 }
                 SaveQueueEntry::Layout => {
                     if self.dirty_layout {
                         if let Some(ref layout) = self.layout {
-                            package_storage::save_layout(&self.workspace, &self.starmap_id, layout)?;
+                            if package_storage::save_layout(&self.workspace, &self.starmap_id, layout).is_err() {
+                                succeeded = false;
+                            }
                         }
-                        self.dirty_layout = false;
+                        if succeeded {
+                            self.dirty_layout = false;
+                        }
                     }
                 }
                 SaveQueueEntry::GraphMeta => {
                     if self.dirty_graph_meta {
-                        self.update_graph_meta_file()?;
-                        self.dirty_graph_meta = false;
+                        if self.update_graph_meta_file().is_err() {
+                            succeeded = false;
+                        }
+                        if succeeded {
+                            self.dirty_graph_meta = false;
+                        }
+                    }
+                }
+                SaveQueueEntry::DeleteNode => {
+                    let ids: Vec<String> = self.deleted_node_ids.iter().cloned().collect();
+                    for node_id in &ids {
+                        match package_storage::delete_node_file(&self.workspace, &self.starmap_id, node_id) {
+                            Ok(()) => { self.deleted_node_ids.remove(node_id); }
+                            Err(e) => {
+                                self.record_delete_failure("node", node_id, &e);
+                                succeeded = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+                SaveQueueEntry::DeleteEdge => {
+                    let ids: Vec<String> = self.deleted_edge_ids.iter().cloned().collect();
+                    for edge_id in &ids {
+                        match package_storage::delete_edge_file(&self.workspace, &self.starmap_id, edge_id) {
+                            Ok(()) => { self.deleted_edge_ids.remove(edge_id); }
+                            Err(e) => {
+                                self.record_delete_failure("edge", edge_id, &e);
+                                succeeded = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+                SaveQueueEntry::DeleteEmbed => {
+                    let ids: Vec<String> = self.deleted_embed_ids.iter().cloned().collect();
+                    for instance_id in &ids {
+                        match package_storage::delete_embed_file(&self.workspace, &self.starmap_id, instance_id) {
+                            Ok(()) => { self.deleted_embed_ids.remove(instance_id); }
+                            Err(e) => {
+                                self.record_delete_failure("embed", instance_id, &e);
+                                succeeded = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+                SaveQueueEntry::DeleteLink => {
+                    let ids: Vec<String> = self.deleted_link_ids.iter().cloned().collect();
+                    for link_id in &ids {
+                        match package_storage::delete_link_file(&self.workspace, &self.starmap_id, link_id) {
+                            Ok(()) => { self.deleted_link_ids.remove(link_id); }
+                            Err(e) => {
+                                self.record_delete_failure("link", link_id, &e);
+                                succeeded = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+                SaveQueueEntry::DeleteHyperlink => {
+                    let ids: Vec<String> = self.deleted_hyperlink_ids.iter().cloned().collect();
+                    for hl_id in &ids {
+                        match package_storage::delete_hyperlink_file(&self.workspace, &self.starmap_id, hl_id) {
+                            Ok(()) => { self.deleted_hyperlink_ids.remove(hl_id); }
+                            Err(e) => {
+                                self.record_delete_failure("hyperlink", hl_id, &e);
+                                succeeded = false;
+                                break;
+                            }
+                        }
                     }
                 }
             }
+            if !succeeded {
+                remaining.push_back(entry);
+            }
+        }
+        self.save_queue = remaining;
+        if self.has_pending_deletes() || self.has_pending_writes() {
+            self.flush_recovery_to_disk()?;
         }
         Ok(())
+    }
+
+    fn record_delete_failure(&mut self, object_type: &str, object_id: &str, error: &crate::error::Error) {
+        self.recovery_log.push(LoadDiagnostic {
+            kind: LoadDiagnosticKind::Corrupt,
+            object_type: object_type.to_string(),
+            object_id: object_id.to_string(),
+            detail: format!("delete failed: {:?}", error),
+        });
+    }
+
+    pub fn has_pending_deletes(&self) -> bool {
+        !self.deleted_node_ids.is_empty()
+            || !self.deleted_edge_ids.is_empty()
+            || !self.deleted_embed_ids.is_empty()
+            || !self.deleted_link_ids.is_empty()
+            || !self.deleted_hyperlink_ids.is_empty()
+    }
+
+    fn has_pending_writes(&self) -> bool {
+        self.is_dirty() || self.dirty_graph_meta
     }
 
     pub fn load_phased(&mut self, up_to: LoadPhase) -> Result<StarMapStoreResult> {
@@ -377,10 +504,11 @@ impl StarMapStore {
                     self.current_load_phase = Some(LoadPhase::ViewportAndLayoutIndex);
                 }
                 LoadPhase::CurrentViewportObjects => {
-                    self.load_all_listed_objects(&mut diagnostics);
+                    self.load_viewport_objects(&mut diagnostics);
                     self.current_load_phase = Some(LoadPhase::CurrentViewportObjects);
                 }
                 LoadPhase::PrefetchNearbyObjects => {
+                    self.prefetch_nearby_objects(&mut diagnostics);
                     self.current_load_phase = Some(LoadPhase::PrefetchNearbyObjects);
                 }
                 LoadPhase::BackgroundFullLoad => {
@@ -516,44 +644,68 @@ impl StarMapStore {
         }
     }
 
-    fn load_all_listed_objects(&mut self, diagnostics: &mut Vec<LoadDiagnostic>) {
-        let node_ids = self.graph_meta.as_ref()
+    fn load_viewport_objects(&mut self, diagnostics: &mut Vec<LoadDiagnostic>) {
+        let viewport_node_ids: HashSet<String> = self.layout.as_ref()
+            .map(|l| l.nodes.iter().map(|n| n.node_id.clone()).collect())
+            .unwrap_or_default();
+
+        let all_node_ids = self.graph_meta.as_ref()
             .map(|m| m.node_ids.clone())
             .unwrap_or_default();
-        for node_id in &node_ids {
-            if !self.nodes.contains_key(node_id) {
-                if let Some(node) = self.try_load_node(node_id) {
-                    self.nodes.insert(node_id.clone(), node);
-                }
-            }
-        }
-
-        let edge_ids = self.graph_meta.as_ref()
+        let all_edge_ids = self.graph_meta.as_ref()
             .map(|m| m.edge_ids.clone())
             .unwrap_or_default();
-        for edge_id in &edge_ids {
-            if !self.edges.contains_key(edge_id) {
-                if let Some(edge) = self.try_load_edge(edge_id) {
-                    self.edges.insert(edge_id.clone(), edge);
-                }
-            }
-        }
-
-        let embed_ids = self.graph_meta.as_ref()
+        let all_embed_ids = self.graph_meta.as_ref()
             .map(|m| m.embed_instance_ids.clone())
             .unwrap_or_default();
-        for instance_id in &embed_ids {
-            if !self.embeds.contains_key(instance_id) {
-                if let Some(embed) = self.try_load_embed(instance_id) {
-                    self.embeds.insert(instance_id.clone(), embed);
+        let all_hl_ids = self.graph_meta.as_ref()
+            .map(|m| m.hyperlink_ids.clone())
+            .unwrap_or_default();
+        let all_link_ids = self.graph_meta.as_ref()
+            .map(|m| m.link_ids.clone())
+            .unwrap_or_default();
+
+        let node_ids_to_load: Vec<&str> = if viewport_node_ids.is_empty() {
+            all_node_ids.iter().map(|s| s.as_str()).collect()
+        } else {
+            all_node_ids.iter()
+                .filter(|id| viewport_node_ids.contains(*id))
+                .map(|s| s.as_str())
+                .collect()
+        };
+
+        for node_id in &node_ids_to_load {
+            if !self.nodes.contains_key(*node_id) {
+                if let Some(node) = self.try_load_node(node_id) {
+                    self.nodes.insert(node_id.to_string(), node);
                 }
             }
         }
 
-        let hl_ids = self.graph_meta.as_ref()
-            .map(|m| m.hyperlink_ids.clone())
-            .unwrap_or_default();
-        for hl_id in &hl_ids {
+        for edge_id in &all_edge_ids {
+            if !self.edges.contains_key(edge_id) {
+                if let Some(edge) = self.try_load_edge(edge_id) {
+                    let from_in_viewport = edge.from.as_ref().map_or(false, |id| self.nodes.contains_key(id));
+                    let to_in_viewport = edge.to.as_ref().map_or(false, |id| self.nodes.contains_key(id));
+                    if viewport_node_ids.is_empty() || from_in_viewport || to_in_viewport {
+                        self.edges.insert(edge_id.clone(), edge);
+                    }
+                }
+            }
+        }
+
+        for instance_id in &all_embed_ids {
+            if !self.embeds.contains_key(instance_id) {
+                if let Some(embed) = self.try_load_embed(instance_id) {
+                    let source_in_viewport = embed.source_node_id.as_ref().map_or(false, |id| self.nodes.contains_key(id));
+                    if viewport_node_ids.is_empty() || source_in_viewport {
+                        self.embeds.insert(instance_id.clone(), embed);
+                    }
+                }
+            }
+        }
+
+        for hl_id in &all_hl_ids {
             if !self.hyperlinks.contains_key(hl_id) {
                 if let Some(hl) = self.try_load_hyperlink(hl_id) {
                     self.hyperlinks.insert(hl_id.clone(), hl);
@@ -561,10 +713,7 @@ impl StarMapStore {
             }
         }
 
-        let link_ids = self.graph_meta.as_ref()
-            .map(|m| m.link_ids.clone())
-            .unwrap_or_default();
-        for link_id in &link_ids {
+        for link_id in &all_link_ids {
             if !self.links.contains_key(link_id) {
                 if let Some(link) = self.try_load_link(link_id) {
                     self.links.insert(link_id.clone(), link);
@@ -573,6 +722,69 @@ impl StarMapStore {
         }
 
         let _ = diagnostics;
+    }
+
+    pub fn ensure_loaded(&mut self) -> Result<()> {
+        if self.current_load_phase.is_none() {
+            self.load_full()?;
+        }
+        Ok(())
+    }
+
+    pub fn ensure_object_loaded(&mut self, node_id: &str) -> Result<()> {
+        if self.nodes.contains_key(node_id) {
+            return Ok(());
+        }
+        if let Some(node) = self.try_load_node(node_id) {
+            self.nodes.insert(node_id.to_string(), node);
+        }
+        Ok(())
+    }
+
+    fn prefetch_nearby_objects(&mut self, _diagnostics: &mut Vec<LoadDiagnostic>) {
+        let loaded_node_ids: HashSet<String> = self.nodes.keys().cloned().collect();
+        let mut adjacent_node_ids: HashSet<String> = HashSet::new();
+        for edge in self.edges.values() {
+            if let Some(ref from_id) = edge.from {
+                if loaded_node_ids.contains(from_id) {
+                    if let Some(ref to_id) = edge.to {
+                        if !self.nodes.contains_key(to_id) {
+                            adjacent_node_ids.insert(to_id.clone());
+                        }
+                    }
+                }
+            }
+            if let Some(ref to_id) = edge.to {
+                if loaded_node_ids.contains(to_id) {
+                    if let Some(ref from_id) = edge.from {
+                        if !self.nodes.contains_key(from_id) {
+                            adjacent_node_ids.insert(from_id.clone());
+                        }
+                    }
+                }
+            }
+        }
+        for node_id in &adjacent_node_ids {
+            if !self.nodes.contains_key(node_id) {
+                if let Some(node) = self.try_load_node(node_id) {
+                    self.nodes.insert(node_id.clone(), node);
+                }
+            }
+        }
+        let all_edge_ids = self.graph_meta.as_ref()
+            .map(|m| m.edge_ids.clone())
+            .unwrap_or_default();
+        for edge_id in &all_edge_ids {
+            if !self.edges.contains_key(edge_id) {
+                if let Some(edge) = self.try_load_edge(edge_id) {
+                    let from_loaded = edge.from.as_ref().map_or(true, |id| self.nodes.contains_key(id));
+                    let to_loaded = edge.to.as_ref().map_or(true, |id| self.nodes.contains_key(id));
+                    if from_loaded || to_loaded {
+                        self.edges.insert(edge_id.clone(), edge);
+                    }
+                }
+            }
+        }
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -1148,24 +1360,34 @@ impl StarMapStore {
             }
         }
 
-        for node_id in &self.deleted_node_ids {
-            let _ = package_storage::delete_node_file(&self.workspace, &self.starmap_id, node_id);
+        let node_ids_to_delete: Vec<String> = self.deleted_node_ids.iter().cloned().collect();
+        for node_id in &node_ids_to_delete {
+            package_storage::delete_node_file(&self.workspace, &self.starmap_id, node_id)?;
+            self.deleted_node_ids.remove(node_id);
         }
 
-        for edge_id in &self.deleted_edge_ids {
-            let _ = package_storage::delete_edge_file(&self.workspace, &self.starmap_id, edge_id);
+        let edge_ids_to_delete: Vec<String> = self.deleted_edge_ids.iter().cloned().collect();
+        for edge_id in &edge_ids_to_delete {
+            package_storage::delete_edge_file(&self.workspace, &self.starmap_id, edge_id)?;
+            self.deleted_edge_ids.remove(edge_id);
         }
 
-        for instance_id in &self.deleted_embed_ids {
-            let _ = package_storage::delete_embed_file(&self.workspace, &self.starmap_id, instance_id);
+        let embed_ids_to_delete: Vec<String> = self.deleted_embed_ids.iter().cloned().collect();
+        for instance_id in &embed_ids_to_delete {
+            package_storage::delete_embed_file(&self.workspace, &self.starmap_id, instance_id)?;
+            self.deleted_embed_ids.remove(instance_id);
         }
 
-        for link_id in &self.deleted_link_ids {
-            let _ = package_storage::delete_link_file(&self.workspace, &self.starmap_id, link_id);
+        let link_ids_to_delete: Vec<String> = self.deleted_link_ids.iter().cloned().collect();
+        for link_id in &link_ids_to_delete {
+            package_storage::delete_link_file(&self.workspace, &self.starmap_id, link_id)?;
+            self.deleted_link_ids.remove(link_id);
         }
 
-        for hl_id in &self.deleted_hyperlink_ids {
-            let _ = package_storage::delete_hyperlink_file(&self.workspace, &self.starmap_id, hl_id);
+        let hl_ids_to_delete: Vec<String> = self.deleted_hyperlink_ids.iter().cloned().collect();
+        for hl_id in &hl_ids_to_delete {
+            package_storage::delete_hyperlink_file(&self.workspace, &self.starmap_id, hl_id)?;
+            self.deleted_hyperlink_ids.remove(hl_id);
         }
 
         self.update_graph_meta_file()?;
@@ -1193,11 +1415,6 @@ impl StarMapStore {
         self.dirty_hyperlinks.clear();
         self.dirty_layout = false;
         self.dirty_graph_meta = false;
-        self.deleted_node_ids.clear();
-        self.deleted_edge_ids.clear();
-        self.deleted_embed_ids.clear();
-        self.deleted_link_ids.clear();
-        self.deleted_hyperlink_ids.clear();
 
         self.flush_recovery_to_disk()?;
 
@@ -2111,5 +2328,156 @@ mod tests {
         assert_eq!(LoadPhase::CurrentViewportObjects.next(), Some(LoadPhase::PrefetchNearbyObjects));
         assert_eq!(LoadPhase::PrefetchNearbyObjects.next(), Some(LoadPhase::BackgroundFullLoad));
         assert_eq!(LoadPhase::BackgroundFullLoad.next(), None);
+    }
+
+    #[test]
+    fn flush_save_queue_handles_delete_entries() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.upsert_node(make_test_node("n1", "Node1"));
+        store.flush().unwrap();
+
+        let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store2.load_full().unwrap();
+        store2.remove_node("n1");
+        assert!(store2.has_pending_deletes());
+
+        store2.enqueue_save(SaveQueueEntry::DeleteNode);
+        store2.enqueue_save(SaveQueueEntry::GraphMeta);
+        store2.flush_save_queue().unwrap();
+        assert!(!store2.has_pending_deletes());
+
+        let mut store3 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        let result = store3.load_full().unwrap();
+        assert_eq!(result.loaded_node_count, 0);
+    }
+
+    #[test]
+    fn flush_delete_failure_retains_deleted_ids() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.upsert_node(make_test_node("n1", "Node1"));
+        store.flush().unwrap();
+
+        let node_path = dir.path()
+            .join("app-meta").join("starmaps").join(&meta.starmap_id)
+            .join("nodes").join("n1.json");
+        assert!(node_path.exists());
+
+        let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store2.load_full().unwrap();
+        store2.remove_node("n1");
+
+        let result = store2.flush();
+        assert!(result.is_ok());
+        assert!(!store2.has_pending_deletes());
+    }
+
+    #[test]
+    fn ensure_loaded_skips_repeated_load() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.upsert_node(make_test_node("n1", "Node1"));
+        store.flush().unwrap();
+
+        let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store2.ensure_loaded().unwrap();
+        assert_eq!(store2.node_count(), 1);
+
+        store2.ensure_loaded().unwrap();
+        assert_eq!(store2.node_count(), 1);
+    }
+
+    #[test]
+    fn load_phased_viewport_only_loads_layout_nodes() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.upsert_node(make_test_node("n1", "InViewport"));
+        store.upsert_node(make_test_node("n2", "OutOfViewport"));
+        let mut layout = StarMapLayout::default();
+        layout.nodes.push(StarMapLayoutNode {
+            node_id: "n1".to_string(),
+            x: 0.0, y: 0.0, width: 100.0, height: 50.0,
+            radius: 25.0, collapsed: false, z_index: 0,
+            scale: 1.0, depth: 0.0, focus_weight: 0.0, orbit_group: None,
+        });
+        store.set_layout(layout);
+        store.flush().unwrap();
+
+        let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        let result = store2.load_phased(LoadPhase::CurrentViewportObjects).unwrap();
+        assert_eq!(store2.current_load_phase(), Some(LoadPhase::CurrentViewportObjects));
+        assert!(store2.get_node("n1").is_some());
+        assert!(store2.get_node("n2").is_none());
+        assert_eq!(result.loaded_node_count, 1);
+    }
+
+    #[test]
+    fn prefetch_nearby_loads_adjacent_nodes() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.upsert_node(make_test_node("n1", "Visible"));
+        store.upsert_node(make_test_node("n2", "Adjacent"));
+        let edge = StarMapEdge {
+            id: "e1".to_string(),
+            kind: StarMapEdgeKind::References,
+            label: None,
+            payload: None,
+            from: Some("n1".to_string()),
+            to: Some("n2".to_string()),
+            from_target: None,
+            to_target: None,
+            from_endpoint: None,
+            to_endpoint: None,
+            from_endpoint_path: None,
+            to_endpoint_path: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+        store.upsert_edge(edge);
+        let mut layout = StarMapLayout::default();
+        layout.nodes.push(StarMapLayoutNode {
+            node_id: "n1".to_string(),
+            x: 0.0, y: 0.0, width: 100.0, height: 50.0,
+            radius: 25.0, collapsed: false, z_index: 0,
+            scale: 1.0, depth: 0.0, focus_weight: 0.0, orbit_group: None,
+        });
+        store.set_layout(layout);
+        store.flush().unwrap();
+
+        let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store2.load_phased(LoadPhase::CurrentViewportObjects).unwrap();
+        assert!(store2.get_node("n1").is_some());
+
+        store2.load_phased(LoadPhase::PrefetchNearbyObjects).unwrap();
+        assert!(store2.get_node("n2").is_some());
+        assert!(store2.get_edge("e1").is_some());
+    }
+
+    #[test]
+    fn save_queue_delete_variants_exist() {
+        let dir = TempDir::new().unwrap();
+        let mut store = StarMapStore::new(dir.path(), "test-id");
+        store.enqueue_save(SaveQueueEntry::DeleteNode);
+        store.enqueue_save(SaveQueueEntry::DeleteEdge);
+        store.enqueue_save(SaveQueueEntry::DeleteEmbed);
+        store.enqueue_save(SaveQueueEntry::DeleteLink);
+        store.enqueue_save(SaveQueueEntry::DeleteHyperlink);
+        assert_eq!(store.save_queue_len(), 5);
     }
 }
