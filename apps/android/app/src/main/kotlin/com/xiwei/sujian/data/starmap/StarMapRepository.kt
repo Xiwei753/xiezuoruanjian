@@ -51,7 +51,13 @@ internal class StarMapRepository(
         return when (val result = bridge.getStarmapPhasedSnapshot(starmapId, request)) {
             is BridgeResult.Success -> {
                 try {
-                    cache.put(starmapId, result.data.toRawCache())
+                    val incomingCache = result.data.toRawCache()
+                    val existingCache = cache.get(starmapId)
+                    if (existingCache != null && sinceRevision > 0u) {
+                        cache.mergeIncremental(starmapId, incomingCache)
+                    } else {
+                        cache.put(starmapId, incomingCache)
+                    }
                     BridgeResult.Success(result.data.toSnapshotResult())
                 } catch (e: Exception) {
                     BridgeResult.Error(ResultEnvelope.error("CONVERSION_ERROR", "Failed to convert phased snapshot: ${e.message}"))

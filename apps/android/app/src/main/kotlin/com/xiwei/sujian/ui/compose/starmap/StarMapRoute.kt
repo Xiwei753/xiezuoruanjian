@@ -156,24 +156,25 @@ private fun StarMapEditorScreen(
     }
 
     suspend fun executeOperation(label: String, block: suspend () -> BridgeResult<*>): Boolean {
+        editorState = editorState.copy(operationInProgress = true)
         return try {
             val result = withContext(Dispatchers.IO) { block() }
             when (result) {
                 is BridgeResult.Success -> {
-                    editorState = editorState.copy(lastError = null)
+                    editorState = editorState.copy(lastError = null, operationInProgress = false)
                     true
                 }
                 is BridgeResult.Error -> {
-                    editorState = editorState.copy(lastError = "${label}失败: ${result.message}")
+                    editorState = editorState.copy(lastError = "${label}失败: ${result.message}", operationInProgress = false)
                     false
                 }
                 BridgeResult.NotLoaded -> {
-                    editorState = editorState.copy(lastError = "${label}失败: 未加载")
+                    editorState = editorState.copy(lastError = "${label}失败: 未加载", operationInProgress = false)
                     false
                 }
             }
         } catch (e: Exception) {
-            editorState = editorState.copy(lastError = "${label}异常: ${e.message}")
+            editorState = editorState.copy(lastError = "${label}异常: ${e.message}", operationInProgress = false)
             false
         }
     }
@@ -199,11 +200,25 @@ private fun StarMapEditorScreen(
                     is BridgeResult.Success -> {
                         val snapshotResult = result.data
                         val graphData = snapshotResult.data
-                        val edgeRenders = when (val er = repo.computeEdgeRenders(graphData)) {
-                            is BridgeResult.Success -> er.data
-                            else -> emptyList()
+                        val mergedGraph = if (graphData.graph.nodes.isEmpty() && graphData.graph.edges.isEmpty()) {
+                            current.graph
+                        } else {
+                            graphData.graph
                         }
-                        graphData.copy(edgeRenders = edgeRenders)
+                        val mergedLayout = if (graphData.layout.nodes.isEmpty()) {
+                            current.layout
+                        } else {
+                            graphData.layout
+                        }
+                        val mergedData = graphData.copy(
+                            graph = mergedGraph,
+                            layout = mergedLayout
+                        )
+                        val edgeRenders = when (val er = repo.computeEdgeRenders(mergedData)) {
+                            is BridgeResult.Success -> er.data
+                            else -> current.edgeRenders
+                        }
+                        mergedData.copy(edgeRenders = edgeRenders)
                     }
                     else -> null
                 }
@@ -281,14 +296,16 @@ private fun StarMapEditorScreen(
                                 val ok = executeOperation("更新节点") {
                                     repository().updateStarmapNode(starmapId, geometry.nodeId, title = finalText.trim())
                                 }
-                                if (ok) loadStarMap()
+                                if (ok) {
+                                    editorState = editorState.copy(editingNodeId = null)
+                                    coordinator.unregisterTarget(targetId)
+                                    loadStarMap()
+                                }
                             }
                         } else {
                             editorState = editorState.copy(editingNodeId = null)
                             coordinator.unregisterTarget(targetId)
                         }
-                        editorState = editorState.copy(editingNodeId = null)
-                        coordinator.unregisterTarget(targetId)
                     }
                 target.onCancel = {
                         editorState = editorState.copy(editingNodeId = null)

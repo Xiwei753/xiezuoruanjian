@@ -13,7 +13,8 @@ internal data class StarMapEditorUiState(
     val isLoading: Boolean = true,
     val selectedNodeId: String? = null,
     val editingNodeId: String? = null,
-    val lastError: String? = null
+    val lastError: String? = null,
+    val operationInProgress: Boolean = false
 )
 
 sealed class StarMapOperationResult {

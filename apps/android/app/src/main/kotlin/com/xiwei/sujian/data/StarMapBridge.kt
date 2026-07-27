@@ -33,6 +33,10 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
         private const val TAG = "StarMapBridge"
     }
 
+    @Volatile
+    internal var getStarMapGraphCallCount: Int = 0
+        private set
+
     private val cache = StarMapSnapshotCache()
     internal val repository = StarMapRepository(this, cache)
 
@@ -42,8 +46,11 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
         holder.service.listStarmaps()
     }
 
-    fun getStarMapGraph(starmapId: String): BridgeResult<StarMapGraphDto> = holder.wrapResult {
-        holder.service.getStarmapGraph(starmapId)
+    fun getStarMapGraph(starmapId: String): BridgeResult<StarMapGraphDto> {
+        getStarMapGraphCallCount++
+        return holder.wrapResult {
+            holder.service.getStarmapGraph(starmapId)
+        }
     }
 
     fun createStarMap(title: String, desc: String): BridgeResult<StarMapMetaDto> = holder.wrapResult {
