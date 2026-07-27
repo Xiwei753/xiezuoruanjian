@@ -845,6 +845,22 @@ class RenderedFrameVisualTest {
         assertTrue("Animation must be active", durationMs > 0)
 
         manualTimeSource.advanceToProgress(1f, durationMs, startTimeMs)
+
+        val preDrawSnapshot = captureAnimationStateSnapshot()
+        assertNotNull(
+            "Before 100% frame draw, animation state snapshot must exist (transaction still active)",
+            preDrawSnapshot
+        )
+        assertTrue(
+            "Before 100% frame draw, transaction must still be Rendering, but was ${preDrawSnapshot!!.transactionState}",
+            preDrawSnapshot.transactionState == TransactionState.Rendering
+                    || preDrawSnapshot.transactionState == TransactionState.Prepared
+        )
+        assertTrue(
+            "Before 100% frame draw, ownedResourceCount must be > 0 (Bitmaps not yet recycled), but was ${preDrawSnapshot.ownedResourceCount}",
+            preDrawSnapshot.ownedResourceCount > 0
+        )
+
         dispatchManualFrame()
 
         val finalFrame = EditorBitmapCapture.captureEditorBitmap()
@@ -883,6 +899,22 @@ class RenderedFrameVisualTest {
         assertTrue("Animation must be active", durationMs > 0)
 
         manualTimeSource.advanceToProgress(1f, durationMs, startTimeMs)
+
+        val preDrawSnapshot = captureAnimationStateSnapshot()
+        assertNotNull(
+            "Before 100% delete frame draw, animation state snapshot must exist (transaction still active)",
+            preDrawSnapshot
+        )
+        assertTrue(
+            "Before 100% delete frame draw, transaction must still be Rendering, but was ${preDrawSnapshot!!.transactionState}",
+            preDrawSnapshot.transactionState == TransactionState.Rendering
+                    || preDrawSnapshot.transactionState == TransactionState.Prepared
+        )
+        assertTrue(
+            "Before 100% delete frame draw, ownedResourceCount must be > 0 (Bitmaps not yet recycled), but was ${preDrawSnapshot.ownedResourceCount}",
+            preDrawSnapshot.ownedResourceCount > 0
+        )
+
         dispatchManualFrame()
 
         val finalFrame = EditorBitmapCapture.captureEditorBitmap()
@@ -914,6 +946,22 @@ class RenderedFrameVisualTest {
         assertTrue("Animation must be active", durationMs > 0)
 
         manualTimeSource.advanceToProgress(1f, durationMs, startTimeMs)
+
+        val preDrawSnapshot = captureAnimationStateSnapshot()
+        assertNotNull(
+            "Before 100% composition frame draw, animation state snapshot must exist (transaction still active)",
+            preDrawSnapshot
+        )
+        assertTrue(
+            "Before 100% composition frame draw, transaction must still be Rendering, but was ${preDrawSnapshot!!.transactionState}",
+            preDrawSnapshot.transactionState == TransactionState.Rendering
+                    || preDrawSnapshot.transactionState == TransactionState.Prepared
+        )
+        assertTrue(
+            "Before 100% composition frame draw, ownedResourceCount must be > 0 (Bitmaps not yet recycled), but was ${preDrawSnapshot.ownedResourceCount}",
+            preDrawSnapshot.ownedResourceCount > 0
+        )
+
         dispatchManualFrame()
 
         val finalFrame = EditorBitmapCapture.captureEditorBitmap()
@@ -952,14 +1000,35 @@ class RenderedFrameVisualTest {
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("C"))
 
-        advanceClockToEnd()
+        val durationMs = getActiveAnimationDurationMs()
+        val startTimeMs = getActiveAnimationStartTimeMs()
+        assertTrue("Animation must be active after rapid input", durationMs > 0)
+
+        manualTimeSource.advanceToProgress(1f, durationMs, startTimeMs)
+
+        val preDrawSnapshot = captureAnimationStateSnapshot()
+        assertNotNull(
+            "Before rapid input final frame draw, animation state snapshot must exist (transaction still active)",
+            preDrawSnapshot
+        )
+        assertTrue(
+            "Before rapid input final frame draw, transaction must still be Rendering, but was ${preDrawSnapshot!!.transactionState}",
+            preDrawSnapshot.transactionState == TransactionState.Rendering
+                    || preDrawSnapshot.transactionState == TransactionState.Prepared
+        )
+        assertTrue(
+            "Before rapid input final frame draw, ownedResourceCount must be > 0 (Bitmaps not yet recycled), but was ${preDrawSnapshot.ownedResourceCount}",
+            preDrawSnapshot.ownedResourceCount > 0
+        )
+
+        dispatchManualFrame()
 
         val finalFrame = EditorBitmapCapture.captureEditorBitmap()
         EditorBitmapCapture.assertBitmapHasContent(finalFrame, "Final frame after rapid input must have rendered content")
 
         val finalStateSnapshot = captureAnimationStateSnapshot()
         assertTrue(
-            "After rapid input completes, transaction must be completed or null",
+            "After rapid input final frame draw, transaction must be completed or null",
             finalStateSnapshot == null
                     || finalStateSnapshot.transactionState == TransactionState.Completed
         )
