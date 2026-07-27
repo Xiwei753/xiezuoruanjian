@@ -47,6 +47,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.R
 import com.xiwei.sujian.data.BridgeProvider
+import com.xiwei.sujian.data.BridgeResult
+import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.model.StarMapData
 import com.xiwei.sujian.model.StarMapGraphEdge
 import com.xiwei.sujian.model.StarMapGraphNode
@@ -282,11 +284,15 @@ private fun StarMapEditorScreen(
 
     DisposableEffect(starmapId) {
         onDispose {
-            try {
-                val bridge = BridgeProvider.getStarmapBridge(context)
-                bridge.flushStarmapStore(starmapId)
-                bridge.closeStarmapStore(starmapId)
-            } catch (_: Exception) {}
+            val bridge = BridgeProvider.getStarmapBridge(context)
+            val flushResult = bridge.flushStarmapStore(starmapId)
+            if (flushResult is BridgeResult.Error) {
+                DiagnosticsLogger.e("StarMapScreen", "flushStarmapStore failed on dispose: ${flushResult.envelope.message}")
+            }
+            val closeResult = bridge.closeStarmapStore(starmapId)
+            if (closeResult is BridgeResult.Error) {
+                DiagnosticsLogger.e("StarMapScreen", "closeStarmapStore failed on dispose: ${closeResult.envelope.message}")
+            }
         }
     }
 

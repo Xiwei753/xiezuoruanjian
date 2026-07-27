@@ -596,14 +596,19 @@ impl StarMapStore {
         }
 
         if any_processed && all_flushed {
-            let node_count = self.nodes.len() as u32;
-            let edge_count = self.edges.len() as u32;
-            let mut linked_chapters = 0u32;
-            for node in self.nodes.values() {
-                if node.kind == StarMapNodeKind::Chapter {
-                    linked_chapters += 1;
-                }
-            }
+            let node_count = self.graph_meta.as_ref()
+                .map(|m| m.node_ids.len() as u32)
+                .unwrap_or(self.nodes.len() as u32);
+            let edge_count = self.graph_meta.as_ref()
+                .map(|m| m.edge_ids.len() as u32)
+                .unwrap_or(self.edges.len() as u32);
+            let linked_chapters = self.graph_meta.as_ref()
+                .map(|m| m.node_ids.iter()
+                    .filter(|id| self.nodes.get(*id).map_or(false, |n| n.kind == StarMapNodeKind::Chapter))
+                    .count() as u32)
+                .unwrap_or_else(|| self.nodes.values()
+                    .filter(|n| n.kind == StarMapNodeKind::Chapter)
+                    .count() as u32);
             crate::starmap::update_starmap_stats(
                 &self.workspace,
                 &self.starmap_id,
@@ -1035,30 +1040,64 @@ impl StarMapStore {
             }
         }
 
-        let all_edge_ids = self.graph_meta.as_ref()
-            .map(|m| m.edge_ids.clone())
-            .unwrap_or_default();
-        let all_embed_ids = self.graph_meta.as_ref()
-            .map(|m| m.embed_instance_ids.clone())
-            .unwrap_or_default();
+        let has_edge_index = self.graph_meta.as_ref()
+            .map(|m| !m.edge_relation_index.is_empty())
+            .unwrap_or(false);
+        let has_embed_index = self.graph_meta.as_ref()
+            .map(|m| !m.embed_host_index.is_empty())
+            .unwrap_or(false);
 
-        for edge_id in &all_edge_ids {
-            if !self.edges.contains_key(edge_id) {
-                if let Some(edge) = self.try_load_edge(edge_id) {
-                    let from_in_loaded = edge.from.as_ref().map_or(false, |id| self.nodes.contains_key(id));
-                    let to_in_loaded = edge.to.as_ref().map_or(false, |id| self.nodes.contains_key(id));
-                    if from_in_loaded || to_in_loaded {
-                        self.edges.insert(edge_id.clone(), edge);
+        if has_edge_index {
+            let edge_relation_index = self.graph_meta.as_ref().unwrap().edge_relation_index.clone();
+            for eri in &edge_relation_index {
+                if !self.edges.contains_key(&eri.edge_id) {
+                    let from_loaded = self.nodes.contains_key(&eri.from);
+                    let to_loaded = self.nodes.contains_key(&eri.to);
+                    if from_loaded || to_loaded {
+                        if let Some(edge) = self.try_load_edge(&eri.edge_id) {
+                            self.edges.insert(eri.edge_id.clone(), edge);
+                        }
+                    }
+                }
+            }
+        } else {
+            let loaded_edges: Vec<_> = self.edges.values().cloned().collect();
+            for edge in &loaded_edges {
+                if let Some(ref from_id) = edge.from {
+                    if self.nodes.contains_key(from_id) {
+                        if let Some(ref to_id) = edge.to {
+                            if !self.edges.contains_key(to_id) {
+                                if let Some(loaded) = self.try_load_edge(to_id) {
+                                    self.edges.insert(to_id.clone(), loaded);
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
-        for instance_id in &all_embed_ids {
-            if !self.embeds.contains_key(instance_id) {
-                if let Some(embed) = self.try_load_embed(instance_id) {
-                    let source_in_loaded = embed.source_node_id.as_ref().map_or(false, |id| self.nodes.contains_key(id));
-                    if source_in_loaded {
-                        self.embeds.insert(instance_id.clone(), embed);
+
+        if has_embed_index {
+            let embed_host_index = self.graph_meta.as_ref().unwrap().embed_host_index.clone();
+            for ehi in &embed_host_index {
+                if !self.embeds.contains_key(&ehi.instance_id) {
+                    if self.nodes.contains_key(&ehi.host_node_id) {
+                        if let Some(embed) = self.try_load_embed(&ehi.instance_id) {
+                            self.embeds.insert(ehi.instance_id.clone(), embed);
+                        }
+                    }
+                }
+            }
+        } else {
+            let loaded_embeds: Vec<_> = self.embeds.values().cloned().collect();
+            for embed in &loaded_embeds {
+                if let Some(ref source_id) = embed.source_node_id {
+                    if self.nodes.contains_key(source_id) {
+                        if !self.embeds.contains_key(&embed.instance_id) {
+                            if let Some(loaded) = self.try_load_embed(&embed.instance_id) {
+                                self.embeds.insert(embed.instance_id.clone(), loaded);
+                            }
+                        }
                     }
                 }
             }
@@ -1907,14 +1946,19 @@ impl StarMapStore {
         let written_revision = self.update_graph_meta_file()?;
         self.package_revision = written_revision;
 
-        let node_count = self.nodes.len() as u32;
-        let edge_count = self.edges.len() as u32;
-        let mut linked_chapters = 0u32;
-        for node in self.nodes.values() {
-            if node.kind == StarMapNodeKind::Chapter {
-                linked_chapters += 1;
-            }
-        }
+        let node_count = self.graph_meta.as_ref()
+            .map(|m| m.node_ids.len() as u32)
+            .unwrap_or(self.nodes.len() as u32);
+        let edge_count = self.graph_meta.as_ref()
+            .map(|m| m.edge_ids.len() as u32)
+            .unwrap_or(self.edges.len() as u32);
+        let linked_chapters = self.graph_meta.as_ref()
+            .map(|m| m.node_ids.iter()
+                .filter(|id| self.nodes.get(*id).map_or(false, |n| n.kind == StarMapNodeKind::Chapter))
+                .count() as u32)
+            .unwrap_or_else(|| self.nodes.values()
+                .filter(|n| n.kind == StarMapNodeKind::Chapter)
+                .count() as u32);
         crate::starmap::update_starmap_stats(
             &self.workspace,
             &self.starmap_id,
@@ -2513,11 +2557,14 @@ impl StarMapStore {
         let Some(ref mut meta) = self.graph_meta else { return };
 
         for node_id in self.nodes.keys() {
-            if !meta.node_ids.contains(node_id) {
+            if !meta.node_ids.contains(node_id) && !self.deleted_node_ids.contains(node_id) {
                 meta.node_ids.push(node_id.clone());
             }
         }
         for edge in self.edges.values() {
+            if self.deleted_edge_ids.contains(&edge.id) {
+                continue;
+            }
             if let Some(eri) = meta.edge_relation_index.iter_mut().find(|eri| eri.edge_id == edge.id) {
                 eri.from = edge.from.clone().unwrap_or_default();
                 eri.to = edge.to.clone().unwrap_or_default();
@@ -2533,6 +2580,9 @@ impl StarMapStore {
             }
         }
         for embed in self.embeds.values() {
+            if self.deleted_embed_ids.contains(&embed.instance_id) {
+                continue;
+            }
             if let Some(ehi) = meta.embed_host_index.iter_mut().find(|ehi| ehi.instance_id == embed.instance_id) {
                 ehi.host_node_id = embed.source_node_id.clone().unwrap_or_default();
             } else {
@@ -2546,15 +2596,23 @@ impl StarMapStore {
             }
         }
         for link_id in self.links.keys() {
-            if !meta.link_ids.contains(link_id) {
+            if !meta.link_ids.contains(link_id) && !self.deleted_link_ids.contains(link_id) {
                 meta.link_ids.push(link_id.clone());
             }
         }
         for hl_id in self.hyperlinks.keys() {
-            if !meta.hyperlink_ids.contains(hl_id) {
+            if !meta.hyperlink_ids.contains(hl_id) && !self.deleted_hyperlink_ids.contains(hl_id) {
                 meta.hyperlink_ids.push(hl_id.clone());
             }
         }
+
+        meta.node_ids.retain(|id| !self.deleted_node_ids.contains(id));
+        meta.edge_ids.retain(|id| !self.deleted_edge_ids.contains(id));
+        meta.edge_relation_index.retain(|eri| !self.deleted_edge_ids.contains(&eri.edge_id));
+        meta.embed_instance_ids.retain(|id| !self.deleted_embed_ids.contains(id));
+        meta.embed_host_index.retain(|ehi| !self.deleted_embed_ids.contains(&ehi.instance_id));
+        meta.link_ids.retain(|id| !self.deleted_link_ids.contains(id));
+        meta.hyperlink_ids.retain(|id| !self.deleted_hyperlink_ids.contains(id));
     }
 
     pub fn to_starmap_graph(&self) -> StarMapGraph {
@@ -4085,5 +4143,140 @@ mod tests {
         assert!(migration_path.exists(), "migration.json should be recorded");
         let content = std::fs::read_to_string(&migration_path).unwrap();
         assert!(content.contains("flat_to_bucket"), "migration record should mention flat_to_bucket");
+    }
+
+    #[test]
+    fn merge_memory_ids_removes_deleted_ids() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.upsert_node(make_test_node("n1", "A"));
+        store.upsert_node(make_test_node("n2", "B"));
+        store.upsert_node(make_test_node("n3", "C"));
+        store.flush().unwrap();
+
+        store.remove_node("n2");
+        store.remove_node("n3");
+        assert!(store.deleted_node_ids.contains("n2"));
+        assert!(store.deleted_node_ids.contains("n3"));
+
+        store.merge_memory_ids_into_graph_meta();
+        let meta_ids = store.graph_meta.as_ref().unwrap().node_ids.clone();
+        assert!(meta_ids.contains(&"n1".to_string()), "n1 should remain");
+        assert!(!meta_ids.contains(&"n2".to_string()), "n2 should be removed from graph_meta");
+        assert!(!meta_ids.contains(&"n3".to_string()), "n3 should be removed from graph_meta");
+    }
+
+    #[test]
+    fn merge_memory_ids_skips_deleted_edge_in_index() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.upsert_node(make_test_node("n1", "A"));
+        store.upsert_node(make_test_node("n2", "B"));
+        store.upsert_node(make_test_node("n3", "C"));
+
+        use crate::starmap::types::{StarMapEdge, StarMapEdgeKind};
+        store.upsert_edge(StarMapEdge {
+            id: "e1".to_string(), from: Some("n1".to_string()), to: Some("n2".to_string()),
+            kind: StarMapEdgeKind::References, label: None, payload: None,
+            from_target: None, to_target: None, from_endpoint: None, to_endpoint: None,
+            from_endpoint_path: None, to_endpoint_path: None, created_at: 0, updated_at: 0,
+        });
+        store.flush().unwrap();
+
+        store.remove_edge("e1");
+        assert!(store.deleted_edge_ids.contains("e1"));
+
+        store.merge_memory_ids_into_graph_meta();
+        let meta = store.graph_meta.as_ref().unwrap();
+        assert!(!meta.edge_ids.contains(&"e1".to_string()), "deleted edge should be removed from edge_ids");
+        assert!(!meta.edge_relation_index.iter().any(|e| e.edge_id == "e1"), "deleted edge should be removed from relation index");
+    }
+
+    #[test]
+    fn flush_stats_uses_graph_meta_counts() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.upsert_node(make_test_node("n1", "A"));
+        store.upsert_node(make_test_node("n2", "B"));
+        store.upsert_node(make_test_node("n3", "C"));
+        store.upsert_node(make_test_node("n4", "D"));
+
+        use crate::starmap::types::{StarMapEdge, StarMapEdgeKind};
+        store.upsert_edge(StarMapEdge {
+            id: "e1".to_string(), from: Some("n1".to_string()), to: Some("n2".to_string()),
+            kind: StarMapEdgeKind::References, label: None, payload: None,
+            from_target: None, to_target: None, from_endpoint: None, to_endpoint: None,
+            from_endpoint_path: None, to_endpoint_path: None, created_at: 0, updated_at: 0,
+        });
+        store.flush().unwrap();
+
+        let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        let _ = store2.load_full();
+        assert_eq!(store2.nodes.len(), 4, "store2 should have loaded 4 nodes");
+        assert_eq!(store2.graph_meta.as_ref().unwrap().node_ids.len(), 4, "graph_meta should have 4 node ids");
+
+        store2.remove_node("n4");
+        assert_eq!(store2.nodes.len(), 3, "cache has 3 after removal");
+        assert_eq!(store2.graph_meta.as_ref().unwrap().node_ids.len(), 3, "graph_meta node_ids should have 3 after removal");
+
+        let result = store2.flush();
+        assert!(result.is_ok(), "flush should succeed");
+
+        let graph_meta = store2.graph_meta.as_ref().unwrap();
+        assert_eq!(graph_meta.node_ids.len(), 3, "final graph_meta should have 3 node ids");
+        assert_eq!(graph_meta.edge_ids.len(), 1, "final graph_meta should have 1 edge id");
+    }
+
+    #[test]
+    fn prefetch_only_loads_adjacent_edges() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        for i in 1..=10 {
+            store.upsert_node(make_test_node(&format!("n{}", i), &format!("Node{}", i)));
+        }
+
+        use crate::starmap::types::{StarMapEdge, StarMapEdgeKind};
+        for i in 1..=9 {
+            store.upsert_edge(StarMapEdge {
+                id: format!("e{}", i), from: Some(format!("n{}", i)), to: Some(format!("n{}", i+1)),
+                kind: StarMapEdgeKind::References, label: None, payload: None,
+                from_target: None, to_target: None, from_endpoint: None, to_endpoint: None,
+                from_endpoint_path: None, to_endpoint_path: None, created_at: 0, updated_at: 0,
+            });
+        }
+        store.flush().unwrap();
+
+        let disk_meta: GraphMeta = serde_json::from_str(
+            &std::fs::read_to_string(store.starmap_dir().join("graph.json")).unwrap()
+        ).unwrap();
+        assert!(!disk_meta.edge_relation_index.is_empty(), "graph_meta should have edge_relation_index");
+
+        let mut fresh = StarMapStore::new(dir.path(), &meta.starmap_id);
+        fresh.graph_meta = Some(disk_meta);
+        fresh.upsert_node(make_test_node("n2", "Node2"));
+        fresh.upsert_node(make_test_node("n3", "Node3"));
+        assert_eq!(fresh.nodes.len(), 2, "only loaded 2 selected nodes");
+
+        fresh.prefetch_nearby_objects(&mut vec![]);
+
+        assert!(fresh.nodes.contains_key("n1"), "n1 should be loaded via prefetch (adjacent to n2 via e1)");
+        assert!(fresh.nodes.contains_key("n4"), "n4 should be loaded via prefetch (adjacent to n3 via e3)");
+        assert!(fresh.edges.contains_key("e1"), "edge e1 (n1-n2) should be loaded");
+        assert!(fresh.edges.contains_key("e2"), "edge e2 (n2-n3) should be loaded");
+        assert!(fresh.edges.contains_key("e3"), "edge e3 (n3-n4) should be loaded");
+        assert!(!fresh.edges.contains_key("e5"), "edge e5 (n5-n6) should NOT be loaded (no loaded node adjacent)");
+        assert!(!fresh.edges.contains_key("e9"), "edge e9 (n9-n10) should NOT be loaded (no loaded node adjacent)");
     }
 }
