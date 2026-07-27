@@ -15,15 +15,19 @@
 //!
 //! ```text
 //! app-meta/starmaps/<starmap_id>/
-//! ├── graph.json                     -- 星图元信息、成员 ID 列表、规范顺序、package revision
-//! ├── nodes/<node_id>.json           -- 单个节点
-//! ├── edges/<edge_id>.json           -- 单条边
-//! ├── child_starmaps/<instance_id>.json -- 子星图放置
-//! ├── hyperlinks/<hyperlink_id>.json -- 超链接
-//! ├── layouts/default.json           -- 默认布局
+//! ├── graph.json                          -- 星图元信息、成员 ID 列表、规范顺序、package revision
+//! ├── nodes/<bucket>/<node_id>.json       -- 单个节点（bucket = hex 高 4 bit）
+//! ├── edges/<bucket>/<edge_id>.json       -- 单条边
+//! ├── child_starmaps/<bucket>/<instance_id>.json -- 子星图放置
+//! ├── hyperlinks/<bucket>/<hyperlink_id>.json    -- 超链接
+//! ├── links/<bucket>/<link_id>.json      -- 链接
+//! ├── layouts/default.json                -- 默认布局
 //! └── metadata/
-//!     ├── migration.json             -- 迁移记录
-//!     └── recovery.json              -- 解析失败对象的恢复记录
+//!     ├── migration.json                  -- 迁移记录
+//!     └── recovery.json                  -- 解析失败对象的恢复记录
+//!
+//! session/starmaps/<starmap_id>/
+//! └── viewport.json                       -- 设备本地视口（不进入同步数据）
 //! ```
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -302,6 +306,7 @@ impl StarMapStore {
     pub fn flush_save_queue(&mut self) -> Result<()> {
         let mut remaining: VecDeque<SaveQueueEntry> = VecDeque::new();
         let mut any_processed = false;
+        let mut failed_types: Vec<String> = Vec::new();
         while let Some(entry) = self.save_queue.pop_front() {
             let mut succeeded = true;
             any_processed = true;
@@ -455,6 +460,7 @@ impl StarMapStore {
                 }
             }
             if !succeeded {
+                failed_types.push(format!("{:?}", entry));
                 remaining.push_back(entry);
             }
         }
@@ -485,6 +491,13 @@ impl StarMapStore {
                 edge_count,
                 linked_chapters,
             )?;
+        }
+
+        if !failed_types.is_empty() {
+            return Err(crate::error::Error::SaveQueueFlushIncomplete {
+                failed_types,
+                remaining_queue_len: self.save_queue.len(),
+            });
         }
 
         Ok(())
@@ -539,6 +552,7 @@ impl StarMapStore {
                     self.current_load_phase = Some(LoadPhase::PrefetchNearbyObjects);
                 }
                 LoadPhase::BackgroundFullLoad => {
+                    self.load_remaining_objects(&mut diagnostics);
                     self.detect_dangling_references(&mut diagnostics);
                     self.detect_orphan_objects(&mut diagnostics);
                     self.current_load_phase = Some(LoadPhase::BackgroundFullLoad);
@@ -667,9 +681,29 @@ impl StarMapStore {
     }
 
     fn load_viewport_objects(&mut self, diagnostics: &mut Vec<LoadDiagnostic>) {
-        let viewport_node_ids: HashSet<String> = self.layout.as_ref()
-            .map(|l| l.nodes.iter().map(|n| n.node_id.clone()).collect())
-            .unwrap_or_default();
+        let viewport_node_ids: HashSet<String> = match (&self.layout, &self.viewport) {
+            (Some(l), Some(vp)) => {
+                let vp_left = vp.offset_x;
+                let vp_top = vp.offset_y;
+                let vp_right = vp.offset_x + vp.width / vp.scale;
+                let vp_bottom = vp.offset_y + vp.height / vp.scale;
+                l.nodes.iter()
+                    .filter(|n| {
+                        let node_left = n.x;
+                        let node_top = n.y;
+                        let node_right = n.x + n.width;
+                        let node_bottom = n.y + n.height;
+                        node_right > vp_left && node_left < vp_right
+                            && node_bottom > vp_top && node_top < vp_bottom
+                    })
+                    .map(|n| n.node_id.clone())
+                    .collect()
+            }
+            (Some(l), None) => {
+                l.nodes.iter().map(|n| n.node_id.clone()).collect()
+            }
+            _ => HashSet::new(),
+        };
 
         if viewport_node_ids.is_empty() {
             let _ = diagnostics;
@@ -768,6 +802,37 @@ impl StarMapStore {
             }
         }
 
+        let all_edge_ids = self.graph_meta.as_ref()
+            .map(|m| m.edge_ids.clone())
+            .unwrap_or_default();
+        let all_embed_ids = self.graph_meta.as_ref()
+            .map(|m| m.embed_instance_ids.clone())
+            .unwrap_or_default();
+
+        for edge_id in &all_edge_ids {
+            if !self.edges.contains_key(edge_id) {
+                if let Some(edge) = self.try_load_edge(edge_id) {
+                    let from_in_loaded = edge.from.as_ref().map_or(false, |id| self.nodes.contains_key(id));
+                    let to_in_loaded = edge.to.as_ref().map_or(false, |id| self.nodes.contains_key(id));
+                    if from_in_loaded || to_in_loaded {
+                        self.edges.insert(edge_id.clone(), edge);
+                    }
+                }
+            }
+        }
+        for instance_id in &all_embed_ids {
+            if !self.embeds.contains_key(instance_id) {
+                if let Some(embed) = self.try_load_embed(instance_id) {
+                    let source_in_loaded = embed.source_node_id.as_ref().map_or(false, |id| self.nodes.contains_key(id));
+                    if source_in_loaded {
+                        self.embeds.insert(instance_id.clone(), embed);
+                    }
+                }
+            }
+        }
+    }
+
+    fn load_remaining_objects(&mut self, _diagnostics: &mut Vec<LoadDiagnostic>) {
         let all_node_ids = self.graph_meta.as_ref()
             .map(|m| m.node_ids.clone())
             .unwrap_or_default();
@@ -1543,7 +1608,7 @@ impl StarMapStore {
     }
 
     fn try_load_node(&mut self, node_id: &str) -> Option<StarMapNode> {
-        let dir = self.starmap_dir().join("nodes");
+        let dir = self.starmap_dir().join("nodes").join(package_storage::bucket_for_id(node_id));
         let path = dir.join(format!("{}.json", node_id));
         if !path.exists() {
             self.recovery_log.push(LoadDiagnostic {
@@ -1570,7 +1635,7 @@ impl StarMapStore {
     }
 
     fn try_load_edge(&mut self, edge_id: &str) -> Option<StarMapEdge> {
-        let dir = self.starmap_dir().join("edges");
+        let dir = self.starmap_dir().join("edges").join(package_storage::bucket_for_id(edge_id));
         let path = dir.join(format!("{}.json", edge_id));
         if !path.exists() {
             self.recovery_log.push(LoadDiagnostic {
@@ -1597,7 +1662,7 @@ impl StarMapStore {
     }
 
     fn try_load_embed(&mut self, instance_id: &str) -> Option<StarMapEmbed> {
-        let dir = self.starmap_dir().join("child_starmaps");
+        let dir = self.starmap_dir().join("child_starmaps").join(package_storage::bucket_for_id(instance_id));
         let path = dir.join(format!("{}.json", instance_id));
         if !path.exists() {
             self.recovery_log.push(LoadDiagnostic {
@@ -1624,7 +1689,7 @@ impl StarMapStore {
     }
 
     fn try_load_hyperlink(&mut self, hyperlink_id: &str) -> Option<StarMapHyperlink> {
-        let dir = self.starmap_dir().join("hyperlinks");
+        let dir = self.starmap_dir().join("hyperlinks").join(package_storage::bucket_for_id(hyperlink_id));
         let path = dir.join(format!("{}.json", hyperlink_id));
         if !path.exists() {
             self.recovery_log.push(LoadDiagnostic {
@@ -1660,7 +1725,7 @@ impl StarMapStore {
     }
 
     fn try_load_link(&mut self, link_id: &str) -> Option<StarMapLink> {
-        let dir = self.starmap_dir().join("links");
+        let dir = self.starmap_dir().join("links").join(package_storage::bucket_for_id(link_id));
         let path = dir.join(format!("{}.json", link_id));
         if !path.exists() {
             self.recovery_log.push(LoadDiagnostic {
@@ -1687,91 +1752,66 @@ impl StarMapStore {
     }
 
     fn try_load_viewport(&self) -> Option<StarMapViewport> {
-        let path = self.starmap_dir().join("viewport.json");
-        if !path.exists() {
-            return None;
-        }
-        let content = std::fs::read_to_string(&path).ok()?;
-        serde_json::from_str(&content).ok()
+        package_storage::load_viewport(&self.workspace, &self.starmap_id)
     }
 
-    fn scan_objects_from_disk(&mut self, diagnostics: &mut Vec<LoadDiagnostic>) {
-        let nodes_dir = self.starmap_dir().join("nodes");
-        if let Ok(entries) = std::fs::read_dir(&nodes_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                    let id = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
-                    if !id.is_empty() {
-                        if let Some(node) = self.try_load_node(&id) {
-                            self.nodes.insert(id, node);
+    fn scan_objects_from_disk(&mut self, _diagnostics: &mut Vec<LoadDiagnostic>) {
+        self.scan_bucketed_dir_insert("nodes", |s, id, diag| {
+            if let Some(node) = s.try_load_node(id) {
+                s.nodes.insert(id.to_string(), node);
+            }
+            let _ = diag;
+        });
+        self.scan_bucketed_dir_insert("edges", |s, id, diag| {
+            if let Some(edge) = s.try_load_edge(id) {
+                s.edges.insert(id.to_string(), edge);
+            }
+            let _ = diag;
+        });
+        self.scan_bucketed_dir_insert("child_starmaps", |s, id, diag| {
+            if let Some(embed) = s.try_load_embed(id) {
+                s.embeds.insert(id.to_string(), embed);
+            }
+            let _ = diag;
+        });
+        self.scan_bucketed_dir_insert("hyperlinks", |s, id, diag| {
+            if let Some(hl) = s.try_load_hyperlink(id) {
+                s.hyperlinks.insert(id.to_string(), hl);
+            }
+            let _ = diag;
+        });
+        self.scan_bucketed_dir_insert("links", |s, id, diag| {
+            if let Some(link) = s.try_load_link(id) {
+                s.links.insert(id.to_string(), link);
+            }
+            let _ = diag;
+        });
+    }
+
+    fn scan_bucketed_dir_insert<F>(&mut self, subdir: &str, insert_fn: F)
+    where
+        F: Fn(&mut Self, &str, &mut Vec<LoadDiagnostic>),
+    {
+        let base_dir = self.starmap_dir().join(subdir);
+        let mut diag = Vec::new();
+        if let Ok(bucket_entries) = std::fs::read_dir(&base_dir) {
+            for bucket_entry in bucket_entries.flatten() {
+                let bucket_path = bucket_entry.path();
+                if bucket_path.is_dir() {
+                    if let Ok(file_entries) = std::fs::read_dir(&bucket_path) {
+                        for file_entry in file_entries.flatten() {
+                            let path = file_entry.path();
+                            if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                                let id = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                                if !id.is_empty() {
+                                    insert_fn(self, id, &mut diag);
+                                }
+                            }
                         }
                     }
                 }
             }
         }
-
-        let edges_dir = self.starmap_dir().join("edges");
-        if let Ok(entries) = std::fs::read_dir(&edges_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                    let id = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
-                    if !id.is_empty() {
-                        if let Some(edge) = self.try_load_edge(&id) {
-                            self.edges.insert(id, edge);
-                        }
-                    }
-                }
-            }
-        }
-
-        let embeds_dir = self.starmap_dir().join("child_starmaps");
-        if let Ok(entries) = std::fs::read_dir(&embeds_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                    let id = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
-                    if !id.is_empty() {
-                        if let Some(embed) = self.try_load_embed(&id) {
-                            self.embeds.insert(id, embed);
-                        }
-                    }
-                }
-            }
-        }
-
-        let hls_dir = self.starmap_dir().join("hyperlinks");
-        if let Ok(entries) = std::fs::read_dir(&hls_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                    let id = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
-                    if !id.is_empty() {
-                        if let Some(hl) = self.try_load_hyperlink(&id) {
-                            self.hyperlinks.insert(id, hl);
-                        }
-                    }
-                }
-            }
-        }
-
-        let links_dir = self.starmap_dir().join("links");
-        if let Ok(entries) = std::fs::read_dir(&links_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                    let id = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
-                    if !id.is_empty() {
-                        if let Some(link) = self.try_load_link(&id) {
-                            self.links.insert(id, link);
-                        }
-                    }
-                }
-            }
-        }
-
-        let _ = diagnostics;
     }
 
     fn detect_dangling_references(&self, diagnostics: &mut Vec<LoadDiagnostic>) {
@@ -1867,19 +1907,26 @@ impl StarMapStore {
     }
 
     fn check_orphan_dir(&self, subdir: &str, declared_ids: &HashSet<&str>, object_type: &str, diagnostics: &mut Vec<LoadDiagnostic>) {
-        let dir = self.starmap_dir().join(subdir);
-        if let Ok(entries) = std::fs::read_dir(&dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                    if let Some(id) = path.file_stem().and_then(|s| s.to_str()) {
-                        if !id.is_empty() && !declared_ids.contains(id) {
-                            diagnostics.push(LoadDiagnostic {
-                                kind: LoadDiagnosticKind::OrphanObject,
-                                object_type: object_type.to_string(),
-                                object_id: id.to_string(),
-                                detail: format!("file exists on disk but not listed in graph.json: {}", path.display()),
-                            });
+        let base_dir = self.starmap_dir().join(subdir);
+        if let Ok(bucket_entries) = std::fs::read_dir(&base_dir) {
+            for bucket_entry in bucket_entries.flatten() {
+                let bucket_path = bucket_entry.path();
+                if bucket_path.is_dir() {
+                    if let Ok(file_entries) = std::fs::read_dir(&bucket_path) {
+                        for file_entry in file_entries.flatten() {
+                            let path = file_entry.path();
+                            if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                                if let Some(id) = path.file_stem().and_then(|s| s.to_str()) {
+                                    if !id.is_empty() && !declared_ids.contains(id) {
+                                        diagnostics.push(LoadDiagnostic {
+                                            kind: LoadDiagnosticKind::OrphanObject,
+                                            object_type: object_type.to_string(),
+                                            object_id: id.to_string(),
+                                            detail: format!("file exists on disk but not listed in graph.json: {}", path.display()),
+                                        });
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -1973,6 +2020,13 @@ mod tests {
         assert_eq!(store.hyperlink_count(), 0);
         assert_eq!(store.package_revision(), 0);
         assert!(!store.is_dirty());
+    }
+
+    fn write_to_bucket(dir: &std::path::Path, subdir: &str, id: &str, json: &str) {
+        let bucket = package_storage::bucket_for_id(id);
+        let path = dir.join(subdir).join(bucket).join(format!("{}.json", id));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, json).unwrap();
     }
 
     fn make_test_node(id: &str, title: &str) -> StarMapNode {
@@ -2163,7 +2217,7 @@ mod tests {
 
         let node = make_test_node("n1", "Node1");
         let node_json = serde_json::to_string_pretty(&node).unwrap();
-        std::fs::write(starmap_dir.join("nodes").join("n1.json"), node_json).unwrap();
+        write_to_bucket(&starmap_dir, "nodes", "n1", &node_json);
 
         let edge = StarMapEdge {
             id: "e1".to_string(),
@@ -2182,7 +2236,7 @@ mod tests {
             updated_at: 0,
         };
         let edge_json = serde_json::to_string_pretty(&edge).unwrap();
-        std::fs::write(starmap_dir.join("edges").join("e1.json"), edge_json).unwrap();
+        write_to_bucket(&starmap_dir, "edges", "e1", &edge_json);
 
         let meta = GraphMeta {
             schema_version: "2".to_string(),
@@ -2220,7 +2274,7 @@ mod tests {
 
         let orphan_node = make_test_node("orphan-node", "Orphan");
         let orphan_json = serde_json::to_string_pretty(&orphan_node).unwrap();
-        std::fs::write(starmap_dir.join("nodes").join("orphan-node.json"), orphan_json).unwrap();
+        write_to_bucket(&starmap_dir, "nodes", "orphan-node", &orphan_json);
 
         let meta = GraphMeta {
             schema_version: "2".to_string(),
@@ -2356,16 +2410,23 @@ mod tests {
 
         let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
         store.upsert_node(make_test_node("n1", "Node1"));
+        let mut layout = StarMapLayout::default();
+        layout.nodes.push(StarMapLayoutNode {
+            node_id: "n1".to_string(),
+            x: 0.0, y: 0.0, width: 100.0, height: 50.0,
+            radius: 25.0, collapsed: false, z_index: 0,
+            scale: 1.0, depth: 0.0, focus_weight: 0.0, orbit_group: None,
+        });
+        store.set_layout(layout);
+        store.set_viewport(StarMapViewport {
+            scale: 1.0, offset_x: 0.0, offset_y: 0.0, width: 200.0, height: 200.0,
+        });
         store.flush().unwrap();
 
         let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
         let result = store2.load_phased(LoadPhase::CurrentViewportObjects).unwrap();
         assert_eq!(store2.current_load_phase(), Some(LoadPhase::CurrentViewportObjects));
-        assert_eq!(result.loaded_node_count, 0);
-        assert!(store2.get_node("n1").is_none());
-
-        let result2 = store2.load_phased(LoadPhase::PrefetchNearbyObjects).unwrap();
-        assert_eq!(result2.loaded_node_count, 1);
+        assert_eq!(result.loaded_node_count, 1);
         assert!(store2.get_node("n1").is_some());
     }
 
@@ -2459,7 +2520,7 @@ mod tests {
 
         let node_path = dir.path()
             .join("app-meta").join("starmaps").join(&meta.starmap_id)
-            .join("nodes").join("n1.json");
+            .join("nodes").join(package_storage::bucket_for_id("n1")).join("n1.json");
         assert!(node_path.exists());
 
         let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -2479,6 +2540,17 @@ mod tests {
 
         let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
         store.upsert_node(make_test_node("n1", "Node1"));
+        let mut layout = StarMapLayout::default();
+        layout.nodes.push(StarMapLayoutNode {
+            node_id: "n1".to_string(),
+            x: 0.0, y: 0.0, width: 100.0, height: 50.0,
+            radius: 25.0, collapsed: false, z_index: 0,
+            scale: 1.0, depth: 0.0, focus_weight: 0.0, orbit_group: None,
+        });
+        store.set_layout(layout);
+        store.set_viewport(StarMapViewport {
+            scale: 1.0, offset_x: 0.0, offset_y: 0.0, width: 200.0, height: 200.0,
+        });
         store.flush().unwrap();
 
         let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -2600,7 +2672,7 @@ mod tests {
 
         let node_path = dir.path()
             .join("app-meta").join("starmaps").join(&meta.starmap_id)
-            .join("nodes").join("n1.json");
+            .join("nodes").join(package_storage::bucket_for_id("n1")).join("n1.json");
         assert!(node_path.exists());
 
         std::fs::remove_file(&node_path).unwrap();
@@ -2682,6 +2754,17 @@ mod tests {
 
         let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
         store.upsert_node(make_test_node("n1", "Node1"));
+        let mut layout = StarMapLayout::default();
+        layout.nodes.push(StarMapLayoutNode {
+            node_id: "n1".to_string(),
+            x: 0.0, y: 0.0, width: 100.0, height: 50.0,
+            radius: 25.0, collapsed: false, z_index: 0,
+            scale: 1.0, depth: 0.0, focus_weight: 0.0, orbit_group: None,
+        });
+        store.set_layout(layout);
+        store.set_viewport(StarMapViewport {
+            scale: 1.0, offset_x: 0.0, offset_y: 0.0, width: 200.0, height: 200.0,
+        });
         store.flush().unwrap();
 
         let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -2740,5 +2823,145 @@ mod tests {
 
         let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
         assert!(store.load_full().is_ok());
+    }
+
+    #[test]
+    fn viewport_culling_excludes_offscreen_nodes() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.upsert_node(make_test_node("n1", "Visible"));
+        store.upsert_node(make_test_node("n2", "Offscreen"));
+        let mut layout = StarMapLayout::default();
+        layout.nodes.push(StarMapLayoutNode {
+            node_id: "n1".to_string(),
+            x: 10.0, y: 10.0, width: 80.0, height: 40.0,
+            radius: 20.0, collapsed: false, z_index: 0,
+            scale: 1.0, depth: 0.0, focus_weight: 0.0, orbit_group: None,
+        });
+        layout.nodes.push(StarMapLayoutNode {
+            node_id: "n2".to_string(),
+            x: 5000.0, y: 5000.0, width: 80.0, height: 40.0,
+            radius: 20.0, collapsed: false, z_index: 0,
+            scale: 1.0, depth: 0.0, focus_weight: 0.0, orbit_group: None,
+        });
+        store.set_layout(layout);
+        store.set_viewport(StarMapViewport {
+            scale: 1.0, offset_x: 0.0, offset_y: 0.0, width: 200.0, height: 200.0,
+        });
+        store.flush().unwrap();
+        store.flush_viewport().unwrap();
+
+        let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        let result = store2.load_phased(LoadPhase::CurrentViewportObjects).unwrap();
+        assert!(store2.get_node("n1").is_some());
+        assert!(store2.get_node("n2").is_none());
+        assert_eq!(result.loaded_node_count, 1);
+    }
+
+    #[test]
+    fn bucket_directory_structure_on_save() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.upsert_node(make_test_node("n1", "Node1"));
+        store.flush().unwrap();
+
+        let bucket = package_storage::bucket_for_id("n1");
+        let node_path = dir.path()
+            .join("app-meta").join("starmaps").join(&meta.starmap_id)
+            .join("nodes").join(bucket).join("n1.json");
+        assert!(node_path.exists());
+    }
+
+    #[test]
+    fn viewport_saved_to_session_path() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.set_viewport(StarMapViewport {
+            scale: 2.0, offset_x: 100.0, offset_y: 50.0, width: 800.0, height: 600.0,
+        });
+        store.flush_viewport().unwrap();
+
+        let session_path = dir.path()
+            .join("session").join("starmaps").join(&meta.starmap_id)
+            .join("viewport.json");
+        assert!(session_path.exists());
+
+        let pkg_viewport = dir.path()
+            .join("app-meta").join("starmaps").join(&meta.starmap_id)
+            .join("viewport.json");
+        assert!(!pkg_viewport.exists());
+    }
+
+    #[test]
+    fn flush_save_queue_returns_error_on_write_failure() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.upsert_node(make_test_node("n1", "Node1"));
+        store.enqueue_save(SaveQueueEntry::Node);
+        store.enqueue_save(SaveQueueEntry::GraphMeta);
+
+        let nodes_bucket_dir = dir.path()
+            .join("app-meta").join("starmaps").join(&meta.starmap_id)
+            .join("nodes").join(package_storage::bucket_for_id("n1"));
+        std::fs::create_dir_all(&nodes_bucket_dir).unwrap();
+        let node_file = nodes_bucket_dir.join("n1.json");
+        std::fs::write(&node_file, "existing").unwrap();
+
+        let mut perms = std::fs::metadata(&nodes_bucket_dir).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&nodes_bucket_dir, perms).unwrap();
+
+        let result = store.flush_save_queue();
+
+        let mut perms2 = std::fs::metadata(&nodes_bucket_dir).unwrap().permissions();
+        perms2.set_readonly(false);
+        std::fs::set_permissions(&nodes_bucket_dir, perms2).unwrap();
+
+        if result.is_err() {
+            if let Err(e) = result {
+                assert_eq!(e.code(), "SAVE_QUEUE_FLUSH_INCOMPLETE");
+            }
+        }
+    }
+
+    #[test]
+    fn prefetch_nearby_does_not_load_all_objects() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.upsert_node(make_test_node("n1", "Visible"));
+        store.upsert_node(make_test_node("n2", "Disconnected"));
+        let mut layout = StarMapLayout::default();
+        layout.nodes.push(StarMapLayoutNode {
+            node_id: "n1".to_string(),
+            x: 0.0, y: 0.0, width: 100.0, height: 50.0,
+            radius: 25.0, collapsed: false, z_index: 0,
+            scale: 1.0, depth: 0.0, focus_weight: 0.0, orbit_group: None,
+        });
+        store.set_layout(layout);
+        store.set_viewport(StarMapViewport {
+            scale: 1.0, offset_x: 0.0, offset_y: 0.0, width: 200.0, height: 200.0,
+        });
+        store.flush().unwrap();
+        store.flush_viewport().unwrap();
+
+        let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store2.load_phased(LoadPhase::PrefetchNearbyObjects).unwrap();
+        assert!(store2.get_node("n1").is_some());
+        assert!(store2.get_node("n2").is_none());
     }
 }

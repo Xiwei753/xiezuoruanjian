@@ -512,6 +512,20 @@ fn scan_json_files(dir: &Path) -> Result<Vec<(String, std::path::PathBuf)>> {
                         result.push((id, path));
                     }
                 }
+            } else if path.is_dir() {
+                if let Ok(sub_entries) = std::fs::read_dir(&path) {
+                    for sub_entry in sub_entries.flatten() {
+                        let sub_path = sub_entry.path();
+                        if sub_path.is_file() {
+                            if let Some(name) = sub_path.file_name().and_then(|n| n.to_str()) {
+                                if name.ends_with(".json") {
+                                    let id = name.trim_end_matches(".json").to_string();
+                                    result.push((id, sub_path));
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

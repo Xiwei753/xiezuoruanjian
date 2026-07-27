@@ -125,6 +125,12 @@ pub enum Error {
     /// 存储事务不完整（部分文件写入失败）。
     #[error("Storage transaction incomplete: tx_id={transaction_id}")]
     StorageTransactionIncomplete { transaction_id: String },
+    /// 保存队列部分写入/删除失败，仍有未落盘数据。
+    #[error("Save queue flush incomplete: failed_types={failed_types:?}, remaining_queue_len={remaining_queue_len}")]
+    SaveQueueFlushIncomplete {
+        failed_types: Vec<String>,
+        remaining_queue_len: usize,
+    },
 
     /// 兜底错误——不应频繁使用，新错误应添加具体变体。
     #[error("Other error: {0}")]
@@ -162,6 +168,7 @@ impl Error {
             Error::SyncGithubApiError { .. } => "SYNC_GITHUB_API_ERROR",
             Error::DiskFull { .. } => "DISK_FULL",
             Error::StorageTransactionIncomplete { .. } => "STORAGE_TRANSACTION_INCOMPLETE",
+            Error::SaveQueueFlushIncomplete { .. } => "SAVE_QUEUE_FLUSH_INCOMPLETE",
             Error::Other(_) => "OTHER",
         }
     }
@@ -195,6 +202,7 @@ impl Error {
             Error::SyncGithubApiError { .. } => true,
             Error::DiskFull { .. } => false,
             Error::StorageTransactionIncomplete { .. } => true,
+            Error::SaveQueueFlushIncomplete { .. } => true,
             Error::Other(_) => true,
         }
     }
@@ -276,6 +284,10 @@ impl Error {
             }
             Error::StorageTransactionIncomplete { transaction_id } => {
                 m.insert("transaction_id".into(), transaction_id.clone());
+            }
+            Error::SaveQueueFlushIncomplete { failed_types, remaining_queue_len } => {
+                m.insert("failed_types".into(), failed_types.join(","));
+                m.insert("remaining_queue_len".into(), remaining_queue_len.to_string());
             }
             Error::InvalidDeleteTarget(detail) => {
                 m.insert("detail".into(), detail.clone());

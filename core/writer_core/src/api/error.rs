@@ -216,6 +216,10 @@ impl From<crate::error::Error> for WriterError {
                 "storage_transaction_incomplete: tx_id={}",
                 transaction_id
             )),
+            Error::SaveQueueFlushIncomplete { failed_types, remaining_queue_len } => WriterError::Other(format!(
+                "save_queue_flush_incomplete: failed_types={:?} remaining={}",
+                failed_types, remaining_queue_len
+            )),
             Error::Other(s) => WriterError::Other(s),
         }
     }
