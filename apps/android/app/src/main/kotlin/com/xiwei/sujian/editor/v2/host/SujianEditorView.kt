@@ -51,6 +51,8 @@ class SujianEditorView @JvmOverloads constructor(
     private var pendingLayoutNeeded: Boolean = false
     private var frameClock: WindowDisplayFrameClock? = null
     private var isRegisteredWithClock: Boolean = false
+    @Volatile
+    private var pendingFrameTimeNanos: Long = Long.MIN_VALUE
 
     var kernelBridge: EditorKernelBridge?
         get() = pipeline.kernelBridge
@@ -276,7 +278,13 @@ class SujianEditorView @JvmOverloads constructor(
         val searchHighlightsUtf16 = searchHighlights.map { (startUtf8, endUtf8) ->
             Pair(pipeline.utf8ToUtf16(startUtf8), pipeline.utf8ToUtf16(endUtf8))
         }
-        pipeline.drawFrame(canvas, searchHighlightsUtf16, width, height, scrollX, scrollY)
+        val frameTimeNanos = pendingFrameTimeNanos
+        if (frameTimeNanos != Long.MIN_VALUE) {
+            pendingFrameTimeNanos = Long.MIN_VALUE
+            pipeline.drawFrame(canvas, searchHighlightsUtf16, width, height, scrollX, scrollY, frameTimeNanos)
+        } else {
+            pipeline.drawFrame(canvas, searchHighlightsUtf16, width, height, scrollX, scrollY)
+        }
         canvas.restore()
     }
 
@@ -291,6 +299,7 @@ class SujianEditorView @JvmOverloads constructor(
     fun getActiveAnimationStartTimeMs(): Long? = pipeline.getActiveAnimationStartTimeMs()
 
     override fun onFrame(frameTimeNanos: Long) {
+        pendingFrameTimeNanos = frameTimeNanos
         invalidate()
     }
 

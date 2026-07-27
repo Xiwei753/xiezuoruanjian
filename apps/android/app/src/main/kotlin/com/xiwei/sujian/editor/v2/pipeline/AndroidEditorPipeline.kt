@@ -478,6 +478,14 @@ class AndroidEditorPipeline private constructor(
      */
     fun drawFrame(canvas: android.graphics.Canvas, searchHighlightsUtf16: List<Pair<Int, Int>>, viewportWidth: Int, viewportHeight: Int, scrollX: Float, scrollY: Float) {
         val frameTimeNanos = visualRuntime.currentTimeNanos()
+        drawFrameWithTime(canvas, searchHighlightsUtf16, viewportWidth, viewportHeight, scrollX, scrollY, frameTimeNanos)
+    }
+
+    fun drawFrame(canvas: android.graphics.Canvas, searchHighlightsUtf16: List<Pair<Int, Int>>, viewportWidth: Int, viewportHeight: Int, scrollX: Float, scrollY: Float, frameTimeNanos: Long) {
+        drawFrameWithTime(canvas, searchHighlightsUtf16, viewportWidth, viewportHeight, scrollX, scrollY, frameTimeNanos)
+    }
+
+    private fun drawFrameWithTime(canvas: android.graphics.Canvas, searchHighlightsUtf16: List<Pair<Int, Int>>, viewportWidth: Int, viewportHeight: Int, scrollX: Float, scrollY: Float, frameTimeNanos: Long) {
         val frameTimeMs = frameTimeNanos / 1_000_000
         val projection = layoutRuntime.getCurrentProjection()
         val cursorDisplayUtf16 = projection.realUtf8ToDisplayUtf16(mirror.getCursorUtf8())

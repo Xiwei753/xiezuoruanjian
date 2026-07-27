@@ -809,3 +809,172 @@ class VisualFrameSnapshotDataTest {
         assertTrue(slice.currentBottom >= slice.currentTop)
     }
 }
+
+class FrameTimePropagationTest {
+
+    @Test
+    fun timelineUsesProvidedFrameTimeNotSystemTime() {
+        val timeline = AnimationTimeline(200L)
+        val specificFrameTimeMs = 1000L
+        timeline.markFirstVisibleFrame(specificFrameTimeMs)
+        assertEquals(specificFrameTimeMs, timeline.getFirstVisibleFrameTimeMs())
+        val progressAtHalf = timeline.progress(specificFrameTimeMs + 100)
+        assertEquals(0.5f, progressAtHalf, 0.01f)
+    }
+
+    @Test
+    fun timelineProgressUsesFrameTimeNanosNotCurrentTime() {
+        val timeline = AnimationTimeline(200L)
+        val frameTime0Ms = 5000L
+        timeline.markFirstVisibleFrame(frameTime0Ms)
+        val frameTime1Ms = frameTime0Ms + 50
+        assertEquals(0.25f, timeline.progress(frameTime1Ms), 0.01f)
+        val frameTime2Ms = frameTime0Ms + 100
+        assertEquals(0.5f, timeline.progress(frameTime2Ms), 0.01f)
+        val frameTime3Ms = frameTime0Ms + 150
+        assertEquals(0.75f, timeline.progress(frameTime3Ms), 0.01f)
+        val frameTime4Ms = frameTime0Ms + 200
+        assertEquals(1f, timeline.progress(frameTime4Ms), 0.01f)
+    }
+
+    @Test
+    fun timelineIsCompletedUsesProvidedFrameTime() {
+        val timeline = AnimationTimeline(200L)
+        val startTimeMs = 3000L
+        timeline.markFirstVisibleFrame(startTimeMs)
+        assertFalse(timeline.isCompleted(startTimeMs + 199))
+        assertTrue(timeline.isCompleted(startTimeMs + 200))
+    }
+
+    @Test
+    fun frameTimeNanosOverridesSystemTimeInDrawFramePath() {
+        val timeline = AnimationTimeline(200L)
+        val frameTimeNanos = 10_000_000_000L
+        val frameTimeMs = frameTimeNanos / 1_000_000
+        timeline.markFirstVisibleFrame(frameTimeMs)
+        assertEquals(0f, timeline.progress(frameTimeMs), 0.01f)
+        assertEquals(0.5f, timeline.progress(frameTimeMs + 100), 0.01f)
+        assertEquals(1f, timeline.progress(frameTimeMs + 200), 0.01f)
+    }
+
+    @Test
+    fun enginePrepareAndSubmitAcceptsFrameTimeMsParameter() {
+        val timeSource = ManualAnimationTimeSource()
+        val transactionIdSource = TransactionIdSource()
+        val engine = AndroidTextAnimationEngine(
+            AndroidVisualPlanner(),
+            VisualResourceStore(),
+            timeSource,
+            transactionIdSource
+        )
+        engine.setAnimationPolicy(TextAnimationPolicy.SYSTEM_SUPPRESSED)
+        timeSource.advanceTo(0L)
+        val intent = com.xiwei.sujian.editor.v2.mirror.VisualIntent(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.INSERT,
+            oldAffectedByteRanges = emptyList(),
+            newAffectedByteRanges = listOf(Pair(0, 3)),
+            animationMode = uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED,
+            durationMs = 0L,
+            coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(0, 0, false)
+        )
+        val layoutEngine = com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine(
+            com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror(),
+            android.text.TextPaint()
+        )
+        engine.prepareAndSubmit(
+            visualIntent = intent,
+            layoutEngine = layoutEngine,
+            mirrorUpdate = { layoutEngine.requestLayout() },
+            frameTimeMs = 500L
+        )
+        assertFalse(engine.hasActiveAnimation())
+    }
+
+    @Test
+    fun visualRuntimePrepareAndSubmitAcceptsFrameTimeMsParameter() {
+        val timeSource = ManualAnimationTimeSource()
+        val transactionIdSource = TransactionIdSource()
+        val runtime = com.xiwei.sujian.editor.v2.pipeline.AndroidVisualRuntime(timeSource, transactionIdSource)
+        runtime.setAnimationPolicy(TextAnimationPolicy.SYSTEM_SUPPRESSED)
+        val intent = com.xiwei.sujian.editor.v2.mirror.VisualIntent(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.INSERT,
+            oldAffectedByteRanges = emptyList(),
+            newAffectedByteRanges = listOf(Pair(0, 3)),
+            animationMode = uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED,
+            durationMs = 0L,
+            coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(0, 0, false)
+        )
+        val layoutEngine = com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine(
+            com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror(),
+            android.text.TextPaint()
+        )
+        runtime.prepareAndSubmit(
+            visualIntent = intent,
+            layoutEngine = layoutEngine,
+            mirrorUpdate = { layoutEngine.requestLayout() },
+            frameTimeMs = 800L
+        )
+        assertFalse(runtime.hasActiveAnimation())
+    }
+
+    @Test
+    fun prepareAndSubmitFrameTimeMsNullFallsBackToTimeSource() {
+        val timeSource = ManualAnimationTimeSource()
+        val transactionIdSource = TransactionIdSource()
+        val engine = AndroidTextAnimationEngine(
+            AndroidVisualPlanner(),
+            VisualResourceStore(),
+            timeSource,
+            transactionIdSource
+        )
+        engine.setAnimationPolicy(TextAnimationPolicy.SYSTEM_SUPPRESSED)
+        timeSource.advanceByMs(100)
+        val intent = com.xiwei.sujian.editor.v2.mirror.VisualIntent(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.INSERT,
+            oldAffectedByteRanges = emptyList(),
+            newAffectedByteRanges = listOf(Pair(0, 3)),
+            animationMode = uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED,
+            durationMs = 0L,
+            coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(0, 0, false)
+        )
+        val layoutEngine = com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine(
+            com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror(),
+            android.text.TextPaint()
+        )
+        engine.prepareAndSubmit(
+            visualIntent = intent,
+            layoutEngine = layoutEngine,
+            mirrorUpdate = { layoutEngine.requestLayout() },
+            frameTimeMs = null
+        )
+        assertFalse(engine.hasActiveAnimation())
+    }
+
+    @Test
+    fun productionCallChain_frameTimeNanosFlowsThroughTick() {
+        val timeSource = ManualAnimationTimeSource()
+        val transactionIdSource = TransactionIdSource()
+        val runtime = com.xiwei.sujian.editor.v2.pipeline.AndroidVisualRuntime(timeSource, transactionIdSource)
+        timeSource.advanceByMs(0)
+        val frameTimeNanos = 5_000_000_000L
+        val frameTimeMs = frameTimeNanos / 1_000_000
+        val layout = android.text.StaticLayout(
+            "hello", android.text.TextPaint(), 100,
+            android.text.Layout.Alignment.ALIGN_NORMAL, 1f, 0f, false
+        )
+        val frameState = runtime.tick(
+            frameTimeMs,
+            layout,
+            null,
+            emptyList(),
+            100, 100,
+            0f, 0f,
+            true, true,
+            5, 0, 0
+        )
+        assertNotNull(frameState)
+    }
+}

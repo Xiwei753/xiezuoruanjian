@@ -172,9 +172,11 @@ class AndroidTextAnimationEngine(
      * that would otherwise be visible alongside the old-snapshot animation during the
      * brief window between mirror update and first animation frame).
      *
-     * Timestamp: [AnimationTimeSource.nowNanos] / 1_000_000 provides a monotonic millisecond
-     * clock consistent with [AnimationTimeline]'s internal time base. Sub-millisecond precision
-     * is intentionally discarded — [AnimationTimeline.progress] operates in whole milliseconds.
+     * Timestamp: When [frameTimeMs] is provided, it is used as the current time (e.g.
+     * from a Choreographer frame callback). Otherwise [AnimationTimeSource.nowNanos] / 1_000_000
+     * provides a monotonic millisecond clock consistent with [AnimationTimeline]'s internal
+     * time base. Sub-millisecond precision is intentionally discarded —
+     * [AnimationTimeline.progress] operates in whole milliseconds.
      * The default [ChoreographerAnimationTimeSource] delegates to [System.nanoTime], which is
      * monotonic (unlike [System.currentTimeMillis], which can jump backwards on NTP adjustments).
      * Tests inject [ManualAnimationTimeSource] to control time precisely.
@@ -183,7 +185,8 @@ class AndroidTextAnimationEngine(
         visualIntent: VisualIntent,
         layoutEngine: AndroidLayoutEngine,
         mirrorUpdate: (() -> Unit)? = null,
-        beforePatch: (() -> Unit)? = null
+        beforePatch: (() -> Unit)? = null,
+        frameTimeMs: Long? = null
     ) {
         if (animationPolicy == TextAnimationPolicy.SYSTEM_SUPPRESSED) {
             // Animation suppressed, but mirror/layout must still update so the
@@ -196,8 +199,8 @@ class AndroidTextAnimationEngine(
             layoutEngine.requestLayout()
             return
         }
-        val frameTimeMs = timeSource.nowNanos() / 1_000_000
-        val rebaseSnapshot = captureRebaseSnapshot(frameTimeMs)
+        val effectiveFrameTimeMs = frameTimeMs ?: (timeSource.nowNanos() / 1_000_000)
+        val rebaseSnapshot = captureRebaseSnapshot(effectiveFrameTimeMs)
 
         val oldRevision = layoutEngine.captureImmutableRevision()
         // Two-phase affected-line computation invariant:

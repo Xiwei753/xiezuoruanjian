@@ -44,9 +44,10 @@ class AndroidVisualRuntime(
         visualIntent: VisualIntent,
         layoutEngine: AndroidLayoutEngine,
         mirrorUpdate: (() -> Unit)? = null,
-        beforePatch: (() -> Unit)? = null
+        beforePatch: (() -> Unit)? = null,
+        frameTimeMs: Long? = null
     ) {
-        animationEngine.prepareAndSubmit(visualIntent, layoutEngine, mirrorUpdate, beforePatch)
+        animationEngine.prepareAndSubmit(visualIntent, layoutEngine, mirrorUpdate, beforePatch, frameTimeMs)
     }
 
     fun cancel() {
