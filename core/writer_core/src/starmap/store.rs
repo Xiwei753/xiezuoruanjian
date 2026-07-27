@@ -1378,9 +1378,7 @@ impl StarMapStore {
                 }
             }
         }
-        if is_new {
-            self.dirty_graph_meta = true;
-        }
+        self.dirty_graph_meta = true;
     }
 
     pub fn remove_edge(&mut self, edge_id: &str) {
@@ -1415,9 +1413,7 @@ impl StarMapStore {
                 }
             }
         }
-        if is_new {
-            self.dirty_graph_meta = true;
-        }
+        self.dirty_graph_meta = true;
     }
 
     pub fn remove_embed(&mut self, instance_id: &str) {
@@ -1640,8 +1636,23 @@ impl StarMapStore {
         if let Some(ref k) = patch.kind { edge.kind = k.clone(); }
         if let Some(ref l) = patch.label { edge.label = l.clone(); }
         if let Some(ref p) = patch.payload { edge.payload = p.clone(); }
-        if let Some(ref ft) = patch.from_target { edge.from_target = ft.clone(); }
-        if let Some(ref tt) = patch.to_target { edge.to_target = tt.clone(); }
+        let endpoints_changed = patch.from_target.is_some() || patch.to_target.is_some();
+        if let Some(ref ft) = patch.from_target {
+            edge.from_target = ft.clone();
+            edge.from = ft.as_ref().and_then(|t| match &t.target {
+                crate::starmap::semantic::StarMapTargetDetail::Node { node_id } => Some(node_id.clone()),
+                crate::starmap::semantic::StarMapTargetDetail::Anchor { node_id, .. } => Some(node_id.clone()),
+                _ => None,
+            });
+        }
+        if let Some(ref tt) = patch.to_target {
+            edge.to_target = tt.clone();
+            edge.to = tt.as_ref().and_then(|t| match &t.target {
+                crate::starmap::semantic::StarMapTargetDetail::Node { node_id } => Some(node_id.clone()),
+                crate::starmap::semantic::StarMapTargetDetail::Anchor { node_id, .. } => Some(node_id.clone()),
+                _ => None,
+            });
+        }
         if let Some(ref fe) = patch.from_endpoint { edge.from_endpoint = fe.clone(); }
         if let Some(ref te) = patch.to_endpoint { edge.to_endpoint = te.clone(); }
         if let Some(ref fep) = patch.from_endpoint_path { edge.from_endpoint_path = fep.clone(); }
@@ -1649,6 +1660,15 @@ impl StarMapStore {
         edge.updated_at = crate::starmap::now_epoch();
         let updated = edge.clone();
         self.dirty_edges.insert(edge_id.to_string());
+        if endpoints_changed {
+            if let Some(ref mut meta) = self.graph_meta {
+                if let Some(eri) = meta.edge_relation_index.iter_mut().find(|e| e.edge_id == edge_id) {
+                    eri.from = updated.from.clone().unwrap_or_default();
+                    eri.to = updated.to.clone().unwrap_or_default();
+                }
+            }
+            self.dirty_graph_meta = true;
+        }
         Ok(updated)
     }
 
@@ -1700,6 +1720,7 @@ impl StarMapStore {
             embed.target_viewport.offset_x = vp.offset_x;
             embed.target_viewport.offset_y = vp.offset_y;
         }
+        let host_changed = patch.source_node_id.is_some();
         if let Some(ref sni) = patch.source_node_id { embed.source_node_id = sni.clone(); }
         if let Some(ref ep) = patch.host_endpoint { embed.host_endpoint = ep.clone(); }
         if let Some(Some(ref anchor_id)) = patch.host_anchor {
@@ -1713,6 +1734,14 @@ impl StarMapStore {
         embed.updated_at = crate::starmap::now_epoch();
         let updated = embed.clone();
         self.dirty_embeds.insert(instance_id.to_string());
+        if host_changed {
+            if let Some(ref mut meta) = self.graph_meta {
+                if let Some(ehi) = meta.embed_host_index.iter_mut().find(|e| e.instance_id == instance_id) {
+                    ehi.host_node_id = updated.source_node_id.clone().unwrap_or_default();
+                }
+            }
+            self.dirty_graph_meta = true;
+        }
         Ok(updated)
     }
 
@@ -1987,6 +2016,8 @@ impl StarMapStore {
         }
         if std::fs::copy(flat_path, bucket_path).is_ok() {
             let _ = std::fs::remove_file(flat_path);
+            let file_name = flat_path.file_name().unwrap_or_default().to_string_lossy();
+            self.record_migration("flat_to_bucket", &format!("migrated {} from flat to bucket", file_name));
         }
     }
 
@@ -3838,5 +3869,221 @@ mod tests {
         let result = store.list_links_with_diagnostics();
         assert!(!result.diagnostics.is_empty(), "should report missing link as diagnostic");
         assert_eq!(result.diagnostics[0].object_id, "missing-link");
+    }
+
+    #[test]
+    fn upsert_edge_existing_marks_dirty_graph_meta() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        let node1 = make_test_node("n1", "A");
+        let node2 = make_test_node("n2", "B");
+        let node3 = make_test_node("n3", "C");
+        store.upsert_node(node1);
+        store.upsert_node(node2);
+        store.upsert_node(node3);
+
+        use crate::starmap::types::{StarMapEdge, StarMapEdgeKind};
+        let edge = StarMapEdge {
+            id: "e1".to_string(),
+            from: Some("n1".to_string()),
+            to: Some("n2".to_string()),
+            kind: StarMapEdgeKind::References,
+            label: None,
+            payload: None,
+            from_target: None,
+            to_target: None,
+            from_endpoint: None,
+            to_endpoint: None,
+            from_endpoint_path: None,
+            to_endpoint_path: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+        store.upsert_edge(edge);
+        store.flush().unwrap();
+
+        let edge_updated = StarMapEdge {
+            id: "e1".to_string(),
+            from: Some("n1".to_string()),
+            to: Some("n3".to_string()),
+            kind: StarMapEdgeKind::References,
+            label: None,
+            payload: None,
+            from_target: None,
+            to_target: None,
+            from_endpoint: None,
+            to_endpoint: None,
+            from_endpoint_path: None,
+            to_endpoint_path: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+        store.upsert_edge(edge_updated);
+        assert!(store.dirty_graph_meta, "upsert_edge on existing edge should mark dirty_graph_meta because relation index changed");
+
+        store.flush().unwrap();
+        let meta_on_disk: GraphMeta = serde_json::from_str(
+            &std::fs::read_to_string(store.starmap_dir().join("graph.json")).unwrap()
+        ).unwrap();
+        let eri = meta_on_disk.edge_relation_index.iter().find(|e| e.edge_id == "e1").unwrap();
+        assert_eq!(eri.to, "n3", "disk relation index should reflect updated endpoint");
+    }
+
+    #[test]
+    fn update_edge_endpoint_marks_dirty_graph_meta() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.upsert_node(make_test_node("n1", "A"));
+        store.upsert_node(make_test_node("n2", "B"));
+        store.upsert_node(make_test_node("n3", "C"));
+
+        use crate::starmap::types::{StarMapEdge, StarMapEdgeKind, StarMapEdgePatch};
+        let edge = StarMapEdge {
+            id: "e1".to_string(),
+            from: Some("n1".to_string()),
+            to: Some("n2".to_string()),
+            kind: StarMapEdgeKind::References,
+            label: None,
+            payload: None,
+            from_target: None,
+            to_target: None,
+            from_endpoint: None,
+            to_endpoint: None,
+            from_endpoint_path: None,
+            to_endpoint_path: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+        store.upsert_edge(edge);
+        store.flush().unwrap();
+
+        let patch = StarMapEdgePatch {
+            kind: None,
+            label: None,
+            payload: None,
+            from_target: Some(Some(crate::starmap::semantic::StarMapDeepTarget {
+                starmap_id: meta.starmap_id.clone(),
+                path: vec![],
+                target: crate::starmap::semantic::StarMapTargetDetail::Node { node_id: "n3".to_string() },
+            })),
+            to_target: None,
+            from_endpoint: None,
+            to_endpoint: None,
+            from_endpoint_path: None,
+            to_endpoint_path: None,
+        };
+        store.update_edge("e1", &patch).unwrap();
+        assert!(store.dirty_graph_meta, "update_edge changing from_target should mark dirty_graph_meta");
+
+        store.flush().unwrap();
+        let meta_on_disk: GraphMeta = serde_json::from_str(
+            &std::fs::read_to_string(store.starmap_dir().join("graph.json")).unwrap()
+        ).unwrap();
+        let eri = meta_on_disk.edge_relation_index.iter().find(|e| e.edge_id == "e1").unwrap();
+        assert_eq!(eri.from, "n3", "disk relation index should reflect updated from endpoint");
+    }
+
+    #[test]
+    fn update_embed_host_marks_dirty_graph_meta() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.upsert_node(make_test_node("n1", "A"));
+        store.upsert_node(make_test_node("n2", "B"));
+
+        use crate::starmap::types::{StarMapEmbed, StarMapEmbedPlacement, StarMapEmbedViewport, StarMapEmbedPatch};
+        let embed = StarMapEmbed {
+            instance_id: "emb1".to_string(),
+            target_starmap_id: "other".to_string(),
+            label: None,
+            display_policy: Default::default(),
+            open_behavior: Default::default(),
+            placement: StarMapEmbedPlacement::default(),
+            target_viewport: StarMapEmbedViewport::default(),
+            source_node_id: Some("n1".to_string()),
+            host_endpoint: None,
+            provenance: Default::default(),
+            created_at: 0,
+            updated_at: 0,
+        };
+        store.upsert_embed(embed);
+        store.flush().unwrap();
+
+        let patch = StarMapEmbedPatch {
+            label: None,
+            display_policy: None,
+            open_behavior: None,
+            viewport: None,
+            placement: None,
+            target_viewport: None,
+            source_node_id: Some(Some("n2".to_string())),
+            host_anchor: None,
+            host_endpoint: None,
+        };
+        store.update_embed("emb1", &patch).unwrap();
+        assert!(store.dirty_graph_meta, "update_embed changing source_node_id should mark dirty_graph_meta");
+
+        store.flush().unwrap();
+        let meta_on_disk: GraphMeta = serde_json::from_str(
+            &std::fs::read_to_string(store.starmap_dir().join("graph.json")).unwrap()
+        ).unwrap();
+        let ehi = meta_on_disk.embed_host_index.iter().find(|e| e.instance_id == "emb1").unwrap();
+        assert_eq!(ehi.host_node_id, "n2", "disk host index should reflect updated host");
+    }
+
+    #[test]
+    fn delete_also_removes_flat_path() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let starmap_dir = dir.path().join("app-meta").join("starmaps").join(&meta.starmap_id);
+        let nodes_dir = starmap_dir.join("nodes");
+        std::fs::create_dir_all(&nodes_dir).unwrap();
+
+        let flat_path = nodes_dir.join("n1.json");
+        std::fs::write(&flat_path, "{}").unwrap();
+        assert!(flat_path.exists(), "flat file should exist before delete");
+
+        package_storage::delete_node_file(dir.path(), &meta.starmap_id, "n1").unwrap();
+        assert!(!flat_path.exists(), "flat file should be removed by delete_node_file");
+    }
+
+    #[test]
+    fn migrate_flat_to_bucket_records_migration() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.upsert_node(make_test_node("n1", "A"));
+        store.flush().unwrap();
+
+        let starmap_dir = store.starmap_dir();
+        let nodes_dir = starmap_dir.join("nodes");
+        let flat_path = nodes_dir.join("n1.json");
+        let bucket_dir = nodes_dir.join(package_storage::bucket_for_id("n1"));
+        let bucket_path = bucket_dir.join("n1.json");
+
+        std::fs::create_dir_all(&bucket_dir).unwrap();
+        std::fs::write(&flat_path, "{}").unwrap();
+        let _ = std::fs::remove_file(&bucket_path);
+
+        store.migrate_flat_to_bucket(&flat_path, &bucket_path);
+        assert!(bucket_path.exists(), "bucket file should exist after migration");
+        assert!(!flat_path.exists(), "flat file should be removed after migration");
+
+        let migration_path = starmap_dir.join("metadata").join("migration.json");
+        assert!(migration_path.exists(), "migration.json should be recorded");
+        let content = std::fs::read_to_string(&migration_path).unwrap();
+        assert!(content.contains("flat_to_bucket"), "migration record should mention flat_to_bucket");
     }
 }

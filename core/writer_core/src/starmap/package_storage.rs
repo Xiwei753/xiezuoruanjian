@@ -45,20 +45,40 @@ fn node_path(dir: &Path, node_id: &str) -> PathBuf {
     dir.join("nodes").join(bucket_for_id(node_id)).join(format!("{}.json", node_id))
 }
 
+fn flat_node_path(dir: &Path, node_id: &str) -> PathBuf {
+    dir.join("nodes").join(format!("{}.json", node_id))
+}
+
 fn edge_path(dir: &Path, edge_id: &str) -> PathBuf {
     dir.join("edges").join(bucket_for_id(edge_id)).join(format!("{}.json", edge_id))
+}
+
+fn flat_edge_path(dir: &Path, edge_id: &str) -> PathBuf {
+    dir.join("edges").join(format!("{}.json", edge_id))
 }
 
 fn child_starmap_path(dir: &Path, instance_id: &str) -> PathBuf {
     dir.join("child_starmaps").join(bucket_for_id(instance_id)).join(format!("{}.json", instance_id))
 }
 
+fn flat_child_starmap_path(dir: &Path, instance_id: &str) -> PathBuf {
+    dir.join("child_starmaps").join(format!("{}.json", instance_id))
+}
+
 fn link_path(dir: &Path, link_id: &str) -> PathBuf {
     dir.join("links").join(bucket_for_id(link_id)).join(format!("{}.json", link_id))
 }
 
+fn flat_link_path(dir: &Path, link_id: &str) -> PathBuf {
+    dir.join("links").join(format!("{}.json", link_id))
+}
+
 fn hyperlink_path(dir: &Path, hyperlink_id: &str) -> PathBuf {
     dir.join("hyperlinks").join(bucket_for_id(hyperlink_id)).join(format!("{}.json", hyperlink_id))
+}
+
+fn flat_hyperlink_path(dir: &Path, hyperlink_id: &str) -> PathBuf {
+    dir.join("hyperlinks").join(format!("{}.json", hyperlink_id))
 }
 
 fn layout_dir(dir: &Path) -> PathBuf {
@@ -99,6 +119,10 @@ pub fn delete_node_file(workspace: &Path, starmap_id: &str, node_id: &str) -> Re
     if path.exists() {
         fs::remove_file(&path)?;
     }
+    let flat = flat_node_path(&dir, node_id);
+    if flat.exists() {
+        let _ = fs::remove_file(&flat);
+    }
     Ok(())
 }
 
@@ -115,6 +139,10 @@ pub fn delete_edge_file(workspace: &Path, starmap_id: &str, edge_id: &str) -> Re
     let path = edge_path(&dir, edge_id);
     if path.exists() {
         fs::remove_file(&path)?;
+    }
+    let flat = flat_edge_path(&dir, edge_id);
+    if flat.exists() {
+        let _ = fs::remove_file(&flat);
     }
     Ok(())
 }
@@ -133,6 +161,10 @@ pub fn delete_embed_file(workspace: &Path, starmap_id: &str, instance_id: &str) 
     if path.exists() {
         fs::remove_file(&path)?;
     }
+    let flat = flat_child_starmap_path(&dir, instance_id);
+    if flat.exists() {
+        let _ = fs::remove_file(&flat);
+    }
     Ok(())
 }
 
@@ -150,6 +182,10 @@ pub fn delete_link_file(workspace: &Path, starmap_id: &str, link_id: &str) -> Re
     if path.exists() {
         fs::remove_file(&path)?;
     }
+    let flat = flat_link_path(&dir, link_id);
+    if flat.exists() {
+        let _ = fs::remove_file(&flat);
+    }
     Ok(())
 }
 
@@ -166,6 +202,10 @@ pub fn delete_hyperlink_file(workspace: &Path, starmap_id: &str, hyperlink_id: &
     let path = hyperlink_path(&dir, hyperlink_id);
     if path.exists() {
         fs::remove_file(&path)?;
+    }
+    let flat = flat_hyperlink_path(&dir, hyperlink_id);
+    if flat.exists() {
+        let _ = fs::remove_file(&flat);
     }
     Ok(())
 }
