@@ -831,6 +831,144 @@ class RenderedFrameVisualTest {
     }
 
     @Test
+    fun insertText_finalFrameResourcesNotRecycledBeforeDraw() {
+        val testData = initTestData()
+        openTestChapter("最终帧插入生命周期测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("Test"))
+
+        val durationMs = getActiveAnimationDurationMs()
+        val startTimeMs = getActiveAnimationStartTimeMs()
+        assertTrue("Animation must be active", durationMs > 0)
+
+        manualTimeSource.advanceToProgress(1f, durationMs, startTimeMs)
+        dispatchManualFrame()
+
+        val finalFrame = EditorBitmapCapture.captureEditorBitmap()
+        EditorBitmapCapture.assertBitmapHasContent(finalFrame, "100% frame must have rendered content")
+
+        val finalStateSnapshot = captureAnimationStateSnapshot()
+        assertTrue(
+            "After 100% frame draw, transaction must be completed or null",
+            finalStateSnapshot == null
+                    || finalStateSnapshot.transactionState == TransactionState.Completed
+        )
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("Test"))
+    }
+
+    @Test
+    fun deleteRange_finalFrameResourcesNotRecycledBeforeDraw() {
+        val testData = initTestData()
+        openTestChapter("最终帧删除生命周期测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("ABCDE"))
+
+        advanceClockToEnd()
+
+        val deleteStart = "AB".toByteArray(Charsets.UTF_8).size
+        val deleteEnd = "ABCD".toByteArray(Charsets.UTF_8).size
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorReplaceRangeAction.replaceRange(deleteStart, deleteEnd, "", "CD"))
+
+        val durationMs = getActiveAnimationDurationMs()
+        val startTimeMs = getActiveAnimationStartTimeMs()
+        assertTrue("Animation must be active", durationMs > 0)
+
+        manualTimeSource.advanceToProgress(1f, durationMs, startTimeMs)
+        dispatchManualFrame()
+
+        val finalFrame = EditorBitmapCapture.captureEditorBitmap()
+        EditorBitmapCapture.assertBitmapHasContent(finalFrame, "100% delete frame must have rendered content")
+
+        val finalStateSnapshot = captureAnimationStateSnapshot()
+        assertTrue(
+            "After 100% delete frame draw, transaction must be completed or null",
+            finalStateSnapshot == null
+                    || finalStateSnapshot.transactionState == TransactionState.Completed
+        )
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("ABE"))
+    }
+
+    @Test
+    fun compositionUpdate_finalFrameResourcesNotRecycledBeforeDraw() {
+        val testData = initTestData()
+        openTestChapter("最终帧预输入生命周期测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCompositionAction.setComposingText("预输入"))
+
+        val durationMs = getActiveAnimationDurationMs()
+        val startTimeMs = getActiveAnimationStartTimeMs()
+        assertTrue("Animation must be active", durationMs > 0)
+
+        manualTimeSource.advanceToProgress(1f, durationMs, startTimeMs)
+        dispatchManualFrame()
+
+        val finalFrame = EditorBitmapCapture.captureEditorBitmap()
+        EditorBitmapCapture.assertBitmapHasContent(finalFrame, "100% composition frame must have rendered content")
+
+        val finalStateSnapshot = captureAnimationStateSnapshot()
+        assertTrue(
+            "After 100% composition frame draw, transaction must be completed or null",
+            finalStateSnapshot == null
+                    || finalStateSnapshot.transactionState == TransactionState.Completed
+        )
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("预输入"))
+    }
+
+    @Test
+    fun rapidInput_finalFrameResourcesNotRecycledBeforeDraw() {
+        val testData = initTestData()
+        openTestChapter("最终帧连续输入生命周期测试", testData)
+
+        manualTimeSource.advanceTo(0L)
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("A"))
+
+        manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("B"))
+
+        manualTimeSource.advanceByMs(16)
+        dispatchManualFrame()
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .perform(EditorCommitTextAction.commitText("C"))
+
+        advanceClockToEnd()
+
+        val finalFrame = EditorBitmapCapture.captureEditorBitmap()
+        EditorBitmapCapture.assertBitmapHasContent(finalFrame, "Final frame after rapid input must have rendered content")
+
+        val finalStateSnapshot = captureAnimationStateSnapshot()
+        assertTrue(
+            "After rapid input completes, transaction must be completed or null",
+            finalStateSnapshot == null
+                    || finalStateSnapshot.transactionState == TransactionState.Completed
+        )
+
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText("ABC"))
+    }
+
+    @Test
     fun deleteRange_cursorRemainsVisibleDuringAnimation() {
         val testData = initTestData()
         openTestChapter("渲染帧删除光标可见测试", testData)
@@ -927,12 +1065,12 @@ class RenderedFrameVisualTest {
 
     private data class FiveProgressResult(
         val frames: List<CapturedFrame>,
-        val visualSnapshots: List<VisualFrameSnapshot>
+        val visualSnapshots: List<VisualFrameSnapshot?>
     )
 
     private fun captureFiveProgressPoints(): FiveProgressResult {
         val frames = mutableListOf<CapturedFrame>()
-        val visualSnapshots = mutableListOf<VisualFrameSnapshot>()
+        val visualSnapshots = mutableListOf<VisualFrameSnapshot?>()
         val progressLabels = listOf("0%", "25%", "50%", "75%", "100%")
         val progressValues = listOf(0f, 0.25f, 0.5f, 0.75f, 1f)
 
@@ -968,18 +1106,27 @@ class RenderedFrameVisualTest {
             frames.add(EditorBitmapCapture.captureEditorBitmap())
 
             val visualSnapshot = captureVisualFrameSnapshot()
-            assertNotNull(
-                "Visual frame snapshot must exist at ${progressLabels[i]} for logical alpha check",
-                visualSnapshot
-            )
-            visualSnapshots.add(visualSnapshot!!)
-            for (slice in visualSnapshot.sliceVisualStates) {
-                assertTrue(
-                    "Slice logical alpha ${slice.currentAlpha} must be in [0,1] at ${progressLabels[i]} for role ${slice.role}",
-                    slice.currentAlpha >= 0f && slice.currentAlpha <= 1f
+            if (i < 4) {
+                assertNotNull(
+                    "Visual frame snapshot must exist at ${progressLabels[i]} for logical alpha check",
+                    visualSnapshot
                 )
+                for (slice in visualSnapshot!!.sliceVisualStates) {
+                    assertTrue(
+                        "Slice logical alpha ${slice.currentAlpha} must be in [0,1] at ${progressLabels[i]} for role ${slice.role}",
+                        slice.currentAlpha >= 0f && slice.currentAlpha <= 1f
+                    )
+                }
             }
+            visualSnapshots.add(visualSnapshot)
         }
+
+        val finalStateSnapshot = captureAnimationStateSnapshot()
+        assertTrue(
+            "After 100% frame, transaction must be completed (no active animation state)",
+            finalStateSnapshot == null
+                    || finalStateSnapshot.transactionState == TransactionState.Completed
+        )
 
         return FiveProgressResult(frames, visualSnapshots)
     }
@@ -1135,11 +1282,14 @@ class RenderedFrameVisualTest {
     }
 
     private fun assertCrossFrameLogicalAlphaProgression(
-        visualSnapshots: List<VisualFrameSnapshot>,
+        visualSnapshots: List<VisualFrameSnapshot?>,
         labels: List<String>
     ) {
-        if (visualSnapshots.size < 2 || labels.size < 2) return
-        val allAlphas = visualSnapshots.mapIndexed { i, snapshot ->
+        val nonNullSnapshots = visualSnapshots.mapIndexedNotNull { i, snapshot ->
+            if (snapshot != null) Pair(i, snapshot) else null
+        }
+        if (nonNullSnapshots.size < 2 || labels.size < 2) return
+        val allAlphas = nonNullSnapshots.map { (i, snapshot) ->
             val alphas = snapshot.sliceVisualStates.map { it.currentAlpha }
             for (slice in snapshot.sliceVisualStates) {
                 assertTrue(

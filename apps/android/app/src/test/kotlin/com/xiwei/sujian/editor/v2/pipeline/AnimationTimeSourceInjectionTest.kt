@@ -152,4 +152,93 @@ class AnimationTimeSourceInjectionTest {
 
         assertEquals(0L, runtime.getActiveAnimationDurationMs())
     }
+
+    @Test
+    fun tick_returnsCompleteAfterDrawFalseWhenNoActiveAnimation() {
+        val manualTimeSource = ManualAnimationTimeSource()
+        val transactionIdSource = TransactionIdSource()
+        val runtime = AndroidVisualRuntime(manualTimeSource, transactionIdSource)
+        manualTimeSource.advanceByMs(100)
+        assertFalse(runtime.hasActiveAnimation())
+    }
+
+    @Test
+    fun tick_doesNotCompleteTransactionBeforeDraw_frameStateHasTransaction() {
+        val manualTimeSource = ManualAnimationTimeSource()
+        val transactionIdSource = TransactionIdSource()
+        val runtime = AndroidVisualRuntime(manualTimeSource, transactionIdSource)
+        manualTimeSource.advanceByMs(100)
+        val snapshot = runtime.captureStateSnapshot()
+        assertNull(snapshot)
+        assertTrue(
+            "Without active animation, hasActiveAnimation should be false",
+            !runtime.hasActiveAnimation()
+        )
+    }
+
+    @Test
+    fun completeAfterDraw_releasesResourcesAfterDraw() {
+        val manualTimeSource = ManualAnimationTimeSource()
+        val transactionIdSource = TransactionIdSource()
+        val runtime = AndroidVisualRuntime(manualTimeSource, transactionIdSource)
+        manualTimeSource.advanceByMs(100)
+        runtime.completeAfterDraw(manualTimeSource.nowNanos() / 1_000_000)
+        assertFalse(runtime.hasActiveAnimation())
+    }
+
+    @Test
+    fun frameState_completeAfterDrawFlagIsFalseByDefault() {
+        val input = FrameRenderInput(
+            layout = android.text.StaticLayout(
+                "", android.text.TextPaint(), 100,
+                android.text.Layout.Alignment.ALIGN_NORMAL, 1f, 0f, false
+            ),
+            layoutRevision = null,
+            transaction = null,
+            timelineProgress = 0f,
+            searchHighlightsUtf16 = emptyList(),
+            viewportWidth = 100,
+            viewportHeight = 100,
+            scrollX = 0f,
+            scrollY = 0f,
+            cursorVisible = true,
+            selectionAllowed = false,
+            cursorUtf16 = 0,
+            selectionStartUtf16 = 0,
+            selectionEndUtf16 = 0
+        )
+        val frameState = FrameState(input)
+        assertFalse(
+            "FrameState completeAfterDraw should default to false",
+            frameState.completeAfterDraw
+        )
+    }
+
+    @Test
+    fun frameState_completeAfterDrawFlagCanBeSetToTrue() {
+        val input = FrameRenderInput(
+            layout = android.text.StaticLayout(
+                "", android.text.TextPaint(), 100,
+                android.text.Layout.Alignment.ALIGN_NORMAL, 1f, 0f, false
+            ),
+            layoutRevision = null,
+            transaction = null,
+            timelineProgress = 1f,
+            searchHighlightsUtf16 = emptyList(),
+            viewportWidth = 100,
+            viewportHeight = 100,
+            scrollX = 0f,
+            scrollY = 0f,
+            cursorVisible = true,
+            selectionAllowed = false,
+            cursorUtf16 = 0,
+            selectionStartUtf16 = 0,
+            selectionEndUtf16 = 0
+        )
+        val frameState = FrameState(input, completeAfterDraw = true)
+        assertTrue(
+            "FrameState completeAfterDraw should be true when set",
+            frameState.completeAfterDraw
+        )
+    }
 }

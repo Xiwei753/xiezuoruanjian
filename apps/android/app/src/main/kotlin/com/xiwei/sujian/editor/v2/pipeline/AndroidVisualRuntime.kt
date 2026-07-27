@@ -57,6 +57,10 @@ class AndroidVisualRuntime(
         animationEngine.release()
     }
 
+    fun completeAfterDraw(frameTimeMs: Long) {
+        animationEngine.completeIfFinished(frameTimeMs)
+    }
+
     fun hasActiveAnimation(): Boolean = animationEngine.hasActiveAnimation()
 
     fun currentTimeNanos(): Long = animationEngine.currentTimeNanos()
@@ -100,6 +104,7 @@ class AndroidVisualRuntime(
         val transaction = animationEngine.getActiveTransaction()
         val progress = animationEngine.getTimelineProgress(frameTimeMs)
         animationEngine.markFirstVisibleFrame(frameTimeMs)
+        val shouldCompleteAfterDraw = transaction != null && animationEngine.isTimelineCompleted(frameTimeMs)
         val renderInput = FrameRenderInput(
             layout = layout,
             layoutRevision = layoutRevision,
@@ -116,7 +121,6 @@ class AndroidVisualRuntime(
             selectionStartUtf16 = selectionStartUtf16,
             selectionEndUtf16 = selectionEndUtf16
         )
-        animationEngine.completeIfFinished(frameTimeMs)
-        return FrameState(renderInput)
+        return FrameState(renderInput, completeAfterDraw = shouldCompleteAfterDraw)
     }
 }

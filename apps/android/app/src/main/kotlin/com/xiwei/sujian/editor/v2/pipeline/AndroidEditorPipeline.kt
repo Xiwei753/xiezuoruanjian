@@ -497,6 +497,9 @@ class AndroidEditorPipeline private constructor(
         )
         if (frameState != null) {
             renderRuntime.drawFromFrameState(canvas, frameState)
+            if (frameState.completeAfterDraw) {
+                visualRuntime.completeAfterDraw(frameTimeMs)
+            }
         }
     }
 
