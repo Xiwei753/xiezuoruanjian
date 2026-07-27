@@ -1,0 +1,192 @@
+package com.xiwei.sujian.data.starmap
+
+import com.xiwei.sujian.data.BridgeResult
+import com.xiwei.sujian.data.ResultEnvelope
+import com.xiwei.sujian.data.StarMapBridge
+import com.xiwei.sujian.model.StarMapData
+import com.xiwei.sujian.model.StarMapEdgeKind
+import com.xiwei.sujian.model.StarMapEdgeRenderData
+import com.xiwei.sujian.model.StarMapGraphEdge
+import com.xiwei.sujian.model.StarMapGraphNode
+import com.xiwei.sujian.model.StarMapLayoutData
+import com.xiwei.sujian.model.StarMapNodeKind
+import uniffi.writer_core.StarMapEdgeDto
+import uniffi.writer_core.StarMapEdgePatchInputDto
+import uniffi.writer_core.StarMapNodePatchInputDto
+
+internal class StarMapRepository(
+    private val bridge: StarMapBridge,
+    private val cache: StarMapSnapshotCache
+) {
+    fun getStarmapGraph(starmapId: String): BridgeResult<StarMapData> {
+        return when (val result = bridge.getStarMapGraph(starmapId)) {
+            is BridgeResult.Success -> {
+                try {
+                    cache.put(starmapId, result.data.toRawCache())
+                    BridgeResult.Success(result.data.toModel())
+                } catch (e: Exception) {
+                    BridgeResult.Error(ResultEnvelope.error("CONVERSION_ERROR", "Failed to convert starmap graph: ${e.message}"))
+                }
+            }
+            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
+            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
+        }
+    }
+
+    fun addStarmapNode(starmapId: String, node: StarMapGraphNode, x: Float = 0f, y: Float = 0f): BridgeResult<StarMapGraphNode> {
+        val baseNode = cache.get(starmapId)?.nodes?.get(node.id)
+        return when (val result = bridge.addStarMapNode(starmapId, node.toDto(baseNode), x, y)) {
+            is BridgeResult.Success -> {
+                cache.putNode(starmapId, result.data.id, result.data)
+                BridgeResult.Success(result.data.toGraphNode())
+            }
+            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
+            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
+        }
+    }
+
+    fun updateStarmapNode(starmapId: String, nodeId: String, title: String? = null, kind: StarMapNodeKind? = null, tags: List<String>? = null): BridgeResult<StarMapGraphNode> {
+        val patch = StarMapNodePatchInputDto(
+            title = title,
+            kind = kind?.toDto(),
+            payload = null,
+            clearPayload = false,
+            tags = tags
+        )
+        return when (val result = bridge.updateStarMapNode(starmapId, nodeId, patch)) {
+            is BridgeResult.Success -> {
+                cache.get(starmapId)?.nodes?.put(result.data.id, result.data)
+                BridgeResult.Success(result.data.toGraphNode())
+            }
+            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
+            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
+        }
+    }
+
+    fun deleteStarmapNode(starmapId: String, nodeId: String): BridgeResult<Boolean> {
+        return when (val result = bridge.deleteStarMapNode(starmapId, nodeId)) {
+            is BridgeResult.Success -> {
+                cache.removeNode(starmapId, nodeId)
+                BridgeResult.Success(true)
+            }
+            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
+            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
+        }
+    }
+
+    fun addStarmapEdge(starmapId: String, from: String, to: String, kind: StarMapEdgeKind = StarMapEdgeKind.RelatedTo, label: String? = null): BridgeResult<StarMapGraphEdge> {
+        val now = System.currentTimeMillis()
+        val edge = StarMapEdgeDto(
+            id = java.util.UUID.randomUUID().toString(),
+            from = from,
+            to = to,
+            kind = kind.toDto(),
+            label = label,
+            payload = null,
+            fromTarget = null,
+            toTarget = null,
+            fromEndpoint = null,
+            toEndpoint = null,
+            fromEndpointPath = null,
+            toEndpointPath = null,
+            createdAt = now.toULong(),
+            updatedAt = now.toULong()
+        )
+        return when (val result = bridge.addStarMapEdge(starmapId, edge)) {
+            is BridgeResult.Success -> {
+                cache.get(starmapId)?.edges?.put(result.data.id, result.data)
+                BridgeResult.Success(result.data.toGraphEdge())
+            }
+            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
+            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
+        }
+    }
+
+    fun deleteStarmapEdge(starmapId: String, edgeId: String): BridgeResult<Boolean> {
+        return when (val result = bridge.deleteStarMapEdge(starmapId, edgeId)) {
+            is BridgeResult.Success -> {
+                cache.removeEdge(starmapId, edgeId)
+                BridgeResult.Success(true)
+            }
+            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
+            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
+        }
+    }
+
+    fun updateStarmapEdge(starmapId: String, edgeId: String, kind: StarMapEdgeKind? = null, label: String? = null): BridgeResult<StarMapGraphEdge> {
+        val patch = StarMapEdgePatchInputDto(
+            kind = kind?.toDto(),
+            label = label,
+            clearLabel = false
+        )
+        return when (val result = bridge.updateStarMapEdge(starmapId, edgeId, patch)) {
+            is BridgeResult.Success -> {
+                cache.get(starmapId)?.edges?.put(result.data.id, result.data)
+                BridgeResult.Success(result.data.toGraphEdge())
+            }
+            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
+            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
+        }
+    }
+
+    fun saveStarmapLayout(starmapId: String, layout: StarMapLayoutData): BridgeResult<Boolean> {
+        val rawCache = cache.get(starmapId) ?: return BridgeResult.Error(
+            ResultEnvelope.error("CACHE_NOT_INITIALIZED", "Starmap cache not initialized for $starmapId")
+        )
+        val dto = layout.toDto(rawCache)
+        return when (val result = bridge.saveStarMapLayout(starmapId, dto)) {
+            is BridgeResult.Success -> {
+                cache.updateLayoutNodes(starmapId, dto.nodes)
+                BridgeResult.Success(result.data)
+            }
+            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
+            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
+        }
+    }
+
+    fun computeEdgeRenders(data: StarMapData): BridgeResult<List<StarMapEdgeRenderData>> {
+        val rawCache = when (val cacheResult = getOrRefreshRawCache(data.graph.starmapId)) {
+            is BridgeResult.Success -> cacheResult.data
+            is BridgeResult.Error -> return BridgeResult.Error(cacheResult.envelope)
+            BridgeResult.NotLoaded -> return BridgeResult.NotLoaded
+        }
+        val graph = rawCache.graph ?: return BridgeResult.Error(
+            ResultEnvelope.error("STAR_MAP_CACHE_MISSING", "Raw starmap graph is not available")
+        )
+        return when (val result = bridge.computeStarMapEdgeRenders(graph, data.layout.toDto(rawCache))) {
+            is BridgeResult.Success -> BridgeResult.Success(result.data.map { it.toModel() })
+            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
+            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
+        }
+    }
+
+    fun hitTestStarmapNode(data: StarMapData, x: Float, y: Float): BridgeResult<String?> {
+        val rawCache = when (val cacheResult = getOrRefreshRawCache(data.graph.starmapId)) {
+            is BridgeResult.Success -> cacheResult.data
+            is BridgeResult.Error -> return BridgeResult.Error(cacheResult.envelope)
+            BridgeResult.NotLoaded -> return BridgeResult.NotLoaded
+        }
+        return bridge.hitTestStarMapNode(data.layout.toDto(rawCache), x, y)
+    }
+
+    private fun getOrRefreshRawCache(starmapId: String): BridgeResult<StarMapRawCache> {
+        cache.get(starmapId)?.let { return BridgeResult.Success(it) }
+        return refreshRawCache(starmapId)
+    }
+
+    private fun refreshRawCache(starmapId: String): BridgeResult<StarMapRawCache> {
+        return when (val result = bridge.getStarMapGraph(starmapId)) {
+            is BridgeResult.Success -> {
+                try {
+                    val rawCache = result.data.toRawCache()
+                    cache.put(starmapId, rawCache)
+                    BridgeResult.Success(rawCache)
+                } catch (e: Exception) {
+                    BridgeResult.Error(ResultEnvelope.error("CONVERSION_ERROR", "Failed to cache starmap graph: ${e.message}"))
+                }
+            }
+            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
+            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
+        }
+    }
+}

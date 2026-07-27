@@ -68,7 +68,7 @@ class SujianApp : Application(), DefaultLifecycleObserver {
         autoSyncScheduler?.stop()
         val result = BridgeProvider.getStarmapBridge(this).flushAllStarmapStores()
         if (result is BridgeResult.Error) {
-            DiagnosticsLogger.e("SujianApp", "flushAllStarmapStores failed: ${result.envelope.message}")
+            DiagnosticsLogger.e("SujianApp", "flushAllStarmapStores failed: ${result.message}")
         }
     }
 }
