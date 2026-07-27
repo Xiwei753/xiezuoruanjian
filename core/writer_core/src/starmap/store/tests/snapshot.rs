@@ -41,6 +41,13 @@ fn load_full_snapshot(dir: &std::path::Path, sid: &str) -> StarMapPhasedSnapshot
     store.get_phased_snapshot(&request).unwrap()
 }
 
+fn load_snapshot_with_revision(dir: &std::path::Path, sid: &str, since_revision: u64) -> StarMapPhasedSnapshot {
+    let mut store = StarMapStore::new(dir, sid);
+    store.load_phased(LoadPhase::BackgroundFullLoad).unwrap();
+    let request = PhasedSnapshotRequest { target_phase: LoadPhase::BackgroundFullLoad, since_revision };
+    store.get_phased_snapshot(&request).unwrap()
+}
+
 #[test]
 fn phased_snapshot_includes_load_phase_and_revision() {
     let (dir, sid) = setup_workspace();
@@ -268,4 +275,117 @@ fn phased_snapshot_preserves_endpoint_path_semantics() {
         StarMapEdgeEndpoint::DeepTarget { target } => assert_eq!(target.starmap_id, "other"),
         _ => panic!("expected DeepTarget"),
     }
+}
+
+#[test]
+fn phased_snapshot_returns_empty_when_revision_unchanged() {
+    let (dir, sid) = setup_workspace();
+    let mut store = StarMapStore::new(dir.path(), &sid);
+    store.upsert_node(make_test_node("n1", "A"));
+    flush_store(&mut store);
+    let rev = store.package_revision();
+
+    let request = PhasedSnapshotRequest { target_phase: LoadPhase::BackgroundFullLoad, since_revision: rev };
+    let snap = store.get_phased_snapshot(&request).unwrap();
+    assert_eq!(snap.since_revision, rev);
+    assert_eq!(snap.package_revision, rev);
+    assert!(snap.nodes.is_empty());
+    assert!(snap.edges.is_empty());
+    assert!(snap.embeds.is_empty());
+    assert!(snap.links.is_empty());
+    assert!(snap.hyperlinks.is_empty());
+}
+
+#[test]
+fn phased_snapshot_returns_objects_when_revision_advanced() {
+    let (dir, sid) = setup_workspace();
+    let mut store = StarMapStore::new(dir.path(), &sid);
+    store.upsert_node(make_test_node("n1", "A"));
+    flush_store(&mut store);
+    let rev1 = store.package_revision();
+
+    store.upsert_node(make_test_node("n2", "B"));
+    flush_store(&mut store);
+    let rev2 = store.package_revision();
+    assert!(rev2 > rev1);
+
+    let request = PhasedSnapshotRequest { target_phase: LoadPhase::BackgroundFullLoad, since_revision: rev1 };
+    let snap = store.get_phased_snapshot(&request).unwrap();
+    assert_eq!(snap.since_revision, rev1);
+    assert_eq!(snap.package_revision, rev2);
+    assert_eq!(snap.nodes.len(), 2);
+}
+
+#[test]
+fn phased_snapshot_since_revision_zero_returns_all() {
+    let (dir, sid) = setup_workspace();
+    let mut store = StarMapStore::new(dir.path(), &sid);
+    store.upsert_node(make_test_node("n1", "A"));
+    flush_store(&mut store);
+
+    let request = PhasedSnapshotRequest { target_phase: LoadPhase::BackgroundFullLoad, since_revision: 0 };
+    let snap = store.get_phased_snapshot(&request).unwrap();
+    assert_eq!(snap.since_revision, 0);
+    assert_eq!(snap.nodes.len(), 1);
+}
+
+#[test]
+fn phased_snapshot_incremental_preserves_layout_and_viewport() {
+    let (dir, sid) = setup_workspace();
+    let mut store = StarMapStore::new(dir.path(), &sid);
+    store.upsert_node(make_test_node("n1", "A"));
+    store.set_layout(StarMapLayout {
+        kind: StarMapLayoutKind::Freeform,
+        nodes: vec![StarMapLayoutNode {
+            node_id: "n1".to_string(),
+            x: 50.0, y: 60.0, width: 100.0, height: 80.0,
+            radius: 30.0, collapsed: false, z_index: 0,
+            scale: 1.0, depth: 0.0, focus_weight: 1.0, orbit_group: None,
+        }],
+    });
+    store.set_viewport(StarMapViewport { scale: 1.0, offset_x: 0.0, offset_y: 0.0, width: 800.0, height: 600.0 });
+    flush_store(&mut store);
+    store.flush_viewport().unwrap();
+    let rev = store.package_revision();
+
+    let request = PhasedSnapshotRequest { target_phase: LoadPhase::BackgroundFullLoad, since_revision: rev };
+    let snap = store.get_phased_snapshot(&request).unwrap();
+    assert!(snap.nodes.is_empty());
+    assert!(snap.layout.is_some());
+    assert!(snap.viewport.is_some());
+}
+
+#[test]
+fn phased_snapshot_phases_have_increasing_object_counts() {
+    let (dir, sid) = setup_workspace();
+    let mut store = StarMapStore::new(dir.path(), &sid);
+    store.upsert_node(make_test_node("n1", "InView"));
+    store.upsert_node(make_test_node("n2", "Nearby"));
+    store.upsert_edge(make_test_edge("e1", "n1", "n2"));
+    store.set_layout(StarMapLayout {
+        kind: StarMapLayoutKind::Freeform,
+        nodes: vec![StarMapLayoutNode {
+            node_id: "n1".to_string(),
+            x: 0.0, y: 0.0, width: 100.0, height: 50.0,
+            radius: 25.0, collapsed: false, z_index: 0,
+            scale: 1.0, depth: 0.0, focus_weight: 1.0, orbit_group: None,
+        }],
+    });
+    store.set_viewport(StarMapViewport { scale: 1.0, offset_x: 0.0, offset_y: 0.0, width: 200.0, height: 200.0 });
+    flush_store(&mut store);
+
+    let mut s1 = StarMapStore::new(dir.path(), &sid);
+    let req1 = PhasedSnapshotRequest { target_phase: LoadPhase::CurrentViewportObjects, since_revision: 0 };
+    let snap1 = s1.get_phased_snapshot(&req1).unwrap();
+    let viewport_count = snap1.nodes.len();
+    assert!(viewport_count >= 1);
+
+    let req2 = PhasedSnapshotRequest { target_phase: LoadPhase::PrefetchNearbyObjects, since_revision: 0 };
+    let snap2 = s1.get_phased_snapshot(&req2).unwrap();
+    assert!(snap2.nodes.len() >= viewport_count);
+
+    let req3 = PhasedSnapshotRequest { target_phase: LoadPhase::BackgroundFullLoad, since_revision: 0 };
+    let snap3 = s1.get_phased_snapshot(&req3).unwrap();
+    assert!(snap3.nodes.len() >= snap2.nodes.len());
+    assert!(snap3.complete);
 }

@@ -20,23 +20,11 @@ internal class StarMapRepository(
     private val bridge: StarMapBridge,
     private val cache: StarMapSnapshotCache
 ) {
-    fun getStarmapGraph(starmapId: String): BridgeResult<StarMapData> {
-        return when (val result = bridge.getStarMapGraph(starmapId)) {
-            is BridgeResult.Success -> {
-                try {
-                    val rawCache = result.data.toRawCache()
-                    cache.put(starmapId, rawCache)
-                    BridgeResult.Success(result.data.toModel(rawCache))
-                } catch (e: Exception) {
-                    BridgeResult.Error(ResultEnvelope.error("CONVERSION_ERROR", "Failed to convert starmap graph: ${e.message}"))
-                }
-            }
-            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
-            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
-        }
-    }
-
-    fun getStarmapPhasedSnapshot(starmapId: String, targetPhase: String = "PrefetchNearbyObjects", sinceRevision: ULong = 0u): BridgeResult<StarMapPhasedSnapshotResult> {
+    fun getStarmapPhasedSnapshot(
+        starmapId: String,
+        targetPhase: String = "CurrentViewportObjects",
+        sinceRevision: ULong = 0u
+    ): BridgeResult<StarMapPhasedSnapshotResult> {
         val request = PhasedSnapshotRequestDto(
             targetPhase = targetPhase,
             sinceRevision = sinceRevision
@@ -53,6 +41,14 @@ internal class StarMapRepository(
             is BridgeResult.Error -> BridgeResult.Error(result.envelope)
             BridgeResult.NotLoaded -> BridgeResult.NotLoaded
         }
+    }
+
+    fun advanceLoadPhase(
+        starmapId: String,
+        targetPhase: String,
+        currentRevision: ULong
+    ): BridgeResult<StarMapPhasedSnapshotResult> {
+        return getStarmapPhasedSnapshot(starmapId, targetPhase, currentRevision)
     }
 
     fun addStarmapNode(starmapId: String, node: StarMapGraphNode, x: Float = 0f, y: Float = 0f): BridgeResult<StarMapGraphNode> {
@@ -153,7 +149,7 @@ internal class StarMapRepository(
 
     fun saveStarmapLayout(starmapId: String, layout: StarMapLayoutData): BridgeResult<Boolean> {
         val rawCache = cache.get(starmapId) ?: return BridgeResult.Error(
-            ResultEnvelope.error("CACHE_NOT_INITIALIZED", "Starmap cache not initialized for $starmapId")
+            ResultEnvelope.error("SNAPSHOT_CACHE_NOT_INITIALIZED", "Starmap cache not initialized for $starmapId. Call getStarmapPhasedSnapshot first.")
         )
         val dto = layout.toDto(rawCache)
         return when (val result = bridge.saveStarMapLayout(starmapId, dto)) {
@@ -171,7 +167,7 @@ internal class StarMapRepository(
             ResultEnvelope.error("SNAPSHOT_CACHE_NOT_INITIALIZED", "Starmap snapshot cache not initialized for ${data.graph.starmapId}. Call getStarmapPhasedSnapshot first.")
         )
         val graph = rawCache.graph ?: return BridgeResult.Error(
-            ResultEnvelope.error("STAR_MAP_CACHE_MISSING", "Raw starmap graph is not available")
+            ResultEnvelope.error("STAR_MAP_CACHE_MISSING", "Raw starmap graph is not available in snapshot cache. This should not happen after a successful getStarmapPhasedSnapshot call.")
         )
         return when (val result = bridge.computeStarMapEdgeRenders(graph, data.layout.toDto(rawCache))) {
             is BridgeResult.Success -> BridgeResult.Success(result.data.map { it.toModel() })

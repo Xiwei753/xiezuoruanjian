@@ -20,7 +20,16 @@ internal fun StarMapNodeDto.toGraphNode(): StarMapGraphNode = StarMapGraphNode(
     payload = payload.toPayloadMap(),
     tags = tags,
     contentKind = content?.kind,
-    anchors = anchors.map { StarMapAnchorData(anchorId = it.anchorId, label = it.label, role = it.role.name) },
+    anchors = anchors.map { StarMapAnchorData(
+        anchorId = it.anchorId,
+        targetKind = it.target.kind,
+        targetChapterId = it.target.chapterId,
+        targetEntityId = it.target.entityId,
+        targetStarmapId = it.target.starmapId,
+        targetUri = it.target.uri,
+        label = it.label,
+        role = it.role.name
+    ) },
     displayPolicy = StarMapDisplayPolicyData(
         importance = displayPolicy.importance,
         minVisibleScale = displayPolicy.minVisibleScale,

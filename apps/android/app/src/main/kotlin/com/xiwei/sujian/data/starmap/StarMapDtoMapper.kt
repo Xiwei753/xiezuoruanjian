@@ -2,16 +2,24 @@ package com.xiwei.sujian.data.starmap
 
 import com.google.gson.Gson
 import com.xiwei.sujian.model.StarMapData
+import com.xiwei.sujian.model.StarMapDeepTargetData
+import com.xiwei.sujian.model.StarMapDisplayPolicyData
 import com.xiwei.sujian.model.StarMapEmbedData
 import com.xiwei.sujian.model.StarMapEmbedPlacementData
 import com.xiwei.sujian.model.StarMapEmbedViewportData
 import com.xiwei.sujian.model.StarMapEdgeRenderData
+import com.xiwei.sujian.model.StarMapEndpointData
+import com.xiwei.sujian.model.StarMapEndpointPathData
+import com.xiwei.sujian.model.StarMapEndpointPathSegmentData
 import com.xiwei.sujian.model.StarMapGraphData
 import com.xiwei.sujian.model.StarMapHyperlinkData
 import com.xiwei.sujian.model.StarMapLayoutKind
 import com.xiwei.sujian.model.StarMapLinkData
 import com.xiwei.sujian.model.StarMapLoadDiagnostic
 import com.xiwei.sujian.model.StarMapMeta
+import com.xiwei.sujian.model.StarMapPathSegmentData
+import com.xiwei.sujian.model.StarMapProvenanceData
+import com.xiwei.sujian.model.StarMapTargetDetailData
 import com.xiwei.sujian.model.StarMapViewportData
 import uniffi.writer_core.LoadDiagnosticDto
 import uniffi.writer_core.StarMapDisplayPolicyDto
@@ -137,6 +145,23 @@ internal fun StarMapEmbedDto.toModel(): StarMapEmbedData = StarMapEmbedData(
     targetStarmapId = targetStarmapId,
     label = label,
     sourceNodeId = sourceNodeId,
+    hostEndpoint = hostEndpoint?.let { StarMapEndpointData(kind = it.kind, nodeId = it.nodeId, anchorId = it.anchorId) },
+    displayPolicy = StarMapDisplayPolicyData(
+        importance = displayPolicy.importance,
+        minVisibleScale = displayPolicy.minVisibleScale,
+        titleScale = displayPolicy.titleScale,
+        summaryScale = displayPolicy.summaryScale,
+        detailScale = displayPolicy.detailScale,
+        maxPreviewChars = displayPolicy.maxPreviewChars.toInt(),
+        minReadablePx = displayPolicy.minReadablePx
+    ),
+    openBehavior = openBehavior.name,
+    provenance = StarMapProvenanceData(
+        source = provenance.source.name,
+        sourceId = provenance.sourceId,
+        generatedBy = provenance.generatedBy,
+        reviewStatus = provenance.reviewStatus.name
+    ),
     placement = StarMapEmbedPlacementData(
         x = placement.x,
         y = placement.y,
@@ -155,17 +180,18 @@ internal fun StarMapEmbedDto.toModel(): StarMapEmbedData = StarMapEmbedData(
 
 internal fun StarMapLinkDto.toModel(): StarMapLinkData = StarMapLinkData(
     linkId = linkId,
-    sourceNodeId = when (source.kind) {
-        "Node" -> source.nodeId ?: ""
-        "Anchor" -> source.nodeId ?: ""
-        else -> ""
-    },
-    targetStarmapId = target.starmapId,
+    source = StarMapEndpointData(
+        kind = source.kind,
+        nodeId = source.nodeId,
+        anchorId = source.anchorId
+    ),
+    target = target.toModel(),
     label = label
 )
 
 internal fun StarMapHyperlinkDto.toModel(): StarMapHyperlinkData = StarMapHyperlinkData(
     hyperlinkId = hyperlinkId,
+    source = source.toModel(),
     targetUri = targetUri,
     label = label,
     targetStarmapId = targetStarmapId
@@ -176,4 +202,24 @@ internal fun LoadDiagnosticDto.toModel(): StarMapLoadDiagnostic = StarMapLoadDia
     objectType = objectType,
     objectId = objectId,
     detail = detail
+)
+
+internal fun uniffi.writer_core.StarMapDeepTargetDto.toModel(): StarMapDeepTargetData = StarMapDeepTargetData(
+    starmapId = starmapId,
+    path = path.map { StarMapPathSegmentData(kind = it.kind, starmapId = it.starmapId) },
+    target = target.toModel()
+)
+
+internal fun uniffi.writer_core.StarMapTargetDetailDto.toModel(): StarMapTargetDetailData = StarMapTargetDetailData(
+    kind = kind,
+    nodeId = nodeId,
+    anchorId = anchorId,
+    projectId = projectId,
+    volumeId = volumeId,
+    chapterId = chapterId,
+    rangeStart = rangeStart,
+    rangeEnd = rangeEnd,
+    entityType = entityType,
+    entityId = entityId,
+    uri = uri
 )

@@ -98,6 +98,7 @@ internal fun StarMapEditorContent(
     starMapData: StarMapData?,
     isLoading: Boolean,
     editingNodeId: String?,
+    lastError: String? = null,
     onBack: () -> Unit,
     onAddNodeClick: () -> Unit,
     onAddEdgeClick: () -> Unit,
@@ -141,6 +142,9 @@ internal fun StarMapEditorContent(
                 Text(stringResource(id = R.string.loading), style = MaterialTheme.typography.bodyLarge)
             }
         } else if (starMapData != null) {
+            if (lastError != null) {
+                Text(lastError, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
             StarMapCanvas(
                 data = starMapData,
                 onNodeDrag = onNodeDrag,

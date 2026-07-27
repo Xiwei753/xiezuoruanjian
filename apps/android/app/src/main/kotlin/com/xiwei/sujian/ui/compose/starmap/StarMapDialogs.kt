@@ -51,8 +51,8 @@ internal fun StarMapCreateDialog(
             val t = coordinator.lastCommittedText?.trim() ?: title.trim()
             if (t.isNotBlank()) {
                 onConfirm(t, description.trim())
+                onDismiss()
             }
-            onDismiss()
         },
         dismissText = stringResource(id = R.string.action_cancel),
         onDismiss = {
@@ -106,9 +106,6 @@ internal fun StarMapAddNodeDialog(
             if (t.isNotBlank()) {
                 onConfirm(t, nodeKind)
             }
-            if (t.isNotBlank()) {
-                onDismiss()
-            }
         },
         dismissText = stringResource(id = R.string.action_cancel),
         onDismiss = {
@@ -157,7 +154,6 @@ internal fun StarMapAddEdgeDialog(
             if (fromNodeId.isNotBlank() && toNodeId.isNotBlank() && fromNodeId != toNodeId) {
                 onConfirm(fromNodeId, toNodeId)
             }
-            onDismiss()
         },
         dismissText = stringResource(id = R.string.action_cancel),
         onDismiss = onDismiss,

@@ -58,6 +58,7 @@ internal fun StarMapPhasedSnapshotDto.toSnapshotResult(): StarMapPhasedSnapshotR
         hyperlinks = hyperlinks.map { it.toModel() },
         loadPhase = loadPhase,
         packageRevision = packageRevision,
+        sinceRevision = sinceRevision,
         complete = complete
     )
     return StarMapPhasedSnapshotResult(

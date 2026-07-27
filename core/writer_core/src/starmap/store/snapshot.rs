@@ -34,6 +34,7 @@ pub struct StarMapPhasedSnapshot {
     pub load_phase: LoadPhase,
     pub package_revision: u64,
     pub complete: bool,
+    pub since_revision: u64,
     pub nodes: Vec<StarMapNode>,
     pub edges: Vec<StarMapEdge>,
     pub embeds: Vec<StarMapEmbed>,
@@ -72,17 +73,32 @@ impl StarMapStore {
     pub fn get_phased_snapshot(&mut self, request: &PhasedSnapshotRequest) -> Result<StarMapPhasedSnapshot> {
         self.load_phased(request.target_phase)?;
         let complete = request.target_phase == LoadPhase::BackgroundFullLoad;
+        let since_rev = request.since_revision;
+
+        let (nodes, edges, embeds, links, hyperlinks) = if since_rev > 0 && since_rev == self.package_revision {
+            (vec![], vec![], vec![], vec![], vec![])
+        } else {
+            (
+                self.nodes.values().cloned().collect(),
+                self.edges.values().cloned().collect(),
+                self.embeds.values().cloned().collect(),
+                self.links.values().cloned().collect(),
+                self.hyperlinks.values().cloned().collect(),
+            )
+        };
+
         Ok(StarMapPhasedSnapshot {
             starmap_id: self.starmap_id.clone(),
             title: self.graph_meta.as_ref().map(|meta| meta.title.clone()).unwrap_or_default(),
             load_phase: request.target_phase,
             package_revision: self.package_revision,
             complete,
-            nodes: self.nodes.values().cloned().collect(),
-            edges: self.edges.values().cloned().collect(),
-            embeds: self.embeds.values().cloned().collect(),
-            links: self.links.values().cloned().collect(),
-            hyperlinks: self.hyperlinks.values().cloned().collect(),
+            since_revision: since_rev,
+            nodes,
+            edges,
+            embeds,
+            links,
+            hyperlinks,
             layout: self.layout.clone(),
             viewport: self.viewport.clone(),
             diagnostics: self.recovery_log.clone(),

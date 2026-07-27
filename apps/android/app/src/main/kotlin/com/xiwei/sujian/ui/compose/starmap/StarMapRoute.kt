@@ -164,6 +164,38 @@ private fun StarMapEditorScreen(
         loadStarMap()
     }
 
+    LaunchedEffect(starmapId, starMapData?.loadPhase, starMapData?.complete) {
+        val current = starMapData ?: return@LaunchedEffect
+        if (current.complete) return@LaunchedEffect
+        val nextPhase = when (current.loadPhase) {
+            "CurrentViewportObjects" -> "PrefetchNearbyObjects"
+            "PrefetchNearbyObjects" -> "BackgroundFullLoad"
+            else -> null
+        }
+        if (nextPhase == null) return@LaunchedEffect
+        delay(100)
+        val advanced = withContext(Dispatchers.IO) {
+            try {
+                val bridge = BridgeProvider.getStarmapBridge(context)
+                when (val result = bridge.advanceLoadPhase(starmapId, nextPhase, current.packageRevision)) {
+                    is BridgeResult.Success -> {
+                        val snapshotResult = result.data
+                        val graphData = snapshotResult.data
+                        val edgeRenders = when (val er = bridge.computeEdgeRenders(graphData)) {
+                            is BridgeResult.Success -> er.data
+                            else -> emptyList()
+                        }
+                        graphData.copy(edgeRenders = edgeRenders)
+                    }
+                    else -> null
+                }
+            } catch (_: Exception) { null }
+        }
+        if (advanced != null) {
+            starMapData = advanced
+        }
+    }
+
     DisposableEffect(starmapId) {
         onDispose {
             val bridge = BridgeProvider.getStarmapBridge(context)
@@ -183,6 +215,7 @@ private fun StarMapEditorScreen(
         starMapData = starMapData,
         isLoading = isLoading,
         editingNodeId = canvasEditingNodeId,
+        lastError = lastOperationError,
         onBack = onBack,
         onAddNodeClick = { showAddNodeDialog = true },
         onAddEdgeClick = { showAddEdgeDialog = true },

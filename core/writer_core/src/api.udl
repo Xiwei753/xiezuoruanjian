@@ -691,6 +691,7 @@ dictionary StarMapPhasedSnapshotDto {
     string load_phase;
     u64 package_revision;
     boolean complete;
+    u64 since_revision;
     sequence<StarMapNodeDto> nodes;
     sequence<StarMapEdgeDto> edges;
     sequence<StarMapEmbedDto> embeds;

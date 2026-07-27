@@ -1,7 +1,9 @@
 package com.xiwei.sujian.data.starmap
 
-import com.xiwei.sujian.model.StarMapGraphEdge
+import com.xiwei.sujian.model.*
 import uniffi.writer_core.StarMapEdgeDto
+import uniffi.writer_core.StarMapEdgeEndpointDto
+import uniffi.writer_core.StarMapEndpointPathDto
 
 internal fun StarMapEdgeDto.toGraphEdge(): StarMapGraphEdge = StarMapGraphEdge(
     id = id,
@@ -10,14 +12,22 @@ internal fun StarMapEdgeDto.toGraphEdge(): StarMapGraphEdge = StarMapGraphEdge(
     kind = kind.toModel(),
     label = label,
     payload = payload.toPayloadMap(),
-    fromEndpoint = fromEndpoint?.let { "${it.kind}:${it.nodeId ?: ""}" },
-    toEndpoint = toEndpoint?.let { "${it.kind}:${it.nodeId ?: ""}" },
-    fromEndpointPath = fromEndpointPath?.let { ep ->
-        ep.segments.joinToString("→") { it.starmapId ?: "" } + "→${ep.endpoint.kind}:${ep.endpoint.nodeId ?: ""}"
-    },
-    toEndpointPath = toEndpointPath?.let { ep ->
-        ep.segments.joinToString("→") { it.starmapId ?: "" } + "→${ep.endpoint.kind}:${ep.endpoint.nodeId ?: ""}"
-    },
+    fromEndpoint = fromEndpoint?.toModel(),
+    toEndpoint = toEndpoint?.toModel(),
+    fromEndpointPath = fromEndpointPath?.toModel(),
+    toEndpointPath = toEndpointPath?.toModel(),
     createdAt = createdAt.toLong(),
     updatedAt = updatedAt.toLong()
+)
+
+internal fun StarMapEdgeEndpointDto.toModel(): StarMapEdgeEndpointData = StarMapEdgeEndpointData(
+    kind = kind,
+    nodeId = nodeId,
+    anchorId = anchorId,
+    deepTarget = target?.toModel()
+)
+
+internal fun StarMapEndpointPathDto.toModel(): StarMapEndpointPathData = StarMapEndpointPathData(
+    segments = segments.map { StarMapEndpointPathSegmentData(kind = it.kind, starmapId = it.starmapId) },
+    endpoint = endpoint.toModel()
 )

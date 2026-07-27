@@ -194,9 +194,9 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
         }
     }
 
-    fun getStarmapGraph(starmapId: String): BridgeResult<StarMapData> = repository.getStarmapGraph(starmapId)
+    fun getStarmapPhasedSnapshot(starmapId: String, targetPhase: String = "CurrentViewportObjects", sinceRevision: ULong = 0u): BridgeResult<StarMapPhasedSnapshotResult> = repository.getStarmapPhasedSnapshot(starmapId, targetPhase, sinceRevision)
 
-    fun getStarmapPhasedSnapshot(starmapId: String, targetPhase: String = "PrefetchNearbyObjects", sinceRevision: ULong = 0u): BridgeResult<StarMapPhasedSnapshotResult> = repository.getStarmapPhasedSnapshot(starmapId, targetPhase, sinceRevision)
+    fun advanceLoadPhase(starmapId: String, targetPhase: String, currentRevision: ULong): BridgeResult<StarMapPhasedSnapshotResult> = repository.advanceLoadPhase(starmapId, targetPhase, currentRevision)
 
     fun addStarmapNode(starmapId: String, node: StarMapGraphNode, x: Float = 0f, y: Float = 0f): BridgeResult<StarMapGraphNode> = repository.addStarmapNode(starmapId, node, x, y)
 
