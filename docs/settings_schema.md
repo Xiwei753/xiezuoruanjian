@@ -41,8 +41,8 @@ Supersedes: None
 - `editorCoordinatedTextCursorAnimationEnabled`（布尔值，协同光标动画开关，默认 false）
 - `aiEnabled`（布尔值，AI 功能开关，默认 false）
 - `statsDeviceId`（字符串，统计设备 ID，默认自动生成 UUID）
-- `linuxQtSidebarWidth`（整数，Linux_qt 侧边栏宽度像素，默认 260；旧字段 `desktopSidebarWidth` 仍可读取）
-- `linuxQtEditorWidth`（整数，Linux_qt 编辑器宽度像素，默认 820；旧字段 `desktopEditorWidth` 仍可读取）
+- `desktopSidebarWidth`（浮点数，桌面端侧边栏宽度像素，默认 240.0）
+- `desktopEditorWidth`（浮点数，桌面端编辑器宽度像素，默认 0.0）
 - `diagnosticsEnabled`（布尔值，本地诊断日志开关，默认 true，不进入同步、不含敏感数据）
 - `diagnosticsVerbose`（布尔值，本地诊断详细模式，默认 true，不进入同步、不含敏感数据）
 
@@ -72,10 +72,11 @@ Supersedes: None
 ### `app-meta/sync/sync_config.json`
 存储同步配置。定义哪些文件/目录应该被同步。
 包括：
+- `enabled`（布尔值）
+- `backend_type`（字符串）
 - `remote_url`（字符串）
+- `transport`（字符串）
 - `branch`（字符串）
-- `auto_sync`（布尔值）
-- `proxy`（对象） [DEPRECATED — 代理功能已移除]
 
 ### `app-meta/sync/sync_secrets.local.json`
 存储敏感信息，如 GitHub 令牌、SSH 私钥。此文件保存在本地，**绝不**应被同步。
