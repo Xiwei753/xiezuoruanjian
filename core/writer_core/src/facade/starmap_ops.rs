@@ -100,7 +100,7 @@ impl super::WriterCore {
         let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
         let store = stores.entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
-        store.ensure_fully_loaded()?;
+        store.ensure_loaded()?;
         Ok(store.to_starmap_graph())
     }
 
@@ -482,6 +482,16 @@ impl super::WriterCore {
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_fully_loaded()?;
         Ok(store.list_links_with_diagnostics())
+    }
+
+    pub fn get_starmap_phased_snapshot(
+        &self,
+        starmap_id: &str,
+    ) -> Result<crate::starmap::store::StarMapPhasedSnapshot> {
+        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
+        let store = stores.entry(starmap_id.to_string())
+            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+        store.get_phased_snapshot()
     }
 
     pub fn find_starmap_references(

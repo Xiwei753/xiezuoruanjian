@@ -1,6 +1,7 @@
 mod edge;
 mod embed;
 mod graph;
+mod hyperlink;
 mod layout;
 mod link;
 mod meta;
@@ -11,6 +12,7 @@ mod semantic;
 pub use edge::*;
 pub use embed::*;
 pub use graph::*;
+pub use hyperlink::*;
 pub use layout::*;
 pub use link::*;
 pub use meta::*;

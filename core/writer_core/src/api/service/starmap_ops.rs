@@ -976,4 +976,83 @@ impl WriterCoreApi {
             .map(crate::api::types::StarMapLinkListWithDiagnosticsDto::from)
             .map_err(Into::into)
     }
+
+    pub fn add_starmap_hyperlink(
+        &self,
+        starmap_id: &str,
+        hl: crate::api::types::StarMapHyperlinkDto,
+    ) -> ApiResult<crate::api::types::StarMapHyperlinkDto> {
+        let result = self.core()
+            .add_starmap_hyperlink(starmap_id, hl.into())
+            .map_err(WriterError::from)?;
+        let project_id = get_starmap_project_id(self, starmap_id);
+        let hl_label = result.label.as_deref().unwrap_or("");
+        let entry = crate::search::extractor::extract_starmap_hyperlink_entry(
+            starmap_id, &result.hyperlink_id, project_id.as_deref(), hl_label, &result.target_uri,
+        );
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+            action: crate::search::SearchIndexAction::Upsert,
+            object_id: entry.object_id.clone(),
+            scope: entry.scope,
+            title: entry.title.clone(),
+            body: entry.body.clone(),
+            target: Some(entry.target.clone()),
+        });
+        Ok(result.into())
+    }
+
+    pub fn update_starmap_hyperlink(
+        &self,
+        starmap_id: &str,
+        hyperlink_id: &str,
+        patch: crate::api::types::StarMapHyperlinkPatchDto,
+    ) -> ApiResult<crate::api::types::StarMapHyperlinkDto> {
+        let label = patch.label.as_ref().and_then(|opt| opt.as_deref());
+        let target_uri = patch.target_uri.as_ref().and_then(|opt| opt.as_deref());
+        let result = self.core()
+            .update_starmap_hyperlink(starmap_id, hyperlink_id, label, target_uri)
+            .map_err(WriterError::from)?;
+        let project_id = get_starmap_project_id(self, starmap_id);
+        let hl_label = result.label.as_deref().unwrap_or("");
+        let entry = crate::search::extractor::extract_starmap_hyperlink_entry(
+            starmap_id, hyperlink_id, project_id.as_deref(), hl_label, &result.target_uri,
+        );
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+            action: crate::search::SearchIndexAction::Upsert,
+            object_id: entry.object_id.clone(),
+            scope: entry.scope,
+            title: entry.title.clone(),
+            body: entry.body.clone(),
+            target: Some(entry.target.clone()),
+        });
+        Ok(result.into())
+    }
+
+    pub fn delete_starmap_hyperlink(&self, starmap_id: &str, hyperlink_id: &str) -> ApiResult<bool> {
+        self.core()
+            .delete_starmap_hyperlink(starmap_id, hyperlink_id)?;
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+            action: crate::search::SearchIndexAction::Delete,
+            object_id: format!("starmap_hyperlink:{}:{}", starmap_id, hyperlink_id),
+            scope: crate::search::SearchScope::All,
+            title: String::new(),
+            body: String::new(),
+            target: None,
+        });
+        Ok(true)
+    }
+
+    pub fn list_starmap_hyperlinks(&self, starmap_id: &str) -> ApiResult<crate::api::types::StarMapHyperlinkListWithDiagnosticsDto> {
+        self.core()
+            .list_starmap_hyperlinks(starmap_id)
+            .map(crate::api::types::StarMapHyperlinkListWithDiagnosticsDto::from)
+            .map_err(Into::into)
+    }
+
+    pub fn get_starmap_phased_snapshot(&self, starmap_id: &str) -> ApiResult<crate::api::types::StarMapPhasedSnapshotDto> {
+        self.core()
+            .get_starmap_phased_snapshot(starmap_id)
+            .map(crate::api::types::StarMapPhasedSnapshotDto::from)
+            .map_err(Into::into)
+    }
 }

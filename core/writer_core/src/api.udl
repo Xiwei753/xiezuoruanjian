@@ -658,6 +658,41 @@ dictionary StarMapLinkListWithDiagnosticsDto {
     sequence<LoadDiagnosticDto> diagnostics;
 };
 
+dictionary StarMapHyperlinkDto {
+    string hyperlink_id;
+    StarMapEndpointPathDto source;
+    string target_uri;
+    string? label;
+    string? target_starmap_id;
+    u64 created_at;
+    u64 updated_at;
+};
+
+dictionary StarMapHyperlinkPatchInputDto {
+    string? label;
+    boolean clear_label;
+    string? target_uri;
+    boolean clear_target_uri;
+};
+
+dictionary StarMapHyperlinkListWithDiagnosticsDto {
+    sequence<StarMapHyperlinkDto> items;
+    sequence<LoadDiagnosticDto> diagnostics;
+};
+
+dictionary StarMapPhasedSnapshotDto {
+    string starmap_id;
+    string title;
+    sequence<StarMapNodeDto> nodes;
+    sequence<StarMapEdgeDto> edges;
+    sequence<StarMapEmbedDto> embeds;
+    sequence<StarMapLinkDto> links;
+    sequence<StarMapHyperlinkDto> hyperlinks;
+    StarMapLayoutDto? layout;
+    StarMapViewportDto? viewport;
+    sequence<LoadDiagnosticDto> diagnostics;
+};
+
 dictionary StarMapLayoutDto {
     StarMapLayoutKindDto kind;
     sequence<StarMapLayoutNodeDto> nodes;
@@ -1153,6 +1188,21 @@ interface WriterAppService {
 
     [Throws=WriterError]
     StarMapLinkListWithDiagnosticsDto list_starmap_links(string starmap_id);
+
+    [Throws=WriterError]
+    StarMapHyperlinkDto add_starmap_hyperlink(string starmap_id, StarMapHyperlinkDto hl);
+
+    [Throws=WriterError]
+    StarMapHyperlinkDto update_starmap_hyperlink(string starmap_id, string hyperlink_id, StarMapHyperlinkPatchInputDto patch);
+
+    [Throws=WriterError]
+    boolean delete_starmap_hyperlink(string starmap_id, string hyperlink_id);
+
+    [Throws=WriterError]
+    StarMapHyperlinkListWithDiagnosticsDto list_starmap_hyperlinks(string starmap_id);
+
+    [Throws=WriterError]
+    StarMapPhasedSnapshotDto get_starmap_phased_snapshot(string starmap_id);
 
     [Throws=WriterError]
     sequence<ActionDescriptorDto> list_registered_actions();

@@ -59,6 +59,43 @@ fn endpoint_path_node_id(path: &crate::starmap::types::StarMapEndpointPath) -> O
     }
 }
 
+fn edge_endpoint_node_id(ep: &crate::starmap::types::StarMapEdgeEndpoint) -> Option<&str> {
+    match ep {
+        crate::starmap::types::StarMapEdgeEndpoint::Node { node_id } => Some(node_id),
+        crate::starmap::types::StarMapEdgeEndpoint::Anchor { node_id, .. } => Some(node_id),
+        crate::starmap::types::StarMapEdgeEndpoint::Starmap => None,
+        crate::starmap::types::StarMapEdgeEndpoint::DeepTarget { .. } => None,
+    }
+}
+
+fn extract_eri_node_refs(eri: &EdgeRelationIndex) -> Vec<&str> {
+    let mut refs = Vec::new();
+    if !eri.from.is_empty() { refs.push(eri.from.as_str()); }
+    if !eri.to.is_empty() { refs.push(eri.to.as_str()); }
+    if let Some(ref ep) = eri.from_endpoint {
+        if let Some(id) = edge_endpoint_node_id(ep) { refs.push(id); }
+    }
+    if let Some(ref ep) = eri.to_endpoint {
+        if let Some(id) = edge_endpoint_node_id(ep) { refs.push(id); }
+    }
+    if let Some(ref path) = eri.from_endpoint_path {
+        if let Some(id) = endpoint_path_node_id(path) { refs.push(id); }
+    }
+    if let Some(ref path) = eri.to_endpoint_path {
+        if let Some(id) = endpoint_path_node_id(path) { refs.push(id); }
+    }
+    refs
+}
+
+fn extract_ehi_node_refs(ehi: &EmbedHostIndex) -> Vec<&str> {
+    let mut refs = Vec::new();
+    if !ehi.host_node_id.is_empty() { refs.push(ehi.host_node_id.as_str()); }
+    if let Some(ref ep) = ehi.host_endpoint {
+        if let Some(id) = endpoint_node_id(ep) { refs.push(id); }
+    }
+    refs
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DirtyKind {
     Node,
@@ -209,6 +246,20 @@ pub struct EmbedHostIndex {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct LinkRelationIndex {
+    pub link_id: String,
+    pub source_node_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HyperlinkRelationIndex {
+    pub hyperlink_id: String,
+    pub source_node_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GraphMeta {
     pub schema_version: String,
     pub starmap_id: String,
@@ -222,6 +273,12 @@ pub struct GraphMeta {
     pub edge_relation_index: Vec<EdgeRelationIndex>,
     #[serde(default)]
     pub embed_host_index: Vec<EmbedHostIndex>,
+    #[serde(default)]
+    pub link_relation_index: Vec<LinkRelationIndex>,
+    #[serde(default)]
+    pub hyperlink_relation_index: Vec<HyperlinkRelationIndex>,
+    #[serde(default)]
+    pub node_kind_counts: HashMap<String, u32>,
     pub package_revision: u64,
     pub updated_at: u64,
 }
@@ -235,6 +292,21 @@ struct LegacyGraphMeta {
     title: String,
     created_at: u64,
     updated_at: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StarMapPhasedSnapshot {
+    pub starmap_id: String,
+    pub title: String,
+    pub nodes: Vec<StarMapNode>,
+    pub edges: Vec<StarMapEdge>,
+    pub embeds: Vec<StarMapEmbed>,
+    pub links: Vec<StarMapLink>,
+    pub hyperlinks: Vec<StarMapHyperlink>,
+    pub layout: Option<StarMapLayout>,
+    pub viewport: Option<StarMapViewport>,
+    pub diagnostics: Vec<LoadDiagnostic>,
 }
 
 impl StarMapStore {
@@ -472,6 +544,9 @@ impl StarMapStore {
                 hyperlink_ids: Vec::new(),
                 edge_relation_index: Vec::new(),
                 embed_host_index: Vec::new(),
+                link_relation_index: Vec::new(),
+                hyperlink_relation_index: Vec::new(),
+                node_kind_counts: HashMap::new(),
                 package_revision: self.package_revision,
                 updated_at: crate::starmap::now_epoch(),
             });
@@ -668,27 +743,9 @@ impl StarMapStore {
             let edge_count = self.graph_meta.as_ref()
                 .map(|m| m.edge_ids.len() as u32)
                 .unwrap_or(self.edges.len() as u32);
-            let linked_chapters = {
-                let node_ids: Vec<String> = self.graph_meta.as_ref()
-                    .map(|m| m.node_ids.clone())
-                    .unwrap_or_default();
-                if !node_ids.is_empty() {
-                    let mut count = 0u32;
-                    for id in &node_ids {
-                        if let Some(n) = self.nodes.get(id) {
-                            if n.kind == StarMapNodeKind::Chapter { count += 1; }
-                        } else if let Some(n) = self.try_load_node(id) {
-                            if n.kind == StarMapNodeKind::Chapter { count += 1; }
-                            self.nodes.insert(id.clone(), n);
-                        }
-                    }
-                    count
-                } else {
-                    self.nodes.values()
-                        .filter(|n| n.kind == StarMapNodeKind::Chapter)
-                        .count() as u32
-                }
-            };
+            let linked_chapters = self.graph_meta.as_ref()
+                .map(|m| *m.node_kind_counts.get("Chapter").unwrap_or(&0))
+                .unwrap_or(0u32);
             crate::starmap::update_starmap_stats(
                 &self.workspace,
                 &self.starmap_id,
@@ -852,6 +909,18 @@ impl StarMapStore {
                             host_node_id: e.source_node_id.clone().unwrap_or_default(),
                             host_endpoint: e.host_endpoint.clone(),
                         }).collect(),
+                        link_relation_index: graph.links.iter().map(|l| LinkRelationIndex {
+                            link_id: l.link_id.clone(),
+                            source_node_id: endpoint_node_id(&l.source).unwrap_or_default().to_string(),
+                        }).collect(),
+                        hyperlink_relation_index: vec![],
+                        node_kind_counts: {
+                            let mut counts = HashMap::new();
+                            for node in &graph.nodes {
+                                *counts.entry(format!("{:?}", node.kind)).or_insert(0u32) += 1;
+                            }
+                            counts
+                        },
                         package_revision: 0,
                         updated_at: graph.updated_at,
                     });
@@ -952,9 +1021,9 @@ impl StarMapStore {
                 if self.edges.contains_key(&eri.edge_id) {
                     continue;
                 }
-                let from_in_viewport = viewport_node_ids.contains(&eri.from);
-                let to_in_viewport = viewport_node_ids.contains(&eri.to);
-                if from_in_viewport || to_in_viewport {
+                let refs = extract_eri_node_refs(eri);
+                let any_in_viewport = refs.iter().any(|id| viewport_node_ids.contains(*id));
+                if any_in_viewport {
                     if let Some(edge) = self.try_load_edge(&eri.edge_id) {
                         self.edges.insert(eri.edge_id.clone(), edge);
                     }
@@ -964,43 +1033,18 @@ impl StarMapStore {
                 if self.embeds.contains_key(&ehi.instance_id) {
                     continue;
                 }
-                let host_in_viewport = viewport_node_ids.contains(&ehi.host_node_id);
-                if host_in_viewport {
+                let refs = extract_ehi_node_refs(ehi);
+                let any_in_viewport = refs.iter().any(|id| viewport_node_ids.contains(*id));
+                if any_in_viewport {
                     if let Some(embed) = self.try_load_embed(&ehi.instance_id) {
                         self.embeds.insert(ehi.instance_id.clone(), embed);
                     }
                 }
             }
         } else {
-            let all_edge_ids = self.graph_meta.as_ref()
-                .map(|m| m.edge_ids.clone())
-                .unwrap_or_default();
-            let all_embed_ids = self.graph_meta.as_ref()
-                .map(|m| m.embed_instance_ids.clone())
-                .unwrap_or_default();
-
-            for edge_id in &all_edge_ids {
-                if !self.edges.contains_key(edge_id) {
-                    if let Some(edge) = self.try_load_edge(edge_id) {
-                        let from_in_viewport = edge.from.as_ref().map_or(false, |id| viewport_node_ids.contains(id));
-                        let to_in_viewport = edge.to.as_ref().map_or(false, |id| viewport_node_ids.contains(id));
-                        if from_in_viewport || to_in_viewport {
-                            self.edges.insert(edge_id.clone(), edge);
-                        }
-                    }
-                }
-            }
-
-            for instance_id in &all_embed_ids {
-                if !self.embeds.contains_key(instance_id) {
-                    if let Some(embed) = self.try_load_embed(instance_id) {
-                        let source_in_viewport = embed.source_node_id.as_ref().map_or(false, |id| viewport_node_ids.contains(id));
-                        if source_in_viewport {
-                            self.embeds.insert(instance_id.clone(), embed);
-                        }
-                    }
-                }
-            }
+            self.rebuild_relation_indexes();
+            self.load_viewport_objects(diagnostics);
+            return;
         }
 
         let _ = diagnostics;
@@ -1072,6 +1116,103 @@ impl StarMapStore {
         Ok(())
     }
 
+    fn rebuild_relation_indexes(&mut self) {
+        let edge_ids = self.graph_meta.as_ref()
+            .map(|m| m.edge_ids.clone())
+            .unwrap_or_default();
+        let embed_ids = self.graph_meta.as_ref()
+            .map(|m| m.embed_instance_ids.clone())
+            .unwrap_or_default();
+        let link_ids = self.graph_meta.as_ref()
+            .map(|m| m.link_ids.clone())
+            .unwrap_or_default();
+        let hl_ids = self.graph_meta.as_ref()
+            .map(|m| m.hyperlink_ids.clone())
+            .unwrap_or_default();
+
+        let mut edge_relation_index = Vec::new();
+        for edge_id in &edge_ids {
+            if !self.edges.contains_key(edge_id) {
+                if let Some(edge) = self.try_load_edge(edge_id) {
+                    self.edges.insert(edge_id.clone(), edge);
+                }
+            }
+            if let Some(edge) = self.edges.get(edge_id) {
+                edge_relation_index.push(EdgeRelationIndex {
+                    edge_id: edge.id.clone(),
+                    from: edge.from.clone().unwrap_or_default(),
+                    to: edge.to.clone().unwrap_or_default(),
+                    from_endpoint: edge.from_endpoint.clone(),
+                    to_endpoint: edge.to_endpoint.clone(),
+                    from_endpoint_path: edge.from_endpoint_path.clone(),
+                    to_endpoint_path: edge.to_endpoint_path.clone(),
+                });
+            }
+        }
+
+        let mut embed_host_index = Vec::new();
+        for instance_id in &embed_ids {
+            if !self.embeds.contains_key(instance_id) {
+                if let Some(embed) = self.try_load_embed(instance_id) {
+                    self.embeds.insert(instance_id.clone(), embed);
+                }
+            }
+            if let Some(embed) = self.embeds.get(instance_id) {
+                embed_host_index.push(EmbedHostIndex {
+                    instance_id: embed.instance_id.clone(),
+                    host_node_id: embed.source_node_id.clone().unwrap_or_default(),
+                    host_endpoint: embed.host_endpoint.clone(),
+                });
+            }
+        }
+
+        let mut link_relation_index = Vec::new();
+        for link_id in &link_ids {
+            if !self.links.contains_key(link_id) {
+                if let Some(link) = self.try_load_link(link_id) {
+                    self.links.insert(link_id.clone(), link);
+                }
+            }
+            if let Some(link) = self.links.get(link_id) {
+                link_relation_index.push(LinkRelationIndex {
+                    link_id: link.link_id.clone(),
+                    source_node_id: endpoint_node_id(&link.source).unwrap_or_default().to_string(),
+                });
+            }
+        }
+
+        let mut hyperlink_relation_index = Vec::new();
+        for hl_id in &hl_ids {
+            if !self.hyperlinks.contains_key(hl_id) {
+                if let Some(hl) = self.try_load_hyperlink(hl_id) {
+                    self.hyperlinks.insert(hl_id.clone(), hl);
+                }
+            }
+            if let Some(hl) = self.hyperlinks.get(hl_id) {
+                hyperlink_relation_index.push(HyperlinkRelationIndex {
+                    hyperlink_id: hl.hyperlink_id.clone(),
+                    source_node_id: endpoint_path_node_id(&hl.source).unwrap_or_default().to_string(),
+                });
+            }
+        }
+
+        let mut node_kind_counts = HashMap::new();
+        for node in self.nodes.values() {
+            *node_kind_counts.entry(format!("{:?}", node.kind)).or_insert(0u32) += 1;
+        }
+
+        if let Some(ref mut meta) = self.graph_meta {
+            meta.edge_relation_index = edge_relation_index;
+            meta.embed_host_index = embed_host_index;
+            meta.link_relation_index = link_relation_index;
+            meta.hyperlink_relation_index = hyperlink_relation_index;
+            meta.node_kind_counts = node_kind_counts;
+        }
+        self.dirty_graph_meta = true;
+        self.enqueue_save(SaveQueueEntry::GraphMeta);
+        self.record_migration("rebuild_relation_indexes", "rebuilt relation indexes from object files for no-index legacy package");
+    }
+
     fn prefetch_nearby_objects(&mut self, _diagnostics: &mut Vec<LoadDiagnostic>) {
         let loaded_node_ids: HashSet<String> = self.nodes.keys().cloned().collect();
         let mut adjacent_node_ids: HashSet<String> = HashSet::new();
@@ -1083,38 +1224,21 @@ impl StarMapStore {
         if has_index {
             let edge_relation_index = self.graph_meta.as_ref().unwrap().edge_relation_index.clone();
             for eri in &edge_relation_index {
-                if loaded_node_ids.contains(&eri.from) {
-                    if !eri.to.is_empty() && !self.nodes.contains_key(&eri.to) {
-                        adjacent_node_ids.insert(eri.to.clone());
-                    }
-                }
-                if loaded_node_ids.contains(&eri.to) {
-                    if !eri.from.is_empty() && !self.nodes.contains_key(&eri.from) {
-                        adjacent_node_ids.insert(eri.from.clone());
+                let refs = extract_eri_node_refs(eri);
+                for node_id in &refs {
+                    if loaded_node_ids.contains(*node_id) {
+                        for other_id in &refs {
+                            if other_id != node_id && !self.nodes.contains_key(*other_id) && !other_id.is_empty() {
+                                adjacent_node_ids.insert(other_id.to_string());
+                            }
+                        }
                     }
                 }
             }
         } else {
-            for edge in self.edges.values() {
-                if let Some(ref from_id) = edge.from {
-                    if loaded_node_ids.contains(from_id) {
-                        if let Some(ref to_id) = edge.to {
-                            if !self.nodes.contains_key(to_id) {
-                                adjacent_node_ids.insert(to_id.clone());
-                            }
-                        }
-                    }
-                }
-                if let Some(ref to_id) = edge.to {
-                    if loaded_node_ids.contains(to_id) {
-                        if let Some(ref from_id) = edge.from {
-                            if !self.nodes.contains_key(from_id) {
-                                adjacent_node_ids.insert(from_id.clone());
-                            }
-                        }
-                    }
-                }
-            }
+            self.rebuild_relation_indexes();
+            self.prefetch_nearby_objects(_diagnostics);
+            return;
         }
 
         for node_id in &adjacent_node_ids {
@@ -1126,19 +1250,19 @@ impl StarMapStore {
         }
 
         let has_edge_index = self.graph_meta.as_ref()
-            .map(|m| !m.edge_relation_index.is_empty())
+            .map(|m| !m.edge_relation_index.is_empty() || m.edge_ids.is_empty())
             .unwrap_or(false);
         let has_embed_index = self.graph_meta.as_ref()
-            .map(|m| !m.embed_host_index.is_empty())
+            .map(|m| !m.embed_host_index.is_empty() || m.embed_instance_ids.is_empty())
             .unwrap_or(false);
 
         if has_edge_index {
             let edge_relation_index = self.graph_meta.as_ref().unwrap().edge_relation_index.clone();
             for eri in &edge_relation_index {
                 if !self.edges.contains_key(&eri.edge_id) {
-                    let from_loaded = self.nodes.contains_key(&eri.from);
-                    let to_loaded = self.nodes.contains_key(&eri.to);
-                    if from_loaded || to_loaded {
+                    let refs = extract_eri_node_refs(eri);
+                    let any_loaded = refs.iter().any(|id| self.nodes.contains_key(*id));
+                    if any_loaded {
                         if let Some(edge) = self.try_load_edge(&eri.edge_id) {
                             self.edges.insert(eri.edge_id.clone(), edge);
                         }
@@ -1146,27 +1270,15 @@ impl StarMapStore {
                 }
             }
         } else {
-            let loaded_edges: Vec<_> = self.edges.values().cloned().collect();
-            for edge in &loaded_edges {
-                if let Some(ref from_id) = edge.from {
-                    if self.nodes.contains_key(from_id) {
-                        if let Some(ref to_id) = edge.to {
-                            if !self.nodes.contains_key(to_id) {
-                                if let Some(node) = self.try_load_node(to_id) {
-                                    self.nodes.insert(to_id.clone(), node);
-                                }
-                            }
-                        }
-                    }
-                }
-                if let Some(ref to_id) = edge.to {
-                    if self.nodes.contains_key(to_id) {
-                        if let Some(ref from_id) = edge.from {
-                            if !self.nodes.contains_key(from_id) {
-                                if let Some(node) = self.try_load_node(from_id) {
-                                    self.nodes.insert(from_id.clone(), node);
-                                }
-                            }
+            self.rebuild_relation_indexes();
+            let edge_relation_index = self.graph_meta.as_ref().unwrap().edge_relation_index.clone();
+            for eri in &edge_relation_index {
+                if !self.edges.contains_key(&eri.edge_id) {
+                    let refs = extract_eri_node_refs(eri);
+                    let any_loaded = refs.iter().any(|id| self.nodes.contains_key(*id));
+                    if any_loaded {
+                        if let Some(edge) = self.try_load_edge(&eri.edge_id) {
+                            self.edges.insert(eri.edge_id.clone(), edge);
                         }
                     }
                 }
@@ -1177,7 +1289,9 @@ impl StarMapStore {
             let embed_host_index = self.graph_meta.as_ref().unwrap().embed_host_index.clone();
             for ehi in &embed_host_index {
                 if !self.embeds.contains_key(&ehi.instance_id) {
-                    if self.nodes.contains_key(&ehi.host_node_id) {
+                    let refs = extract_ehi_node_refs(ehi);
+                    let any_loaded = refs.iter().any(|id| self.nodes.contains_key(*id));
+                    if any_loaded {
                         if let Some(embed) = self.try_load_embed(&ehi.instance_id) {
                             self.embeds.insert(ehi.instance_id.clone(), embed);
                         }
@@ -1185,20 +1299,16 @@ impl StarMapStore {
                 }
             }
         } else {
-            let embed_targets: Vec<String> = self.embeds.values()
-                .filter_map(|embed| {
-                    if let Some(ref source_id) = embed.source_node_id {
-                        if self.nodes.contains_key(source_id) {
-                            return embed.target_starmap_id.strip_prefix("starmap:").map(|s| s.to_string());
+            self.rebuild_relation_indexes();
+            let embed_host_index = self.graph_meta.as_ref().unwrap().embed_host_index.clone();
+            for ehi in &embed_host_index {
+                if !self.embeds.contains_key(&ehi.instance_id) {
+                    let refs = extract_ehi_node_refs(ehi);
+                    let any_loaded = refs.iter().any(|id| self.nodes.contains_key(*id));
+                    if any_loaded {
+                        if let Some(embed) = self.try_load_embed(&ehi.instance_id) {
+                            self.embeds.insert(ehi.instance_id.clone(), embed);
                         }
-                    }
-                    None
-                })
-                .collect();
-            for target_id in &embed_targets {
-                if !self.nodes.contains_key(target_id.as_str()) {
-                    if let Some(node) = self.try_load_node(target_id) {
-                        self.nodes.insert(target_id.clone(), node);
                     }
                 }
             }
@@ -1336,6 +1446,18 @@ impl StarMapStore {
                             host_node_id: e.source_node_id.clone().unwrap_or_default(),
                             host_endpoint: e.host_endpoint.clone(),
                         }).collect(),
+                        link_relation_index: graph.links.iter().map(|l| LinkRelationIndex {
+                            link_id: l.link_id.clone(),
+                            source_node_id: endpoint_node_id(&l.source).unwrap_or_default().to_string(),
+                        }).collect(),
+                        hyperlink_relation_index: vec![],
+                        node_kind_counts: {
+                            let mut counts = HashMap::new();
+                            for node in &graph.nodes {
+                                *counts.entry(format!("{:?}", node.kind)).or_insert(0u32) += 1;
+                            }
+                            counts
+                        },
                         package_revision: 0,
                         updated_at: graph.updated_at,
                     });
@@ -1476,6 +1598,7 @@ impl StarMapStore {
 
     pub fn upsert_node(&mut self, node: StarMapNode) {
         let node_id = node.id.clone();
+        let kind_key = format!("{:?}", node.kind);
         let is_new = !self.nodes.contains_key(&node_id);
         self.nodes.insert(node_id.clone(), node);
         self.dirty_nodes.insert(node_id.clone());
@@ -1487,12 +1610,21 @@ impl StarMapStore {
                 if !meta.node_ids.contains(&node_id) {
                     meta.node_ids.push(node_id);
                 }
+                *meta.node_kind_counts.entry(kind_key).or_insert(0u32) += 1;
             }
             self.dirty_graph_meta = true;
         }
     }
 
     pub fn remove_node(&mut self, node_id: &str) {
+        if let Some(node) = self.nodes.get(node_id) {
+            let kind_key = format!("{:?}", node.kind);
+            if let Some(ref mut meta) = self.graph_meta {
+                if let Some(count) = meta.node_kind_counts.get_mut(&kind_key) {
+                    *count = count.saturating_sub(1);
+                }
+            }
+        }
         self.nodes.remove(node_id);
         self.dirty_nodes.remove(node_id);
         self.deleted_node_ids.insert(node_id.to_string());
@@ -1608,6 +1740,7 @@ impl StarMapStore {
     pub fn upsert_hyperlink(&mut self, hl: StarMapHyperlink) {
         let hl_id = hl.hyperlink_id.clone();
         let is_new = !self.hyperlinks.contains_key(&hl_id);
+        let source_node_id = endpoint_path_node_id(&hl.source).unwrap_or_default().to_string();
         self.hyperlinks.insert(hl_id.clone(), hl);
         self.dirty_hyperlinks.insert(hl_id.clone());
         if is_new {
@@ -1616,7 +1749,18 @@ impl StarMapStore {
             }
             if let Some(ref mut meta) = self.graph_meta {
                 if !meta.hyperlink_ids.contains(&hl_id) {
-                    meta.hyperlink_ids.push(hl_id);
+                    meta.hyperlink_ids.push(hl_id.clone());
+                }
+                meta.hyperlink_relation_index.push(HyperlinkRelationIndex {
+                    hyperlink_id: hl_id.clone(),
+                    source_node_id,
+                });
+            }
+            self.dirty_graph_meta = true;
+        } else {
+            if let Some(ref mut meta) = self.graph_meta {
+                if let Some(hri) = meta.hyperlink_relation_index.iter_mut().find(|hri| hri.hyperlink_id == hl_id) {
+                    hri.source_node_id = source_node_id;
                 }
             }
             self.dirty_graph_meta = true;
@@ -1626,6 +1770,7 @@ impl StarMapStore {
     pub fn upsert_link(&mut self, link: StarMapLink) {
         let link_id = link.link_id.clone();
         let is_new = !self.links.contains_key(&link_id);
+        let source_node_id = endpoint_node_id(&link.source).unwrap_or_default().to_string();
         self.links.insert(link_id.clone(), link);
         self.dirty_links.insert(link_id.clone());
         if is_new {
@@ -1634,7 +1779,18 @@ impl StarMapStore {
             }
             if let Some(ref mut meta) = self.graph_meta {
                 if !meta.link_ids.contains(&link_id) {
-                    meta.link_ids.push(link_id);
+                    meta.link_ids.push(link_id.clone());
+                }
+                meta.link_relation_index.push(LinkRelationIndex {
+                    link_id: link_id.clone(),
+                    source_node_id,
+                });
+            }
+            self.dirty_graph_meta = true;
+        } else {
+            if let Some(ref mut meta) = self.graph_meta {
+                if let Some(lri) = meta.link_relation_index.iter_mut().find(|lri| lri.link_id == link_id) {
+                    lri.source_node_id = source_node_id;
                 }
             }
             self.dirty_graph_meta = true;
@@ -1650,6 +1806,7 @@ impl StarMapStore {
         }
         if let Some(ref mut meta) = self.graph_meta {
             meta.link_ids.retain(|id| id != link_id);
+            meta.link_relation_index.retain(|lri| lri.link_id != link_id);
         }
         self.dirty_graph_meta = true;
     }
@@ -1663,6 +1820,7 @@ impl StarMapStore {
         }
         if let Some(ref mut meta) = self.graph_meta {
             meta.hyperlink_ids.retain(|id| id != hyperlink_id);
+            meta.hyperlink_relation_index.retain(|hri| hri.hyperlink_id != hyperlink_id);
         }
         self.dirty_graph_meta = true;
     }
@@ -1715,7 +1873,20 @@ impl StarMapStore {
             ))
         })?;
         if let Some(ref t) = patch.title { node.title = t.clone(); }
-        if let Some(ref k) = patch.kind { node.kind = k.clone(); }
+        if let Some(ref k) = patch.kind {
+            let old_kind_key = format!("{:?}", node.kind);
+            let new_kind_key = format!("{:?}", k);
+            if old_kind_key != new_kind_key {
+                if let Some(ref mut meta) = self.graph_meta {
+                    if let Some(count) = meta.node_kind_counts.get_mut(&old_kind_key) {
+                        *count = count.saturating_sub(1);
+                    }
+                    *meta.node_kind_counts.entry(new_kind_key).or_insert(0u32) += 1;
+                }
+                self.dirty_graph_meta = true;
+            }
+            node.kind = k.clone();
+        }
         if let Some(ref p) = patch.payload { node.payload = p.clone(); }
         if let Some(ref t) = patch.tags { node.tags = t.clone(); }
         if let Some(ref c) = patch.content { node.content = c.clone(); }
@@ -1743,27 +1914,31 @@ impl StarMapStore {
 
         let edge_ids_to_remove: Vec<String> = self.graph_meta.as_ref()
             .map(|m| m.edge_relation_index.iter()
-                .filter(|eri| eri.from == node_id || eri.to == node_id)
+                .filter(|eri| extract_eri_node_refs(eri).contains(&node_id))
                 .map(|eri| eri.edge_id.clone())
                 .collect())
             .unwrap_or_default();
 
         let embed_ids_to_remove: Vec<String> = self.graph_meta.as_ref()
             .map(|m| m.embed_host_index.iter()
-                .filter(|ehi| ehi.host_node_id == node_id)
+                .filter(|ehi| extract_ehi_node_refs(ehi).contains(&node_id))
                 .map(|ehi| ehi.instance_id.clone())
                 .collect())
             .unwrap_or_default();
 
-        let link_ids_to_remove: Vec<String> = self.links.values()
-            .filter(|l| endpoint_node_id(&l.source) == Some(node_id))
-            .map(|l| l.link_id.clone())
-            .collect();
+        let link_ids_to_remove: Vec<String> = self.graph_meta.as_ref()
+            .map(|m| m.link_relation_index.iter()
+                .filter(|lri| lri.source_node_id == node_id)
+                .map(|lri| lri.link_id.clone())
+                .collect())
+            .unwrap_or_default();
 
-        let hyperlink_ids_to_remove: Vec<String> = self.hyperlinks.values()
-            .filter(|hl| endpoint_path_node_id(&hl.source) == Some(node_id))
-            .map(|hl| hl.hyperlink_id.clone())
-            .collect();
+        let hyperlink_ids_to_remove: Vec<String> = self.graph_meta.as_ref()
+            .map(|m| m.hyperlink_relation_index.iter()
+                .filter(|hri| hri.source_node_id == node_id)
+                .map(|hri| hri.hyperlink_id.clone())
+                .collect())
+            .unwrap_or_default();
 
         self.remove_node(node_id);
 
@@ -2174,27 +2349,9 @@ impl StarMapStore {
         let edge_count = self.graph_meta.as_ref()
             .map(|m| m.edge_ids.len() as u32)
             .unwrap_or(self.edges.len() as u32);
-        let linked_chapters = {
-            let node_ids: Vec<String> = self.graph_meta.as_ref()
-                .map(|m| m.node_ids.clone())
-                .unwrap_or_default();
-            if !node_ids.is_empty() {
-                let mut count = 0u32;
-                for id in &node_ids {
-                    if let Some(n) = self.nodes.get(id) {
-                        if n.kind == StarMapNodeKind::Chapter { count += 1; }
-                    } else if let Some(n) = self.try_load_node(id) {
-                        if n.kind == StarMapNodeKind::Chapter { count += 1; }
-                        self.nodes.insert(id.clone(), n);
-                    }
-                }
-                count
-            } else {
-                self.nodes.values()
-                    .filter(|n| n.kind == StarMapNodeKind::Chapter)
-                    .count() as u32
-            }
-        };
+        let linked_chapters = self.graph_meta.as_ref()
+            .map(|m| *m.node_kind_counts.get("Chapter").unwrap_or(&0))
+            .unwrap_or(0u32);
         crate::starmap::update_starmap_stats(
             &self.workspace,
             &self.starmap_id,
@@ -2265,6 +2422,18 @@ impl StarMapStore {
                             host_node_id: e.source_node_id.clone().unwrap_or_default(),
                             host_endpoint: e.host_endpoint.clone(),
                         }).collect(),
+                        link_relation_index: graph.links.iter().map(|l| LinkRelationIndex {
+                            link_id: l.link_id.clone(),
+                            source_node_id: endpoint_node_id(&l.source).unwrap_or_default().to_string(),
+                        }).collect(),
+                        hyperlink_relation_index: vec![],
+                        node_kind_counts: {
+                            let mut counts = HashMap::new();
+                            for node in &graph.nodes {
+                                *counts.entry(format!("{:?}", node.kind)).or_insert(0u32) += 1;
+                            }
+                            counts
+                        },
                         package_revision: 0,
                         updated_at: graph.updated_at,
                         });
@@ -2281,6 +2450,9 @@ impl StarMapStore {
                         hyperlink_ids: vec![],
                         edge_relation_index: vec![],
                         embed_host_index: vec![],
+                        link_relation_index: vec![],
+                        hyperlink_relation_index: vec![],
+                        node_kind_counts: HashMap::new(),
                         package_revision: 0,
                         updated_at: meta.updated_at,
                     });
@@ -2802,6 +2974,9 @@ impl StarMapStore {
                 hyperlink_ids: Vec::new(),
                 edge_relation_index: Vec::new(),
                 embed_host_index: Vec::new(),
+                link_relation_index: Vec::new(),
+                hyperlink_relation_index: Vec::new(),
+                node_kind_counts: HashMap::new(),
                 package_revision: self.package_revision,
                 updated_at: crate::starmap::now_epoch(),
             });
@@ -2828,6 +3003,9 @@ impl StarMapStore {
             hyperlink_ids: meta.hyperlink_ids.clone(),
             edge_relation_index: meta.edge_relation_index.clone(),
             embed_host_index: meta.embed_host_index.clone(),
+            link_relation_index: meta.link_relation_index.clone(),
+            hyperlink_relation_index: meta.hyperlink_relation_index.clone(),
+            node_kind_counts: meta.node_kind_counts.clone(),
             package_revision: next_revision,
             updated_at: crate::starmap::now_epoch(),
         };
@@ -2891,14 +3069,38 @@ impl StarMapStore {
                 });
             }
         }
-        for link_id in self.links.keys() {
-            if !meta.link_ids.contains(link_id) && !self.deleted_link_ids.contains(link_id) {
-                meta.link_ids.push(link_id.clone());
+        for link in self.links.values() {
+            if self.deleted_link_ids.contains(&link.link_id) {
+                continue;
+            }
+            if !meta.link_ids.contains(&link.link_id) {
+                meta.link_ids.push(link.link_id.clone());
+            }
+            let source_node_id = endpoint_node_id(&link.source).unwrap_or_default().to_string();
+            if let Some(lri) = meta.link_relation_index.iter_mut().find(|lri| lri.link_id == link.link_id) {
+                lri.source_node_id = source_node_id;
+            } else {
+                meta.link_relation_index.push(LinkRelationIndex {
+                    link_id: link.link_id.clone(),
+                    source_node_id,
+                });
             }
         }
-        for hl_id in self.hyperlinks.keys() {
-            if !meta.hyperlink_ids.contains(hl_id) && !self.deleted_hyperlink_ids.contains(hl_id) {
-                meta.hyperlink_ids.push(hl_id.clone());
+        for hl in self.hyperlinks.values() {
+            if self.deleted_hyperlink_ids.contains(&hl.hyperlink_id) {
+                continue;
+            }
+            if !meta.hyperlink_ids.contains(&hl.hyperlink_id) {
+                meta.hyperlink_ids.push(hl.hyperlink_id.clone());
+            }
+            let source_node_id = endpoint_path_node_id(&hl.source).unwrap_or_default().to_string();
+            if let Some(hri) = meta.hyperlink_relation_index.iter_mut().find(|hri| hri.hyperlink_id == hl.hyperlink_id) {
+                hri.source_node_id = source_node_id;
+            } else {
+                meta.hyperlink_relation_index.push(HyperlinkRelationIndex {
+                    hyperlink_id: hl.hyperlink_id.clone(),
+                    source_node_id,
+                });
             }
         }
 
@@ -2908,7 +3110,9 @@ impl StarMapStore {
         meta.embed_instance_ids.retain(|id| !self.deleted_embed_ids.contains(id));
         meta.embed_host_index.retain(|ehi| !self.deleted_embed_ids.contains(&ehi.instance_id));
         meta.link_ids.retain(|id| !self.deleted_link_ids.contains(id));
+        meta.link_relation_index.retain(|lri| !self.deleted_link_ids.contains(&lri.link_id));
         meta.hyperlink_ids.retain(|id| !self.deleted_hyperlink_ids.contains(id));
+        meta.hyperlink_relation_index.retain(|hri| !self.deleted_hyperlink_ids.contains(&hri.hyperlink_id));
     }
 
     pub fn to_starmap_graph(&self) -> StarMapGraph {
@@ -2924,6 +3128,22 @@ impl StarMapStore {
             created_at: 0,
             updated_at: crate::starmap::now_epoch(),
         }
+    }
+
+    pub fn get_phased_snapshot(&mut self) -> Result<StarMapPhasedSnapshot> {
+        self.load_phased(LoadPhase::PrefetchNearbyObjects)?;
+        Ok(StarMapPhasedSnapshot {
+            starmap_id: self.starmap_id.clone(),
+            title: self.graph_meta.as_ref().map(|meta| meta.title.clone()).unwrap_or_default(),
+            nodes: self.nodes.values().cloned().collect(),
+            edges: self.edges.values().cloned().collect(),
+            embeds: self.embeds.values().cloned().collect(),
+            links: self.links.values().cloned().collect(),
+            hyperlinks: self.hyperlinks.values().cloned().collect(),
+            layout: self.layout.clone(),
+            viewport: self.viewport.clone(),
+            diagnostics: self.recovery_log.clone(),
+        })
     }
 }
 
@@ -3024,6 +3244,9 @@ mod tests {
             hyperlink_ids: vec![],
             edge_relation_index: vec![],
             embed_host_index: vec![],
+            link_relation_index: vec![],
+            hyperlink_relation_index: vec![],
+            node_kind_counts: HashMap::new(),
             package_revision: 1,
             updated_at: 0,
         };
@@ -3115,6 +3338,9 @@ mod tests {
             hyperlink_ids: vec![],
             edge_relation_index: vec![],
             embed_host_index: vec![],
+            link_relation_index: vec![],
+            hyperlink_relation_index: vec![],
+            node_kind_counts: HashMap::new(),
             package_revision: 1,
             updated_at: 0,
         };
@@ -3175,6 +3401,9 @@ mod tests {
             hyperlink_ids: vec![],
             edge_relation_index: vec![],
             embed_host_index: vec![],
+            link_relation_index: vec![],
+            hyperlink_relation_index: vec![],
+            node_kind_counts: HashMap::new(),
             package_revision: 1,
             updated_at: 0,
         };
@@ -3215,6 +3444,9 @@ mod tests {
             hyperlink_ids: vec![],
             edge_relation_index: vec![],
             embed_host_index: vec![],
+            link_relation_index: vec![],
+            hyperlink_relation_index: vec![],
+            node_kind_counts: HashMap::new(),
             package_revision: 1,
             updated_at: 0,
         };
@@ -3251,6 +3483,9 @@ mod tests {
             hyperlink_ids: vec![],
             edge_relation_index: vec![],
             embed_host_index: vec![],
+            link_relation_index: vec![],
+            hyperlink_relation_index: vec![],
+            node_kind_counts: HashMap::new(),
             package_revision: 1,
             updated_at: 0,
         };
@@ -4214,6 +4449,9 @@ mod tests {
             hyperlink_ids: vec![],
             edge_relation_index: vec![],
             embed_host_index: vec![],
+            link_relation_index: vec![],
+            hyperlink_relation_index: vec![],
+            node_kind_counts: HashMap::new(),
             package_revision: 0,
             updated_at: 0,
         };

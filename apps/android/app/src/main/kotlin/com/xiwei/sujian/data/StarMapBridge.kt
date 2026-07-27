@@ -35,6 +35,9 @@ import uniffi.writer_core.StarMapNodeKindDto
 import uniffi.writer_core.StarMapNodePatchInputDto
 import uniffi.writer_core.StarMapOpenBehaviorDto
 import uniffi.writer_core.StarMapProvenanceDto
+import uniffi.writer_core.StarMapHyperlinkDto
+import uniffi.writer_core.StarMapHyperlinkPatchInputDto
+import uniffi.writer_core.StarMapPhasedSnapshotDto
 import uniffi.writer_core.StarMapReferenceDto
 import uniffi.writer_core.StarMapReviewStatusDto
 import uniffi.writer_core.StarMapSourceKindDto
@@ -126,6 +129,26 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
 
     fun deleteStarmapLink(starmapId: String, linkId: String): BridgeResult<Boolean> = holder.wrapResult {
         holder.service.deleteStarmapLink(starmapId, linkId)
+    }
+
+    fun addStarmapHyperlink(starmapId: String, hl: StarMapHyperlinkDto): BridgeResult<StarMapHyperlinkDto> = holder.wrapResult {
+        holder.service.addStarmapHyperlink(starmapId, hl)
+    }
+
+    fun updateStarmapHyperlink(starmapId: String, hyperlinkId: String, patch: StarMapHyperlinkPatchInputDto): BridgeResult<StarMapHyperlinkDto> = holder.wrapResult {
+        holder.service.updateStarmapHyperlink(starmapId, hyperlinkId, patch)
+    }
+
+    fun deleteStarmapHyperlink(starmapId: String, hyperlinkId: String): BridgeResult<Boolean> = holder.wrapResult {
+        holder.service.deleteStarmapHyperlink(starmapId, hyperlinkId)
+    }
+
+    fun listStarmapHyperlinks(starmapId: String): BridgeResult<uniffi.writer_core.StarMapHyperlinkListWithDiagnosticsDto> = holder.wrapResult {
+        holder.service.listStarmapHyperlinks(starmapId)
+    }
+
+    fun getStarmapPhasedSnapshot(starmapId: String): BridgeResult<StarMapPhasedSnapshotDto> = holder.wrapResult {
+        holder.service.getStarmapPhasedSnapshot(starmapId)
     }
 
     fun findStarmapReferences(targetStarmapId: String): BridgeResult<List<StarMapReferenceDto>> = holder.wrapResult {

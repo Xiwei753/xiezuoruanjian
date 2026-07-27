@@ -257,13 +257,80 @@ private fun StarMapEditorScreen(
         val data = withContext(Dispatchers.IO) {
             try {
                 val bridge = BridgeProvider.getStarmapBridge(context)
-                when (val result = bridge.getStarmapGraph(starmapId)) {
+                when (val result = bridge.getStarmapPhasedSnapshot(starmapId)) {
                     is com.xiwei.sujian.data.BridgeResult.Success -> {
-                        val graphData = result.data
-                        val viewport = when (val vp = bridge.getStarmapViewport(starmapId)) {
-                            is com.xiwei.sujian.data.BridgeResult.Success -> vp.data
-                            else -> StarMapViewportData()
-                        }
+                        val snapshot = result.data
+                        val graphData = StarMapData(
+                            graph = com.xiwei.sujian.model.StarMapGraphData(
+                                schemaVersion = 0,
+                                id = snapshot.starmapId,
+                                starmapId = snapshot.starmapId,
+                                title = snapshot.title,
+                                nodes = snapshot.nodes.map { node ->
+                                    com.xiwei.sujian.model.StarMapGraphNode(
+                                        id = node.id,
+                                        title = node.title,
+                                        kind = when (node.kind) {
+                                            uniffi.writer_core.StarMapNodeKindDto.CHARACTER -> StarMapNodeKind.Character
+                                            uniffi.writer_core.StarMapNodeKindDto.EVENT -> StarMapNodeKind.Event
+                                            uniffi.writer_core.StarMapNodeKindDto.LOCATION -> StarMapNodeKind.Location
+                                            uniffi.writer_core.StarMapNodeKindDto.ITEM -> StarMapNodeKind.Item
+                                            uniffi.writer_core.StarMapNodeKindDto.CONCEPT -> StarMapNodeKind.Concept
+                                            uniffi.writer_core.StarMapNodeKindDto.THEME -> StarMapNodeKind.Theme
+                                            uniffi.writer_core.StarMapNodeKindDto.NOTE -> StarMapNodeKind.Note
+                                            uniffi.writer_core.StarMapNodeKindDto.ORGANIZATION -> StarMapNodeKind.Organization
+                                            uniffi.writer_core.StarMapNodeKindDto.TIMELINE -> StarMapNodeKind.Timeline
+                                            uniffi.writer_core.StarMapNodeKindDto.PLOT -> StarMapNodeKind.Plot
+                                            uniffi.writer_core.StarMapNodeKindDto.FORESHADOWING -> StarMapNodeKind.Foreshadowing
+                                            uniffi.writer_core.StarMapNodeKindDto.CHAPTER -> StarMapNodeKind.Chapter
+                                            uniffi.writer_core.StarMapNodeKindDto.CUSTOM -> StarMapNodeKind.Custom
+                                        },
+                                        createdAt = node.createdAt.toLong(),
+                                        updatedAt = node.updatedAt.toLong()
+                                    )
+                                },
+                                edges = snapshot.edges.map { edge ->
+                                    com.xiwei.sujian.model.StarMapGraphEdge(
+                                        id = edge.id,
+                                        from = edge.from ?: "",
+                                        to = edge.to ?: "",
+                                        kind = when (edge.kind) {
+                                            uniffi.writer_core.StarMapEdgeKindDto.CONTAINS -> com.xiwei.sujian.model.StarMapEdgeKind.Contains
+                                            uniffi.writer_core.StarMapEdgeKindDto.REFERENCES -> com.xiwei.sujian.model.StarMapEdgeKind.References
+                                            uniffi.writer_core.StarMapEdgeKindDto.APPEARS_IN -> com.xiwei.sujian.model.StarMapEdgeKind.AppearsIn
+                                            uniffi.writer_core.StarMapEdgeKindDto.CAUSES -> com.xiwei.sujian.model.StarMapEdgeKind.Causes
+                                            uniffi.writer_core.StarMapEdgeKindDto.RELATED_TO -> com.xiwei.sujian.model.StarMapEdgeKind.RelatedTo
+                                            uniffi.writer_core.StarMapEdgeKindDto.LOCATED_AT -> com.xiwei.sujian.model.StarMapEdgeKind.LocatedAt
+                                            uniffi.writer_core.StarMapEdgeKindDto.CHARACTER_RELATION -> com.xiwei.sujian.model.StarMapEdgeKind.CharacterRelation
+                                            uniffi.writer_core.StarMapEdgeKindDto.TIMELINE -> com.xiwei.sujian.model.StarMapEdgeKind.Timeline
+                                            uniffi.writer_core.StarMapEdgeKindDto.FORESHADOWS -> com.xiwei.sujian.model.StarMapEdgeKind.Foreshadows
+                                            uniffi.writer_core.StarMapEdgeKindDto.RESOLVES -> com.xiwei.sujian.model.StarMapEdgeKind.Resolves
+                                            uniffi.writer_core.StarMapEdgeKindDto.DEPENDS_ON -> com.xiwei.sujian.model.StarMapEdgeKind.DependsOn
+                                            uniffi.writer_core.StarMapEdgeKindDto.CONFLICTS_WITH -> com.xiwei.sujian.model.StarMapEdgeKind.ConflictsWith
+                                            uniffi.writer_core.StarMapEdgeKindDto.CUSTOM -> com.xiwei.sujian.model.StarMapEdgeKind.Custom
+                                        },
+                                        label = edge.label,
+                                        createdAt = edge.createdAt.toLong(),
+                                        updatedAt = edge.updatedAt.toLong()
+                                    )
+                                },
+                                createdAt = 0L,
+                                updatedAt = 0L
+                            ),
+                            layout = StarMapLayoutData(
+                                kind = com.xiwei.sujian.model.StarMapLayoutKind.Freeform,
+                                nodes = emptyList()
+                            )
+                        )
+                        val viewport = snapshot.viewport?.let { vp ->
+                            StarMapViewportData(
+                                scale = vp.scale,
+                                offsetX = vp.offsetX,
+                                offsetY = vp.offsetY,
+                                width = vp.width,
+                                height = vp.height
+                            )
+                        } ?: StarMapViewportData()
                         val edgeRenders = when (val er = bridge.computeEdgeRenders(graphData)) {
                             is com.xiwei.sujian.data.BridgeResult.Success -> er.data
                             else -> emptyList()
@@ -370,20 +437,22 @@ private fun StarMapEditorScreen(
                         target.onCommit = { finalText ->
                                 if (finalText.isNotBlank() && finalText.trim() != graphNode.title) {
                                     coroutineScope.launch {
+                                        var success = false
                                         withContext(Dispatchers.IO) {
                                             try {
                                                 val bridge = BridgeProvider.getStarmapBridge(context)
                                                 val result = bridge.updateStarmapNode(starmapId, geometry.nodeId, title = finalText.trim(), kind = null)
-                                                if (result is BridgeResult.Error) {
-                                                    DiagnosticsLogger.e("StarMapScreen", "updateStarmapNode onCommit failed: ${result.envelope.message}")
-                                                    return@withContext
+                                                success = result is BridgeResult.Success
+                                                if (!success) {
+                                                    DiagnosticsLogger.e("StarMapScreen", "updateStarmapNode onCommit failed: ${(result as? BridgeResult.Error)?.envelope?.message}")
                                                 }
                                             } catch (e: Exception) {
                                                 DiagnosticsLogger.e("StarMapScreen", "updateStarmapNode onCommit exception: ${e.message}")
-                                                return@withContext
                                             }
                                         }
-                                        loadStarMap()
+                                        if (success) {
+                                            loadStarMap()
+                                        }
                                     }
                                 }
                                 canvasEditingNodeId = null
@@ -436,40 +505,44 @@ private fun StarMapEditorScreen(
                 coordinator = coordinator,
                 onUpdate = { newTitle, newKind ->
                     coroutineScope.launch {
+                        var success = false
                         withContext(Dispatchers.IO) {
                             try {
                                 val bridge = BridgeProvider.getStarmapBridge(context)
                                 val result = bridge.updateStarmapNode(starmapId, nodeId, title = newTitle, kind = newKind)
-                                if (result is BridgeResult.Error) {
-                                    DiagnosticsLogger.e("StarMapScreen", "updateStarmapNode failed: ${result.envelope.message}")
-                                    return@withContext
+                                success = result is BridgeResult.Success
+                                if (!success) {
+                                    DiagnosticsLogger.e("StarMapScreen", "updateStarmapNode failed: ${(result as? BridgeResult.Error)?.envelope?.message}")
                                 }
                             } catch (e: Exception) {
                                 DiagnosticsLogger.e("StarMapScreen", "updateStarmapNode exception: ${e.message}")
-                                return@withContext
                             }
                         }
-                        selectedNodeId = null
-                        loadStarMap()
+                        if (success) {
+                            selectedNodeId = null
+                            loadStarMap()
+                        }
                     }
                 },
                 onDelete = {
                     coroutineScope.launch {
+                        var success = false
                         withContext(Dispatchers.IO) {
                             try {
                                 val bridge = BridgeProvider.getStarmapBridge(context)
                                 val result = bridge.deleteStarmapNode(starmapId, nodeId)
-                                if (result is BridgeResult.Error) {
-                                    DiagnosticsLogger.e("StarMapScreen", "deleteStarmapNode failed: ${result.envelope.message}")
-                                    return@withContext
+                                success = result is BridgeResult.Success
+                                if (!success) {
+                                    DiagnosticsLogger.e("StarMapScreen", "deleteStarmapNode failed: ${(result as? BridgeResult.Error)?.envelope?.message}")
                                 }
                             } catch (e: Exception) {
                                 DiagnosticsLogger.e("StarMapScreen", "deleteStarmapNode exception: ${e.message}")
-                                return@withContext
                             }
                         }
-                        selectedNodeId = null
-                        loadStarMap()
+                        if (success) {
+                            selectedNodeId = null
+                            loadStarMap()
+                        }
                     }
                 },
                 onDismiss = { selectedNodeId = null }
@@ -492,6 +565,7 @@ private fun StarMapEditorScreen(
                 val t = coordinator.lastCommittedText?.trim() ?: nodeTitle.trim()
                 if (t.isNotBlank()) {
                     coroutineScope.launch {
+                        var success = false
                         withContext(Dispatchers.IO) {
                             try {
                                 val bridge = BridgeProvider.getStarmapBridge(context)
@@ -502,19 +576,22 @@ private fun StarMapEditorScreen(
                                     kind = nodeKind
                                 )
                                 val result = bridge.addStarmapNode(starmapId, node)
-                                if (result is BridgeResult.Error) {
-                                    DiagnosticsLogger.e("StarMapScreen", "addStarmapNode failed: ${result.envelope.message}")
-                                    return@withContext
+                                success = result is BridgeResult.Success
+                                if (!success) {
+                                    DiagnosticsLogger.e("StarMapScreen", "addStarmapNode failed: ${(result as? BridgeResult.Error)?.envelope?.message}")
                                 }
                             } catch (e: Exception) {
                                 DiagnosticsLogger.e("StarMapScreen", "addStarmapNode exception: ${e.message}")
-                                return@withContext
                             }
                         }
-                        loadStarMap()
+                        if (success) {
+                            loadStarMap()
+                        }
                     }
                 }
-                showAddNodeDialog = false
+                if (t.isNotBlank()) {
+                    showAddNodeDialog = false
+                }
             },
             dismissText = stringResource(id = R.string.action_cancel),
             onDismiss = {
@@ -560,20 +637,22 @@ private fun StarMapEditorScreen(
             onConfirm = {
                 if (fromNodeId.isNotBlank() && toNodeId.isNotBlank() && fromNodeId != toNodeId) {
                     coroutineScope.launch {
+                        var success = false
                         withContext(Dispatchers.IO) {
                             try {
                                 val bridge = BridgeProvider.getStarmapBridge(context)
                                 val result = bridge.addStarmapEdge(starmapId, fromNodeId, toNodeId)
-                                if (result is BridgeResult.Error) {
-                                    DiagnosticsLogger.e("StarMapScreen", "addStarmapEdge failed: ${result.envelope.message}")
-                                    return@withContext
+                                success = result is BridgeResult.Success
+                                if (!success) {
+                                    DiagnosticsLogger.e("StarMapScreen", "addStarmapEdge failed: ${(result as? BridgeResult.Error)?.envelope?.message}")
                                 }
                             } catch (e: Exception) {
                                 DiagnosticsLogger.e("StarMapScreen", "addStarmapEdge exception: ${e.message}")
-                                return@withContext
                             }
                         }
-                        loadStarMap()
+                        if (success) {
+                            loadStarMap()
+                        }
                     }
                 }
                 showAddEdgeDialog = false
