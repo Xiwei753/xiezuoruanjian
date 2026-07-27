@@ -33,6 +33,7 @@ class SujianEditorView @JvmOverloads constructor(
         textSize = 48f
         isAntiAlias = true
     }
+    private val timeSource = animationTimeSource
     private val pipeline = AndroidEditorPipeline.create(
         com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror(),
         textPaint,
@@ -300,6 +301,9 @@ class SujianEditorView @JvmOverloads constructor(
 
     override fun onFrame(frameTimeNanos: Long) {
         pendingFrameTimeNanos = frameTimeNanos
+        if (timeSource is com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource) {
+            timeSource.onFrameTimeNanos(frameTimeNanos)
+        }
         invalidate()
     }
 

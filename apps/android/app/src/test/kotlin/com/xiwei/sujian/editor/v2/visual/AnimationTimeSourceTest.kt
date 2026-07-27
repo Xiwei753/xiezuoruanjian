@@ -6,12 +6,37 @@ import org.junit.Test
 class AnimationTimeSourceTest {
 
     @Test
-    fun choreographerTimeSourceReturnsSystemNanoTime() {
+    fun choreographerTimeSourceReturnsSystemNanoTimeBeforeFrame() {
         val source = ChoreographerAnimationTimeSource()
         val before = System.nanoTime()
         val result = source.nowNanos()
         val after = System.nanoTime()
         assertTrue(result in before..after)
+    }
+
+    @Test
+    fun choreographerTimeSourceReturnsFrameTimeAfterOnFrame() {
+        val source = ChoreographerAnimationTimeSource()
+        val frameTime = 1_000_000_000L
+        source.onFrameTimeNanos(frameTime)
+        assertEquals(frameTime, source.nowNanos())
+    }
+
+    @Test
+    fun choreographerTimeSourceUpdatesOnEachFrame() {
+        val source = ChoreographerAnimationTimeSource()
+        source.onFrameTimeNanos(1_000_000_000L)
+        assertEquals(1_000_000_000L, source.nowNanos())
+        source.onFrameTimeNanos(1_016_000_000L)
+        assertEquals(1_016_000_000L, source.nowNanos())
+    }
+
+    @Test
+    fun choreographerTimeSourcePrefersFrameTimeOverSystemTime() {
+        val source = ChoreographerAnimationTimeSource()
+        val frameTime = 500_000_000L
+        source.onFrameTimeNanos(frameTime)
+        assertEquals(frameTime, source.nowNanos())
     }
 
     @Test

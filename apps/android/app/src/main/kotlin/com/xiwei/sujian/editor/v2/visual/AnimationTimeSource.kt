@@ -5,7 +5,17 @@ interface AnimationTimeSource {
 }
 
 class ChoreographerAnimationTimeSource : AnimationTimeSource {
-    override fun nowNanos(): Long = System.nanoTime()
+    @Volatile
+    private var lastFrameTimeNanos: Long = Long.MIN_VALUE
+
+    fun onFrameTimeNanos(frameTimeNanos: Long) {
+        lastFrameTimeNanos = frameTimeNanos
+    }
+
+    override fun nowNanos(): Long {
+        val cached = lastFrameTimeNanos
+        return if (cached != Long.MIN_VALUE) cached else System.nanoTime()
+    }
 }
 
 class ManualAnimationTimeSource : AnimationTimeSource {

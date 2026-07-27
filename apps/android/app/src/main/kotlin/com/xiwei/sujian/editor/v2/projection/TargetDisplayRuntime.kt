@@ -41,6 +41,8 @@ class TargetDisplayRuntime(
         private set
 
     private var cachedFrameState: FrameState? = null
+    @Volatile
+    private var lastFrameTimeNanos: Long = Long.MIN_VALUE
 
     private var frameClock: WindowDisplayFrameClock? = null
     private var isRegisteredWithClock: Boolean = false
@@ -48,6 +50,9 @@ class TargetDisplayRuntime(
     override fun needsFrame(): Boolean = hasActiveAnimation() || cachedFrameState == null
 
     override fun onFrame(frameTimeNanos: Long) {
+        if (timeSource is com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource) {
+            timeSource.onFrameTimeNanos(frameTimeNanos)
+        }
         val versionAtFrameStart = displayStateVersion
         val frameTimeMs = frameTimeNanos / 1_000_000
         val layout = layoutEngine.getLayout()
@@ -72,6 +77,7 @@ class TargetDisplayRuntime(
                 cachedFrameState = FrameState(tickResult.renderInput, versionAtFrameStart)
             }
         }
+        lastFrameTimeNanos = frameTimeNanos
         frameGeneration++
     }
 
@@ -237,7 +243,8 @@ class TargetDisplayRuntime(
             renderRuntime.drawFromFrameState(canvas, cached)
             return
         }
-        val frameTimeMs = timeSource.nowNanos() / 1_000_000
+        val frameTimeNanos = lastFrameTimeNanos
+        val frameTimeMs = if (frameTimeNanos != Long.MIN_VALUE) frameTimeNanos / 1_000_000 else timeSource.nowNanos() / 1_000_000
         val layout = layoutEngine.getLayout() ?: return
         val highlightsUtf16 = getSearchHighlightsUtf16()
         val cursorDisplayUtf16 = projection.realUtf8ToDisplayUtf16(mirror.getCursorUtf8())
