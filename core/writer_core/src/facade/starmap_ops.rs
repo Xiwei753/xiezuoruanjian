@@ -165,10 +165,12 @@ impl super::WriterCore {
         store.enqueue_save(SaveQueueEntry::Edge);
         store.enqueue_save(SaveQueueEntry::Embed);
         store.enqueue_save(SaveQueueEntry::Link);
+        store.enqueue_save(SaveQueueEntry::Hyperlink);
         store.enqueue_save(SaveQueueEntry::DeleteNode);
         store.enqueue_save(SaveQueueEntry::DeleteEdge);
         store.enqueue_save(SaveQueueEntry::DeleteEmbed);
         store.enqueue_save(SaveQueueEntry::DeleteLink);
+        store.enqueue_save(SaveQueueEntry::DeleteHyperlink);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
         store.flush_save_queue()?;
 
@@ -220,6 +222,8 @@ impl super::WriterCore {
         store.enqueue_save(SaveQueueEntry::DeleteNode);
         store.enqueue_save(SaveQueueEntry::DeleteEdge);
         store.enqueue_save(SaveQueueEntry::DeleteEmbed);
+        store.enqueue_save(SaveQueueEntry::DeleteLink);
+        store.enqueue_save(SaveQueueEntry::DeleteHyperlink);
         store.enqueue_save(SaveQueueEntry::Layout);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
         Ok(())
@@ -422,6 +426,51 @@ impl super::WriterCore {
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_fully_loaded()?;
         Ok(store.list_hyperlinks_with_diagnostics())
+    }
+
+    pub fn add_starmap_hyperlink(
+        &self,
+        starmap_id: &str,
+        hl: crate::starmap::types::StarMapHyperlink,
+    ) -> Result<crate::starmap::types::StarMapHyperlink> {
+        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
+        let store = stores.entry(starmap_id.to_string())
+            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+        store.ensure_loaded()?;
+        let result = store.add_hyperlink(hl)?;
+        store.enqueue_save(SaveQueueEntry::Hyperlink);
+        store.enqueue_save(SaveQueueEntry::GraphMeta);
+        Ok(result)
+    }
+
+    pub fn update_starmap_hyperlink(
+        &self,
+        starmap_id: &str,
+        hyperlink_id: &str,
+        label: Option<&str>,
+        target_uri: Option<&str>,
+    ) -> Result<crate::starmap::types::StarMapHyperlink> {
+        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
+        let store = stores.entry(starmap_id.to_string())
+            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+        store.ensure_loaded()?;
+        store.ensure_hyperlink_loaded(hyperlink_id)?;
+        let result = store.update_hyperlink(hyperlink_id, label, target_uri)?;
+        store.enqueue_save(SaveQueueEntry::Hyperlink);
+        store.enqueue_save(SaveQueueEntry::GraphMeta);
+        Ok(result)
+    }
+
+    pub fn delete_starmap_hyperlink(&self, starmap_id: &str, hyperlink_id: &str) -> Result<()> {
+        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
+        let store = stores.entry(starmap_id.to_string())
+            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+        store.ensure_loaded()?;
+        store.ensure_hyperlink_loaded(hyperlink_id)?;
+        store.delete_hyperlink(hyperlink_id)?;
+        store.enqueue_save(SaveQueueEntry::DeleteHyperlink);
+        store.enqueue_save(SaveQueueEntry::GraphMeta);
+        Ok(())
     }
 
     pub fn list_starmap_links(

@@ -42,6 +42,23 @@ use crate::storage::atomic_write_string;
 
 use serde::{Deserialize, Serialize};
 
+fn endpoint_node_id(endpoint: &crate::starmap::types::StarMapEndpoint) -> Option<&str> {
+    match endpoint {
+        crate::starmap::types::StarMapEndpoint::Node { node_id } => Some(node_id),
+        crate::starmap::types::StarMapEndpoint::Anchor { node_id, .. } => Some(node_id),
+        crate::starmap::types::StarMapEndpoint::Starmap => None,
+    }
+}
+
+fn endpoint_path_node_id(path: &crate::starmap::types::StarMapEndpointPath) -> Option<&str> {
+    match &path.endpoint {
+        crate::starmap::types::StarMapEdgeEndpoint::Node { node_id } => Some(node_id),
+        crate::starmap::types::StarMapEdgeEndpoint::Anchor { node_id, .. } => Some(node_id),
+        crate::starmap::types::StarMapEdgeEndpoint::Starmap => None,
+        crate::starmap::types::StarMapEdgeEndpoint::DeepTarget { .. } => None,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DirtyKind {
     Node,
@@ -436,6 +453,29 @@ impl StarMapStore {
 
     pub fn save_queue_len(&self) -> usize {
         self.save_queue.len()
+    }
+
+    fn ensure_graph_meta_initialized(&mut self) {
+        if self.graph_meta.is_some() {
+            return;
+        }
+        self.reload_graph_meta_if_stale();
+        if self.graph_meta.is_none() {
+            self.graph_meta = Some(GraphMeta {
+                schema_version: "2".to_string(),
+                starmap_id: self.starmap_id.clone(),
+                title: String::new(),
+                node_ids: Vec::new(),
+                edge_ids: Vec::new(),
+                embed_instance_ids: Vec::new(),
+                link_ids: Vec::new(),
+                hyperlink_ids: Vec::new(),
+                edge_relation_index: Vec::new(),
+                embed_host_index: Vec::new(),
+                package_revision: self.package_revision,
+                updated_at: crate::starmap::now_epoch(),
+            });
+        }
     }
 
     pub fn enqueue_save(&mut self, entry: SaveQueueEntry) {
@@ -1440,6 +1480,9 @@ impl StarMapStore {
         self.nodes.insert(node_id.clone(), node);
         self.dirty_nodes.insert(node_id.clone());
         if is_new {
+            if self.graph_meta.is_none() {
+                self.ensure_graph_meta_initialized();
+            }
             if let Some(ref mut meta) = self.graph_meta {
                 if !meta.node_ids.contains(&node_id) {
                     meta.node_ids.push(node_id);
@@ -1453,6 +1496,9 @@ impl StarMapStore {
         self.nodes.remove(node_id);
         self.dirty_nodes.remove(node_id);
         self.deleted_node_ids.insert(node_id.to_string());
+        if self.graph_meta.is_none() {
+            self.ensure_graph_meta_initialized();
+        }
         if let Some(ref mut meta) = self.graph_meta {
             meta.node_ids.retain(|id| id != node_id);
         }
@@ -1470,6 +1516,9 @@ impl StarMapStore {
         let to_endpoint_path = edge.to_endpoint_path.clone();
         self.edges.insert(edge_id.clone(), edge);
         self.dirty_edges.insert(edge_id.clone());
+        if self.graph_meta.is_none() {
+            self.ensure_graph_meta_initialized();
+        }
         if let Some(ref mut meta) = self.graph_meta {
             if is_new {
                 if !meta.edge_ids.contains(&edge_id) {
@@ -1502,6 +1551,9 @@ impl StarMapStore {
         self.edges.remove(edge_id);
         self.dirty_edges.remove(edge_id);
         self.deleted_edge_ids.insert(edge_id.to_string());
+        if self.graph_meta.is_none() {
+            self.ensure_graph_meta_initialized();
+        }
         if let Some(ref mut meta) = self.graph_meta {
             meta.edge_ids.retain(|id| id != edge_id);
             meta.edge_relation_index.retain(|eri| eri.edge_id != edge_id);
@@ -1516,6 +1568,9 @@ impl StarMapStore {
         let host_endpoint = embed.host_endpoint.clone();
         self.embeds.insert(instance_id.clone(), embed);
         self.dirty_embeds.insert(instance_id.clone());
+        if self.graph_meta.is_none() {
+            self.ensure_graph_meta_initialized();
+        }
         if let Some(ref mut meta) = self.graph_meta {
             if is_new {
                 if !meta.embed_instance_ids.contains(&instance_id) {
@@ -1540,6 +1595,9 @@ impl StarMapStore {
         self.embeds.remove(instance_id);
         self.dirty_embeds.remove(instance_id);
         self.deleted_embed_ids.insert(instance_id.to_string());
+        if self.graph_meta.is_none() {
+            self.ensure_graph_meta_initialized();
+        }
         if let Some(ref mut meta) = self.graph_meta {
             meta.embed_instance_ids.retain(|id| id != instance_id);
             meta.embed_host_index.retain(|ehi| ehi.instance_id != instance_id);
@@ -1553,6 +1611,9 @@ impl StarMapStore {
         self.hyperlinks.insert(hl_id.clone(), hl);
         self.dirty_hyperlinks.insert(hl_id.clone());
         if is_new {
+            if self.graph_meta.is_none() {
+                self.ensure_graph_meta_initialized();
+            }
             if let Some(ref mut meta) = self.graph_meta {
                 if !meta.hyperlink_ids.contains(&hl_id) {
                     meta.hyperlink_ids.push(hl_id);
@@ -1568,6 +1629,9 @@ impl StarMapStore {
         self.links.insert(link_id.clone(), link);
         self.dirty_links.insert(link_id.clone());
         if is_new {
+            if self.graph_meta.is_none() {
+                self.ensure_graph_meta_initialized();
+            }
             if let Some(ref mut meta) = self.graph_meta {
                 if !meta.link_ids.contains(&link_id) {
                     meta.link_ids.push(link_id);
@@ -1581,6 +1645,9 @@ impl StarMapStore {
         self.links.remove(link_id);
         self.dirty_links.remove(link_id);
         self.deleted_link_ids.insert(link_id.to_string());
+        if self.graph_meta.is_none() {
+            self.ensure_graph_meta_initialized();
+        }
         if let Some(ref mut meta) = self.graph_meta {
             meta.link_ids.retain(|id| id != link_id);
         }
@@ -1591,6 +1658,9 @@ impl StarMapStore {
         self.hyperlinks.remove(hyperlink_id);
         self.dirty_hyperlinks.remove(hyperlink_id);
         self.deleted_hyperlink_ids.insert(hyperlink_id.to_string());
+        if self.graph_meta.is_none() {
+            self.ensure_graph_meta_initialized();
+        }
         if let Some(ref mut meta) = self.graph_meta {
             meta.hyperlink_ids.retain(|id| id != hyperlink_id);
         }
@@ -1685,6 +1755,16 @@ impl StarMapStore {
                 .collect())
             .unwrap_or_default();
 
+        let link_ids_to_remove: Vec<String> = self.links.values()
+            .filter(|l| endpoint_node_id(&l.source) == Some(node_id))
+            .map(|l| l.link_id.clone())
+            .collect();
+
+        let hyperlink_ids_to_remove: Vec<String> = self.hyperlinks.values()
+            .filter(|hl| endpoint_path_node_id(&hl.source) == Some(node_id))
+            .map(|hl| hl.hyperlink_id.clone())
+            .collect();
+
         self.remove_node(node_id);
 
         for eid in &edge_ids_to_remove {
@@ -1693,6 +1773,14 @@ impl StarMapStore {
 
         for iid in &embed_ids_to_remove {
             self.remove_embed(iid);
+        }
+
+        for lid in &link_ids_to_remove {
+            self.remove_link(lid);
+        }
+
+        for hlid in &hyperlink_ids_to_remove {
+            self.remove_hyperlink(hlid);
         }
 
         if let Some(ref mut layout) = self.layout {
@@ -1899,8 +1987,7 @@ impl StarMapStore {
             )));
         }
         let result = link.clone();
-        self.links.insert(link.link_id.clone(), link);
-        self.dirty_links.insert(result.link_id.clone());
+        self.upsert_link(link);
         Ok(result)
     }
 
@@ -1933,9 +2020,51 @@ impl StarMapStore {
                 "Link not found",
             )));
         }
-        self.links.remove(link_id);
-        self.dirty_links.remove(link_id);
-        self.deleted_link_ids.insert(link_id.to_string());
+        self.remove_link(link_id);
+        Ok(())
+    }
+
+    pub fn add_hyperlink(&mut self, hl: StarMapHyperlink) -> Result<StarMapHyperlink> {
+        if self.hyperlinks.contains_key(&hl.hyperlink_id) {
+            return Err(crate::error::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Duplicate hyperlink_id",
+            )));
+        }
+        let result = hl.clone();
+        self.upsert_hyperlink(hl);
+        Ok(result)
+    }
+
+    pub fn update_hyperlink(&mut self, hyperlink_id: &str, label: Option<&str>, target_uri: Option<&str>) -> Result<StarMapHyperlink> {
+        if !self.hyperlinks.contains_key(hyperlink_id) {
+            self.ensure_hyperlink_loaded(hyperlink_id)?;
+        }
+        let hl = self.hyperlinks.get_mut(hyperlink_id).ok_or_else(|| {
+            crate::error::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Hyperlink not found",
+            ))
+        })?;
+        if let Some(l) = label { hl.label = Some(l.to_string()); }
+        if let Some(u) = target_uri { hl.target_uri = u.to_string(); }
+        hl.updated_at = crate::starmap::now_epoch();
+        let updated = hl.clone();
+        self.dirty_hyperlinks.insert(hyperlink_id.to_string());
+        Ok(updated)
+    }
+
+    pub fn delete_hyperlink(&mut self, hyperlink_id: &str) -> Result<()> {
+        if !self.hyperlinks.contains_key(hyperlink_id) {
+            self.ensure_hyperlink_loaded(hyperlink_id)?;
+        }
+        if !self.hyperlinks.contains_key(hyperlink_id) {
+            return Err(crate::error::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Hyperlink not found",
+            )));
+        }
+        self.remove_hyperlink(hyperlink_id);
         Ok(())
     }
 
@@ -4666,5 +4795,242 @@ mod tests {
         let result = store2.list_links_with_diagnostics();
         assert!(!result.diagnostics.is_empty(), "should have diagnostics for corrupt link, got {} diagnostics", result.diagnostics.len());
         assert_eq!(result.diagnostics[0].kind, LoadDiagnosticKind::Corrupt, "should report Corrupt not Missing");
+    }
+
+    #[test]
+    fn add_link_updates_graph_meta_link_ids() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        let link = make_test_link("l1", "Test");
+        store.add_link(link).unwrap();
+        assert!(store.dirty_links.contains("l1"));
+        assert!(store.dirty_graph_meta, "add_link must mark dirty_graph_meta");
+        assert!(store.graph_meta.is_some(), "add_link must initialize graph_meta");
+        let meta_ids = store.graph_meta.as_ref().unwrap().link_ids.clone();
+        assert!(meta_ids.contains(&"l1".to_string()), "add_link must add link_id to graph_meta.link_ids");
+
+        store.flush().unwrap();
+        let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store2.load_full().unwrap();
+        assert_eq!(store2.link_count(), 1);
+        assert!(store2.graph_meta.as_ref().unwrap().link_ids.contains(&"l1".to_string()),
+            "link_id must persist in graph.json after flush");
+    }
+
+    #[test]
+    fn delete_link_updates_graph_meta_link_ids() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        let link = make_test_link("l1", "Test");
+        store.add_link(link).unwrap();
+        store.flush().unwrap();
+
+        let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store2.load_full().unwrap();
+        store2.delete_link("l1").unwrap();
+        assert!(store2.deleted_link_ids.contains(&"l1".to_string()),
+            "delete_link must mark deleted_link_ids");
+        assert!(store2.dirty_graph_meta, "delete_link must mark dirty_graph_meta");
+        assert!(!store2.graph_meta.as_ref().unwrap().link_ids.contains(&"l1".to_string()),
+            "delete_link must remove link_id from graph_meta.link_ids");
+
+        store2.flush().unwrap();
+        let mut store3 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store3.load_full().unwrap();
+        assert_eq!(store3.link_count(), 0);
+        assert!(!store3.graph_meta.as_ref().unwrap().link_ids.contains(&"l1".to_string()),
+            "link_id must be removed from graph.json after flush");
+    }
+
+    #[test]
+    fn link_flush_save_queue_persists_via_save_queue() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        let link = make_test_link("l1", "Test");
+        store.add_link(link).unwrap();
+        store.enqueue_save(SaveQueueEntry::Link);
+        store.enqueue_save(SaveQueueEntry::GraphMeta);
+        store.flush_save_queue().unwrap();
+
+        let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store2.load_full().unwrap();
+        assert_eq!(store2.link_count(), 1);
+        assert_eq!(store2.get_link("l1").unwrap().label.as_deref(), Some("Test"));
+    }
+
+    #[test]
+    fn delete_link_flush_save_queue_persists_via_save_queue() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        let link = make_test_link("l1", "Test");
+        store.add_link(link).unwrap();
+        assert!(store.dirty_links.contains("l1"));
+        assert!(store.dirty_graph_meta, "add_link must mark dirty_graph_meta");
+        let meta_ids = store.graph_meta.as_ref().unwrap().link_ids.clone();
+        assert!(meta_ids.contains(&"l1".to_string()), "add_link must add link_id to graph_meta.link_ids");
+
+        store.flush().unwrap();
+        let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store2.load_full().unwrap();
+        assert_eq!(store2.link_count(), 1);
+        assert!(store2.graph_meta.as_ref().unwrap().link_ids.contains(&"l1".to_string()),
+            "link_id must persist in graph.json after flush");
+    }
+
+    #[test]
+    fn hyperlink_add_update_delete_round_trip() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.load_full().unwrap();
+
+        let hl = StarMapHyperlink {
+            hyperlink_id: "hl1".to_string(),
+            source: StarMapEndpointPath {
+                segments: vec![],
+                endpoint: StarMapEdgeEndpoint::Starmap,
+            },
+            target_uri: "https://example.com".to_string(),
+            label: Some("TestHL".to_string()),
+            target_starmap_id: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+        let result = store.add_hyperlink(hl).unwrap();
+        assert_eq!(result.hyperlink_id, "hl1");
+        assert!(store.dirty_hyperlinks.contains("hl1"));
+        assert!(store.dirty_graph_meta, "add_hyperlink must mark dirty_graph_meta");
+        assert!(store.graph_meta.as_ref().unwrap().hyperlink_ids.contains(&"hl1".to_string()));
+
+        store.enqueue_save(SaveQueueEntry::Hyperlink);
+        store.enqueue_save(SaveQueueEntry::GraphMeta);
+        store.flush_save_queue().unwrap();
+
+        let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store2.load_full().unwrap();
+        assert_eq!(store2.hyperlink_count(), 1);
+        assert_eq!(store2.get_hyperlink("hl1").unwrap().label.as_deref(), Some("TestHL"));
+
+        let updated = store2.update_hyperlink("hl1", Some("UpdatedHL"), None).unwrap();
+        assert_eq!(updated.label.as_deref(), Some("UpdatedHL"));
+        store2.enqueue_save(SaveQueueEntry::Hyperlink);
+        store2.flush_save_queue().unwrap();
+
+        let mut store3 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store3.load_full().unwrap();
+        assert_eq!(store3.get_hyperlink("hl1").unwrap().label.as_deref(), Some("UpdatedHL"));
+
+        store3.delete_hyperlink("hl1").unwrap();
+        assert!(!store3.graph_meta.as_ref().unwrap().hyperlink_ids.contains(&"hl1".to_string()));
+        assert!(store3.dirty_graph_meta, "delete_hyperlink must mark dirty_graph_meta");
+        store3.enqueue_save(SaveQueueEntry::DeleteHyperlink);
+        store3.enqueue_save(SaveQueueEntry::GraphMeta);
+        store3.flush_save_queue().unwrap();
+
+        let mut store4 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store4.load_full().unwrap();
+        assert_eq!(store4.hyperlink_count(), 0);
+    }
+
+    #[test]
+    fn delete_node_cascades_to_links_and_hyperlinks() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
+
+        let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store.load_full().unwrap();
+
+        let node = StarMapNode {
+            id: "n1".to_string(),
+            title: "Node1".to_string(),
+            kind: StarMapNodeKind::Chapter,
+            payload: None,
+            tags: vec![],
+            content: Default::default(),
+            anchors: vec![],
+            portal: None,
+            display_policy: Default::default(),
+            open_behavior: Default::default(),
+            provenance: Default::default(),
+            created_at: 0,
+            updated_at: 0,
+        };
+        store.upsert_node(node);
+        store.enqueue_save(SaveQueueEntry::Node);
+        store.enqueue_save(SaveQueueEntry::GraphMeta);
+        store.flush_save_queue().unwrap();
+
+        let link = StarMapLink {
+            link_id: "l1".to_string(),
+            source: StarMapEndpoint::Node { node_id: "n1".to_string() },
+            target: crate::starmap::semantic::StarMapDeepTarget {
+                starmap_id: "other".to_string(),
+                path: vec![],
+                target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
+            },
+            label: Some("LinkToN1".to_string()),
+            created_at: 0,
+            updated_at: 0,
+        };
+        store.upsert_link(link);
+        store.enqueue_save(SaveQueueEntry::Link);
+        store.enqueue_save(SaveQueueEntry::GraphMeta);
+        store.flush_save_queue().unwrap();
+
+        let hl = StarMapHyperlink {
+            hyperlink_id: "hl1".to_string(),
+            source: StarMapEndpointPath {
+                segments: vec![],
+                endpoint: StarMapEdgeEndpoint::Node { node_id: "n1".to_string() },
+            },
+            target_uri: "https://example.com".to_string(),
+            label: Some("HLonN1".to_string()),
+            target_starmap_id: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+        store.upsert_hyperlink(hl);
+        store.enqueue_save(SaveQueueEntry::Hyperlink);
+        store.enqueue_save(SaveQueueEntry::GraphMeta);
+        store.flush_save_queue().unwrap();
+
+        let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store2.load_full().unwrap();
+        assert_eq!(store2.link_count(), 1);
+        assert_eq!(store2.hyperlink_count(), 1);
+
+        store2.delete_node("n1").unwrap();
+        assert!(store2.get_link("l1").is_none(), "delete_node must cascade remove link");
+        assert!(store2.get_hyperlink("hl1").is_none(), "delete_node must cascade remove hyperlink");
+        assert!(store2.deleted_link_ids.contains(&"l1".to_string()));
+        assert!(store2.deleted_hyperlink_ids.contains(&"hl1".to_string()));
+        assert!(store2.dirty_graph_meta);
+
+        store2.enqueue_save(SaveQueueEntry::DeleteNode);
+        store2.enqueue_save(SaveQueueEntry::DeleteLink);
+        store2.enqueue_save(SaveQueueEntry::DeleteHyperlink);
+        store2.enqueue_save(SaveQueueEntry::GraphMeta);
+        store2.flush_save_queue().unwrap();
+
+        let mut store3 = StarMapStore::new(dir.path(), &meta.starmap_id);
+        store3.load_full().unwrap();
+        assert_eq!(store3.node_count(), 0);
+        assert_eq!(store3.link_count(), 0);
+        assert_eq!(store3.hyperlink_count(), 0);
     }
 }
