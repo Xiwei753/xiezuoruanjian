@@ -12,9 +12,28 @@ use super::StarMapStore;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PhasedSnapshotRequest {
+    pub target_phase: LoadPhase,
+    pub since_revision: u64,
+}
+
+impl Default for PhasedSnapshotRequest {
+    fn default() -> Self {
+        Self {
+            target_phase: LoadPhase::PrefetchNearbyObjects,
+            since_revision: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StarMapPhasedSnapshot {
     pub starmap_id: String,
     pub title: String,
+    pub load_phase: LoadPhase,
+    pub package_revision: u64,
+    pub complete: bool,
     pub nodes: Vec<StarMapNode>,
     pub edges: Vec<StarMapEdge>,
     pub embeds: Vec<StarMapEmbed>,
@@ -50,11 +69,15 @@ impl StarMapStore {
         }
     }
 
-    pub fn get_phased_snapshot(&mut self) -> Result<StarMapPhasedSnapshot> {
-        self.load_phased(LoadPhase::PrefetchNearbyObjects)?;
+    pub fn get_phased_snapshot(&mut self, request: &PhasedSnapshotRequest) -> Result<StarMapPhasedSnapshot> {
+        self.load_phased(request.target_phase)?;
+        let complete = request.target_phase == LoadPhase::BackgroundFullLoad;
         Ok(StarMapPhasedSnapshot {
             starmap_id: self.starmap_id.clone(),
             title: self.graph_meta.as_ref().map(|meta| meta.title.clone()).unwrap_or_default(),
+            load_phase: request.target_phase,
+            package_revision: self.package_revision,
+            complete,
             nodes: self.nodes.values().cloned().collect(),
             edges: self.edges.values().cloned().collect(),
             embeds: self.embeds.values().cloned().collect(),

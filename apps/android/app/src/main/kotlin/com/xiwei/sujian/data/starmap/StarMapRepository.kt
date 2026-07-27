@@ -10,6 +10,8 @@ import com.xiwei.sujian.model.StarMapGraphEdge
 import com.xiwei.sujian.model.StarMapGraphNode
 import com.xiwei.sujian.model.StarMapLayoutData
 import com.xiwei.sujian.model.StarMapNodeKind
+import com.xiwei.sujian.model.StarMapPhasedSnapshotResult
+import uniffi.writer_core.PhasedSnapshotRequestDto
 import uniffi.writer_core.StarMapEdgeDto
 import uniffi.writer_core.StarMapEdgePatchInputDto
 import uniffi.writer_core.StarMapNodePatchInputDto
@@ -26,6 +28,25 @@ internal class StarMapRepository(
                     BridgeResult.Success(result.data.toModel())
                 } catch (e: Exception) {
                     BridgeResult.Error(ResultEnvelope.error("CONVERSION_ERROR", "Failed to convert starmap graph: ${e.message}"))
+                }
+            }
+            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
+            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
+        }
+    }
+
+    fun getStarmapPhasedSnapshot(starmapId: String, targetPhase: String = "PrefetchNearbyObjects", sinceRevision: ULong = 0u): BridgeResult<StarMapPhasedSnapshotResult> {
+        val request = PhasedSnapshotRequestDto(
+            targetPhase = targetPhase,
+            sinceRevision = sinceRevision
+        )
+        return when (val result = bridge.getStarmapPhasedSnapshot(starmapId, request)) {
+            is BridgeResult.Success -> {
+                try {
+                    cache.put(starmapId, result.data.toRawCache())
+                    BridgeResult.Success(result.data.toSnapshotResult())
+                } catch (e: Exception) {
+                    BridgeResult.Error(ResultEnvelope.error("CONVERSION_ERROR", "Failed to convert phased snapshot: ${e.message}"))
                 }
             }
             is BridgeResult.Error -> BridgeResult.Error(result.envelope)
@@ -145,11 +166,9 @@ internal class StarMapRepository(
     }
 
     fun computeEdgeRenders(data: StarMapData): BridgeResult<List<StarMapEdgeRenderData>> {
-        val rawCache = when (val cacheResult = getOrRefreshRawCache(data.graph.starmapId)) {
-            is BridgeResult.Success -> cacheResult.data
-            is BridgeResult.Error -> return BridgeResult.Error(cacheResult.envelope)
-            BridgeResult.NotLoaded -> return BridgeResult.NotLoaded
-        }
+        val rawCache = cache.get(data.graph.starmapId) ?: return BridgeResult.Error(
+            ResultEnvelope.error("SNAPSHOT_CACHE_NOT_INITIALIZED", "Starmap snapshot cache not initialized for ${data.graph.starmapId}. Call getStarmapPhasedSnapshot first.")
+        )
         val graph = rawCache.graph ?: return BridgeResult.Error(
             ResultEnvelope.error("STAR_MAP_CACHE_MISSING", "Raw starmap graph is not available")
         )
@@ -161,32 +180,9 @@ internal class StarMapRepository(
     }
 
     fun hitTestStarmapNode(data: StarMapData, x: Float, y: Float): BridgeResult<String?> {
-        val rawCache = when (val cacheResult = getOrRefreshRawCache(data.graph.starmapId)) {
-            is BridgeResult.Success -> cacheResult.data
-            is BridgeResult.Error -> return BridgeResult.Error(cacheResult.envelope)
-            BridgeResult.NotLoaded -> return BridgeResult.NotLoaded
-        }
+        val rawCache = cache.get(data.graph.starmapId) ?: return BridgeResult.Error(
+            ResultEnvelope.error("SNAPSHOT_CACHE_NOT_INITIALIZED", "Starmap snapshot cache not initialized for ${data.graph.starmapId}. Call getStarmapPhasedSnapshot first.")
+        )
         return bridge.hitTestStarMapNode(data.layout.toDto(rawCache), x, y)
-    }
-
-    private fun getOrRefreshRawCache(starmapId: String): BridgeResult<StarMapRawCache> {
-        cache.get(starmapId)?.let { return BridgeResult.Success(it) }
-        return refreshRawCache(starmapId)
-    }
-
-    private fun refreshRawCache(starmapId: String): BridgeResult<StarMapRawCache> {
-        return when (val result = bridge.getStarMapGraph(starmapId)) {
-            is BridgeResult.Success -> {
-                try {
-                    val rawCache = result.data.toRawCache()
-                    cache.put(starmapId, rawCache)
-                    BridgeResult.Success(rawCache)
-                } catch (e: Exception) {
-                    BridgeResult.Error(ResultEnvelope.error("CONVERSION_ERROR", "Failed to cache starmap graph: ${e.message}"))
-                }
-            }
-            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
-            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
-        }
     }
 }

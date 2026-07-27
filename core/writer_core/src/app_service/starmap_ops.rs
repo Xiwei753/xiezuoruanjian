@@ -252,7 +252,8 @@ impl super::WriterAppService {
     pub fn get_starmap_phased_snapshot(
         &self,
         starmap_id: String,
+        request: crate::api::types::PhasedSnapshotRequestDto,
     ) -> Result<StarMapPhasedSnapshotDto, WriterError> {
-        self.api.get_starmap_phased_snapshot(&starmap_id)
+        self.api.get_starmap_phased_snapshot(&starmap_id, &request)
     }
 }

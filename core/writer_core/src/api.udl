@@ -680,9 +680,17 @@ dictionary StarMapHyperlinkListWithDiagnosticsDto {
     sequence<LoadDiagnosticDto> diagnostics;
 };
 
+dictionary PhasedSnapshotRequestDto {
+    string target_phase;
+    u64 since_revision;
+};
+
 dictionary StarMapPhasedSnapshotDto {
     string starmap_id;
     string title;
+    string load_phase;
+    u64 package_revision;
+    boolean complete;
     sequence<StarMapNodeDto> nodes;
     sequence<StarMapEdgeDto> edges;
     sequence<StarMapEmbedDto> embeds;
@@ -1202,7 +1210,7 @@ interface WriterAppService {
     StarMapHyperlinkListWithDiagnosticsDto list_starmap_hyperlinks(string starmap_id);
 
     [Throws=WriterError]
-    StarMapPhasedSnapshotDto get_starmap_phased_snapshot(string starmap_id);
+    StarMapPhasedSnapshotDto get_starmap_phased_snapshot(string starmap_id, PhasedSnapshotRequestDto request);
 
     [Throws=WriterError]
     sequence<ActionDescriptorDto> list_registered_actions();

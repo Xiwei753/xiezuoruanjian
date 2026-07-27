@@ -130,6 +130,7 @@ private fun StarMapEditorScreen(
     var selectedNodeId by remember { mutableStateOf<String?>(null) }
     var viewportSaveJob by remember { mutableStateOf<Job?>(null) }
     var canvasEditingNodeId by remember { mutableStateOf<String?>(null) }
+    var lastOperationError by remember { mutableStateOf<String?>(null) }
 
     val coordinator = LocalAnimatedTextEditorCoordinator.current
         ?: throw IllegalStateException(
@@ -143,83 +144,13 @@ private fun StarMapEditorScreen(
                 val bridge = BridgeProvider.getStarmapBridge(context)
                 when (val result = bridge.getStarmapPhasedSnapshot(starmapId)) {
                     is BridgeResult.Success -> {
-                        val snapshot = result.data
-                        val graphData = StarMapData(
-                            graph = com.xiwei.sujian.model.StarMapGraphData(
-                                schemaVersion = 0,
-                                id = snapshot.starmapId,
-                                starmapId = snapshot.starmapId,
-                                title = snapshot.title,
-                                nodes = snapshot.nodes.map { node ->
-                                    com.xiwei.sujian.model.StarMapGraphNode(
-                                        id = node.id,
-                                        title = node.title,
-                                        kind = when (node.kind) {
-                                            uniffi.writer_core.StarMapNodeKindDto.CHARACTER -> StarMapNodeKind.Character
-                                            uniffi.writer_core.StarMapNodeKindDto.EVENT -> StarMapNodeKind.Event
-                                            uniffi.writer_core.StarMapNodeKindDto.LOCATION -> StarMapNodeKind.Location
-                                            uniffi.writer_core.StarMapNodeKindDto.ITEM -> StarMapNodeKind.Item
-                                            uniffi.writer_core.StarMapNodeKindDto.CONCEPT -> StarMapNodeKind.Concept
-                                            uniffi.writer_core.StarMapNodeKindDto.THEME -> StarMapNodeKind.Theme
-                                            uniffi.writer_core.StarMapNodeKindDto.NOTE -> StarMapNodeKind.Note
-                                            uniffi.writer_core.StarMapNodeKindDto.ORGANIZATION -> StarMapNodeKind.Organization
-                                            uniffi.writer_core.StarMapNodeKindDto.TIMELINE -> StarMapNodeKind.Timeline
-                                            uniffi.writer_core.StarMapNodeKindDto.PLOT -> StarMapNodeKind.Plot
-                                            uniffi.writer_core.StarMapNodeKindDto.FORESHADOWING -> StarMapNodeKind.Foreshadowing
-                                            uniffi.writer_core.StarMapNodeKindDto.CHAPTER -> StarMapNodeKind.Chapter
-                                            uniffi.writer_core.StarMapNodeKindDto.CUSTOM -> StarMapNodeKind.Custom
-                                        },
-                                        createdAt = node.createdAt.toLong(),
-                                        updatedAt = node.updatedAt.toLong()
-                                    )
-                                },
-                                edges = snapshot.edges.map { edge ->
-                                    com.xiwei.sujian.model.StarMapGraphEdge(
-                                        id = edge.id,
-                                        from = edge.from ?: "",
-                                        to = edge.to ?: "",
-                                        kind = when (edge.kind) {
-                                            uniffi.writer_core.StarMapEdgeKindDto.CONTAINS -> com.xiwei.sujian.model.StarMapEdgeKind.Contains
-                                            uniffi.writer_core.StarMapEdgeKindDto.REFERENCES -> com.xiwei.sujian.model.StarMapEdgeKind.References
-                                            uniffi.writer_core.StarMapEdgeKindDto.APPEARS_IN -> com.xiwei.sujian.model.StarMapEdgeKind.AppearsIn
-                                            uniffi.writer_core.StarMapEdgeKindDto.CAUSES -> com.xiwei.sujian.model.StarMapEdgeKind.Causes
-                                            uniffi.writer_core.StarMapEdgeKindDto.RELATED_TO -> com.xiwei.sujian.model.StarMapEdgeKind.RelatedTo
-                                            uniffi.writer_core.StarMapEdgeKindDto.LOCATED_AT -> com.xiwei.sujian.model.StarMapEdgeKind.LocatedAt
-                                            uniffi.writer_core.StarMapEdgeKindDto.CHARACTER_RELATION -> com.xiwei.sujian.model.StarMapEdgeKind.CharacterRelation
-                                            uniffi.writer_core.StarMapEdgeKindDto.TIMELINE -> com.xiwei.sujian.model.StarMapEdgeKind.Timeline
-                                            uniffi.writer_core.StarMapEdgeKindDto.FORESHADOWS -> com.xiwei.sujian.model.StarMapEdgeKind.Foreshadows
-                                            uniffi.writer_core.StarMapEdgeKindDto.RESOLVES -> com.xiwei.sujian.model.StarMapEdgeKind.Resolves
-                                            uniffi.writer_core.StarMapEdgeKindDto.DEPENDS_ON -> com.xiwei.sujian.model.StarMapEdgeKind.DependsOn
-                                            uniffi.writer_core.StarMapEdgeKindDto.CONFLICTS_WITH -> com.xiwei.sujian.model.StarMapEdgeKind.ConflictsWith
-                                            uniffi.writer_core.StarMapEdgeKindDto.CUSTOM -> com.xiwei.sujian.model.StarMapEdgeKind.Custom
-                                        },
-                                        label = edge.label,
-                                        createdAt = edge.createdAt.toLong(),
-                                        updatedAt = edge.updatedAt.toLong()
-                                    )
-                                },
-                                createdAt = 0L,
-                                updatedAt = 0L
-                            ),
-                            layout = StarMapLayoutData(
-                                kind = com.xiwei.sujian.model.StarMapLayoutKind.Freeform,
-                                nodes = emptyList()
-                            )
-                        )
-                        val viewport = snapshot.viewport?.let { vp ->
-                            StarMapViewportData(
-                                scale = vp.scale,
-                                offsetX = vp.offsetX,
-                                offsetY = vp.offsetY,
-                                width = vp.width,
-                                height = vp.height
-                            )
-                        } ?: StarMapViewportData()
+                        val snapshotResult = result.data
+                        val graphData = snapshotResult.data
                         val edgeRenders = when (val er = bridge.computeEdgeRenders(graphData)) {
                             is BridgeResult.Success -> er.data
                             else -> emptyList()
                         }
-                        graphData.copy(edgeRenders = edgeRenders, viewport = viewport)
+                        graphData.copy(edgeRenders = edgeRenders)
                     }
                     else -> null
                 }
@@ -296,7 +227,7 @@ private fun StarMapEditorScreen(
                 target.updateProfile(TextEditorProfile.CanvasLabel)
                 target.updatePersistent(false)
                 target.updateText(graphNode.title)
-                target.onCommit = { finalText ->
+                    target.onCommit = { finalText ->
                         if (finalText.isNotBlank() && finalText.trim() != graphNode.title) {
                             coroutineScope.launch {
                                 var success = false
@@ -306,16 +237,20 @@ private fun StarMapEditorScreen(
                                         val result = bridge.updateStarmapNode(starmapId, geometry.nodeId, title = finalText.trim(), kind = null)
                                         success = result is BridgeResult.Success
                                         if (!success) {
-                                            DiagnosticsLogger.e("StarMapScreen", "updateStarmapNode onCommit failed: ${(result as? BridgeResult.Error)?.message}")
+                                            lastOperationError = "更新节点失败: ${(result as? BridgeResult.Error)?.message}"
                                         }
                                     } catch (e: Exception) {
-                                        DiagnosticsLogger.e("StarMapScreen", "updateStarmapNode onCommit exception: ${e.message}")
+                                        lastOperationError = "更新节点异常: ${e.message}"
                                     }
                                 }
                                 if (success) {
+                                    lastOperationError = null
                                     loadStarMap()
                                 }
                             }
+                        } else {
+                            canvasEditingNodeId = null
+                            coordinator.unregisterTarget(targetId)
                         }
                         canvasEditingNodeId = null
                         coordinator.unregisterTarget(targetId)
@@ -363,13 +298,14 @@ private fun StarMapEditorScreen(
                                 val result = bridge.updateStarmapNode(starmapId, nodeId, title = newTitle, kind = newKind)
                                 success = result is BridgeResult.Success
                                 if (!success) {
-                                    DiagnosticsLogger.e("StarMapScreen", "updateStarmapNode failed: ${(result as? BridgeResult.Error)?.message}")
+                                    lastOperationError = "更新节点失败: ${(result as? BridgeResult.Error)?.message}"
                                 }
                             } catch (e: Exception) {
-                                DiagnosticsLogger.e("StarMapScreen", "updateStarmapNode exception: ${e.message}")
+                                lastOperationError = "更新节点异常: ${e.message}"
                             }
                         }
                         if (success) {
+                            lastOperationError = null
                             selectedNodeId = null
                             loadStarMap()
                         }
@@ -384,13 +320,14 @@ private fun StarMapEditorScreen(
                                 val result = bridge.deleteStarmapNode(starmapId, nodeId)
                                 success = result is BridgeResult.Success
                                 if (!success) {
-                                    DiagnosticsLogger.e("StarMapScreen", "deleteStarmapNode failed: ${(result as? BridgeResult.Error)?.message}")
+                                    lastOperationError = "删除节点失败: ${(result as? BridgeResult.Error)?.message}"
                                 }
                             } catch (e: Exception) {
-                                DiagnosticsLogger.e("StarMapScreen", "deleteStarmapNode exception: ${e.message}")
+                                lastOperationError = "删除节点异常: ${e.message}"
                             }
                         }
                         if (success) {
+                            lastOperationError = null
                             selectedNodeId = null
                             loadStarMap()
                         }
@@ -419,13 +356,15 @@ private fun StarMapEditorScreen(
                             val result = bridge.addStarmapNode(starmapId, node)
                             success = result is BridgeResult.Success
                             if (!success) {
-                                DiagnosticsLogger.e("StarMapScreen", "addStarmapNode failed: ${(result as? BridgeResult.Error)?.message}")
+                                lastOperationError = "添加节点失败: ${(result as? BridgeResult.Error)?.message}"
                             }
                         } catch (e: Exception) {
-                            DiagnosticsLogger.e("StarMapScreen", "addStarmapNode exception: ${e.message}")
+                            lastOperationError = "添加节点异常: ${e.message}"
                         }
                     }
                     if (success) {
+                        lastOperationError = null
+                        showAddNodeDialog = false
                         loadStarMap()
                     }
                 }
@@ -446,13 +385,15 @@ private fun StarMapEditorScreen(
                             val result = bridge.addStarmapEdge(starmapId, fromNodeId, toNodeId)
                             success = result is BridgeResult.Success
                             if (!success) {
-                                DiagnosticsLogger.e("StarMapScreen", "addStarmapEdge failed: ${(result as? BridgeResult.Error)?.message}")
+                                lastOperationError = "添加连线失败: ${(result as? BridgeResult.Error)?.message}"
                             }
                         } catch (e: Exception) {
-                            DiagnosticsLogger.e("StarMapScreen", "addStarmapEdge exception: ${e.message}")
+                            lastOperationError = "添加连线异常: ${e.message}"
                         }
                     }
                     if (success) {
+                        lastOperationError = null
+                        showAddEdgeDialog = false
                         loadStarMap()
                     }
                 }

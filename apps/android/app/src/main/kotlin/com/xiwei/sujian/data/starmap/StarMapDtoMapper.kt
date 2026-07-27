@@ -1,31 +1,47 @@
 package com.xiwei.sujian.data.starmap
 
 import com.google.gson.Gson
+import com.xiwei.sujian.model.StarMapAnchorData
 import com.xiwei.sujian.model.StarMapData
+import com.xiwei.sujian.model.StarMapDisplayPolicyData
 import com.xiwei.sujian.model.StarMapEdgeKind
 import com.xiwei.sujian.model.StarMapEdgeRenderData
+import com.xiwei.sujian.model.StarMapEmbedData
+import com.xiwei.sujian.model.StarMapEmbedPlacementData
+import com.xiwei.sujian.model.StarMapEmbedViewportData
 import com.xiwei.sujian.model.StarMapGraphData
 import com.xiwei.sujian.model.StarMapGraphEdge
 import com.xiwei.sujian.model.StarMapGraphNode
+import com.xiwei.sujian.model.StarMapHyperlinkData
 import com.xiwei.sujian.model.StarMapLayoutData
 import com.xiwei.sujian.model.StarMapLayoutKind
 import com.xiwei.sujian.model.StarMapLayoutNodeData
+import com.xiwei.sujian.model.StarMapLinkData
+import com.xiwei.sujian.model.StarMapLoadDiagnostic
 import com.xiwei.sujian.model.StarMapMeta
 import com.xiwei.sujian.model.StarMapNodeKind
+import com.xiwei.sujian.model.StarMapPhasedSnapshotResult
+import com.xiwei.sujian.model.StarMapProvenanceData
 import com.xiwei.sujian.model.StarMapViewportData
+import uniffi.writer_core.LoadDiagnosticDto
+import uniffi.writer_core.PhasedSnapshotRequestDto
 import uniffi.writer_core.StarMapDisplayPolicyDto
 import uniffi.writer_core.StarMapEdgeDto
 import uniffi.writer_core.StarMapEdgeKindDto
 import uniffi.writer_core.StarMapEdgeRenderDto
+import uniffi.writer_core.StarMapEmbedDto
 import uniffi.writer_core.StarMapGraphDto
+import uniffi.writer_core.StarMapHyperlinkDto
 import uniffi.writer_core.StarMapLayoutDto
 import uniffi.writer_core.StarMapLayoutKindDto
 import uniffi.writer_core.StarMapLayoutNodeDto
+import uniffi.writer_core.StarMapLinkDto
 import uniffi.writer_core.StarMapMetaDto
 import uniffi.writer_core.StarMapNodeContentDto
 import uniffi.writer_core.StarMapNodeDto
 import uniffi.writer_core.StarMapNodeKindDto
 import uniffi.writer_core.StarMapOpenBehaviorDto
+import uniffi.writer_core.StarMapPhasedSnapshotDto
 import uniffi.writer_core.StarMapProvenanceDto
 import uniffi.writer_core.StarMapReviewStatusDto
 import uniffi.writer_core.StarMapSourceKindDto
@@ -78,6 +94,21 @@ internal fun StarMapNodeDto.toGraphNode(): StarMapGraphNode = StarMapGraphNode(
     kind = kind.toModel(),
     payload = payload.toPayloadMap(),
     tags = tags,
+    contentKind = content?.kind,
+    anchors = anchors.map { StarMapAnchorData(anchorId = it.anchorId, label = it.label, role = it.role.name) },
+    displayPolicy = StarMapDisplayPolicyData(
+        importance = displayPolicy.importance,
+        minVisibleScale = displayPolicy.minVisibleScale,
+        titleScale = displayPolicy.titleScale,
+        summaryScale = displayPolicy.summaryScale,
+        detailScale = displayPolicy.detailScale,
+        maxPreviewChars = displayPolicy.maxPreviewChars.toInt(),
+        minReadablePx = displayPolicy.minReadablePx
+    ),
+    provenance = StarMapProvenanceData(
+        source = provenance.source.name,
+        reviewStatus = provenance.reviewStatus.name
+    ),
     createdAt = createdAt.toLong(),
     updatedAt = updatedAt.toLong()
 )
@@ -152,6 +183,14 @@ internal fun StarMapEdgeDto.toGraphEdge(): StarMapGraphEdge = StarMapGraphEdge(
     kind = kind.toModel(),
     label = label,
     payload = payload.toPayloadMap(),
+    fromEndpoint = fromEndpoint?.let { "${it.kind}:${it.nodeId ?: ""}" },
+    toEndpoint = toEndpoint?.let { "${it.kind}:${it.nodeId ?: ""}" },
+    fromEndpointPath = fromEndpointPath?.let { ep ->
+        ep.segments.joinToString("→") { it.starmapId ?: "" } + "→${ep.endpoint.kind}:${ep.endpoint.nodeId ?: ""}"
+    },
+    toEndpointPath = toEndpointPath?.let { ep ->
+        ep.segments.joinToString("→") { it.starmapId ?: "" } + "→${ep.endpoint.kind}:${ep.endpoint.nodeId ?: ""}"
+    },
     createdAt = createdAt.toLong(),
     updatedAt = updatedAt.toLong()
 )
@@ -316,4 +355,131 @@ internal fun defaultStarMapDisplayPolicy() = StarMapDisplayPolicyDto(
     detailScale = 1f,
     maxPreviewChars = 120u,
     minReadablePx = 12f
+)
+
+internal fun PhasedSnapshotRequestDto.Companion.create(
+    targetPhase: String = "PrefetchNearbyObjects",
+    sinceRevision: ULong = 0u
+): PhasedSnapshotRequestDto = PhasedSnapshotRequestDto(
+    targetPhase = targetPhase,
+    sinceRevision = sinceRevision
+)
+
+internal fun StarMapPhasedSnapshotDto.toRawCache(): StarMapRawCache = StarMapRawCache(
+    graph = StarMapGraphDto(
+        schemaVersion = 1u,
+        id = starmapId,
+        starmapId = starmapId,
+        title = title,
+        nodes = nodes,
+        edges = edges,
+        embeds = embeds,
+        links = links,
+        createdAt = 0u,
+        updatedAt = 0u
+    ),
+    nodes = nodes.associateByTo(mutableMapOf()) { it.id },
+    edges = edges.associateByTo(mutableMapOf()) { it.id },
+    layoutNodes = layout?.nodes?.associateByTo(mutableMapOf()) { it.nodeId } ?: mutableMapOf()
+)
+
+internal fun StarMapPhasedSnapshotDto.toSnapshotResult(): StarMapPhasedSnapshotResult {
+    val layoutData = layout?.toModel() ?: StarMapLayoutData(
+        kind = StarMapLayoutKind.Freeform,
+        nodes = emptyList()
+    )
+    val data = StarMapData(
+        graph = StarMapGraphData(
+            schemaVersion = 0,
+            id = starmapId,
+            starmapId = starmapId,
+            title = title,
+            nodes = nodes.map { it.toGraphNode() },
+            edges = edges.map { it.toGraphEdge() },
+            createdAt = 0L,
+            updatedAt = 0L
+        ),
+        layout = layoutData,
+        viewport = viewport?.toModel() ?: StarMapViewportData(),
+        embeds = embeds.map { it.toModel() },
+        links = links.map { it.toModel() },
+        hyperlinks = hyperlinks.map { it.toModel() },
+        loadPhase = loadPhase,
+        packageRevision = packageRevision,
+        complete = complete
+    )
+    return StarMapPhasedSnapshotResult(
+        data = data,
+        diagnostics = diagnostics.map { it.toModel() }
+    )
+}
+
+internal fun StarMapLayoutDto.toModel(): StarMapLayoutData = StarMapLayoutData(
+    kind = when (kind) {
+        StarMapLayoutKindDto.FREEFORM -> StarMapLayoutKind.Freeform
+        StarMapLayoutKindDto.AUTO_RADIAL -> StarMapLayoutKind.AutoRadial
+        StarMapLayoutKindDto.CUSTOM -> StarMapLayoutKind.Custom
+    },
+    nodes = nodes.map { it.toModel() }
+)
+
+internal fun StarMapLayoutNodeDto.toModel(): StarMapLayoutNodeData = StarMapLayoutNodeData(
+    nodeId = nodeId,
+    x = x,
+    y = y,
+    width = width,
+    height = height,
+    radius = radius,
+    collapsed = collapsed,
+    zIndex = zIndex,
+    scale = scale,
+    depth = depth,
+    focusWeight = focusWeight,
+    orbitGroup = orbitGroup
+)
+
+internal fun StarMapEmbedDto.toModel(): StarMapEmbedData = StarMapEmbedData(
+    instanceId = instanceId,
+    targetStarmapId = targetStarmapId,
+    label = label,
+    sourceNodeId = sourceNodeId,
+    placement = StarMapEmbedPlacementData(
+        x = placement.x,
+        y = placement.y,
+        width = placement.width,
+        height = placement.height,
+        scale = placement.scale,
+        zIndex = placement.zIndex,
+        collapsed = placement.collapsed
+    ),
+    targetViewport = StarMapEmbedViewportData(
+        scale = targetViewport.scale,
+        offsetX = targetViewport.offsetX,
+        offsetY = targetViewport.offsetY
+    )
+)
+
+internal fun StarMapLinkDto.toModel(): StarMapLinkData = StarMapLinkData(
+    linkId = linkId,
+    sourceNodeId = when (source.kind) {
+        "Node" -> source.nodeId ?: ""
+        "Anchor" -> source.nodeId ?: ""
+        else -> ""
+    },
+    targetStarmapId = target.starmapId,
+    label = label
+)
+
+internal fun StarMapHyperlinkDto.toModel(): StarMapHyperlinkData = StarMapHyperlinkData(
+    hyperlinkId = hyperlinkId,
+    targetUri = targetUri,
+    label = label,
+    targetStarmapId = targetStarmapId
+)
+
+internal fun LoadDiagnosticDto.toModel(): StarMapLoadDiagnostic = StarMapLoadDiagnostic(
+    kind = kind,
+    objectType = objectType,
+    objectId = objectId,
+    detail = detail
 )

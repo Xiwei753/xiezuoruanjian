@@ -487,11 +487,12 @@ impl super::WriterCore {
     pub fn get_starmap_phased_snapshot(
         &self,
         starmap_id: &str,
+        request: &crate::starmap::store::PhasedSnapshotRequest,
     ) -> Result<crate::starmap::store::StarMapPhasedSnapshot> {
         let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
         let store = stores.entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
-        store.get_phased_snapshot()
+        store.get_phased_snapshot(request)
     }
 
     pub fn find_starmap_references(

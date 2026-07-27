@@ -13,6 +13,8 @@ import com.xiwei.sujian.model.StarMapLayoutData
 import com.xiwei.sujian.model.StarMapMeta
 import com.xiwei.sujian.model.StarMapMotionPolicyData
 import com.xiwei.sujian.model.StarMapNodeKind
+import com.xiwei.sujian.model.StarMapPhasedSnapshotResult
+import uniffi.writer_core.PhasedSnapshotRequestDto
 import com.xiwei.sujian.model.StarMapViewportData
 import uniffi.writer_core.StarMapEdgeDto
 import uniffi.writer_core.StarMapEdgeKindDto
@@ -130,8 +132,8 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
         holder.service.listStarmapHyperlinks(starmapId)
     }
 
-    fun getStarmapPhasedSnapshot(starmapId: String): BridgeResult<StarMapPhasedSnapshotDto> = holder.wrapResult {
-        holder.service.getStarmapPhasedSnapshot(starmapId)
+    fun getStarmapPhasedSnapshot(starmapId: String, request: PhasedSnapshotRequestDto): BridgeResult<StarMapPhasedSnapshotDto> = holder.wrapResult {
+        holder.service.getStarmapPhasedSnapshot(starmapId, request)
     }
 
     fun findStarmapReferences(targetStarmapId: String): BridgeResult<List<StarMapReferenceDto>> = holder.wrapResult {
@@ -193,6 +195,8 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
     }
 
     fun getStarmapGraph(starmapId: String): BridgeResult<StarMapData> = repository.getStarmapGraph(starmapId)
+
+    fun getStarmapPhasedSnapshot(starmapId: String, targetPhase: String = "PrefetchNearbyObjects", sinceRevision: ULong = 0u): BridgeResult<StarMapPhasedSnapshotResult> = repository.getStarmapPhasedSnapshot(starmapId, targetPhase, sinceRevision)
 
     fun addStarmapNode(starmapId: String, node: StarMapGraphNode, x: Float = 0f, y: Float = 0f): BridgeResult<StarMapGraphNode> = repository.addStarmapNode(starmapId, node, x, y)
 

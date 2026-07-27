@@ -50,7 +50,7 @@ pub mod types;
 pub use types::*;
 pub use meta::GraphMeta;
 pub use relation_index::{EdgeRelationIndex, EmbedHostIndex, LinkRelationIndex, HyperlinkRelationIndex};
-pub use snapshot::StarMapPhasedSnapshot;
+pub use snapshot::{StarMapPhasedSnapshot, PhasedSnapshotRequest};
 
 pub struct StarMapStore {
     pub(super) workspace: PathBuf,

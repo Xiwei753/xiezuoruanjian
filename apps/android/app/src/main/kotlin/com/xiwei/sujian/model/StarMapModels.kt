@@ -126,8 +126,33 @@ data class StarMapGraphNode(
     val kind: StarMapNodeKind,
     val payload: Map<String, Any>? = null,
     val tags: List<String> = emptyList(),
+    val contentKind: String? = null,
+    val anchors: List<StarMapAnchorData> = emptyList(),
+    val displayPolicy: StarMapDisplayPolicyData? = null,
+    val provenance: StarMapProvenanceData? = null,
     val createdAt: Long = 0,
     val updatedAt: Long = 0
+)
+
+data class StarMapAnchorData(
+    val anchorId: String,
+    val label: String? = null,
+    val role: String = "Source"
+)
+
+data class StarMapDisplayPolicyData(
+    val importance: Float = 1f,
+    val minVisibleScale: Float = 0f,
+    val titleScale: Float = 1f,
+    val summaryScale: Float = 1f,
+    val detailScale: Float = 1f,
+    val maxPreviewChars: Int = 120,
+    val minReadablePx: Float = 12f
+)
+
+data class StarMapProvenanceData(
+    val source: String = "Human",
+    val reviewStatus: String = "Accepted"
 )
 
 data class StarMapGraphEdge(
@@ -137,6 +162,10 @@ data class StarMapGraphEdge(
     val kind: StarMapEdgeKind,
     val label: String? = null,
     val payload: Map<String, Any>? = null,
+    val fromEndpoint: String? = null,
+    val toEndpoint: String? = null,
+    val fromEndpointPath: String? = null,
+    val toEndpointPath: String? = null,
     val createdAt: Long = 0,
     val updatedAt: Long = 0
 )
@@ -227,7 +256,64 @@ data class StarMapData(
     val graph: StarMapGraphData,
     val layout: StarMapLayoutData,
     val edgeRenders: List<StarMapEdgeRenderData> = emptyList(),
-    val viewport: StarMapViewportData = StarMapViewportData()
+    val viewport: StarMapViewportData = StarMapViewportData(),
+    val embeds: List<StarMapEmbedData> = emptyList(),
+    val links: List<StarMapLinkData> = emptyList(),
+    val hyperlinks: List<StarMapHyperlinkData> = emptyList(),
+    val loadPhase: String = "PrefetchNearbyObjects",
+    val packageRevision: ULong = 0u,
+    val complete: Boolean = false
+)
+
+data class StarMapEmbedData(
+    val instanceId: String,
+    val targetStarmapId: String,
+    val label: String? = null,
+    val sourceNodeId: String? = null,
+    val placement: StarMapEmbedPlacementData = StarMapEmbedPlacementData(),
+    val targetViewport: StarMapEmbedViewportData = StarMapEmbedViewportData()
+)
+
+data class StarMapEmbedPlacementData(
+    val x: Float = 0f,
+    val y: Float = 0f,
+    val width: Float = 200f,
+    val height: Float = 150f,
+    val scale: Float = 1f,
+    val zIndex: Int = 0,
+    val collapsed: Boolean = false
+)
+
+data class StarMapEmbedViewportData(
+    val scale: Float = 1f,
+    val offsetX: Float = 0f,
+    val offsetY: Float = 0f
+)
+
+data class StarMapLinkData(
+    val linkId: String,
+    val sourceNodeId: String = "",
+    val targetStarmapId: String = "",
+    val label: String? = null
+)
+
+data class StarMapHyperlinkData(
+    val hyperlinkId: String,
+    val targetUri: String,
+    val label: String? = null,
+    val targetStarmapId: String? = null
+)
+
+data class StarMapPhasedSnapshotResult(
+    val data: StarMapData,
+    val diagnostics: List<StarMapLoadDiagnostic> = emptyList()
+)
+
+data class StarMapLoadDiagnostic(
+    val kind: String,
+    val objectType: String,
+    val objectId: String,
+    val detail: String? = null
 )
 
 /**

@@ -1049,9 +1049,10 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
-    pub fn get_starmap_phased_snapshot(&self, starmap_id: &str) -> ApiResult<crate::api::types::StarMapPhasedSnapshotDto> {
+    pub fn get_starmap_phased_snapshot(&self, starmap_id: &str, request: &crate::api::types::PhasedSnapshotRequestDto) -> ApiResult<crate::api::types::StarMapPhasedSnapshotDto> {
+        let core_request: crate::starmap::store::PhasedSnapshotRequest = request.clone().into();
         self.core()
-            .get_starmap_phased_snapshot(starmap_id)
+            .get_starmap_phased_snapshot(starmap_id, &core_request)
             .map(crate::api::types::StarMapPhasedSnapshotDto::from)
             .map_err(Into::into)
     }

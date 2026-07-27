@@ -91,9 +91,49 @@ impl From<crate::starmap::store::ListWithDiagnostics<crate::starmap::types::Star
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct PhasedSnapshotRequestDto {
+    pub target_phase: String,
+    pub since_revision: u64,
+}
+
+impl From<crate::starmap::store::PhasedSnapshotRequest> for PhasedSnapshotRequestDto {
+    fn from(r: crate::starmap::store::PhasedSnapshotRequest) -> Self {
+        Self {
+            target_phase: match r.target_phase {
+                crate::starmap::store::LoadPhase::GraphMeta => "GraphMeta".to_string(),
+                crate::starmap::store::LoadPhase::ViewportAndLayoutIndex => "ViewportAndLayoutIndex".to_string(),
+                crate::starmap::store::LoadPhase::CurrentViewportObjects => "CurrentViewportObjects".to_string(),
+                crate::starmap::store::LoadPhase::PrefetchNearbyObjects => "PrefetchNearbyObjects".to_string(),
+                crate::starmap::store::LoadPhase::BackgroundFullLoad => "BackgroundFullLoad".to_string(),
+            },
+            since_revision: r.since_revision,
+        }
+    }
+}
+
+impl From<PhasedSnapshotRequestDto> for crate::starmap::store::PhasedSnapshotRequest {
+    fn from(d: PhasedSnapshotRequestDto) -> Self {
+        Self {
+            target_phase: match d.target_phase.as_str() {
+                "GraphMeta" => crate::starmap::store::LoadPhase::GraphMeta,
+                "ViewportAndLayoutIndex" => crate::starmap::store::LoadPhase::ViewportAndLayoutIndex,
+                "CurrentViewportObjects" => crate::starmap::store::LoadPhase::CurrentViewportObjects,
+                "BackgroundFullLoad" => crate::starmap::store::LoadPhase::BackgroundFullLoad,
+                _ => crate::starmap::store::LoadPhase::PrefetchNearbyObjects,
+            },
+            since_revision: d.since_revision,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct StarMapPhasedSnapshotDto {
     pub starmap_id: String,
     pub title: String,
+    pub load_phase: String,
+    pub package_revision: u64,
+    pub complete: bool,
     pub nodes: Vec<StarMapNodeDto>,
     pub edges: Vec<StarMapEdgeDto>,
     pub embeds: Vec<StarMapEmbedDto>,
@@ -109,6 +149,15 @@ impl From<crate::starmap::store::StarMapPhasedSnapshot> for StarMapPhasedSnapsho
         Self {
             starmap_id: s.starmap_id,
             title: s.title,
+            load_phase: match s.load_phase {
+                crate::starmap::store::LoadPhase::GraphMeta => "GraphMeta".to_string(),
+                crate::starmap::store::LoadPhase::ViewportAndLayoutIndex => "ViewportAndLayoutIndex".to_string(),
+                crate::starmap::store::LoadPhase::CurrentViewportObjects => "CurrentViewportObjects".to_string(),
+                crate::starmap::store::LoadPhase::PrefetchNearbyObjects => "PrefetchNearbyObjects".to_string(),
+                crate::starmap::store::LoadPhase::BackgroundFullLoad => "BackgroundFullLoad".to_string(),
+            },
+            package_revision: s.package_revision,
+            complete: s.complete,
             nodes: s.nodes.into_iter().map(Into::into).collect(),
             edges: s.edges.into_iter().map(Into::into).collect(),
             embeds: s.embeds.into_iter().map(Into::into).collect(),
