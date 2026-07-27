@@ -91,6 +91,12 @@ impl WriterCore {
     }
 }
 
+impl Drop for WriterCore {
+    fn drop(&mut self) {
+        let _ = self.flush_all_starmap_stores();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

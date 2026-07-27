@@ -189,4 +189,29 @@ impl super::WriterAppService {
     ) -> Result<StarMapMotionPolicyDto, WriterError> {
         self.api.get_starmap_motion_policy()
     }
+
+    pub fn flush_starmap_store(
+        &self,
+        starmap_id: String,
+    ) -> Result<bool, WriterError> {
+        self.api.flush_starmap_store(&starmap_id)
+    }
+
+    pub fn close_starmap_store(
+        &self,
+        starmap_id: String,
+    ) -> Result<bool, WriterError> {
+        self.api.close_starmap_store(&starmap_id)
+    }
+
+    pub fn flush_all_starmap_stores(&self) -> Result<bool, WriterError> {
+        self.api.flush_all_starmap_stores()
+    }
+
+    pub fn list_starmap_links(
+        &self,
+        starmap_id: String,
+    ) -> Result<Vec<StarMapLinkDto>, WriterError> {
+        self.api.list_starmap_links(&starmap_id)
+    }
 }

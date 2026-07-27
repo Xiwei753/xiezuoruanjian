@@ -424,6 +424,21 @@ impl super::WriterCore {
         Ok(store.all_hyperlinks().cloned().collect())
     }
 
+    pub fn list_starmap_links(
+        &self,
+        starmap_id: &str,
+    ) -> Result<Vec<crate::starmap::types::StarMapLink>> {
+        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
+        let store = stores.entry(starmap_id.to_string())
+            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+        store.ensure_loaded()?;
+        let link_ids: Vec<String> = store.graph_meta_link_ids();
+        for link_id in &link_ids {
+            let _ = store.ensure_link_loaded(link_id);
+        }
+        Ok(store.all_links().cloned().collect())
+    }
+
     pub fn find_starmap_references(
         &self,
         target_starmap_id: &str,

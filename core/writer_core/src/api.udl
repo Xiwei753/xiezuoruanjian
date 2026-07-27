@@ -1131,6 +1131,18 @@ interface WriterAppService {
     StarMapMotionPolicyDto get_starmap_motion_policy();
 
     [Throws=WriterError]
+    boolean flush_starmap_store(string starmap_id);
+
+    [Throws=WriterError]
+    boolean close_starmap_store(string starmap_id);
+
+    [Throws=WriterError]
+    boolean flush_all_starmap_stores();
+
+    [Throws=WriterError]
+    sequence<StarMapLinkDto> list_starmap_links(string starmap_id);
+
+    [Throws=WriterError]
     sequence<ActionDescriptorDto> list_registered_actions();
 
     [Throws=WriterError]

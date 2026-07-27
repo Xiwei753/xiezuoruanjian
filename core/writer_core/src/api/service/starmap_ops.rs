@@ -969,4 +969,11 @@ impl WriterCoreApi {
             .map(|_| true)
             .map_err(Into::into)
     }
+
+    pub fn list_starmap_links(&self, starmap_id: &str) -> ApiResult<Vec<crate::api::types::StarMapLinkDto>> {
+        self.core()
+            .list_starmap_links(starmap_id)
+            .map(|links| links.into_iter().map(crate::api::types::StarMapLinkDto::from).collect())
+            .map_err(Into::into)
+    }
 }

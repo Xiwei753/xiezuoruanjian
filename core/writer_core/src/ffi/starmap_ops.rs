@@ -425,3 +425,58 @@ pub unsafe extern "C" fn writer_core_compute_starmap_edge_renders(
         Err(e) => err_json("STARMAP_ERROR", &e),
     }
 }
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_flush_starmap_store(
+    starmap_id_ptr: *const c_char,
+) -> *mut c_char {
+    let starmap_id = match c_str_to_rust(starmap_id_ptr) {
+        Ok(s) => s,
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid starmap_id: error {}", e),
+            )
+        }
+    };
+    match with_core(|core| {
+        core.flush_starmap_store(&starmap_id).map_err(|e| format!("{}", e))?;
+        Ok(true)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("STARMAP_ERROR", &e),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_close_starmap_store(
+    starmap_id_ptr: *const c_char,
+) -> *mut c_char {
+    let starmap_id = match c_str_to_rust(starmap_id_ptr) {
+        Ok(s) => s,
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid starmap_id: error {}", e),
+            )
+        }
+    };
+    match with_core(|core| {
+        core.close_starmap_store(&starmap_id).map_err(|e| format!("{}", e))?;
+        Ok(true)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("STARMAP_ERROR", &e),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_flush_all_starmap_stores() -> *mut c_char {
+    match with_core(|core| {
+        core.flush_all_starmap_stores().map_err(|e| format!("{}", e))?;
+        Ok(true)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("STARMAP_ERROR", &e),
+    }
+}

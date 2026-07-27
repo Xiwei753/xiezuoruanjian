@@ -169,6 +169,12 @@ pub struct GraphMeta {
     pub embed_instance_ids: Vec<String>,
     pub link_ids: Vec<String>,
     pub hyperlink_ids: Vec<String>,
+    #[serde(default)]
+    pub edge_from_index: Vec<String>,
+    #[serde(default)]
+    pub edge_to_index: Vec<String>,
+    #[serde(default)]
+    pub embed_host_node_index: Vec<String>,
     pub package_revision: u64,
     pub updated_at: u64,
 }
@@ -656,6 +662,9 @@ impl StarMapStore {
                         embed_instance_ids: graph.embeds.iter().map(|e| e.instance_id.clone()).collect(),
                         link_ids: graph.links.iter().map(|l| l.link_id.clone()).collect(),
                         hyperlink_ids: vec![],
+                        edge_from_index: graph.edges.iter().map(|e| e.from.clone().unwrap_or_default()).collect(),
+                        edge_to_index: graph.edges.iter().map(|e| e.to.clone().unwrap_or_default()).collect(),
+                        embed_host_node_index: graph.embeds.iter().map(|e| e.source_node_id.clone().unwrap_or_default()).collect(),
                         package_revision: 0,
                         updated_at: graph.updated_at,
                     });
@@ -736,13 +745,6 @@ impl StarMapStore {
             return;
         }
 
-        let all_edge_ids = self.graph_meta.as_ref()
-            .map(|m| m.edge_ids.clone())
-            .unwrap_or_default();
-        let all_embed_ids = self.graph_meta.as_ref()
-            .map(|m| m.embed_instance_ids.clone())
-            .unwrap_or_default();
-
         for node_id in &viewport_node_ids {
             if !self.nodes.contains_key(node_id) {
                 if let Some(node) = self.try_load_node(node_id) {
@@ -751,24 +753,70 @@ impl StarMapStore {
             }
         }
 
-        for edge_id in &all_edge_ids {
-            if !self.edges.contains_key(edge_id) {
-                if let Some(edge) = self.try_load_edge(edge_id) {
-                    let from_in_viewport = edge.from.as_ref().map_or(false, |id| self.nodes.contains_key(id));
-                    let to_in_viewport = edge.to.as_ref().map_or(false, |id| self.nodes.contains_key(id));
-                    if from_in_viewport || to_in_viewport {
+        let has_index = self.graph_meta.as_ref()
+            .map(|m| !m.edge_from_index.is_empty() || m.edge_ids.is_empty())
+            .unwrap_or(false);
+
+        if has_index {
+            let edge_ids: Vec<String> = self.graph_meta.as_ref().unwrap().edge_ids.clone();
+            let edge_from_index: Vec<String> = self.graph_meta.as_ref().unwrap().edge_from_index.clone();
+            let edge_to_index: Vec<String> = self.graph_meta.as_ref().unwrap().edge_to_index.clone();
+            let embed_instance_ids: Vec<String> = self.graph_meta.as_ref().unwrap().embed_instance_ids.clone();
+            let embed_host_node_index: Vec<String> = self.graph_meta.as_ref().unwrap().embed_host_node_index.clone();
+
+            for (i, edge_id) in edge_ids.iter().enumerate() {
+                if self.edges.contains_key(edge_id) {
+                    continue;
+                }
+                let from_in_viewport = i < edge_from_index.len()
+                    && viewport_node_ids.contains(&edge_from_index[i]);
+                let to_in_viewport = i < edge_to_index.len()
+                    && viewport_node_ids.contains(&edge_to_index[i]);
+                if from_in_viewport || to_in_viewport {
+                    if let Some(edge) = self.try_load_edge(edge_id) {
                         self.edges.insert(edge_id.clone(), edge);
                     }
                 }
             }
-        }
-
-        for instance_id in &all_embed_ids {
-            if !self.embeds.contains_key(instance_id) {
-                if let Some(embed) = self.try_load_embed(instance_id) {
-                    let source_in_viewport = embed.source_node_id.as_ref().map_or(false, |id| self.nodes.contains_key(id));
-                    if source_in_viewport {
+            for (i, instance_id) in embed_instance_ids.iter().enumerate() {
+                if self.embeds.contains_key(instance_id) {
+                    continue;
+                }
+                let host_in_viewport = i < embed_host_node_index.len()
+                    && viewport_node_ids.contains(&embed_host_node_index[i]);
+                if host_in_viewport {
+                    if let Some(embed) = self.try_load_embed(instance_id) {
                         self.embeds.insert(instance_id.clone(), embed);
+                    }
+                }
+            }
+        } else {
+            let all_edge_ids = self.graph_meta.as_ref()
+                .map(|m| m.edge_ids.clone())
+                .unwrap_or_default();
+            let all_embed_ids = self.graph_meta.as_ref()
+                .map(|m| m.embed_instance_ids.clone())
+                .unwrap_or_default();
+
+            for edge_id in &all_edge_ids {
+                if !self.edges.contains_key(edge_id) {
+                    if let Some(edge) = self.try_load_edge(edge_id) {
+                        let from_in_viewport = edge.from.as_ref().map_or(false, |id| viewport_node_ids.contains(id));
+                        let to_in_viewport = edge.to.as_ref().map_or(false, |id| viewport_node_ids.contains(id));
+                        if from_in_viewport || to_in_viewport {
+                            self.edges.insert(edge_id.clone(), edge);
+                        }
+                    }
+                }
+            }
+
+            for instance_id in &all_embed_ids {
+                if !self.embeds.contains_key(instance_id) {
+                    if let Some(embed) = self.try_load_embed(instance_id) {
+                        let source_in_viewport = embed.source_node_id.as_ref().map_or(false, |id| viewport_node_ids.contains(id));
+                        if source_in_viewport {
+                            self.embeds.insert(instance_id.clone(), embed);
+                        }
                     }
                 }
             }
@@ -846,26 +894,55 @@ impl StarMapStore {
     fn prefetch_nearby_objects(&mut self, _diagnostics: &mut Vec<LoadDiagnostic>) {
         let loaded_node_ids: HashSet<String> = self.nodes.keys().cloned().collect();
         let mut adjacent_node_ids: HashSet<String> = HashSet::new();
-        for edge in self.edges.values() {
-            if let Some(ref from_id) = edge.from {
+
+        let has_index = self.graph_meta.as_ref()
+            .map(|m| !m.edge_from_index.is_empty() || m.edge_ids.is_empty())
+            .unwrap_or(false);
+
+        if has_index {
+            let edge_from_index: Vec<String> = self.graph_meta.as_ref().unwrap().edge_from_index.clone();
+            let edge_to_index: Vec<String> = self.graph_meta.as_ref().unwrap().edge_to_index.clone();
+            for (i, from_id) in edge_from_index.iter().enumerate() {
                 if loaded_node_ids.contains(from_id) {
-                    if let Some(ref to_id) = edge.to {
-                        if !self.nodes.contains_key(to_id) {
-                            adjacent_node_ids.insert(to_id.clone());
+                    if i < edge_to_index.len() && !edge_to_index[i].is_empty() {
+                        if !self.nodes.contains_key(&edge_to_index[i]) {
+                            adjacent_node_ids.insert(edge_to_index[i].clone());
                         }
                     }
                 }
             }
-            if let Some(ref to_id) = edge.to {
+            for (i, to_id) in edge_to_index.iter().enumerate() {
                 if loaded_node_ids.contains(to_id) {
-                    if let Some(ref from_id) = edge.from {
-                        if !self.nodes.contains_key(from_id) {
-                            adjacent_node_ids.insert(from_id.clone());
+                    if i < edge_from_index.len() && !edge_from_index[i].is_empty() {
+                        if !self.nodes.contains_key(&edge_from_index[i]) {
+                            adjacent_node_ids.insert(edge_from_index[i].clone());
+                        }
+                    }
+                }
+            }
+        } else {
+            for edge in self.edges.values() {
+                if let Some(ref from_id) = edge.from {
+                    if loaded_node_ids.contains(from_id) {
+                        if let Some(ref to_id) = edge.to {
+                            if !self.nodes.contains_key(to_id) {
+                                adjacent_node_ids.insert(to_id.clone());
+                            }
+                        }
+                    }
+                }
+                if let Some(ref to_id) = edge.to {
+                    if loaded_node_ids.contains(to_id) {
+                        if let Some(ref from_id) = edge.from {
+                            if !self.nodes.contains_key(from_id) {
+                                adjacent_node_ids.insert(from_id.clone());
+                            }
                         }
                     }
                 }
             }
         }
+
         for node_id in &adjacent_node_ids {
             if !self.nodes.contains_key(node_id) {
                 if let Some(node) = self.try_load_node(node_id) {
@@ -1021,6 +1098,9 @@ impl StarMapStore {
                         embed_instance_ids: graph.embeds.iter().map(|e| e.instance_id.clone()).collect(),
                         link_ids: graph.links.iter().map(|l| l.link_id.clone()).collect(),
                         hyperlink_ids: vec![],
+                        edge_from_index: graph.edges.iter().map(|e| e.from.clone().unwrap_or_default()).collect(),
+                        edge_to_index: graph.edges.iter().map(|e| e.to.clone().unwrap_or_default()).collect(),
+                        embed_host_node_index: graph.embeds.iter().map(|e| e.source_node_id.clone().unwrap_or_default()).collect(),
                         package_revision: 0,
                         updated_at: graph.updated_at,
                     });
@@ -1161,62 +1241,87 @@ impl StarMapStore {
 
     pub fn upsert_node(&mut self, node: StarMapNode) {
         let node_id = node.id.clone();
+        let is_new = !self.nodes.contains_key(&node_id);
         self.nodes.insert(node_id.clone(), node);
         self.dirty_nodes.insert(node_id);
+        if is_new {
+            self.dirty_graph_meta = true;
+        }
     }
 
     pub fn remove_node(&mut self, node_id: &str) {
         self.nodes.remove(node_id);
         self.dirty_nodes.remove(node_id);
         self.deleted_node_ids.insert(node_id.to_string());
+        self.dirty_graph_meta = true;
     }
 
     pub fn upsert_edge(&mut self, edge: StarMapEdge) {
         let edge_id = edge.id.clone();
+        let is_new = !self.edges.contains_key(&edge_id);
         self.edges.insert(edge_id.clone(), edge);
         self.dirty_edges.insert(edge_id);
+        if is_new {
+            self.dirty_graph_meta = true;
+        }
     }
 
     pub fn remove_edge(&mut self, edge_id: &str) {
         self.edges.remove(edge_id);
         self.dirty_edges.remove(edge_id);
         self.deleted_edge_ids.insert(edge_id.to_string());
+        self.dirty_graph_meta = true;
     }
 
     pub fn upsert_embed(&mut self, embed: StarMapEmbed) {
         let instance_id = embed.instance_id.clone();
+        let is_new = !self.embeds.contains_key(&instance_id);
         self.embeds.insert(instance_id.clone(), embed);
         self.dirty_embeds.insert(instance_id);
+        if is_new {
+            self.dirty_graph_meta = true;
+        }
     }
 
     pub fn remove_embed(&mut self, instance_id: &str) {
         self.embeds.remove(instance_id);
         self.dirty_embeds.remove(instance_id);
         self.deleted_embed_ids.insert(instance_id.to_string());
+        self.dirty_graph_meta = true;
     }
 
     pub fn upsert_hyperlink(&mut self, hl: StarMapHyperlink) {
         let hl_id = hl.hyperlink_id.clone();
+        let is_new = !self.hyperlinks.contains_key(&hl_id);
         self.hyperlinks.insert(hl_id.clone(), hl);
         self.dirty_hyperlinks.insert(hl_id);
+        if is_new {
+            self.dirty_graph_meta = true;
+        }
     }
 
     pub fn upsert_link(&mut self, link: StarMapLink) {
         let link_id = link.link_id.clone();
+        let is_new = !self.links.contains_key(&link_id);
         self.links.insert(link_id.clone(), link);
         self.dirty_links.insert(link_id);
+        if is_new {
+            self.dirty_graph_meta = true;
+        }
     }
 
     pub fn remove_link(&mut self, link_id: &str) {
         self.links.remove(link_id);
         self.dirty_links.remove(link_id);
         self.deleted_link_ids.insert(link_id.to_string());
+        self.dirty_graph_meta = true;
     }
 
     pub fn remove_hyperlink(&mut self, hyperlink_id: &str) {
         self.hyperlinks.remove(hyperlink_id);
         self.dirty_hyperlinks.remove(hyperlink_id);
         self.deleted_hyperlink_ids.insert(hyperlink_id.to_string());
+        self.dirty_graph_meta = true;
     }
 
     pub fn set_layout(&mut self, layout: StarMapLayout) {
@@ -1257,6 +1362,9 @@ impl StarMapStore {
     }
 
     pub fn update_node(&mut self, node_id: &str, patch: &StarMapNodePatch) -> Result<StarMapNode> {
+        if !self.nodes.contains_key(node_id) {
+            self.ensure_object_loaded(node_id)?;
+        }
         let node = self.nodes.get_mut(node_id).ok_or_else(|| {
             crate::error::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -1281,11 +1389,33 @@ impl StarMapStore {
 
     pub fn delete_node(&mut self, node_id: &str) -> Result<()> {
         if !self.nodes.contains_key(node_id) {
+            self.ensure_object_loaded(node_id)?;
+        }
+        if !self.nodes.contains_key(node_id) {
             return Err(crate::error::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 "Node not found",
             )));
         }
+
+        let all_edge_ids = self.graph_meta.as_ref()
+            .map(|m| m.edge_ids.clone())
+            .unwrap_or_default();
+        for eid in &all_edge_ids {
+            if !self.edges.contains_key(eid) {
+                let _ = self.ensure_edge_loaded(eid);
+            }
+        }
+
+        let all_embed_ids = self.graph_meta.as_ref()
+            .map(|m| m.embed_instance_ids.clone())
+            .unwrap_or_default();
+        for iid in &all_embed_ids {
+            if !self.embeds.contains_key(iid) {
+                let _ = self.ensure_embed_loaded(iid);
+            }
+        }
+
         self.remove_node(node_id);
 
         let edge_ids_to_remove: Vec<String> = self.edges.values()
@@ -1334,6 +1464,16 @@ impl StarMapStore {
     }
 
     pub fn add_edge(&mut self, edge: StarMapEdge) -> Result<StarMapEdge> {
+        if let Some(ref from_id) = edge.from {
+            if !self.nodes.contains_key(from_id) {
+                let _ = self.ensure_object_loaded(from_id);
+            }
+        }
+        if let Some(ref to_id) = edge.to {
+            if !self.nodes.contains_key(to_id) {
+                let _ = self.ensure_object_loaded(to_id);
+            }
+        }
         let from_valid = edge.from_target.is_some()
             || edge.from_endpoint.is_some()
             || edge.from_endpoint_path.is_some()
@@ -1360,6 +1500,9 @@ impl StarMapStore {
     }
 
     pub fn update_edge(&mut self, edge_id: &str, patch: &StarMapEdgePatch) -> Result<StarMapEdge> {
+        if !self.edges.contains_key(edge_id) {
+            self.ensure_edge_loaded(edge_id)?;
+        }
         let edge = self.edges.get_mut(edge_id).ok_or_else(|| {
             crate::error::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -1383,6 +1526,9 @@ impl StarMapStore {
 
     pub fn delete_edge(&mut self, edge_id: &str) -> Result<()> {
         if !self.edges.contains_key(edge_id) {
+            self.ensure_edge_loaded(edge_id)?;
+        }
+        if !self.edges.contains_key(edge_id) {
             return Err(crate::error::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 "Edge not found",
@@ -1405,6 +1551,9 @@ impl StarMapStore {
     }
 
     pub fn update_embed(&mut self, instance_id: &str, patch: &StarMapEmbedPatch) -> Result<StarMapEmbed> {
+        if !self.embeds.contains_key(instance_id) {
+            self.ensure_embed_loaded(instance_id)?;
+        }
         let embed = self.embeds.get_mut(instance_id).ok_or_else(|| {
             crate::error::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -1441,6 +1590,9 @@ impl StarMapStore {
 
     pub fn delete_embed(&mut self, instance_id: &str) -> Result<()> {
         if !self.embeds.contains_key(instance_id) {
+            self.ensure_embed_loaded(instance_id)?;
+        }
+        if !self.embeds.contains_key(instance_id) {
             return Err(crate::error::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 "Embed not found",
@@ -1464,6 +1616,9 @@ impl StarMapStore {
     }
 
     pub fn update_link(&mut self, link_id: &str, patch: &StarMapLinkPatch) -> Result<StarMapLink> {
+        if !self.links.contains_key(link_id) {
+            self.ensure_link_loaded(link_id)?;
+        }
         let link = self.links.get_mut(link_id).ok_or_else(|| {
             crate::error::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -1480,6 +1635,9 @@ impl StarMapStore {
     }
 
     pub fn delete_link(&mut self, link_id: &str) -> Result<()> {
+        if !self.links.contains_key(link_id) {
+            self.ensure_link_loaded(link_id)?;
+        }
         if !self.links.contains_key(link_id) {
             return Err(crate::error::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -1657,6 +1815,9 @@ impl StarMapStore {
                             embed_instance_ids: graph.embeds.iter().map(|e| e.instance_id.clone()).collect(),
                             link_ids: graph.links.iter().map(|l| l.link_id.clone()).collect(),
                             hyperlink_ids: vec![],
+                            edge_from_index: graph.edges.iter().map(|e| e.from.clone().unwrap_or_default()).collect(),
+                            edge_to_index: graph.edges.iter().map(|e| e.to.clone().unwrap_or_default()).collect(),
+                            embed_host_node_index: graph.embeds.iter().map(|e| e.source_node_id.clone().unwrap_or_default()).collect(),
                             package_revision: 0,
                             updated_at: graph.updated_at,
                         });
@@ -1671,6 +1832,9 @@ impl StarMapStore {
                         embed_instance_ids: vec![],
                         link_ids: vec![],
                         hyperlink_ids: vec![],
+                        edge_from_index: vec![],
+                        edge_to_index: vec![],
+                        embed_host_node_index: vec![],
                         package_revision: 0,
                         updated_at: meta.updated_at,
                     });
@@ -1683,17 +1847,22 @@ impl StarMapStore {
     }
 
     fn try_load_node(&mut self, node_id: &str) -> Option<StarMapNode> {
-        let dir = self.starmap_dir().join("nodes").join(package_storage::bucket_for_id(node_id));
-        let path = dir.join(format!("{}.json", node_id));
-        if !path.exists() {
+        let bucket_dir = self.starmap_dir().join("nodes").join(package_storage::bucket_for_id(node_id));
+        let bucket_path = bucket_dir.join(format!("{}.json", node_id));
+        let flat_path = self.starmap_dir().join("nodes").join(format!("{}.json", node_id));
+        let path = if bucket_path.exists() {
+            bucket_path
+        } else if flat_path.exists() {
+            flat_path
+        } else {
             self.recovery_log.push(LoadDiagnostic {
                 kind: LoadDiagnosticKind::Missing,
                 object_type: "node".to_string(),
                 object_id: node_id.to_string(),
-                detail: format!("node file not found: {}", path.display()),
+                detail: format!("node file not found: tried {} and {}", bucket_path.display(), flat_path.display()),
             });
             return None;
-        }
+        };
         let content = std::fs::read_to_string(&path).ok()?;
         match serde_json::from_str::<StarMapNode>(&content) {
             Ok(node) => Some(node),
@@ -1710,17 +1879,22 @@ impl StarMapStore {
     }
 
     fn try_load_edge(&mut self, edge_id: &str) -> Option<StarMapEdge> {
-        let dir = self.starmap_dir().join("edges").join(package_storage::bucket_for_id(edge_id));
-        let path = dir.join(format!("{}.json", edge_id));
-        if !path.exists() {
+        let bucket_dir = self.starmap_dir().join("edges").join(package_storage::bucket_for_id(edge_id));
+        let bucket_path = bucket_dir.join(format!("{}.json", edge_id));
+        let flat_path = self.starmap_dir().join("edges").join(format!("{}.json", edge_id));
+        let path = if bucket_path.exists() {
+            bucket_path
+        } else if flat_path.exists() {
+            flat_path
+        } else {
             self.recovery_log.push(LoadDiagnostic {
                 kind: LoadDiagnosticKind::Missing,
                 object_type: "edge".to_string(),
                 object_id: edge_id.to_string(),
-                detail: format!("edge file not found: {}", path.display()),
+                detail: format!("edge file not found: tried {} and {}", bucket_path.display(), flat_path.display()),
             });
             return None;
-        }
+        };
         let content = std::fs::read_to_string(&path).ok()?;
         match serde_json::from_str::<StarMapEdge>(&content) {
             Ok(edge) => Some(edge),
@@ -1737,17 +1911,22 @@ impl StarMapStore {
     }
 
     fn try_load_embed(&mut self, instance_id: &str) -> Option<StarMapEmbed> {
-        let dir = self.starmap_dir().join("child_starmaps").join(package_storage::bucket_for_id(instance_id));
-        let path = dir.join(format!("{}.json", instance_id));
-        if !path.exists() {
+        let bucket_dir = self.starmap_dir().join("child_starmaps").join(package_storage::bucket_for_id(instance_id));
+        let bucket_path = bucket_dir.join(format!("{}.json", instance_id));
+        let flat_path = self.starmap_dir().join("child_starmaps").join(format!("{}.json", instance_id));
+        let path = if bucket_path.exists() {
+            bucket_path
+        } else if flat_path.exists() {
+            flat_path
+        } else {
             self.recovery_log.push(LoadDiagnostic {
                 kind: LoadDiagnosticKind::Missing,
                 object_type: "embed".to_string(),
                 object_id: instance_id.to_string(),
-                detail: format!("embed file not found: {}", path.display()),
+                detail: format!("embed file not found: tried {} and {}", bucket_path.display(), flat_path.display()),
             });
             return None;
-        }
+        };
         let content = std::fs::read_to_string(&path).ok()?;
         match serde_json::from_str::<StarMapEmbed>(&content) {
             Ok(embed) => Some(embed),
@@ -1764,17 +1943,22 @@ impl StarMapStore {
     }
 
     fn try_load_hyperlink(&mut self, hyperlink_id: &str) -> Option<StarMapHyperlink> {
-        let dir = self.starmap_dir().join("hyperlinks").join(package_storage::bucket_for_id(hyperlink_id));
-        let path = dir.join(format!("{}.json", hyperlink_id));
-        if !path.exists() {
+        let bucket_dir = self.starmap_dir().join("hyperlinks").join(package_storage::bucket_for_id(hyperlink_id));
+        let bucket_path = bucket_dir.join(format!("{}.json", hyperlink_id));
+        let flat_path = self.starmap_dir().join("hyperlinks").join(format!("{}.json", hyperlink_id));
+        let path = if bucket_path.exists() {
+            bucket_path
+        } else if flat_path.exists() {
+            flat_path
+        } else {
             self.recovery_log.push(LoadDiagnostic {
                 kind: LoadDiagnosticKind::Missing,
                 object_type: "hyperlink".to_string(),
                 object_id: hyperlink_id.to_string(),
-                detail: format!("hyperlink file not found: {}", path.display()),
+                detail: format!("hyperlink file not found: tried {} and {}", bucket_path.display(), flat_path.display()),
             });
             return None;
-        }
+        };
         let content = std::fs::read_to_string(&path).ok()?;
         match serde_json::from_str::<StarMapHyperlink>(&content) {
             Ok(hl) => Some(hl),
@@ -1807,17 +1991,22 @@ impl StarMapStore {
     }
 
     fn try_load_link(&mut self, link_id: &str) -> Option<StarMapLink> {
-        let dir = self.starmap_dir().join("links").join(package_storage::bucket_for_id(link_id));
-        let path = dir.join(format!("{}.json", link_id));
-        if !path.exists() {
+        let bucket_dir = self.starmap_dir().join("links").join(package_storage::bucket_for_id(link_id));
+        let bucket_path = bucket_dir.join(format!("{}.json", link_id));
+        let flat_path = self.starmap_dir().join("links").join(format!("{}.json", link_id));
+        let path = if bucket_path.exists() {
+            bucket_path
+        } else if flat_path.exists() {
+            flat_path
+        } else {
             self.recovery_log.push(LoadDiagnostic {
                 kind: LoadDiagnosticKind::Missing,
                 object_type: "link".to_string(),
                 object_id: link_id.to_string(),
-                detail: format!("link file not found: {}", path.display()),
+                detail: format!("link file not found: tried {} and {}", bucket_path.display(), flat_path.display()),
             });
             return None;
-        }
+        };
         let content = std::fs::read_to_string(&path).ok()?;
         match serde_json::from_str::<StarMapLink>(&content) {
             Ok(link) => Some(link),
@@ -2074,6 +2263,16 @@ impl StarMapStore {
         let hyperlink_ids: Vec<String> = self.hyperlinks.keys().cloned().collect();
         let link_ids: Vec<String> = self.links.keys().cloned().collect();
 
+        let edge_from_index: Vec<String> = self.edges.values()
+            .map(|e| e.from.clone().unwrap_or_default())
+            .collect();
+        let edge_to_index: Vec<String> = self.edges.values()
+            .map(|e| e.to.clone().unwrap_or_default())
+            .collect();
+        let embed_host_node_index: Vec<String> = self.embeds.values()
+            .map(|e| e.source_node_id.clone().unwrap_or_default())
+            .collect();
+
         let title = self.graph_meta.as_ref()
             .map(|m| m.title.clone())
             .unwrap_or_default();
@@ -2087,6 +2286,9 @@ impl StarMapStore {
             embed_instance_ids,
             link_ids,
             hyperlink_ids,
+            edge_from_index,
+            edge_to_index,
+            embed_host_node_index,
             package_revision: self.package_revision,
             updated_at: crate::starmap::now_epoch(),
         };
@@ -2209,6 +2411,9 @@ mod tests {
             embed_instance_ids: vec![],
             link_ids: vec![],
             hyperlink_ids: vec![],
+            edge_from_index: vec![],
+            edge_to_index: vec![],
+            embed_host_node_index: vec![],
             package_revision: 1,
             updated_at: 0,
         };
@@ -2298,6 +2503,9 @@ mod tests {
             embed_instance_ids: vec![],
             link_ids: vec!["missing-link".to_string()],
             hyperlink_ids: vec![],
+            edge_from_index: vec![],
+            edge_to_index: vec![],
+            embed_host_node_index: vec![],
             package_revision: 1,
             updated_at: 0,
         };
@@ -2356,6 +2564,9 @@ mod tests {
             embed_instance_ids: vec![],
             link_ids: vec![],
             hyperlink_ids: vec![],
+            edge_from_index: vec![],
+            edge_to_index: vec![],
+            embed_host_node_index: vec![],
             package_revision: 1,
             updated_at: 0,
         };
@@ -2394,6 +2605,9 @@ mod tests {
             embed_instance_ids: vec![],
             link_ids: vec![],
             hyperlink_ids: vec![],
+            edge_from_index: vec![],
+            edge_to_index: vec![],
+            embed_host_node_index: vec![],
             package_revision: 1,
             updated_at: 0,
         };
@@ -2428,6 +2642,9 @@ mod tests {
             embed_instance_ids: vec![],
             link_ids: vec![],
             hyperlink_ids: vec![],
+            edge_from_index: vec![],
+            edge_to_index: vec![],
+            embed_host_node_index: vec![],
             package_revision: 1,
             updated_at: 0,
         };
