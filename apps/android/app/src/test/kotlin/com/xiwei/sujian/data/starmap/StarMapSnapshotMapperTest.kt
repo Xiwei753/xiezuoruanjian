@@ -7,6 +7,8 @@ import uniffi.writer_core.*
 
 class StarMapSnapshotMapperTest {
 
+    private val emptyDeletedIds = listOf<String>()
+
     @Test
     fun phasedSnapshotDto_toSnapshotResult_preservesLayoutCoordinates() {
         val dto = StarMapPhasedSnapshotDto(
@@ -41,7 +43,8 @@ class StarMapSnapshotMapperTest {
                 ))
             ),
             viewport = StarMapViewportDto(scale = 1.0f, offsetX = 0.0f, offsetY = 0.0f, width = 800.0f, height = 600.0f),
-            diagnostics = emptyList()
+            diagnostics = emptyList(),
+            deletedNodeIds = emptyDeletedIds, deletedEdgeIds = emptyDeletedIds, deletedEmbedIds = emptyDeletedIds, deletedLinkIds = emptyDeletedIds, deletedHyperlinkIds = emptyDeletedIds
         )
 
         val result = dto.toSnapshotResult()
@@ -60,7 +63,8 @@ class StarMapSnapshotMapperTest {
             packageRevision = 10u, complete = false, sinceRevision = 7u,
             nodes = emptyList(), edges = emptyList(), embeds = emptyList(),
             links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList()
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyDeletedIds, deletedEdgeIds = emptyDeletedIds, deletedEmbedIds = emptyDeletedIds, deletedLinkIds = emptyDeletedIds, deletedHyperlinkIds = emptyDeletedIds
         )
         val result = dto.toSnapshotResult()
         assertEquals(7uL, result.data.sinceRevision)
@@ -76,7 +80,8 @@ class StarMapSnapshotMapperTest {
             links = emptyList(), hyperlinks = emptyList(),
             layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, emptyList()),
             viewport = StarMapViewportDto(1.0f, 0.0f, 0.0f, 800.0f, 600.0f),
-            diagnostics = emptyList()
+            diagnostics = emptyList(),
+            deletedNodeIds = emptyDeletedIds, deletedEdgeIds = emptyDeletedIds, deletedEmbedIds = emptyDeletedIds, deletedLinkIds = emptyDeletedIds, deletedHyperlinkIds = emptyDeletedIds
         )
         val result = dto.toSnapshotResult()
         assertEquals(0, result.data.graph.nodes.size)
@@ -101,7 +106,8 @@ class StarMapSnapshotMapperTest {
                 )
             ),
             edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList()
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyDeletedIds, deletedEdgeIds = emptyDeletedIds, deletedEmbedIds = emptyDeletedIds, deletedLinkIds = emptyDeletedIds, deletedHyperlinkIds = emptyDeletedIds
         )
         val cache = dto.toRawCache()
         assertNotNull(cache.graph)

@@ -333,7 +333,7 @@ data class StarMapData(
     val embeds: List<StarMapEmbedData> = emptyList(),
     val links: List<StarMapLinkData> = emptyList(),
     val hyperlinks: List<StarMapHyperlinkData> = emptyList(),
-    val loadPhase: String = "PrefetchNearbyObjects",
+    val loadPhase: String = "CurrentViewportObjects",
     val packageRevision: ULong = 0u,
     val sinceRevision: ULong = 0u,
     val complete: Boolean = false

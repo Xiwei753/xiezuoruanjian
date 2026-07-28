@@ -108,18 +108,6 @@ internal class StarMapSnapshotCache {
             for (link in incomingGraph.links) {
                 existing.links[link.linkId] = link
             }
-            existing.graph = StarMapGraphDto(
-                schemaVersion = incomingGraph.schemaVersion,
-                id = incomingGraph.id,
-                starmapId = incomingGraph.starmapId,
-                title = incomingGraph.title,
-                nodes = existing.nodes.values.toList(),
-                edges = existing.edges.values.toList(),
-                embeds = existing.embeds.values.toList(),
-                links = existing.links.values.toList(),
-                createdAt = incomingGraph.createdAt,
-                updatedAt = incomingGraph.updatedAt
-            )
         }
         for ((nodeId, nodeDto) in incoming.nodes) {
             existing.nodes[nodeId] = nodeDto
@@ -177,6 +165,23 @@ internal class StarMapSnapshotCache {
             existing.hyperlinks.remove(deletedId)
             existing.deletedHyperlinkIds.add(deletedId)
         }
+        rebuildGraph(existing)
+    }
+
+    private fun rebuildGraph(cache: StarMapRawCache) {
+        val meta = cache.graph ?: return
+        cache.graph = StarMapGraphDto(
+            schemaVersion = meta.schemaVersion,
+            id = meta.id,
+            starmapId = meta.starmapId,
+            title = meta.title,
+            nodes = cache.nodes.values.toList(),
+            edges = cache.edges.values.toList(),
+            embeds = cache.embeds.values.toList(),
+            links = cache.links.values.toList(),
+            createdAt = meta.createdAt,
+            updatedAt = meta.updatedAt
+        )
     }
 
     fun removeNode(starmapId: String, nodeId: String) { rawCacheByStarmapId[starmapId]?.nodes?.remove(nodeId) }

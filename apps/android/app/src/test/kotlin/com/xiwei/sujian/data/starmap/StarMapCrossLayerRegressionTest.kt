@@ -882,7 +882,112 @@ class StarMapCrossLayerRegressionTest {
         cache.mergeIncremental("sm1", dto2.toRawCache())
 
         val merged = cache.get("sm1")!!
-        assertEquals(2, merged.nodes.size, "progressive phase must add objects even when sinceRevision == packageRevision")
+        assertEquals("progressive phase must add objects even when sinceRevision == packageRevision", 2, merged.nodes.size)
         assertEquals(1, merged.edges.size)
+    }
+
+    @Test
+    fun incrementalMerge_rebuildsGraphWithoutDeletedObjects() {
+        val cache = StarMapSnapshotCache()
+        val dto1 = StarMapPhasedSnapshotDto(
+            starmapId = "sm1", title = "T", loadPhase = "CurrentViewportObjects",
+            packageRevision = 1u, complete = false, sinceRevision = 0u,
+            nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B"), makeNodeDto("n3", "C")),
+            edges = listOf(makeEdgeDto("e1", "n1", "n2"), makeEdgeDto("e2", "n2", "n3")),
+            embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
+                StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
+                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null),
+                StarMapLayoutNodeDto(nodeId = "n2", x = 200f, y = 60f, width = 100f, height = 80f,
+                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null),
+                StarMapLayoutNodeDto(nodeId = "n3", x = 350f, y = 60f, width = 100f, height = 80f,
+                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
+            )),
+            viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
+        )
+        cache.put("sm1", dto1.toRawCache())
+        val before = cache.get("sm1")!!
+        assertEquals(3, before.nodes.size)
+        assertEquals(2, before.edges.size)
+        assertEquals(3, before.graph!!.nodes.size)
+        assertEquals(2, before.graph!!.edges.size)
+
+        val dto2 = StarMapPhasedSnapshotDto(
+            starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
+            packageRevision = 2u, complete = true, sinceRevision = 1u,
+            nodes = listOf(makeNodeDto("n1", "A")),
+            edges = listOf(makeEdgeDto("e1", "n1", "n2")),
+            embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = listOf("n2", "n3"), deletedEdgeIds = listOf("e2"), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
+        )
+        cache.mergeIncremental("sm1", dto2.toRawCache())
+
+        val after = cache.get("sm1")!!
+        assertEquals(1, after.nodes.size)
+        assertNotNull("n1 must remain", after.nodes["n1"])
+        assertNull("n2 must be removed", after.nodes["n2"])
+        assertNull("n3 must be removed", after.nodes["n3"])
+        assertEquals(1, after.edges.size)
+        assertNotNull("e1 must remain", after.edges["e1"])
+        assertNull("e2 must be removed", after.edges["e2"])
+        assertNotNull("graph must be rebuilt after merge", after.graph)
+        assertEquals("graph.nodes must not contain deleted nodes", 1, after.graph!!.nodes.size)
+        assertEquals("n1", after.graph!!.nodes[0].id)
+        assertEquals("graph.edges must not contain deleted edges", 1, after.graph!!.edges.size)
+        assertEquals("e1", after.graph!!.edges[0].id)
+    }
+
+    @Test
+    fun starMapData_defaultLoadPhase_isCurrentViewportObjects() {
+        val data = StarMapData(
+            graph = StarMapGraphData(schemaVersion = 1, id = "sm1", starmapId = "sm1", title = "T",
+                nodes = emptyList(), edges = emptyList(), createdAt = 0, updatedAt = 0),
+            layout = StarMapLayoutData(kind = StarMapLayoutKind.Freeform, nodes = emptyList())
+        )
+        assertEquals("CurrentViewportObjects", data.loadPhase)
+        assertFalse(data.complete)
+        assertEquals(0uL, data.packageRevision)
+    }
+
+    @Test
+    fun crudCacheUpdate_graphRemainsConsistent() {
+        val cache = StarMapSnapshotCache()
+        val dto = StarMapPhasedSnapshotDto(
+            starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
+            packageRevision = 1u, complete = true, sinceRevision = 0u,
+            nodes = listOf(makeNodeDto("n1", "A")),
+            edges = listOf(makeEdgeDto("e1", "n1", "n1")),
+            embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
+                StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
+                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
+            )),
+            viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
+        )
+        cache.put("sm1", dto.toRawCache())
+
+        val newNode = StarMapNodeDto(
+            id = "n2", title = "B", kind = StarMapNodeKindDto.EVENT,
+            payload = null, tags = emptyList(),
+            content = StarMapNodeContentDto("empty", null, null, null, null, null, null, null, null, null, null, null),
+            anchors = emptyList(), portal = null,
+            displayPolicy = defaultStarMapDisplayPolicy(),
+            openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
+            provenance = StarMapProvenanceDto(StarMapSourceKindDto.HUMAN, null, null, null, StarMapReviewStatusDto.ACCEPTED, null),
+            createdAt = 0u, updatedAt = 0u
+        )
+        cache.putNode("sm1", "n2", newNode)
+        val afterPut = cache.get("sm1")!!
+        assertEquals(2, afterPut.nodes.size)
+        assertTrue(afterPut.nodes.containsKey("n2"))
+
+        cache.removeNode("sm1", "n1")
+        val afterRemove = cache.get("sm1")!!
+        assertEquals(1, afterRemove.nodes.size)
+        assertFalse(afterRemove.nodes.containsKey("n1"))
+        assertTrue(afterRemove.nodes.containsKey("n2"))
     }
 }

@@ -7,6 +7,8 @@ import uniffi.writer_core.*
 
 class StarMapCacheContractTest {
 
+    private val emptyDeletedIds = listOf<String>()
+
     @Test
     fun rawCache_fromSnapshot_hasGraphDto() {
         val dto = StarMapPhasedSnapshotDto(
@@ -29,7 +31,8 @@ class StarMapCacheContractTest {
                 StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
                     radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
             )),
-            viewport = null, diagnostics = emptyList()
+            viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyDeletedIds, deletedEdgeIds = emptyDeletedIds, deletedEmbedIds = emptyDeletedIds, deletedLinkIds = emptyDeletedIds, deletedHyperlinkIds = emptyDeletedIds
         )
         val cache = dto.toRawCache()
         assertNotNull("rawCache.graph must be initialized from snapshot", cache.graph)
@@ -97,7 +100,8 @@ class StarMapCacheContractTest {
             packageRevision = 0u, complete = false, sinceRevision = 0u,
             nodes = emptyList(), edges = emptyList(), embeds = emptyList(),
             links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList()
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyDeletedIds, deletedEdgeIds = emptyDeletedIds, deletedEmbedIds = emptyDeletedIds, deletedLinkIds = emptyDeletedIds, deletedHyperlinkIds = emptyDeletedIds
         )
         val result = dto.toSnapshotResult()
         assertNotNull(result.data.layout)
@@ -112,7 +116,8 @@ class StarMapCacheContractTest {
             packageRevision = 1u, complete = false, sinceRevision = 0u,
             nodes = emptyList(), edges = emptyList(), embeds = emptyList(),
             links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList()
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyDeletedIds, deletedEdgeIds = emptyDeletedIds, deletedEmbedIds = emptyDeletedIds, deletedLinkIds = emptyDeletedIds, deletedHyperlinkIds = emptyDeletedIds
         )
         val result1 = dto1.toSnapshotResult()
         assertEquals("CurrentViewportObjects", result1.data.loadPhase)
@@ -123,7 +128,8 @@ class StarMapCacheContractTest {
             packageRevision = 2u, complete = true, sinceRevision = 1u,
             nodes = emptyList(), edges = emptyList(), embeds = emptyList(),
             links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList()
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyDeletedIds, deletedEdgeIds = emptyDeletedIds, deletedEmbedIds = emptyDeletedIds, deletedLinkIds = emptyDeletedIds, deletedHyperlinkIds = emptyDeletedIds
         )
         val result2 = dto2.toSnapshotResult()
         assertEquals("BackgroundFullLoad", result2.data.loadPhase)
@@ -152,7 +158,8 @@ class StarMapCacheContractTest {
                     radius = 40f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
             )),
             viewport = StarMapViewportDto(2f, 10f, 20f, 800f, 600f),
-            diagnostics = emptyList()
+            diagnostics = emptyList(),
+            deletedNodeIds = emptyDeletedIds, deletedEdgeIds = emptyDeletedIds, deletedEmbedIds = emptyDeletedIds, deletedLinkIds = emptyDeletedIds, deletedHyperlinkIds = emptyDeletedIds
         )
         val rawCache = dto.toRawCache()
         val result = rawCache.toSnapshotResult()

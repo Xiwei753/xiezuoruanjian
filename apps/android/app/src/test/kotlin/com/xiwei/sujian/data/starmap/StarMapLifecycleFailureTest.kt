@@ -9,6 +9,8 @@ import uniffi.writer_core.*
 
 class StarMapLifecycleFailureTest {
 
+    private val emptyDeletedIds = listOf<String>()
+
     private fun makeNodeDto(id: String, title: String) = StarMapNodeDto(
         id = id, title = title, kind = StarMapNodeKindDto.CHARACTER,
         payload = null, tags = emptyList(),
@@ -32,7 +34,8 @@ class StarMapLifecycleFailureTest {
                 StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
                     radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
             )),
-            viewport = null, diagnostics = emptyList()
+            viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyDeletedIds, deletedEdgeIds = emptyDeletedIds, deletedEmbedIds = emptyDeletedIds, deletedLinkIds = emptyDeletedIds, deletedHyperlinkIds = emptyDeletedIds
         )
         cache.put("sm1", dto.toRawCache())
 
@@ -62,7 +65,8 @@ class StarMapLifecycleFailureTest {
             packageRevision = 1u, complete = true, sinceRevision = 0u,
             nodes = listOf(makeNodeDto("n1", "A")),
             edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList()
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyDeletedIds, deletedEdgeIds = emptyDeletedIds, deletedEmbedIds = emptyDeletedIds, deletedLinkIds = emptyDeletedIds, deletedHyperlinkIds = emptyDeletedIds
         )
         cache.put("sm1", dto.toRawCache())
 
@@ -94,7 +98,8 @@ class StarMapLifecycleFailureTest {
                 StarMapLayoutNodeDto(nodeId = "n1", x = 100f, y = 200f, width = 150f, height = 80f,
                     radius = 40f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
             )),
-            viewport = null, diagnostics = emptyList()
+            viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyDeletedIds, deletedEdgeIds = emptyDeletedIds, deletedEmbedIds = emptyDeletedIds, deletedLinkIds = emptyDeletedIds, deletedHyperlinkIds = emptyDeletedIds
         )
         cache.put("sm1", dto.toRawCache())
 
@@ -127,14 +132,16 @@ class StarMapLifecycleFailureTest {
             packageRevision = 1u, complete = true, sinceRevision = 0u,
             nodes = listOf(makeNodeDto("n1", "A")),
             edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList()
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyDeletedIds, deletedEdgeIds = emptyDeletedIds, deletedEmbedIds = emptyDeletedIds, deletedLinkIds = emptyDeletedIds, deletedHyperlinkIds = emptyDeletedIds
         )
         val dto2 = StarMapPhasedSnapshotDto(
             starmapId = "sm2", title = "T2", loadPhase = "BackgroundFullLoad",
             packageRevision = 1u, complete = true, sinceRevision = 0u,
             nodes = listOf(makeNodeDto("n2", "B")),
             edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList()
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyDeletedIds, deletedEdgeIds = emptyDeletedIds, deletedEmbedIds = emptyDeletedIds, deletedLinkIds = emptyDeletedIds, deletedHyperlinkIds = emptyDeletedIds
         )
         cache.put("sm1", dto1.toRawCache())
         cache.put("sm2", dto2.toRawCache())

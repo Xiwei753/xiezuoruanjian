@@ -4,6 +4,7 @@ import com.xiwei.sujian.model.StarMapAnchorData
 import com.xiwei.sujian.model.StarMapDisplayPolicyData
 import com.xiwei.sujian.model.StarMapGraphNode
 import com.xiwei.sujian.model.StarMapNodeKind
+import com.xiwei.sujian.model.StarMapPortalData
 import uniffi.writer_core.StarMapDisplayPolicyDto
 import uniffi.writer_core.StarMapNodeContentDto
 import uniffi.writer_core.StarMapNodeDto

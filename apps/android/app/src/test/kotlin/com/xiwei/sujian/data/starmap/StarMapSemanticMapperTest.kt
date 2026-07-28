@@ -215,12 +215,12 @@ class StarMapSemanticMapperTest {
         val dto = StarMapNodeDto(
             id = "n1", title = "Chapter", kind = StarMapNodeKindDto.CHAPTER,
             payload = null, tags = emptyList(),
-            content = StarMapNodeContentDto("chapter", "body text", "summary text", "proj1", "vol1", "ch1", 0u, 100u, null, null, null, null),
+            content = StarMapNodeContentDto("chapter", "summary text", "body text", "proj1", "vol1", "ch1", 0u, 100u, null, null, null, null),
             anchors = emptyList(),
             portal = null,
             displayPolicy = defaultStarMapDisplayPolicy(),
-            openBehavior = StarMapOpenBehaviorDto.EDITOR,
-            provenance = StarMapProvenanceDto(StarMapSourceKindDto.AI, "src1", "gen1", "prompt1", StarMapReviewStatusDto.PENDING, "anchor1"),
+            openBehavior = StarMapOpenBehaviorDto.WRITING_MODE,
+            provenance = StarMapProvenanceDto(StarMapSourceKindDto.AI, "src1", "gen1", "prompt1", StarMapReviewStatusDto.NEEDS_REVIEW, "anchor1"),
             createdAt = 0u, updatedAt = 0u
         )
         val model = dto.toGraphNode()
@@ -228,13 +228,13 @@ class StarMapSemanticMapperTest {
         assertEquals("body text", model.contentBody)
         assertEquals("summary text", model.contentSummary)
         assertEquals("ch1", model.contentChapterId)
-        assertEquals("EDITOR", model.openBehavior)
+        assertEquals("WRITING_MODE", model.openBehavior)
         assertNotNull(model.provenance)
         assertEquals("AI", model.provenance!!.source)
         assertEquals("src1", model.provenance!!.sourceId)
         assertEquals("gen1", model.provenance!!.generatedBy)
         assertEquals("prompt1", model.provenance!!.promptId)
-        assertEquals("PENDING", model.provenance!!.reviewStatus)
+        assertEquals("NEEDS_REVIEW", model.provenance!!.reviewStatus)
         assertEquals("anchor1", model.provenance!!.createdFromAnchor)
     }
 
@@ -253,8 +253,8 @@ class StarMapSemanticMapperTest {
                         projectId = null, volumeId = null, chapterId = null, rangeStart = null, rangeEnd = null,
                         entityType = null, entityId = null, uri = null)
                 ),
-                mode = StarMapPortalModeDto.NAVIGATE,
-                previewPolicy = StarMapPortalPreviewPolicyDto.INLINE
+                mode = StarMapPortalModeDto.ENTER_CHILD,
+                previewPolicy = StarMapPortalPreviewPolicyDto.AUTO
             ),
             displayPolicy = defaultStarMapDisplayPolicy(),
             openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
@@ -266,7 +266,7 @@ class StarMapSemanticMapperTest {
         assertEquals("child_sm", model.portal!!.targetStarmapId)
         assertNotNull(model.portal!!.deepTarget)
         assertEquals("inner1", model.portal!!.deepTarget!!.target.nodeId)
-        assertEquals("NAVIGATE", model.portal!!.mode)
-        assertEquals("INLINE", model.portal!!.previewPolicy)
+        assertEquals("ENTER_CHILD", model.portal!!.mode)
+        assertEquals("AUTO", model.portal!!.previewPolicy)
     }
 }
