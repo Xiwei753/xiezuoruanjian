@@ -79,12 +79,13 @@ impl super::WriterAppService {
         self.api.delete_starmap_edge(&starmap_id, &edge_id)
     }
 
-    pub fn save_starmap_graph(
+    pub fn import_or_replace_starmap_package(
         &self,
         starmap_id: String,
         graph: StarMapGraphDto,
+        base_package_revision: u64,
     ) -> Result<bool, WriterError> {
-        self.api.save_starmap_graph(&starmap_id, &graph)
+        self.api.import_or_replace_starmap_package(&starmap_id, &graph, base_package_revision)
     }
 
     pub fn save_starmap_layout(

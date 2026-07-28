@@ -799,10 +799,11 @@ impl WriterCoreApi {
         Ok(true)
     }
 
-    pub fn save_starmap_graph(
+    pub fn import_or_replace_starmap_package(
         &self,
         starmap_id: &str,
         graph: &crate::api::types::StarMapGraphDto,
+        base_package_revision: u64,
     ) -> ApiResult<bool> {
         let old_graph = self.core().get_starmap_graph(starmap_id).ok();
         let old_node_ids: std::collections::HashSet<String> = old_graph
@@ -822,8 +823,9 @@ impl WriterCoreApi {
             .map(|g| g.embeds.iter().map(|e| e.instance_id.clone()).collect())
             .unwrap_or_default();
 
-        self.core()
-            .save_starmap_graph(starmap_id, &graph.clone().into())?;
+        let core = self.core();
+        core.import_or_replace_starmap_package(starmap_id, &graph.clone().into(), base_package_revision)?;
+        drop(core);
 
         let project_id = get_starmap_project_id(self, starmap_id);
 

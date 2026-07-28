@@ -792,7 +792,7 @@ mod tests {
     }
 
     #[test]
-    fn cross_entry_save_starmap_graph_removes_old_node_index() {
+    fn cross_entry_import_or_replace_starmap_package_removes_old_node_index() {
         let dir = TempDir::new().unwrap();
         crate::workspace::create_workspace(dir.path()).unwrap();
         let api = crate::api::service::WriterCoreApi::new(dir.path());
@@ -852,7 +852,7 @@ mod tests {
             created_at: 0,
             updated_at: 0,
         };
-        api.save_starmap_graph(&meta.starmap_id, &old_graph).unwrap();
+        api.import_or_replace_starmap_package(&meta.starmap_id, &old_graph, 0).unwrap();
         assert!(!api.search_service_search("NodeA", SearchScope::StarmapNode, 10, None).is_empty());
         assert!(!api.search_service_search("NodeB", SearchScope::StarmapNode, 10, None).is_empty());
 
@@ -889,7 +889,8 @@ mod tests {
             created_at: 0,
             updated_at: 0,
         };
-        api.save_starmap_graph(&meta.starmap_id, &new_graph).unwrap();
+        let rev1 = api.core().get_starmap_store_package_revision(&meta.starmap_id);
+        api.import_or_replace_starmap_package(&meta.starmap_id, &new_graph, rev1).unwrap();
 
         assert!(!api.search_service_search("NodeA", SearchScope::StarmapNode, 10, None).is_empty());
         assert!(api.search_service_search("NodeB", SearchScope::StarmapNode, 10, None).is_empty());
@@ -1113,7 +1114,7 @@ mod tests {
     }
 
     #[test]
-    fn cross_entry_save_starmap_graph_removes_old_edge_index() {
+    fn cross_entry_import_or_replace_starmap_package_removes_old_edge_index() {
         let dir = TempDir::new().unwrap();
         crate::workspace::create_workspace(dir.path()).unwrap();
         let api = crate::api::service::WriterCoreApi::new(dir.path());
@@ -1189,7 +1190,7 @@ mod tests {
             created_at: 0,
             updated_at: 0,
         };
-        api.save_starmap_graph(&meta.starmap_id, &old_graph).unwrap();
+        api.import_or_replace_starmap_package(&meta.starmap_id, &old_graph, 0).unwrap();
         assert!(!api.search_service_search("EdgeLabel", SearchScope::StarmapEdgeLabel, 10, None).is_empty());
 
         let node_a_only = crate::api::types::StarMapNodeDto {
@@ -1225,7 +1226,8 @@ mod tests {
             created_at: 0,
             updated_at: 0,
         };
-        api.save_starmap_graph(&meta.starmap_id, &new_graph).unwrap();
+        let rev1 = api.core().get_starmap_store_package_revision(&meta.starmap_id);
+        api.import_or_replace_starmap_package(&meta.starmap_id, &new_graph, rev1).unwrap();
 
         assert!(api.search_service_search("EdgeLabel", SearchScope::StarmapEdgeLabel, 10, None).is_empty());
         assert!(api.search_service_search("NodeB", SearchScope::StarmapNode, 10, None).is_empty());
@@ -1679,5 +1681,44 @@ mod tests {
         let api = crate::api::service::WriterCoreApi::new(dir.path());
         let result = api.global_search_json("test", "starmapEmbed", 10, None);
         assert!(result.is_ok(), "starmapEmbed scope should be recognized");
+    }
+
+    #[test]
+    fn import_or_replace_rejects_revision_mismatch() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        let meta = api.create_starmap("RevMap", "desc", None).unwrap();
+
+        let graph = crate::api::types::StarMapGraphDto {
+            schema_version: 1,
+            id: "g1".to_string(),
+            starmap_id: meta.starmap_id.clone(),
+            title: "RevMap".to_string(),
+            nodes: vec![],
+            edges: vec![],
+            embeds: vec![],
+            links: vec![],
+            hyperlinks: vec![],
+            created_at: 0,
+            updated_at: 0,
+        };
+
+        let result = api.import_or_replace_starmap_package(&meta.starmap_id, &graph, 99);
+        assert!(result.is_err(), "must reject when base_package_revision does not match current");
+    }
+
+    #[test]
+    fn open_workspace_rebuilds_search_index() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+
+        let path_str = dir.path().to_string_lossy().to_string();
+        let svc = crate::open_workspace(path_str).unwrap();
+
+        let status_json = svc.get_search_index_status().unwrap();
+        let status: serde_json::Value = serde_json::from_str(&status_json).unwrap();
+        assert_eq!(status["isRebuilding"], false, "rebuild must complete before open_workspace returns");
+        assert!(status["lastRebuildAt"].as_u64().unwrap() > 0, "last_rebuild_at must be non-zero after open_workspace");
     }
 }

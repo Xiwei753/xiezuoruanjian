@@ -311,9 +311,13 @@ impl AppBackend {
                     self.debug_log("workspace", "ensure_device_info_failed", &format!("{}", e));
                 }
                 self.ai_available_changed();
-                self.workspace_opened();
-                self.workspace_content_changed();
-                self.workspace_state_changed();
+        self.workspace_opened();
+        self.workspace_content_changed();
+        self.workspace_state_changed();
+
+        if let Err(e) = api.search_service_rebuild(None) {
+            self.debug_log("workspace", "search_index_rebuild_failed", &format!("{}", e));
+        }
                 self.debug_log(
                     "workspace",
                     "try_restore_last_workspace_success",

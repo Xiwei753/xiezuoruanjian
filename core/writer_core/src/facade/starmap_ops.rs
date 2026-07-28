@@ -104,10 +104,11 @@ impl super::WriterCore {
         Ok(store.to_starmap_graph())
     }
 
-    pub fn save_starmap_graph(
+    pub fn import_or_replace_starmap_package(
         &self,
         starmap_id: &str,
         graph: &crate::starmap::types::StarMapGraph,
+        base_package_revision: u64,
     ) -> Result<()> {
         validation::validate_graph(&self.workspace_path, graph)?;
 
@@ -116,6 +117,14 @@ impl super::WriterCore {
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
 
         store.ensure_fully_loaded()?;
+
+        let current_revision = store.package_revision();
+        if base_package_revision != current_revision {
+            return Err(crate::error::Error::Other(format!(
+                "package revision mismatch: base={}, current={}",
+                base_package_revision, current_revision
+            )));
+        }
 
         let old_node_ids: std::collections::HashSet<String> = store.all_nodes().map(|n| n.id.clone()).collect();
         let old_edge_ids: std::collections::HashSet<String> = store.all_edges().map(|e| e.id.clone()).collect();
@@ -185,6 +194,14 @@ impl super::WriterCore {
         store.flush_save_queue()?;
 
         Ok(())
+    }
+
+    pub fn get_starmap_store_package_revision(&self, starmap_id: &str) -> u64 {
+        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
+        let store = stores.entry(starmap_id.to_string())
+            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+        let _ = store.ensure_loaded();
+        store.package_revision()
     }
 
     pub fn add_starmap_node(

@@ -115,7 +115,11 @@ pub fn open_workspace(
     if !crate::workspace::validate_workspace(p).map_err(WriterError::from)? {
         return Err(WriterError::InvalidWorkspace);
     }
-    Ok(std::sync::Arc::new(WriterAppService::new(path)))
+    let service = std::sync::Arc::new(WriterAppService::new(path));
+    if let Err(e) = service.rebuild_search_index(None) {
+        log::warn!("Failed to rebuild search index on open_workspace: {e}");
+    }
+    Ok(service)
 }
 
 pub fn open_workspace_with_platform_services(
@@ -126,7 +130,11 @@ pub fn open_workspace_with_platform_services(
     if !crate::workspace::validate_workspace(p).map_err(WriterError::from)? {
         return Err(WriterError::InvalidWorkspace);
     }
-    Ok(std::sync::Arc::new(WriterAppService::with_platform_services(path, services)))
+    let service = std::sync::Arc::new(WriterAppService::with_platform_services(path, services));
+    if let Err(e) = service.rebuild_search_index(None) {
+        log::warn!("Failed to rebuild search index on open_workspace_with_platform_services: {e}");
+    }
+    Ok(service)
 }
 
 pub fn open_workspace_with_init(
@@ -157,7 +165,11 @@ pub fn open_workspace_with_init(
         }
     };
 
-    Ok(std::sync::Arc::new(WriterAppService::with_platform_services(path, services)))
+    let service = std::sync::Arc::new(WriterAppService::with_platform_services(path, services));
+    if let Err(e) = service.rebuild_search_index(None) {
+        log::warn!("Failed to rebuild search index on open_workspace_with_init: {e}");
+    }
+    Ok(service)
 }
 
 pub fn repair_workspace(path: String) -> std::result::Result<bool, WriterError> {
@@ -290,5 +302,9 @@ pub fn open_workspace_with_secure_storage(
         }
     };
 
-    Ok(std::sync::Arc::new(WriterAppService::with_platform_services(path, services)))
+    let service = std::sync::Arc::new(WriterAppService::with_platform_services(path, services));
+    if let Err(e) = service.rebuild_search_index(None) {
+        log::warn!("Failed to rebuild search index on open_workspace_with_secure_storage: {e}");
+    }
+    Ok(service)
 }

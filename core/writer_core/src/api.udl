@@ -1152,7 +1152,7 @@ interface WriterAppService {
     boolean delete_starmap_edge(string starmap_id, string edge_id);
 
     [Throws=WriterError]
-    boolean save_starmap_graph(string starmap_id, StarMapGraphDto graph);
+    boolean import_or_replace_starmap_package(string starmap_id, StarMapGraphDto graph, u64 base_package_revision);
 
     [Throws=WriterError]
     boolean save_starmap_layout(string starmap_id, StarMapLayoutDto layout);

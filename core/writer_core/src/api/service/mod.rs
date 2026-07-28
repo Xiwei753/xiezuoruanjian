@@ -104,6 +104,11 @@ impl WriterCoreApi {
         core.get_search_index_status()
     }
 
+    pub(crate) fn get_starmap_store_package_revision(&self, starmap_id: &str) -> u64 {
+        let core = self.core_instance.lock().unwrap_or_else(|e| e.into_inner());
+        core.get_starmap_store_package_revision(starmap_id)
+    }
+
     pub(crate) fn json_string<T: Serialize>(value: &T) -> ApiResult<String> {
         serde_json::to_string(value).map_err(Into::into)
     }
