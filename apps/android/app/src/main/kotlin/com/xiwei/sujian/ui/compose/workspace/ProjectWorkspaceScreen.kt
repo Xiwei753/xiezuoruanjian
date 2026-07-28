@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
@@ -165,9 +166,23 @@ private fun WorkbenchWorkspaceContent(
     val editorContentMaxWidthDp = appState.currentLayoutPlan?.editorContentMaxWidthDp ?: 0f
     val pagePaddingDp = appState.currentLayoutPlan?.pagePaddingDp ?: 0f
 
+    val previousStorageKey = remember { mutableStateOf(storageKey) }
+    LaunchedEffect(storageKey) {
+        if (previousStorageKey.value != storageKey) {
+            workbenchVm.onWindowBucketChanged(storageKey)
+            previousStorageKey.value = storageKey
+        }
+    }
+
     SujianWorkbench(
         layoutState = layoutState,
-        onAction = { action -> workbenchVm.dispatch(action) },
+        onAction = { action ->
+            when (action) {
+                is WorkbenchAction.ResizePanel,
+                is WorkbenchAction.MoveFloatingPanel -> workbenchVm.dispatchDeferredPersist(action)
+                else -> workbenchVm.dispatch(action)
+            }
+        },
         modifier = modifier.fillMaxSize().then(windowInsetsPadding),
         editorContent = {
             if (currentVolumeId != null && currentChapterId != null) {
