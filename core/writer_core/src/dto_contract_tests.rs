@@ -699,3 +699,156 @@ fn test_settings_auto_indent_contract() {
     assert_eq!(json["autoIndentEnabled"], true);
     assert_eq!(json["autoIndentWidth"], 4.0);
 }
+#[test]
+fn test_project_stats_summary_dto_contract() {
+    let summary = crate::api::types::ProjectStatsSummaryDto {
+        range: crate::api::types::DateRangeDto {
+            start_date: "2024-01-01".to_string(),
+            end_date: "2024-01-31".to_string(),
+        },
+        projects: vec![
+            crate::api::types::ProjectStatsRecordDto {
+                project_id: "p1".to_string(),
+                human_typed_chars: 50,
+                pasted_chars: 20,
+                deleted_chars: 5,
+                ai_inserted_chars: 2,
+                net_delta_chars: 67,
+                active_seconds: 120,
+            }
+        ],
+    };
+
+    let json = serde_json::to_value(&summary).unwrap();
+    let mut expected_keys = vec!["projects", "range"]
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>();
+    expected_keys.sort();
+
+    let actual_keys = sorted_keys(&json);
+    assert_eq!(actual_keys, expected_keys);
+
+    let projects = json["projects"].as_array().unwrap();
+    let project_keys = sorted_keys(&projects[0]);
+
+    let mut expected_project_keys = vec![
+        "activeSeconds",
+        "aiInsertedChars",
+        "deletedChars",
+        "humanTypedChars",
+        "netDeltaChars",
+        "pastedChars",
+        "projectId",
+    ]
+    .into_iter()
+    .map(|s| s.to_string())
+    .collect::<Vec<_>>();
+    expected_project_keys.sort();
+
+    assert_eq!(project_keys, expected_project_keys);
+}
+#[test]
+fn test_chapter_stats_summary_dto_contract() {
+    let summary = crate::api::types::ChapterStatsSummaryDto {
+        range: crate::api::types::DateRangeDto {
+            start_date: "2024-01-01".to_string(),
+            end_date: "2024-01-31".to_string(),
+        },
+        chapters: vec![
+            crate::api::types::ChapterStatsRecordDto {
+                chapter_id: "c1".to_string(),
+                human_typed_chars: 50,
+                pasted_chars: 20,
+                deleted_chars: 5,
+                ai_inserted_chars: 2,
+                net_delta_chars: 67,
+                active_seconds: 120,
+            }
+        ],
+    };
+
+    let json = serde_json::to_value(&summary).unwrap();
+    let mut expected_keys = vec!["chapters", "range"]
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>();
+    expected_keys.sort();
+
+    let actual_keys = sorted_keys(&json);
+    assert_eq!(actual_keys, expected_keys);
+
+    let chapters = json["chapters"].as_array().unwrap();
+    let chapter_keys = sorted_keys(&chapters[0]);
+
+    let mut expected_chapter_keys = vec![
+        "activeSeconds",
+        "aiInsertedChars",
+        "chapterId",
+        "deletedChars",
+        "humanTypedChars",
+        "netDeltaChars",
+        "pastedChars",
+    ]
+    .into_iter()
+    .map(|s| s.to_string())
+    .collect::<Vec<_>>();
+    expected_chapter_keys.sort();
+
+    assert_eq!(chapter_keys, expected_chapter_keys);
+}
+#[test]
+fn test_device_stats_summary_dto_contract() {
+    let summary = crate::api::types::DeviceStatsSummaryDto {
+        range: crate::api::types::DateRangeDto {
+            start_date: "2024-01-01".to_string(),
+            end_date: "2024-01-31".to_string(),
+        },
+        devices: vec![
+            crate::api::types::DeviceStatsRecordDto {
+                device_id: "d1".to_string(),
+                platform: crate::api::types::PlatformDto::Desktop,
+                device_class: "phone".to_string(),
+                human_typed_chars: 50,
+                pasted_chars: 20,
+                deleted_chars: 5,
+                ai_inserted_chars: 2,
+                net_delta_chars: 67,
+                active_seconds: 120,
+                sessions_count: 3,
+            }
+        ],
+    };
+
+    let json = serde_json::to_value(&summary).unwrap();
+    let mut expected_keys = vec!["devices", "range"]
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>();
+    expected_keys.sort();
+
+    let actual_keys = sorted_keys(&json);
+    assert_eq!(actual_keys, expected_keys);
+
+    let devices = json["devices"].as_array().unwrap();
+    let device_keys = sorted_keys(&devices[0]);
+
+    let mut expected_device_keys = vec![
+        "activeSeconds",
+        "aiInsertedChars",
+        "deletedChars",
+        "deviceClass",
+        "deviceId",
+        "humanTypedChars",
+        "netDeltaChars",
+        "pastedChars",
+        "platform",
+        "sessionsCount",
+    ]
+    .into_iter()
+    .map(|s| s.to_string())
+    .collect::<Vec<_>>();
+    expected_device_keys.sort();
+
+    assert_eq!(device_keys, expected_device_keys);
+}
