@@ -9,6 +9,9 @@ on:
 permissions:
   contents: read
 
+env:
+  CARGO_NDK_VERSION: "4.1.2"
+
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -37,18 +40,33 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          build-root-directory: apps/android
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android,x86_64-linux-android
 
+      - name: Cache cargo-ndk binary
+        id: cache-cargo-ndk
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-ndk
+          key: cargo-ndk-${{ env.CARGO_NDK_VERSION }}-${{ runner.os }}
+
       - name: Install cargo-ndk
-        run: cargo install cargo-ndk
+        if: steps.cache-cargo-ndk.outputs.cache-hit != 'true'
+        run: cargo install cargo-ndk --version ${{ env.CARGO_NDK_VERSION }} --locked
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.flavor }}-${{ matrix.abi }}
+          shared-key: android
+          cache-on-failure: true
 
       - name: Setup Android NDK
         uses: nttld/setup-ndk@v1
@@ -114,6 +132,16 @@ jobs:
           name: sujian-android-${{ matrix.flavor }}-${{ matrix.abi }}-debug
           path: apps/android/app/build/outputs/apk/${{ matrix.flavor == 'no-ai' && 'noAi' || 'ai' }}/debug/sujian-android-*.apk
 
+      - name: Upload native build artifacts for emulator test
+        if: matrix.flavor == 'no-ai' && matrix.abi == 'x86_64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-no-ai-x86_64
+          path: |
+            apps/android/app/build/generated/writer-native/
+            apps/android/app/build/generated/writer-uniffi/
+          retention-days: 1
+
   emulator-test:
     runs-on: ubuntu-24.04
     needs: build
@@ -138,18 +166,30 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
         with:
-          targets: x86_64-linux-android
+          build-root-directory: apps/android
 
-      - name: Install cargo-ndk
-        run: cargo install cargo-ndk
-
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
+      - name: Download native build artifacts
+        uses: actions/download-artifact@v4
         with:
-          key: ${{ matrix.flavor }}-x86_64-emulator
+          name: native-no-ai-x86_64
+          path: .
+
+      - name: Verify native artifacts
+        run: |
+          SO_PATH="apps/android/app/build/generated/writer-native/noAiDebug/x86_64/libuniffi_writer_core.so"
+          if [ ! -f "$SO_PATH" ]; then
+            echo "::error::Native library artifact missing: $SO_PATH"
+            exit 1
+          fi
+          UNIFFI_DIR="apps/android/app/build/generated/writer-uniffi/noAi/kotlin/uniffi"
+          if [ ! -d "$UNIFFI_DIR" ]; then
+            echo "::error::UniFFI bindings artifact missing: $UNIFFI_DIR"
+            exit 1
+          fi
+          echo "Native artifacts verified successfully."
 
       - name: Setup Android NDK
         uses: nttld/setup-ndk@v1
@@ -161,11 +201,6 @@ jobs:
 
       - name: Make build scripts executable
         run: chmod +x tools/build_android.sh tools/android/build_native.sh tools/android/verify_apk_abis.sh
-
-      - name: Build native library and generate UniFFI bindings
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_ROOT }}
-        run: ./tools/build_android.sh --${{ matrix.flavor }} --abi x86_64 --skip-gradle
 
       - name: Enable KVM group permissions
         run: |
