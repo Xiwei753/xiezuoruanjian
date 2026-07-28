@@ -4,6 +4,7 @@ use crate::editor::transaction::composition::*;
 use crate::editor::transaction::rebase::*;
 use crate::editor::transaction::engine::*;
 use crate::editor::transaction::platform::*;
+use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange, EditorRevision, EditorSessionGeneration};
 
 # [allow(deprecated)]
 
@@ -31,8 +32,8 @@ use crate::editor::transaction::platform::*;
                 h: 24.0,
                 char_: "你".to_string(),
                 baseline_y: 36.0,
-                byte_start: 0,
-                byte_end: 3,
+                byte_start: Utf8ByteOffset::unchecked(0),
+                byte_end: Utf8ByteOffset::unchecked(3),
             };
             let json = serde_json::to_string(&gr).unwrap();
             // 字段名必须是 camelCase，char_ → "char"
@@ -73,8 +74,8 @@ use crate::editor::transaction::platform::*;
                 range_start: 0,
                 range_len: 3,
                 text: "abc".to_string(),
-                old_cursor: EditorCursor { index: 0 },
-                new_cursor: EditorCursor { index: 3 },
+                old_cursor: EditorCursor { index: Utf8ByteOffset::unchecked(0) },
+                new_cursor: EditorCursor { index: Utf8ByteOffset::unchecked(3) },
                 duration_ms: 160,
                 glyph_rects: vec![
                     GlyphRect {
@@ -84,8 +85,8 @@ use crate::editor::transaction::platform::*;
                         h: 20.0,
                         char_: "a".to_string(),
                         baseline_y: 16.0,
-                        byte_start: 0,
-                        byte_end: 1,
+                        byte_start: Utf8ByteOffset::unchecked(0),
+                        byte_end: Utf8ByteOffset::unchecked(1),
                     },
                     GlyphRect {
                         x: 10.0,
@@ -94,8 +95,8 @@ use crate::editor::transaction::platform::*;
                         h: 20.0,
                         char_: "b".to_string(),
                         baseline_y: 16.0,
-                        byte_start: 1,
-                        byte_end: 2,
+                        byte_start: Utf8ByteOffset::unchecked(1),
+                        byte_end: Utf8ByteOffset::unchecked(2),
                     },
                     GlyphRect {
                         x: 20.0,
@@ -104,8 +105,8 @@ use crate::editor::transaction::platform::*;
                         h: 20.0,
                         char_: "c".to_string(),
                         baseline_y: 16.0,
-                        byte_start: 2,
-                        byte_end: 3,
+                        byte_start: Utf8ByteOffset::unchecked(2),
+                        byte_end: Utf8ByteOffset::unchecked(3),
                     },
                 ],
                 old_cursor_rect: None,
@@ -201,8 +202,8 @@ use crate::editor::transaction::platform::*;
                 range_start: 0,
                 range_len: 1,
                 text: "a".to_string(),
-                old_cursor: EditorCursor { index: 0 },
-                new_cursor: EditorCursor { index: 1 },
+                old_cursor: EditorCursor { index: Utf8ByteOffset::unchecked(0) },
+                new_cursor: EditorCursor { index: Utf8ByteOffset::unchecked(1) },
                 duration_ms: 160,
                 glyph_rects: Vec::new(),
                 old_cursor_rect: Some(CursorRect { x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
@@ -221,8 +222,8 @@ use crate::editor::transaction::platform::*;
                 range_start: 0,
                 range_len: 1,
                 text: "a".to_string(),
-                old_cursor: EditorCursor { index: 0 },
-                new_cursor: EditorCursor { index: 1 },
+                old_cursor: EditorCursor { index: Utf8ByteOffset::unchecked(0) },
+                new_cursor: EditorCursor { index: Utf8ByteOffset::unchecked(1) },
                 duration_ms: 160,
                 glyph_rects: Vec::new(),
                 old_cursor_rect: None,
@@ -439,7 +440,7 @@ use crate::editor::transaction::platform::*;
             );
             let vt = engine.visual_transaction(&tx).unwrap();
             assert_eq!(vt.kind, EditorAnimationKind::Insert);
-            assert_eq!(vt.inserted_range, Some((2, 3)));
+            assert_eq!(vt.inserted_range, Utf8ByteRange::from_values(2, 3));
             assert_eq!(vt.coordinate_mode, VisualCoordinateMode::Baseline);
             assert!(vt.deleted_glyph_rects.is_none());
             assert!(vt.insert_glyph_rects.is_none());
@@ -567,7 +568,7 @@ use crate::editor::transaction::platform::*;
             let gr = GlyphRect {
                 x: 10.5, y: 20.0, w: 16.0, h: 24.0,
                 char_: "你".to_string(), baseline_y: 40.0,
-                byte_start: 0, byte_end: 3,
+                byte_start: Utf8ByteOffset::unchecked(0), byte_end: Utf8ByteOffset::unchecked(3),
             };
             let json = serde_json::to_string(&gr).unwrap();
             assert!(json.contains("\"baselineY\":"));
@@ -679,8 +680,8 @@ use crate::editor::transaction::platform::*;
             assert_eq!(clusters.len(), 1);
             assert_eq!(clusters[0].text, "😀");
             assert!(clusters[0].is_complex);
-            assert_eq!(clusters[0].byte_start, 0);
-            assert_eq!(clusters[0].byte_end, "😀".len());
+            assert_eq!(clusters[0].byte_start, Utf8ByteOffset::unchecked(0));
+            assert_eq!(clusters[0].byte_end, Utf8ByteOffset::unchecked("😀".len()));
         }
 
         #[test]
@@ -719,8 +720,7 @@ use crate::editor::transaction::platform::*;
             let hvr = HiddenVisualRange {
                 id: 42,
                 kind: AnimationMode::GlyphAnimation,
-                range_start: 10,
-                range_end: 20,
+                range: Utf8ByteRange::from_values(10, 20).unwrap(),
                 old_rect: None,
                 new_rect: None,
                 line_index: 3,
@@ -730,8 +730,7 @@ use crate::editor::transaction::platform::*;
             assert!(json.contains("\"id\":"));
             assert!(json.contains("\"kind\":"));
             assert!(json.contains("\"glyphAnimation\""));
-            assert!(json.contains("\"rangeStart\":"));
-            assert!(json.contains("\"rangeEnd\":"));
+            assert!(json.contains("\"range\":"));
             assert!(json.contains("\"lineIndex\":"));
             // None fields should be skipped
             assert!(!json.contains("\"oldRect\":"));
@@ -742,8 +741,7 @@ use crate::editor::transaction::platform::*;
             let hvr2 = HiddenVisualRange {
                 id: 43,
                 kind: AnimationMode::LineReflowAnimation,
-                range_start: 0,
-                range_end: 5,
+                range: Utf8ByteRange::from_values(0, 5).unwrap(),
                 old_rect: Some(Rect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 }),
                 new_rect: Some(Rect { x: 0.0, y: 20.0, w: 100.0, h: 20.0 }),
                 line_index: 1,
@@ -834,8 +832,8 @@ use crate::editor::transaction::platform::*;
             let emoji = "👨‍👩‍👧‍👦";
             let clusters = split_text_into_clusters(emoji, 0);
             assert_eq!(clusters.len(), 1, "ZWJ emoji should be 1 cluster");
-            assert_eq!(clusters[0].byte_start, 0);
-            assert_eq!(clusters[0].byte_end, emoji.len());
+            assert_eq!(clusters[0].byte_start, Utf8ByteOffset::unchecked(0));
+            assert_eq!(clusters[0].byte_end, Utf8ByteOffset::unchecked(emoji.len()));
             assert_eq!(clusters[0].text, emoji);
             assert!(clusters[0].is_complex, "ZWJ emoji should be complex");
         }
@@ -846,8 +844,8 @@ use crate::editor::transaction::platform::*;
             let emoji = "❤️"; // ❤ + FE0F
             let clusters = split_text_into_clusters(emoji, 0);
             assert_eq!(clusters.len(), 1, "Variation selector emoji should be 1 cluster");
-            assert_eq!(clusters[0].byte_start, 0);
-            assert_eq!(clusters[0].byte_end, emoji.len());
+            assert_eq!(clusters[0].byte_start, Utf8ByteOffset::unchecked(0));
+            assert_eq!(clusters[0].byte_end, Utf8ByteOffset::unchecked(emoji.len()));
             assert_eq!(clusters[0].text, emoji);
             assert!(clusters[0].is_complex, "Variation selector emoji should be complex");
         }
@@ -964,31 +962,25 @@ use crate::editor::transaction::platform::*;
             tl.mark_first_visible_frame(1000);
             let pvt = PlatformVisualTransaction {
                 transaction_id: 1,
-                generation: 1,
+                generation: EditorSessionGeneration::new(1),
                 state: PlatformVisualTransactionState::Rendering,
                 old_revision: VisualLayoutRevision {
-                    document_revision: 1,
-                    layout_revision: 1,
-                    viewport_width: 800.0,
-                    font_fingerprint: "f1".to_string(),
-                    paragraph_style_fingerprint: "p1".to_string(),
-                    text_color_fingerprint: "t1".to_string(),
-                    density_or_dpr: 2.0,
+                    document_revision: EditorRevision::new(1), layout_revision: 1,
+                    viewport_width: 800.0, font_fingerprint: "f1".into(),
+                    paragraph_style_fingerprint: "p1".into(),
+                    text_color_fingerprint: "t1".into(), density_or_dpr: 2.0,
                 },
                 new_revision: VisualLayoutRevision {
-                    document_revision: 2,
-                    layout_revision: 2,
-                    viewport_width: 800.0,
-                    font_fingerprint: "f1".to_string(),
-                    paragraph_style_fingerprint: "p1".to_string(),
-                    text_color_fingerprint: "t1".to_string(),
-                    density_or_dpr: 2.0,
+                    document_revision: EditorRevision::new(2), layout_revision: 2,
+                    viewport_width: 800.0, font_fingerprint: "f1".into(),
+                    paragraph_style_fingerprint: "p1".into(),
+                    text_color_fingerprint: "t1".into(), density_or_dpr: 2.0,
                 },
                 slice_roles: vec![AnimatedSliceRole::Insert],
-                slice_document_byte_ranges: vec![(2, 3)],
+                slice_document_byte_ranges: vec![Utf8ByteRange::from_values(2, 3).unwrap()],
                 static_line_patches: Vec::new(),
-                cursor_transition_byte_start: 2,
-                cursor_transition_byte_end: 3,
+                cursor_transition_byte_start: Utf8ByteOffset::unchecked(2),
+                cursor_transition_byte_end: Utf8ByteOffset::unchecked(3),
                 duration_ms: 160,
                 rendering_started_at_ms: Some(1000),
                 accumulated_paused_duration_ms: 0,
@@ -1018,9 +1010,9 @@ use crate::editor::transaction::platform::*;
         #[test]
         fn visual_revision_serializes_camel_case() {
             let rev = VisualRevision {
-                revision_id: 1,
+                revision_id: EditorRevision::new(1),
                 full_text: "hello".to_string(),
-                affected_paragraph_range: (0, 5),
+                affected_paragraph_range: Utf8ByteRange::from_values(0, 5).unwrap(),
                 line_snapshot_ids: vec![1, 2],
                 cursor_rect: Some(CursorRect { x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
                 caret_affinity: Some(CaretAffinity::Downstream),
@@ -1087,9 +1079,9 @@ use crate::editor::transaction::platform::*;
             // 预输入 "ni" → 候选转换 commit "你"
             let comp_rev = CompositionVisualRevision::new(
                 "hello ".to_string(),
-                Some((6, 8)),
+                Utf8ByteRange::from_values(6, 8),
                 "ni".to_string(),
-                (0, 8),
+                Utf8ByteRange::from_values(0, 8).unwrap(),
             );
             let tx = engine.composition_commit_or_cancel_transaction(
                 "hello ",
@@ -1109,7 +1101,7 @@ use crate::editor::transaction::platform::*;
                 "hello".to_string(),
                 None,
                 " world".to_string(),
-                (0, 5),
+                Utf8ByteRange::from_values(0, 5).unwrap(),
             );
             let tx = engine.composition_commit_or_cancel_transaction(
                 "hello",
@@ -1141,10 +1133,10 @@ use crate::editor::transaction::platform::*;
         fn platform_visual_transaction_cancel_reason_serializes() {
             let mut pvt = PlatformVisualTransaction {
                 transaction_id: 1,
-                generation: 1,
+                generation: EditorSessionGeneration::new(1),
                 state: PlatformVisualTransactionState::Cancelled,
                 old_revision: VisualLayoutRevision {
-                    document_revision: 1,
+                    document_revision: EditorRevision::new(1),
                     layout_revision: 1,
                     viewport_width: 800.0,
                     font_fingerprint: "f1".to_string(),
@@ -1153,7 +1145,7 @@ use crate::editor::transaction::platform::*;
                     density_or_dpr: 2.0,
                 },
                 new_revision: VisualLayoutRevision {
-                    document_revision: 2,
+                    document_revision: EditorRevision::new(2),
                     layout_revision: 2,
                     viewport_width: 800.0,
                     font_fingerprint: "f1".to_string(),
@@ -1164,8 +1156,8 @@ use crate::editor::transaction::platform::*;
                 slice_roles: Vec::new(),
                 slice_document_byte_ranges: Vec::new(),
                 static_line_patches: Vec::new(),
-                cursor_transition_byte_start: 0,
-                cursor_transition_byte_end: 0,
+                cursor_transition_byte_start: Utf8ByteOffset::unchecked(0),
+                cursor_transition_byte_end: Utf8ByteOffset::unchecked(0),
                 duration_ms: 160,
                 rendering_started_at_ms: None,
                 accumulated_paused_duration_ms: 0,

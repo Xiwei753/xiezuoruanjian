@@ -214,6 +214,49 @@ private fun StarMapEditorScreen(
         }
     }
 
+    suspend fun retryPendingSaves() {
+        if (editorState.hasPendingLayoutSave && editorState.starMapData != null) {
+            withContext(Dispatchers.IO) {
+                try {
+                    val repo = repository()
+                    when (val result = repo.saveStarmapLayout(starmapId, editorState.starMapData!!.layout)) {
+                        is BridgeResult.Success -> {
+                            editorState = editorState.copy(hasPendingLayoutSave = false, layoutSaveError = null)
+                        }
+                        is BridgeResult.Error -> {
+                            editorState = editorState.copy(layoutSaveError = "布局保存失败: ${result.message}")
+                        }
+                        BridgeResult.NotLoaded -> {
+                            editorState = editorState.copy(layoutSaveError = "布局保存失败: 未加载")
+                        }
+                    }
+                } catch (e: Exception) {
+                    editorState = editorState.copy(layoutSaveError = "布局保存异常: ${e.message}")
+                }
+            }
+        }
+        if (editorState.hasPendingViewportSave && editorState.starMapData != null) {
+            withContext(Dispatchers.IO) {
+                try {
+                    val repo = repository()
+                    when (val result = repo.saveStarmapViewport(starmapId, editorState.starMapData!!.viewport)) {
+                        is BridgeResult.Success -> {
+                            editorState = editorState.copy(hasPendingViewportSave = false, viewportSaveError = null)
+                        }
+                        is BridgeResult.Error -> {
+                            editorState = editorState.copy(viewportSaveError = "视口保存失败: ${result.message}")
+                        }
+                        BridgeResult.NotLoaded -> {
+                            editorState = editorState.copy(viewportSaveError = "视口保存失败: 未加载")
+                        }
+                    }
+                } catch (e: Exception) {
+                    editorState = editorState.copy(viewportSaveError = "视口保存异常: ${e.message}")
+                }
+            }
+        }
+    }
+
     DisposableEffect(starmapId) {
         onDispose {
             val repo = repository()
@@ -236,17 +279,28 @@ private fun StarMapEditorScreen(
         onAddEdgeClick = { showAddEdgeDialog = true },
         onNodeDrag = { nodeId, x, y ->
             coroutineScope.launch {
+                val updatedNodes = editorState.starMapData!!.layout.nodes.map {
+                    if (it.nodeId == nodeId) it.copy(x = x, y = y) else it
+                }
+                val updatedLayout = editorState.starMapData!!.layout.copy(nodes = updatedNodes)
+                editorState = editorState.copy(hasPendingLayoutSave = true, layoutSaveError = null)
                 withContext(Dispatchers.IO) {
                     try {
                         val repo = repository()
-                        val updatedNodes = editorState.starMapData!!.layout.nodes.map {
-                            if (it.nodeId == nodeId) it.copy(x = x, y = y) else it
+                        when (val result = repo.saveStarmapLayout(starmapId, updatedLayout)) {
+                            is BridgeResult.Success -> {
+                                editorState = editorState.copy(hasPendingLayoutSave = false, layoutSaveError = null)
+                            }
+                            is BridgeResult.Error -> {
+                                editorState = editorState.copy(layoutSaveError = "布局保存失败: ${result.message}")
+                            }
+                            BridgeResult.NotLoaded -> {
+                                editorState = editorState.copy(layoutSaveError = "布局保存失败: 未加载")
+                            }
                         }
-                        repo.saveStarmapLayout(
-                            starmapId,
-                            editorState.starMapData!!.layout.copy(nodes = updatedNodes)
-                        )
-                    } catch (_: Exception) { }
+                    } catch (e: Exception) {
+                        editorState = editorState.copy(layoutSaveError = "布局保存异常: ${e.message}")
+                    }
                 }
             }
         },
@@ -254,11 +308,24 @@ private fun StarMapEditorScreen(
             viewportSaveJob?.cancel()
             viewportSaveJob = coroutineScope.launch {
                 delay(500)
+                editorState = editorState.copy(hasPendingViewportSave = true, viewportSaveError = null)
                 withContext(Dispatchers.IO) {
                     try {
                         val repo = repository()
-                        repo.saveStarmapViewport(starmapId, viewport)
-                    } catch (_: Exception) { }
+                        when (val result = repo.saveStarmapViewport(starmapId, viewport)) {
+                            is BridgeResult.Success -> {
+                                editorState = editorState.copy(hasPendingViewportSave = false, viewportSaveError = null)
+                            }
+                            is BridgeResult.Error -> {
+                                editorState = editorState.copy(viewportSaveError = "视口保存失败: ${result.message}")
+                            }
+                            BridgeResult.NotLoaded -> {
+                                editorState = editorState.copy(viewportSaveError = "视口保存失败: 未加载")
+                            }
+                        }
+                    } catch (e: Exception) {
+                        editorState = editorState.copy(viewportSaveError = "视口保存异常: ${e.message}")
+                    }
                 }
             }
         },
@@ -266,6 +333,9 @@ private fun StarMapEditorScreen(
             if (editorState.editingNodeId == null) {
                 editorState = editorState.copy(selectedNodeId = nodeId)
             }
+        },
+        onRetrySaves = {
+            coroutineScope.launch { retryPendingSaves() }
         },
         onNodeDoubleTap = { geometry ->
             val graphNode = editorState.starMapData?.graph?.nodes?.find { it.id == geometry.nodeId }

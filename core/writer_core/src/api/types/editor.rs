@@ -227,12 +227,12 @@ impl From<crate::editor::EditorVisualTransaction> for EditorVisualTransactionDto
     fn from(vt: crate::editor::EditorVisualTransaction) -> Self {
         let (inserted_range_start, inserted_range_end) = vt
             .inserted_range
-            .map(|(s, e)| (s as u32, e as u32))
+            .map(|r| (r.start().value() as u32, r.end().value() as u32))
             .unwrap_or((0, 0));
         let has_inserted_range = vt.inserted_range.is_some();
         let (deleted_range_start, deleted_range_end) = vt
             .deleted_range
-            .map(|(s, e)| (s as u32, e as u32))
+            .map(|r| (r.start().value() as u32, r.end().value() as u32))
             .unwrap_or((0, 0));
         let has_deleted_range = vt.deleted_range.is_some();
         Self {
@@ -258,10 +258,10 @@ impl From<crate::editor::EditorVisualTransaction> for EditorVisualTransactionDto
             },
             old_text: vt.old_text,
             new_text: vt.new_text,
-            old_selection_anchor: vt.old_selection.anchor.index as u32,
-            old_selection_head: vt.old_selection.head.index as u32,
-            new_selection_anchor: vt.new_selection.anchor.index as u32,
-            new_selection_head: vt.new_selection.head.index as u32,
+            old_selection_anchor: vt.old_selection.anchor.index.value() as u32,
+            old_selection_head: vt.old_selection.head.index.value() as u32,
+            new_selection_anchor: vt.new_selection.anchor.index.value() as u32,
+            new_selection_head: vt.new_selection.head.index.value() as u32,
             inserted_range_start,
             inserted_range_end,
             has_inserted_range,
@@ -449,7 +449,7 @@ impl From<crate::editor::PlatformVisualTransaction> for PlatformVisualTransactio
     fn from(t: crate::editor::PlatformVisualTransaction) -> Self {
         Self {
             transaction_id: t.transaction_id,
-            generation: t.generation,
+            generation: t.generation.value(),
             state: t.state.into(),
             duration_ms: t.duration_ms,
             unified_kind: t.unified_kind.map(|k| k.into()).unwrap_or_default(),
@@ -841,10 +841,10 @@ pub struct VisualRevisionDto {
 impl From<crate::editor::VisualRevision> for VisualRevisionDto {
     fn from(r: crate::editor::VisualRevision) -> Self {
         Self {
-            revision_id: r.revision_id,
+            revision_id: r.revision_id.value(),
             full_text: r.full_text,
-            affected_paragraph_range_start: r.affected_paragraph_range.0,
-            affected_paragraph_range_end: r.affected_paragraph_range.1,
+            affected_paragraph_range_start: r.affected_paragraph_range.start().value(),
+            affected_paragraph_range_end: r.affected_paragraph_range.end().value(),
             cursor_rect: r.cursor_rect.map(Into::into),
             caret_affinity: r.caret_affinity.map(Into::into),
             shaping_identity: r.shaping_identity,
@@ -1031,7 +1031,7 @@ mod tests {
         );
         let vt = engine.visual_transaction(&tx).unwrap();
         // Core layer: Insert has inserted_range = Some((2, 3))
-        assert_eq!(vt.inserted_range, Some((2, 3)));
+        assert_eq!(vt.inserted_range, crate::editor::strong_types::Utf8ByteRange::from_values(2, 3));
         let dto: EditorVisualTransactionDto = vt.into();
         assert_eq!(dto.inserted_range_start, 2);
         assert_eq!(dto.inserted_range_end, 3);
@@ -1051,7 +1051,7 @@ mod tests {
         );
         let vt = engine.visual_transaction(&tx).unwrap();
         // Core layer: Delete has deleted_range = Some((2, 3))
-        assert_eq!(vt.deleted_range, Some((2, 3)));
+        assert_eq!(vt.deleted_range, crate::editor::strong_types::Utf8ByteRange::from_values(2, 3));
         let dto: EditorVisualTransactionDto = vt.into();
         assert_eq!(dto.deleted_range_start, 2);
         assert_eq!(dto.deleted_range_end, 3);
@@ -1231,25 +1231,25 @@ mod tests {
         tl.mark_first_visible_frame(1000);
         let pvt = crate::editor::PlatformVisualTransaction {
             transaction_id: 1,
-            generation: 1,
+            generation: crate::editor::strong_types::EditorSessionGeneration::new(1),
             state: crate::editor::PlatformVisualTransactionState::Rendering,
             old_revision: crate::editor::VisualLayoutRevision {
-                document_revision: 1, layout_revision: 1,
+                document_revision: crate::editor::strong_types::EditorRevision::new(1), layout_revision: 1,
                 viewport_width: 800.0, font_fingerprint: "f1".into(),
                 paragraph_style_fingerprint: "p1".into(),
                 text_color_fingerprint: "t1".into(), density_or_dpr: 2.0,
             },
             new_revision: crate::editor::VisualLayoutRevision {
-                document_revision: 2, layout_revision: 2,
+                document_revision: crate::editor::strong_types::EditorRevision::new(2), layout_revision: 2,
                 viewport_width: 800.0, font_fingerprint: "f1".into(),
                 paragraph_style_fingerprint: "p1".into(),
                 text_color_fingerprint: "t1".into(), density_or_dpr: 2.0,
             },
             slice_roles: vec![crate::editor::AnimatedSliceRole::Insert],
-            slice_document_byte_ranges: vec![(2, 3)],
+            slice_document_byte_ranges: vec![crate::editor::strong_types::Utf8ByteRange::from_values(2, 3).unwrap()],
             static_line_patches: Vec::new(),
-            cursor_transition_byte_start: 2,
-            cursor_transition_byte_end: 3,
+            cursor_transition_byte_start: crate::editor::strong_types::Utf8ByteOffset::unchecked(2),
+            cursor_transition_byte_end: crate::editor::strong_types::Utf8ByteOffset::unchecked(3),
             duration_ms: 160,
             rendering_started_at_ms: Some(1000),
             accumulated_paused_duration_ms: 0,

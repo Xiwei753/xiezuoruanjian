@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::editor::strong_types::Utf8ByteOffset;
+
 pub(crate) fn clamp_to_char_boundary(text: &str, index: usize) -> usize {
     if index > text.len() {
         return text.len();
@@ -14,14 +16,19 @@ pub(crate) fn clamp_to_char_boundary(text: &str, index: usize) -> usize {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorCursor {
-    pub index: usize,
+    #[serde(serialize_with = "crate::editor::strong_types::ser_offset", deserialize_with = "crate::editor::strong_types::de_offset")]
+    pub index: Utf8ByteOffset,
 }
 
 impl EditorCursor {
     pub fn new(text: &str, index: usize) -> Self {
         Self {
-            index: clamp_to_char_boundary(text, index),
+            index: Utf8ByteOffset::clamp(text, index),
         }
+    }
+
+    pub fn from_offset(offset: Utf8ByteOffset) -> Self {
+        Self { index: offset }
     }
 }
 
@@ -45,12 +52,20 @@ impl EditorSelection {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum EditorChange {
-    Insert { index: usize, text: String },
-    Delete { index: usize, text: String },
+    Insert {
+        #[serde(serialize_with = "crate::editor::strong_types::ser_offset", deserialize_with = "crate::editor::strong_types::de_offset")]
+        index: Utf8ByteOffset,
+        text: String,
+    },
+    Delete {
+        #[serde(serialize_with = "crate::editor::strong_types::ser_offset", deserialize_with = "crate::editor::strong_types::de_offset")]
+        index: Utf8ByteOffset,
+        text: String,
+    },
 }
 
 impl EditorChange {
-    pub fn index(&self) -> usize {
+    pub fn index(&self) -> Utf8ByteOffset {
         match self {
             Self::Insert { index, .. } | Self::Delete { index, .. } => *index,
         }

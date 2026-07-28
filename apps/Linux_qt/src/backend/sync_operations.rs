@@ -91,13 +91,15 @@ impl AppBackend {
         self.workspace_content_changed();
         self.workspace_state_changed();
 
+        if let Some(api) = self.core_api() {
+            if let Err(e) = api.rebuild_search_index_json(None) {
+                self.debug_log("sync", "search_index_rebuild_failed", &format!("{}", e));
+            }
+        }
+
         if chapter_deleted {
             self.current_save_status = "chapter.deleted_remotely_refreshed".to_string();
             self.save_status_changed();
-            // 在这种混合状态下，如果 current_sync_operation_state 已经是 JSON，
-            // 简单的 push_str 会破坏格式。
-            // 正常情况下，handle_sync_outcome 会设置 current_sync_operation_state，
-            // 这里我们只需要通过 save_status 告知 UI 即可。
         }
 
         self.debug_log("sync", "sync_refresh_applied", "tree_reloaded=true");

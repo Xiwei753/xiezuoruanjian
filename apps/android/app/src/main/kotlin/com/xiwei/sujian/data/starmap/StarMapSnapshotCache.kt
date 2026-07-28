@@ -147,6 +147,7 @@ internal class StarMapSnapshotCache {
         }
         for (deletedId in incoming.deletedNodeIds) {
             existing.nodes.remove(deletedId)
+            existing.layoutNodes.remove(deletedId)
             existing.deletedNodeIds.add(deletedId)
         }
         for (deletedId in incoming.deletedEdgeIds) {

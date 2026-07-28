@@ -225,10 +225,10 @@ impl EditorKernel {
         for c in changes {
             match c {
                 EditorChange::Delete { index, text } => {
-                    old_ranges.push(Utf8ByteRange::from_values(*index, *index + text.len()).unwrap());
+                    old_ranges.push(Utf8ByteRange::from_values(index.value(), index.value() + text.len()).unwrap());
                 }
                 EditorChange::Insert { index, text } => {
-                    new_ranges.push(Utf8ByteRange::from_values(*index, *index + text.len()).unwrap());
+                    new_ranges.push(Utf8ByteRange::from_values(index.value(), index.value() + text.len()).unwrap());
                 }
             }
         }

@@ -104,6 +104,7 @@ impl Default for HistoryManager {
 mod tests {
     use super::*;
     use crate::editor::transaction::EditorChange;
+    use crate::editor::strong_types::Utf8ByteOffset;
 
     fn insert_cmd(
         index: usize,
@@ -113,11 +114,11 @@ mod tests {
     ) -> TextEditCommand {
         TextEditCommand::new(
             vec![EditorChange::Insert {
-                index,
+                index: Utf8ByteOffset::unchecked(index),
                 text: text.to_string(),
             }],
-            cursor_before,
-            cursor_after,
+            Utf8ByteOffset::unchecked(cursor_before),
+            Utf8ByteOffset::unchecked(cursor_after),
         )
     }
 
@@ -205,7 +206,7 @@ mod tests {
     #[test]
     fn empty_command_not_pushed() {
         let mut mgr = HistoryManager::new();
-        mgr.push(TextEditCommand::new(vec![], 0, 0));
+        mgr.push(TextEditCommand::new(vec![], Utf8ByteOffset::unchecked(0), Utf8ByteOffset::unchecked(0)));
         assert_eq!(mgr.undo_count(), 0);
     }
 

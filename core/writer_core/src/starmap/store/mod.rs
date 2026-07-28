@@ -49,6 +49,7 @@ pub mod types;
 
 pub use types::*;
 pub use meta::GraphMeta;
+pub use meta::DeletedSinceLastSync;
 pub use relation_index::{EdgeRelationIndex, EmbedHostIndex, LinkRelationIndex, HyperlinkRelationIndex};
 pub use snapshot::{StarMapPhasedSnapshot, PhasedSnapshotRequest};
 
@@ -197,6 +198,17 @@ impl StarMapStore {
             || !self.dirty_hyperlinks.is_empty()
             || self.dirty_layout
             || self.dirty_graph_meta
+    }
+
+    pub fn clear_persistent_deletion_log(&mut self) {
+        if let Some(ref mut meta) = self.graph_meta {
+            meta.deleted_since_last_sync.nodes.clear();
+            meta.deleted_since_last_sync.edges.clear();
+            meta.deleted_since_last_sync.embeds.clear();
+            meta.deleted_since_last_sync.links.clear();
+            meta.deleted_since_last_sync.hyperlinks.clear();
+            self.dirty_graph_meta = true;
+        }
     }
 }
 

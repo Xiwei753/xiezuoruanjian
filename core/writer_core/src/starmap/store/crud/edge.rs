@@ -57,6 +57,9 @@ impl StarMapStore {
         if let Some(ref mut meta) = self.graph_meta {
             meta.edge_ids.retain(|id| id != edge_id);
             meta.edge_relation_index.retain(|eri| eri.edge_id != edge_id);
+            if !meta.deleted_since_last_sync.edges.contains(&edge_id.to_string()) {
+                meta.deleted_since_last_sync.edges.push(edge_id.to_string());
+            }
         }
         self.dirty_graph_meta = true;
     }

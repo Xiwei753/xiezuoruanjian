@@ -27,6 +27,35 @@ pub struct GraphMeta {
     pub node_kind_counts: HashMap<String, u32>,
     pub package_revision: u64,
     pub updated_at: u64,
+    #[serde(default)]
+    pub deleted_since_last_sync: DeletedSinceLastSync,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletedSinceLastSync {
+    #[serde(default)]
+    pub nodes: Vec<String>,
+    #[serde(default)]
+    pub edges: Vec<String>,
+    #[serde(default)]
+    pub embeds: Vec<String>,
+    #[serde(default)]
+    pub links: Vec<String>,
+    #[serde(default)]
+    pub hyperlinks: Vec<String>,
+}
+
+impl Default for DeletedSinceLastSync {
+    fn default() -> Self {
+        Self {
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            embeds: Vec::new(),
+            links: Vec::new(),
+            hyperlinks: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

@@ -5,6 +5,7 @@ use super::types::{
 };
 #[cfg(test)]
 use super::types::EditorCursor;
+use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset, Utf8ByteRange};
 
 /// 矩形区域，用于 HiddenVisualRange 中的 old_rect/new_rect。
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -29,10 +30,9 @@ pub struct HiddenVisualRange {
     pub id: u64,
     /// 动画模式
     pub kind: AnimationMode,
-    /// 范围起始（UTF-8 byte offset，半开区间左端）
-    pub range_start: usize,
-    /// 范围结束（UTF-8 byte offset，半开区间右端，即 `[range_start, range_end)`）
-    pub range_end: usize,
+    /// 范围（UTF-8 byte offset，半开区间）
+    #[serde(serialize_with = "crate::editor::strong_types::ser_range", deserialize_with = "crate::editor::strong_types::de_range")]
+    pub range: Utf8ByteRange,
     /// 旧矩形（LineReflow/Snapshot 使用）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub old_rect: Option<Rect>,
@@ -53,9 +53,11 @@ pub struct HiddenVisualRange {
 #[serde(rename_all = "camelCase")]
 pub struct ClusterRect {
     /// 该 cluster 的 UTF-8 byte 起始位置（半开区间左端）
-    pub byte_start: usize,
+    #[serde(serialize_with = "crate::editor::strong_types::ser_offset", deserialize_with = "crate::editor::strong_types::de_offset")]
+    pub byte_start: Utf8ByteOffset,
     /// 该 cluster 的 UTF-8 byte 结束位置（半开区间右端，即 `[byte_start, byte_end)`）
-    pub byte_end: usize,
+    #[serde(serialize_with = "crate::editor::strong_types::ser_offset", deserialize_with = "crate::editor::strong_types::de_offset")]
+    pub byte_end: Utf8ByteOffset,
     /// cluster 文本内容
     pub text: String,
     /// 是否包含复杂 grapheme
@@ -68,9 +70,11 @@ pub struct ClusterRect {
 #[serde(rename_all = "camelCase")]
 pub struct ClusterRun {
     /// 该 run 的 UTF-8 byte 起始位置（半开区间左端）
-    pub byte_start: usize,
+    #[serde(serialize_with = "crate::editor::strong_types::ser_offset", deserialize_with = "crate::editor::strong_types::de_offset")]
+    pub byte_start: Utf8ByteOffset,
     /// 该 run 的 UTF-8 byte 结束位置（半开区间右端，即 `[byte_start, byte_end)`）
-    pub byte_end: usize,
+    #[serde(serialize_with = "crate::editor::strong_types::ser_offset", deserialize_with = "crate::editor::strong_types::de_offset")]
+    pub byte_end: Utf8ByteOffset,
     /// run 文本内容
     pub text: String,
     /// 该 run 包含的 cluster 数量
@@ -107,9 +111,11 @@ pub struct ReflowGlyphRect {
     #[serde(rename = "char")]
     pub char_: String,
     /// 该 glyph 在新文本中的 UTF-8 byte 起始位置（用于静态层跳过 reflow range）
-    pub byte_start: usize,
+    #[serde(serialize_with = "crate::editor::strong_types::ser_offset", deserialize_with = "crate::editor::strong_types::de_offset")]
+    pub byte_start: Utf8ByteOffset,
     /// 该 glyph 在新文本中的 UTF-8 byte 结束位置
-    pub byte_end: usize,
+    #[serde(serialize_with = "crate::editor::strong_types::ser_offset", deserialize_with = "crate::editor::strong_types::de_offset")]
+    pub byte_end: Utf8ByteOffset,
     /// 插入前的 x 坐标（文档坐标系，不含 scroll offset）
     pub old_x: f64,
     /// 插入前的 y 坐标（文档坐标系，不含 scroll offset）
@@ -152,11 +158,11 @@ pub struct GlyphRect {
     #[serde(default)]
     pub baseline_y: f64,
     /// 该 glyph 在文本中的 UTF-8 byte 起始位置
-    #[serde(default)]
-    pub byte_start: usize,
+    #[serde(default, serialize_with = "crate::editor::strong_types::ser_offset", deserialize_with = "crate::editor::strong_types::de_offset")]
+    pub byte_start: Utf8ByteOffset,
     /// 该 glyph 在文本中的 UTF-8 byte 结束位置
-    #[serde(default)]
-    pub byte_end: usize,
+    #[serde(default, serialize_with = "crate::editor::strong_types::ser_offset", deserialize_with = "crate::editor::strong_types::de_offset")]
+    pub byte_end: Utf8ByteOffset,
 }
 
 /// **DEPRECATED**: 已被 `EditorVisualTransaction` + `visual_transaction()` 替代。
@@ -233,11 +239,12 @@ pub struct EditorVisualTransaction {
     /// 新选区（UTF-8 byte offset）
     pub new_selection: EditorSelection,
     /// 插入范围（UTF-8 byte offset），Insert 动画时平台层应跳过此范围
-    pub inserted_range: Option<(usize, usize)>,
+    #[serde(default, skip_serializing_if = "Option::is_none", serialize_with = "crate::editor::strong_types::ser_opt_range", deserialize_with = "crate::editor::strong_types::de_opt_range")]
+    pub inserted_range: Option<Utf8ByteRange>,
     /// 删除范围（UTF-8 byte offset），Delete 动画时平台层使用此范围
     /// 而非自行 diff_plain_text 计算，确保 Core 是范围语义唯一来源。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub deleted_range: Option<(usize, usize)>,
+    #[serde(default, skip_serializing_if = "Option::is_none", serialize_with = "crate::editor::strong_types::ser_opt_range", deserialize_with = "crate::editor::strong_types::de_opt_range")]
+    pub deleted_range: Option<Utf8ByteRange>,
     /// 删除前 glyph 矩形快照（由平台层填充，Core 默认 None）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deleted_glyph_rects: Option<Vec<GlyphRect>>,
@@ -351,11 +358,12 @@ pub struct PreeditVisualTransaction {
 #[serde(rename_all = "camelCase")]
 pub struct VisualRevision {
     /// 修订唯一 ID（递增）
-    pub revision_id: u64,
+    pub revision_id: EditorRevision,
     /// 完整正文文本
     pub full_text: String,
     /// 受影响段落范围（UTF-8 byte offset）
-    pub affected_paragraph_range: (usize, usize),
+    #[serde(serialize_with = "crate::editor::strong_types::ser_range", deserialize_with = "crate::editor::strong_types::de_range")]
+    pub affected_paragraph_range: Utf8ByteRange,
     /// 行快照 ID 列表（由平台层填充）
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub line_snapshot_ids: Vec<u64>,
@@ -427,7 +435,7 @@ pub fn build_virtual_text(
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VisualLayoutRevision {
-    pub document_revision: u64,
+    pub document_revision: EditorRevision,
     pub layout_revision: u64,
     pub viewport_width: f64,
     pub font_fingerprint: String,
@@ -470,9 +478,11 @@ pub enum AnimatedSliceRole {
 pub struct StaticLinePatch {
     pub new_snapshot_id: u64,
     /// 补丁覆盖范围起始（new_text UTF-8 byte offset，半开区间左端）
-    pub byte_start: usize,
+    #[serde(serialize_with = "crate::editor::strong_types::ser_offset", deserialize_with = "crate::editor::strong_types::de_offset")]
+    pub byte_start: Utf8ByteOffset,
     /// 补丁覆盖范围结束（new_text UTF-8 byte offset，半开区间右端，即 `[byte_start, byte_end)`）
-    pub byte_end: usize,
+    #[serde(serialize_with = "crate::editor::strong_types::ser_offset", deserialize_with = "crate::editor::strong_types::de_offset")]
+    pub byte_end: Utf8ByteOffset,
     /// 补丁在视口中的目标矩形（文档坐标，不含滚动偏移）
     pub destination_rect: Rect,
     /// 从 new_text 快照纹理中裁剪的可见子区域列表（纹理坐标）
@@ -666,9 +676,11 @@ pub struct DecorationSlice {
     /// 装饰类型
     pub kind: DecorationSliceKind,
     /// UTF-8 byte 范围起始（半开区间，含）
-    pub byte_start: usize,
+    #[serde(serialize_with = "crate::editor::strong_types::ser_offset", deserialize_with = "crate::editor::strong_types::de_offset")]
+    pub byte_start: Utf8ByteOffset,
     /// UTF-8 byte 范围结束（半开区间，不含）
-    pub byte_end: usize,
+    #[serde(serialize_with = "crate::editor::strong_types::ser_offset", deserialize_with = "crate::editor::strong_types::de_offset")]
+    pub byte_end: Utf8ByteOffset,
     /// 矩形区域（由平台层填充）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rect: Option<Rect>,

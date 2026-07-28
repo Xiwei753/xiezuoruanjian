@@ -45,6 +45,9 @@ impl StarMapStore {
         if let Some(ref mut meta) = self.graph_meta {
             meta.hyperlink_ids.retain(|id| id != hyperlink_id);
             meta.hyperlink_relation_index.retain(|hri| hri.hyperlink_id != hyperlink_id);
+            if !meta.deleted_since_last_sync.hyperlinks.contains(&hyperlink_id.to_string()) {
+                meta.deleted_since_last_sync.hyperlinks.push(hyperlink_id.to_string());
+            }
         }
         self.dirty_graph_meta = true;
     }

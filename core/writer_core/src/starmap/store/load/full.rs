@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::error::Result;
 use crate::starmap::types::*;
 
-use super::super::meta::GraphMeta;
+use super::super::meta::{GraphMeta, DeletedSinceLastSync};
 use super::super::relation_index::*;
 use super::super::types::*;
 use super::super::StarMapStore;
@@ -90,6 +90,7 @@ impl StarMapStore {
                         },
                         package_revision: 0,
                         updated_at: graph.updated_at,
+                        deleted_since_last_sync: DeletedSinceLastSync::default(),
                     });
                     for node in &graph.nodes {
                         self.nodes.insert(node.id.clone(), node.clone());

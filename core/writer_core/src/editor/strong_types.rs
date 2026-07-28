@@ -1,8 +1,52 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 use std::ops::Range;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub(crate) fn ser_offset<S: Serializer>(offset: &Utf8ByteOffset, s: S) -> Result<S::Ok, S::Error> {
+    offset.value().serialize(s)
+}
+
+pub(crate) fn de_offset<'de, D: Deserializer<'de>>(d: D) -> Result<Utf8ByteOffset, D::Error> {
+    let v: usize = usize::deserialize(d)?;
+    Ok(Utf8ByteOffset::unchecked(v))
+}
+
+pub(crate) fn ser_range<S: Serializer>(range: &Utf8ByteRange, s: S) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeTuple;
+    let mut tup = s.serialize_tuple(2)?;
+    tup.serialize_element(&range.start().value())?;
+    tup.serialize_element(&range.end().value())?;
+    tup.end()
+}
+
+pub(crate) fn de_range<'de, D: Deserializer<'de>>(d: D) -> Result<Utf8ByteRange, D::Error> {
+    let (start, end): (usize, usize) = <(usize, usize)>::deserialize(d)?;
+    Ok(Utf8ByteRange::from_values(start, end).unwrap_or_else(|| Utf8ByteRange::from_values(0, 0).unwrap()))
+}
+
+pub(crate) fn ser_opt_range<S: Serializer>(opt: &Option<Utf8ByteRange>, s: S) -> Result<S::Ok, S::Error> {
+    match opt {
+        None => s.serialize_none(),
+        Some(range) => ser_range(range, s),
+    }
+}
+
+pub(crate) fn de_opt_range<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Utf8ByteRange>, D::Error> {
+    let opt: Option<(usize, usize)> = Option::deserialize(d)?;
+    Ok(opt.and_then(|(s, e)| Utf8ByteRange::from_values(s, e)))
+}
+
+pub(crate) fn ser_range_vec<S: Serializer>(ranges: &Vec<Utf8ByteRange>, s: S) -> Result<S::Ok, S::Error> {
+    let tuples: Vec<(usize, usize)> = ranges.iter().map(|r| (r.start().value(), r.end().value())).collect();
+    tuples.serialize(s)
+}
+
+pub(crate) fn de_range_vec<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Utf8ByteRange>, D::Error> {
+    let tuples: Vec<(usize, usize)> = Vec::deserialize(d)?;
+    Ok(tuples.iter().filter_map(|&(s, e)| Utf8ByteRange::from_values(s, e)).collect())
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Utf8ByteOffset(usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -70,7 +114,7 @@ impl Utf8ByteOffset {
         Self(clamped)
     }
 
-    pub(super) fn unchecked(offset: usize) -> Self {
+    pub(crate) fn unchecked(offset: usize) -> Self {
         Self(offset)
     }
 
@@ -82,6 +126,20 @@ impl Utf8ByteOffset {
 impl fmt::Display for Utf8ByteOffset {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Utf8ByteOffset({})", self.0)
+    }
+}
+
+impl std::ops::Add<usize> for Utf8ByteOffset {
+    type Output = Utf8ByteOffset;
+    fn add(self, rhs: usize) -> Self::Output {
+        Utf8ByteOffset(self.0.saturating_add(rhs))
+    }
+}
+
+impl std::ops::Sub<usize> for Utf8ByteOffset {
+    type Output = Utf8ByteOffset;
+    fn sub(self, rhs: usize) -> Self::Output {
+        Utf8ByteOffset(self.0.saturating_sub(rhs))
     }
 }
 
@@ -113,7 +171,7 @@ impl Utf8ByteRange {
         }
     }
 
-    pub(super) fn from_values(start: usize, end: usize) -> Option<Self> {
+    pub(crate) fn from_values(start: usize, end: usize) -> Option<Self> {
         if start > end {
             return None;
         }
@@ -155,7 +213,7 @@ impl fmt::Display for InvalidRevisionError {
 
 impl std::error::Error for InvalidRevisionError {}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct EditorRevision(u64);
 
 impl EditorRevision {
@@ -201,7 +259,7 @@ impl fmt::Display for InvalidSessionIdError {
 
 impl std::error::Error for InvalidSessionIdError {}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct EditorSessionId(u64);
 
 impl EditorSessionId {
@@ -238,7 +296,7 @@ impl fmt::Display for InvalidGenerationError {
 
 impl std::error::Error for InvalidGenerationError {}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct EditorSessionGeneration(u64);
 
 impl EditorSessionGeneration {

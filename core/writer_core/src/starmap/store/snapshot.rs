@@ -96,11 +96,30 @@ impl StarMapStore {
             )
         };
 
-        let deleted_node_ids: Vec<String> = self.deleted_node_ids.iter().cloned().collect();
-        let deleted_edge_ids: Vec<String> = self.deleted_edge_ids.iter().cloned().collect();
-        let deleted_embed_ids: Vec<String> = self.deleted_embed_ids.iter().cloned().collect();
-        let deleted_link_ids: Vec<String> = self.deleted_link_ids.iter().cloned().collect();
-        let deleted_hyperlink_ids: Vec<String> = self.deleted_hyperlink_ids.iter().cloned().collect();
+        let persistent = self.graph_meta.as_ref()
+            .map(|m| m.deleted_since_last_sync.clone())
+            .unwrap_or_default();
+
+        let deleted_node_ids: Vec<String> = self.deleted_node_ids.iter()
+            .chain(persistent.nodes.iter())
+            .cloned()
+            .collect();
+        let deleted_edge_ids: Vec<String> = self.deleted_edge_ids.iter()
+            .chain(persistent.edges.iter())
+            .cloned()
+            .collect();
+        let deleted_embed_ids: Vec<String> = self.deleted_embed_ids.iter()
+            .chain(persistent.embeds.iter())
+            .cloned()
+            .collect();
+        let deleted_link_ids: Vec<String> = self.deleted_link_ids.iter()
+            .chain(persistent.links.iter())
+            .cloned()
+            .collect();
+        let deleted_hyperlink_ids: Vec<String> = self.deleted_hyperlink_ids.iter()
+            .chain(persistent.hyperlinks.iter())
+            .cloned()
+            .collect();
 
         Ok(StarMapPhasedSnapshot {
             starmap_id: self.starmap_id.clone(),
@@ -146,6 +165,7 @@ impl StarMapStore {
                 node_kind_counts: HashMap::new(),
                 package_revision: self.package_revision,
                 updated_at: crate::starmap::now_epoch(),
+                deleted_since_last_sync: super::meta::DeletedSinceLastSync::default(),
             });
         }
 
@@ -175,6 +195,7 @@ impl StarMapStore {
             node_kind_counts: meta.node_kind_counts.clone(),
             package_revision: next_revision,
             updated_at: crate::starmap::now_epoch(),
+            deleted_since_last_sync: meta.deleted_since_last_sync.clone(),
         };
 
         let json = serde_json::to_string_pretty(&meta_to_write)?;

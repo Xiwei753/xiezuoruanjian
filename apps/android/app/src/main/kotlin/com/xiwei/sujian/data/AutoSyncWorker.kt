@@ -58,6 +58,12 @@ class AutoSyncWorker(
                     val status = result.data.status
                     if (isSuccessfulStatus(status)) {
                         SyncChangeBus.notifyChanged()
+                        try {
+                            val bridge = BridgeProvider.getAppServiceBridge(applicationContext)
+                            bridge.holder.service.rebuildSearchIndex(null)
+                        } catch (e: Exception) {
+                            DiagnosticsLogger.w(TAG, "Search index rebuild failed after sync", e)
+                        }
                     }
                     Result.success()
                 }

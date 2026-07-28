@@ -14,7 +14,11 @@ internal data class StarMapEditorUiState(
     val selectedNodeId: String? = null,
     val editingNodeId: String? = null,
     val lastError: String? = null,
-    val operationInProgress: Boolean = false
+    val operationInProgress: Boolean = false,
+    val layoutSaveError: String? = null,
+    val viewportSaveError: String? = null,
+    val hasPendingLayoutSave: Boolean = false,
+    val hasPendingViewportSave: Boolean = false
 )
 
 sealed class StarMapOperationResult {

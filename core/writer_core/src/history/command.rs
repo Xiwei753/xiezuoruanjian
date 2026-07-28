@@ -1,4 +1,5 @@
 use crate::editor::transaction::EditorChange;
+use crate::editor::strong_types::Utf8ByteOffset;
 
 /// 可撤销的编辑命令 — forward/inverse 变更对 + 光标位置。
 ///
@@ -13,13 +14,13 @@ pub struct TextEditCommand {
     /// 反向变更序列，逆序应用（从后往前撤销）。
     pub inverse: Vec<EditorChange>,
     /// 执行前的光标位置（UTF-8 byte offset）。
-    pub cursor_before: usize,
+    pub cursor_before: Utf8ByteOffset,
     /// 执行后的光标位置（UTF-8 byte offset）。
-    pub cursor_after: usize,
+    pub cursor_after: Utf8ByteOffset,
 }
 
 impl TextEditCommand {
-    pub fn new(forward: Vec<EditorChange>, cursor_before: usize, cursor_after: usize) -> Self {
+    pub fn new(forward: Vec<EditorChange>, cursor_before: Utf8ByteOffset, cursor_after: Utf8ByteOffset) -> Self {
         let inverse = compute_inverse(&forward);
         Self {
             forward,
@@ -33,7 +34,7 @@ impl TextEditCommand {
         for change in &self.forward {
             apply_change(text, change);
         }
-        *cursor = clamp_cursor_to_char_boundary(text, self.cursor_after);
+        *cursor = clamp_cursor_to_char_boundary(text, self.cursor_after.value());
     }
 
     /// 应用反向变更序列（撤销）。
@@ -45,7 +46,7 @@ impl TextEditCommand {
         for change in self.inverse.iter().rev() {
             apply_change(text, change);
         }
-        *cursor = clamp_cursor_to_char_boundary(text, self.cursor_before);
+        *cursor = clamp_cursor_to_char_boundary(text, self.cursor_before.value());
     }
 }
 
@@ -77,21 +78,23 @@ fn compute_inverse(changes: &[EditorChange]) -> Vec<EditorChange> {
 fn apply_change(text: &mut String, change: &EditorChange) {
     match change {
         EditorChange::Insert { index, text: ins } => {
-            if *index > text.len() || !text.is_char_boundary(*index) {
+            let idx = index.value();
+            if idx > text.len() || !text.is_char_boundary(idx) {
                 return;
             }
-            text.insert_str(*index, ins);
+            text.insert_str(idx, ins);
         }
         EditorChange::Delete { index, text: del } => {
-            if *index > text.len() || !text.is_char_boundary(*index) {
+            let idx = index.value();
+            if idx > text.len() || !text.is_char_boundary(idx) {
                 return;
             }
-            let end = index + del.len();
+            let end = idx + del.len();
             if end > text.len() || !text.is_char_boundary(end) {
                 return;
             }
-            if *index < end {
-                text.drain(*index..end);
+            if idx < end {
+                text.drain(idx..end);
             }
         }
     }
@@ -129,11 +132,11 @@ mod tests {
     fn insert_undo_redo() {
         let cmd = TextEditCommand::new(
             vec![EditorChange::Insert {
-                index: 2,
+                index: Utf8ByteOffset::unchecked(2),
                 text: "XX".to_string(),
             }],
-            2,
-            4,
+            Utf8ByteOffset::unchecked(2),
+            Utf8ByteOffset::unchecked(4),
         );
 
         let mut text = "abcd".to_string();
@@ -152,11 +155,11 @@ mod tests {
     fn delete_undo_redo() {
         let cmd = TextEditCommand::new(
             vec![EditorChange::Delete {
-                index: 1,
+                index: Utf8ByteOffset::unchecked(1),
                 text: "bc".to_string(),
             }],
-            3,
-            1,
+            Utf8ByteOffset::unchecked(3),
+            Utf8ByteOffset::unchecked(1),
         );
 
         let mut text = "abcd".to_string();
@@ -176,16 +179,16 @@ mod tests {
         let cmd = TextEditCommand::new(
             vec![
                 EditorChange::Delete {
-                    index: 1,
+                    index: Utf8ByteOffset::unchecked(1),
                     text: "bc".to_string(),
                 },
                 EditorChange::Insert {
-                    index: 1,
+                    index: Utf8ByteOffset::unchecked(1),
                     text: "XY".to_string(),
                 },
             ],
-            3,
-            3,
+            Utf8ByteOffset::unchecked(3),
+            Utf8ByteOffset::unchecked(3),
         );
 
         let mut text = "abcd".to_string();
@@ -202,11 +205,11 @@ mod tests {
     fn apply_forward_clamps_cursor_out_of_bounds() {
         let cmd = TextEditCommand::new(
             vec![EditorChange::Insert {
-                index: 1,
+                index: Utf8ByteOffset::unchecked(1),
                 text: "X".to_string(),
             }],
-            0,
-            100,
+            Utf8ByteOffset::unchecked(0),
+            Utf8ByteOffset::unchecked(100),
         );
 
         let mut text = "a".to_string();
@@ -221,11 +224,11 @@ mod tests {
     fn apply_inverse_clamps_cursor_out_of_bounds() {
         let cmd = TextEditCommand::new(
             vec![EditorChange::Insert {
-                index: 1,
+                index: Utf8ByteOffset::unchecked(1),
                 text: "X".to_string(),
             }],
-            100,
-            2,
+            Utf8ByteOffset::unchecked(100),
+            Utf8ByteOffset::unchecked(2),
         );
 
         let mut text = "aX".to_string();
@@ -239,14 +242,14 @@ mod tests {
     #[test]
     fn apply_change_skips_invalid_insert_index() {
         let mut text = "abc".to_string();
-        apply_change(&mut text, &EditorChange::Insert { index: 100, text: "X".into() });
+        apply_change(&mut text, &EditorChange::Insert { index: Utf8ByteOffset::unchecked(100), text: "X".into() });
         assert_eq!(text, "abc");
     }
 
     #[test]
     fn apply_change_skips_invalid_delete_range() {
         let mut text = "abc".to_string();
-        apply_change(&mut text, &EditorChange::Delete { index: 100, text: "abc".into() });
+        apply_change(&mut text, &EditorChange::Delete { index: Utf8ByteOffset::unchecked(100), text: "abc".into() });
         assert_eq!(text, "abc");
     }
 

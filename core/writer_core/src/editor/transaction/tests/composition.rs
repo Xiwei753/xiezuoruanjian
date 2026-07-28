@@ -3,6 +3,7 @@ use crate::editor::transaction::visual::*;
 use crate::editor::transaction::composition::*;
 use crate::editor::transaction::rebase::*;
 use crate::editor::transaction::engine::*;
+use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange, EditorRevision, EditorSessionId, EditorSessionGeneration};
 
 # [allow(deprecated)]
 
@@ -77,24 +78,24 @@ use crate::editor::transaction::engine::*;
         fn composition_visual_revision_serializes_camel_case() {
             let rev = CompositionVisualRevision {
                 revision_id: 1,
-                session_id: 1,
-                committed_revision_id: 10,
+                session_id: EditorSessionId::new(1),
+                committed_revision_id: EditorRevision::new(10),
                 committed_text: "hello".to_string(),
-                composition_replace_range: Some((5, 7)),
+                composition_replace_range: Utf8ByteRange::from_values(5, 7),
                 preedit_text: "ni".to_string(),
-                preedit_cursor_offset: 2,
+                preedit_cursor_offset: Utf8ByteOffset::unchecked(2),
                 virtual_text: "helloni".to_string(),
-                affected_paragraph_range: (0, 7),
+                affected_paragraph_range: Utf8ByteRange::from_values(0, 7).unwrap(),
                 line_snapshot_ids: vec![1, 2],
                 cursor_rect: Some(CursorRect { x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
                 decoration_ranges: vec![DecorationSlice {
                     kind: DecorationSliceKind::Underline,
-                    byte_start: 5,
-                    byte_end: 7,
+                    byte_start: Utf8ByteOffset::unchecked(5),
+                    byte_end: Utf8ByteOffset::unchecked(7),
                     rect: None,
                     color: None,
                 }],
-                ime_cursor_range: Some((5, 7)),
+                ime_cursor_range: Utf8ByteRange::from_values(5, 7),
                 offset_map_from_previous: None,
             };
             let json = serde_json::to_string(&rev).unwrap();
@@ -112,14 +113,14 @@ use crate::editor::transaction::engine::*;
         fn composition_visual_revision_skips_none_and_empty() {
             let rev = CompositionVisualRevision {
                 revision_id: 0,
-                session_id: 0,
-                committed_revision_id: 0,
+                session_id: EditorSessionId::new(0),
+                committed_revision_id: EditorRevision::new(0),
                 committed_text: "hello".to_string(),
                 composition_replace_range: None,
                 preedit_text: String::new(),
-                preedit_cursor_offset: 0,
+                preedit_cursor_offset: Utf8ByteOffset::unchecked(0),
                 virtual_text: String::new(),
-                affected_paragraph_range: (0, 5),
+                affected_paragraph_range: Utf8ByteRange::from_values(0, 5).unwrap(),
                 line_snapshot_ids: Vec::new(),
                 cursor_rect: None,
                 decoration_ranges: Vec::new(),
@@ -181,9 +182,9 @@ use crate::editor::transaction::engine::*;
         fn composition_visual_revision_new_builds_virtual_text() {
             let rev = CompositionVisualRevision::new(
                 "hello".to_string(),
-                Some((2, 5)),
+                Utf8ByteRange::from_values(2, 5),
                 "y".to_string(),
-                (0, 5),
+                Utf8ByteRange::from_values(0, 5).unwrap(),
             );
             assert_eq!(rev.virtual_text, "hey");
             assert_eq!(rev.committed_text, "hello");
@@ -196,7 +197,7 @@ use crate::editor::transaction::engine::*;
                 "abc".to_string(),
                 None,
                 "def".to_string(),
-                (0, 3),
+                Utf8ByteRange::from_values(0, 3).unwrap(),
             );
             assert_eq!(rev.virtual_text, "abcdef");
         }
@@ -219,9 +220,7 @@ use crate::editor::transaction::engine::*;
         #[test]
         fn composition_update_does_not_modify_committed_text() {
             let mut engine = EditorEngine::new();
-            let tx = engine.composition_update_transaction(
-                "committed",
-                Some((0, 5)),
+            let tx = engine.composition_update_transaction("committed", Some((0, 5)),
                 "old_preedit",
                 "new_preedit",
             );
@@ -236,7 +235,7 @@ use crate::editor::transaction::engine::*;
                 "hello".to_string(),
                 None,
                 " world".to_string(),
-                (0, 5),
+                Utf8ByteRange::from_values(0, 5).unwrap(),
             );
             // commit 后正文与 virtual_text 相同
             let tx = engine.composition_commit_or_cancel_transaction(
@@ -256,7 +255,7 @@ use crate::editor::transaction::engine::*;
                 "hello".to_string(),
                 None,
                 " wor".to_string(),
-                (0, 5),
+                Utf8ByteRange::from_values(0, 5).unwrap(),
             );
             // commit 后正文与 virtual_text 不同（候选转换）
             let tx = engine.composition_commit_or_cancel_transaction(
@@ -276,7 +275,7 @@ use crate::editor::transaction::engine::*;
                 "hello".to_string(),
                 None,
                 " world".to_string(),
-                (0, 5),
+                Utf8ByteRange::from_values(0, 5).unwrap(),
             );
             let tx = engine.composition_commit_or_cancel_transaction(
                 "hello",
@@ -290,9 +289,7 @@ use crate::editor::transaction::engine::*;
         #[test]
         fn composition_update_does_not_change_committed_text() {
             let mut engine = EditorEngine::new();
-            let tx = engine.composition_update_transaction(
-                "original",
-                Some((0, 4)),
+            let tx = engine.composition_update_transaction("original", Some((0, 4)),
                 "orig",
                 "new_text",
             );
@@ -309,7 +306,7 @@ use crate::editor::transaction::engine::*;
                 "hello".to_string(),
                 None,
                 " world".to_string(),
-                (0, 5),
+                Utf8ByteRange::from_values(0, 5).unwrap(),
             );
             let tx = engine.composition_commit_or_cancel_transaction(
                 "hello",
@@ -338,7 +335,7 @@ use crate::editor::transaction::engine::*;
                 "hello".to_string(),
                 None,
                 " world".to_string(),
-                (0, 5),
+                Utf8ByteRange::from_values(0, 5).unwrap(),
             );
             let tx = engine.composition_commit_or_cancel_transaction(
                 "hello",
@@ -411,8 +408,8 @@ use crate::editor::transaction::engine::*;
             let session = CompositionSession::new(
                 1, 10, "你好世界".to_string(), "你好".len(),
             );
-            assert_eq!(session.replace_start, "你好".len());
-            assert_eq!(session.replace_end_exclusive, "你好".len());
+            assert_eq!(session.replace_start, Utf8ByteOffset::unchecked("你好".len()));
+            assert_eq!(session.replace_end_exclusive, Utf8ByteOffset::unchecked("你好".len()));
         }
 
         #[test]
@@ -422,13 +419,13 @@ use crate::editor::transaction::engine::*;
             );
             let rev1 = session.update_preedit("a".to_string(), 1);
             assert_eq!(rev1.virtual_text, "你好a世界");
-            assert_eq!(session.replace_start, "你好".len());
-            assert_eq!(session.replace_end_exclusive, "你好".len());
+            assert_eq!(session.replace_start, Utf8ByteOffset::unchecked("你好".len()));
+            assert_eq!(session.replace_end_exclusive, Utf8ByteOffset::unchecked("你好".len()));
 
             let rev2 = session.update_preedit("abcdef".to_string(), 6);
             assert_eq!(rev2.virtual_text, "你好abcdef世界");
-            assert_eq!(session.replace_start, "你好".len());
-            assert_eq!(session.replace_end_exclusive, "你好".len(),
+            assert_eq!(session.replace_start, Utf8ByteOffset::unchecked("你好".len()));
+            assert_eq!(session.replace_end_exclusive, Utf8ByteOffset::unchecked("你好".len()),
                 "replace_end must NOT change with preedit length");
         }
 
@@ -438,8 +435,8 @@ use crate::editor::transaction::engine::*;
                 1, 10, "你好世界".to_string(), 0,
             );
             session.set_composing_region(3, 9);
-            assert_eq!(session.replace_start, 3);
-            assert_eq!(session.replace_end_exclusive, 9);
+            assert_eq!(session.replace_start, Utf8ByteOffset::unchecked(3));
+            assert_eq!(session.replace_end_exclusive, Utf8ByteOffset::unchecked(9));
             let rev = session.update_preedit("abc".to_string(), 3);
             assert_eq!(rev.virtual_text, "你abc界");
         }
@@ -452,7 +449,7 @@ use crate::editor::transaction::engine::*;
 
             let rev1 = session.update_preedit("n".to_string(), 1);
             assert_eq!(rev1.revision_id, 1);
-            assert_eq!(rev1.session_id, 1);
+            assert_eq!(rev1.session_id, EditorSessionId::new(1));
             assert!(rev1.offset_map_from_previous.is_none(), "First revision has no previous");
 
             let rev2 = session.update_preedit("ni".to_string(), 2);
@@ -490,17 +487,17 @@ use crate::editor::transaction::engine::*;
         fn composition_visual_revision_from_previous_chains_correctly() {
             let rev1 = CompositionVisualRevision::new(
                 "hello world".to_string(),
-                Some((6, 6)),
+                Utf8ByteRange::from_values(6, 6),
                 "n".to_string(),
-                (0, 11),
+                Utf8ByteRange::from_values(0, 11).unwrap(),
             );
             assert_eq!(rev1.virtual_text, "hello nworld");
             let rev2 = CompositionVisualRevision::from_previous(
-                &rev1, "ni".to_string(), 2, (0, 11),
+                &rev1, "ni".to_string(), 2, Utf8ByteRange::from_values(0, 11).unwrap(),
             );
             assert_eq!(rev2.virtual_text, "hello niworld");
             assert_eq!(rev2.committed_text, "hello world");
-            assert_eq!(rev2.composition_replace_range, Some((6, 6)));
+            assert_eq!(rev2.composition_replace_range, Utf8ByteRange::from_values(6, 6));
             assert!(rev2.offset_map_from_previous.is_some());
         }
 
@@ -508,9 +505,9 @@ use crate::editor::transaction::engine::*;
         fn composition_visual_revision_preedit_byte_range_in_virtual_text() {
             let rev = CompositionVisualRevision::new(
                 "你好世界".to_string(),
-                Some((6, 6)),
+                Utf8ByteRange::from_values(6, 6),
                 "abc".to_string(),
-                (0, 12),
+                Utf8ByteRange::from_values(0, 12).unwrap(),
             );
             let (start, end) = rev.preedit_byte_range_in_virtual_text();
             assert_eq!(start, 6);
@@ -523,7 +520,7 @@ use crate::editor::transaction::engine::*;
                 "hello".to_string(),
                 None,
                 "world".to_string(),
-                (0, 5),
+                Utf8ByteRange::from_values(0, 5).unwrap(),
             );
             let (start, end) = rev.preedit_byte_range_in_virtual_text();
             assert_eq!(start, 5);
@@ -536,8 +533,8 @@ use crate::editor::transaction::engine::*;
             assert!(!map.entries.is_empty());
             let first = &map.entries[0];
             assert_eq!(first.kind, OffsetMapKind::Identity);
-            assert_eq!(first.old_byte_offset, 0);
-            assert_eq!(first.new_byte_offset, 0);
+            assert_eq!(first.old_byte_offset, Utf8ByteOffset::unchecked(0));
+            assert_eq!(first.new_byte_offset, Utf8ByteOffset::unchecked(0));
             assert_eq!(first.length, 6);
         }
 
@@ -548,8 +545,8 @@ use crate::editor::transaction::engine::*;
             let suffix = map.entries.iter().find(|e| e.kind == OffsetMapKind::Shifted);
             assert!(suffix.is_some(), "Suffix after insert must be Shifted");
             let suffix = suffix.unwrap();
-            assert_eq!(suffix.old_byte_offset, 1);
-            assert_eq!(suffix.new_byte_offset, 2);
+            assert_eq!(suffix.old_byte_offset, Utf8ByteOffset::unchecked(1));
+            assert_eq!(suffix.new_byte_offset, Utf8ByteOffset::unchecked(2));
             assert_eq!(suffix.length, 1);
         }
 
@@ -616,9 +613,9 @@ use crate::editor::transaction::engine::*;
             let mut engine = EditorEngine::new();
             let rev1 = CompositionVisualRevision::new(
                 "hello world".to_string(),
-                Some((6, 6)),
+                Utf8ByteRange::from_values(6, 6),
                 "n".to_string(),
-                (0, 11),
+                Utf8ByteRange::from_values(0, 11).unwrap(),
             );
             let tx = engine.composition_update_from_previous(&rev1, "ni", 2);
             assert_eq!(tx.old_revision.virtual_text, "hello nworld");
@@ -631,9 +628,9 @@ use crate::editor::transaction::engine::*;
             let mut engine = EditorEngine::new();
             let rev1 = CompositionVisualRevision::new(
                 "hello ".to_string(),
-                Some((6, 6)),
+                Utf8ByteRange::from_values(6, 6),
                 "n".to_string(),
-                (0, 6),
+                Utf8ByteRange::from_values(0, 6).unwrap(),
             );
             let tx1 = engine.composition_update_from_previous(&rev1, "ni", 2);
             assert_eq!(tx1.old_revision.preedit_text, "n");
@@ -650,9 +647,9 @@ use crate::editor::transaction::engine::*;
             let mut engine = EditorEngine::new();
             let comp_rev = CompositionVisualRevision::new(
                 "hello world".to_string(),
-                Some((6, 11)),
+                Utf8ByteRange::from_values(6, 11),
                 "earth".to_string(),
-                (0, 11),
+                Utf8ByteRange::from_values(0, 11).unwrap(),
             );
             let committed_after = "hello earth";
             let tx = engine.composition_commit_or_cancel_transaction(
@@ -670,9 +667,9 @@ use crate::editor::transaction::engine::*;
             let mut engine = EditorEngine::new();
             let comp_rev = CompositionVisualRevision::new(
                 "hello world".to_string(),
-                Some((6, 11)),
+                Utf8ByteRange::from_values(6, 11),
                 "earth".to_string(),
-                (0, 11),
+                Utf8ByteRange::from_values(0, 11).unwrap(),
             );
             let tx = engine.composition_commit_or_cancel_transaction(
                 "hello world",
@@ -689,9 +686,9 @@ use crate::editor::transaction::engine::*;
             let mut engine = EditorEngine::new();
             let comp_rev = CompositionVisualRevision::new(
                 "hello".to_string(),
-                Some((5, 5)),
+                Utf8ByteRange::from_values(5, 5),
                 " world".to_string(),
-                (0, 5),
+                Utf8ByteRange::from_values(0, 5).unwrap(),
             );
             let tx = engine.composition_commit_or_cancel_transaction(
                 "hello",
@@ -707,9 +704,9 @@ use crate::editor::transaction::engine::*;
             let mut engine = EditorEngine::new();
             let comp_rev = CompositionVisualRevision::new(
                 "hello ".to_string(),
-                Some((6, 8)),
+                Utf8ByteRange::from_values(6, 8),
                 "ni".to_string(),
-                (0, 8),
+                Utf8ByteRange::from_values(0, 8).unwrap(),
             );
             let tx = engine.composition_commit_or_cancel_transaction(
                 "hello ",
@@ -729,16 +726,16 @@ use crate::editor::transaction::engine::*;
 
             let rev1 = session.update_preedit("n".to_string(), 1);
             assert_eq!(rev1.virtual_text, "你好n世界");
-            assert_eq!(rev1.composition_replace_range, Some((6, 6)));
+            assert_eq!(rev1.composition_replace_range, Utf8ByteRange::from_values(6, 6));
 
             let rev2 = session.update_preedit("ni".to_string(), 2);
             assert_eq!(rev2.virtual_text, "你好ni世界");
-            assert_eq!(rev2.composition_replace_range, Some((6, 6)));
+            assert_eq!(rev2.composition_replace_range, Utf8ByteRange::from_values(6, 6));
             assert!(rev2.offset_map_from_previous.is_some());
 
             let rev3 = session.update_preedit("nih".to_string(), 3);
             assert_eq!(rev3.virtual_text, "你好nih世界");
-            assert_eq!(rev3.composition_replace_range, Some((6, 6)));
+            assert_eq!(rev3.composition_replace_range, Utf8ByteRange::from_values(6, 6));
         }
 
         #[test]
@@ -748,29 +745,29 @@ use crate::editor::transaction::engine::*;
             );
             let rev = session.update_preedit("abc".to_string(), 3);
             assert_eq!(rev.virtual_text, "你abc界");
-            assert_eq!(rev.composition_replace_range, Some((3, 9)));
+            assert_eq!(rev.composition_replace_range, Utf8ByteRange::from_values(3, 9));
         }
 
         #[test]
         fn composition_visual_revision_new_fields_serialize() {
             let rev = CompositionVisualRevision {
                 revision_id: 42,
-                session_id: 7,
-                committed_revision_id: 100,
+                session_id: EditorSessionId::new(7),
+                committed_revision_id: EditorRevision::new(100),
                 committed_text: "hello".to_string(),
-                composition_replace_range: Some((5, 5)),
+                composition_replace_range: Utf8ByteRange::from_values(5, 5),
                 preedit_text: "world".to_string(),
-                preedit_cursor_offset: 3,
+                preedit_cursor_offset: Utf8ByteOffset::unchecked(3),
                 virtual_text: "helloworld".to_string(),
-                affected_paragraph_range: (0, 5),
+                affected_paragraph_range: Utf8ByteRange::from_values(0, 5).unwrap(),
                 line_snapshot_ids: Vec::new(),
                 cursor_rect: None,
                 decoration_ranges: Vec::new(),
                 ime_cursor_range: None,
                 offset_map_from_previous: Some(OffsetMap {
                     entries: vec![OffsetMapEntry {
-                        old_byte_offset: 0,
-                        new_byte_offset: 0,
+                        old_byte_offset: Utf8ByteOffset::unchecked(0),
+                        new_byte_offset: Utf8ByteOffset::unchecked(0),
                         length: 5,
                         kind: OffsetMapKind::Identity,
                     }],
@@ -803,14 +800,14 @@ use crate::editor::transaction::engine::*;
             let map = OffsetMap {
                 entries: vec![
                     OffsetMapEntry {
-                        old_byte_offset: 0,
-                        new_byte_offset: 0,
+                        old_byte_offset: Utf8ByteOffset::unchecked(0),
+                        new_byte_offset: Utf8ByteOffset::unchecked(0),
                         length: 5,
                         kind: OffsetMapKind::Identity,
                     },
                     OffsetMapEntry {
-                        old_byte_offset: 8,
-                        new_byte_offset: 10,
+                        old_byte_offset: Utf8ByteOffset::unchecked(8),
+                        new_byte_offset: Utf8ByteOffset::unchecked(10),
                         length: 3,
                         kind: OffsetMapKind::Shifted,
                     },
@@ -908,7 +905,7 @@ use crate::editor::transaction::engine::*;
             assert!(!session.is_active());
             assert!(session.preedit_text.is_empty());
             assert!(session.current_visual_revision.is_none());
-            assert_eq!(session.last_submitted_generation, 0);
+            assert_eq!(session.last_submitted_generation, EditorSessionGeneration::new(0));
         }
 
         #[test]

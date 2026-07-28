@@ -102,6 +102,7 @@ internal fun StarMapEditorContent(
     onViewportChange: (viewport: StarMapViewportData) -> Unit,
     onNodeTap: (nodeId: String) -> Unit,
     onNodeDoubleTap: (geometry: NodeTextGeometry) -> Unit,
+    onRetrySaves: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val dims = LocalSujianDimensions.current
@@ -140,6 +141,19 @@ internal fun StarMapEditorContent(
         } else if (state.starMapData != null) {
             if (state.lastError != null) {
                 Text(state.lastError, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+            if (state.layoutSaveError != null) {
+                Text(state.layoutSaveError, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+            if (state.viewportSaveError != null) {
+                Text(state.viewportSaveError, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+            if (state.hasPendingLayoutSave || state.hasPendingViewportSave) {
+                SujianIconButton(
+                    onClick = { onRetrySaves() },
+                    icon = SujianIcons.Add,
+                    contentDescription = "重试保存",
+                )
             }
             StarMapCanvas(
                 data = state.starMapData,

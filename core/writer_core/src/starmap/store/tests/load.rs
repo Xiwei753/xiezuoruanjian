@@ -1,5 +1,6 @@
 use super::*;
 use super::super::*;
+use super::super::meta::DeletedSinceLastSync;
 use tempfile::TempDir;
 
 #[test]
@@ -39,6 +40,7 @@ use tempfile::TempDir;
             node_kind_counts: HashMap::new(),
             package_revision: 1,
             updated_at: 0,
+            deleted_since_last_sync: DeletedSinceLastSync::default(),
         };
         let json = serde_json::to_string_pretty(&meta).unwrap();
         std::fs::write(starmap_dir.join("graph.json"), json).unwrap();
@@ -75,6 +77,7 @@ use tempfile::TempDir;
             node_kind_counts: HashMap::new(),
             package_revision: 1,
             updated_at: 0,
+            deleted_since_last_sync: DeletedSinceLastSync::default(),
         };
         let json = serde_json::to_string_pretty(&meta).unwrap();
         std::fs::write(starmap_dir.join("graph.json"), json).unwrap();
@@ -137,6 +140,7 @@ use tempfile::TempDir;
             node_kind_counts: HashMap::new(),
             package_revision: 1,
             updated_at: 0,
+            deleted_since_last_sync: DeletedSinceLastSync::default(),
         };
         let json = serde_json::to_string_pretty(&meta).unwrap();
         std::fs::write(starmap_dir.join("graph.json"), json).unwrap();
@@ -179,6 +183,7 @@ use tempfile::TempDir;
             node_kind_counts: HashMap::new(),
             package_revision: 1,
             updated_at: 0,
+            deleted_since_last_sync: DeletedSinceLastSync::default(),
         };
         let json = serde_json::to_string_pretty(&meta).unwrap();
         std::fs::write(starmap_dir.join("graph.json"), json).unwrap();
@@ -217,6 +222,7 @@ use tempfile::TempDir;
             node_kind_counts: HashMap::new(),
             package_revision: 1,
             updated_at: 0,
+            deleted_since_last_sync: DeletedSinceLastSync::default(),
         };
         let json = serde_json::to_string_pretty(&meta).unwrap();
         std::fs::write(starmap_dir.join("graph.json"), json).unwrap();
@@ -719,6 +725,7 @@ use tempfile::TempDir;
             node_kind_counts: HashMap::new(),
             package_revision: 0,
             updated_at: 0,
+            deleted_since_last_sync: DeletedSinceLastSync::default(),
         };
         store.graph_meta = Some(graph_meta);
         store.flush().unwrap();

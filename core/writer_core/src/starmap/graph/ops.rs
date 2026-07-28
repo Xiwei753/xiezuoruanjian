@@ -58,6 +58,7 @@ pub(crate) fn save_starmap_graph(workspace: &Path, starmap_id: &str, graph: &Sta
     let old_edge_ids: std::collections::HashSet<String> = store.all_edges().map(|e| e.id.clone()).collect();
     let old_embed_ids: std::collections::HashSet<String> = store.all_embeds().map(|e| e.instance_id.clone()).collect();
     let old_link_ids: std::collections::HashSet<String> = store.all_links().map(|l| l.link_id.clone()).collect();
+    let old_hyperlink_ids: std::collections::HashSet<String> = store.all_hyperlinks().map(|hl| hl.hyperlink_id.clone()).collect();
 
     let new_node_ids: std::collections::HashSet<String> = graph.nodes.iter().map(|n| n.id.clone()).collect();
     let new_edge_ids: std::collections::HashSet<String> = graph.edges.iter().map(|e| e.id.clone()).collect();
@@ -79,7 +80,7 @@ pub(crate) fn save_starmap_graph(workspace: &Path, starmap_id: &str, graph: &Sta
 
     for old_id in &old_node_ids {
         if !new_node_ids.contains(old_id) {
-            store.remove_node(old_id);
+            let _ = store.delete_node(old_id);
         }
     }
     for old_id in &old_edge_ids {
@@ -96,6 +97,9 @@ pub(crate) fn save_starmap_graph(workspace: &Path, starmap_id: &str, graph: &Sta
         if !new_link_ids.contains(old_id) {
             store.remove_link(old_id);
         }
+    }
+    for old_id in &old_hyperlink_ids {
+        store.remove_hyperlink(old_id);
     }
 
     store.flush()?;

@@ -12,6 +12,7 @@ use super::composition::{
     CompositionCommitOrCancelTransaction, CompositionUpdateTransaction, CompositionVisualRevision,
 };
 use super::rebase::{RebaseFrameSnapshot, TransactionRebase};
+use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange};
 
 /// 编辑引擎 — 创建 EditorTransaction 和 EditorVisualTransaction 的工厂。
 ///
@@ -107,7 +108,7 @@ impl EditorEngine {
                 events.push(EditorAnimationEvent {
                     id: self.take_animation_id(),
                     kind,
-                    range_start: change.index(),
+                    range_start: change.index().value(),
                     range_len: change.text().len(),
                     text: change.text().to_string(),
                     old_cursor: transaction.old_selection.head,
@@ -126,7 +127,7 @@ impl EditorEngine {
             events.push(EditorAnimationEvent {
                 id: self.take_animation_id(),
                 kind: EditorAnimationKind::Cursor,
-                range_start: transaction.new_selection.head.index,
+                range_start: transaction.new_selection.head.index.value(),
                 range_len: 0,
                 text: String::new(),
                 old_cursor: transaction.old_selection.head,
@@ -174,12 +175,12 @@ impl EditorEngine {
             EditorChange::Delete { .. } => EditorAnimationKind::Delete,
         };
         let inserted_range = match change {
-            EditorChange::Insert { index, text } => Some((*index, *index + text.len())),
+            EditorChange::Insert { index, text } => Utf8ByteRange::from_values(index.value(), index.value() + text.len()),
             EditorChange::Delete { .. } => None,
         };
         let deleted_range = match change {
             EditorChange::Insert { .. } => None,
-            EditorChange::Delete { index, text } => Some((*index, *index + text.len())),
+            EditorChange::Delete { index, text } => Utf8ByteRange::from_values(index.value(), index.value() + text.len()),
         };
 
         let text = change.text();
@@ -204,8 +205,8 @@ impl EditorEngine {
         // 如果是 Insert，计算 cluster_rects 和 cluster_runs
         let (cluster_rects, cluster_runs) = match change {
             EditorChange::Insert { index, text: _ } => {
-                let rects = split_text_into_clusters(text, *index);
-                let runs = split_text_into_runs(text, *index);
+                let rects = split_text_into_clusters(text, index.value());
+                let runs = split_text_into_runs(text, index.value());
                 (Some(rects), Some(runs))
             }
             EditorChange::Delete { .. } => (None, None),
@@ -213,11 +214,10 @@ impl EditorEngine {
 
         // 构建 hidden_visual_ranges
         let hidden_visual_ranges = match inserted_range {
-            Some((start, end)) => vec![HiddenVisualRange {
+            Some(range) => vec![HiddenVisualRange {
                 id: self.take_animation_id(),
                 kind: animation_mode,
-                range_start: start,
-                range_end: end,
+                range,
                 old_rect: None,
                 new_rect: None,
                 line_index: 0,
@@ -307,17 +307,18 @@ impl EditorEngine {
         old_preedit_text: &str,
         new_preedit_text: &str,
     ) -> CompositionUpdateTransaction {
+        let range = composition_replace_range.and_then(|(s, e)| Utf8ByteRange::from_values(s, e));
         let old_revision = CompositionVisualRevision::new(
             committed_text.to_string(),
-            composition_replace_range,
+            range,
             old_preedit_text.to_string(),
-            (0, committed_text.len()),
+            Utf8ByteRange::from_values(0, committed_text.len()).unwrap_or_else(|| Utf8ByteRange::from_values(0, 0).unwrap()),
         );
         let new_revision = CompositionVisualRevision::new(
             committed_text.to_string(),
-            composition_replace_range,
+            range,
             new_preedit_text.to_string(),
-            (0, committed_text.len()),
+            Utf8ByteRange::from_values(0, committed_text.len()).unwrap_or_else(|| Utf8ByteRange::from_values(0, 0).unwrap()),
         );
         let visual_class_kinds = classify_visual_diff(
             &old_revision.virtual_text,
@@ -541,13 +542,13 @@ pub fn diff_plain_text(old_text: &str, new_text: &str) -> Vec<EditorChange> {
     let mut changes = Vec::new();
     if !removed.is_empty() {
         changes.push(EditorChange::Delete {
-            index: prefix,
+            index: Utf8ByteOffset::unchecked(prefix),
             text: removed.to_string(),
         });
     }
     if !inserted.is_empty() {
         changes.push(EditorChange::Insert {
-            index: prefix,
+            index: Utf8ByteOffset::unchecked(prefix),
             text: inserted.to_string(),
         });
     }
@@ -728,8 +729,8 @@ pub fn split_text_into_runs(text: &str, base_offset: usize) -> Vec<ClusterRun> {
             // 空格结束当前 run
             if !current_text.is_empty() {
                 runs.push(ClusterRun {
-                    byte_start: current_byte_start,
-                    byte_end: absolute_byte,
+                    byte_start: Utf8ByteOffset::unchecked(current_byte_start),
+                    byte_end: Utf8ByteOffset::unchecked(absolute_byte),
                     text: current_text.clone(),
                     cluster_count: current_cluster_count,
                 });
@@ -738,8 +739,8 @@ pub fn split_text_into_runs(text: &str, base_offset: usize) -> Vec<ClusterRun> {
             }
             // 空格本身作为独立 run
             runs.push(ClusterRun {
-                byte_start: absolute_byte,
-                byte_end: absolute_byte + ch.len_utf8(),
+                byte_start: Utf8ByteOffset::unchecked(absolute_byte),
+                byte_end: Utf8ByteOffset::unchecked(absolute_byte + ch.len_utf8()),
                 text: ch.to_string(),
                 cluster_count: 1,
             });
@@ -759,8 +760,8 @@ pub fn split_text_into_runs(text: &str, base_offset: usize) -> Vec<ClusterRun> {
         // CJK 字符达到 chunk 大小时结束 run
         if is_cjk && current_cluster_count >= chinese_chunk_size {
             runs.push(ClusterRun {
-                byte_start: current_byte_start,
-                byte_end: absolute_byte + ch.len_utf8(),
+                byte_start: Utf8ByteOffset::unchecked(current_byte_start),
+                byte_end: Utf8ByteOffset::unchecked(absolute_byte + ch.len_utf8()),
                 text: current_text.clone(),
                 cluster_count: current_cluster_count,
             });
@@ -772,8 +773,8 @@ pub fn split_text_into_runs(text: &str, base_offset: usize) -> Vec<ClusterRun> {
         // 非 CJK 连续字符达到一定长度也结束 run
         if !is_cjk && current_cluster_count >= 8 {
             runs.push(ClusterRun {
-                byte_start: current_byte_start,
-                byte_end: absolute_byte + ch.len_utf8(),
+                byte_start: Utf8ByteOffset::unchecked(current_byte_start),
+                byte_end: Utf8ByteOffset::unchecked(absolute_byte + ch.len_utf8()),
                 text: current_text.clone(),
                 cluster_count: current_cluster_count,
             });
@@ -786,8 +787,8 @@ pub fn split_text_into_runs(text: &str, base_offset: usize) -> Vec<ClusterRun> {
     // 处理剩余
     if !current_text.is_empty() {
         runs.push(ClusterRun {
-            byte_start: current_byte_start,
-            byte_end: base_offset + text.len(),
+            byte_start: Utf8ByteOffset::unchecked(current_byte_start),
+            byte_end: Utf8ByteOffset::unchecked(base_offset + text.len()),
             text: current_text,
             cluster_count: current_cluster_count,
         });
@@ -811,8 +812,8 @@ pub fn split_text_into_clusters(text: &str, base_offset: usize) -> Vec<ClusterRe
         let byte_end = byte_start + grapheme.len();
         let is_complex = grapheme.chars().any(|ch| is_complex_grapheme_code_point(ch as u32));
         clusters.push(ClusterRect {
-            byte_start,
-            byte_end,
+            byte_start: Utf8ByteOffset::unchecked(byte_start),
+            byte_end: Utf8ByteOffset::unchecked(byte_end),
             text: grapheme.to_string(),
             is_complex,
         });

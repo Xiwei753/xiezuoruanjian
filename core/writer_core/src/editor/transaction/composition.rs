@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::visual::{CursorRect, DecorationSlice, VisualClassKind, build_virtual_text};
 use super::engine::{common_prefix_byte_len, common_suffix_byte_len};
+use crate::editor::strong_types::{EditorRevision, EditorSessionId, EditorSessionGeneration, Utf8ByteOffset, Utf8ByteRange};
 
 /// 预输入视觉修订 — 把预输入改为临时视觉正文版本。
 ///
@@ -24,35 +25,27 @@ pub struct CompositionVisualRevision {
     pub revision_id: u64,
     /// 所属 composition session ID
     #[serde(default)]
-    pub session_id: u64,
+    pub session_id: EditorSessionId,
     /// 此修订基于的 committed revision ID
     #[serde(default)]
-    pub committed_revision_id: u64,
+    pub committed_revision_id: EditorRevision,
     /// 已提交文本（不含预输入）
     pub committed_text: String,
     /// 预输入替换范围（UTF-8 byte offset，committed 正文坐标）
-    ///
-    /// #517: replaceStart/replaceEndExclusive 始终是 committed 正文坐标，
-    /// 不是 virtualText 坐标，也不是 preedit 长度。
-    /// 普通 setComposingText 初次预输入默认是零长度插入：
-    /// replaceStart == replaceEndExclusive == 原 committed 光标位置。
-    /// 只有 setComposingRegion 或平台明确给出替换范围时才能形成非零替换范围。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub composition_replace_range: Option<(usize, usize)>,
+    #[serde(default, skip_serializing_if = "Option::is_none", serialize_with = "crate::editor::strong_types::ser_opt_range", deserialize_with = "crate::editor::strong_types::de_opt_range")]
+    pub composition_replace_range: Option<Utf8ByteRange>,
     /// 预输入文本
     #[serde(default)]
     pub preedit_text: String,
     /// 预输入光标偏移（preedit 内部 UTF-8 byte offset）
-    ///
-    /// #517: 始终是 preedit 内部坐标，不能与 composition_replace_range 混用。
-    #[serde(default)]
-    pub preedit_cursor_offset: usize,
+    #[serde(default, serialize_with = "crate::editor::strong_types::ser_offset", deserialize_with = "crate::editor::strong_types::de_offset")]
+    pub preedit_cursor_offset: Utf8ByteOffset,
     /// 虚拟文本 — 仅用于排版和渲染，不写入正文
-    /// 必须通过 `build_virtual_text()` 构造，不得手动拼接
     #[serde(default)]
     pub virtual_text: String,
     /// 受影响段落范围（UTF-8 byte offset）
-    pub affected_paragraph_range: (usize, usize),
+    #[serde(serialize_with = "crate::editor::strong_types::ser_range", deserialize_with = "crate::editor::strong_types::de_range")]
+    pub affected_paragraph_range: Utf8ByteRange,
     /// 行快照 ID 列表（由平台层填充）
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub line_snapshot_ids: Vec<u64>,
@@ -63,8 +56,8 @@ pub struct CompositionVisualRevision {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub decoration_ranges: Vec<DecorationSlice>,
     /// IME 光标范围/位置（UTF-8 byte offset）
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ime_cursor_range: Option<(usize, usize)>,
+    #[serde(default, skip_serializing_if = "Option::is_none", serialize_with = "crate::editor::strong_types::ser_opt_range", deserialize_with = "crate::editor::strong_types::de_opt_range")]
+    pub ime_cursor_range: Option<Utf8ByteRange>,
     /// 从上一 CompositionVisualRevision 的偏移映射
     ///
     /// #517: 连续更新必须从 previous visual revision 接续，
@@ -82,23 +75,24 @@ impl CompositionVisualRevision {
     /// 自动计算，不手动传入。
     pub fn new(
         committed_text: String,
-        composition_replace_range: Option<(usize, usize)>,
+        composition_replace_range: Option<Utf8ByteRange>,
         preedit_text: String,
-        affected_paragraph_range: (usize, usize),
+        affected_paragraph_range: Utf8ByteRange,
     ) -> Self {
+        let composition_replace_range_tuple = composition_replace_range.map(|r| (r.start().value(), r.end().value()));
         let virtual_text = build_virtual_text(
             &committed_text,
-            composition_replace_range,
+            composition_replace_range_tuple,
             &preedit_text,
         );
         Self {
             revision_id: 0,
-            session_id: 0,
-            committed_revision_id: 0,
+            session_id: EditorSessionId::new(0),
+            committed_revision_id: EditorRevision::initial(),
             committed_text,
             composition_replace_range,
             preedit_text,
-            preedit_cursor_offset: 0,
+            preedit_cursor_offset: Utf8ByteOffset::unchecked(0),
             virtual_text,
             affected_paragraph_range,
             line_snapshot_ids: Vec::new(),
@@ -119,11 +113,12 @@ impl CompositionVisualRevision {
         previous: &CompositionVisualRevision,
         new_preedit_text: String,
         new_preedit_cursor_offset: usize,
-        affected_paragraph_range: (usize, usize),
+        affected_paragraph_range: Utf8ByteRange,
     ) -> Self {
+        let composition_replace_range_tuple = previous.composition_replace_range.map(|r| (r.start().value(), r.end().value()));
         let virtual_text = build_virtual_text(
             &previous.committed_text,
-            previous.composition_replace_range,
+            composition_replace_range_tuple,
             &new_preedit_text,
         );
         let offset_map = OffsetMap::build(&previous.virtual_text, &virtual_text);
@@ -134,7 +129,7 @@ impl CompositionVisualRevision {
             committed_text: previous.committed_text.clone(),
             composition_replace_range: previous.composition_replace_range,
             preedit_text: new_preedit_text,
-            preedit_cursor_offset: new_preedit_cursor_offset,
+            preedit_cursor_offset: Utf8ByteOffset::unchecked(new_preedit_cursor_offset),
             virtual_text,
             affected_paragraph_range,
             line_snapshot_ids: Vec::new(),
@@ -151,7 +146,8 @@ impl CompositionVisualRevision {
     /// 不能表示 committed replaceRange；两者必须分开命名和存储。
     pub fn preedit_byte_range_in_virtual_text(&self) -> (usize, usize) {
         match self.composition_replace_range {
-            Some((replace_start, _)) => {
+            Some(range) => {
+                let replace_start = range.start().value();
                 (replace_start, replace_start + self.preedit_text.len())
             }
             None => {
@@ -183,9 +179,11 @@ pub struct OffsetMap {
 #[serde(rename_all = "camelCase")]
 pub struct OffsetMapEntry {
     /// old virtualText 中的 UTF-8 byte offset
-    pub old_byte_offset: usize,
+    #[serde(serialize_with = "crate::editor::strong_types::ser_offset", deserialize_with = "crate::editor::strong_types::de_offset")]
+    pub old_byte_offset: Utf8ByteOffset,
     /// new virtualText 中的 UTF-8 byte offset
-    pub new_byte_offset: usize,
+    #[serde(serialize_with = "crate::editor::strong_types::ser_offset", deserialize_with = "crate::editor::strong_types::de_offset")]
+    pub new_byte_offset: Utf8ByteOffset,
     /// 映射的字符数（UTF-8 bytes）
     pub length: usize,
     /// 映射类型
@@ -218,8 +216,8 @@ impl OffsetMap {
 
         if prefix > 0 {
             entries.push(OffsetMapEntry {
-                old_byte_offset: 0,
-                new_byte_offset: 0,
+                old_byte_offset: Utf8ByteOffset::unchecked(0),
+                new_byte_offset: Utf8ByteOffset::unchecked(0),
                 length: prefix,
                 kind: OffsetMapKind::Identity,
             });
@@ -234,8 +232,8 @@ impl OffsetMap {
                 OffsetMapKind::Identity
             };
             entries.push(OffsetMapEntry {
-                old_byte_offset: old_suffix_start,
-                new_byte_offset: new_suffix_start,
+                old_byte_offset: Utf8ByteOffset::unchecked(old_suffix_start),
+                new_byte_offset: Utf8ByteOffset::unchecked(new_suffix_start),
                 length: suffix,
                 kind,
             });
@@ -247,11 +245,12 @@ impl OffsetMap {
     /// 查找 old byte offset 在 new text 中的对应位置。
     pub fn map_old_to_new(&self, old_byte_offset: usize) -> Option<usize> {
         for entry in &self.entries {
-            if old_byte_offset >= entry.old_byte_offset
-                && old_byte_offset < entry.old_byte_offset + entry.length
+            let entry_old = entry.old_byte_offset.value();
+            if old_byte_offset >= entry_old
+                && old_byte_offset < entry_old + entry.length
             {
-                let offset_within = old_byte_offset - entry.old_byte_offset;
-                return Some(entry.new_byte_offset + offset_within);
+                let offset_within = old_byte_offset - entry_old;
+                return Some(entry.new_byte_offset.value() + offset_within);
             }
         }
         None
@@ -259,11 +258,12 @@ impl OffsetMap {
 
     pub fn map_new_to_old(&self, new_byte_offset: usize) -> Option<usize> {
         for entry in &self.entries {
-            if new_byte_offset >= entry.new_byte_offset
-                && new_byte_offset < entry.new_byte_offset + entry.length
+            let entry_new = entry.new_byte_offset.value();
+            if new_byte_offset >= entry_new
+                && new_byte_offset < entry_new + entry.length
             {
-                let offset_within = new_byte_offset - entry.new_byte_offset;
-                return Some(entry.old_byte_offset + offset_within);
+                let offset_within = new_byte_offset - entry_new;
+                return Some(entry.old_byte_offset.value() + offset_within);
             }
         }
         None
@@ -286,27 +286,27 @@ impl OffsetMap {
 #[serde(rename_all = "camelCase")]
 pub struct CompositionSession {
     /// 会话唯一 ID
-    pub session_id: u64,
+    pub session_id: EditorSessionId,
     /// 此会话基于的 committed revision ID
-    pub committed_revision_id: u64,
+    pub committed_revision_id: EditorRevision,
     /// 会话开始时的 committed 文本
     pub committed_text_at_start: String,
     /// committed 正文替换范围起始（UTF-8 byte offset）
-    pub replace_start: usize,
+    pub replace_start: Utf8ByteOffset,
     /// committed 正文替换范围结束（不含，UTF-8 byte offset）
-    pub replace_end_exclusive: usize,
+    pub replace_end_exclusive: Utf8ByteOffset,
     /// 当前预输入文本
     #[serde(default)]
     pub preedit_text: String,
     /// 预输入光标偏移（preedit 内部 UTF-8 byte offset）
-    #[serde(default)]
-    pub preedit_cursor_offset: usize,
+    #[serde(default, serialize_with = "crate::editor::strong_types::ser_offset", deserialize_with = "crate::editor::strong_types::de_offset")]
+    pub preedit_cursor_offset: Utf8ByteOffset,
     /// 当前视觉修订
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_visual_revision: Option<CompositionVisualRevision>,
     /// 最后提交的 generation
     #[serde(default)]
-    pub last_submitted_generation: u64,
+    pub last_submitted_generation: EditorSessionGeneration,
     /// 下一个 revision ID
     #[serde(default)]
     pub next_revision_id: u64,
@@ -324,16 +324,17 @@ impl CompositionSession {
         committed_text: String,
         cursor_position: usize,
     ) -> Self {
+        let cursor = Utf8ByteOffset::unchecked(cursor_position);
         Self {
-            session_id,
-            committed_revision_id,
+            session_id: EditorSessionId::new(session_id),
+            committed_revision_id: EditorRevision::new(committed_revision_id),
             committed_text_at_start: committed_text.clone(),
-            replace_start: cursor_position,
-            replace_end_exclusive: cursor_position,
+            replace_start: cursor,
+            replace_end_exclusive: cursor,
             preedit_text: String::new(),
-            preedit_cursor_offset: 0,
+            preedit_cursor_offset: Utf8ByteOffset::unchecked(0),
             current_visual_revision: None,
-            last_submitted_generation: 0,
+            last_submitted_generation: EditorSessionGeneration::initial(),
             next_revision_id: 1,
         }
     }
@@ -347,15 +348,15 @@ impl CompositionSession {
         replace_end_exclusive: usize,
     ) -> Self {
         Self {
-            session_id,
-            committed_revision_id,
+            session_id: EditorSessionId::new(session_id),
+            committed_revision_id: EditorRevision::new(committed_revision_id),
             committed_text_at_start: committed_text,
-            replace_start,
-            replace_end_exclusive,
+            replace_start: Utf8ByteOffset::unchecked(replace_start),
+            replace_end_exclusive: Utf8ByteOffset::unchecked(replace_end_exclusive),
             preedit_text: String::new(),
-            preedit_cursor_offset: 0,
+            preedit_cursor_offset: Utf8ByteOffset::unchecked(0),
             current_visual_revision: None,
-            last_submitted_generation: 0,
+            last_submitted_generation: EditorSessionGeneration::initial(),
             next_revision_id: 1,
         }
     }
@@ -375,7 +376,7 @@ impl CompositionSession {
                     previous,
                     new_preedit_text.clone(),
                     new_preedit_cursor_offset,
-                    (0, self.committed_text_at_start.len()),
+                    Utf8ByteRange::from_values(0, self.committed_text_at_start.len()).unwrap_or_else(|| Utf8ByteRange::from_values(0, 0).unwrap()),
                 );
                 rev.revision_id = self.take_revision_id();
                 rev.session_id = self.session_id;
@@ -383,11 +384,12 @@ impl CompositionSession {
                 rev
             }
             None => {
+                let replace_range = Utf8ByteRange::from_values(self.replace_start.value(), self.replace_end_exclusive.value());
                 let mut rev = CompositionVisualRevision::new(
                     self.committed_text_at_start.clone(),
-                    Some((self.replace_start, self.replace_end_exclusive)),
+                    replace_range,
                     new_preedit_text.clone(),
-                    (0, self.committed_text_at_start.len()),
+                    Utf8ByteRange::from_values(0, self.committed_text_at_start.len()).unwrap_or_else(|| Utf8ByteRange::from_values(0, 0).unwrap()),
                 );
                 rev.revision_id = self.take_revision_id();
                 rev.session_id = self.session_id;
@@ -396,9 +398,9 @@ impl CompositionSession {
             }
         };
         self.preedit_text = new_preedit_text;
-        self.preedit_cursor_offset = new_preedit_cursor_offset;
+        self.preedit_cursor_offset = Utf8ByteOffset::unchecked(new_preedit_cursor_offset);
         self.current_visual_revision = Some(new_revision.clone());
-        self.last_submitted_generation = self.last_submitted_generation.saturating_add(1);
+        self.last_submitted_generation = self.last_submitted_generation.next();
         new_revision
     }
 
@@ -408,9 +410,9 @@ impl CompositionSession {
     /// 会被 clamp 到 committed_text_at_start.len()，并自动交换保证 start <= end。
     /// #517: 只有 setComposingRegion 或平台明确给出替换范围时才能修改 replaceRange。
     pub fn set_composing_region(&mut self, start: usize, end: usize) {
-        self.replace_start = start.min(self.committed_text_at_start.len());
-        self.replace_end_exclusive = end.min(self.committed_text_at_start.len());
-        if self.replace_start > self.replace_end_exclusive {
+        self.replace_start = Utf8ByteOffset::unchecked(start.min(self.committed_text_at_start.len()));
+        self.replace_end_exclusive = Utf8ByteOffset::unchecked(end.min(self.committed_text_at_start.len()));
+        if self.replace_start.value() > self.replace_end_exclusive.value() {
             std::mem::swap(&mut self.replace_start, &mut self.replace_end_exclusive);
         }
     }
@@ -421,19 +423,20 @@ impl CompositionSession {
     }
 
     /// 获取当前 composition_replace_range。
-    pub fn composition_replace_range(&self) -> Option<(usize, usize)> {
+    pub fn composition_replace_range(&self) -> Option<Utf8ByteRange> {
         if self.replace_start == self.replace_end_exclusive && self.preedit_text.is_empty() {
             None
         } else {
-            Some((self.replace_start, self.replace_end_exclusive))
+            Utf8ByteRange::from_values(self.replace_start.value(), self.replace_end_exclusive.value())
         }
     }
 
     /// 构造当前虚拟文本。
     pub fn virtual_text(&self) -> String {
+        let range_tuple = self.composition_replace_range().map(|r| (r.start().value(), r.end().value()));
         build_virtual_text(
             &self.committed_text_at_start,
-            self.composition_replace_range(),
+            range_tuple,
             &self.preedit_text,
         )
     }
@@ -443,7 +446,7 @@ impl CompositionSession {
     /// #517: 此范围只能表示 virtualText 中 preedit 的范围，
     /// 不能表示 committed replaceRange；两者必须分开命名和存储。
     pub fn preedit_byte_range_in_virtual_text(&self) -> (usize, usize) {
-        let start = self.replace_start;
+        let start = self.replace_start.value();
         let end = start + self.preedit_text.len();
         (start, end)
     }
@@ -459,21 +462,21 @@ impl CompositionSession {
                 self.committed_text_at_start.clone(),
                 self.composition_replace_range(),
                 self.preedit_text.clone(),
-                (0, self.committed_text_at_start.len()),
+                Utf8ByteRange::from_values(0, self.committed_text_at_start.len()).unwrap_or_else(|| Utf8ByteRange::from_values(0, 0).unwrap()),
             )
         });
 
         let mut committed_after = self.committed_text_at_start.clone();
         committed_after.replace_range(
-            self.replace_start..self.replace_end_exclusive,
+            self.replace_start.value()..self.replace_end_exclusive.value(),
             commit_text,
         );
 
         self.preedit_text.clear();
-        self.preedit_cursor_offset = 0;
+        self.preedit_cursor_offset = Utf8ByteOffset::unchecked(0);
         self.current_visual_revision = None;
-        self.replace_start = 0;
-        self.replace_end_exclusive = 0;
+        self.replace_start = Utf8ByteOffset::unchecked(0);
+        self.replace_end_exclusive = Utf8ByteOffset::unchecked(0);
 
         (composition_revision, committed_after)
     }
@@ -488,15 +491,15 @@ impl CompositionSession {
                 self.committed_text_at_start.clone(),
                 self.composition_replace_range(),
                 self.preedit_text.clone(),
-                (0, self.committed_text_at_start.len()),
+                Utf8ByteRange::from_values(0, self.committed_text_at_start.len()).unwrap_or_else(|| Utf8ByteRange::from_values(0, 0).unwrap()),
             )
         });
 
         self.preedit_text.clear();
-        self.preedit_cursor_offset = 0;
+        self.preedit_cursor_offset = Utf8ByteOffset::unchecked(0);
         self.current_visual_revision = None;
-        self.replace_start = 0;
-        self.replace_end_exclusive = 0;
+        self.replace_start = Utf8ByteOffset::unchecked(0);
+        self.replace_end_exclusive = Utf8ByteOffset::unchecked(0);
 
         composition_revision
     }
@@ -504,11 +507,11 @@ impl CompositionSession {
     /// 清除会话。
     pub fn clear(&mut self) {
         self.preedit_text.clear();
-        self.preedit_cursor_offset = 0;
+        self.preedit_cursor_offset = Utf8ByteOffset::unchecked(0);
         self.current_visual_revision = None;
-        self.replace_start = 0;
-        self.replace_end_exclusive = 0;
-        self.last_submitted_generation = 0;
+        self.replace_start = Utf8ByteOffset::unchecked(0);
+        self.replace_end_exclusive = Utf8ByteOffset::unchecked(0);
+        self.last_submitted_generation = EditorSessionGeneration::initial();
     }
 
     fn take_revision_id(&mut self) -> u64 {

@@ -2,6 +2,7 @@ use crate::editor::transaction::types::*;
 use crate::editor::transaction::visual::*;
 use crate::editor::transaction::rebase::*;
 use crate::editor::transaction::engine::*;
+use crate::editor::strong_types::Utf8ByteOffset;
 
 # [allow(deprecated)]
 
@@ -11,7 +12,7 @@ use crate::editor::transaction::engine::*;
             assert_eq!(
                 changes,
                 vec![EditorChange::Insert {
-                    index: "你好".len(),
+                    index: Utf8ByteOffset::unchecked("你好".len()),
                     text: "新".to_string(),
                 }]
             );
@@ -23,7 +24,7 @@ use crate::editor::transaction::engine::*;
             assert_eq!(
                 changes,
                 vec![EditorChange::Delete {
-                    index: "abc".len(),
+                    index: Utf8ByteOffset::unchecked("abc".len()),
                     text: "月".to_string(),
                 }]
             );
@@ -36,7 +37,7 @@ use crate::editor::transaction::engine::*;
             assert_eq!(
                 diff_plain_text("", "text"),
                 vec![EditorChange::Insert {
-                    index: 0,
+                    index: Utf8ByteOffset::unchecked(0),
                     text: "text".to_string(),
                 }]
             );
@@ -44,7 +45,7 @@ use crate::editor::transaction::engine::*;
             assert_eq!(
                 diff_plain_text("text", ""),
                 vec![EditorChange::Delete {
-                    index: 0,
+                    index: Utf8ByteOffset::unchecked(0),
                     text: "text".to_string(),
                 }]
             );
@@ -57,11 +58,11 @@ use crate::editor::transaction::engine::*;
                 changes,
                 vec![
                     EditorChange::Delete {
-                        index: "alpha ".len(),
+                        index: Utf8ByteOffset::unchecked("alpha ".len()),
                         text: "bet".to_string(),
                     },
                     EditorChange::Insert {
-                        index: "alpha ".len(),
+                        index: Utf8ByteOffset::unchecked("alpha ".len()),
                         text: "gamm".to_string(),
                     },
                 ]
@@ -235,8 +236,8 @@ use crate::editor::transaction::engine::*;
         fn decoration_slice_serializes_camel_case() {
             let ds = DecorationSlice {
                 kind: DecorationSliceKind::Underline,
-                byte_start: 5,
-                byte_end: 7,
+                byte_start: Utf8ByteOffset::unchecked(5),
+                byte_end: Utf8ByteOffset::unchecked(7),
                 rect: Some(Rect { x: 10.0, y: 20.0, w: 30.0, h: 2.0 }),
                 color: Some("#FF0000".to_string()),
             };
@@ -252,8 +253,8 @@ use crate::editor::transaction::engine::*;
         fn decoration_slice_skips_none() {
             let ds = DecorationSlice {
                 kind: DecorationSliceKind::Cursor,
-                byte_start: 0,
-                byte_end: 0,
+                byte_start: Utf8ByteOffset::unchecked(0),
+                byte_end: Utf8ByteOffset::unchecked(0),
                 rect: None,
                 color: None,
             };
@@ -284,8 +285,8 @@ use crate::editor::transaction::engine::*;
             assert_eq!(vt.new_text, "hello world");
             assert!(vt.inserted_range.is_none());
             assert!(vt.deleted_range.is_none());
-            assert_eq!(vt.old_selection.head.index, 5);
-            assert_eq!(vt.new_selection.head.index, 0);
+            assert_eq!(vt.old_selection.head.index, Utf8ByteOffset::unchecked(5));
+            assert_eq!(vt.new_selection.head.index, Utf8ByteOffset::unchecked(0));
         }
 
         #[test]

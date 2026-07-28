@@ -86,7 +86,18 @@ impl super::WriterCore {
         } else {
             crate::sync::create_sync_backend(&backend_type)
         };
-        backend.sync(&self.workspace_path, config, &secrets, force_sync)
+        let result = backend.sync(&self.workspace_path, config, &secrets, force_sync)?;
+        let should_rebuild = matches!(
+            result.status,
+            crate::sync::SyncStatus::Success
+                | crate::sync::SyncStatus::LatestWinsApplied
+                | crate::sync::SyncStatus::NoChanges
+                | crate::sync::SyncStatus::BranchMissingRecovered
+        );
+        if should_rebuild {
+            let _ = self.rebuild_search_index(None);
+        }
+        Ok(result)
     }
 
     pub fn load_sync_secrets(&self) -> crate::error::Result<crate::sync::SyncSecrets> {

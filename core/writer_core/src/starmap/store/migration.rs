@@ -3,7 +3,7 @@ use std::path::Path;
 
 use crate::error::Result;
 
-use super::meta::{GraphMeta, LegacyGraphMeta};
+use super::meta::{GraphMeta, LegacyGraphMeta, DeletedSinceLastSync};
 use super::relation_index::*;
 use super::types::*;
 use super::StarMapStore;
@@ -147,6 +147,7 @@ impl StarMapStore {
                         },
                         package_revision: 0,
                         updated_at: graph.updated_at,
+                        deleted_since_last_sync: DeletedSinceLastSync::default(),
                         });
                     }
                     let meta: LegacyGraphMeta = serde_json::from_str(&content)?;
@@ -166,6 +167,7 @@ impl StarMapStore {
                         node_kind_counts: HashMap::new(),
                         package_revision: 0,
                         updated_at: meta.updated_at,
+                        deleted_since_last_sync: DeletedSinceLastSync::default(),
                     });
                 }
             }
