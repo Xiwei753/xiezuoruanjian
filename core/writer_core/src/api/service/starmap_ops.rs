@@ -822,6 +822,10 @@ impl WriterCoreApi {
             .as_ref()
             .map(|g| g.embeds.iter().map(|e| e.instance_id.clone()).collect())
             .unwrap_or_default();
+        let old_hyperlink_ids: std::collections::HashSet<String> = old_graph
+            .as_ref()
+            .map(|g| g.hyperlinks.iter().map(|hl| hl.hyperlink_id.clone()).collect())
+            .unwrap_or_default();
 
         let core = self.core();
         core.import_or_replace_starmap_package(starmap_id, &graph.clone().into(), base_package_revision)?;
@@ -930,6 +934,33 @@ impl WriterCoreApi {
             self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
                 action: crate::search::SearchIndexAction::Delete,
                 object_id: format!("starmap_embed:{}:{}", starmap_id, old_id),
+                scope: crate::search::SearchScope::All,
+                title: String::new(),
+                body: String::new(),
+                target: None,
+            });
+        }
+
+        let new_hyperlink_ids: std::collections::HashSet<String> =
+            graph.hyperlinks.iter().map(|hl| hl.hyperlink_id.clone()).collect();
+        for hl in &graph.hyperlinks {
+            let hl_label = hl.label.as_deref().unwrap_or("");
+            let entry = crate::search::extractor::extract_starmap_hyperlink_entry(
+                starmap_id, &hl.hyperlink_id, project_id.as_deref(), hl_label, &hl.target_uri,
+            );
+            self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                action: crate::search::SearchIndexAction::Upsert,
+                object_id: entry.object_id.clone(),
+                scope: entry.scope,
+                title: entry.title.clone(),
+                body: entry.body.clone(),
+                target: Some(entry.target.clone()),
+            });
+        }
+        for old_id in &old_hyperlink_ids - &new_hyperlink_ids {
+            self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                action: crate::search::SearchIndexAction::Delete,
+                object_id: format!("starmap_hyperlink:{}:{}", starmap_id, old_id),
                 scope: crate::search::SearchScope::All,
                 title: String::new(),
                 body: String::new(),

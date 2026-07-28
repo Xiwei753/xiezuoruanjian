@@ -1721,4 +1721,108 @@ mod tests {
         assert_eq!(status["isRebuilding"], false, "rebuild must complete before open_workspace returns");
         assert!(status["lastRebuildAt"].as_u64().unwrap() > 0, "last_rebuild_at must be non-zero after open_workspace");
     }
+
+    #[test]
+    fn cross_entry_import_or_replace_starmap_package_updates_hyperlink_index() {
+        let dir = TempDir::new().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        let meta = api.create_starmap("HlMap", "desc", None).unwrap();
+
+        let endpoint_path = crate::api::types::StarMapEndpointPathDto {
+            segments: vec![],
+            endpoint: crate::api::types::StarMapEdgeEndpointDto {
+                kind: "node".to_string(),
+                node_id: Some("n1".to_string()),
+                anchor_id: None,
+                target: None,
+            },
+        };
+        let hl1 = crate::api::types::StarMapHyperlinkDto {
+            hyperlink_id: "hl1".to_string(),
+            source: endpoint_path.clone(),
+            target_uri: "https://example.com/page1".to_string(),
+            label: Some("Page1Link".to_string()),
+            target_starmap_id: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+        let hl2 = crate::api::types::StarMapHyperlinkDto {
+            hyperlink_id: "hl2".to_string(),
+            source: endpoint_path.clone(),
+            target_uri: "https://example.com/page2".to_string(),
+            label: Some("Page2Link".to_string()),
+            target_starmap_id: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+
+        let old_graph = crate::api::types::StarMapGraphDto {
+            schema_version: 1,
+            id: "g1".to_string(),
+            starmap_id: meta.starmap_id.clone(),
+            title: "HlMap".to_string(),
+            nodes: vec![],
+            edges: vec![],
+            embeds: vec![],
+            links: vec![],
+            hyperlinks: vec![hl1, hl2],
+            created_at: 0,
+            updated_at: 0,
+        };
+        api.import_or_replace_starmap_package(&meta.starmap_id, &old_graph, 0).unwrap();
+        assert_eq!(api.search_service_search("Page1Link", SearchScope::StarmapHyperlink, 10, None).len(), 1);
+        assert_eq!(api.search_service_search("Page2Link", SearchScope::StarmapHyperlink, 10, None).len(), 1);
+
+        let hl3 = crate::api::types::StarMapHyperlinkDto {
+            hyperlink_id: "hl3".to_string(),
+            source: endpoint_path,
+            target_uri: "https://example.com/page3".to_string(),
+            label: Some("Page3Link".to_string()),
+            target_starmap_id: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+        let hl1_updated = crate::api::types::StarMapHyperlinkDto {
+            hyperlink_id: "hl1".to_string(),
+            source: crate::api::types::StarMapEndpointPathDto {
+                segments: vec![],
+                endpoint: crate::api::types::StarMapEdgeEndpointDto {
+                    kind: "node".to_string(),
+                    node_id: Some("n1".to_string()),
+                    anchor_id: None,
+                    target: None,
+                },
+            },
+            target_uri: "https://example.com/updated".to_string(),
+            label: Some("UpdatedLink".to_string()),
+            target_starmap_id: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+        let new_graph = crate::api::types::StarMapGraphDto {
+            schema_version: 1,
+            id: "g1".to_string(),
+            starmap_id: meta.starmap_id.clone(),
+            title: "HlMap".to_string(),
+            nodes: vec![],
+            edges: vec![],
+            embeds: vec![],
+            links: vec![],
+            hyperlinks: vec![hl1_updated, hl3],
+            created_at: 0,
+            updated_at: 0,
+        };
+        let rev1 = api.core().get_starmap_store_package_revision(&meta.starmap_id);
+        api.import_or_replace_starmap_package(&meta.starmap_id, &new_graph, rev1).unwrap();
+
+        assert_eq!(api.search_service_search("UpdatedLink", SearchScope::StarmapHyperlink, 10, None).len(), 1,
+            "updated hyperlink must be indexed");
+        assert_eq!(api.search_service_search("Page3Link", SearchScope::StarmapHyperlink, 10, None).len(), 1,
+            "new hyperlink must be indexed");
+        assert!(api.search_service_search("Page2Link", SearchScope::StarmapHyperlink, 10, None).is_empty(),
+            "deleted hyperlink hl2 must be removed from index");
+        assert!(api.search_service_search("Page1Link", SearchScope::StarmapHyperlink, 10, None).is_empty(),
+            "old label of updated hyperlink must be removed from index");
+    }
 }
