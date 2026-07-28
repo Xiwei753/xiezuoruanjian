@@ -9,7 +9,7 @@ use crate::starmap::types::*;
 /// 节点同时写入 `graph.json`（语义数据）和 `layout.json`（视觉定位）。
 /// layout 写入失败时静默忽略（`let _ =`），因为 layout 缺失不影响语义完整性——
 /// 下次加载 layout 会回退到默认值，平台端可重新触发布局计算。
-pub fn add_starmap_node(
+pub(crate) fn add_starmap_node(
     workspace: &std::path::Path,
     starmap_id: &str,
     node: StarMapNode,
@@ -50,7 +50,7 @@ pub fn add_starmap_node(
 /// `StarMapNodePatch` 中 `None` 表示"不修改"，`Some(None)` 表示"清空可选字段"。
 /// 保存时 `validation::validate_graph` 会校验 portal deep_target 可达性、
 /// anchor 唯一性、display_policy scale 层级等不变量。
-pub fn update_starmap_node(
+pub(crate) fn update_starmap_node(
     workspace: &std::path::Path,
     starmap_id: &str,
     node_id: &str,
@@ -118,7 +118,7 @@ pub fn update_starmap_node(
 /// 级联删除确保图数据引用完整性——不允许存在悬空引用。
 /// 这是一次性全量扫描，适用于当前数据规模；若未来图规模增长，
 /// 可能需要索引加速。
-pub fn delete_starmap_node(
+pub(crate) fn delete_starmap_node(
     workspace: &std::path::Path,
     starmap_id: &str,
     node_id: &str,

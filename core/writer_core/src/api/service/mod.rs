@@ -389,6 +389,7 @@ mod tests {
             }],
             embeds: vec![],
             links: vec![],
+            hyperlinks: vec![],
             created_at: 0,
             updated_at: 0,
         };

@@ -59,7 +59,7 @@ impl StarMapStore {
         if let Some(ref mut meta) = self.graph_meta {
             meta.edge_ids.retain(|id| id != edge_id);
             meta.edge_relation_index.retain(|eri| eri.edge_id != edge_id);
-            meta.deleted_since_last_sync.add_entry("edge", edge_id, self.package_revision);
+            meta.deleted_since_last_sync.add_entry("edge", edge_id, self.package_revision.saturating_add(1));
         }
         self.dirty_graph_meta = true;
     }

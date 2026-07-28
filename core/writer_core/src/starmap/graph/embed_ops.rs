@@ -2,7 +2,7 @@ use crate::error::{Error, Result};
 use crate::starmap::now_epoch;
 use crate::starmap::types::*;
 
-pub fn add_starmap_embed(
+pub(crate) fn add_starmap_embed(
     workspace: &std::path::Path,
     starmap_id: &str,
     embed: StarMapEmbed,
@@ -24,7 +24,7 @@ pub fn add_starmap_embed(
     Ok(embed)
 }
 
-pub fn update_starmap_embed(
+pub(crate) fn update_starmap_embed(
     workspace: &std::path::Path,
     starmap_id: &str,
     instance_id: &str,
@@ -85,7 +85,7 @@ pub fn update_starmap_embed(
     }
 }
 
-pub fn delete_starmap_embed(
+pub(crate) fn delete_starmap_embed(
     workspace: &std::path::Path,
     starmap_id: &str,
     instance_id: &str,

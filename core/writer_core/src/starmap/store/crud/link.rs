@@ -44,7 +44,7 @@ impl StarMapStore {
         if let Some(ref mut meta) = self.graph_meta {
             meta.link_ids.retain(|id| id != link_id);
             meta.link_relation_index.retain(|lri| lri.link_id != link_id);
-            meta.deleted_since_last_sync.add_entry("link", link_id, self.package_revision);
+            meta.deleted_since_last_sync.add_entry("link", link_id, self.package_revision.saturating_add(1));
         }
         self.dirty_graph_meta = true;
     }

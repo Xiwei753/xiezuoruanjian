@@ -11,9 +11,9 @@ mod ops;
 pub mod resolve;
 pub mod validation;
 
-pub use edge_ops::*;
-pub use embed_ops::*;
-pub use link_ops::*;
-pub use node_ops::*;
+pub(crate) use edge_ops::*;
+pub(crate) use embed_ops::*;
+pub(crate) use link_ops::*;
+pub(crate) use node_ops::*;
 pub use ops::*;
 pub use resolve::resolve_deep_target;

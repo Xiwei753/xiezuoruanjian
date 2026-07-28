@@ -275,6 +275,7 @@ pub struct SyncResultDto {
     pub error_category: Option<String>,
     pub message_key: Option<String>,
     pub first_sync_mode: String,
+    pub search_index_rebuild_error: Option<String>,
 }
 
 impl From<crate::sync::SyncResult> for SyncResultDto {
@@ -293,6 +294,7 @@ impl From<crate::sync::SyncResult> for SyncResultDto {
             error_category: r.error_category,
             message_key: r.message_key,
             first_sync_mode: first_sync_mode_to_wire(&r.first_sync_mode),
+            search_index_rebuild_error: r.search_index_rebuild_error,
         }
     }
 }

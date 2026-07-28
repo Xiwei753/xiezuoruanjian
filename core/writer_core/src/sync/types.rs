@@ -436,6 +436,8 @@ pub struct SyncResult {
     pub remote_deletes: Vec<String>,
     #[serde(default)]
     pub overwritten_files: Vec<String>,
+    #[serde(default)]
+    pub search_index_rebuild_error: Option<String>,
 }
 
 impl SyncResult {
@@ -457,6 +459,7 @@ impl SyncResult {
             local_deletes: Vec::new(),
             remote_deletes: Vec::new(),
             overwritten_files: Vec::new(),
+            search_index_rebuild_error: None,
         }
     }
 
@@ -479,6 +482,7 @@ impl SyncResult {
             local_deletes: Vec::new(),
             remote_deletes: Vec::new(),
             overwritten_files: Vec::new(),
+            search_index_rebuild_error: None,
         }
     }
 
@@ -500,6 +504,7 @@ impl SyncResult {
             local_deletes: Vec::new(),
             remote_deletes: Vec::new(),
             overwritten_files: Vec::new(),
+            search_index_rebuild_error: None,
         }
     }
 }

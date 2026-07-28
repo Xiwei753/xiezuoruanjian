@@ -840,3 +840,88 @@ fn test_deep_target_resolution() {
     };
     assert_eq!(resolve_deep_target(dir.path(), &dt_too_deep), TooDeep);
 }
+
+#[test]
+fn save_starmap_graph_preserves_existing_hyperlinks() {
+    let dir = setup_workspace();
+    let meta = create_starmap(dir.path(), "HL Test", "", None).unwrap();
+
+    let node = StarMapNode {
+        id: "n1".to_string(),
+        title: "Node1".to_string(),
+        kind: StarMapNodeKind::Note,
+        payload: None,
+        tags: vec![],
+        content: Default::default(),
+        anchors: vec![],
+        portal: None,
+        display_policy: Default::default(),
+        open_behavior: Default::default(),
+        provenance: Default::default(),
+        created_at: now_epoch(),
+        updated_at: now_epoch(),
+    };
+
+    let hl = StarMapHyperlink {
+        hyperlink_id: "hl1".to_string(),
+        source: StarMapEndpointPath {
+            segments: vec![],
+            endpoint: StarMapEdgeEndpoint::Node { node_id: "n1".to_string() },
+        },
+        target_uri: "https://example.com".to_string(),
+        label: Some("Example".to_string()),
+        target_starmap_id: None,
+        created_at: now_epoch(),
+        updated_at: now_epoch(),
+    };
+
+    let graph_with_hl = StarMapGraph {
+        schema_version: 1,
+        id: meta.starmap_id.clone(),
+        starmap_id: meta.starmap_id.clone(),
+        title: "HL Test".to_string(),
+        nodes: vec![node],
+        edges: vec![],
+        embeds: vec![],
+        links: vec![],
+        hyperlinks: vec![hl.clone()],
+        created_at: 0,
+        updated_at: now_epoch(),
+    };
+    save_starmap_graph(dir.path(), &meta.starmap_id, &graph_with_hl).unwrap();
+
+    let graph_without_hl_field = StarMapGraph {
+        schema_version: 1,
+        id: meta.starmap_id.clone(),
+        starmap_id: meta.starmap_id.clone(),
+        title: "HL Test".to_string(),
+        nodes: vec![StarMapNode {
+            id: "n1".to_string(),
+            title: "Node1".to_string(),
+            kind: StarMapNodeKind::Note,
+            payload: None,
+            tags: vec![],
+            content: Default::default(),
+            anchors: vec![],
+            portal: None,
+            display_policy: Default::default(),
+            open_behavior: Default::default(),
+            provenance: Default::default(),
+            created_at: now_epoch(),
+            updated_at: now_epoch(),
+        }],
+        edges: vec![],
+        embeds: vec![],
+        links: vec![],
+        hyperlinks: vec![hl.clone()],
+        created_at: 0,
+        updated_at: now_epoch(),
+    };
+    save_starmap_graph(dir.path(), &meta.starmap_id, &graph_without_hl_field).unwrap();
+
+    let reloaded = get_starmap_graph(dir.path(), &meta.starmap_id).unwrap();
+    assert!(
+        reloaded.hyperlinks.iter().any(|h| h.hyperlink_id == "hl1"),
+        "save_starmap_graph must preserve existing hyperlinks when the new graph includes them"
+    );
+}

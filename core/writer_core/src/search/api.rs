@@ -848,6 +848,7 @@ mod tests {
             edges: vec![],
             embeds: vec![],
             links: vec![],
+            hyperlinks: vec![],
             created_at: 0,
             updated_at: 0,
         };
@@ -884,6 +885,7 @@ mod tests {
             edges: vec![],
             embeds: vec![],
             links: vec![],
+            hyperlinks: vec![],
             created_at: 0,
             updated_at: 0,
         };
@@ -1183,6 +1185,7 @@ mod tests {
             edges: vec![edge_ab],
             embeds: vec![],
             links: vec![],
+            hyperlinks: vec![],
             created_at: 0,
             updated_at: 0,
         };
@@ -1218,6 +1221,7 @@ mod tests {
             edges: vec![],
             embeds: vec![],
             links: vec![],
+            hyperlinks: vec![],
             created_at: 0,
             updated_at: 0,
         };

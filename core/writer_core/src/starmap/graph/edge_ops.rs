@@ -14,7 +14,7 @@ use crate::starmap::types::*;
 /// 至少一端须有有效引用：要么 legacy ID 指向已有节点，
 /// 要么提供了 endpoint / endpoint_path / deep_target。
 /// 此处仅做本地存在性检查，deep_target 的可达性由 `validation::validate_graph` 在保存时校验。
-pub fn add_starmap_edge(
+pub(crate) fn add_starmap_edge(
     workspace: &std::path::Path,
     starmap_id: &str,
     edge: StarMapEdge,
@@ -57,7 +57,7 @@ pub fn add_starmap_edge(
 ///
 /// `StarMapEdgePatch` 中 `None` 字段表示"不修改"，`Some(None)` 表示"清空该字段"。
 /// 保存时 `validation::validate_graph` 会校验端点引用完整性。
-pub fn update_starmap_edge(
+pub(crate) fn update_starmap_edge(
     workspace: &std::path::Path,
     starmap_id: &str,
     edge_id: &str,
@@ -107,7 +107,7 @@ pub fn update_starmap_edge(
 
 /// 删除一条边。通过 `retain` 过滤，若未找到则返回 NotFound。
 /// 保存时同步更新 `starmap_stats.edge_count`。
-pub fn delete_starmap_edge(
+pub(crate) fn delete_starmap_edge(
     workspace: &std::path::Path,
     starmap_id: &str,
     edge_id: &str,

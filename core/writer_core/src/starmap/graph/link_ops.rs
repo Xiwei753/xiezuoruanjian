@@ -2,7 +2,7 @@ use crate::error::{Error, Result};
 use crate::starmap::now_epoch;
 use crate::starmap::types::*;
 
-pub fn add_starmap_link(
+pub(crate) fn add_starmap_link(
     workspace: &std::path::Path,
     starmap_id: &str,
     link: StarMapLink,
@@ -20,7 +20,7 @@ pub fn add_starmap_link(
     Ok(link)
 }
 
-pub fn update_starmap_link(
+pub(crate) fn update_starmap_link(
     workspace: &std::path::Path,
     starmap_id: &str,
     link_id: &str,
@@ -50,7 +50,7 @@ pub fn update_starmap_link(
     }
 }
 
-pub fn delete_starmap_link(
+pub(crate) fn delete_starmap_link(
     workspace: &std::path::Path,
     starmap_id: &str,
     link_id: &str,

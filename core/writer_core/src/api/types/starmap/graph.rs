@@ -13,6 +13,8 @@ pub struct StarMapGraphDto {
     pub embeds: Vec<StarMapEmbedDto>,
     #[serde(default)]
     pub links: Vec<StarMapLinkDto>,
+    #[serde(default)]
+    pub hyperlinks: Vec<StarMapHyperlinkDto>,
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -28,6 +30,7 @@ impl From<crate::starmap::types::StarMapGraph> for StarMapGraphDto {
             edges: g.edges.into_iter().map(Into::into).collect(),
             embeds: g.embeds.into_iter().map(Into::into).collect(),
             links: g.links.into_iter().map(Into::into).collect(),
+            hyperlinks: g.hyperlinks.into_iter().map(Into::into).collect(),
             created_at: g.created_at,
             updated_at: g.updated_at,
         }
@@ -45,6 +48,7 @@ impl From<StarMapGraphDto> for crate::starmap::types::StarMapGraph {
             edges: d.edges.into_iter().map(Into::into).collect(),
             embeds: d.embeds.into_iter().map(Into::into).collect(),
             links: d.links.into_iter().map(Into::into).collect(),
+            hyperlinks: d.hyperlinks.into_iter().map(Into::into).collect(),
             created_at: d.created_at,
             updated_at: d.updated_at,
         }

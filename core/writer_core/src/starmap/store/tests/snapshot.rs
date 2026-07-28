@@ -657,3 +657,63 @@ fn phased_snapshot_includes_deleted_ids() {
     assert!(snap.deleted_node_ids.contains(&"n2".to_string()), "deleted node IDs must appear in snapshot");
     assert!(snap.deleted_edge_ids.contains(&"e1".to_string()), "deleted edge IDs must appear in snapshot");
 }
+
+#[test]
+fn deletion_tombstone_revision_binds_to_flush_revision() {
+    let (dir, sid) = setup_workspace();
+    let mut store = StarMapStore::new(dir.path(), &sid);
+    store.upsert_node(make_test_node("n1", "A"));
+    store.upsert_node(make_test_node("n2", "B"));
+    flush_store(&mut store);
+    let rev_after_initial = store.package_revision;
+
+    store.remove_node("n2");
+    flush_store(&mut store);
+    let rev_after_delete = store.package_revision;
+    assert!(rev_after_delete > rev_after_initial, "flush must advance revision");
+
+    let request = PhasedSnapshotRequest { target_phase: LoadPhase::BackgroundFullLoad, since_revision: rev_after_initial };
+    let snap = store.get_phased_snapshot(&request).unwrap();
+    assert!(
+        snap.deleted_node_ids.contains(&"n2".to_string()),
+        "deletion tombstone must be visible when client uses pre-delete revision: since_revision={}, deleted_at_revision must be > since_revision",
+        rev_after_initial
+    );
+}
+
+#[test]
+fn deletion_tombstone_persists_across_store_close_reopen() {
+    let (dir, sid) = setup_workspace();
+    let mut store = StarMapStore::new(dir.path(), &sid);
+    store.upsert_node(make_test_node("n1", "A"));
+    store.upsert_node(make_test_node("n2", "B"));
+    store.upsert_edge(make_test_edge("e1", "n1", "n2"));
+    store.flush().unwrap();
+    let rev_after_initial = store.package_revision;
+
+    store.remove_node("n2");
+    store.remove_edge("e1");
+    store.flush().unwrap();
+    let rev_after_delete = store.package_revision;
+    drop(store);
+
+    let mut store2 = StarMapStore::new(dir.path(), &sid);
+    store2.load_full().unwrap();
+    let persistent_entries: Vec<_> = store2.graph_meta.as_ref()
+        .map(|m| m.deleted_since_last_sync.entries_since(rev_after_initial).cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    assert!(!persistent_entries.is_empty(), "deleted_since_last_sync must have entries after reload");
+    let request = PhasedSnapshotRequest { target_phase: LoadPhase::BackgroundFullLoad, since_revision: rev_after_initial };
+    let snap = store2.get_phased_snapshot(&request).unwrap();
+    assert!(
+        snap.deleted_node_ids.contains(&"n2".to_string()),
+        "deletion tombstone for n2 must persist after close+reopen and be visible with since_revision={}",
+        rev_after_initial
+    );
+    assert!(
+        snap.deleted_edge_ids.contains(&"e1".to_string()),
+        "deletion tombstone for e1 must persist after close+reopen and be visible with since_revision={}",
+        rev_after_initial
+    );
+    assert_eq!(snap.nodes.len(), 1, "only n1 should remain after reopen");
+}

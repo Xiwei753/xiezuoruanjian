@@ -70,6 +70,7 @@ impl StarMapStore {
             edges: self.edges.values().cloned().collect(),
             embeds: self.embeds.values().cloned().collect(),
             links: self.links.values().cloned().collect(),
+            hyperlinks: self.hyperlinks.values().cloned().collect(),
             created_at: 0,
             updated_at: crate::starmap::now_epoch(),
         }

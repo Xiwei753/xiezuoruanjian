@@ -87,6 +87,7 @@ impl super::WriterCore {
             crate::sync::create_sync_backend(&backend_type)
         };
         let result = backend.sync(&self.workspace_path, config, &secrets, force_sync)?;
+        let mut result = result;
         if matches!(
             result.status,
             crate::sync::SyncStatus::Success
@@ -95,6 +96,7 @@ impl super::WriterCore {
         ) {
             if let Err(e) = self.rebuild_search_index(None) {
                 log::warn!("Failed to rebuild search index after sync: {e}");
+                result.search_index_rebuild_error = Some(format!("{e}"));
             }
         }
         Ok(result)

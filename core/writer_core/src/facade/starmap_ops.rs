@@ -127,6 +127,7 @@ impl super::WriterCore {
         let new_edge_ids: std::collections::HashSet<String> = graph.edges.iter().map(|e| e.id.clone()).collect();
         let new_embed_ids: std::collections::HashSet<String> = graph.embeds.iter().map(|e| e.instance_id.clone()).collect();
         let new_link_ids: std::collections::HashSet<String> = graph.links.iter().map(|l| l.link_id.clone()).collect();
+        let new_hyperlink_ids: std::collections::HashSet<String> = graph.hyperlinks.iter().map(|hl| hl.hyperlink_id.clone()).collect();
 
         for node in &graph.nodes {
             store.upsert_node(node.clone());
@@ -139,6 +140,9 @@ impl super::WriterCore {
         }
         for link in &graph.links {
             store.upsert_link(link.clone());
+        }
+        for hl in &graph.hyperlinks {
+            store.upsert_hyperlink(hl.clone());
         }
 
         for old_id in &old_node_ids {
@@ -162,7 +166,9 @@ impl super::WriterCore {
             }
         }
         for old_id in &old_hyperlink_ids {
-            store.remove_hyperlink(old_id);
+            if !new_hyperlink_ids.contains(old_id) {
+                store.remove_hyperlink(old_id);
+            }
         }
 
         store.enqueue_save(SaveQueueEntry::Node);

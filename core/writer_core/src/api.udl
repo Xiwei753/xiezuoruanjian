@@ -314,6 +314,7 @@ dictionary SyncResultDto {
     string? error_category;
     string? message_key;
     string first_sync_mode;
+    string? search_index_rebuild_error;
 };
 
 [Error]
@@ -479,6 +480,7 @@ dictionary StarMapGraphDto {
     sequence<StarMapEdgeDto> edges;
     sequence<StarMapEmbedDto> embeds;
     sequence<StarMapLinkDto> links;
+    sequence<StarMapHyperlinkDto> hyperlinks;
     u64 created_at;
     u64 updated_at;
 };
