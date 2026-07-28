@@ -16,7 +16,6 @@ pub struct WriterCoreApi {
     pub(crate) sync_transport: Option<writer_platform_api::SyncTransportFactory>,
     pub(crate) secure_storage: Option<std::sync::Arc<dyn writer_platform_api::SecureStorage>>,
     secrets_override: std::sync::Mutex<Option<crate::sync::SyncSecrets>>,
-    search_service: std::sync::Mutex<crate::search::service::SearchIndexService>,
     core_instance: std::sync::Mutex<WriterCore>,
 }
 
@@ -28,7 +27,6 @@ impl WriterCoreApi {
             sync_transport: None,
             secure_storage: None,
             secrets_override: std::sync::Mutex::new(None),
-            search_service: std::sync::Mutex::new(crate::search::service::SearchIndexService::new()),
             core_instance: std::sync::Mutex::new(core),
         }
     }
@@ -44,7 +42,6 @@ impl WriterCoreApi {
             sync_transport: Some(transport_factory),
             secure_storage: None,
             secrets_override: std::sync::Mutex::new(None),
-            search_service: std::sync::Mutex::new(crate::search::service::SearchIndexService::new()),
             core_instance: std::sync::Mutex::new(core),
         }
     }
@@ -56,13 +53,11 @@ impl WriterCoreApi {
     ) -> Self {
         let mut core = WriterCore::new(&workspace_path);
         core.sync_transport = sync_transport_factory.clone();
-        core.secure_storage = secure_storage.clone();
         Self {
             workspace_path: workspace_path.as_ref().to_path_buf(),
             sync_transport: sync_transport_factory,
             secure_storage,
             secrets_override: std::sync::Mutex::new(None),
-            search_service: std::sync::Mutex::new(crate::search::service::SearchIndexService::new()),
             core_instance: std::sync::Mutex::new(core),
         }
     }
@@ -78,13 +73,13 @@ impl WriterCoreApi {
     }
 
     pub(crate) fn enqueue_search_index_update(&self, update: crate::search::SearchIndexUpdate) {
-        let mut service = self.search_service.lock().unwrap_or_else(|e| e.into_inner());
-        service.enqueue_update(update);
+        let core = self.core_instance.lock().unwrap_or_else(|e| e.into_inner());
+        core.enqueue_search_index_update(update);
     }
 
     pub(crate) fn remove_search_index_by_prefix(&self, prefix: &str) {
-        let mut service = self.search_service.lock().unwrap_or_else(|e| e.into_inner());
-        service.remove_by_prefix(prefix);
+        let core = self.core_instance.lock().unwrap_or_else(|e| e.into_inner());
+        core.remove_search_index_by_prefix(prefix);
     }
 
     pub(crate) fn search_service_search(
@@ -94,28 +89,19 @@ impl WriterCoreApi {
         limit: usize,
         cursor: Option<&str>,
     ) -> Vec<crate::search::SearchResult> {
-        let mut service = self.search_service.lock().unwrap_or_else(|e| e.into_inner());
-        service.search(query, scope, limit, cursor)
+        let core = self.core_instance.lock().unwrap_or_else(|e| e.into_inner());
+        core.global_search(query, scope, limit, cursor)
     }
 
     pub(crate) fn search_service_rebuild(&self, project_id: Option<&str>) -> crate::error::Result<crate::search::SearchIndexStatus> {
-        {
-            let core = self.core_instance.lock().unwrap_or_else(|e| e.into_inner());
-            core.flush_all_starmap_stores()?;
-        }
-        let entries = crate::search::rebuild::rebuild_index(&self.workspace_path, project_id)?;
-        let mut service = self.search_service.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(pid) = project_id {
-            service.rebuild_project_from_entries(pid, entries);
-        } else {
-            service.rebuild_from_entries(entries);
-        }
-        Ok(service.status())
+        let core = self.core_instance.lock().unwrap_or_else(|e| e.into_inner());
+        core.flush_all_starmap_stores()?;
+        core.rebuild_search_index(project_id)
     }
 
     pub(crate) fn search_service_status(&self) -> crate::search::SearchIndexStatus {
-        let service = self.search_service.lock().unwrap_or_else(|e| e.into_inner());
-        service.status()
+        let core = self.core_instance.lock().unwrap_or_else(|e| e.into_inner());
+        core.get_search_index_status()
     }
 
     pub(crate) fn json_string<T: Serialize>(value: &T) -> ApiResult<String> {

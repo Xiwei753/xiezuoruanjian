@@ -144,12 +144,27 @@ impl Utf8ByteRange {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum InvalidRevisionError {}
+
+impl fmt::Display for InvalidRevisionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "invalid revision")
+    }
+}
+
+impl std::error::Error for InvalidRevisionError {}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct EditorRevision(u64);
 
 impl EditorRevision {
     pub fn new(revision: u64) -> Self {
         Self(revision)
+    }
+
+    pub fn try_new(revision: u64) -> Result<Self, InvalidRevisionError> {
+        Ok(Self(revision))
     }
 
     pub fn initial() -> Self {
@@ -171,12 +186,34 @@ impl fmt::Display for EditorRevision {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum InvalidSessionIdError {
+    Zero,
+}
+
+impl fmt::Display for InvalidSessionIdError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            InvalidSessionIdError::Zero => write!(f, "session id must not be zero"),
+        }
+    }
+}
+
+impl std::error::Error for InvalidSessionIdError {}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct EditorSessionId(u64);
 
 impl EditorSessionId {
     pub fn new(id: u64) -> Self {
         Self(id)
+    }
+
+    pub fn try_new(id: u64) -> Result<Self, InvalidSessionIdError> {
+        if id == 0 {
+            return Err(InvalidSessionIdError::Zero);
+        }
+        Ok(Self(id))
     }
 
     pub fn value(self) -> u64 {
@@ -190,12 +227,27 @@ impl fmt::Display for EditorSessionId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum InvalidGenerationError {}
+
+impl fmt::Display for InvalidGenerationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "invalid generation")
+    }
+}
+
+impl std::error::Error for InvalidGenerationError {}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct EditorSessionGeneration(u64);
 
 impl EditorSessionGeneration {
     pub fn new(gen: u64) -> Self {
         Self(gen)
+    }
+
+    pub fn try_new(gen: u64) -> Result<Self, InvalidGenerationError> {
+        Ok(Self(gen))
     }
 
     pub fn initial() -> Self {
@@ -376,5 +428,26 @@ mod tests {
         assert_eq!(offset.value() as u64, revision.value());
         assert_eq!(revision.value(), session_id.value());
         assert_eq!(session_id.value(), generation.value());
+    }
+
+    #[test]
+    fn editor_session_id_try_new_rejects_zero() {
+        assert!(EditorSessionId::try_new(0).is_err());
+        assert!(EditorSessionId::try_new(1).is_ok());
+        assert_eq!(EditorSessionId::try_new(1).unwrap().value(), 1);
+    }
+
+    #[test]
+    fn editor_revision_try_new_accepts_any() {
+        assert!(EditorRevision::try_new(0).is_ok());
+        assert!(EditorRevision::try_new(1).is_ok());
+        assert_eq!(EditorRevision::try_new(0).unwrap(), EditorRevision::initial());
+    }
+
+    #[test]
+    fn editor_session_generation_try_new_accepts_any() {
+        assert!(EditorSessionGeneration::try_new(0).is_ok());
+        assert!(EditorSessionGeneration::try_new(1).is_ok());
+        assert_eq!(EditorSessionGeneration::try_new(0).unwrap(), EditorSessionGeneration::initial());
     }
 }

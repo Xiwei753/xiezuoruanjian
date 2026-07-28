@@ -217,7 +217,10 @@ impl super::WriterAppService {
                 replacement_text,
                 resulting_selection_anchor: anchor,
                 resulting_selection_head: head,
-                composition_session_id: EditorSessionId::new(composition_session_id),
+                composition_session_id: match EditorSessionId::try_new(composition_session_id) {
+                    Ok(id) => id,
+                    Err(_) => return EditorEditResultDto::stale_fallback(),
+                },
                 composition_base_revision: EditorRevision::new(composition_base_revision),
                 composition_generation: EditorSessionGeneration::new(composition_generation),
                 cause: core_cause,
@@ -310,7 +313,10 @@ impl super::WriterAppService {
                 Err(_) => return EditorEditResultDto::invalid_offset_fallback(),
             };
             let result = s.kernel.apply(EditorCommand::UpdateComposition {
-                composition_session_id: EditorSessionId::new(composition_session_id),
+                composition_session_id: match EditorSessionId::try_new(composition_session_id) {
+                    Ok(id) => id,
+                    Err(_) => return EditorEditResultDto::stale_fallback(),
+                },
                 composition_generation: EditorSessionGeneration::new(composition_generation),
                 new_preedit_text,
                 new_preedit_cursor_offset: cursor_offset,
@@ -330,7 +336,10 @@ impl super::WriterAppService {
             use crate::editor::strong_types::{EditorRevision, EditorSessionId, EditorSessionGeneration};
         self.with_session(|s| {
             let result = s.kernel.apply(EditorCommand::FinishComposition {
-                composition_session_id: EditorSessionId::new(composition_session_id),
+                composition_session_id: match EditorSessionId::try_new(composition_session_id) {
+                    Ok(id) => id,
+                    Err(_) => return EditorEditResultDto::stale_fallback(),
+                },
                 composition_generation: EditorSessionGeneration::new(composition_generation),
                 expected_revision: EditorRevision::new(expected_revision),
             });
@@ -348,7 +357,10 @@ impl super::WriterAppService {
             use crate::editor::strong_types::{EditorRevision, EditorSessionId, EditorSessionGeneration};
         self.with_session(|s| {
             let result = s.kernel.apply(EditorCommand::CancelComposition {
-                composition_session_id: EditorSessionId::new(composition_session_id),
+                composition_session_id: match EditorSessionId::try_new(composition_session_id) {
+                    Ok(id) => id,
+                    Err(_) => return EditorEditResultDto::stale_fallback(),
+                },
                 composition_generation: EditorSessionGeneration::new(composition_generation),
                 expected_revision: EditorRevision::new(expected_revision),
             });
