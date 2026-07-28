@@ -110,6 +110,8 @@ class AppServiceBridge(val holder: WriterAppServiceHolder) {
     fun ensureDeviceInfo(platform: String, deviceClass: String) = settingsBridge.ensureDeviceInfo(platform, deviceClass)
 
     fun listStarMaps() = starMapBridge.listStarMaps()
+    @Suppress("DEPRECATION")
+    @Deprecated("Use getStarmapPhasedSnapshot for progressive loading.")
     fun getStarMapGraph(starmapId: String) = starMapBridge.getStarMapGraph(starmapId)
     fun createStarMap(title: String, desc: String) = starMapBridge.createStarMap(title, desc)
     fun addStarMapNode(starmapId: String, node: uniffi.writer_core.StarMapNodeDto, x: Float, y: Float) = starMapBridge.addStarMapNode(starmapId, node, x, y)

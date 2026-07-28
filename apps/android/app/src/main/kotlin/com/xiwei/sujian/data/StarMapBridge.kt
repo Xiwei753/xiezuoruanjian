@@ -1,5 +1,6 @@
 package com.xiwei.sujian.data
 
+import com.xiwei.sujian.data.starmap.StarMapBridgeOps
 import com.xiwei.sujian.data.starmap.StarMapRepository
 import com.xiwei.sujian.data.starmap.StarMapSnapshotCache
 import uniffi.writer_core.PhasedSnapshotRequestDto
@@ -28,7 +29,7 @@ import uniffi.writer_core.StarMapViewportDto
  * 只负责 UniFFI 调用和 BridgeResult 包装，不做 DTO↔Model 转换。
  * Model 层 API 由 [StarMapRepository] 提供。
  */
-class StarMapBridge internal constructor(private val holder: WriterAppServiceHolder) {
+class StarMapBridge internal constructor(private val holder: WriterAppServiceHolder) : StarMapBridgeOps {
     companion object {
         private const val TAG = "StarMapBridge"
     }
@@ -40,120 +41,120 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
     private val cache = StarMapSnapshotCache()
     internal val repository = StarMapRepository(this, cache)
 
-    // ── DTO 层 API（供 AppServiceBridge 门面委托） ──
-
-    fun listStarMaps(): BridgeResult<List<StarMapMetaDto>> = holder.wrapResult {
+    override fun listStarMaps(): BridgeResult<List<StarMapMetaDto>> = holder.wrapResult {
         holder.service.listStarmaps()
     }
 
-    fun getStarMapGraph(starmapId: String): BridgeResult<StarMapGraphDto> {
+    @Suppress("OverridingDeprecatedMember")
+    @Deprecated("Use getStarmapPhasedSnapshot for progressive loading. getStarMapGraph performs full graph load.")
+    override fun getStarMapGraph(starmapId: String): BridgeResult<StarMapGraphDto> {
         getStarMapGraphCallCount++
         return holder.wrapResult {
             holder.service.getStarmapGraph(starmapId)
         }
     }
 
-    fun createStarMap(title: String, desc: String): BridgeResult<StarMapMetaDto> = holder.wrapResult {
+    override fun createStarMap(title: String, desc: String): BridgeResult<StarMapMetaDto> = holder.wrapResult {
         holder.service.createStarmap(title, desc)
     }
 
-    fun addStarMapNode(starmapId: String, node: StarMapNodeDto, x: Float, y: Float): BridgeResult<StarMapNodeDto> = holder.wrapResult {
+    override fun addStarMapNode(starmapId: String, node: StarMapNodeDto, x: Float, y: Float): BridgeResult<StarMapNodeDto> = holder.wrapResult {
         holder.service.addStarmapNode(starmapId, node, x, y)
     }
 
-    fun saveStarMapLayout(starmapId: String, layout: StarMapLayoutDto): BridgeResult<Boolean> = holder.wrapResult {
+    override fun saveStarMapLayout(starmapId: String, layout: StarMapLayoutDto): BridgeResult<Boolean> = holder.wrapResult {
         holder.service.saveStarmapLayout(starmapId, layout)
     }
 
-    fun getStarMapViewport(starmapId: String): BridgeResult<StarMapViewportDto> = holder.wrapResult {
+    override fun getStarMapViewport(starmapId: String): BridgeResult<StarMapViewportDto> = holder.wrapResult {
         holder.service.getStarmapViewport(starmapId)
     }
 
-    fun saveStarMapViewport(starmapId: String, viewport: StarMapViewportDto): BridgeResult<Boolean> = holder.wrapResult {
+    override fun saveStarMapViewport(starmapId: String, viewport: StarMapViewportDto): BridgeResult<Boolean> = holder.wrapResult {
         holder.service.saveStarmapViewport(starmapId, viewport)
     }
 
-    fun computeStarMapEdgeRenders(graph: StarMapGraphDto, layout: StarMapLayoutDto): BridgeResult<List<StarMapEdgeRenderDto>> = holder.wrapResult {
+    override fun computeStarMapEdgeRenders(graph: StarMapGraphDto, layout: StarMapLayoutDto): BridgeResult<List<StarMapEdgeRenderDto>> = holder.wrapResult {
         holder.service.computeStarmapEdgeRenders(graph, layout)
     }
 
-    fun hitTestStarMapNode(layout: StarMapLayoutDto, x: Float, y: Float): BridgeResult<String?> = holder.wrapResult {
+    override fun hitTestStarMapNode(layout: StarMapLayoutDto, x: Float, y: Float): BridgeResult<String?> = holder.wrapResult {
         holder.service.hitTestStarmapNode(layout, x, y)
     }
 
-    fun addStarmapEmbed(starmapId: String, embed: StarMapEmbedDto): BridgeResult<StarMapEmbedDto> = holder.wrapResult {
+    override fun addStarmapEmbed(starmapId: String, embed: StarMapEmbedDto): BridgeResult<StarMapEmbedDto> = holder.wrapResult {
         holder.service.addStarmapEmbed(starmapId, embed)
     }
 
-    fun updateStarmapEmbed(starmapId: String, instanceId: String, patch: StarMapEmbedPatchInputDto): BridgeResult<StarMapEmbedDto> = holder.wrapResult {
+    override fun updateStarmapEmbed(starmapId: String, instanceId: String, patch: StarMapEmbedPatchInputDto): BridgeResult<StarMapEmbedDto> = holder.wrapResult {
         holder.service.updateStarmapEmbed(starmapId, instanceId, patch)
     }
 
-    fun deleteStarmapEmbed(starmapId: String, instanceId: String): BridgeResult<Boolean> = holder.wrapResult {
+    override fun deleteStarmapEmbed(starmapId: String, instanceId: String): BridgeResult<Boolean> = holder.wrapResult {
         holder.service.deleteStarmapEmbed(starmapId, instanceId)
     }
 
-    fun addStarmapLink(starmapId: String, link: StarMapLinkDto): BridgeResult<StarMapLinkDto> = holder.wrapResult {
+    override fun addStarmapLink(starmapId: String, link: StarMapLinkDto): BridgeResult<StarMapLinkDto> = holder.wrapResult {
         holder.service.addStarmapLink(starmapId, link)
     }
 
-    fun updateStarmapLink(starmapId: String, linkId: String, patch: StarMapLinkPatchInputDto): BridgeResult<StarMapLinkDto> = holder.wrapResult {
+    override fun updateStarmapLink(starmapId: String, linkId: String, patch: StarMapLinkPatchInputDto): BridgeResult<StarMapLinkDto> = holder.wrapResult {
         holder.service.updateStarmapLink(starmapId, linkId, patch)
     }
 
-    fun deleteStarmapLink(starmapId: String, linkId: String): BridgeResult<Boolean> = holder.wrapResult {
+    override fun deleteStarmapLink(starmapId: String, linkId: String): BridgeResult<Boolean> = holder.wrapResult {
         holder.service.deleteStarmapLink(starmapId, linkId)
     }
 
-    fun addStarmapHyperlink(starmapId: String, hl: StarMapHyperlinkDto): BridgeResult<StarMapHyperlinkDto> = holder.wrapResult {
+    override fun addStarmapHyperlink(starmapId: String, hl: StarMapHyperlinkDto): BridgeResult<StarMapHyperlinkDto> = holder.wrapResult {
         holder.service.addStarmapHyperlink(starmapId, hl)
     }
 
-    fun updateStarmapHyperlink(starmapId: String, hyperlinkId: String, patch: StarMapHyperlinkPatchInputDto): BridgeResult<StarMapHyperlinkDto> = holder.wrapResult {
+    override fun updateStarmapHyperlink(starmapId: String, hyperlinkId: String, patch: StarMapHyperlinkPatchInputDto): BridgeResult<StarMapHyperlinkDto> = holder.wrapResult {
         holder.service.updateStarmapHyperlink(starmapId, hyperlinkId, patch)
     }
 
-    fun deleteStarmapHyperlink(starmapId: String, hyperlinkId: String): BridgeResult<Boolean> = holder.wrapResult {
+    override fun deleteStarmapHyperlink(starmapId: String, hyperlinkId: String): BridgeResult<Boolean> = holder.wrapResult {
         holder.service.deleteStarmapHyperlink(starmapId, hyperlinkId)
     }
 
-    fun listStarmapHyperlinks(starmapId: String): BridgeResult<uniffi.writer_core.StarMapHyperlinkListWithDiagnosticsDto> = holder.wrapResult {
+    override fun listStarmapHyperlinks(starmapId: String): BridgeResult<uniffi.writer_core.StarMapHyperlinkListWithDiagnosticsDto> = holder.wrapResult {
         holder.service.listStarmapHyperlinks(starmapId)
     }
 
-    fun getStarmapPhasedSnapshot(starmapId: String, request: PhasedSnapshotRequestDto): BridgeResult<StarMapPhasedSnapshotDto> = holder.wrapResult {
+    override fun getStarmapPhasedSnapshot(starmapId: String, request: PhasedSnapshotRequestDto): BridgeResult<StarMapPhasedSnapshotDto> = holder.wrapResult {
         holder.service.getStarmapPhasedSnapshot(starmapId, request)
     }
 
-    fun findStarmapReferences(targetStarmapId: String): BridgeResult<List<StarMapReferenceDto>> = holder.wrapResult {
+    override fun findStarmapReferences(targetStarmapId: String): BridgeResult<List<StarMapReferenceDto>> = holder.wrapResult {
         holder.service.findStarmapReferences(targetStarmapId)
     }
 
-    fun getStarMapMotionPolicy(): BridgeResult<StarMapMotionPolicyDto> = holder.wrapResult {
+    override fun getStarMapMotionPolicy(): BridgeResult<StarMapMotionPolicyDto> = holder.wrapResult {
         holder.service.getStarmapMotionPolicy()
     }
 
-    fun updateStarMapNode(starmapId: String, nodeId: String, patch: StarMapNodePatchInputDto): BridgeResult<StarMapNodeDto> = holder.wrapResult {
+    override fun updateStarMapNode(starmapId: String, nodeId: String, patch: StarMapNodePatchInputDto): BridgeResult<StarMapNodeDto> = holder.wrapResult {
         holder.service.updateStarmapNode(starmapId, nodeId, patch)
     }
 
-    fun deleteStarMapNode(starmapId: String, nodeId: String): BridgeResult<Boolean> = holder.wrapResult {
+    override fun deleteStarMapNode(starmapId: String, nodeId: String): BridgeResult<Boolean> = holder.wrapResult {
         holder.service.deleteStarmapNode(starmapId, nodeId)
     }
 
-    fun addStarMapEdge(starmapId: String, edge: StarMapEdgeDto): BridgeResult<StarMapEdgeDto> = holder.wrapResult {
+    override fun addStarMapEdge(starmapId: String, edge: StarMapEdgeDto): BridgeResult<StarMapEdgeDto> = holder.wrapResult {
         holder.service.addStarmapEdge(starmapId, edge)
     }
 
-    fun deleteStarMapEdge(starmapId: String, edgeId: String): BridgeResult<Boolean> = holder.wrapResult {
+    override fun deleteStarMapEdge(starmapId: String, edgeId: String): BridgeResult<Boolean> = holder.wrapResult {
         holder.service.deleteStarmapEdge(starmapId, edgeId)
     }
 
-    fun updateStarMapEdge(starmapId: String, edgeId: String, patch: StarMapEdgePatchInputDto): BridgeResult<StarMapEdgeDto> = holder.wrapResult {
+    override fun updateStarMapEdge(starmapId: String, edgeId: String, patch: StarMapEdgePatchInputDto): BridgeResult<StarMapEdgeDto> = holder.wrapResult {
         holder.service.updateStarmapEdge(starmapId, edgeId, patch)
     }
 
-    fun flushStarmapStore(starmapId: String): BridgeResult<Boolean> {
+    override fun flushStarmapStore(starmapId: String): BridgeResult<Boolean> {
         return try {
             holder.service.flushStarmapStore(starmapId)
             BridgeResult.Success(true)
@@ -162,7 +163,7 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
         }
     }
 
-    fun closeStarmapStore(starmapId: String): BridgeResult<Boolean> {
+    override fun closeStarmapStore(starmapId: String): BridgeResult<Boolean> {
         return try {
             holder.service.closeStarmapStore(starmapId)
             BridgeResult.Success(true)
@@ -171,7 +172,7 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
         }
     }
 
-    fun flushAllStarmapStores(): BridgeResult<Boolean> {
+    override fun flushAllStarmapStores(): BridgeResult<Boolean> {
         return try {
             holder.service.flushAllStarmapStores()
             BridgeResult.Success(true)

@@ -2,7 +2,6 @@ package com.xiwei.sujian.data.starmap
 
 import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.data.ResultEnvelope
-import com.xiwei.sujian.data.StarMapBridge
 import com.xiwei.sujian.model.StarMapData
 import com.xiwei.sujian.model.StarMapEdgeKind
 import com.xiwei.sujian.model.StarMapEdgeRenderData
@@ -23,7 +22,7 @@ import uniffi.writer_core.StarMapEdgePatchInputDto
 import uniffi.writer_core.StarMapNodePatchInputDto
 
 internal class StarMapRepository(
-    private val bridge: StarMapBridge,
+    private val bridge: StarMapBridgeOps,
     private val cache: StarMapSnapshotCache
 ) {
     fun listStarmaps(): BridgeResult<List<StarMapMeta>> {
