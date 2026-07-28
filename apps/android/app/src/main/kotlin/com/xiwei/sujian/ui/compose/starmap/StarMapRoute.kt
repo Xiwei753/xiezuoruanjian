@@ -198,27 +198,12 @@ private fun StarMapEditorScreen(
                 val repo = repository()
                 when (val result = repo.advanceLoadPhase(starmapId, nextPhase, current.packageRevision)) {
                     is BridgeResult.Success -> {
-                        val snapshotResult = result.data
-                        val graphData = snapshotResult.data
-                        val mergedGraph = if (graphData.graph.nodes.isEmpty() && graphData.graph.edges.isEmpty()) {
-                            current.graph
-                        } else {
-                            graphData.graph
-                        }
-                        val mergedLayout = if (graphData.layout.nodes.isEmpty()) {
-                            current.layout
-                        } else {
-                            graphData.layout
-                        }
-                        val mergedData = graphData.copy(
-                            graph = mergedGraph,
-                            layout = mergedLayout
-                        )
-                        val edgeRenders = when (val er = repo.computeEdgeRenders(mergedData)) {
+                        val graphData = result.data.data
+                        val edgeRenders = when (val er = repo.computeEdgeRenders(graphData)) {
                             is BridgeResult.Success -> er.data
                             else -> current.edgeRenders
                         }
-                        mergedData.copy(edgeRenders = edgeRenders)
+                        graphData.copy(edgeRenders = edgeRenders)
                     }
                     else -> null
                 }

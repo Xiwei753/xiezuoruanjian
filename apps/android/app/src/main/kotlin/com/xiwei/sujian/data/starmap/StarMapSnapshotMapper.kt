@@ -32,7 +32,16 @@ internal fun StarMapPhasedSnapshotDto.toRawCache(): StarMapRawCache = StarMapRaw
     ),
     nodes = nodes.associateByTo(mutableMapOf()) { it.id },
     edges = edges.associateByTo(mutableMapOf()) { it.id },
-    layoutNodes = layout?.nodes?.associateByTo(mutableMapOf()) { it.nodeId } ?: mutableMapOf()
+    embeds = embeds.associateByTo(mutableMapOf()) { it.instanceId },
+    links = links.associateByTo(mutableMapOf()) { it.linkId },
+    hyperlinks = hyperlinks.associateByTo(mutableMapOf()) { it.hyperlinkId },
+    layoutNodes = layout?.nodes?.associateByTo(mutableMapOf()) { it.nodeId } ?: mutableMapOf(),
+    layoutKind = layout?.kind ?: uniffi.writer_core.StarMapLayoutKindDto.FREEFORM,
+    loadPhase = loadPhase,
+    packageRevision = packageRevision,
+    complete = complete,
+    viewport = viewport,
+    diagnostics = diagnostics.map { it.toModel() }
 )
 
 internal fun StarMapPhasedSnapshotDto.toSnapshotResult(): StarMapPhasedSnapshotResult {

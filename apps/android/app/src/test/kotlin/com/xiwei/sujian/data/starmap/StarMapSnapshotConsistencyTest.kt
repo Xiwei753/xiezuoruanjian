@@ -240,4 +240,33 @@ class StarMapSnapshotConsistencyTest {
         assertEquals("https://example.com", hl.targetUri)
         assertEquals("tgt", hl.targetStarmapId)
     }
+
+    @Test
+    fun rawCache_toSnapshotResult_matchesDto_toSnapshotResult() {
+        val dto = StarMapPhasedSnapshotDto(
+            starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
+            packageRevision = 1u, complete = true, sinceRevision = 0u,
+            nodes = listOf(makeNodeDto("n1", "A")),
+            edges = listOf(makeEdgeDto("e1", "n1", "n1")),
+            embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
+                StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
+                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
+            )),
+            viewport = StarMapViewportDto(1f, 0f, 0f, 800f, 600f),
+            diagnostics = emptyList()
+        )
+        val fromDto = dto.toSnapshotResult()
+        val fromCache = dto.toRawCache().toSnapshotResult()
+
+        assertEquals(fromDto.data.graph.nodes.size, fromCache.data.graph.nodes.size)
+        assertEquals(fromDto.data.graph.edges.size, fromCache.data.graph.edges.size)
+        assertEquals(fromDto.data.layout.nodes.size, fromCache.data.layout.nodes.size)
+        assertEquals(fromDto.data.embeds.size, fromCache.data.embeds.size)
+        assertEquals(fromDto.data.links.size, fromCache.data.links.size)
+        assertEquals(fromDto.data.hyperlinks.size, fromCache.data.hyperlinks.size)
+        assertEquals(fromDto.data.loadPhase, fromCache.data.loadPhase)
+        assertEquals(fromDto.data.packageRevision, fromCache.data.packageRevision)
+        assertEquals(fromDto.data.complete, fromCache.data.complete)
+    }
 }

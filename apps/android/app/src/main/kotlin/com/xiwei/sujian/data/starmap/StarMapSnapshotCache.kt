@@ -1,16 +1,77 @@
 package com.xiwei.sujian.data.starmap
 
+import com.xiwei.sujian.model.StarMapData
+import com.xiwei.sujian.model.StarMapGraphData
+import com.xiwei.sujian.model.StarMapLayoutData
+import com.xiwei.sujian.model.StarMapLayoutKind
+import com.xiwei.sujian.model.StarMapPhasedSnapshotResult
+import com.xiwei.sujian.model.StarMapViewportData
 import uniffi.writer_core.StarMapEdgeDto
+import uniffi.writer_core.StarMapEmbedDto
 import uniffi.writer_core.StarMapGraphDto
+import uniffi.writer_core.StarMapHyperlinkDto
+import uniffi.writer_core.StarMapLayoutKindDto
 import uniffi.writer_core.StarMapLayoutNodeDto
+import uniffi.writer_core.StarMapLinkDto
 import uniffi.writer_core.StarMapNodeDto
+import uniffi.writer_core.StarMapViewportDto
 
 internal data class StarMapRawCache(
-    val graph: StarMapGraphDto? = null,
+    var graph: StarMapGraphDto? = null,
     val nodes: MutableMap<String, StarMapNodeDto> = mutableMapOf(),
     val edges: MutableMap<String, StarMapEdgeDto> = mutableMapOf(),
-    val layoutNodes: MutableMap<String, StarMapLayoutNodeDto> = mutableMapOf()
+    val embeds: MutableMap<String, StarMapEmbedDto> = mutableMapOf(),
+    val links: MutableMap<String, StarMapLinkDto> = mutableMapOf(),
+    val hyperlinks: MutableMap<String, StarMapHyperlinkDto> = mutableMapOf(),
+    val layoutNodes: MutableMap<String, StarMapLayoutNodeDto> = mutableMapOf(),
+    var layoutKind: StarMapLayoutKindDto = StarMapLayoutKindDto.FREEFORM,
+    var loadPhase: String = "CurrentViewportObjects",
+    var packageRevision: ULong = 0u,
+    var complete: Boolean = false,
+    var viewport: StarMapViewportDto? = null,
+    var diagnostics: List<com.xiwei.sujian.model.StarMapLoadDiagnostic> = emptyList()
 )
+
+internal fun StarMapRawCache.toSnapshotResult(): StarMapPhasedSnapshotResult {
+    val layoutData = if (layoutNodes.isNotEmpty()) {
+        StarMapLayoutData(
+            kind = when (layoutKind) {
+                StarMapLayoutKindDto.FREEFORM -> StarMapLayoutKind.Freeform
+                StarMapLayoutKindDto.AUTO_RADIAL -> StarMapLayoutKind.AutoRadial
+                StarMapLayoutKindDto.CUSTOM -> StarMapLayoutKind.Custom
+            },
+            nodes = layoutNodes.values.map { it.toModel() }
+        )
+    } else {
+        StarMapLayoutData(kind = StarMapLayoutKind.Freeform, nodes = emptyList())
+    }
+    val graphMeta = graph
+    val data = StarMapData(
+        graph = StarMapGraphData(
+            schemaVersion = graphMeta?.schemaVersion?.toInt() ?: 0,
+            id = graphMeta?.id ?: "",
+            starmapId = graphMeta?.starmapId ?: "",
+            title = graphMeta?.title ?: "",
+            nodes = nodes.values.map { it.toGraphNode() },
+            edges = edges.values.map { it.toGraphEdge() },
+            createdAt = graphMeta?.createdAt?.toLong() ?: 0L,
+            updatedAt = graphMeta?.updatedAt?.toLong() ?: 0L
+        ),
+        layout = layoutData,
+        viewport = viewport?.toModel() ?: StarMapViewportData(),
+        embeds = embeds.values.map { it.toModel() },
+        links = links.values.map { it.toModel() },
+        hyperlinks = hyperlinks.values.map { it.toModel() },
+        loadPhase = loadPhase,
+        packageRevision = packageRevision,
+        sinceRevision = packageRevision,
+        complete = complete
+    )
+    return StarMapPhasedSnapshotResult(
+        data = data,
+        diagnostics = diagnostics
+    )
+}
 
 internal class StarMapSnapshotCache {
     private val rawCacheByStarmapId = mutableMapOf<String, StarMapRawCache>()
@@ -27,26 +88,32 @@ internal class StarMapSnapshotCache {
             rawCacheByStarmapId[starmapId] = incoming
             return
         }
-        if (incoming.graph != null) {
-            for (node in incoming.graph.nodes) {
+        val incomingGraph = incoming.graph
+        if (incomingGraph != null) {
+            for (node in incomingGraph.nodes) {
                 existing.nodes[node.id] = node
             }
-            for (edge in incoming.graph.edges) {
+            for (edge in incomingGraph.edges) {
                 existing.edges[edge.id] = edge
             }
-            val mergedGraph = StarMapGraphDto(
-                schemaVersion = incoming.graph.schemaVersion,
-                id = incoming.graph.id,
-                starmapId = incoming.graph.starmapId,
-                title = incoming.graph.title,
+            for (embed in incomingGraph.embeds) {
+                existing.embeds[embed.instanceId] = embed
+            }
+            for (link in incomingGraph.links) {
+                existing.links[link.linkId] = link
+            }
+            existing.graph = StarMapGraphDto(
+                schemaVersion = incomingGraph.schemaVersion,
+                id = incomingGraph.id,
+                starmapId = incomingGraph.starmapId,
+                title = incomingGraph.title,
                 nodes = existing.nodes.values.toList(),
                 edges = existing.edges.values.toList(),
-                embeds = incoming.graph.embeds,
-                links = incoming.graph.links,
-                createdAt = incoming.graph.createdAt,
-                updatedAt = incoming.graph.updatedAt
+                embeds = existing.embeds.values.toList(),
+                links = existing.links.values.toList(),
+                createdAt = incomingGraph.createdAt,
+                updatedAt = incomingGraph.updatedAt
             )
-            rawCacheByStarmapId[starmapId] = existing.copy(graph = mergedGraph)
         }
         for ((nodeId, nodeDto) in incoming.nodes) {
             existing.nodes[nodeId] = nodeDto
@@ -54,8 +121,35 @@ internal class StarMapSnapshotCache {
         for ((edgeId, edgeDto) in incoming.edges) {
             existing.edges[edgeId] = edgeDto
         }
+        for ((instanceId, embedDto) in incoming.embeds) {
+            existing.embeds[instanceId] = embedDto
+        }
+        for ((linkId, linkDto) in incoming.links) {
+            existing.links[linkId] = linkDto
+        }
+        for ((hyperlinkId, hlDto) in incoming.hyperlinks) {
+            existing.hyperlinks[hyperlinkId] = hlDto
+        }
         for ((nodeId, layoutNode) in incoming.layoutNodes) {
             existing.layoutNodes[nodeId] = layoutNode
+        }
+        if (incoming.layoutKind != StarMapLayoutKindDto.FREEFORM || existing.layoutKind == StarMapLayoutKindDto.FREEFORM) {
+            existing.layoutKind = incoming.layoutKind
+        }
+        if (incoming.loadPhase != "CurrentViewportObjects" || existing.loadPhase == "CurrentViewportObjects") {
+            existing.loadPhase = incoming.loadPhase
+        }
+        if (incoming.packageRevision > existing.packageRevision) {
+            existing.packageRevision = incoming.packageRevision
+        }
+        if (incoming.complete) {
+            existing.complete = true
+        }
+        if (incoming.viewport != null) {
+            existing.viewport = incoming.viewport
+        }
+        if (incoming.diagnostics.isNotEmpty()) {
+            existing.diagnostics = incoming.diagnostics
         }
     }
 
@@ -63,9 +157,21 @@ internal class StarMapSnapshotCache {
 
     fun removeEdge(starmapId: String, edgeId: String) { rawCacheByStarmapId[starmapId]?.edges?.remove(edgeId) }
 
+    fun removeEmbed(starmapId: String, instanceId: String) { rawCacheByStarmapId[starmapId]?.embeds?.remove(instanceId) }
+
+    fun removeLink(starmapId: String, linkId: String) { rawCacheByStarmapId[starmapId]?.links?.remove(linkId) }
+
+    fun removeHyperlink(starmapId: String, hyperlinkId: String) { rawCacheByStarmapId[starmapId]?.hyperlinks?.remove(hyperlinkId) }
+
     fun putNode(starmapId: String, nodeId: String, dto: StarMapNodeDto) { rawCacheByStarmapId.getOrPut(starmapId) { StarMapRawCache() }.nodes[nodeId] = dto }
 
     fun putEdge(starmapId: String, edgeId: String, dto: StarMapEdgeDto) { rawCacheByStarmapId.getOrPut(starmapId) { StarMapRawCache() }.edges[edgeId] = dto }
+
+    fun putEmbed(starmapId: String, instanceId: String, dto: StarMapEmbedDto) { rawCacheByStarmapId.getOrPut(starmapId) { StarMapRawCache() }.embeds[instanceId] = dto }
+
+    fun putLink(starmapId: String, linkId: String, dto: StarMapLinkDto) { rawCacheByStarmapId.getOrPut(starmapId) { StarMapRawCache() }.links[linkId] = dto }
+
+    fun putHyperlink(starmapId: String, hyperlinkId: String, dto: StarMapHyperlinkDto) { rawCacheByStarmapId.getOrPut(starmapId) { StarMapRawCache() }.hyperlinks[hyperlinkId] = dto }
 
     fun updateLayoutNodes(starmapId: String, nodes: List<StarMapLayoutNodeDto>) {
         val cache = rawCacheByStarmapId[starmapId] ?: return

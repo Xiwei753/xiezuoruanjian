@@ -173,6 +173,9 @@ class StarMapLifecycleFailureTest {
             graph = null,
             nodes = mutableMapOf(),
             edges = mutableMapOf(),
+            embeds = mutableMapOf(),
+            links = mutableMapOf(),
+            hyperlinks = mutableMapOf(),
             layoutNodes = mutableMapOf()
         ))
 

@@ -75,7 +75,9 @@ class StarMapRepositoryContractTest {
                 nodes = emptyList(), edges = emptyList(), embeds = emptyList(), links = emptyList(),
                 createdAt = 0u, updatedAt = 0u
             ),
-            nodes = mutableMapOf(), edges = mutableMapOf(), layoutNodes = mutableMapOf()
+            nodes = mutableMapOf(), edges = mutableMapOf(),
+            embeds = mutableMapOf(), links = mutableMapOf(), hyperlinks = mutableMapOf(),
+            layoutNodes = mutableMapOf()
         )
         cache.put("sm1", rawCache)
         assertNotNull(cache.get("sm1"))

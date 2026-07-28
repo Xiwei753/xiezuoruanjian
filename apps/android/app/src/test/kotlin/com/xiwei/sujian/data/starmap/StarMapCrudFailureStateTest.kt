@@ -203,4 +203,92 @@ class StarMapCrudFailureStateTest {
         }
         assertFalse("dialog closed only on success", showAddNodeDialog)
     }
+
+    @Test
+    fun addEmbed_failure_doesNotCorruptCache() {
+        val cache = StarMapSnapshotCache()
+        val dto = StarMapPhasedSnapshotDto(
+            starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
+            packageRevision = 1u, complete = true, sinceRevision = 0u,
+            nodes = listOf(makeNodeDto("n1", "A")),
+            edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+            layout = null, viewport = null, diagnostics = emptyList()
+        )
+        cache.put("sm1", dto.toRawCache())
+        assertEquals(0, cache.get("sm1")!!.embeds.size)
+
+        val failedResult: BridgeResult<StarMapEmbedData> = BridgeResult.Error(
+            ResultEnvelope.error("NATIVE_ERROR", "add embed failed")
+        )
+        when (failedResult) {
+            is BridgeResult.Error -> assertNotNull(failedResult.message)
+            else -> fail("expected Error")
+        }
+        assertEquals(0, cache.get("sm1")!!.embeds.size)
+    }
+
+    @Test
+    fun deleteLink_failure_doesNotCorruptCache() {
+        val cache = StarMapSnapshotCache()
+        val deepTarget = StarMapDeepTargetDto(
+            starmapId = "other", path = emptyList(),
+            target = StarMapTargetDetailDto(kind = "Node", nodeId = "x", anchorId = null,
+                projectId = null, volumeId = null, chapterId = null, rangeStart = null, rangeEnd = null,
+                entityType = null, entityId = null, uri = null)
+        )
+        val dto = StarMapPhasedSnapshotDto(
+            starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
+            packageRevision = 1u, complete = true, sinceRevision = 0u,
+            nodes = listOf(makeNodeDto("n1", "A")),
+            edges = emptyList(), embeds = emptyList(),
+            links = listOf(StarMapLinkDto(
+                linkId = "lk1",
+                source = StarMapEndpointDto(kind = "Node", nodeId = "n1", anchorId = null),
+                target = deepTarget, label = null,
+                createdAt = 0u, updatedAt = 0u
+            )),
+            hyperlinks = emptyList(),
+            layout = null, viewport = null, diagnostics = emptyList()
+        )
+        cache.put("sm1", dto.toRawCache())
+        assertTrue(cache.get("sm1")!!.links.containsKey("lk1"))
+
+        val failedResult: BridgeResult<Boolean> = BridgeResult.Error(
+            ResultEnvelope.error("NATIVE_ERROR", "delete link failed")
+        )
+        when (failedResult) {
+            is BridgeResult.Error -> assertNotNull(failedResult.message)
+            else -> fail("expected Error")
+        }
+        assertTrue(cache.get("sm1")!!.links.containsKey("lk1"))
+    }
+
+    @Test
+    fun deleteHyperlink_failure_doesNotCorruptCache() {
+        val cache = StarMapSnapshotCache()
+        val dto = StarMapPhasedSnapshotDto(
+            starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
+            packageRevision = 1u, complete = true, sinceRevision = 0u,
+            nodes = listOf(makeNodeDto("n1", "A")),
+            edges = emptyList(), embeds = emptyList(), links = emptyList(),
+            hyperlinks = listOf(StarMapHyperlinkDto(
+                hyperlinkId = "hl1",
+                source = StarMapEndpointPathDto(segments = emptyList(), endpoint = StarMapEdgeEndpointDto(kind = "Node", nodeId = "n1", anchorId = null, target = null)),
+                targetUri = "https://example.com", label = null, targetStarmapId = null,
+                createdAt = 0u, updatedAt = 0u
+            )),
+            layout = null, viewport = null, diagnostics = emptyList()
+        )
+        cache.put("sm1", dto.toRawCache())
+        assertTrue(cache.get("sm1")!!.hyperlinks.containsKey("hl1"))
+
+        val failedResult: BridgeResult<Boolean> = BridgeResult.Error(
+            ResultEnvelope.error("NATIVE_ERROR", "delete hyperlink failed")
+        )
+        when (failedResult) {
+            is BridgeResult.Error -> assertNotNull(failedResult.message)
+            else -> fail("expected Error")
+        }
+        assertTrue(cache.get("sm1")!!.hyperlinks.containsKey("hl1"))
+    }
 }

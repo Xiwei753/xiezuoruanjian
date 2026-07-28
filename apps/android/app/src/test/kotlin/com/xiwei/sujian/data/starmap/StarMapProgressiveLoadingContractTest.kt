@@ -90,7 +90,7 @@ class StarMapProgressiveLoadingContractTest {
             )),
             viewport = null, diagnostics = emptyList()
         )
-        cache.put("sm1", dto2.toRawCache())
+        cache.mergeIncremental("sm1", dto2.toRawCache())
 
         val cached = cache.get("sm1")!!
         assertEquals(2, cached.nodes.size)
@@ -183,5 +183,194 @@ class StarMapProgressiveLoadingContractTest {
         assertEquals(3uL, result.data.sinceRevision)
         assertEquals(2, result.data.graph.nodes.size)
         assertEquals(1, result.data.graph.edges.size)
+    }
+
+    @Test
+    fun cacheBasedResult_afterIncrementalMerge_preservesAllData() {
+        val cache = StarMapSnapshotCache()
+        val dto1 = StarMapPhasedSnapshotDto(
+            starmapId = "sm1", title = "T", loadPhase = "CurrentViewportObjects",
+            packageRevision = 1u, complete = false, sinceRevision = 0u,
+            nodes = listOf(makeNodeDto("n1", "A")),
+            edges = listOf(makeEdgeDto("e1", "n1", "n1")),
+            embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
+                StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
+                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
+            )),
+            viewport = StarMapViewportDto(1f, 0f, 0f, 800f, 600f),
+            diagnostics = emptyList()
+        )
+        cache.put("sm1", dto1.toRawCache())
+
+        val dto2 = StarMapPhasedSnapshotDto(
+            starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
+            packageRevision = 2u, complete = true, sinceRevision = 1u,
+            nodes = emptyList(), edges = emptyList(), embeds = emptyList(),
+            links = emptyList(), hyperlinks = emptyList(),
+            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, emptyList()),
+            viewport = null, diagnostics = emptyList()
+        )
+        cache.mergeIncremental("sm1", dto2.toRawCache())
+
+        val mergedCache = cache.get("sm1")!!
+        val result = mergedCache.toSnapshotResult()
+        assertEquals(1, result.data.graph.nodes.size)
+        assertEquals("A", result.data.graph.nodes[0].title)
+        assertEquals(1, result.data.graph.edges.size)
+        assertEquals(1, result.data.layout.nodes.size)
+        assertEquals(50f, result.data.layout.nodes[0].x, 0.001f)
+        assertEquals(1f, result.data.viewport.scale, 0.001f)
+        assertEquals(2uL, result.data.packageRevision)
+        assertTrue(result.data.complete)
+    }
+
+    @Test
+    fun embedsLinksHyperlinks_incrementalMerge_preservesExistingAndAddsNew() {
+        val cache = StarMapSnapshotCache()
+        val deepTarget = StarMapDeepTargetDto(
+            starmapId = "other", path = emptyList(),
+            target = StarMapTargetDetailDto(kind = "Node", nodeId = "inner1", anchorId = null,
+                projectId = null, volumeId = null, chapterId = null, rangeStart = null, rangeEnd = null,
+                entityType = null, entityId = null, uri = null)
+        )
+        val dto1 = StarMapPhasedSnapshotDto(
+            starmapId = "sm1", title = "T", loadPhase = "CurrentViewportObjects",
+            packageRevision = 1u, complete = false, sinceRevision = 0u,
+            nodes = listOf(makeNodeDto("n1", "A")),
+            edges = emptyList(),
+            embeds = listOf(StarMapEmbedDto(
+                instanceId = "emb1", targetStarmapId = "child", label = "first",
+                displayPolicy = defaultStarMapDisplayPolicy(),
+                openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
+                placement = StarMapEmbedPlacementDto(x = 10f, y = 20f, width = 200f, height = 150f, scale = 1f, zIndex = 0, collapsed = false),
+                targetViewport = StarMapEmbedViewportDto(scale = 1f, offsetX = 0f, offsetY = 0f),
+                sourceNodeId = "n1",
+                hostEndpoint = StarMapEndpointDto(kind = "Node", nodeId = "n1", anchorId = null),
+                provenance = StarMapProvenanceDto(StarMapSourceKindDto.HUMAN, null, null, null, StarMapReviewStatusDto.ACCEPTED, null),
+                createdAt = 0u, updatedAt = 0u
+            )),
+            links = listOf(StarMapLinkDto(
+                linkId = "lk1",
+                source = StarMapEndpointDto(kind = "Node", nodeId = "n1", anchorId = null),
+                target = deepTarget,
+                label = "link1",
+                createdAt = 0u, updatedAt = 0u
+            )),
+            hyperlinks = listOf(StarMapHyperlinkDto(
+                hyperlinkId = "hl1",
+                source = StarMapEndpointPathDto(segments = emptyList(), endpoint = StarMapEdgeEndpointDto(kind = "Node", nodeId = "n1", anchorId = null, target = null)),
+                targetUri = "https://example.com",
+                label = "hl1",
+                targetStarmapId = null,
+                createdAt = 0u, updatedAt = 0u
+            )),
+            layout = null, viewport = null, diagnostics = emptyList()
+        )
+        cache.put("sm1", dto1.toRawCache())
+
+        val dto2 = StarMapPhasedSnapshotDto(
+            starmapId = "sm1", title = "T", loadPhase = "PrefetchNearbyObjects",
+            packageRevision = 2u, complete = false, sinceRevision = 1u,
+            nodes = listOf(makeNodeDto("n2", "B")),
+            edges = emptyList(),
+            embeds = listOf(StarMapEmbedDto(
+                instanceId = "emb2", targetStarmapId = "child2", label = "second",
+                displayPolicy = defaultStarMapDisplayPolicy(),
+                openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
+                placement = StarMapEmbedPlacementDto(x = 30f, y = 40f, width = 200f, height = 150f, scale = 1f, zIndex = 0, collapsed = false),
+                targetViewport = StarMapEmbedViewportDto(scale = 1f, offsetX = 0f, offsetY = 0f),
+                sourceNodeId = "n2",
+                hostEndpoint = null,
+                provenance = StarMapProvenanceDto(StarMapSourceKindDto.HUMAN, null, null, null, StarMapReviewStatusDto.ACCEPTED, null),
+                createdAt = 0u, updatedAt = 0u
+            )),
+            links = emptyList(),
+            hyperlinks = listOf(StarMapHyperlinkDto(
+                hyperlinkId = "hl2",
+                source = StarMapEndpointPathDto(segments = emptyList(), endpoint = StarMapEdgeEndpointDto(kind = "Node", nodeId = "n2", anchorId = null, target = null)),
+                targetUri = "https://other.com",
+                label = "hl2",
+                targetStarmapId = null,
+                createdAt = 0u, updatedAt = 0u
+            )),
+            layout = null, viewport = null, diagnostics = emptyList()
+        )
+        cache.mergeIncremental("sm1", dto2.toRawCache())
+
+        val merged = cache.get("sm1")!!
+        assertEquals(2, merged.nodes.size)
+        assertEquals(2, merged.embeds.size)
+        assertTrue(merged.embeds.containsKey("emb1"))
+        assertTrue(merged.embeds.containsKey("emb2"))
+        assertEquals(1, merged.links.size)
+        assertTrue(merged.links.containsKey("lk1"))
+        assertEquals(2, merged.hyperlinks.size)
+        assertTrue(merged.hyperlinks.containsKey("hl1"))
+        assertTrue(merged.hyperlinks.containsKey("hl2"))
+
+        val result = merged.toSnapshotResult()
+        assertEquals(2, result.data.embeds.size)
+        assertEquals(1, result.data.links.size)
+        assertEquals(2, result.data.hyperlinks.size)
+        assertEquals("first", result.data.embeds.find { it.instanceId == "emb1" }!!.label)
+        assertEquals("second", result.data.embeds.find { it.instanceId == "emb2" }!!.label)
+    }
+
+    @Test
+    fun embedLinkHyperlinkCrud_cacheUpdatesCorrectly() {
+        val cache = StarMapSnapshotCache()
+        val dto = StarMapPhasedSnapshotDto(
+            starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
+            packageRevision = 1u, complete = true, sinceRevision = 0u,
+            nodes = listOf(makeNodeDto("n1", "A")),
+            edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+            layout = null, viewport = null, diagnostics = emptyList()
+        )
+        cache.put("sm1", dto.toRawCache())
+
+        val embedDto = StarMapEmbedDto(
+            instanceId = "emb1", targetStarmapId = "child", label = "new",
+            displayPolicy = defaultStarMapDisplayPolicy(),
+            openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
+            placement = StarMapEmbedPlacementDto(x = 0f, y = 0f, width = 200f, height = 150f, scale = 1f, zIndex = 0, collapsed = false),
+            targetViewport = StarMapEmbedViewportDto(scale = 1f, offsetX = 0f, offsetY = 0f),
+            sourceNodeId = "n1",
+            hostEndpoint = null,
+            provenance = StarMapProvenanceDto(StarMapSourceKindDto.HUMAN, null, null, null, StarMapReviewStatusDto.ACCEPTED, null),
+            createdAt = 0u, updatedAt = 0u
+        )
+        cache.putEmbed("sm1", "emb1", embedDto)
+        assertTrue(cache.get("sm1")!!.embeds.containsKey("emb1"))
+        cache.removeEmbed("sm1", "emb1")
+        assertFalse(cache.get("sm1")!!.embeds.containsKey("emb1"))
+
+        val linkDto = StarMapLinkDto(
+            linkId = "lk1",
+            source = StarMapEndpointDto(kind = "Node", nodeId = "n1", anchorId = null),
+            target = StarMapDeepTargetDto(starmapId = "other", path = emptyList(),
+                target = StarMapTargetDetailDto(kind = "Node", nodeId = "x", anchorId = null,
+                    projectId = null, volumeId = null, chapterId = null, rangeStart = null, rangeEnd = null,
+                    entityType = null, entityId = null, uri = null)),
+            label = null,
+            createdAt = 0u, updatedAt = 0u
+        )
+        cache.putLink("sm1", "lk1", linkDto)
+        assertTrue(cache.get("sm1")!!.links.containsKey("lk1"))
+        cache.removeLink("sm1", "lk1")
+        assertFalse(cache.get("sm1")!!.links.containsKey("lk1"))
+
+        val hlDto = StarMapHyperlinkDto(
+            hyperlinkId = "hl1",
+            source = StarMapEndpointPathDto(segments = emptyList(), endpoint = StarMapEdgeEndpointDto(kind = "Node", nodeId = "n1", anchorId = null, target = null)),
+            targetUri = "https://test.com",
+            label = null,
+            targetStarmapId = null,
+            createdAt = 0u, updatedAt = 0u
+        )
+        cache.putHyperlink("sm1", "hl1", hlDto)
+        assertTrue(cache.get("sm1")!!.hyperlinks.containsKey("hl1"))
+        cache.removeHyperlink("sm1", "hl1")
+        assertFalse(cache.get("sm1")!!.hyperlinks.containsKey("hl1"))
     }
 }
