@@ -1272,6 +1272,13 @@ interface WriterAppService {
 
     ScreenPolicyDto resolve_screen_policy(ScreenRoleDto screen_role, ShellModeDto shell_mode);
 
+    // ── Workbench (Issue #568) ──
+
+    WorkbenchConstraintsDto resolve_workbench_constraints(WindowMetricsDto metrics);
+    WorkbenchLayoutStateDto default_workbench_layout();
+    WorkbenchLayoutStateDto preset_workbench_layout(WorkbenchPresetDto preset);
+    sequence<WorkbenchPanelIdDto> validate_workbench_layout(WorkbenchLayoutStateDto state, WorkbenchConstraintsDto constraints);
+
     // ── #535: Editor V2 Kernel ──
 
     EditorEditResultDto editor_kernel_insert(u32 byte_offset, string text, EditorTransactionCauseDto cause, u64 expected_revision);
@@ -1483,6 +1490,75 @@ dictionary LayoutPlanDto {
     float primary_pane_max_dp;
     WorkspacePaneModeDto? supporting_pane_mode;
     sequence<AvoidRegionDto> avoid_regions;
+};
+
+// ── Workbench DTOs (Issue #568) ──
+
+enum WorkbenchPanelIdDto {
+    "ProjectNavigator",
+    "ChapterNavigator",
+    "AiAssistant",
+    "Search",
+    "Statistics",
+    "StarMap",
+    "DocumentOutline",
+    "CharacterInfo",
+};
+
+enum DockZoneDto {
+    "Left",
+    "Right",
+    "Bottom",
+    "Floating",
+};
+
+enum PanelVisibilityDto {
+    "Hidden",
+    "Collapsed",
+    "Expanded",
+};
+
+enum WorkbenchPresetDto {
+    "FocusWriting",
+    "ChapterWriting",
+    "AiWriting",
+    "ResearchWriting",
+    "Custom",
+};
+
+dictionary WorkbenchPanelStateDto {
+    WorkbenchPanelIdDto id;
+    DockZoneDto zone;
+    PanelVisibilityDto visibility;
+    float size_dp;
+    string tab_group_id;
+    u32 order;
+    float floating_x;
+    float floating_y;
+    float floating_width_dp;
+    float floating_height_dp;
+};
+
+dictionary TabGroupActiveDto {
+    string group_id;
+    WorkbenchPanelIdDto active_panel;
+};
+
+dictionary WorkbenchLayoutStateDto {
+    sequence<WorkbenchPanelStateDto> panels;
+    sequence<TabGroupActiveDto> active_tab_by_group;
+    WorkbenchPresetDto preset;
+};
+
+dictionary WorkbenchConstraintsDto {
+    float side_panel_min_dp;
+    float side_panel_max_dp;
+    float bottom_panel_min_dp;
+    float bottom_panel_max_ratio;
+    float editor_min_dp;
+    boolean allow_side_dock;
+    boolean allow_both_side_docks;
+    boolean allow_bottom_dock;
 };
 
 // ── Screen Policy DTOs ──

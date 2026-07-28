@@ -151,6 +151,269 @@ pub struct VisiblePaneRoles {
     pub show_supporting: bool,
 }
 
+// ========== 工作台面板系统 — Issue #568 ==========
+
+/// 工作台面板标识 — 每个可停靠面板的唯一 ID。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum WorkbenchPanelId {
+    ProjectNavigator,
+    ChapterNavigator,
+    AiAssistant,
+    Search,
+    Statistics,
+    StarMap,
+    DocumentOutline,
+    CharacterInfo,
+}
+
+/// 停靠区域 — 面板可停靠的位置。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum DockZone {
+    Left,
+    Right,
+    Bottom,
+    Floating,
+}
+
+/// 面板可见性 — Hidden=不渲染, Collapsed=仅图标, Expanded=完整内容。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PanelVisibility {
+    Hidden,
+    Collapsed,
+    Expanded,
+}
+
+/// 工作台预设 — 预定义的面板布局方案。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum WorkbenchPreset {
+    FocusWriting,
+    ChapterWriting,
+    AiWriting,
+    ResearchWriting,
+    Custom,
+}
+
+/// 工作台面板状态 — 单个面板的完整状态。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkbenchPanelState {
+    pub id: WorkbenchPanelId,
+    pub zone: DockZone,
+    pub visibility: PanelVisibility,
+    pub size_dp: f32,
+    pub tab_group_id: String,
+    pub order: u32,
+    pub floating_x: f32,
+    pub floating_y: f32,
+    pub floating_width_dp: f32,
+    pub floating_height_dp: f32,
+}
+
+/// 工作台布局状态 — 所有面板的状态 + 激活标签 + 当前预设。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkbenchLayoutState {
+    pub panels: Vec<WorkbenchPanelState>,
+    pub active_tab_by_group: Vec<(String, WorkbenchPanelId)>,
+    pub preset: WorkbenchPreset,
+}
+
+/// 工作台约束 — 由窗口度量决定的面板尺寸限制。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkbenchConstraints {
+    pub side_panel_min_dp: f32,
+    pub side_panel_max_dp: f32,
+    pub bottom_panel_min_dp: f32,
+    pub bottom_panel_max_ratio: f32,
+    pub editor_min_dp: f32,
+    pub allow_side_dock: bool,
+    pub allow_both_side_docks: bool,
+    pub allow_bottom_dock: bool,
+}
+
+const SIDE_PANEL_MIN_DP: f32 = 280.0;
+const SIDE_PANEL_MAX_DP: f32 = 520.0;
+const BOTTOM_PANEL_MIN_DP: f32 = 220.0;
+const BOTTOM_PANEL_MAX_RATIO: f32 = 0.55;
+const EDITOR_MIN_DP: f32 = 480.0;
+
+/// 根据窗口度量计算工作台约束。纯函数，无副作用。
+pub fn resolve_workbench_constraints(metrics: &WindowMetrics) -> WorkbenchConstraints {
+    let width_class = resolve_width_class(metrics.width_dp);
+    match width_class {
+        WidthClass::Compact | WidthClass::Medium => WorkbenchConstraints {
+            side_panel_min_dp: SIDE_PANEL_MIN_DP,
+            side_panel_max_dp: SIDE_PANEL_MAX_DP,
+            bottom_panel_min_dp: BOTTOM_PANEL_MIN_DP,
+            bottom_panel_max_ratio: BOTTOM_PANEL_MAX_RATIO,
+            editor_min_dp: EDITOR_MIN_DP,
+            allow_side_dock: false,
+            allow_both_side_docks: false,
+            allow_bottom_dock: false,
+        },
+        WidthClass::Expanded => WorkbenchConstraints {
+            side_panel_min_dp: SIDE_PANEL_MIN_DP,
+            side_panel_max_dp: SIDE_PANEL_MAX_DP,
+            bottom_panel_min_dp: BOTTOM_PANEL_MIN_DP,
+            bottom_panel_max_ratio: BOTTOM_PANEL_MAX_RATIO,
+            editor_min_dp: EDITOR_MIN_DP,
+            allow_side_dock: true,
+            allow_both_side_docks: false,
+            allow_bottom_dock: false,
+        },
+        WidthClass::Large | WidthClass::ExtraLarge => WorkbenchConstraints {
+            side_panel_min_dp: SIDE_PANEL_MIN_DP,
+            side_panel_max_dp: SIDE_PANEL_MAX_DP,
+            bottom_panel_min_dp: BOTTOM_PANEL_MIN_DP,
+            bottom_panel_max_ratio: BOTTOM_PANEL_MAX_RATIO,
+            editor_min_dp: EDITOR_MIN_DP,
+            allow_side_dock: true,
+            allow_both_side_docks: true,
+            allow_bottom_dock: true,
+        },
+    }
+}
+
+fn all_panel_ids() -> Vec<WorkbenchPanelId> {
+    vec![
+        WorkbenchPanelId::ProjectNavigator,
+        WorkbenchPanelId::ChapterNavigator,
+        WorkbenchPanelId::AiAssistant,
+        WorkbenchPanelId::Search,
+        WorkbenchPanelId::Statistics,
+        WorkbenchPanelId::StarMap,
+        WorkbenchPanelId::DocumentOutline,
+        WorkbenchPanelId::CharacterInfo,
+    ]
+}
+
+fn hidden_panel(id: WorkbenchPanelId, zone: DockZone, order: u32) -> WorkbenchPanelState {
+    WorkbenchPanelState {
+        id,
+        zone,
+        visibility: PanelVisibility::Hidden,
+        size_dp: 0.0,
+        tab_group_id: String::new(),
+        order,
+        floating_x: 0.0,
+        floating_y: 0.0,
+        floating_width_dp: 420.0,
+        floating_height_dp: 560.0,
+    }
+}
+
+/// 生成默认工作台布局。所有面板隐藏，预设为 FocusWriting。
+pub fn default_workbench_layout() -> WorkbenchLayoutState {
+    let panels: Vec<WorkbenchPanelState> = all_panel_ids()
+        .into_iter()
+        .enumerate()
+        .map(|(i, id)| hidden_panel(id, DockZone::Left, i as u32))
+        .collect();
+    WorkbenchLayoutState {
+        panels,
+        active_tab_by_group: Vec::new(),
+        preset: WorkbenchPreset::FocusWriting,
+    }
+}
+
+/// 根据预设生成工作台布局。
+pub fn preset_workbench_layout(preset: WorkbenchPreset) -> WorkbenchLayoutState {
+    match preset {
+        WorkbenchPreset::FocusWriting => {
+            let mut state = default_workbench_layout();
+            state.preset = WorkbenchPreset::FocusWriting;
+            state
+        }
+        WorkbenchPreset::ChapterWriting => {
+            let mut state = default_workbench_layout();
+            if let Some(p) = state.panels.iter_mut().find(|p| p.id == WorkbenchPanelId::ChapterNavigator) {
+                p.zone = DockZone::Left;
+                p.visibility = PanelVisibility::Expanded;
+                p.size_dp = 320.0;
+                p.tab_group_id = "left".to_string();
+                p.order = 0;
+            }
+            state.preset = WorkbenchPreset::ChapterWriting;
+            state
+        }
+        WorkbenchPreset::AiWriting => {
+            let mut state = default_workbench_layout();
+            if let Some(p) = state.panels.iter_mut().find(|p| p.id == WorkbenchPanelId::AiAssistant) {
+                p.zone = DockZone::Right;
+                p.visibility = PanelVisibility::Expanded;
+                p.size_dp = 400.0;
+                p.tab_group_id = "right".to_string();
+                p.order = 0;
+            }
+            state.preset = WorkbenchPreset::AiWriting;
+            state
+        }
+        WorkbenchPreset::ResearchWriting => {
+            let mut state = default_workbench_layout();
+            if let Some(p) = state.panels.iter_mut().find(|p| p.id == WorkbenchPanelId::ChapterNavigator) {
+                p.zone = DockZone::Left;
+                p.visibility = PanelVisibility::Expanded;
+                p.size_dp = 320.0;
+                p.tab_group_id = "left".to_string();
+                p.order = 0;
+            }
+            if let Some(p) = state.panels.iter_mut().find(|p| p.id == WorkbenchPanelId::Search) {
+                p.zone = DockZone::Right;
+                p.visibility = PanelVisibility::Expanded;
+                p.size_dp = 360.0;
+                p.tab_group_id = "right".to_string();
+                p.order = 0;
+            }
+            state.preset = WorkbenchPreset::ResearchWriting;
+            state
+        }
+        WorkbenchPreset::Custom => default_workbench_layout(),
+    }
+}
+
+/// 验证工作台布局是否满足约束。返回违反约束的面板 ID 列表（空=合法）。
+pub fn validate_workbench_layout(
+    state: &WorkbenchLayoutState,
+    constraints: &WorkbenchConstraints,
+) -> Vec<WorkbenchPanelId> {
+    let mut violations = Vec::new();
+    for panel in &state.panels {
+        if panel.visibility != PanelVisibility::Expanded {
+            continue;
+        }
+        match panel.zone {
+            DockZone::Left | DockZone::Right => {
+                if panel.size_dp < constraints.side_panel_min_dp
+                    || panel.size_dp > constraints.side_panel_max_dp
+                {
+                    violations.push(panel.id);
+                }
+                if !constraints.allow_side_dock {
+                    violations.push(panel.id);
+                }
+                if !constraints.allow_both_side_docks {
+                    let same_side_expanded = state.panels.iter().any(|p| {
+                        p.id != panel.id
+                            && p.zone == panel.zone
+                            && p.visibility == PanelVisibility::Expanded
+                    });
+                    if same_side_expanded {
+                        violations.push(panel.id);
+                    }
+                }
+            }
+            DockZone::Bottom => {
+                if panel.size_dp < constraints.bottom_panel_min_dp {
+                    violations.push(panel.id);
+                }
+                if !constraints.allow_bottom_dock {
+                    violations.push(panel.id);
+                }
+            }
+            DockZone::Floating => {}
+        }
+    }
+    violations
+}
+
 // ========== 输入结构体 ==========
 
 /// 窗口度量 — 平台端测量后传入。所有尺寸单位为 dp（密度无关像素）。
@@ -552,5 +815,112 @@ mod tests {
         let m = WindowMetrics::default();
         assert_eq!(m.width_dp, 360.0);
         assert_eq!(m.fold_feature.state, FoldState::None);
+    }
+
+    // ── Workbench tests ──
+
+    #[test]
+    fn test_workbench_constraints_compact() {
+        let m = default_metrics();
+        let c = resolve_workbench_constraints(&m);
+        assert!(!c.allow_side_dock);
+        assert!(!c.allow_both_side_docks);
+        assert!(!c.allow_bottom_dock);
+    }
+
+    #[test]
+    fn test_workbench_constraints_expanded() {
+        let mut m = default_metrics(); m.width_dp = 1000.0;
+        let c = resolve_workbench_constraints(&m);
+        assert!(c.allow_side_dock);
+        assert!(!c.allow_both_side_docks);
+    }
+
+    #[test]
+    fn test_workbench_constraints_large() {
+        let mut m = default_metrics(); m.width_dp = 1400.0;
+        let c = resolve_workbench_constraints(&m);
+        assert!(c.allow_side_dock);
+        assert!(c.allow_both_side_docks);
+        assert!(c.allow_bottom_dock);
+    }
+
+    #[test]
+    fn test_default_workbench_layout_all_hidden() {
+        let state = default_workbench_layout();
+        assert_eq!(state.preset, WorkbenchPreset::FocusWriting);
+        assert_eq!(state.panels.len(), 8);
+        for panel in &state.panels {
+            assert_eq!(panel.visibility, PanelVisibility::Hidden);
+        }
+    }
+
+    #[test]
+    fn test_preset_chapter_writing() {
+        let state = preset_workbench_layout(WorkbenchPreset::ChapterWriting);
+        assert_eq!(state.preset, WorkbenchPreset::ChapterWriting);
+        let chapter = state.panels.iter().find(|p| p.id == WorkbenchPanelId::ChapterNavigator).unwrap();
+        assert_eq!(chapter.visibility, PanelVisibility::Expanded);
+        assert_eq!(chapter.zone, DockZone::Left);
+        assert!((chapter.size_dp - 320.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_preset_ai_writing() {
+        let state = preset_workbench_layout(WorkbenchPreset::AiWriting);
+        assert_eq!(state.preset, WorkbenchPreset::AiWriting);
+        let ai = state.panels.iter().find(|p| p.id == WorkbenchPanelId::AiAssistant).unwrap();
+        assert_eq!(ai.visibility, PanelVisibility::Expanded);
+        assert_eq!(ai.zone, DockZone::Right);
+        assert!((ai.size_dp - 400.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_preset_research_writing() {
+        let state = preset_workbench_layout(WorkbenchPreset::ResearchWriting);
+        assert_eq!(state.preset, WorkbenchPreset::ResearchWriting);
+        let chapter = state.panels.iter().find(|p| p.id == WorkbenchPanelId::ChapterNavigator).unwrap();
+        assert_eq!(chapter.visibility, PanelVisibility::Expanded);
+        assert_eq!(chapter.zone, DockZone::Left);
+        let search = state.panels.iter().find(|p| p.id == WorkbenchPanelId::Search).unwrap();
+        assert_eq!(search.visibility, PanelVisibility::Expanded);
+        assert_eq!(search.zone, DockZone::Right);
+    }
+
+    #[test]
+    fn test_validate_layout_valid() {
+        let state = preset_workbench_layout(WorkbenchPreset::ChapterWriting);
+        let mut m = default_metrics(); m.width_dp = 1000.0;
+        let constraints = resolve_workbench_constraints(&m);
+        let violations = validate_workbench_layout(&state, &constraints);
+        assert!(violations.is_empty());
+    }
+
+    #[test]
+    fn test_validate_layout_side_dock_not_allowed() {
+        let state = preset_workbench_layout(WorkbenchPreset::ChapterWriting);
+        let m = default_metrics();
+        let constraints = resolve_workbench_constraints(&m);
+        let violations = validate_workbench_layout(&state, &constraints);
+        assert!(!violations.is_empty());
+    }
+
+    #[test]
+    fn test_validate_layout_size_out_of_range() {
+        let mut state = default_workbench_layout();
+        if let Some(p) = state.panels.iter_mut().find(|p| p.id == WorkbenchPanelId::ChapterNavigator) {
+            p.zone = DockZone::Left;
+            p.visibility = PanelVisibility::Expanded;
+            p.size_dp = 100.0;
+        }
+        let mut m = default_metrics(); m.width_dp = 1400.0;
+        let constraints = resolve_workbench_constraints(&m);
+        let violations = validate_workbench_layout(&state, &constraints);
+        assert!(violations.contains(&WorkbenchPanelId::ChapterNavigator));
+    }
+
+    #[test]
+    fn test_workbench_panel_id_count() {
+        assert_eq!(all_panel_ids().len(), 8);
     }
 }

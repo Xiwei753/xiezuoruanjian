@@ -233,6 +233,40 @@ impl WriterAppService {
             action_slots: action_slots.into_iter().map(Into::into).collect(),
         }
     }
+
+    // ── Workbench (Issue #568) ──
+
+    pub fn resolve_workbench_constraints(
+        &self,
+        metrics: crate::api::WindowMetricsDto,
+    ) -> crate::api::WorkbenchConstraintsDto {
+        let core_metrics: crate::layout_policy::WindowMetrics = metrics.into();
+        let constraints = crate::layout_policy::resolve_workbench_constraints(&core_metrics);
+        constraints.into()
+    }
+
+    pub fn default_workbench_layout(&self) -> crate::api::WorkbenchLayoutStateDto {
+        crate::layout_policy::default_workbench_layout().into()
+    }
+
+    pub fn preset_workbench_layout(
+        &self,
+        preset: crate::api::WorkbenchPresetDto,
+    ) -> crate::api::WorkbenchLayoutStateDto {
+        let core_preset: crate::layout_policy::WorkbenchPreset = preset.into();
+        crate::layout_policy::preset_workbench_layout(core_preset).into()
+    }
+
+    pub fn validate_workbench_layout(
+        &self,
+        state: crate::api::WorkbenchLayoutStateDto,
+        constraints: crate::api::WorkbenchConstraintsDto,
+    ) -> Vec<crate::api::WorkbenchPanelIdDto> {
+        let core_state: crate::layout_policy::WorkbenchLayoutState = state.into();
+        let core_constraints: crate::layout_policy::WorkbenchConstraints = constraints.into();
+        let violations = crate::layout_policy::validate_workbench_layout(&core_state, &core_constraints);
+        violations.into_iter().map(Into::into).collect()
+    }
 }
 
 #[cfg(test)]
