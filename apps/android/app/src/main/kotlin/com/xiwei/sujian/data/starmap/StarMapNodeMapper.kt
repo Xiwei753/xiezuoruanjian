@@ -20,6 +20,11 @@ internal fun StarMapNodeDto.toGraphNode(): StarMapGraphNode = StarMapGraphNode(
     payload = payload.toPayloadMap(),
     tags = tags,
     contentKind = content?.kind,
+    contentBody = content?.body,
+    contentSummary = content?.summary,
+    contentChapterId = content?.chapterId,
+    contentEntityId = content?.entityId,
+    contentUri = content?.uri,
     anchors = anchors.map { StarMapAnchorData(
         anchorId = it.anchorId,
         targetKind = it.target.kind,
@@ -30,6 +35,13 @@ internal fun StarMapNodeDto.toGraphNode(): StarMapGraphNode = StarMapGraphNode(
         label = it.label,
         role = it.role.name
     ) },
+    portal = portal?.let { StarMapPortalData(
+        targetStarmapId = it.targetStarmapId,
+        deepTarget = it.deepTarget?.toModel(),
+        mode = it.mode.name,
+        previewPolicy = it.previewPolicy.name
+    ) },
+    openBehavior = openBehavior?.name,
     displayPolicy = StarMapDisplayPolicyData(
         importance = displayPolicy.importance,
         minVisibleScale = displayPolicy.minVisibleScale,
@@ -41,7 +53,11 @@ internal fun StarMapNodeDto.toGraphNode(): StarMapGraphNode = StarMapGraphNode(
     ),
     provenance = com.xiwei.sujian.model.StarMapProvenanceData(
         source = provenance.source.name,
-        reviewStatus = provenance.reviewStatus.name
+        sourceId = provenance.sourceId,
+        generatedBy = provenance.generatedBy,
+        promptId = provenance.promptId,
+        reviewStatus = provenance.reviewStatus.name,
+        createdFromAnchor = provenance.createdFromAnchor
     ),
     createdAt = createdAt.toLong(),
     updatedAt = updatedAt.toLong()

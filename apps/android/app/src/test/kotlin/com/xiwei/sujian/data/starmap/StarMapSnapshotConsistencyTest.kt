@@ -42,7 +42,8 @@ class StarMapSnapshotConsistencyTest {
                     radius = 30.0f, collapsed = true, zIndex = 1, scale = 0.8f, depth = 1.0f, focusWeight = 0.5f, orbitGroup = "group1")
             )),
             viewport = StarMapViewportDto(scale = 1.5f, offsetX = 10f, offsetY = 20f, width = 800f, height = 600f),
-            diagnostics = emptyList()
+            diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
 
         val rawCache = dto.toRawCache()
@@ -88,7 +89,8 @@ class StarMapSnapshotConsistencyTest {
                 StarMapLayoutNodeDto(nodeId = "n2", x = 200f, y = 0f, width = 100f, height = 50f,
                     radius = 25f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
             )),
-            viewport = null, diagnostics = emptyList()
+            viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
 
         val rawCache = dto.toRawCache()
@@ -110,7 +112,8 @@ class StarMapSnapshotConsistencyTest {
                     radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
             )),
             viewport = StarMapViewportDto(2f, 10f, 20f, 800f, 600f),
-            diagnostics = emptyList()
+            diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
 
         val result = dto.toSnapshotResult()
@@ -193,7 +196,8 @@ class StarMapSnapshotConsistencyTest {
                 targetStarmapId = "tgt",
                 createdAt = 0u, updatedAt = 0u
             )),
-            layout = null, viewport = null, diagnostics = emptyList()
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
 
         val result = dto.toSnapshotResult()
@@ -254,7 +258,8 @@ class StarMapSnapshotConsistencyTest {
                     radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
             )),
             viewport = StarMapViewportDto(1f, 0f, 0f, 800f, 600f),
-            diagnostics = emptyList()
+            diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         val fromDto = dto.toSnapshotResult()
         val fromCache = dto.toRawCache().toSnapshotResult()

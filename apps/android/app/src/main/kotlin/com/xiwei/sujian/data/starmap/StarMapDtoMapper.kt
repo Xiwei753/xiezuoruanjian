@@ -163,7 +163,9 @@ internal fun StarMapEmbedDto.toModel(): StarMapEmbedData = StarMapEmbedData(
         source = provenance.source.name,
         sourceId = provenance.sourceId,
         generatedBy = provenance.generatedBy,
-        reviewStatus = provenance.reviewStatus.name
+        promptId = provenance.promptId,
+        reviewStatus = provenance.reviewStatus.name,
+        createdFromAnchor = provenance.createdFromAnchor
     ),
     placement = StarMapEmbedPlacementData(
         x = placement.x,

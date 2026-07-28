@@ -40,6 +40,11 @@ pub struct StarMapPhasedSnapshot {
     pub embeds: Vec<StarMapEmbed>,
     pub links: Vec<StarMapLink>,
     pub hyperlinks: Vec<StarMapHyperlink>,
+    pub deleted_node_ids: Vec<String>,
+    pub deleted_edge_ids: Vec<String>,
+    pub deleted_embed_ids: Vec<String>,
+    pub deleted_link_ids: Vec<String>,
+    pub deleted_hyperlink_ids: Vec<String>,
     pub layout: Option<StarMapLayout>,
     pub viewport: Option<StarMapViewport>,
     pub diagnostics: Vec<LoadDiagnostic>,
@@ -75,7 +80,11 @@ impl StarMapStore {
         let complete = request.target_phase == LoadPhase::BackgroundFullLoad;
         let since_rev = request.since_revision;
 
-        let (nodes, edges, embeds, links, hyperlinks) = if since_rev > 0 && since_rev == self.package_revision {
+        let skip_unchanged = complete
+            && since_rev > 0
+            && since_rev == self.package_revision;
+
+        let (nodes, edges, embeds, links, hyperlinks) = if skip_unchanged {
             (vec![], vec![], vec![], vec![], vec![])
         } else {
             (
@@ -86,6 +95,12 @@ impl StarMapStore {
                 self.hyperlinks.values().cloned().collect(),
             )
         };
+
+        let deleted_node_ids: Vec<String> = self.deleted_node_ids.iter().cloned().collect();
+        let deleted_edge_ids: Vec<String> = self.deleted_edge_ids.iter().cloned().collect();
+        let deleted_embed_ids: Vec<String> = self.deleted_embed_ids.iter().cloned().collect();
+        let deleted_link_ids: Vec<String> = self.deleted_link_ids.iter().cloned().collect();
+        let deleted_hyperlink_ids: Vec<String> = self.deleted_hyperlink_ids.iter().cloned().collect();
 
         Ok(StarMapPhasedSnapshot {
             starmap_id: self.starmap_id.clone(),
@@ -99,6 +114,11 @@ impl StarMapStore {
             embeds,
             links,
             hyperlinks,
+            deleted_node_ids,
+            deleted_edge_ids,
+            deleted_embed_ids,
+            deleted_link_ids,
+            deleted_hyperlink_ids,
             layout: self.layout.clone(),
             viewport: self.viewport.clone(),
             diagnostics: self.recovery_log.clone(),

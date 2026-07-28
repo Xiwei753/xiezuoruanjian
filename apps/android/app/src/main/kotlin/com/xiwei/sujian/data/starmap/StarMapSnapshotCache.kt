@@ -27,9 +27,15 @@ internal data class StarMapRawCache(
     var layoutKind: StarMapLayoutKindDto = StarMapLayoutKindDto.FREEFORM,
     var loadPhase: String = "CurrentViewportObjects",
     var packageRevision: ULong = 0u,
+    var sinceRevision: ULong = 0u,
     var complete: Boolean = false,
     var viewport: StarMapViewportDto? = null,
-    var diagnostics: List<com.xiwei.sujian.model.StarMapLoadDiagnostic> = emptyList()
+    var diagnostics: List<com.xiwei.sujian.model.StarMapLoadDiagnostic> = emptyList(),
+    val deletedNodeIds: MutableSet<String> = mutableSetOf(),
+    val deletedEdgeIds: MutableSet<String> = mutableSetOf(),
+    val deletedEmbedIds: MutableSet<String> = mutableSetOf(),
+    val deletedLinkIds: MutableSet<String> = mutableSetOf(),
+    val deletedHyperlinkIds: MutableSet<String> = mutableSetOf()
 )
 
 internal fun StarMapRawCache.toSnapshotResult(): StarMapPhasedSnapshotResult {
@@ -64,7 +70,7 @@ internal fun StarMapRawCache.toSnapshotResult(): StarMapPhasedSnapshotResult {
         hyperlinks = hyperlinks.values.map { it.toModel() },
         loadPhase = loadPhase,
         packageRevision = packageRevision,
-        sinceRevision = packageRevision,
+        sinceRevision = sinceRevision,
         complete = complete
     )
     return StarMapPhasedSnapshotResult(
@@ -150,6 +156,26 @@ internal class StarMapSnapshotCache {
         }
         if (incoming.diagnostics.isNotEmpty()) {
             existing.diagnostics = incoming.diagnostics
+        }
+        for (deletedId in incoming.deletedNodeIds) {
+            existing.nodes.remove(deletedId)
+            existing.deletedNodeIds.add(deletedId)
+        }
+        for (deletedId in incoming.deletedEdgeIds) {
+            existing.edges.remove(deletedId)
+            existing.deletedEdgeIds.add(deletedId)
+        }
+        for (deletedId in incoming.deletedEmbedIds) {
+            existing.embeds.remove(deletedId)
+            existing.deletedEmbedIds.add(deletedId)
+        }
+        for (deletedId in incoming.deletedLinkIds) {
+            existing.links.remove(deletedId)
+            existing.deletedLinkIds.add(deletedId)
+        }
+        for (deletedId in incoming.deletedHyperlinkIds) {
+            existing.hyperlinks.remove(deletedId)
+            existing.deletedHyperlinkIds.add(deletedId)
         }
     }
 

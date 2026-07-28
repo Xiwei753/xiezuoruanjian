@@ -127,11 +127,25 @@ data class StarMapGraphNode(
     val payload: Map<String, Any>? = null,
     val tags: List<String> = emptyList(),
     val contentKind: String? = null,
+    val contentBody: String? = null,
+    val contentSummary: String? = null,
+    val contentChapterId: String? = null,
+    val contentEntityId: String? = null,
+    val contentUri: String? = null,
     val anchors: List<StarMapAnchorData> = emptyList(),
+    val portal: StarMapPortalData? = null,
+    val openBehavior: String? = null,
     val displayPolicy: StarMapDisplayPolicyData? = null,
     val provenance: StarMapProvenanceData? = null,
     val createdAt: Long = 0,
     val updatedAt: Long = 0
+)
+
+data class StarMapPortalData(
+    val targetStarmapId: String = "",
+    val deepTarget: StarMapDeepTargetData? = null,
+    val mode: String = "Navigate",
+    val previewPolicy: String = "Inline"
 )
 
 data class StarMapAnchorData(
@@ -159,7 +173,9 @@ data class StarMapProvenanceData(
     val source: String = "Human",
     val sourceId: String? = null,
     val generatedBy: String? = null,
-    val reviewStatus: String = "Accepted"
+    val promptId: String? = null,
+    val reviewStatus: String = "Accepted",
+    val createdFromAnchor: String? = null
 )
 
 data class StarMapEdgeEndpointData(
@@ -217,6 +233,8 @@ data class StarMapGraphEdge(
     val kind: StarMapEdgeKind,
     val label: String? = null,
     val payload: Map<String, Any>? = null,
+    val fromTarget: StarMapDeepTargetData? = null,
+    val toTarget: StarMapDeepTargetData? = null,
     val fromEndpoint: StarMapEdgeEndpointData? = null,
     val toEndpoint: StarMapEdgeEndpointData? = null,
     val fromEndpointPath: StarMapEndpointPathData? = null,

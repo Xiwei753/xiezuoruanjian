@@ -185,4 +185,88 @@ class StarMapSemanticMapperTest {
         assertEquals("ch_ref", model.anchors[0].label)
         assertEquals("SOURCE", model.anchors[0].role)
     }
+
+    @Test
+    fun edgeDto_toGraphEdge_preservesFromTargetAndToTarget() {
+        val deepTarget = StarMapDeepTargetDto(
+            starmapId = "other",
+            path = emptyList(),
+            target = StarMapTargetDetailDto(kind = "Starmap", nodeId = null, anchorId = null,
+                projectId = null, volumeId = null, chapterId = null, rangeStart = null, rangeEnd = null,
+                entityType = null, entityId = null, uri = null)
+        )
+        val dto = StarMapEdgeDto(
+            id = "e1", from = "n1", to = "n2", kind = StarMapEdgeKindDto.REFERENCES,
+            label = "ref", payload = null,
+            fromTarget = deepTarget, toTarget = deepTarget,
+            fromEndpoint = null, toEndpoint = null,
+            fromEndpointPath = null, toEndpointPath = null,
+            createdAt = 0u, updatedAt = 0u
+        )
+        val model = dto.toGraphEdge()
+        assertNotNull("fromTarget must be mapped", model.fromTarget)
+        assertEquals("other", model.fromTarget!!.starmapId)
+        assertNotNull("toTarget must be mapped", model.toTarget)
+        assertEquals("other", model.toTarget!!.starmapId)
+    }
+
+    @Test
+    fun nodeDto_toGraphNode_preservesContentDetails() {
+        val dto = StarMapNodeDto(
+            id = "n1", title = "Chapter", kind = StarMapNodeKindDto.CHAPTER,
+            payload = null, tags = emptyList(),
+            content = StarMapNodeContentDto("chapter", "body text", "summary text", "proj1", "vol1", "ch1", 0u, 100u, null, null, null, null),
+            anchors = emptyList(),
+            portal = null,
+            displayPolicy = defaultStarMapDisplayPolicy(),
+            openBehavior = StarMapOpenBehaviorDto.EDITOR,
+            provenance = StarMapProvenanceDto(StarMapSourceKindDto.AI, "src1", "gen1", "prompt1", StarMapReviewStatusDto.PENDING, "anchor1"),
+            createdAt = 0u, updatedAt = 0u
+        )
+        val model = dto.toGraphNode()
+        assertEquals("chapter", model.contentKind)
+        assertEquals("body text", model.contentBody)
+        assertEquals("summary text", model.contentSummary)
+        assertEquals("ch1", model.contentChapterId)
+        assertEquals("EDITOR", model.openBehavior)
+        assertNotNull(model.provenance)
+        assertEquals("AI", model.provenance!!.source)
+        assertEquals("src1", model.provenance!!.sourceId)
+        assertEquals("gen1", model.provenance!!.generatedBy)
+        assertEquals("prompt1", model.provenance!!.promptId)
+        assertEquals("PENDING", model.provenance!!.reviewStatus)
+        assertEquals("anchor1", model.provenance!!.createdFromAnchor)
+    }
+
+    @Test
+    fun nodeDto_toGraphNode_preservesPortal() {
+        val dto = StarMapNodeDto(
+            id = "n1", title = "Portal", kind = StarMapNodeKindDto.CHARACTER,
+            payload = null, tags = emptyList(),
+            content = StarMapNodeContentDto("empty", null, null, null, null, null, null, null, null, null, null, null),
+            anchors = emptyList(),
+            portal = StarMapPortalDto(
+                targetStarmapId = "child_sm",
+                deepTarget = StarMapDeepTargetDto(
+                    starmapId = "child_sm", path = emptyList(),
+                    target = StarMapTargetDetailDto(kind = "Node", nodeId = "inner1", anchorId = null,
+                        projectId = null, volumeId = null, chapterId = null, rangeStart = null, rangeEnd = null,
+                        entityType = null, entityId = null, uri = null)
+                ),
+                mode = StarMapPortalModeDto.NAVIGATE,
+                previewPolicy = StarMapPortalPreviewPolicyDto.INLINE
+            ),
+            displayPolicy = defaultStarMapDisplayPolicy(),
+            openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
+            provenance = StarMapProvenanceDto(StarMapSourceKindDto.HUMAN, null, null, null, StarMapReviewStatusDto.ACCEPTED, null),
+            createdAt = 0u, updatedAt = 0u
+        )
+        val model = dto.toGraphNode()
+        assertNotNull("portal must be mapped", model.portal)
+        assertEquals("child_sm", model.portal!!.targetStarmapId)
+        assertNotNull(model.portal!!.deepTarget)
+        assertEquals("inner1", model.portal!!.deepTarget!!.target.nodeId)
+        assertEquals("NAVIGATE", model.portal!!.mode)
+        assertEquals("INLINE", model.portal!!.previewPolicy)
+    }
 }

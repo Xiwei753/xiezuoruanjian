@@ -697,6 +697,11 @@ dictionary StarMapPhasedSnapshotDto {
     sequence<StarMapEmbedDto> embeds;
     sequence<StarMapLinkDto> links;
     sequence<StarMapHyperlinkDto> hyperlinks;
+    sequence<string> deleted_node_ids;
+    sequence<string> deleted_edge_ids;
+    sequence<string> deleted_embed_ids;
+    sequence<string> deleted_link_ids;
+    sequence<string> deleted_hyperlink_ids;
     StarMapLayoutDto? layout;
     StarMapViewportDto? viewport;
     sequence<LoadDiagnosticDto> diagnostics;

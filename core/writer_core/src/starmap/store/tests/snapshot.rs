@@ -598,3 +598,62 @@ fn phased_snapshot_flush_close_failure_preserves_cache() {
     assert!(snap2.layout.is_some(), "layout must still be present even with empty objects");
     assert!(snap2.viewport.is_some(), "viewport must still be present even with empty objects");
 }
+
+#[test]
+fn phased_snapshot_progressive_returns_objects_despite_same_revision() {
+    let (dir, sid) = setup_workspace();
+    let mut store = StarMapStore::new(dir.path(), &sid);
+    store.upsert_node(make_test_node("n1", "InView"));
+    store.upsert_node(make_test_node("n2", "Nearby"));
+    store.upsert_edge(make_test_edge("e1", "n1", "n2"));
+    store.set_layout(StarMapLayout {
+        kind: StarMapLayoutKind::Freeform,
+        nodes: vec![
+            StarMapLayoutNode {
+                node_id: "n1".to_string(),
+                x: 0.0, y: 0.0, width: 100.0, height: 50.0,
+                radius: 25.0, collapsed: false, z_index: 0,
+                scale: 1.0, depth: 0.0, focus_weight: 1.0, orbit_group: None,
+            },
+            StarMapLayoutNode {
+                node_id: "n2".to_string(),
+                x: 200.0, y: 200.0, width: 100.0, height: 50.0,
+                radius: 25.0, collapsed: false, z_index: 0,
+                scale: 1.0, depth: 0.0, focus_weight: 1.0, orbit_group: None,
+            },
+        ],
+    });
+    store.set_viewport(StarMapViewport { scale: 1.0, offset_x: 0.0, offset_y: 0.0, width: 800.0, height: 600.0 });
+    flush_store(&mut store);
+    let rev = store.package_revision();
+
+    let mut store2 = StarMapStore::new(dir.path(), &sid);
+    let req1 = PhasedSnapshotRequest { target_phase: LoadPhase::CurrentViewportObjects, since_revision: rev };
+    let snap1 = store2.get_phased_snapshot(&req1).unwrap();
+    assert!(!snap1.nodes.is_empty(), "progressive phase must return objects even when since_revision == package_revision");
+
+    let req2 = PhasedSnapshotRequest { target_phase: LoadPhase::PrefetchNearbyObjects, since_revision: rev };
+    let snap2 = store2.get_phased_snapshot(&req2).unwrap();
+    assert!(!snap2.nodes.is_empty(), "prefetch phase must return objects even when since_revision == package_revision");
+    assert!(snap2.nodes.len() >= snap1.nodes.len(), "prefetch should load at least as many as viewport");
+}
+
+#[test]
+fn phased_snapshot_includes_deleted_ids() {
+    let (dir, sid) = setup_workspace();
+    let mut store = StarMapStore::new(dir.path(), &sid);
+    store.upsert_node(make_test_node("n1", "A"));
+    store.upsert_node(make_test_node("n2", "B"));
+    store.upsert_edge(make_test_edge("e1", "n1", "n2"));
+    flush_store(&mut store);
+
+    store.remove_node("n2");
+    store.remove_edge("e1");
+    flush_store(&mut store);
+
+    let request = PhasedSnapshotRequest { target_phase: LoadPhase::BackgroundFullLoad, since_revision: 0 };
+    let snap = store.get_phased_snapshot(&request).unwrap();
+    assert_eq!(snap.nodes.len(), 1);
+    assert!(snap.deleted_node_ids.contains(&"n2".to_string()), "deleted node IDs must appear in snapshot");
+    assert!(snap.deleted_edge_ids.contains(&"e1".to_string()), "deleted edge IDs must appear in snapshot");
+}

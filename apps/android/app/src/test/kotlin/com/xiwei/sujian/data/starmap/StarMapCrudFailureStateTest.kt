@@ -28,7 +28,8 @@ class StarMapCrudFailureStateTest {
             packageRevision = 1u, complete = true, sinceRevision = 0u,
             nodes = listOf(makeNodeDto("n1", "A")),
             edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList()
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         cache.put("sm1", dto.toRawCache())
 
@@ -59,7 +60,8 @@ class StarMapCrudFailureStateTest {
             packageRevision = 1u, complete = true, sinceRevision = 0u,
             nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B")),
             edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList()
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         cache.put("sm1", dto.toRawCache())
 
@@ -88,7 +90,8 @@ class StarMapCrudFailureStateTest {
             packageRevision = 1u, complete = true, sinceRevision = 0u,
             nodes = listOf(makeNodeDto("n1", "OriginalTitle")),
             edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList()
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         cache.put("sm1", dto.toRawCache())
 
@@ -115,7 +118,8 @@ class StarMapCrudFailureStateTest {
             packageRevision = 1u, complete = true, sinceRevision = 0u,
             nodes = listOf(makeNodeDto("n1", "A")),
             edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList()
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         cache.put("sm1", dto.toRawCache())
 
@@ -212,7 +216,8 @@ class StarMapCrudFailureStateTest {
             packageRevision = 1u, complete = true, sinceRevision = 0u,
             nodes = listOf(makeNodeDto("n1", "A")),
             edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList()
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         cache.put("sm1", dto.toRawCache())
         assertEquals(0, cache.get("sm1")!!.embeds.size)
@@ -248,7 +253,8 @@ class StarMapCrudFailureStateTest {
                 createdAt = 0u, updatedAt = 0u
             )),
             hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList()
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         cache.put("sm1", dto.toRawCache())
         assertTrue(cache.get("sm1")!!.links.containsKey("lk1"))
@@ -277,7 +283,8 @@ class StarMapCrudFailureStateTest {
                 targetUri = "https://example.com", label = null, targetStarmapId = null,
                 createdAt = 0u, updatedAt = 0u
             )),
-            layout = null, viewport = null, diagnostics = emptyList()
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         cache.put("sm1", dto.toRawCache())
         assertTrue(cache.get("sm1")!!.hyperlinks.containsKey("hl1"))

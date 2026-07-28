@@ -39,9 +39,15 @@ internal fun StarMapPhasedSnapshotDto.toRawCache(): StarMapRawCache = StarMapRaw
     layoutKind = layout?.kind ?: uniffi.writer_core.StarMapLayoutKindDto.FREEFORM,
     loadPhase = loadPhase,
     packageRevision = packageRevision,
+    sinceRevision = sinceRevision,
     complete = complete,
     viewport = viewport,
-    diagnostics = diagnostics.map { it.toModel() }
+    diagnostics = diagnostics.map { it.toModel() },
+    deletedNodeIds = deletedNodeIds.toMutableSet(),
+    deletedEdgeIds = deletedEdgeIds.toMutableSet(),
+    deletedEmbedIds = deletedEmbedIds.toMutableSet(),
+    deletedLinkIds = deletedLinkIds.toMutableSet(),
+    deletedHyperlinkIds = deletedHyperlinkIds.toMutableSet()
 )
 
 internal fun StarMapPhasedSnapshotDto.toSnapshotResult(): StarMapPhasedSnapshotResult {

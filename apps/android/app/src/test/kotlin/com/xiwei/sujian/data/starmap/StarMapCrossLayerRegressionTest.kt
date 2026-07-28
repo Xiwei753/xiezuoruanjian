@@ -42,7 +42,8 @@ class StarMapCrossLayerRegressionTest {
                     radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
             )),
             viewport = StarMapViewportDto(1f, 0f, 0f, 800f, 600f),
-            diagnostics = emptyList()
+            diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         val rawCache1 = dto1.toRawCache()
         assertNotNull("toRawCache must produce graph for computeEdgeRenders", rawCache1.graph)
@@ -60,7 +61,8 @@ class StarMapCrossLayerRegressionTest {
                 StarMapLayoutNodeDto(nodeId = "n2", x = 200f, y = 60f, width = 100f, height = 80f,
                     radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
             )),
-            viewport = null, diagnostics = emptyList()
+            viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         cache.mergeIncremental("sm1", dto2.toRawCache())
 
@@ -78,7 +80,8 @@ class StarMapCrossLayerRegressionTest {
                 StarMapLayoutNodeDto(nodeId = "n3", x = 350f, y = 60f, width = 100f, height = 80f,
                     radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
             )),
-            viewport = null, diagnostics = emptyList()
+            viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         cache.mergeIncremental("sm1", dto3.toRawCache())
 
@@ -105,7 +108,8 @@ class StarMapCrossLayerRegressionTest {
                     radius = 30f, collapsed = true, zIndex = 1, scale = 0.8f, depth = 1f, focusWeight = 0.5f, orbitGroup = "g1")
             )),
             viewport = StarMapViewportDto(1.5f, 10f, 20f, 800f, 600f),
-            diagnostics = emptyList()
+            diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
 
         val rawCache = dto.toRawCache()
@@ -147,7 +151,8 @@ class StarMapCrossLayerRegressionTest {
                 StarMapLayoutNodeDto(nodeId = "n2", x = 200f, y = 60f, width = 100f, height = 80f,
                     radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
             )),
-            viewport = null, diagnostics = emptyList()
+            viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         cache.put("sm1", dto1.toRawCache())
         assertEquals(2, cache.get("sm1")!!.nodes.size)
@@ -158,7 +163,8 @@ class StarMapCrossLayerRegressionTest {
             packageRevision = 1u, complete = true, sinceRevision = 1u,
             nodes = emptyList(), edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
             layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, emptyList()),
-            viewport = null, diagnostics = emptyList()
+            viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         cache.mergeIncremental("sm1", dto2.toRawCache())
 
@@ -180,7 +186,8 @@ class StarMapCrossLayerRegressionTest {
                 StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
                     radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
             )),
-            viewport = null, diagnostics = emptyList()
+            viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         cache.put("sm1", dto1.toRawCache())
 
@@ -196,7 +203,8 @@ class StarMapCrossLayerRegressionTest {
                 StarMapLayoutNodeDto(nodeId = "n2", x = 200f, y = 60f, width = 100f, height = 80f,
                     radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
             )),
-            viewport = null, diagnostics = emptyList()
+            viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         cache.mergeIncremental("sm1", dto2.toRawCache())
 
@@ -281,7 +289,8 @@ class StarMapCrossLayerRegressionTest {
                 targetStarmapId = "tgt",
                 createdAt = 0u, updatedAt = 0u
             )),
-            layout = null, viewport = null, diagnostics = emptyList()
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
 
         val result = dto.toSnapshotResult()
@@ -465,7 +474,8 @@ class StarMapCrossLayerRegressionTest {
             packageRevision = 1u, complete = false, sinceRevision = 0u,
             nodes = listOf(makeNodeDto("n1", "InView")),
             edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList()
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         val result1 = dto1.toSnapshotResult()
         assertEquals("CurrentViewportObjects", result1.data.loadPhase)
@@ -477,7 +487,8 @@ class StarMapCrossLayerRegressionTest {
             packageRevision = 1u, complete = false, sinceRevision = 0u,
             nodes = listOf(makeNodeDto("n1", "InView"), makeNodeDto("n2", "Nearby")),
             edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList()
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         val result2 = dto2.toSnapshotResult()
         assertTrue(result2.data.graph.nodes.size >= count1)
@@ -487,7 +498,8 @@ class StarMapCrossLayerRegressionTest {
             packageRevision = 1u, complete = true, sinceRevision = 0u,
             nodes = listOf(makeNodeDto("n1", "InView"), makeNodeDto("n2", "Nearby"), makeNodeDto("n3", "Far")),
             edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList()
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         val result3 = dto3.toSnapshotResult()
         assertTrue(result3.data.complete)
@@ -503,7 +515,8 @@ class StarMapCrossLayerRegressionTest {
             links = emptyList(), hyperlinks = emptyList(),
             layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, emptyList()),
             viewport = StarMapViewportDto(1f, 0f, 0f, 800f, 600f),
-            diagnostics = emptyList()
+            diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         val result = dto.toSnapshotResult()
         assertEquals(5uL, result.data.packageRevision)
@@ -520,7 +533,8 @@ class StarMapCrossLayerRegressionTest {
             nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B")),
             edges = listOf(makeEdgeDto("e1", "n1", "n2")),
             embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList()
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         val result = dto.toSnapshotResult()
         assertEquals(5uL, result.data.packageRevision)
@@ -544,7 +558,8 @@ class StarMapCrossLayerRegressionTest {
                     radius = 25f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
             )),
             viewport = StarMapViewportDto(1f, 0f, 0f, 800f, 600f),
-            diagnostics = emptyList()
+            diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         val result = dto.toSnapshotResult()
         assertEquals(2, result.data.graph.nodes.size)
@@ -568,7 +583,8 @@ class StarMapCrossLayerRegressionTest {
                 StarMapLayoutNodeDto(nodeId = "n1", x = 100f, y = 200f, width = 150f, height = 80f,
                     radius = 40f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
             )),
-            viewport = null, diagnostics = emptyList()
+            viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         cache.put("sm1", dto.toRawCache())
 
@@ -603,7 +619,8 @@ class StarMapCrossLayerRegressionTest {
                 StarMapLayoutNodeDto(nodeId = "n2", x = 200f, y = 60f, width = 100f, height = 80f,
                     radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
             )),
-            viewport = null, diagnostics = emptyList()
+            viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         cache.put("sm1", dto.toRawCache())
 
@@ -650,7 +667,8 @@ class StarMapCrossLayerRegressionTest {
                 StarMapLayoutNodeDto(nodeId = "n2", x = 200f, y = 0f, width = 100f, height = 50f,
                     radius = 25f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
             )),
-            viewport = null, diagnostics = emptyList()
+            viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         val rawCache = dto.toRawCache()
         cache.put("sm1", rawCache)
@@ -709,7 +727,8 @@ class StarMapCrossLayerRegressionTest {
                     radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
             )),
             viewport = StarMapViewportDto(1f, 0f, 0f, 800f, 600f),
-            diagnostics = emptyList()
+            diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         cache.put("sm1", dto1.toRawCache())
 
@@ -718,7 +737,8 @@ class StarMapCrossLayerRegressionTest {
             packageRevision = 1u, complete = false, sinceRevision = 1u,
             nodes = emptyList(), edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
             layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, emptyList()),
-            viewport = null, diagnostics = emptyList()
+            viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         cache.mergeIncremental("sm1", dto2.toRawCache())
 
@@ -766,7 +786,8 @@ class StarMapCrossLayerRegressionTest {
                 targetUri = "https://example.com", label = "hl1", targetStarmapId = null,
                 createdAt = 0u, updatedAt = 0u
             )),
-            layout = null, viewport = null, diagnostics = emptyList()
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         cache.put("sm1", dto1.toRawCache())
 
@@ -774,7 +795,8 @@ class StarMapCrossLayerRegressionTest {
             starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
             packageRevision = 2u, complete = true, sinceRevision = 1u,
             nodes = emptyList(), edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList()
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         cache.mergeIncremental("sm1", dto2.toRawCache())
 
@@ -787,5 +809,80 @@ class StarMapCrossLayerRegressionTest {
         assertEquals(1, result.data.hyperlinks.size)
         assertEquals("hl1", result.data.hyperlinks[0].hyperlinkId)
         assertEquals("https://example.com", result.data.hyperlinks[0].targetUri)
+    }
+
+    @Test
+    fun incrementalMerge_appliesDeletedTombstones() {
+        val cache = StarMapSnapshotCache()
+        val dto1 = StarMapPhasedSnapshotDto(
+            starmapId = "sm1", title = "T", loadPhase = "CurrentViewportObjects",
+            packageRevision = 1u, complete = false, sinceRevision = 0u,
+            nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B")),
+            edges = listOf(makeEdgeDto("e1", "n1", "n2")),
+            embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
+        )
+        cache.put("sm1", dto1.toRawCache())
+        assertEquals(2, cache.get("sm1")!!.nodes.size)
+
+        val dto2 = StarMapPhasedSnapshotDto(
+            starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
+            packageRevision = 2u, complete = true, sinceRevision = 1u,
+            nodes = listOf(makeNodeDto("n1", "A")),
+            edges = emptyList(),
+            embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = listOf("n2"), deletedEdgeIds = listOf("e1"), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
+        )
+        cache.mergeIncremental("sm1", dto2.toRawCache())
+
+        val merged = cache.get("sm1")!!
+        assertEquals(1, merged.nodes.size)
+        assertNotNull("n1 should remain", merged.nodes["n1"])
+        assertNull("n2 should be removed by tombstone", merged.nodes["n2"])
+        assertNull("e1 should be removed by tombstone", merged.edges["e1"])
+        assertTrue("deletedNodeIds should contain n2", merged.deletedNodeIds.contains("n2"))
+        assertTrue("deletedEdgeIds should contain e1", merged.deletedEdgeIds.contains("e1"))
+    }
+
+    @Test
+    fun progressivePhase_returnsObjectsDespiteSameRevision() {
+        val cache = StarMapSnapshotCache()
+        val dto1 = StarMapPhasedSnapshotDto(
+            starmapId = "sm1", title = "T", loadPhase = "CurrentViewportObjects",
+            packageRevision = 5u, complete = false, sinceRevision = 0u,
+            nodes = listOf(makeNodeDto("n1", "InView")),
+            edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
+                StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
+                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
+            )),
+            viewport = StarMapViewportDto(1f, 0f, 0f, 800f, 600f),
+            diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
+        )
+        cache.put("sm1", dto1.toRawCache())
+
+        val dto2 = StarMapPhasedSnapshotDto(
+            starmapId = "sm1", title = "T", loadPhase = "PrefetchNearbyObjects",
+            packageRevision = 5u, complete = false, sinceRevision = 5u,
+            nodes = listOf(makeNodeDto("n1", "InView"), makeNodeDto("n2", "Nearby")),
+            edges = listOf(makeEdgeDto("e1", "n1", "n2")),
+            embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
+                StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
+                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null),
+                StarMapLayoutNodeDto(nodeId = "n2", x = 200f, y = 60f, width = 100f, height = 80f,
+                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
+            )),
+            viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
+        )
+        cache.mergeIncremental("sm1", dto2.toRawCache())
+
+        val merged = cache.get("sm1")!!
+        assertEquals(2, merged.nodes.size, "progressive phase must add objects even when sinceRevision == packageRevision")
+        assertEquals(1, merged.edges.size)
     }
 }

@@ -43,7 +43,8 @@ class StarMapProgressiveLoadingContractTest {
                     radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
             )),
             viewport = StarMapViewportDto(1f, 0f, 0f, 800f, 600f),
-            diagnostics = emptyList()
+            diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
 
         val rawCache = dto.toRawCache()
@@ -72,7 +73,8 @@ class StarMapProgressiveLoadingContractTest {
                 StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
                     radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
             )),
-            viewport = null, diagnostics = emptyList()
+            viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         cache.put("sm1", dto1.toRawCache())
 
@@ -88,7 +90,8 @@ class StarMapProgressiveLoadingContractTest {
                 StarMapLayoutNodeDto(nodeId = "n2", x = 200f, y = 60f, width = 100f, height = 80f,
                     radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
             )),
-            viewport = null, diagnostics = emptyList()
+            viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         cache.mergeIncremental("sm1", dto2.toRawCache())
 
@@ -118,7 +121,8 @@ class StarMapProgressiveLoadingContractTest {
             packageRevision = 1u, complete = false, sinceRevision = 0u,
             nodes = listOf(makeNodeDto("n1", "InView")),
             edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList()
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         val result1 = dto1.toSnapshotResult()
         assertEquals("CurrentViewportObjects", result1.data.loadPhase)
@@ -130,7 +134,8 @@ class StarMapProgressiveLoadingContractTest {
             packageRevision = 1u, complete = false, sinceRevision = 0u,
             nodes = listOf(makeNodeDto("n1", "InView"), makeNodeDto("n2", "Nearby")),
             edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList()
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         val result2 = dto2.toSnapshotResult()
         assertEquals("PrefetchNearbyObjects", result2.data.loadPhase)
@@ -142,7 +147,8 @@ class StarMapProgressiveLoadingContractTest {
             packageRevision = 1u, complete = true, sinceRevision = 0u,
             nodes = listOf(makeNodeDto("n1", "InView"), makeNodeDto("n2", "Nearby"), makeNodeDto("n3", "Far")),
             edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList()
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         val result3 = dto3.toSnapshotResult()
         assertEquals("BackgroundFullLoad", result3.data.loadPhase)
@@ -159,7 +165,8 @@ class StarMapProgressiveLoadingContractTest {
             links = emptyList(), hyperlinks = emptyList(),
             layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, emptyList()),
             viewport = StarMapViewportDto(1f, 0f, 0f, 800f, 600f),
-            diagnostics = emptyList()
+            diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         val result = dto.toSnapshotResult()
         assertEquals(5uL, result.data.packageRevision)
@@ -176,7 +183,8 @@ class StarMapProgressiveLoadingContractTest {
             nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B")),
             edges = listOf(makeEdgeDto("e1", "n1", "n2")),
             embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList()
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         val result = dto.toSnapshotResult()
         assertEquals(5uL, result.data.packageRevision)
@@ -199,7 +207,8 @@ class StarMapProgressiveLoadingContractTest {
                     radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
             )),
             viewport = StarMapViewportDto(1f, 0f, 0f, 800f, 600f),
-            diagnostics = emptyList()
+            diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         cache.put("sm1", dto1.toRawCache())
 
@@ -209,7 +218,8 @@ class StarMapProgressiveLoadingContractTest {
             nodes = emptyList(), edges = emptyList(), embeds = emptyList(),
             links = emptyList(), hyperlinks = emptyList(),
             layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, emptyList()),
-            viewport = null, diagnostics = emptyList()
+            viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         cache.mergeIncremental("sm1", dto2.toRawCache())
 
@@ -265,7 +275,8 @@ class StarMapProgressiveLoadingContractTest {
                 targetStarmapId = null,
                 createdAt = 0u, updatedAt = 0u
             )),
-            layout = null, viewport = null, diagnostics = emptyList()
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         cache.put("sm1", dto1.toRawCache())
 
@@ -294,7 +305,8 @@ class StarMapProgressiveLoadingContractTest {
                 targetStarmapId = null,
                 createdAt = 0u, updatedAt = 0u
             )),
-            layout = null, viewport = null, diagnostics = emptyList()
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         cache.mergeIncremental("sm1", dto2.toRawCache())
 
@@ -325,7 +337,8 @@ class StarMapProgressiveLoadingContractTest {
             packageRevision = 1u, complete = true, sinceRevision = 0u,
             nodes = listOf(makeNodeDto("n1", "A")),
             edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList()
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
         )
         cache.put("sm1", dto.toRawCache())
 

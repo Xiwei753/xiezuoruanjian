@@ -239,6 +239,10 @@ impl StarMapStore {
     }
 
     pub(in crate::starmap::store) fn load_viewport_objects(&mut self, diagnostics: &mut Vec<LoadDiagnostic>) {
+        self.load_viewport_objects_impl(diagnostics, false);
+    }
+
+    fn load_viewport_objects_impl(&mut self, diagnostics: &mut Vec<LoadDiagnostic>, index_already_rebuilt: bool) {
         let viewport_node_ids: std::collections::HashSet<String> = match (&self.layout, &self.viewport) {
             (Some(l), Some(vp)) => {
                 let vp_left = vp.offset_x;
@@ -308,10 +312,9 @@ impl StarMapStore {
                     }
                 }
             }
-        } else {
+        } else if !index_already_rebuilt {
             self.rebuild_relation_indexes();
-            self.load_viewport_objects(diagnostics);
-            return;
+            self.load_viewport_objects_impl(diagnostics, true);
         }
 
         let _ = diagnostics;
