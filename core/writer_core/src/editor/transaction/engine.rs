@@ -108,8 +108,8 @@ impl EditorEngine {
                 events.push(EditorAnimationEvent {
                     id: self.take_animation_id(),
                     kind,
-                    range_start: change.index().value(),
-                    range_len: change.text().len(),
+                    range_start: change.index(),
+                    range_len: Utf8ByteOffset::unchecked(change.text().len()),
                     text: change.text().to_string(),
                     old_cursor: transaction.old_selection.head,
                     new_cursor: transaction.new_selection.head,
@@ -127,8 +127,8 @@ impl EditorEngine {
             events.push(EditorAnimationEvent {
                 id: self.take_animation_id(),
                 kind: EditorAnimationKind::Cursor,
-                range_start: transaction.new_selection.head.index.value(),
-                range_len: 0,
+                range_start: transaction.new_selection.head.index,
+                range_len: Utf8ByteOffset::unchecked(0),
                 text: String::new(),
                 old_cursor: transaction.old_selection.head,
                 new_cursor: transaction.new_selection.head,
