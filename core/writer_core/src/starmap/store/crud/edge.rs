@@ -16,10 +16,12 @@ impl StarMapStore {
         let to_endpoint_path = edge.to_endpoint_path.clone();
         self.edges.insert(edge_id.clone(), edge);
         self.dirty_edges.insert(edge_id.clone());
+        self.deleted_edge_ids.remove(&edge_id);
         if self.graph_meta.is_none() {
             self.ensure_graph_meta_initialized();
         }
         if let Some(ref mut meta) = self.graph_meta {
+            meta.deleted_since_last_sync.remove_entry("edge", &edge_id);
             if is_new {
                 if !meta.edge_ids.contains(&edge_id) {
                     meta.edge_ids.push(edge_id.clone());
@@ -57,9 +59,7 @@ impl StarMapStore {
         if let Some(ref mut meta) = self.graph_meta {
             meta.edge_ids.retain(|id| id != edge_id);
             meta.edge_relation_index.retain(|eri| eri.edge_id != edge_id);
-            if !meta.deleted_since_last_sync.edges.contains(&edge_id.to_string()) {
-                meta.deleted_since_last_sync.edges.push(edge_id.to_string());
-            }
+            meta.deleted_since_last_sync.add_entry("edge", edge_id, self.package_revision);
         }
         self.dirty_graph_meta = true;
     }

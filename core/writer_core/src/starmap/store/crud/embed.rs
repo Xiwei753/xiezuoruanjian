@@ -12,10 +12,12 @@ impl StarMapStore {
         let host_endpoint = embed.host_endpoint.clone();
         self.embeds.insert(instance_id.clone(), embed);
         self.dirty_embeds.insert(instance_id.clone());
+        self.deleted_embed_ids.remove(&instance_id);
         if self.graph_meta.is_none() {
             self.ensure_graph_meta_initialized();
         }
         if let Some(ref mut meta) = self.graph_meta {
+            meta.deleted_since_last_sync.remove_entry("embed", &instance_id);
             if is_new {
                 if !meta.embed_instance_ids.contains(&instance_id) {
                     meta.embed_instance_ids.push(instance_id.clone());
@@ -45,9 +47,7 @@ impl StarMapStore {
         if let Some(ref mut meta) = self.graph_meta {
             meta.embed_instance_ids.retain(|id| id != instance_id);
             meta.embed_host_index.retain(|ehi| ehi.instance_id != instance_id);
-            if !meta.deleted_since_last_sync.embeds.contains(&instance_id.to_string()) {
-                meta.deleted_since_last_sync.embeds.push(instance_id.to_string());
-            }
+            meta.deleted_since_last_sync.add_entry("embed", instance_id, self.package_revision);
         }
         self.dirty_graph_meta = true;
     }

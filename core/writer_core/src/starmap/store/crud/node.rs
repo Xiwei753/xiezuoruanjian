@@ -11,13 +11,15 @@ impl StarMapStore {
         let is_new = !self.nodes.contains_key(&node_id);
         self.nodes.insert(node_id.clone(), node);
         self.dirty_nodes.insert(node_id.clone());
-        if is_new {
-            if self.graph_meta.is_none() {
-                self.ensure_graph_meta_initialized();
-            }
-            if let Some(ref mut meta) = self.graph_meta {
+        self.deleted_node_ids.remove(&node_id);
+        if self.graph_meta.is_none() {
+            self.ensure_graph_meta_initialized();
+        }
+        if let Some(ref mut meta) = self.graph_meta {
+            meta.deleted_since_last_sync.remove_entry("node", &node_id);
+            if is_new {
                 if !meta.node_ids.contains(&node_id) {
-                    meta.node_ids.push(node_id);
+                    meta.node_ids.push(node_id.clone());
                 }
                 *meta.node_kind_counts.entry(kind_key).or_insert(0u32) += 1;
             }
@@ -42,9 +44,7 @@ impl StarMapStore {
         }
         if let Some(ref mut meta) = self.graph_meta {
             meta.node_ids.retain(|id| id != node_id);
-            if !meta.deleted_since_last_sync.nodes.contains(&node_id.to_string()) {
-                meta.deleted_since_last_sync.nodes.push(node_id.to_string());
-            }
+            meta.deleted_since_last_sync.add_entry("node", node_id, self.package_revision);
         }
         self.dirty_graph_meta = true;
     }

@@ -91,12 +91,6 @@ impl AppBackend {
         self.workspace_content_changed();
         self.workspace_state_changed();
 
-        if let Some(api) = self.core_api() {
-            if let Err(e) = api.rebuild_search_index_json(None) {
-                self.debug_log("sync", "search_index_rebuild_failed", &format!("{}", e));
-            }
-        }
-
         if chapter_deleted {
             self.current_save_status = "chapter.deleted_remotely_refreshed".to_string();
             self.save_status_changed();

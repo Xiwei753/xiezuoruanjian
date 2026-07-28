@@ -71,8 +71,8 @@ use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange, EditorRevision,
             let event = EditorAnimationEvent {
                 id: 1,
                 kind: EditorAnimationKind::Insert,
-                range_start: 0,
-                range_len: 3,
+                range_start: Utf8ByteOffset::unchecked(0),
+                range_len: Utf8ByteOffset::unchecked(3),
                 text: "abc".to_string(),
                 old_cursor: EditorCursor { index: Utf8ByteOffset::unchecked(0) },
                 new_cursor: EditorCursor { index: Utf8ByteOffset::unchecked(3) },
@@ -199,8 +199,8 @@ use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange, EditorRevision,
             let event = EditorAnimationEvent {
                 id: 1,
                 kind: EditorAnimationKind::Insert,
-                range_start: 0,
-                range_len: 1,
+                range_start: Utf8ByteOffset::unchecked(0),
+                range_len: Utf8ByteOffset::unchecked(1),
                 text: "a".to_string(),
                 old_cursor: EditorCursor { index: Utf8ByteOffset::unchecked(0) },
                 new_cursor: EditorCursor { index: Utf8ByteOffset::unchecked(1) },
@@ -219,8 +219,8 @@ use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange, EditorRevision,
             let event = EditorAnimationEvent {
                 id: 1,
                 kind: EditorAnimationKind::Insert,
-                range_start: 0,
-                range_len: 1,
+                range_start: Utf8ByteOffset::unchecked(0),
+                range_len: Utf8ByteOffset::unchecked(1),
                 text: "a".to_string(),
                 old_cursor: EditorCursor { index: Utf8ByteOffset::unchecked(0) },
                 new_cursor: EditorCursor { index: Utf8ByteOffset::unchecked(1) },
@@ -249,8 +249,8 @@ use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange, EditorRevision,
             assert_eq!(events.len(), 2);
             assert_eq!(events[0].kind, EditorAnimationKind::Insert);
             // range_start should be at byte offset of "世" insertion point
-            assert_eq!(events[0].range_start, "你好".len()); // 6 bytes
-            assert_eq!(events[0].range_len, "世".len()); // 3 bytes
+            assert_eq!(events[0].range_start.value(), "你好".len()); // 6 bytes
+            assert_eq!(events[0].range_len.value(), "世".len()); // 3 bytes
             assert_eq!(events[0].text, "世");
         }
 
@@ -269,8 +269,8 @@ use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange, EditorRevision,
             assert_eq!(events.len(), 2);
             assert_eq!(events[0].kind, EditorAnimationKind::Delete);
             // range_start should be at byte offset where "世" was deleted
-            assert_eq!(events[0].range_start, "你好".len()); // 6 bytes
-            assert_eq!(events[0].range_len, "世".len()); // 3 bytes
+            assert_eq!(events[0].range_start.value(), "你好".len()); // 6 bytes
+            assert_eq!(events[0].range_len.value(), "世".len()); // 3 bytes
             assert_eq!(events[0].text, "世");
         }
 

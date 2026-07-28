@@ -28,6 +28,8 @@
 use aho_corasick::AhoCorasick;
 use serde::Serialize;
 
+use crate::editor::strong_types::Utf8ByteOffset;
+
 /// 单个拼写错误的纠正建议。
 ///
 /// `start_index`/`end_index` 为 UTF-8 byte offset（半开区间 [start, end)），
@@ -36,9 +38,9 @@ use serde::Serialize;
 #[serde(rename_all = "camelCase")]
 pub struct TypoCorrection {
     /// 错误文本的起始位置（UTF-8 byte offset，含）
-    pub start_index: usize,
+    pub start_index: Utf8ByteOffset,
     /// 错误文本的结束位置（UTF-8 byte offset，不含，半开区间）
-    pub end_index: usize,
+    pub end_index: Utf8ByteOffset,
     /// 原始错误文本
     pub original_text: String,
     /// 纠正建议文本
@@ -71,16 +73,16 @@ impl AutoCorrectEngine {
         self.matcher
             .find_iter(text)
             .map(|mat| {
-                let start_index = mat.start();
-                let end_index = mat.end();
+                let start = mat.start();
+                let end = mat.end();
                 let pattern_index = mat.pattern().as_usize();
 
-                let original_text = text[start_index..end_index].to_string();
+                let original_text = text[start..end].to_string();
                 let suggestion = self.replacements[pattern_index].clone();
 
                 TypoCorrection {
-                    start_index,
-                    end_index,
+                    start_index: Utf8ByteOffset::unchecked(start),
+                    end_index: Utf8ByteOffset::unchecked(end),
                     original_text,
                     suggestion,
                 }
@@ -107,13 +109,13 @@ mod tests {
 
         assert_eq!(corrections[0].original_text, "teh");
         assert_eq!(corrections[0].suggestion, "the");
-        assert_eq!(corrections[0].start_index, 0);
-        assert_eq!(corrections[0].end_index, 3);
+        assert_eq!(corrections[0].start_index.value(), 0);
+        assert_eq!(corrections[0].end_index.value(), 3);
 
         assert_eq!(corrections[1].original_text, "donot");
         assert_eq!(corrections[1].suggestion, "do not");
-        assert_eq!(corrections[1].start_index, 20);
-        assert_eq!(corrections[1].end_index, 25);
+        assert_eq!(corrections[1].start_index.value(), 20);
+        assert_eq!(corrections[1].end_index.value(), 25);
     }
 
     #[test]
@@ -147,9 +149,9 @@ mod tests {
         let text = "teh teh teh";
         let corrections = engine.scan_text(text);
         assert_eq!(corrections.len(), 3);
-        assert_eq!(corrections[0].start_index, 0);
-        assert_eq!(corrections[1].start_index, 4);
-        assert_eq!(corrections[2].start_index, 8);
+        assert_eq!(corrections[0].start_index.value(), 0);
+        assert_eq!(corrections[1].start_index.value(), 4);
+        assert_eq!(corrections[2].start_index.value(), 8);
     }
 
     #[test]
@@ -165,7 +167,7 @@ mod tests {
         assert_eq!(corrections[0].original_text, "錯字");
         assert_eq!(corrections[0].suggestion, "错字");
         // start_index and end_index are in bytes
-        assert_eq!(&text[corrections[0].start_index..corrections[0].end_index], "錯字");
+        assert_eq!(&text[corrections[0].start_index.value()..corrections[0].end_index.value()], "錯字");
     }
 
     #[test]

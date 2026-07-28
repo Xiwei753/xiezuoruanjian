@@ -87,15 +87,15 @@ impl super::WriterCore {
             crate::sync::create_sync_backend(&backend_type)
         };
         let result = backend.sync(&self.workspace_path, config, &secrets, force_sync)?;
-        let should_rebuild = matches!(
+        if matches!(
             result.status,
             crate::sync::SyncStatus::Success
                 | crate::sync::SyncStatus::LatestWinsApplied
-                | crate::sync::SyncStatus::NoChanges
                 | crate::sync::SyncStatus::BranchMissingRecovered
-        );
-        if should_rebuild {
-            let _ = self.rebuild_search_index(None);
+        ) {
+            if let Err(e) = self.rebuild_search_index(None) {
+                log::warn!("Failed to rebuild search index after sync: {e}");
+            }
         }
         Ok(result)
     }

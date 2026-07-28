@@ -35,26 +35,44 @@ pub struct GraphMeta {
 #[serde(rename_all = "camelCase")]
 pub struct DeletedSinceLastSync {
     #[serde(default)]
-    pub nodes: Vec<String>,
-    #[serde(default)]
-    pub edges: Vec<String>,
-    #[serde(default)]
-    pub embeds: Vec<String>,
-    #[serde(default)]
-    pub links: Vec<String>,
-    #[serde(default)]
-    pub hyperlinks: Vec<String>,
+    pub entries: Vec<DeletionEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletionEntry {
+    pub object_type: String,
+    pub object_id: String,
+    pub deleted_at_revision: u64,
 }
 
 impl Default for DeletedSinceLastSync {
     fn default() -> Self {
         Self {
-            nodes: Vec::new(),
-            edges: Vec::new(),
-            embeds: Vec::new(),
-            links: Vec::new(),
-            hyperlinks: Vec::new(),
+            entries: Vec::new(),
         }
+    }
+}
+
+impl DeletedSinceLastSync {
+    pub fn add_entry(&mut self, object_type: &str, object_id: &str, revision: u64) {
+        self.entries.push(DeletionEntry {
+            object_type: object_type.to_string(),
+            object_id: object_id.to_string(),
+            deleted_at_revision: revision,
+        });
+    }
+
+    pub fn remove_entry(&mut self, object_type: &str, object_id: &str) {
+        self.entries.retain(|e| !(e.object_type == object_type && e.object_id == object_id));
+    }
+
+    pub fn entries_since(&self, since_revision: u64) -> impl Iterator<Item = &DeletionEntry> {
+        self.entries.iter().filter(move |e| e.deleted_at_revision > since_revision)
+    }
+
+    pub fn compact(&mut self, keep_since_revision: u64) {
+        self.entries.retain(|e| e.deleted_at_revision >= keep_since_revision);
     }
 }
 

@@ -178,8 +178,8 @@ pub struct GlyphRect {
 pub(crate) struct EditorAnimationEvent {
     pub id: u64,
     pub kind: EditorAnimationKind,
-    pub range_start: usize,
-    pub range_len: usize,
+    pub range_start: Utf8ByteOffset,
+    pub range_len: Utf8ByteOffset,
     pub text: String,
     pub old_cursor: EditorCursor,
     pub new_cursor: EditorCursor,

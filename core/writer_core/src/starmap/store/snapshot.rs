@@ -96,28 +96,28 @@ impl StarMapStore {
             )
         };
 
-        let persistent = self.graph_meta.as_ref()
-            .map(|m| m.deleted_since_last_sync.clone())
+        let persistent_entries = self.graph_meta.as_ref()
+            .map(|m| m.deleted_since_last_sync.entries_since(since_rev).cloned().collect::<Vec<_>>())
             .unwrap_or_default();
 
         let deleted_node_ids: Vec<String> = self.deleted_node_ids.iter()
-            .chain(persistent.nodes.iter())
+            .chain(persistent_entries.iter().filter(|e| e.object_type == "node").map(|e| &e.object_id))
             .cloned()
             .collect();
         let deleted_edge_ids: Vec<String> = self.deleted_edge_ids.iter()
-            .chain(persistent.edges.iter())
+            .chain(persistent_entries.iter().filter(|e| e.object_type == "edge").map(|e| &e.object_id))
             .cloned()
             .collect();
         let deleted_embed_ids: Vec<String> = self.deleted_embed_ids.iter()
-            .chain(persistent.embeds.iter())
+            .chain(persistent_entries.iter().filter(|e| e.object_type == "embed").map(|e| &e.object_id))
             .cloned()
             .collect();
         let deleted_link_ids: Vec<String> = self.deleted_link_ids.iter()
-            .chain(persistent.links.iter())
+            .chain(persistent_entries.iter().filter(|e| e.object_type == "link").map(|e| &e.object_id))
             .cloned()
             .collect();
         let deleted_hyperlink_ids: Vec<String> = self.deleted_hyperlink_ids.iter()
-            .chain(persistent.hyperlinks.iter())
+            .chain(persistent_entries.iter().filter(|e| e.object_type == "hyperlink").map(|e| &e.object_id))
             .cloned()
             .collect();
 

@@ -11,11 +11,13 @@ impl StarMapStore {
         let source_node_id = endpoint_path_node_id(&hl.source).unwrap_or_default().to_string();
         self.hyperlinks.insert(hl_id.clone(), hl);
         self.dirty_hyperlinks.insert(hl_id.clone());
-        if is_new {
-            if self.graph_meta.is_none() {
-                self.ensure_graph_meta_initialized();
-            }
-            if let Some(ref mut meta) = self.graph_meta {
+        self.deleted_hyperlink_ids.remove(&hl_id);
+        if self.graph_meta.is_none() {
+            self.ensure_graph_meta_initialized();
+        }
+        if let Some(ref mut meta) = self.graph_meta {
+            meta.deleted_since_last_sync.remove_entry("hyperlink", &hl_id);
+            if is_new {
                 if !meta.hyperlink_ids.contains(&hl_id) {
                     meta.hyperlink_ids.push(hl_id.clone());
                 }
@@ -23,10 +25,7 @@ impl StarMapStore {
                     hyperlink_id: hl_id.clone(),
                     source_node_id,
                 });
-            }
-            self.dirty_graph_meta = true;
-        } else {
-            if let Some(ref mut meta) = self.graph_meta {
+            } else {
                 if let Some(hri) = meta.hyperlink_relation_index.iter_mut().find(|hri| hri.hyperlink_id == hl_id) {
                     hri.source_node_id = source_node_id;
                 }
@@ -45,9 +44,7 @@ impl StarMapStore {
         if let Some(ref mut meta) = self.graph_meta {
             meta.hyperlink_ids.retain(|id| id != hyperlink_id);
             meta.hyperlink_relation_index.retain(|hri| hri.hyperlink_id != hyperlink_id);
-            if !meta.deleted_since_last_sync.hyperlinks.contains(&hyperlink_id.to_string()) {
-                meta.deleted_since_last_sync.hyperlinks.push(hyperlink_id.to_string());
-            }
+            meta.deleted_since_last_sync.add_entry("hyperlink", hyperlink_id, self.package_revision);
         }
         self.dirty_graph_meta = true;
     }

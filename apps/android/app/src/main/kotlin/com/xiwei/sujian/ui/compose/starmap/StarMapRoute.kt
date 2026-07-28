@@ -283,7 +283,10 @@ private fun StarMapEditorScreen(
                     if (it.nodeId == nodeId) it.copy(x = x, y = y) else it
                 }
                 val updatedLayout = editorState.starMapData!!.layout.copy(nodes = updatedNodes)
-                editorState = editorState.copy(hasPendingLayoutSave = true, layoutSaveError = null)
+                editorState = editorState.copy(
+                    starMapData = editorState.starMapData!!.copy(layout = updatedLayout),
+                    hasPendingLayoutSave = true, layoutSaveError = null
+                )
                 withContext(Dispatchers.IO) {
                     try {
                         val repo = repository()
@@ -308,7 +311,10 @@ private fun StarMapEditorScreen(
             viewportSaveJob?.cancel()
             viewportSaveJob = coroutineScope.launch {
                 delay(500)
-                editorState = editorState.copy(hasPendingViewportSave = true, viewportSaveError = null)
+                editorState = editorState.copy(
+                    starMapData = editorState.starMapData?.copy(viewport = viewport),
+                    hasPendingViewportSave = true, viewportSaveError = null
+                )
                 withContext(Dispatchers.IO) {
                     try {
                         val repo = repository()

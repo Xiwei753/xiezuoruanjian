@@ -87,12 +87,12 @@ class StarMapCrossLayerIntegrationTest {
             val phase2 = repo.advanceLoadPhase(starmapId, "PrefetchNearbyObjects", rev1)
             assertTrue("phase2 must succeed", phase2 is BridgeResult.Success)
             val rev2 = (phase2 as BridgeResult.Success).data.data.packageRevision
-            assertTrue("phase2 revision must not regress", rev2 >= rev1)
+            assertEquals("phase2 revision must be same as phase1 (no mutations)", rev1, rev2)
 
             val phase3 = repo.advanceLoadPhase(starmapId, "BackgroundFullLoad", rev2)
             assertTrue("phase3 must succeed", phase3 is BridgeResult.Success)
             val rev3 = (phase3 as BridgeResult.Success).data.data.packageRevision
-            assertTrue("phase3 revision must not regress", rev3 >= rev2)
+            assertEquals("phase3 revision must be same as phase1 (no mutations)", rev1, rev3)
 
             assertEquals("getStarMapGraph must not be called", 0, bridge.getStarMapGraphCallCount)
         } finally {
@@ -252,6 +252,74 @@ class StarMapCrossLayerIntegrationTest {
             val dataAfter = (snapshotAfter as BridgeResult.Success).data.data
             assertNull("deleted node must not be in snapshot", dataAfter.graph.nodes.find { it.id == node2Id })
             assertNotNull("remaining node must be in snapshot", dataAfter.graph.nodes.find { it.id == node1Id })
+
+            assertEquals("getStarMapGraph must not be called", 0, bridge.getStarMapGraphCallCount)
+        } finally {
+            bridge.closeStarmapStore(starmapId)
+        }
+    }
+
+    @Test
+    fun deleteFlushReload_nodeRemovedAcrossFlushBoundary() {
+        val (bridge, repo) = realBridgeAndRepo()
+
+        val createResult = repo.createStarmap("删除冲刷重载测试", "验证删除+flush+reload后节点消失")
+        assertTrue("createStarmap must succeed", createResult is BridgeResult.Success)
+        val starmapId = (createResult as BridgeResult.Success).data.starmapId
+
+        try {
+            val n1 = StarMapGraphNode(id = UUID.randomUUID().toString(), title = "保留节点", kind = StarMapNodeKind.Character)
+            val n2 = StarMapGraphNode(id = UUID.randomUUID().toString(), title = "待删节点", kind = StarMapNodeKind.Event)
+            assertTrue("add n1", repo.addStarmapNode(starmapId, n1, 50f, 60f) is BridgeResult.Success)
+            assertTrue("add n2", repo.addStarmapNode(starmapId, n2, 200f, 60f) is BridgeResult.Success)
+
+            val before = repo.getStarmapPhasedSnapshot(starmapId)
+            assertTrue("before delete must succeed", before is BridgeResult.Success)
+            val beforeNodes = (before as BridgeResult.Success).data.data.graph.nodes
+            assertTrue("must have 2 nodes before delete", beforeNodes.size >= 2)
+
+            assertTrue("delete must succeed", repo.deleteStarmapNode(starmapId, n2.id) is BridgeResult.Success)
+            assertTrue("flush must succeed", repo.flushStarmapStore(starmapId) is BridgeResult.Success)
+
+            val after = repo.getStarmapPhasedSnapshot(starmapId)
+            assertTrue("after reload must succeed", after is BridgeResult.Success)
+            val afterData = (after as BridgeResult.Success).data.data
+            assertNull("deleted node must not appear", afterData.graph.nodes.find { it.id == n2.id })
+            assertNotNull("remaining node must appear", afterData.graph.nodes.find { it.id == n1.id })
+
+            assertEquals("getStarMapGraph must not be called", 0, bridge.getStarMapGraphCallCount)
+        } finally {
+            bridge.closeStarmapStore(starmapId)
+        }
+    }
+
+    @Test
+    fun deleteThenRecreateSameId_restoresNode() {
+        val (bridge, repo) = realBridgeAndRepo()
+
+        val createResult = repo.createStarmap("删除重建测试", "验证删除同ID节点后重新添加可恢复")
+        assertTrue("createStarmap must succeed", createResult is BridgeResult.Success)
+        val starmapId = (createResult as BridgeResult.Success).data.starmapId
+
+        try {
+            val nodeId = UUID.randomUUID().toString()
+            val n1 = StarMapGraphNode(id = nodeId, title = "原始标题", kind = StarMapNodeKind.Character)
+            assertTrue("add n1", repo.addStarmapNode(starmapId, n1, 50f, 60f) is BridgeResult.Success)
+            assertTrue("flush must succeed", repo.flushStarmapStore(starmapId) is BridgeResult.Success)
+
+            assertTrue("delete must succeed", repo.deleteStarmapNode(starmapId, nodeId) is BridgeResult.Success)
+            assertTrue("flush after delete must succeed", repo.flushStarmapStore(starmapId) is BridgeResult.Success)
+
+            val n2 = StarMapGraphNode(id = nodeId, title = "重建标题", kind = StarMapNodeKind.Character)
+            assertTrue("recreate with same ID", repo.addStarmapNode(starmapId, n2, 50f, 60f) is BridgeResult.Success)
+            assertTrue("flush after recreate must succeed", repo.flushStarmapStore(starmapId) is BridgeResult.Success)
+
+            val snapshot = repo.getStarmapPhasedSnapshot(starmapId)
+            assertTrue("final snapshot must succeed", snapshot is BridgeResult.Success)
+            val data = (snapshot as BridgeResult.Success).data.data
+            val found = data.graph.nodes.find { it.id == nodeId }
+            assertNotNull("recreated node must be in snapshot", found)
+            assertEquals("recreated node must have new title", "重建标题", found!!.title)
 
             assertEquals("getStarMapGraph must not be called", 0, bridge.getStarMapGraphCallCount)
         } finally {

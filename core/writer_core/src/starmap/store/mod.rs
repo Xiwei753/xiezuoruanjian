@@ -202,11 +202,14 @@ impl StarMapStore {
 
     pub fn clear_persistent_deletion_log(&mut self) {
         if let Some(ref mut meta) = self.graph_meta {
-            meta.deleted_since_last_sync.nodes.clear();
-            meta.deleted_since_last_sync.edges.clear();
-            meta.deleted_since_last_sync.embeds.clear();
-            meta.deleted_since_last_sync.links.clear();
-            meta.deleted_since_last_sync.hyperlinks.clear();
+            meta.deleted_since_last_sync.entries.clear();
+            self.dirty_graph_meta = true;
+        }
+    }
+
+    pub fn compact_deletion_log(&mut self, keep_since_revision: u64) {
+        if let Some(ref mut meta) = self.graph_meta {
+            meta.deleted_since_last_sync.compact(keep_since_revision);
             self.dirty_graph_meta = true;
         }
     }
