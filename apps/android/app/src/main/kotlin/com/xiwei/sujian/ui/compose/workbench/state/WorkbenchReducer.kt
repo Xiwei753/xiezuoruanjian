@@ -30,7 +30,7 @@ object WorkbenchReducer {
             is WorkbenchAction.DockPanel -> dockPanel(state, action.panelId, action.zone)
             is WorkbenchAction.MoveFloatingPanel -> moveFloatingPanel(state, action.panelId, action.x, action.y)
             is WorkbenchAction.ApplyPreset -> applyPreset(state, action.preset)
-            is WorkbenchAction.RestoreLayout -> state
+            is WorkbenchAction.RestoreLayout -> computeDefaultLayout()
         }
     }
 

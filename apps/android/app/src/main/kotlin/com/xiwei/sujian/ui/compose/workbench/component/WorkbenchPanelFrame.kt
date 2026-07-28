@@ -35,6 +35,7 @@ fun WorkbenchPanelFrame(
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
     title: String? = null,
+    titleBarModifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
     val dims = LocalSujianDimensions.current
@@ -45,7 +46,8 @@ fun WorkbenchPanelFrame(
         ) {
             androidx.compose.foundation.layout.Row(
                 modifier = Modifier.padding(horizontal = dims.space8, vertical = dims.space4)
-                    .height(40.dp),
+                    .height(40.dp)
+                    .then(titleBarModifier),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 val panelIcon = panelIconForId(panelState.id)
