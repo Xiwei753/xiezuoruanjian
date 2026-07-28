@@ -6,7 +6,7 @@ sealed class WorkbenchAction {
     data class CollapsePanel(val panelId: WorkbenchPanelId) : WorkbenchAction()
     data class HidePanel(val panelId: WorkbenchPanelId) : WorkbenchAction()
     data class MovePanel(val panelId: WorkbenchPanelId, val zone: DockZone) : WorkbenchAction()
-    data class ResizePanel(val panelId: WorkbenchPanelId, val sizeDp: Float) : WorkbenchAction()
+    data class ResizePanel(val panelId: WorkbenchPanelId, val sizeDp: Float, val availableWidthDp: Float = Float.MAX_VALUE) : WorkbenchAction()
     data class ActivateTab(val tabGroupId: String, val panelId: WorkbenchPanelId) : WorkbenchAction()
     data class FloatPanel(val panelId: WorkbenchPanelId) : WorkbenchAction()
     data class DockPanel(val panelId: WorkbenchPanelId, val zone: DockZone) : WorkbenchAction()

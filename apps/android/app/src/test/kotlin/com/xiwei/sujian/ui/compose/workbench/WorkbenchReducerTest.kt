@@ -177,4 +177,38 @@ class WorkbenchReducerTest {
         val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.RestoreLayout)
         assertEquals(defaultState, result)
     }
+
+    @Test
+    fun resizePanel_enforcesEditorMinWidth_singleSide() {
+        val expanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val availableWidth = 900f
+        val result = WorkbenchReducer.reduce(expanded, WorkbenchAction.ResizePanel(WorkbenchPanelId.ChapterNavigator, 500f, availableWidth))
+        val maxSizeForEditor = availableWidth - 480f
+        assertTrue(result.panels[WorkbenchPanelId.ChapterNavigator]?.sizeDp!! <= maxSizeForEditor)
+    }
+
+    @Test
+    fun resizePanel_enforcesEditorMinWidth_bothSides() {
+        val leftExpanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val rightExpanded = WorkbenchReducer.reduce(leftExpanded, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val availableWidth = 1200f
+        val result = WorkbenchReducer.reduce(rightExpanded, WorkbenchAction.ResizePanel(WorkbenchPanelId.ChapterNavigator, 600f, availableWidth))
+        val otherSideWidth = rightExpanded.panels[WorkbenchPanelId.AiAssistant]?.sizeDp ?: 0f
+        val maxSizeForEditor = availableWidth - 480f - otherSideWidth
+        assertTrue(result.panels[WorkbenchPanelId.ChapterNavigator]?.sizeDp!! <= maxSizeForEditor)
+    }
+
+    @Test
+    fun resizePanel_availableWidthDefault_noEditorConstraint() {
+        val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ResizePanel(WorkbenchPanelId.ChapterNavigator, 520f))
+        assertEquals(520f, result.panels[WorkbenchPanelId.ChapterNavigator]?.sizeDp!!, 0.01f)
+    }
+
+    @Test
+    fun resizePanel_bottomPanel_notAffectedByEditorMinWidth() {
+        val moved = WorkbenchReducer.reduce(defaultState, WorkbenchAction.MovePanel(WorkbenchPanelId.Statistics, DockZone.Bottom))
+        val expanded = WorkbenchReducer.reduce(moved, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Statistics))
+        val result = WorkbenchReducer.reduce(expanded, WorkbenchAction.ResizePanel(WorkbenchPanelId.Statistics, 300f, 600f))
+        assertEquals(300f, result.panels[WorkbenchPanelId.Statistics]?.sizeDp!!, 0.01f)
+    }
 }

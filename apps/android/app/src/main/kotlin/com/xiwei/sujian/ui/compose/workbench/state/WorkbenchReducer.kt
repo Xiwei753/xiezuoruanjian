@@ -24,7 +24,7 @@ object WorkbenchReducer {
             is WorkbenchAction.CollapsePanel -> collapsePanel(state, action.panelId)
             is WorkbenchAction.HidePanel -> hidePanel(state, action.panelId)
             is WorkbenchAction.MovePanel -> movePanel(state, action.panelId, action.zone)
-            is WorkbenchAction.ResizePanel -> resizePanel(state, action.panelId, action.sizeDp)
+            is WorkbenchAction.ResizePanel -> resizePanel(state, action.panelId, action.sizeDp, action.availableWidthDp)
             is WorkbenchAction.ActivateTab -> activateTab(state, action.tabGroupId, action.panelId)
             is WorkbenchAction.FloatPanel -> floatPanel(state, action.panelId)
             is WorkbenchAction.DockPanel -> dockPanel(state, action.panelId, action.zone)
@@ -67,10 +67,17 @@ object WorkbenchReducer {
         return updatePanel(state, panel.copy(zone = zone), markCustom = true)
     }
 
-    private fun resizePanel(state: WorkbenchLayoutState, panelId: WorkbenchPanelId, sizeDp: Float): WorkbenchLayoutState {
+    private fun resizePanel(state: WorkbenchLayoutState, panelId: WorkbenchPanelId, sizeDp: Float, availableWidthDp: Float): WorkbenchLayoutState {
         val panel = state.panels[panelId] ?: return state
         val clamped = when (panel.zone) {
-            DockZone.Left, DockZone.Right -> sizeDp.coerceIn(SIDE_PANEL_MIN_DP, SIDE_PANEL_MAX_DP)
+            DockZone.Left, DockZone.Right -> {
+                val otherSideWidth = state.panels.values
+                    .filter { it.id != panelId && it.zone in listOf(DockZone.Left, DockZone.Right) && it.visibility == PanelVisibility.Expanded }
+                    .sumOf { it.sizeDp.toDouble() }
+                    .toFloat()
+                val maxForEditor = availableWidthDp - EDITOR_MIN_DP - otherSideWidth
+                sizeDp.coerceIn(SIDE_PANEL_MIN_DP, min(SIDE_PANEL_MAX_DP, maxForEditor))
+            }
             DockZone.Bottom -> max(sizeDp, BOTTOM_PANEL_MIN_DP)
             DockZone.Floating -> sizeDp
         }

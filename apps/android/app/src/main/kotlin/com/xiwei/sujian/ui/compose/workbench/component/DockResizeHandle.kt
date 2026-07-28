@@ -42,7 +42,10 @@ fun DockResizeHandle(
         modifier = handleModifier
             .background(handleColor)
             .pointerInput(zone, panelId) {
-                detectDragGestures { change, dragAmount ->
+                detectDragGestures(
+                    onDragEnd = { accumulatedDp = 0f },
+                    onDragCancel = { accumulatedDp = 0f },
+                ) { change, dragAmount ->
                     val deltaDp = when (zone) {
                         DockZone.Left -> dragAmount.x / density.density
                         DockZone.Right -> -dragAmount.x / density.density

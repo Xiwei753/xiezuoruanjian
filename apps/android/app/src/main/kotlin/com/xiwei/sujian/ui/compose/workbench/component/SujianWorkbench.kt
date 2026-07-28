@@ -12,10 +12,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.ui.compose.workbench.model.DockZone
@@ -27,8 +25,6 @@ import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelState
 
 private const val SIDE_PANEL_MIN_DP = 280f
 private const val SIDE_PANEL_MAX_DP = 520f
-private const val BOTTOM_PANEL_MIN_DP = 220f
-private const val EDITOR_MIN_DP = 480f
 private const val OVERLAY_THRESHOLD_DP = 840
 private const val DUAL_SIDE_THRESHOLD_DP = 1200
 
@@ -44,7 +40,6 @@ fun SujianWorkbench(
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val maxWidthDp = maxWidth.value
-        val maxHeightDp = maxHeight.value
 
         val isOverlayMode = maxWidthDp < OVERLAY_THRESHOLD_DP
         val allowDualSide = maxWidthDp >= DUAL_SIDE_THRESHOLD_DP
@@ -66,10 +61,6 @@ fun SujianWorkbench(
         val leftCollapsed = leftPanels.filter { it.visibility == PanelVisibility.Collapsed || it.visibility == PanelVisibility.Hidden }
         val rightCollapsed = rightPanels.filter { it.visibility == PanelVisibility.Collapsed || it.visibility == PanelVisibility.Hidden }
         val bottomCollapsed = bottomPanels.filter { it.visibility == PanelVisibility.Collapsed || it.visibility == PanelVisibility.Hidden }
-
-        val leftDockWidth = if (leftExpanded.isNotEmpty() && !isOverlayMode) leftExpanded.first().sizeDp.dp else 0.dp
-        val rightDockWidth = if (rightExpanded.isNotEmpty() && !isOverlayMode && (allowDualSide || leftExpanded.isEmpty())) rightExpanded.first().sizeDp.dp else 0.dp
-        val bottomDockHeight = if (bottomExpanded.isNotEmpty() && !isOverlayMode) bottomExpanded.first().sizeDp.dp else 0.dp
 
         Box(modifier = Modifier.fillMaxSize()) {
             Row(modifier = Modifier.fillMaxSize()) {
@@ -98,7 +89,7 @@ fun SujianWorkbench(
                         zone = DockZone.Left,
                         panelId = leftExpanded.first().id,
                         currentSizeDp = leftExpanded.first().sizeDp,
-                        onResize = { id, size -> onAction(WorkbenchAction.ResizePanel(id, size)) },
+                        onResize = { id, size -> onAction(WorkbenchAction.ResizePanel(id, size, maxWidthDp)) },
                         modifier = Modifier.fillMaxHeight(),
                     )
                 }
@@ -120,7 +111,7 @@ fun SujianWorkbench(
                         zone = DockZone.Right,
                         panelId = rightExpanded.first().id,
                         currentSizeDp = rightExpanded.first().sizeDp,
-                        onResize = { id, size -> onAction(WorkbenchAction.ResizePanel(id, size)) },
+                        onResize = { id, size -> onAction(WorkbenchAction.ResizePanel(id, size, maxWidthDp)) },
                         modifier = Modifier.fillMaxHeight(),
                     )
                     DockHost(
