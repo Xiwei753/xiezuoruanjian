@@ -366,4 +366,18 @@
     <string name="unexpected_error">Unexpected error</string>
     <string name="sync_diag_ok">OK</string>
     <string name="sync_diag_fail">Fail</string>
+
+    <string name="workbench_panel_float">Float</string>
+    <string name="workbench_panel_collapse">Collapse</string>
+    <string name="workbench_panel_close">Close</string>
+    <string name="workbench_panel_project_navigator">Project Navigator</string>
+    <string name="workbench_panel_chapter_navigator">Chapter Navigator</string>
+    <string name="workbench_panel_ai_assistant">AI Assistant</string>
+    <string name="workbench_panel_search">Search</string>
+    <string name="workbench_panel_statistics">Statistics</string>
+    <string name="workbench_panel_starmap">Star Map</string>
+    <string name="workbench_panel_document_outline">Document Outline</string>
+    <string name="workbench_panel_character_info">Character Info</string>
+    <string name="workbench_panel_ai_placeholder">AI Assistant coming soon</string>
+    <string name="workbench_panel_search_placeholder">Search coming soon</string>
 </resources>

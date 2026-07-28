@@ -295,6 +295,7 @@ dependencies {
 
     implementation(libs.androidx.window)
     implementation(libs.androidx.window.core)
+    implementation(libs.androidx.datastore.preferences)
 
     coreLibraryDesugaring(libs.desugar)
 

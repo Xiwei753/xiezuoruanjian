@@ -442,4 +442,18 @@
     <string name="sync_diag_ok">正常</string>
     <string name="sync_diag_fail">异常</string>
     <string name="sync_block_not_ready">同步未就绪</string>
+
+    <string name="workbench_panel_float">浮动</string>
+    <string name="workbench_panel_collapse">折叠</string>
+    <string name="workbench_panel_close">关闭</string>
+    <string name="workbench_panel_project_navigator">作品导航</string>
+    <string name="workbench_panel_chapter_navigator">章节导航</string>
+    <string name="workbench_panel_ai_assistant">AI 助手</string>
+    <string name="workbench_panel_search">搜索</string>
+    <string name="workbench_panel_statistics">统计</string>
+    <string name="workbench_panel_starmap">星图</string>
+    <string name="workbench_panel_document_outline">文档大纲</string>
+    <string name="workbench_panel_character_info">角色信息</string>
+    <string name="workbench_panel_ai_placeholder">AI 助手即将上线</string>
+    <string name="workbench_panel_search_placeholder">搜索功能即将上线</string>
 </resources>

@@ -14,8 +14,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
 import com.xiwei.sujian.designsystem.layout.SujianListDetailScope
 import com.xiwei.sujian.designsystem.layout.SujianListDetailScaffoldWithNavigator
@@ -23,9 +26,25 @@ import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.model.AvoidRegion
 import com.xiwei.sujian.model.AvoidRegionKind
 import com.xiwei.sujian.model.WorkspacePaneMode
+import com.xiwei.sujian.platform.api.WindowSizeClass
+import com.xiwei.sujian.ui.compose.LocalAndroidCapabilities
 import com.xiwei.sujian.ui.compose.SujianAppState
 import com.xiwei.sujian.ui.compose.adaptive.rememberCoreLayoutDirective
 import com.xiwei.sujian.ui.compose.editor.SujianEditorHost
+import com.xiwei.sujian.ui.compose.workbench.component.SujianWorkbench
+import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchAction
+import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelId
+import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelState
+import com.xiwei.sujian.ui.compose.workbench.panel.AiAssistantPanel
+import com.xiwei.sujian.ui.compose.workbench.panel.ChapterNavigatorPanel
+import com.xiwei.sujian.ui.compose.workbench.panel.ProjectNavigatorPanel
+import com.xiwei.sujian.ui.compose.workbench.panel.SearchPanel
+import com.xiwei.sujian.ui.compose.workbench.panel.StarMapPanel
+import com.xiwei.sujian.ui.compose.workbench.panel.StatisticsPanel
+import com.xiwei.sujian.ui.compose.workbench.state.LayoutStorageKey
+import com.xiwei.sujian.ui.compose.workbench.state.WindowWidthBucket
+import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchLayoutRepository
+import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchViewModel
 import kotlinx.coroutines.launch
 
 @OptIn(androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi::class)
@@ -64,6 +83,183 @@ fun ProjectWorkspaceScreen(
         )
         return
     }
+
+    val capabilities = LocalAndroidCapabilities.current
+    val isTabletWindow = capabilities.windowSizeClass != WindowSizeClass.Compact
+
+    if (isTabletWindow) {
+        WorkbenchWorkspaceContent(
+            appState = appState,
+            currentProjectId = currentProjectId,
+            currentVolumeId = currentVolumeId,
+            currentChapterId = currentChapterId,
+            currentChapterTitle = currentChapterTitle,
+            workspaceRepository = workspaceRepository,
+            onNavigateToProject = onNavigateToProject,
+            onNavigateToChapter = onNavigateToChapter,
+            modifier = modifier,
+        )
+    } else {
+        CompactWorkspaceContent(
+            appState = appState,
+            currentProjectId = currentProjectId,
+            currentVolumeId = currentVolumeId,
+            currentChapterId = currentChapterId,
+            currentChapterTitle = currentChapterTitle,
+            layoutPlan = layoutPlan,
+            workspaceRepository = workspaceRepository,
+            onNavigateToProject = onNavigateToProject,
+            onNavigateToChapter = onNavigateToChapter,
+            modifier = modifier,
+        )
+    }
+}
+
+@Composable
+private fun WorkbenchWorkspaceContent(
+    appState: SujianAppState,
+    currentProjectId: String,
+    currentVolumeId: String?,
+    currentChapterId: String?,
+    currentChapterTitle: String,
+    workspaceRepository: com.xiwei.sujian.data.WorkspaceRepository,
+    onNavigateToProject: ((projectId: String) -> Unit)?,
+    onNavigateToChapter: ((projectId: String, volumeId: String, chapterId: String) -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    val dims = LocalSujianDimensions.current
+    val workbenchVm: WorkbenchViewModel = viewModel()
+
+    val widthDp = configuration.screenWidthDp
+    val heightDp = configuration.screenHeightDp
+    val orientation = if (configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) "landscape" else "portrait"
+    val widthBucket = WindowWidthBucket.fromDp(widthDp)
+
+    val deviceId = remember {
+        try {
+            val prefs = context.getSharedPreferences("sujian_device", android.content.Context.MODE_PRIVATE)
+            prefs.getString("device_id", "unknown") ?: "unknown"
+        } catch (_: Exception) { "unknown" }
+    }
+
+    val storageKey = remember(deviceId, orientation, widthBucket) {
+        LayoutStorageKey(
+            deviceId = deviceId,
+            orientation = orientation,
+            windowWidthBucket = widthBucket,
+            windowMode = "standard",
+        )
+    }
+
+    LaunchedEffect(storageKey) {
+        val repo = WorkbenchLayoutRepository(context)
+        workbenchVm.initialize(repo, storageKey)
+    }
+
+    val layoutState = workbenchVm.layoutState
+
+    val avoidRegions = appState.currentLayoutPlan?.avoidRegions ?: emptyList()
+    val windowInsetsPadding = computeWindowInsetPadding(avoidRegions)
+    val editorContentMaxWidthDp = appState.currentLayoutPlan?.editorContentMaxWidthDp ?: 0f
+    val pagePaddingDp = appState.currentLayoutPlan?.pagePaddingDp ?: 0f
+
+    SujianWorkbench(
+        layoutState = layoutState,
+        onAction = { action -> workbenchVm.dispatch(action) },
+        modifier = modifier.fillMaxSize().then(windowInsetsPadding),
+        editorContent = {
+            if (currentVolumeId != null && currentChapterId != null) {
+                val editorModifier = Modifier
+                    .fillMaxSize()
+                    .then(
+                        if (editorContentMaxWidthDp > 0f) Modifier.width(editorContentMaxWidthDp.dp)
+                        else Modifier
+                    )
+                    .then(
+                        if (pagePaddingDp > 0f) Modifier.padding(horizontal = pagePaddingDp.dp)
+                        else Modifier
+                    )
+
+                SujianEditorHost(
+                    projectId = currentProjectId,
+                    volumeId = currentVolumeId,
+                    chapterId = currentChapterId,
+                    chapterTitle = currentChapterTitle,
+                    modifier = editorModifier,
+                )
+            } else {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        stringResource(id = R.string.select_chapter_to_write),
+                        modifier = Modifier.padding(dims.space16),
+                    )
+                }
+            }
+        },
+        panelContent = { panelState ->
+            when (panelState.id) {
+                WorkbenchPanelId.ProjectNavigator -> ProjectNavigatorPanel(
+                    appState = appState,
+                    onSelectProject = { projectId, projectTitle ->
+                        appState.selectProject(projectId, projectTitle)
+                        appState.clearChapterSelection()
+                    },
+                )
+                WorkbenchPanelId.ChapterNavigator -> ChapterNavigatorPanel(
+                    projectId = currentProjectId,
+                    workspaceRepository = workspaceRepository,
+                    onSelectChapter = { volumeId, chapterId, chapterTitle ->
+                        appState.selectChapter(volumeId, chapterId, chapterTitle)
+                        if (onNavigateToChapter != null) {
+                            onNavigateToChapter(currentProjectId, volumeId, chapterId)
+                        }
+                    },
+                    onBackToProjects = {
+                        appState.clearProjectSelection()
+                    },
+                )
+                WorkbenchPanelId.AiAssistant -> AiAssistantPanel()
+                WorkbenchPanelId.Search -> SearchPanel()
+                WorkbenchPanelId.Statistics -> StatisticsPanel()
+                WorkbenchPanelId.StarMap -> StarMapPanel()
+                WorkbenchPanelId.DocumentOutline,
+                WorkbenchPanelId.CharacterInfo -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = panelState.id.name,
+                            style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                }
+            }
+        },
+    )
+}
+
+@OptIn(androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi::class)
+@Composable
+private fun CompactWorkspaceContent(
+    appState: SujianAppState,
+    currentProjectId: String,
+    currentVolumeId: String?,
+    currentChapterId: String?,
+    currentChapterTitle: String,
+    layoutPlan: com.xiwei.sujian.model.LayoutPlan?,
+    workspaceRepository: com.xiwei.sujian.data.WorkspaceRepository,
+    onNavigateToProject: ((projectId: String) -> Unit)?,
+    onNavigateToChapter: ((projectId: String, volumeId: String, chapterId: String) -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    val coroutineScope = rememberCoroutineScope()
+    val dims = LocalSujianDimensions.current
 
     val visiblePaneRoles = layoutPlan?.visiblePaneRoles
     val editorContentMaxWidthDp = layoutPlan?.editorContentMaxWidthDp ?: 0f
@@ -126,7 +322,6 @@ fun ProjectWorkspaceScreen(
         .then(windowInsetsPadding)
 
     val hingePadding = computeHingePadding(avoidRegions)
-    val dims = LocalSujianDimensions.current
 
     SujianListDetailScaffoldWithNavigator(
         navigator = navigator,
