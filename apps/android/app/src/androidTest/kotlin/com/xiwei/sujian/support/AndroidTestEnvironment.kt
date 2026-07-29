@@ -373,7 +373,10 @@ object AndroidTestEnvironment {
             }
         }
         val project = repo.createProject("自动化测试作品")
-        val volume = repo.createVolume(project.id, "测试卷")
+        // Core's create_project auto-creates a default "第一卷" volume
+        val volumes = repo.getVolumes(project.id)
+        val volume = volumes.firstOrNull()
+            ?: repo.createVolume(project.id, "测试卷")
         return TestProjectData(project.id, project.title, volume.id, volume.title)
     }
 
@@ -402,6 +405,7 @@ object AndroidTestEnvironment {
                     val session = createSession(ctx, animationTimeSource, transactionIdSource, manualFrameClock)
                     SujianAppDependencies.setTestProvider { _ -> session.deps }
                     try {
+                        ensureTestProjectAndVolume(ctx, session)
                         base.evaluate()
                     } finally {
                         SujianAppDependencies.setTestProvider(null)

@@ -91,10 +91,15 @@ fun SujianNavigationSuite(
     val capabilities = LocalAndroidCapabilities.current
     val isWideScreen = capabilities.windowSizeClass != WindowSizeClass.Compact
 
-    NavigationSuiteScaffold(
+        NavigationSuiteScaffold(
         navigationSuiteItems = {
             SujianDestination.entries.forEach { destination ->
-                        item(
+                val semanticTag = when (destination) {
+                    SujianDestination.Works -> SujianSemanticIds.NavigationWorks
+                    SujianDestination.Settings -> SujianSemanticIds.NavigationSettings
+                    else -> null
+                }
+                item(
                     selected = currentTopDestination == destination,
                     onClick = {
                         val targetRoute = when (destination) {
@@ -109,14 +114,9 @@ fun SujianNavigationSuite(
                         backStack.clear()
                         backStack.add(targetRoute)
                     },
+                    modifier = if (semanticTag != null) Modifier.testTag(semanticTag) else Modifier,
                     icon = {
-                        val semanticTag = when (destination) {
-                            SujianDestination.Works -> SujianSemanticIds.NavigationWorks
-                            SujianDestination.Settings -> SujianSemanticIds.NavigationSettings
-                            else -> null
-                        }
                         Icon(
-                            modifier = if (semanticTag != null) Modifier.testTag(semanticTag) else Modifier,
                             imageVector = if (currentTopDestination == destination) {
                                 destination.selectedIcon
                             } else {

@@ -51,11 +51,10 @@ class SettingsPersistenceTest {
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationSettings)
         composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationSettings).performClick()
 
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.SettingsScreen)
-
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.SettingsNavEditor)
         composeTestRule.onNodeWithTag(SujianSemanticIds.SettingsNavEditor).performClick()
 
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.SettingsScreen)
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.SettingsTypingAnimation)
     }
 
@@ -94,8 +93,18 @@ class SettingsPersistenceTest {
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationSettings, timeoutMs = 15_000)
         navigateToEditorSettings()
 
+        composeTestRule.waitForIdle()
+
+        ComposeWait.waitUntil(composeTestRule, {
+            val node = composeTestRule.onNodeWithTag(SujianSemanticIds.SettingsTypingAnimation)
+            val state = node.fetchSemanticsNode().config.getOrElseNullable(
+                androidx.compose.ui.semantics.SemanticsProperties.ToggleableState
+            ) { null }
+            if (wasOn) state == androidx.compose.ui.state.ToggleableState.Off
+            else state == androidx.compose.ui.state.ToggleableState.On
+        }, timeoutMs = 10_000, message = { "Typing animation toggle did not reflect persisted state after restart" })
+
         val restoredNode = composeTestRule.onNodeWithTag(SujianSemanticIds.SettingsTypingAnimation)
-        restoredNode.assertIsDisplayed()
         if (wasOn) {
             restoredNode.assertIsOff()
         } else {
@@ -111,11 +120,10 @@ class SettingsPersistenceTest {
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationSettings)
         composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationSettings).performClick()
 
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.SettingsScreen)
-
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.SettingsNavAppearance)
         composeTestRule.onNodeWithTag(SujianSemanticIds.SettingsNavAppearance).performClick()
 
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.SettingsScreen)
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.SettingsFontSize)
         val sliderNode = composeTestRule.onNodeWithTag(SujianSemanticIds.SettingsFontSize)
         sliderNode.assertIsDisplayed()
@@ -141,14 +149,20 @@ class SettingsPersistenceTest {
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationSettings, timeoutMs = 15_000)
         composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationSettings).performClick()
 
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.SettingsScreen)
-
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.SettingsNavAppearance)
         composeTestRule.onNodeWithTag(SujianSemanticIds.SettingsNavAppearance).performClick()
 
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.SettingsScreen)
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.SettingsFontSize, timeoutMs = 15_000)
+        ComposeWait.waitUntil(composeTestRule, {
+            val node = composeTestRule.onNodeWithTag(SujianSemanticIds.SettingsFontSize)
+            val desc = node.fetchSemanticsNode().config[
+                androidx.compose.ui.semantics.SemanticsProperties.StateDescription
+            ]
+            desc?.contains("22") == true
+        }, timeoutMs = 15_000, message = { "Slider state description did not update to 22 after restart" })
+
         val restoredSliderNode = composeTestRule.onNodeWithTag(SujianSemanticIds.SettingsFontSize)
-        restoredSliderNode.assertIsDisplayed()
         val restoredStateDesc = restoredSliderNode.fetchSemanticsNode().config[
             androidx.compose.ui.semantics.SemanticsProperties.StateDescription
         ]

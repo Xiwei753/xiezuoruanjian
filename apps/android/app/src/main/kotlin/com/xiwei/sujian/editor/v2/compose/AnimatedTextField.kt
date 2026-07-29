@@ -16,11 +16,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.focusable
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.semantics.editableText
+import androidx.compose.ui.semantics.insertTextAtCursor
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setText
 import androidx.compose.ui.platform.testTag
@@ -127,6 +129,7 @@ private fun AnimatedTextFieldWithCoordinator(
     Box(
         modifier = modifier
             .fillMaxWidth()
+            .focusable()
             .testTag(targetId)
             .onGloballyPositioned { coordinates ->
                 val position = coordinates.positionInWindow()
@@ -155,6 +158,13 @@ private fun AnimatedTextFieldWithCoordinator(
                 setText {
                     coordinator.updateTargetText(targetId, it.text)
                     coordinator.beginEdit(targetId, it.text.toByteArray(Charsets.UTF_8).size)
+                    localValue = it.text
+                    refOnValueChanged(it.text)
+                    true
+                }
+                insertTextAtCursor {
+                    localValue = it.text
+                    refOnValueChanged(it.text)
                     true
                 }
             }

@@ -4,7 +4,7 @@ import android.graphics.RectF
 import androidx.compose.ui.test.junit4.AndroidComposeTestRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.test.espresso.Espresso
 import androidx.test.espresso.matcher.ViewMatchers
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -1432,7 +1432,7 @@ class RenderedFrameVisualTest {
         composeTestRule.onNodeWithTag(SujianSemanticIds.WorkspaceCreateChapter).performClick()
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.ChapterTitleInput)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.ChapterTitleInput).performTextInput(chapterTitle)
+        composeTestRule.onNodeWithTag(SujianSemanticIds.ChapterTitleInput).performTextReplacement(chapterTitle)
 
         composeTestRule.onNodeWithTag(SujianSemanticIds.DialogConfirm).performClick()
 

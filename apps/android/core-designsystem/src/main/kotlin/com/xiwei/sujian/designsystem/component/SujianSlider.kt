@@ -40,10 +40,7 @@ fun SujianSlider(
     val dimensions = LocalSujianDimensions.current
     val displayLabel = valueLabel ?: valueFormatter?.invoke(value) ?: String.format("%.1f", value)
 
-    Column(modifier = modifier.fillMaxWidth().then(
-        if (semanticId != null) Modifier.testTag(semanticId).semantics(mergeDescendants = true) {}
-        else Modifier
-    )) {
+    Column(modifier = modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
