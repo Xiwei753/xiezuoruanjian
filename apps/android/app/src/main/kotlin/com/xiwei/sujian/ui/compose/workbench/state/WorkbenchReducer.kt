@@ -86,7 +86,7 @@ object WorkbenchReducer {
                     .toFloat()
                 val maxForEditor = availableWidthDp - EDITOR_MIN_DP - otherSideWidth
                 if (maxForEditor < SIDE_PANEL_MIN_DP) {
-                    sizeDp.coerceIn(0f, min(SIDE_PANEL_MAX_DP, maxOf(0f, maxForEditor)))
+                    return state
                 } else {
                     sizeDp.coerceIn(SIDE_PANEL_MIN_DP, min(SIDE_PANEL_MAX_DP, maxForEditor))
                 }

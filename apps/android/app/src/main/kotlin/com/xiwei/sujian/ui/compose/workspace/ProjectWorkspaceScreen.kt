@@ -237,7 +237,11 @@ private fun WorkbenchWorkspaceContent(
                         appState.clearProjectSelection()
                     },
                 )
-                WorkbenchPanelId.AiAssistant -> AiAssistantPanel()
+                WorkbenchPanelId.AiAssistant -> AiAssistantPanel(
+                    projectId = currentProjectId,
+                    volumeId = currentVolumeId,
+                    chapterId = currentChapterId,
+                )
                 WorkbenchPanelId.Search -> SearchPanel()
                 WorkbenchPanelId.Statistics -> StatisticsPanel()
                 WorkbenchPanelId.StarMap -> StarMapPanel()

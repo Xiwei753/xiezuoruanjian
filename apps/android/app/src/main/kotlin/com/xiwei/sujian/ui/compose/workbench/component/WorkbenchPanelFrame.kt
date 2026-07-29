@@ -1,6 +1,7 @@
 package com.xiwei.sujian.ui.compose.workbench.component
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -14,15 +15,22 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.R
 import com.xiwei.sujian.designsystem.icon.SujianIcons
 import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.ui.compose.workbench.model.DockZone
+import com.xiwei.sujian.ui.compose.workbench.model.DragDropTarget
 import com.xiwei.sujian.ui.compose.workbench.model.PanelVisibility
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelId
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelState
@@ -36,9 +44,15 @@ fun WorkbenchPanelFrame(
     modifier: Modifier = Modifier,
     title: String? = null,
     titleBarModifier: Modifier = Modifier,
+    onDragStart: ((Float, Float) -> Unit)? = null,
+    onDrag: ((Float, Float) -> Unit)? = null,
+    onDragEnd: ((Float, Float) -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
     val dims = LocalSujianDimensions.current
+    val density = LocalDensity.current
+    var isDragging by remember { mutableStateOf(false) }
+
     Column(modifier = modifier) {
         Surface(
             color = MaterialTheme.colorScheme.surfaceVariant,
@@ -47,6 +61,28 @@ fun WorkbenchPanelFrame(
             androidx.compose.foundation.layout.Row(
                 modifier = Modifier.padding(horizontal = dims.space8, vertical = dims.space4)
                     .height(40.dp)
+                    .then(
+                        if (onDragStart != null && onDrag != null && onDragEnd != null) {
+                            Modifier.pointerInput(panelState.id) {
+                                detectDragGestures(
+                                    onDragStart = { offset ->
+                                        isDragging = true
+                                        onDragStart(offset.x / density.density, offset.y / density.density)
+                                    },
+                                    onDragEnd = {
+                                        isDragging = false
+                                        onDragEnd(0f, 0f)
+                                    },
+                                    onDragCancel = {
+                                        isDragging = false
+                                    },
+                                ) { change, dragAmount ->
+                                    change.consume()
+                                    onDrag(dragAmount.x / density.density, dragAmount.y / density.density)
+                                }
+                            }
+                        } else Modifier
+                    )
                     .then(titleBarModifier),
                 verticalAlignment = Alignment.CenterVertically,
             ) {

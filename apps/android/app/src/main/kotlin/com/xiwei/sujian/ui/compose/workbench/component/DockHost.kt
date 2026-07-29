@@ -32,6 +32,10 @@ fun DockHost(
     onHide: (WorkbenchPanelId) -> Unit,
     onActivateTab: (groupId: String, panelId: WorkbenchPanelId) -> Unit,
     onMovePanelToGroup: (panelId: WorkbenchPanelId, tabGroupId: String) -> Unit = { _, _ -> },
+    onDragStart: ((WorkbenchPanelId, Float, Float) -> Unit)? = null,
+    onDrag: ((WorkbenchPanelId, Float, Float) -> Unit)? = null,
+    onDragEnd: ((WorkbenchPanelId) -> Unit)? = null,
+    onResizeGroup: ((String, Float) -> Unit)? = null,
     modifier: Modifier = Modifier,
     panelContent: @Composable (WorkbenchPanelState) -> Unit,
 ) {
@@ -77,6 +81,9 @@ fun DockHost(
                             onFloat = { onFloat(activePanel.id) },
                             onCollapse = { onCollapse(activePanel.id) },
                             onClose = { onHide(activePanel.id) },
+                            onDragStart = onDragStart?.let { { x, y -> it(activePanel.id, x, y) } },
+                            onDrag = onDrag?.let { { x, y -> it(activePanel.id, x, y) } },
+                            onDragEnd = onDragEnd?.let { { _, _ -> it(activePanel.id) } },
                             modifier = Modifier.fillMaxSize(),
                         ) {
                             panelContent(activePanel)
@@ -84,7 +91,7 @@ fun DockHost(
                     }
                 } else {
                     Column(modifier = Modifier.fillMaxHeight()) {
-                        for (group in groups) {
+                        for ((index, group) in groups.withIndex()) {
                             val groupPanels = expandedPanels.filter { it.tabGroupId == group.id }
                             val activePanelId = group.activePanelId ?: group.panelIds.firstOrNull()
                             val activePanel = groupPanels.find { it.id == activePanelId } ?: groupPanels.firstOrNull()
@@ -104,11 +111,29 @@ fun DockHost(
                                         onFloat = { onFloat(activePanel.id) },
                                         onCollapse = { onCollapse(activePanel.id) },
                                         onClose = { onHide(activePanel.id) },
+                                        onDragStart = onDragStart?.let { { x, y -> it(activePanel.id, x, y) } },
+                                        onDrag = onDrag?.let { { x, y -> it(activePanel.id, x, y) } },
+                                        onDragEnd = onDragEnd?.let { { _, _ -> it(activePanel.id) } },
                                         modifier = Modifier.fillMaxSize(),
                                     ) {
                                         panelContent(activePanel)
                                     }
                                 }
+                            }
+                            if (index < groups.size - 1) {
+                                DockResizeHandle(
+                                    zone = zone,
+                                    panelId = group.panelIds.first(),
+                                    currentSizeDp = activePanel?.sizeDp ?: group.sizeRatio * 300f,
+                                    onResize = { _, newSize ->
+                                        onResizeGroup?.invoke(group.id, newSize)
+                                    },
+                                    modifier = if (zone == DockZone.Left || zone == DockZone.Right) {
+                                        Modifier.fillMaxHeight().width(4.dp)
+                                    } else {
+                                        Modifier.fillMaxWidth().height(4.dp)
+                                    },
+                                )
                             }
                         }
                     }
@@ -132,6 +157,9 @@ fun DockHost(
                             onFloat = { onFloat(activePanel.id) },
                             onCollapse = { onCollapse(activePanel.id) },
                             onClose = { onHide(activePanel.id) },
+                            onDragStart = onDragStart?.let { { x, y -> it(activePanel.id, x, y) } },
+                            onDrag = onDrag?.let { { x, y -> it(activePanel.id, x, y) } },
+                            onDragEnd = onDragEnd?.let { { _, _ -> it(activePanel.id) } },
                             modifier = Modifier.fillMaxSize(),
                         ) {
                             panelContent(activePanel)
@@ -139,7 +167,7 @@ fun DockHost(
                     }
                 } else {
                     Row(modifier = Modifier.fillMaxWidth()) {
-                        for (group in groups) {
+                        for ((index, group) in groups.withIndex()) {
                             val groupPanels = expandedPanels.filter { it.tabGroupId == group.id }
                             val activePanelId = group.activePanelId ?: group.panelIds.firstOrNull()
                             val activePanel = groupPanels.find { it.id == activePanelId } ?: groupPanels.firstOrNull()
@@ -159,6 +187,9 @@ fun DockHost(
                                         onFloat = { onFloat(activePanel.id) },
                                         onCollapse = { onCollapse(activePanel.id) },
                                         onClose = { onHide(activePanel.id) },
+                                        onDragStart = onDragStart?.let { { x, y -> it(activePanel.id, x, y) } },
+                                        onDrag = onDrag?.let { { x, y -> it(activePanel.id, x, y) } },
+                                        onDragEnd = onDragEnd?.let { { _, _ -> it(activePanel.id) } },
                                         modifier = Modifier.fillMaxSize(),
                                     ) {
                                         panelContent(activePanel)

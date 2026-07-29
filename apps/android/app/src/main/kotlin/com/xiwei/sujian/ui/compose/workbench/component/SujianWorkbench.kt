@@ -17,12 +17,16 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.ui.compose.workbench.model.DockZone
+import com.xiwei.sujian.ui.compose.workbench.model.DragDropTarget
 import com.xiwei.sujian.ui.compose.workbench.model.PanelVisibility
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchAction
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchDragState
@@ -41,11 +45,12 @@ fun SujianWorkbench(
     layoutState: WorkbenchLayoutState,
     onAction: (WorkbenchAction) -> Unit,
     modifier: Modifier = Modifier,
-    dragState: WorkbenchDragState = WorkbenchDragState.Idle,
     editorContent: @Composable () -> Unit,
     panelContent: @Composable (WorkbenchPanelState) -> Unit,
 ) {
     val dims = LocalSujianDimensions.current
+
+    var dragState by remember { mutableStateOf(WorkbenchDragState.Idle) }
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val maxWidthDp = maxWidth.value
@@ -78,6 +83,47 @@ fun SujianWorkbench(
 
         val showRightDock = rightExpanded.isNotEmpty() && !isOverlayMode && (allowDualSide || leftExpanded.isEmpty())
 
+        fun computeDropTarget(px: Float, py: Float): DragDropTarget {
+            if (px < DUAL_SIDE_THRESHOLD_DP * 0.15f) return DragDropTarget.DockLeft
+            if (px > maxWidthDp - DUAL_SIDE_THRESHOLD_DP * 0.15f) return DragDropTarget.DockRight
+            if (py > maxHeightDp * 0.7f) return DragDropTarget.DockBottom
+            return DragDropTarget.None
+        }
+
+        val onPanelDragStart: (WorkbenchPanelId, Float, Float) -> Unit = { id, _, _ ->
+            dragState = WorkbenchDragState(
+                isDragging = true,
+                draggedPanelId = id,
+                pointerX = 0f,
+                pointerY = 0f,
+                dropTarget = DragDropTarget.None,
+            )
+        }
+
+        val onPanelDrag: (WorkbenchPanelId, Float, Float) -> Unit = { _, dx, dy ->
+            val newX = dragState.pointerX + dx
+            val newY = dragState.pointerY + dy
+            dragState = dragState.copy(
+                pointerX = newX,
+                pointerY = newY,
+                dropTarget = computeDropTarget(newX, newY),
+            )
+        }
+
+        val onPanelDragEnd: (WorkbenchPanelId) -> Unit = { id ->
+            val target = dragState.dropTarget
+            if (target == DragDropTarget.DockLeft) {
+                onAction(WorkbenchAction.DockPanel(id, DockZone.Left))
+            } else if (target == DragDropTarget.DockRight) {
+                onAction(WorkbenchAction.DockPanel(id, DockZone.Right))
+            } else if (target == DragDropTarget.DockBottom) {
+                onAction(WorkbenchAction.DockPanel(id, DockZone.Bottom))
+            } else {
+                onAction(WorkbenchAction.FloatPanel(id))
+            }
+            dragState = WorkbenchDragState.Idle
+        }
+
         Column(modifier = Modifier.fillMaxSize()) {
             Row(
                 modifier = Modifier.weight(1f).fillMaxWidth()
@@ -101,6 +147,9 @@ fun SujianWorkbench(
                         onHide = { onAction(WorkbenchAction.HidePanel(it)) },
                         onActivateTab = { g, p -> onAction(WorkbenchAction.ActivateTab(g, p)) },
                         onMovePanelToGroup = { p, g -> onAction(WorkbenchAction.MovePanelToGroup(p, g)) },
+                        onDragStart = onPanelDragStart,
+                        onDrag = onPanelDrag,
+                        onDragEnd = onPanelDragEnd,
                         modifier = Modifier.fillMaxHeight(),
                         panelContent = panelContent,
                     )
@@ -142,6 +191,9 @@ fun SujianWorkbench(
                         onHide = { onAction(WorkbenchAction.HidePanel(it)) },
                         onActivateTab = { g, p -> onAction(WorkbenchAction.ActivateTab(g, p)) },
                         onMovePanelToGroup = { p, g -> onAction(WorkbenchAction.MovePanelToGroup(p, g)) },
+                        onDragStart = onPanelDragStart,
+                        onDrag = onPanelDrag,
+                        onDragEnd = onPanelDragEnd,
                         modifier = Modifier.fillMaxHeight(),
                         panelContent = panelContent,
                     )
@@ -174,6 +226,9 @@ fun SujianWorkbench(
                     onHide = { onAction(WorkbenchAction.HidePanel(it)) },
                     onActivateTab = { g, p -> onAction(WorkbenchAction.ActivateTab(g, p)) },
                     onMovePanelToGroup = { p, g -> onAction(WorkbenchAction.MovePanelToGroup(p, g)) },
+                    onDragStart = onPanelDragStart,
+                    onDrag = onPanelDrag,
+                    onDragEnd = onPanelDragEnd,
                     modifier = Modifier.fillMaxWidth(),
                     panelContent = panelContent,
                 )
