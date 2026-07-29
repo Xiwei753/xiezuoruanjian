@@ -163,7 +163,28 @@ object WorkbenchReducer {
 
     private fun dockPanel(state: WorkbenchLayoutState, panelId: WorkbenchPanelId, zone: DockZone): WorkbenchLayoutState {
         val panel = state.panels[panelId] ?: return state
-        return updatePanel(state, panel.copy(zone = zone, visibility = PanelVisibility.Expanded), markCustom = true)
+        if (panel.zone == zone) return updatePanel(state, panel.copy(visibility = PanelVisibility.Expanded), markCustom = true)
+        val existingGroupId = state.panels.values
+            .filter { it.zone == zone && it.visibility == PanelVisibility.Expanded }
+            .firstOrNull()?.tabGroupId
+        val newTabGroupId = existingGroupId ?: "${zone.name.lowercase()}-panel-${panel.id.name}"
+        val updatedDockGroupSizes = if (existingGroupId == null && newTabGroupId !in state.dockGroupSizes) {
+            val defaultSize = when (zone) {
+                DockZone.Left, DockZone.Right -> SIDE_PANEL_MIN_DP
+                DockZone.Bottom -> BOTTOM_PANEL_MIN_DP
+                DockZone.Floating -> 300f
+            }
+            state.dockGroupSizes + (newTabGroupId to defaultSize)
+        } else state.dockGroupSizes
+        return state.copy(
+            panels = state.panels + (panel.id to panel.copy(
+                zone = zone,
+                visibility = PanelVisibility.Expanded,
+                tabGroupId = newTabGroupId,
+            )),
+            dockGroupSizes = updatedDockGroupSizes,
+            preset = WorkbenchPreset.Custom,
+        )
     }
 
     private fun moveFloatingPanel(state: WorkbenchLayoutState, panelId: WorkbenchPanelId, x: Float, y: Float): WorkbenchLayoutState {
@@ -389,11 +410,6 @@ object WorkbenchReducer {
         maxWidthDp: Float,
         maxHeightDp: Float,
     ): WorkbenchPresentationState {
-        val isOverlayMode = maxWidthDp < 840
-        if (!isOverlayMode) {
-            return WorkbenchPresentationState()
-        }
-        val allowDualSide = maxWidthDp >= 1200
         val leftExpanded = state.panels.values.filter {
             it.zone == DockZone.Left && it.visibility == PanelVisibility.Expanded
         }
@@ -403,21 +419,49 @@ object WorkbenchReducer {
         val bottomExpanded = state.panels.values.filter {
             it.zone == DockZone.Bottom && it.visibility == PanelVisibility.Expanded
         }
-        val allExpanded = leftExpanded + rightExpanded + bottomExpanded
-        if (allExpanded.isEmpty()) {
-            return WorkbenchPresentationState(isOverlayMode = true)
+
+        val overlayIds: List<WorkbenchPanelId>
+        val isOverlayMode: Boolean
+
+        when {
+            maxWidthDp < 840 -> {
+                val allExpanded = leftExpanded + rightExpanded + bottomExpanded
+                overlayIds = allExpanded.map { it.id }
+                isOverlayMode = true
+            }
+            maxWidthDp < 1200 -> {
+                if (leftExpanded.isNotEmpty() && rightExpanded.isNotEmpty()) {
+                    overlayIds = rightExpanded.map { it.id }
+                    isOverlayMode = false
+                } else {
+                    overlayIds = emptyList()
+                    isOverlayMode = false
+                }
+            }
+            else -> {
+                overlayIds = emptyList()
+                isOverlayMode = false
+            }
         }
-        val overlayIds = allExpanded.map { it.id }
+
+        if (overlayIds.isEmpty()) {
+            return WorkbenchPresentationState(isOverlayMode = isOverlayMode)
+        }
+
+        val allExpanded = leftExpanded + rightExpanded + bottomExpanded
         val preferredActive = state.activeOverlayPanelId
         val activeId = when {
             preferredActive != null && preferredActive in overlayIds -> preferredActive
-            !allowDualSide && leftExpanded.isNotEmpty() && rightExpanded.isNotEmpty() -> leftExpanded.first().id
-            else -> allExpanded.first().id
+            else -> {
+                val firstOverlay = allExpanded.firstOrNull { it.id in overlayIds }
+                firstOverlay?.id ?: overlayIds.first()
+            }
         }
+
         return WorkbenchPresentationState(
             overlayPanelIds = overlayIds,
             activeOverlayPanelId = activeId,
-            isOverlayMode = true,
+            isOverlayMode = isOverlayMode,
         )
     }
 

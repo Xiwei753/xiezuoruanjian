@@ -331,7 +331,7 @@ fun DockGroupResizeHandle(
                     onDragCancel = {},
                 ) { change, dragAmount ->
                     val deltaDp = when (zone) {
-                        DockZone.Left, DockZone.Right -> dragAmount.y / density.density
+                        DockZone.Left, DockZone.Right -> -dragAmount.y / density.density
                         DockZone.Bottom -> dragAmount.x / density.density
                         DockZone.Floating -> 0f
                     }
