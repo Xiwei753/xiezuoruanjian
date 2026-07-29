@@ -16,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
+import com.xiwei.sujian.ui.compose.workbench.model.DockGroupState
 import com.xiwei.sujian.ui.compose.workbench.model.DockZone
 import com.xiwei.sujian.ui.compose.workbench.model.PanelVisibility
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelId
@@ -30,6 +31,7 @@ fun DockHost(
     onCollapse: (WorkbenchPanelId) -> Unit,
     onHide: (WorkbenchPanelId) -> Unit,
     onActivateTab: (groupId: String, panelId: WorkbenchPanelId) -> Unit,
+    onMovePanelToGroup: (panelId: WorkbenchPanelId, tabGroupId: String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
     panelContent: @Composable (WorkbenchPanelState) -> Unit,
 ) {
@@ -37,9 +39,19 @@ fun DockHost(
     val expandedPanels = panels.filter { it.visibility == PanelVisibility.Expanded }
     if (expandedPanels.isEmpty()) return
 
-    val firstPanel = expandedPanels.first()
-    val activePanelId = activeTabByGroup[firstPanel.tabGroupId] ?: firstPanel.id
-    val activePanel = expandedPanels.find { it.id == activePanelId } ?: firstPanel
+    val groups = expandedPanels
+        .groupBy { it.tabGroupId }
+        .map { (groupId, groupPanels) ->
+            val sorted = groupPanels.sortedBy { it.order }
+            DockGroupState(
+                id = groupId,
+                zone = zone,
+                order = sorted.firstOrNull()?.order ?: 0,
+                activePanelId = activeTabByGroup[groupId] ?: sorted.firstOrNull()?.id,
+                panelIds = sorted.map { it.id },
+            )
+        }
+        .sortedBy { it.order }
 
     Surface(
         color = MaterialTheme.colorScheme.surface,
@@ -48,46 +60,112 @@ fun DockHost(
     ) {
         when (zone) {
             DockZone.Left, DockZone.Right -> {
-                Column(modifier = Modifier.width(activePanel.sizeDp.dp).fillMaxHeight()) {
-                    if (expandedPanels.size > 1) {
-                        DockTabStrip(
-                            panels = expandedPanels,
-                            activeTabId = activePanelId,
-                            onActivateTab = { panelId ->
-                                onActivateTab(firstPanel.tabGroupId, panelId)
-                            },
-                        )
+                if (groups.size <= 1) {
+                    val group = groups.first()
+                    val activePanelId = group.activePanelId ?: group.panelIds.firstOrNull()
+                    val activePanel = expandedPanels.find { it.id == activePanelId } ?: expandedPanels.first()
+                    Column(modifier = Modifier.width(activePanel.sizeDp.dp).fillMaxHeight()) {
+                        if (group.panelIds.size > 1) {
+                            DockTabStrip(
+                                panels = expandedPanels.filter { it.tabGroupId == group.id },
+                                activeTabId = activePanelId ?: WorkbenchPanelId.ProjectNavigator,
+                                onActivateTab = { panelId -> onActivateTab(group.id, panelId) },
+                            )
+                        }
+                        WorkbenchPanelFrame(
+                            panelState = activePanel,
+                            onFloat = { onFloat(activePanel.id) },
+                            onCollapse = { onCollapse(activePanel.id) },
+                            onClose = { onHide(activePanel.id) },
+                            modifier = Modifier.fillMaxSize(),
+                        ) {
+                            panelContent(activePanel)
+                        }
                     }
-                    WorkbenchPanelFrame(
-                        panelState = activePanel,
-                        onFloat = { onFloat(activePanel.id) },
-                        onCollapse = { onCollapse(activePanel.id) },
-                        onClose = { onHide(activePanel.id) },
-                        modifier = Modifier.fillMaxSize(),
-                    ) {
-                        panelContent(activePanel)
+                } else {
+                    Column(modifier = Modifier.fillMaxHeight()) {
+                        for (group in groups) {
+                            val groupPanels = expandedPanels.filter { it.tabGroupId == group.id }
+                            val activePanelId = group.activePanelId ?: group.panelIds.firstOrNull()
+                            val activePanel = groupPanels.find { it.id == activePanelId } ?: groupPanels.firstOrNull()
+                            if (activePanel != null) {
+                                Column(
+                                    modifier = Modifier.width(activePanel.sizeDp.dp).weight(1f)
+                                ) {
+                                    if (group.panelIds.size > 1) {
+                                        DockTabStrip(
+                                            panels = groupPanels,
+                                            activeTabId = activePanelId ?: WorkbenchPanelId.ProjectNavigator,
+                                            onActivateTab = { panelId -> onActivateTab(group.id, panelId) },
+                                        )
+                                    }
+                                    WorkbenchPanelFrame(
+                                        panelState = activePanel,
+                                        onFloat = { onFloat(activePanel.id) },
+                                        onCollapse = { onCollapse(activePanel.id) },
+                                        onClose = { onHide(activePanel.id) },
+                                        modifier = Modifier.fillMaxSize(),
+                                    ) {
+                                        panelContent(activePanel)
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
             DockZone.Bottom -> {
-                Column(modifier = Modifier.fillMaxWidth().height(activePanel.sizeDp.dp)) {
-                    if (expandedPanels.size > 1) {
-                        DockTabStrip(
-                            panels = expandedPanels,
-                            activeTabId = activePanelId,
-                            onActivateTab = { panelId ->
-                                onActivateTab(firstPanel.tabGroupId, panelId)
-                            },
-                        )
+                if (groups.size <= 1) {
+                    val group = groups.first()
+                    val activePanelId = group.activePanelId ?: group.panelIds.firstOrNull()
+                    val activePanel = expandedPanels.find { it.id == activePanelId } ?: expandedPanels.first()
+                    Column(modifier = Modifier.fillMaxWidth().height(activePanel.sizeDp.dp)) {
+                        if (group.panelIds.size > 1) {
+                            DockTabStrip(
+                                panels = expandedPanels.filter { it.tabGroupId == group.id },
+                                activeTabId = activePanelId ?: WorkbenchPanelId.ProjectNavigator,
+                                onActivateTab = { panelId -> onActivateTab(group.id, panelId) },
+                            )
+                        }
+                        WorkbenchPanelFrame(
+                            panelState = activePanel,
+                            onFloat = { onFloat(activePanel.id) },
+                            onCollapse = { onCollapse(activePanel.id) },
+                            onClose = { onHide(activePanel.id) },
+                            modifier = Modifier.fillMaxSize(),
+                        ) {
+                            panelContent(activePanel)
+                        }
                     }
-                    WorkbenchPanelFrame(
-                        panelState = activePanel,
-                        onFloat = { onFloat(activePanel.id) },
-                        onCollapse = { onCollapse(activePanel.id) },
-                        onClose = { onHide(activePanel.id) },
-                        modifier = Modifier.fillMaxSize(),
-                    ) {
-                        panelContent(activePanel)
+                } else {
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        for (group in groups) {
+                            val groupPanels = expandedPanels.filter { it.tabGroupId == group.id }
+                            val activePanelId = group.activePanelId ?: group.panelIds.firstOrNull()
+                            val activePanel = groupPanels.find { it.id == activePanelId } ?: groupPanels.firstOrNull()
+                            if (activePanel != null) {
+                                Column(
+                                    modifier = Modifier.weight(1f).height(activePanel.sizeDp.dp)
+                                ) {
+                                    if (group.panelIds.size > 1) {
+                                        DockTabStrip(
+                                            panels = groupPanels,
+                                            activeTabId = activePanelId ?: WorkbenchPanelId.ProjectNavigator,
+                                            onActivateTab = { panelId -> onActivateTab(group.id, panelId) },
+                                        )
+                                    }
+                                    WorkbenchPanelFrame(
+                                        panelState = activePanel,
+                                        onFloat = { onFloat(activePanel.id) },
+                                        onCollapse = { onCollapse(activePanel.id) },
+                                        onClose = { onHide(activePanel.id) },
+                                        modifier = Modifier.fillMaxSize(),
+                                    ) {
+                                        panelContent(activePanel)
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

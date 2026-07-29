@@ -9,7 +9,10 @@ import androidx.lifecycle.viewModelScope
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchAction
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchLayoutState
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 class WorkbenchViewModel(
@@ -21,9 +24,16 @@ class WorkbenchViewModel(
 
     private var repository: WorkbenchLayoutRepository? = null
     private var currentStorageKey: LayoutStorageKey? = null
-    private var pendingResizeJob: kotlinx.coroutines.Job? = null
+    private var pendingResizeJob: Job? = null
+    private val switchMutex = Mutex()
+    private var isInitialized = false
 
     fun initialize(repository: WorkbenchLayoutRepository, storageKey: LayoutStorageKey) {
+        if (isInitialized) {
+            switchStorageKey(storageKey)
+            return
+        }
+        isInitialized = true
         this.repository = repository
         this.currentStorageKey = storageKey
         viewModelScope.launch {
@@ -53,16 +63,22 @@ class WorkbenchViewModel(
     }
 
     fun onWindowBucketChanged(newKey: LayoutStorageKey) {
+        switchStorageKey(newKey)
+    }
+
+    private fun switchStorageKey(newKey: LayoutStorageKey) {
         val oldKey = currentStorageKey
         if (oldKey == newKey) return
         val repo = repository ?: return
         viewModelScope.launch {
-            if (oldKey != null) {
-                withContext(Dispatchers.IO) { repo.saveLayout(oldKey, layoutState) }
+            switchMutex.withLock {
+                if (oldKey != null) {
+                    withContext(Dispatchers.IO) { repo.saveLayout(oldKey, layoutState) }
+                }
+                currentStorageKey = newKey
+                val saved = withContext(Dispatchers.IO) { repo.loadLayout(newKey) }
+                layoutState = saved ?: WorkbenchReducer.computeDefaultLayout()
             }
-            currentStorageKey = newKey
-            val saved = withContext(Dispatchers.IO) { repo.loadLayout(newKey) }
-            layoutState = saved ?: WorkbenchReducer.computeDefaultLayout()
         }
     }
 

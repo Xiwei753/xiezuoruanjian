@@ -51,10 +51,11 @@ sealed class VolumeChapterListItem {
 }
 
 @Composable
-fun VolumeChapterTree(
+fun ChapterTreeContent(
     projectId: String,
     workspaceRepository: com.xiwei.sujian.data.WorkspaceRepository,
     onSelectChapter: (volumeId: String, chapterId: String, chapterTitle: String) -> Unit,
+    showHeader: Boolean = true,
     onBackToProjects: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -82,29 +83,31 @@ fun VolumeChapterTree(
     }
 
     Column(modifier = modifier) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+        if (showHeader) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    SujianIconButton(
+                        onClick = onBackToProjects,
+                        icon = SujianIcons.ArrowBack,
+                        contentDescription = stringResource(id = R.string.back_to_project_list),
+                    )
+                    Text(stringResource(id = R.string.volume_chapter_title), style = MaterialTheme.typography.titleMedium)
+                }
                 SujianIconButton(
-                    onClick = onBackToProjects,
-                    icon = SujianIcons.ArrowBack,
-                    contentDescription = stringResource(id = R.string.back_to_project_list),
+                    onClick = {
+                        dialogState = WorkspaceDialogState.CreateVolume()
+                    },
+                    icon = SujianIcons.Add,
+                    contentDescription = stringResource(id = R.string.action_new_volume_short),
+                    semanticId = SujianSemanticIds.WorkspaceCreateVolume,
                 )
-                Text(stringResource(id = R.string.volume_chapter_title), style = MaterialTheme.typography.titleMedium)
             }
-            SujianIconButton(
-                onClick = {
-                    dialogState = WorkspaceDialogState.CreateVolume()
-                },
-                icon = SujianIcons.Add,
-                contentDescription = stringResource(id = R.string.action_new_volume_short),
-                semanticId = SujianSemanticIds.WorkspaceCreateVolume,
-            )
         }
 
         uiState.projectStats?.let { stats ->
@@ -275,6 +278,24 @@ fun VolumeChapterTree(
             )
         }
     }
+}
+
+@Composable
+fun VolumeChapterTree(
+    projectId: String,
+    workspaceRepository: com.xiwei.sujian.data.WorkspaceRepository,
+    onSelectChapter: (volumeId: String, chapterId: String, chapterTitle: String) -> Unit,
+    onBackToProjects: () -> Unit = {},
+    modifier: Modifier = Modifier
+) {
+    ChapterTreeContent(
+        projectId = projectId,
+        workspaceRepository = workspaceRepository,
+        onSelectChapter = onSelectChapter,
+        showHeader = true,
+        onBackToProjects = onBackToProjects,
+        modifier = modifier,
+    )
 }
 
 @Composable

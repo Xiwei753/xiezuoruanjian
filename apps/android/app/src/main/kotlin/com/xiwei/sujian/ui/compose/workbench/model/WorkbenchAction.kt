@@ -13,4 +13,10 @@ sealed class WorkbenchAction {
     data class MoveFloatingPanel(val panelId: WorkbenchPanelId, val x: Float, val y: Float) : WorkbenchAction()
     data class ApplyPreset(val preset: WorkbenchPreset) : WorkbenchAction()
     data object RestoreLayout : WorkbenchAction()
+    data class MovePanelToGroup(val panelId: WorkbenchPanelId, val tabGroupId: String) : WorkbenchAction()
+    data class CreateDockGroup(val groupId: String, val zone: DockZone, val order: Int) : WorkbenchAction()
+    data class ReorderPanel(val panelId: WorkbenchPanelId, val newOrder: Int) : WorkbenchAction()
+    data class ReorderDockGroup(val groupId: String, val newOrder: Int) : WorkbenchAction()
+    data class BringFloatingToFront(val panelId: WorkbenchPanelId) : WorkbenchAction()
+    data class ResizeFloatingPanel(val panelId: WorkbenchPanelId, val widthDp: Float, val heightDp: Float) : WorkbenchAction()
 }

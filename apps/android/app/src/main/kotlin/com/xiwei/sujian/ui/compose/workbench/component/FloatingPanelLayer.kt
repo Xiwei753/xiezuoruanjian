@@ -19,9 +19,12 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.xiwei.sujian.ui.compose.workbench.model.DockZone
+import com.xiwei.sujian.ui.compose.workbench.model.DragDropTarget
 import com.xiwei.sujian.ui.compose.workbench.model.PanelVisibility
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelId
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelState
+
+private const val DOCK_HINT_MARGIN_DP = 72f
 
 @Composable
 fun FloatingPanelLayer(
@@ -30,6 +33,12 @@ fun FloatingPanelLayer(
     onCollapse: (WorkbenchPanelId) -> Unit,
     onHide: (WorkbenchPanelId) -> Unit,
     onMoveFloating: (WorkbenchPanelId, Float, Float) -> Unit,
+    onDock: (WorkbenchPanelId, DockZone) -> Unit,
+    onBringToFront: (WorkbenchPanelId) -> Unit,
+    onResizeFloating: (WorkbenchPanelId, Float, Float) -> Unit,
+    onMovePanelToGroup: (WorkbenchPanelId, String) -> Unit,
+    maxWidthDp: Float,
+    maxHeightDp: Float,
     modifier: Modifier = Modifier,
     panelContent: @Composable (WorkbenchPanelState) -> Unit,
 ) {
@@ -37,16 +46,27 @@ fun FloatingPanelLayer(
     if (floatingPanels.isEmpty()) return
 
     Box(modifier = modifier.fillMaxSize()) {
-        for ((index, panel) in floatingPanels.withIndex()) {
+        val sortedByZ = floatingPanels.sortedBy { it.floatingZIndex }
+        for ((index, panel) in sortedByZ.withIndex()) {
             val density = LocalDensity.current
             var dragOffsetX by remember(panel.id) { mutableFloatStateOf(0f) }
             var dragOffsetY by remember(panel.id) { mutableFloatStateOf(0f) }
+            var resizeOffsetW by remember(panel.id) { mutableFloatStateOf(0f) }
+            var resizeOffsetH by remember(panel.id) { mutableFloatStateOf(0f) }
 
             Surface(
                 modifier = Modifier
-                    .offset(x = (panel.floatingX + dragOffsetX).dp, y = (panel.floatingY + dragOffsetY).dp)
-                    .size(width = panel.floatingWidthDp.dp, height = panel.floatingHeightDp.dp)
-                    .zIndex(index.toFloat()),
+                    .offset(
+                        x = (panel.floatingX + dragOffsetX).dp,
+                        y = (panel.floatingY + dragOffsetY).dp
+                    )
+                    .size(
+                        width = (panel.floatingWidthDp + resizeOffsetW).dp
+                            .coerceAtLeast(200.dp),
+                        height = (panel.floatingHeightDp + resizeOffsetH).dp
+                            .coerceAtLeast(150.dp),
+                    )
+                    .zIndex(panel.floatingZIndex.toFloat()),
                 tonalElevation = 4.dp,
                 shadowElevation = 8.dp,
                 shape = androidx.compose.material3.MaterialTheme.shapes.large,
@@ -61,10 +81,23 @@ fun FloatingPanelLayer(
                     titleBarModifier = Modifier
                         .pointerInput(panel.id) {
                             detectDragGestures(
+                                onDragStart = {
+                                    onBringToFront(panel.id)
+                                },
                                 onDragEnd = {
                                     val newX = panel.floatingX + dragOffsetX
                                     val newY = panel.floatingY + dragOffsetY
-                                    onMoveFloating(panel.id, newX, newY)
+                                    val dropTarget = computeDropTarget(
+                                        newX, newY,
+                                        panel.floatingWidthDp, panel.floatingHeightDp,
+                                        maxWidthDp, maxHeightDp,
+                                    )
+                                    when (dropTarget) {
+                                        DragDropTarget.DockLeft -> onDock(panel.id, DockZone.Left)
+                                        DragDropTarget.DockRight -> onDock(panel.id, DockZone.Right)
+                                        DragDropTarget.DockBottom -> onDock(panel.id, DockZone.Bottom)
+                                        else -> onMoveFloating(panel.id, newX, newY)
+                                    }
                                     dragOffsetX = 0f
                                     dragOffsetY = 0f
                                 },
@@ -81,7 +114,49 @@ fun FloatingPanelLayer(
                 ) {
                     panelContent(panel)
                 }
+
+                Box(
+                    modifier = Modifier
+                        .align(androidx.compose.ui.Alignment.BottomEnd)
+                        .width(16.dp)
+                        .height(16.dp)
+                        .pointerInput(panel.id) {
+                            detectDragGestures(
+                                onDragEnd = {
+                                    val newW = panel.floatingWidthDp + resizeOffsetW
+                                    val newH = panel.floatingHeightDp + resizeOffsetH
+                                    onResizeFloating(panel.id, newW, newH)
+                                    resizeOffsetW = 0f
+                                    resizeOffsetH = 0f
+                                },
+                                onDragCancel = {
+                                    resizeOffsetW = 0f
+                                    resizeOffsetH = 0f
+                                },
+                            ) { change, dragAmount ->
+                                resizeOffsetW += dragAmount.x / density.density
+                                resizeOffsetH += dragAmount.y / density.density
+                                change.consume()
+                            }
+                        },
+                )
             }
         }
     }
+}
+
+private fun computeDropTarget(
+    panelX: Float,
+    panelY: Float,
+    panelW: Float,
+    panelH: Float,
+    maxW: Float,
+    maxH: Float,
+): DragDropTarget {
+    val centerX = panelX + panelW / 2f
+    val centerY = panelY + panelH / 2f
+    if (centerX < DOCK_HINT_MARGIN_DP) return DragDropTarget.DockLeft
+    if (centerX > maxW - DOCK_HINT_MARGIN_DP) return DragDropTarget.DockRight
+    if (centerY > maxH - DOCK_HINT_MARGIN_DP) return DragDropTarget.DockBottom
+    return DragDropTarget.None
 }

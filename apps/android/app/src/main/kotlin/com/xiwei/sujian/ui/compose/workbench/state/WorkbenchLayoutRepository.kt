@@ -64,6 +64,7 @@ class WorkbenchLayoutRepository(
                     prefs[floatPreferencesKey("${p}.floatingY")] = panel.floatingY
                     prefs[floatPreferencesKey("${p}.floatingWidthDp")] = panel.floatingWidthDp
                     prefs[floatPreferencesKey("${p}.floatingHeightDp")] = panel.floatingHeightDp
+                    prefs[intPreferencesKey("${p}.floatingZIndex")] = panel.floatingZIndex
                 }
                 prefs[stringPreferencesKey("${prefix}.preset")] = state.preset.name
                 for ((groupId, panelId) in state.activeTabByGroup) {
@@ -96,6 +97,7 @@ class WorkbenchLayoutRepository(
                         floatingY = prefs[floatPreferencesKey("${p}.floatingY")] ?: 0f,
                         floatingWidthDp = prefs[floatPreferencesKey("${p}.floatingWidthDp")] ?: 420f,
                         floatingHeightDp = prefs[floatPreferencesKey("${p}.floatingHeightDp")] ?: 560f,
+                        floatingZIndex = prefs[intPreferencesKey("${p}.floatingZIndex")] ?: 0,
                     )
                 }
 

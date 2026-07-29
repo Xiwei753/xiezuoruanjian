@@ -41,9 +41,10 @@ import com.xiwei.sujian.model.RecentEdit
 import com.xiwei.sujian.ui.compose.SujianAppState
 
 @Composable
-fun ProjectListScreen(
+fun ProjectListContent(
     appState: SujianAppState,
     onSelectProject: (projectId: String, projectTitle: String) -> Unit,
+    showFab: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     var showCreateDialog by remember { mutableStateOf(false) }
@@ -98,12 +99,14 @@ fun ProjectListScreen(
             }
         }
 
-        SujianFab(
-            onClick = { showCreateDialog = true },
-            icon = SujianIcons.Add,
-            contentDescription = stringResource(id = R.string.action_new_project),
-            modifier = Modifier.align(Alignment.BottomEnd).padding(dims.space16)
-        )
+        if (showFab) {
+            SujianFab(
+                onClick = { showCreateDialog = true },
+                icon = SujianIcons.Add,
+                contentDescription = stringResource(id = R.string.action_new_project),
+                modifier = Modifier.align(Alignment.BottomEnd).padding(dims.space16)
+            )
+        }
     }
 
     if (showCreateDialog) {
@@ -147,6 +150,20 @@ fun ProjectListScreen(
             onDismiss = { showMenuForProject = null }
         )
     }
+}
+
+@Composable
+fun ProjectListScreen(
+    appState: SujianAppState,
+    onSelectProject: (projectId: String, projectTitle: String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    ProjectListContent(
+        appState = appState,
+        onSelectProject = onSelectProject,
+        showFab = true,
+        modifier = modifier,
+    )
 }
 
 @Composable

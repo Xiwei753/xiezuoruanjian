@@ -154,9 +154,15 @@ private fun WorkbenchWorkspaceContent(
         )
     }
 
+    val previousStorageKey = remember { mutableStateOf<LayoutStorageKey?>(null) }
     LaunchedEffect(storageKey) {
-        val repo = WorkbenchLayoutRepository(context)
-        workbenchVm.initialize(repo, storageKey)
+        if (previousStorageKey.value == null) {
+            val repo = WorkbenchLayoutRepository(context)
+            workbenchVm.initialize(repo, storageKey)
+        } else if (previousStorageKey.value != storageKey) {
+            workbenchVm.onWindowBucketChanged(storageKey)
+        }
+        previousStorageKey.value = storageKey
     }
 
     val layoutState = workbenchVm.layoutState
@@ -166,20 +172,13 @@ private fun WorkbenchWorkspaceContent(
     val editorContentMaxWidthDp = appState.currentLayoutPlan?.editorContentMaxWidthDp ?: 0f
     val pagePaddingDp = appState.currentLayoutPlan?.pagePaddingDp ?: 0f
 
-    val previousStorageKey = remember { mutableStateOf(storageKey) }
-    LaunchedEffect(storageKey) {
-        if (previousStorageKey.value != storageKey) {
-            workbenchVm.onWindowBucketChanged(storageKey)
-            previousStorageKey.value = storageKey
-        }
-    }
-
     SujianWorkbench(
         layoutState = layoutState,
         onAction = { action ->
             when (action) {
                 is WorkbenchAction.ResizePanel,
-                is WorkbenchAction.MoveFloatingPanel -> workbenchVm.dispatchDeferredPersist(action)
+                is WorkbenchAction.MoveFloatingPanel,
+                is WorkbenchAction.ResizeFloatingPanel -> workbenchVm.dispatchDeferredPersist(action)
                 else -> workbenchVm.dispatch(action)
             }
         },

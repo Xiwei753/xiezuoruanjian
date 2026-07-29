@@ -1,7 +1,10 @@
 package com.xiwei.sujian.ui.compose.workbench.component
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -11,7 +14,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -19,9 +25,11 @@ import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.ui.compose.workbench.model.DockZone
 import com.xiwei.sujian.ui.compose.workbench.model.PanelVisibility
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchAction
+import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchDragState
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchLayoutState
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelId
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelState
+import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchReducer
 
 private const val SIDE_PANEL_MIN_DP = 280f
 private const val SIDE_PANEL_MAX_DP = 520f
@@ -33,6 +41,7 @@ fun SujianWorkbench(
     layoutState: WorkbenchLayoutState,
     onAction: (WorkbenchAction) -> Unit,
     modifier: Modifier = Modifier,
+    dragState: WorkbenchDragState = WorkbenchDragState.Idle,
     editorContent: @Composable () -> Unit,
     panelContent: @Composable (WorkbenchPanelState) -> Unit,
 ) {
@@ -40,9 +49,14 @@ fun SujianWorkbench(
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val maxWidthDp = maxWidth.value
+        val maxHeightDp = maxHeight.value
 
         val isOverlayMode = maxWidthDp < OVERLAY_THRESHOLD_DP
         val allowDualSide = maxWidthDp >= DUAL_SIDE_THRESHOLD_DP
+
+        val presentationState = remember(layoutState, maxWidthDp, maxHeightDp) {
+            WorkbenchReducer.computePresentationState(layoutState, maxWidthDp, maxHeightDp)
+        }
 
         val leftPanels = layoutState.panels.values
             .filter { it.zone == DockZone.Left }
@@ -62,8 +76,12 @@ fun SujianWorkbench(
         val rightCollapsed = rightPanels.filter { it.visibility == PanelVisibility.Collapsed || it.visibility == PanelVisibility.Hidden }
         val bottomCollapsed = bottomPanels.filter { it.visibility == PanelVisibility.Collapsed || it.visibility == PanelVisibility.Hidden }
 
-        Box(modifier = Modifier.fillMaxSize()) {
-            Row(modifier = Modifier.fillMaxSize()) {
+        val showRightDock = rightExpanded.isNotEmpty() && !isOverlayMode && (allowDualSide || leftExpanded.isEmpty())
+
+        Column(modifier = Modifier.fillMaxSize()) {
+            Row(
+                modifier = Modifier.weight(1f).fillMaxWidth()
+            ) {
                 if (leftCollapsed.isNotEmpty()) {
                     PanelLauncherRail(
                         zone = DockZone.Left,
@@ -82,6 +100,7 @@ fun SujianWorkbench(
                         onCollapse = { onAction(WorkbenchAction.CollapsePanel(it)) },
                         onHide = { onAction(WorkbenchAction.HidePanel(it)) },
                         onActivateTab = { g, p -> onAction(WorkbenchAction.ActivateTab(g, p)) },
+                        onMovePanelToGroup = { p, g -> onAction(WorkbenchAction.MovePanelToGroup(p, g)) },
                         modifier = Modifier.fillMaxHeight(),
                         panelContent = panelContent,
                     )
@@ -106,7 +125,7 @@ fun SujianWorkbench(
                     }
                 }
 
-                if (rightExpanded.isNotEmpty() && !isOverlayMode && (allowDualSide || leftExpanded.isEmpty())) {
+                if (showRightDock) {
                     DockResizeHandle(
                         zone = DockZone.Right,
                         panelId = rightExpanded.first().id,
@@ -122,6 +141,7 @@ fun SujianWorkbench(
                         onCollapse = { onAction(WorkbenchAction.CollapsePanel(it)) },
                         onHide = { onAction(WorkbenchAction.HidePanel(it)) },
                         onActivateTab = { g, p -> onAction(WorkbenchAction.ActivateTab(g, p)) },
+                        onMovePanelToGroup = { p, g -> onAction(WorkbenchAction.MovePanelToGroup(p, g)) },
                         modifier = Modifier.fillMaxHeight(),
                         panelContent = panelContent,
                     )
@@ -138,6 +158,13 @@ fun SujianWorkbench(
             }
 
             if (bottomExpanded.isNotEmpty() && !isOverlayMode) {
+                DockResizeHandle(
+                    zone = DockZone.Bottom,
+                    panelId = bottomExpanded.first().id,
+                    currentSizeDp = bottomExpanded.first().sizeDp,
+                    onResize = { id, size -> onAction(WorkbenchAction.ResizePanel(id, size, maxHeightDp)) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 DockHost(
                     zone = DockZone.Bottom,
                     panels = bottomExpanded,
@@ -146,7 +173,8 @@ fun SujianWorkbench(
                     onCollapse = { onAction(WorkbenchAction.CollapsePanel(it)) },
                     onHide = { onAction(WorkbenchAction.HidePanel(it)) },
                     onActivateTab = { g, p -> onAction(WorkbenchAction.ActivateTab(g, p)) },
-                    modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
+                    onMovePanelToGroup = { p, g -> onAction(WorkbenchAction.MovePanelToGroup(p, g)) },
+                    modifier = Modifier.fillMaxWidth(),
                     panelContent = panelContent,
                 )
             }
@@ -156,16 +184,24 @@ fun SujianWorkbench(
                     zone = DockZone.Bottom,
                     panels = bottomCollapsed,
                     onTogglePanel = { onAction(WorkbenchAction.TogglePanel(it)) },
-                    modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
+        }
 
+        Box(modifier = Modifier.fillMaxSize()) {
             FloatingPanelLayer(
                 panels = layoutState.panels.values.toList(),
                 onFloat = { onAction(WorkbenchAction.FloatPanel(it)) },
                 onCollapse = { onAction(WorkbenchAction.CollapsePanel(it)) },
                 onHide = { onAction(WorkbenchAction.HidePanel(it)) },
                 onMoveFloating = { id, x, y -> onAction(WorkbenchAction.MoveFloatingPanel(id, x, y)) },
+                onDock = { id, zone -> onAction(WorkbenchAction.DockPanel(id, zone)) },
+                onBringToFront = { onAction(WorkbenchAction.BringFloatingToFront(it)) },
+                onResizeFloating = { id, w, h -> onAction(WorkbenchAction.ResizeFloatingPanel(id, w, h)) },
+                onMovePanelToGroup = { id, groupId -> onAction(WorkbenchAction.MovePanelToGroup(id, groupId)) },
+                maxWidthDp = maxWidthDp,
+                maxHeightDp = maxHeightDp,
                 modifier = Modifier.fillMaxSize(),
                 panelContent = panelContent,
             )
@@ -174,11 +210,12 @@ fun SujianWorkbench(
                 val allExpanded = (leftExpanded + rightExpanded + bottomExpanded)
                     .filter { it.zone != DockZone.Floating }
                 if (allExpanded.isNotEmpty()) {
-                    val panel = allExpanded.first()
+                    val activeOverlayId = presentationState.activeOverlayPanelId ?: allExpanded.first().id
+                    val activePanel = allExpanded.find { it.id == activeOverlayId } ?: allExpanded.first()
                     Surface(
                         modifier = Modifier
                             .align(Alignment.CenterEnd)
-                            .width(panel.sizeDp.dp.coerceIn(SIDE_PANEL_MIN_DP.dp, SIDE_PANEL_MAX_DP.dp))
+                            .width(activePanel.sizeDp.dp.coerceIn(SIDE_PANEL_MIN_DP.dp, SIDE_PANEL_MAX_DP.dp))
                             .fillMaxHeight(),
                         tonalElevation = 4.dp,
                         shadowElevation = 8.dp,
@@ -186,15 +223,88 @@ fun SujianWorkbench(
                         color = MaterialTheme.colorScheme.surface,
                     ) {
                         WorkbenchPanelFrame(
-                            panelState = panel,
-                            onFloat = { onAction(WorkbenchAction.FloatPanel(panel.id)) },
-                            onCollapse = { onAction(WorkbenchAction.CollapsePanel(panel.id)) },
-                            onClose = { onAction(WorkbenchAction.HidePanel(panel.id)) },
+                            panelState = activePanel,
+                            onFloat = { onAction(WorkbenchAction.FloatPanel(activePanel.id)) },
+                            onCollapse = { onAction(WorkbenchAction.CollapsePanel(activePanel.id)) },
+                            onClose = { onAction(WorkbenchAction.HidePanel(activePanel.id)) },
                             modifier = Modifier.fillMaxSize(),
                         ) {
-                            panelContent(panel)
+                            panelContent(activePanel)
                         }
                     }
+                    if (presentationState.overlayPanelIds.size > 1) {
+                        OverlayTabStrip(
+                            panelIds = presentationState.overlayPanelIds,
+                            activeId = activeOverlayId,
+                            allExpanded = allExpanded,
+                            onSwitch = { id ->
+                                onAction(WorkbenchAction.ExpandPanel(id))
+                            },
+                            modifier = Modifier
+                                .align(Alignment.CenterEnd)
+                                .padding(top = 48.dp)
+                                .width(SIDE_PANEL_MIN_DP.dp),
+                        )
+                    }
+                }
+            }
+
+            if (dragState.isDragging) {
+                WorkbenchDragOverlay(
+                    dragState = dragState,
+                    maxWidthDp = maxWidthDp,
+                    maxHeightDp = maxHeightDp,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun OverlayTabStrip(
+    panelIds: List<WorkbenchPanelId>,
+    activeId: WorkbenchPanelId,
+    allExpanded: List<WorkbenchPanelState>,
+    onSwitch: (WorkbenchPanelId) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        tonalElevation = 2.dp,
+        modifier = modifier,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().height(36.dp).padding(horizontal = 8.dp),
+        ) {
+            for (id in panelIds) {
+                val isActive = id == activeId
+                val icon = panelIconForId(id)
+                Row(
+                    modifier = Modifier
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = { onSwitch(id) },
+                        )
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (icon != null) {
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = null,
+                            modifier = Modifier.width(14.dp).height(14.dp),
+                            tint = if (isActive) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Text(
+                        text = panelTitleForId(id),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (isActive) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }

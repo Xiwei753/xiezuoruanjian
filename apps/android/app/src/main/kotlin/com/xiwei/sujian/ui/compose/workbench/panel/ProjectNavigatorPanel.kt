@@ -3,7 +3,7 @@ package com.xiwei.sujian.ui.compose.workbench.panel
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import com.xiwei.sujian.ui.compose.SujianAppState
-import com.xiwei.sujian.ui.compose.workspace.ProjectListScreen
+import com.xiwei.sujian.ui.compose.workspace.ProjectListContent
 
 @Composable
 fun ProjectNavigatorPanel(
@@ -11,9 +11,10 @@ fun ProjectNavigatorPanel(
     onSelectProject: (projectId: String, projectTitle: String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    ProjectListScreen(
+    ProjectListContent(
         appState = appState,
         onSelectProject = onSelectProject,
+        showFab = false,
         modifier = modifier,
     )
 }
