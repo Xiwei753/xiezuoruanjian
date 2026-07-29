@@ -94,7 +94,7 @@ fun SujianNavigationSuite(
     NavigationSuiteScaffold(
         navigationSuiteItems = {
             SujianDestination.entries.forEach { destination ->
-                item(
+                        item(
                     selected = currentTopDestination == destination,
                     onClick = {
                         val targetRoute = when (destination) {
@@ -115,18 +115,15 @@ fun SujianNavigationSuite(
                             SujianDestination.Settings -> SujianSemanticIds.NavigationSettings
                             else -> null
                         }
-                        androidx.compose.foundation.layout.Box(
-                            modifier = if (semanticTag != null) Modifier.testTag(semanticTag) else Modifier
-                        ) {
-                            Icon(
-                                imageVector = if (currentTopDestination == destination) {
-                                    destination.selectedIcon
-                                } else {
-                                    destination.unselectedIcon
-                                },
-                                contentDescription = stringResource(id = destination.labelResId),
-                            )
-                        }
+                        Icon(
+                            modifier = if (semanticTag != null) Modifier.testTag(semanticTag) else Modifier,
+                            imageVector = if (currentTopDestination == destination) {
+                                destination.selectedIcon
+                            } else {
+                                destination.unselectedIcon
+                            },
+                            contentDescription = stringResource(id = destination.labelResId),
+                        )
                     },
                     label = {
                         Text(text = stringResource(id = destination.labelResId))

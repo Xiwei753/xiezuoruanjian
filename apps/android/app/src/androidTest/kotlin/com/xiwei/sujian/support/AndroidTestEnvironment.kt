@@ -1,6 +1,7 @@
 package com.xiwei.sujian.support
 
 import android.content.Context
+import androidx.lifecycle.ViewModelProvider
 import androidx.test.core.app.ActivityScenario
 import com.xiwei.sujian.data.AppServiceBridge
 import com.xiwei.sujian.data.SettingsRepository
@@ -9,6 +10,7 @@ import com.xiwei.sujian.data.WriterAppServiceHolder
 import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
 import com.xiwei.sujian.runtime.SujianAppDependencies
 import com.xiwei.sujian.ui.MainActivity
+import com.xiwei.sujian.ui.compose.SujianAppViewModel
 import uniffi.writer_core.PlatformDto
 import uniffi.writer_core.PlatformInitDto
 import org.junit.Assert
@@ -373,6 +375,18 @@ object AndroidTestEnvironment {
         val project = repo.createProject("自动化测试作品")
         val volume = repo.createVolume(project.id, "测试卷")
         return TestProjectData(project.id, project.title, volume.id, volume.title)
+    }
+
+    fun refreshViewModelProjects(activity: androidx.activity.ComponentActivity) {
+        val vm = ViewModelProvider(activity)[SujianAppViewModel::class.java]
+        val session = requireCurrentSession()
+        val workspaceUC = com.xiwei.sujian.data.WorkspaceUseCase(session.deps.workspaceRepository)
+        vm.initialize(
+            workspaceRepo = session.deps.workspaceRepository,
+            workspaceUC = workspaceUC,
+            settingsRepo = session.deps.settingsRepository,
+            context = activity.applicationContext
+        )
     }
 
     class TestDependenciesRule(

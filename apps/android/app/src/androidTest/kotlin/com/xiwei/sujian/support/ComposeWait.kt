@@ -1,5 +1,6 @@
 package com.xiwei.sujian.support
 
+import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.junit4.ComposeTestRule
 
@@ -79,13 +80,37 @@ object ComposeWait {
         timeoutMs: Long = DEFAULT_TIMEOUT_MS,
         message: (() -> String)? = null
     ) {
-        try {
-            rule.waitUntil(timeoutMs, condition)
-        } catch (e: AssertionError) {
-            if (message != null) {
-                throw AssertionError("${message()}. Original: ${e.message}", e)
+        var lastObserved: String? = null
+        var lastConditionError: AssertionError? = null
+        val wrappedCondition: () -> Boolean = {
+            try {
+                val result = condition()
+                if (!result) {
+                    lastObserved = "condition returned false"
+                }
+                result
+            } catch (e: AssertionError) {
+                lastConditionError = e
+                lastObserved = e.message
+                false
             }
-            throw e
+        }
+        try {
+            rule.waitUntil(timeoutMs, wrappedCondition)
+        } catch (e: androidx.compose.ui.test.ComposeTimeoutException) {
+            val diag = message?.let { "${it()}. " }.orEmpty()
+            val conditionDiag = lastConditionError?.let {
+                "Condition threw: ${it.javaClass.simpleName}: ${it.message}"
+            }.orEmpty()
+            val observedDiag = lastObserved?.let { "Last observed: $it" }.orEmpty()
+            val timeoutDiag = "Timeout after ${timeoutMs}ms"
+            val combined = buildString {
+                append(diag)
+                if (conditionDiag.isNotEmpty()) append(conditionDiag + ". ")
+                if (observedDiag.isNotEmpty() && conditionDiag.isEmpty()) append(observedDiag + ". ")
+                append(timeoutDiag)
+            }
+            throw AssertionError(combined, e)
         }
     }
 }

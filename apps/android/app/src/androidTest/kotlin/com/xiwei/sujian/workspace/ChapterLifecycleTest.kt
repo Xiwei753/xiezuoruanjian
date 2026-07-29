@@ -45,9 +45,12 @@ class ChapterLifecycleTest {
     private fun getSession(): TestSession = AndroidTestEnvironment.requireCurrentSession()
 
     private fun initTestData(): AndroidTestEnvironment.TestProjectData {
-        return AndroidTestEnvironment.ensureTestProjectAndVolume(
-            androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
-        )
+        val context = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
+        val testData = AndroidTestEnvironment.ensureTestProjectAndVolume(context)
+        activityRule.onActivity { activity ->
+            AndroidTestEnvironment.refreshViewModelProjects(activity)
+        }
+        return testData
     }
 
     @Test

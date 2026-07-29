@@ -41,6 +41,12 @@ class SettingsPersistenceTest {
 
     private fun getSession(): TestSession = AndroidTestEnvironment.requireCurrentSession()
 
+    private fun initTestData() {
+        activityRule.onActivity { activity ->
+            AndroidTestEnvironment.refreshViewModelProjects(activity)
+        }
+    }
+
     private fun navigateToEditorSettings() {
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationSettings)
         composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationSettings).performClick()
