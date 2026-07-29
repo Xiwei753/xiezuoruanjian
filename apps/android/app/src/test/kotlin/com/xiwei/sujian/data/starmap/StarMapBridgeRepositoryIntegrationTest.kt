@@ -237,7 +237,8 @@ class StarMapBridgeRepositoryIntegrationTest {
                     radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
             ))
         )
-        val bridge = createFakeBridge(phasedSnapshotResults = mutableMapOf("sm1" to dto2))
+        val results = mutableMapOf("sm1" to dto1)
+        val bridge = createFakeBridge(phasedSnapshotResults = results)
         val cache = StarMapSnapshotCache()
         val repo = StarMapRepository(bridge, cache)
 
@@ -245,6 +246,7 @@ class StarMapBridgeRepositoryIntegrationTest {
         assertTrue(result1 is BridgeResult.Success)
         assertEquals(1, (result1 as BridgeResult.Success).data.data.graph.nodes.size)
 
+        results["sm1"] = dto2
         val result2 = repo.getStarmapPhasedSnapshot("sm1", sinceRevision = 1u)
         assertTrue(result2 is BridgeResult.Success)
         val merged = (result2 as BridgeResult.Success).data.data

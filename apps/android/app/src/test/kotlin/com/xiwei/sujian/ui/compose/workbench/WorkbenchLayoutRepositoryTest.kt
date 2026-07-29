@@ -41,7 +41,13 @@ class WorkbenchLayoutRepositoryTest {
 
     @Test
     fun loadLayout_returnsNullWhenNotSaved() = runTest {
-        val result = repository.loadLayout(testKey)
+        val unsavedKey = LayoutStorageKey(
+            deviceId = "unsaved-test-device",
+            orientation = "portrait",
+            windowWidthBucket = WindowWidthBucket.Expanded,
+            windowMode = "standard",
+        )
+        val result = repository.loadLayout(unsavedKey)
         assertNull(result)
     }
 

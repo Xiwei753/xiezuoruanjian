@@ -315,18 +315,27 @@ class StarMapCacheContractTest {
     fun rebuildGraph_includesHyperlinks() {
         val cache = StarMapSnapshotCache()
         val hl = makeHyperlinkDto(hyperlinkId = "hl1")
-        val rawCache = StarMapRawCache(
-            graph = StarMapGraphDto(
-                schemaVersion = 1u, id = "sm1", starmapId = "sm1", title = "T",
-                nodes = emptyList(), edges = emptyList(), embeds = emptyList(), links = emptyList(),
-                hyperlinks = emptyList(),
-                createdAt = 0u, updatedAt = 0u
-            ),
+        val graphDto = StarMapGraphDto(
+            schemaVersion = 1u, id = "sm1", starmapId = "sm1", title = "T",
+            nodes = emptyList(), edges = emptyList(), embeds = emptyList(), links = emptyList(),
+            hyperlinks = emptyList(),
+            createdAt = 0u, updatedAt = 0u
+        )
+        val initialCache = StarMapRawCache(
+            graph = graphDto,
+            nodes = mutableMapOf(), edges = mutableMapOf(), embeds = mutableMapOf(),
+            links = mutableMapOf(), hyperlinks = mutableMapOf(),
+            layoutNodes = mutableMapOf()
+        )
+        cache.mergeIncremental("sm1", initialCache)
+
+        val incomingCache = StarMapRawCache(
+            graph = graphDto,
             nodes = mutableMapOf(), edges = mutableMapOf(), embeds = mutableMapOf(),
             links = mutableMapOf(), hyperlinks = mutableMapOf("hl1" to hl),
             layoutNodes = mutableMapOf()
         )
-        cache.put("sm1", rawCache)
+        cache.mergeIncremental("sm1", incomingCache)
 
         val graph = cache.get("sm1")!!.graph!!
         assertEquals(1, graph.hyperlinks.size)
