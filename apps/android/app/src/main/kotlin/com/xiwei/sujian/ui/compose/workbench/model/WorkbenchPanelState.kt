@@ -56,8 +56,6 @@ data class WorkbenchLayoutState(
     fun actualSideWidthDp(zone: DockZone): Float {
         val groups = dockGroupsByZone(zone)
         if (groups.isEmpty()) return 0f
-        return groups.maxOf { group ->
-            group.panelIds.mapNotNull { panels[it]?.sizeDp }.maxOrNull() ?: 0f
-        }
+        return groups.maxOf { it.sizeRatio }
     }
 }

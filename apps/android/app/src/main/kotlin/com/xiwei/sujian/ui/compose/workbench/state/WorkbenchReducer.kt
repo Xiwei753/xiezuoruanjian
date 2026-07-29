@@ -110,7 +110,16 @@ object WorkbenchReducer {
             }
             DockZone.Floating -> sizeDp
         }
-        return updatePanel(state, panel.copy(sizeDp = clamped), markCustom = true)
+        val updatedDockGroupSizes = if (panel.zone != DockZone.Floating) {
+            state.dockGroupSizes + (panel.tabGroupId to clamped)
+        } else {
+            state.dockGroupSizes
+        }
+        return state.copy(
+            panels = state.panels + (panel.id to panel.copy(sizeDp = clamped)),
+            dockGroupSizes = updatedDockGroupSizes,
+            preset = WorkbenchPreset.Custom
+        )
     }
 
     private fun activateTab(state: WorkbenchLayoutState, tabGroupId: String, panelId: WorkbenchPanelId): WorkbenchLayoutState {
@@ -342,6 +351,11 @@ object WorkbenchReducer {
 
     private fun researchWritingPreset(state: WorkbenchLayoutState): WorkbenchLayoutState {
         val searchTabGroup = "research-right"
+        val updatedDockGroupSizes = if (searchTabGroup !in state.dockGroupSizes) {
+            state.dockGroupSizes + (searchTabGroup to 380f)
+        } else {
+            state.dockGroupSizes
+        }
         return state.copy(
             panels = state.panels.mapValues { (id, panel) ->
                 when (id) {
@@ -365,6 +379,7 @@ object WorkbenchReducer {
                 }
             },
             activeTabByGroup = state.activeTabByGroup + (searchTabGroup to WorkbenchPanelId.Search),
+            dockGroupSizes = updatedDockGroupSizes,
             preset = WorkbenchPreset.ResearchWriting
         )
     }

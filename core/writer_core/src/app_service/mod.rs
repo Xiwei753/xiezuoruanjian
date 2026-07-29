@@ -234,16 +234,6 @@ impl WriterAppService {
         }
     }
 
-    // ── Workbench (Issue #568) ──
-
-    pub fn resolve_workbench_constraints(
-        &self,
-        metrics: crate::api::WindowMetricsDto,
-    ) -> crate::api::WorkbenchConstraintsDto {
-        let core_metrics: crate::layout_policy::WindowMetrics = metrics.into();
-        let constraints = crate::layout_policy::resolve_workbench_constraints(&core_metrics);
-        constraints.into()
-    }
 }
 
 #[cfg(test)]

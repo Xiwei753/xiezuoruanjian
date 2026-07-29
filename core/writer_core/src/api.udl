@@ -1272,10 +1272,6 @@ interface WriterAppService {
 
     ScreenPolicyDto resolve_screen_policy(ScreenRoleDto screen_role, ShellModeDto shell_mode);
 
-    // ── Workbench Constraints (Issue #568) ──
-
-    WorkbenchConstraintsDto resolve_workbench_constraints(WindowMetricsDto metrics);
-
     // ── #535: Editor V2 Kernel ──
 
     EditorEditResultDto editor_kernel_insert(u32 byte_offset, string text, EditorTransactionCauseDto cause, u64 expected_revision);
@@ -1487,19 +1483,6 @@ dictionary LayoutPlanDto {
     float primary_pane_max_dp;
     WorkspacePaneModeDto? supporting_pane_mode;
     sequence<AvoidRegionDto> avoid_regions;
-};
-
-// ── Workbench Constraints DTO (Issue #568) ──
-
-dictionary WorkbenchConstraintsDto {
-    float side_panel_min_dp;
-    float side_panel_max_dp;
-    float bottom_panel_min_dp;
-    float bottom_panel_max_ratio;
-    float editor_min_dp;
-    boolean allow_side_dock;
-    boolean allow_both_side_docks;
-    boolean allow_bottom_dock;
 };
 
 // ── Screen Policy DTOs ──

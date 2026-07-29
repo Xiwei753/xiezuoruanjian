@@ -385,11 +385,11 @@ class WorkbenchReducerTest {
     }
 
     @Test
-    fun actualSideWidthDp_returnsMaxGroupWidth() {
+    fun actualSideWidthDp_returnsMaxGroupSizeRatio() {
         val research = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ApplyPreset(WorkbenchPreset.ResearchWriting))
         val rightWidth = research.actualSideWidthDp(DockZone.Right)
-        val searchSize = research.panels[WorkbenchPanelId.Search]?.sizeDp ?: 0f
-        assertEquals(searchSize, rightWidth, 0.01f)
+        val expectedRatio = research.dockGroupSizes["research-right"] ?: 380f
+        assertEquals(expectedRatio, rightWidth, 0.01f)
     }
 
     @Test
@@ -462,6 +462,39 @@ class WorkbenchReducerTest {
         val (x, y) = WorkbenchReducer.clampFloatingPosition(-50f, -30f, 400f, 500f, 800f, 600f)
         assertTrue(x >= 0f)
         assertTrue(y >= 0f)
+    }
+
+    @Test
+    fun resizePanel_syncsDockGroupSizes() {
+        val expanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val result = WorkbenchReducer.reduce(expanded, WorkbenchAction.ResizePanel(WorkbenchPanelId.ChapterNavigator, 400f))
+        val groupSize = result.dockGroupSizes["left-nav"]
+        val panelSize = result.panels[WorkbenchPanelId.ChapterNavigator]?.sizeDp
+        assertEquals(panelSize, groupSize, 0.01f)
+    }
+
+    @Test
+    fun resizePanelDelta_syncsDockGroupSizes() {
+        val expanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val result = WorkbenchReducer.reduce(expanded, WorkbenchAction.ResizePanelDelta(WorkbenchPanelId.ChapterNavigator, 50f))
+        val groupSize = result.dockGroupSizes["left-nav"]
+        val panelSize = result.panels[WorkbenchPanelId.ChapterNavigator]?.sizeDp
+        assertEquals(panelSize, groupSize, 0.01f)
+    }
+
+    @Test
+    fun actualSideWidthDp_usesDockGroupSizes() {
+        val state = WorkbenchReducer.computeDefaultLayout()
+        val rightWidth = state.actualSideWidthDp(DockZone.Right)
+        val expectedWidth = state.dockGroupSizes["right-tools"] ?: 400f
+        assertEquals(expectedWidth, rightWidth, 0.01f)
+    }
+
+    @Test
+    fun researchWritingPreset_initializesDockGroupSizes() {
+        val research = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ApplyPreset(WorkbenchPreset.ResearchWriting))
+        assertTrue(research.dockGroupSizes.containsKey("research-right"))
+        assertEquals(380f, research.dockGroupSizes["research-right"]!!, 0.01f)
     }
 
     @Test

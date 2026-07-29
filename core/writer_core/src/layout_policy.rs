@@ -151,65 +151,6 @@ pub struct VisiblePaneRoles {
     pub show_supporting: bool,
 }
 
-// ========== 工作台约束 — Issue #568 ==========
-
-/// 工作台约束 — 由窗口度量决定的面板尺寸限制。
-/// Core 只提供约束，面板状态和布局由平台端自行管理。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkbenchConstraints {
-    pub side_panel_min_dp: f32,
-    pub side_panel_max_dp: f32,
-    pub bottom_panel_min_dp: f32,
-    pub bottom_panel_max_ratio: f32,
-    pub editor_min_dp: f32,
-    pub allow_side_dock: bool,
-    pub allow_both_side_docks: bool,
-    pub allow_bottom_dock: bool,
-}
-
-const SIDE_PANEL_MIN_DP: f32 = 280.0;
-const SIDE_PANEL_MAX_DP: f32 = 520.0;
-const BOTTOM_PANEL_MIN_DP: f32 = 220.0;
-const BOTTOM_PANEL_MAX_RATIO: f32 = 0.55;
-const EDITOR_MIN_DP: f32 = 480.0;
-
-/// 根据窗口度量计算工作台约束。纯函数，无副作用。
-pub fn resolve_workbench_constraints(metrics: &WindowMetrics) -> WorkbenchConstraints {
-    let width_class = resolve_width_class(metrics.width_dp);
-    match width_class {
-        WidthClass::Compact | WidthClass::Medium => WorkbenchConstraints {
-            side_panel_min_dp: SIDE_PANEL_MIN_DP,
-            side_panel_max_dp: SIDE_PANEL_MAX_DP,
-            bottom_panel_min_dp: BOTTOM_PANEL_MIN_DP,
-            bottom_panel_max_ratio: BOTTOM_PANEL_MAX_RATIO,
-            editor_min_dp: EDITOR_MIN_DP,
-            allow_side_dock: false,
-            allow_both_side_docks: false,
-            allow_bottom_dock: false,
-        },
-        WidthClass::Expanded => WorkbenchConstraints {
-            side_panel_min_dp: SIDE_PANEL_MIN_DP,
-            side_panel_max_dp: SIDE_PANEL_MAX_DP,
-            bottom_panel_min_dp: BOTTOM_PANEL_MIN_DP,
-            bottom_panel_max_ratio: BOTTOM_PANEL_MAX_RATIO,
-            editor_min_dp: EDITOR_MIN_DP,
-            allow_side_dock: true,
-            allow_both_side_docks: false,
-            allow_bottom_dock: false,
-        },
-        WidthClass::Large | WidthClass::ExtraLarge => WorkbenchConstraints {
-            side_panel_min_dp: SIDE_PANEL_MIN_DP,
-            side_panel_max_dp: SIDE_PANEL_MAX_DP,
-            bottom_panel_min_dp: BOTTOM_PANEL_MIN_DP,
-            bottom_panel_max_ratio: BOTTOM_PANEL_MAX_RATIO,
-            editor_min_dp: EDITOR_MIN_DP,
-            allow_side_dock: true,
-            allow_both_side_docks: true,
-            allow_bottom_dock: true,
-        },
-    }
-}
-
 // ========== 输入结构体 ==========
 
 /// 窗口度量 — 平台端测量后传入。所有尺寸单位为 dp（密度无关像素）。
@@ -613,31 +554,4 @@ mod tests {
         assert_eq!(m.fold_feature.state, FoldState::None);
     }
 
-    // ── Workbench constraints tests ──
-
-    #[test]
-    fn test_workbench_constraints_compact() {
-        let m = default_metrics();
-        let c = resolve_workbench_constraints(&m);
-        assert!(!c.allow_side_dock);
-        assert!(!c.allow_both_side_docks);
-        assert!(!c.allow_bottom_dock);
-    }
-
-    #[test]
-    fn test_workbench_constraints_expanded() {
-        let mut m = default_metrics(); m.width_dp = 1000.0;
-        let c = resolve_workbench_constraints(&m);
-        assert!(c.allow_side_dock);
-        assert!(!c.allow_both_side_docks);
-    }
-
-    #[test]
-    fn test_workbench_constraints_large() {
-        let mut m = default_metrics(); m.width_dp = 1400.0;
-        let c = resolve_workbench_constraints(&m);
-        assert!(c.allow_side_dock);
-        assert!(c.allow_both_side_docks);
-        assert!(c.allow_bottom_dock);
-    }
 }
