@@ -52,6 +52,8 @@ fun FloatingPanelLayer(
             val density = LocalDensity.current
             var dragOffsetX by remember(panel.id) { mutableFloatStateOf(0f) }
             var dragOffsetY by remember(panel.id) { mutableFloatStateOf(0f) }
+            var startPointerOffsetX by remember(panel.id) { mutableFloatStateOf(0f) }
+            var startPointerOffsetY by remember(panel.id) { mutableFloatStateOf(0f) }
             var resizeOffsetW by remember(panel.id) { mutableFloatStateOf(0f) }
             var resizeOffsetH by remember(panel.id) { mutableFloatStateOf(0f) }
 
@@ -85,14 +87,18 @@ fun FloatingPanelLayer(
                     titleBarModifier = Modifier
                         .pointerInput(panel.id) {
                             detectDragGestures(
-                                onDragStart = {
+                                onDragStart = { offset ->
+                                    startPointerOffsetX = offset.x / density.density
+                                    startPointerOffsetY = offset.y / density.density
                                     onBringToFront(panel.id)
                                 },
                                 onDragEnd = {
-                                    val newX = panel.floatingX + dragOffsetX
-                                    val newY = panel.floatingY + dragOffsetY
+                                    val newPanelX = panel.floatingX + dragOffsetX
+                                    val newPanelY = panel.floatingY + dragOffsetY
+                                    val pointerX = newPanelX + startPointerOffsetX
+                                    val pointerY = newPanelY + startPointerOffsetY
                                     val dropTarget = computeDropTargetByPointer(
-                                        newX, newY,
+                                        pointerX, pointerY,
                                         maxWidthDp, maxHeightDp,
                                     )
                                     when (dropTarget) {
@@ -101,7 +107,7 @@ fun FloatingPanelLayer(
                                         DragDropTarget.DockBottom -> onDock(panel.id, DockZone.Bottom)
                                         else -> {
                                             val (cx, cy) = WorkbenchReducer.clampFloatingPosition(
-                                                newX, newY,
+                                                newPanelX, newPanelY,
                                                 panel.floatingWidthDp, panel.floatingHeightDp,
                                                 maxWidthDp, maxHeightDp,
                                             )
