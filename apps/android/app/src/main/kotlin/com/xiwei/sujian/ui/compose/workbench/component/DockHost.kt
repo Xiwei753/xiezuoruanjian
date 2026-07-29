@@ -53,6 +53,7 @@ fun DockHost(
     zone: DockZone,
     panels: List<WorkbenchPanelState>,
     activeTabByGroup: Map<String, WorkbenchPanelId>,
+    dockGroupSizes: Map<String, Float> = emptyMap(),
     onFloat: (WorkbenchPanelId) -> Unit,
     onCollapse: (WorkbenchPanelId) -> Unit,
     onHide: (WorkbenchPanelId) -> Unit,
@@ -76,10 +77,12 @@ fun DockHost(
         .groupBy { it.tabGroupId }
         .map { (groupId, groupPanels) ->
             val sorted = groupPanels.sortedBy { it.order }
+            val sizeRatio = dockGroupSizes[groupId] ?: 280f
             DockGroupState(
                 id = groupId,
                 zone = zone,
                 order = sorted.firstOrNull()?.order ?: 0,
+                sizeRatio = sizeRatio,
                 activePanelId = activeTabByGroup[groupId] ?: sorted.firstOrNull()?.id,
                 panelIds = sorted.map { it.id },
             )
@@ -99,7 +102,16 @@ fun DockHost(
                     val group = groups.first()
                     val activePanelId = group.activePanelId ?: group.panelIds.firstOrNull()
                     val activePanel = expandedPanels.find { it.id == activePanelId } ?: expandedPanels.first()
-                    Column(modifier = Modifier.width(activePanel.sizeDp.dp).fillMaxHeight()) {
+                    Column(
+                        modifier = Modifier
+                            .width(activePanel.sizeDp.dp)
+                            .fillMaxHeight()
+                            .onGloballyPositioned { coords ->
+                                onRegisterTabGroupHitArea?.invoke(
+                                    computeTabGroupHitArea(group.id, coords, density.density)
+                                )
+                            },
+                    ) {
                         if (group.panelIds.size > 1) {
                             DockTabStrip(
                                 panels = expandedPanels.filter { it.tabGroupId == group.id },
@@ -137,7 +149,14 @@ fun DockHost(
                             val activePanel = groupPanels.find { it.id == activePanelId } ?: groupPanels.firstOrNull()
                             if (activePanel != null) {
                                 Column(
-                                    modifier = Modifier.width(activePanel.sizeDp.dp).weight(group.sizeRatio.coerceAtLeast(1f))
+                                    modifier = Modifier
+                                        .width(activePanel.sizeDp.dp)
+                                        .weight(group.sizeRatio.coerceAtLeast(1f))
+                                        .onGloballyPositioned { coords ->
+                                            onRegisterTabGroupHitArea?.invoke(
+                                                computeTabGroupHitArea(group.id, coords, density.density)
+                                            )
+                                        },
                                 ) {
                                     if (group.panelIds.size > 1) {
                                         DockTabStrip(
@@ -188,7 +207,16 @@ fun DockHost(
                     val group = groups.first()
                     val activePanelId = group.activePanelId ?: group.panelIds.firstOrNull()
                     val activePanel = expandedPanels.find { it.id == activePanelId } ?: expandedPanels.first()
-                    Column(modifier = Modifier.fillMaxWidth().height(activePanel.sizeDp.dp)) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(activePanel.sizeDp.dp)
+                            .onGloballyPositioned { coords ->
+                                onRegisterTabGroupHitArea?.invoke(
+                                    computeTabGroupHitArea(group.id, coords, density.density)
+                                )
+                            },
+                    ) {
                         if (group.panelIds.size > 1) {
                             DockTabStrip(
                                 panels = expandedPanels.filter { it.tabGroupId == group.id },
@@ -226,7 +254,14 @@ fun DockHost(
                             val activePanel = groupPanels.find { it.id == activePanelId } ?: groupPanels.firstOrNull()
                             if (activePanel != null) {
                                 Column(
-                                    modifier = Modifier.weight(group.sizeRatio.coerceAtLeast(1f)).height(activePanel.sizeDp.dp)
+                                    modifier = Modifier
+                                        .weight(group.sizeRatio.coerceAtLeast(1f))
+                                        .height(activePanel.sizeDp.dp)
+                                        .onGloballyPositioned { coords ->
+                                            onRegisterTabGroupHitArea?.invoke(
+                                                computeTabGroupHitArea(group.id, coords, density.density)
+                                            )
+                                        },
                                 ) {
                                     if (group.panelIds.size > 1) {
                                         DockTabStrip(

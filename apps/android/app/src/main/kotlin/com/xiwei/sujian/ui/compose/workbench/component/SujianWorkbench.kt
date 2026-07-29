@@ -175,6 +175,7 @@ fun SujianWorkbench(
                         zone = DockZone.Left,
                         panels = leftExpanded,
                         activeTabByGroup = layoutState.activeTabByGroup,
+                        dockGroupSizes = layoutState.dockGroupSizes,
                         onFloat = { onAction(WorkbenchAction.FloatPanel(it)) },
                         onCollapse = { onAction(WorkbenchAction.CollapsePanel(it)) },
                         onHide = { onAction(WorkbenchAction.HidePanel(it)) },
@@ -221,6 +222,7 @@ fun SujianWorkbench(
                         zone = DockZone.Right,
                         panels = rightExpanded,
                         activeTabByGroup = layoutState.activeTabByGroup,
+                        dockGroupSizes = layoutState.dockGroupSizes,
                         onFloat = { onAction(WorkbenchAction.FloatPanel(it)) },
                         onCollapse = { onAction(WorkbenchAction.CollapsePanel(it)) },
                         onHide = { onAction(WorkbenchAction.HidePanel(it)) },
@@ -259,6 +261,7 @@ fun SujianWorkbench(
                     zone = DockZone.Bottom,
                     panels = bottomExpanded,
                     activeTabByGroup = layoutState.activeTabByGroup,
+                    dockGroupSizes = layoutState.dockGroupSizes,
                     onFloat = { onAction(WorkbenchAction.FloatPanel(it)) },
                     onCollapse = { onAction(WorkbenchAction.CollapsePanel(it)) },
                     onHide = { onAction(WorkbenchAction.HidePanel(it)) },
@@ -293,7 +296,10 @@ fun SujianWorkbench(
                 onCollapse = { onAction(WorkbenchAction.CollapsePanel(it)) },
                 onHide = { onAction(WorkbenchAction.HidePanel(it)) },
                 onMoveFloating = { id, x, y ->
-                    val (cx, cy) = WorkbenchReducer.clampFloatingPosition(x, y, 420f, 560f, maxWidthDp, maxHeightDp)
+                    val panel = layoutState.panels[id]
+                    val w = panel?.floatingWidthDp ?: 420f
+                    val h = panel?.floatingHeightDp ?: 560f
+                    val (cx, cy) = WorkbenchReducer.clampFloatingPosition(x, y, w, h, maxWidthDp, maxHeightDp)
                     onAction(WorkbenchAction.MoveFloatingPanel(id, cx, cy))
                 },
                 onDock = { id, zone -> onAction(WorkbenchAction.DockPanel(id, zone)) },

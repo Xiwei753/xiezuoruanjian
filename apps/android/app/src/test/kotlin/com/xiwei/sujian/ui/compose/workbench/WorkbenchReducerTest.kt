@@ -8,6 +8,7 @@ import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelId
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPreset
 import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchReducer
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -472,5 +473,89 @@ class WorkbenchReducerTest {
         val rightWidth = statsExpanded.actualSideWidthDp(DockZone.Right)
         val maxAllowed = availableWidth - 480f - rightWidth
         assertTrue(result.panels[WorkbenchPanelId.ChapterNavigator]?.sizeDp!! <= maxAllowed)
+    }
+
+    @Test
+    fun dockGroupsByZone_usesDockGroupSizes_asSizeRatio() {
+        val state = WorkbenchReducer.computeDefaultLayout()
+        val groups = state.dockGroupsByZone(DockZone.Left)
+        for (group in groups) {
+            val expectedRatio = state.dockGroupSizes[group.id] ?: 280f
+            assertEquals(expectedRatio, group.sizeRatio, 0.01f)
+        }
+    }
+
+    @Test
+    fun dockGroupsByZone_sizeRatioZero_defaultsTo280() {
+        val state = WorkbenchReducer.computeDefaultLayout()
+        val groups = state.dockGroupsByZone(DockZone.Right)
+        for (group in groups) {
+            assertTrue(group.sizeRatio >= 280f)
+        }
+    }
+
+    @Test
+    fun resizeDockGroup_accumulatesAndUpdatesDockGroupSizes() {
+        val state = WorkbenchReducer.computeDefaultLayout()
+        val initialSize = state.dockGroupSizes["left-nav"] ?: 320f
+        val afterFirst = WorkbenchReducer.reduce(state, WorkbenchAction.ResizeDockGroup("left-nav", DockZone.Left, 30f))
+        assertEquals(initialSize + 30f, afterFirst.dockGroupSizes["left-nav"]!!, 0.01f)
+        val afterSecond = WorkbenchReducer.reduce(afterFirst, WorkbenchAction.ResizeDockGroup("left-nav", DockZone.Left, -20f))
+        assertEquals(initialSize + 10f, afterSecond.dockGroupSizes["left-nav"]!!, 0.01f)
+    }
+
+    @Test
+    fun resizeDockGroup_updatesSizePropagatesToDockGroupsByZone() {
+        val state = WorkbenchReducer.computeDefaultLayout()
+        val resized = WorkbenchReducer.reduce(state, WorkbenchAction.ResizeDockGroup("left-nav", DockZone.Left, 80f))
+        val leftGroups = resized.dockGroupsByZone(DockZone.Left)
+        val navGroup = leftGroups.find { it.id == "left-nav" }
+        assertNotNull(navGroup)
+        val expectedRatio = state.dockGroupSizes["left-nav"]!! + 80f
+        assertEquals(expectedRatio, navGroup!!.sizeRatio, 0.01f)
+    }
+
+    @Test
+    fun resizeDockGroup_negativeDelta_clampsMin() {
+        val state = WorkbenchReducer.computeDefaultLayout()
+        val result = WorkbenchReducer.reduce(state, WorkbenchAction.ResizeDockGroup("left-nav", DockZone.Left, -1000f))
+        assertTrue((result.dockGroupSizes["left-nav"] ?: 0f) >= 280f)
+    }
+
+    @Test
+    fun resizeDockGroup_bottomGroup_clampsByMax() {
+        val state = WorkbenchReducer.computeDefaultLayout()
+        val result = WorkbenchReducer.reduce(state, WorkbenchAction.ResizeDockGroup("bottom-group", DockZone.Bottom, 5000f))
+        assertTrue((result.dockGroupSizes["bottom-group"] ?: 0f) <= 2000f)
+    }
+
+    @Test
+    fun movePanelToGroup_initializesDockGroupSizesForNewGroup() {
+        val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.MovePanelToGroup(WorkbenchPanelId.Search, "new-group"))
+        assertTrue(result.dockGroupSizes.containsKey("new-group"))
+        assertTrue((result.dockGroupSizes["new-group"] ?: 0f) >= 280f)
+    }
+
+    @Test
+    fun computePresentationState_switchesOverlayViaActivateOverlayPanel() {
+        val expanded1 = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val expanded2 = WorkbenchReducer.reduce(expanded1, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val expanded3 = WorkbenchReducer.reduce(expanded2, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Search))
+        val withActive = WorkbenchReducer.reduce(expanded3, WorkbenchAction.ActivateOverlayPanel(WorkbenchPanelId.Search))
+        val presentation = WorkbenchReducer.computePresentationState(withActive, 600f, 800f)
+        assertEquals(WorkbenchPanelId.Search, presentation.activeOverlayPanelId)
+        assertTrue(presentation.overlayPanelIds.contains(WorkbenchPanelId.Search))
+    }
+
+    @Test
+    fun clampFloatingPanels_usesPanelActualDimensions() {
+        val floated = WorkbenchReducer.reduce(defaultState, WorkbenchAction.FloatPanelAt(WorkbenchPanelId.AiAssistant, -100f, -50f))
+        val resized = WorkbenchReducer.reduce(floated, WorkbenchAction.ResizeFloatingPanel(WorkbenchPanelId.AiAssistant, 300f, 400f))
+        val result = WorkbenchReducer.reduce(resized, WorkbenchAction.ClampFloatingPanels(800f, 600f))
+        val panel = result.panels[WorkbenchPanelId.AiAssistant]!!
+        assertEquals(0f, panel.floatingX, 0.01f)
+        assertEquals(0f, panel.floatingY, 0.01f)
+        assertEquals(300f, panel.floatingWidthDp, 0.01f)
+        assertEquals(400f, panel.floatingHeightDp, 0.01f)
     }
 }
