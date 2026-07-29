@@ -91,7 +91,8 @@ impl WriterCoreApi {
             body: title_entry.body.clone(),
             target: Some(title_entry.target.clone()),
         });
-        if let Ok(content) = self.core().open_chapter(project_id, volume_id, chapter_id) {
+        let chapter_result = self.core().open_chapter(project_id, volume_id, chapter_id);
+        if let Ok(content) = chapter_result {
             if !content.content.is_empty() {
                 let body_entry = crate::search::extractor::extract_chapter_body_entry(
                     project_id, volume_id, chapter_id, new_title, &content.content,

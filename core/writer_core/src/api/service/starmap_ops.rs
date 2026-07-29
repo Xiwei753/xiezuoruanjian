@@ -473,7 +473,8 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        if let Ok(graph) = self.core().get_starmap_graph(starmap_id) {
+        let graph_result = self.core().get_starmap_graph(starmap_id);
+        if let Ok(graph) = graph_result {
             for node in &graph.nodes {
                 let node_content = extract_node_search_body(&node.content, &node.tags);
                 let entry = crate::search::extractor::extract_starmap_node_entry(
@@ -535,7 +536,8 @@ impl WriterCoreApi {
                 });
             }
         }
-        if let Ok(result) = self.core().list_starmap_hyperlinks(starmap_id) {
+        let hl_result = self.core().list_starmap_hyperlinks(starmap_id);
+        if let Ok(result) = hl_result {
             for hl in &result.items {
                 let hl_title = hl.label.as_deref().unwrap_or("");
                 let entry = crate::search::extractor::extract_starmap_hyperlink_entry(
@@ -569,7 +571,8 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        if let Ok(graph) = self.core().get_starmap_graph(starmap_id) {
+        let graph_result = self.core().get_starmap_graph(starmap_id);
+        if let Ok(graph) = graph_result {
             for node in &graph.nodes {
                 let node_content = extract_node_search_body(&node.content, &node.tags);
                 let entry = crate::search::extractor::extract_starmap_node_entry(
@@ -631,7 +634,8 @@ impl WriterCoreApi {
                 });
             }
         }
-        if let Ok(result) = self.core().list_starmap_hyperlinks(starmap_id) {
+        let hl_result = self.core().list_starmap_hyperlinks(starmap_id);
+        if let Ok(result) = hl_result {
             for hl in &result.items {
                 let hl_title = hl.label.as_deref().unwrap_or("");
                 let entry = crate::search::extractor::extract_starmap_hyperlink_entry(

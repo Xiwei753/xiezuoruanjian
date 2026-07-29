@@ -17,7 +17,8 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        if let Ok(volumes) = self.core().list_volumes(&project.id) {
+        let volumes_result = self.core().list_volumes(&project.id);
+        if let Ok(volumes) = volumes_result {
             if let Some(default_vol) = volumes.first() {
                 let vol_entry = crate::search::extractor::extract_volume_title_entry(
                     &project.id, &default_vol.id, &default_vol.title,
