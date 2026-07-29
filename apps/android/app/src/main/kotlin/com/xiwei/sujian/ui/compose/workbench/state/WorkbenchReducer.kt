@@ -169,9 +169,15 @@ object WorkbenchReducer {
             .firstOrNull()?.zone ?: panel.zone
         val updatedPanel = panel.copy(tabGroupId = tabGroupId, zone = targetGroupZone)
         val newActiveTab = state.activeTabByGroup + (tabGroupId to panelId)
+        val newGroupSizes = if (tabGroupId !in state.dockGroupSizes) {
+            state.dockGroupSizes + (tabGroupId to SIDE_PANEL_MIN_DP.toFloat())
+        } else {
+            state.dockGroupSizes
+        }
         return state.copy(
             panels = state.panels + (panelId to updatedPanel),
             activeTabByGroup = newActiveTab,
+            dockGroupSizes = newGroupSizes,
             preset = WorkbenchPreset.Custom
         )
     }
@@ -180,7 +186,12 @@ object WorkbenchReducer {
         val existingGroups = state.dockGroupsByZone(zone)
         val existingIds = existingGroups.map { it.id }
         if (groupId in existingIds) return state
-        val newGroupSizes = state.dockGroupSizes + (groupId to 1f)
+        val defaultSize = when (zone) {
+            DockZone.Left, DockZone.Right -> SIDE_PANEL_MIN_DP
+            DockZone.Bottom -> BOTTOM_PANEL_MIN_DP
+            DockZone.Floating -> 300f
+        }
+        val newGroupSizes = state.dockGroupSizes + (groupId to defaultSize)
         return state.copy(
             dockGroupSizes = newGroupSizes,
             preset = WorkbenchPreset.Custom
@@ -229,11 +240,13 @@ object WorkbenchReducer {
         )
     }
 
-    private fun resizeDockGroup(state: WorkbenchLayoutState, groupId: String, zone: DockZone, sizeDp: Float): WorkbenchLayoutState {
+    private fun resizeDockGroup(state: WorkbenchLayoutState, groupId: String, zone: DockZone, deltaDp: Float): WorkbenchLayoutState {
+        val currentSize = state.dockGroupSizes[groupId] ?: SIDE_PANEL_MIN_DP.toFloat()
+        val newSize = currentSize + deltaDp
         val clamped = when (zone) {
-            DockZone.Left, DockZone.Right -> sizeDp.coerceIn(SIDE_PANEL_MIN_DP, SIDE_PANEL_MAX_DP)
-            DockZone.Bottom -> sizeDp.coerceIn(BOTTOM_PANEL_MIN_DP, 2000f)
-            DockZone.Floating -> sizeDp
+            DockZone.Left, DockZone.Right -> newSize.coerceIn(SIDE_PANEL_MIN_DP, SIDE_PANEL_MAX_DP)
+            DockZone.Bottom -> newSize.coerceIn(BOTTOM_PANEL_MIN_DP, 2000f)
+            DockZone.Floating -> newSize
         }
         return state.copy(
             dockGroupSizes = state.dockGroupSizes + (groupId to clamped),
@@ -427,7 +440,12 @@ object WorkbenchReducer {
         return WorkbenchLayoutState(
             panels = panels,
             activeTabByGroup = emptyMap(),
-            preset = WorkbenchPreset.FocusWriting
+            preset = WorkbenchPreset.FocusWriting,
+            dockGroupSizes = mapOf(
+                "left-nav" to 320f,
+                "right-tools" to 400f,
+                "right-outline" to 300f,
+            ),
         )
     }
 

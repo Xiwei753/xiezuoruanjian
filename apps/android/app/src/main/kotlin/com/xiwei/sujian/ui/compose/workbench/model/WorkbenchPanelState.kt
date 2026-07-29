@@ -45,7 +45,7 @@ data class WorkbenchLayoutState(
                     id = groupId,
                     zone = zone,
                     order = sorted.firstOrNull()?.order ?: 0,
-                    sizeRatio = dockGroupSizes[groupId] ?: 1f,
+                    sizeRatio = dockGroupSizes[groupId] ?: 280f,
                     activePanelId = activeTabByGroup[groupId] ?: sorted.firstOrNull()?.id,
                     panelIds = sorted.map { it.id },
                 )

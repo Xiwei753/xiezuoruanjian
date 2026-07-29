@@ -24,6 +24,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.ui.compose.workbench.model.DockZone
@@ -51,9 +52,11 @@ fun SujianWorkbench(
     panelContent: @Composable (WorkbenchPanelState) -> Unit,
 ) {
     val dims = LocalSujianDimensions.current
+    val density = LocalDensity.current
 
     var dragState by remember { mutableStateOf(WorkbenchDragState.Idle) }
     var tabGroupHitAreas by remember { mutableStateOf<List<TabGroupHitArea>>(emptyList()) }
+    var titleBarPositions by remember { mutableStateOf<Map<WorkbenchPanelId, Pair<Float, Float>>>(emptyMap()) }
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val maxWidthDp = maxWidth.value
@@ -86,12 +89,27 @@ fun SujianWorkbench(
 
         val showRightDock = rightExpanded.isNotEmpty() && !isOverlayMode && (allowDualSide || leftExpanded.isEmpty())
 
-        val onPanelDragStart: (WorkbenchPanelId, Float, Float) -> Unit = { id, startX, startY ->
+        val onTitleBarPositionChanged: (WorkbenchPanelId, Float, Float) -> Unit = { id, xWindowPx, yWindowPx ->
+            titleBarPositions = titleBarPositions + (id to (xWindowPx to yWindowPx))
+        }
+
+        val onPanelDragStart: (WorkbenchPanelId, Float, Float) -> Unit = { id, pointerLocalDpX, pointerLocalDpY ->
+            val titleBarPosPx = titleBarPositions[id]
+            val absoluteXDp = if (titleBarPosPx != null) {
+                titleBarPosPx.first / density.density + pointerLocalDpX
+            } else {
+                pointerLocalDpX
+            }
+            val absoluteYDp = if (titleBarPosPx != null) {
+                titleBarPosPx.second / density.density + pointerLocalDpY
+            } else {
+                pointerLocalDpY
+            }
             dragState = WorkbenchDragState(
                 isDragging = true,
                 draggedPanelId = id,
-                pointerX = startX,
-                pointerY = startY,
+                pointerX = absoluteXDp,
+                pointerY = absoluteYDp,
                 dropTarget = DragDropTarget.None,
                 tabGroupHitAreas = tabGroupHitAreas,
             )
@@ -168,6 +186,7 @@ fun SujianWorkbench(
                         onDragCancel = onPanelDragCancel,
                         onResizeGroup = { groupId, size -> onAction(WorkbenchAction.ResizeDockGroup(groupId, DockZone.Left, size)) },
                         onRegisterTabGroupHitArea = onRegisterTabGroupHitArea,
+                        onTitleBarPositionChanged = onTitleBarPositionChanged,
                         modifier = Modifier.fillMaxHeight(),
                         panelContent = panelContent,
                     )
@@ -215,6 +234,7 @@ fun SujianWorkbench(
                         onDragCancel = onPanelDragCancel,
                         onResizeGroup = { groupId, size -> onAction(WorkbenchAction.ResizeDockGroup(groupId, DockZone.Right, size)) },
                         onRegisterTabGroupHitArea = onRegisterTabGroupHitArea,
+                        onTitleBarPositionChanged = onTitleBarPositionChanged,
                         modifier = Modifier.fillMaxHeight(),
                         panelContent = panelContent,
                     )
@@ -253,6 +273,7 @@ fun SujianWorkbench(
                     onDragCancel = onPanelDragCancel,
                     onResizeGroup = { groupId, size -> onAction(WorkbenchAction.ResizeDockGroup(groupId, DockZone.Bottom, size)) },
                     onRegisterTabGroupHitArea = onRegisterTabGroupHitArea,
+                    onTitleBarPositionChanged = onTitleBarPositionChanged,
                     modifier = Modifier.fillMaxWidth(),
                     panelContent = panelContent,
                 )

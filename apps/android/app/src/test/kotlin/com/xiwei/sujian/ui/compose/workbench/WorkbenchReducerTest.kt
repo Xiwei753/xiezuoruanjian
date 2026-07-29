@@ -337,7 +337,7 @@ class WorkbenchReducerTest {
     fun createDockGroup_savesGroupSize() {
         val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.CreateDockGroup("new-group", DockZone.Left, 0))
         assertTrue(result.dockGroupSizes.containsKey("new-group"))
-        assertEquals(1f, result.dockGroupSizes["new-group"]!!, 0.01f)
+        assertTrue((result.dockGroupSizes["new-group"] ?: 0f) >= 280f)
     }
 
     @Test
@@ -348,9 +348,18 @@ class WorkbenchReducerTest {
     }
 
     @Test
-    fun resizeDockGroup_updatesGroupSize() {
-        val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ResizeDockGroup("left-nav", DockZone.Left, 350f))
-        assertEquals(350f, result.dockGroupSizes["left-nav"]!!, 0.01f)
+    fun resizeDockGroup_accumulatesDelta() {
+        val state = WorkbenchReducer.computeDefaultLayout()
+        val initialSize = state.dockGroupSizes["left-nav"] ?: 320f
+        val result = WorkbenchReducer.reduce(state, WorkbenchAction.ResizeDockGroup("left-nav", DockZone.Left, 30f))
+        assertEquals(initialSize + 30f, result.dockGroupSizes["left-nav"]!!, 0.01f)
+    }
+
+    @Test
+    fun resizeDockGroup_clampsMinSize() {
+        val state = WorkbenchReducer.computeDefaultLayout()
+        val result = WorkbenchReducer.reduce(state, WorkbenchAction.ResizeDockGroup("left-nav", DockZone.Left, -1000f))
+        assertTrue((result.dockGroupSizes["left-nav"] ?: 0f) >= 280f)
     }
 
     @Test

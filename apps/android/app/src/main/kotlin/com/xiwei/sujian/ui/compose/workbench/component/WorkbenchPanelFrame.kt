@@ -23,6 +23,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -44,6 +46,7 @@ fun WorkbenchPanelFrame(
     modifier: Modifier = Modifier,
     title: String? = null,
     titleBarModifier: Modifier = Modifier,
+    onTitleBarPositionChanged: ((xWindowPx: Float, yWindowPx: Float) -> Unit)? = null,
     onDragStart: ((Float, Float) -> Unit)? = null,
     onDrag: ((Float, Float) -> Unit)? = null,
     onDragEnd: ((Float, Float) -> Unit)? = null,
@@ -62,6 +65,14 @@ fun WorkbenchPanelFrame(
             androidx.compose.foundation.layout.Row(
                 modifier = Modifier.padding(horizontal = dims.space8, vertical = dims.space4)
                     .height(40.dp)
+                    .then(
+                        if (onTitleBarPositionChanged != null) {
+                            Modifier.onGloballyPositioned { coords ->
+                                val pos = coords.positionInWindow()
+                                onTitleBarPositionChanged(pos.x, pos.y)
+                            }
+                        } else Modifier
+                    )
                     .then(
                         if (onDragStart != null && onDrag != null && onDragEnd != null) {
                             Modifier.pointerInput(panelState.id) {
