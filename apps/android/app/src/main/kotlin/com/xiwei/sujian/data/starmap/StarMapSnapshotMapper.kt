@@ -27,6 +27,7 @@ internal fun StarMapPhasedSnapshotDto.toRawCache(): StarMapRawCache = StarMapRaw
         edges = edges,
         embeds = embeds,
         links = links,
+        hyperlinks = hyperlinks,
         createdAt = 0u,
         updatedAt = 0u
     ),

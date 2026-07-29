@@ -180,6 +180,7 @@ internal class StarMapSnapshotCache {
             edges = cache.edges.values.toList(),
             embeds = cache.embeds.values.toList(),
             links = cache.links.values.toList(),
+            hyperlinks = cache.hyperlinks.values.toList(),
             createdAt = meta.createdAt,
             updatedAt = meta.updatedAt
         )

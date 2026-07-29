@@ -73,6 +73,7 @@ class StarMapRepositoryContractTest {
             graph = StarMapGraphDto(
                 schemaVersion = 1u, id = "sm1", starmapId = "sm1", title = "T",
                 nodes = emptyList(), edges = emptyList(), embeds = emptyList(), links = emptyList(),
+                hyperlinks = emptyList(),
                 createdAt = 0u, updatedAt = 0u
             ),
             nodes = mutableMapOf(), edges = mutableMapOf(),

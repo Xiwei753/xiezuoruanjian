@@ -49,6 +49,7 @@ class StarMapCacheContractTest {
             graph = StarMapGraphDto(
                 schemaVersion = 1u, id = "sm1", starmapId = "sm1", title = "T",
                 nodes = emptyList(), edges = emptyList(), embeds = emptyList(), links = emptyList(),
+                hyperlinks = emptyList(),
                 createdAt = 0u, updatedAt = 0u
             ),
             nodes = mutableMapOf(), edges = mutableMapOf(),
@@ -170,5 +171,195 @@ class StarMapCacheContractTest {
         assertEquals(2f, result.data.viewport.scale, 0.001f)
         assertEquals(3uL, result.data.packageRevision)
         assertTrue(result.data.complete)
+    }
+
+    private fun makeHyperlinkDto(
+        hyperlinkId: String = "hl1",
+        targetUri: String = "https://example.com",
+        label: String? = "Example",
+        targetStarmapId: String? = null
+    ) = StarMapHyperlinkDto(
+        hyperlinkId = hyperlinkId,
+        source = StarMapEndpointPathDto(
+            segments = emptyList(),
+            endpoint = StarMapEdgeEndpointDto(kind = "node", nodeId = "n1", anchorId = null, target = null)
+        ),
+        targetUri = targetUri,
+        label = label,
+        targetStarmapId = targetStarmapId,
+        createdAt = 0u,
+        updatedAt = 0u
+    )
+
+    @Test
+    fun snapshotDto_toRawCache_preservesHyperlinks() {
+        val hl = makeHyperlinkDto()
+        val dto = StarMapPhasedSnapshotDto(
+            starmapId = "sm1", title = "T", loadPhase = "CurrentViewportObjects",
+            packageRevision = 1u, complete = false, sinceRevision = 0u,
+            nodes = emptyList(), edges = emptyList(), embeds = emptyList(),
+            links = emptyList(), hyperlinks = listOf(hl),
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyDeletedIds, deletedEdgeIds = emptyDeletedIds, deletedEmbedIds = emptyDeletedIds,
+            deletedLinkIds = emptyDeletedIds, deletedHyperlinkIds = emptyDeletedIds
+        )
+        val cache = dto.toRawCache()
+        assertEquals(1, cache.hyperlinks.size)
+        assertTrue(cache.hyperlinks.containsKey("hl1"))
+        assertEquals("https://example.com", cache.hyperlinks["hl1"]!!.targetUri)
+        assertEquals("Example", cache.hyperlinks["hl1"]!!.label)
+    }
+
+    @Test
+    fun rawCache_toSnapshotResult_preservesHyperlinks() {
+        val hl = makeHyperlinkDto()
+        val cache = StarMapRawCache(
+            graph = StarMapGraphDto(
+                schemaVersion = 1u, id = "sm1", starmapId = "sm1", title = "T",
+                nodes = emptyList(), edges = emptyList(), embeds = emptyList(), links = emptyList(),
+                hyperlinks = listOf(hl),
+                createdAt = 0u, updatedAt = 0u
+            ),
+            nodes = mutableMapOf(), edges = mutableMapOf(), embeds = mutableMapOf(),
+            links = mutableMapOf(),
+            hyperlinks = mutableMapOf("hl1" to hl),
+            layoutNodes = mutableMapOf()
+        )
+        val result = cache.toSnapshotResult()
+        assertEquals(1, result.data.hyperlinks.size)
+        assertEquals("hl1", result.data.hyperlinks[0].hyperlinkId)
+        assertEquals("https://example.com", result.data.hyperlinks[0].targetUri)
+    }
+
+    @Test
+    fun snapshotCache_mergeIncremental_preservesHyperlinks() {
+        val cache = StarMapSnapshotCache()
+        val hl1 = makeHyperlinkDto(hyperlinkId = "hl1", targetUri = "https://a.com")
+        val rawCache1 = StarMapRawCache(
+            graph = StarMapGraphDto(
+                schemaVersion = 1u, id = "sm1", starmapId = "sm1", title = "T",
+                nodes = emptyList(), edges = emptyList(), embeds = emptyList(), links = emptyList(),
+                hyperlinks = listOf(hl1),
+                createdAt = 0u, updatedAt = 0u
+            ),
+            nodes = mutableMapOf(), edges = mutableMapOf(), embeds = mutableMapOf(),
+            links = mutableMapOf(),
+            hyperlinks = mutableMapOf("hl1" to hl1),
+            layoutNodes = mutableMapOf(),
+            packageRevision = 1u
+        )
+        cache.put("sm1", rawCache1)
+
+        val hl2 = makeHyperlinkDto(hyperlinkId = "hl2", targetUri = "https://b.com")
+        val rawCache2 = StarMapRawCache(
+            graph = StarMapGraphDto(
+                schemaVersion = 1u, id = "sm1", starmapId = "sm1", title = "T",
+                nodes = emptyList(), edges = emptyList(), embeds = emptyList(), links = emptyList(),
+                hyperlinks = listOf(hl1, hl2),
+                createdAt = 0u, updatedAt = 0u
+            ),
+            nodes = mutableMapOf(), edges = mutableMapOf(), embeds = mutableMapOf(),
+            links = mutableMapOf(),
+            hyperlinks = mutableMapOf("hl1" to hl1, "hl2" to hl2),
+            layoutNodes = mutableMapOf(),
+            packageRevision = 2u
+        )
+        cache.mergeIncremental("sm1", rawCache2)
+
+        val merged = cache.get("sm1")!!
+        assertEquals(2, merged.hyperlinks.size)
+        assertTrue(merged.hyperlinks.containsKey("hl1"))
+        assertTrue(merged.hyperlinks.containsKey("hl2"))
+    }
+
+    @Test
+    fun snapshotCache_mergeIncremental_deletesHyperlinks() {
+        val cache = StarMapSnapshotCache()
+        val hl1 = makeHyperlinkDto(hyperlinkId = "hl1")
+        val hl2 = makeHyperlinkDto(hyperlinkId = "hl2")
+        val rawCache1 = StarMapRawCache(
+            graph = StarMapGraphDto(
+                schemaVersion = 1u, id = "sm1", starmapId = "sm1", title = "T",
+                nodes = emptyList(), edges = emptyList(), embeds = emptyList(), links = emptyList(),
+                hyperlinks = listOf(hl1, hl2),
+                createdAt = 0u, updatedAt = 0u
+            ),
+            nodes = mutableMapOf(), edges = mutableMapOf(), embeds = mutableMapOf(),
+            links = mutableMapOf(),
+            hyperlinks = mutableMapOf("hl1" to hl1, "hl2" to hl2),
+            layoutNodes = mutableMapOf()
+        )
+        cache.put("sm1", rawCache1)
+
+        val rawCache2 = StarMapRawCache(
+            graph = StarMapGraphDto(
+                schemaVersion = 1u, id = "sm1", starmapId = "sm1", title = "T",
+                nodes = emptyList(), edges = emptyList(), embeds = emptyList(), links = emptyList(),
+                hyperlinks = emptyList(),
+                createdAt = 0u, updatedAt = 0u
+            ),
+            nodes = mutableMapOf(), edges = mutableMapOf(), embeds = mutableMapOf(),
+            links = mutableMapOf(), hyperlinks = mutableMapOf(),
+            layoutNodes = mutableMapOf(),
+            deletedHyperlinkIds = mutableSetOf("hl1")
+        )
+        cache.mergeIncremental("sm1", rawCache2)
+
+        val merged = cache.get("sm1")!!
+        assertEquals(1, merged.hyperlinks.size)
+        assertFalse(merged.hyperlinks.containsKey("hl1"))
+        assertTrue(merged.hyperlinks.containsKey("hl2"))
+    }
+
+    @Test
+    fun rebuildGraph_includesHyperlinks() {
+        val cache = StarMapSnapshotCache()
+        val hl = makeHyperlinkDto(hyperlinkId = "hl1")
+        val rawCache = StarMapRawCache(
+            graph = StarMapGraphDto(
+                schemaVersion = 1u, id = "sm1", starmapId = "sm1", title = "T",
+                nodes = emptyList(), edges = emptyList(), embeds = emptyList(), links = emptyList(),
+                hyperlinks = emptyList(),
+                createdAt = 0u, updatedAt = 0u
+            ),
+            nodes = mutableMapOf(), edges = mutableMapOf(), embeds = mutableMapOf(),
+            links = mutableMapOf(), hyperlinks = mutableMapOf("hl1" to hl),
+            layoutNodes = mutableMapOf()
+        )
+        cache.put("sm1", rawCache)
+
+        val graph = cache.get("sm1")!!.graph!!
+        assertEquals(1, graph.hyperlinks.size)
+        assertEquals("hl1", graph.hyperlinks[0].hyperlinkId)
+    }
+
+    @Test
+    fun snapshotDto_withHyperlinks_roundtrip_preservesAllFields() {
+        val hl = makeHyperlinkDto(hyperlinkId = "hl1", targetUri = "https://example.com", label = "Link")
+        val dto = StarMapPhasedSnapshotDto(
+            starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
+            packageRevision = 2u, complete = true, sinceRevision = 0u,
+            nodes = listOf(StarMapNodeDto(
+                id = "n1", title = "A", kind = StarMapNodeKindDto.NOTE,
+                payload = null, tags = emptyList(),
+                content = StarMapNodeContentDto("note", null, null, null, null, null, null, null, null, null, null, null),
+                anchors = emptyList(), portal = null,
+                displayPolicy = defaultStarMapDisplayPolicy(),
+                openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
+                provenance = StarMapProvenanceDto(StarMapSourceKindDto.HUMAN, null, null, null, StarMapReviewStatusDto.ACCEPTED, null),
+                createdAt = 0u, updatedAt = 0u
+            )),
+            edges = emptyList(), embeds = emptyList(), links = emptyList(),
+            hyperlinks = listOf(hl),
+            layout = null, viewport = null, diagnostics = emptyList(),
+            deletedNodeIds = emptyDeletedIds, deletedEdgeIds = emptyDeletedIds, deletedEmbedIds = emptyDeletedIds,
+            deletedLinkIds = emptyDeletedIds, deletedHyperlinkIds = emptyDeletedIds
+        )
+        val rawCache = dto.toRawCache()
+        val result = rawCache.toSnapshotResult()
+        assertEquals(1, result.data.hyperlinks.size)
+        assertEquals("hl1", result.data.hyperlinks[0].hyperlinkId)
+        assertEquals("https://example.com", result.data.hyperlinks[0].targetUri)
+        assertEquals("Link", result.data.hyperlinks[0].label)
     }
 }

@@ -56,7 +56,7 @@ internal fun StarMapGraphDto.toRawCache(): StarMapRawCache = StarMapRawCache(
     edges = edges.associateByTo(mutableMapOf()) { it.id },
     embeds = embeds.associateByTo(mutableMapOf()) { it.instanceId },
     links = links.associateByTo(mutableMapOf()) { it.linkId },
-    hyperlinks = mutableMapOf()
+    hyperlinks = hyperlinks.associateByTo(mutableMapOf()) { it.hyperlinkId }
 )
 
 internal fun StarMapGraphDto.toModel(cache: StarMapRawCache? = null): StarMapData = StarMapData(
