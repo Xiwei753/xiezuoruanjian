@@ -17,6 +17,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,6 +48,7 @@ private const val DUAL_SIDE_THRESHOLD_DP = 1200
 fun SujianWorkbench(
     layoutState: WorkbenchLayoutState,
     onAction: (WorkbenchAction) -> Unit,
+    onWindowSizeChanged: (maxWidthDp: Float, maxHeightDp: Float) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
     editorContent: @Composable () -> Unit,
     panelContent: @Composable (WorkbenchPanelState) -> Unit,
@@ -61,6 +63,10 @@ fun SujianWorkbench(
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val maxWidthDp = maxWidth.value
         val maxHeightDp = maxHeight.value
+
+        LaunchedEffect(maxWidthDp, maxHeightDp) {
+            onWindowSizeChanged(maxWidthDp, maxHeightDp)
+        }
 
         val isOverlayMode = maxWidthDp < OVERLAY_THRESHOLD_DP
         val allowDualSide = maxWidthDp >= DUAL_SIDE_THRESHOLD_DP

@@ -182,6 +182,9 @@ private fun WorkbenchWorkspaceContent(
                 else -> workbenchVm.dispatch(action)
             }
         },
+        onWindowSizeChanged = { maxWidthDp, maxHeightDp ->
+            workbenchVm.onWindowSizeChanged(maxWidthDp, maxHeightDp)
+        },
         modifier = modifier.fillMaxSize().then(windowInsetsPadding),
         editorContent = {
             if (currentVolumeId != null && currentChapterId != null) {

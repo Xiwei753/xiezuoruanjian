@@ -104,7 +104,7 @@ fun DockHost(
                     val activePanel = expandedPanels.find { it.id == activePanelId } ?: expandedPanels.first()
                     Column(
                         modifier = Modifier
-                            .width(activePanel.sizeDp.dp)
+                            .width(group.sizeRatio.dp)
                             .fillMaxHeight()
                             .onGloballyPositioned { coords ->
                                 onRegisterTabGroupHitArea?.invoke(
@@ -150,8 +150,8 @@ fun DockHost(
                             if (activePanel != null) {
                                 Column(
                                     modifier = Modifier
-                                        .width(activePanel.sizeDp.dp)
-                                        .weight(group.sizeRatio.coerceAtLeast(1f))
+                                        .width(group.sizeRatio.dp)
+                                        .weight(1f)
                                         .onGloballyPositioned { coords ->
                                             onRegisterTabGroupHitArea?.invoke(
                                                 computeTabGroupHitArea(group.id, coords, density.density)
@@ -210,7 +210,7 @@ fun DockHost(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(activePanel.sizeDp.dp)
+                            .height(group.sizeRatio.dp)
                             .onGloballyPositioned { coords ->
                                 onRegisterTabGroupHitArea?.invoke(
                                     computeTabGroupHitArea(group.id, coords, density.density)
@@ -256,7 +256,7 @@ fun DockHost(
                                 Column(
                                     modifier = Modifier
                                         .weight(group.sizeRatio.coerceAtLeast(1f))
-                                        .height(activePanel.sizeDp.dp)
+                                        .height(group.sizeRatio.dp.coerceIn(220.dp, 2000.dp))
                                         .onGloballyPositioned { coords ->
                                             onRegisterTabGroupHitArea?.invoke(
                                                 computeTabGroupHitArea(group.id, coords, density.density)
