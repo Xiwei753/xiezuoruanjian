@@ -31,6 +31,8 @@ data class WorkbenchLayoutState(
     val activeTabByGroup: Map<String, WorkbenchPanelId>,
     val preset: WorkbenchPreset,
     val nextFloatingZIndex: Int = 1,
+    val dockGroupSizes: Map<String, Float> = emptyMap(),
+    val activeOverlayPanelId: WorkbenchPanelId? = null,
 ) {
     fun dockGroupsByZone(zone: DockZone): List<DockGroupState> {
         val panelsInZone = panels.values
@@ -43,10 +45,19 @@ data class WorkbenchLayoutState(
                     id = groupId,
                     zone = zone,
                     order = sorted.firstOrNull()?.order ?: 0,
+                    sizeRatio = dockGroupSizes[groupId] ?: 1f,
                     activePanelId = activeTabByGroup[groupId] ?: sorted.firstOrNull()?.id,
                     panelIds = sorted.map { it.id },
                 )
             }
             .sortedBy { it.order }
+    }
+
+    fun actualSideWidthDp(zone: DockZone): Float {
+        val groups = dockGroupsByZone(zone)
+        if (groups.isEmpty()) return 0f
+        return groups.maxOf { group ->
+            group.panelIds.mapNotNull { panels[it]?.sizeDp }.maxOrNull() ?: 0f
+        }
     }
 }

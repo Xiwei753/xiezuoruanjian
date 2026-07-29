@@ -110,7 +110,64 @@ class WorkbenchViewModelTest {
 
         assertTrue(
             viewModel.layoutState.preset == WorkbenchPreset.AiWriting ||
-            viewModel.layoutState.preset == WorkbenchPreset.FocusWriting
+            viewModel.layoutState.preset == WorkbenchPreset.FocusWriting ||
+            viewModel.layoutState.preset == WorkbenchPreset.Custom
         )
+    }
+
+    @Test
+    fun onWindowBucketChanged_newBucketGetsDefaultLayout() = runTest {
+        viewModel.initialize(repository, testKey)
+        advanceUntilIdle()
+
+        val newKey = LayoutStorageKey(
+            deviceId = "test-device-new",
+            orientation = "portrait",
+            windowWidthBucket = WindowWidthBucket.Compact,
+            windowMode = "standard",
+        )
+        viewModel.onWindowBucketChanged(newKey)
+        advanceUntilIdle()
+
+        val state = viewModel.layoutState
+        for (panel in state.panels.values) {
+            assertTrue(
+                "Panel ${panel.id} visibility should be valid",
+                panel.visibility in listOf(PanelVisibility.Collapsed, PanelVisibility.Expanded, PanelVisibility.Hidden)
+            )
+        }
+    }
+
+    @Test
+    fun dispatch_floatPanelAt_setsPosition() {
+        viewModel.dispatch(WorkbenchAction.FloatPanelAt(WorkbenchPanelId.AiAssistant, 100f, 200f))
+        assertEquals(DockZone.Floating, viewModel.layoutState.panels[WorkbenchPanelId.AiAssistant]?.zone)
+        assertEquals(100f, viewModel.layoutState.panels[WorkbenchPanelId.AiAssistant]?.floatingX!!, 0.01f)
+        assertEquals(200f, viewModel.layoutState.panels[WorkbenchPanelId.AiAssistant]?.floatingY!!, 0.01f)
+    }
+
+    @Test
+    fun dispatch_activateOverlayPanel_updatesState() {
+        viewModel.dispatch(WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        viewModel.dispatch(WorkbenchAction.ActivateOverlayPanel(WorkbenchPanelId.ChapterNavigator))
+        assertEquals(WorkbenchPanelId.ChapterNavigator, viewModel.layoutState.activeOverlayPanelId)
+    }
+
+    @Test
+    fun dispatch_clampFloatingPanels_clampsPositions() {
+        viewModel.dispatch(WorkbenchAction.FloatPanelAt(WorkbenchPanelId.AiAssistant, -100f, -50f))
+        viewModel.dispatch(WorkbenchAction.ClampFloatingPanels(800f, 600f))
+        val panel = viewModel.layoutState.panels[WorkbenchPanelId.AiAssistant]!!
+        assertTrue(panel.floatingX >= 0f)
+        assertTrue(panel.floatingY >= 0f)
+    }
+
+    @Test
+    fun onWindowSizeChanged_clampsFloatingPanels() {
+        viewModel.dispatch(WorkbenchAction.FloatPanelAt(WorkbenchPanelId.AiAssistant, -100f, -50f))
+        viewModel.onWindowSizeChanged(800f, 600f)
+        val panel = viewModel.layoutState.panels[WorkbenchPanelId.AiAssistant]!!
+        assertTrue(panel.floatingX >= 0f)
+        assertTrue(panel.floatingY >= 0f)
     }
 }

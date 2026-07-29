@@ -30,19 +30,13 @@ class WorkbenchViewModel(
 
     fun initialize(repository: WorkbenchLayoutRepository, storageKey: LayoutStorageKey) {
         if (isInitialized) {
-            viewModelScope.launch { switchStorageKey(storageKey) }
+            onWindowBucketChanged(storageKey)
             return
         }
         isInitialized = true
         this.repository = repository
-        this.currentStorageKey = storageKey
         viewModelScope.launch {
-            val saved = withContext(Dispatchers.IO) {
-                repository.loadLayout(storageKey)
-            }
-            if (saved != null) {
-                layoutState = saved
-            }
+            switchStorageKey(storageKey)
         }
     }
 
@@ -71,19 +65,24 @@ class WorkbenchViewModel(
         }
     }
 
+    fun onWindowSizeChanged(maxWidthDp: Float, maxHeightDp: Float) {
+        dispatch(WorkbenchAction.ClampFloatingPanels(maxWidthDp, maxHeightDp))
+    }
+
     private suspend fun switchStorageKey(newKey: LayoutStorageKey) {
-        val oldKey = currentStorageKey
-        if (oldKey == newKey) return
         val repo = repository ?: return
         switchMutex.withLock {
+            val oldKey = currentStorageKey
+            if (oldKey == newKey) return
+            pendingResizeJob?.cancel()
+            pendingResizeJob = null
             if (oldKey != null) {
-                withContext(Dispatchers.IO) { repo.saveLayout(oldKey, layoutState) }
+                val snapshot = layoutState
+                withContext(Dispatchers.IO) { repo.saveLayout(oldKey, snapshot) }
             }
             currentStorageKey = newKey
             val saved = withContext(Dispatchers.IO) { repo.loadLayout(newKey) }
-            if (saved != null) {
-                layoutState = saved
-            }
+            layoutState = saved ?: WorkbenchReducer.computeDefaultLayout()
         }
     }
 

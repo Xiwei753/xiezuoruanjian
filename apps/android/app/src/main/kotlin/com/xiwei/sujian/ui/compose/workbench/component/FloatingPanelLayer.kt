@@ -23,6 +23,7 @@ import com.xiwei.sujian.ui.compose.workbench.model.DragDropTarget
 import com.xiwei.sujian.ui.compose.workbench.model.PanelVisibility
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelId
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelState
+import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchReducer
 
 private const val DOCK_HINT_MARGIN_DP = 72f
 
@@ -54,6 +55,11 @@ fun FloatingPanelLayer(
             var resizeOffsetW by remember(panel.id) { mutableFloatStateOf(0f) }
             var resizeOffsetH by remember(panel.id) { mutableFloatStateOf(0f) }
 
+            val clampedWidth = (panel.floatingWidthDp + resizeOffsetW)
+                .coerceIn(200f, maxWidthDp)
+            val clampedHeight = (panel.floatingHeightDp + resizeOffsetH)
+                .coerceIn(150f, maxHeightDp)
+
             Surface(
                 modifier = Modifier
                     .offset(
@@ -61,10 +67,8 @@ fun FloatingPanelLayer(
                         y = (panel.floatingY + dragOffsetY).dp
                     )
                     .size(
-                        width = (panel.floatingWidthDp + resizeOffsetW).dp
-                            .coerceAtLeast(200.dp),
-                        height = (panel.floatingHeightDp + resizeOffsetH).dp
-                            .coerceAtLeast(150.dp),
+                        width = clampedWidth.dp,
+                        height = clampedHeight.dp,
                     )
                     .zIndex(panel.floatingZIndex.toFloat()),
                 tonalElevation = 4.dp,
@@ -87,16 +91,22 @@ fun FloatingPanelLayer(
                                 onDragEnd = {
                                     val newX = panel.floatingX + dragOffsetX
                                     val newY = panel.floatingY + dragOffsetY
-                                    val dropTarget = computeDropTarget(
+                                    val dropTarget = computeDropTargetByPointer(
                                         newX, newY,
-                                        panel.floatingWidthDp, panel.floatingHeightDp,
                                         maxWidthDp, maxHeightDp,
                                     )
                                     when (dropTarget) {
                                         DragDropTarget.DockLeft -> onDock(panel.id, DockZone.Left)
                                         DragDropTarget.DockRight -> onDock(panel.id, DockZone.Right)
                                         DragDropTarget.DockBottom -> onDock(panel.id, DockZone.Bottom)
-                                        else -> onMoveFloating(panel.id, newX, newY)
+                                        else -> {
+                                            val (cx, cy) = WorkbenchReducer.clampFloatingPosition(
+                                                newX, newY,
+                                                panel.floatingWidthDp, panel.floatingHeightDp,
+                                                maxWidthDp, maxHeightDp,
+                                            )
+                                            onMoveFloating(panel.id, cx, cy)
+                                        }
                                     }
                                     dragOffsetX = 0f
                                     dragOffsetY = 0f
@@ -123,8 +133,10 @@ fun FloatingPanelLayer(
                         .pointerInput(panel.id) {
                             detectDragGestures(
                                 onDragEnd = {
-                                    val newW = panel.floatingWidthDp + resizeOffsetW
-                                    val newH = panel.floatingHeightDp + resizeOffsetH
+                                    val newW = (panel.floatingWidthDp + resizeOffsetW)
+                                        .coerceIn(200f, maxWidthDp)
+                                    val newH = (panel.floatingHeightDp + resizeOffsetH)
+                                        .coerceIn(150f, maxHeightDp)
                                     onResizeFloating(panel.id, newW, newH)
                                     resizeOffsetW = 0f
                                     resizeOffsetH = 0f
@@ -145,18 +157,14 @@ fun FloatingPanelLayer(
     }
 }
 
-private fun computeDropTarget(
-    panelX: Float,
-    panelY: Float,
-    panelW: Float,
-    panelH: Float,
+private fun computeDropTargetByPointer(
+    pointerX: Float,
+    pointerY: Float,
     maxW: Float,
     maxH: Float,
 ): DragDropTarget {
-    val centerX = panelX + panelW / 2f
-    val centerY = panelY + panelH / 2f
-    if (centerX < DOCK_HINT_MARGIN_DP) return DragDropTarget.DockLeft
-    if (centerX > maxW - DOCK_HINT_MARGIN_DP) return DragDropTarget.DockRight
-    if (centerY > maxH - DOCK_HINT_MARGIN_DP) return DragDropTarget.DockBottom
+    if (pointerX < DOCK_HINT_MARGIN_DP) return DragDropTarget.DockLeft
+    if (pointerX > maxW - DOCK_HINT_MARGIN_DP) return DragDropTarget.DockRight
+    if (pointerY > maxH - DOCK_HINT_MARGIN_DP) return DragDropTarget.DockBottom
     return DragDropTarget.None
 }

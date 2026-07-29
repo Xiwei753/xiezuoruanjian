@@ -7,6 +7,7 @@ import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchLayoutState
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelId
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelState
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPreset
+import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPresentationState
 import kotlin.math.max
 import kotlin.math.min
 
@@ -19,6 +20,7 @@ object WorkbenchReducer {
     private const val EDITOR_MIN_DP = 480f
     private const val FLOATING_MIN_WIDTH_DP = 200f
     private const val FLOATING_MIN_HEIGHT_DP = 150f
+    private const val FLOATING_TITLE_BAR_DP = 40f
 
     fun reduce(state: WorkbenchLayoutState, action: WorkbenchAction): WorkbenchLayoutState {
         return when (action) {
@@ -40,6 +42,10 @@ object WorkbenchReducer {
             is WorkbenchAction.ReorderDockGroup -> reorderDockGroup(state, action.groupId, action.newOrder)
             is WorkbenchAction.BringFloatingToFront -> bringFloatingToFront(state, action.panelId)
             is WorkbenchAction.ResizeFloatingPanel -> resizeFloatingPanel(state, action.panelId, action.widthDp, action.heightDp)
+            is WorkbenchAction.FloatPanelAt -> floatPanelAt(state, action.panelId, action.x, action.y)
+            is WorkbenchAction.ActivateOverlayPanel -> activateOverlayPanel(state, action.panelId)
+            is WorkbenchAction.ResizeDockGroup -> resizeDockGroup(state, action.groupId, action.zone, action.sizeDp)
+            is WorkbenchAction.ClampFloatingPanels -> clampFloatingPanels(state, action.maxWidthDp, action.maxHeightDp)
         }
     }
 
@@ -68,7 +74,13 @@ object WorkbenchReducer {
     private fun hidePanel(state: WorkbenchLayoutState, panelId: WorkbenchPanelId): WorkbenchLayoutState {
         val panel = state.panels[panelId] ?: return state
         if (panel.visibility == PanelVisibility.Hidden) return state
-        return updatePanel(state, panel.copy(visibility = PanelVisibility.Hidden), markCustom = true)
+        val newState = updatePanel(state, panel.copy(visibility = PanelVisibility.Hidden), markCustom = true)
+        return if (newState.activeOverlayPanelId == panelId) {
+            val remaining = newState.panels.values.filter {
+                it.visibility == PanelVisibility.Expanded && it.zone != DockZone.Floating
+            }
+            newState.copy(activeOverlayPanelId = remaining.firstOrNull()?.id)
+        } else newState
     }
 
     private fun movePanel(state: WorkbenchLayoutState, panelId: WorkbenchPanelId, zone: DockZone): WorkbenchLayoutState {
@@ -79,17 +91,17 @@ object WorkbenchReducer {
     private fun resizePanel(state: WorkbenchLayoutState, panelId: WorkbenchPanelId, sizeDp: Float, availableWidthDp: Float): WorkbenchLayoutState {
         val panel = state.panels[panelId] ?: return state
         val clamped = when (panel.zone) {
-            DockZone.Left, DockZone.Right -> {
-                val otherSideWidth = state.panels.values
-                    .filter { it.id != panelId && it.zone in listOf(DockZone.Left, DockZone.Right) && it.visibility == PanelVisibility.Expanded }
-                    .sumOf { it.sizeDp.toDouble() }
-                    .toFloat()
+            DockZone.Left -> {
+                val otherSideWidth = state.actualSideWidthDp(DockZone.Right)
                 val maxForEditor = availableWidthDp - EDITOR_MIN_DP - otherSideWidth
-                if (maxForEditor < SIDE_PANEL_MIN_DP) {
-                    return state
-                } else {
-                    sizeDp.coerceIn(SIDE_PANEL_MIN_DP, min(SIDE_PANEL_MAX_DP, maxForEditor))
-                }
+                if (maxForEditor < SIDE_PANEL_MIN_DP) return state
+                sizeDp.coerceIn(SIDE_PANEL_MIN_DP, min(SIDE_PANEL_MAX_DP, maxForEditor))
+            }
+            DockZone.Right -> {
+                val otherSideWidth = state.actualSideWidthDp(DockZone.Left)
+                val maxForEditor = availableWidthDp - EDITOR_MIN_DP - otherSideWidth
+                if (maxForEditor < SIDE_PANEL_MIN_DP) return state
+                sizeDp.coerceIn(SIDE_PANEL_MIN_DP, min(SIDE_PANEL_MAX_DP, maxForEditor))
             }
             DockZone.Bottom -> {
                 val maxBottomDp = availableWidthDp * BOTTOM_PANEL_MAX_RATIO
@@ -123,6 +135,22 @@ object WorkbenchReducer {
         )
     }
 
+    private fun floatPanelAt(state: WorkbenchLayoutState, panelId: WorkbenchPanelId, x: Float, y: Float): WorkbenchLayoutState {
+        val panel = state.panels[panelId] ?: return state
+        val newZ = state.nextFloatingZIndex
+        return state.copy(
+            panels = state.panels + (panel.id to panel.copy(
+                zone = DockZone.Floating,
+                visibility = PanelVisibility.Expanded,
+                floatingX = x,
+                floatingY = y,
+                floatingZIndex = newZ
+            )),
+            preset = WorkbenchPreset.Custom,
+            nextFloatingZIndex = newZ + 1
+        )
+    }
+
     private fun dockPanel(state: WorkbenchLayoutState, panelId: WorkbenchPanelId, zone: DockZone): WorkbenchLayoutState {
         val panel = state.panels[panelId] ?: return state
         return updatePanel(state, panel.copy(zone = zone, visibility = PanelVisibility.Expanded), markCustom = true)
@@ -136,7 +164,10 @@ object WorkbenchReducer {
 
     private fun movePanelToGroup(state: WorkbenchLayoutState, panelId: WorkbenchPanelId, tabGroupId: String): WorkbenchLayoutState {
         val panel = state.panels[panelId] ?: return state
-        val updatedPanel = panel.copy(tabGroupId = tabGroupId)
+        val targetGroupZone = state.panels.values
+            .filter { it.tabGroupId == tabGroupId && it.visibility == PanelVisibility.Expanded }
+            .firstOrNull()?.zone ?: panel.zone
+        val updatedPanel = panel.copy(tabGroupId = tabGroupId, zone = targetGroupZone)
         val newActiveTab = state.activeTabByGroup + (tabGroupId to panelId)
         return state.copy(
             panels = state.panels + (panelId to updatedPanel),
@@ -146,7 +177,14 @@ object WorkbenchReducer {
     }
 
     private fun createDockGroup(state: WorkbenchLayoutState, groupId: String, zone: DockZone, order: Int): WorkbenchLayoutState {
-        return state.copy(preset = WorkbenchPreset.Custom)
+        val existingGroups = state.dockGroupsByZone(zone)
+        val existingIds = existingGroups.map { it.id }
+        if (groupId in existingIds) return state
+        val newGroupSizes = state.dockGroupSizes + (groupId to 1f)
+        return state.copy(
+            dockGroupSizes = newGroupSizes,
+            preset = WorkbenchPreset.Custom
+        )
     }
 
     private fun reorderPanel(state: WorkbenchLayoutState, panelId: WorkbenchPanelId, newOrder: Int): WorkbenchLayoutState {
@@ -180,6 +218,47 @@ object WorkbenchReducer {
         val clampedWidth = max(widthDp, FLOATING_MIN_WIDTH_DP)
         val clampedHeight = max(heightDp, FLOATING_MIN_HEIGHT_DP)
         return updatePanel(state, panel.copy(floatingWidthDp = clampedWidth, floatingHeightDp = clampedHeight), markCustom = true)
+    }
+
+    private fun activateOverlayPanel(state: WorkbenchLayoutState, panelId: WorkbenchPanelId): WorkbenchLayoutState {
+        val panel = state.panels[panelId] ?: return state
+        if (panel.visibility != PanelVisibility.Expanded) return state
+        return state.copy(
+            activeOverlayPanelId = panelId,
+            preset = WorkbenchPreset.Custom
+        )
+    }
+
+    private fun resizeDockGroup(state: WorkbenchLayoutState, groupId: String, zone: DockZone, sizeDp: Float): WorkbenchLayoutState {
+        val clamped = when (zone) {
+            DockZone.Left, DockZone.Right -> sizeDp.coerceIn(SIDE_PANEL_MIN_DP, SIDE_PANEL_MAX_DP)
+            DockZone.Bottom -> sizeDp.coerceIn(BOTTOM_PANEL_MIN_DP, 2000f)
+            DockZone.Floating -> sizeDp
+        }
+        return state.copy(
+            dockGroupSizes = state.dockGroupSizes + (groupId to clamped),
+            preset = WorkbenchPreset.Custom
+        )
+    }
+
+    private fun clampFloatingPanels(state: WorkbenchLayoutState, maxWidthDp: Float, maxHeightDp: Float): WorkbenchLayoutState {
+        val updatedPanels = state.panels.toMutableMap()
+        for ((id, panel) in state.panels) {
+            if (panel.zone != DockZone.Floating || panel.visibility != PanelVisibility.Expanded) continue
+            val clampedW = panel.floatingWidthDp.coerceIn(FLOATING_MIN_WIDTH_DP, maxWidthDp)
+            val clampedH = panel.floatingHeightDp.coerceIn(FLOATING_MIN_HEIGHT_DP, maxHeightDp)
+            val maxX = maxWidthDp - 32f
+            val maxY = maxHeightDp - FLOATING_TITLE_BAR_DP
+            val clampedX = panel.floatingX.coerceIn(0f, max(0f, maxX - clampedW + 32f))
+            val clampedY = panel.floatingY.coerceIn(0f, max(0f, maxY))
+            updatedPanels[id] = panel.copy(
+                floatingX = clampedX,
+                floatingY = clampedY,
+                floatingWidthDp = clampedW,
+                floatingHeightDp = clampedH,
+            )
+        }
+        return state.copy(panels = updatedPanels)
     }
 
     private fun applyPreset(state: WorkbenchLayoutState, preset: WorkbenchPreset): WorkbenchLayoutState {
@@ -275,10 +354,10 @@ object WorkbenchReducer {
         state: WorkbenchLayoutState,
         maxWidthDp: Float,
         maxHeightDp: Float,
-    ): com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPresentationState {
+    ): WorkbenchPresentationState {
         val isOverlayMode = maxWidthDp < 840
         if (!isOverlayMode) {
-            return com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPresentationState()
+            return WorkbenchPresentationState()
         }
         val allowDualSide = maxWidthDp >= 1200
         val leftExpanded = state.panels.values.filter {
@@ -292,17 +371,16 @@ object WorkbenchReducer {
         }
         val allExpanded = leftExpanded + rightExpanded + bottomExpanded
         if (allExpanded.isEmpty()) {
-            return com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPresentationState(
-                isOverlayMode = true
-            )
+            return WorkbenchPresentationState(isOverlayMode = true)
         }
         val overlayIds = allExpanded.map { it.id }
-        val activeId = if (!allowDualSide && leftExpanded.isNotEmpty() && rightExpanded.isNotEmpty()) {
-            leftExpanded.first().id
-        } else {
-            allExpanded.first().id
+        val preferredActive = state.activeOverlayPanelId
+        val activeId = when {
+            preferredActive != null && preferredActive in overlayIds -> preferredActive
+            !allowDualSide && leftExpanded.isNotEmpty() && rightExpanded.isNotEmpty() -> leftExpanded.first().id
+            else -> allExpanded.first().id
         }
-        return com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPresentationState(
+        return WorkbenchPresentationState(
             overlayPanelIds = overlayIds,
             activeOverlayPanelId = activeId,
             isOverlayMode = true,
@@ -351,5 +429,17 @@ object WorkbenchReducer {
             activeTabByGroup = emptyMap(),
             preset = WorkbenchPreset.FocusWriting
         )
+    }
+
+    fun clampFloatingPosition(
+        x: Float, y: Float,
+        widthDp: Float, heightDp: Float,
+        maxWidthDp: Float, maxHeightDp: Float,
+    ): Pair<Float, Float> {
+        val maxX = maxWidthDp - 32f
+        val maxY = maxHeightDp - FLOATING_TITLE_BAR_DP
+        val clampedX = x.coerceIn(0f, max(0f, maxX - widthDp + 32f))
+        val clampedY = y.coerceIn(0f, max(0f, maxY))
+        return clampedX to clampedY
     }
 }

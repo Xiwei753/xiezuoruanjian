@@ -70,6 +70,12 @@ class WorkbenchLayoutRepository(
                 for ((groupId, panelId) in state.activeTabByGroup) {
                     prefs[stringPreferencesKey("${prefix}.activeTab.${groupId}")] = panelId.name
                 }
+                for ((groupId, size) in state.dockGroupSizes) {
+                    prefs[floatPreferencesKey("${prefix}.groupSize.${groupId}")] = size
+                }
+                if (state.activeOverlayPanelId != null) {
+                    prefs[stringPreferencesKey("${prefix}.activeOverlay")] = state.activeOverlayPanelId.name
+                }
             }
         }
     }
@@ -112,7 +118,27 @@ class WorkbenchLayoutRepository(
                     }
                 }
 
-                WorkbenchLayoutState(panels = panels, activeTabByGroup = activeTabByGroup, preset = preset)
+                val dockGroupSizes = mutableMapOf<String, Float>()
+                val allGroupIds = panels.values.map { it.tabGroupId }.distinct().filter { it.isNotEmpty() }
+                for (groupId in allGroupIds) {
+                    val size = prefs[floatPreferencesKey("${prefix}.groupSize.${groupId}")]
+                    if (size != null) {
+                        dockGroupSizes[groupId] = size
+                    }
+                }
+
+                val activeOverlayStr = prefs[stringPreferencesKey("${prefix}.activeOverlay")]
+                val activeOverlayPanelId = activeOverlayStr?.let {
+                    WorkbenchPanelId.entries.find { id -> id.name == it }
+                }
+
+                WorkbenchLayoutState(
+                    panels = panels,
+                    activeTabByGroup = activeTabByGroup,
+                    preset = preset,
+                    dockGroupSizes = dockGroupSizes,
+                    activeOverlayPanelId = activeOverlayPanelId,
+                )
             } catch (_: Exception) {
                 null
             }

@@ -47,6 +47,7 @@ fun WorkbenchPanelFrame(
     onDragStart: ((Float, Float) -> Unit)? = null,
     onDrag: ((Float, Float) -> Unit)? = null,
     onDragEnd: ((Float, Float) -> Unit)? = null,
+    onDragCancel: (() -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
     val dims = LocalSujianDimensions.current
@@ -75,6 +76,7 @@ fun WorkbenchPanelFrame(
                                     },
                                     onDragCancel = {
                                         isDragging = false
+                                        onDragCancel?.invoke()
                                     },
                                 ) { change, dragAmount ->
                                     change.consume()
