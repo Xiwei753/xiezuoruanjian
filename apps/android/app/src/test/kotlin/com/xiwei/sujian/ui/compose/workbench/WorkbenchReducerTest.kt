@@ -415,6 +415,48 @@ class WorkbenchReducerTest {
     }
 
     @Test
+    fun resizePanelDelta_accumulatesFromCurrentSize() {
+        val expanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val initialSize = expanded.panels[WorkbenchPanelId.ChapterNavigator]?.sizeDp ?: 320f
+        val result = WorkbenchReducer.reduce(expanded, WorkbenchAction.ResizePanelDelta(WorkbenchPanelId.ChapterNavigator, 30f))
+        assertEquals(initialSize + 30f, result.panels[WorkbenchPanelId.ChapterNavigator]?.sizeDp!!, 0.01f)
+    }
+
+    @Test
+    fun resizePanelDelta_clampsByEditorMinWidth() {
+        val expanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val result = WorkbenchReducer.reduce(expanded, WorkbenchAction.ResizePanelDelta(WorkbenchPanelId.ChapterNavigator, 500f, 900f))
+        val maxForEditor = 900f - 480f
+        assertTrue(result.panels[WorkbenchPanelId.ChapterNavigator]?.sizeDp!! <= maxForEditor)
+    }
+
+    @Test
+    fun resizePanelDelta_negativeDeltaWithBothSides_enforcesEditorMin() {
+        val expanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val rightExpanded = WorkbenchReducer.reduce(expanded, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val result = WorkbenchReducer.reduce(rightExpanded, WorkbenchAction.ResizePanelDelta(WorkbenchPanelId.ChapterNavigator, -1000f, 1200f))
+        val rightWidth = rightExpanded.actualSideWidthDp(DockZone.Right)
+        val maxForEditor = 1200f - 480f - rightWidth
+        assertTrue(result.panels[WorkbenchPanelId.ChapterNavigator]?.sizeDp!! >= 280f)
+        assertTrue(result.panels[WorkbenchPanelId.ChapterNavigator]?.sizeDp!! <= maxForEditor)
+    }
+
+    @Test
+    fun resizePanelDelta_negativeDelta_clampsMin() {
+        val expanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val result = WorkbenchReducer.reduce(expanded, WorkbenchAction.ResizePanelDelta(WorkbenchPanelId.ChapterNavigator, -1000f))
+        assertTrue(result.panels[WorkbenchPanelId.ChapterNavigator]?.sizeDp!! >= 280f)
+    }
+
+    @Test
+    fun resizePanelDelta_bottomPanel_usesAvailableHeight() {
+        val moved = WorkbenchReducer.reduce(defaultState, WorkbenchAction.MovePanel(WorkbenchPanelId.Statistics, DockZone.Bottom))
+        val expanded = WorkbenchReducer.reduce(moved, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Statistics))
+        val result = WorkbenchReducer.reduce(expanded, WorkbenchAction.ResizePanelDelta(WorkbenchPanelId.Statistics, 50f, 800f))
+        assertTrue(result.panels[WorkbenchPanelId.Statistics]?.sizeDp!! >= 220f)
+    }
+
+    @Test
     fun clampFloatingPosition_withinBounds() {
         val (x, y) = WorkbenchReducer.clampFloatingPosition(-50f, -30f, 400f, 500f, 800f, 600f)
         assertTrue(x >= 0f)

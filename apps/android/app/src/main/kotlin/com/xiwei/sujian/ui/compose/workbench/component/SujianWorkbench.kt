@@ -193,8 +193,7 @@ fun SujianWorkbench(
                     DockResizeHandle(
                         zone = DockZone.Left,
                         panelId = leftExpanded.first().id,
-                        currentSizeDp = leftExpanded.first().sizeDp,
-                        onResize = { id, size -> onAction(WorkbenchAction.ResizePanel(id, size, maxWidthDp)) },
+                        onResizeDelta = { id, delta -> onAction(WorkbenchAction.ResizePanelDelta(id, delta, maxWidthDp)) },
                         modifier = Modifier.fillMaxHeight(),
                     )
                 }
@@ -215,8 +214,7 @@ fun SujianWorkbench(
                     DockResizeHandle(
                         zone = DockZone.Right,
                         panelId = rightExpanded.first().id,
-                        currentSizeDp = rightExpanded.first().sizeDp,
-                        onResize = { id, size -> onAction(WorkbenchAction.ResizePanel(id, size, maxWidthDp)) },
+                        onResizeDelta = { id, delta -> onAction(WorkbenchAction.ResizePanelDelta(id, delta, maxWidthDp)) },
                         modifier = Modifier.fillMaxHeight(),
                     )
                     DockHost(
@@ -254,8 +252,7 @@ fun SujianWorkbench(
                 DockResizeHandle(
                     zone = DockZone.Bottom,
                     panelId = bottomExpanded.first().id,
-                    currentSizeDp = bottomExpanded.first().sizeDp,
-                    onResize = { id, size -> onAction(WorkbenchAction.ResizePanel(id, size, maxHeightDp)) },
+                    onResizeDelta = { id, delta -> onAction(WorkbenchAction.ResizePanelDelta(id, delta, maxHeightDp)) },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 DockHost(

@@ -42,7 +42,7 @@ class WorkbenchViewModel(
 
     fun dispatch(action: WorkbenchAction) {
         layoutState = WorkbenchReducer.reduce(layoutState, action)
-        if (action !is WorkbenchAction.ResizePanel && action !is WorkbenchAction.MoveFloatingPanel) {
+        if (action !is WorkbenchAction.ResizePanel && action !is WorkbenchAction.ResizePanelDelta && action !is WorkbenchAction.MoveFloatingPanel) {
             schedulePersist()
         }
     }

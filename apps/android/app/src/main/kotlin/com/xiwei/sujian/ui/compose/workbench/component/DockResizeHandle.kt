@@ -9,10 +9,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
@@ -23,13 +19,11 @@ import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelId
 fun DockResizeHandle(
     zone: DockZone,
     panelId: WorkbenchPanelId,
-    currentSizeDp: Float,
-    onResize: (panelId: WorkbenchPanelId, newSizeDp: Float) -> Unit,
+    onResizeDelta: (panelId: WorkbenchPanelId, deltaDp: Float) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val handleColor = MaterialTheme.colorScheme.outlineVariant
     val density = androidx.compose.ui.platform.LocalDensity.current
-    var accumulatedDp by remember { mutableFloatStateOf(0f) }
 
     val handleModifier = when (zone) {
         DockZone.Left -> modifier.width(4.dp).fillMaxHeight()
@@ -43,8 +37,8 @@ fun DockResizeHandle(
             .background(handleColor)
             .pointerInput(zone, panelId) {
                 detectDragGestures(
-                    onDragEnd = { accumulatedDp = 0f },
-                    onDragCancel = { accumulatedDp = 0f },
+                    onDragEnd = {},
+                    onDragCancel = {},
                 ) { change, dragAmount ->
                     val deltaDp = when (zone) {
                         DockZone.Left -> dragAmount.x / density.density
@@ -52,9 +46,9 @@ fun DockResizeHandle(
                         DockZone.Bottom -> -dragAmount.y / density.density
                         DockZone.Floating -> dragAmount.x / density.density
                     }
-                    accumulatedDp += deltaDp
-                    val newSize = (currentSizeDp + accumulatedDp).coerceAtLeast(0f)
-                    onResize(panelId, newSize)
+                    if (deltaDp != 0f) {
+                        onResizeDelta(panelId, deltaDp)
+                    }
                     change.consume()
                 }
             }

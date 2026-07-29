@@ -44,6 +44,7 @@ object WorkbenchReducer {
             is WorkbenchAction.ResizeFloatingPanel -> resizeFloatingPanel(state, action.panelId, action.widthDp, action.heightDp)
             is WorkbenchAction.FloatPanelAt -> floatPanelAt(state, action.panelId, action.x, action.y)
             is WorkbenchAction.ActivateOverlayPanel -> activateOverlayPanel(state, action.panelId)
+            is WorkbenchAction.ResizePanelDelta -> resizePanelDelta(state, action.panelId, action.deltaDp, action.availableWidthDp)
             is WorkbenchAction.ResizeDockGroup -> resizeDockGroup(state, action.groupId, action.zone, action.sizeDp)
             is WorkbenchAction.ClampFloatingPanels -> clampFloatingPanels(state, action.maxWidthDp, action.maxHeightDp)
         }
@@ -238,6 +239,11 @@ object WorkbenchReducer {
             activeOverlayPanelId = panelId,
             preset = WorkbenchPreset.Custom
         )
+    }
+
+    private fun resizePanelDelta(state: WorkbenchLayoutState, panelId: WorkbenchPanelId, deltaDp: Float, availableWidthDp: Float): WorkbenchLayoutState {
+        val panel = state.panels[panelId] ?: return state
+        return resizePanel(state, panelId, panel.sizeDp + deltaDp, availableWidthDp)
     }
 
     private fun resizeDockGroup(state: WorkbenchLayoutState, groupId: String, zone: DockZone, deltaDp: Float): WorkbenchLayoutState {
