@@ -178,6 +178,28 @@ def test_cargo_ndk_cached(wf, _text):
     assert has_cache, "Build job must cache cargo-ndk binary"
 
 
+def test_emulator_test_excludes_native_build_task(wf, _text):
+    emulator_job = wf["jobs"]["emulator-test"]
+    steps = emulator_job.get("steps", [])
+    for s in steps:
+        # The Gradle command is inside the 'script' key of android-emulator-runner
+        script = s.get("with", {}).get("script", "")
+        run_cmd = s.get("run", "")
+        combined = script or run_cmd
+        if "gradlew" in combined and "connected" in combined:
+            assert "-x" in combined, (
+                "emulator-test Gradle command must exclude buildWriterNative task "
+                "(-x build<Variant>WriterNative) because native artifacts are "
+                "restored from the build job's upload, not rebuilt."
+            )
+            assert "WriterNative" in combined, (
+                "emulator-test must explicitly exclude the WriterNative build task "
+                "since cargo-ndk/Rust toolchain are not installed in this job."
+            )
+            return
+    raise AssertionError("Could not find gradlew connected* command in emulator-test")
+
+
 def test_emulator_test_verifies_artifacts(wf, _text):
     emulator_job = wf["jobs"]["emulator-test"]
     steps = emulator_job.get("steps", [])
@@ -341,6 +363,7 @@ def main():
         test_native_artifact_upload_exists,
         test_cargo_ndk_cached,
         test_emulator_test_verifies_artifacts,
+        test_emulator_test_excludes_native_build_task,
         test_emulator_matrix_not_reduced,
         test_native_artifact_upload_paths_precise,
         test_emulator_test_download_path_matches_upload_lca,
