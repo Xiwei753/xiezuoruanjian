@@ -699,3 +699,63 @@ fn test_settings_auto_indent_contract() {
     assert_eq!(json["autoIndentEnabled"], true);
     assert_eq!(json["autoIndentWidth"], 4.0);
 }
+
+#[test]
+fn test_project_dto_contract() {
+    let dto = crate::api::types::ProjectDto {
+        id: "proj_1".to_string(),
+        title: "Test Project".to_string(),
+        created_at: "2023-01-01T00:00:00Z".to_string(),
+        updated_at: "2023-01-02T00:00:00Z".to_string(),
+    };
+
+    let json_val = serde_json::to_value(&dto).unwrap();
+    assert_eq!(json_val["id"], "proj_1");
+    assert_eq!(json_val["title"], "Test Project");
+    assert_eq!(json_val["created_at"], "2023-01-01T00:00:00Z");
+    assert_eq!(json_val["updated_at"], "2023-01-02T00:00:00Z");
+
+    let json_str = serde_json::to_string(&dto).unwrap();
+    let deserialized: crate::api::types::ProjectDto = serde_json::from_str(&json_str).unwrap();
+    assert_eq!(deserialized, dto);
+}
+
+#[test]
+fn test_project_stats_dto_contract() {
+    let dto = crate::api::types::ProjectStatsDto {
+        total_word_count: 1000,
+        volume_count: 5,
+        chapter_count: 50,
+    };
+
+    let json_val = serde_json::to_value(&dto).unwrap();
+    assert_eq!(json_val["total_word_count"], 1000);
+    assert_eq!(json_val["volume_count"], 5);
+    assert_eq!(json_val["chapter_count"], 50);
+
+    let json_str = serde_json::to_string(&dto).unwrap();
+    let deserialized: crate::api::types::ProjectStatsDto = serde_json::from_str(&json_str).unwrap();
+    assert_eq!(deserialized, dto);
+}
+
+#[test]
+fn test_volume_dto_contract() {
+    let dto = crate::api::types::VolumeDto {
+        id: "vol_1".to_string(),
+        title: "Test Volume".to_string(),
+        created_at: "2023-01-01T00:00:00Z".to_string(),
+        updated_at: "2023-01-02T00:00:00Z".to_string(),
+        order: 1,
+    };
+
+    let json_val = serde_json::to_value(&dto).unwrap();
+    assert_eq!(json_val["id"], "vol_1");
+    assert_eq!(json_val["title"], "Test Volume");
+    assert_eq!(json_val["created_at"], "2023-01-01T00:00:00Z");
+    assert_eq!(json_val["updated_at"], "2023-01-02T00:00:00Z");
+    assert_eq!(json_val["order"], 1);
+
+    let json_str = serde_json::to_string(&dto).unwrap();
+    let deserialized: crate::api::types::VolumeDto = serde_json::from_str(&json_str).unwrap();
+    assert_eq!(deserialized, dto);
+}
