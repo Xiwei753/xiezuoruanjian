@@ -14,7 +14,7 @@ Verifies invariants that must hold for the Android CI:
 """
 
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import yaml
 
@@ -196,6 +196,134 @@ def test_emulator_matrix_not_reduced(wf, _text):
     assert "no-ai" in flavors, "Emulator test matrix must include no-ai flavor"
 
 
+def _get_upload_paths_for_native_artifact(wf):
+    """Return list of upload paths for the native-no-ai-x86_64 artifact, or None."""
+    build_job = wf["jobs"]["build"]
+    steps = build_job.get("steps", [])
+    for s in steps:
+        uses = s.get("uses", "")
+        with_ = s.get("with", {})
+        if "upload-artifact" in uses and with_.get("name") == "native-no-ai-x86_64":
+            raw = with_.get("path", "")
+            return [p.strip() for p in raw.strip().splitlines() if p.strip()]
+    return None
+
+
+def _get_download_path_for_native_artifact(wf):
+    """Return download path for native-no-ai-x86_64 artifact, or None."""
+    emulator_job = wf["jobs"]["emulator-test"]
+    steps = emulator_job.get("steps", [])
+    for s in steps:
+        uses = s.get("uses", "")
+        with_ = s.get("with", {})
+        if "download-artifact" in uses and with_.get("name") == "native-no-ai-x86_64":
+            return with_.get("path", "")
+    return None
+
+
+def _get_verify_file_paths(wf):
+    """Return (so_path, uniffi_dir) from the verify step, or (None, None)."""
+    emulator_job = wf["jobs"]["emulator-test"]
+    steps = emulator_job.get("steps", [])
+    for s in steps:
+        name = s.get("name", "")
+        run_cmd = s.get("run", "")
+        if "verify" in name.lower() or "verify" in run_cmd.lower():
+            so_path = None
+            uniffi_dir = None
+            for line in run_cmd.splitlines():
+                line = line.strip()
+                if 'SO_PATH="' in line:
+                    so_path = line.split('"')[1]
+                if line.startswith("UNIFFI_DIR=") and '="' in line:
+                    uniffi_dir = line.split('"')[1]
+            return so_path, uniffi_dir
+    return None, None
+
+
+def _common_path(paths):
+    """Return the longest common ancestor directory of a list of POSIX paths."""
+    if not paths:
+        return ""
+    parts_list = [PurePosixPath(p).parts for p in paths]
+    common = []
+    for i, part in enumerate(parts_list[0]):
+        if all(len(parts) > i and parts[i] == part for parts in parts_list):
+            common.append(part)
+        else:
+            break
+    return str(PurePosixPath(*common)) if common else ""
+
+
+def test_native_artifact_upload_paths_precise(wf, _text):
+    paths = _get_upload_paths_for_native_artifact(wf)
+    assert paths is not None, "native-no-ai-x86_64 upload step not found"
+    assert len(paths) == 2, (
+        f"Expected exactly 2 upload paths for native artifact, got {len(paths)}"
+    )
+    assert any("writer-native" in p for p in paths), (
+        "Expected upload path containing writer-native/"
+    )
+    assert any("writer-uniffi" in p for p in paths), (
+        "Expected upload path containing writer-uniffi/"
+    )
+    assert not any(p in ("apps/android/app/build", "apps/android/app/build/")
+                    for p in paths), (
+        "Upload path must not be the entire build/ directory; "
+        "only generated/writer-native/ and generated/writer-uniffi/ are needed"
+    )
+
+
+def test_emulator_test_download_path_matches_upload_lca(wf, _text):
+    upload_paths = _get_upload_paths_for_native_artifact(wf)
+    assert upload_paths is not None, "native-no-ai-x86_64 upload step not found"
+    download_path = _get_download_path_for_native_artifact(wf)
+    assert download_path is not None, (
+        "native-no-ai-x86_64 download step not found"
+    )
+    lca = _common_path(upload_paths)
+    assert lca, f"Could not compute LCA of upload paths: {upload_paths}"
+    expected = lca + "/"
+    assert download_path == expected, (
+        f"Download path mismatch: expected '{expected}' (LCA of upload paths), "
+        f"got '{download_path}'. "
+        "upload-artifact@v4 strips the LCA prefix from multi-path artifacts, "
+        "so download must target the LCA to restore the expected directory layout."
+    )
+
+
+def test_artifact_verify_paths_consistent_with_contract(wf, _text):
+    upload_paths = _get_upload_paths_for_native_artifact(wf)
+    assert upload_paths is not None, "native-no-ai-x86_64 upload step not found"
+    download_path = _get_download_path_for_native_artifact(wf)
+    assert download_path is not None, (
+        "native-no-ai-x86_64 download step not found"
+    )
+    so_path, uniffi_dir = _get_verify_file_paths(wf)
+    assert so_path, "Could not extract SO_PATH from verify step"
+    assert uniffi_dir, "Could not extract UNIFFI_DIR from verify step"
+
+    # After download, artifact root content (stripped LCA) is placed under download_path
+    # So a verify path like "apps/android/app/build/generated/writer-native/..." must
+    # be reachable as: <download_path>/<artifact_relative_path>
+    lca = _common_path(upload_paths)
+    # Artifact-relative path = verify path minus the LCA prefix
+    for verify_path, label in [(so_path, "SO_PATH"), (uniffi_dir, "UNIFFI_DIR")]:
+        if not verify_path.startswith(lca):
+            raise AssertionError(
+                f"{label} '{verify_path}' does not start with upload LCA '{lca}'; "
+                f"download would not restore this path."
+            )
+        expected_prefix = download_path.rstrip("/")
+        rel = verify_path[len(lca):].lstrip("/")
+        expected_path = f"{expected_prefix}/{rel}"
+        if not expected_path.startswith(expected_prefix.rstrip("/")):
+            raise AssertionError(
+                f"{label} relative path mismatch: "
+                f"expected under '{expected_prefix}/', got '{expected_path}'"
+            )
+
+
 def main():
     wf, text = load_workflow()
     tests = [
@@ -214,6 +342,9 @@ def main():
         test_cargo_ndk_cached,
         test_emulator_test_verifies_artifacts,
         test_emulator_matrix_not_reduced,
+        test_native_artifact_upload_paths_precise,
+        test_emulator_test_download_path_matches_upload_lca,
+        test_artifact_verify_paths_consistent_with_contract,
     ]
     failed = 0
     for t in tests:

@@ -175,7 +175,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: native-no-ai-x86_64
-          path: .
+          path: apps/android/app/build/generated/
 
       - name: Verify native artifacts
         run: |
