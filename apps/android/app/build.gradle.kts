@@ -342,18 +342,25 @@ android {
 //   -Psujian.testAnnotation=com.xiwei.sujian.support.SujianLargeTest
 val sujianTestAnnotation: String? by project
 
-afterEvaluate {
-    if (sujianTestAnnotation != null) {
-        tasks.matching {
-            it.name.startsWith("connected") && it.name.endsWith("AndroidTest")
-        }.configureEach {
-            val testTask = this
-            if (testTask.hasProperty("instrumentationRunnerArguments")) {
-                @Suppress("UNCHECKED_CAST")
-                val args = testTask.property("instrumentationRunnerArguments") as MutableMap<String, String>
-                args["annotation"] = sujianTestAnnotation!!
-            }
+android {
+    defaultConfig {
+        val annotation = sujianTestAnnotation
+        if (annotation != null) {
+            testInstrumentationRunnerArguments["annotation"] = annotation
         }
+    }
+}
+
+tasks.register("testDiscoveryCheck") {
+    doLast {
+        val runnerArgs = android.defaultConfig.testInstrumentationRunnerArguments
+        val annotation = runnerArgs["annotation"]
+        if (annotation != null) {
+            println("Test filter active: annotation=$annotation")
+        } else {
+            println("No test annotation filter — all tests will run.")
+        }
+        println("Test categories: check printTestCategories task")
     }
 }
 

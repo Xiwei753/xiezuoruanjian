@@ -28,7 +28,7 @@ import org.junit.runner.RunWith
  */
 @RunWith(AndroidJUnit4::class)
 open class BaseEditorTest(
-    val manualTimeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource? = null,
+    val manualTimeSource: com.xiwei.sujian.editor.v2.visual.ManualAnimationTimeSource? = null,
     val transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource? = null,
     val manualFrameClock: com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock.ManualFrameClock? = null
 ) {
@@ -47,7 +47,8 @@ open class BaseEditorTest(
                     ?: com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
                 transactionIdSource = transactionIdSource
                     ?: com.xiwei.sujian.editor.v2.visual.TransactionIdSource(),
-                manualFrameClock = manualFrameClock
+                manualFrameClock = manualFrameClock,
+                seedProject = true
             )
         )
         .around(_composeTestRule)

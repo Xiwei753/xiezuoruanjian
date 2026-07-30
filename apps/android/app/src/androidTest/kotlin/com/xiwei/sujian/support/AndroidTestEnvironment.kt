@@ -81,11 +81,7 @@ class TestSession private constructor(
             )
 
             val projectedData = if (seedProject) {
-                try {
-                    AndroidTestEnvironment.ensureTestProjectAndVolume(appContext, deps)
-                } catch (e: Exception) {
-                    null
-                }
+                AndroidTestEnvironment.ensureTestProjectAndVolume(appContext, deps)
             } else null
 
             return TestSession(
@@ -379,9 +375,16 @@ object AndroidTestEnvironment {
         val volumeTitle: String,
     )
 
+    fun ensureTestProjectAndVolume(context: Context, deps: TestSujianAppDependencies): TestProjectData {
+        return ensureTestProjectAndVolumeInternal(deps.workspaceRepository)
+    }
+
     fun ensureTestProjectAndVolume(context: Context, session: TestSession? = null): TestProjectData {
         val s = session ?: requireCurrentSession()
-        val repo = s.deps.workspaceRepository
+        return ensureTestProjectAndVolumeInternal(s.deps.workspaceRepository)
+    }
+
+    private fun ensureTestProjectAndVolumeInternal(repo: WorkspaceRepository): TestProjectData {
         val projects = repo.getProjects()
         val existing = projects.firstOrNull { it.title == "自动化测试作品" }
         if (existing != null) {
@@ -412,30 +415,33 @@ object AndroidTestEnvironment {
         return vm
     }
 
-    fun awaitProjectLoaded(vm: SujianAppViewModel, expectedProjectId: String, timeoutMs: Long = 15_000) {
-        val deadlineMs = System.currentTimeMillis() + timeoutMs
-        while (System.currentTimeMillis() < deadlineMs) {
-            if (vm.projects.any { it.id == expectedProjectId }) return
-            try {
-                Thread.sleep(50)
-            } catch (_: InterruptedException) {
-                throw AssertionError("Interrupted while waiting for project $expectedProjectId")
-            }
+    fun awaitProjectLoaded(
+        vm: SujianAppViewModel,
+        expectedProjectId: String,
+        composeTestRule: androidx.compose.ui.test.junit4.ComposeTestRule,
+        timeoutMs: Long = 15_000
+    ) {
+        var lastObservedIds: List<String> = emptyList()
+        var lastObservedEntries: String = ""
+        composeTestRule.waitUntil(timeoutMs) {
+            lastObservedIds = vm.projects.map { it.id }
+            lastObservedEntries = vm.projects.joinToString { "${it.id}:${it.title}" }
+            vm.projects.any { it.id == expectedProjectId }
         }
-        val observedIds = vm.projects.map { it.id }
-        val observedEntries = vm.projects.joinToString { "${it.id}:${it.title}" }
-        throw AssertionError(
-            "Test setup barrier: ViewModel projects did not contain expected project ID " +
-            "'$expectedProjectId' within ${timeoutMs}ms. " +
-            "Observed project IDs: $observedIds. Titles: [$observedEntries]"
-        )
+        if (vm.projects.none { it.id == expectedProjectId }) {
+            throw AssertionError(
+                "Test setup barrier: ViewModel projects did not contain expected project ID " +
+                "'$expectedProjectId' within ${timeoutMs}ms. " +
+                "Observed project IDs: $lastObservedIds. Titles: [$lastObservedEntries]"
+            )
+        }
     }
 
     class TestDependenciesRule(
         private val animationTimeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource = com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
         private val transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource = com.xiwei.sujian.editor.v2.visual.TransactionIdSource(),
         val manualFrameClock: com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock.ManualFrameClock? = null,
-        val seedProject: Boolean = true
+        val seedProject: Boolean = false
     ) : TestRule {
         override fun apply(base: Statement, description: Description): Statement {
             return object : Statement() {
@@ -444,9 +450,6 @@ object AndroidTestEnvironment {
                     val ctx = instrumentation.targetContext
                     val session = createSession(ctx, animationTimeSource, transactionIdSource, manualFrameClock, seedProject)
                     SujianAppDependencies.setTestProvider { _ -> session.deps }
-                    if (!seedProject) {
-                        ensureTestProjectAndVolume(ctx, session)
-                    }
                     try {
                         base.evaluate()
                     } finally {

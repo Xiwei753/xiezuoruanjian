@@ -32,13 +32,13 @@ class RenderedFrameVisualTest : BaseEditorTest(
 ) {
 
     private fun dispatchManualFrame() {
-        val frameTimeNanos = manualTimeSource.nowNanos()
-        manualFrameClock.dispatchFrame(frameTimeNanos)
+        val frameTimeNanos = manualTimeSource!!.nowNanos()
+        manualFrameClock!!.dispatchFrame(frameTimeNanos)
     }
 
     private fun advanceClockToEnd() {
         for (i in 0 until 20) {
-            manualTimeSource.advanceByMs(16)
+            manualTimeSource!!.advanceByMs(16)
             dispatchManualFrame()
         }
     }
@@ -92,12 +92,12 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧插入测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("Hello"))
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         val startFrame = EditorBitmapCapture.captureEditorBitmap()
@@ -115,18 +115,18 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧中间帧测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("AB"))
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         val startFrame = EditorBitmapCapture.captureEditorBitmap()
         EditorBitmapCapture.assertBitmapHasContent(startFrame, "Start frame must have rendered content")
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         val midFrame = EditorBitmapCapture.captureEditorBitmap()
@@ -146,7 +146,7 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧删除测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("ABCDE"))
@@ -163,7 +163,7 @@ class RenderedFrameVisualTest : BaseEditorTest(
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorReplaceRangeAction.replaceRange(deleteStart, deleteEnd, "", "CD"))
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         val deleteStartFrame = EditorBitmapCapture.captureEditorBitmap()
@@ -186,13 +186,13 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧Unicode测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         val testText = "你好世界"
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText(testText))
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         val frame = EditorBitmapCapture.captureEditorBitmap()
@@ -213,12 +213,12 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧composition测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCompositionAction.setComposingText("预"))
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         val frame = EditorBitmapCapture.captureEditorBitmap()
@@ -238,7 +238,7 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧插入删除测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("XXXXX"))
@@ -271,13 +271,13 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧多行测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         val testText = "第一行\n第二行\n第三行"
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText(testText))
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         val frame = EditorBitmapCapture.captureEditorBitmap()
@@ -297,12 +297,12 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧连续输入测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("A"))
 
-        manualTimeSource.advanceByMs(8)
+        manualTimeSource!!.advanceByMs(8)
         dispatchManualFrame()
 
         val frame1 = EditorBitmapCapture.captureEditorBitmap()
@@ -311,7 +311,7 @@ class RenderedFrameVisualTest : BaseEditorTest(
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("B"))
 
-        manualTimeSource.advanceByMs(8)
+        manualTimeSource!!.advanceByMs(8)
         dispatchManualFrame()
 
         val frame2 = EditorBitmapCapture.captureEditorBitmap()
@@ -335,7 +335,7 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧空编辑器测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         val frame = EditorBitmapCapture.captureEditorBitmap()
         val bounds = frame.contentBounds()
@@ -350,7 +350,7 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧五点测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("Test"))
@@ -376,7 +376,7 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧删除五点测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("ABCDE"))
@@ -419,7 +419,7 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧composition五点测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCompositionAction.setComposingText("预输入"))
@@ -445,7 +445,7 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧Unicode五点测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         val testText = "你好世界"
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -472,7 +472,7 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧多行五点测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         val testText = "第一行\n第二行\n第三行"
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -505,12 +505,12 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧连续输入五点测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("A"))
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
         val frame1 = EditorBitmapCapture.captureEditorBitmap()
         EditorBitmapCapture.assertBitmapHasContent(frame1, "Frame after 'A' must have content")
@@ -529,27 +529,27 @@ class RenderedFrameVisualTest : BaseEditorTest(
             startTimeMs >= 0
         )
 
-        manualTimeSource.advanceToProgress(0f, durationMs, startTimeMs)
+        manualTimeSource!!.advanceToProgress(0f, durationMs, startTimeMs)
         dispatchManualFrame()
         val frame2 = EditorBitmapCapture.captureEditorBitmap()
         EditorBitmapCapture.assertBitmapHasContent(frame2, "Frame at 0% must have content")
 
-        manualTimeSource.advanceToProgress(0.25f, durationMs, startTimeMs)
+        manualTimeSource!!.advanceToProgress(0.25f, durationMs, startTimeMs)
         dispatchManualFrame()
         val frame3 = EditorBitmapCapture.captureEditorBitmap()
         EditorBitmapCapture.assertBitmapHasContent(frame3, "Frame at 25% must have content")
 
-        manualTimeSource.advanceToProgress(0.5f, durationMs, startTimeMs)
+        manualTimeSource!!.advanceToProgress(0.5f, durationMs, startTimeMs)
         dispatchManualFrame()
         val frame4 = EditorBitmapCapture.captureEditorBitmap()
         EditorBitmapCapture.assertBitmapHasContent(frame4, "Frame at 50% must have content")
 
-        manualTimeSource.advanceToProgress(0.75f, durationMs, startTimeMs)
+        manualTimeSource!!.advanceToProgress(0.75f, durationMs, startTimeMs)
         dispatchManualFrame()
         val frame5 = EditorBitmapCapture.captureEditorBitmap()
         EditorBitmapCapture.assertBitmapHasContent(frame5, "Frame at 75% must have content")
 
-        manualTimeSource.advanceToProgress(1f, durationMs, startTimeMs)
+        manualTimeSource!!.advanceToProgress(1f, durationMs, startTimeMs)
         dispatchManualFrame()
         val frame6 = EditorBitmapCapture.captureEditorBitmap()
         EditorBitmapCapture.assertBitmapHasContent(frame6, "End frame must have content")
@@ -580,12 +580,12 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧光标像素测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("X"))
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         val startFrame = EditorBitmapCapture.captureEditorBitmap()
@@ -596,7 +596,7 @@ class RenderedFrameVisualTest : BaseEditorTest(
         assertNotNull("Start frame visual snapshot must provide cursorRect", cursorRect)
         assertCursorRegionFromSnapshotRect(startFrame, cursorRect!!, "Start frame cursor from snapshot")
 
-        manualTimeSource.advanceByMs(50)
+        manualTimeSource!!.advanceByMs(50)
         dispatchManualFrame()
         val midFrame = EditorBitmapCapture.captureEditorBitmap()
         EditorBitmapCapture.assertBitmapHasContent(midFrame, "Mid-frame must have content during animation")
@@ -614,17 +614,17 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧位移方向测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("AB"))
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
         val startFrame = EditorBitmapCapture.captureEditorBitmap()
         EditorBitmapCapture.assertBitmapHasContent(startFrame, "Start frame must have content")
 
-        manualTimeSource.advanceByMs(50)
+        manualTimeSource!!.advanceByMs(50)
         dispatchManualFrame()
         val midFrame = EditorBitmapCapture.captureEditorBitmap()
         EditorBitmapCapture.assertBitmapHasContent(midFrame, "Mid-frame must have content")
@@ -661,7 +661,7 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧删除位移测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("ABCDE"))
@@ -678,7 +678,7 @@ class RenderedFrameVisualTest : BaseEditorTest(
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorReplaceRangeAction.replaceRange(deleteStart, deleteEnd, "", "CD"))
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
         val deleteStartFrame = EditorBitmapCapture.captureEditorBitmap()
         EditorBitmapCapture.assertBitmapHasContent(deleteStartFrame, "Delete start frame must have content")
@@ -700,12 +700,12 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧光标层级测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("AB"))
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         val frame = EditorBitmapCapture.captureEditorBitmap()
@@ -725,7 +725,7 @@ class RenderedFrameVisualTest : BaseEditorTest(
             frame.isPixelNonBackground(cursorX, cursorY)
         )
 
-        manualTimeSource.advanceByMs(50)
+        manualTimeSource!!.advanceByMs(50)
         dispatchManualFrame()
         val midFrame = EditorBitmapCapture.captureEditorBitmap()
         EditorBitmapCapture.assertBitmapHasContent(midFrame, "Mid-frame must have content for cursor layer check")
@@ -752,7 +752,7 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧背景覆盖测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("Test"))
@@ -804,7 +804,7 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val testData = getSession().ensureTestProjectData()
         openTestChapter("最终帧插入生命周期测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("Test"))
@@ -813,7 +813,7 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val startTimeMs = getActiveAnimationStartTimeMs()
         assertTrue("Animation must be active", durationMs > 0)
 
-        manualTimeSource.advanceToProgress(1f, durationMs, startTimeMs)
+        manualTimeSource!!.advanceToProgress(1f, durationMs, startTimeMs)
 
         val preDrawSnapshot = captureAnimationStateSnapshot()
         assertNotNull(
@@ -858,7 +858,7 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val testData = getSession().ensureTestProjectData()
         openTestChapter("最终帧删除生命周期测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("ABCDE"))
@@ -874,7 +874,7 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val startTimeMs = getActiveAnimationStartTimeMs()
         assertTrue("Animation must be active", durationMs > 0)
 
-        manualTimeSource.advanceToProgress(1f, durationMs, startTimeMs)
+        manualTimeSource!!.advanceToProgress(1f, durationMs, startTimeMs)
 
         val preDrawSnapshot = captureAnimationStateSnapshot()
         assertNotNull(
@@ -919,7 +919,7 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val testData = getSession().ensureTestProjectData()
         openTestChapter("最终帧预输入生命周期测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCompositionAction.setComposingText("预输入"))
@@ -928,7 +928,7 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val startTimeMs = getActiveAnimationStartTimeMs()
         assertTrue("Animation must be active", durationMs > 0)
 
-        manualTimeSource.advanceToProgress(1f, durationMs, startTimeMs)
+        manualTimeSource!!.advanceToProgress(1f, durationMs, startTimeMs)
 
         val preDrawSnapshot = captureAnimationStateSnapshot()
         assertNotNull(
@@ -973,18 +973,18 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val testData = getSession().ensureTestProjectData()
         openTestChapter("最终帧连续输入生命周期测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("A"))
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("B"))
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -994,7 +994,7 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val startTimeMs = getActiveAnimationStartTimeMs()
         assertTrue("Animation must be active after rapid input", durationMs > 0)
 
-        manualTimeSource.advanceToProgress(1f, durationMs, startTimeMs)
+        manualTimeSource!!.advanceToProgress(1f, durationMs, startTimeMs)
 
         val preDrawSnapshot = captureAnimationStateSnapshot()
         assertNotNull(
@@ -1039,7 +1039,7 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧删除光标可见测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("ABCDE"))
@@ -1051,7 +1051,7 @@ class RenderedFrameVisualTest : BaseEditorTest(
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorReplaceRangeAction.replaceRange(deleteStart, deleteEnd, "", "CD"))
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
         val startFrame = EditorBitmapCapture.captureEditorBitmap()
         EditorBitmapCapture.assertBitmapHasContent(startFrame, "Delete start frame must have content")
@@ -1059,7 +1059,7 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val startBounds = startFrame.contentBounds()
         assertTrue("Delete start content must have width > 0", startBounds.width() > 0)
 
-        manualTimeSource.advanceByMs(50)
+        manualTimeSource!!.advanceByMs(50)
         dispatchManualFrame()
         val midFrame = EditorBitmapCapture.captureEditorBitmap()
         EditorBitmapCapture.assertBitmapHasContent(midFrame, "Delete mid-frame must have content")
@@ -1086,12 +1086,12 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧PixelCopy测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("AB"))
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         val pixelCopyFrame = EditorBitmapCapture.capturePixelCopyBitmap()
@@ -1110,12 +1110,12 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧软件绘制测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("AB"))
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         val softwareFrame = EditorBitmapCapture.captureSoftwareBitmap()
@@ -1140,7 +1140,7 @@ class RenderedFrameVisualTest : BaseEditorTest(
         val progressLabels = listOf("0%", "25%", "50%", "75%", "100%")
         val progressValues = listOf(0f, 0.25f, 0.5f, 0.75f, 1f)
 
-        manualTimeSource.advanceByMs(1)
+        manualTimeSource!!.advanceByMs(1)
         dispatchManualFrame()
 
         val durationMs = getActiveAnimationDurationMs()
@@ -1167,7 +1167,7 @@ class RenderedFrameVisualTest : BaseEditorTest(
         )
 
         for ((i, progress) in progressValues.withIndex()) {
-            manualTimeSource.advanceToProgress(progress, durationMs, startTimeMs)
+            manualTimeSource!!.advanceToProgress(progress, durationMs, startTimeMs)
             dispatchManualFrame()
             frames.add(EditorBitmapCapture.captureEditorBitmap())
 

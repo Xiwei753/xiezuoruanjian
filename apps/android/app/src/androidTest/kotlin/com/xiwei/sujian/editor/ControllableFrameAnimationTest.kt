@@ -38,12 +38,12 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         val chapterId = openTestChapter("可控帧插入测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("Hello"))
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("Hello"))
@@ -60,7 +60,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         val chapterId = openTestChapter("可控帧删除测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("ABCDE"))
@@ -75,7 +75,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorReplaceRangeAction.replaceRange(deleteStart, deleteEnd, "", "CD"))
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -92,7 +92,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         val chapterId = openTestChapter("可控帧中间插入测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("ABCDE"))
@@ -103,7 +103,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorReplaceRangeAction.replaceRange(insertOffset, insertOffset, "XY", ""))
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -121,13 +121,13 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         val chapterId = openTestChapter("可控帧Unicode测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         val testText = "你好🙂世界"
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText(testText))
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -144,18 +144,18 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         val chapterId = openTestChapter("可控帧连续输入测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("A"))
 
-        manualTimeSource.advanceByMs(8)
+        manualTimeSource!!.advanceByMs(8)
         dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("B"))
 
-        manualTimeSource.advanceByMs(8)
+        manualTimeSource!!.advanceByMs(8)
         dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -173,13 +173,13 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         val chapterId = openTestChapter("可控帧多行测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         val testText = "第一行\n第二行\n第三行"
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText(testText))
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -192,13 +192,13 @@ class ControllableFrameAnimationTest : BaseEditorTest(
     }
 
     private fun dispatchManualFrame() {
-        val frameTimeNanos = manualTimeSource.nowNanos()
+        val frameTimeNanos = manualTimeSource!!.nowNanos()
         manualFrameClock!!.dispatchFrame(frameTimeNanos)
     }
 
     private fun advanceClockToEnd() {
         for (i in 0 until 20) {
-            manualTimeSource.advanceByMs(16)
+            manualTimeSource!!.advanceByMs(16)
             dispatchManualFrame()
         }
     }
@@ -231,7 +231,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         expectedText: String,
         verifyCursorVisible: Boolean = true
     ) {
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
         val snapshot = captureEditorSnapshot()
         assertNotNull("Animation snapshot must exist during active animation", snapshot)
@@ -268,7 +268,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         openTestChapter("中间帧插入测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("Hello"))
@@ -299,7 +299,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         openTestChapter("中间帧删除测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("ABCDE"))
@@ -332,7 +332,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         openTestChapter("中间帧中间插入测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("ABCDE"))
@@ -363,7 +363,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         openTestChapter("中间帧连续输入测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("A"))
@@ -371,13 +371,13 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val snapshot1 = captureEditorSnapshot()
         assertNotNull("Animation should be active after first insert", snapshot1)
 
-        manualTimeSource.advanceByMs(8)
+        manualTimeSource!!.advanceByMs(8)
         dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("B"))
 
-        manualTimeSource.advanceByMs(8)
+        manualTimeSource!!.advanceByMs(8)
         dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -398,7 +398,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         openTestChapter("中间帧Unicode测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         val testText = "你好🙂世界"
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -421,7 +421,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         openTestChapter("Emoji五进度点测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         val emojiText = "🙂🎉"
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -459,7 +459,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
             )
         }
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
         advanceToProgressAndVerify(0.6f, 1.0f, emojiText)
 
@@ -481,12 +481,12 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         openTestChapter("可控帧composition更新测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCompositionAction.setComposingText("你"))
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -495,7 +495,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCompositionAction.setComposingText("你好"))
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -512,12 +512,12 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         openTestChapter("可控帧composition提交测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCompositionAction.setComposingText("测试"))
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -535,7 +535,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         openTestChapter("可控帧composition取消测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("AB"))
@@ -548,7 +548,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCompositionAction.setComposingText("XY"))
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -557,7 +557,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCompositionAction.sendKeyDelete())
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         advanceClockToEnd()
@@ -571,7 +571,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         openTestChapter("中间帧composition测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCompositionAction.setComposingText("中"))
@@ -593,12 +593,12 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         openTestChapter("中间帧composition提交测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCompositionAction.setComposingText("文"))
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -607,7 +607,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCompositionAction.setComposingText("文字"))
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -628,13 +628,13 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         openTestChapter("滚动动画测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         val longText = (1..20).joinToString("\n") { "第${it}行内容" }
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText(longText))
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -651,7 +651,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         openTestChapter("切换章节动画测试A", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("章节A"))
@@ -686,7 +686,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
 
         waitForEditorReady(testData.projectId, testData.volumeId, chapterId2)
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         val snapshot = captureEditorSnapshot()
@@ -770,7 +770,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         openTestChapter("视觉帧插入测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("Hello"))
@@ -780,14 +780,14 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         verifySliceVisualProperties(startFrame!!, 0f, 0.3f, SliceRole.Insert)
         verifyInsertSliceFadesIn(startFrame.sliceVisualStates, startFrame.progress)
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
         val midFrame1 = captureVisualFrame()
         assertNotNull("Mid-frame 1 visual snapshot must exist during animation", midFrame1)
         verifySliceVisualProperties(midFrame1!!, 0.1f, 0.6f, SliceRole.Insert)
         verifyInsertSliceFadesIn(midFrame1.sliceVisualStates, midFrame1.progress)
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
         val midFrame2 = captureVisualFrame()
         assertNotNull("Mid-frame 2 visual snapshot must exist during animation", midFrame2)
@@ -809,7 +809,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         openTestChapter("视觉帧删除测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("ABCDE"))
@@ -829,7 +829,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         verifySliceVisualProperties(startFrame!!, 0f, 0.3f, SliceRole.Delete)
         verifyDeleteSliceFadesOut(startFrame.sliceVisualStates, startFrame.progress)
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
         val midFrame = captureVisualFrame()
         assertNotNull("Mid-frame visual snapshot must exist during delete animation", midFrame)
@@ -847,7 +847,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         openTestChapter("视觉帧光标测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("Hi"))
@@ -869,7 +869,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
             startCursorRect.height() > 0f
         )
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
         val midFrame = captureVisualFrame()
         assertNotNull("Visual frame must exist at mid-frame for cursor test", midFrame)
@@ -896,7 +896,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         openTestChapter("视觉帧中间插入测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("ABCDE"))
@@ -920,7 +920,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
             )
         }
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
         val midFrame = captureVisualFrame()
         assertNotNull("Mid-frame visual snapshot must exist during middle insert", midFrame)
@@ -937,7 +937,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         openTestChapter("视觉帧块位移测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         val firstLine = "第一行内容"
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -972,7 +972,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         openTestChapter("视觉帧composition测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCompositionAction.setComposingText("测"))
@@ -987,7 +987,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
             )
         }
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
         val midFrame = captureVisualFrame()
         assertNotNull("Mid-frame visual snapshot must exist during composition", midFrame)
@@ -1010,7 +1010,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         openTestChapter("单字删除测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("ABC"))
@@ -1045,7 +1045,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         openTestChapter("跨行删除测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         val line1 = "第一行"
         val line2 = "第二行"
@@ -1083,7 +1083,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         openTestChapter("组合字符测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         val baseChar = "e"
         val combiningAcute = "\u0301"
@@ -1116,7 +1116,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         openTestChapter("composition下划线测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCompositionAction.setComposingText("预"))
@@ -1139,13 +1139,13 @@ class ControllableFrameAnimationTest : BaseEditorTest(
             )
         }
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCompositionAction.setComposingText("预编"))
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
         val midFrame = captureVisualFrame()
         assertNotNull("Mid-frame visual snapshot must exist during composition decoration", midFrame)
@@ -1171,7 +1171,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         openTestChapter("单字删除视觉帧测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("ABC"))
@@ -1187,7 +1187,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         assertNotNull("Visual frame should exist after single char delete", startFrame)
         verifySliceVisualProperties(startFrame!!, 0f, 0.3f, SliceRole.Delete)
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
         val midFrame = captureVisualFrame()
         assertNotNull("Mid-frame visual snapshot must exist during single char delete", midFrame)
@@ -1205,7 +1205,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         openTestChapter("跨行删除视觉帧测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         val line1 = "行一"
         val line2 = "行二"
@@ -1231,7 +1231,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
             )
         }
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
         val midFrame = captureVisualFrame()
         assertNotNull("Mid-frame visual snapshot must exist during cross-line delete", midFrame)
@@ -1254,7 +1254,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         val chapterId = openTestChapter("返回列表动画测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("返回测试"))
@@ -1272,7 +1272,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
 
         waitForEditorReady(testData.projectId, testData.volumeId, chapterId)
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         val snapshot = captureEditorSnapshot()
@@ -1287,7 +1287,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         openTestChapter("后台恢复动画测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("后台测试"))
@@ -1302,7 +1302,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
 
         activityRule.simulateBackgroundRecovery()
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         val snapshotAfter = captureEditorSnapshot()
@@ -1317,7 +1317,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         val chapterId = openTestChapter("冷重启动画测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("重启测试"))
@@ -1333,7 +1333,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
 
         navigateToChapterAfterRestart(testData, chapterId)
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         val snapshot = captureEditorSnapshot()
@@ -1348,7 +1348,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         openTestChapter("行末输入测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("AB"))
@@ -1382,7 +1382,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         openTestChapter("行末插入中间帧测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("X"))
@@ -1399,7 +1399,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         assertNotNull("Visual frame should exist after line-end insert", startFrame)
         verifySliceVisualProperties(startFrame!!, 0f, 0.3f, SliceRole.Insert)
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
         val midFrame = captureVisualFrame()
         assertNotNull("Mid-frame visual snapshot must exist during line-end insert animation", midFrame)
@@ -1420,7 +1420,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val testData = ensureTestProjectData()
         openTestChapter("未完成事务继续输入测试", testData)
 
-        manualTimeSource.advanceTo(0L)
+        manualTimeSource!!.advanceTo(0L)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("A"))
@@ -1431,7 +1431,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         assertTrue("First transaction must own resources", snapshot1.ownedResourceCount > 0)
         assertEquals(TransactionState.Rendering, snapshot1.transactionState)
 
-        manualTimeSource.advanceByMs(4)
+        manualTimeSource!!.advanceByMs(4)
         dispatchManualFrame()
 
         val midSnapshot1 = captureEditorSnapshot()
@@ -1460,7 +1460,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
                     || snapshot2.transactionState == TransactionState.Pending
         )
 
-        manualTimeSource.advanceByMs(16)
+        manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
