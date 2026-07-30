@@ -63,9 +63,11 @@ fun ProjectWorkspaceScreen(
     val deps = com.xiwei.sujian.runtime.LocalSujianAppDependencies.current
     val workspaceRepository = deps.workspaceRepository
 
-    val currentProjectId = projectIdOverride ?: appState.currentProjectId
-    val currentVolumeId = volumeIdOverride ?: appState.currentVolumeId
-    val currentChapterId = chapterIdOverride ?: appState.currentChapterId
+    val isRouteDriven = onNavigateToProject != null || onNavigateToChapter != null
+
+    val currentProjectId = resolveEffectiveId(projectIdOverride, appState.currentProjectId, isRouteDriven)
+    val currentVolumeId = resolveEffectiveId(volumeIdOverride, appState.currentVolumeId, isRouteDriven)
+    val currentChapterId = resolveEffectiveId(chapterIdOverride, appState.currentChapterId, isRouteDriven)
     val currentChapterTitle = appState.currentChapterTitle
     val layoutPlan = appState.currentLayoutPlan
 
@@ -498,3 +500,9 @@ private fun computeHingePadding(avoidRegions: List<AvoidRegion>): Modifier {
     if (topDp == 0f && bottomDp == 0f) return Modifier
     return Modifier.padding(top = topDp.dp, bottom = bottomDp.dp)
 }
+
+internal fun resolveEffectiveId(
+    overrideValue: String?,
+    appStateValue: String?,
+    isRouteDriven: Boolean
+): String? = if (isRouteDriven) overrideValue else (overrideValue ?: appStateValue)
