@@ -71,14 +71,18 @@ open class BaseEditorTest(
         composeTestRule.onNodeWithTag(SujianSemanticIds.ChapterTitleInput).performTextReplacement(chapterTitle)
         composeTestRule.onNodeWithTag(SujianSemanticIds.DialogConfirm).performClick()
         val chapterId = waitForChapterByTitle(chapterTitle, testData)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterId)).performClick()
+        val chapterTag = SujianSemanticIds.chapter(testData.volumeId, chapterId)
+        ComposeWait.waitForTag(composeTestRule, chapterTag, timeoutMs = 15_000)
+        composeTestRule.onNodeWithTag(chapterTag).performClick()
         waitForEditorReady(testData.projectId, testData.volumeId, chapterId)
         return chapterId
     }
 
     protected fun navigateToChapterAfterRestart(testData: TestProjectData, chapterId: String) {
         navigateToTestVolume(testData)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterId)).performClick()
+        val chapterTag = SujianSemanticIds.chapter(testData.volumeId, chapterId)
+        ComposeWait.waitForTag(composeTestRule, chapterTag, timeoutMs = 15_000)
+        composeTestRule.onNodeWithTag(chapterTag).performClick()
         waitForEditorReady(testData.projectId, testData.volumeId, chapterId)
     }
 

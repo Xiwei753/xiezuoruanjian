@@ -94,6 +94,12 @@ object ComposeWait {
                 throw AssertionError("${message()}. Original: ${e.message}", e)
             }
             throw e
+        } catch (e: RuntimeException) {
+            if (e is InterruptedException || e is java.util.concurrent.CancellationException) {
+                throw e
+            }
+            val detail = if (message != null) "${message()}. " else ""
+            throw RuntimeException("${detail}Original: ${e.message}", e)
         }
     }
 }
