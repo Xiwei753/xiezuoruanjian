@@ -450,6 +450,7 @@ object AndroidTestEnvironment {
                     val ctx = instrumentation.targetContext
                     val session = createSession(ctx, animationTimeSource, transactionIdSource, manualFrameClock, seedProject)
                     SujianAppDependencies.setTestProvider { _ -> session.deps }
+
                     try {
                         base.evaluate()
                     } finally {
