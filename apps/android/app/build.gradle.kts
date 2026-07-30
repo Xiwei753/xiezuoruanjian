@@ -342,11 +342,27 @@ android {
 //   -Psujian.testAnnotation=com.xiwei.sujian.support.SujianLargeTest
 val sujianTestAnnotation: String? by project
 
+// Set annotation filter in defaultConfig for from-scratch builds with -P property.
 android {
     defaultConfig {
-        val annotation = sujianTestAnnotation
-        if (annotation != null) {
-            testInstrumentationRunnerArguments["annotation"] = annotation
+        sujianTestAnnotation?.let {
+            testInstrumentationRunnerArguments["annotation"] = it
+        }
+    }
+}
+
+// Also configure connected test task arguments at execution time for pre-built APK
+// scenarios (CI builds APK in one job, runs tests in another with -P property).
+afterEvaluate {
+    if (sujianTestAnnotation != null) {
+        tasks.matching {
+            it.name.startsWith("connected") && it.name.endsWith("AndroidTest")
+        }.configureEach {
+            if (hasProperty("instrumentationRunnerArguments")) {
+                @Suppress("UNCHECKED_CAST")
+                val args = property("instrumentationRunnerArguments") as MutableMap<String, String>
+                args["annotation"] = sujianTestAnnotation
+            }
         }
     }
 }
