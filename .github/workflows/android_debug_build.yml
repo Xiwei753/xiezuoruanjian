@@ -218,7 +218,7 @@ jobs:
           disable-animations: true
           script: |
             adb shell getprop ro.product.cpu.abi
-            cd apps/android && ANDROID_NDK_HOME=$ANDROID_NDK_ROOT ./gradlew connectedNoAiDebugAndroidTest -x buildNoAiDebugWriterNative -Psujian.android.abis=x86_64 -Psujian.testAnnotation=$SMALL_ANNOTATION
+            cd apps/android && ANDROID_NDK_HOME=$ANDROID_NDK_ROOT ./gradlew connectedNoAiDebugAndroidTest -x buildNoAiDebugWriterNative -Psujian.android.abis=x86_64 -Pandroid.testInstrumentationRunnerArguments.annotation=$SMALL_ANNOTATION
 
   emulator-medium-test:
     runs-on: ubuntu-24.04
@@ -293,7 +293,7 @@ jobs:
           disable-animations: true
           script: |
             adb shell getprop ro.product.cpu.abi
-            cd apps/android && ANDROID_NDK_HOME=$ANDROID_NDK_ROOT ./gradlew connectedNoAiDebugAndroidTest -x buildNoAiDebugWriterNative -Psujian.android.abis=x86_64 -Psujian.testAnnotation=$MEDIUM_ANNOTATION
+            cd apps/android && ANDROID_NDK_HOME=$ANDROID_NDK_ROOT ./gradlew connectedNoAiDebugAndroidTest -x buildNoAiDebugWriterNative -Psujian.android.abis=x86_64 -Pandroid.testInstrumentationRunnerArguments.annotation=$MEDIUM_ANNOTATION
 
   emulator-large-test:
     runs-on: ubuntu-24.04
@@ -368,4 +368,4 @@ jobs:
           disable-animations: true
           script: |
             adb shell getprop ro.product.cpu.abi
-            cd apps/android && ANDROID_NDK_HOME=$ANDROID_NDK_ROOT ./gradlew connectedNoAiDebugAndroidTest -x buildNoAiDebugWriterNative -Psujian.android.abis=x86_64 -Psujian.testAnnotation=$LARGE_ANNOTATION
+            cd apps/android && ANDROID_NDK_HOME=$ANDROID_NDK_ROOT ./gradlew connectedNoAiDebugAndroidTest -x buildNoAiDebugWriterNative -Psujian.android.abis=x86_64 -Pandroid.testInstrumentationRunnerArguments.annotation=$LARGE_ANNOTATION

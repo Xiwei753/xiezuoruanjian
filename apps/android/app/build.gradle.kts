@@ -334,48 +334,97 @@ android {
     }
 }
 
-// Test category support.
-// The default `connectedNoAiDebugAndroidTest` runs all tests.
-// To filter by category, set the project property:
-//   -Psujian.testAnnotation=com.xiwei.sujian.support.SujianSmallTest
-//   -Psujian.testAnnotation=com.xiwei.sujian.support.SujianMediumTest
-//   -Psujian.testAnnotation=com.xiwei.sujian.support.SujianLargeTest
-val sujianTestAnnotation: String? by project
-
-// Set annotation filter in defaultConfig for from-scratch builds with -P property.
-android {
-    defaultConfig {
-        sujianTestAnnotation?.let {
-            testInstrumentationRunnerArguments["annotation"] = it
-        }
-    }
-}
-
-// Also configure connected test task arguments at execution time for pre-built APK
-// scenarios (CI builds APK in one job, runs tests in another with -P property).
-afterEvaluate {
-    tasks.matching {
-        it.name.startsWith("connected") && it.name.endsWith("AndroidTest")
-    }.configureEach {
-        val annotation = sujianTestAnnotation ?: return@configureEach
-        if (hasProperty("instrumentationRunnerArguments")) {
-            @Suppress("UNCHECKED_CAST")
-            val args = property("instrumentationRunnerArguments") as MutableMap<String, String>
-            args["annotation"] = annotation
-        }
-    }
-}
-
+// Static verification of test classification.
+// All concrete androidTest classes must belong to exactly one category.
+// Does NOT read or apply any dynamic filter — that is done at the
+// AndroidJUnitRunner level via the standard Gradle property:
+//   -Pandroid.testInstrumentationRunnerArguments.annotation=<fully.qualified.AnnotationClass>
 tasks.register("testDiscoveryCheck") {
     doLast {
-        val runnerArgs = android.defaultConfig.testInstrumentationRunnerArguments
-        val annotation = runnerArgs["annotation"]
-        if (annotation != null) {
-            println("Test filter active: annotation=$annotation")
-        } else {
-            println("No test annotation filter — all tests will run.")
+        val androidTestDir = project.projectDir.resolve("src/androidTest")
+        if (!androidTestDir.exists()) {
+            throw GradleException("androidTest source directory not found: $androidTestDir")
         }
-        println("Test categories: check printTestCategories task")
+
+        data class TestClass(val path: String, val annotations: List<String>)
+
+        val testFiles = fileTree(androidTestDir) {
+            include("**/*Test.kt", "**/*Test.java")
+        }.files
+
+        val validAnnotations = setOf(
+            "com.xiwei.sujian.support.SujianSmallTest",
+            "com.xiwei.sujian.support.SujianMediumTest",
+            "com.xiwei.sujian.support.SujianLargeTest"
+        )
+        val annotationSimpleNames = validAnnotations.map { it.substringAfterLast('.') }
+
+        val testClasses = mutableListOf<TestClass>()
+
+        for (file in testFiles) {
+            val relativePath = file.relativeTo(androidTestDir).path
+            val content = file.readText()
+
+            // Skip abstract / open base classes
+            if (content.contains(Regex("\\babstract\\s+class\\b")) ||
+                content.contains(Regex("\\bopen\\s+class\\b"))
+            ) {
+                println("SKIP (abstract/open): $relativePath")
+                continue
+            }
+
+            val foundAnnotations = annotationSimpleNames.filter { name ->
+                Regex("@${name}\\b").containsMatchIn(content)
+            }
+
+            testClasses.add(TestClass(relativePath, foundAnnotations))
+        }
+
+        val errors = mutableListOf<String>()
+
+        for (tc in testClasses) {
+            when {
+                tc.annotations.isEmpty() -> {
+                    errors.add("MISSING CATEGORY: ${tc.path} has no Small/Medium/Large annotation")
+                }
+                tc.annotations.size > 1 -> {
+                    errors.add("DUPLICATE CATEGORY: ${tc.path} has multiple: ${tc.annotations}")
+                }
+            }
+        }
+
+        // Verify workflow contains all three standard runner argument strings
+        val workflowFile = project.rootProject.projectDir.parentFile.parentFile
+            .resolve(".github/workflows/android_debug_build.yml")
+        if (workflowFile.exists()) {
+            val workflowContent = workflowFile.readText()
+            val annotationToVar = mapOf(
+                "com.xiwei.sujian.support.SujianSmallTest" to "SMALL_ANNOTATION",
+                "com.xiwei.sujian.support.SujianMediumTest" to "MEDIUM_ANNOTATION",
+                "com.xiwei.sujian.support.SujianLargeTest" to "LARGE_ANNOTATION"
+            )
+            for ((_, varName) in annotationToVar) {
+                val expectedPattern = "android.testInstrumentationRunnerArguments.annotation=\$${varName}"
+                if (!workflowContent.contains(expectedPattern)) {
+                    errors.add("WORKFLOW MISSING: $expectedPattern not found in android_debug_build.yml")
+                }
+            }
+        } else {
+            errors.add("WORKFLOW NOT FOUND: .github/workflows/android_debug_build.yml")
+        }
+
+        if (errors.isNotEmpty()) {
+            throw GradleException(
+                "Test classification integrity check FAILED:\n  " +
+                errors.joinToString("\n  ")
+            )
+        }
+
+        val totalTests = testClasses.size
+        val smallCount = testClasses.count { "SujianSmallTest" in it.annotations }
+        val mediumCount = testClasses.count { "SujianMediumTest" in it.annotations }
+        val largeCount = testClasses.count { "SujianLargeTest" in it.annotations }
+        println("testDiscoveryCheck PASSED: $totalTests concrete test classes ($smallCount small, $mediumCount medium, $largeCount large)")
     }
 }
 
@@ -384,9 +433,9 @@ tasks.register("printTestCategories") {
         println("""
 Sujian Android Test Categories:
   All tests:        ./gradlew connectedNoAiDebugAndroidTest
-  Small tests:      ./gradlew connectedNoAiDebugAndroidTest -Psujian.testAnnotation=com.xiwei.sujian.support.SujianSmallTest
-  Medium tests:     ./gradlew connectedNoAiDebugAndroidTest -Psujian.testAnnotation=com.xiwei.sujian.support.SujianMediumTest
-  Large tests:      ./gradlew connectedNoAiDebugAndroidTest -Psujian.testAnnotation=com.xiwei.sujian.support.SujianLargeTest
+  Small tests:      ./gradlew connectedNoAiDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.annotation=com.xiwei.sujian.support.SujianSmallTest
+  Medium tests:     ./gradlew connectedNoAiDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.annotation=com.xiwei.sujian.support.SujianMediumTest
+  Large tests:      ./gradlew connectedNoAiDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.annotation=com.xiwei.sujian.support.SujianLargeTest
   JVM unit tests:   ./gradlew testNoAiDebugUnitTest
   All verification: ./gradlew connectedNoAiDebugAndroidTest
         """.trimIndent())
