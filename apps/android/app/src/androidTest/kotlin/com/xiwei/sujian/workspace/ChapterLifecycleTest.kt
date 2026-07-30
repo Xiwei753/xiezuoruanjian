@@ -1,6 +1,9 @@
 package com.xiwei.sujian.workspace
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasAnySibling
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.AndroidComposeTestRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -128,7 +131,7 @@ class ChapterLifecycleTest {
             coordinator.activeTargetId == targetIdA
         }, timeoutMs = 10_000, message = { "activeTargetId should be $targetIdA but was $lastTargetId after opening chapter A" })
 
-        composeTestRule.onNodeWithText("交替章节A").assertIsDisplayed()
+        composeTestRule.onNode(hasText("交替章节A") and hasAnySibling(hasTestTag(SujianSemanticIds.EditorSaveStatus))).assertIsDisplayed()
 
         Espresso.pressBack()
 
@@ -144,7 +147,7 @@ class ChapterLifecycleTest {
             coordinator.activeTargetId == targetIdB
         }, timeoutMs = 10_000, message = { "activeTargetId should be $targetIdB but was $lastTargetIdB after opening chapter B" })
 
-        composeTestRule.onNodeWithText("交替章节B").assertIsDisplayed()
+        composeTestRule.onNode(hasText("交替章节B") and hasAnySibling(hasTestTag(SujianSemanticIds.EditorSaveStatus))).assertIsDisplayed()
 
         assertNotEquals("Chapters A and B should have different target IDs", targetIdA, targetIdB)
     }
@@ -244,7 +247,7 @@ class ChapterLifecycleTest {
             coordinator.activeTargetId == expectedTargetId
         }, timeoutMs = 10_000, message = { "activeTargetId should be $expectedTargetId but was $lastTargetId for chapter $chapterId" })
 
-        composeTestRule.onNodeWithText(expectedTitle).assertIsDisplayed()
+        composeTestRule.onNode(hasText(expectedTitle) and hasAnySibling(hasTestTag(SujianSemanticIds.EditorSaveStatus))).assertIsDisplayed()
 
         if (expectedContent != null) {
             Espresso.onView(ViewMatchers.withId(R.id.editor_content))
