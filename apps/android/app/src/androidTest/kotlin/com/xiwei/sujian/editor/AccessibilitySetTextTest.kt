@@ -43,9 +43,11 @@ class AccessibilitySetTextTest {
     private fun initTestData(): AndroidTestEnvironment.TestProjectData {
         val context = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
         val testData = AndroidTestEnvironment.ensureTestProjectAndVolume(context)
+        var vm: com.xiwei.sujian.ui.compose.SujianAppViewModel? = null
         activityRule.onActivity { activity ->
-            AndroidTestEnvironment.refreshViewModelProjects(activity)
+            vm = AndroidTestEnvironment.refreshViewModelProjects(activity)
         }
+        AndroidTestEnvironment.awaitProjectLoaded(vm!!, testData.projectId)
         return testData
     }
 

@@ -42,8 +42,9 @@ class SettingsPersistenceTest {
     private fun getSession(): TestSession = AndroidTestEnvironment.requireCurrentSession()
 
     private fun initTestData() {
+        var vm: com.xiwei.sujian.ui.compose.SujianAppViewModel? = null
         activityRule.onActivity { activity ->
-            AndroidTestEnvironment.refreshViewModelProjects(activity)
+            vm = AndroidTestEnvironment.refreshViewModelProjects(activity)
         }
     }
 

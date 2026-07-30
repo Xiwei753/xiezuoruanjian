@@ -380,7 +380,7 @@ object AndroidTestEnvironment {
         return TestProjectData(project.id, project.title, volume.id, volume.title)
     }
 
-    fun refreshViewModelProjects(activity: androidx.activity.ComponentActivity) {
+    fun refreshViewModelProjects(activity: androidx.activity.ComponentActivity): SujianAppViewModel {
         val vm = ViewModelProvider(activity)[SujianAppViewModel::class.java]
         val session = requireCurrentSession()
         val workspaceUC = com.xiwei.sujian.data.WorkspaceUseCase(session.deps.workspaceRepository)
@@ -389,6 +389,22 @@ object AndroidTestEnvironment {
             workspaceUC = workspaceUC,
             settingsRepo = session.deps.settingsRepository,
             context = activity.applicationContext
+        )
+        return vm
+    }
+
+    fun awaitProjectLoaded(vm: SujianAppViewModel, expectedProjectId: String, timeoutMs: Long = 15_000) {
+        val deadlineMs = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadlineMs) {
+            if (vm.projects.any { it.id == expectedProjectId }) return
+            Thread.sleep(100)
+        }
+        val observedIds = vm.projects.map { it.id }
+        val observedEntries = vm.projects.joinToString { "${it.id}:${it.title}" }
+        throw AssertionError(
+            "Test setup barrier: ViewModel projects did not contain expected project ID " +
+            "'$expectedProjectId' within ${timeoutMs}ms. " +
+            "Observed project IDs: $observedIds. Titles: [$observedEntries]"
         )
     }
 
