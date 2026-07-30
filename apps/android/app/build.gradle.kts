@@ -354,14 +354,15 @@ android {
 // Also configure connected test task arguments at execution time for pre-built APK
 // scenarios (CI builds APK in one job, runs tests in another with -P property).
 afterEvaluate {
-    if (sujianTestAnnotation != null) {
+    val annotation = sujianTestAnnotation
+    if (annotation != null) {
         tasks.matching {
             it.name.startsWith("connected") && it.name.endsWith("AndroidTest")
         }.configureEach {
             if (hasProperty("instrumentationRunnerArguments")) {
                 @Suppress("UNCHECKED_CAST")
                 val args = property("instrumentationRunnerArguments") as MutableMap<String, String>
-                args["annotation"] = sujianTestAnnotation
+                args["annotation"] = annotation
             }
         }
     }
