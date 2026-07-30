@@ -74,7 +74,6 @@ fun ProjectWorkspaceScreen(
             appState = appState,
             onSelectProject = { projectId, projectTitle ->
                 if (onNavigateToProject != null) {
-                    appState.selectProject(projectId, projectTitle)
                     onNavigateToProject(projectId)
                 } else {
                     appState.selectProject(projectId, projectTitle)
@@ -231,9 +230,10 @@ private fun WorkbenchWorkspaceContent(
                     projectId = currentProjectId,
                     workspaceRepository = workspaceRepository,
                     onSelectChapter = { volumeId, chapterId, chapterTitle ->
-                        appState.selectChapter(volumeId, chapterId, chapterTitle)
                         if (onNavigateToChapter != null) {
                             onNavigateToChapter(currentProjectId, volumeId, chapterId)
+                        } else {
+                            appState.selectChapter(volumeId, chapterId, chapterTitle)
                         }
                     },
                     onBackToProjects = {
@@ -353,10 +353,10 @@ private fun CompactWorkspaceContent(
                     projectId = currentProjectId,
                     workspaceRepository = workspaceRepository,
                     onSelectChapter = { volumeId, chapterId, chapterTitle ->
-                        appState.selectChapter(volumeId, chapterId, chapterTitle)
                         if (onNavigateToChapter != null) {
                             onNavigateToChapter(currentProjectId, volumeId, chapterId)
                         } else {
+                            appState.selectChapter(volumeId, chapterId, chapterTitle)
                             coroutineScope.launch {
                                 navigator.navigateTo(
                                     androidx.compose.material3.adaptive.layout.ThreePaneScaffoldRole.Secondary,
