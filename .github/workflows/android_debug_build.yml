@@ -149,8 +149,6 @@ jobs:
       fail-fast: false
       matrix:
         flavor: [no-ai]
-    env:
-      ANDROID_EMULATOR_FORCE_GLES: 1
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
