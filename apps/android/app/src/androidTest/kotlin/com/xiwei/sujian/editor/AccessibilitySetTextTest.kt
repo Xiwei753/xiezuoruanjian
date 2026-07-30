@@ -52,7 +52,7 @@ class AccessibilitySetTextTest : BaseEditorTest() {
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText(testText))
 
-        activityRule.restartRuntimeAndActivity()
+        getSession().restartRuntimeAndActivity()
 
         navigateToChapterAfterRestart(testData, chapterId)
 
@@ -81,7 +81,7 @@ class AccessibilitySetTextTest : BaseEditorTest() {
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasSelectionUtf16(expectedUtf16Length, expectedUtf16Length))
 
-        activityRule.restartRuntimeAndActivity()
+        getSession().restartRuntimeAndActivity()
 
         navigateToChapterAfterRestart(testData, chapterId)
 
@@ -109,7 +109,7 @@ class AccessibilitySetTextTest : BaseEditorTest() {
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("替换后的内容"))
 
-        activityRule.restartRuntimeAndActivity()
+        getSession().restartRuntimeAndActivity()
 
         navigateToChapterAfterRestart(testData, chapterId)
 

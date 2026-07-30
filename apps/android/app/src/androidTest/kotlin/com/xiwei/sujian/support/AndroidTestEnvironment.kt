@@ -36,12 +36,99 @@ class TestSession private constructor(
     private val manualFrameClock: com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock.ManualFrameClock?,
     var testProjectData: AndroidTestEnvironment.TestProjectData? = null
 ) {
+    private var scenario: ActivityScenario<MainActivity>? = null
+
     private val prefsFileNames = listOf(
         "sujian_diagnostics_$prefsSuffix",
         "sujian_device_$prefsSuffix"
     )
     val deps: TestSujianAppDependencies
         get() = depsHolder
+
+    fun launchActivity(): ActivityScenario<MainActivity> {
+        scenario?.close()
+        SujianAppDependencies.setTestProvider { _ -> depsHolder }
+        scenario = ActivityScenario.launch(MainActivity::class.java)
+        scenario!!.onActivity { }
+        return scenario!!
+    }
+
+    fun closeActivity() {
+        scenario?.close()
+        scenario = null
+    }
+
+    fun isActivityLaunched(): Boolean = scenario != null
+
+    fun <T> onActivity(action: (MainActivity) -> T): T {
+        val sc = scenario ?: throw IllegalStateException("No active ActivityScenario. Call launchActivity() first.")
+        var result: T? = null
+        sc.onActivity { activity ->
+            result = action(activity)
+        }
+        return result ?: throw IllegalStateException("onActivity did not produce a result.")
+    }
+
+    fun restartRuntimeAndActivity() {
+        val sc = scenario
+        if (sc != null) {
+            val destroyLatch = CountDownLatch(1)
+            val lifecycleCallback = ActivityLifecycleCallback { activity, stage ->
+                if (stage == Stage.DESTROYED && activity is MainActivity) {
+                    destroyLatch.countDown()
+                }
+            }
+            val lifecycleMonitor = ActivityLifecycleMonitorRegistry.getInstance()
+            lifecycleMonitor.addLifecycleCallback(lifecycleCallback)
+
+            sc.close()
+            scenario = null
+
+            val destroyed = destroyLatch.await(10, TimeUnit.SECONDS)
+            lifecycleMonitor.removeLifecycleCallback(lifecycleCallback)
+
+            Assert.assertTrue(
+                "Old Activity was not destroyed within 10 seconds after scenario.close()",
+                destroyed
+            )
+        }
+
+        depsHolder.releaseRuntime()
+        depsHolder = TestSujianAppDependencies(
+            context,
+            testRootDir = testRootDir,
+            workspaceDir = workspaceDir,
+            prefsSuffix = prefsSuffix,
+            animationTimeSource = animationTimeSource,
+            transactionIdSource = transactionIdSource,
+            manualFrameClock = manualFrameClock
+        )
+        SujianAppDependencies.setTestProvider { _ -> depsHolder }
+
+        scenario = ActivityScenario.launch(MainActivity::class.java)
+
+        val resumeLatch = CountDownLatch(1)
+        val maxWaitMs = 10_000L
+        val resumeStartMs = System.currentTimeMillis()
+        while (!resumeLatch.await(0, TimeUnit.MILLISECONDS) && (System.currentTimeMillis() - resumeStartMs) < maxWaitMs) {
+            scenario!!.onActivity { activity ->
+                if (activity.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+                    resumeLatch.countDown()
+                }
+            }
+        }
+
+        Assert.assertTrue(
+            "New Activity did not reach RESUMED state within ${maxWaitMs}ms after cold restart",
+            resumeLatch.await(0, TimeUnit.MILLISECONDS)
+        )
+    }
+
+    fun simulateBackgroundRecovery() {
+        val sc = scenario ?: throw IllegalStateException("No active ActivityScenario. Call launchActivity() first.")
+        sc.moveToState(androidx.lifecycle.Lifecycle.State.STARTED)
+        sc.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+    }
 
     companion object {
         fun create(
@@ -219,21 +306,6 @@ class RestartableMainActivityRule(
     private val sessionProvider: () -> TestSession
 ) : TestRule {
     private var scenario: ActivityScenario<MainActivity>? = null
-    private var composeTestRule: androidx.compose.ui.test.junit4.ComposeTestRule? = null
-
-    fun setComposeTestRule(rule: androidx.compose.ui.test.junit4.ComposeTestRule) {
-        composeTestRule = rule
-    }
-
-    @Deprecated(
-        message = "Holding Activity references outside the UI thread risks stale references after cold restart. " +
-            "Use onActivity { } for one-shot reads that return plain data snapshots, " +
-            "or use Espresso onView() / Compose test APIs for View interactions.",
-        replaceWith = ReplaceWith("onActivity { it }")
-    )
-    fun getActivity(): MainActivity {
-        return provideActivity()
-    }
 
     private fun provideActivity(): MainActivity {
         val sc = scenario ?: throw IllegalStateException("No active ActivityScenario. Call launchActivity() first.")
@@ -242,65 +314,12 @@ class RestartableMainActivityRule(
         return activity ?: throw IllegalStateException("ActivityScenario.onActivity did not provide activity.")
     }
 
-    val composeActivityProvider: (RestartableMainActivityRule) -> MainActivity
-        get() = { _ -> provideActivity() }
-
     fun launchActivity() {
         scenario?.close()
         val session = sessionProvider()
         SujianAppDependencies.setTestProvider { _ -> session.deps }
         scenario = ActivityScenario.launch(MainActivity::class.java)
         scenario!!.onActivity { }
-    }
-
-    fun restartRuntimeAndActivity() {
-        val sc = scenario
-        if (sc != null) {
-            val destroyLatch = CountDownLatch(1)
-            val lifecycleCallback = ActivityLifecycleCallback { activity, stage ->
-                if (stage == Stage.DESTROYED && activity is MainActivity) {
-                    destroyLatch.countDown()
-                }
-            }
-            val lifecycleMonitor = ActivityLifecycleMonitorRegistry.getInstance()
-            lifecycleMonitor.addLifecycleCallback(lifecycleCallback)
-
-            sc.close()
-            scenario = null
-
-            val destroyed = destroyLatch.await(10, TimeUnit.SECONDS)
-            lifecycleMonitor.removeLifecycleCallback(lifecycleCallback)
-
-            Assert.assertTrue(
-                "Old Activity was not destroyed within 10 seconds after scenario.close()",
-                destroyed
-            )
-        }
-
-        val session = sessionProvider()
-        session.deps.releaseRuntime()
-        session.recreateDeps()
-
-        SujianAppDependencies.setTestProvider { _ -> session.deps }
-        scenario = ActivityScenario.launch(MainActivity::class.java)
-
-        val resumeLatch = CountDownLatch(1)
-        val maxWaitMs = 10_000L
-        val resumeStartMs = System.currentTimeMillis()
-        while (!resumeLatch.await(0, TimeUnit.MILLISECONDS) && (System.currentTimeMillis() - resumeStartMs) < maxWaitMs) {
-            scenario!!.onActivity { activity ->
-                if (activity.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
-                    resumeLatch.countDown()
-                }
-            }
-        }
-
-        Assert.assertTrue(
-            "New Activity did not reach RESUMED state within ${maxWaitMs}ms after cold restart",
-            resumeLatch.await(0, TimeUnit.MILLISECONDS)
-        )
-
-        composeTestRule?.waitForIdle()
     }
 
     fun <T> onActivity(action: (MainActivity) -> T): T {
@@ -312,16 +331,7 @@ class RestartableMainActivityRule(
         return result ?: throw IllegalStateException("onActivity did not produce a result.")
     }
 
-    fun simulateBackgroundRecovery() {
-        val sc = scenario ?: throw IllegalStateException("No active ActivityScenario. Call launchActivity() first.")
-        sc.moveToState(androidx.lifecycle.Lifecycle.State.STARTED)
-        sc.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
-        composeTestRule?.waitForIdle()
-    }
-
-    fun isActivityLaunched(): Boolean {
-        return scenario != null
-    }
+    fun isActivityLaunched(): Boolean = scenario != null
 
     fun closeActivity() {
         scenario?.close()

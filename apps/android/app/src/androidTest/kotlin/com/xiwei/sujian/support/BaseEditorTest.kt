@@ -1,6 +1,6 @@
 package com.xiwei.sujian.support
 
-import androidx.compose.ui.test.junit4.AndroidComposeTestRule
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextReplacement
@@ -32,12 +32,7 @@ open class BaseEditorTest(
     val transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource? = null,
     val manualFrameClock: com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock.ManualFrameClock? = null
 ) {
-    protected val activityRule = RestartableMainActivityRule { AndroidTestEnvironment.requireCurrentSession() }
-
-    private val _composeTestRule = AndroidComposeTestRule(
-        activityRule,
-        activityRule.composeActivityProvider
-    ).also { activityRule.setComposeTestRule(it) }
+    protected val composeTestRule = createAndroidComposeRule<MainActivity>()
 
     @get:Rule
     val ruleChain: RuleChain = RuleChain
@@ -51,9 +46,7 @@ open class BaseEditorTest(
                 seedProject = true
             )
         )
-        .around(_composeTestRule)
-
-    protected val composeTestRule get() = _composeTestRule
+        .around(composeTestRule)
 
     protected fun getSession(): TestSession = AndroidTestEnvironment.requireCurrentSession()
 

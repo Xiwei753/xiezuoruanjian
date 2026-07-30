@@ -3,7 +3,7 @@ package com.xiwei.sujian.settings
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
-import androidx.compose.ui.test.junit4.AndroidComposeTestRule
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
@@ -14,7 +14,6 @@ import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.support.AndroidTestEnvironment
 import com.xiwei.sujian.support.ComposeWait
 import com.xiwei.sujian.support.SujianMediumTest
-import com.xiwei.sujian.support.RestartableMainActivityRule
 import com.xiwei.sujian.support.TestSession
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -27,19 +26,12 @@ import org.junit.runner.RunWith
 @SujianMediumTest
 class SettingsPersistenceTest {
 
-    private val activityRule = RestartableMainActivityRule { AndroidTestEnvironment.requireCurrentSession() }
-
-    private val _composeTestRule = AndroidComposeTestRule(
-        activityRule,
-        activityRule.composeActivityProvider
-    ).also { activityRule.setComposeTestRule(it) }
+    private val composeTestRule = createAndroidComposeRule<MainActivity>()
 
     @get:Rule
     val ruleChain: RuleChain = RuleChain
         .outerRule(AndroidTestEnvironment.TestDependenciesRule())
-        .around(_composeTestRule)
-
-    private val composeTestRule get() = _composeTestRule
+        .around(composeTestRule)
 
     private fun getSession(): TestSession = AndroidTestEnvironment.requireCurrentSession()
 
@@ -84,7 +76,7 @@ class SettingsPersistenceTest {
             session.deps.settingsRepository.getLocalSettings().editorTypingAnimationEnabled == expectedEnabled
         }, timeoutMs = 10_000, message = { "Settings repository did not reflect typing animation change to $expectedEnabled" })
 
-        activityRule.restartRuntimeAndActivity()
+        session.restartRuntimeAndActivity()
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationSettings, timeoutMs = 15_000)
         navigateToEditorSettings()
@@ -133,7 +125,7 @@ class SettingsPersistenceTest {
             kotlin.math.abs(currentFontSize - targetFontSize) < 0.5f
         }, timeoutMs = 10_000, message = { "Font size did not update to $targetFontSize after Slider interaction" })
 
-        activityRule.restartRuntimeAndActivity()
+        session.restartRuntimeAndActivity()
 
         val newSession = AndroidTestEnvironment.requireCurrentSession()
         val restoredFontSize = newSession.deps.settingsRepository.getEffectiveFontSize()

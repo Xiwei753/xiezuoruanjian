@@ -1300,7 +1300,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
         val snapshotBefore = captureEditorSnapshot()
         assertNull("No animation should be active before background", snapshotBefore)
 
-        activityRule.simulateBackgroundRecovery()
+        getSession().simulateBackgroundRecovery()
 
         manualTimeSource!!.advanceByMs(16)
         dispatchManualFrame()
@@ -1329,7 +1329,7 @@ class ControllableFrameAnimationTest : BaseEditorTest(
 
         ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
 
-        activityRule.restartRuntimeAndActivity()
+        getSession().restartRuntimeAndActivity()
 
         navigateToChapterAfterRestart(testData, chapterId)
 

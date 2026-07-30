@@ -45,7 +45,7 @@ class EditorPersistenceTest : BaseEditorTest() {
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("第一段测试正文，继续写作"))
 
-        activityRule.restartRuntimeAndActivity()
+        getSession().restartRuntimeAndActivity()
 
         navigateToChapterAfterRestart(testData, chapterId)
 
@@ -62,7 +62,7 @@ class EditorPersistenceTest : BaseEditorTest() {
 
         ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
 
-        activityRule.restartRuntimeAndActivity()
+        getSession().restartRuntimeAndActivity()
 
         navigateToChapterAfterRestart(testData, chapterId)
 
@@ -83,7 +83,7 @@ class EditorPersistenceTest : BaseEditorTest() {
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText(testText))
 
-        activityRule.restartRuntimeAndActivity()
+        getSession().restartRuntimeAndActivity()
 
         navigateToChapterAfterRestart(testData, chapterId)
 
@@ -142,7 +142,7 @@ class EditorPersistenceTest : BaseEditorTest() {
                 expectedCursorUtf16
             ))
 
-        activityRule.restartRuntimeAndActivity()
+        getSession().restartRuntimeAndActivity()
 
         navigateToChapterAfterRestart(testData, chapterId)
 
@@ -189,7 +189,7 @@ class EditorPersistenceTest : BaseEditorTest() {
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasSelectionUtf8(insertEndByteOffset, insertEndByteOffset))
 
-        activityRule.restartRuntimeAndActivity()
+        getSession().restartRuntimeAndActivity()
 
         navigateToChapterAfterRestart(testData, chapterId)
 
