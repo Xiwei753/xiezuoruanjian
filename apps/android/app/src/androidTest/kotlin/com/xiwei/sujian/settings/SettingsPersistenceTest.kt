@@ -13,6 +13,7 @@ import com.xiwei.sujian.ui.MainActivity
 import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.support.AndroidTestEnvironment
 import com.xiwei.sujian.support.ComposeWait
+import com.xiwei.sujian.support.SujianMediumTest
 import com.xiwei.sujian.support.RestartableMainActivityRule
 import com.xiwei.sujian.support.TestSession
 import org.junit.Assert.assertEquals
@@ -23,6 +24,7 @@ import org.junit.rules.RuleChain
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
+@SujianMediumTest
 class SettingsPersistenceTest {
 
     private val activityRule = RestartableMainActivityRule { AndroidTestEnvironment.requireCurrentSession() }

@@ -1,12 +1,10 @@
 package com.xiwei.sujian.editor
 
-import androidx.compose.ui.test.junit4.AndroidComposeTestRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.espresso.Espresso
 import androidx.test.espresso.matcher.ViewMatchers
-import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.xiwei.sujian.R
 import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock
@@ -19,57 +17,25 @@ import com.xiwei.sujian.editor.v2.visual.TransactionIdSource
 import com.xiwei.sujian.editor.v2.visual.TransactionState
 import com.xiwei.sujian.editor.v2.visual.VisualFrameSnapshot
 import com.xiwei.sujian.support.AndroidTestEnvironment
+import com.xiwei.sujian.support.BaseEditorTest
 import com.xiwei.sujian.support.ComposeWait
 import com.xiwei.sujian.support.EditorCommitTextAction
 import com.xiwei.sujian.support.EditorCompositionAction
 import com.xiwei.sujian.support.EditorReplaceRangeAction
 import com.xiwei.sujian.support.EditorViewAssertions
-import com.xiwei.sujian.support.RestartableMainActivityRule
-import com.xiwei.sujian.support.TestSession
-import com.xiwei.sujian.ui.MainActivity
+import com.xiwei.sujian.support.SujianMediumTest
 import org.junit.Assert.*
-import org.junit.Rule
 import org.junit.Test
-import org.junit.rules.RuleChain
-import org.junit.runner.RunWith
 
-@RunWith(AndroidJUnit4::class)
-class ControllableFrameAnimationTest {
-
-    private val manualTimeSource = ManualAnimationTimeSource()
-    private val transactionIdSource = TransactionIdSource()
-    private val manualFrameClock = WindowDisplayFrameClock.ManualFrameClock()
-
-    private val activityRule = RestartableMainActivityRule { AndroidTestEnvironment.requireCurrentSession() }
-
-    private val _composeTestRule = AndroidComposeTestRule(
-        activityRule,
-        activityRule.composeActivityProvider
-    ).also { activityRule.setComposeTestRule(it) }
-
-    @get:Rule
-    val ruleChain: RuleChain = RuleChain
-        .outerRule(AndroidTestEnvironment.TestDependenciesRule(manualTimeSource, transactionIdSource, manualFrameClock))
-        .around(_composeTestRule)
-
-    private val composeTestRule get() = _composeTestRule
-
-    private fun getSession(): TestSession = AndroidTestEnvironment.requireCurrentSession()
-
-    private fun initTestData(): AndroidTestEnvironment.TestProjectData {
-        val context = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
-        val testData = AndroidTestEnvironment.ensureTestProjectAndVolume(context)
-        var vm: com.xiwei.sujian.ui.compose.SujianAppViewModel? = null
-        activityRule.onActivity { activity ->
-            vm = AndroidTestEnvironment.refreshViewModelProjects(activity)
-        }
-        AndroidTestEnvironment.awaitProjectLoaded(vm!!, testData.projectId)
-        return testData
-    }
-
+@SujianMediumTest
+class ControllableFrameAnimationTest : BaseEditorTest(
+    manualTimeSource = ManualAnimationTimeSource(),
+    transactionIdSource = TransactionIdSource(),
+    manualFrameClock = WindowDisplayFrameClock.ManualFrameClock()
+) {
     @Test
     fun insertText_animationStartsAndCompletes() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         val chapterId = openTestChapter("可控帧插入测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -91,7 +57,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun deleteRange_animationStartsAndCompletes() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         val chapterId = openTestChapter("可控帧删除测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -123,7 +89,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun middleInsert_animationPreservesSurroundingText() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         val chapterId = openTestChapter("可控帧中间插入测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -152,7 +118,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun unicodeInsert_animationCompletesCorrectly() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         val chapterId = openTestChapter("可控帧Unicode测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -175,7 +141,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun rapidSequentialInput_eachCompletesCorrectly() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         val chapterId = openTestChapter("可控帧连续输入测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -204,7 +170,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun multilineInsert_animationCompletesCorrectly() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         val chapterId = openTestChapter("可控帧多行测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -227,7 +193,7 @@ class ControllableFrameAnimationTest {
 
     private fun dispatchManualFrame() {
         val frameTimeNanos = manualTimeSource.nowNanos()
-        manualFrameClock.dispatchFrame(frameTimeNanos)
+        manualFrameClock!!.dispatchFrame(frameTimeNanos)
     }
 
     private fun advanceClockToEnd() {
@@ -299,7 +265,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun insertText_intermediateFramesShowProgressAndPreserveText() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         openTestChapter("中间帧插入测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -330,7 +296,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun deleteRange_intermediateFramesPreserveSurroundingText() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         openTestChapter("中间帧删除测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -363,7 +329,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun middleInsert_intermediateFramesShowCorrectPosition() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         openTestChapter("中间帧中间插入测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -394,7 +360,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun rapidInput_animationRebasesCorrectly() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         openTestChapter("中间帧连续输入测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -429,7 +395,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun unicodeInsert_intermediateFramesPreserveText() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         openTestChapter("中间帧Unicode测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -452,7 +418,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun emojiInsert_fiveProgressPoints_intermediateFramesShowVisualState() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         openTestChapter("Emoji五进度点测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -512,7 +478,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun compositionUpdate_animatedAndCompletes() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         openTestChapter("可控帧composition更新测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -543,7 +509,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun compositionCommit_animatedAndCompletes() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         openTestChapter("可控帧composition提交测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -566,7 +532,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun compositionCancel_animatedAndRevertsText() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         openTestChapter("可控帧composition取消测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -602,7 +568,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun compositionUpdate_intermediateFramesPreserveText() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         openTestChapter("中间帧composition测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -624,7 +590,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun compositionUpdateThenCommit_intermediateFramesCorrect() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         openTestChapter("中间帧composition提交测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -659,7 +625,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun scrollDuringAnimation_textAndCursorPreserved() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         openTestChapter("滚动动画测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -682,7 +648,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun switchChapter_animationCleared() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         openTestChapter("切换章节动画测试A", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -728,73 +694,6 @@ class ControllableFrameAnimationTest {
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText(""))
-    }
-
-    private fun openTestChapter(chapterTitle: String, testData: AndroidTestEnvironment.TestProjectData): String {
-        navigateToTestVolume(testData)
-
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceCreateChapter, timeoutMs = 15_000)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.WorkspaceCreateChapter).performClick()
-
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.ChapterTitleInput)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.ChapterTitleInput).performTextReplacement(chapterTitle)
-
-        composeTestRule.onNodeWithTag(SujianSemanticIds.DialogConfirm).performClick()
-
-        val chapterId = waitForChapterByTitle(chapterTitle, testData)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterId)).performClick()
-
-        waitForEditorReady(testData.projectId, testData.volumeId, chapterId)
-
-        return chapterId
-    }
-
-    private fun navigateToTestVolume(testData: AndroidTestEnvironment.TestProjectData) {
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationWorks, timeoutMs = 15_000)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationWorks).performClick()
-
-        val projectTag = SujianSemanticIds.project(testData.projectId)
-        ComposeWait.waitForTag(composeTestRule, projectTag, timeoutMs = 15_000)
-        composeTestRule.onNodeWithTag(projectTag).performClick()
-
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList, timeoutMs = 15_000)
-
-        val volumeTag = SujianSemanticIds.volume(testData.volumeId)
-        ComposeWait.waitForTag(composeTestRule, volumeTag, timeoutMs = 15_000)
-        composeTestRule.onNodeWithTag(volumeTag).performClick()
-    }
-
-    private fun waitForEditorReady(projectId: String, volumeId: String, chapterId: String) {
-        ComposeWait.waitForEspressoViewCondition(
-            composeTestRule,
-            EditorViewAssertions.isEditorReady(),
-            timeoutMs = 15_000
-        ) { "Editor did not become ready for chapter $chapterId" }
-
-        val expectedTargetId = "chapter-body:$projectId:$volumeId:$chapterId"
-        var lastTargetId: String? = null
-        ComposeWait.waitUntil(composeTestRule, {
-            val coordinator = AndroidTestEnvironment.requireCurrentSession().deps.coordinator
-            lastTargetId = coordinator.activeTargetId
-            coordinator.activeTargetId == expectedTargetId
-        }, timeoutMs = 10_000, message = { "activeTargetId should be $expectedTargetId but was $lastTargetId" })
-    }
-
-    private fun waitForChapterByTitle(title: String, testData: AndroidTestEnvironment.TestProjectData): String {
-        val s = AndroidTestEnvironment.requireCurrentSession()
-        val repo = s.deps.workspaceRepository
-        var chapterId = ""
-        ComposeWait.waitUntil(composeTestRule, {
-            val chapters = repo.getChapters(testData.projectId, testData.volumeId)
-            val found = chapters.firstOrNull { it.title == title }
-            if (found != null) {
-                chapterId = found.id
-                true
-            } else {
-                false
-            }
-        }, timeoutMs = 15_000, message = { "Chapter '$title' not found" })
-        return chapterId
     }
 
     private fun verifySliceVisualProperties(
@@ -868,7 +767,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun insertText_visualFrameSlicesShowPositionAndAlpha() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         openTestChapter("视觉帧插入测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -907,7 +806,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun deleteRange_visualFrameSlicesShowFadeOut() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         openTestChapter("视觉帧删除测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -945,7 +844,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun insertText_cursorRectMovesDuringAnimation() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         openTestChapter("视觉帧光标测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -994,7 +893,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun middleInsert_visualFrameSlicesShowCorrectPosition() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         openTestChapter("视觉帧中间插入测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -1035,7 +934,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun multilineInsert_visualFrameBlockShiftsShowMovement() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         openTestChapter("视觉帧块位移测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -1070,7 +969,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun compositionUpdate_visualFrameShowsPreeditSlices() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         openTestChapter("视觉帧composition测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -1108,7 +1007,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun singleCharDelete_animationStartsAndCompletes() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         openTestChapter("单字删除测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -1143,7 +1042,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun crossLineDelete_animationPreservesRemainingText() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         openTestChapter("跨行删除测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -1181,7 +1080,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun combiningCharInsert_animationCompletesCorrectly() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         openTestChapter("组合字符测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -1214,7 +1113,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun compositionUpdate_visualFrameShowsPreeditDecoration() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         openTestChapter("composition下划线测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -1269,7 +1168,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun singleCharDelete_visualFrameSlicesShowFadeOut() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         openTestChapter("单字删除视觉帧测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -1303,7 +1202,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun crossLineDelete_visualFrameBlockShiftsAdjust() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         openTestChapter("跨行删除视觉帧测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -1352,7 +1251,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun backToChapterList_animationCleared() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         val chapterId = openTestChapter("返回列表动画测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -1385,7 +1284,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun backgroundRecover_animationCleared() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         openTestChapter("后台恢复动画测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -1415,7 +1314,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun coldRestart_animationCleared() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         val chapterId = openTestChapter("冷重启动画测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -1446,7 +1345,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun lineEndInsert_animationStartsAndCompletes() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         openTestChapter("行末输入测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -1480,7 +1379,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun lineEndInsert_intermediateFramesShowProgressAndPreserveText() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         openTestChapter("行末插入中间帧测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -1518,7 +1417,7 @@ class ControllableFrameAnimationTest {
 
     @Test
     fun previousTransactionNotFinished_continueInput_rebasesCorrectly() {
-        val testData = initTestData()
+        val testData = ensureTestProjectData()
         openTestChapter("未完成事务继续输入测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -1575,12 +1474,5 @@ class ControllableFrameAnimationTest {
 
         val endSnapshot = captureEditorSnapshot()
         assertNull("No animation should be active after rebase completes", endSnapshot)
-    }
-
-    private fun navigateToChapterAfterRestart(testData: AndroidTestEnvironment.TestProjectData, chapterId: String) {
-        navigateToTestVolume(testData)
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.chapter(testData.volumeId, chapterId), timeoutMs = 15_000)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterId)).performClick()
-        waitForEditorReady(testData.projectId, testData.volumeId, chapterId)
     }
 }

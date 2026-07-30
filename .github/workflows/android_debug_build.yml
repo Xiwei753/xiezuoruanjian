@@ -11,6 +11,9 @@ permissions:
 
 env:
   CARGO_NDK_VERSION: "4.1.2"
+  SMALL_ANNOTATION: "com.xiwei.sujian.support.SujianSmallTest"
+  MEDIUM_ANNOTATION: "com.xiwei.sujian.support.SujianMediumTest"
+  LARGE_ANNOTATION: "com.xiwei.sujian.support.SujianLargeTest"
 
 jobs:
   build:
@@ -142,13 +145,9 @@ jobs:
             apps/android/app/build/generated/writer-uniffi/
           retention-days: 1
 
-  emulator-test:
+  emulator-small-test:
     runs-on: ubuntu-24.04
     needs: build
-    strategy:
-      fail-fast: false
-      matrix:
-        flavor: [no-ai]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -208,7 +207,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Run instrumented tests on x86_64 emulator
+      - name: Run small instrumented tests on x86_64 emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
@@ -219,4 +218,154 @@ jobs:
           disable-animations: true
           script: |
             adb shell getprop ro.product.cpu.abi
-            cd apps/android && ANDROID_NDK_HOME=$ANDROID_NDK_ROOT ./gradlew connected${{ matrix.flavor == 'no-ai' && 'NoAi' || 'Ai' }}DebugAndroidTest -x build${{ matrix.flavor == 'no-ai' && 'NoAi' || 'Ai' }}DebugWriterNative -Psujian.android.abis=x86_64
+            cd apps/android && ANDROID_NDK_HOME=$ANDROID_NDK_ROOT ./gradlew connectedNoAiDebugAndroidTest -x buildNoAiDebugWriterNative -Psujian.android.abis=x86_64 -Psujian.testAnnotation=$SMALL_ANNOTATION
+
+  emulator-medium-test:
+    runs-on: ubuntu-24.04
+    needs: build
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Read NDK version
+        id: ndk
+        run: |
+          source tools/android/ndk.env
+          echo "ndk_version=$NDK_VERSION" >> "$GITHUB_OUTPUT"
+          echo "ndk_version_numeric=$NDK_VERSION_NUMERIC" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          build-root-directory: apps/android
+
+      - name: Download native build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: native-no-ai-x86_64
+          path: apps/android/app/build/generated/
+
+      - name: Verify native artifacts
+        run: |
+          SO_PATH="apps/android/app/build/generated/writer-native/noAiDebug/x86_64/libuniffi_writer_core.so"
+          if [ ! -f "$SO_PATH" ]; then
+            echo "::error::Native library artifact missing: $SO_PATH"
+            exit 1
+          fi
+          UNIFFI_DIR="apps/android/app/build/generated/writer-uniffi/noAi/kotlin/uniffi"
+          if [ ! -d "$UNIFFI_DIR" ]; then
+            echo "::error::UniFFI bindings artifact missing: $UNIFFI_DIR"
+            exit 1
+          fi
+          echo "Native artifacts verified successfully."
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: ${{ steps.ndk.outputs.ndk_version }}
+
+      - name: Make gradlew executable
+        run: chmod +x apps/android/gradlew
+
+      - name: Make build scripts executable
+        run: chmod +x tools/build_android.sh tools/android/build_native.sh tools/android/verify_apk_abis.sh
+
+      - name: Enable KVM group permissions
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run medium instrumented tests on x86_64 emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          profile: pixel_6
+          emulator-build: 15261927
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          disable-animations: true
+          script: |
+            adb shell getprop ro.product.cpu.abi
+            cd apps/android && ANDROID_NDK_HOME=$ANDROID_NDK_ROOT ./gradlew connectedNoAiDebugAndroidTest -x buildNoAiDebugWriterNative -Psujian.android.abis=x86_64 -Psujian.testAnnotation=$MEDIUM_ANNOTATION
+
+  emulator-large-test:
+    runs-on: ubuntu-24.04
+    needs: build
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Read NDK version
+        id: ndk
+        run: |
+          source tools/android/ndk.env
+          echo "ndk_version=$NDK_VERSION" >> "$GITHUB_OUTPUT"
+          echo "ndk_version_numeric=$NDK_VERSION_NUMERIC" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          build-root-directory: apps/android
+
+      - name: Download native build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: native-no-ai-x86_64
+          path: apps/android/app/build/generated/
+
+      - name: Verify native artifacts
+        run: |
+          SO_PATH="apps/android/app/build/generated/writer-native/noAiDebug/x86_64/libuniffi_writer_core.so"
+          if [ ! -f "$SO_PATH" ]; then
+            echo "::error::Native library artifact missing: $SO_PATH"
+            exit 1
+          fi
+          UNIFFI_DIR="apps/android/app/build/generated/writer-uniffi/noAi/kotlin/uniffi"
+          if [ ! -d "$UNIFFI_DIR" ]; then
+            echo "::error::UniFFI bindings artifact missing: $UNIFFI_DIR"
+            exit 1
+          fi
+          echo "Native artifacts verified successfully."
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: ${{ steps.ndk.outputs.ndk_version }}
+
+      - name: Make gradlew executable
+        run: chmod +x apps/android/gradlew
+
+      - name: Make build scripts executable
+        run: chmod +x tools/build_android.sh tools/android/build_native.sh tools/android/verify_apk_abis.sh
+
+      - name: Enable KVM group permissions
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run large instrumented tests on x86_64 emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          profile: pixel_6
+          emulator-build: 15261927
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          disable-animations: true
+          script: |
+            adb shell getprop ro.product.cpu.abi
+            cd apps/android && ANDROID_NDK_HOME=$ANDROID_NDK_ROOT ./gradlew connectedNoAiDebugAndroidTest -x buildNoAiDebugWriterNative -Psujian.android.abis=x86_64 -Psujian.testAnnotation=$LARGE_ANNOTATION
