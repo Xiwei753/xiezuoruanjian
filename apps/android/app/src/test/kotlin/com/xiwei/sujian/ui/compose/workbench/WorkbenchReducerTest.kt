@@ -486,7 +486,8 @@ class WorkbenchReducerTest {
     @Test
     fun actualSideWidthDp_usesDockGroupSizes() {
         val state = WorkbenchReducer.computeDefaultLayout()
-        val rightWidth = state.actualSideWidthDp(DockZone.Right)
+        val expanded = WorkbenchReducer.reduce(state, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val rightWidth = expanded.actualSideWidthDp(DockZone.Right)
         val expectedWidth = state.dockGroupSizes["right-tools"] ?: 400f
         assertEquals(expectedWidth, rightWidth, 0.01f)
     }
@@ -541,7 +542,8 @@ class WorkbenchReducerTest {
     @Test
     fun resizeDockGroup_updatesSizePropagatesToDockGroupsByZone() {
         val state = WorkbenchReducer.computeDefaultLayout()
-        val resized = WorkbenchReducer.reduce(state, WorkbenchAction.ResizeDockGroup("left-nav", DockZone.Left, 80f))
+        val expanded = WorkbenchReducer.reduce(state, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ProjectNavigator))
+        val resized = WorkbenchReducer.reduce(expanded, WorkbenchAction.ResizeDockGroup("left-nav", DockZone.Left, 80f))
         val leftGroups = resized.dockGroupsByZone(DockZone.Left)
         val navGroup = leftGroups.find { it.id == "left-nav" }
         assertNotNull(navGroup)
