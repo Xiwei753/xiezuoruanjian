@@ -324,11 +324,49 @@ dependencies {
     implementation("${libs.jna.get().group}:${libs.jna.get().name}:${libs.jna.get().version}@aar")
     testImplementation(libs.jna)
     androidTestImplementation(libs.jna)
+    androidTestImplementation("androidx.test:runner:1.6.2")
 }
 
 android {
     lint {
         disable.addAll(listOf("MissingTranslation"))
         baseline = file("lint-baseline.xml")
+    }
+}
+
+// Test category support.
+// The default `connectedNoAiDebugAndroidTest` runs all tests.
+// To filter by category, set the project property:
+//   -Psujian.testAnnotation=com.xiwei.sujian.support.SujianSmallTest
+//   -Psujian.testAnnotation=com.xiwei.sujian.support.SujianMediumTest
+//   -Psujian.testAnnotation=com.xiwei.sujian.support.SujianLargeTest
+val sujianTestAnnotation: String? by project
+
+afterEvaluate {
+    if (sujianTestAnnotation != null) {
+        tasks.matching {
+            it.name.startsWith("connected") && it.name.endsWith("AndroidTest")
+        }.configureEach {
+            val testTask = this
+            if (testTask.hasProperty("instrumentationRunnerArguments")) {
+                @Suppress("UNCHECKED_CAST")
+                val args = testTask.property("instrumentationRunnerArguments") as MutableMap<String, String>
+                args["annotation"] = sujianTestAnnotation!!
+            }
+        }
+    }
+}
+
+tasks.register("printTestCategories") {
+    doLast {
+        println("""
+Sujian Android Test Categories:
+  All tests:        ./gradlew connectedNoAiDebugAndroidTest
+  Small tests:      ./gradlew connectedNoAiDebugAndroidTest -Psujian.testAnnotation=com.xiwei.sujian.support.SujianSmallTest
+  Medium tests:     ./gradlew connectedNoAiDebugAndroidTest -Psujian.testAnnotation=com.xiwei.sujian.support.SujianMediumTest
+  Large tests:      ./gradlew connectedNoAiDebugAndroidTest -Psujian.testAnnotation=com.xiwei.sujian.support.SujianLargeTest
+  JVM unit tests:   ./gradlew testNoAiDebugUnitTest
+  All verification: ./gradlew connectedNoAiDebugAndroidTest
+        """.trimIndent())
     }
 }

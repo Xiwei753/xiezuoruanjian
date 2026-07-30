@@ -4,63 +4,30 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasAnySibling
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.junit4.AndroidComposeTestRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.test.espresso.Espresso
 import androidx.test.espresso.matcher.ViewMatchers
-import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.xiwei.sujian.R
 import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.support.AndroidTestEnvironment
+import com.xiwei.sujian.support.BaseEditorTest
 import com.xiwei.sujian.support.ComposeWait
 import com.xiwei.sujian.support.EditorCommitTextAction
 import com.xiwei.sujian.support.EditorViewAssertions
-import com.xiwei.sujian.support.RestartableMainActivityRule
-import com.xiwei.sujian.support.TestSession
-import com.xiwei.sujian.ui.MainActivity
+import com.xiwei.sujian.support.SujianLargeTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
-import org.junit.Rule
 import org.junit.Test
-import org.junit.rules.RuleChain
-import org.junit.runner.RunWith
 
-@RunWith(AndroidJUnit4::class)
-class ChapterLifecycleTest {
-
-    private val activityRule = RestartableMainActivityRule { AndroidTestEnvironment.requireCurrentSession() }
-
-    private val _composeTestRule = AndroidComposeTestRule(
-        activityRule,
-        activityRule.composeActivityProvider
-    ).also { activityRule.setComposeTestRule(it) }
-
-    @get:Rule
-    val ruleChain: RuleChain = RuleChain
-        .outerRule(AndroidTestEnvironment.TestDependenciesRule())
-        .around(_composeTestRule)
-
-    private val composeTestRule get() = _composeTestRule
-
-    private fun getSession(): TestSession = AndroidTestEnvironment.requireCurrentSession()
-
-    private fun initTestData(): AndroidTestEnvironment.TestProjectData {
-        val context = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
-        val testData = AndroidTestEnvironment.ensureTestProjectAndVolume(context)
-        var vm: com.xiwei.sujian.ui.compose.SujianAppViewModel? = null
-        activityRule.onActivity { activity ->
-            vm = AndroidTestEnvironment.refreshViewModelProjects(activity)
-        }
-        AndroidTestEnvironment.awaitProjectLoaded(vm!!, testData.projectId)
-        return testData
-    }
+@SujianLargeTest
+class ChapterLifecycleTest : BaseEditorTest() {
 
     @Test
     fun createChapter_appearsInList() {
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
 
         navigateToTestVolume(testData)
 
@@ -78,7 +45,7 @@ class ChapterLifecycleTest {
 
     @Test
     fun createChapter_canOpenInEditor() {
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
 
         navigateToTestVolume(testData)
 
@@ -98,7 +65,7 @@ class ChapterLifecycleTest {
 
     @Test
     fun createTwoChapters_canSwitchBetween() {
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
         val session = getSession()
 
         navigateToTestVolume(testData)
@@ -157,7 +124,7 @@ class ChapterLifecycleTest {
     @Test
     fun twoChapters_textIsolation_noCrossContamination() {
         val session = getSession()
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
 
         navigateToTestVolume(testData)
 
@@ -255,37 +222,5 @@ class ChapterLifecycleTest {
             Espresso.onView(ViewMatchers.withId(R.id.editor_content))
                 .check(EditorViewAssertions.hasDisplayText(expectedContent))
         }
-    }
-
-    private fun waitForChapterByTitle(title: String, testData: AndroidTestEnvironment.TestProjectData): String {
-        val s = AndroidTestEnvironment.requireCurrentSession()
-        val repo = s.deps.workspaceRepository
-        var chapterId = ""
-        ComposeWait.waitUntil(composeTestRule, {
-            val chapters = repo.getChapters(testData.projectId, testData.volumeId)
-            val found = chapters.firstOrNull { it.title == title }
-            if (found != null) {
-                chapterId = found.id
-                true
-            } else {
-                false
-            }
-        }, timeoutMs = 15_000, message = { "Chapter '$title' not found in volume ${testData.volumeId}" })
-        return chapterId
-    }
-
-    private fun navigateToTestVolume(testData: AndroidTestEnvironment.TestProjectData) {
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationWorks, timeoutMs = 15_000)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationWorks).performClick()
-
-        val projectTag = SujianSemanticIds.project(testData.projectId)
-        ComposeWait.waitForTag(composeTestRule, projectTag, timeoutMs = 15_000)
-        composeTestRule.onNodeWithTag(projectTag).performClick()
-
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList, timeoutMs = 15_000)
-
-        val volumeTag = SujianSemanticIds.volume(testData.volumeId)
-        ComposeWait.waitForTag(composeTestRule, volumeTag, timeoutMs = 15_000)
-        composeTestRule.onNodeWithTag(volumeTag).performClick()
     }
 }

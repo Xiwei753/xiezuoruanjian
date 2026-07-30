@@ -1,6 +1,5 @@
 package com.xiwei.sujian.support
 
-import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.junit4.ComposeTestRule
 
@@ -12,11 +11,14 @@ object ComposeWait {
         tag: String,
         timeoutMs: Long = DEFAULT_TIMEOUT_MS
     ): SemanticsNodeInteraction {
+        var lastNodeCount = 0
         waitUntil(rule, {
             val nodes = rule.onAllNodes(androidx.compose.ui.test.hasTestTag(tag))
-            nodes.fetchSemanticsNodes().isNotEmpty()
+            val fetched = nodes.fetchSemanticsNodes()
+            lastNodeCount = fetched.size
+            fetched.isNotEmpty()
         }, timeoutMs) {
-            "Timed out waiting for tag: $tag"
+            "Timed out waiting for tag '$tag': last seen $lastNodeCount nodes with that tag"
         }
         return rule.onNode(androidx.compose.ui.test.hasTestTag(tag))
     }
@@ -27,11 +29,13 @@ object ComposeWait {
         timeoutMs: Long = 15_000L
     ) {
         var lastObservedState: String? = null
+        var lastNodeCount = 0
         waitUntil(rule, {
             val nodes = rule.onAllNodes(androidx.compose.ui.test.hasTestTag(
                 com.xiwei.sujian.designsystem.testing.SujianSemanticIds.EditorSaveStatus
             ))
             val fetched = nodes.fetchSemanticsNodes()
+            lastNodeCount = fetched.size
             if (fetched.isEmpty()) {
                 lastObservedState = null
                 false
@@ -43,7 +47,7 @@ object ComposeWait {
                 stateDesc == expectedState
             }
         }, timeoutMs) {
-            "Expected save status '$expectedState' but last observed was '$lastObservedState'"
+            "Expected save status '$expectedState' but last observed was '$lastObservedState' (nodes found: $lastNodeCount)"
         }
     }
 
@@ -66,6 +70,9 @@ object ComposeWait {
                 lastDiagnostic = e.message ?: "assertion failed"
                 false
             } catch (e: Exception) {
+                if (e is InterruptedException || e is java.util.concurrent.CancellationException) {
+                    throw e
+                }
                 lastDiagnostic = "${e.javaClass.simpleName}: ${e.message}"
                 false
             }
@@ -80,37 +87,13 @@ object ComposeWait {
         timeoutMs: Long = DEFAULT_TIMEOUT_MS,
         message: (() -> String)? = null
     ) {
-        var lastObserved: String? = null
-        var lastConditionError: AssertionError? = null
-        val wrappedCondition: () -> Boolean = {
-            try {
-                val result = condition()
-                if (!result) {
-                    lastObserved = "condition returned false"
-                }
-                result
-            } catch (e: AssertionError) {
-                lastConditionError = e
-                lastObserved = e.message
-                false
-            }
-        }
         try {
-            rule.waitUntil(timeoutMs, wrappedCondition)
-        } catch (e: androidx.compose.ui.test.ComposeTimeoutException) {
-            val diag = message?.let { "${it()}. " }.orEmpty()
-            val conditionDiag = lastConditionError?.let {
-                "Condition threw: ${it.javaClass.simpleName}: ${it.message}"
-            }.orEmpty()
-            val observedDiag = lastObserved?.let { "Last observed: $it" }.orEmpty()
-            val timeoutDiag = "Timeout after ${timeoutMs}ms"
-            val combined = buildString {
-                append(diag)
-                if (conditionDiag.isNotEmpty()) append(conditionDiag + ". ")
-                if (observedDiag.isNotEmpty() && conditionDiag.isEmpty()) append(observedDiag + ". ")
-                append(timeoutDiag)
+            rule.waitUntil(timeoutMs, condition)
+        } catch (e: AssertionError) {
+            if (message != null) {
+                throw AssertionError("${message()}. Original: ${e.message}", e)
             }
-            throw AssertionError(combined, e)
+            throw e
         }
     }
 }

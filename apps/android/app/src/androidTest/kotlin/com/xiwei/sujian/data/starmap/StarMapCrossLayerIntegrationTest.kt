@@ -6,6 +6,7 @@ import com.xiwei.sujian.data.StarMapBridge
 import com.xiwei.sujian.model.StarMapGraphNode
 import com.xiwei.sujian.model.StarMapNodeKind
 import com.xiwei.sujian.support.AndroidTestEnvironment
+import com.xiwei.sujian.support.SujianMediumTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -16,6 +17,7 @@ import org.junit.runner.RunWith
 import java.util.UUID
 
 @RunWith(AndroidJUnit4::class)
+@SujianMediumTest
 class StarMapCrossLayerIntegrationTest {
 
     @get:Rule

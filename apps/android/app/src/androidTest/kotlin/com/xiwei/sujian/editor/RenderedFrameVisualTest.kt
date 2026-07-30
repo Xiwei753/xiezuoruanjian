@@ -1,15 +1,9 @@
 package com.xiwei.sujian.editor
 
 import android.graphics.RectF
-import androidx.compose.ui.test.junit4.AndroidComposeTestRule
-import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performTextReplacement
 import androidx.test.espresso.Espresso
 import androidx.test.espresso.matcher.ViewMatchers
-import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.xiwei.sujian.R
-import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import com.xiwei.sujian.editor.v2.visual.CaptureMethod
@@ -19,56 +13,23 @@ import com.xiwei.sujian.editor.v2.visual.ManualAnimationTimeSource
 import com.xiwei.sujian.editor.v2.visual.TransactionIdSource
 import com.xiwei.sujian.editor.v2.visual.TransactionState
 import com.xiwei.sujian.editor.v2.visual.VisualFrameSnapshot
-import com.xiwei.sujian.support.AndroidTestEnvironment
-import com.xiwei.sujian.support.ComposeWait
+import com.xiwei.sujian.support.BaseEditorTest
 import com.xiwei.sujian.support.EditorBitmapCapture
 import com.xiwei.sujian.support.EditorBitmapCapture.CapturedFrame
 import com.xiwei.sujian.support.EditorCommitTextAction
 import com.xiwei.sujian.support.EditorCompositionAction
 import com.xiwei.sujian.support.EditorReplaceRangeAction
 import com.xiwei.sujian.support.EditorViewAssertions
-import com.xiwei.sujian.support.RestartableMainActivityRule
-import com.xiwei.sujian.support.TestSession
-import com.xiwei.sujian.ui.MainActivity
+import com.xiwei.sujian.support.SujianMediumTest
 import org.junit.Assert.*
-import org.junit.Rule
 import org.junit.Test
-import org.junit.rules.RuleChain
-import org.junit.runner.RunWith
 
-@RunWith(AndroidJUnit4::class)
-class RenderedFrameVisualTest {
-
-    private val manualTimeSource = ManualAnimationTimeSource()
-    private val transactionIdSource = TransactionIdSource()
-    private val manualFrameClock = WindowDisplayFrameClock.ManualFrameClock()
-
-    private val activityRule = RestartableMainActivityRule { AndroidTestEnvironment.requireCurrentSession() }
-
-    private val _composeTestRule = AndroidComposeTestRule(
-        activityRule,
-        activityRule.composeActivityProvider
-    ).also { activityRule.setComposeTestRule(it) }
-
-    @get:Rule
-    val ruleChain: RuleChain = RuleChain
-        .outerRule(AndroidTestEnvironment.TestDependenciesRule(manualTimeSource, transactionIdSource, manualFrameClock))
-        .around(_composeTestRule)
-
-    private val composeTestRule get() = _composeTestRule
-
-    private fun getSession(): TestSession = AndroidTestEnvironment.requireCurrentSession()
-
-    private fun initTestData(): AndroidTestEnvironment.TestProjectData {
-        val context = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
-        val testData = AndroidTestEnvironment.ensureTestProjectAndVolume(context)
-        var vm: com.xiwei.sujian.ui.compose.SujianAppViewModel? = null
-        activityRule.onActivity { activity ->
-            vm = AndroidTestEnvironment.refreshViewModelProjects(activity)
-        }
-        AndroidTestEnvironment.awaitProjectLoaded(vm!!, testData.projectId)
-        return testData
-    }
+@SujianMediumTest
+class RenderedFrameVisualTest : BaseEditorTest(
+    manualTimeSource = ManualAnimationTimeSource(),
+    transactionIdSource = TransactionIdSource(),
+    manualFrameClock = WindowDisplayFrameClock.ManualFrameClock()
+) {
 
     private fun dispatchManualFrame() {
         val frameTimeNanos = manualTimeSource.nowNanos()
@@ -128,7 +89,7 @@ class RenderedFrameVisualTest {
 
     @Test
     fun insertText_startFrame_showsRenderedContent() {
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧插入测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -151,7 +112,7 @@ class RenderedFrameVisualTest {
 
     @Test
     fun insertText_midFrame_showsIntermediateRendering() {
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧中间帧测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -182,7 +143,7 @@ class RenderedFrameVisualTest {
 
     @Test
     fun deleteRange_startFrame_showsOriginalContent() {
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧删除测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -222,7 +183,7 @@ class RenderedFrameVisualTest {
 
     @Test
     fun unicodeInsert_renderedBitmapShowsContent() {
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧Unicode测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -249,7 +210,7 @@ class RenderedFrameVisualTest {
 
     @Test
     fun compositionUpdate_renderedBitmapShowsPreedit() {
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧composition测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -274,7 +235,7 @@ class RenderedFrameVisualTest {
 
     @Test
     fun insertThenDelete_contentBoundsShrink() {
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧插入删除测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -307,7 +268,7 @@ class RenderedFrameVisualTest {
 
     @Test
     fun multilineInsert_renderedBitmapShowsMultipleLines() {
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧多行测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -333,7 +294,7 @@ class RenderedFrameVisualTest {
 
     @Test
     fun rapidInput_eachFrameShowsProgressiveContent() {
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧连续输入测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -371,7 +332,7 @@ class RenderedFrameVisualTest {
 
     @Test
     fun emptyEditor_showsNoTextContent() {
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧空编辑器测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -386,7 +347,7 @@ class RenderedFrameVisualTest {
 
     @Test
     fun insertText_fiveProgressPoints_allHaveRenderedContent() {
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧五点测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -412,7 +373,7 @@ class RenderedFrameVisualTest {
 
     @Test
     fun deleteRange_fiveProgressPoints_allHaveRenderedContent() {
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧删除五点测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -455,7 +416,7 @@ class RenderedFrameVisualTest {
 
     @Test
     fun compositionUpdate_fiveProgressPoints_allHaveRenderedContent() {
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧composition五点测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -481,7 +442,7 @@ class RenderedFrameVisualTest {
 
     @Test
     fun unicodeInsert_fiveProgressPoints_allHaveRenderedContent() {
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧Unicode五点测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -508,7 +469,7 @@ class RenderedFrameVisualTest {
 
     @Test
     fun multilineInsert_fiveProgressPoints_allHaveRenderedContent() {
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧多行五点测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -541,7 +502,7 @@ class RenderedFrameVisualTest {
 
     @Test
     fun rapidInput_fiveProgressPoints_allHaveRenderedContent() {
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧连续输入五点测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -616,7 +577,7 @@ class RenderedFrameVisualTest {
 
     @Test
     fun insertText_pixelLevel_cursorRegionHasContent() {
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧光标像素测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -650,7 +611,7 @@ class RenderedFrameVisualTest {
 
     @Test
     fun insertText_crossFrame_movementDirectionIsRightward() {
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧位移方向测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -697,7 +658,7 @@ class RenderedFrameVisualTest {
 
     @Test
     fun deleteRange_crossFrame_movementDirectionIsLeftward() {
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧删除位移测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -736,7 +697,7 @@ class RenderedFrameVisualTest {
 
     @Test
     fun insertText_cursorLayerAboveText_notCovered() {
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧光标层级测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -788,7 +749,7 @@ class RenderedFrameVisualTest {
 
     @Test
     fun insertText_backgroundDoesNotCoverContent() {
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧背景覆盖测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -840,7 +801,7 @@ class RenderedFrameVisualTest {
 
     @Test
     fun insertText_finalFrameResourcesNotRecycledBeforeDraw() {
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
         openTestChapter("最终帧插入生命周期测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -894,7 +855,7 @@ class RenderedFrameVisualTest {
 
     @Test
     fun deleteRange_finalFrameResourcesNotRecycledBeforeDraw() {
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
         openTestChapter("最终帧删除生命周期测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -955,7 +916,7 @@ class RenderedFrameVisualTest {
 
     @Test
     fun compositionUpdate_finalFrameResourcesNotRecycledBeforeDraw() {
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
         openTestChapter("最终帧预输入生命周期测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -1009,7 +970,7 @@ class RenderedFrameVisualTest {
 
     @Test
     fun rapidInput_finalFrameResourcesNotRecycledBeforeDraw() {
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
         openTestChapter("最终帧连续输入生命周期测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -1075,7 +1036,7 @@ class RenderedFrameVisualTest {
 
     @Test
     fun deleteRange_cursorRemainsVisibleDuringAnimation() {
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧删除光标可见测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -1122,7 +1083,7 @@ class RenderedFrameVisualTest {
 
     @Test
     fun insertText_pixelCopy_showsRenderedContent() {
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧PixelCopy测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -1146,7 +1107,7 @@ class RenderedFrameVisualTest {
 
     @Test
     fun insertText_softwareDraw_showsRenderedContent() {
-        val testData = initTestData()
+        val testData = getSession().ensureTestProjectData()
         openTestChapter("渲染帧软件绘制测试", testData)
 
         manualTimeSource.advanceTo(0L)
@@ -1427,70 +1388,4 @@ class RenderedFrameVisualTest {
         )
     }
 
-    private fun openTestChapter(chapterTitle: String, testData: AndroidTestEnvironment.TestProjectData): String {
-        navigateToTestVolume(testData)
-
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceCreateChapter, timeoutMs = 15_000)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.WorkspaceCreateChapter).performClick()
-
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.ChapterTitleInput)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.ChapterTitleInput).performTextReplacement(chapterTitle)
-
-        composeTestRule.onNodeWithTag(SujianSemanticIds.DialogConfirm).performClick()
-
-        val chapterId = waitForChapterByTitle(chapterTitle, testData)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterId)).performClick()
-
-        waitForEditorReady(testData.projectId, testData.volumeId, chapterId)
-
-        return chapterId
-    }
-
-    private fun navigateToTestVolume(testData: AndroidTestEnvironment.TestProjectData) {
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationWorks, timeoutMs = 15_000)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationWorks).performClick()
-
-        val projectTag = SujianSemanticIds.project(testData.projectId)
-        ComposeWait.waitForTag(composeTestRule, projectTag, timeoutMs = 15_000)
-        composeTestRule.onNodeWithTag(projectTag).performClick()
-
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList, timeoutMs = 15_000)
-
-        val volumeTag = SujianSemanticIds.volume(testData.volumeId)
-        ComposeWait.waitForTag(composeTestRule, volumeTag, timeoutMs = 15_000)
-        composeTestRule.onNodeWithTag(volumeTag).performClick()
-    }
-
-    private fun waitForEditorReady(projectId: String, volumeId: String, chapterId: String) {
-        ComposeWait.waitForEspressoViewCondition(
-            composeTestRule,
-            EditorViewAssertions.isEditorReady(),
-            timeoutMs = 15_000
-        ) { "Editor did not become ready for chapter $chapterId" }
-
-        val expectedTargetId = "chapter-body:$projectId:$volumeId:$chapterId"
-        var lastTargetId: String? = null
-        ComposeWait.waitUntil(composeTestRule, {
-            val coordinator = AndroidTestEnvironment.requireCurrentSession().deps.coordinator
-            lastTargetId = coordinator.activeTargetId
-            coordinator.activeTargetId == expectedTargetId
-        }, timeoutMs = 10_000, message = { "activeTargetId should be $expectedTargetId but was $lastTargetId" })
-    }
-
-    private fun waitForChapterByTitle(title: String, testData: AndroidTestEnvironment.TestProjectData): String {
-        val s = AndroidTestEnvironment.requireCurrentSession()
-        val repo = s.deps.workspaceRepository
-        var chapterId = ""
-        ComposeWait.waitUntil(composeTestRule, {
-            val chapters = repo.getChapters(testData.projectId, testData.volumeId)
-            val found = chapters.firstOrNull { it.title == title }
-            if (found != null) {
-                chapterId = found.id
-                true
-            } else {
-                false
-            }
-        }, timeoutMs = 15_000, message = { "Chapter '$title' not found" })
-        return chapterId
-    }
 }

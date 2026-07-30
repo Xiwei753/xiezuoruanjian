@@ -33,7 +33,8 @@ class TestSession private constructor(
     private val context: Context,
     private val animationTimeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource,
     private val transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource,
-    private val manualFrameClock: com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock.ManualFrameClock?
+    private val manualFrameClock: com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock.ManualFrameClock?,
+    var testProjectData: AndroidTestEnvironment.TestProjectData? = null
 ) {
     private val prefsFileNames = listOf(
         "sujian_diagnostics_$prefsSuffix",
@@ -47,7 +48,8 @@ class TestSession private constructor(
             context: Context,
             animationTimeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource = com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
             transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource = com.xiwei.sujian.editor.v2.visual.TransactionIdSource(),
-            manualFrameClock: com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock.ManualFrameClock? = null
+            manualFrameClock: com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock.ManualFrameClock? = null,
+            seedProject: Boolean = false
         ): TestSession {
             val appContext = context.applicationContext
             val sessionId = UUID.randomUUID().toString()
@@ -78,6 +80,14 @@ class TestSession private constructor(
                 manualFrameClock = manualFrameClock
             )
 
+            val projectedData = if (seedProject) {
+                try {
+                    AndroidTestEnvironment.ensureTestProjectAndVolume(appContext, deps)
+                } catch (e: Exception) {
+                    null
+                }
+            } else null
+
             return TestSession(
                 testRootDir = testRootDir,
                 workspaceDir = workspaceDir,
@@ -86,7 +96,8 @@ class TestSession private constructor(
                 context = appContext,
                 animationTimeSource = animationTimeSource,
                 transactionIdSource = transactionIdSource,
-                manualFrameClock = manualFrameClock
+                manualFrameClock = manualFrameClock,
+                testProjectData = projectedData
             )
         }
     }
@@ -103,6 +114,13 @@ class TestSession private constructor(
         )
         SujianAppDependencies.setTestProvider { _ -> depsHolder }
         return depsHolder
+    }
+
+    fun ensureTestProjectData(): AndroidTestEnvironment.TestProjectData {
+        if (testProjectData == null) {
+            testProjectData = AndroidTestEnvironment.ensureTestProjectAndVolume(context, deps)
+        }
+        return testProjectData!!
     }
 
     fun releaseSession() {
@@ -341,9 +359,10 @@ object AndroidTestEnvironment {
         context: Context,
         animationTimeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource = com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
         transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource = com.xiwei.sujian.editor.v2.visual.TransactionIdSource(),
-        manualFrameClock: com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock.ManualFrameClock? = null
+        manualFrameClock: com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock.ManualFrameClock? = null,
+        seedProject: Boolean = false
     ): TestSession {
-        val session = TestSession.create(context, animationTimeSource, transactionIdSource, manualFrameClock)
+        val session = TestSession.create(context, animationTimeSource, transactionIdSource, manualFrameClock, seedProject)
         currentSession = session
         return session
     }
@@ -397,7 +416,11 @@ object AndroidTestEnvironment {
         val deadlineMs = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadlineMs) {
             if (vm.projects.any { it.id == expectedProjectId }) return
-            Thread.sleep(100)
+            try {
+                Thread.sleep(50)
+            } catch (_: InterruptedException) {
+                throw AssertionError("Interrupted while waiting for project $expectedProjectId")
+            }
         }
         val observedIds = vm.projects.map { it.id }
         val observedEntries = vm.projects.joinToString { "${it.id}:${it.title}" }
@@ -411,17 +434,20 @@ object AndroidTestEnvironment {
     class TestDependenciesRule(
         private val animationTimeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource = com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
         private val transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource = com.xiwei.sujian.editor.v2.visual.TransactionIdSource(),
-        val manualFrameClock: com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock.ManualFrameClock? = null
+        val manualFrameClock: com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock.ManualFrameClock? = null,
+        val seedProject: Boolean = true
     ) : TestRule {
         override fun apply(base: Statement, description: Description): Statement {
             return object : Statement() {
                 override fun evaluate() {
                     val instrumentation = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
                     val ctx = instrumentation.targetContext
-                    val session = createSession(ctx, animationTimeSource, transactionIdSource, manualFrameClock)
+                    val session = createSession(ctx, animationTimeSource, transactionIdSource, manualFrameClock, seedProject)
                     SujianAppDependencies.setTestProvider { _ -> session.deps }
-                    try {
+                    if (!seedProject) {
                         ensureTestProjectAndVolume(ctx, session)
+                    }
+                    try {
                         base.evaluate()
                     } finally {
                         SujianAppDependencies.setTestProvider(null)

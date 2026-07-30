@@ -5,11 +5,13 @@ import android.graphics.Color
 import android.graphics.Rect
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.xiwei.sujian.editor.v2.visual.ColorDistance
+import com.xiwei.sujian.support.SujianSmallTest
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
+@SujianSmallTest
 class CapturedFrameBoundsTest {
 
     private fun makeFrame(
