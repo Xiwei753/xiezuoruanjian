@@ -210,13 +210,16 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      - name: Set host SELinux to permissive (for SwiftShader JIT)
+        run: sudo setenforce 0 || echo "SELinux not available, continuing"
+
       - name: Run instrumented tests on x86_64 emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
           arch: x86_64
           profile: pixel_6
-          emulator-options: -no-snapshot-save -no-window -gpu guest -noaudio -no-boot-anim -selinux permissive -feature -Vulkan
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -selinux permissive -feature -Vulkan
           disable-animations: true
           script: |
             adb shell getprop ro.product.cpu.abi
