@@ -469,8 +469,8 @@ class WorkbenchReducerTest {
     fun resizePanel_syncsDockGroupSizes() {
         val expanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
         val result = WorkbenchReducer.reduce(expanded, WorkbenchAction.ResizePanel(WorkbenchPanelId.ChapterNavigator, 400f))
-        val groupSize = result.dockGroupSizes["left-nav"]
-        val panelSize = result.panels[WorkbenchPanelId.ChapterNavigator]?.sizeDp
+        val groupSize = result.dockGroupSizes["left-nav"]!!
+        val panelSize = result.panels[WorkbenchPanelId.ChapterNavigator]!!.sizeDp
         assertEquals(panelSize, groupSize, 0.01f)
     }
 
@@ -478,8 +478,8 @@ class WorkbenchReducerTest {
     fun resizePanelDelta_syncsDockGroupSizes() {
         val expanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
         val result = WorkbenchReducer.reduce(expanded, WorkbenchAction.ResizePanelDelta(WorkbenchPanelId.ChapterNavigator, 50f))
-        val groupSize = result.dockGroupSizes["left-nav"]
-        val panelSize = result.panels[WorkbenchPanelId.ChapterNavigator]?.sizeDp
+        val groupSize = result.dockGroupSizes["left-nav"]!!
+        val panelSize = result.panels[WorkbenchPanelId.ChapterNavigator]!!.sizeDp
         assertEquals(panelSize, groupSize, 0.01f)
     }
 
