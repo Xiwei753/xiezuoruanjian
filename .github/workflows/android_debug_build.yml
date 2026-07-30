@@ -216,7 +216,7 @@ jobs:
           api-level: 34
           arch: x86_64
           profile: pixel_6
-          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -selinux permissive -feature -Vulkan
           disable-animations: true
           script: |
             adb shell getprop ro.product.cpu.abi
