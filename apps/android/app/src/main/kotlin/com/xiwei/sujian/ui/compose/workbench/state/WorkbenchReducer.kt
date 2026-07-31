@@ -32,7 +32,6 @@ object WorkbenchReducer {
             is WorkbenchAction.CollapsePanel -> collapsePanel(state, action.panelId)
             is WorkbenchAction.HidePanel -> hidePanel(state, action.panelId)
             is WorkbenchAction.MovePanel -> movePanel(state, action.panelId, action.zone)
-            is WorkbenchAction.ResizePanel -> resizePanel(state, action.panelId, action.sizeDp, action.availableWidthDp)
             is WorkbenchAction.ActivateTab -> activateTab(state, action.tabGroupId, action.panelId)
             is WorkbenchAction.FloatPanel -> floatPanel(state, action.panelId)
             is WorkbenchAction.DockPanel -> dockPanel(state, action.panelId, action.zone)
@@ -48,7 +47,6 @@ object WorkbenchReducer {
             is WorkbenchAction.ResizeFloatingPanel -> resizeFloatingPanel(state, action.panelId, action.widthDp, action.heightDp)
             is WorkbenchAction.FloatPanelAt -> floatPanelAt(state, action.panelId, action.x, action.y)
             is WorkbenchAction.ActivateOverlayPanel -> activateOverlayPanel(state, action.panelId)
-            is WorkbenchAction.ResizePanelDelta -> resizePanelDelta(state, action.panelId, action.deltaDp, action.availableWidthDp)
             is WorkbenchAction.ResizeDockSplit -> resizeDockSplit(state, action.zone, action.beforeGroupId, action.afterGroupId, action.deltaDp, action.availableMainAxisDp)
             is WorkbenchAction.ResizeDockZone -> resizeDockZone(state, action.zone, action.deltaDp, action.availableMainAxisDp, action.actualOtherSideWidthDp)
             is WorkbenchAction.ClampFloatingPanels -> clampFloatingPanels(state, action.maxWidthDp, action.maxHeightDp)
@@ -130,39 +128,6 @@ object WorkbenchReducer {
         return updatePanel(state, panel.copy(zone = zone), markCustom = true)
     }
 
-    private fun resizePanel(state: WorkbenchLayoutState, panelId: WorkbenchPanelId, sizeDp: Float, availableWidthDp: Float): WorkbenchLayoutState {
-        val panel = state.panels[panelId] ?: return state
-        val clamped = when (panel.zone) {
-            DockZone.Left -> {
-                val otherSideWidth = state.actualSideWidthDp(DockZone.Right)
-                val maxForEditor = availableWidthDp - EDITOR_MIN_DP - otherSideWidth
-                if (maxForEditor < SIDE_PANEL_MIN_DP) return state
-                sizeDp.coerceIn(SIDE_PANEL_MIN_DP, min(SIDE_PANEL_MAX_DP, maxForEditor))
-            }
-            DockZone.Right -> {
-                val otherSideWidth = state.actualSideWidthDp(DockZone.Left)
-                val maxForEditor = availableWidthDp - EDITOR_MIN_DP - otherSideWidth
-                if (maxForEditor < SIDE_PANEL_MIN_DP) return state
-                sizeDp.coerceIn(SIDE_PANEL_MIN_DP, min(SIDE_PANEL_MAX_DP, maxForEditor))
-            }
-            DockZone.Bottom -> {
-                val maxBottomDp = availableWidthDp * BOTTOM_PANEL_MAX_RATIO
-                sizeDp.coerceIn(BOTTOM_PANEL_MIN_DP, maxBottomDp)
-            }
-            DockZone.Floating -> sizeDp
-        }
-        val updatedDockZoneSizeDp = if (panel.zone != DockZone.Floating) {
-            state.dockZoneSizeDp + (panel.zone to clamped)
-        } else {
-            state.dockZoneSizeDp
-        }
-        return state.copy(
-            panels = state.panels + (panel.id to panel.copy(sizeDp = clamped)),
-            dockZoneSizeDp = updatedDockZoneSizeDp,
-            preset = WorkbenchPreset.Custom
-        )
-    }
-
     private fun activateTab(state: WorkbenchLayoutState, tabGroupId: String, panelId: WorkbenchPanelId): WorkbenchLayoutState {
         val panel = state.panels[panelId] ?: return state
         if (panel.tabGroupId != tabGroupId) return state
@@ -226,11 +191,10 @@ object WorkbenchReducer {
     private fun dockPanelAsNewGroup(state: WorkbenchLayoutState, panelId: WorkbenchPanelId, zone: DockZone, insertionOrder: Int): WorkbenchLayoutState {
         val panel = state.panels[panelId] ?: return state
         val newTabGroupId = generateDockGroupId(state, zone)
-        val existingGroupsInZone = visibleDockGroupsByZone(state, zone)
-        val maxOrder = existingGroupsInZone.maxOfOrNull { state.dockGroupMeta[it.id]?.order ?: it.order } ?: -1
+        val zoneMeta = state.dockGroupMeta.values.filter { it.zone == zone }.sortedBy { it.order }.toMutableList()
+        val maxOrder = zoneMeta.maxOfOrNull { it.order } ?: -1
         val newOrder = if (insertionOrder in 0..maxOrder + 1) insertionOrder else maxOrder + 1
         val newGroupMeta = DockGroupMeta(newTabGroupId, zone, maxOrder + 1)
-        val zoneMeta = state.dockGroupMeta.values.filter { it.zone == zone }.sortedBy { it.order }.toMutableList()
         zoneMeta.add(newGroupMeta)
         val insertPos = newOrder.coerceIn(0, zoneMeta.size - 1)
         zoneMeta.remove(newGroupMeta)
@@ -445,11 +409,6 @@ object WorkbenchReducer {
             activeOverlayPanelId = panelId,
             preset = WorkbenchPreset.Custom
         )
-    }
-
-    private fun resizePanelDelta(state: WorkbenchLayoutState, panelId: WorkbenchPanelId, deltaDp: Float, availableWidthDp: Float): WorkbenchLayoutState {
-        val panel = state.panels[panelId] ?: return state
-        return resizePanel(state, panelId, panel.sizeDp + deltaDp, availableWidthDp)
     }
 
     private fun visibleDockGroupsByZone(state: WorkbenchLayoutState, zone: DockZone): List<DockGroupState> {

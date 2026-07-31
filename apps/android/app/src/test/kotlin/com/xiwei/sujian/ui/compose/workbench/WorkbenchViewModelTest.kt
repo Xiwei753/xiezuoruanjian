@@ -141,25 +141,18 @@ class WorkbenchViewModelTest {
     }
 
     @Test
-    fun dispatch_resizePanel_updatesSizeInMemory() {
-        viewModel.dispatch(WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
-        viewModel.dispatch(WorkbenchAction.ResizePanel(WorkbenchPanelId.ChapterNavigator, 400f))
-        val size = viewModel.layoutState.panels[WorkbenchPanelId.ChapterNavigator]?.sizeDp
-        assertEquals(400f, size!!, 0.01f)
-    }
-
-    @Test
-    fun dispatchDeferredPersist_resizePanel_updatesSizeInMemory() {
-        viewModel.dispatchDeferredPersist(WorkbenchAction.ResizePanel(WorkbenchPanelId.ChapterNavigator, 380f))
-        val size = viewModel.layoutState.panels[WorkbenchPanelId.ChapterNavigator]?.sizeDp
-        assertEquals(380f, size!!, 0.01f)
-    }
-
-    @Test
     fun dispatchDeferredPersist_resizeDockSplit_updatesWeightsInMemory() {
-        viewModel.dispatchDeferredPersist(WorkbenchAction.ResizeDockSplit(DockZone.Left, "left-nav", "left-extra", 50f, 320f))
-        val weights = viewModel.layoutState.dockGroupWeights
-        assertTrue(weights.containsKey("left-nav"))
+        viewModel.dispatch(WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        viewModel.dispatch(WorkbenchAction.DockPanelAsNewGroup(WorkbenchPanelId.ProjectNavigator, DockZone.Left, 1))
+        val leftNavWeight = viewModel.layoutState.dockGroupWeights["left-nav"] ?: 1f
+        val newGroupId = viewModel.layoutState.panels[WorkbenchPanelId.ProjectNavigator]?.tabGroupId ?: ""
+        val newGroupWeight = viewModel.layoutState.dockGroupWeights[newGroupId] ?: 1f
+        val totalWeight = leftNavWeight + newGroupWeight
+        viewModel.dispatchDeferredPersist(WorkbenchAction.ResizeDockSplit(DockZone.Left, "left-nav", newGroupId, 50f, 600f))
+        val afterLeftNav = viewModel.layoutState.dockGroupWeights["left-nav"] ?: 1f
+        val afterNewGroup = viewModel.layoutState.dockGroupWeights[newGroupId] ?: 1f
+        assertTrue("left-nav weight must change after resize", afterLeftNav != leftNavWeight)
+        assertEquals("total weight must be preserved", totalWeight, afterLeftNav + afterNewGroup, 0.01f)
     }
 
     @Test
@@ -259,11 +252,17 @@ class WorkbenchViewModelTest {
     }
 
     @Test
-    fun dispatchDeferredPersist_cancelsPreviousJob() {
+    fun dispatchDeferredPersist_cancelsPreviousJob() = runViewModelTest {
+        val store = RecordingStore(emptyMap())
+        viewModel.initialize(store, testKey)
+        advanceUntilIdle()
         viewModel.dispatchDeferredPersist(WorkbenchAction.ResizeDockZone(DockZone.Left, 10f, 1200f))
         viewModel.dispatchDeferredPersist(WorkbenchAction.ResizeDockZone(DockZone.Left, 20f, 1200f))
-        val zoneSize = viewModel.layoutState.dockZoneSizeDp[DockZone.Left]
-        assertNotNull(zoneSize)
+        advanceUntilIdle()
+        val savesForTestKey = store.saves.savesFor(testKey)
+        assertTrue("deferred persist should eventually save", savesForTestKey.isNotEmpty())
+        val finalLeftSize = viewModel.layoutState.dockZoneSizeDp[DockZone.Left]
+        assertTrue("saved layout must reflect the final (second) resize", savesForTestKey.last().dockZoneSizeDp[DockZone.Left] == finalLeftSize)
     }
 
     @Test

@@ -58,7 +58,7 @@ class WorkbenchViewModel(
             return
         }
         layoutState = WorkbenchReducer.reduce(layoutState, action)
-        if (action !is WorkbenchAction.ResizePanel && action !is WorkbenchAction.ResizePanelDelta && action !is WorkbenchAction.MoveFloatingPanel && action !is WorkbenchAction.ClampFloatingPanels) {
+        if (action !is WorkbenchAction.MoveFloatingPanel && action !is WorkbenchAction.ClampFloatingPanels) {
             schedulePersist()
         }
     }

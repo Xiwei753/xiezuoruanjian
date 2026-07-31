@@ -177,7 +177,6 @@ private fun WorkbenchWorkspaceContent(
         layoutState = layoutState,
         onAction = { action ->
             when (action) {
-                is WorkbenchAction.ResizePanel,
                 is WorkbenchAction.MoveFloatingPanel,
                 is WorkbenchAction.ResizeFloatingPanel,
                 is WorkbenchAction.ResizeDockSplit,
