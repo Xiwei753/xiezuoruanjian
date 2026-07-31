@@ -1,6 +1,6 @@
 package com.xiwei.sujian.editor
 
-import androidx.compose.ui.test.junit4.AndroidComposeTestRule
+import androidx.compose.ui.test.junit4.v2.AndroidComposeTestRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
@@ -28,7 +28,7 @@ class AccessibilitySetTextTest {
 
     private val _composeTestRule = AndroidComposeTestRule(
         activityRule,
-        activityRule.composeActivityProvider
+        activityProvider = activityRule.composeActivityProvider
     ).also { activityRule.setComposeTestRule(it) }
 
     @get:Rule
