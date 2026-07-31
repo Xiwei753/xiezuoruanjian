@@ -75,6 +75,7 @@ class SujianEditorView @JvmOverloads constructor(
         id = R.id.editor_content
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
         isFocusable = true
+        isFocusableInTouchMode = true
     }
 
     fun loadText(text: String, cursorUtf8: Int) {

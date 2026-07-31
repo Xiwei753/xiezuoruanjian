@@ -1,6 +1,6 @@
 package com.xiwei.sujian.designsystem.component
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -40,10 +40,11 @@ fun SujianSwitchRow(
         modifier = modifier
             .fillMaxWidth()
             .then(if (semanticId != null) Modifier.testTag(semanticId) else Modifier)
-            .clickable(
+            .toggleable(
+                value = checked,
                 enabled = enabled,
                 role = Role.Switch,
-                onClick = { onCheckedChange(!checked) },
+                onValueChange = onCheckedChange,
             )
             .semantics {
                 stateDescription = if (checked) "已开启" else "已关闭"
