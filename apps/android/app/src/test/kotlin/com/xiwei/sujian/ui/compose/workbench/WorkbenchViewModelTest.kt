@@ -158,7 +158,7 @@ class WorkbenchViewModelTest {
         viewModel.dispatch(WorkbenchAction.FloatPanelAt(WorkbenchPanelId.AiAssistant, -100f, -50f))
         viewModel.dispatch(WorkbenchAction.ClampFloatingPanels(800f, 600f))
         val panel = viewModel.layoutState.panels[WorkbenchPanelId.AiAssistant]!!
-        assertTrue(panel.floatingX >= 0f)
+        assertTrue(panel.floatingX >= -(panel.floatingWidthDp - 32f))
         assertTrue(panel.floatingY >= 0f)
     }
 
@@ -167,7 +167,7 @@ class WorkbenchViewModelTest {
         viewModel.dispatch(WorkbenchAction.FloatPanelAt(WorkbenchPanelId.AiAssistant, -100f, -50f))
         viewModel.onWindowSizeChanged(800f, 600f)
         val panel = viewModel.layoutState.panels[WorkbenchPanelId.AiAssistant]!!
-        assertTrue(panel.floatingX >= 0f)
+        assertTrue(panel.floatingX >= -(panel.floatingWidthDp - 32f))
         assertTrue(panel.floatingY >= 0f)
     }
 }

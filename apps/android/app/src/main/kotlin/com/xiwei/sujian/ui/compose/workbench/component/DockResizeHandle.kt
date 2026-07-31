@@ -13,13 +13,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.ui.compose.workbench.model.DockZone
-import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelId
 
 @Composable
 fun DockResizeHandle(
     zone: DockZone,
-    panelId: WorkbenchPanelId,
-    onResizeDelta: (panelId: WorkbenchPanelId, deltaDp: Float) -> Unit,
+    onResizeZoneDelta: (zone: DockZone, deltaDp: Float) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val handleColor = MaterialTheme.colorScheme.outlineVariant
@@ -35,7 +33,7 @@ fun DockResizeHandle(
     Box(
         modifier = handleModifier
             .background(handleColor)
-            .pointerInput(zone, panelId) {
+            .pointerInput(zone) {
                 detectDragGestures(
                     onDragEnd = {},
                     onDragCancel = {},
@@ -47,7 +45,7 @@ fun DockResizeHandle(
                         DockZone.Floating -> dragAmount.x / density.density
                     }
                     if (deltaDp != 0f) {
-                        onResizeDelta(panelId, deltaDp)
+                        onResizeZoneDelta(zone, deltaDp)
                     }
                     change.consume()
                 }

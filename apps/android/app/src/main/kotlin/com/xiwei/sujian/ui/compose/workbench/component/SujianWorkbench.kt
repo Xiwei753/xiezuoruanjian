@@ -206,8 +206,7 @@ fun SujianWorkbench(
                     )
                     DockResizeHandle(
                         zone = DockZone.Left,
-                        panelId = leftExpanded.first().id,
-                        onResizeDelta = { id, delta -> onAction(WorkbenchAction.ResizePanelDelta(id, delta, maxWidthDp)) },
+                        onResizeZoneDelta = { z, delta -> onAction(WorkbenchAction.ResizeDockZone(z, delta, maxWidthDp)) },
                         modifier = Modifier.fillMaxHeight(),
                     )
                 }
@@ -227,8 +226,7 @@ fun SujianWorkbench(
                 if (showRightDock) {
                     DockResizeHandle(
                         zone = DockZone.Right,
-                        panelId = rightForDock.first().id,
-                        onResizeDelta = { id, delta -> onAction(WorkbenchAction.ResizePanelDelta(id, delta, maxWidthDp)) },
+                        onResizeZoneDelta = { z, delta -> onAction(WorkbenchAction.ResizeDockZone(z, delta, maxWidthDp)) },
                         modifier = Modifier.fillMaxHeight(),
                     )
                     DockHost(
@@ -266,8 +264,7 @@ fun SujianWorkbench(
             if (bottomForDock.isNotEmpty()) {
                 DockResizeHandle(
                     zone = DockZone.Bottom,
-                    panelId = bottomForDock.first().id,
-                    onResizeDelta = { id, delta -> onAction(WorkbenchAction.ResizePanelDelta(id, delta, maxHeightDp)) },
+                    onResizeZoneDelta = { z, delta -> onAction(WorkbenchAction.ResizeDockZone(z, delta, maxHeightDp)) },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 DockHost(
@@ -323,6 +320,17 @@ fun SujianWorkbench(
                     onAction(WorkbenchAction.ResizeFloatingPanel(id, clampedW, clampedH))
                 },
                 onMovePanelToGroup = { id, groupId -> onAction(WorkbenchAction.MovePanelToGroup(id, groupId)) },
+                onFloatPanelAt = { id, x, y -> onAction(WorkbenchAction.FloatPanelAt(id, x, y)) },
+                tabGroupHitAreas = tabGroupHitAreas,
+                onDragUpdate = { newState ->
+                    dragState = newState
+                },
+                onDragEnd = {
+                    dragState = WorkbenchDragState.Idle
+                },
+                onDragCancel = {
+                    dragState = WorkbenchDragState.Idle
+                },
                 maxWidthDp = maxWidthDp,
                 maxHeightDp = maxHeightDp,
                 modifier = Modifier.fillMaxSize(),

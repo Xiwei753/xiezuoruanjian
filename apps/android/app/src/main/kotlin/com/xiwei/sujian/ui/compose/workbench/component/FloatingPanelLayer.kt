@@ -15,17 +15,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.xiwei.sujian.ui.compose.workbench.model.DockZone
 import com.xiwei.sujian.ui.compose.workbench.model.DragDropTarget
 import com.xiwei.sujian.ui.compose.workbench.model.PanelVisibility
+import com.xiwei.sujian.ui.compose.workbench.model.TabGroupHitArea
+import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchDragState
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelId
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelState
 import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchReducer
-
-private const val DOCK_HINT_MARGIN_DP = 72f
 
 @Composable
 fun FloatingPanelLayer(
@@ -38,6 +40,11 @@ fun FloatingPanelLayer(
     onBringToFront: (WorkbenchPanelId) -> Unit,
     onResizeFloating: (WorkbenchPanelId, Float, Float) -> Unit,
     onMovePanelToGroup: (WorkbenchPanelId, String) -> Unit,
+    onFloatPanelAt: (WorkbenchPanelId, Float, Float) -> Unit,
+    tabGroupHitAreas: List<TabGroupHitArea>,
+    onDragUpdate: ((WorkbenchDragState) -> Unit)? = null,
+    onDragEnd: (() -> Unit)? = null,
+    onDragCancel: (() -> Unit)? = null,
     maxWidthDp: Float,
     maxHeightDp: Float,
     modifier: Modifier = Modifier,
@@ -56,6 +63,8 @@ fun FloatingPanelLayer(
             var startPointerOffsetY by remember(panel.id) { mutableFloatStateOf(0f) }
             var resizeOffsetW by remember(panel.id) { mutableFloatStateOf(0f) }
             var resizeOffsetH by remember(panel.id) { mutableFloatStateOf(0f) }
+            var titleBarRootXDp by remember(panel.id) { mutableFloatStateOf(0f) }
+            var titleBarRootYDp by remember(panel.id) { mutableFloatStateOf(0f) }
 
             val clampedWidth = (panel.floatingWidthDp + resizeOffsetW)
                 .coerceIn(200f, maxWidthDp)
@@ -85,6 +94,11 @@ fun FloatingPanelLayer(
                     onClose = { onHide(panel.id) },
                     modifier = Modifier.fillMaxSize(),
                     titleBarModifier = Modifier
+                        .onGloballyPositioned { coords ->
+                            val pos = coords.positionInWindow()
+                            titleBarRootXDp = pos.x / density.density
+                            titleBarRootYDp = pos.y / density.density
+                        }
                         .pointerInput(panel.id) {
                             detectDragGestures(
                                 onDragStart = { offset ->
@@ -97,33 +111,64 @@ fun FloatingPanelLayer(
                                     val newPanelY = panel.floatingY + dragOffsetY
                                     val pointerX = newPanelX + startPointerOffsetX
                                     val pointerY = newPanelY + startPointerOffsetY
-                                    val dropTarget = computeDropTargetByPointer(
-                                        pointerX, pointerY,
-                                        maxWidthDp, maxHeightDp,
+                                    val dragState = WorkbenchDragState(
+                                        isDragging = true,
+                                        draggedPanelId = panel.id,
+                                        pointerX = pointerX,
+                                        pointerY = pointerY,
+                                        tabGroupHitAreas = tabGroupHitAreas,
                                     )
-                                    when (dropTarget) {
+                                    val (target, groupId) = dragState.resolveDropTarget(maxWidthDp, maxHeightDp)
+                                    when (target) {
                                         DragDropTarget.DockLeft -> onDock(panel.id, DockZone.Left)
                                         DragDropTarget.DockRight -> onDock(panel.id, DockZone.Right)
                                         DragDropTarget.DockBottom -> onDock(panel.id, DockZone.Bottom)
+                                        DragDropTarget.TabGroup -> {
+                                            if (groupId != null) {
+                                                onMovePanelToGroup(panel.id, groupId)
+                                            } else {
+                                                val (cx, cy) = WorkbenchReducer.clampFloatingPosition(
+                                                    newPanelX, newPanelY,
+                                                    panel.floatingWidthDp, panel.floatingHeightDp,
+                                                    maxWidthDp, maxHeightDp,
+                                                )
+                                                onFloatPanelAt(panel.id, cx, cy)
+                                            }
+                                        }
                                         else -> {
                                             val (cx, cy) = WorkbenchReducer.clampFloatingPosition(
                                                 newPanelX, newPanelY,
                                                 panel.floatingWidthDp, panel.floatingHeightDp,
                                                 maxWidthDp, maxHeightDp,
                                             )
-                                            onMoveFloating(panel.id, cx, cy)
+                                            onFloatPanelAt(panel.id, cx, cy)
                                         }
                                     }
                                     dragOffsetX = 0f
                                     dragOffsetY = 0f
+                                    onDragEnd?.invoke()
                                 },
                                 onDragCancel = {
                                     dragOffsetX = 0f
                                     dragOffsetY = 0f
+                                    onDragCancel?.invoke()
                                 },
                             ) { change, dragAmount ->
-                                dragOffsetX += dragAmount.x / density.density
-                                dragOffsetY += dragAmount.y / density.density
+                                val dxDp = dragAmount.x / density.density
+                                val dyDp = dragAmount.y / density.density
+                                dragOffsetX += dxDp
+                                dragOffsetY += dyDp
+                                val currentPointerX = panel.floatingX + dragOffsetX + startPointerOffsetX
+                                val currentPointerY = panel.floatingY + dragOffsetY + startPointerOffsetY
+                                val interimState = WorkbenchDragState(
+                                    isDragging = true,
+                                    draggedPanelId = panel.id,
+                                    pointerX = currentPointerX,
+                                    pointerY = currentPointerY,
+                                    tabGroupHitAreas = tabGroupHitAreas,
+                                )
+                                val (target, _) = interimState.resolveDropTarget(maxWidthDp, maxHeightDp)
+                                onDragUpdate?.invoke(interimState.copy(dropTarget = target))
                                 change.consume()
                             }
                         },
@@ -161,16 +206,4 @@ fun FloatingPanelLayer(
             }
         }
     }
-}
-
-private fun computeDropTargetByPointer(
-    pointerX: Float,
-    pointerY: Float,
-    maxW: Float,
-    maxH: Float,
-): DragDropTarget {
-    if (pointerX < DOCK_HINT_MARGIN_DP) return DragDropTarget.DockLeft
-    if (pointerX > maxW - DOCK_HINT_MARGIN_DP) return DragDropTarget.DockRight
-    if (pointerY > maxH - DOCK_HINT_MARGIN_DP) return DragDropTarget.DockBottom
-    return DragDropTarget.None
 }

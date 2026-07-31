@@ -27,6 +27,8 @@ class WorkbenchViewModel(
     private var pendingResizeJob: Job? = null
     private val switchMutex = Mutex()
     private var isInitialized = false
+    private var lastMaxWidthDp: Float = 0f
+    private var lastMaxHeightDp: Float = 0f
 
     fun initialize(repository: WorkbenchLayoutRepository, storageKey: LayoutStorageKey) {
         if (isInitialized) {
@@ -66,6 +68,8 @@ class WorkbenchViewModel(
     }
 
     fun onWindowSizeChanged(maxWidthDp: Float, maxHeightDp: Float) {
+        lastMaxWidthDp = maxWidthDp
+        lastMaxHeightDp = maxHeightDp
         dispatch(WorkbenchAction.ClampFloatingPanels(maxWidthDp, maxHeightDp))
     }
 
@@ -82,7 +86,11 @@ class WorkbenchViewModel(
             }
             currentStorageKey = newKey
             val saved = withContext(Dispatchers.IO) { repo.loadLayout(newKey) }
-            layoutState = saved ?: WorkbenchReducer.computeDefaultLayout()
+            var newState = saved ?: WorkbenchReducer.computeDefaultLayout()
+            if (lastMaxWidthDp > 0f && lastMaxHeightDp > 0f) {
+                newState = WorkbenchReducer.reduce(newState, WorkbenchAction.ClampFloatingPanels(lastMaxWidthDp, lastMaxHeightDp))
+            }
+            layoutState = newState
         }
     }
 

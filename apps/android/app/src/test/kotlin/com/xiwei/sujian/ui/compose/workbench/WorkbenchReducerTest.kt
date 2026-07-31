@@ -1,8 +1,11 @@
 package com.xiwei.sujian.ui.compose.workbench
 
 import com.xiwei.sujian.ui.compose.workbench.model.DockZone
+import com.xiwei.sujian.ui.compose.workbench.model.DragDropTarget
 import com.xiwei.sujian.ui.compose.workbench.model.PanelVisibility
+import com.xiwei.sujian.ui.compose.workbench.model.TabGroupHitArea
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchAction
+import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchDragState
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchLayoutState
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelId
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPreset
@@ -347,6 +350,9 @@ class WorkbenchReducerTest {
         val first = WorkbenchReducer.reduce(defaultState, WorkbenchAction.CreateDockGroup("g1", DockZone.Left, 0))
         val second = WorkbenchReducer.reduce(first, WorkbenchAction.CreateDockGroup("g1", DockZone.Left, 1))
         assertEquals(first.dockGroupSizes, second.dockGroupSizes)
+        val firstGroupCount = first.dockGroupsByZone(DockZone.Left).size
+        val secondGroupCount = second.dockGroupsByZone(DockZone.Left).size
+        assertEquals(firstGroupCount, secondGroupCount)
     }
 
     @Test
@@ -369,7 +375,7 @@ class WorkbenchReducerTest {
         val floated = WorkbenchReducer.reduce(defaultState, WorkbenchAction.FloatPanelAt(WorkbenchPanelId.AiAssistant, -100f, -50f))
         val result = WorkbenchReducer.reduce(floated, WorkbenchAction.ClampFloatingPanels(800f, 600f))
         val panel = result.panels[WorkbenchPanelId.AiAssistant]!!
-        assertTrue(panel.floatingX >= 0f)
+        assertTrue(panel.floatingX >= -(panel.floatingWidthDp - 32f))
         assertTrue(panel.floatingY >= 0f)
         assertTrue(panel.floatingWidthDp <= 800f)
         assertTrue(panel.floatingHeightDp <= 600f)
@@ -461,7 +467,7 @@ class WorkbenchReducerTest {
     @Test
     fun clampFloatingPosition_withinBounds() {
         val (x, y) = WorkbenchReducer.clampFloatingPosition(-50f, -30f, 400f, 500f, 800f, 600f)
-        assertTrue(x >= 0f)
+        assertTrue(x >= -(400f - 32f))
         assertTrue(y >= 0f)
     }
 
@@ -471,7 +477,9 @@ class WorkbenchReducerTest {
         val result = WorkbenchReducer.reduce(expanded, WorkbenchAction.ResizePanel(WorkbenchPanelId.ChapterNavigator, 400f))
         val groupSize = result.dockGroupSizes["left-nav"]
         val panelSize = result.panels[WorkbenchPanelId.ChapterNavigator]?.sizeDp
-        assertEquals(panelSize, groupSize, 0.01f)
+        assertNotNull(panelSize)
+        assertNotNull(groupSize)
+        assertEquals(panelSize!!, groupSize!!, 0.01f)
     }
 
     @Test
@@ -480,15 +488,17 @@ class WorkbenchReducerTest {
         val result = WorkbenchReducer.reduce(expanded, WorkbenchAction.ResizePanelDelta(WorkbenchPanelId.ChapterNavigator, 50f))
         val groupSize = result.dockGroupSizes["left-nav"]
         val panelSize = result.panels[WorkbenchPanelId.ChapterNavigator]?.sizeDp
-        assertEquals(panelSize, groupSize, 0.01f)
+        assertNotNull(panelSize)
+        assertNotNull(groupSize)
+        assertEquals(panelSize!!, groupSize!!, 0.01f)
     }
 
     @Test
     fun actualSideWidthDp_usesDockGroupSizes() {
-        val state = WorkbenchReducer.computeDefaultLayout()
-        val rightWidth = state.actualSideWidthDp(DockZone.Right)
-        val expectedWidth = state.dockGroupSizes["right-tools"] ?: 400f
-        assertEquals(expectedWidth, rightWidth, 0.01f)
+        val research = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ApplyPreset(WorkbenchPreset.ResearchWriting))
+        val rightWidth = research.actualSideWidthDp(DockZone.Right)
+        val expectedRatio = research.dockGroupSizes["research-right"] ?: 380f
+        assertEquals(expectedRatio, rightWidth, 0.01f)
     }
 
     @Test
@@ -511,20 +521,25 @@ class WorkbenchReducerTest {
 
     @Test
     fun dockGroupsByZone_usesDockGroupSizes_asSizeRatio() {
-        val state = WorkbenchReducer.computeDefaultLayout()
-        val groups = state.dockGroupsByZone(DockZone.Left)
+        val chapterExpanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val groups = chapterExpanded.dockGroupsByZone(DockZone.Left)
+        assertTrue(groups.isNotEmpty())
         for (group in groups) {
-            val expectedRatio = state.dockGroupSizes[group.id] ?: 280f
+            val expectedRatio = chapterExpanded.dockGroupSizes[group.id] ?: 280f
             assertEquals(expectedRatio, group.sizeRatio, 0.01f)
         }
     }
 
     @Test
     fun dockGroupsByZone_sizeRatioZero_defaultsTo280() {
-        val state = WorkbenchReducer.computeDefaultLayout()
-        val groups = state.dockGroupsByZone(DockZone.Right)
+        val chapterExpanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val stateWithoutSize = chapterExpanded.copy(dockGroupSizes = chapterExpanded.dockGroupSizes - "left-nav")
+        val groups = stateWithoutSize.dockGroupsByZone(DockZone.Left)
+        assertTrue(groups.isNotEmpty())
         for (group in groups) {
-            assertTrue(group.sizeRatio >= 280f)
+            if (group.id == "left-nav") {
+                assertEquals(280f, group.sizeRatio, 0.01f)
+            }
         }
     }
 
@@ -540,12 +555,12 @@ class WorkbenchReducerTest {
 
     @Test
     fun resizeDockGroup_updatesSizePropagatesToDockGroupsByZone() {
-        val state = WorkbenchReducer.computeDefaultLayout()
-        val resized = WorkbenchReducer.reduce(state, WorkbenchAction.ResizeDockGroup("left-nav", DockZone.Left, 80f))
+        val chapterExpanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val resized = WorkbenchReducer.reduce(chapterExpanded, WorkbenchAction.ResizeDockGroup("left-nav", DockZone.Left, 80f))
         val leftGroups = resized.dockGroupsByZone(DockZone.Left)
         val navGroup = leftGroups.find { it.id == "left-nav" }
         assertNotNull(navGroup)
-        val expectedRatio = state.dockGroupSizes["left-nav"]!! + 80f
+        val expectedRatio = chapterExpanded.dockGroupSizes["left-nav"]!! + 80f
         assertEquals(expectedRatio, navGroup!!.sizeRatio, 0.01f)
     }
 
@@ -587,7 +602,7 @@ class WorkbenchReducerTest {
         val resized = WorkbenchReducer.reduce(floated, WorkbenchAction.ResizeFloatingPanel(WorkbenchPanelId.AiAssistant, 300f, 400f))
         val result = WorkbenchReducer.reduce(resized, WorkbenchAction.ClampFloatingPanels(800f, 600f))
         val panel = result.panels[WorkbenchPanelId.AiAssistant]!!
-        assertEquals(0f, panel.floatingX, 0.01f)
+        assertTrue(panel.floatingX >= -(300f - 32f))
         assertEquals(0f, panel.floatingY, 0.01f)
         assertEquals(300f, panel.floatingWidthDp, 0.01f)
         assertEquals(400f, panel.floatingHeightDp, 0.01f)
@@ -640,8 +655,8 @@ class WorkbenchReducerTest {
     fun dockPanel_reusesExistingGroupInZone() {
         val chapterExpanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
         val leftGroupId = chapterExpanded.panels[WorkbenchPanelId.ChapterNavigator]?.tabGroupId ?: ""
-        val result = WorkbenchReducer.reduce(chapterExpanded, WorkbenchAction.DockPanel(WorkbenchPanelId.ProjectNavigator, DockZone.Left))
-        assertEquals(leftGroupId, result.panels[WorkbenchPanelId.ProjectNavigator]?.tabGroupId)
+        val result = WorkbenchReducer.reduce(chapterExpanded, WorkbenchAction.DockPanel(WorkbenchPanelId.AiAssistant, DockZone.Left))
+        assertEquals(leftGroupId, result.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId)
     }
 
     @Test
@@ -684,5 +699,178 @@ class WorkbenchReducerTest {
         val presentation = WorkbenchReducer.computePresentationState(allExpanded, 1000f, 800f)
         assertTrue(presentation.overlayPanelIds.contains(WorkbenchPanelId.AiAssistant))
         assertFalse(presentation.overlayPanelIds.contains(WorkbenchPanelId.Statistics))
+    }
+
+    @Test
+    fun resizeDockZone_updatesAllGroupsInZone() {
+        val chapterExpanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val result = WorkbenchReducer.reduce(chapterExpanded, WorkbenchAction.ResizeDockZone(DockZone.Left, 50f, 1200f))
+        val leftGroups = result.dockGroupsByZone(DockZone.Left)
+        for (group in leftGroups) {
+            val expectedSize = result.dockGroupSizes[group.id]
+            assertNotNull(expectedSize)
+            assertEquals(expectedSize!!, group.sizeRatio, 0.01f)
+        }
+        val chapterSize = result.panels[WorkbenchPanelId.ChapterNavigator]?.sizeDp!!
+        assertTrue(chapterSize >= 280f)
+    }
+
+    @Test
+    fun resizeDockZone_enforcesEditorMinWidth() {
+        val leftExpanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val rightExpanded = WorkbenchReducer.reduce(leftExpanded, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val availableWidth = 1200f
+        val result = WorkbenchReducer.reduce(rightExpanded, WorkbenchAction.ResizeDockZone(DockZone.Left, 500f, availableWidth))
+        val rightWidth = result.actualSideWidthDp(DockZone.Right)
+        val maxForEditor = availableWidth - 480f - rightWidth
+        assertTrue(result.panels[WorkbenchPanelId.ChapterNavigator]?.sizeDp!! <= maxForEditor)
+    }
+
+    @Test
+    fun resizeDockZone_bottomZone_clampsByMaxRatio() {
+        val moved = WorkbenchReducer.reduce(defaultState, WorkbenchAction.MovePanel(WorkbenchPanelId.Statistics, DockZone.Bottom))
+        val expanded = WorkbenchReducer.reduce(moved, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Statistics))
+        val result = WorkbenchReducer.reduce(expanded, WorkbenchAction.ResizeDockZone(DockZone.Bottom, 500f, 800f))
+        val maxBottom = 800f * 0.55f
+        assertTrue(result.panels[WorkbenchPanelId.Statistics]?.sizeDp!! <= maxBottom)
+    }
+
+    @Test
+    fun resizeDockZone_emptyZone_noChange() {
+        val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ResizeDockZone(DockZone.Left, 50f, 1200f))
+        assertEquals(defaultState, result)
+    }
+
+    @Test
+    fun clampFloatingPosition_allowsPartialLeftOverflow() {
+        val (x, y) = WorkbenchReducer.clampFloatingPosition(-300f, 10f, 400f, 500f, 800f, 600f)
+        assertTrue(x >= -(400f - 32f))
+        assertTrue(x <= 800f - 32f)
+    }
+
+    @Test
+    fun clampFloatingPosition_clampsRightEdge() {
+        val (x, _) = WorkbenchReducer.clampFloatingPosition(900f, 10f, 400f, 500f, 800f, 600f)
+        assertTrue(x <= 800f - 32f)
+    }
+
+    @Test
+    fun clampFloatingPosition_clampsBottomEdge() {
+        val (_, y) = WorkbenchReducer.clampFloatingPosition(10f, 700f, 400f, 500f, 800f, 600f)
+        assertTrue(y <= 600f - 40f)
+    }
+
+    @Test
+    fun moveFloatingPanel_clampsPosition() {
+        val floated = WorkbenchReducer.reduce(defaultState, WorkbenchAction.FloatPanel(WorkbenchPanelId.AiAssistant))
+        val result = WorkbenchReducer.reduce(floated, WorkbenchAction.MoveFloatingPanel(WorkbenchPanelId.AiAssistant, -500f, -200f))
+        val panel = result.panels[WorkbenchPanelId.AiAssistant]!!
+        assertTrue(panel.floatingX >= -(panel.floatingWidthDp - 32f))
+        assertTrue(panel.floatingY >= 0f)
+    }
+
+    @Test
+    fun clampFloatingPanels_usesClampFloatingPosition() {
+        val floated = WorkbenchReducer.reduce(defaultState, WorkbenchAction.FloatPanelAt(WorkbenchPanelId.AiAssistant, -100f, -50f))
+        val result = WorkbenchReducer.reduce(floated, WorkbenchAction.ClampFloatingPanels(800f, 600f))
+        val panel = result.panels[WorkbenchPanelId.AiAssistant]!!
+        assertTrue(panel.floatingY >= 0f)
+        assertTrue(panel.floatingWidthDp <= 800f)
+        assertTrue(panel.floatingHeightDp <= 600f)
+    }
+
+    @Test
+    fun resolveDropTarget_tabGroupHitAreaTakesPriority() {
+        val hitArea = TabGroupHitArea("test-group", 100f, 100f, 300f, 200f)
+        val dragState = WorkbenchDragState(
+            isDragging = true,
+            draggedPanelId = WorkbenchPanelId.Search,
+            pointerX = 200f,
+            pointerY = 150f,
+            tabGroupHitAreas = listOf(hitArea),
+        )
+        val (target, groupId) = dragState.resolveDropTarget(800f, 600f)
+        assertEquals(DragDropTarget.TabGroup, target)
+        assertEquals("test-group", groupId)
+    }
+
+    @Test
+    fun resolveDropTarget_dockMarginsWhenNotInHitArea() {
+        val dragState = WorkbenchDragState(
+            isDragging = true,
+            draggedPanelId = WorkbenchPanelId.Search,
+            pointerX = 50f,
+            pointerY = 300f,
+            tabGroupHitAreas = emptyList(),
+        )
+        val (target, _) = dragState.resolveDropTarget(800f, 600f)
+        assertEquals(DragDropTarget.DockLeft, target)
+    }
+
+    @Test
+    fun resizeDockGroup_syncsPanelSizeDp() {
+        val chapterExpanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val resized = WorkbenchReducer.reduce(chapterExpanded, WorkbenchAction.ResizeDockGroup("left-nav", DockZone.Left, 50f))
+        val expectedSize = resized.dockGroupSizes["left-nav"]!!
+        assertEquals(expectedSize, resized.panels[WorkbenchPanelId.ChapterNavigator]?.sizeDp!!, 0.01f)
+    }
+
+    @Test
+    fun resizePanelDelta_noDoubleAccumulation() {
+        val chapterExpanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val first = WorkbenchReducer.reduce(chapterExpanded, WorkbenchAction.ResizePanelDelta(WorkbenchPanelId.ChapterNavigator, 30f))
+        val second = WorkbenchReducer.reduce(first, WorkbenchAction.ResizePanelDelta(WorkbenchPanelId.ChapterNavigator, 20f))
+        val initialSize = chapterExpanded.panels[WorkbenchPanelId.ChapterNavigator]?.sizeDp!!
+        assertEquals(initialSize + 50f, second.panels[WorkbenchPanelId.ChapterNavigator]?.sizeDp!!, 0.01f)
+        assertEquals(second.panels[WorkbenchPanelId.ChapterNavigator]?.sizeDp!!, second.dockGroupSizes["left-nav"]!!, 0.01f)
+    }
+
+    @Test
+    fun dockPanel_crossZone_updatesZoneAndTabGroupId() {
+        val chapterExpanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val leftGroupId = chapterExpanded.panels[WorkbenchPanelId.ChapterNavigator]?.tabGroupId!!
+        val result = WorkbenchReducer.reduce(chapterExpanded, WorkbenchAction.DockPanel(WorkbenchPanelId.AiAssistant, DockZone.Left))
+        assertEquals(DockZone.Left, result.panels[WorkbenchPanelId.AiAssistant]?.zone)
+        assertEquals(leftGroupId, result.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId)
+    }
+
+    @Test
+    fun createDockGroup_persistsZoneAndOrder() {
+        val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.CreateDockGroup("new-group", DockZone.Bottom, 3))
+        assertTrue(result.dockGroupSizes.containsKey("new-group"))
+        val groups = result.dockGroupsByZone(DockZone.Bottom)
+        val newGroup = groups.find { it.id == "new-group" }
+        assertNotNull(newGroup)
+        assertEquals(DockZone.Bottom, newGroup!!.zone)
+        assertEquals(3, newGroup.order)
+    }
+
+    @Test
+    fun movePanelToGroup_bottomZone_usesBottomDefaultSize() {
+        val bottomExpanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.MovePanel(WorkbenchPanelId.Statistics, DockZone.Bottom))
+        val expanded = WorkbenchReducer.reduce(bottomExpanded, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Statistics))
+        val bottomGroupId = expanded.panels[WorkbenchPanelId.Statistics]?.tabGroupId!!
+        val result = WorkbenchReducer.reduce(expanded, WorkbenchAction.MovePanelToGroup(WorkbenchPanelId.Search, bottomGroupId))
+        val groupSize = result.dockGroupSizes[bottomGroupId]
+        assertNotNull(groupSize)
+        assertTrue(groupSize!! >= 220f)
+    }
+
+    @Test
+    fun expandPanel_syncsDockGroupSizes() {
+        val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val panelSize = result.panels[WorkbenchPanelId.ChapterNavigator]?.sizeDp!!
+        val groupSize = result.dockGroupSizes["left-nav"]
+        assertNotNull(groupSize)
+        assertEquals(panelSize, groupSize!!, 0.01f)
+    }
+
+    @Test
+    fun applyPreset_syncsDockGroupSizesWithPanelSizeDp() {
+        val research = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ApplyPreset(WorkbenchPreset.ResearchWriting))
+        val searchSize = research.panels[WorkbenchPanelId.Search]?.sizeDp!!
+        val researchRightSize = research.dockGroupSizes["research-right"]
+        assertNotNull(researchRightSize)
+        assertEquals(searchSize, researchRightSize!!, 0.01f)
     }
 }

@@ -23,5 +23,6 @@ sealed class WorkbenchAction {
     data class ActivateOverlayPanel(val panelId: WorkbenchPanelId) : WorkbenchAction()
     data class ResizePanelDelta(val panelId: WorkbenchPanelId, val deltaDp: Float, val availableWidthDp: Float = Float.MAX_VALUE) : WorkbenchAction()
     data class ResizeDockGroup(val groupId: String, val zone: DockZone, val sizeDp: Float) : WorkbenchAction()
+    data class ResizeDockZone(val zone: DockZone, val deltaDp: Float, val availableWidthDp: Float = Float.MAX_VALUE) : WorkbenchAction()
     data class ClampFloatingPanels(val maxWidthDp: Float, val maxHeightDp: Float) : WorkbenchAction()
 }

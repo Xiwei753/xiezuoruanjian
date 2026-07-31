@@ -33,24 +33,39 @@ data class WorkbenchLayoutState(
     val nextFloatingZIndex: Int = 1,
     val dockGroupSizes: Map<String, Float> = emptyMap(),
     val activeOverlayPanelId: WorkbenchPanelId? = null,
+    val dockGroupMeta: Map<String, DockGroupMeta> = emptyMap(),
 ) {
     fun dockGroupsByZone(zone: DockZone): List<DockGroupState> {
         val panelsInZone = panels.values
             .filter { it.zone == zone && it.visibility == PanelVisibility.Expanded }
-        return panelsInZone
+        val panelDerivedGroups = panelsInZone
             .groupBy { it.tabGroupId }
             .map { (groupId, groupPanels) ->
                 val sorted = groupPanels.sortedBy { it.order }
+                val meta = dockGroupMeta[groupId]
                 DockGroupState(
                     id = groupId,
                     zone = zone,
-                    order = sorted.firstOrNull()?.order ?: 0,
+                    order = meta?.order ?: sorted.firstOrNull()?.order ?: 0,
                     sizeRatio = dockGroupSizes[groupId] ?: 280f,
                     activePanelId = activeTabByGroup[groupId] ?: sorted.firstOrNull()?.id,
                     panelIds = sorted.map { it.id },
                 )
             }
-            .sortedBy { it.order }
+        val panelGroupIds = panelDerivedGroups.map { it.id }.toSet()
+        val standaloneGroups = dockGroupMeta.values
+            .filter { it.zone == zone && it.id !in panelGroupIds }
+            .map { meta ->
+                DockGroupState(
+                    id = meta.id,
+                    zone = zone,
+                    order = meta.order,
+                    sizeRatio = dockGroupSizes[meta.id] ?: 280f,
+                    activePanelId = null,
+                    panelIds = emptyList(),
+                )
+            }
+        return (panelDerivedGroups + standaloneGroups).sortedBy { it.order }
     }
 
     fun actualSideWidthDp(zone: DockZone): Float {
@@ -59,3 +74,9 @@ data class WorkbenchLayoutState(
         return groups.maxOf { it.sizeRatio }
     }
 }
+
+data class DockGroupMeta(
+    val id: String,
+    val zone: DockZone,
+    val order: Int,
+)
