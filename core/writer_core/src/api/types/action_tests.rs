@@ -45,8 +45,46 @@ fn test_action_descriptor_dto_roundtrip() {
     let back: ActionDescriptor = dto.into();
     assert_eq!(desc.id, back.id);
     assert_eq!(desc.title, back.title);
+    assert_eq!(desc.description, back.description);
+    assert_eq!(desc.category, back.category);
+    assert_eq!(desc.kind, back.kind);
+    assert_eq!(desc.risk_level, back.risk_level);
+    assert_eq!(desc.confirm_required, back.confirm_required);
+    assert_eq!(desc.undoable, back.undoable);
+    assert_eq!(desc.platforms, back.platforms);
     assert_eq!(desc.input_schema, back.input_schema);
     assert_eq!(desc.ui_schema, back.ui_schema);
+}
+
+#[test]
+fn test_action_descriptor_dto_json_key_contract() {
+    let dto = ActionDescriptorDto {
+        id: "a1".to_string(),
+        title: "T".to_string(),
+        description: "D".to_string(),
+        category: "C".to_string(),
+        kind: ActionKindDto::Query,
+        risk_level: ActionRiskLevelDto::SafeRead,
+        confirm_required: false,
+        undoable: true,
+        platforms: vec!["android".to_string()],
+        input_schema: None,
+        ui_schema: None,
+    };
+    let json = serde_json::to_value(&dto).unwrap();
+    assert_eq!(json["id"], "a1");
+    assert_eq!(json["title"], "T");
+    assert_eq!(json["description"], "D");
+    assert_eq!(json["category"], "C");
+    assert_eq!(json["kind"], "Query");
+    assert_eq!(json["riskLevel"], "SafeRead");
+    assert_eq!(json["confirmRequired"], false);
+    assert_eq!(json["undoable"], true);
+    assert_eq!(json["platforms"][0], "android");
+    assert!(json["inputSchema"].is_null());
+    assert!(json["uiSchema"].is_null());
+    let as_object = json.as_object().unwrap();
+    assert_eq!(as_object.len(), 11, "ActionDescriptorDto must have exactly 11 JSON keys");
 }
 
 #[test]

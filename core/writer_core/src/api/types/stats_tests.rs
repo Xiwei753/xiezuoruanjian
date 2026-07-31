@@ -131,10 +131,21 @@ fn test_project_stats_summary_dto_key_contract() {
         }],
     };
     let json = serde_json::to_value(&summary).unwrap();
-    let project = &json["projects"][0];
-    assert_eq!(project["projectId"], "p1");
-    assert_eq!(project["humanTypedChars"], 50);
-    assert_eq!(project["netDeltaChars"], 67);
+    assert_eq!(
+        json,
+        json!({
+            "range": { "startDate": "2024-01-01", "endDate": "2024-01-31" },
+            "projects": [{
+                "projectId": "p1",
+                "humanTypedChars": 50,
+                "pastedChars": 20,
+                "deletedChars": 5,
+                "aiInsertedChars": 2,
+                "netDeltaChars": 67,
+                "activeSeconds": 120
+            }]
+        })
+    );
     let restored: ProjectStatsSummaryDto = serde_json::from_value(json).unwrap();
     assert_eq!(restored, summary);
 }
@@ -157,9 +168,21 @@ fn test_chapter_stats_summary_dto_key_contract() {
         }],
     };
     let json = serde_json::to_value(&summary).unwrap();
-    let chapter = &json["chapters"][0];
-    assert_eq!(chapter["chapterId"], "c1");
-    assert_eq!(chapter["humanTypedChars"], 50);
+    assert_eq!(
+        json,
+        json!({
+            "range": { "startDate": "2024-01-01", "endDate": "2024-01-31" },
+            "chapters": [{
+                "chapterId": "c1",
+                "humanTypedChars": 50,
+                "pastedChars": 20,
+                "deletedChars": 5,
+                "aiInsertedChars": 2,
+                "netDeltaChars": 67,
+                "activeSeconds": 120
+            }]
+        })
+    );
     let restored: ChapterStatsSummaryDto = serde_json::from_value(json).unwrap();
     assert_eq!(restored, summary);
 }
@@ -185,11 +208,24 @@ fn test_device_stats_summary_dto_key_contract() {
         }],
     };
     let json = serde_json::to_value(&summary).unwrap();
-    let device = &json["devices"][0];
-    assert_eq!(device["deviceId"], "d1");
-    assert_eq!(device["platform"], "Desktop");
-    assert_eq!(device["deviceClass"], "phone");
-    assert_eq!(device["sessionsCount"], 3);
+    assert_eq!(
+        json,
+        json!({
+            "range": { "startDate": "2024-01-01", "endDate": "2024-01-31" },
+            "devices": [{
+                "deviceId": "d1",
+                "platform": "Desktop",
+                "deviceClass": "phone",
+                "humanTypedChars": 50,
+                "pastedChars": 20,
+                "deletedChars": 5,
+                "aiInsertedChars": 2,
+                "netDeltaChars": 67,
+                "activeSeconds": 120,
+                "sessionsCount": 3
+            }]
+        })
+    );
     let restored: DeviceStatsSummaryDto = serde_json::from_value(json).unwrap();
     assert_eq!(restored, summary);
 }
@@ -210,11 +246,19 @@ fn test_speed_curve_summary_dto_contract() {
         }],
     };
     let json = serde_json::to_value(&summary).unwrap();
-    assert_eq!(json["bucketMinutes"], 5);
-    let record = &json["buckets"][0];
-    assert_eq!(record["startMs"], 1714521600000_i64);
-    assert_eq!(record["charsTyped"], 150);
-    assert!((record["charsPerMinute"].as_f64().unwrap() - 30.0).abs() < 1e-6);
+    assert_eq!(
+        json,
+        json!({
+            "range": { "startDate": "2024-05-01", "endDate": "2024-05-02" },
+            "bucketMinutes": 5,
+            "buckets": [{
+                "startMs": 1714521600000_i64,
+                "endMs": 1714521900000_i64,
+                "charsTyped": 150,
+                "charsPerMinute": 30.0
+            }]
+        })
+    );
     let restored: SpeedCurveSummaryDto = serde_json::from_value(json).unwrap();
     assert_eq!(restored, summary);
 }

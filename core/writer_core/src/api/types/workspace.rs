@@ -1,5 +1,6 @@
 use super::*;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct RecentEditDto {
     pub project_id: String,
     pub volume_id: String,
@@ -19,6 +20,7 @@ impl From<crate::workspace::RecentEdit> for RecentEditDto {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkspaceSummaryDto {
     pub path: String,
     pub is_valid: bool,

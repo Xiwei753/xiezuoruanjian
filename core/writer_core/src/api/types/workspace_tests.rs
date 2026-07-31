@@ -1,5 +1,6 @@
 use super::workspace::*;
 use crate::workspace::RecentEdit;
+use serde_json::json;
 
 #[test]
 fn test_recent_edit_dto_conversion() {
@@ -37,14 +38,27 @@ fn test_workspace_diagnostics_dto_contract() {
         create_project_available: true,
     };
     let json = serde_json::to_value(&dto).unwrap();
-    assert!(json.get("hasWorkspace").is_some());
-    assert!(json.get("coreInitialized").is_some());
-    assert!(json.get("createProjectAvailable").is_some());
-    assert!(json.get("manifestExists").is_some());
-    assert!(json.get("projectsDirExists").is_some());
-    assert!(json.get("treeCount").is_some());
-    assert!(json.get("validateWorkspace").is_some());
-    assert!(json.get("writableError").is_some());
+    assert_eq!(
+        json,
+        json!({
+            "hasWorkspace": true,
+            "workspacePath": "/workspace",
+            "coreInitialized": true,
+            "pathExists": true,
+            "isDir": true,
+            "manifestPath": "/workspace/manifest.json",
+            "manifestExists": true,
+            "projectsPath": "/workspace/projects",
+            "projectsDirExists": true,
+            "appMetaExists": true,
+            "writable": true,
+            "writableError": "",
+            "validateWorkspace": true,
+            "treeCount": 5,
+            "lastWorkspacePath": "/last",
+            "createProjectAvailable": true
+        })
+    );
     let deserialized: crate::api::types::WorkspaceDiagnosticsDto =
         serde_json::from_value(json).unwrap();
     assert_eq!(dto, deserialized);
@@ -59,9 +73,48 @@ fn test_recent_edit_dto_serialization_roundtrip() {
         timestamp: "2023-10-10".to_string(),
     };
     let json = serde_json::to_value(&dto).unwrap();
-    assert!(json.get("project_id").is_some());
-    assert!(json.get("volume_id").is_some());
-    assert!(json.get("chapter_id").is_some());
-    let deserialized: RecentEditDto = serde_json::from_value(json).unwrap();
+    assert_eq!(
+        json,
+        json!({
+            "projectId": "p1",
+            "volumeId": "v1",
+            "chapterId": "c1",
+            "timestamp": "2023-10-10"
+        })
+    );
+    let deserialized: RecentEditDto = serde_json::from_value(json.clone()).unwrap();
     assert_eq!(dto, deserialized);
+    let as_object = json.as_object().unwrap();
+    assert_eq!(as_object.len(), 4, "RecentEditDto must have exactly 4 JSON keys");
+}
+
+#[test]
+fn test_workspace_summary_dto_json_key_contract() {
+    let dto = crate::api::types::WorkspaceSummaryDto {
+        path: "/ws".to_string(),
+        is_valid: true,
+        projects: vec![crate::api::types::ProjectDto {
+            id: "p1".to_string(),
+            title: "P".to_string(),
+            created_at: "2023-01-01".to_string(),
+            updated_at: "2023-01-02".to_string(),
+        }],
+        recent_edits: vec![RecentEditDto {
+            project_id: "p1".to_string(),
+            volume_id: "v1".to_string(),
+            chapter_id: "c1".to_string(),
+            timestamp: "2023-01-01".to_string(),
+        }],
+    };
+    let json = serde_json::to_value(&dto).unwrap();
+    assert_eq!(json["path"], "/ws");
+    assert_eq!(json["isValid"], true);
+    assert_eq!(json["projects"][0]["id"], "p1");
+    assert_eq!(json["projects"][0]["title"], "P");
+    assert_eq!(json["projects"][0]["createdAt"], "2023-01-01");
+    assert_eq!(json["projects"][0]["updatedAt"], "2023-01-02");
+    assert_eq!(json["recentEdits"][0]["projectId"], "p1");
+    assert_eq!(json["recentEdits"][0]["volumeId"], "v1");
+    assert_eq!(json["recentEdits"][0]["chapterId"], "c1");
+    assert_eq!(json["recentEdits"][0]["timestamp"], "2023-01-01");
 }

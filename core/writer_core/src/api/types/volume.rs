@@ -1,6 +1,7 @@
 use crate::facade::ChapterOpenResult;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct VolumeDto {
     pub id: String,
     pub title: String,
@@ -22,6 +23,7 @@ impl From<crate::volume::Volume> for VolumeDto {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct ChapterMetaDto {
     pub id: String,
     pub title: String,
@@ -49,6 +51,7 @@ impl From<crate::chapter::Chapter> for ChapterMetaDto {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct ChapterContentDto {
     pub meta: ChapterMetaDto,
     pub content: String,
@@ -73,6 +76,7 @@ impl From<ChapterOpenResult> for ChapterContentDto {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct ChapterSaveReceiptDto {
     pub chapter_relative_path: String,
     pub content_len: u32,

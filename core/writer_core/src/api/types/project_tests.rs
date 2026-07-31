@@ -1,5 +1,6 @@
 use super::project::*;
 use crate::project::{Project, ProjectStats};
+use serde_json::json;
 
 #[test]
 fn test_project_dto_from_project() {
@@ -38,8 +39,17 @@ fn test_project_dto_serialization_roundtrip() {
         created_at: "2023-01-01T00:00:00Z".to_string(),
         updated_at: "2023-01-02T00:00:00Z".to_string(),
     };
-    let json_str = serde_json::to_string(&dto).unwrap();
-    let deserialized: ProjectDto = serde_json::from_str(&json_str).unwrap();
+    let json = serde_json::to_value(&dto).unwrap();
+    assert_eq!(
+        json,
+        json!({
+            "id": "proj_1",
+            "title": "Test Project",
+            "createdAt": "2023-01-01T00:00:00Z",
+            "updatedAt": "2023-01-02T00:00:00Z"
+        })
+    );
+    let deserialized: ProjectDto = serde_json::from_value(json).unwrap();
     assert_eq!(deserialized, dto);
 }
 
@@ -50,7 +60,15 @@ fn test_project_stats_dto_serialization_roundtrip() {
         volume_count: 5,
         chapter_count: 50,
     };
-    let json_str = serde_json::to_string(&dto).unwrap();
-    let deserialized: ProjectStatsDto = serde_json::from_str(&json_str).unwrap();
+    let json = serde_json::to_value(&dto).unwrap();
+    assert_eq!(
+        json,
+        json!({
+            "totalWordCount": 1000,
+            "volumeCount": 5,
+            "chapterCount": 50
+        })
+    );
+    let deserialized: ProjectStatsDto = serde_json::from_value(json).unwrap();
     assert_eq!(deserialized, dto);
 }

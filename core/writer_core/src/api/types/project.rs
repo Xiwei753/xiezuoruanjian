@@ -1,4 +1,5 @@
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct ProjectDto {
     pub id: String,
     pub title: String,
@@ -18,6 +19,7 @@ impl From<crate::project::Project> for ProjectDto {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct ProjectStatsDto {
     pub total_word_count: u32,
     pub volume_count: u32,
