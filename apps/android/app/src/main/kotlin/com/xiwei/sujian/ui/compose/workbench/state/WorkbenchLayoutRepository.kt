@@ -68,7 +68,8 @@ class WorkbenchLayoutRepository(
                         k.name.contains("${prefix}.groupWeight.") ||
                         k.name.contains("${prefix}.groupMeta.") ||
                         k.name.contains("${prefix}.activeTab.") ||
-                        k.name.contains("${prefix}.zoneSize.")
+                        k.name.contains("${prefix}.zoneSize.") ||
+                        k.name.contains("${prefix}.groupSize.")
                     )
                 }
                 for (k in dynamicKeysToRemove) {

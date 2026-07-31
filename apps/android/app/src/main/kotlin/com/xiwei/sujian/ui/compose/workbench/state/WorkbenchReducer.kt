@@ -339,7 +339,11 @@ object WorkbenchReducer {
         }
         if (remainingPanels.isNotEmpty()) {
             val activeTab = state.activeTabByGroup[oldGroupId]
-            if (activeTab != null && state.panels[activeTab]?.tabGroupId != oldGroupId) {
+            val activePanel = if (activeTab != null) state.panels[activeTab] else null
+            val activeTabLeftGroup = activePanel == null
+                || activePanel.tabGroupId != oldGroupId
+                || (oldZone != null && activePanel.zone != oldZone)
+            if (activeTabLeftGroup) {
                 val expandedRemaining = remainingPanels.filter { it.visibility == PanelVisibility.Expanded }
                 return if (expandedRemaining.isNotEmpty()) {
                     state.copy(activeTabByGroup = state.activeTabByGroup + (oldGroupId to expandedRemaining.first().id))
@@ -508,7 +512,7 @@ object WorkbenchReducer {
         )
     }
 
-    private fun resizeDockZone(state: WorkbenchLayoutState, zone: DockZone, deltaDp: Float, availableMainAxisDp: Float, actualOtherSideWidthDp: Float = 0f): WorkbenchLayoutState {
+    private fun resizeDockZone(state: WorkbenchLayoutState, zone: DockZone, deltaDp: Float, availableMainAxisDp: Float, actualOtherSideWidthDp: Float? = null): WorkbenchLayoutState {
         val hasExpandedPanels = state.panels.values.any { it.zone == zone && it.visibility == PanelVisibility.Expanded }
         if (!hasExpandedPanels) return state
         val currentSize = state.dockZoneSizeDp[zone] ?: when (zone) {
@@ -519,7 +523,7 @@ object WorkbenchReducer {
         val newSize = currentSize + deltaDp
         val clampedSize = when (zone) {
             DockZone.Left, DockZone.Right -> {
-                val otherSideWidth = if (actualOtherSideWidthDp > 0f) actualOtherSideWidthDp else {
+                val otherSideWidth = if (actualOtherSideWidthDp != null) actualOtherSideWidthDp else {
                     val otherZone = when (zone) {
                         DockZone.Left -> DockZone.Right
                         DockZone.Right -> DockZone.Left

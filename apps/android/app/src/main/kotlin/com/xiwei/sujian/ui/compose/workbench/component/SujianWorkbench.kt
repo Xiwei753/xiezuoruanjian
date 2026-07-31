@@ -219,7 +219,7 @@ fun SujianWorkbench(
                     DockResizeHandle(
                         zone = DockZone.Left,
                         onResizeZoneDelta = { z, delta ->
-                            val otherActualWidth = if (showRightDock) layoutState.dockZoneSizeDp[DockZone.Right] ?: 280f else 0f
+                            val otherActualWidth: Float? = if (showRightDock) layoutState.dockZoneSizeDp[DockZone.Right] ?: 280f else 0f
                             onAction(WorkbenchAction.ResizeDockZone(z, delta, maxWidthDp, otherActualWidth))
                         },
                         modifier = Modifier.fillMaxHeight(),
@@ -242,7 +242,7 @@ fun SujianWorkbench(
                     DockResizeHandle(
                         zone = DockZone.Right,
                         onResizeZoneDelta = { z, delta ->
-                            val otherActualWidth = if (leftForDock.isNotEmpty()) layoutState.dockZoneSizeDp[DockZone.Left] ?: 280f else 0f
+                            val otherActualWidth: Float? = if (leftForDock.isNotEmpty()) layoutState.dockZoneSizeDp[DockZone.Left] ?: 280f else 0f
                             onAction(WorkbenchAction.ResizeDockZone(z, delta, maxWidthDp, otherActualWidth))
                         },
                         modifier = Modifier.fillMaxHeight(),
@@ -383,34 +383,28 @@ fun SujianWorkbench(
                         shape = MaterialTheme.shapes.large,
                         color = MaterialTheme.colorScheme.surface,
                     ) {
-                        WorkbenchPanelFrame(
-                            panelState = activePanel,
-                            onFloat = { onAction(WorkbenchAction.FloatPanel(activePanel.id)) },
-                            onCollapse = { onAction(WorkbenchAction.CollapsePanel(activePanel.id)) },
-                            onClose = { onAction(WorkbenchAction.HidePanel(activePanel.id)) },
-                            modifier = Modifier.fillMaxSize(),
-                        ) {
-                            panelContent(activePanel)
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            if (presentationState.overlayPanelIds.size > 1) {
+                                OverlayTabStrip(
+                                    panelIds = presentationState.overlayPanelIds,
+                                    activeId = activeOverlayId,
+                                    allExpanded = overlayExpanded,
+                                    onSwitch = { id ->
+                                        onAction(WorkbenchAction.ActivateOverlayPanel(id))
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                            WorkbenchPanelFrame(
+                                panelState = activePanel,
+                                onFloat = { onAction(WorkbenchAction.FloatPanel(activePanel.id)) },
+                                onCollapse = { onAction(WorkbenchAction.CollapsePanel(activePanel.id)) },
+                                onClose = { onAction(WorkbenchAction.HidePanel(activePanel.id)) },
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                panelContent(activePanel)
+                            }
                         }
-                    }
-                    if (presentationState.overlayPanelIds.size > 1) {
-                        val stripAlignment = when (activePanel.zone) {
-                            DockZone.Left -> Alignment.CenterStart
-                            DockZone.Bottom -> Alignment.BottomCenter
-                            else -> Alignment.CenterEnd
-                        }
-                        OverlayTabStrip(
-                            panelIds = presentationState.overlayPanelIds,
-                            activeId = activeOverlayId,
-                            allExpanded = overlayExpanded,
-                            onSwitch = { id ->
-                                onAction(WorkbenchAction.ActivateOverlayPanel(id))
-                            },
-                            modifier = Modifier
-                                .align(stripAlignment)
-                                .padding(top = 48.dp)
-                                .width(SIDE_PANEL_MIN_DP.dp),
-                        )
                     }
                 }
             }

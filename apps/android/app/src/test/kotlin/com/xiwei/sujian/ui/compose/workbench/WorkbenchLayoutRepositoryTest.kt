@@ -360,6 +360,20 @@ class WorkbenchLayoutRepositoryTest {
 
     @Test
     fun saveAndLoad_roundTrip_researchWriting_exact() = assertPresetRoundTripExact(WorkbenchPreset.ResearchWriting)
+
+    @Test
+    fun saveLayout_clearsStaleV1GroupSizeKeys() = runTest {
+        val stateV1Style = WorkbenchReducerTestHelper.createTestLayoutState(WorkbenchPreset.Custom).copy(
+            dockGroupWeights = mapOf("left-nav" to 1f),
+            dockGroupMeta = mapOf("left-nav" to DockGroupMeta("left-nav", DockZone.Left, 0)),
+            dockZoneSizeDp = mapOf(DockZone.Left to 320f),
+        )
+        repository.saveLayout(testKey, stateV1Style)
+        val loaded = repository.loadLayout(testKey)
+        assertNotNull(loaded)
+        assertTrue(loaded!!.dockGroupWeights.containsKey("left-nav"))
+        assertFalse("V1 groupSize keys should not leak into loaded state", loaded.dockGroupWeights.keys.any { it.startsWith("groupSize") })
+    }
 }
 
 internal object WorkbenchReducerTestHelper {

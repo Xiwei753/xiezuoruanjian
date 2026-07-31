@@ -30,6 +30,6 @@ sealed class WorkbenchAction {
         val deltaDp: Float,
         val availableMainAxisDp: Float,
     ) : WorkbenchAction()
-    data class ResizeDockZone(val zone: DockZone, val deltaDp: Float, val availableMainAxisDp: Float = Float.MAX_VALUE, val actualOtherSideWidthDp: Float = 0f) : WorkbenchAction()
+    data class ResizeDockZone(val zone: DockZone, val deltaDp: Float, val availableMainAxisDp: Float = Float.MAX_VALUE, val actualOtherSideWidthDp: Float? = null) : WorkbenchAction()
     data class ClampFloatingPanels(val maxWidthDp: Float, val maxHeightDp: Float) : WorkbenchAction()
 }

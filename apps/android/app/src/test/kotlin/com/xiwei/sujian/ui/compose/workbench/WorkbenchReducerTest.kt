@@ -21,6 +21,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.min
 
 class WorkbenchReducerTest {
 
@@ -1825,9 +1826,23 @@ class WorkbenchReducerTest {
         val rightExpanded = WorkbenchReducer.reduce(leftExpanded, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
         val availableWidth = 1200f
         val actualRightWidth = 0f
-        val result = WorkbenchReducer.reduce(rightExpanded, WorkbenchAction.ResizeDockZone(DockZone.Left, 500f, availableWidth, actualRightWidth))
+        val currentLeftSize = rightExpanded.dockZoneSizeDp[DockZone.Left] ?: 320f
+        val deltaDp = 500f
+        val newSize = currentLeftSize + deltaDp
         val maxForEditor = availableWidth - 480f - actualRightWidth
-        assertTrue(result.dockZoneSizeDp[DockZone.Left]!! <= maxForEditor)
+        val expectedClamped = newSize.coerceIn(280f, min(520f, maxForEditor))
+        val result = WorkbenchReducer.reduce(rightExpanded, WorkbenchAction.ResizeDockZone(DockZone.Left, deltaDp, availableWidth, actualRightWidth))
+        assertEquals("with other side = 0f, left zone should be clamped to exact expected value", expectedClamped, result.dockZoneSizeDp[DockZone.Left]!!, 0.01f)
+    }
+
+    @Test
+    fun resizeDockZone_nullOtherSide_fallsBackToPersistedWidth() {
+        val leftExpanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val rightExpanded = WorkbenchReducer.reduce(leftExpanded, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val availableWidth = 1200f
+        val resultNull = WorkbenchReducer.reduce(rightExpanded, WorkbenchAction.ResizeDockZone(DockZone.Left, 500f, availableWidth, null))
+        val resultExplicit = WorkbenchReducer.reduce(rightExpanded, WorkbenchAction.ResizeDockZone(DockZone.Left, 500f, availableWidth, rightExpanded.actualSideWidthDp(DockZone.Right)))
+        assertEquals("null should behave same as explicit persisted width", resultExplicit.dockZoneSizeDp[DockZone.Left]!!, resultNull.dockZoneSizeDp[DockZone.Left]!!, 0.01f)
     }
 
     @Test
@@ -1913,5 +1928,34 @@ class WorkbenchReducerTest {
         assertEquals("no duplicate orders in Right zone", rightOrders.distinct().size, rightOrders.size)
         val leftOrders = state.dockGroupMeta.values.filter { it.zone == DockZone.Left }.map { it.order }
         assertEquals("no duplicate orders in Left zone", leftOrders.distinct().size, leftOrders.size)
+    }
+
+    // --- Fix: floatPanel/floatPanelAt activeTab switches to remaining panel in group ---
+
+    @Test
+    fun floatPanel_activeTabSwitchesToRemainingExpandedPanel() {
+        val expanded1 = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val expanded2 = WorkbenchReducer.reduce(expanded1, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Search))
+        val groupId = expanded2.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId ?: ""
+        val withActive = WorkbenchReducer.reduce(expanded2, WorkbenchAction.ActivateTab(groupId, WorkbenchPanelId.AiAssistant))
+        assertEquals(WorkbenchPanelId.AiAssistant, withActive.activeTabByGroup[groupId])
+        val result = WorkbenchReducer.reduce(withActive, WorkbenchAction.FloatPanel(WorkbenchPanelId.AiAssistant))
+        val newActive = result.activeTabByGroup[groupId]
+        assertTrue("activeTab must switch away from floated panel", newActive != WorkbenchPanelId.AiAssistant)
+        assertTrue("activeTab must point to remaining expanded panel in group", newActive != null && result.panels[newActive]?.visibility == PanelVisibility.Expanded)
+    }
+
+    @Test
+    fun floatPanelAt_activeTabSwitchesToRemainingExpandedPanel() {
+        val expanded1 = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val expanded2 = WorkbenchReducer.reduce(expanded1, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Search))
+        val groupId = expanded2.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId ?: ""
+        val withActive = WorkbenchReducer.reduce(expanded2, WorkbenchAction.ActivateTab(groupId, WorkbenchPanelId.AiAssistant))
+        val result = WorkbenchReducer.reduce(withActive, WorkbenchAction.FloatPanelAt(WorkbenchPanelId.AiAssistant, 100f, 200f))
+        val newActive = result.activeTabByGroup[groupId]
+        assertTrue("activeTab must switch away from floated panel", newActive != WorkbenchPanelId.AiAssistant)
+        if (newActive != null) {
+            assertTrue("activeTab must point to remaining expanded panel", result.panels[newActive]?.visibility == PanelVisibility.Expanded)
+        }
     }
 }
