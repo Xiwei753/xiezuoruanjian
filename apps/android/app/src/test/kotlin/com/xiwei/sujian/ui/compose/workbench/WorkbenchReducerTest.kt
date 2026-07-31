@@ -207,7 +207,8 @@ class WorkbenchReducerTest {
 
     @Test
     fun movePanelToGroup_updatesActiveTab() {
-        val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.MovePanelToGroup(WorkbenchPanelId.Search, "custom-group"))
+        val expanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Search))
+        val result = WorkbenchReducer.reduce(expanded, WorkbenchAction.MovePanelToGroup(WorkbenchPanelId.Search, "custom-group"))
         assertEquals(WorkbenchPanelId.Search, result.activeTabByGroup["custom-group"])
     }
 
@@ -2002,5 +2003,55 @@ class WorkbenchReducerTest {
         val resultWithOther = WorkbenchReducer.reduce(rightExpanded, WorkbenchAction.ResizeDockZone(DockZone.Left, 300f, availableWidth, 400f))
         assertTrue("0f (other side truly absent) should allow larger left zone than null (fallback to persisted right width)", resultZero.dockZoneSizeDp[DockZone.Left]!! >= resultNull.dockZoneSizeDp[DockZone.Left]!!)
         assertTrue("0f should allow larger left zone than when other side is 400dp", resultZero.dockZoneSizeDp[DockZone.Left]!! > resultWithOther.dockZoneSizeDp[DockZone.Left]!!)
+    }
+
+    // --- cleanUpOldGroup should normalize active tabs across all groups ---
+
+    @Test
+    fun movePanel_normalizesStaleActiveTabInOtherGroup() {
+        val leftExpanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val rightExpanded = WorkbenchReducer.reduce(leftExpanded, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val outlineExpanded = WorkbenchReducer.reduce(rightExpanded, WorkbenchAction.ExpandPanel(WorkbenchPanelId.DocumentOutline))
+        val staleState = outlineExpanded.copy(
+            activeTabByGroup = outlineExpanded.activeTabByGroup + ("left-nav" to WorkbenchPanelId.AiAssistant)
+        )
+        val moved = WorkbenchReducer.reduce(staleState, WorkbenchAction.MovePanel(WorkbenchPanelId.AiAssistant, DockZone.Bottom))
+        val leftActive = moved.activeTabByGroup["left-nav"]
+        val leftActivePanel = moved.panels[leftActive]
+        if (leftActive != null) {
+            assertTrue("left-nav activeTab should point to an Expanded panel in Left zone, got ${leftActivePanel?.zone}/${leftActivePanel?.visibility}", leftActivePanel?.zone == DockZone.Left && leftActivePanel?.visibility == PanelVisibility.Expanded)
+        }
+    }
+
+    @Test
+    fun floatPanel_normalizesStaleActiveTabInOtherGroup() {
+        val leftExpanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val rightExpanded = WorkbenchReducer.reduce(leftExpanded, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val searchExpanded = WorkbenchReducer.reduce(rightExpanded, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Search))
+        val staleState = searchExpanded.copy(
+            activeTabByGroup = searchExpanded.activeTabByGroup + ("left-nav" to WorkbenchPanelId.AiAssistant)
+        )
+        val floated = WorkbenchReducer.reduce(staleState, WorkbenchAction.FloatPanel(WorkbenchPanelId.Search))
+        val leftActive = floated.activeTabByGroup["left-nav"]
+        val leftActivePanel = floated.panels[leftActive]
+        if (leftActive != null) {
+            assertTrue("left-nav activeTab should point to an Expanded panel in Left zone, got ${leftActivePanel?.zone}/${leftActivePanel?.visibility}", leftActivePanel?.zone == DockZone.Left && leftActivePanel?.visibility == PanelVisibility.Expanded)
+        }
+    }
+
+    @Test
+    fun movePanelToGroup_normalizesStaleActiveTabInOtherGroup() {
+        val leftExpanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val rightExpanded = WorkbenchReducer.reduce(leftExpanded, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val searchExpanded = WorkbenchReducer.reduce(rightExpanded, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Search))
+        val staleState = searchExpanded.copy(
+            activeTabByGroup = searchExpanded.activeTabByGroup + ("left-nav" to WorkbenchPanelId.AiAssistant)
+        )
+        val moved = WorkbenchReducer.reduce(staleState, WorkbenchAction.MovePanelToGroup(WorkbenchPanelId.Search, "right-outline"))
+        val leftActive = moved.activeTabByGroup["left-nav"]
+        val leftActivePanel = moved.panels[leftActive]
+        if (leftActive != null) {
+            assertTrue("left-nav activeTab should point to an Expanded panel in Left zone, got ${leftActivePanel?.zone}/${leftActivePanel?.visibility}", leftActivePanel?.zone == DockZone.Left && leftActivePanel?.visibility == PanelVisibility.Expanded)
+        }
     }
 }

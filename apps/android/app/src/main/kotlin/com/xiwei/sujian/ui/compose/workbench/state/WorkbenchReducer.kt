@@ -310,7 +310,7 @@ object WorkbenchReducer {
         } else {
             state.panels.values.filter { it.tabGroupId == oldGroupId }
         }
-        if (remainingPanels.isNotEmpty()) {
+        val intermediateState = if (remainingPanels.isNotEmpty()) {
             val activeTab = state.activeTabByGroup[oldGroupId]
             val activePanel = if (activeTab != null) state.panels[activeTab] else null
             val activeTabLeftGroup = activePanel == null
@@ -318,25 +318,28 @@ object WorkbenchReducer {
                 || (oldZone != null && activePanel.zone != oldZone)
             if (activeTabLeftGroup) {
                 val expandedRemaining = remainingPanels.filter { it.visibility == PanelVisibility.Expanded }
-                return if (expandedRemaining.isNotEmpty()) {
+                if (expandedRemaining.isNotEmpty()) {
                     state.copy(activeTabByGroup = state.activeTabByGroup + (oldGroupId to expandedRemaining.first().id))
                 } else {
                     state.copy(activeTabByGroup = state.activeTabByGroup - oldGroupId)
                 }
+            } else {
+                state
             }
-            return state
-        }
-        var cleanedState = state.copy(
-            dockGroupMeta = state.dockGroupMeta - oldGroupId,
-            dockGroupWeights = state.dockGroupWeights - oldGroupId,
-            activeTabByGroup = state.activeTabByGroup - oldGroupId,
-        )
-        if (oldZone != null) {
-            cleanedState = cleanedState.copy(
-                dockGroupMeta = reindexGroupOrders(cleanedState.dockGroupMeta, oldZone),
+        } else {
+            var cleanedState = state.copy(
+                dockGroupMeta = state.dockGroupMeta - oldGroupId,
+                dockGroupWeights = state.dockGroupWeights - oldGroupId,
+                activeTabByGroup = state.activeTabByGroup - oldGroupId,
             )
+            if (oldZone != null) {
+                cleanedState = cleanedState.copy(
+                    dockGroupMeta = reindexGroupOrders(cleanedState.dockGroupMeta, oldZone),
+                )
+            }
+            cleanedState
         }
-        return cleanedState
+        return normalizeActiveTabs(intermediateState)
     }
 
     private fun reindexGroupOrders(meta: Map<String, DockGroupMeta>, zone: DockZone): Map<String, DockGroupMeta> {
