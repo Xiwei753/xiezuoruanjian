@@ -91,9 +91,14 @@ fun SujianNavigationSuite(
     val capabilities = LocalAndroidCapabilities.current
     val isWideScreen = capabilities.windowSizeClass != WindowSizeClass.Compact
 
-    NavigationSuiteScaffold(
+        NavigationSuiteScaffold(
         navigationSuiteItems = {
             SujianDestination.entries.forEach { destination ->
+                val semanticTag = when (destination) {
+                    SujianDestination.Works -> SujianSemanticIds.NavigationWorks
+                    SujianDestination.Settings -> SujianSemanticIds.NavigationSettings
+                    else -> null
+                }
                 item(
                     selected = currentTopDestination == destination,
                     onClick = {
@@ -109,24 +114,16 @@ fun SujianNavigationSuite(
                         backStack.clear()
                         backStack.add(targetRoute)
                     },
+                    modifier = if (semanticTag != null) Modifier.testTag(semanticTag) else Modifier,
                     icon = {
-                        val semanticTag = when (destination) {
-                            SujianDestination.Works -> SujianSemanticIds.NavigationWorks
-                            SujianDestination.Settings -> SujianSemanticIds.NavigationSettings
-                            else -> null
-                        }
-                        androidx.compose.foundation.layout.Box(
-                            modifier = if (semanticTag != null) Modifier.testTag(semanticTag) else Modifier
-                        ) {
-                            Icon(
-                                imageVector = if (currentTopDestination == destination) {
-                                    destination.selectedIcon
-                                } else {
-                                    destination.unselectedIcon
-                                },
-                                contentDescription = stringResource(id = destination.labelResId),
-                            )
-                        }
+                        Icon(
+                            imageVector = if (currentTopDestination == destination) {
+                                destination.selectedIcon
+                            } else {
+                                destination.unselectedIcon
+                            },
+                            contentDescription = stringResource(id = destination.labelResId),
+                        )
                     },
                     label = {
                         Text(text = stringResource(id = destination.labelResId))

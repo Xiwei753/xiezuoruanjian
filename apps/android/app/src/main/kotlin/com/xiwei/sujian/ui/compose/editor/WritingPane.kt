@@ -170,7 +170,7 @@ fun WritingPane(
         }
     }
 
-    LaunchedEffect(targetId) {
+    LaunchedEffect(targetId, uiState.loading) {
         if (coordinator.activeTargetId != targetId && !uiState.loading) {
             coordinator.beginEdit(targetId, uiState.content.toByteArray(Charsets.UTF_8).size)
         }
