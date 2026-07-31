@@ -195,7 +195,7 @@ pub enum FirstSyncMode {
     UnrelatedHistories,
 }
 
-/// 同步配置 — 持久化为 `app-meta/sync/config.json`，UI 层读写。
+/// 同步配置 — 持久化为 `app-meta/sync/sync_config.json`，UI 层读写。
 ///
 /// 非线程安全：只在主线程读写，同步引擎在同步期间持有快照。
 /// `sync_interval_seconds` 最小有效值为 60（引擎侧 clamp），0 表示仅手动同步。
@@ -243,7 +243,7 @@ pub(crate) fn default_branch() -> String {
     "main".to_string()
 }
 
-/// 同步密钥 — 敏感凭证，不持久化到 config.json，由平台端安全存储注入。
+/// 同步密钥 — 敏感凭证，不持久化到 sync_config.json，由平台端安全存储注入。
 ///
 /// `token`：GitHub personal access token（HTTPS 模式）。
 /// `ssh_private_key`：SSH deploy key（SSH 模式，当前未使用）。
