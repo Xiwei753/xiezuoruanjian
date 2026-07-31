@@ -102,11 +102,18 @@ class BridgeMapperContractTest {
             order = 1,
             wordCount = 100U,
             hash = "h1",
-            note = null
+            note = "a note"
         )
         val dto = ChapterContentDto(meta = metaDto, content = "Hello world")
         val model = dto.toModel()
         assertEquals("ch1", model.meta.id)
+        assertEquals("Ch", model.meta.title)
+        assertEquals("2023-01-01", model.meta.createdAt)
+        assertEquals("2023-01-02", model.meta.updatedAt)
+        assertEquals(1, model.meta.order)
+        assertEquals(100, model.meta.wordCount)
+        assertEquals("h1", model.meta.hash)
+        assertEquals("a note", model.meta.note)
         assertEquals("Hello world", model.content)
     }
 
@@ -130,17 +137,17 @@ class BridgeMapperContractTest {
     }
 
     @Test
-    fun recentEditDto_roundtrip_viaWorkspaceSummary() {
-        val projectDto = ProjectDto(
-            id = "p1",
-            title = "P",
-            createdAt = "2023-01-01",
-            updatedAt = "2023-01-02"
+    fun recentEditDto_toModel_mapsAllFields() {
+        val dto = RecentEditDto(
+            projectId = "p1",
+            volumeId = "v1",
+            chapterId = "ch1",
+            timestamp = "2023-01-01T00:00:00Z"
         )
-        val project = projectDto.toModel()
-        assertEquals("p1", project.id)
-        assertEquals("P", project.title)
-        assertEquals("2023-01-01", project.createdAt)
-        assertEquals("2023-01-02", project.updatedAt)
+        val model = dto.toModel()
+        assertEquals("p1", model.projectId)
+        assertEquals("v1", model.volumeId)
+        assertEquals("ch1", model.chapterId)
+        assertEquals("2023-01-01T00:00:00Z", model.timestamp)
     }
 }

@@ -36,7 +36,7 @@ class ProjectBridge internal constructor(private val holder: WriterAppServiceHol
     }
 
     fun getRecentEdits(): BridgeResult<List<RecentEdit>> = holder.wrapResult {
-        holder.service.getRecentEdits().map { RecentEdit(it.projectId, it.volumeId, it.chapterId, it.timestamp) }
+        holder.service.getRecentEdits().map { it.toModel() }
     }
 
     fun recordRecentEdit(projectId: String, volumeId: String, chapterId: String): BridgeResult<Boolean> = holder.wrapResult {

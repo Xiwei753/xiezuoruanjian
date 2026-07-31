@@ -12,6 +12,7 @@ import com.xiwei.sujian.model.FirstSyncMode
 import com.xiwei.sujian.model.LocalSettings
 import com.xiwei.sujian.model.Project
 import com.xiwei.sujian.model.ProjectStats
+import com.xiwei.sujian.model.RecentEdit
 import com.xiwei.sujian.model.ProjectWritingStatsItem
 import com.xiwei.sujian.model.ProjectWritingStatsSummary
 import com.xiwei.sujian.model.SyncConfig
@@ -40,6 +41,7 @@ import uniffi.writer_core.DeviceStatsSummaryDto
 import uniffi.writer_core.LocalSettingsDto
 import uniffi.writer_core.ProjectDto
 import uniffi.writer_core.ProjectStatsDto
+import uniffi.writer_core.RecentEditDto
 import uniffi.writer_core.ProjectStatsRecordDto
 import uniffi.writer_core.ProjectStatsSummaryDto
 import uniffi.writer_core.SpeedCurvePointDto
@@ -73,6 +75,8 @@ internal fun WriterException.toWireErrorCode(): String = when (this) {
 }
 
 internal fun ProjectDto.toModel() = Project(id, title, createdAt, updatedAt)
+
+internal fun RecentEditDto.toModel() = RecentEdit(projectId, volumeId, chapterId, timestamp)
 
 internal fun ProjectStatsDto.toModel() = ProjectStats(
     totalWordCount = totalWordCount.toInt(),
