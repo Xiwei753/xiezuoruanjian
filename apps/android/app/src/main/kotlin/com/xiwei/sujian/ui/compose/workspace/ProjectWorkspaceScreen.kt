@@ -179,7 +179,9 @@ private fun WorkbenchWorkspaceContent(
             when (action) {
                 is WorkbenchAction.ResizePanel,
                 is WorkbenchAction.MoveFloatingPanel,
-                is WorkbenchAction.ResizeFloatingPanel -> workbenchVm.dispatchDeferredPersist(action)
+                is WorkbenchAction.ResizeFloatingPanel,
+                is WorkbenchAction.ResizeDockSplit,
+                is WorkbenchAction.ResizeDockZone -> workbenchVm.dispatchDeferredPersist(action)
                 else -> workbenchVm.dispatch(action)
             }
         },

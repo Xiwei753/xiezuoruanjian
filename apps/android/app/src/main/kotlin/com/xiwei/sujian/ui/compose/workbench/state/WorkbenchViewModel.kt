@@ -44,7 +44,7 @@ class WorkbenchViewModel(
 
     fun dispatch(action: WorkbenchAction) {
         layoutState = WorkbenchReducer.reduce(layoutState, action)
-        if (action !is WorkbenchAction.ResizePanel && action !is WorkbenchAction.ResizePanelDelta && action !is WorkbenchAction.MoveFloatingPanel) {
+        if (action !is WorkbenchAction.ResizePanel && action !is WorkbenchAction.ResizePanelDelta && action !is WorkbenchAction.MoveFloatingPanel && action !is WorkbenchAction.ClampFloatingPanels) {
             schedulePersist()
         }
     }
@@ -71,6 +71,11 @@ class WorkbenchViewModel(
         lastMaxWidthDp = maxWidthDp
         lastMaxHeightDp = maxHeightDp
         dispatch(WorkbenchAction.ClampFloatingPanels(maxWidthDp, maxHeightDp))
+        pendingResizeJob?.cancel()
+        pendingResizeJob = viewModelScope.launch {
+            kotlinx.coroutines.delay(500)
+            persistLayout()
+        }
     }
 
     private suspend fun switchStorageKey(newKey: LayoutStorageKey) {

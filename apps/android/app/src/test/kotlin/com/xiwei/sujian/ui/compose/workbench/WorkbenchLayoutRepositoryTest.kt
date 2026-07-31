@@ -2,7 +2,9 @@ package com.xiwei.sujian.ui.compose.workbench
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.xiwei.sujian.ui.compose.workbench.model.DockGroupMeta
 import com.xiwei.sujian.ui.compose.workbench.model.DockZone
+import com.xiwei.sujian.ui.compose.workbench.model.LAYOUT_SNAPSHOT_VERSION
 import com.xiwei.sujian.ui.compose.workbench.model.PanelVisibility
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchLayoutState
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelId
@@ -15,6 +17,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -135,6 +138,79 @@ class WorkbenchLayoutRepositoryTest {
         assertNotNull(loaded2)
         assertEquals(WorkbenchPreset.FocusWriting, loaded1!!.preset)
         assertEquals(WorkbenchPreset.AiWriting, loaded2!!.preset)
+    }
+
+    @Test
+    fun saveAndLoad_roundTrip_preservesDockZoneSizeDp() = runTest {
+        val state = WorkbenchReducerTestHelper.createTestLayoutState(WorkbenchPreset.Custom).copy(
+            dockZoneSizeDp = mapOf(DockZone.Left to 350f, DockZone.Right to 420f, DockZone.Bottom to 250f)
+        )
+        repository.saveLayout(testKey, state)
+        val loaded = repository.loadLayout(testKey)
+        assertNotNull(loaded)
+        assertEquals(350f, loaded!!.dockZoneSizeDp[DockZone.Left]!!, 0.01f)
+        assertEquals(420f, loaded.dockZoneSizeDp[DockZone.Right]!!, 0.01f)
+        assertEquals(250f, loaded.dockZoneSizeDp[DockZone.Bottom]!!, 0.01f)
+    }
+
+    @Test
+    fun saveAndLoad_roundTrip_preservesDockGroupWeights() = runTest {
+        val state = WorkbenchReducerTestHelper.createTestLayoutState(WorkbenchPreset.Custom).copy(
+            dockGroupWeights = mapOf("left-nav" to 2f, "right-tools" to 1.5f)
+        )
+        repository.saveLayout(testKey, state)
+        val loaded = repository.loadLayout(testKey)
+        assertNotNull(loaded)
+        assertEquals(2f, loaded!!.dockGroupWeights["left-nav"]!!, 0.01f)
+        assertEquals(1.5f, loaded.dockGroupWeights["right-tools"]!!, 0.01f)
+    }
+
+    @Test
+    fun saveAndLoad_roundTrip_preservesDockGroupMeta() = runTest {
+        val state = WorkbenchReducerTestHelper.createTestLayoutState(WorkbenchPreset.Custom).copy(
+            dockGroupMeta = mapOf(
+                "left-nav" to DockGroupMeta("left-nav", DockZone.Left, 0),
+                "right-tools" to DockGroupMeta("right-tools", DockZone.Right, 1),
+            )
+        )
+        repository.saveLayout(testKey, state)
+        val loaded = repository.loadLayout(testKey)
+        assertNotNull(loaded)
+        assertEquals(DockZone.Left, loaded!!.dockGroupMeta["left-nav"]!!.zone)
+        assertEquals(0, loaded.dockGroupMeta["left-nav"]!!.order)
+        assertEquals(DockZone.Right, loaded.dockGroupMeta["right-tools"]!!.zone)
+        assertEquals(1, loaded.dockGroupMeta["right-tools"]!!.order)
+    }
+
+    @Test
+    fun saveAndLoad_roundTrip_preservesNextFloatingZIndex() = runTest {
+        val state = WorkbenchReducerTestHelper.createTestLayoutState(WorkbenchPreset.Custom).copy(
+            nextFloatingZIndex = 7
+        )
+        repository.saveLayout(testKey, state)
+        val loaded = repository.loadLayout(testKey)
+        assertNotNull(loaded)
+        assertEquals(7, loaded!!.nextFloatingZIndex)
+    }
+
+    @Test
+    fun saveAndLoad_roundTrip_preservesSnapshotVersion() = runTest {
+        val state = WorkbenchReducerTestHelper.createTestLayoutState(WorkbenchPreset.Custom)
+        repository.saveLayout(testKey, state)
+        val loaded = repository.loadLayout(testKey)
+        assertNotNull(loaded)
+        assertEquals(LAYOUT_SNAPSHOT_VERSION, loaded!!.snapshotVersion)
+    }
+
+    @Test
+    fun saveAndLoad_roundTrip_preservesActiveOverlayPanelId() = runTest {
+        val state = WorkbenchReducerTestHelper.createTestLayoutStateWithPanel(
+            WorkbenchPanelId.AiAssistant, DockZone.Right, PanelVisibility.Expanded
+        ).copy(activeOverlayPanelId = WorkbenchPanelId.AiAssistant)
+        repository.saveLayout(testKey, state)
+        val loaded = repository.loadLayout(testKey)
+        assertNotNull(loaded)
+        assertEquals(WorkbenchPanelId.AiAssistant, loaded!!.activeOverlayPanelId)
     }
 }
 

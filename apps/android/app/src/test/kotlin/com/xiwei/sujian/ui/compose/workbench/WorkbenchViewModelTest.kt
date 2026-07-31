@@ -14,6 +14,7 @@ import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchViewModel
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -75,6 +76,22 @@ class WorkbenchViewModelTest {
         viewModel.dispatchDeferredPersist(WorkbenchAction.ResizePanel(WorkbenchPanelId.ChapterNavigator, 380f))
         val size = viewModel.layoutState.panels[WorkbenchPanelId.ChapterNavigator]?.sizeDp
         assertEquals(380f, size!!, 0.01f)
+    }
+
+    @Test
+    fun dispatchDeferredPersist_resizeDockSplit_updatesWeightsInMemory() {
+        viewModel.dispatchDeferredPersist(WorkbenchAction.ResizeDockSplit(DockZone.Left, "left-nav", "left-extra", 50f, 320f))
+        val weights = viewModel.layoutState.dockGroupWeights
+        assertTrue(weights.containsKey("left-nav"))
+    }
+
+    @Test
+    fun dispatchDeferredPersist_resizeDockZone_updatesZoneSizeInMemory() {
+        viewModel.dispatch(WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        viewModel.dispatchDeferredPersist(WorkbenchAction.ResizeDockZone(DockZone.Left, 50f, 1200f))
+        val zoneSize = viewModel.layoutState.dockZoneSizeDp[DockZone.Left]
+        assertNotNull(zoneSize)
+        assertTrue(zoneSize!! > 320f)
     }
 
     @Test
@@ -169,5 +186,13 @@ class WorkbenchViewModelTest {
         val panel = viewModel.layoutState.panels[WorkbenchPanelId.AiAssistant]!!
         assertTrue(panel.floatingX >= -(panel.floatingWidthDp - 32f))
         assertTrue(panel.floatingY >= 0f)
+    }
+
+    @Test
+    fun dispatchDeferredPersist_cancelsPreviousJob() {
+        viewModel.dispatchDeferredPersist(WorkbenchAction.ResizeDockZone(DockZone.Left, 10f, 1200f))
+        viewModel.dispatchDeferredPersist(WorkbenchAction.ResizeDockZone(DockZone.Left, 20f, 1200f))
+        val zoneSize = viewModel.layoutState.dockZoneSizeDp[DockZone.Left]
+        assertNotNull(zoneSize)
     }
 }

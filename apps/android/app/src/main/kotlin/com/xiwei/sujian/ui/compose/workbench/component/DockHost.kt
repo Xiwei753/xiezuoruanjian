@@ -53,7 +53,8 @@ fun DockHost(
     zone: DockZone,
     panels: List<WorkbenchPanelState>,
     activeTabByGroup: Map<String, WorkbenchPanelId>,
-    dockGroupSizes: Map<String, Float> = emptyMap(),
+    dockGroupWeights: Map<String, Float> = emptyMap(),
+    dockZoneSizeDp: Float = 0f,
     onFloat: (WorkbenchPanelId) -> Unit,
     onCollapse: (WorkbenchPanelId) -> Unit,
     onHide: (WorkbenchPanelId) -> Unit,
@@ -63,7 +64,7 @@ fun DockHost(
     onDrag: ((WorkbenchPanelId, Float, Float) -> Unit)? = null,
     onDragEnd: ((WorkbenchPanelId) -> Unit)? = null,
     onDragCancel: (() -> Unit)? = null,
-    onResizeGroup: ((groupId: String, newSizeDp: Float) -> Unit)? = null,
+    onResizeSplit: ((zone: DockZone, beforeGroupId: String, afterGroupId: String, deltaDp: Float, availableMainAxisDp: Float) -> Unit)? = null,
     onRegisterTabGroupHitArea: ((TabGroupHitArea) -> Unit)? = null,
     onTitleBarPositionChanged: ((panelId: WorkbenchPanelId, xWindowPx: Float, yWindowPx: Float) -> Unit)? = null,
     modifier: Modifier = Modifier,
@@ -77,12 +78,12 @@ fun DockHost(
         .groupBy { it.tabGroupId }
         .map { (groupId, groupPanels) ->
             val sorted = groupPanels.sortedBy { it.order }
-            val sizeRatio = dockGroupSizes[groupId] ?: 280f
+            val weight = dockGroupWeights[groupId] ?: 1f
             DockGroupState(
                 id = groupId,
                 zone = zone,
                 order = sorted.firstOrNull()?.order ?: 0,
-                sizeRatio = sizeRatio,
+                weight = weight,
                 activePanelId = activeTabByGroup[groupId] ?: sorted.firstOrNull()?.id,
                 panelIds = sorted.map { it.id },
             )
@@ -98,13 +99,14 @@ fun DockHost(
     ) {
         when (zone) {
             DockZone.Left, DockZone.Right -> {
+                val zoneWidth = dockZoneSizeDp.coerceAtLeast(0f)
                 if (groups.size <= 1) {
                     val group = groups.first()
                     val activePanelId = group.activePanelId ?: group.panelIds.firstOrNull()
                     val activePanel = expandedPanels.find { it.id == activePanelId } ?: expandedPanels.first()
                     Column(
                         modifier = Modifier
-                            .width(group.sizeRatio.dp)
+                            .width(zoneWidth.dp)
                             .fillMaxHeight()
                             .onGloballyPositioned { coords ->
                                 onRegisterTabGroupHitArea?.invoke(
@@ -142,7 +144,11 @@ fun DockHost(
                         }
                     }
                 } else {
-                    Column(modifier = Modifier.fillMaxHeight()) {
+                    Column(
+                        modifier = Modifier
+                            .width(zoneWidth.dp)
+                            .fillMaxHeight()
+                    ) {
                         for ((index, group) in groups.withIndex()) {
                             val groupPanels = expandedPanels.filter { it.tabGroupId == group.id }
                             val activePanelId = group.activePanelId ?: group.panelIds.firstOrNull()
@@ -150,8 +156,8 @@ fun DockHost(
                             if (activePanel != null) {
                                 Column(
                                     modifier = Modifier
-                                        .width(group.sizeRatio.dp)
-                                        .weight(1f)
+                                        .weight(group.weight.coerceAtLeast(0.1f))
+                                        .fillMaxWidth()
                                         .onGloballyPositioned { coords ->
                                             onRegisterTabGroupHitArea?.invoke(
                                                 computeTabGroupHitArea(group.id, coords, density.density)
@@ -189,12 +195,14 @@ fun DockHost(
                                 }
                             }
                             if (index < groups.size - 1) {
-                                DockGroupResizeHandle(
+                                val beforeGroupId = group.id
+                                val afterGroupId = groups[index + 1].id
+                                DockSplitResizeHandle(
                                     zone = zone,
-                                    groupId = group.id,
-                                    onResize = { gId, delta ->
-                                        onResizeGroup?.invoke(gId, delta)
-                                    },
+                                    beforeGroupId = beforeGroupId,
+                                    afterGroupId = afterGroupId,
+                                    zoneSizeDp = zoneWidth,
+                                    onResizeSplit = onResizeSplit,
                                     modifier = Modifier.fillMaxWidth().height(4.dp),
                                 )
                             }
@@ -203,6 +211,7 @@ fun DockHost(
                 }
             }
             DockZone.Bottom -> {
+                val zoneHeight = dockZoneSizeDp.coerceAtLeast(0f)
                 if (groups.size <= 1) {
                     val group = groups.first()
                     val activePanelId = group.activePanelId ?: group.panelIds.firstOrNull()
@@ -210,7 +219,7 @@ fun DockHost(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(group.sizeRatio.dp)
+                            .height(zoneHeight.dp)
                             .onGloballyPositioned { coords ->
                                 onRegisterTabGroupHitArea?.invoke(
                                     computeTabGroupHitArea(group.id, coords, density.density)
@@ -247,7 +256,11 @@ fun DockHost(
                         }
                     }
                 } else {
-                    Row(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(zoneHeight.dp)
+                    ) {
                         for ((index, group) in groups.withIndex()) {
                             val groupPanels = expandedPanels.filter { it.tabGroupId == group.id }
                             val activePanelId = group.activePanelId ?: group.panelIds.firstOrNull()
@@ -255,8 +268,8 @@ fun DockHost(
                             if (activePanel != null) {
                                 Column(
                                     modifier = Modifier
-                                        .weight(group.sizeRatio.coerceAtLeast(1f))
-                                        .height(group.sizeRatio.dp.coerceIn(220.dp, 2000.dp))
+                                        .weight(group.weight.coerceAtLeast(0.1f))
+                                        .fillMaxHeight()
                                         .onGloballyPositioned { coords ->
                                             onRegisterTabGroupHitArea?.invoke(
                                                 computeTabGroupHitArea(group.id, coords, density.density)
@@ -294,12 +307,14 @@ fun DockHost(
                                 }
                             }
                             if (index < groups.size - 1) {
-                                DockGroupResizeHandle(
+                                val beforeGroupId = group.id
+                                val afterGroupId = groups[index + 1].id
+                                DockSplitResizeHandle(
                                     zone = zone,
-                                    groupId = group.id,
-                                    onResize = { gId, delta ->
-                                        onResizeGroup?.invoke(gId, delta)
-                                    },
+                                    beforeGroupId = beforeGroupId,
+                                    afterGroupId = afterGroupId,
+                                    zoneSizeDp = zoneHeight,
+                                    onResizeSplit = onResizeSplit,
                                     modifier = Modifier.fillMaxHeight().width(4.dp),
                                 )
                             }
@@ -313,10 +328,12 @@ fun DockHost(
 }
 
 @Composable
-fun DockGroupResizeHandle(
+fun DockSplitResizeHandle(
     zone: DockZone,
-    groupId: String,
-    onResize: (groupId: String, deltaDp: Float) -> Unit,
+    beforeGroupId: String,
+    afterGroupId: String,
+    zoneSizeDp: Float,
+    onResizeSplit: ((zone: DockZone, beforeGroupId: String, afterGroupId: String, deltaDp: Float, availableMainAxisDp: Float) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val handleColor = MaterialTheme.colorScheme.outlineVariant
@@ -325,7 +342,7 @@ fun DockGroupResizeHandle(
     Box(
         modifier = modifier
             .background(handleColor)
-            .pointerInput(zone, groupId) {
+            .pointerInput(zone, beforeGroupId, afterGroupId) {
                 detectDragGestures(
                     onDragEnd = {},
                     onDragCancel = {},
@@ -335,8 +352,8 @@ fun DockGroupResizeHandle(
                         DockZone.Bottom -> dragAmount.x / density.density
                         DockZone.Floating -> 0f
                     }
-                    if (deltaDp != 0f) {
-                        onResize(groupId, deltaDp)
+                    if (deltaDp != 0f && onResizeSplit != null) {
+                        onResizeSplit(zone, beforeGroupId, afterGroupId, deltaDp, zoneSizeDp)
                     }
                     change.consume()
                 }

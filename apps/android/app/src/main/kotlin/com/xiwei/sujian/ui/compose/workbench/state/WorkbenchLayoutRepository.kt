@@ -7,7 +7,9 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import com.xiwei.sujian.ui.compose.workbench.model.DockGroupMeta
 import com.xiwei.sujian.ui.compose.workbench.model.DockZone
+import com.xiwei.sujian.ui.compose.workbench.model.LAYOUT_SNAPSHOT_VERSION
 import com.xiwei.sujian.ui.compose.workbench.model.PanelVisibility
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchLayoutState
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelId
@@ -53,6 +55,7 @@ class WorkbenchLayoutRepository(
         withContext(Dispatchers.IO) {
             context.workbenchDataStore.edit { prefs ->
                 val prefix = key.toStorageKey()
+                prefs[intPreferencesKey("${prefix}.snapshotVersion")] = state.snapshotVersion
                 for (panel in state.panels.values) {
                     val p = "${prefix}.panel.${panel.id.name}"
                     prefs[stringPreferencesKey("${p}.zone")] = panel.zone.name
@@ -70,12 +73,22 @@ class WorkbenchLayoutRepository(
                 for ((groupId, panelId) in state.activeTabByGroup) {
                     prefs[stringPreferencesKey("${prefix}.activeTab.${groupId}")] = panelId.name
                 }
-                for ((groupId, size) in state.dockGroupSizes) {
-                    prefs[floatPreferencesKey("${prefix}.groupSize.${groupId}")] = size
+                for ((zone, size) in state.dockZoneSizeDp) {
+                    prefs[floatPreferencesKey("${prefix}.zoneSize.${zone.name}")] = size
+                }
+                for ((groupId, weight) in state.dockGroupWeights) {
+                    prefs[floatPreferencesKey("${prefix}.groupWeight.${groupId}")] = weight
+                }
+                val allGroupIds = (state.dockGroupWeights.keys + state.dockGroupMeta.keys).distinct()
+                prefs[stringPreferencesKey("${prefix}.allGroupIds")] = allGroupIds.joinToString(",")
+                for ((groupId, meta) in state.dockGroupMeta) {
+                    prefs[stringPreferencesKey("${prefix}.groupMeta.${groupId}.zone")] = meta.zone.name
+                    prefs[intPreferencesKey("${prefix}.groupMeta.${groupId}.order")] = meta.order
                 }
                 if (state.activeOverlayPanelId != null) {
                     prefs[stringPreferencesKey("${prefix}.activeOverlay")] = state.activeOverlayPanelId.name
                 }
+                prefs[intPreferencesKey("${prefix}.nextFloatingZIndex")] = state.nextFloatingZIndex
             }
         }
     }
@@ -87,6 +100,7 @@ class WorkbenchLayoutRepository(
                 val prefix = key.toStorageKey()
                 val presetStr = prefs[stringPreferencesKey("${prefix}.preset")] ?: return@withContext null
                 val preset = WorkbenchPreset.entries.find { it.name == presetStr } ?: WorkbenchPreset.Custom
+                val snapshotVersion = prefs[intPreferencesKey("${prefix}.snapshotVersion")] ?: 1
 
                 val panels = WorkbenchPanelId.entries.associateWith { id ->
                     val p = "${prefix}.panel.${id.name}"
@@ -118,25 +132,71 @@ class WorkbenchLayoutRepository(
                     }
                 }
 
-                val dockGroupSizes = mutableMapOf<String, Float>()
-                val allGroupIds = panels.values.map { it.tabGroupId }.distinct().filter { it.isNotEmpty() }
-                for (groupId in allGroupIds) {
-                    val size = prefs[floatPreferencesKey("${prefix}.groupSize.${groupId}")]
-                    if (size != null) {
-                        dockGroupSizes[groupId] = size
-                    }
-                }
-
                 val activeOverlayStr = prefs[stringPreferencesKey("${prefix}.activeOverlay")]
                 val activeOverlayPanelId = activeOverlayStr?.let {
                     WorkbenchPanelId.entries.find { id -> id.name == it }
                 }
 
+                if (snapshotVersion < 2) {
+                    val dockGroupSizes = mutableMapOf<String, Float>()
+                    val allGroupIds = panels.values.map { it.tabGroupId }.distinct().filter { it.isNotEmpty() }
+                    for (groupId in allGroupIds) {
+                        val size = prefs[floatPreferencesKey("${prefix}.groupSize.${groupId}")]
+                        if (size != null) {
+                            dockGroupSizes[groupId] = size
+                        }
+                    }
+                    return@withContext WorkbenchReducer.migrateFromV1(
+                        panels = panels,
+                        activeTabByGroup = activeTabByGroup,
+                        preset = preset,
+                        dockGroupSizes = dockGroupSizes,
+                        activeOverlayPanelId = activeOverlayPanelId,
+                    )
+                }
+
+                val dockZoneSizeDp = mutableMapOf<DockZone, Float>()
+                for (zone in listOf(DockZone.Left, DockZone.Right, DockZone.Bottom)) {
+                    val size = prefs[floatPreferencesKey("${prefix}.zoneSize.${zone.name}")]
+                    if (size != null) {
+                        dockZoneSizeDp[zone] = size
+                    }
+                }
+
+                val dockGroupWeights = mutableMapOf<String, Float>()
+                val allGroupIdsStr = prefs[stringPreferencesKey("${prefix}.allGroupIds")]
+                val allGroupIds = if (allGroupIdsStr != null) {
+                    allGroupIdsStr.split(",").filter { it.isNotEmpty() }
+                } else {
+                    panels.values.map { it.tabGroupId }.distinct().filter { it.isNotEmpty() }
+                }
+                for (groupId in allGroupIds) {
+                    val weight = prefs[floatPreferencesKey("${prefix}.groupWeight.${groupId}")]
+                    if (weight != null) {
+                        dockGroupWeights[groupId] = weight
+                    }
+                }
+
+                val dockGroupMeta = mutableMapOf<String, DockGroupMeta>()
+                for (groupId in allGroupIds) {
+                    val zoneStr = prefs[stringPreferencesKey("${prefix}.groupMeta.${groupId}.zone")]
+                    val order = prefs[intPreferencesKey("${prefix}.groupMeta.${groupId}.order")]
+                    if (zoneStr != null && order != null) {
+                        val zone = DockZone.entries.find { it.name == zoneStr } ?: DockZone.Left
+                        dockGroupMeta[groupId] = DockGroupMeta(groupId, zone, order)
+                    }
+                }
+
+                val nextFloatingZIndex = prefs[intPreferencesKey("${prefix}.nextFloatingZIndex")] ?: 1
+
                 WorkbenchLayoutState(
                     panels = panels,
                     activeTabByGroup = activeTabByGroup,
                     preset = preset,
-                    dockGroupSizes = dockGroupSizes,
+                    nextFloatingZIndex = nextFloatingZIndex,
+                    dockZoneSizeDp = dockZoneSizeDp,
+                    dockGroupWeights = dockGroupWeights,
+                    dockGroupMeta = dockGroupMeta,
                     activeOverlayPanelId = activeOverlayPanelId,
                 )
             } catch (_: Exception) {
