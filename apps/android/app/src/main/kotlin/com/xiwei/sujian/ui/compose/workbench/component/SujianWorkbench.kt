@@ -334,7 +334,7 @@ fun SujianWorkbench(
                     val (cx, cy) = WorkbenchReducer.clampFloatingPosition(x, y, w, h, maxWidthDp, maxHeightDp)
                     onAction(WorkbenchAction.MoveFloatingPanel(id, cx, cy))
                 },
-                onDock = { id, zone -> onAction(WorkbenchAction.DockPanel(id, zone)) },
+                onDock = { id, zone -> onAction(WorkbenchAction.DockPanelAsNewGroup(id, zone, Int.MAX_VALUE)) },
                 onBringToFront = { onAction(WorkbenchAction.BringFloatingToFront(it)) },
                 onResizeFloating = { id, w, h ->
                     val clampedW = w.coerceIn(200f, maxWidthDp)

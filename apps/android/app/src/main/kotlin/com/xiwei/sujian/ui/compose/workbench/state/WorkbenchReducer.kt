@@ -592,10 +592,6 @@ object WorkbenchReducer {
         return state.copy(activeTabByGroup = updatedActiveTab)
     }
 
-    private fun focusWritingPreset(): WorkbenchLayoutState {
-        return computeDefaultLayout()
-    }
-
     private fun chapterWritingPreset(): WorkbenchLayoutState {
         val base = computeDefaultLayout()
         val panels = base.panels + (WorkbenchPanelId.ChapterNavigator to base.panels.getValue(WorkbenchPanelId.ChapterNavigator).copy(
