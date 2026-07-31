@@ -18,6 +18,17 @@ mod sync;
 mod volume;
 mod workspace;
 
+#[cfg(test)]
+mod action_tests;
+#[cfg(test)]
+mod project_tests;
+#[cfg(test)]
+mod stats_tests;
+#[cfg(test)]
+mod volume_tests;
+#[cfg(test)]
+mod workspace_tests;
+
 pub use action::*;
 pub use editor::*;
 pub use platform::*;

@@ -86,3 +86,44 @@ fn test_execute_action_invalid_args_json() {
         .unwrap();
     assert!(!result.success);
 }
+
+#[test]
+fn test_execute_action_line_spacing_get_set() {
+    let temp_dir = tempdir().unwrap();
+    let core = WriterCore::new(temp_dir.path());
+
+    let result = core.execute_action("settings.editor.line_spacing.set", r#"{"multiplier": 0.5}"#, "").unwrap();
+    assert!(!result.success);
+
+    let result = core.execute_action("settings.editor.line_spacing.set", r#"{"multiplier": 4.0}"#, "").unwrap();
+    assert!(!result.success);
+
+    let result = core.execute_action("settings.editor.line_spacing.set", r#"{"multiplier": 2.0}"#, "").unwrap();
+    assert!(result.success);
+
+    let result = core.execute_action("settings.editor.line_spacing.get", "", "").unwrap();
+    assert!(result.success);
+    let data = result.data.unwrap();
+    assert_eq!(data["multiplier"].as_f64().unwrap(), 2.0);
+
+    let result = core.execute_action("settings.editor.line_spacing.set", r#"{}"#, "").unwrap();
+    assert!(!result.success);
+}
+
+#[test]
+fn test_execute_action_auto_indent_get_set() {
+    let temp_dir = tempdir().unwrap();
+    let core = WriterCore::new(temp_dir.path());
+
+    let result = core.execute_action("settings.editor.auto_indent.set", r#"{"enabled": true, "widthChars": 4.0}"#, "").unwrap();
+    assert!(result.success);
+
+    let result = core.execute_action("settings.editor.auto_indent.get", "", "").unwrap();
+    assert!(result.success);
+    let data = result.data.unwrap();
+    assert_eq!(data["enabled"].as_bool().unwrap(), true);
+    assert_eq!(data["widthChars"].as_f64().unwrap(), 4.0);
+
+    let result = core.execute_action("settings.editor.auto_indent.set", r#"{"widthChars": 2.0}"#, "").unwrap();
+    assert!(!result.success);
+}

@@ -66,10 +66,8 @@ mod tests {
         let _volume2 = create_volume(workspace_path, &project.id, "Volume 2").unwrap();
 
         let volumes = list_volumes(workspace_path, &project.id).unwrap();
-        // Since project creation might create a default volume, let's verify length
         assert!(volumes.len() >= 2);
 
-        // Try missing IDs
         let ordered_ids = vec![volume1.id.clone()];
         let result = reorder_volumes(workspace_path, &project.id, &ordered_ids);
         match result {
@@ -79,7 +77,6 @@ mod tests {
             _ => panic!("Expected Error::Other for missing IDs"),
         }
 
-        // Try extra non-existent IDs
         let mut extra_ids = volumes.iter().map(|v| v.id.clone()).collect::<Vec<_>>();
         extra_ids.push("non-existent-id".to_string());
         let result = reorder_volumes(workspace_path, &project.id, &extra_ids);
@@ -88,6 +85,34 @@ mod tests {
                 assert_eq!(msg, "Invalid ordered_ids for reorder")
             }
             _ => panic!("Expected Error::Other for extra non-existent IDs"),
+        }
+    }
+
+    #[test]
+    fn test_reorder_volumes_success() {
+        let dir = tempdir().unwrap();
+        let workspace_path = dir.path();
+        create_workspace(workspace_path).unwrap();
+
+        let project = create_project(workspace_path, "Test Project").unwrap();
+
+        let _volume1 = create_volume(workspace_path, &project.id, "Volume 1").unwrap();
+        let _volume2 = create_volume(workspace_path, &project.id, "Volume 2").unwrap();
+
+        let volumes = list_volumes(workspace_path, &project.id).unwrap();
+        let mut ordered_ids = volumes.iter().map(|v| v.id.clone()).collect::<Vec<_>>();
+
+        ordered_ids.reverse();
+
+        let result = reorder_volumes(workspace_path, &project.id, &ordered_ids);
+        assert!(result.is_ok());
+
+        let new_volumes = list_volumes(workspace_path, &project.id).unwrap();
+        let new_ids = new_volumes.iter().map(|v| v.id.clone()).collect::<Vec<_>>();
+        assert_eq!(new_ids, ordered_ids);
+
+        for (i, vol) in new_volumes.iter().enumerate() {
+            assert_eq!(vol.order, i as i32);
         }
     }
 
