@@ -1,6 +1,7 @@
 package com.xiwei.sujian.ui.compose.workbench.state
 
 import android.content.Context
+import android.util.Log
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
@@ -114,10 +115,10 @@ class WorkbenchLayoutRepository(
     }
 
     override suspend fun loadLayout(key: LayoutStorageKey): WorkbenchLayoutState? {
+        val prefix = key.toStorageKey()
         return withContext(Dispatchers.IO) {
             try {
                 val prefs = context.workbenchDataStore.data.first()
-                val prefix = key.toStorageKey()
                 val presetStr = prefs[stringPreferencesKey("${prefix}.preset")] ?: return@withContext null
                 val preset = WorkbenchPreset.entries.find { it.name == presetStr } ?: WorkbenchPreset.Custom
                 val snapshotVersion = prefs[intPreferencesKey("${prefix}.snapshotVersion")] ?: 1
@@ -223,7 +224,8 @@ class WorkbenchLayoutRepository(
                     dockGroupMeta = dockGroupMeta,
                     activeOverlayPanelId = activeOverlayPanelId,
                 )
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                Log.w("WorkbenchLayoutRepo", "Failed to load layout for key $prefix", e)
                 null
             }
         }

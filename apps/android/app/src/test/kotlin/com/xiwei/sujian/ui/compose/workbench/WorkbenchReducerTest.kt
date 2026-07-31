@@ -1472,6 +1472,28 @@ class WorkbenchReducerTest {
         assertFalse(result.activeTabByGroup.containsKey("g1"))
     }
 
+    @Test
+    fun cleanUpOldGroup_panelWithMatchingTabGroupIdButDifferentZone_notCountedAsRemaining() {
+        val state = defaultState.copy(
+            dockGroupWeights = mapOf("g1" to 1f, "target" to 1f),
+            dockGroupMeta = mapOf(
+                "g1" to DockGroupMeta("g1", DockZone.Left, 0),
+                "target" to DockGroupMeta("target", DockZone.Left, 1),
+            ),
+            activeTabByGroup = mapOf("g1" to WorkbenchPanelId.ChapterNavigator),
+            panels = defaultState.panels +
+                (WorkbenchPanelId.ChapterNavigator to defaultState.panels[WorkbenchPanelId.ChapterNavigator]!!.copy(
+                    zone = DockZone.Left, visibility = PanelVisibility.Expanded, tabGroupId = "g1"
+                )) +
+                (WorkbenchPanelId.Search to defaultState.panels[WorkbenchPanelId.Search]!!.copy(
+                    zone = DockZone.Floating, visibility = PanelVisibility.Expanded, tabGroupId = "g1"
+                )),
+        )
+        val result = WorkbenchReducer.reduce(state, WorkbenchAction.MovePanelToGroup(WorkbenchPanelId.ChapterNavigator, "target"))
+        assertFalse("group g1 has no remaining panel in Left zone (Search is Floating), so it must be deleted", result.dockGroupMeta.containsKey("g1"))
+        assertFalse(result.dockGroupWeights.containsKey("g1"))
+    }
+
     // --- Item 6 (follow-up): ResizeDockSplit space-insufficiency safety ---
 
     @Test

@@ -41,8 +41,6 @@ import com.xiwei.sujian.ui.compose.workbench.model.filterTabGroupHitAreas
 import com.xiwei.sujian.ui.compose.workbench.model.upsertTabGroupHitArea
 import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchReducer
 
-private const val SIDE_PANEL_MIN_DP = 280f
-private const val SIDE_PANEL_MAX_DP = 520f
 private const val DUAL_SIDE_THRESHOLD_DP = 1200
 
 @Composable
@@ -199,7 +197,7 @@ fun SujianWorkbench(
                         groups = leftDockGroups,
                         activeTabByGroup = layoutState.activeTabByGroup,
                         dockGroupWeights = layoutState.dockGroupWeights,
-                        dockZoneSizeDp = layoutState.dockZoneSizeDp[DockZone.Left] ?: 280f,
+                        dockZoneSizeDp = layoutState.dockZoneSizeDp[DockZone.Left] ?: WorkbenchReducer.SIDE_PANEL_MIN_DP,
                         onFloat = { onAction(WorkbenchAction.FloatPanel(it)) },
                         onCollapse = { onAction(WorkbenchAction.CollapsePanel(it)) },
                         onHide = { onAction(WorkbenchAction.HidePanel(it)) },
@@ -219,7 +217,7 @@ fun SujianWorkbench(
                     DockResizeHandle(
                         zone = DockZone.Left,
                         onResizeZoneDelta = { z, delta ->
-                            val otherActualWidth: Float? = if (showRightDock) layoutState.dockZoneSizeDp[DockZone.Right] ?: 280f else null
+                            val otherActualWidth: Float? = if (showRightDock) layoutState.actualSideWidthDp(DockZone.Right).let { if (it > 0f) it else null } else null
                             onAction(WorkbenchAction.ResizeDockZone(z, delta, maxWidthDp, otherActualWidth))
                         },
                         modifier = Modifier.fillMaxHeight(),
@@ -242,7 +240,7 @@ fun SujianWorkbench(
                     DockResizeHandle(
                         zone = DockZone.Right,
                         onResizeZoneDelta = { z, delta ->
-                            val otherActualWidth: Float? = if (leftForDock.isNotEmpty()) layoutState.dockZoneSizeDp[DockZone.Left] ?: 280f else null
+                            val otherActualWidth: Float? = if (leftForDock.isNotEmpty()) layoutState.actualSideWidthDp(DockZone.Left).let { if (it > 0f) it else null } else null
                             onAction(WorkbenchAction.ResizeDockZone(z, delta, maxWidthDp, otherActualWidth))
                         },
                         modifier = Modifier.fillMaxHeight(),
@@ -253,7 +251,7 @@ fun SujianWorkbench(
                         groups = rightDockGroups,
                         activeTabByGroup = layoutState.activeTabByGroup,
                         dockGroupWeights = layoutState.dockGroupWeights,
-                        dockZoneSizeDp = layoutState.dockZoneSizeDp[DockZone.Right] ?: 280f,
+                        dockZoneSizeDp = layoutState.dockZoneSizeDp[DockZone.Right] ?: WorkbenchReducer.SIDE_PANEL_MIN_DP,
                         onFloat = { onAction(WorkbenchAction.FloatPanel(it)) },
                         onCollapse = { onAction(WorkbenchAction.CollapsePanel(it)) },
                         onHide = { onAction(WorkbenchAction.HidePanel(it)) },
@@ -294,7 +292,7 @@ fun SujianWorkbench(
                     groups = bottomDockGroups,
                     activeTabByGroup = layoutState.activeTabByGroup,
                     dockGroupWeights = layoutState.dockGroupWeights,
-                    dockZoneSizeDp = layoutState.dockZoneSizeDp[DockZone.Bottom] ?: 220f,
+                    dockZoneSizeDp = layoutState.dockZoneSizeDp[DockZone.Bottom] ?: WorkbenchReducer.BOTTOM_PANEL_MIN_DP,
                     onFloat = { onAction(WorkbenchAction.FloatPanel(it)) },
                     onCollapse = { onAction(WorkbenchAction.CollapsePanel(it)) },
                     onHide = { onAction(WorkbenchAction.HidePanel(it)) },
@@ -368,10 +366,10 @@ fun SujianWorkbench(
                 if (overlayExpanded.isNotEmpty()) {
                     val activeOverlayId = presentationState.activeOverlayPanelId ?: overlayExpanded.first().id
                     val activePanel = overlayExpanded.find { it.id == activeOverlayId } ?: overlayExpanded.first()
-                    val overlayWidth = (layoutState.dockZoneSizeDp[activePanel.zone] ?: activePanel.sizeDp).dp.coerceIn(SIDE_PANEL_MIN_DP.dp, SIDE_PANEL_MAX_DP.dp)
+                    val overlayWidth = (layoutState.dockZoneSizeDp[activePanel.zone] ?: activePanel.sizeDp).dp.coerceIn(WorkbenchReducer.SIDE_PANEL_MIN_DP.dp, WorkbenchReducer.SIDE_PANEL_MAX_DP.dp)
                     val (overlayAlignment, overlayModifier) = when (activePanel.zone) {
                         DockZone.Left -> Alignment.CenterStart to Modifier.width(overlayWidth).fillMaxHeight()
-                        DockZone.Bottom -> Alignment.BottomCenter to Modifier.fillMaxWidth().height((layoutState.dockZoneSizeDp[DockZone.Bottom] ?: 220f).dp.coerceIn(220.dp, 400.dp))
+                        DockZone.Bottom -> Alignment.BottomCenter to Modifier.fillMaxWidth().height((layoutState.dockZoneSizeDp[DockZone.Bottom] ?: WorkbenchReducer.BOTTOM_PANEL_MIN_DP).dp.coerceIn(WorkbenchReducer.BOTTOM_PANEL_MIN_DP.dp, 400.dp))
                         else -> Alignment.CenterEnd to Modifier.width(overlayWidth).fillMaxHeight()
                     }
                     Surface(

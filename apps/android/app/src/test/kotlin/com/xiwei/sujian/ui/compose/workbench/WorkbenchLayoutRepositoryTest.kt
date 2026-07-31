@@ -159,7 +159,11 @@ class WorkbenchLayoutRepositoryTest {
     @Test
     fun saveAndLoad_roundTrip_preservesDockGroupWeights() = runTest {
         val state = WorkbenchReducerTestHelper.createTestLayoutState(WorkbenchPreset.Custom).copy(
-            dockGroupWeights = mapOf("left-nav" to 2f, "right-tools" to 1.5f)
+            dockGroupWeights = mapOf("left-nav" to 2f, "right-tools" to 1.5f),
+            dockGroupMeta = mapOf(
+                "left-nav" to DockGroupMeta("left-nav", DockZone.Left, 0),
+                "right-tools" to DockGroupMeta("right-tools", DockZone.Right, 0),
+            ),
         )
         repository.saveLayout(testKey, state)
         val loaded = repository.loadLayout(testKey)
@@ -387,11 +391,24 @@ internal object WorkbenchReducerTestHelper {
                 },
                 visibility = PanelVisibility.Collapsed,
                 sizeDp = 320f,
-                tabGroupId = "default",
+                tabGroupId = when (id) {
+                    WorkbenchPanelId.ProjectNavigator, WorkbenchPanelId.ChapterNavigator -> "left-nav"
+                    else -> "right-tools"
+                },
                 order = id.ordinal,
             )
         }
-        return WorkbenchLayoutState(panels = panels, activeTabByGroup = emptyMap(), preset = preset)
+        return WorkbenchLayoutState(
+            panels = panels,
+            activeTabByGroup = emptyMap(),
+            preset = preset,
+            dockZoneSizeDp = mapOf(DockZone.Left to 280f, DockZone.Right to 280f, DockZone.Bottom to 220f),
+            dockGroupWeights = mapOf("left-nav" to 1f, "right-tools" to 1f),
+            dockGroupMeta = mapOf(
+                "left-nav" to DockGroupMeta("left-nav", DockZone.Left, 0),
+                "right-tools" to DockGroupMeta("right-tools", DockZone.Right, 0),
+            ),
+        )
     }
 
     fun createTestLayoutStateWithPanel(

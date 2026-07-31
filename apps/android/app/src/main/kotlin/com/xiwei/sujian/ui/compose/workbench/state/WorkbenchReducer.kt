@@ -15,9 +15,9 @@ import kotlin.math.min
 
 object WorkbenchReducer {
 
-    private const val SIDE_PANEL_MIN_DP = 280f
-    private const val SIDE_PANEL_MAX_DP = 520f
-    private const val BOTTOM_PANEL_MIN_DP = 220f
+    internal const val SIDE_PANEL_MIN_DP = 280f
+    internal const val SIDE_PANEL_MAX_DP = 520f
+    internal const val BOTTOM_PANEL_MIN_DP = 220f
     private const val BOTTOM_PANEL_MAX_RATIO = 0.55f
     private const val EDITOR_MIN_DP = 480f
     private const val FLOATING_MIN_WIDTH_DP = 200f
