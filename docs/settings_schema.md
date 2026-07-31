@@ -1,7 +1,7 @@
 # 设置 Schema 定义
 
 Status: active
-Last verified: 2026-06-28
+Last verified: 2026-07-31
 Truth source: product decision / code
 Supersedes: None
 
@@ -41,8 +41,8 @@ Supersedes: None
 - `editorCoordinatedTextCursorAnimationEnabled`（布尔值，协同光标动画开关，默认 false）
 - `aiEnabled`（布尔值，AI 功能开关，默认 false）
 - `statsDeviceId`（字符串，统计设备 ID，默认自动生成 UUID）
-- `linuxQtSidebarWidth`（整数，Linux_qt 侧边栏宽度像素，默认 260；旧字段 `desktopSidebarWidth` 仍可读取）
-- `linuxQtEditorWidth`（整数，Linux_qt 编辑器宽度像素，默认 820；旧字段 `desktopEditorWidth` 仍可读取）
+- `desktopSidebarWidth`（浮点数，桌面端侧边栏宽度像素，默认 240.0；兼容读取 `linux_qt_sidebar_width`、`desktop_sidebar_width`、`linux_sidebar_width`）
+- `desktopEditorWidth`（浮点数，桌面端编辑器宽度像素，默认 0.0；兼容读取 `linux_qt_editor_width`、`desktop_editor_width`）
 - `diagnosticsEnabled`（布尔值，本地诊断日志开关，默认 true，不进入同步、不含敏感数据）
 - `diagnosticsVerbose`（布尔值，本地诊断详细模式，默认 true，不进入同步、不含敏感数据）
 
@@ -70,12 +70,17 @@ Supersedes: None
 - `lightScheme` / `darkScheme`（ThemeColorScheme，完整 Material 3 语义角色）
 
 ### `app-meta/sync/sync_config.json`
-存储同步配置。定义哪些文件/目录应该被同步。
-包括：
+存储同步配置。包括：
+- `enabled`（布尔值，是否启用同步）
+- `backend_type`（字符串，当前为 `github_api`，`git` 为预留）
 - `remote_url`（字符串）
-- `branch`（字符串）
+- `transport`（字符串，`https_token` 或 `ssh_deploy_key`）
+- `branch`（字符串，默认 `main`）
 - `auto_sync`（布尔值）
-- `proxy`（对象） [DEPRECATED — 代理功能已移除]
+- `sync_interval_seconds`（整数，0 表示仅手动同步）
+- `username`（字符串）
+- `has_network_permission`（布尔值）
+- `has_network_state_permission`（布尔值）
 
 ### `app-meta/sync/sync_secrets.local.json`
 存储敏感信息，如 GitHub 令牌、SSH 私钥。此文件保存在本地，**绝不**应被同步。
