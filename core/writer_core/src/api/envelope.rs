@@ -254,7 +254,7 @@ mod tests {
     }
 
     #[test]
-    fn error_envelope_json_contains_message_key() {
+    fn error_envelope_serializes_message_key() {
         let error = WriterError::SyncConflict("path conflict".into());
         let json = ResultEnvelope::<()>::error(error).to_json_string();
 
