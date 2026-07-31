@@ -1866,6 +1866,26 @@ class WorkbenchReducerTest {
     }
 
     @Test
+    fun togglePanel_expandPath_normalizesStaleActiveTabsInOtherGroups() {
+        val expanded1 = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val expanded2 = WorkbenchReducer.reduce(expanded1, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Search))
+        val rightGroupId = expanded2.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId ?: ""
+        val withActiveRight = WorkbenchReducer.reduce(expanded2, WorkbenchAction.ActivateTab(rightGroupId, WorkbenchPanelId.AiAssistant))
+        val hidden = WorkbenchReducer.reduce(withActiveRight, WorkbenchAction.HidePanel(WorkbenchPanelId.AiAssistant))
+        assertTrue("after hiding AiAssistant, right group activeTab should not be AiAssistant",
+            hidden.activeTabByGroup[rightGroupId] != WorkbenchPanelId.AiAssistant)
+        val manuallyCorrupted = hidden.copy(
+            activeTabByGroup = hidden.activeTabByGroup + (rightGroupId to WorkbenchPanelId.AiAssistant)
+        )
+        val collapsedLeft = manuallyCorrupted.copy(
+            panels = manuallyCorrupted.panels + (WorkbenchPanelId.ChapterNavigator to manuallyCorrupted.panels[WorkbenchPanelId.ChapterNavigator]!!.copy(visibility = PanelVisibility.Collapsed))
+        )
+        val result = WorkbenchReducer.reduce(collapsedLeft, WorkbenchAction.TogglePanel(WorkbenchPanelId.ChapterNavigator))
+        assertTrue("togglePanel(expand) should normalize stale activeTab in other groups",
+            result.activeTabByGroup[rightGroupId] != WorkbenchPanelId.AiAssistant)
+    }
+
+    @Test
     fun expandPanel_normalizesStaleActiveTabsInOtherGroups() {
         val expanded1 = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
         val expanded2 = WorkbenchReducer.reduce(expanded1, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Search))

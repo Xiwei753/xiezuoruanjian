@@ -64,7 +64,7 @@ object WorkbenchReducer {
         }
         val updated = updatePanel(state, panel.copy(visibility = newVisibility), markCustom = true)
         return if (newVisibility == PanelVisibility.Expanded) {
-            updated.copy(activeTabByGroup = updated.activeTabByGroup + (panel.tabGroupId to panelId))
+            normalizeActiveTabs(updated.copy(activeTabByGroup = updated.activeTabByGroup + (panel.tabGroupId to panelId)))
         } else {
             normalizeActiveTabs(updated)
         }
