@@ -120,6 +120,7 @@ class WorkbenchViewModel(
                 if (lastMaxWidthDp > 0f && lastMaxHeightDp > 0f) {
                     newState = WorkbenchReducer.reduce(newState, WorkbenchAction.ClampFloatingPanels(lastMaxWidthDp, lastMaxHeightDp))
                 }
+                newState = WorkbenchReducer.normalizeActiveTabs(newState)
                 layoutState = newState
                 currentStorageKey = newKey
             }

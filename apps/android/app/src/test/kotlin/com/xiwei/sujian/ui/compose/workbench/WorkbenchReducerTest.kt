@@ -2089,4 +2089,31 @@ class WorkbenchReducerTest {
             assertTrue("group $groupId has panels in zone ${meta.zone} matching its meta", panelsInMetaZone.isNotEmpty() || panelsInOtherZone.isEmpty())
         }
     }
+
+    @Test
+    fun normalizeActiveTabs_publicApi_repairsStaleActiveTabFromDisk() {
+        val expanded1 = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val expanded2 = WorkbenchReducer.reduce(expanded1, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Search))
+        val groupId = expanded2.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId ?: ""
+        val withActive = WorkbenchReducer.reduce(expanded2, WorkbenchAction.ActivateTab(groupId, WorkbenchPanelId.AiAssistant))
+        val floated = WorkbenchReducer.reduce(withActive, WorkbenchAction.FloatPanel(WorkbenchPanelId.AiAssistant))
+        val manualStale = floated.copy(
+            activeTabByGroup = floated.activeTabByGroup + (groupId to WorkbenchPanelId.AiAssistant)
+        )
+        val repaired = WorkbenchReducer.normalizeActiveTabs(manualStale)
+        val activeTab = repaired.activeTabByGroup[groupId]
+        assertTrue("normalizeActiveTabs should repair stale activeTab pointing to floated panel", activeTab != WorkbenchPanelId.AiAssistant)
+    }
+
+    @Test
+    fun normalizeActiveTabs_publicApi_repairsMissingPanelActiveTab() {
+        val expanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val groupId = expanded.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId ?: ""
+        val staleState = expanded.copy(
+            activeTabByGroup = expanded.activeTabByGroup + (groupId to WorkbenchPanelId.Search)
+        )
+        val repaired = WorkbenchReducer.normalizeActiveTabs(staleState)
+        val activeTab = repaired.activeTabByGroup[groupId]
+        assertTrue("normalizeActiveTabs should repair activeTab pointing to non-Expanded panel", activeTab != WorkbenchPanelId.Search)
+    }
 }

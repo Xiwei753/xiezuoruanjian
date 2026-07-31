@@ -572,7 +572,7 @@ object WorkbenchReducer {
         )
     }
 
-    private fun normalizeActiveTabs(state: WorkbenchLayoutState): WorkbenchLayoutState {
+    internal fun normalizeActiveTabs(state: WorkbenchLayoutState): WorkbenchLayoutState {
         var updatedActiveTab = state.activeTabByGroup
         for ((groupId, activeId) in state.activeTabByGroup) {
             val activePanel = state.panels[activeId]
