@@ -1614,9 +1614,9 @@ class WorkbenchReducerTest {
                 visibility = PanelVisibility.Expanded, sizeDp = 320f
             )),
             activeTabByGroup = mapOf("left-nav" to WorkbenchPanelId.ChapterNavigator),
-            dockZoneSizeDp = mapOf(DockZone.Left to 320f),
-            dockGroupWeights = mapOf("left-nav" to 1f),
-            dockGroupMeta = mapOf("left-nav" to DockGroupMeta("left-nav", DockZone.Left, 0)),
+            dockZoneSizeDp = mapOf(DockZone.Left to 320f, DockZone.Right to 400f),
+            dockGroupWeights = base.dockGroupWeights,
+            dockGroupMeta = base.dockGroupMeta,
             preset = WorkbenchPreset.ChapterWriting,
         )
         val result = WorkbenchReducer.reduce(pollutedCustomState(), WorkbenchAction.ApplyPreset(WorkbenchPreset.ChapterWriting))
@@ -1631,9 +1631,9 @@ class WorkbenchReducerTest {
                 visibility = PanelVisibility.Expanded, sizeDp = 400f
             )),
             activeTabByGroup = mapOf("right-tools" to WorkbenchPanelId.AiAssistant),
-            dockZoneSizeDp = mapOf(DockZone.Right to 400f),
-            dockGroupWeights = mapOf("right-tools" to 1f),
-            dockGroupMeta = mapOf("right-tools" to DockGroupMeta("right-tools", DockZone.Right, 0)),
+            dockZoneSizeDp = mapOf(DockZone.Left to 320f, DockZone.Right to 400f),
+            dockGroupWeights = base.dockGroupWeights,
+            dockGroupMeta = base.dockGroupMeta,
             preset = WorkbenchPreset.AiWriting,
         )
         val result = WorkbenchReducer.reduce(pollutedCustomState(), WorkbenchAction.ApplyPreset(WorkbenchPreset.AiWriting))
@@ -1926,6 +1926,64 @@ class WorkbenchReducerTest {
 
     // --- Defect: SujianWorkbench passes 0f instead of null for actualOtherSideWidthDp ---
     // This is a UI-layer defect; test the Reducer contract: 0f means zero, null means fallback
+
+    // --- Defect: Presets lose dockGroupMeta for inactive groups ---
+
+    @Test
+    fun chapterWritingPreset_preservesAllDefaultGroupMeta() {
+        val preset = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ApplyPreset(WorkbenchPreset.ChapterWriting))
+        assertTrue("chapterWritingPreset should retain right-tools meta", preset.dockGroupMeta.containsKey("right-tools"))
+        assertTrue("chapterWritingPreset should retain right-outline meta", preset.dockGroupMeta.containsKey("right-outline"))
+    }
+
+    @Test
+    fun aiWritingPreset_preservesAllDefaultGroupMeta() {
+        val preset = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ApplyPreset(WorkbenchPreset.AiWriting))
+        assertTrue("aiWritingPreset should retain left-nav meta", preset.dockGroupMeta.containsKey("left-nav"))
+        assertTrue("aiWritingPreset should retain right-outline meta", preset.dockGroupMeta.containsKey("right-outline"))
+    }
+
+    // --- Defect: movePanelToGroup creates new group meta with order=0 causing duplicate ---
+
+    @Test
+    fun movePanelToGroup_newGroupMeta_orderNotDuplicateWithExisting() {
+        val expanded1 = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val expanded2 = WorkbenchReducer.reduce(expanded1, WorkbenchAction.ExpandPanel(WorkbenchPanelId.DocumentOutline))
+        val rightToolsGroup = expanded2.panels[WorkbenchPanelId.AiAssistant]!!.tabGroupId
+        val rightOutlineGroup = expanded2.panels[WorkbenchPanelId.DocumentOutline]!!.tabGroupId
+        val newGroupId = "right-new-dynamic"
+        val moved = WorkbenchReducer.reduce(expanded2, WorkbenchAction.MovePanelToGroup(WorkbenchPanelId.Search, newGroupId))
+        val newMeta = moved.dockGroupMeta[newGroupId]
+        assertNotNull("new group meta should exist", newMeta)
+        val existingOrders = moved.dockGroupMeta.values
+            .filter { it.zone == DockZone.Right && it.id != newGroupId }
+            .map { it.order }
+        if (newMeta != null) {
+            assertFalse("new group order=${newMeta.order} should not duplicate existing orders $existingOrders", newMeta.order in existingOrders)
+        }
+    }
+
+    // --- Defect: movePanelBetweenGroups creates new group meta with order=0 causing duplicate ---
+
+    @Test
+    fun movePanelBetweenGroups_newGroupMeta_orderNotDuplicateWithExisting() {
+        val expanded1 = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val expanded2 = WorkbenchReducer.reduce(expanded1, WorkbenchAction.ExpandPanel(WorkbenchPanelId.DocumentOutline))
+        val newGroupId = "right-dynamic-via-between"
+        val stateWithNewGroup = expanded2.copy(
+            dockGroupMeta = expanded2.dockGroupMeta + (newGroupId to DockGroupMeta(newGroupId, DockZone.Right, 2)),
+            dockGroupWeights = expanded2.dockGroupWeights + (newGroupId to 1f),
+        )
+        val moved = WorkbenchReducer.reduce(stateWithNewGroup, WorkbenchAction.MovePanelToGroup(WorkbenchPanelId.Search, newGroupId))
+        val newMeta = moved.dockGroupMeta[newGroupId]
+        assertNotNull("new group meta should exist", newMeta)
+        val existingOrders = moved.dockGroupMeta.values
+            .filter { it.zone == DockZone.Right && it.id != newGroupId }
+            .map { it.order }
+        if (newMeta != null) {
+            assertFalse("new group order=${newMeta.order} should not duplicate existing orders $existingOrders", newMeta.order in existingOrders)
+        }
+    }
 
     @Test
     fun resizeDockZone_zeroOtherSide_allowsLargerZoneThanPersistedWidth() {

@@ -259,11 +259,17 @@ object WorkbenchReducer {
         val targetGroupZone = state.panels.values
             .filter { it.tabGroupId == tabGroupId && it.visibility == PanelVisibility.Expanded }
             .firstOrNull()?.zone ?: state.dockGroupMeta[tabGroupId]?.zone ?: panel.zone
+        val newGroupMeta = if (tabGroupId !in state.dockGroupMeta) {
+            val maxOrder = state.dockGroupMeta.values.filter { it.zone == targetGroupZone }.maxOfOrNull { it.order } ?: -1
+            state.dockGroupMeta + (tabGroupId to DockGroupMeta(tabGroupId, targetGroupZone, maxOrder + 1))
+        } else {
+            state.dockGroupMeta
+        }
         val movedState = state.copy(
             panels = state.panels + (panelId to panel.copy(tabGroupId = tabGroupId, zone = targetGroupZone)),
             activeTabByGroup = state.activeTabByGroup + (tabGroupId to panelId),
             dockGroupWeights = if (tabGroupId !in state.dockGroupWeights) state.dockGroupWeights + (tabGroupId to 1f) else state.dockGroupWeights,
-            dockGroupMeta = if (tabGroupId !in state.dockGroupMeta) state.dockGroupMeta + (tabGroupId to DockGroupMeta(tabGroupId, targetGroupZone, 0)) else state.dockGroupMeta,
+            dockGroupMeta = newGroupMeta,
             preset = WorkbenchPreset.Custom,
         )
         return cleanUpOldGroup(movedState, panel.tabGroupId)
@@ -282,7 +288,8 @@ object WorkbenchReducer {
             state.dockGroupWeights
         }
         val newGroupMeta = if (newTabGroupId !in state.dockGroupMeta) {
-            state.dockGroupMeta + (newTabGroupId to DockGroupMeta(newTabGroupId, targetGroupZone, 0))
+            val maxOrder = state.dockGroupMeta.values.filter { it.zone == targetGroupZone }.maxOfOrNull { it.order } ?: -1
+            state.dockGroupMeta + (newTabGroupId to DockGroupMeta(newTabGroupId, targetGroupZone, maxOrder + 1))
         } else {
             state.dockGroupMeta
         }
@@ -579,9 +586,9 @@ object WorkbenchReducer {
         return base.copy(
             panels = panels,
             activeTabByGroup = mapOf("left-nav" to WorkbenchPanelId.ChapterNavigator),
-            dockZoneSizeDp = mapOf(DockZone.Left to 320f),
-            dockGroupWeights = mapOf("left-nav" to 1f),
-            dockGroupMeta = mapOf("left-nav" to DockGroupMeta("left-nav", DockZone.Left, 0)),
+            dockZoneSizeDp = mapOf(DockZone.Left to 320f, DockZone.Right to 400f),
+            dockGroupWeights = base.dockGroupWeights,
+            dockGroupMeta = base.dockGroupMeta,
             preset = WorkbenchPreset.ChapterWriting,
         )
     }
@@ -595,9 +602,9 @@ object WorkbenchReducer {
         return base.copy(
             panels = panels,
             activeTabByGroup = mapOf("right-tools" to WorkbenchPanelId.AiAssistant),
-            dockZoneSizeDp = mapOf(DockZone.Right to 400f),
-            dockGroupWeights = mapOf("right-tools" to 1f),
-            dockGroupMeta = mapOf("right-tools" to DockGroupMeta("right-tools", DockZone.Right, 0)),
+            dockZoneSizeDp = mapOf(DockZone.Left to 320f, DockZone.Right to 400f),
+            dockGroupWeights = base.dockGroupWeights,
+            dockGroupMeta = base.dockGroupMeta,
             preset = WorkbenchPreset.AiWriting,
         )
     }

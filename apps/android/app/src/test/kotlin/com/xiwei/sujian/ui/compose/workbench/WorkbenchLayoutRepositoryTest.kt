@@ -297,9 +297,9 @@ class WorkbenchLayoutRepositoryTest {
                     visibility = PanelVisibility.Expanded, sizeDp = 320f
                 )),
                 activeTabByGroup = mapOf("left-nav" to WorkbenchPanelId.ChapterNavigator),
-                dockZoneSizeDp = mapOf(DockZone.Left to 320f),
-                dockGroupWeights = mapOf("left-nav" to 1f),
-                dockGroupMeta = mapOf("left-nav" to DockGroupMeta("left-nav", DockZone.Left, 0)),
+                dockZoneSizeDp = mapOf(DockZone.Left to 320f, DockZone.Right to 400f),
+                dockGroupWeights = base.dockGroupWeights,
+                dockGroupMeta = base.dockGroupMeta,
                 preset = WorkbenchPreset.ChapterWriting,
             )
             WorkbenchPreset.AiWriting -> base.copy(
@@ -307,9 +307,9 @@ class WorkbenchLayoutRepositoryTest {
                     visibility = PanelVisibility.Expanded, sizeDp = 400f
                 )),
                 activeTabByGroup = mapOf("right-tools" to WorkbenchPanelId.AiAssistant),
-                dockZoneSizeDp = mapOf(DockZone.Right to 400f),
-                dockGroupWeights = mapOf("right-tools" to 1f),
-                dockGroupMeta = mapOf("right-tools" to DockGroupMeta("right-tools", DockZone.Right, 0)),
+                dockZoneSizeDp = mapOf(DockZone.Left to 320f, DockZone.Right to 400f),
+                dockGroupWeights = base.dockGroupWeights,
+                dockGroupMeta = base.dockGroupMeta,
                 preset = WorkbenchPreset.AiWriting,
             )
             WorkbenchPreset.ResearchWriting -> base.copy(
