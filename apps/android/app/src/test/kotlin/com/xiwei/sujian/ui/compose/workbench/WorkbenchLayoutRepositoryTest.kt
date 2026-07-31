@@ -6,6 +6,7 @@ import com.xiwei.sujian.ui.compose.workbench.model.DockGroupMeta
 import com.xiwei.sujian.ui.compose.workbench.model.DockZone
 import com.xiwei.sujian.ui.compose.workbench.model.LAYOUT_SNAPSHOT_VERSION
 import com.xiwei.sujian.ui.compose.workbench.model.PanelVisibility
+import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchAction
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchLayoutState
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelId
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelState
@@ -13,6 +14,7 @@ import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPreset
 import com.xiwei.sujian.ui.compose.workbench.state.LayoutStorageKey
 import com.xiwei.sujian.ui.compose.workbench.state.WindowWidthBucket
 import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchLayoutRepository
+import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchReducer
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -269,6 +271,95 @@ class WorkbenchLayoutRepositoryTest {
         val loadedVal = loaded!!
         assertTrue("nextFloatingZIndex should be at least maxPanelZ + 1 = 11, got ${loadedVal.nextFloatingZIndex}", loadedVal.nextFloatingZIndex >= 11)
     }
+
+    // --- Item 7 (follow-up): every preset must round-trip exactly from a polluted custom state ---
+
+    private fun pollutedCustomState(): WorkbenchLayoutState {
+        var state = WorkbenchReducer.computeDefaultLayout()
+        state = WorkbenchReducer.reduce(state, WorkbenchAction.CreateDockGroup("custom-a", DockZone.Left, 2))
+        state = WorkbenchReducer.reduce(state, WorkbenchAction.MovePanelToGroup(WorkbenchPanelId.Search, "custom-a"))
+        state = WorkbenchReducer.reduce(state, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        state = WorkbenchReducer.reduce(state, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Search))
+        state = WorkbenchReducer.reduce(state, WorkbenchAction.ResizeDockSplit(DockZone.Left, "custom-a", "left-nav", -1000f, 320f))
+        return state
+    }
+
+    private fun expectedPresetState(preset: WorkbenchPreset): WorkbenchLayoutState {
+        val base = WorkbenchReducer.computeDefaultLayout()
+        return when (preset) {
+            WorkbenchPreset.FocusWriting -> base
+            WorkbenchPreset.ChapterWriting -> base.copy(
+                panels = base.panels + (WorkbenchPanelId.ChapterNavigator to base.panels.getValue(WorkbenchPanelId.ChapterNavigator).copy(
+                    visibility = PanelVisibility.Expanded, sizeDp = 320f
+                )),
+                activeTabByGroup = mapOf("left-nav" to WorkbenchPanelId.ChapterNavigator),
+                dockZoneSizeDp = mapOf(DockZone.Left to 320f),
+                dockGroupWeights = mapOf("left-nav" to 1f),
+                dockGroupMeta = mapOf("left-nav" to DockGroupMeta("left-nav", DockZone.Left, 0)),
+                preset = WorkbenchPreset.ChapterWriting,
+            )
+            WorkbenchPreset.AiWriting -> base.copy(
+                panels = base.panels + (WorkbenchPanelId.AiAssistant to base.panels.getValue(WorkbenchPanelId.AiAssistant).copy(
+                    visibility = PanelVisibility.Expanded, sizeDp = 400f
+                )),
+                activeTabByGroup = mapOf("right-tools" to WorkbenchPanelId.AiAssistant),
+                dockZoneSizeDp = mapOf(DockZone.Right to 400f),
+                dockGroupWeights = mapOf("right-tools" to 1f),
+                dockGroupMeta = mapOf("right-tools" to DockGroupMeta("right-tools", DockZone.Right, 0)),
+                preset = WorkbenchPreset.AiWriting,
+            )
+            WorkbenchPreset.ResearchWriting -> base.copy(
+                panels = base.panels
+                    + (WorkbenchPanelId.ChapterNavigator to base.panels.getValue(WorkbenchPanelId.ChapterNavigator).copy(
+                        visibility = PanelVisibility.Expanded, sizeDp = 320f
+                    ))
+                    + (WorkbenchPanelId.Search to base.panels.getValue(WorkbenchPanelId.Search).copy(
+                        visibility = PanelVisibility.Expanded, sizeDp = 380f, tabGroupId = "research-right"
+                    ))
+                    + (WorkbenchPanelId.Statistics to base.panels.getValue(WorkbenchPanelId.Statistics).copy(
+                        tabGroupId = "research-right"
+                    )),
+                activeTabByGroup = mapOf(
+                    "left-nav" to WorkbenchPanelId.ChapterNavigator,
+                    "research-right" to WorkbenchPanelId.Search,
+                ),
+                dockZoneSizeDp = mapOf(DockZone.Left to 320f, DockZone.Right to 380f),
+                dockGroupWeights = mapOf("left-nav" to 1f, "research-right" to 1f),
+                dockGroupMeta = mapOf(
+                    "left-nav" to DockGroupMeta("left-nav", DockZone.Left, 0),
+                    "research-right" to DockGroupMeta("research-right", DockZone.Right, 0),
+                ),
+                preset = WorkbenchPreset.ResearchWriting,
+            )
+            WorkbenchPreset.Custom -> error("no canonical state for Custom")
+        }
+    }
+
+    private fun assertPresetRoundTripExact(preset: WorkbenchPreset) = runTest {
+        val applied = WorkbenchReducer.reduce(pollutedCustomState(), WorkbenchAction.ApplyPreset(preset))
+        repository.saveLayout(testKey, applied)
+        val loaded = repository.loadLayout(testKey)
+        assertNotNull(loaded)
+        val expected = expectedPresetState(preset)
+        assertEquals("preset must survive the snapshot round trip", expected.preset, loaded!!.preset)
+        assertEquals("panels must survive the snapshot round trip", expected.panels, loaded.panels)
+        assertEquals("activeTabByGroup must survive the snapshot round trip", expected.activeTabByGroup, loaded.activeTabByGroup)
+        assertEquals("dockZoneSizeDp must survive the snapshot round trip", expected.dockZoneSizeDp, loaded.dockZoneSizeDp)
+        assertEquals("dockGroupWeights must survive the snapshot round trip", expected.dockGroupWeights, loaded.dockGroupWeights)
+        assertEquals("dockGroupMeta must survive the snapshot round trip", expected.dockGroupMeta, loaded.dockGroupMeta)
+    }
+
+    @Test
+    fun saveAndLoad_roundTrip_focusWriting_exact() = assertPresetRoundTripExact(WorkbenchPreset.FocusWriting)
+
+    @Test
+    fun saveAndLoad_roundTrip_chapterWriting_exact() = assertPresetRoundTripExact(WorkbenchPreset.ChapterWriting)
+
+    @Test
+    fun saveAndLoad_roundTrip_aiWriting_exact() = assertPresetRoundTripExact(WorkbenchPreset.AiWriting)
+
+    @Test
+    fun saveAndLoad_roundTrip_researchWriting_exact() = assertPresetRoundTripExact(WorkbenchPreset.ResearchWriting)
 }
 
 internal object WorkbenchReducerTestHelper {

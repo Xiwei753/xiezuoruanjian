@@ -37,6 +37,8 @@ import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchDragState
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchLayoutState
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelId
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelState
+import com.xiwei.sujian.ui.compose.workbench.model.filterTabGroupHitAreas
+import com.xiwei.sujian.ui.compose.workbench.model.upsertTabGroupHitArea
 import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchReducer
 
 private const val SIDE_PANEL_MIN_DP = 280f
@@ -92,6 +94,15 @@ fun SujianWorkbench(
         val leftForDock = leftExpanded.filter { it.id !in overlayPanelIds }
         val rightForDock = rightExpanded.filter { it.id !in overlayPanelIds }
         val bottomForDock = bottomExpanded.filter { it.id !in overlayPanelIds }
+
+        val leftDockGroups = layoutState.dockGroupsForHost(DockZone.Left, overlayPanelIds)
+        val rightDockGroups = layoutState.dockGroupsForHost(DockZone.Right, overlayPanelIds)
+        val bottomDockGroups = layoutState.dockGroupsForHost(DockZone.Bottom, overlayPanelIds)
+        val liveGroupIds = (leftDockGroups + rightDockGroups + bottomDockGroups).map { it.id }.toSet()
+
+        LaunchedEffect(liveGroupIds) {
+            tabGroupHitAreas = filterTabGroupHitAreas(tabGroupHitAreas, liveGroupIds)
+        }
 
         val leftCollapsed = leftPanels.filter { it.visibility == PanelVisibility.Collapsed || it.visibility == PanelVisibility.Hidden }
         val rightCollapsed = rightPanels.filter { it.visibility == PanelVisibility.Collapsed || it.visibility == PanelVisibility.Hidden }
@@ -165,9 +176,7 @@ fun SujianWorkbench(
         }
 
         val onRegisterTabGroupHitArea: (TabGroupHitArea) -> Unit = { area ->
-            val current = tabGroupHitAreas
-            val filtered = current.filter { it.groupId != area.groupId }
-            tabGroupHitAreas = filtered + area
+            tabGroupHitAreas = upsertTabGroupHitArea(tabGroupHitAreas, area)
         }
 
         Column(modifier = Modifier.fillMaxSize()) {
@@ -187,6 +196,7 @@ fun SujianWorkbench(
                     DockHost(
                         zone = DockZone.Left,
                         panels = leftForDock,
+                        groups = leftDockGroups,
                         activeTabByGroup = layoutState.activeTabByGroup,
                         dockGroupWeights = layoutState.dockGroupWeights,
                         dockZoneSizeDp = layoutState.dockZoneSizeDp[DockZone.Left] ?: 280f,
@@ -234,6 +244,7 @@ fun SujianWorkbench(
                     DockHost(
                         zone = DockZone.Right,
                         panels = rightForDock,
+                        groups = rightDockGroups,
                         activeTabByGroup = layoutState.activeTabByGroup,
                         dockGroupWeights = layoutState.dockGroupWeights,
                         dockZoneSizeDp = layoutState.dockZoneSizeDp[DockZone.Right] ?: 280f,
@@ -274,6 +285,7 @@ fun SujianWorkbench(
                 DockHost(
                     zone = DockZone.Bottom,
                     panels = bottomForDock,
+                    groups = bottomDockGroups,
                     activeTabByGroup = layoutState.activeTabByGroup,
                     dockGroupWeights = layoutState.dockGroupWeights,
                     dockZoneSizeDp = layoutState.dockZoneSizeDp[DockZone.Bottom] ?: 220f,

@@ -75,6 +75,12 @@ data class WorkbenchLayoutState(
         if (groups.isEmpty()) return 0f
         return dockZoneSizeDp[zone] ?: 0f
     }
+
+    fun dockGroupsForHost(zone: DockZone, overlayPanelIds: Set<WorkbenchPanelId>): List<DockGroupState> {
+        return dockGroupsByZone(zone).filter { group ->
+            group.panelIds.any { it !in overlayPanelIds }
+        }
+    }
 }
 
 const val LAYOUT_SNAPSHOT_VERSION = 2

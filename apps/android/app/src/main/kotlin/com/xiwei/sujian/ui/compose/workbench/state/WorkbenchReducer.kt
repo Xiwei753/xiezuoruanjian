@@ -218,10 +218,14 @@ object WorkbenchReducer {
         val existingGroupsInZone = visibleDockGroupsByZone(state, zone)
         val maxOrder = existingGroupsInZone.maxOfOrNull { state.dockGroupMeta[it.id]?.order ?: it.order } ?: -1
         val newOrder = if (insertionOrder in 0..maxOrder + 1) insertionOrder else maxOrder + 1
-        val reindexedMeta = reindexGroupOrders(
-            state.dockGroupMeta + (newTabGroupId to DockGroupMeta(newTabGroupId, zone, newOrder)),
-            zone,
-        )
+        val newGroupMeta = DockGroupMeta(newTabGroupId, zone, maxOrder + 1)
+        val zoneMeta = state.dockGroupMeta.values.filter { it.zone == zone }.sortedBy { it.order }.toMutableList()
+        zoneMeta.add(newGroupMeta)
+        val insertPos = newOrder.coerceIn(0, zoneMeta.size - 1)
+        zoneMeta.remove(newGroupMeta)
+        zoneMeta.add(insertPos, newGroupMeta)
+        val reindexedZoneMeta = zoneMeta.mapIndexed { index, meta -> meta.id to meta.copy(order = index) }.toMap()
+        val reindexedMeta = state.dockGroupMeta.filter { it.value.zone != zone } + reindexedZoneMeta
         val updatedDockGroupWeights = state.dockGroupWeights + (newTabGroupId to 1f)
         val updatedDockZoneSizeDp = if (zone != DockZone.Floating && state.dockZoneSizeDp[zone] == null) {
             val defaultSize = when (zone) {
@@ -318,17 +322,19 @@ object WorkbenchReducer {
     private fun cleanUpOldGroup(state: WorkbenchLayoutState, oldGroupId: String): WorkbenchLayoutState {
         val oldZone = state.dockGroupMeta[oldGroupId]?.zone
         val remainingPanels = if (oldZone != null) {
-            state.panels.values.filter { it.tabGroupId == oldGroupId && it.visibility == PanelVisibility.Expanded && it.zone == oldZone }
+            state.panels.values.filter { it.tabGroupId == oldGroupId && it.zone == oldZone }
         } else {
-            state.panels.values.filter { it.tabGroupId == oldGroupId && it.visibility == PanelVisibility.Expanded }
+            state.panels.values.filter { it.tabGroupId == oldGroupId }
         }
         if (remainingPanels.isNotEmpty()) {
             val activeTab = state.activeTabByGroup[oldGroupId]
             if (activeTab != null && state.panels[activeTab]?.tabGroupId != oldGroupId) {
-                val newActive = remainingPanels.firstOrNull()?.id
-                return if (newActive != null) {
-                    state.copy(activeTabByGroup = state.activeTabByGroup + (oldGroupId to newActive))
-                } else state
+                val expandedRemaining = remainingPanels.filter { it.visibility == PanelVisibility.Expanded }
+                return if (expandedRemaining.isNotEmpty()) {
+                    state.copy(activeTabByGroup = state.activeTabByGroup + (oldGroupId to expandedRemaining.first().id))
+                } else {
+                    state.copy(activeTabByGroup = state.activeTabByGroup - oldGroupId)
+                }
             }
             return state
         }
@@ -454,8 +460,17 @@ object WorkbenchReducer {
         if (kotlin.math.abs(beforeIdx - afterIdx) != 1) return state
         val zoneTotalWeight = visibleGroups.sumOf { (state.dockGroupWeights[it.id] ?: 1f).toDouble() }.toFloat()
         if (zoneTotalWeight <= 0f) return state
+        val requiredDp = visibleGroups.size * GROUP_MIN_DP
+        if (availableMainAxisDp < requiredDp) {
+            val equalWeight = zoneTotalWeight / visibleGroups.size
+            return state.copy(
+                dockGroupWeights = state.dockGroupWeights + visibleGroups.associate { it.id to equalWeight },
+                preset = WorkbenchPreset.Custom,
+            )
+        }
+        val effectiveMinDp = min(GROUP_MIN_DP, availableMainAxisDp / visibleGroups.size)
         val deltaWeight = deltaDp * zoneTotalWeight / availableMainAxisDp
-        val minWeight = GROUP_MIN_DP * zoneTotalWeight / availableMainAxisDp
+        val minWeight = effectiveMinDp * zoneTotalWeight / availableMainAxisDp
         val totalWeight = beforeWeight + afterWeight
         var newBefore = beforeWeight + deltaWeight
         var newAfter = afterWeight - deltaWeight
@@ -466,6 +481,13 @@ object WorkbenchReducer {
         if (newAfter < minWeight) {
             newBefore = totalWeight - minWeight
             newAfter = minWeight
+        }
+        if (newBefore < 0f || newAfter < 0f) {
+            val equalWeight = zoneTotalWeight / visibleGroups.size
+            return state.copy(
+                dockGroupWeights = state.dockGroupWeights + visibleGroups.associate { it.id to equalWeight },
+                preset = WorkbenchPreset.Custom,
+            )
         }
         return state.copy(
             dockGroupWeights = state.dockGroupWeights
@@ -531,10 +553,10 @@ object WorkbenchReducer {
 
     private fun applyPreset(state: WorkbenchLayoutState, preset: WorkbenchPreset): WorkbenchLayoutState {
         return when (preset) {
-            WorkbenchPreset.FocusWriting -> focusWritingPreset(state)
-            WorkbenchPreset.ChapterWriting -> chapterWritingPreset(state)
-            WorkbenchPreset.AiWriting -> aiWritingPreset(state)
-            WorkbenchPreset.ResearchWriting -> researchWritingPreset(state)
+            WorkbenchPreset.FocusWriting -> computeDefaultLayout()
+            WorkbenchPreset.ChapterWriting -> chapterWritingPreset()
+            WorkbenchPreset.AiWriting -> aiWritingPreset()
+            WorkbenchPreset.ResearchWriting -> researchWritingPreset()
             WorkbenchPreset.Custom -> state
         }
     }
@@ -546,90 +568,71 @@ object WorkbenchReducer {
         )
     }
 
-    private fun focusWritingPreset(state: WorkbenchLayoutState): WorkbenchLayoutState {
-        return state.copy(
-            panels = state.panels.mapValues { (_, panel) ->
-                panel.copy(visibility = PanelVisibility.Collapsed)
-            },
-            preset = WorkbenchPreset.FocusWriting
+    private fun focusWritingPreset(): WorkbenchLayoutState {
+        return computeDefaultLayout()
+    }
+
+    private fun chapterWritingPreset(): WorkbenchLayoutState {
+        val base = computeDefaultLayout()
+        val panels = base.panels + (WorkbenchPanelId.ChapterNavigator to base.panels.getValue(WorkbenchPanelId.ChapterNavigator).copy(
+            visibility = PanelVisibility.Expanded,
+            sizeDp = 320f,
+        ))
+        return base.copy(
+            panels = panels,
+            activeTabByGroup = mapOf("left-nav" to WorkbenchPanelId.ChapterNavigator),
+            dockZoneSizeDp = mapOf(DockZone.Left to 320f),
+            dockGroupWeights = mapOf("left-nav" to 1f),
+            dockGroupMeta = mapOf("left-nav" to DockGroupMeta("left-nav", DockZone.Left, 0)),
+            preset = WorkbenchPreset.ChapterWriting,
         )
     }
 
-    private fun chapterWritingPreset(state: WorkbenchLayoutState): WorkbenchLayoutState {
-        val updatedPanels = state.panels.mapValues { (id, panel) ->
-            when (id) {
-                WorkbenchPanelId.ChapterNavigator -> panel.copy(
-                    zone = DockZone.Left,
-                    visibility = PanelVisibility.Expanded,
-                    sizeDp = 320f
-                )
-                else -> panel.copy(visibility = PanelVisibility.Collapsed)
-            }
-        }
-        return state.copy(
-            panels = updatedPanels,
-            activeTabByGroup = state.activeTabByGroup,
-            dockZoneSizeDp = state.dockZoneSizeDp + (DockZone.Left to 320f),
-            dockGroupWeights = state.dockGroupWeights + ("left-nav" to 1f),
-            dockGroupMeta = state.dockGroupMeta + ("left-nav" to DockGroupMeta("left-nav", DockZone.Left, 0)),
-            preset = WorkbenchPreset.ChapterWriting
+    private fun aiWritingPreset(): WorkbenchLayoutState {
+        val base = computeDefaultLayout()
+        val panels = base.panels + (WorkbenchPanelId.AiAssistant to base.panels.getValue(WorkbenchPanelId.AiAssistant).copy(
+            visibility = PanelVisibility.Expanded,
+            sizeDp = 400f,
+        ))
+        return base.copy(
+            panels = panels,
+            activeTabByGroup = mapOf("right-tools" to WorkbenchPanelId.AiAssistant),
+            dockZoneSizeDp = mapOf(DockZone.Right to 400f),
+            dockGroupWeights = mapOf("right-tools" to 1f),
+            dockGroupMeta = mapOf("right-tools" to DockGroupMeta("right-tools", DockZone.Right, 0)),
+            preset = WorkbenchPreset.AiWriting,
         )
     }
 
-    private fun aiWritingPreset(state: WorkbenchLayoutState): WorkbenchLayoutState {
-        val updatedPanels = state.panels.mapValues { (id, panel) ->
-            when (id) {
-                WorkbenchPanelId.AiAssistant -> panel.copy(
-                    zone = DockZone.Right,
-                    visibility = PanelVisibility.Expanded,
-                    sizeDp = 400f
-                )
-                else -> panel.copy(visibility = PanelVisibility.Collapsed)
-            }
-        }
-        return state.copy(
-            panels = updatedPanels,
-            activeTabByGroup = state.activeTabByGroup,
-            dockZoneSizeDp = state.dockZoneSizeDp + (DockZone.Right to 400f),
-            dockGroupWeights = state.dockGroupWeights + ("right-tools" to 1f),
-            dockGroupMeta = state.dockGroupMeta + ("right-tools" to DockGroupMeta("right-tools", DockZone.Right, 0)),
-            preset = WorkbenchPreset.AiWriting
-        )
-    }
-
-    private fun researchWritingPreset(state: WorkbenchLayoutState): WorkbenchLayoutState {
+    private fun researchWritingPreset(): WorkbenchLayoutState {
         val searchTabGroup = "research-right"
-        return state.copy(
-            panels = state.panels.mapValues { (id, panel) ->
-                when (id) {
-                    WorkbenchPanelId.ChapterNavigator -> panel.copy(
-                        zone = DockZone.Left,
-                        visibility = PanelVisibility.Expanded,
-                        sizeDp = 320f
-                    )
-                    WorkbenchPanelId.Search -> panel.copy(
-                        zone = DockZone.Right,
-                        visibility = PanelVisibility.Expanded,
-                        sizeDp = 380f,
-                        tabGroupId = searchTabGroup
-                    )
-                    WorkbenchPanelId.Statistics -> panel.copy(
-                        zone = DockZone.Right,
-                        visibility = PanelVisibility.Collapsed,
-                        tabGroupId = searchTabGroup
-                    )
-                    else -> panel.copy(visibility = PanelVisibility.Collapsed)
-                }
-            },
-            activeTabByGroup = state.activeTabByGroup + (searchTabGroup to WorkbenchPanelId.Search),
-            dockZoneSizeDp = state.dockZoneSizeDp + (DockZone.Left to 320f) + (DockZone.Right to 380f),
-            dockGroupWeights = state.dockGroupWeights
-                + ("left-nav" to 1f)
-                + (searchTabGroup to 1f),
-            dockGroupMeta = state.dockGroupMeta +
-                ("left-nav" to DockGroupMeta("left-nav", DockZone.Left, 0)) +
-                (searchTabGroup to DockGroupMeta(searchTabGroup, DockZone.Right, 0)),
-            preset = WorkbenchPreset.ResearchWriting
+        val base = computeDefaultLayout()
+        val panels = base.panels +
+            (WorkbenchPanelId.ChapterNavigator to base.panels.getValue(WorkbenchPanelId.ChapterNavigator).copy(
+                visibility = PanelVisibility.Expanded,
+                sizeDp = 320f,
+            )) +
+            (WorkbenchPanelId.Search to base.panels.getValue(WorkbenchPanelId.Search).copy(
+                visibility = PanelVisibility.Expanded,
+                sizeDp = 380f,
+                tabGroupId = searchTabGroup,
+            )) +
+            (WorkbenchPanelId.Statistics to base.panels.getValue(WorkbenchPanelId.Statistics).copy(
+                tabGroupId = searchTabGroup,
+            ))
+        return base.copy(
+            panels = panels,
+            activeTabByGroup = mapOf(
+                "left-nav" to WorkbenchPanelId.ChapterNavigator,
+                searchTabGroup to WorkbenchPanelId.Search,
+            ),
+            dockZoneSizeDp = mapOf(DockZone.Left to 320f, DockZone.Right to 380f),
+            dockGroupWeights = mapOf("left-nav" to 1f, searchTabGroup to 1f),
+            dockGroupMeta = mapOf(
+                "left-nav" to DockGroupMeta("left-nav", DockZone.Left, 0),
+                searchTabGroup to DockGroupMeta(searchTabGroup, DockZone.Right, 0),
+            ),
+            preset = WorkbenchPreset.ResearchWriting,
         )
     }
 

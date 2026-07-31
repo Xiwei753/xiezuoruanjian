@@ -27,6 +27,12 @@ class WorkbenchViewModel(
     private var isInitialized = false
     private var lastMaxWidthDp: Float = 0f
     private var lastMaxHeightDp: Float = 0f
+    private var activeSwitchCount = 0
+    private var switchGeneration = 0L
+    private val pendingActions = ArrayDeque<WorkbenchAction>()
+
+    private val isSwitching: Boolean
+        get() = activeSwitchCount > 0
 
     fun initialize(repository: WorkbenchLayoutStore, storageKey: LayoutStorageKey) {
         if (isInitialized) {
@@ -35,12 +41,22 @@ class WorkbenchViewModel(
         }
         isInitialized = true
         this.repository = repository
+        val generation = ++switchGeneration
+        activeSwitchCount++
         viewModelScope.launch {
-            switchStorageKey(storageKey)
+            try {
+                switchStorageKey(storageKey, generation)
+            } finally {
+                activeSwitchCount--
+            }
         }
     }
 
     fun dispatch(action: WorkbenchAction) {
+        if (isSwitching) {
+            pendingActions.addLast(action)
+            return
+        }
         layoutState = WorkbenchReducer.reduce(layoutState, action)
         if (action !is WorkbenchAction.ResizePanel && action !is WorkbenchAction.ResizePanelDelta && action !is WorkbenchAction.MoveFloatingPanel && action !is WorkbenchAction.ClampFloatingPanels) {
             schedulePersist()
@@ -48,6 +64,10 @@ class WorkbenchViewModel(
     }
 
     fun dispatchDeferredPersist(action: WorkbenchAction) {
+        if (isSwitching) {
+            pendingActions.addLast(action)
+            return
+        }
         layoutState = WorkbenchReducer.reduce(layoutState, action)
         pendingResizeJob?.cancel()
         pendingResizeJob = viewModelScope.launch {
@@ -60,8 +80,14 @@ class WorkbenchViewModel(
 
     fun onWindowBucketChanged(newKey: LayoutStorageKey) {
         switchJob?.cancel()
+        val generation = ++switchGeneration
+        activeSwitchCount++
         switchJob = viewModelScope.launch {
-            switchStorageKey(newKey)
+            try {
+                switchStorageKey(newKey, generation)
+            } finally {
+                activeSwitchCount--
+            }
         }
     }
 
@@ -76,24 +102,33 @@ class WorkbenchViewModel(
         }
     }
 
-    private suspend fun switchStorageKey(newKey: LayoutStorageKey) {
+    private suspend fun switchStorageKey(newKey: LayoutStorageKey, generation: Long) {
         val repo = repository ?: return
         switchMutex.withLock {
+            if (generation != switchGeneration) return@withLock
             val oldKey = currentStorageKey
-            if (oldKey == newKey) return
             pendingResizeJob?.cancel()
             pendingResizeJob = null
-            if (oldKey != null) {
-                val snapshot = layoutState
-                repo.saveLayout(oldKey, snapshot)
+            if (oldKey != newKey) {
+                if (oldKey != null) {
+                    val snapshot = layoutState
+                    repo.saveLayout(oldKey, snapshot)
+                }
+                val saved = repo.loadLayout(newKey)
+                if (generation != switchGeneration) return@withLock
+                var newState = saved ?: WorkbenchReducer.computeDefaultLayout()
+                if (lastMaxWidthDp > 0f && lastMaxHeightDp > 0f) {
+                    newState = WorkbenchReducer.reduce(newState, WorkbenchAction.ClampFloatingPanels(lastMaxWidthDp, lastMaxHeightDp))
+                }
+                layoutState = newState
+                currentStorageKey = newKey
             }
-            currentStorageKey = newKey
-            val saved = repo.loadLayout(newKey)
-            var newState = saved ?: WorkbenchReducer.computeDefaultLayout()
-            if (lastMaxWidthDp > 0f && lastMaxHeightDp > 0f) {
-                newState = WorkbenchReducer.reduce(newState, WorkbenchAction.ClampFloatingPanels(lastMaxWidthDp, lastMaxHeightDp))
+            if (pendingActions.isNotEmpty()) {
+                while (pendingActions.isNotEmpty()) {
+                    layoutState = WorkbenchReducer.reduce(layoutState, pendingActions.removeFirst())
+                }
+                repo.saveLayout(newKey, layoutState)
             }
-            layoutState = newState
         }
     }
 

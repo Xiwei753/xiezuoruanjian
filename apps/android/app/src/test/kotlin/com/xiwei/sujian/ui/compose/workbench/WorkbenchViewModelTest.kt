@@ -15,6 +15,8 @@ import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchReducer
 import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchViewModel
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -22,6 +24,7 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -83,16 +86,18 @@ class WorkbenchViewModelTest {
 
         val saves = mutableListOf<Pair<LayoutStorageKey, WorkbenchLayoutState>>()
         val events = mutableListOf<String>()
-        private var gatedKey: LayoutStorageKey? = null
-        private var gate: CompletableDeferred<Unit>? = null
+        private val gates = mutableMapOf<LayoutStorageKey, CompletableDeferred<Unit>>()
+        private val nonCancellableKeys = mutableSetOf<LayoutStorageKey>()
 
-        fun gateLoad(key: LayoutStorageKey) {
-            gatedKey = key
-            gate = CompletableDeferred()
+        fun gateLoad(key: LayoutStorageKey, nonCancellable: Boolean = false) {
+            gates[key] = CompletableDeferred()
+            if (nonCancellable) {
+                nonCancellableKeys += key
+            }
         }
 
-        fun releaseGate() {
-            gate?.complete(Unit)
+        fun releaseGate(key: LayoutStorageKey) {
+            gates[key]?.complete(Unit)
         }
 
         override suspend fun saveLayout(key: LayoutStorageKey, state: WorkbenchLayoutState) {
@@ -102,8 +107,13 @@ class WorkbenchViewModelTest {
 
         override suspend fun loadLayout(key: LayoutStorageKey): WorkbenchLayoutState? {
             events += "load:${key.toStorageKey()}"
-            if (key == gatedKey) {
-                gate?.await()
+            val gate = gates[key]
+            if (gate != null) {
+                if (key in nonCancellableKeys) {
+                    withContext(NonCancellable) { gate.await() }
+                } else {
+                    gate.await()
+                }
             }
             return layouts[key]
         }
@@ -299,18 +309,138 @@ class WorkbenchViewModelTest {
         viewModel.dispatch(WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
         advanceUntilIdle()
 
-        assertTrue("switch is still blocked on load, in-memory layout must be the old one", viewModel.layoutState.hasExpanded(WorkbenchPanelId.ChapterNavigator))
+        assertFalse(
+            "action dispatched while the switch is blocked on load must be queued, not applied to the old layout",
+            viewModel.layoutState.hasExpanded(WorkbenchPanelId.ChapterNavigator)
+        )
         assertTrue(store.saves.savesFor(newKey).isEmpty())
 
-        store.releaseGate()
+        store.releaseGate(newKey)
         advanceUntilIdle()
 
         assertTrue(
-            "every save to the new key must carry the new layout, never the stale old one",
-            store.saves.savesFor(newKey).isNotEmpty() && store.saves.savesFor(newKey).all { it.hasExpanded(WorkbenchPanelId.AiAssistant) }
+            "queued action must be replayed onto the freshly installed layout",
+            viewModel.layoutState.hasExpanded(WorkbenchPanelId.ChapterNavigator)
         )
-        assertTrue("old key saves must keep the old layout", store.saves.savesFor(testKey).all { it.hasExpanded(WorkbenchPanelId.ChapterNavigator) })
         assertTrue(viewModel.layoutState.hasExpanded(WorkbenchPanelId.AiAssistant))
+        val newKeySaves = store.saves.savesFor(newKey)
+        assertTrue(
+            "the unified save after replay must carry the new layout with the replayed action",
+            newKeySaves.isNotEmpty() && newKeySaves.last().hasExpanded(WorkbenchPanelId.AiAssistant) && newKeySaves.last().hasExpanded(WorkbenchPanelId.ChapterNavigator)
+        )
+        assertTrue("old key saves must keep the old layout", store.saves.savesFor(testKey).all { !it.hasExpanded(WorkbenchPanelId.ChapterNavigator) })
+    }
+
+    @Test
+    fun dispatchDuringSwitch_queuedAndReplayedInFifoOrder() = runViewModelTest {
+        val store = RecordingStore(mapOf(newKey to expandPanels(WorkbenchPanelId.AiAssistant, WorkbenchPanelId.ChapterNavigator)))
+        store.gateLoad(newKey)
+        viewModel.initialize(store, testKey)
+        advanceUntilIdle()
+
+        viewModel.onWindowBucketChanged(newKey)
+        viewModel.dispatch(WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        viewModel.dispatch(WorkbenchAction.CollapsePanel(WorkbenchPanelId.ChapterNavigator))
+        advanceUntilIdle()
+
+        assertTrue(store.saves.savesFor(newKey).isEmpty())
+
+        store.releaseGate(newKey)
+        advanceUntilIdle()
+
+        assertTrue("loaded layout must be installed", viewModel.layoutState.hasExpanded(WorkbenchPanelId.AiAssistant))
+        assertFalse(
+            "FIFO replay: the later CollapsePanel must undo the earlier ExpandPanel",
+            viewModel.layoutState.hasExpanded(WorkbenchPanelId.ChapterNavigator)
+        )
+        val lastSave = store.saves.savesFor(newKey).lastOrNull()
+        assertTrue("unified save must persist the replayed result", lastSave != null)
+        assertTrue(
+            "the persisted state must reflect the replayed actions, never the stale old layout",
+            lastSave!!.hasExpanded(WorkbenchPanelId.AiAssistant) && !lastSave.hasExpanded(WorkbenchPanelId.ChapterNavigator)
+        )
+    }
+
+    @Test
+    fun dispatchDeferredPersistDuringSwitch_queuedNotApplied() = runViewModelTest {
+        val store = RecordingStore(mapOf(newKey to expandPanels(WorkbenchPanelId.ChapterNavigator)))
+        store.gateLoad(newKey)
+        viewModel.initialize(store, testKey)
+        advanceUntilIdle()
+
+        viewModel.onWindowBucketChanged(newKey)
+        viewModel.dispatchDeferredPersist(WorkbenchAction.ResizeDockZone(DockZone.Left, 100f, 1200f))
+        advanceUntilIdle()
+
+        assertEquals(
+            "deferred action must not touch the in-memory layout while the switch is loading",
+            320f, viewModel.layoutState.dockZoneSizeDp[DockZone.Left]!!, 0.01f
+        )
+
+        store.releaseGate(newKey)
+        advanceUntilIdle()
+
+        assertEquals(
+            "deferred action must be replayed after the new layout is installed",
+            420f, viewModel.layoutState.dockZoneSizeDp[DockZone.Left]!!, 0.01f
+        )
+        val newKeySaves = store.saves.savesFor(newKey)
+        assertTrue(newKeySaves.isNotEmpty())
+        assertTrue(
+            "deferred action result must land under the new key, never the old one",
+            newKeySaves.last().dockZoneSizeDp[DockZone.Left] == 420f &&
+                store.saves.savesFor(testKey).all { it.dockZoneSizeDp[DockZone.Left] != 420f }
+        )
+    }
+
+    @Test
+    fun consecutiveSwitch_onlyLastGenerationInstalls() = runViewModelTest {
+        val keyA = LayoutStorageKey(
+            deviceId = "test-device",
+            orientation = "portrait",
+            windowWidthBucket = WindowWidthBucket.Large,
+            windowMode = "standard",
+        )
+        val keyB = newKey
+        val store = RecordingStore(
+            mapOf(
+                keyA to expandPanels(WorkbenchPanelId.ChapterNavigator),
+                keyB to expandPanels(WorkbenchPanelId.Search),
+            )
+        )
+        store.gateLoad(keyA, nonCancellable = true)
+        store.gateLoad(keyB)
+        viewModel.initialize(store, testKey)
+        advanceUntilIdle()
+
+        viewModel.onWindowBucketChanged(keyA)
+        advanceUntilIdle()
+        viewModel.onWindowBucketChanged(keyB)
+        advanceUntilIdle()
+
+        assertFalse(viewModel.layoutState.hasExpanded(WorkbenchPanelId.ChapterNavigator))
+        assertFalse(viewModel.layoutState.hasExpanded(WorkbenchPanelId.Search))
+
+        store.releaseGate(keyA)
+        advanceUntilIdle()
+
+        assertFalse(
+            "the stale first-generation load must never overwrite the newer switch",
+            viewModel.layoutState.hasExpanded(WorkbenchPanelId.ChapterNavigator)
+        )
+        assertTrue(
+            "keyA must never receive the stale old layout while its load was superseded",
+            store.saves.savesFor(keyA).none { it.hasExpanded(WorkbenchPanelId.ChapterNavigator) }
+        )
+
+        store.releaseGate(keyB)
+        advanceUntilIdle()
+
+        assertTrue(
+            "only the last generation may install its layout",
+            viewModel.layoutState.hasExpanded(WorkbenchPanelId.Search)
+        )
+        assertFalse(viewModel.layoutState.hasExpanded(WorkbenchPanelId.ChapterNavigator))
     }
 
     @Test
@@ -330,7 +460,7 @@ class WorkbenchViewModelTest {
         )
         assertTrue(store.saves.savesFor(newKey).isEmpty())
 
-        store.releaseGate()
+        store.releaseGate(newKey)
         advanceUntilIdle()
 
         assertTrue(viewModel.layoutState.hasExpanded(WorkbenchPanelId.AiAssistant))

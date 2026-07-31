@@ -10,6 +10,14 @@ data class TabGroupHitArea(
     fun contains(x: Float, y: Float): Boolean = x in left..right && y in top..bottom
 }
 
+fun filterTabGroupHitAreas(areas: List<TabGroupHitArea>, liveGroupIds: Set<String>): List<TabGroupHitArea> {
+    return areas.filter { it.groupId in liveGroupIds }
+}
+
+fun upsertTabGroupHitArea(areas: List<TabGroupHitArea>, area: TabGroupHitArea): List<TabGroupHitArea> {
+    return areas.filter { it.groupId != area.groupId } + area
+}
+
 enum class DragDropTarget {
     None,
     DockLeft,
@@ -33,15 +41,15 @@ data class WorkbenchDragState(
     }
 
     fun resolveDropTarget(maxWidthDp: Float, maxHeightDp: Float): Pair<DragDropTarget, String?> {
+        val dockMargin = 72f
+        if (pointerX < dockMargin) return DragDropTarget.DockLeft to null
+        if (pointerX > maxWidthDp - dockMargin) return DragDropTarget.DockRight to null
+        if (pointerY > maxHeightDp - dockMargin) return DragDropTarget.DockBottom to null
         for (area in tabGroupHitAreas) {
             if (area.contains(pointerX, pointerY)) {
                 return DragDropTarget.TabGroup to area.groupId
             }
         }
-        val dockMargin = 72f
-        if (pointerX < dockMargin) return DragDropTarget.DockLeft to null
-        if (pointerX > maxWidthDp - dockMargin) return DragDropTarget.DockRight to null
-        if (pointerY > maxHeightDp - dockMargin) return DragDropTarget.DockBottom to null
         return DragDropTarget.None to null
     }
 }
