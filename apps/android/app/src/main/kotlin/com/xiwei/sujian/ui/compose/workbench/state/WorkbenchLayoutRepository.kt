@@ -48,10 +48,16 @@ private val Context.workbenchDataStore: DataStore<Preferences> by androidx.datas
     name = "workbench_layout_prefs"
 )
 
+interface WorkbenchLayoutStore {
+    suspend fun saveLayout(key: LayoutStorageKey, state: WorkbenchLayoutState)
+
+    suspend fun loadLayout(key: LayoutStorageKey): WorkbenchLayoutState?
+}
+
 class WorkbenchLayoutRepository(
     private val context: Context,
-) {
-    suspend fun saveLayout(key: LayoutStorageKey, state: WorkbenchLayoutState) {
+) : WorkbenchLayoutStore {
+    override suspend fun saveLayout(key: LayoutStorageKey, state: WorkbenchLayoutState) {
         withContext(Dispatchers.IO) {
             context.workbenchDataStore.edit { prefs ->
                 val prefix = key.toStorageKey()
@@ -106,7 +112,7 @@ class WorkbenchLayoutRepository(
         }
     }
 
-    suspend fun loadLayout(key: LayoutStorageKey): WorkbenchLayoutState? {
+    override suspend fun loadLayout(key: LayoutStorageKey): WorkbenchLayoutState? {
         return withContext(Dispatchers.IO) {
             try {
                 val prefs = context.workbenchDataStore.data.first()

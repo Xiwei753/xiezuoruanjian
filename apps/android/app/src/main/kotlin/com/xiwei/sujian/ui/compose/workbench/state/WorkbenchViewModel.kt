@@ -8,12 +8,10 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchAction
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchLayoutState
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 
 class WorkbenchViewModel(
     application: Application,
@@ -22,7 +20,7 @@ class WorkbenchViewModel(
     var layoutState by mutableStateOf(WorkbenchReducer.computeDefaultLayout())
         private set
 
-    private var repository: WorkbenchLayoutRepository? = null
+    private var repository: WorkbenchLayoutStore? = null
     private var currentStorageKey: LayoutStorageKey? = null
     private var pendingResizeJob: Job? = null
     private val switchMutex = Mutex()
@@ -30,7 +28,7 @@ class WorkbenchViewModel(
     private var lastMaxWidthDp: Float = 0f
     private var lastMaxHeightDp: Float = 0f
 
-    fun initialize(repository: WorkbenchLayoutRepository, storageKey: LayoutStorageKey) {
+    fun initialize(repository: WorkbenchLayoutStore, storageKey: LayoutStorageKey) {
         if (isInitialized) {
             onWindowBucketChanged(storageKey)
             return
@@ -87,10 +85,10 @@ class WorkbenchViewModel(
             pendingResizeJob = null
             if (oldKey != null) {
                 val snapshot = layoutState
-                withContext(Dispatchers.IO) { repo.saveLayout(oldKey, snapshot) }
+                repo.saveLayout(oldKey, snapshot)
             }
             currentStorageKey = newKey
-            val saved = withContext(Dispatchers.IO) { repo.loadLayout(newKey) }
+            val saved = repo.loadLayout(newKey)
             var newState = saved ?: WorkbenchReducer.computeDefaultLayout()
             if (lastMaxWidthDp > 0f && lastMaxHeightDp > 0f) {
                 newState = WorkbenchReducer.reduce(newState, WorkbenchAction.ClampFloatingPanels(lastMaxWidthDp, lastMaxHeightDp))
@@ -108,7 +106,7 @@ class WorkbenchViewModel(
             val repo = repository ?: return@withLock
             val key = currentStorageKey ?: return@withLock
             val snapshot = layoutState
-            withContext(Dispatchers.IO) { repo.saveLayout(key, snapshot) }
+            repo.saveLayout(key, snapshot)
         }
     }
 }

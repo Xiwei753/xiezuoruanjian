@@ -5,14 +5,22 @@ import androidx.test.core.app.ApplicationProvider
 import com.xiwei.sujian.ui.compose.workbench.model.DockZone
 import com.xiwei.sujian.ui.compose.workbench.model.PanelVisibility
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchAction
+import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchLayoutState
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelId
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPreset
 import com.xiwei.sujian.ui.compose.workbench.state.LayoutStorageKey
 import com.xiwei.sujian.ui.compose.workbench.state.WindowWidthBucket
-import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchLayoutRepository
+import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchLayoutStore
+import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchReducer
 import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchViewModel
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -27,11 +35,16 @@ import org.robolectric.annotation.Config
 class WorkbenchViewModelTest {
 
     private lateinit var viewModel: WorkbenchViewModel
-    private lateinit var repository: WorkbenchLayoutRepository
     private val testKey = LayoutStorageKey(
         deviceId = "test-device",
         orientation = "portrait",
         windowWidthBucket = WindowWidthBucket.Expanded,
+        windowMode = "standard",
+    )
+    private val newKey = LayoutStorageKey(
+        deviceId = "test-device",
+        orientation = "landscape",
+        windowWidthBucket = WindowWidthBucket.Large,
         windowMode = "standard",
     )
 
@@ -39,7 +52,61 @@ class WorkbenchViewModelTest {
     fun setUp() {
         val application = ApplicationProvider.getApplicationContext<Application>()
         viewModel = WorkbenchViewModel(application)
-        repository = WorkbenchLayoutRepository(application)
+    }
+
+    private fun runViewModelTest(block: suspend TestScope.() -> Unit) = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        try {
+            block()
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    private fun expandPanels(vararg ids: WorkbenchPanelId): WorkbenchLayoutState {
+        var state = WorkbenchReducer.computeDefaultLayout()
+        for (id in ids) {
+            state = WorkbenchReducer.reduce(state, WorkbenchAction.ExpandPanel(id))
+        }
+        return state
+    }
+
+    private fun List<Pair<LayoutStorageKey, WorkbenchLayoutState>>.savesFor(key: LayoutStorageKey) =
+        filter { it.first == key }.map { it.second }
+
+    private fun WorkbenchLayoutState.hasExpanded(id: WorkbenchPanelId) =
+        panels[id]?.visibility == PanelVisibility.Expanded
+
+    private class RecordingStore(
+        private val layouts: Map<LayoutStorageKey, WorkbenchLayoutState>,
+    ) : WorkbenchLayoutStore {
+
+        val saves = mutableListOf<Pair<LayoutStorageKey, WorkbenchLayoutState>>()
+        val events = mutableListOf<String>()
+        private var gatedKey: LayoutStorageKey? = null
+        private var gate: CompletableDeferred<Unit>? = null
+
+        fun gateLoad(key: LayoutStorageKey) {
+            gatedKey = key
+            gate = CompletableDeferred()
+        }
+
+        fun releaseGate() {
+            gate?.complete(Unit)
+        }
+
+        override suspend fun saveLayout(key: LayoutStorageKey, state: WorkbenchLayoutState) {
+            events += "save:${key.toStorageKey()}"
+            saves += key to state
+        }
+
+        override suspend fun loadLayout(key: LayoutStorageKey): WorkbenchLayoutState? {
+            events += "load:${key.toStorageKey()}"
+            if (key == gatedKey) {
+                gate?.await()
+            }
+            return layouts[key]
+        }
     }
 
     @Test
@@ -109,50 +176,43 @@ class WorkbenchViewModelTest {
     }
 
     @Test
-    fun onWindowBucketChanged_updatesStorageKey() = runTest {
-        viewModel.initialize(repository, testKey)
+    fun onWindowBucketChanged_updatesStorageKey() = runViewModelTest {
+        val store = RecordingStore(mapOf(newKey to expandPanels(WorkbenchPanelId.AiAssistant)))
+        viewModel.initialize(store, testKey)
         advanceUntilIdle()
 
-        viewModel.dispatch(WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
         viewModel.dispatch(WorkbenchAction.ApplyPreset(WorkbenchPreset.AiWriting))
-
-        val newKey = LayoutStorageKey(
-            deviceId = "test-device",
-            orientation = "landscape",
-            windowWidthBucket = WindowWidthBucket.Large,
-            windowMode = "standard",
+        advanceUntilIdle()
+        assertTrue(
+            "old key must receive the AiWriting layout before the switch",
+            store.saves.savesFor(testKey).isNotEmpty() && store.saves.savesFor(testKey).all { it.preset == WorkbenchPreset.AiWriting }
         )
+
         viewModel.onWindowBucketChanged(newKey)
         advanceUntilIdle()
 
-        assertTrue(
-            viewModel.layoutState.preset == WorkbenchPreset.AiWriting ||
-            viewModel.layoutState.preset == WorkbenchPreset.FocusWriting ||
-            viewModel.layoutState.preset == WorkbenchPreset.Custom
-        )
+        assertEquals(WorkbenchPreset.Custom, viewModel.layoutState.preset)
+        assertTrue(store.saves.savesFor(newKey).none { it.preset == WorkbenchPreset.AiWriting })
     }
 
     @Test
-    fun onWindowBucketChanged_newBucketGetsDefaultLayout() = runTest {
-        viewModel.initialize(repository, testKey)
+    fun onWindowBucketChanged_newBucketGetsDefaultLayout() = runViewModelTest {
+        val store = RecordingStore(emptyMap())
+        viewModel.initialize(store, testKey)
         advanceUntilIdle()
 
-        val newKey = LayoutStorageKey(
-            deviceId = "test-device-new",
-            orientation = "portrait",
-            windowWidthBucket = WindowWidthBucket.Compact,
-            windowMode = "standard",
-        )
+        viewModel.dispatch(WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
         viewModel.onWindowBucketChanged(newKey)
         advanceUntilIdle()
 
-        val state = viewModel.layoutState
-        for (panel in state.panels.values) {
-            assertTrue(
-                "Panel ${panel.id} visibility should be valid",
-                panel.visibility in listOf(PanelVisibility.Collapsed, PanelVisibility.Expanded, PanelVisibility.Hidden)
+        for (panel in viewModel.layoutState.panels.values) {
+            assertEquals(
+                "Panel ${panel.id} should be collapsed after switching to an empty bucket",
+                PanelVisibility.Collapsed,
+                panel.visibility
             )
         }
+        assertTrue("nothing may be written to the new key before its layout is loaded", store.saves.savesFor(newKey).isEmpty())
     }
 
     @Test
@@ -197,82 +257,83 @@ class WorkbenchViewModelTest {
     }
 
     @Test
-    fun persistLayout_capturesStorageKeySnapshot() = runTest {
-        viewModel.initialize(repository, testKey)
+    fun persistLayout_capturesStorageKeySnapshot() = runViewModelTest {
+        val store = RecordingStore(emptyMap())
+        viewModel.initialize(store, testKey)
         advanceUntilIdle()
         viewModel.dispatch(WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
-        val snapshotKey = viewModel.layoutState.panels[WorkbenchPanelId.ChapterNavigator]?.visibility
-        assertEquals(PanelVisibility.Expanded, snapshotKey)
+        advanceUntilIdle()
+
+        val saved = store.saves.savesFor(testKey)
+        assertTrue("persist must record an actual repository write", saved.isNotEmpty())
+        assertTrue("saved snapshot must contain the expanded ChapterNavigator", saved.last().hasExpanded(WorkbenchPanelId.ChapterNavigator))
     }
 
     @Test
-    fun switchStorageKey_savesOldKeyBeforeLoadingNew() = runTest {
-        viewModel.initialize(repository, testKey)
+    fun switchStorageKey_savesOldKeyBeforeLoadingNew() = runViewModelTest {
+        val store = RecordingStore(mapOf(newKey to expandPanels(WorkbenchPanelId.AiAssistant)))
+        viewModel.initialize(store, testKey)
         advanceUntilIdle()
         viewModel.dispatch(WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        advanceUntilIdle()
 
-        val newKey = LayoutStorageKey(
-            deviceId = "test-device",
-            orientation = "landscape",
-            windowWidthBucket = WindowWidthBucket.Large,
-            windowMode = "standard",
-        )
         viewModel.onWindowBucketChanged(newKey)
         advanceUntilIdle()
 
-        val state = viewModel.layoutState
+        val saveOldIdx = store.events.indexOfFirst { it == "save:${testKey.toStorageKey()}" }
+        val loadNewIdx = store.events.indexOfFirst { it == "load:${newKey.toStorageKey()}" }
+        assertTrue("old key must be saved before the new key is loaded", saveOldIdx >= 0 && loadNewIdx > saveOldIdx)
+        assertTrue("old key saves must carry the old layout", store.saves.savesFor(testKey).all { it.hasExpanded(WorkbenchPanelId.ChapterNavigator) })
+        assertTrue("new key layout must come from the store", viewModel.layoutState.hasExpanded(WorkbenchPanelId.AiAssistant))
+        assertTrue("new key saves must never carry the old layout", store.saves.savesFor(newKey).all { it.hasExpanded(WorkbenchPanelId.AiAssistant) })
+    }
+
+    @Test
+    fun persistLayout_atomicKeyStateUnderSwitch() = runViewModelTest {
+        val store = RecordingStore(mapOf(newKey to expandPanels(WorkbenchPanelId.AiAssistant)))
+        store.gateLoad(newKey)
+        viewModel.initialize(store, testKey)
+        advanceUntilIdle()
+
+        viewModel.onWindowBucketChanged(newKey)
+        viewModel.dispatch(WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        advanceUntilIdle()
+
+        assertTrue("switch is still blocked on load, in-memory layout must be the old one", viewModel.layoutState.hasExpanded(WorkbenchPanelId.ChapterNavigator))
+        assertTrue(store.saves.savesFor(newKey).isEmpty())
+
+        store.releaseGate()
+        advanceUntilIdle()
+
         assertTrue(
-            state.preset == WorkbenchPreset.FocusWriting ||
-            state.preset == WorkbenchPreset.Custom
+            "every save to the new key must carry the new layout, never the stale old one",
+            store.saves.savesFor(newKey).isNotEmpty() && store.saves.savesFor(newKey).all { it.hasExpanded(WorkbenchPanelId.AiAssistant) }
         )
+        assertTrue("old key saves must keep the old layout", store.saves.savesFor(testKey).all { it.hasExpanded(WorkbenchPanelId.ChapterNavigator) })
+        assertTrue(viewModel.layoutState.hasExpanded(WorkbenchPanelId.AiAssistant))
     }
 
     @Test
-    fun persistLayout_atomicKeyStateUnderSwitch() = runTest {
-        viewModel.initialize(repository, testKey)
+    fun switchStorageKey_currentKeyAndLayoutStateArePaired() = runViewModelTest {
+        val store = RecordingStore(mapOf(newKey to expandPanels(WorkbenchPanelId.AiAssistant)))
+        store.gateLoad(newKey)
+        viewModel.initialize(store, testKey)
         advanceUntilIdle()
         viewModel.dispatch(WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
-
-        val newKey = LayoutStorageKey(
-            deviceId = "test-device",
-            orientation = "landscape",
-            windowWidthBucket = WindowWidthBucket.Large,
-            windowMode = "standard",
-        )
         viewModel.onWindowBucketChanged(newKey)
         advanceUntilIdle()
 
-        val stateAfterSwitch = viewModel.layoutState
-        for (panel in stateAfterSwitch.panels.values) {
-            assertTrue(
-                "Panel ${panel.id} state should be valid after key switch",
-                panel.visibility in listOf(PanelVisibility.Collapsed, PanelVisibility.Expanded, PanelVisibility.Hidden)
-            )
-        }
-    }
-
-    @Test
-    fun switchStorageKey_currentKeyAndLayoutStateArePaired() = runTest {
-        viewModel.initialize(repository, testKey)
-        advanceUntilIdle()
-        viewModel.dispatch(WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
-        viewModel.dispatch(WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
-
-        val newKey = LayoutStorageKey(
-            deviceId = "alt-device",
-            orientation = "portrait",
-            windowWidthBucket = WindowWidthBucket.Compact,
-            windowMode = "standard",
+        assertTrue(
+            "old key must be flushed before the new key load starts",
+            store.events.indexOfFirst { it == "save:${testKey.toStorageKey()}" } <
+                store.events.indexOfFirst { it == "load:${newKey.toStorageKey()}" }
         )
-        viewModel.onWindowBucketChanged(newKey)
+        assertTrue(store.saves.savesFor(newKey).isEmpty())
+
+        store.releaseGate()
         advanceUntilIdle()
 
-        val state = viewModel.layoutState
-        for (panel in state.panels.values) {
-            assertTrue(
-                "Panel ${panel.id} state should be valid after key switch",
-                panel.visibility in listOf(PanelVisibility.Collapsed, PanelVisibility.Expanded, PanelVisibility.Hidden)
-            )
-        }
+        assertTrue(viewModel.layoutState.hasExpanded(WorkbenchPanelId.AiAssistant))
+        assertTrue(store.saves.savesFor(newKey).all { it.hasExpanded(WorkbenchPanelId.AiAssistant) })
     }
 }

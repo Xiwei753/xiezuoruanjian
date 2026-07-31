@@ -1192,6 +1192,36 @@ class WorkbenchReducerTest {
         assertEquals(WorkbenchPanelId.AiAssistant, result.activeTabByGroup[newGroupId])
     }
 
+    @Test
+    fun dockPanelAsNewGroup_doubleDock_samePanel_sameZone_distinctGroupIds() {
+        val first = WorkbenchReducer.reduce(defaultState, WorkbenchAction.DockPanelAsNewGroup(WorkbenchPanelId.AiAssistant, DockZone.Left, 0))
+        val firstGroupId = first.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId ?: ""
+        val second = WorkbenchReducer.reduce(first, WorkbenchAction.DockPanelAsNewGroup(WorkbenchPanelId.AiAssistant, DockZone.Left, 0))
+        val secondGroupId = second.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId ?: ""
+        assertTrue("Repeated edge dock must create a fresh group, not reuse the previous one", secondGroupId != firstGroupId)
+        assertTrue("Old group must be cleaned up once its only panel moves away", !second.dockGroupMeta.containsKey(firstGroupId))
+        assertTrue(!second.dockGroupWeights.containsKey(firstGroupId))
+        assertTrue(second.dockGroupMeta.containsKey(secondGroupId))
+    }
+
+    @Test
+    fun floatPanel_removesEmptyMiddleGroup_reindexesRemainingOrders() {
+        var state = defaultState
+        for (id in listOf(WorkbenchPanelId.ChapterNavigator, WorkbenchPanelId.AiAssistant, WorkbenchPanelId.Search)) {
+            state = WorkbenchReducer.reduce(state, WorkbenchAction.DockPanelAsNewGroup(id, DockZone.Left, Int.MAX_VALUE))
+        }
+        val middleGroupId = state.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId ?: ""
+        assertTrue(state.dockGroupMeta.containsKey(middleGroupId))
+        val result = WorkbenchReducer.reduce(state, WorkbenchAction.FloatPanel(WorkbenchPanelId.AiAssistant))
+        assertFalse("Empty middle group meta should be removed", result.dockGroupMeta.containsKey(middleGroupId))
+        assertFalse("Empty middle group weights should be removed", result.dockGroupWeights.containsKey(middleGroupId))
+        assertFalse("Empty middle group activeTab should be removed", result.activeTabByGroup.containsKey(middleGroupId))
+        val remaining = result.dockGroupsByZone(DockZone.Left)
+        assertEquals("Two groups should remain", 2, remaining.size)
+        assertTrue(remaining.none { it.id == middleGroupId })
+        assertEquals("Remaining group orders should stay continuous 0..n-1", listOf(0, 1), remaining.map { it.order })
+    }
+
     // --- Item 4: movePanelBetweenGroups and old group cleanup ---
 
     @Test
