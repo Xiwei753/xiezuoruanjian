@@ -328,11 +328,8 @@ class WorkbenchLayoutRepositoryTest {
                     "research-right" to WorkbenchPanelId.Search,
                 ),
                 dockZoneSizeDp = mapOf(DockZone.Left to 320f, DockZone.Right to 380f),
-                dockGroupWeights = mapOf("left-nav" to 1f, "research-right" to 1f),
-                dockGroupMeta = mapOf(
-                    "left-nav" to DockGroupMeta("left-nav", DockZone.Left, 0),
-                    "research-right" to DockGroupMeta("research-right", DockZone.Right, 0),
-                ),
+                dockGroupWeights = base.dockGroupWeights + ("research-right" to 1f),
+                dockGroupMeta = base.dockGroupMeta + ("research-right" to DockGroupMeta("research-right", DockZone.Right, 2)),
                 preset = WorkbenchPreset.ResearchWriting,
             )
             WorkbenchPreset.Custom -> error("no canonical state for Custom")

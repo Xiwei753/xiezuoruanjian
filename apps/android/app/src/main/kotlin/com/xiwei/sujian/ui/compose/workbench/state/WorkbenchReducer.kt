@@ -612,6 +612,7 @@ object WorkbenchReducer {
     private fun researchWritingPreset(): WorkbenchLayoutState {
         val searchTabGroup = "research-right"
         val base = computeDefaultLayout()
+        val rightMaxOrder = base.dockGroupMeta.values.filter { it.zone == DockZone.Right }.maxOfOrNull { it.order } ?: -1
         val panels = base.panels +
             (WorkbenchPanelId.ChapterNavigator to base.panels.getValue(WorkbenchPanelId.ChapterNavigator).copy(
                 visibility = PanelVisibility.Expanded,
@@ -632,11 +633,8 @@ object WorkbenchReducer {
                 searchTabGroup to WorkbenchPanelId.Search,
             ),
             dockZoneSizeDp = mapOf(DockZone.Left to 320f, DockZone.Right to 380f),
-            dockGroupWeights = mapOf("left-nav" to 1f, searchTabGroup to 1f),
-            dockGroupMeta = mapOf(
-                "left-nav" to DockGroupMeta("left-nav", DockZone.Left, 0),
-                searchTabGroup to DockGroupMeta(searchTabGroup, DockZone.Right, 0),
-            ),
+            dockGroupWeights = base.dockGroupWeights + (searchTabGroup to 1f),
+            dockGroupMeta = base.dockGroupMeta + (searchTabGroup to DockGroupMeta(searchTabGroup, DockZone.Right, rightMaxOrder + 1)),
             preset = WorkbenchPreset.ResearchWriting,
         )
     }

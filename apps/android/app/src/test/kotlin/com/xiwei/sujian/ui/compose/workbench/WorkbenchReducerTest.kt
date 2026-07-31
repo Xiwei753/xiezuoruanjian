@@ -1659,15 +1659,22 @@ class WorkbenchReducerTest {
                 "research-right" to WorkbenchPanelId.Search,
             ),
             dockZoneSizeDp = mapOf(DockZone.Left to 320f, DockZone.Right to 380f),
-            dockGroupWeights = mapOf("left-nav" to 1f, "research-right" to 1f),
-            dockGroupMeta = mapOf(
-                "left-nav" to DockGroupMeta("left-nav", DockZone.Left, 0),
-                "research-right" to DockGroupMeta("research-right", DockZone.Right, 0),
-            ),
+            dockGroupWeights = base.dockGroupWeights + ("research-right" to 1f),
+            dockGroupMeta = base.dockGroupMeta + ("research-right" to DockGroupMeta("research-right", DockZone.Right, 2)),
             preset = WorkbenchPreset.ResearchWriting,
         )
         val result = WorkbenchReducer.reduce(pollutedCustomState(), WorkbenchAction.ApplyPreset(WorkbenchPreset.ResearchWriting))
         assertPresetRebuildsCompletely(result, expected)
+    }
+
+    @Test
+    fun researchWritingPreset_preservesAllDefaultGroupMeta() {
+        val preset = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ApplyPreset(WorkbenchPreset.ResearchWriting))
+        assertTrue("researchWritingPreset should retain right-tools meta", preset.dockGroupMeta.containsKey("right-tools"))
+        assertTrue("researchWritingPreset should retain right-outline meta", preset.dockGroupMeta.containsKey("right-outline"))
+        assertTrue("researchWritingPreset should have research-right meta", preset.dockGroupMeta.containsKey("research-right"))
+        val rightOrders = preset.dockGroupMeta.values.filter { it.zone == DockZone.Right }.map { it.order }.sorted()
+        assertEquals("right zone group orders should be distinct and contiguous", listOf(0, 1, 2), rightOrders)
     }
 
     // --- Fix #2: activeTab normalization after visibility change ---
