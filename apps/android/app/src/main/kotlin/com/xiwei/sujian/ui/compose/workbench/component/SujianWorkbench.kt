@@ -144,9 +144,9 @@ fun SujianWorkbench(
         val onPanelDragEnd: (WorkbenchPanelId) -> Unit = { id ->
             val target = dragState.dropTarget
             when (target) {
-                DragDropTarget.DockLeft -> onAction(WorkbenchAction.DockPanel(id, DockZone.Left))
-                DragDropTarget.DockRight -> onAction(WorkbenchAction.DockPanel(id, DockZone.Right))
-                DragDropTarget.DockBottom -> onAction(WorkbenchAction.DockPanel(id, DockZone.Bottom))
+                DragDropTarget.DockLeft -> onAction(WorkbenchAction.DockPanelAsNewGroup(id, DockZone.Left, Int.MAX_VALUE))
+                DragDropTarget.DockRight -> onAction(WorkbenchAction.DockPanelAsNewGroup(id, DockZone.Right, Int.MAX_VALUE))
+                DragDropTarget.DockBottom -> onAction(WorkbenchAction.DockPanelAsNewGroup(id, DockZone.Bottom, Int.MAX_VALUE))
                 DragDropTarget.TabGroup -> {
                     val groupId = dragState.targetTabGroupId
                     if (groupId != null) {
@@ -200,6 +200,7 @@ fun SujianWorkbench(
                         onDragEnd = onPanelDragEnd,
                         onDragCancel = onPanelDragCancel,
                         onResizeSplit = { zone, beforeId, afterId, delta, available -> onAction(WorkbenchAction.ResizeDockSplit(zone, beforeId, afterId, delta, available)) },
+                        onReorderDockGroup = { groupId, newOrder -> onAction(WorkbenchAction.ReorderDockGroup(groupId, newOrder)) },
                         onRegisterTabGroupHitArea = onRegisterTabGroupHitArea,
                         onTitleBarPositionChanged = onTitleBarPositionChanged,
                         modifier = Modifier.fillMaxHeight(),
@@ -246,6 +247,7 @@ fun SujianWorkbench(
                         onDragEnd = onPanelDragEnd,
                         onDragCancel = onPanelDragCancel,
                         onResizeSplit = { zone, beforeId, afterId, delta, available -> onAction(WorkbenchAction.ResizeDockSplit(zone, beforeId, afterId, delta, available)) },
+                        onReorderDockGroup = { groupId, newOrder -> onAction(WorkbenchAction.ReorderDockGroup(groupId, newOrder)) },
                         onRegisterTabGroupHitArea = onRegisterTabGroupHitArea,
                         onTitleBarPositionChanged = onTitleBarPositionChanged,
                         modifier = Modifier.fillMaxHeight(),
@@ -285,6 +287,7 @@ fun SujianWorkbench(
                     onDragEnd = onPanelDragEnd,
                     onDragCancel = onPanelDragCancel,
                     onResizeSplit = { zone, beforeId, afterId, delta, available -> onAction(WorkbenchAction.ResizeDockSplit(zone, beforeId, afterId, delta, available)) },
+                    onReorderDockGroup = { groupId, newOrder -> onAction(WorkbenchAction.ReorderDockGroup(groupId, newOrder)) },
                     onRegisterTabGroupHitArea = onRegisterTabGroupHitArea,
                     onTitleBarPositionChanged = onTitleBarPositionChanged,
                     modifier = Modifier.fillMaxWidth(),

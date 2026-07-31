@@ -10,6 +10,7 @@ sealed class WorkbenchAction {
     data class ActivateTab(val tabGroupId: String, val panelId: WorkbenchPanelId) : WorkbenchAction()
     data class FloatPanel(val panelId: WorkbenchPanelId) : WorkbenchAction()
     data class DockPanel(val panelId: WorkbenchPanelId, val zone: DockZone) : WorkbenchAction()
+    data class DockPanelAsNewGroup(val panelId: WorkbenchPanelId, val zone: DockZone, val insertionOrder: Int) : WorkbenchAction()
     data class MoveFloatingPanel(val panelId: WorkbenchPanelId, val x: Float, val y: Float) : WorkbenchAction()
     data class ApplyPreset(val preset: WorkbenchPreset) : WorkbenchAction()
     data object RestoreLayout : WorkbenchAction()

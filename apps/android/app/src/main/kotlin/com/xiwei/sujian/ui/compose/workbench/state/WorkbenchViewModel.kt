@@ -104,10 +104,10 @@ class WorkbenchViewModel(
     }
 
     private suspend fun persistLayout() {
-        val repo = repository ?: return
-        val key = currentStorageKey ?: return
-        val snapshot = layoutState
         switchMutex.withLock {
+            val repo = repository ?: return@withLock
+            val key = currentStorageKey ?: return@withLock
+            val snapshot = layoutState
             withContext(Dispatchers.IO) { repo.saveLayout(key, snapshot) }
         }
     }

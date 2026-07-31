@@ -1,6 +1,7 @@
 package com.xiwei.sujian.ui.compose.workbench.component
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -10,9 +11,13 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -66,6 +71,7 @@ fun DockHost(
     onDragEnd: ((WorkbenchPanelId) -> Unit)? = null,
     onDragCancel: (() -> Unit)? = null,
     onResizeSplit: ((zone: DockZone, beforeGroupId: String, afterGroupId: String, deltaDp: Float, availableMainAxisDp: Float) -> Unit)? = null,
+    onReorderDockGroup: ((groupId: String, newOrder: Int) -> Unit)? = null,
     onRegisterTabGroupHitArea: ((TabGroupHitArea) -> Unit)? = null,
     onTitleBarPositionChanged: ((panelId: WorkbenchPanelId, xWindowPx: Float, yWindowPx: Float) -> Unit)? = null,
     modifier: Modifier = Modifier,
@@ -181,6 +187,12 @@ fun DockHost(
                                                 },
                                             )
                                         }
+                                        DockGroupMoveBar(
+                                            groupIndex = index,
+                                            totalGroups = groups.size,
+                                            groupId = group.id,
+                                            onReorderDockGroup = onReorderDockGroup,
+                                        )
                                         WorkbenchPanelFrame(
                                             panelState = activePanel,
                                             onFloat = { onFloat(activePanel.id) },
@@ -208,7 +220,7 @@ fun DockHost(
                                         afterGroupId = afterGroupId,
                                         availableMainAxisDp = availableMainAxisDp.coerceAtLeast(0f),
                                         onResizeSplit = onResizeSplit,
-                                        modifier = Modifier.fillMaxWidth().height(4.dp),
+                                        modifier = Modifier.fillMaxHeight().width(4.dp),
                                     )
                                 }
                             }
@@ -298,6 +310,12 @@ fun DockHost(
                                                 },
                                             )
                                         }
+                                        DockGroupMoveBar(
+                                            groupIndex = index,
+                                            totalGroups = groups.size,
+                                            groupId = group.id,
+                                            onReorderDockGroup = onReorderDockGroup,
+                                        )
                                         WorkbenchPanelFrame(
                                             panelState = activePanel,
                                             onFloat = { onFloat(activePanel.id) },
@@ -359,7 +377,7 @@ fun DockSplitResizeHandle(
                     onDragCancel = {},
                 ) { change, dragAmount ->
                     val deltaDp = when (zone) {
-                        DockZone.Left, DockZone.Right -> -dragAmount.y / density.density
+                        DockZone.Left, DockZone.Right -> dragAmount.y / density.density
                         DockZone.Bottom -> dragAmount.x / density.density
                         DockZone.Floating -> 0f
                     }
@@ -370,4 +388,35 @@ fun DockSplitResizeHandle(
                 }
             }
     )
+}
+
+@Composable
+private fun DockGroupMoveBar(
+    groupIndex: Int,
+    totalGroups: Int,
+    groupId: String,
+    onReorderDockGroup: ((groupId: String, newOrder: Int) -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    if (onReorderDockGroup == null || totalGroups <= 1) return
+    Row(modifier = modifier.padding(horizontal = 2.dp)) {
+        if (groupIndex > 0) {
+            androidx.compose.material3.Text(
+                text = "▲",
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier
+                    .clickable { onReorderDockGroup(groupId, groupIndex - 1) }
+                    .padding(horizontal = 4.dp, vertical = 2.dp),
+            )
+        }
+        if (groupIndex < totalGroups - 1) {
+            androidx.compose.material3.Text(
+                text = "▼",
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier
+                    .clickable { onReorderDockGroup(groupId, groupIndex + 1) }
+                    .padding(horizontal = 4.dp, vertical = 2.dp),
+            )
+        }
+    }
 }

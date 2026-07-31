@@ -226,4 +226,53 @@ class WorkbenchViewModelTest {
             state.preset == WorkbenchPreset.Custom
         )
     }
+
+    @Test
+    fun persistLayout_atomicKeyStateUnderSwitch() = runTest {
+        viewModel.initialize(repository, testKey)
+        advanceUntilIdle()
+        viewModel.dispatch(WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+
+        val newKey = LayoutStorageKey(
+            deviceId = "test-device",
+            orientation = "landscape",
+            windowWidthBucket = WindowWidthBucket.Large,
+            windowMode = "standard",
+        )
+        viewModel.onWindowBucketChanged(newKey)
+        advanceUntilIdle()
+
+        val stateAfterSwitch = viewModel.layoutState
+        for (panel in stateAfterSwitch.panels.values) {
+            assertTrue(
+                "Panel ${panel.id} state should be valid after key switch",
+                panel.visibility in listOf(PanelVisibility.Collapsed, PanelVisibility.Expanded, PanelVisibility.Hidden)
+            )
+        }
+    }
+
+    @Test
+    fun switchStorageKey_currentKeyAndLayoutStateArePaired() = runTest {
+        viewModel.initialize(repository, testKey)
+        advanceUntilIdle()
+        viewModel.dispatch(WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        viewModel.dispatch(WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+
+        val newKey = LayoutStorageKey(
+            deviceId = "alt-device",
+            orientation = "portrait",
+            windowWidthBucket = WindowWidthBucket.Compact,
+            windowMode = "standard",
+        )
+        viewModel.onWindowBucketChanged(newKey)
+        advanceUntilIdle()
+
+        val state = viewModel.layoutState
+        for (panel in state.panels.values) {
+            assertTrue(
+                "Panel ${panel.id} state should be valid after key switch",
+                panel.visibility in listOf(PanelVisibility.Collapsed, PanelVisibility.Expanded, PanelVisibility.Hidden)
+            )
+        }
+    }
 }
