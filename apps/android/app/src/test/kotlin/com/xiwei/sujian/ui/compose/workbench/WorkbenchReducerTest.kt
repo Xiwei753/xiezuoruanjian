@@ -695,7 +695,18 @@ class WorkbenchReducerTest {
         val newGroup = groups.find { it.id == "new-group" }
         assertNotNull(newGroup)
         assertEquals(DockZone.Bottom, newGroup!!.zone)
-        assertEquals(3, newGroup.order)
+        assertEquals(0, newGroup.order)
+    }
+
+    @Test
+    fun createDockGroup_duplicateOrder_reindexes() {
+        val first = WorkbenchReducer.reduce(defaultState, WorkbenchAction.CreateDockGroup("g1", DockZone.Left, 0))
+        val second = WorkbenchReducer.reduce(first, WorkbenchAction.CreateDockGroup("g2", DockZone.Left, 0))
+        val leftGroups = second.dockGroupsByZone(DockZone.Left)
+        val orders = leftGroups.map { it.order }
+        assertEquals((0 until leftGroups.size).toList(), orders.sorted())
+        val orderSet = orders.toSet()
+        assertEquals(orders.size, orderSet.size)
     }
 
     @Test

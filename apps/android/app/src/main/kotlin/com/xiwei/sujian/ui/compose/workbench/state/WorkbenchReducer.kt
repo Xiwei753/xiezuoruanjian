@@ -362,7 +362,15 @@ object WorkbenchReducer {
         val existingIds = existingGroups.map { it.id }
         if (groupId in existingIds) return state
         val newGroupWeights = state.dockGroupWeights + (groupId to 1f)
-        val newGroupMeta = state.dockGroupMeta + (groupId to DockGroupMeta(groupId, zone, order))
+        val zoneMeta = state.dockGroupMeta.values.filter { it.zone == zone }.sortedBy { it.order }.toMutableList()
+        val maxOrder = zoneMeta.maxOfOrNull { it.order } ?: -1
+        val newGroupMeta = DockGroupMeta(groupId, zone, maxOrder + 1)
+        zoneMeta.add(newGroupMeta)
+        val insertPos = order.coerceIn(0, zoneMeta.size - 1)
+        zoneMeta.remove(newGroupMeta)
+        zoneMeta.add(insertPos, newGroupMeta)
+        val reindexedZoneMeta = zoneMeta.mapIndexed { index, meta -> meta.id to meta.copy(order = index) }.toMap()
+        val reindexedMeta = state.dockGroupMeta.filter { it.value.zone != zone } + reindexedZoneMeta
         val newDockZoneSizeDp = if (zone != DockZone.Floating && state.dockZoneSizeDp[zone] == null) {
             val defaultSize = when (zone) {
                 DockZone.Left, DockZone.Right -> SIDE_PANEL_MIN_DP
@@ -373,7 +381,7 @@ object WorkbenchReducer {
         } else state.dockZoneSizeDp
         return state.copy(
             dockGroupWeights = newGroupWeights,
-            dockGroupMeta = newGroupMeta,
+            dockGroupMeta = reindexedMeta,
             dockZoneSizeDp = newDockZoneSizeDp,
             preset = WorkbenchPreset.Custom
         )
