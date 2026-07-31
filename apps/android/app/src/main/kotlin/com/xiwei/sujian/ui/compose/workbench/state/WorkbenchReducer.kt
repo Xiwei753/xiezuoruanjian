@@ -192,16 +192,12 @@ object WorkbenchReducer {
     private fun dockPanel(state: WorkbenchLayoutState, panelId: WorkbenchPanelId, zone: DockZone): WorkbenchLayoutState {
         val panel = state.panels[panelId] ?: return state
         if (panel.zone == zone) return updatePanel(state, panel.copy(visibility = PanelVisibility.Expanded), markCustom = true)
-        val existingGroupId = state.panels.values
-            .filter { it.zone == zone && it.visibility == PanelVisibility.Expanded }
-            .firstOrNull()?.tabGroupId
-        val newTabGroupId = existingGroupId ?: "${zone.name.lowercase()}-panel-${panel.id.name}"
-        val updatedDockGroupWeights = if (newTabGroupId !in state.dockGroupWeights) {
-            state.dockGroupWeights + (newTabGroupId to 1f)
-        } else state.dockGroupWeights
-        val updatedDockGroupMeta = if (newTabGroupId !in state.dockGroupMeta) {
-            state.dockGroupMeta + (newTabGroupId to DockGroupMeta(newTabGroupId, zone, 0))
-        } else state.dockGroupMeta
+        val newTabGroupId = "${zone.name.lowercase()}-panel-${panel.id.name}"
+        val existingGroupsInZone = state.dockGroupsByZone(zone)
+        val maxOrder = existingGroupsInZone.maxOfOrNull { it.order } ?: -1
+        val newOrder = maxOrder + 1
+        val updatedDockGroupWeights = state.dockGroupWeights + (newTabGroupId to 1f)
+        val updatedDockGroupMeta = state.dockGroupMeta + (newTabGroupId to DockGroupMeta(newTabGroupId, zone, newOrder))
         val updatedDockZoneSizeDp = if (zone != DockZone.Floating && state.dockZoneSizeDp[zone] == null) {
             val defaultSize = when (zone) {
                 DockZone.Left, DockZone.Right -> SIDE_PANEL_MIN_DP
@@ -210,6 +206,7 @@ object WorkbenchReducer {
             }
             state.dockZoneSizeDp + (zone to defaultSize)
         } else state.dockZoneSizeDp
+        val updatedActiveTab = state.activeTabByGroup + (newTabGroupId to panelId)
         return state.copy(
             panels = state.panels + (panel.id to panel.copy(
                 zone = zone,
@@ -219,6 +216,7 @@ object WorkbenchReducer {
             dockGroupWeights = updatedDockGroupWeights,
             dockGroupMeta = updatedDockGroupMeta,
             dockZoneSizeDp = updatedDockZoneSizeDp,
+            activeTabByGroup = updatedActiveTab,
             preset = WorkbenchPreset.Custom,
         )
     }
@@ -284,13 +282,9 @@ object WorkbenchReducer {
     }
 
     private fun reorderDockGroup(state: WorkbenchLayoutState, groupId: String, newOrder: Int): WorkbenchLayoutState {
-        val panelsInGroup = state.panels.values.filter { it.tabGroupId == groupId }
-        if (panelsInGroup.isEmpty()) return state
-        val updatedPanels = state.panels.toMutableMap()
-        for (p in panelsInGroup) {
-            updatedPanels[p.id] = p.copy(order = newOrder + (p.order - panelsInGroup.minOf { it.order }))
-        }
-        return state.copy(panels = updatedPanels, preset = WorkbenchPreset.Custom)
+        val existingMeta = state.dockGroupMeta[groupId] ?: return state
+        val updatedMeta = state.dockGroupMeta + (groupId to existingMeta.copy(order = newOrder))
+        return state.copy(dockGroupMeta = updatedMeta, preset = WorkbenchPreset.Custom)
     }
 
     private fun bringFloatingToFront(state: WorkbenchLayoutState, panelId: WorkbenchPanelId): WorkbenchLayoutState {
@@ -336,8 +330,11 @@ object WorkbenchReducer {
         val beforeWeight = state.dockGroupWeights[beforeGroupId] ?: return state
         val afterWeight = state.dockGroupWeights[afterGroupId] ?: return state
         if (availableMainAxisDp <= 0f) return state
-        val deltaWeight = deltaDp / availableMainAxisDp
-        val minWeight = GROUP_MIN_DP / availableMainAxisDp
+        val visibleGroups = state.dockGroupsByZone(zone)
+        val zoneTotalWeight = visibleGroups.sumOf { (state.dockGroupWeights[it.id] ?: 1f).toDouble() }.toFloat()
+        if (zoneTotalWeight <= 0f) return state
+        val deltaWeight = deltaDp * zoneTotalWeight / availableMainAxisDp
+        val minWeight = GROUP_MIN_DP * zoneTotalWeight / availableMainAxisDp
         val totalWeight = beforeWeight + afterWeight
         var newBefore = beforeWeight + deltaWeight
         var newAfter = afterWeight - deltaWeight

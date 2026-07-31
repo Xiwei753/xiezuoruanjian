@@ -15,6 +15,7 @@ import com.xiwei.sujian.ui.compose.workbench.state.WindowWidthBucket
 import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchLayoutRepository
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -211,6 +212,62 @@ class WorkbenchLayoutRepositoryTest {
         val loaded = repository.loadLayout(testKey)
         assertNotNull(loaded)
         assertEquals(WorkbenchPanelId.AiAssistant, loaded!!.activeOverlayPanelId)
+    }
+
+    @Test
+    fun saveLayout_clearsStaleOverlayKey() = runTest {
+        val stateWithOverlay = WorkbenchReducerTestHelper.createTestLayoutStateWithPanel(
+            WorkbenchPanelId.AiAssistant, DockZone.Right, PanelVisibility.Expanded
+        ).copy(activeOverlayPanelId = WorkbenchPanelId.AiAssistant)
+        repository.saveLayout(testKey, stateWithOverlay)
+        val loadedWithOverlay = repository.loadLayout(testKey)
+        assertNotNull(loadedWithOverlay)
+        assertEquals(WorkbenchPanelId.AiAssistant, loadedWithOverlay!!.activeOverlayPanelId)
+
+        val stateWithoutOverlay = stateWithOverlay.copy(activeOverlayPanelId = null)
+        repository.saveLayout(testKey, stateWithoutOverlay)
+        val loadedWithoutOverlay = repository.loadLayout(testKey)
+        assertNotNull(loadedWithoutOverlay)
+        assertNull(loadedWithoutOverlay!!.activeOverlayPanelId)
+    }
+
+    @Test
+    fun saveLayout_clearsStaleGroupKeys() = runTest {
+        val stateWithGroup = WorkbenchReducerTestHelper.createTestLayoutState(WorkbenchPreset.Custom).copy(
+            dockGroupWeights = mapOf("group-a" to 1f),
+            dockGroupMeta = mapOf("group-a" to DockGroupMeta("group-a", DockZone.Left, 0)),
+        )
+        repository.saveLayout(testKey, stateWithGroup)
+        val loadedWithGroup = repository.loadLayout(testKey)
+        assertNotNull(loadedWithGroup)
+        assertTrue(loadedWithGroup!!.dockGroupWeights.containsKey("group-a"))
+
+        val stateWithoutGroup = stateWithGroup.copy(
+            dockGroupWeights = emptyMap(),
+            dockGroupMeta = emptyMap(),
+        )
+        repository.saveLayout(testKey, stateWithoutGroup)
+        val loadedWithoutGroup = repository.loadLayout(testKey)
+        assertNotNull(loadedWithoutGroup)
+        assertFalse(loadedWithoutGroup!!.dockGroupWeights.containsKey("group-a"))
+    }
+
+    @Test
+    fun loadLayout_v2_nextFloatingZIndex_defendsAgainstLowSavedValue() = runTest {
+        val state = WorkbenchReducerTestHelper.createTestLayoutState(WorkbenchPreset.Custom).copy(
+            nextFloatingZIndex = 1,
+            panels = WorkbenchReducerTestHelper.createTestLayoutState(WorkbenchPreset.Custom).panels +
+                (WorkbenchPanelId.AiAssistant to WorkbenchReducerTestHelper.createTestLayoutState(WorkbenchPreset.Custom).panels[WorkbenchPanelId.AiAssistant]!!.copy(
+                    zone = DockZone.Floating,
+                    visibility = PanelVisibility.Expanded,
+                    floatingZIndex = 10,
+                )),
+        )
+        repository.saveLayout(testKey, state)
+        val loaded = repository.loadLayout(testKey)
+        assertNotNull(loaded)
+        val loadedVal = loaded!!
+        assertTrue("nextFloatingZIndex should be at least maxPanelZ + 1 = 11, got ${loadedVal.nextFloatingZIndex}", loadedVal.nextFloatingZIndex >= 11)
     }
 }
 

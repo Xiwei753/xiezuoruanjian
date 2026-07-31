@@ -55,6 +55,19 @@ class WorkbenchLayoutRepository(
         withContext(Dispatchers.IO) {
             context.workbenchDataStore.edit { prefs ->
                 val prefix = key.toStorageKey()
+                val dynamicKeysToRemove = prefs.asMap().keys.filter { k ->
+                    k.name.startsWith(prefix) && (
+                        k.name == "${prefix}.activeOverlay" ||
+                        k.name == "${prefix}.allGroupIds" ||
+                        k.name.contains("${prefix}.groupWeight.") ||
+                        k.name.contains("${prefix}.groupMeta.") ||
+                        k.name.contains("${prefix}.activeTab.") ||
+                        k.name.contains("${prefix}.zoneSize.")
+                    )
+                }
+                for (k in dynamicKeysToRemove) {
+                    prefs.remove(k)
+                }
                 prefs[intPreferencesKey("${prefix}.snapshotVersion")] = state.snapshotVersion
                 for (panel in state.panels.values) {
                     val p = "${prefix}.panel.${panel.id.name}"
@@ -187,7 +200,11 @@ class WorkbenchLayoutRepository(
                     }
                 }
 
-                val nextFloatingZIndex = prefs[intPreferencesKey("${prefix}.nextFloatingZIndex")] ?: 1
+                val savedNextFloatingZIndex = prefs[intPreferencesKey("${prefix}.nextFloatingZIndex")] ?: 1
+                val maxPanelZ = panels.values
+                    .filter { it.zone == DockZone.Floating && it.visibility == PanelVisibility.Expanded }
+                    .maxOfOrNull { it.floatingZIndex } ?: 0
+                val nextFloatingZIndex = maxOf(savedNextFloatingZIndex, maxPanelZ + 1)
 
                 WorkbenchLayoutState(
                     panels = panels,

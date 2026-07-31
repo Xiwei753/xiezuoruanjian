@@ -527,9 +527,13 @@ class WorkbenchReducerTest {
         val state = defaultState.copy(
             dockGroupWeights = defaultState.dockGroupWeights + ("left-nav" to 1f) + ("left-extra" to 1f),
             dockGroupMeta = defaultState.dockGroupMeta + ("left-extra" to com.xiwei.sujian.ui.compose.workbench.model.DockGroupMeta("left-extra", DockZone.Left, 1)),
+            panels = defaultState.panels + (WorkbenchPanelId.ChapterNavigator to defaultState.panels[WorkbenchPanelId.ChapterNavigator]!!.copy(
+                zone = DockZone.Left, visibility = PanelVisibility.Expanded, tabGroupId = "left-nav"
+            )),
         )
         val result = WorkbenchReducer.reduce(state, WorkbenchAction.ResizeDockSplit(DockZone.Left, "left-nav", "left-extra", -1000f, 320f))
-        val minWeight = 80f / 320f
+        val zoneTotalWeight = 1f + 1f
+        val minWeight = 80f * zoneTotalWeight / 320f
         assertTrue(result.dockGroupWeights["left-nav"]!! >= minWeight - 0.01f)
         assertTrue(result.dockGroupWeights["left-extra"]!! >= minWeight - 0.01f)
     }
@@ -703,7 +707,10 @@ class WorkbenchReducerTest {
         val chapterExpanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
         val leftGroupId = chapterExpanded.panels[WorkbenchPanelId.ChapterNavigator]?.tabGroupId ?: ""
         val result = WorkbenchReducer.reduce(chapterExpanded, WorkbenchAction.DockPanel(WorkbenchPanelId.AiAssistant, DockZone.Left))
-        assertEquals(leftGroupId, result.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId)
+        val newGroupId = result.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId ?: ""
+        assertTrue("DockPanel edge dock should create a new group, not reuse existing", newGroupId != leftGroupId)
+        assertTrue(result.dockGroupWeights.containsKey(newGroupId))
+        assertTrue(result.dockGroupMeta.containsKey(newGroupId))
     }
 
     @Test
@@ -783,7 +790,8 @@ class WorkbenchReducerTest {
         val leftGroupId = chapterExpanded.panels[WorkbenchPanelId.ChapterNavigator]?.tabGroupId!!
         val result = WorkbenchReducer.reduce(chapterExpanded, WorkbenchAction.DockPanel(WorkbenchPanelId.AiAssistant, DockZone.Left))
         assertEquals(DockZone.Left, result.panels[WorkbenchPanelId.AiAssistant]?.zone)
-        assertEquals(leftGroupId, result.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId)
+        val newGroupId = result.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId!!
+        assertTrue("DockPanel edge dock should create a new group", newGroupId != leftGroupId)
     }
 
     @Test
@@ -896,5 +904,162 @@ class WorkbenchReducerTest {
         val firstZ = first.nextFloatingZIndex
         val second = WorkbenchReducer.reduce(first, WorkbenchAction.FloatPanel(WorkbenchPanelId.Search))
         assertTrue(second.nextFloatingZIndex > firstZ)
+    }
+
+    @Test
+    fun resizeDockSplit_weightConversion_usesZoneTotalWeight() {
+        val state = defaultState.copy(
+            dockGroupWeights = defaultState.dockGroupWeights + ("left-nav" to 1f) + ("left-extra" to 1f),
+            dockGroupMeta = defaultState.dockGroupMeta + ("left-extra" to com.xiwei.sujian.ui.compose.workbench.model.DockGroupMeta("left-extra", DockZone.Left, 1)),
+            panels = defaultState.panels + (WorkbenchPanelId.ChapterNavigator to defaultState.panels[WorkbenchPanelId.ChapterNavigator]!!.copy(
+                zone = DockZone.Left, visibility = PanelVisibility.Expanded, tabGroupId = "left-nav"
+            )),
+        )
+        val availableMainAxisDp = 600f
+        val deltaDp = 60f
+        val zoneTotalWeight = 2f
+        val expectedDeltaWeight = deltaDp * zoneTotalWeight / availableMainAxisDp
+        val result = WorkbenchReducer.reduce(state, WorkbenchAction.ResizeDockSplit(DockZone.Left, "left-nav", "left-extra", deltaDp, availableMainAxisDp))
+        val actualDelta = result.dockGroupWeights["left-nav"]!! - state.dockGroupWeights["left-nav"]!!
+        assertEquals(expectedDeltaWeight, actualDelta, 0.01f)
+    }
+
+    @Test
+    fun resizeDockSplit_threeGroups_correctWeightConversion() {
+        val state = defaultState.copy(
+            dockGroupWeights = mapOf("g1" to 1f, "g2" to 1f, "g3" to 1f),
+            dockGroupMeta = mapOf(
+                "g1" to com.xiwei.sujian.ui.compose.workbench.model.DockGroupMeta("g1", DockZone.Left, 0),
+                "g2" to com.xiwei.sujian.ui.compose.workbench.model.DockGroupMeta("g2", DockZone.Left, 1),
+                "g3" to com.xiwei.sujian.ui.compose.workbench.model.DockGroupMeta("g3", DockZone.Left, 2),
+            ),
+            panels = defaultState.panels + (WorkbenchPanelId.ChapterNavigator to defaultState.panels[WorkbenchPanelId.ChapterNavigator]!!.copy(
+                zone = DockZone.Left, visibility = PanelVisibility.Expanded, tabGroupId = "g1"
+            )),
+        )
+        val availableMainAxisDp = 600f
+        val deltaDp = 60f
+        val zoneTotalWeight = 3f
+        val expectedDeltaWeight = deltaDp * zoneTotalWeight / availableMainAxisDp
+        val result = WorkbenchReducer.reduce(state, WorkbenchAction.ResizeDockSplit(DockZone.Left, "g1", "g2", deltaDp, availableMainAxisDp))
+        val actualDelta = result.dockGroupWeights["g1"]!! - state.dockGroupWeights["g1"]!!
+        assertEquals(expectedDeltaWeight, actualDelta, 0.01f)
+    }
+
+    @Test
+    fun resizeDockSplit_nonNormalizedWeights_correctConversion() {
+        val state = defaultState.copy(
+            dockGroupWeights = mapOf("g1" to 2f, "g2" to 3f),
+            dockGroupMeta = mapOf(
+                "g1" to com.xiwei.sujian.ui.compose.workbench.model.DockGroupMeta("g1", DockZone.Left, 0),
+                "g2" to com.xiwei.sujian.ui.compose.workbench.model.DockGroupMeta("g2", DockZone.Left, 1),
+            ),
+            panels = defaultState.panels + (WorkbenchPanelId.ChapterNavigator to defaultState.panels[WorkbenchPanelId.ChapterNavigator]!!.copy(
+                zone = DockZone.Left, visibility = PanelVisibility.Expanded, tabGroupId = "g1"
+            )),
+        )
+        val availableMainAxisDp = 500f
+        val deltaDp = 50f
+        val zoneTotalWeight = 5f
+        val expectedDeltaWeight = deltaDp * zoneTotalWeight / availableMainAxisDp
+        val result = WorkbenchReducer.reduce(state, WorkbenchAction.ResizeDockSplit(DockZone.Left, "g1", "g2", deltaDp, availableMainAxisDp))
+        val actualDelta = result.dockGroupWeights["g1"]!! - state.dockGroupWeights["g1"]!!
+        assertEquals(expectedDeltaWeight, actualDelta, 0.01f)
+    }
+
+    @Test
+    fun dockPanel_edgeDock_createsNewGroup() {
+        val chapterExpanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val existingGroupId = chapterExpanded.panels[WorkbenchPanelId.ChapterNavigator]?.tabGroupId ?: ""
+        val result = WorkbenchReducer.reduce(chapterExpanded, WorkbenchAction.DockPanel(WorkbenchPanelId.AiAssistant, DockZone.Left))
+        val newGroupId = result.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId ?: ""
+        assertTrue("Edge dock should create new group, not merge into existing", newGroupId != existingGroupId)
+        assertTrue(result.dockGroupMeta.containsKey(newGroupId))
+        assertTrue(result.dockGroupWeights.containsKey(newGroupId))
+    }
+
+    @Test
+    fun dockPanel_edgeDock_newGroupOrderIsAfterExisting() {
+        val chapterExpanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val result = WorkbenchReducer.reduce(chapterExpanded, WorkbenchAction.DockPanel(WorkbenchPanelId.AiAssistant, DockZone.Left))
+        val newGroupId = result.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId ?: ""
+        val newMeta = result.dockGroupMeta[newGroupId]!!
+        val existingGroups = chapterExpanded.dockGroupsByZone(DockZone.Left)
+        val maxExistingOrder = existingGroups.maxOfOrNull { it.order } ?: -1
+        assertTrue("New group order should be after existing groups", newMeta.order > maxExistingOrder)
+    }
+
+    @Test
+    fun dockPanel_edgeDock_setsActiveTab() {
+        val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.DockPanel(WorkbenchPanelId.AiAssistant, DockZone.Left))
+        val newGroupId = result.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId ?: ""
+        assertEquals(WorkbenchPanelId.AiAssistant, result.activeTabByGroup[newGroupId])
+    }
+
+    @Test
+    fun movePanelToGroup_mergesIntoExistingGroup() {
+        val chapterExpanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val leftGroupId = chapterExpanded.panels[WorkbenchPanelId.ChapterNavigator]?.tabGroupId ?: ""
+        val result = WorkbenchReducer.reduce(chapterExpanded, WorkbenchAction.MovePanelToGroup(WorkbenchPanelId.AiAssistant, leftGroupId))
+        assertEquals(leftGroupId, result.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId)
+    }
+
+    @Test
+    fun reorderDockGroup_updatesMetaOrder() {
+        val state = defaultState.copy(
+            dockGroupMeta = defaultState.dockGroupMeta + ("left-nav" to com.xiwei.sujian.ui.compose.workbench.model.DockGroupMeta("left-nav", DockZone.Left, 0)),
+        )
+        val result = WorkbenchReducer.reduce(state, WorkbenchAction.ReorderDockGroup("left-nav", 5))
+        assertEquals(5, result.dockGroupMeta["left-nav"]?.order)
+    }
+
+    @Test
+    fun reorderDockGroup_unknownGroup_noChange() {
+        val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ReorderDockGroup("unknown-group", 5))
+        assertEquals(defaultState, result)
+    }
+
+    @Test
+    fun reorderDockGroup_doesNotChangePanelOrder() {
+        val state = defaultState.copy(
+            dockGroupMeta = defaultState.dockGroupMeta + ("left-nav" to com.xiwei.sujian.ui.compose.workbench.model.DockGroupMeta("left-nav", DockZone.Left, 0)),
+        )
+        val panelOrderBefore = state.panels[WorkbenchPanelId.ChapterNavigator]?.order
+        val result = WorkbenchReducer.reduce(state, WorkbenchAction.ReorderDockGroup("left-nav", 5))
+        assertEquals(panelOrderBefore, result.panels[WorkbenchPanelId.ChapterNavigator]?.order)
+    }
+
+    @Test
+    fun reorderDockGroup_changesRenderOrder() {
+        val meta0 = com.xiwei.sujian.ui.compose.workbench.model.DockGroupMeta("g1", DockZone.Left, 0)
+        val meta1 = com.xiwei.sujian.ui.compose.workbench.model.DockGroupMeta("g2", DockZone.Left, 1)
+        val state = defaultState.copy(
+            dockGroupWeights = mapOf("g1" to 1f, "g2" to 1f),
+            dockGroupMeta = mapOf("g1" to meta0, "g2" to meta1),
+            panels = defaultState.panels +
+                (WorkbenchPanelId.ChapterNavigator to defaultState.panels[WorkbenchPanelId.ChapterNavigator]!!.copy(zone = DockZone.Left, visibility = PanelVisibility.Expanded, tabGroupId = "g1")) +
+                (WorkbenchPanelId.AiAssistant to defaultState.panels[WorkbenchPanelId.AiAssistant]!!.copy(zone = DockZone.Left, visibility = PanelVisibility.Expanded, tabGroupId = "g2")),
+        )
+        val groupsBefore = state.dockGroupsByZone(DockZone.Left).map { it.id }
+        assertEquals(listOf("g1", "g2"), groupsBefore)
+        val result = WorkbenchReducer.reduce(state, WorkbenchAction.ReorderDockGroup("g1", 2))
+        val groupsAfter = result.dockGroupsByZone(DockZone.Left).map { it.id }
+        assertEquals(listOf("g2", "g1"), groupsAfter)
+    }
+
+    @Test
+    fun resizeDockSplit_negativeAvailableAxis_noChange() {
+        val state = defaultState.copy(
+            dockGroupWeights = defaultState.dockGroupWeights + ("left-nav" to 1f) + ("left-extra" to 1f),
+            dockGroupMeta = defaultState.dockGroupMeta + ("left-extra" to com.xiwei.sujian.ui.compose.workbench.model.DockGroupMeta("left-extra", DockZone.Left, 1)),
+        )
+        val result = WorkbenchReducer.reduce(state, WorkbenchAction.ResizeDockSplit(DockZone.Left, "left-nav", "left-extra", 50f, -100f))
+        assertEquals(state.dockGroupWeights, result.dockGroupWeights)
+    }
+
+    @Test
+    fun resizeDockSplit_invalidGroup_noChange() {
+        val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ResizeDockSplit(DockZone.Left, "nonexistent1", "nonexistent2", 50f, 320f))
+        assertEquals(defaultState, result)
     }
 }

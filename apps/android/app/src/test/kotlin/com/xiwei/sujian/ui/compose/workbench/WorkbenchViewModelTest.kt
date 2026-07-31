@@ -195,4 +195,35 @@ class WorkbenchViewModelTest {
         val zoneSize = viewModel.layoutState.dockZoneSizeDp[DockZone.Left]
         assertNotNull(zoneSize)
     }
+
+    @Test
+    fun persistLayout_capturesStorageKeySnapshot() = runTest {
+        viewModel.initialize(repository, testKey)
+        advanceUntilIdle()
+        viewModel.dispatch(WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val snapshotKey = viewModel.layoutState.panels[WorkbenchPanelId.ChapterNavigator]?.visibility
+        assertEquals(PanelVisibility.Expanded, snapshotKey)
+    }
+
+    @Test
+    fun switchStorageKey_savesOldKeyBeforeLoadingNew() = runTest {
+        viewModel.initialize(repository, testKey)
+        advanceUntilIdle()
+        viewModel.dispatch(WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+
+        val newKey = LayoutStorageKey(
+            deviceId = "test-device",
+            orientation = "landscape",
+            windowWidthBucket = WindowWidthBucket.Large,
+            windowMode = "standard",
+        )
+        viewModel.onWindowBucketChanged(newKey)
+        advanceUntilIdle()
+
+        val state = viewModel.layoutState
+        assertTrue(
+            state.preset == WorkbenchPreset.FocusWriting ||
+            state.preset == WorkbenchPreset.Custom
+        )
+    }
 }

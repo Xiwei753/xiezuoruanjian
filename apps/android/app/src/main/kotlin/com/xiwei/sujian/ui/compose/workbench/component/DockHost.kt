@@ -3,6 +3,7 @@ package com.xiwei.sujian.ui.compose.workbench.component
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -144,67 +145,72 @@ fun DockHost(
                         }
                     }
                 } else {
-                    Column(
+                    BoxWithConstraints(
                         modifier = Modifier
                             .width(zoneWidth.dp)
                             .fillMaxHeight()
                     ) {
-                        for ((index, group) in groups.withIndex()) {
-                            val groupPanels = expandedPanels.filter { it.tabGroupId == group.id }
-                            val activePanelId = group.activePanelId ?: group.panelIds.firstOrNull()
-                            val activePanel = groupPanels.find { it.id == activePanelId } ?: groupPanels.firstOrNull()
-                            if (activePanel != null) {
-                                Column(
-                                    modifier = Modifier
-                                        .weight(group.weight.coerceAtLeast(0.1f))
-                                        .fillMaxWidth()
-                                        .onGloballyPositioned { coords ->
-                                            onRegisterTabGroupHitArea?.invoke(
-                                                computeTabGroupHitArea(group.id, coords, density.density)
-                                            )
-                                        },
-                                ) {
-                                    if (group.panelIds.size > 1) {
-                                        DockTabStrip(
-                                            panels = groupPanels,
-                                            activeTabId = activePanelId ?: WorkbenchPanelId.ProjectNavigator,
-                                            onActivateTab = { panelId -> onActivateTab(group.id, panelId) },
-                                            modifier = Modifier.onGloballyPositioned { coords ->
+                        val availableMainAxisDp = maxHeight.value - (groups.size - 1) * 4f
+                        Column(
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            for ((index, group) in groups.withIndex()) {
+                                val groupPanels = expandedPanels.filter { it.tabGroupId == group.id }
+                                val activePanelId = group.activePanelId ?: group.panelIds.firstOrNull()
+                                val activePanel = groupPanels.find { it.id == activePanelId } ?: groupPanels.firstOrNull()
+                                if (activePanel != null) {
+                                    Column(
+                                        modifier = Modifier
+                                            .weight(group.weight.coerceAtLeast(0.1f))
+                                            .fillMaxWidth()
+                                            .onGloballyPositioned { coords ->
                                                 onRegisterTabGroupHitArea?.invoke(
                                                     computeTabGroupHitArea(group.id, coords, density.density)
                                                 )
                                             },
-                                        )
-                                    }
-                                    WorkbenchPanelFrame(
-                                        panelState = activePanel,
-                                        onFloat = { onFloat(activePanel.id) },
-                                        onCollapse = { onCollapse(activePanel.id) },
-                                        onClose = { onHide(activePanel.id) },
-                                        onTitleBarPositionChanged = onTitleBarPositionChanged?.let { callback ->
-                                            { x, y -> callback(activePanel.id, x, y) }
-                                        },
-                                        onDragStart = onDragStart?.let { { x, y -> it(activePanel.id, x, y) } },
-                                        onDrag = onDrag?.let { { x, y -> it(activePanel.id, x, y) } },
-                                        onDragEnd = onDragEnd?.let { { _, _ -> it(activePanel.id) } },
-                                        onDragCancel = onDragCancel,
-                                        modifier = Modifier.fillMaxSize(),
                                     ) {
-                                        panelContent(activePanel)
+                                        if (group.panelIds.size > 1) {
+                                            DockTabStrip(
+                                                panels = groupPanels,
+                                                activeTabId = activePanelId ?: WorkbenchPanelId.ProjectNavigator,
+                                                onActivateTab = { panelId -> onActivateTab(group.id, panelId) },
+                                                modifier = Modifier.onGloballyPositioned { coords ->
+                                                    onRegisterTabGroupHitArea?.invoke(
+                                                        computeTabGroupHitArea(group.id, coords, density.density)
+                                                    )
+                                                },
+                                            )
+                                        }
+                                        WorkbenchPanelFrame(
+                                            panelState = activePanel,
+                                            onFloat = { onFloat(activePanel.id) },
+                                            onCollapse = { onCollapse(activePanel.id) },
+                                            onClose = { onHide(activePanel.id) },
+                                            onTitleBarPositionChanged = onTitleBarPositionChanged?.let { callback ->
+                                                { x, y -> callback(activePanel.id, x, y) }
+                                            },
+                                            onDragStart = onDragStart?.let { { x, y -> it(activePanel.id, x, y) } },
+                                            onDrag = onDrag?.let { { x, y -> it(activePanel.id, x, y) } },
+                                            onDragEnd = onDragEnd?.let { { _, _ -> it(activePanel.id) } },
+                                            onDragCancel = onDragCancel,
+                                            modifier = Modifier.fillMaxSize(),
+                                        ) {
+                                            panelContent(activePanel)
+                                        }
                                     }
                                 }
-                            }
-                            if (index < groups.size - 1) {
-                                val beforeGroupId = group.id
-                                val afterGroupId = groups[index + 1].id
-                                DockSplitResizeHandle(
-                                    zone = zone,
-                                    beforeGroupId = beforeGroupId,
-                                    afterGroupId = afterGroupId,
-                                    zoneSizeDp = zoneWidth,
-                                    onResizeSplit = onResizeSplit,
-                                    modifier = Modifier.fillMaxWidth().height(4.dp),
-                                )
+                                if (index < groups.size - 1) {
+                                    val beforeGroupId = group.id
+                                    val afterGroupId = groups[index + 1].id
+                                    DockSplitResizeHandle(
+                                        zone = zone,
+                                        beforeGroupId = beforeGroupId,
+                                        afterGroupId = afterGroupId,
+                                        availableMainAxisDp = availableMainAxisDp.coerceAtLeast(0f),
+                                        onResizeSplit = onResizeSplit,
+                                        modifier = Modifier.fillMaxWidth().height(4.dp),
+                                    )
+                                }
                             }
                         }
                     }
@@ -256,67 +262,72 @@ fun DockHost(
                         }
                     }
                 } else {
-                    Row(
+                    BoxWithConstraints(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(zoneHeight.dp)
                     ) {
-                        for ((index, group) in groups.withIndex()) {
-                            val groupPanels = expandedPanels.filter { it.tabGroupId == group.id }
-                            val activePanelId = group.activePanelId ?: group.panelIds.firstOrNull()
-                            val activePanel = groupPanels.find { it.id == activePanelId } ?: groupPanels.firstOrNull()
-                            if (activePanel != null) {
-                                Column(
-                                    modifier = Modifier
-                                        .weight(group.weight.coerceAtLeast(0.1f))
-                                        .fillMaxHeight()
-                                        .onGloballyPositioned { coords ->
-                                            onRegisterTabGroupHitArea?.invoke(
-                                                computeTabGroupHitArea(group.id, coords, density.density)
-                                            )
-                                        },
-                                ) {
-                                    if (group.panelIds.size > 1) {
-                                        DockTabStrip(
-                                            panels = groupPanels,
-                                            activeTabId = activePanelId ?: WorkbenchPanelId.ProjectNavigator,
-                                            onActivateTab = { panelId -> onActivateTab(group.id, panelId) },
-                                            modifier = Modifier.onGloballyPositioned { coords ->
+                        val availableMainAxisDp = maxWidth.value - (groups.size - 1) * 4f
+                        Row(
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            for ((index, group) in groups.withIndex()) {
+                                val groupPanels = expandedPanels.filter { it.tabGroupId == group.id }
+                                val activePanelId = group.activePanelId ?: group.panelIds.firstOrNull()
+                                val activePanel = groupPanels.find { it.id == activePanelId } ?: groupPanels.firstOrNull()
+                                if (activePanel != null) {
+                                    Column(
+                                        modifier = Modifier
+                                            .weight(group.weight.coerceAtLeast(0.1f))
+                                            .fillMaxHeight()
+                                            .onGloballyPositioned { coords ->
                                                 onRegisterTabGroupHitArea?.invoke(
                                                     computeTabGroupHitArea(group.id, coords, density.density)
                                                 )
                                             },
-                                        )
-                                    }
-                                    WorkbenchPanelFrame(
-                                        panelState = activePanel,
-                                        onFloat = { onFloat(activePanel.id) },
-                                        onCollapse = { onCollapse(activePanel.id) },
-                                        onClose = { onHide(activePanel.id) },
-                                        onTitleBarPositionChanged = onTitleBarPositionChanged?.let { callback ->
-                                            { x, y -> callback(activePanel.id, x, y) }
-                                        },
-                                        onDragStart = onDragStart?.let { { x, y -> it(activePanel.id, x, y) } },
-                                        onDrag = onDrag?.let { { x, y -> it(activePanel.id, x, y) } },
-                                        onDragEnd = onDragEnd?.let { { _, _ -> it(activePanel.id) } },
-                                        onDragCancel = onDragCancel,
-                                        modifier = Modifier.fillMaxSize(),
                                     ) {
-                                        panelContent(activePanel)
+                                        if (group.panelIds.size > 1) {
+                                            DockTabStrip(
+                                                panels = groupPanels,
+                                                activeTabId = activePanelId ?: WorkbenchPanelId.ProjectNavigator,
+                                                onActivateTab = { panelId -> onActivateTab(group.id, panelId) },
+                                                modifier = Modifier.onGloballyPositioned { coords ->
+                                                    onRegisterTabGroupHitArea?.invoke(
+                                                        computeTabGroupHitArea(group.id, coords, density.density)
+                                                    )
+                                                },
+                                            )
+                                        }
+                                        WorkbenchPanelFrame(
+                                            panelState = activePanel,
+                                            onFloat = { onFloat(activePanel.id) },
+                                            onCollapse = { onCollapse(activePanel.id) },
+                                            onClose = { onHide(activePanel.id) },
+                                            onTitleBarPositionChanged = onTitleBarPositionChanged?.let { callback ->
+                                                { x, y -> callback(activePanel.id, x, y) }
+                                            },
+                                            onDragStart = onDragStart?.let { { x, y -> it(activePanel.id, x, y) } },
+                                            onDrag = onDrag?.let { { x, y -> it(activePanel.id, x, y) } },
+                                            onDragEnd = onDragEnd?.let { { _, _ -> it(activePanel.id) } },
+                                            onDragCancel = onDragCancel,
+                                            modifier = Modifier.fillMaxSize(),
+                                        ) {
+                                            panelContent(activePanel)
+                                        }
                                     }
                                 }
-                            }
-                            if (index < groups.size - 1) {
-                                val beforeGroupId = group.id
-                                val afterGroupId = groups[index + 1].id
-                                DockSplitResizeHandle(
-                                    zone = zone,
-                                    beforeGroupId = beforeGroupId,
-                                    afterGroupId = afterGroupId,
-                                    zoneSizeDp = zoneHeight,
-                                    onResizeSplit = onResizeSplit,
-                                    modifier = Modifier.fillMaxHeight().width(4.dp),
-                                )
+                                if (index < groups.size - 1) {
+                                    val beforeGroupId = group.id
+                                    val afterGroupId = groups[index + 1].id
+                                    DockSplitResizeHandle(
+                                        zone = zone,
+                                        beforeGroupId = beforeGroupId,
+                                        afterGroupId = afterGroupId,
+                                        availableMainAxisDp = availableMainAxisDp.coerceAtLeast(0f),
+                                        onResizeSplit = onResizeSplit,
+                                        modifier = Modifier.fillMaxHeight().width(4.dp),
+                                    )
+                                }
                             }
                         }
                     }
@@ -332,7 +343,7 @@ fun DockSplitResizeHandle(
     zone: DockZone,
     beforeGroupId: String,
     afterGroupId: String,
-    zoneSizeDp: Float,
+    availableMainAxisDp: Float,
     onResizeSplit: ((zone: DockZone, beforeGroupId: String, afterGroupId: String, deltaDp: Float, availableMainAxisDp: Float) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -353,7 +364,7 @@ fun DockSplitResizeHandle(
                         DockZone.Floating -> 0f
                     }
                     if (deltaDp != 0f && onResizeSplit != null) {
-                        onResizeSplit(zone, beforeGroupId, afterGroupId, deltaDp, zoneSizeDp)
+                        onResizeSplit(zone, beforeGroupId, afterGroupId, deltaDp, availableMainAxisDp)
                     }
                     change.consume()
                 }
