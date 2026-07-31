@@ -1829,4 +1829,91 @@ class WorkbenchReducerTest {
         val newActive = result.activeTabByGroup[groupId]
         assertEquals("activeTab must switch to the remaining expanded panel (Search)", WorkbenchPanelId.Search, newActive)
     }
+
+    // --- Defect: movePanel does not clean up old group activeTab ---
+
+    @Test
+    fun movePanel_cleansUpOldGroupActiveTab() {
+        val expanded1 = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val expanded2 = WorkbenchReducer.reduce(expanded1, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Search))
+        val groupId = expanded2.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId ?: ""
+        val withActive = WorkbenchReducer.reduce(expanded2, WorkbenchAction.ActivateTab(groupId, WorkbenchPanelId.AiAssistant))
+        assertEquals(WorkbenchPanelId.AiAssistant, withActive.activeTabByGroup[groupId])
+        val result = WorkbenchReducer.reduce(withActive, WorkbenchAction.MovePanel(WorkbenchPanelId.AiAssistant, DockZone.Bottom))
+        val newActive = result.activeTabByGroup[groupId]
+        assertTrue("movePanel away from group should switch activeTab to remaining panel", newActive != WorkbenchPanelId.AiAssistant)
+        if (result.panels.values.any { it.tabGroupId == groupId && it.zone != DockZone.Floating && it.visibility == PanelVisibility.Expanded }) {
+            assertNotNull("activeTab should point to a remaining expanded panel in the old group", newActive)
+        }
+    }
+
+    // --- Defect: normalizeActiveTabs does not check zone ---
+
+    @Test
+    fun normalizeActiveTabs_repairsActiveTabPointingToFloatingPanel() {
+        val expanded1 = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val expanded2 = WorkbenchReducer.reduce(expanded1, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Search))
+        val groupId = expanded2.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId ?: ""
+        val withActive = WorkbenchReducer.reduce(expanded2, WorkbenchAction.ActivateTab(groupId, WorkbenchPanelId.AiAssistant))
+        val floated = WorkbenchReducer.reduce(withActive, WorkbenchAction.FloatPanel(WorkbenchPanelId.AiAssistant))
+        val activeTab = floated.activeTabByGroup[groupId]
+        assertTrue("after floatPanel, activeTab must not point to the floated panel (zone mismatch)", activeTab != WorkbenchPanelId.AiAssistant)
+    }
+
+    @Test
+    fun normalizeActiveTabs_zoneCheck_floatingPanelNotCountedAsGroupMember() {
+        val expanded1 = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val expanded2 = WorkbenchReducer.reduce(expanded1, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Search))
+        val groupId = expanded2.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId ?: ""
+        val withActive = WorkbenchReducer.reduce(expanded2, WorkbenchAction.ActivateTab(groupId, WorkbenchPanelId.AiAssistant))
+        val floated = WorkbenchReducer.reduce(withActive, WorkbenchAction.FloatPanel(WorkbenchPanelId.AiAssistant))
+        val zone = floated.dockGroupMeta[groupId]?.zone
+        if (zone != null) {
+            val activeTab = floated.activeTabByGroup[groupId]
+            val activePanel = if (activeTab != null) floated.panels[activeTab] else null
+            assertTrue("activeTab panel must be in the same zone as the group", activePanel == null || activePanel.zone == zone)
+        }
+    }
+
+    @Test
+    fun normalizeActiveTabs_repairsStaleActiveTabAfterManualZoneChange() {
+        val expanded1 = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val expanded2 = WorkbenchReducer.reduce(expanded1, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Search))
+        val groupId = expanded2.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId ?: ""
+        val withActive = WorkbenchReducer.reduce(expanded2, WorkbenchAction.ActivateTab(groupId, WorkbenchPanelId.AiAssistant))
+        val moved = WorkbenchReducer.reduce(withActive, WorkbenchAction.MovePanel(WorkbenchPanelId.AiAssistant, DockZone.Left))
+        val activeTab = moved.activeTabByGroup[groupId]
+        val activePanel = if (activeTab != null) moved.panels[activeTab] else null
+        val groupZone = moved.dockGroupMeta[groupId]?.zone
+        if (groupZone != null && activePanel != null) {
+            assertTrue("after movePanel away, activeTab should not point to panel in different zone (activeTab=$activeTab, panelZone=${activePanel.zone}, groupZone=$groupZone)", activePanel.zone == groupZone || activeTab != WorkbenchPanelId.AiAssistant)
+        }
+    }
+
+    // --- Defect: Bottom resize handle direction is reversed ---
+
+    @Test
+    fun resizeDockZone_bottomPositiveDelta_increasesBottomHeight() {
+        val moved = WorkbenchReducer.reduce(defaultState, WorkbenchAction.MovePanel(WorkbenchPanelId.Statistics, DockZone.Bottom))
+        val expanded = WorkbenchReducer.reduce(moved, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Statistics))
+        val beforeSize = expanded.dockZoneSizeDp[DockZone.Bottom] ?: 220f
+        val result = WorkbenchReducer.reduce(expanded, WorkbenchAction.ResizeDockZone(DockZone.Bottom, 50f, 800f))
+        val afterSize = result.dockZoneSizeDp[DockZone.Bottom]!!
+        assertTrue("positive delta should increase bottom height (before=$beforeSize, after=$afterSize)", afterSize > beforeSize)
+    }
+
+    // --- Defect: SujianWorkbench passes 0f instead of null for actualOtherSideWidthDp ---
+    // This is a UI-layer defect; test the Reducer contract: 0f means zero, null means fallback
+
+    @Test
+    fun resizeDockZone_zeroOtherSide_allowsLargerZoneThanPersistedWidth() {
+        val leftExpanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val rightExpanded = WorkbenchReducer.reduce(leftExpanded, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val availableWidth = 1200f
+        val resultZero = WorkbenchReducer.reduce(rightExpanded, WorkbenchAction.ResizeDockZone(DockZone.Left, 500f, availableWidth, 0f))
+        val resultNull = WorkbenchReducer.reduce(rightExpanded, WorkbenchAction.ResizeDockZone(DockZone.Left, 500f, availableWidth, null))
+        val resultWithOther = WorkbenchReducer.reduce(rightExpanded, WorkbenchAction.ResizeDockZone(DockZone.Left, 300f, availableWidth, 400f))
+        assertTrue("0f (other side truly absent) should allow larger left zone than null (fallback to persisted right width)", resultZero.dockZoneSizeDp[DockZone.Left]!! >= resultNull.dockZoneSizeDp[DockZone.Left]!!)
+        assertTrue("0f should allow larger left zone than when other side is 400dp", resultZero.dockZoneSizeDp[DockZone.Left]!! > resultWithOther.dockZoneSizeDp[DockZone.Left]!!)
+    }
 }

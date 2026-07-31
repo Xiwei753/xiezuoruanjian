@@ -125,7 +125,9 @@ object WorkbenchReducer {
 
     private fun movePanel(state: WorkbenchLayoutState, panelId: WorkbenchPanelId, zone: DockZone): WorkbenchLayoutState {
         val panel = state.panels[panelId] ?: return state
-        return updatePanel(state, panel.copy(zone = zone), markCustom = true)
+        val oldGroupId = panel.tabGroupId
+        val movedState = updatePanel(state, panel.copy(zone = zone), markCustom = true)
+        return cleanUpOldGroup(movedState, oldGroupId)
     }
 
     private fun activateTab(state: WorkbenchLayoutState, tabGroupId: String, panelId: WorkbenchPanelId): WorkbenchLayoutState {
@@ -548,9 +550,11 @@ object WorkbenchReducer {
         var updatedActiveTab = state.activeTabByGroup
         for ((groupId, activeId) in state.activeTabByGroup) {
             val activePanel = state.panels[activeId]
-            if (activePanel == null || activePanel.tabGroupId != groupId || activePanel.visibility != PanelVisibility.Expanded) {
+            val groupZone = state.dockGroupMeta[groupId]?.zone
+            val zoneMismatch = groupZone != null && activePanel != null && activePanel.zone != groupZone
+            if (activePanel == null || activePanel.tabGroupId != groupId || activePanel.visibility != PanelVisibility.Expanded || zoneMismatch) {
                 val expandedInGroup = state.panels.values
-                    .filter { it.tabGroupId == groupId && it.visibility == PanelVisibility.Expanded }
+                    .filter { it.tabGroupId == groupId && it.visibility == PanelVisibility.Expanded && (groupZone == null || it.zone == groupZone) }
                     .sortedBy { it.order }
                 if (expandedInGroup.isNotEmpty()) {
                     updatedActiveTab = updatedActiveTab + (groupId to expandedInGroup.first().id)

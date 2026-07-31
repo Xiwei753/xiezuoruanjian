@@ -41,7 +41,7 @@ fun DockResizeHandle(
                     val deltaDp = when (zone) {
                         DockZone.Left -> dragAmount.x / density.density
                         DockZone.Right -> -dragAmount.x / density.density
-                        DockZone.Bottom -> -dragAmount.y / density.density
+                        DockZone.Bottom -> dragAmount.y / density.density
                         DockZone.Floating -> dragAmount.x / density.density
                     }
                     if (deltaDp != 0f) {
