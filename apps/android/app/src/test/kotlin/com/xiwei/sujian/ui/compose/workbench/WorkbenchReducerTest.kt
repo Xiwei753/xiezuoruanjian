@@ -1866,6 +1866,24 @@ class WorkbenchReducerTest {
     }
 
     @Test
+    fun expandPanel_normalizesStaleActiveTabsInOtherGroups() {
+        val expanded1 = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val expanded2 = WorkbenchReducer.reduce(expanded1, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Search))
+        val rightGroupId = expanded2.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId ?: ""
+        val leftGroupId = expanded2.panels[WorkbenchPanelId.ChapterNavigator]?.tabGroupId ?: ""
+        val withActiveRight = WorkbenchReducer.reduce(expanded2, WorkbenchAction.ActivateTab(rightGroupId, WorkbenchPanelId.AiAssistant))
+        val hidden = WorkbenchReducer.reduce(withActiveRight, WorkbenchAction.HidePanel(WorkbenchPanelId.AiAssistant))
+        assertTrue("after hiding AiAssistant, right group activeTab should not be AiAssistant",
+            hidden.activeTabByGroup[rightGroupId] != WorkbenchPanelId.AiAssistant)
+        val manuallyCorrupted = hidden.copy(
+            activeTabByGroup = hidden.activeTabByGroup + (rightGroupId to WorkbenchPanelId.AiAssistant)
+        )
+        val result = WorkbenchReducer.reduce(manuallyCorrupted, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        assertTrue("expandPanel should normalize stale activeTab in other groups",
+            result.activeTabByGroup[rightGroupId] != WorkbenchPanelId.AiAssistant)
+    }
+
+    @Test
     fun expandPanel_noDuplicateOrdersInSameZone() {
         var state = defaultState
         for (id in WorkbenchPanelId.entries) {

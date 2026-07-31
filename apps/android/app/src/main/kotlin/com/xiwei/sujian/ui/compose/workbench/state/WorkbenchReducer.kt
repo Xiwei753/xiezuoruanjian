@@ -96,12 +96,13 @@ object WorkbenchReducer {
         } else {
             updatedState.dockZoneSizeDp
         }
-        return updatedState.copy(
+        val withActiveTab = updatedState.copy(
             dockGroupWeights = syncedDockGroupWeights,
             dockGroupMeta = syncedDockGroupMeta,
             dockZoneSizeDp = syncedDockZoneSizeDp,
             activeTabByGroup = updatedState.activeTabByGroup + (panel.tabGroupId to panelId),
         )
+        return normalizeActiveTabs(withActiveTab)
     }
 
     private fun collapsePanel(state: WorkbenchLayoutState, panelId: WorkbenchPanelId): WorkbenchLayoutState {
