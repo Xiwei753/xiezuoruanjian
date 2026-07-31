@@ -107,14 +107,26 @@ fn test_workspace_summary_dto_json_key_contract() {
         }],
     };
     let json = serde_json::to_value(&dto).unwrap();
-    assert_eq!(json["path"], "/ws");
-    assert_eq!(json["isValid"], true);
-    assert_eq!(json["projects"][0]["id"], "p1");
-    assert_eq!(json["projects"][0]["title"], "P");
-    assert_eq!(json["projects"][0]["createdAt"], "2023-01-01");
-    assert_eq!(json["projects"][0]["updatedAt"], "2023-01-02");
-    assert_eq!(json["recentEdits"][0]["projectId"], "p1");
-    assert_eq!(json["recentEdits"][0]["volumeId"], "v1");
-    assert_eq!(json["recentEdits"][0]["chapterId"], "c1");
-    assert_eq!(json["recentEdits"][0]["timestamp"], "2023-01-01");
+    assert_eq!(
+        json,
+        json!({
+            "path": "/ws",
+            "isValid": true,
+            "projects": [{
+                "id": "p1",
+                "title": "P",
+                "createdAt": "2023-01-01",
+                "updatedAt": "2023-01-02"
+            }],
+            "recentEdits": [{
+                "projectId": "p1",
+                "volumeId": "v1",
+                "chapterId": "c1",
+                "timestamp": "2023-01-01"
+            }]
+        })
+    );
+    let deserialized: crate::api::types::WorkspaceSummaryDto =
+        serde_json::from_value(json).unwrap();
+    assert_eq!(dto, deserialized);
 }

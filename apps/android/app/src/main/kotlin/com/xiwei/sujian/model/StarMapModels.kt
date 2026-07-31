@@ -1,19 +1,14 @@
 package com.xiwei.sujian.model
 
-import com.google.gson.annotations.SerializedName
-import com.google.gson.JsonDeserializer
-import com.google.gson.JsonElement
-import com.google.gson.JsonDeserializationContext
-import java.lang.reflect.Type
-
 /**
  * StarMapModels — 星图数据模型
  *
  * 定义星图相关的数据类和枚举，与 Rust Core 的星图数据结构一一对应。
  *
  * ## 架构定位
- * - 这些模型是 Rust Core JSON 响应的 Kotlin 映射
- * - 所有字段名使用 @SerializedName 映射 Rust 的 snake_case
+ * - 这些模型是 Rust Core UniFFI DTO 的 Kotlin 映射
+ * - 字段名使用 Kotlin camelCase 命名，与 Core serde rename_all = "camelCase" 契约一致
+ * - 所有数据通过 UniFFI typed bridge 传输，不经过 Gson JSON 反序列化
  *
  * ## 包含模型
  * - StarMapMeta：星图元数据
@@ -39,85 +34,35 @@ data class StarMapMeta(
 )
 
 enum class StarMapNodeKind {
-    @SerializedName("character") Character,
-    @SerializedName("event") Event,
-    @SerializedName("location") Location,
-    @SerializedName("item") Item,
-    @SerializedName("concept") Concept,
-    @SerializedName("theme") Theme,
-    @SerializedName("note") Note,
-    @SerializedName("organization") Organization,
-    @SerializedName("timeline") Timeline,
-    @SerializedName("plot") Plot,
-    @SerializedName("foreshadowing") Foreshadowing,
-    @SerializedName("chapter") Chapter,
-    @SerializedName("custom") Custom
-}
-
-class StarMapNodeKindDeserializer : JsonDeserializer<StarMapNodeKind> {
-    override fun deserialize(
-        json: JsonElement,
-        typeOfT: Type,
-        context: JsonDeserializationContext
-    ): StarMapNodeKind {
-        val kindString = json.asString.lowercase()
-        return when (kindString) {
-            "character" -> StarMapNodeKind.Character
-            "event" -> StarMapNodeKind.Event
-            "location" -> StarMapNodeKind.Location
-            "item" -> StarMapNodeKind.Item
-            "concept" -> StarMapNodeKind.Concept
-            "theme" -> StarMapNodeKind.Theme
-            "note" -> StarMapNodeKind.Note
-            "organization" -> StarMapNodeKind.Organization
-            "timeline" -> StarMapNodeKind.Timeline
-            "plot" -> StarMapNodeKind.Plot
-            "foreshadowing" -> StarMapNodeKind.Foreshadowing
-            "chapter" -> StarMapNodeKind.Chapter
-            else -> StarMapNodeKind.Custom
-        }
-    }
+    Character,
+    Event,
+    Location,
+    Item,
+    Concept,
+    Theme,
+    Note,
+    Organization,
+    Timeline,
+    Plot,
+    Foreshadowing,
+    Chapter,
+    Custom
 }
 
 enum class StarMapEdgeKind {
-    @SerializedName("contains") Contains,
-    @SerializedName("references") References,
-    @SerializedName("appearsIn") AppearsIn,
-    @SerializedName("causes") Causes,
-    @SerializedName("relatedTo") RelatedTo,
-    @SerializedName("locatedAt") LocatedAt,
-    @SerializedName("characterRelation") CharacterRelation,
-    @SerializedName("timeline") Timeline,
-    @SerializedName("foreshadows") Foreshadows,
-    @SerializedName("resolves") Resolves,
-    @SerializedName("dependsOn") DependsOn,
-    @SerializedName("conflictsWith") ConflictsWith,
-    @SerializedName("custom") Custom
-}
-
-class StarMapEdgeKindDeserializer : JsonDeserializer<StarMapEdgeKind> {
-    override fun deserialize(
-        json: JsonElement,
-        typeOfT: Type,
-        context: JsonDeserializationContext
-    ): StarMapEdgeKind {
-        val kindString = json.asString.lowercase()
-        return when (kindString) {
-            "contains" -> StarMapEdgeKind.Contains
-            "references" -> StarMapEdgeKind.References
-            "appearsin" -> StarMapEdgeKind.AppearsIn
-            "causes" -> StarMapEdgeKind.Causes
-            "relatedto" -> StarMapEdgeKind.RelatedTo
-            "locatedat" -> StarMapEdgeKind.LocatedAt
-            "characterrelation" -> StarMapEdgeKind.CharacterRelation
-            "timeline" -> StarMapEdgeKind.Timeline
-            "foreshadows" -> StarMapEdgeKind.Foreshadows
-            "resolves" -> StarMapEdgeKind.Resolves
-            "dependson" -> StarMapEdgeKind.DependsOn
-            "conflictswith" -> StarMapEdgeKind.ConflictsWith
-            else -> StarMapEdgeKind.Custom
-        }
-    }
+    Contains,
+    References,
+    AppearsIn,
+    Causes,
+    RelatedTo,
+    LocatedAt,
+    CharacterRelation,
+    Timeline,
+    Foreshadows,
+    Resolves,
+    DependsOn,
+    ConflictsWith,
+    Custom
 }
 
 data class StarMapGraphNode(
@@ -267,9 +212,9 @@ data class StarMapGraphData(
 )
 
 enum class StarMapLayoutKind {
-    @SerializedName("freeform") Freeform,
-    @SerializedName("autoRadial") AutoRadial,
-    @SerializedName("custom") Custom
+    Freeform,
+    AutoRadial,
+    Custom
 }
 
 data class StarMapLayoutNodeData(

@@ -6,20 +6,17 @@ package com.xiwei.sujian.model
 //!
 //! ## 架构定位
 //!
-//! 这些模型是 Rust Core UniFFI DTO 或 legacy JSON 响应的 Kotlin 映射，**不是业务实体**。
+//! 这些模型是 Rust Core UniFFI DTO 的 Kotlin 映射，**不是业务实体**。
 //! 业务实体的定义和操作都在 Rust Core 中。
+//! 所有数据通过 UniFFI typed bridge 传输，不经过 Gson JSON 反序列化。
 //!
 //! ## 设计原则
 //!
-//! - 所有字段名使用 `@SerializedName` 映射 Rust 的 snake_case
+//! - 字段名使用 Kotlin camelCase 命名，与 Core serde rename_all = "camelCase" 契约一致
 //! - 这些类只做数据承载，不包含业务逻辑
 //! - 修改 Rust Core 数据结构时，必须同步更新这里的模型
 
-import com.google.gson.annotations.SerializedName
-import com.google.gson.JsonDeserializationContext
-import com.google.gson.JsonDeserializer
 import com.google.gson.JsonElement
-import java.lang.reflect.Type
 
 data class WorkspaceManifest(
     val version: Int
@@ -56,47 +53,47 @@ data class LocalSettings(
     val desktopSidebarWidth: Double = 240.0,
     val desktopEditorWidth: Double = 0.0,
     val editorCoordinatedTextCursorAnimationEnabled: Boolean = false,
-    @SerializedName("diagnostics_enabled") val diagnosticsEnabled: Boolean = true,
-    @SerializedName("diagnostics_verbose") val diagnosticsVerbose: Boolean = true,
-    @SerializedName("use_self_render_editor_on_android") val useSelfRenderEditorOnAndroid: Boolean = true,
-    @SerializedName("experimental_fullscreen_mode") val experimentalFullscreenMode: Boolean = false
+    val diagnosticsEnabled: Boolean = true,
+    val diagnosticsVerbose: Boolean = true,
+    val useSelfRenderEditorOnAndroid: Boolean = true,
+    val experimentalFullscreenMode: Boolean = false
 )
 
 data class SyncableSettings(
-    @SerializedName("fontSize") val fontSize: Double = 0.0,
-    @SerializedName("themeMode") val themeMode: String = "",
-    @Deprecated("Use themePaletteJson instead") @SerializedName("monetColor") val monetColor: String = "",
-    @SerializedName("themePaletteJson") val themePaletteJson: String = ""
+    val fontSize: Double = 0.0,
+    val themeMode: String = "",
+    @Deprecated("Use themePaletteJson instead") val monetColor: String = "",
+    val themePaletteJson: String = ""
 )
 
 data class Project(
     val id: String,
     val title: String,
-    @SerializedName("created_at") val createdAt: String,
-    @SerializedName("updated_at") val updatedAt: String
+    val createdAt: String,
+    val updatedAt: String
 )
 
 data class ProjectStats(
-    @SerializedName("total_word_count") val totalWordCount: Int,
-    @SerializedName("volume_count") val volumeCount: Int,
-    @SerializedName("chapter_count") val chapterCount: Int
+    val totalWordCount: Int,
+    val volumeCount: Int,
+    val chapterCount: Int
 )
 
 data class Volume(
     val id: String,
     val title: String,
-    @SerializedName("created_at") val createdAt: String,
-    @SerializedName("updated_at") val updatedAt: String,
+    val createdAt: String,
+    val updatedAt: String,
     val order: Int = 0
 )
 
 data class ChapterMeta(
     val id: String,
     val title: String,
-    @SerializedName("created_at") val createdAt: String,
-    @SerializedName("updated_at") val updatedAt: String,
+    val createdAt: String,
+    val updatedAt: String,
     val order: Int = 0,
-    @SerializedName("word_count") val wordCount: Int,
+    val wordCount: Int,
     val hash: String,
     val note: String? = null
 )
@@ -109,44 +106,44 @@ data class ChapterOpenResult(
 typealias ChapterContent = ChapterOpenResult
 
 data class ChapterSaveReceipt(
-    @SerializedName("chapter_relative_path") val chapterRelativePath: String,
-    @SerializedName("content_len") val contentLen: Long,
-    @SerializedName("content_hash") val contentHash: String,
-    @SerializedName("meta_hash") val metaHash: String,
-    @SerializedName("updated_at") val updatedAt: String,
-    @SerializedName("word_count") val wordCount: Int
+    val chapterRelativePath: String,
+    val contentLen: Long,
+    val contentHash: String,
+    val metaHash: String,
+    val updatedAt: String,
+    val wordCount: Int
 )
 
 data class RecentEdit(
-    @SerializedName("project_id") val projectId: String,
-    @SerializedName("volume_id") val volumeId: String,
-    @SerializedName("chapter_id") val chapterId: String,
+    val projectId: String,
+    val volumeId: String,
+    val chapterId: String,
     val timestamp: String
 )
 
 // Sync Models
 
 enum class SyncTransport {
-    @SerializedName("https_token") HttpsToken,
-    @SerializedName("ssh_deploy_key") SshKey
+    HttpsToken,
+    SshKey
 }
 
 enum class BackendType {
-    @SerializedName("git") Git,
-    @SerializedName("github_api") GithubApi
+    Git,
+    GithubApi
 }
 
 data class SyncConfig(
     val enabled: Boolean? = false,
-    @SerializedName("backend_type") val backendType: BackendType? = BackendType.GithubApi,
-    @SerializedName("remote_url") val remoteUrl: String? = "",
+    val backendType: BackendType? = BackendType.GithubApi,
+    val remoteUrl: String? = "",
     val transport: SyncTransport? = SyncTransport.HttpsToken,
     val branch: String? = "main",
-    @SerializedName("auto_sync") val autoSync: Boolean? = false,
-    @SerializedName("sync_interval_seconds") val syncIntervalSeconds: Int? = 300,
+    val autoSync: Boolean? = false,
+    val syncIntervalSeconds: Int? = 300,
     val username: String? = "",
-    @SerializedName("has_network_permission") val hasNetworkPermission: Boolean? = null,
-    @SerializedName("has_network_state_permission") val hasNetworkStatePermission: Boolean? = null
+    val hasNetworkPermission: Boolean? = null,
+    val hasNetworkStatePermission: Boolean? = null
 ) {
     fun normalize(): SyncConfig {
         return copy(
@@ -166,31 +163,31 @@ data class SyncConfig(
 
 data class SyncSecrets(
     val token: String? = null,
-    @SerializedName("ssh_private_key") val sshPrivateKey: String? = null
+    val sshPrivateKey: String? = null
 )
 
 data class Tombstone(
-    @SerializedName("original_path") val originalPath: String,
-    @SerializedName("trash_path") val trashPath: String,
-    @SerializedName("deleted_at") val deletedAt: Long,
-    @SerializedName("purge_after") val purgeAfter: Long,
-    @SerializedName("deleted_by") val deletedBy: String,
-    @SerializedName("original_hash") val originalHash: String,
+    val originalPath: String,
+    val trashPath: String,
+    val deletedAt: Long,
+    val purgeAfter: Long,
+    val deletedBy: String,
+    val originalHash: String,
     val kind: String
 )
 
 data class SyncState(
     val status: SyncStatus = SyncStatus.Idle,
-    @SerializedName("remote_url") val remoteUrl: String? = null,
-    @SerializedName("backend_type") val backendType: String? = null,
+    val remoteUrl: String? = null,
+    val backendType: String? = null,
     val transport: String? = null,
-    @SerializedName("last_synced_commit") val lastSyncedCommit: String? = null,
-    @SerializedName("last_sync_time") val lastSyncTime: Long? = null,
-    @SerializedName("last_error") val lastError: String? = null,
-    @SerializedName("known_files") val knownFiles: Map<String, String>? = emptyMap(),
+    val lastSyncedCommit: String? = null,
+    val lastSyncTime: Long? = null,
+    val lastError: String? = null,
+    val knownFiles: Map<String, String>? = emptyMap(),
     val conflicts: List<SyncConflict>? = emptyList(),
     val tombstones: List<Tombstone>? = emptyList(),
-    @SerializedName("deleted_files") val deletedFiles: Set<String>? = emptySet()
+    val deletedFiles: Set<String>? = emptySet()
 )
 
 data class SyncCapabilityData(
@@ -201,138 +198,100 @@ data class SyncCapabilityData(
 )
 
 enum class SyncStatus {
-    @SerializedName("idle") Idle,
-    @SerializedName("syncing") Syncing,
-    @SerializedName("success") Success,
-    @SerializedName("configured_not_tested") ConfiguredNotTested,
-    @SerializedName("conflict") Conflict,
-    @SerializedName("partial_conflict") PartialConflict,
-    @SerializedName("recoverable_error") RecoverableError,
-    @SerializedName("fatal_error") FatalError,
-    @SerializedName("dirty_repo_blocked") DirtyRepoBlocked,
-    @SerializedName("branch_missing_recovered") BranchMissingRecovered,
-    @SerializedName("error") Error,
-    @SerializedName("no_changes") NoChanges,
-    @SerializedName("latest_wins_applied") LatestWinsApplied
-}
-
-class SyncStatusDeserializer : JsonDeserializer<SyncStatus> {
-    override fun deserialize(
-        json: JsonElement,
-        typeOfT: Type,
-        context: JsonDeserializationContext
-    ): SyncStatus {
-        if (json.isJsonPrimitive) {
-            val str = json.asString
-            return when (str) {
-                "idle" -> SyncStatus.Idle
-                "syncing" -> SyncStatus.Syncing
-                "success" -> SyncStatus.Success
-                "configured_not_tested" -> SyncStatus.ConfiguredNotTested
-                "conflict" -> SyncStatus.Conflict
-                "partial_conflict" -> SyncStatus.PartialConflict
-                "dirty_repo_blocked" -> SyncStatus.DirtyRepoBlocked
-                "branch_missing_recovered" -> SyncStatus.BranchMissingRecovered
-                "no_changes" -> SyncStatus.NoChanges
-                "latest_wins_applied" -> SyncStatus.LatestWinsApplied
-                else -> SyncStatus.Error
-            }
-        }
-        if (json.isJsonObject) {
-            val obj = json.asJsonObject
-            if (obj.has("error") || obj.has("Error")) {
-                return SyncStatus.Error
-            }
-            if (obj.has("recoverable_error") || obj.has("RecoverableError")) {
-                return SyncStatus.RecoverableError
-            }
-            if (obj.has("fatal_error") || obj.has("FatalError")) {
-                return SyncStatus.FatalError
-            }
-        }
-        return SyncStatus.Error
-    }
+    Idle,
+    Syncing,
+    Success,
+    ConfiguredNotTested,
+    Conflict,
+    PartialConflict,
+    RecoverableError,
+    FatalError,
+    DirtyRepoBlocked,
+    BranchMissingRecovered,
+    Error,
+    NoChanges,
+    LatestWinsApplied
 }
 
 enum class FirstSyncMode {
-    @SerializedName("not_attempted") NotAttempted,
-    @SerializedName("clone_into_empty_workspace") CloneIntoEmptyWorkspace,
-    @SerializedName("init_existing_workspace") InitExistingWorkspace,
-    @SerializedName("already_git_repo") AlreadyGitRepo,
-    @SerializedName("blocked_non_empty_remote") BlockedNonEmptyRemote,
-    @SerializedName("unrelated_histories") UnrelatedHistories,
-    @SerializedName("none") None
+    NotAttempted,
+    CloneIntoEmptyWorkspace,
+    InitExistingWorkspace,
+    AlreadyGitRepo,
+    BlockedNonEmptyRemote,
+    UnrelatedHistories,
+    None
 }
 
 data class SyncConflictSummary(
     val status: String,
-    @SerializedName("local_dirty") val localDirty: Boolean,
-    @SerializedName("remote_changed") val remoteChanged: Boolean,
-    @SerializedName("conflicted_files") val conflictedFiles: List<String> = emptyList(),
-    @SerializedName("blocked_reason") val blockedReason: String,
-    @SerializedName("safe_next_steps") val safeNextSteps: List<String> = emptyList()
+    val localDirty: Boolean,
+    val remoteChanged: Boolean,
+    val conflictedFiles: List<String> = emptyList(),
+    val blockedReason: String,
+    val safeNextSteps: List<String> = emptyList()
 )
 
 data class SettingConflictDetail(
     val key: String,
-    @SerializedName("local_value") val localValue: String,
-    @SerializedName("remote_value") val remoteValue: String
+    val localValue: String,
+    val remoteValue: String
 )
 
 data class SyncConflict(
-    @SerializedName("local_path") val localPath: String,
-    @SerializedName("remote_path") val remotePath: String,
-    @SerializedName("local_hash") val localHash: String,
-    @SerializedName("remote_hash") val remoteHash: String,
-    @SerializedName("base_hash") val baseHash: String,
-    @SerializedName("created_at") val createdAt: Long,
+    val localPath: String,
+    val remotePath: String,
+    val localHash: String,
+    val remoteHash: String,
+    val baseHash: String,
+    val createdAt: Long,
     val description: String
 )
 
 data class SyncDiagnosticsResult(
     val success: Boolean,
     val backendType: String,
-    @SerializedName("has_network_permission") val hasNetworkPermission: Boolean,
-    @SerializedName("has_network_state_permission") val hasNetworkStatePermission: Boolean,
-    @SerializedName("network_state") val networkState: String,
+    val hasNetworkPermission: Boolean,
+    val hasNetworkStatePermission: Boolean,
+    val networkState: String,
     val networkOk: Boolean,
     val authOk: Boolean,
     val repoOk: Boolean,
     val branchOk: Boolean,
-    @SerializedName("network_status") val networkStatus: String,
-    @SerializedName("auth_status") val authStatus: String,
-    @SerializedName("repo_status") val repoStatus: String,
-    @SerializedName("branch_status") val branchStatus: String,
-    @SerializedName("remote_url_sanitized") val remoteUrlSanitized: String,
+    val networkStatus: String,
+    val authStatus: String,
+    val repoStatus: String,
+    val branchStatus: String,
+    val remoteUrlSanitized: String,
     val transport: String,
-    @SerializedName("error_category") val errorCategory: String,
-    @SerializedName("raw_error") val rawError: String?
+    val errorCategory: String,
+    val rawError: String?
 )
 
 data class SyncResult(
     val status: SyncStatus,
-    @SerializedName("uploaded_files") val uploadedFiles: List<String> = emptyList(),
-    @SerializedName("downloaded_files") val downloadedFiles: List<String> = emptyList(),
-    @SerializedName("local_deletes") val localDeletes: List<String> = emptyList(),
-    @SerializedName("remote_deletes") val remoteDeletes: List<String> = emptyList(),
-    @SerializedName("overwritten_files") val overwrittenFiles: List<String> = emptyList(),
-    @SerializedName("ignored_files") val ignoredFiles: List<String> = emptyList(),
+    val uploadedFiles: List<String> = emptyList(),
+    val downloadedFiles: List<String> = emptyList(),
+    val localDeletes: List<String> = emptyList(),
+    val remoteDeletes: List<String> = emptyList(),
+    val overwrittenFiles: List<String> = emptyList(),
+    val ignoredFiles: List<String> = emptyList(),
     val conflicts: List<SyncConflict> = emptyList(),
-    @SerializedName("conflict_summary") val conflictSummary: SyncConflictSummary? = null,
-    @SerializedName("settings_conflicts") val settingsConflicts: List<SettingConflictDetail>? = null,
-    @SerializedName("commit_hash") val commitHash: String? = null,
+    val conflictSummary: SyncConflictSummary? = null,
+    val settingsConflicts: List<SettingConflictDetail>? = null,
+    val commitHash: String? = null,
     val error: String? = null,
-    @SerializedName("error_category") val errorCategory: String? = null,
-    @SerializedName("first_sync_mode") val firstSyncMode: FirstSyncMode = FirstSyncMode.None
+    val errorCategory: String? = null,
+    val firstSyncMode: FirstSyncMode = FirstSyncMode.None
 )
 
 data class SyncPlan(
-    @SerializedName("files_to_upload") val filesToUpload: List<String> = emptyList(),
-    @SerializedName("files_to_download") val filesToDownload: List<String> = emptyList(),
-    @SerializedName("files_to_delete_local") val filesToDeleteLocal: List<String> = emptyList(),
-    @SerializedName("files_to_delete_remote") val filesToDeleteRemote: List<String> = emptyList(),
-    @SerializedName("ignored_files") val ignoredFiles: List<String> = emptyList(),
-    @SerializedName("conflicts") val conflicts: List<String> = emptyList()
+    val filesToUpload: List<String> = emptyList(),
+    val filesToDownload: List<String> = emptyList(),
+    val filesToDeleteLocal: List<String> = emptyList(),
+    val filesToDeleteRemote: List<String> = emptyList(),
+    val ignoredFiles: List<String> = emptyList(),
+    val conflicts: List<String> = emptyList()
 )
 
 data class ActionDescriptor(
@@ -357,67 +316,22 @@ data class ActionResult(
     val requiresConfirmation: Boolean?
 )
 
-data class UiSchemaDescriptor(
-    val type: String?,
-    val min: Double?,
-    val max: Double?,
-    val step: Double?
-) {
-    companion object {
-        fun fromJson(element: JsonElement?): UiSchemaDescriptor? {
-            if (element == null || !element.isJsonObject) return null
-            val obj = element.asJsonObject
-            return UiSchemaDescriptor(
-                type = obj.get("type")?.asString,
-                min = obj.get("min")?.asDouble,
-                max = obj.get("max")?.asDouble,
-                step = obj.get("step")?.asDouble
-            )
-        }
-    }
-}
-
-data class InputSchemaProperty(
-    val name: String,
-    val type: String,
-    val minimum: Double?,
-    val maximum: Double?
-) {
-    companion object {
-        fun fromJson(element: JsonElement?): List<InputSchemaProperty> {
-            if (element == null || !element.isJsonObject) return emptyList()
-            val obj = element.asJsonObject
-            val props = obj.getAsJsonObject("properties") ?: return emptyList()
-            val required = obj.getAsJsonArray("required")?.map { it.asString } ?: emptyList()
-            return props.entrySet().map { (key, value) ->
-                val propObj = value.asJsonObject
-                InputSchemaProperty(
-                    name = key,
-                    type = propObj.get("type")?.asString ?: "string",
-                    minimum = propObj.get("minimum")?.asDouble,
-                    maximum = propObj.get("maximum")?.asDouble
-                )
-            }
-        }
-    }
-}
-
 data class WritingStatsSummary(
     val range: WritingStatsRange? = null,
     val totalWordCount: Long = 0,
     val totalTimeSeconds: Long = 0,
     val activeDays: Int = 0,
-    @SerializedName("total_human_typed_chars") val totalHumanTypedChars: Long? = null,
-    @SerializedName("total_active_seconds") val totalActiveSeconds: Long? = null,
-    @SerializedName("total_sessions") val totalSessions: Int? = null,
-    @SerializedName("days_count") val daysCount: Int? = null
+    val totalHumanTypedChars: Long? = null,
+    val totalActiveSeconds: Long? = null,
+    val totalSessions: Int? = null,
+    val daysCount: Int? = null
 )
 
 typealias WritingWritingStatsSummary = WritingStatsSummary
 
 data class WritingStatsRange(
-    @SerializedName("start_date") val startDate: String? = null,
-    @SerializedName("end_date") val endDate: String? = null
+    val startDate: String? = null,
+    val endDate: String? = null
 )
 
 data class ProjectWritingStatsSummary(
@@ -426,14 +340,14 @@ data class ProjectWritingStatsSummary(
 )
 
 data class ProjectWritingStatsItem(
-    @SerializedName("project_id") val projectId: String? = null,
+    val projectId: String? = null,
     val projectTitle: String? = null,
-    @SerializedName("human_typed_chars") val humanTypedChars: Long? = null,
-    @SerializedName("pasted_chars") val pastedChars: Long? = null,
-    @SerializedName("deleted_chars") val deletedChars: Long? = null,
-    @SerializedName("ai_inserted_chars") val aiInsertedChars: Long? = null,
-    @SerializedName("net_delta_chars") val netDeltaChars: Long? = null,
-    @SerializedName("active_seconds") val activeSeconds: Long? = null
+    val humanTypedChars: Long? = null,
+    val pastedChars: Long? = null,
+    val deletedChars: Long? = null,
+    val aiInsertedChars: Long? = null,
+    val netDeltaChars: Long? = null,
+    val activeSeconds: Long? = null
 )
 
 data class ChapterWritingStatsSummary(
@@ -442,13 +356,13 @@ data class ChapterWritingStatsSummary(
 )
 
 data class ChapterWritingStatsItem(
-    @SerializedName("chapter_id") val chapterId: String? = null,
-    @SerializedName("human_typed_chars") val humanTypedChars: Long? = null,
-    @SerializedName("pasted_chars") val pastedChars: Long? = null,
-    @SerializedName("deleted_chars") val deletedChars: Long? = null,
-    @SerializedName("ai_inserted_chars") val aiInsertedChars: Long? = null,
-    @SerializedName("net_delta_chars") val netDeltaChars: Long? = null,
-    @SerializedName("active_seconds") val activeSeconds: Long? = null
+    val chapterId: String? = null,
+    val humanTypedChars: Long? = null,
+    val pastedChars: Long? = null,
+    val deletedChars: Long? = null,
+    val aiInsertedChars: Long? = null,
+    val netDeltaChars: Long? = null,
+    val activeSeconds: Long? = null
 )
 
 data class DeviceWritingStatsSummary(
@@ -457,29 +371,29 @@ data class DeviceWritingStatsSummary(
 )
 
 data class DeviceWritingStatsItem(
-    @SerializedName("device_id") val deviceId: String? = null,
+    val deviceId: String? = null,
     val platform: String? = null,
-    @SerializedName("device_class") val deviceClass: String? = null,
-    @SerializedName("human_typed_chars") val humanTypedChars: Long? = null,
-    @SerializedName("pasted_chars") val pastedChars: Long? = null,
-    @SerializedName("deleted_chars") val deletedChars: Long? = null,
-    @SerializedName("ai_inserted_chars") val aiInsertedChars: Long? = null,
-    @SerializedName("net_delta_chars") val netDeltaChars: Long? = null,
-    @SerializedName("active_seconds") val activeSeconds: Long? = null,
-    @SerializedName("sessions_count") val sessionsCount: Int? = null
+    val deviceClass: String? = null,
+    val humanTypedChars: Long? = null,
+    val pastedChars: Long? = null,
+    val deletedChars: Long? = null,
+    val aiInsertedChars: Long? = null,
+    val netDeltaChars: Long? = null,
+    val activeSeconds: Long? = null,
+    val sessionsCount: Int? = null
 )
 
 data class WritingSpeedCurve(
     val range: WritingStatsRange? = null,
-    @SerializedName("bucket_minutes") val bucketMinutes: Int = 0,
+    val bucketMinutes: Int = 0,
     val buckets: List<WritingSpeedBucket>? = emptyList()
 )
 
 data class WritingSpeedBucket(
-    @SerializedName("start_ms") val startMs: Long = 0,
-    @SerializedName("end_ms") val endMs: Long = 0,
-    @SerializedName("chars_typed") val charsTyped: Long = 0,
-    @SerializedName("chars_per_minute") val charsPerMinute: Double = 0.0
+    val startMs: Long = 0,
+    val endMs: Long = 0,
+    val charsTyped: Long = 0,
+    val charsPerMinute: Double = 0.0
 )
 
 data class ProjectStatsSummary(

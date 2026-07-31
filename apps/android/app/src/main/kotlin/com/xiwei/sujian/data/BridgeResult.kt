@@ -1,9 +1,6 @@
 package com.xiwei.sujian.data
 
 
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
-
 /**
  * Android 端 Bridge 调用结果密封类。
  *
@@ -50,7 +47,7 @@ data class ResultEnvelope<out T>(
     val errorCode: String? = null,
     val messageKey: String? = null,
     val messageArgs: Map<String, String> = emptyMap(),
-    @Deprecated("Core 不再提供 user_message，使用 messageKey 或 rawError") val userMessage: String? = null, // i18n-exempt
+    @Deprecated("Core 不再提供 user_message，使用 messageKey 或 rawError") val userMessage: String? = null,
     val rawError: String? = null,
     val warnings: List<String> = emptyList(),
     val changedPaths: List<String> = emptyList(),
@@ -62,7 +59,7 @@ data class ResultEnvelope<out T>(
             data = data
         )
 
-        @Deprecated("使用 messageKey/rawError") // i18n-exempt
+        @Deprecated("使用 messageKey/rawError")
         fun error(errorCode: String, @Suppress("DEPRECATION") userMessage: String): ResultEnvelope<Nothing> = ResultEnvelope(
             success = false,
             errorCode = errorCode,
@@ -89,30 +86,5 @@ data class ResultEnvelope<out T>(
             "NOT_IMPLEMENTED_BRIDGE" -> "error.not_implemented_bridge"
             else -> "error.other"
         }
-    }
-}
-
-/**
- * 将 JSON 字符串结果解析为强类型对象。
- *
- * Core FFI 层返回 JSON 字符串，此函数在 Bridge 层完成反序列化。
- * 解析失败时返回 [BridgeResult.Error]（errorCode = JSON_ERROR），
- * 不向上抛异常。
- */
-internal inline fun <reified T> BridgeResult<String>.parseJsonResult(
-    gson: Gson,
-    label: String
-): BridgeResult<T> {
-    return when (this) {
-        is BridgeResult.Success -> try {
-            val type = object : TypeToken<T>() {}.type
-            BridgeResult.Success(gson.fromJson<T>(data, type))
-        } catch (e: Exception) {
-            BridgeResult.Error(
-                ResultEnvelope.error("JSON_ERROR", "JSON parse error for $label: ${e.message ?: e.javaClass.simpleName}")
-            )
-        }
-        is BridgeResult.Error -> this
-        BridgeResult.NotLoaded -> BridgeResult.NotLoaded
     }
 }

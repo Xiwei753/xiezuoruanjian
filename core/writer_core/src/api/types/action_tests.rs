@@ -1,5 +1,6 @@
 use super::action::*;
 use crate::action_registry::{ActionKind, ActionRiskLevel, ActionDescriptor, ActionResult};
+use serde_json::json;
 
 #[test]
 fn test_action_kind_dto_roundtrip() {
@@ -103,4 +104,49 @@ fn test_action_result_dto_roundtrip() {
     assert_eq!(res.data, back.data);
     assert_eq!(res.proposed_ui, back.proposed_ui);
     assert_eq!(res.requires_confirmation, back.requires_confirmation);
+}
+
+#[test]
+fn test_action_result_dto_json_contract() {
+    let dto = ActionResultDto {
+        success: true,
+        message: Some("Action succeeded".to_string()),
+        data: Some("{\"id\":123}".to_string()),
+        proposed_ui: None,
+        requires_confirmation: Some(false),
+    };
+    let json_val = serde_json::to_value(&dto).unwrap();
+    assert_eq!(
+        json_val,
+        json!({
+            "success": true,
+            "message": "Action succeeded",
+            "data": "{\"id\":123}",
+            "proposedUi": null,
+            "requiresConfirmation": false
+        })
+    );
+    let deserialized: ActionResultDto = serde_json::from_value(json_val).unwrap();
+    assert_eq!(dto, deserialized);
+
+    let minimal = ActionResultDto {
+        success: false,
+        message: None,
+        data: None,
+        proposed_ui: None,
+        requires_confirmation: None,
+    };
+    let min_json = serde_json::to_value(&minimal).unwrap();
+    assert_eq!(
+        min_json,
+        json!({
+            "success": false,
+            "message": null,
+            "data": null,
+            "proposedUi": null,
+            "requiresConfirmation": null
+        })
+    );
+    let min_back: ActionResultDto = serde_json::from_value(min_json).unwrap();
+    assert_eq!(minimal, min_back);
 }

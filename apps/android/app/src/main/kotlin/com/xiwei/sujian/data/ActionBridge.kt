@@ -1,6 +1,5 @@
 package com.xiwei.sujian.data
 
-import com.google.gson.Gson
 import com.google.gson.JsonElement
 import com.xiwei.sujian.model.ActionDescriptor
 import com.xiwei.sujian.model.ActionResult
@@ -8,8 +7,6 @@ import uniffi.writer_core.ActionDescriptorDto
 import uniffi.writer_core.ActionResultDto
 
 class ActionBridge internal constructor(private val appService: AppServiceBridge) {
-
-    private val gson = Gson()
 
     fun listRegisteredActions(): BridgeResult<List<ActionDescriptor>> {
         return when (val result = appService.listRegisteredActions()) {
