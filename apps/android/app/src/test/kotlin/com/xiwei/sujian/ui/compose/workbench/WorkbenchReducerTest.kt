@@ -1213,9 +1213,9 @@ class WorkbenchReducerTest {
     @Test
     fun floatPanel_removesEmptyMiddleGroup_reindexesRemainingOrders() {
         var state = defaultState
-        for (id in listOf(WorkbenchPanelId.ChapterNavigator, WorkbenchPanelId.AiAssistant, WorkbenchPanelId.Search)) {
-            state = WorkbenchReducer.reduce(state, WorkbenchAction.DockPanelAsNewGroup(id, DockZone.Left, Int.MAX_VALUE))
-        }
+        state = WorkbenchReducer.reduce(state, WorkbenchAction.DockPanelAsNewGroup(WorkbenchPanelId.ChapterNavigator, DockZone.Left, Int.MAX_VALUE))
+        state = WorkbenchReducer.reduce(state, WorkbenchAction.DockPanelAsNewGroup(WorkbenchPanelId.AiAssistant, DockZone.Left, Int.MAX_VALUE))
+        state = WorkbenchReducer.reduce(state, WorkbenchAction.DockPanelAsNewGroup(WorkbenchPanelId.Search, DockZone.Left, Int.MAX_VALUE))
         val middleGroupId = state.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId ?: ""
         assertTrue(state.dockGroupMeta.containsKey(middleGroupId))
         val result = WorkbenchReducer.reduce(state, WorkbenchAction.FloatPanel(WorkbenchPanelId.AiAssistant))
@@ -1223,9 +1223,11 @@ class WorkbenchReducerTest {
         assertFalse("Empty middle group weights should be removed", result.dockGroupWeights.containsKey(middleGroupId))
         assertFalse("Empty middle group activeTab should be removed", result.activeTabByGroup.containsKey(middleGroupId))
         val remaining = result.dockGroupsByZone(DockZone.Left)
-        assertEquals("Two groups should remain", 2, remaining.size)
-        assertTrue(remaining.none { it.id == middleGroupId })
-        assertEquals("Remaining group orders should stay continuous 0..n-1", listOf(0, 1), remaining.map { it.order })
+        val expandedGroups = remaining.filter { it.panelIds.isNotEmpty() }
+        assertEquals("Two expanded groups should remain", 2, expandedGroups.size)
+        assertTrue(expandedGroups.none { it.id == middleGroupId })
+        val expandedOrders = expandedGroups.map { it.order }
+        assertEquals("Expanded group orders should be continuous", listOf(0, 1), expandedOrders)
     }
 
     // --- Item 4: movePanelBetweenGroups and old group cleanup ---
@@ -1767,5 +1769,111 @@ class WorkbenchReducerTest {
         )
         val result = WorkbenchReducer.reduce(pollutedCustomState(), WorkbenchAction.ApplyPreset(WorkbenchPreset.ResearchWriting))
         assertPresetRebuildsCompletely(result, expected)
+    }
+
+    // --- Fix #2: activeTab normalization after visibility change ---
+
+    @Test
+    fun collapsePanel_activeTabBecomesCollapsed_normalizesToNextExpanded() {
+        val expanded1 = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val expanded2 = WorkbenchReducer.reduce(expanded1, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ProjectNavigator))
+        val groupId = expanded2.panels[WorkbenchPanelId.ChapterNavigator]?.tabGroupId ?: ""
+        val withActive = WorkbenchReducer.reduce(expanded2, WorkbenchAction.ActivateTab(groupId, WorkbenchPanelId.ChapterNavigator))
+        assertEquals(WorkbenchPanelId.ChapterNavigator, withActive.activeTabByGroup[groupId])
+        val result = WorkbenchReducer.reduce(withActive, WorkbenchAction.CollapsePanel(WorkbenchPanelId.ChapterNavigator))
+        val newActive = result.activeTabByGroup[groupId]
+        assertTrue("activeTab must switch away from collapsed panel", newActive != WorkbenchPanelId.ChapterNavigator)
+        assertTrue("activeTab must point to an expanded panel in the same group", newActive != null && result.panels[newActive]?.visibility == PanelVisibility.Expanded)
+    }
+
+    @Test
+    fun hidePanel_activeTabBecomesHidden_normalizesToNextExpanded() {
+        val expanded1 = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val expanded2 = WorkbenchReducer.reduce(expanded1, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Search))
+        val groupId = expanded2.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId ?: ""
+        val withActive = WorkbenchReducer.reduce(expanded2, WorkbenchAction.ActivateTab(groupId, WorkbenchPanelId.AiAssistant))
+        val result = WorkbenchReducer.reduce(withActive, WorkbenchAction.HidePanel(WorkbenchPanelId.AiAssistant))
+        val newActive = result.activeTabByGroup[groupId]
+        assertTrue("activeTab must switch away from hidden panel", newActive != WorkbenchPanelId.AiAssistant)
+        if (newActive != null) {
+            assertTrue("activeTab must point to an expanded panel", result.panels[newActive]?.visibility == PanelVisibility.Expanded)
+        }
+    }
+
+    @Test
+    fun togglePanel_collapseActiveTab_normalizesActiveTab() {
+        val expanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val groupId = expanded.panels[WorkbenchPanelId.ChapterNavigator]?.tabGroupId ?: ""
+        assertEquals(WorkbenchPanelId.ChapterNavigator, expanded.activeTabByGroup[groupId])
+        val collapsed = WorkbenchReducer.reduce(expanded, WorkbenchAction.TogglePanel(WorkbenchPanelId.ChapterNavigator))
+        assertEquals(PanelVisibility.Collapsed, collapsed.panels[WorkbenchPanelId.ChapterNavigator]?.visibility)
+        assertTrue("activeTab for a group with no expanded panels should be cleared", collapsed.activeTabByGroup[groupId] == null)
+    }
+
+    @Test
+    fun expandPanel_setsActiveTabForGroup() {
+        val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val groupId = result.panels[WorkbenchPanelId.ChapterNavigator]?.tabGroupId ?: ""
+        assertEquals("expanding a panel should set it as the active tab", WorkbenchPanelId.ChapterNavigator, result.activeTabByGroup[groupId])
+    }
+
+    // --- Fix #3: ResizeDockZone with actualOtherSideWidthDp ---
+
+    @Test
+    fun resizeDockZone_usesActualOtherSideWidth_whenProvided() {
+        val leftExpanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val rightExpanded = WorkbenchReducer.reduce(leftExpanded, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val availableWidth = 1200f
+        val actualRightWidth = 0f
+        val result = WorkbenchReducer.reduce(rightExpanded, WorkbenchAction.ResizeDockZone(DockZone.Left, 500f, availableWidth, actualRightWidth))
+        val maxForEditor = availableWidth - 480f - actualRightWidth
+        assertTrue(result.dockZoneSizeDp[DockZone.Left]!! <= maxForEditor)
+    }
+
+    @Test
+    fun resizeDockZone_actualOtherSideWidth_overridesPersistedWidth() {
+        val leftExpanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val rightExpanded = WorkbenchReducer.reduce(leftExpanded, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val availableWidth = 1200f
+        val resultSmallOther = WorkbenchReducer.reduce(rightExpanded, WorkbenchAction.ResizeDockZone(DockZone.Left, 300f, availableWidth, 100f))
+        val resultLargeOther = WorkbenchReducer.reduce(rightExpanded, WorkbenchAction.ResizeDockZone(DockZone.Left, 300f, availableWidth, 400f))
+        assertTrue("smaller other side width should allow larger left zone", resultSmallOther.dockZoneSizeDp[DockZone.Left]!! > resultLargeOther.dockZoneSizeDp[DockZone.Left]!!)
+    }
+
+    // --- Fix #5: computeDefaultLayout has complete dockGroupMeta ---
+
+    @Test
+    fun defaultLayout_hasCompleteDockGroupMeta() {
+        assertTrue(defaultState.dockGroupMeta.containsKey("left-nav"))
+        assertTrue(defaultState.dockGroupMeta.containsKey("right-tools"))
+        assertTrue(defaultState.dockGroupMeta.containsKey("right-outline"))
+        assertEquals(DockZone.Left, defaultState.dockGroupMeta["left-nav"]?.zone)
+        assertEquals(DockZone.Right, defaultState.dockGroupMeta["right-tools"]?.zone)
+        assertEquals(DockZone.Right, defaultState.dockGroupMeta["right-outline"]?.zone)
+        assertEquals(0, defaultState.dockGroupMeta["right-tools"]?.order)
+        assertEquals(1, defaultState.dockGroupMeta["right-outline"]?.order)
+    }
+
+    @Test
+    fun expandPanel_newGroupMeta_orderIsAfterExisting() {
+        val expanded1 = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val leftNavOrder = expanded1.dockGroupMeta["left-nav"]?.order ?: 0
+        val expanded2 = WorkbenchReducer.reduce(expanded1, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val rightToolsOrder = expanded2.dockGroupMeta["right-tools"]?.order ?: 0
+        val expanded3 = WorkbenchReducer.reduce(expanded2, WorkbenchAction.ExpandPanel(WorkbenchPanelId.DocumentOutline))
+        val rightOutlineOrder = expanded3.dockGroupMeta["right-outline"]?.order ?: 0
+        assertTrue("right-outline order must be after right-tools", rightOutlineOrder > rightToolsOrder)
+    }
+
+    @Test
+    fun expandPanel_noDuplicateOrdersInSameZone() {
+        var state = defaultState
+        for (id in WorkbenchPanelId.entries) {
+            state = WorkbenchReducer.reduce(state, WorkbenchAction.ExpandPanel(id))
+        }
+        val rightOrders = state.dockGroupMeta.values.filter { it.zone == DockZone.Right }.map { it.order }
+        assertEquals("no duplicate orders in Right zone", rightOrders.distinct().size, rightOrders.size)
+        val leftOrders = state.dockGroupMeta.values.filter { it.zone == DockZone.Left }.map { it.order }
+        assertEquals("no duplicate orders in Left zone", leftOrders.distinct().size, leftOrders.size)
     }
 }

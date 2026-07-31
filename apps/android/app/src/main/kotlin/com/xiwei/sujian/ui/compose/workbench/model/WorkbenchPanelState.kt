@@ -71,8 +71,8 @@ data class WorkbenchLayoutState(
     }
 
     fun actualSideWidthDp(zone: DockZone): Float {
-        val groups = dockGroupsByZone(zone)
-        if (groups.isEmpty()) return 0f
+        val hasExpandedPanels = panels.values.any { it.zone == zone && it.visibility == PanelVisibility.Expanded }
+        if (!hasExpandedPanels) return 0f
         return dockZoneSizeDp[zone] ?: 0f
     }
 

@@ -218,7 +218,10 @@ fun SujianWorkbench(
                     )
                     DockResizeHandle(
                         zone = DockZone.Left,
-                        onResizeZoneDelta = { z, delta -> onAction(WorkbenchAction.ResizeDockZone(z, delta, maxWidthDp)) },
+                        onResizeZoneDelta = { z, delta ->
+                            val otherActualWidth = if (showRightDock) layoutState.dockZoneSizeDp[DockZone.Right] ?: 280f else 0f
+                            onAction(WorkbenchAction.ResizeDockZone(z, delta, maxWidthDp, otherActualWidth))
+                        },
                         modifier = Modifier.fillMaxHeight(),
                     )
                 }
@@ -238,7 +241,10 @@ fun SujianWorkbench(
                 if (showRightDock) {
                     DockResizeHandle(
                         zone = DockZone.Right,
-                        onResizeZoneDelta = { z, delta -> onAction(WorkbenchAction.ResizeDockZone(z, delta, maxWidthDp)) },
+                        onResizeZoneDelta = { z, delta ->
+                            val otherActualWidth = if (leftForDock.isNotEmpty()) layoutState.dockZoneSizeDp[DockZone.Left] ?: 280f else 0f
+                            onAction(WorkbenchAction.ResizeDockZone(z, delta, maxWidthDp, otherActualWidth))
+                        },
                         modifier = Modifier.fillMaxHeight(),
                     )
                     DockHost(
@@ -362,11 +368,16 @@ fun SujianWorkbench(
                 if (overlayExpanded.isNotEmpty()) {
                     val activeOverlayId = presentationState.activeOverlayPanelId ?: overlayExpanded.first().id
                     val activePanel = overlayExpanded.find { it.id == activeOverlayId } ?: overlayExpanded.first()
+                    val overlayWidth = (layoutState.dockZoneSizeDp[activePanel.zone] ?: activePanel.sizeDp).dp.coerceIn(SIDE_PANEL_MIN_DP.dp, SIDE_PANEL_MAX_DP.dp)
+                    val (overlayAlignment, overlayModifier) = when (activePanel.zone) {
+                        DockZone.Left -> Alignment.CenterStart to Modifier.width(overlayWidth).fillMaxHeight()
+                        DockZone.Bottom -> Alignment.BottomCenter to Modifier.fillMaxWidth().height((layoutState.dockZoneSizeDp[DockZone.Bottom] ?: 220f).dp.coerceIn(220.dp, 400.dp))
+                        else -> Alignment.CenterEnd to Modifier.width(overlayWidth).fillMaxHeight()
+                    }
                     Surface(
                         modifier = Modifier
-                            .align(Alignment.CenterEnd)
-                            .width((layoutState.dockZoneSizeDp[activePanel.zone] ?: activePanel.sizeDp).dp.coerceIn(SIDE_PANEL_MIN_DP.dp, SIDE_PANEL_MAX_DP.dp))
-                            .fillMaxHeight(),
+                            .align(overlayAlignment)
+                            .then(overlayModifier),
                         tonalElevation = 4.dp,
                         shadowElevation = 8.dp,
                         shape = MaterialTheme.shapes.large,
@@ -383,6 +394,11 @@ fun SujianWorkbench(
                         }
                     }
                     if (presentationState.overlayPanelIds.size > 1) {
+                        val stripAlignment = when (activePanel.zone) {
+                            DockZone.Left -> Alignment.CenterStart
+                            DockZone.Bottom -> Alignment.BottomCenter
+                            else -> Alignment.CenterEnd
+                        }
                         OverlayTabStrip(
                             panelIds = presentationState.overlayPanelIds,
                             activeId = activeOverlayId,
@@ -391,7 +407,7 @@ fun SujianWorkbench(
                                 onAction(WorkbenchAction.ActivateOverlayPanel(id))
                             },
                             modifier = Modifier
-                                .align(Alignment.CenterEnd)
+                                .align(stripAlignment)
                                 .padding(top = 48.dp)
                                 .width(SIDE_PANEL_MIN_DP.dp),
                         )

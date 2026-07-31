@@ -123,7 +123,7 @@ class WorkbenchViewModel(
                 layoutState = newState
                 currentStorageKey = newKey
             }
-            if (pendingActions.isNotEmpty()) {
+            while (pendingActions.isNotEmpty()) {
                 while (pendingActions.isNotEmpty()) {
                     layoutState = WorkbenchReducer.reduce(layoutState, pendingActions.removeFirst())
                 }
