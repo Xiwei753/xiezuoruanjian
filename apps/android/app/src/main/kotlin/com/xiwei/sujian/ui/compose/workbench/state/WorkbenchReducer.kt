@@ -125,9 +125,17 @@ object WorkbenchReducer {
 
     private fun movePanel(state: WorkbenchLayoutState, panelId: WorkbenchPanelId, zone: DockZone): WorkbenchLayoutState {
         val panel = state.panels[panelId] ?: return state
-        val oldGroupId = panel.tabGroupId
-        val movedState = updatePanel(state, panel.copy(zone = zone), markCustom = true)
-        return cleanUpOldGroup(movedState, oldGroupId)
+        if (panel.zone == zone) return state
+        val existingGroupsInZone = visibleDockGroupsByZone(state, zone)
+        val targetGroupId = existingGroupsInZone.firstOrNull()?.id
+        if (targetGroupId != null) {
+            return movePanelBetweenGroups(
+                state.copy(panels = state.panels + (panelId to panel.copy(zone = zone))),
+                panelId,
+                targetGroupId,
+            )
+        }
+        return dockPanelAsNewGroup(state, panelId, zone, 0)
     }
 
     private fun activateTab(state: WorkbenchLayoutState, tabGroupId: String, panelId: WorkbenchPanelId): WorkbenchLayoutState {

@@ -217,7 +217,7 @@ fun SujianWorkbench(
                     DockResizeHandle(
                         zone = DockZone.Left,
                         onResizeZoneDelta = { z, delta ->
-                            val otherActualWidth: Float? = if (showRightDock) layoutState.actualSideWidthDp(DockZone.Right).let { if (it > 0f) it else null } else null
+                            val otherActualWidth: Float? = if (showRightDock) layoutState.actualSideWidthDp(DockZone.Right).let { if (it > 0f) it else null } else 0f
                             onAction(WorkbenchAction.ResizeDockZone(z, delta, maxWidthDp, otherActualWidth))
                         },
                         modifier = Modifier.fillMaxHeight(),
@@ -240,7 +240,7 @@ fun SujianWorkbench(
                     DockResizeHandle(
                         zone = DockZone.Right,
                         onResizeZoneDelta = { z, delta ->
-                            val otherActualWidth: Float? = if (leftForDock.isNotEmpty()) layoutState.actualSideWidthDp(DockZone.Left).let { if (it > 0f) it else null } else null
+                            val otherActualWidth: Float? = if (leftForDock.isNotEmpty()) layoutState.actualSideWidthDp(DockZone.Left).let { if (it > 0f) it else null } else 0f
                             onAction(WorkbenchAction.ResizeDockZone(z, delta, maxWidthDp, otherActualWidth))
                         },
                         modifier = Modifier.fillMaxHeight(),

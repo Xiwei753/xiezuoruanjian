@@ -2054,4 +2054,28 @@ class WorkbenchReducerTest {
             assertTrue("left-nav activeTab should point to an Expanded panel in Left zone, got ${leftActivePanel?.zone}/${leftActivePanel?.visibility}", leftActivePanel?.zone == DockZone.Left && leftActivePanel?.visibility == PanelVisibility.Expanded)
         }
     }
+
+    @Test
+    fun movePanel_crossZone_tabGroupIdConsistentWithNewZone() {
+        val expanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val result = WorkbenchReducer.reduce(expanded, WorkbenchAction.MovePanel(WorkbenchPanelId.AiAssistant, DockZone.Bottom))
+        val panel = result.panels[WorkbenchPanelId.AiAssistant]!!
+        assertEquals("panel zone should be Bottom", DockZone.Bottom, panel.zone)
+        val meta = result.dockGroupMeta[panel.tabGroupId]
+        assertNotNull("dockGroupMeta must exist for the panel's tabGroupId", meta)
+        if (meta != null) {
+            assertEquals("dockGroupMeta zone must match panel zone after cross-zone move", DockZone.Bottom, meta.zone)
+        }
+    }
+
+    @Test
+    fun movePanel_crossZone_noOrphanedTabGroupIdInWrongZone() {
+        val expanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val result = WorkbenchReducer.reduce(expanded, WorkbenchAction.MovePanel(WorkbenchPanelId.AiAssistant, DockZone.Bottom))
+        for ((groupId, meta) in result.dockGroupMeta) {
+            val panelsInMetaZone = result.panels.values.filter { it.tabGroupId == groupId && it.zone == meta.zone }
+            val panelsInOtherZone = result.panels.values.filter { it.tabGroupId == groupId && it.zone != meta.zone && it.zone != DockZone.Floating }
+            assertTrue("group $groupId has panels in zone ${meta.zone} matching its meta", panelsInMetaZone.isNotEmpty() || panelsInOtherZone.isEmpty())
+        }
+    }
 }
