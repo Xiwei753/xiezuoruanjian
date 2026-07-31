@@ -38,7 +38,7 @@ object WorkbenchReducer {
             is WorkbenchAction.DockPanelAsNewGroup -> dockPanelAsNewGroup(state, action.panelId, action.zone, action.insertionOrder)
             is WorkbenchAction.MoveFloatingPanel -> moveFloatingPanel(state, action.panelId, action.x, action.y)
             is WorkbenchAction.ApplyPreset -> applyPreset(state, action.preset)
-            is WorkbenchAction.RestoreLayout -> computeDefaultLayout()
+            is WorkbenchAction.RestoreLayout -> normalizeActiveTabs(computeDefaultLayout())
             is WorkbenchAction.MovePanelToGroup -> movePanelToGroup(state, action.panelId, action.tabGroupId)
             is WorkbenchAction.CreateDockGroup -> createDockGroup(state, action.groupId, action.zone, action.order)
             is WorkbenchAction.ReorderPanel -> reorderPanel(state, action.panelId, action.newOrder)
@@ -524,6 +524,7 @@ object WorkbenchReducer {
             }
             DockZone.Bottom -> {
                 val maxBottomDp = availableMainAxisDp * BOTTOM_PANEL_MAX_RATIO
+                if (maxBottomDp < BOTTOM_PANEL_MIN_DP) return state
                 newSize.coerceIn(BOTTOM_PANEL_MIN_DP, maxBottomDp)
             }
             DockZone.Floating -> return state
@@ -556,13 +557,14 @@ object WorkbenchReducer {
     }
 
     private fun applyPreset(state: WorkbenchLayoutState, preset: WorkbenchPreset): WorkbenchLayoutState {
-        return when (preset) {
+        val result = when (preset) {
             WorkbenchPreset.FocusWriting -> computeDefaultLayout()
             WorkbenchPreset.ChapterWriting -> chapterWritingPreset()
             WorkbenchPreset.AiWriting -> aiWritingPreset()
             WorkbenchPreset.ResearchWriting -> researchWritingPreset()
             WorkbenchPreset.Custom -> state
         }
+        return normalizeActiveTabs(result)
     }
 
     private fun updatePanel(state: WorkbenchLayoutState, panel: WorkbenchPanelState, markCustom: Boolean): WorkbenchLayoutState {
@@ -782,11 +784,11 @@ object WorkbenchReducer {
         val dockZoneSizeDp = mutableMapOf<DockZone, Float>()
         val dockGroupWeights = mutableMapOf<String, Float>()
         val dockGroupMeta = mutableMapOf<String, DockGroupMeta>()
+        val groupsByZone = mutableMapOf<DockZone, MutableList<String>>()
         for ((groupId, size) in dockGroupSizes) {
             val groupPanels = panels.values.filter { it.tabGroupId == groupId }
             val zone = groupPanels.firstOrNull()?.zone ?: DockZone.Left
-            val order = groupPanels.minOfOrNull { it.order } ?: 0
-            dockGroupMeta[groupId] = DockGroupMeta(groupId, zone, order)
+            groupsByZone.getOrPut(zone) { mutableListOf() }.add(groupId)
             dockGroupWeights[groupId] = 1f
             when (zone) {
                 DockZone.Left, DockZone.Right -> {
@@ -805,9 +807,15 @@ object WorkbenchReducer {
             }
         }
         for (panel in panels.values) {
-            if (panel.tabGroupId.isNotEmpty() && panel.tabGroupId !in dockGroupMeta) {
-                dockGroupMeta[panel.tabGroupId] = DockGroupMeta(panel.tabGroupId, panel.zone, panel.order)
+            if (panel.tabGroupId.isNotEmpty() && panel.tabGroupId !in groupsByZone.values.flatten()) {
+                val zone = panel.zone
+                groupsByZone.getOrPut(zone) { mutableListOf() }.add(panel.tabGroupId)
                 dockGroupWeights[panel.tabGroupId] = 1f
+            }
+        }
+        for ((zone, groupIds) in groupsByZone) {
+            groupIds.forEachIndexed { index, groupId ->
+                dockGroupMeta[groupId] = DockGroupMeta(groupId, zone, index)
             }
         }
         val maxZIndex = panels.values

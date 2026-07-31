@@ -122,14 +122,15 @@ fun DockHost(
                     val activePanelId = group.activePanelId ?: group.panelIds.firstOrNull()
                     val activePanel = panels.find { it.id == activePanelId } ?: panels.filter { it.tabGroupId == group.id }.firstOrNull()
                     if (activePanel != null) {
+                        val singleGroupPanels = panels.filter { it.tabGroupId == group.id }
                         Column(
                             modifier = Modifier
                                 .width(zoneWidth.dp)
                                 .fillMaxHeight(),
                         ) {
-                            if (group.panelIds.size > 1) {
+                            if (singleGroupPanels.size > 1) {
                                 DockTabStrip(
-                                    panels = panels.filter { it.tabGroupId == group.id },
+                                    panels = singleGroupPanels,
                                     activeTabId = activePanelId ?: WorkbenchPanelId.ProjectNavigator,
                                     onActivateTab = { panelId -> onActivateTab(group.id, panelId) },
                                     modifier = Modifier.onGloballyPositioned { coords ->
@@ -144,7 +145,7 @@ fun DockHost(
                                 onFloat = { onFloat(activePanel.id) },
                                 onCollapse = { onCollapse(activePanel.id) },
                                 onClose = { onHide(activePanel.id) },
-                                titleBarModifier = titleBarHitAreaModifier(group.id, onRegisterTabGroupHitArea, group.panelIds.size > 1),
+                                titleBarModifier = titleBarHitAreaModifier(group.id, onRegisterTabGroupHitArea, singleGroupPanels.size > 1),
                                 onTitleBarPositionChanged = onTitleBarPositionChanged?.let { callback ->
                                     { x, y -> callback(activePanel.id, x, y) }
                             },
@@ -178,7 +179,7 @@ fun DockHost(
                                             .weight(group.weight.coerceAtLeast(0.1f))
                                             .fillMaxWidth(),
                                     ) {
-                                        if (group.panelIds.size > 1) {
+                                        if (groupPanels.size > 1) {
                                             DockTabStrip(
                                                 panels = groupPanels,
                                                 activeTabId = activePanelId ?: WorkbenchPanelId.ProjectNavigator,
@@ -201,7 +202,7 @@ fun DockHost(
                                             onFloat = { onFloat(activePanel.id) },
                                             onCollapse = { onCollapse(activePanel.id) },
                                             onClose = { onHide(activePanel.id) },
-                                            titleBarModifier = titleBarHitAreaModifier(group.id, onRegisterTabGroupHitArea, group.panelIds.size > 1),
+                                            titleBarModifier = titleBarHitAreaModifier(group.id, onRegisterTabGroupHitArea, groupPanels.size > 1),
                                             onTitleBarPositionChanged = onTitleBarPositionChanged?.let { callback ->
                                                 { x, y -> callback(activePanel.id, x, y) }
                                             },
@@ -239,14 +240,15 @@ fun DockHost(
                     val activePanelId = group.activePanelId ?: group.panelIds.firstOrNull()
                     val activePanel = panels.find { it.id == activePanelId } ?: panels.filter { it.tabGroupId == group.id }.firstOrNull()
                     if (activePanel != null) {
+                        val singleGroupPanels = panels.filter { it.tabGroupId == group.id }
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(zoneHeight.dp),
                         ) {
-                            if (group.panelIds.size > 1) {
+                            if (singleGroupPanels.size > 1) {
                                 DockTabStrip(
-                                    panels = panels.filter { it.tabGroupId == group.id },
+                                    panels = singleGroupPanels,
                                     activeTabId = activePanelId ?: WorkbenchPanelId.ProjectNavigator,
                                     onActivateTab = { panelId -> onActivateTab(group.id, panelId) },
                                     modifier = Modifier.onGloballyPositioned { coords ->
@@ -261,7 +263,7 @@ fun DockHost(
                                 onFloat = { onFloat(activePanel.id) },
                                 onCollapse = { onCollapse(activePanel.id) },
                                 onClose = { onHide(activePanel.id) },
-                                titleBarModifier = titleBarHitAreaModifier(group.id, onRegisterTabGroupHitArea, group.panelIds.size > 1),
+                                titleBarModifier = titleBarHitAreaModifier(group.id, onRegisterTabGroupHitArea, singleGroupPanels.size > 1),
                                 onTitleBarPositionChanged = onTitleBarPositionChanged?.let { callback ->
                                     { x, y -> callback(activePanel.id, x, y) }
                                 },
@@ -295,7 +297,7 @@ fun DockHost(
                                             .weight(group.weight.coerceAtLeast(0.1f))
                                             .fillMaxHeight(),
                                     ) {
-                                        if (group.panelIds.size > 1) {
+                                        if (groupPanels.size > 1) {
                                             DockTabStrip(
                                                 panels = groupPanels,
                                                 activeTabId = activePanelId ?: WorkbenchPanelId.ProjectNavigator,
@@ -318,7 +320,7 @@ fun DockHost(
                                             onFloat = { onFloat(activePanel.id) },
                                             onCollapse = { onCollapse(activePanel.id) },
                                             onClose = { onHide(activePanel.id) },
-                                            titleBarModifier = titleBarHitAreaModifier(group.id, onRegisterTabGroupHitArea, group.panelIds.size > 1),
+                                            titleBarModifier = titleBarHitAreaModifier(group.id, onRegisterTabGroupHitArea, groupPanels.size > 1),
                                             onTitleBarPositionChanged = onTitleBarPositionChanged?.let { callback ->
                                                 { x, y -> callback(activePanel.id, x, y) }
                                             },

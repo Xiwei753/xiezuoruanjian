@@ -2116,4 +2116,77 @@ class WorkbenchReducerTest {
         val activeTab = repaired.activeTabByGroup[groupId]
         assertTrue("normalizeActiveTabs should repair activeTab pointing to non-Expanded panel", activeTab != WorkbenchPanelId.Search)
     }
+
+    @Test
+    fun migrateFromV1_groupOrdersAreUniqueWithinZone() {
+        val panels = mapOf(
+            WorkbenchPanelId.AiAssistant to WorkbenchPanelState(
+                id = WorkbenchPanelId.AiAssistant, zone = DockZone.Right, visibility = PanelVisibility.Expanded,
+                sizeDp = 280f, order = 0, tabGroupId = "right-tools", floatingX = 0f, floatingY = 0f,
+                floatingWidthDp = 0f, floatingHeightDp = 0f, floatingZIndex = 0,
+            ),
+            WorkbenchPanelId.Search to WorkbenchPanelState(
+                id = WorkbenchPanelId.Search, zone = DockZone.Right, visibility = PanelVisibility.Expanded,
+                sizeDp = 280f, order = 1, tabGroupId = "right-tools", floatingX = 0f, floatingY = 0f,
+                floatingWidthDp = 0f, floatingHeightDp = 0f, floatingZIndex = 0,
+            ),
+            WorkbenchPanelId.DocumentOutline to WorkbenchPanelState(
+                id = WorkbenchPanelId.DocumentOutline, zone = DockZone.Right, visibility = PanelVisibility.Expanded,
+                sizeDp = 280f, order = 0, tabGroupId = "right-outline", floatingX = 0f, floatingY = 0f,
+                floatingWidthDp = 0f, floatingHeightDp = 0f, floatingZIndex = 0,
+            ),
+            WorkbenchPanelId.CharacterInfo to WorkbenchPanelState(
+                id = WorkbenchPanelId.CharacterInfo, zone = DockZone.Right, visibility = PanelVisibility.Expanded,
+                sizeDp = 280f, order = 1, tabGroupId = "right-outline", floatingX = 0f, floatingY = 0f,
+                floatingWidthDp = 0f, floatingHeightDp = 0f, floatingZIndex = 0,
+            ),
+        )
+        val dockGroupSizes = mapOf("right-tools" to 280f, "right-outline" to 280f)
+        val result = WorkbenchReducer.migrateFromV1(
+            panels = panels,
+            activeTabByGroup = emptyMap(),
+            preset = WorkbenchPreset.Custom,
+            dockGroupSizes = dockGroupSizes,
+            activeOverlayPanelId = null,
+        )
+        val rightOrders = result.dockGroupMeta.values
+            .filter { it.zone == DockZone.Right }
+            .map { it.order }
+        assertEquals("right zone should have 2 groups", 2, rightOrders.size)
+        assertEquals("orders should be unique and sequential", listOf(0, 1), rightOrders.sorted())
+    }
+
+    @Test
+    fun resizeDockZone_bottom_tinyScreen_returnsState() {
+        val state = defaultState.copy(
+            dockZoneSizeDp = defaultState.dockZoneSizeDp + (DockZone.Bottom to 220f),
+        )
+        val result = WorkbenchReducer.reduce(
+            state,
+            WorkbenchAction.ResizeDockZone(DockZone.Bottom, 10f, 300f, null),
+        )
+        assertEquals("bottom zone size unchanged when screen too small", 220f, result.dockZoneSizeDp[DockZone.Bottom]!!)
+    }
+
+    @Test
+    fun applyPreset_callsNormalizeActiveTabs() {
+        val staleState = defaultState.copy(
+            activeTabByGroup = defaultState.activeTabByGroup + ("right-tools" to WorkbenchPanelId.ProjectNavigator),
+        )
+        val result = WorkbenchReducer.reduce(staleState, WorkbenchAction.ApplyPreset(WorkbenchPreset.ChapterWriting))
+        val activeTab = result.activeTabByGroup["right-tools"]
+        assertTrue("applyPreset should normalize stale activeTab", activeTab != WorkbenchPanelId.ProjectNavigator)
+    }
+
+    @Test
+    fun restoreLayout_callsNormalizeActiveTabs() {
+        val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.RestoreLayout)
+        for ((groupId, panelId) in result.activeTabByGroup) {
+            val panel = result.panels[panelId]
+            assertNotNull("activeTab $panelId in group $groupId must reference existing panel", panel)
+            if (panel != null) {
+                assertTrue("activeTab must be Expanded", panel.visibility == PanelVisibility.Expanded)
+            }
+        }
+    }
 }
