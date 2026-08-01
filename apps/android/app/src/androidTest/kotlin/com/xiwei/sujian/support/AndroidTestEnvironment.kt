@@ -3,6 +3,7 @@ package com.xiwei.sujian.support
 import android.content.Context
 import androidx.test.core.app.ActivityScenario
 import com.xiwei.sujian.data.AppServiceBridge
+import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.data.WriterAppServiceHolder
@@ -37,6 +38,9 @@ class TestSession private constructor(
         "sujian_diagnostics_$prefsSuffix",
         "sujian_device_$prefsSuffix"
     )
+    private val dataStoreDirNames = listOf(
+        "workbench_layout_prefs"
+    )
     val deps: TestSujianAppDependencies
         get() = depsHolder
 
@@ -48,28 +52,14 @@ class TestSession private constructor(
             manualFrameClock: com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock.ManualFrameClock? = null
         ): TestSession {
             val appContext = context.applicationContext
-            val sessionId = UUID.randomUUID().toString()
-            val testRootDir = File(appContext.cacheDir, "test_session_$sessionId")
-            testRootDir.mkdirs()
+            val paths = TestWorkspaceFactory.createIsolatedWorkspace(appContext)
 
-            val workspaceDir = File(testRootDir, "workspace")
-            workspaceDir.mkdirs()
-            File(workspaceDir, "projects").mkdirs()
-            File(workspaceDir, "app-meta/settings").mkdirs()
-            File(workspaceDir, "app-meta/logs").mkdirs()
-            File(workspaceDir, "trash").mkdirs()
-            File(workspaceDir, "sqlite_cache").mkdirs()
-            val manifest = File(workspaceDir, "workspace_manifest.json")
-            if (!manifest.exists()) {
-                manifest.writeText("{\"version\": 1}")
-            }
-
-            val prefsSuffix = sessionId.take(8)
+            val prefsSuffix = UUID.randomUUID().toString().take(8)
 
             val deps = TestSujianAppDependencies(
                 appContext,
-                testRootDir = testRootDir,
-                workspaceDir = workspaceDir,
+                testRootDir = paths.testRootDir,
+                workspaceDir = paths.workspaceDir,
                 prefsSuffix = prefsSuffix,
                 animationTimeSource = animationTimeSource,
                 transactionIdSource = transactionIdSource,
@@ -77,8 +67,8 @@ class TestSession private constructor(
             )
 
             return TestSession(
-                testRootDir = testRootDir,
-                workspaceDir = workspaceDir,
+                testRootDir = paths.testRootDir,
+                workspaceDir = paths.workspaceDir,
                 prefsSuffix = prefsSuffix,
                 depsHolder = deps,
                 context = appContext,
@@ -113,13 +103,20 @@ class TestSession private constructor(
             val deleted = appContext.deleteSharedPreferences(name)
             Assert.assertTrue("Failed to delete test SharedPreferences: $name", deleted)
         }
-        try {
-            testRootDir.deleteRecursively()
-        } catch (e: Exception) {
-            throw AssertionError(
-                "TestSession.releaseSession: Failed to delete test root directory ${testRootDir.absolutePath}: ${e.message}"
-            )
+        for (dsName in dataStoreDirNames) {
+            val dsDir = File(appContext.filesDir, "datastore/$dsName")
+            if (dsDir.exists()) {
+                dsDir.deleteRecursively()
+            }
         }
+        TestWorkspaceFactory.deleteWorkspace(TestWorkspaceFactory.TestWorkspacePaths(
+            testRootDir = testRootDir,
+            workspaceDir = workspaceDir,
+            appDataDir = File(testRootDir, "app_data"),
+            cacheDir = File(testRootDir, "cache"),
+            logDir = File(testRootDir, "logs"),
+            noBackupDir = File(testRootDir, "no_backup"),
+        ))
     }
 }
 
@@ -147,14 +144,27 @@ class TestSujianAppDependencies(
         testNoBackupDir.mkdirs()
         if (!testWorkspaceDir.exists()) {
             testWorkspaceDir.mkdirs()
-            File(testWorkspaceDir, "projects").mkdirs()
-            File(testWorkspaceDir, "app-meta/settings").mkdirs()
-            File(testWorkspaceDir, "app-meta/logs").mkdirs()
-            File(testWorkspaceDir, "trash").mkdirs()
-            File(testWorkspaceDir, "sqlite_cache").mkdirs()
-            val manifest = File(testWorkspaceDir, "workspace_manifest.json")
-            if (!manifest.exists()) {
-                manifest.writeText("{\"version\": 1}")
+        }
+        val manifest = File(testWorkspaceDir, "workspace_manifest.json")
+        if (!manifest.exists()) {
+            val initHolder = WriterAppServiceHolder(
+                workspacePath = testWorkspaceDir.absolutePath,
+            )
+            try {
+                val result = initHolder.wrapResult { initHolder.service.createWorkspaceIfNeeded() }
+                when (result) {
+                    is BridgeResult.Success -> {}
+                    is BridgeResult.Error -> throw AssertionError(
+                        "TestSujianAppDependencies: createWorkspaceIfNeeded failed: " +
+                            "errorCode=${result.code}, message=${result.message}, " +
+                            "rawError=${result.envelope.rawError}"
+                    )
+                    BridgeResult.NotLoaded -> throw AssertionError(
+                        "TestSujianAppDependencies: native library not loaded during workspace initialization"
+                    )
+                }
+            } finally {
+                initHolder.close()
             }
         }
     }

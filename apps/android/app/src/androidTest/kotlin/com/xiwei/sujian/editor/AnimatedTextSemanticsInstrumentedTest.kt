@@ -14,9 +14,6 @@ import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextRange
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import androidx.test.platform.app.InstrumentationRegistry
-import com.xiwei.sujian.data.AppServiceBridge
-import com.xiwei.sujian.data.WriterAppServiceHolder
 import com.xiwei.sujian.editor.v2.compose.AnimatedTextField
 import com.xiwei.sujian.editor.v2.compose.AnimatedTextArea
 import com.xiwei.sujian.editor.v2.compose.AnimatedInlineText
@@ -26,78 +23,32 @@ import com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock
 import com.xiwei.sujian.editor.v2.compose.TextOffsetUtils
 import com.xiwei.sujian.editor.v2.visual.ManualAnimationTimeSource
 import com.xiwei.sujian.editor.v2.visual.TransactionIdSource
-import org.junit.After
+import com.xiwei.sujian.support.AndroidTestEnvironment
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import uniffi.writer_core.PlatformDto
-import uniffi.writer_core.PlatformInitDto
-import java.io.File
 
 @RunWith(AndroidJUnit4::class)
 class AnimatedTextSemanticsInstrumentedTest {
 
     @get:Rule
+    val testRule = AndroidTestEnvironment.TestDependenciesRule(
+        animationTimeSource = ManualAnimationTimeSource(),
+        manualFrameClock = WindowDisplayFrameClock.ManualFrameClock()
+    )
+
+    @get:Rule
     val composeTestRule = createComposeRule()
 
     private lateinit var coordinator: AnimatedTextEditorCoordinator
-    private lateinit var serviceHolder: WriterAppServiceHolder
-    private lateinit var testDir: File
 
     @Before
     fun setUp() {
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
-        testDir = File(context.cacheDir, "semantics_test_${System.nanoTime()}")
-        testDir.mkdirs()
-        val workspaceDir = File(testDir, "workspace")
-        workspaceDir.mkdirs()
-        File(workspaceDir, "projects").mkdirs()
-        File(workspaceDir, "app-meta/settings").mkdirs()
-        File(workspaceDir, "app-meta/logs").mkdirs()
-        File(workspaceDir, "trash").mkdirs()
-        File(workspaceDir, "sqlite_cache").mkdirs()
-        val manifest = File(workspaceDir, "workspace_manifest.json")
-        if (!manifest.exists()) {
-            manifest.writeText("{\"version\": 1}")
-        }
-
-        serviceHolder = WriterAppServiceHolder(
-            workspacePath = workspaceDir.absolutePath,
-            platformInit = PlatformInitDto(
-                platform = PlatformDto.ANDROID,
-                appDataDir = testDir.absolutePath,
-                cacheDir = testDir.absolutePath,
-                logDir = testDir.absolutePath,
-                noBackupDir = testDir.absolutePath,
-                deviceId = "test",
-                appVersion = "test",
-                locale = "zh-CN",
-                timezone = "Asia/Shanghai",
-                isConnected = true,
-                isMetered = false,
-                proxyHost = null,
-                proxyPort = null,
-            ),
-        )
-        val bridge = AppServiceBridge(serviceHolder)
-        val manualFrameClock = WindowDisplayFrameClock.ManualFrameClock()
-        coordinator = AnimatedTextEditorCoordinator(
-            context,
-            bridge,
-            ManualAnimationTimeSource(),
-            TransactionIdSource(),
-            WindowDisplayFrameClock(manualFrameClock),
-        )
-    }
-
-    @After
-    fun tearDown() {
-        try { coordinator.releaseHost() } catch (_: Exception) {}
-        try { serviceHolder.close() } catch (_: Exception) {}
-        try { testDir.deleteRecursively() } catch (_: Exception) {}
+        val session = AndroidTestEnvironment.requireCurrentSession()
+        coordinator = session.deps.coordinator
     }
 
     @Test

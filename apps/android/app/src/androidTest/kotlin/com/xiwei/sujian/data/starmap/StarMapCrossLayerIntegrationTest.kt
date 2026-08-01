@@ -3,6 +3,7 @@ package com.xiwei.sujian.data.starmap
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.data.StarMapBridge
+import com.xiwei.sujian.model.StarMapMeta
 import com.xiwei.sujian.model.StarMapGraphNode
 import com.xiwei.sujian.model.StarMapNodeKind
 import com.xiwei.sujian.support.AndroidTestEnvironment
@@ -27,13 +28,27 @@ class StarMapCrossLayerIntegrationTest {
         return bridge to bridge.repository
     }
 
+    private fun requireStarmapId(createResult: BridgeResult<StarMapMeta>, operation: String): String {
+        when (createResult) {
+            is BridgeResult.Success -> return createResult.data.starmapId
+            is BridgeResult.Error -> throw AssertionError(
+                "$operation: createStarmap returned BridgeResult.Error: " +
+                    "errorCode=${createResult.code}, message=${createResult.message}, " +
+                    "rawError=${createResult.envelope.rawError}, " +
+                    "messageKey=${createResult.envelope.messageKey}"
+            )
+            BridgeResult.NotLoaded -> throw AssertionError(
+                "$operation: createStarmap returned NotLoaded — native library not available"
+            )
+        }
+    }
+
     @Test
     fun progressiveLoading_threePhases_neverCallsGetStarMapGraph() {
         val (bridge, repo) = realBridgeAndRepo()
 
         val createResult = repo.createStarmap("跨层渐进加载测试", "验证三阶段不调用getStarMapGraph")
-        assertTrue("createStarmap must succeed", createResult is BridgeResult.Success)
-        val starmapId = (createResult as BridgeResult.Success).data.starmapId
+        val starmapId = requireStarmapId(createResult, "progressiveLoading_threePhases")
 
         try {
             val n1 = StarMapGraphNode(id = UUID.randomUUID().toString(), title = "角色A", kind = StarMapNodeKind.Character)
@@ -71,8 +86,7 @@ class StarMapCrossLayerIntegrationTest {
         val (bridge, repo) = realBridgeAndRepo()
 
         val createResult = repo.createStarmap("同版本三阶段测试", "验证同一packageRevision连续推进")
-        assertTrue("createStarmap must succeed", createResult is BridgeResult.Success)
-        val starmapId = (createResult as BridgeResult.Success).data.starmapId
+        val starmapId = requireStarmapId(createResult, "progressiveLoading_sameRevision")
 
         try {
             val n1 = StarMapGraphNode(id = UUID.randomUUID().toString(), title = "节点1", kind = StarMapNodeKind.Character)
@@ -105,8 +119,7 @@ class StarMapCrossLayerIntegrationTest {
         val (bridge, repo) = realBridgeAndRepo()
 
         val createResult = repo.createStarmap("DTO转换一致性测试", "验证DTO到Model字段一致")
-        assertTrue("createStarmap must succeed", createResult is BridgeResult.Success)
-        val starmapId = (createResult as BridgeResult.Success).data.starmapId
+        val starmapId = requireStarmapId(createResult, "dtoModelConversion")
 
         try {
             val n1 = StarMapGraphNode(id = UUID.randomUUID().toString(), title = "角色X", kind = StarMapNodeKind.Character)
@@ -144,8 +157,7 @@ class StarMapCrossLayerIntegrationTest {
         val (bridge, repo) = realBridgeAndRepo()
 
         val createResult = repo.createStarmap("增量合并一致性测试", "验证增量合并后缓存与Core一致")
-        assertTrue("createStarmap must succeed", createResult is BridgeResult.Success)
-        val starmapId = (createResult as BridgeResult.Success).data.starmapId
+        val starmapId = requireStarmapId(createResult, "incrementalMerge")
 
         try {
             val n1 = StarMapGraphNode(id = UUID.randomUUID().toString(), title = "视口内节点", kind = StarMapNodeKind.Character)
@@ -189,8 +201,7 @@ class StarMapCrossLayerIntegrationTest {
         val (bridge, repo) = realBridgeAndRepo()
 
         val createResult = repo.createStarmap("更新节点一致性测试", "验证更新后缓存与Core一致")
-        assertTrue("createStarmap must succeed", createResult is BridgeResult.Success)
-        val starmapId = (createResult as BridgeResult.Success).data.starmapId
+        val starmapId = requireStarmapId(createResult, "crudUpdateNode")
 
         try {
             val node = StarMapGraphNode(id = UUID.randomUUID().toString(), title = "原始标题", kind = StarMapNodeKind.Character)
@@ -225,8 +236,7 @@ class StarMapCrossLayerIntegrationTest {
         val (bridge, repo) = realBridgeAndRepo()
 
         val createResult = repo.createStarmap("删除节点一致性测试", "验证删除后缓存与Core一致")
-        assertTrue("createStarmap must succeed", createResult is BridgeResult.Success)
-        val starmapId = (createResult as BridgeResult.Success).data.starmapId
+        val starmapId = requireStarmapId(createResult, "crudDeleteNode")
 
         try {
             val n1 = StarMapGraphNode(id = UUID.randomUUID().toString(), title = "保留节点", kind = StarMapNodeKind.Character)
@@ -264,8 +274,7 @@ class StarMapCrossLayerIntegrationTest {
         val (bridge, repo) = realBridgeAndRepo()
 
         val createResult = repo.createStarmap("删除冲刷重载测试", "验证删除+flush+reload后节点消失")
-        assertTrue("createStarmap must succeed", createResult is BridgeResult.Success)
-        val starmapId = (createResult as BridgeResult.Success).data.starmapId
+        val starmapId = requireStarmapId(createResult, "deleteFlushReload")
 
         try {
             val n1 = StarMapGraphNode(id = UUID.randomUUID().toString(), title = "保留节点", kind = StarMapNodeKind.Character)
@@ -298,8 +307,7 @@ class StarMapCrossLayerIntegrationTest {
         val (bridge, repo) = realBridgeAndRepo()
 
         val createResult = repo.createStarmap("删除重建测试", "验证删除同ID节点后重新添加可恢复")
-        assertTrue("createStarmap must succeed", createResult is BridgeResult.Success)
-        val starmapId = (createResult as BridgeResult.Success).data.starmapId
+        val starmapId = requireStarmapId(createResult, "deleteThenRecreateSameId")
 
         try {
             val nodeId = UUID.randomUUID().toString()

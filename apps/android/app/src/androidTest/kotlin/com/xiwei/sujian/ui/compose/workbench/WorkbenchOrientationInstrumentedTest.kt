@@ -23,6 +23,7 @@ import com.xiwei.sujian.ui.compose.workbench.state.WindowWidthBucket
 import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchLayoutRepository
 import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchReducer
 import kotlinx.coroutines.runBlocking
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -30,6 +31,7 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.io.File
 
 @RunWith(AndroidJUnit4::class)
 class WorkbenchOrientationInstrumentedTest {
@@ -52,6 +54,15 @@ class WorkbenchOrientationInstrumentedTest {
             windowWidthBucket = WindowWidthBucket.Large,
             windowMode = "standard",
         )
+    }
+
+    @After
+    fun tearDown() {
+        val context = composeTestRule.activity.applicationContext
+        val dsDir = File(context.filesDir, "datastore/workbench_layout_prefs")
+        if (dsDir.exists()) {
+            dsDir.deleteRecursively()
+        }
     }
 
     @Test
