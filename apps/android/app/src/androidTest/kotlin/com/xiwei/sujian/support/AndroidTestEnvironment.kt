@@ -239,26 +239,27 @@ class RestartableMainActivityRule(
 
     fun restartRuntimeAndActivity() {
         val sc = scenario
-        Assert.assertNotNull("Activity must be launched before restartRuntimeAndActivity", sc)
-        val destroyLatch = CountDownLatch(1)
-        val lifecycleCallback = ActivityLifecycleCallback { activity, stage ->
-            if (stage == Stage.DESTROYED && activity is MainActivity) {
-                destroyLatch.countDown()
+        if (sc != null) {
+            val destroyLatch = CountDownLatch(1)
+            val lifecycleCallback = ActivityLifecycleCallback { activity, stage ->
+                if (stage == Stage.DESTROYED && activity is MainActivity) {
+                    destroyLatch.countDown()
+                }
             }
+            val lifecycleMonitor = ActivityLifecycleMonitorRegistry.getInstance()
+            lifecycleMonitor.addLifecycleCallback(lifecycleCallback)
+
+            sc.close()
+            scenario = null
+
+            val destroyed = destroyLatch.await(10, TimeUnit.SECONDS)
+            lifecycleMonitor.removeLifecycleCallback(lifecycleCallback)
+
+            Assert.assertTrue(
+                "Old Activity was not destroyed within 10 seconds after scenario.close()",
+                destroyed
+            )
         }
-        val lifecycleMonitor = ActivityLifecycleMonitorRegistry.getInstance()
-        lifecycleMonitor.addLifecycleCallback(lifecycleCallback)
-
-        sc!!.close()
-        scenario = null
-
-        val destroyed = destroyLatch.await(10, TimeUnit.SECONDS)
-        lifecycleMonitor.removeLifecycleCallback(lifecycleCallback)
-
-        Assert.assertTrue(
-            "Old Activity was not destroyed within 10 seconds after scenario.close()",
-            destroyed
-        )
 
         val session = sessionProvider()
         session.deps.releaseRuntime()

@@ -92,38 +92,40 @@ fun FloatingPanelLayer(
                 shape = androidx.compose.material3.MaterialTheme.shapes.large,
                 color = androidx.compose.material3.MaterialTheme.colorScheme.surface,
             ) {
-                WorkbenchPanelFrame(
-                    panelState = panel,
-                    onFloat = { onFloat(panel.id) },
-                    onCollapse = { onCollapse(panel.id) },
-                    onClose = { onHide(panel.id) },
-                    modifier = Modifier.fillMaxSize(),
-                    titleBarModifier = Modifier
-                        .onGloballyPositioned { coords ->
-                            val pos = coords.positionInWindow()
-                            titleBarRootXDp = pos.x / density.density
-                            titleBarRootYDp = pos.y / density.density
-                        }
-                        .pointerInput(panel.id) {
-                            detectDragGestures(
-                                onDragStart = { offset ->
-                                    startPointerOffsetX = offset.x / density.density
-                                    startPointerOffsetY = offset.y / density.density
-                                    onBringToFront(panel.id)
-                                },
-                                onDragEnd = {
-                                    val newPanelX = panel.floatingX + dragOffsetX
-                                    val newPanelY = panel.floatingY + dragOffsetY
-                                    val pointerX = newPanelX + startPointerOffsetX
-                                    val pointerY = newPanelY + startPointerOffsetY
-                                    val dragState = WorkbenchDragState(
-                                        isDragging = true,
-                                        draggedPanelId = panel.id,
-                                        pointerX = pointerX,
-                                        pointerY = pointerY,
-                                        tabGroupHitAreas = tabGroupHitAreas,
-                                    )
-                                    val (target, groupId) = dragState.resolveDropTarget(maxWidthDp, maxHeightDp)
+                Box(Modifier.fillMaxSize()) {
+                    WorkbenchPanelFrame(
+                        panelState = panel,
+                        onFloat = { onFloat(panel.id) },
+                        onCollapse = { onCollapse(panel.id) },
+                        onClose = { onHide(panel.id) },
+                        modifier = Modifier.fillMaxSize(),
+                        titleBarModifier = Modifier
+                            .testTag(SujianSemanticIds.floatingTitleBar(panel.id.name))
+                            .onGloballyPositioned { coords ->
+                                val pos = coords.positionInWindow()
+                                titleBarRootXDp = pos.x / density.density
+                                titleBarRootYDp = pos.y / density.density
+                            }
+                            .pointerInput("floatingTitleBarDrag", panel.id) {
+                                detectDragGestures(
+                                    onDragStart = { offset ->
+                                        startPointerOffsetX = offset.x / density.density
+                                        startPointerOffsetY = offset.y / density.density
+                                        onBringToFront(panel.id)
+                                    },
+                                    onDragEnd = {
+                                        val newPanelX = panel.floatingX + dragOffsetX
+                                        val newPanelY = panel.floatingY + dragOffsetY
+                                        val pointerX = newPanelX + startPointerOffsetX
+                                        val pointerY = newPanelY + startPointerOffsetY
+                                        val dragState = WorkbenchDragState(
+                                            isDragging = true,
+                                            draggedPanelId = panel.id,
+                                            pointerX = pointerX,
+                                            pointerY = pointerY,
+                                            tabGroupHitAreas = tabGroupHitAreas,
+                                        )
+                                        val (target, groupId) = dragState.resolveDropTarget(maxWidthDp, maxHeightDp)
                                     when (target) {
                                         DragDropTarget.DockLeft -> onDock(panel.id, DockZone.Left)
                                         DragDropTarget.DockRight -> onDock(panel.id, DockZone.Right)
@@ -187,7 +189,7 @@ fun FloatingPanelLayer(
                         .width(16.dp)
                         .height(16.dp)
                         .testTag(SujianSemanticIds.floatingResizeHandle(panel.id.name))
-                        .pointerInput(panel.id) {
+                        .pointerInput("floatingResizeHandle", panel.id) {
                             detectDragGestures(
                                 onDragEnd = {
                                     val (newW, newH) = WorkbenchReducer.clampFloatingSize(
@@ -211,6 +213,7 @@ fun FloatingPanelLayer(
                             }
                         },
                 )
+                }
             }
         }
     }

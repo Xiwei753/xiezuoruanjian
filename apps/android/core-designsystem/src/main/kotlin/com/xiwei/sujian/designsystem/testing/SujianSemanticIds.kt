@@ -39,6 +39,7 @@ object SujianSemanticIds {
     fun dockTabStrip(groupId: String) = "workbench.tab_strip.$groupId"
     fun dockTab(groupId: String, panelId: String) = "workbench.tab.$groupId.$panelId"
     fun floatingPanel(panelId: String) = "workbench.floating.$panelId"
+    fun floatingTitleBar(panelId: String) = "workbench.floating_title_bar.$panelId"
     fun floatingResizeHandle(panelId: String) = "workbench.floating_resize.$panelId"
     fun panelLauncherButton(panelId: String) = "workbench.launcher.$panelId"
     fun panelFrame(panelId: String) = "workbench.panel.$panelId"

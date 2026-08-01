@@ -1,5 +1,6 @@
 package com.xiwei.sujian.ui.compose.workbench
 
+import android.util.Log
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.requiredSize
@@ -22,6 +23,7 @@ import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchAction
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelId
 import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchReducer
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -272,15 +274,21 @@ class WorkbenchUiInstrumentedTest {
     }
 
     @Test
-    fun floatingPanel_dockToLeftEdge_viaAction_triggersDockAsNewGroup() {
+    fun floatingPanel_dragTitleBar_toDockLeftEdge_triggersDockAsNewGroup() {
         var layoutState by mutableStateOf(defaultState)
+        var lastAction: WorkbenchAction? = null
+        val onAction: (WorkbenchAction) -> Unit = { action ->
+            lastAction = action
+            Log.i("WorkbenchUiTest", "Action: $action")
+            layoutState = WorkbenchReducer.reduce(layoutState, action)
+        }
 
         composeTestRule.setContent {
             Box(Modifier.requiredSize(1200.dp, 800.dp)) {
                 SujianWorkbench(
                     layoutState = layoutState,
-                    onAction = { layoutState = WorkbenchReducer.reduce(layoutState, it) },
-                    onWindowSizeChanged = { _, _ -> },
+                    onAction = onAction,
+                    onWindowSizeChanged = { w, h -> Log.i("WorkbenchUiTest", "windowSizeChanged: w=$w h=$h") },
                     modifier = Modifier.fillMaxSize(),
                     editorContent = { Box(Modifier.size(100.dp)) },
                     panelContent = { _ -> Box(Modifier.size(50.dp)) },
@@ -294,13 +302,40 @@ class WorkbenchUiInstrumentedTest {
         layoutState = WorkbenchReducer.reduce(layoutState, WorkbenchAction.FloatPanel(WorkbenchPanelId.AiAssistant))
         composeTestRule.waitForIdle()
 
-        assertEquals("Panel should start as Floating", DockZone.Floating, layoutState.panels[WorkbenchPanelId.AiAssistant]!!.zone)
+        val panel = layoutState.panels[WorkbenchPanelId.AiAssistant]!!
+        assertEquals("Panel should start as Floating", DockZone.Floating, panel.zone)
+        Log.i("WorkbenchUiTest", "Before drag: floatingX=${panel.floatingX} floatingY=${panel.floatingY} zone=${panel.zone}")
 
-        layoutState = WorkbenchReducer.reduce(layoutState, WorkbenchAction.DockPanelAsNewGroup(WorkbenchPanelId.AiAssistant, DockZone.Left, Int.MAX_VALUE))
+        val titleBarTag = SujianSemanticIds.floatingTitleBar(WorkbenchPanelId.AiAssistant.name)
+        val titleBarNode = composeTestRule.onNodeWithTag(titleBarTag)
+        titleBarNode.assertExists()
+
+        val floatingTag = SujianSemanticIds.floatingPanel(WorkbenchPanelId.AiAssistant.name)
+        val floatingNode = composeTestRule.onNodeWithTag(floatingTag)
+
+        val resizeHandleTag = SujianSemanticIds.floatingResizeHandle(WorkbenchPanelId.AiAssistant.name)
+        composeTestRule.onNodeWithTag(resizeHandleTag).assertExists()
+
+        titleBarNode.performTouchInput {
+            val startX = width * 0.25f
+            val startY = height * 0.5f
+            val endX = -left + 36f
+            down(Offset(startX, startY))
+            moveTo(Offset(startX - 50f, startY))
+            moveTo(Offset(endX, startY))
+            up()
+        }
         composeTestRule.waitForIdle()
 
         val zoneAfter = layoutState.panels[WorkbenchPanelId.AiAssistant]!!.zone
-        assertEquals("Panel should dock to Left after DockPanelAsNewGroup action", DockZone.Left, zoneAfter)
+        Log.i("WorkbenchUiTest", "After drag: zone=$zoneAfter lastAction=$lastAction")
+        val dockGroupMeta = layoutState.dockGroupMeta.entries.firstOrNull { it.value.zone == DockZone.Left }
+        val dockGroupWeight = dockGroupMeta?.let { layoutState.dockGroupWeights[it.key] }
+        assertTrue("Panel should dock to Left after dragging title bar to left edge, got zone=$zoneAfter", zoneAfter == DockZone.Left)
+        assertNotNull("Dock group meta should exist for Left zone", dockGroupMeta)
+        if (dockGroupWeight != null) {
+            assertTrue("Dock group weight should be positive, got $dockGroupWeight", dockGroupWeight > 0f)
+        }
     }
 
     @Test
@@ -324,11 +359,11 @@ class WorkbenchUiInstrumentedTest {
 
         layoutState = WorkbenchReducer.reduce(layoutState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Statistics))
         layoutState = WorkbenchReducer.reduce(layoutState, WorkbenchAction.DockPanelAsNewGroup(WorkbenchPanelId.Statistics, DockZone.Bottom, 0))
-        layoutState = WorkbenchReducer.reduce(layoutState, WorkbenchAction.ResizeDockZone(DockZone.Bottom, 200f, 800f))
+        layoutState = WorkbenchReducer.reduce(layoutState, WorkbenchAction.ResizeDockZone(DockZone.Bottom, 100f, 800f))
         composeTestRule.waitForIdle()
 
         val beforeBottomSize = layoutState.dockZoneSizeDp[DockZone.Bottom] ?: 0f
-        assertTrue("Bottom zone should have initial size > BOTTOM_PANEL_MIN_DP", beforeBottomSize > WorkbenchReducer.BOTTOM_PANEL_MIN_DP)
+        assertTrue("Bottom zone should have initial size > BOTTOM_PANEL_MIN_DP, got $beforeBottomSize (min=${WorkbenchReducer.BOTTOM_PANEL_MIN_DP})", beforeBottomSize > WorkbenchReducer.BOTTOM_PANEL_MIN_DP)
 
         val resizeTag = SujianSemanticIds.dockResizeHandle(DockZone.Bottom.name)
         composeTestRule.onNodeWithTag(resizeTag).performTouchInput {
@@ -340,5 +375,6 @@ class WorkbenchUiInstrumentedTest {
 
         val afterBottomSize = layoutState.dockZoneSizeDp[DockZone.Bottom] ?: 0f
         assertTrue("Bottom dock zone should shrink after dragging resize handle up, before=$beforeBottomSize after=$afterBottomSize", afterBottomSize < beforeBottomSize)
+        assertTrue("Bottom zone after resize must still be >= BOTTOM_PANEL_MIN_DP, got $afterBottomSize (min=${WorkbenchReducer.BOTTOM_PANEL_MIN_DP})", afterBottomSize >= WorkbenchReducer.BOTTOM_PANEL_MIN_DP)
     }
 }
