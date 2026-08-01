@@ -20,8 +20,8 @@ object WorkbenchReducer {
     internal const val BOTTOM_PANEL_MIN_DP = 220f
     private const val BOTTOM_PANEL_MAX_RATIO = 0.55f
     private const val EDITOR_MIN_DP = 480f
-    private const val FLOATING_MIN_WIDTH_DP = 200f
-    private const val FLOATING_MIN_HEIGHT_DP = 150f
+    internal const val FLOATING_MIN_WIDTH_DP = 200f
+    internal const val FLOATING_MIN_HEIGHT_DP = 150f
     private const val FLOATING_TITLE_BAR_DP = 40f
     private const val GROUP_MIN_DP = 80f
 

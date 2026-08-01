@@ -53,6 +53,8 @@ interface WorkbenchLayoutStore {
     suspend fun saveLayout(key: LayoutStorageKey, state: WorkbenchLayoutState)
 
     suspend fun loadLayout(key: LayoutStorageKey): WorkbenchLayoutState?
+
+    suspend fun clearLayout(key: LayoutStorageKey)
 }
 
 class WorkbenchLayoutRepository(
@@ -110,6 +112,18 @@ class WorkbenchLayoutRepository(
                     prefs[stringPreferencesKey("${prefix}.activeOverlay")] = state.activeOverlayPanelId.name
                 }
                 prefs[intPreferencesKey("${prefix}.nextFloatingZIndex")] = state.nextFloatingZIndex
+            }
+        }
+    }
+
+    override suspend fun clearLayout(key: LayoutStorageKey) {
+        withContext(Dispatchers.IO) {
+            context.workbenchDataStore.edit { prefs ->
+                val prefix = key.toStorageKey()
+                val keysToRemove = prefs.asMap().keys.filter { it.name.startsWith(prefix) }
+                for (k in keysToRemove) {
+                    prefs.remove(k)
+                }
             }
         }
     }

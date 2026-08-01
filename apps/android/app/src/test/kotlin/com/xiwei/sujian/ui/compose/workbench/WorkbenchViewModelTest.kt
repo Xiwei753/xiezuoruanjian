@@ -117,6 +117,10 @@ class WorkbenchViewModelTest {
             }
             return layouts[key]
         }
+
+        override suspend fun clearLayout(key: LayoutStorageKey) {
+            events += "clear:${key.toStorageKey()}"
+        }
     }
 
     @Test

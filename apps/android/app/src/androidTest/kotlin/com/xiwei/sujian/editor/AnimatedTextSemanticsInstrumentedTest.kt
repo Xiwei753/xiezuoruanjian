@@ -179,6 +179,10 @@ class AnimatedTextSemanticsInstrumentedTest {
             .performSemanticsAction(SemanticsActions.SetSelection) { it(1, 1, false) }
         composeTestRule.waitForIdle()
 
+        composeTestRule.onNodeWithTag("f-emoji").assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.TextSelectionRange, TextRange(1, 1))
+        )
+
         composeTestRule.onNodeWithTag("f-emoji")
             .performSemanticsAction(SemanticsActions.InsertTextAtCursor) { it(AnnotatedString("😀")) }
         composeTestRule.waitForIdle()
@@ -190,6 +194,10 @@ class AnimatedTextSemanticsInstrumentedTest {
         val cursorCharIndex = 1 + "😀".length
         val cursorUtf8 = TextOffsetUtils.utf8OffsetForCharIndex(currentValue, cursorCharIndex)
         assertEquals("cursor after a+😀 => byte offset 5", 5, cursorUtf8)
+
+        composeTestRule.onNodeWithTag("f-emoji").assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.TextSelectionRange, TextRange(cursorCharIndex, cursorCharIndex))
+        )
     }
 
     @Test
