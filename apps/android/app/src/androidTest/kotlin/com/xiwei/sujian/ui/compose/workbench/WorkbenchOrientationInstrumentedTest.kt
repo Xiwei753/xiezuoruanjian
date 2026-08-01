@@ -23,7 +23,6 @@ import com.xiwei.sujian.ui.compose.workbench.state.WindowWidthBucket
 import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchLayoutRepository
 import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchReducer
 import kotlinx.coroutines.runBlocking
-import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -53,13 +52,6 @@ class WorkbenchOrientationInstrumentedTest {
             windowWidthBucket = WindowWidthBucket.Large,
             windowMode = "standard",
         )
-    }
-
-    @After
-    fun tearDown() {
-        runBlocking {
-            repository.clearLayout(testKey)
-        }
     }
 
     @Test
