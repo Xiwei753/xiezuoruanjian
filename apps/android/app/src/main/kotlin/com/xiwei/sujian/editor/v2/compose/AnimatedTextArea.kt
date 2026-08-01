@@ -24,6 +24,10 @@ import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.semantics.editableText
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setText
+import androidx.compose.ui.semantics.setSelection
+import androidx.compose.ui.semantics.insertTextAtCursor
+import androidx.compose.ui.semantics.textSelectionRange
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
@@ -90,6 +94,7 @@ private fun AnimatedTextAreaWithCoordinator(
     minLineHeight: Dp
 ) {
     var localValue by remember(value) { mutableStateOf(value) }
+    var selectionRange by remember { mutableStateOf(TextRange(value.length)) }
     var isEditing by remember { mutableStateOf(false) }
 
     val currentValue by rememberUpdatedState(value)
@@ -158,14 +163,48 @@ private fun AnimatedTextAreaWithCoordinator(
                     Modifier
                 }
             )
-            .semantics {
-                editableText = androidx.compose.ui.text.AnnotatedString(localValue)
-                setText {
-                    coordinator.updateTargetText(targetId, it.text)
-                    coordinator.beginEdit(targetId, it.text.toByteArray(Charsets.UTF_8).size)
-                    true
+            .then(
+                if (enabled) {
+                    Modifier.semantics {
+                        editableText = androidx.compose.ui.text.AnnotatedString(localValue)
+                        textSelectionRange = selectionRange
+                        setText {
+                            val newText = it.text
+                            localValue = newText
+                            selectionRange = TextRange(newText.length)
+                            coordinator.updateTargetText(targetId, newText)
+                            coordinator.beginEdit(targetId, newText.toByteArray(Charsets.UTF_8).size)
+                            refOnValueChanged(newText)
+                            true
+                        }
+                        insertTextAtCursor { annotatedText ->
+                            val insertText = annotatedText.text
+                            val sel = selectionRange
+                            val before = localValue.substring(0, sel.min)
+                            val after = localValue.substring(sel.max)
+                            val newText = before + insertText + after
+                            val newCursor = sel.min + insertText.length
+                            localValue = newText
+                            selectionRange = TextRange(newCursor)
+                            val utf8Offset = localValue.substring(0, newCursor).toByteArray(Charsets.UTF_8).size
+                            coordinator.updateTargetText(targetId, newText)
+                            coordinator.beginEdit(targetId, utf8Offset)
+                            refOnValueChanged(newText)
+                            true
+                        }
+                        setSelection { selStart, selEnd, _ ->
+                            val clampedStart = selStart.coerceIn(0, localValue.length)
+                            val clampedEnd = selEnd.coerceIn(0, localValue.length)
+                            selectionRange = TextRange(clampedStart, clampedEnd)
+                            true
+                        }
+                    }
+                } else {
+                    Modifier.semantics {
+                        editableText = androidx.compose.ui.text.AnnotatedString(localValue)
+                    }
                 }
-            }
+            )
     ) {
         OutlinedTextFieldDefaults.DecorationBox(
             value = localValue,

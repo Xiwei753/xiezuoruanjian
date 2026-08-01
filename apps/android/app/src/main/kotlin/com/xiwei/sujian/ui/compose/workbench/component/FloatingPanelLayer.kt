@@ -66,10 +66,12 @@ fun FloatingPanelLayer(
             var titleBarRootXDp by remember(panel.id) { mutableFloatStateOf(0f) }
             var titleBarRootYDp by remember(panel.id) { mutableFloatStateOf(0f) }
 
-            val clampedWidth = (panel.floatingWidthDp + resizeOffsetW)
-                .coerceIn(200f, maxWidthDp)
-            val clampedHeight = (panel.floatingHeightDp + resizeOffsetH)
-                .coerceIn(150f, maxHeightDp)
+            val (clampedWidth, clampedHeight) = WorkbenchReducer.clampFloatingSize(
+                panel.floatingWidthDp + resizeOffsetW,
+                panel.floatingHeightDp + resizeOffsetH,
+                maxWidthDp,
+                maxHeightDp,
+            )
 
             Surface(
                 modifier = Modifier
@@ -184,10 +186,12 @@ fun FloatingPanelLayer(
                         .pointerInput(panel.id) {
                             detectDragGestures(
                                 onDragEnd = {
-                                    val newW = (panel.floatingWidthDp + resizeOffsetW)
-                                        .coerceIn(200f, maxWidthDp)
-                                    val newH = (panel.floatingHeightDp + resizeOffsetH)
-                                        .coerceIn(150f, maxHeightDp)
+                                    val (newW, newH) = WorkbenchReducer.clampFloatingSize(
+                                        panel.floatingWidthDp + resizeOffsetW,
+                                        panel.floatingHeightDp + resizeOffsetH,
+                                        maxWidthDp,
+                                        maxHeightDp,
+                                    )
                                     onResizeFloating(panel.id, newW, newH)
                                     resizeOffsetW = 0f
                                     resizeOffsetH = 0f

@@ -17,9 +17,9 @@ object ComposeWait {
             val fetched = nodes.fetchSemanticsNodes()
             lastObserved = if (fetched.isEmpty()) "no nodes" else "${fetched.size} node(s)"
             fetched.isNotEmpty()
-        }, timeoutMs) {
+        }, timeoutMs, diagnostic = {
             "Timed out waiting for tag: $tag (last observed: $lastObserved)"
-        }
+        })
         return rule.onNode(androidx.compose.ui.test.hasTestTag(tag))
     }
 
@@ -44,9 +44,9 @@ object ComposeWait {
                 lastObservedState = stateDesc
                 stateDesc == expectedState
             }
-        }, timeoutMs) {
+        }, timeoutMs, diagnostic = {
             "Expected save status '$expectedState' but last observed was '$lastObservedState'"
-        }
+        })
     }
 
     fun waitForEspressoViewCondition(
@@ -71,46 +71,39 @@ object ComposeWait {
                 lastDiagnostic = "${e.javaClass.simpleName}: ${e.message}"
                 false
             }
-        }, timeoutMs) {
+        }, timeoutMs, diagnostic = {
             "${message()}. Last diagnostic: $lastDiagnostic"
-        }
+        })
     }
 
     fun waitUntil(
         rule: ComposeTestRule,
         condition: () -> Boolean,
         timeoutMs: Long = DEFAULT_TIMEOUT_MS,
-        message: (() -> String)? = null
+        message: (() -> String)? = null,
+        diagnostic: (() -> String)? = null
     ) {
-        var lastObservedState: String? = null
+        var lastDiagnosticValue: String? = null
         try {
-            rule.waitUntil(timeoutMs) {
-                rule.waitForIdle()
+            val conditionDescription = if (message != null) message() else "Condition not satisfied"
+            rule.waitUntil(timeoutMs, conditionDescription) {
                 val result = condition()
-                if (!result) {
-                    lastObservedState = try {
-                        val nodes = rule.onAllNodes(
-                            androidx.compose.ui.test.hasTestTag(
-                                com.xiwei.sujian.designsystem.testing.SujianSemanticIds.EditorSaveStatus
-                            )
-                        )
-                        val fetched = nodes.fetchSemanticsNodes()
-                        if (fetched.isEmpty()) "no save-status node" else fetched.first().config.getOrElse(
-                            androidx.compose.ui.semantics.SemanticsProperties.StateDescription
-                        ) { "no state desc" }.toString()
-                    } catch (_: Exception) { "unavailable" }
+                if (!result && diagnostic != null) {
+                    lastDiagnosticValue = try { diagnostic() } catch (_: Exception) { "unavailable" }
                 }
                 result
             }
         } catch (e: androidx.compose.ui.test.ComposeTimeoutException) {
             val diag = if (message != null) message() else "Condition not satisfied"
+            val detail = if (lastDiagnosticValue != null) ". Diagnostic: $lastDiagnosticValue" else ""
             throw AssertionError(
-                "$diag. Timeout: ${timeoutMs}ms. Last observed state: $lastObservedState. Original: ${e.message}",
+                "$diag. Timeout: ${timeoutMs}ms$detail. Original: ${e.message}",
                 e
             )
         } catch (e: AssertionError) {
             if (message != null) {
-                throw AssertionError("${message()}. Last observed state: $lastObservedState. Original: ${e.message}", e)
+                val detail = if (lastDiagnosticValue != null) ". Diagnostic: $lastDiagnosticValue" else ""
+                throw AssertionError("${message()}$detail. Original: ${e.message}", e)
             }
             throw e
         }

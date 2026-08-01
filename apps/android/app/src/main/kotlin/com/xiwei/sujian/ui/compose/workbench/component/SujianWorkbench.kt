@@ -337,8 +337,7 @@ fun SujianWorkbench(
                 onDock = { id, zone -> onAction(WorkbenchAction.DockPanelAsNewGroup(id, zone, Int.MAX_VALUE)) },
                 onBringToFront = { onAction(WorkbenchAction.BringFloatingToFront(it)) },
                 onResizeFloating = { id, w, h ->
-                    val clampedW = w.coerceIn(200f, maxWidthDp)
-                    val clampedH = h.coerceIn(150f, maxHeightDp)
+                    val (clampedW, clampedH) = WorkbenchReducer.clampFloatingSize(w, h, maxWidthDp, maxHeightDp)
                     onAction(WorkbenchAction.ResizeFloatingPanel(id, clampedW, clampedH))
                 },
                 onMovePanelToGroup = { id, groupId -> onAction(WorkbenchAction.MovePanelToGroup(id, groupId)) },

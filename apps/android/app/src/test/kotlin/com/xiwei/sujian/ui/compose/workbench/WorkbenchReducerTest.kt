@@ -19,6 +19,7 @@ import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchReducer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.min
@@ -2090,5 +2091,230 @@ class WorkbenchReducerTest {
         val result = WorkbenchReducer.reduce(docked, WorkbenchAction.MovePanelToGroup(WorkbenchPanelId.Search, leftGroupId))
         assertEquals(leftGroupId, result.panels[WorkbenchPanelId.Search]?.tabGroupId)
         assertEquals(DockZone.Left, result.panels[WorkbenchPanelId.Search]?.zone)
+    }
+
+    @Test
+    fun clampFloatingSize_normalWindow_clampsToMinAndMax() {
+        val (w, h) = WorkbenchReducer.clampFloatingSize(100f, 80f, 800f, 600f)
+        assertEquals(200f, w, 0.01f)
+        assertEquals(150f, h, 0.01f)
+    }
+
+    @Test
+    fun clampFloatingSize_tinyWindow_150x120_clampsToWindowSize() {
+        val (w, h) = WorkbenchReducer.clampFloatingSize(300f, 250f, 150f, 120f)
+        assertEquals(150f, w, 0.01f)
+        assertEquals(120f, h, 0.01f)
+    }
+
+    @Test
+    fun clampFloatingSize_zeroWindow_clampsToZero() {
+        val (w, h) = WorkbenchReducer.clampFloatingSize(300f, 250f, 0f, 0f)
+        assertEquals(0f, w, 0.01f)
+        assertEquals(0f, h, 0.01f)
+    }
+
+    @Test
+    fun clampFloatingSize_normalWindow_oversizedClampsToMax() {
+        val (w, h) = WorkbenchReducer.clampFloatingSize(900f, 700f, 800f, 600f)
+        assertEquals(800f, w, 0.01f)
+        assertEquals(600f, h, 0.01f)
+    }
+
+    @Test
+    fun clampFloatingSize_negativeMax_treatedAsZero() {
+        val (w, h) = WorkbenchReducer.clampFloatingSize(300f, 250f, -10f, -20f)
+        assertEquals(0f, w, 0.01f)
+        assertEquals(0f, h, 0.01f)
+    }
+
+    @Test
+    fun clampFloatingSize_uiLayerAndReducerProduceSameResult() {
+        val testCases = listOf(
+            Triple(300f, 250f, 800f to 600f),
+            Triple(100f, 80f, 800f to 600f),
+            Triple(300f, 250f, 150f to 120f),
+            Triple(300f, 250f, 0f to 0f),
+        )
+        for ((inputW, inputH, maxPair) in testCases) {
+            val (maxW, maxH) = maxPair
+            val (uiW, uiH) = WorkbenchReducer.clampFloatingSize(inputW, inputH, maxW, maxH)
+            val floated = WorkbenchReducer.reduce(defaultState, WorkbenchAction.FloatPanelAt(WorkbenchPanelId.AiAssistant, 10f, 10f))
+            val resized = WorkbenchReducer.reduce(floated, WorkbenchAction.ResizeFloatingPanel(WorkbenchPanelId.AiAssistant, inputW, inputH))
+            val clamped = WorkbenchReducer.reduce(resized, WorkbenchAction.ClampFloatingPanels(maxW, maxH))
+            val panel = clamped.panels[WorkbenchPanelId.AiAssistant]!!
+            assertEquals("UI and Reducer width match for ($inputW, $inputH, $maxW, $maxH)", uiW, panel.floatingWidthDp, 0.01f)
+            assertEquals("UI and Reducer height match for ($inputW, $inputH, $maxW, $maxH)", uiH, panel.floatingHeightDp, 0.01f)
+        }
+    }
+
+    @Test
+    fun floatPanel_usesFloatingNamespaceGroupId() {
+        val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.FloatPanel(WorkbenchPanelId.AiAssistant))
+        val panel = result.panels[WorkbenchPanelId.AiAssistant]!!
+        assertEquals(DockZone.Floating, panel.zone)
+        assertTrue("Floating panel tabGroupId should use floating: namespace", panel.tabGroupId.startsWith("floating:"))
+    }
+
+    @Test
+    fun floatPanelAt_usesFloatingNamespaceGroupId() {
+        val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.FloatPanelAt(WorkbenchPanelId.AiAssistant, 10f, 20f))
+        val panel = result.panels[WorkbenchPanelId.AiAssistant]!!
+        assertEquals(DockZone.Floating, panel.zone)
+        assertTrue("FloatPanelAt tabGroupId should use floating: namespace", panel.tabGroupId.startsWith("floating:"))
+    }
+
+    @Test
+    fun floatPanel_oldDockGroupCleanedUp() {
+        val expanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.DockPanelAsNewGroup(WorkbenchPanelId.AiAssistant, DockZone.Right, 0))
+        val oldGroupId = expanded.panels[WorkbenchPanelId.AiAssistant]!!.tabGroupId
+        assertTrue("Old group should be a dock group", oldGroupId.startsWith("right-group-"))
+        val floated = WorkbenchReducer.reduce(expanded, WorkbenchAction.FloatPanel(WorkbenchPanelId.AiAssistant))
+        assertFalse("Old dock group meta should be removed after float", oldGroupId in floated.dockGroupMeta)
+    }
+
+    @Test
+    fun generateDockGroupId_doesNotReuseFloatingGroupId() {
+        val floated = WorkbenchReducer.reduce(defaultState, WorkbenchAction.FloatPanel(WorkbenchPanelId.AiAssistant))
+        val floatingGroupId = floated.panels[WorkbenchPanelId.AiAssistant]!!.tabGroupId
+        val docked = WorkbenchReducer.reduce(floated, WorkbenchAction.DockPanelAsNewGroup(WorkbenchPanelId.Search, DockZone.Right, 0))
+        val newGroupId = docked.panels[WorkbenchPanelId.Search]!!.tabGroupId
+        assertNotEquals("New dock group ID must not reuse floating group ID", floatingGroupId, newGroupId)
+        assertFalse("New dock group ID must not use floating: namespace", newGroupId.startsWith("floating:"))
+    }
+
+    @Test
+    fun migrateFromV1_allFloatingGroup_noDockMetaGenerated() {
+        val panels = WorkbenchPanelId.entries.associateWith { id ->
+            WorkbenchPanelState(
+                id = id,
+                zone = DockZone.Floating,
+                visibility = PanelVisibility.Expanded,
+                sizeDp = 320f,
+                tabGroupId = "old-floating-group",
+                order = 0,
+                floatingX = 10f,
+                floatingY = 10f,
+            )
+        }
+        val dockGroupSizes = mapOf("old-floating-group" to 320f)
+        val result = WorkbenchReducer.migrateFromV1(
+            panels = panels,
+            activeTabByGroup = emptyMap(),
+            preset = WorkbenchPreset.Custom,
+            dockGroupSizes = dockGroupSizes,
+            activeOverlayPanelId = null,
+        )
+        assertFalse("All-floating group should not generate dockGroupMeta", "old-floating-group" in result.dockGroupMeta)
+        assertFalse("All-floating group should not generate dockGroupWeights", "old-floating-group" in result.dockGroupWeights)
+    }
+
+    @Test
+    fun migrateFromV1_mixedDockAndFloating_usesDockedZoneOnly() {
+        val panels = WorkbenchPanelId.entries.associateWith { id ->
+            when (id) {
+                WorkbenchPanelId.AiAssistant -> WorkbenchPanelState(
+                    id = id, zone = DockZone.Right, visibility = PanelVisibility.Expanded,
+                    sizeDp = 400f, tabGroupId = "mixed-group", order = 0
+                )
+                WorkbenchPanelId.Search -> WorkbenchPanelState(
+                    id = id, zone = DockZone.Floating, visibility = PanelVisibility.Expanded,
+                    sizeDp = 380f, tabGroupId = "mixed-group", order = 1,
+                    floatingX = 10f, floatingY = 10f,
+                )
+                else -> WorkbenchPanelState(
+                    id = id, zone = DockZone.Right, visibility = PanelVisibility.Collapsed,
+                    sizeDp = 320f, tabGroupId = "right-tools", order = id.ordinal
+                )
+            }
+        }
+        val dockGroupSizes = mapOf("mixed-group" to 400f, "right-tools" to 380f)
+        val result = WorkbenchReducer.migrateFromV1(
+            panels = panels,
+            activeTabByGroup = emptyMap(),
+            preset = WorkbenchPreset.Custom,
+            dockGroupSizes = dockGroupSizes,
+            activeOverlayPanelId = null,
+        )
+        val mixedMeta = result.dockGroupMeta["mixed-group"]
+        assertNotNull("Mixed group with docked panel should have dockGroupMeta", mixedMeta)
+        assertEquals("Mixed group zone should be determined by docked panel", DockZone.Right, mixedMeta!!.zone)
+    }
+
+    @Test
+    fun migrateFromV1_floatingPanelsGetFloatingNamespace() {
+        val panels = WorkbenchPanelId.entries.associateWith { id ->
+            when (id) {
+                WorkbenchPanelId.AiAssistant -> WorkbenchPanelState(
+                    id = id, zone = DockZone.Floating, visibility = PanelVisibility.Expanded,
+                    sizeDp = 400f, tabGroupId = "old-group", order = 0,
+                    floatingX = 10f, floatingY = 10f,
+                )
+                else -> WorkbenchPanelState(
+                    id = id, zone = DockZone.Right, visibility = PanelVisibility.Collapsed,
+                    sizeDp = 320f, tabGroupId = "right-tools", order = id.ordinal
+                )
+            }
+        }
+        val result = WorkbenchReducer.migrateFromV1(
+            panels = panels,
+            activeTabByGroup = emptyMap(),
+            preset = WorkbenchPreset.Custom,
+            dockGroupSizes = mapOf("right-tools" to 380f),
+            activeOverlayPanelId = null,
+        )
+        val floatingPanel = result.panels[WorkbenchPanelId.AiAssistant]!!
+        assertTrue("Floating panel should get floating: namespace tabGroupId", floatingPanel.tabGroupId.startsWith("floating:"))
+    }
+
+    @Test
+    fun migrateFromV1_defaultGroupsUseCanonicalOrder() {
+        val panels = WorkbenchPanelId.entries.associateWith { id ->
+            WorkbenchPanelState(
+                id = id,
+                zone = when (id) {
+                    WorkbenchPanelId.ProjectNavigator, WorkbenchPanelId.ChapterNavigator -> DockZone.Left
+                    else -> DockZone.Right
+                },
+                visibility = PanelVisibility.Collapsed,
+                sizeDp = 320f,
+                tabGroupId = when (id) {
+                    WorkbenchPanelId.ProjectNavigator, WorkbenchPanelId.ChapterNavigator -> "left-nav"
+                    WorkbenchPanelId.AiAssistant, WorkbenchPanelId.Search, WorkbenchPanelId.Statistics -> "right-tools"
+                    WorkbenchPanelId.StarMap, WorkbenchPanelId.DocumentOutline, WorkbenchPanelId.CharacterInfo -> "right-outline"
+                },
+                order = id.ordinal,
+            )
+        }
+        val dockGroupSizes = linkedMapOf(
+            "right-outline" to 300f,
+            "right-tools" to 400f,
+            "left-nav" to 320f,
+        )
+        val result = WorkbenchReducer.migrateFromV1(
+            panels = panels,
+            activeTabByGroup = emptyMap(),
+            preset = WorkbenchPreset.Custom,
+            dockGroupSizes = dockGroupSizes,
+            activeOverlayPanelId = null,
+        )
+        val rightGroups = result.dockGroupMeta.values.filter { it.zone == DockZone.Right }.sortedBy { it.order }.map { it.id }
+        assertEquals(
+            "Default groups should use canonical order: right-tools before right-outline",
+            listOf("right-tools", "right-outline"),
+            rightGroups
+        )
+    }
+
+    @Test
+    fun sameGroup_oneDockedOneFloating_floatingGetsNamespace() {
+        val expanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.DockPanelAsNewGroup(WorkbenchPanelId.AiAssistant, DockZone.Right, 0))
+        val sharedGroupId = expanded.panels[WorkbenchPanelId.AiAssistant]!!.tabGroupId
+        val withSearch = WorkbenchReducer.reduce(expanded, WorkbenchAction.MovePanelToGroup(WorkbenchPanelId.Search, sharedGroupId))
+        assertEquals("Search should be in same dock group", sharedGroupId, withSearch.panels[WorkbenchPanelId.Search]!!.tabGroupId)
+        val floated = WorkbenchReducer.reduce(withSearch, WorkbenchAction.FloatPanel(WorkbenchPanelId.Search))
+        val searchPanel = floated.panels[WorkbenchPanelId.Search]!!
+        assertTrue("Floated panel should have floating: namespace", searchPanel.tabGroupId.startsWith("floating:"))
+        assertEquals("Remaining docked panel should keep original group", sharedGroupId, floated.panels[WorkbenchPanelId.AiAssistant]!!.tabGroupId)
     }
 }

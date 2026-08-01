@@ -132,11 +132,13 @@ object WorkbenchReducer {
         val panel = state.panels[panelId] ?: return state
         val newZ = state.nextFloatingZIndex
         val oldGroupId = panel.tabGroupId
+        val floatingGroupId = "floating:${panelId.name}"
         val movedState = state.copy(
             panels = state.panels + (panel.id to panel.copy(
                 zone = DockZone.Floating,
                 visibility = PanelVisibility.Expanded,
-                floatingZIndex = newZ
+                floatingZIndex = newZ,
+                tabGroupId = floatingGroupId,
             )),
             preset = WorkbenchPreset.Custom,
             nextFloatingZIndex = newZ + 1
@@ -148,13 +150,15 @@ object WorkbenchReducer {
         val panel = state.panels[panelId] ?: return state
         val newZ = state.nextFloatingZIndex
         val oldGroupId = panel.tabGroupId
+        val floatingGroupId = "floating:${panelId.name}"
         val movedState = state.copy(
             panels = state.panels + (panel.id to panel.copy(
                 zone = DockZone.Floating,
                 visibility = PanelVisibility.Expanded,
                 floatingX = x,
                 floatingY = y,
-                floatingZIndex = newZ
+                floatingZIndex = newZ,
+                tabGroupId = floatingGroupId,
             )),
             preset = WorkbenchPreset.Custom,
             nextFloatingZIndex = newZ + 1
@@ -201,13 +205,15 @@ object WorkbenchReducer {
     }
 
     private fun generateDockGroupId(state: WorkbenchLayoutState, zone: DockZone): String {
-        val existingIds = state.dockGroupMeta.keys
+        val existingMetaIds = state.dockGroupMeta.keys
+        val allPanelGroupIds = state.panels.values.map { it.tabGroupId }.toSet()
+        val allUsedIds = existingMetaIds + allPanelGroupIds
         var counter = (state.dockGroupMeta.values
             .filter { it.zone == zone }
             .mapNotNull { regexMatchInt(it.id) }
             .maxOrNull() ?: 0) + 1
         var candidate = "${zone.name.lowercase()}-group-$counter"
-        while (candidate in existingIds) {
+        while (candidate in allUsedIds) {
             counter++
             candidate = "${zone.name.lowercase()}-group-$counter"
         }
@@ -354,8 +360,7 @@ object WorkbenchReducer {
     private fun resizeFloatingPanel(state: WorkbenchLayoutState, panelId: WorkbenchPanelId, widthDp: Float, heightDp: Float): WorkbenchLayoutState {
         val panel = state.panels[panelId] ?: return state
         if (panel.zone != DockZone.Floating) return state
-        val clampedWidth = max(widthDp, FLOATING_MIN_WIDTH_DP)
-        val clampedHeight = max(heightDp, FLOATING_MIN_HEIGHT_DP)
+        val (clampedWidth, clampedHeight) = clampFloatingSize(widthDp, heightDp, Float.MAX_VALUE, Float.MAX_VALUE)
         return updatePanel(state, panel.copy(floatingWidthDp = clampedWidth, floatingHeightDp = clampedHeight), markCustom = true)
     }
 
@@ -466,12 +471,9 @@ object WorkbenchReducer {
 
     private fun clampFloatingPanels(state: WorkbenchLayoutState, maxWidthDp: Float, maxHeightDp: Float): WorkbenchLayoutState {
         val updatedPanels = state.panels.toMutableMap()
-        val effectiveMinW = min(FLOATING_MIN_WIDTH_DP, maxWidthDp)
-        val effectiveMinH = min(FLOATING_MIN_HEIGHT_DP, maxHeightDp)
         for ((id, panel) in state.panels) {
             if (panel.zone != DockZone.Floating || panel.visibility != PanelVisibility.Expanded) continue
-            val clampedW = panel.floatingWidthDp.coerceIn(effectiveMinW, maxWidthDp)
-            val clampedH = panel.floatingHeightDp.coerceIn(effectiveMinH, maxHeightDp)
+            val (clampedW, clampedH) = clampFloatingSize(panel.floatingWidthDp, panel.floatingHeightDp, maxWidthDp, maxHeightDp)
             val (clampedX, clampedY) = clampFloatingPosition(
                 panel.floatingX, panel.floatingY,
                 clampedW, clampedH,
@@ -718,7 +720,9 @@ object WorkbenchReducer {
         val groupsByZone = mutableMapOf<DockZone, MutableList<String>>()
         for ((groupId, size) in dockGroupSizes) {
             val groupPanels = panels.values.filter { it.tabGroupId == groupId }
-            val zone = groupPanels.firstOrNull()?.zone ?: DockZone.Left
+            val dockedPanels = groupPanels.filter { it.zone != DockZone.Floating }
+            if (dockedPanels.isEmpty()) continue
+            val zone = dockedPanels.firstOrNull()?.zone ?: DockZone.Left
             groupsByZone.getOrPut(zone) { mutableListOf() }.add(groupId)
             dockGroupWeights[groupId] = 1f
             when (zone) {
@@ -738,16 +742,22 @@ object WorkbenchReducer {
             }
         }
         for (panel in panels.values) {
+            if (panel.zone == DockZone.Floating) continue
             if (panel.tabGroupId.isNotEmpty() && panel.tabGroupId !in groupsByZone.values.flatten()) {
                 val zone = panel.zone
                 groupsByZone.getOrPut(zone) { mutableListOf() }.add(panel.tabGroupId)
                 dockGroupWeights[panel.tabGroupId] = 1f
             }
         }
+        val defaultGroupOrder = mapOf(
+            "left-nav" to -3,
+            "right-tools" to -2,
+            "right-outline" to -1,
+        )
         for ((zone, groupIds) in groupsByZone) {
             val sortedGroupIds = groupIds.sortedWith(
                 compareBy<String> { groupId ->
-                    panels.values.filter { it.tabGroupId == groupId }.minOfOrNull { it.order } ?: Int.MAX_VALUE
+                    defaultGroupOrder[groupId] ?: (groupIds.indexOf(groupId))
                 }.thenBy { it }
             )
             sortedGroupIds.forEachIndexed { index, groupId ->
@@ -758,8 +768,15 @@ object WorkbenchReducer {
             .filter { it.zone == DockZone.Floating }
             .maxOfOrNull { it.floatingZIndex } ?: 0
         val nextFloatingZIndex = maxZIndex + 1
+        val migratedPanels = panels.mapValues { (_, panel) ->
+            if (panel.zone == DockZone.Floating && !panel.tabGroupId.startsWith("floating:")) {
+                panel.copy(tabGroupId = "floating:${panel.id.name}")
+            } else {
+                panel
+            }
+        }
         return WorkbenchLayoutState(
-            panels = panels,
+            panels = migratedPanels,
             activeTabByGroup = activeTabByGroup,
             preset = preset,
             nextFloatingZIndex = nextFloatingZIndex,
@@ -768,6 +785,21 @@ object WorkbenchReducer {
             dockGroupMeta = dockGroupMeta,
             activeOverlayPanelId = activeOverlayPanelId,
         )
+    }
+
+    fun clampFloatingSize(
+        widthDp: Float,
+        heightDp: Float,
+        maxWidthDp: Float,
+        maxHeightDp: Float,
+    ): Pair<Float, Float> {
+        val safeMaxW = max(0f, maxWidthDp)
+        val safeMaxH = max(0f, maxHeightDp)
+        val effectiveMinW = min(FLOATING_MIN_WIDTH_DP, safeMaxW)
+        val effectiveMinH = min(FLOATING_MIN_HEIGHT_DP, safeMaxH)
+        val clampedW = widthDp.coerceIn(effectiveMinW, safeMaxW)
+        val clampedH = heightDp.coerceIn(effectiveMinH, safeMaxH)
+        return clampedW to clampedH
     }
 
     fun clampFloatingPosition(
