@@ -187,11 +187,12 @@ private fun AnimatedTextFieldWithCoordinator(
                             true
                         }
                         setSelection { selStart, selEnd, _ ->
-                            val clampedStart = selStart.coerceIn(0, localValue.length)
-                            val clampedEnd = selEnd.coerceIn(0, localValue.length)
-                            val safeStart = if (clampedStart in 1 until localValue.length && localValue[clampedStart].isLowSurrogate()) clampedStart - 1 else clampedStart
-                            val safeEnd = if (clampedEnd in 1 until localValue.length && localValue[clampedEnd].isLowSurrogate()) clampedEnd - 1 else clampedEnd
+                            val safeStart = TextOffsetUtils.safeCharIndex(localValue, selStart)
+                            val safeEnd = TextOffsetUtils.safeCharIndex(localValue, selEnd)
                             selectionRange = TextRange(safeStart, safeEnd)
+                            val utf8Start = TextOffsetUtils.utf8OffsetForCharIndex(localValue, selStart)
+                            coordinator.updateTargetText(targetId, localValue)
+                            coordinator.beginEdit(targetId, utf8Start)
                             true
                         }
                     }

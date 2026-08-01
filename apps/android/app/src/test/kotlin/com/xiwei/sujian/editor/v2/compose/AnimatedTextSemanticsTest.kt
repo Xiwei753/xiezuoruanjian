@@ -198,4 +198,79 @@ class AnimatedTextSemanticsTest {
         assertEquals(5, newCursor)
         assertEquals(5, utf8Offset)
     }
+
+    @Test
+    fun safeCharIndex_cjk_returnsSameIndex() {
+        assertEquals(2, TextOffsetUtils.safeCharIndex("你好世界", 2))
+    }
+
+    @Test
+    fun safeCharIndex_cjk_utf8OffsetCorrect() {
+        assertEquals(6, TextOffsetUtils.utf8OffsetForCharIndex("你好世界", 2))
+    }
+
+    @Test
+    fun safeCharIndex_emoji_lowSurrogate_backsOff() {
+        assertEquals(2, TextOffsetUtils.safeCharIndex("ab🙂cd", 3))
+    }
+
+    @Test
+    fun safeCharIndex_emoji_utf8OffsetNotSplit() {
+        assertEquals(2, TextOffsetUtils.utf8OffsetForCharIndex("ab🙂cd", 3))
+    }
+
+    @Test
+    fun insertAtCursor_consecutive_cursorAdvances() {
+        val (text1, cursor1) = TextOffsetUtils.insertAtCursor("abc", 3, "X")
+        assertEquals("abcX", text1)
+        assertEquals(4, cursor1)
+        val (text2, cursor2) = TextOffsetUtils.insertAtCursor(text1, cursor1, "Y")
+        assertEquals("abcXY", text2)
+        assertEquals(5, cursor2)
+    }
+
+    @Test
+    fun insertAtCursor_consecutiveEmoji_cursorAdvancesCorrectly() {
+        val (text1, cursor1) = TextOffsetUtils.insertAtCursor("ab", 2, "🙂")
+        val utf8Offset1 = TextOffsetUtils.utf8OffsetForCharIndex(text1, cursor1)
+        assertEquals("ab🙂", text1)
+        assertEquals(4, cursor1)
+        assertEquals(6, utf8Offset1)
+        val (text2, cursor2) = TextOffsetUtils.insertAtCursor(text1, cursor1, "c")
+        val utf8Offset2 = TextOffsetUtils.utf8OffsetForCharIndex(text2, cursor2)
+        assertEquals("ab🙂c", text2)
+        assertEquals(5, cursor2)
+        assertEquals(7, utf8Offset2)
+    }
+
+    @Test
+    fun replaceSelection_surrogatePair_utf8Correct() {
+        val (newText, newCursor) = TextOffsetUtils.replaceSelection("a🙂b🙂c", 1, 4, "XY")
+        val utf8Offset = TextOffsetUtils.utf8OffsetForCharIndex(newText, newCursor)
+        assertEquals("aXY🙂c", newText)
+        assertEquals(3, newCursor)
+        assertEquals(3, utf8Offset)
+    }
+
+    @Test
+    fun safeCharIndex_atBoundary_zeroAndLength() {
+        val text = "hello"
+        assertEquals(0, TextOffsetUtils.safeCharIndex(text, 0))
+        assertEquals(5, TextOffsetUtils.safeCharIndex(text, 5))
+        assertEquals(0, TextOffsetUtils.utf8OffsetForCharIndex(text, 0))
+        assertEquals(5, TextOffsetUtils.utf8OffsetForCharIndex(text, 5))
+    }
+
+    @Test
+    fun safeCharIndex_outOfBounds_clamped() {
+        val text = "hi"
+        assertEquals(0, TextOffsetUtils.safeCharIndex(text, -1))
+        assertEquals(2, TextOffsetUtils.safeCharIndex(text, 100))
+    }
+
+    @Test
+    fun utf8OffsetForCharIndex_emptyString_alwaysZero() {
+        assertEquals(0, TextOffsetUtils.utf8OffsetForCharIndex("", 0))
+        assertEquals(0, TextOffsetUtils.utf8OffsetForCharIndex("", 5))
+    }
 }

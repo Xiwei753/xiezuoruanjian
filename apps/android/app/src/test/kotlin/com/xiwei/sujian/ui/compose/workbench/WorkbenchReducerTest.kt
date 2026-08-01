@@ -2307,6 +2307,131 @@ class WorkbenchReducerTest {
     }
 
     @Test
+    fun clampFloatingSize_extremelyNarrowSplit_1x1() {
+        val (w, h) = WorkbenchReducer.clampFloatingSize(300f, 250f, 1f, 1f)
+        assertEquals(1f, w, 0.01f)
+        assertEquals(1f, h, 0.01f)
+    }
+
+    @Test
+    fun clampFloatingSize_rotationSizeChange_landscapeToPortrait() {
+        val (w1, h1) = WorkbenchFloatingSize(300f, 250f, 1200f, 800f)
+        assertEquals(300f, w1, 0.01f)
+        assertEquals(250f, h1, 0.01f)
+        val (w2, h2) = WorkbenchFloatingSize(300f, 250f, 800f, 1200f)
+        assertEquals(300f, w2, 0.01f)
+        assertEquals(250f, h2, 0.01f)
+    }
+
+    private fun WorkbenchFloatingSize(w: Float, h: Float, maxW: Float, maxH: Float) =
+        WorkbenchReducer.clampFloatingSize(w, h, maxW, maxH)
+
+    @Test
+    fun clampFloatingSize_negativeWidth_clampedToMin() {
+        val (w, h) = WorkbenchReducer.clampFloatingSize(-50f, 200f, 800f, 600f)
+        assertEquals(200f, w, 0.01f)
+        assertEquals(200f, h, 0.01f)
+    }
+
+    @Test
+    fun clampFloatingSize_veryLargeWindow_clampsToInput() {
+        val (w, h) = WorkbenchReducer.clampFloatingSize(400f, 300f, 10000f, 10000f)
+        assertEquals(400f, w, 0.01f)
+        assertEquals(300f, h, 0.01f)
+    }
+
+    @Test
+    fun clampFloatingPanels_rotationSuddenShrink_clampsAllFloating() {
+        val floated = WorkbenchReducer.reduce(defaultState, WorkbenchAction.FloatPanelAt(WorkbenchPanelId.AiAssistant, 10f, 10f))
+        val resized = WorkbenchReducer.reduce(floated, WorkbenchAction.ResizeFloatingPanel(WorkbenchPanelId.AiAssistant, 500f, 400f))
+        val clamped = WorkbenchReducer.reduce(resized, WorkbenchAction.ClampFloatingPanels(150f, 120f))
+        val panel = clamped.panels[WorkbenchPanelId.AiAssistant]!!
+        assertEquals(150f, panel.floatingWidthDp, 0.01f)
+        assertEquals(120f, panel.floatingHeightDp, 0.01f)
+        assertTrue(panel.floatingX >= 0f)
+        assertTrue(panel.floatingY >= 0f)
+    }
+
+    @Test
+    fun clampFloatingPanels_positionClampedWithinVisibleBounds() {
+        val floated = WorkbenchReducer.reduce(defaultState, WorkbenchAction.FloatPanelAt(WorkbenchPanelId.AiAssistant, 1000f, 800f))
+        val clamped = WorkbenchReducer.reduce(floated, WorkbenchAction.ClampFloatingPanels(800f, 600f))
+        val panel = clamped.panels[WorkbenchPanelId.AiAssistant]!!
+        assertTrue("X should be clamped within visible bounds", panel.floatingX <= 800f)
+        assertTrue("Y should be clamped within visible bounds", panel.floatingY <= 600f)
+    }
+
+    @Test
+    fun resizeDockSplit_weightConservationInvariant() {
+        val expanded1 = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val expanded2 = WorkbenchReducer.reduce(expanded1, WorkbenchAction.ExpandPanel(WorkbenchPanelId.DocumentOutline))
+        val beforeGroup = expanded2.dockGroupMeta.values.filter { it.zone == DockZone.Right }.sortedBy { it.order }
+        if (beforeGroup.size >= 2) {
+            val totalWeightBefore = beforeGroup.sumOf { (expanded2.dockGroupWeights[it.id] ?: 1f).toDouble() }.toFloat()
+            val result = WorkbenchReducer.reduce(expanded2, WorkbenchAction.ResizeDockSplit(
+                DockZone.Right, beforeGroup[0].id, beforeGroup[1].id, 50f, 400f
+            ))
+            val totalWeightAfter = beforeGroup.sumOf { (result.dockGroupWeights[it.id] ?: 1f).toDouble() }.toFloat()
+            assertEquals("Total weight should be conserved", totalWeightBefore, totalWeightAfter, 0.01f)
+        }
+    }
+
+    @Test
+    fun resizeDockSplit_minimumSizeEnforced() {
+        val expanded1 = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val expanded2 = WorkbenchReducer.reduce(expanded1, WorkbenchAction.ExpandPanel(WorkbenchPanelId.DocumentOutline))
+        val groups = expanded2.dockGroupMeta.values.filter { it.zone == DockZone.Right }.sortedBy { it.order }
+        if (groups.size >= 2) {
+            val result = WorkbenchReducer.reduce(expanded2, WorkbenchAction.ResizeDockSplit(
+                DockZone.Right, groups[0].id, groups[1].id, -500f, 400f
+            ))
+            val beforeWeight = result.dockGroupWeights[groups[0].id]!!
+            val afterWeight = result.dockGroupWeights[groups[1].id]!!
+            val totalWeight = beforeWeight + afterWeight
+            val minWeight = 80f * totalWeight / 400f
+            assertTrue("Before group should be at least minWeight", beforeWeight >= minWeight - 0.01f)
+            assertTrue("After group should be at least minWeight", afterWeight >= minWeight - 0.01f)
+        }
+    }
+
+    @Test
+    fun resizeDockZone_bottomZone_extremeSmallScreen() {
+        val expanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        val bottomDocked = WorkbenchReducer.reduce(expanded, WorkbenchAction.DockPanelAsNewGroup(WorkbenchPanelId.AiAssistant, DockZone.Bottom, 0))
+        val result = WorkbenchReducer.reduce(bottomDocked, WorkbenchAction.ResizeDockZone(DockZone.Bottom, 10f, 300f))
+        val bottomSize = result.dockZoneSizeDp[DockZone.Bottom]!!
+        val maxBottomDp = 300f * 0.55f
+        if (maxBottomDp < 220f) {
+            assertEquals("When max < min, resize should be no-op", bottomDocked.dockZoneSizeDp[DockZone.Bottom]!!, bottomSize, 0.01f)
+        } else {
+            assertTrue("Bottom size should be within valid range", bottomSize >= 220f)
+            assertTrue("Bottom size should not exceed 55% of screen", bottomSize <= maxBottomDp + 0.01f)
+        }
+    }
+
+    @Test
+    fun resizeDockZone_noExpandedPanels_noChange() {
+        val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ResizeDockZone(DockZone.Left, 50f, 1200f))
+        assertEquals(defaultState.dockZoneSizeDp, result.dockZoneSizeDp)
+    }
+
+    @Test
+    fun clampFloatingSize_alwaysNonNegative() {
+        val testCases = listOf(
+            Triple(0f, 0f, 0f to 0f),
+            Triple(-100f, -100f, 800f to 600f),
+            Triple(300f, 250f, -10f to -20f),
+            Triple(0f, 0f, 150f to 120f),
+        )
+        for ((inputW, inputH, maxPair) in testCases) {
+            val (maxW, maxH) = maxPair
+            val (w, h) = WorkbenchReducer.clampFloatingSize(inputW, inputH, maxW, maxH)
+            assertTrue("Width should be non-negative for ($inputW, $inputH, $maxW, $maxH)", w >= 0f)
+            assertTrue("Height should be non-negative for ($inputW, $inputH, $maxW, $maxH)", h >= 0f)
+        }
+    }
+
+    @Test
     fun sameGroup_oneDockedOneFloating_floatingGetsNamespace() {
         val expanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.DockPanelAsNewGroup(WorkbenchPanelId.AiAssistant, DockZone.Right, 0))
         val sharedGroupId = expanded.panels[WorkbenchPanelId.AiAssistant]!!.tabGroupId

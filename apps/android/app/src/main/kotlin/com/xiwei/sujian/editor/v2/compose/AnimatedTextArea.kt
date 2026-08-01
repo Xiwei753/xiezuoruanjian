@@ -13,6 +13,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.platform.testTag
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -140,6 +141,7 @@ private fun AnimatedTextAreaWithCoordinator(
 
     Box(
         modifier = modifier
+            .testTag(targetId)
             .fillMaxWidth()
             .heightIn(min = minLineHeight * minLines)
             .onGloballyPositioned { coordinates ->
@@ -194,11 +196,12 @@ private fun AnimatedTextAreaWithCoordinator(
                             true
                         }
                         setSelection { selStart, selEnd, _ ->
-                            val clampedStart = selStart.coerceIn(0, localValue.length)
-                            val clampedEnd = selEnd.coerceIn(0, localValue.length)
-                            val safeStart = if (clampedStart in 1 until localValue.length && localValue[clampedStart].isLowSurrogate()) clampedStart - 1 else clampedStart
-                            val safeEnd = if (clampedEnd in 1 until localValue.length && localValue[clampedEnd].isLowSurrogate()) clampedEnd - 1 else clampedEnd
+                            val safeStart = TextOffsetUtils.safeCharIndex(localValue, selStart)
+                            val safeEnd = TextOffsetUtils.safeCharIndex(localValue, selEnd)
                             selectionRange = TextRange(safeStart, safeEnd)
+                            val utf8Start = TextOffsetUtils.utf8OffsetForCharIndex(localValue, selStart)
+                            coordinator.updateTargetText(targetId, localValue)
+                            coordinator.beginEdit(targetId, utf8Start)
                             true
                         }
                     }
