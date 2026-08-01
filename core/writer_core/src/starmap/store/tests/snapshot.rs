@@ -41,13 +41,6 @@ fn load_full_snapshot(dir: &std::path::Path, sid: &str) -> StarMapPhasedSnapshot
     store.get_phased_snapshot(&request).unwrap()
 }
 
-fn load_snapshot_with_revision(dir: &std::path::Path, sid: &str, since_revision: u64) -> StarMapPhasedSnapshot {
-    let mut store = StarMapStore::new(dir, sid);
-    store.load_phased(LoadPhase::BackgroundFullLoad).unwrap();
-    let request = PhasedSnapshotRequest { target_phase: LoadPhase::BackgroundFullLoad, since_revision };
-    store.get_phased_snapshot(&request).unwrap()
-}
-
 #[test]
 fn phased_snapshot_includes_load_phase_and_revision() {
     let (dir, sid) = setup_workspace();
@@ -694,7 +687,6 @@ fn deletion_tombstone_persists_across_store_close_reopen() {
     store.remove_node("n2");
     store.remove_edge("e1");
     store.flush().unwrap();
-    let rev_after_delete = store.package_revision;
     drop(store);
 
     let mut store2 = StarMapStore::new(dir.path(), &sid);
