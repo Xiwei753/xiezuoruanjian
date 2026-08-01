@@ -21,6 +21,8 @@ mod workspace;
 #[cfg(test)]
 mod action_tests;
 #[cfg(test)]
+mod platform_tests;
+#[cfg(test)]
 mod project_tests;
 #[cfg(test)]
 mod stats_tests;
