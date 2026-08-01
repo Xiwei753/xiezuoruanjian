@@ -20,6 +20,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.foundation.focusable
 import androidx.compose.ui.semantics.editableText
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setText
@@ -158,6 +159,13 @@ private fun AnimatedTextFieldWithCoordinator(
                     true
                 }
             }
+            .then(
+                if (enabled) {
+                    Modifier.focusable()
+                } else {
+                    Modifier
+                }
+            )
     ) {
         OutlinedTextFieldDefaults.DecorationBox(
             value = localValue,
