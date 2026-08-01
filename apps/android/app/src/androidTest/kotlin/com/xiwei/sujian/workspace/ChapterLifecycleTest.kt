@@ -56,8 +56,8 @@ class ChapterLifecycleTest {
 
         navigateToTestVolume(testData)
 
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceCreateChapter, timeoutMs = 15_000)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.WorkspaceCreateChapter).performClick()
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.createChapter(testData.volumeId), timeoutMs = 15_000)
+        composeTestRule.onNodeWithTag(SujianSemanticIds.createChapter(testData.volumeId)).performClick()
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.ChapterTitleInput)
         composeTestRule.onNodeWithTag(SujianSemanticIds.ChapterTitleInput).performTextInput("自动化测试章节")
@@ -74,8 +74,8 @@ class ChapterLifecycleTest {
 
         navigateToTestVolume(testData)
 
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceCreateChapter, timeoutMs = 15_000)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.WorkspaceCreateChapter).performClick()
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.createChapter(testData.volumeId), timeoutMs = 15_000)
+        composeTestRule.onNodeWithTag(SujianSemanticIds.createChapter(testData.volumeId)).performClick()
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.ChapterTitleInput)
         composeTestRule.onNodeWithTag(SujianSemanticIds.ChapterTitleInput).performTextInput("打开测试章节")
@@ -95,8 +95,8 @@ class ChapterLifecycleTest {
 
         navigateToTestVolume(testData)
 
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceCreateChapter, timeoutMs = 15_000)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.WorkspaceCreateChapter).performClick()
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.createChapter(testData.volumeId), timeoutMs = 15_000)
+        composeTestRule.onNodeWithTag(SujianSemanticIds.createChapter(testData.volumeId)).performClick()
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.ChapterTitleInput)
         composeTestRule.onNodeWithTag(SujianSemanticIds.ChapterTitleInput).performTextInput("交替章节A")
@@ -105,7 +105,7 @@ class ChapterLifecycleTest {
 
         val chapterAId = waitForChapterByTitle("交替章节A", testData)
 
-        composeTestRule.onNodeWithTag(SujianSemanticIds.WorkspaceCreateChapter).performClick()
+        composeTestRule.onNodeWithTag(SujianSemanticIds.createChapter(testData.volumeId)).performClick()
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.ChapterTitleInput)
         composeTestRule.onNodeWithTag(SujianSemanticIds.ChapterTitleInput).performTextInput("交替章节B")
@@ -153,14 +153,14 @@ class ChapterLifecycleTest {
 
         navigateToTestVolume(testData)
 
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceCreateChapter, timeoutMs = 15_000)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.WorkspaceCreateChapter).performClick()
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.createChapter(testData.volumeId), timeoutMs = 15_000)
+        composeTestRule.onNodeWithTag(SujianSemanticIds.createChapter(testData.volumeId)).performClick()
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.ChapterTitleInput)
         composeTestRule.onNodeWithTag(SujianSemanticIds.ChapterTitleInput).performTextInput("正文隔离A")
         composeTestRule.onNodeWithTag(SujianSemanticIds.DialogConfirm).performClick()
         val chapterAId = waitForChapterByTitle("正文隔离A", testData)
 
-        composeTestRule.onNodeWithTag(SujianSemanticIds.WorkspaceCreateChapter).performClick()
+        composeTestRule.onNodeWithTag(SujianSemanticIds.createChapter(testData.volumeId)).performClick()
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.ChapterTitleInput)
         composeTestRule.onNodeWithTag(SujianSemanticIds.ChapterTitleInput).performTextInput("正文隔离B")
         composeTestRule.onNodeWithTag(SujianSemanticIds.DialogConfirm).performClick()

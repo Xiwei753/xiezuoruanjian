@@ -20,6 +20,7 @@ object SujianSemanticIds {
     const val WorkspaceVolumeList = "workspace.volume.list"
     const val WorkspaceCreateVolume = "workspace.volume.create"
     const val WorkspaceCreateChapter = "workspace.chapter.create"
+    fun createChapter(volumeId: String) = "workspace.chapter.create.$volumeId"
     const val ChapterTitleInput = "workspace.chapter.title.input"
     const val DialogConfirm = "dialog.confirm"
     const val DialogCancel = "dialog.cancel"

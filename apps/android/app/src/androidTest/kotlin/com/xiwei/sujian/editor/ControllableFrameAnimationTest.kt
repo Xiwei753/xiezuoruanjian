@@ -702,8 +702,8 @@ class ControllableFrameAnimationTest {
         ComposeWait.waitForTag(composeTestRule, volumeTag, timeoutMs = 15_000)
         composeTestRule.onNodeWithTag(volumeTag).performClick()
 
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceCreateChapter, timeoutMs = 15_000)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.WorkspaceCreateChapter).performClick()
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.createChapter(testData.volumeId), timeoutMs = 15_000)
+        composeTestRule.onNodeWithTag(SujianSemanticIds.createChapter(testData.volumeId)).performClick()
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.ChapterTitleInput)
         composeTestRule.onNodeWithTag(SujianSemanticIds.ChapterTitleInput).performTextInput("切换章节动画测试B")
@@ -728,8 +728,8 @@ class ControllableFrameAnimationTest {
     private fun openTestChapter(chapterTitle: String, testData: AndroidTestEnvironment.TestProjectData): String {
         navigateToTestVolume(testData)
 
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceCreateChapter, timeoutMs = 15_000)
-        composeTestRule.onNodeWithTag(SujianSemanticIds.WorkspaceCreateChapter).performClick()
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.createChapter(testData.volumeId), timeoutMs = 15_000)
+        composeTestRule.onNodeWithTag(SujianSemanticIds.createChapter(testData.volumeId)).performClick()
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.ChapterTitleInput)
         composeTestRule.onNodeWithTag(SujianSemanticIds.ChapterTitleInput).performTextInput(chapterTitle)

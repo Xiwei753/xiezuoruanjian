@@ -501,7 +501,7 @@ fun VolumeRow(
                     onClick = onCreateChapter,
                     icon = SujianIcons.Add,
                     contentDescription = stringResource(id = R.string.action_new_chapter),
-                    semanticId = SujianSemanticIds.WorkspaceCreateChapter,
+                    semanticId = SujianSemanticIds.createChapter(volume.id),
                 )
                 SujianIconButton(
                     onClick = onMoreActions,
