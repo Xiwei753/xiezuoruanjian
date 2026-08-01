@@ -48,8 +48,8 @@ fun AnimatedInlineText(
             "Ensure the host Activity provides one via CompositionLocalProvider."
         )
 
-    var localValue by remember(value) { mutableStateOf(value) }
-    var selectionRange by remember(value) { mutableStateOf(TextRange(value.length)) }
+    var localValue by remember { mutableStateOf(value) }
+    var selectionRange by remember { mutableStateOf(TextRange(value.length)) }
     var isEditing by remember { mutableStateOf(false) }
 
     val currentValue by rememberUpdatedState(value)

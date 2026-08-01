@@ -28,9 +28,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <activity android:name=".ui.OrientationTestActivity"
-            android:exported="false"
-            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode" />
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
