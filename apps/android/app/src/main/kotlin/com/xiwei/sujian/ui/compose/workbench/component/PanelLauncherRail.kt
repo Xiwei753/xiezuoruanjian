@@ -31,6 +31,8 @@ import com.xiwei.sujian.ui.compose.workbench.model.DockZone
 import com.xiwei.sujian.ui.compose.workbench.model.PanelVisibility
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelId
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelState
+import androidx.compose.ui.platform.testTag
+import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 
 @Composable
 fun PanelLauncherRail(
@@ -57,7 +59,7 @@ fun PanelLauncherRail(
                     val icon = panelIconForId(panel.id) ?: SujianIcons.Widgets
                     IconButton(
                         onClick = { onTogglePanel(panel.id) },
-                        modifier = Modifier.size(48.dp),
+                        modifier = Modifier.size(48.dp).testTag(SujianSemanticIds.panelLauncherButton(panel.id.name)),
                     ) {
                         Icon(
                             imageVector = icon,
@@ -81,7 +83,7 @@ fun PanelLauncherRail(
                     val icon = panelIconForId(panel.id) ?: SujianIcons.Widgets
                     IconButton(
                         onClick = { onTogglePanel(panel.id) },
-                        modifier = Modifier.size(48.dp),
+                        modifier = Modifier.size(48.dp).testTag(SujianSemanticIds.panelLauncherButton(panel.id.name)),
                     ) {
                         Icon(
                             imageVector = icon,

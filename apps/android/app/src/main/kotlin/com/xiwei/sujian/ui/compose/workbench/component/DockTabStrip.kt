@@ -19,9 +19,12 @@ import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelId
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelState
+import androidx.compose.ui.platform.testTag
+import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 
 @Composable
 fun DockTabStrip(
+    groupId: String,
     panels: List<WorkbenchPanelState>,
     activeTabId: WorkbenchPanelId,
     onActivateTab: (WorkbenchPanelId) -> Unit,
@@ -31,7 +34,7 @@ fun DockTabStrip(
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant,
         tonalElevation = 0.dp,
-        modifier = modifier,
+        modifier = modifier.testTag(SujianSemanticIds.dockTabStrip(groupId)),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().height(36.dp).padding(horizontal = dims.space4),
@@ -43,6 +46,7 @@ fun DockTabStrip(
                 val icon = panelIconForId(panel.id)
                 androidx.compose.foundation.layout.Row(
                     modifier = Modifier
+                        .testTag(SujianSemanticIds.dockTab(groupId, panel.id.name))
                         .clickable { onActivateTab(panel.id) }
                         .padding(horizontal = dims.space8, vertical = dims.space4),
                     verticalAlignment = Alignment.CenterVertically,

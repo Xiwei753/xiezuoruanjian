@@ -3,7 +3,6 @@ package com.xiwei.sujian.editor
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -24,6 +23,7 @@ import com.xiwei.sujian.editor.v2.compose.AnimatedInlineText
 import com.xiwei.sujian.editor.v2.compose.LocalAnimatedTextEditorCoordinator
 import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
 import com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock
+import com.xiwei.sujian.editor.v2.compose.TextOffsetUtils
 import com.xiwei.sujian.editor.v2.visual.ManualAnimationTimeSource
 import com.xiwei.sujian.editor.v2.visual.TransactionIdSource
 import org.junit.After
@@ -95,25 +95,19 @@ class AnimatedTextSemanticsInstrumentedTest {
 
     @After
     fun tearDown() {
-        try {
-            coordinator.releaseHost()
-        } catch (_: Exception) {}
-        try {
-            serviceHolder.close()
-        } catch (_: Exception) {}
-        try {
-            testDir.deleteRecursively()
-        } catch (_: Exception) {}
+        try { coordinator.releaseHost() } catch (_: Exception) {}
+        try { serviceHolder.close() } catch (_: Exception) {}
+        try { testDir.deleteRecursively() } catch (_: Exception) {}
     }
 
     @Test
-    fun animatedTextField_insertTextAtCursor_appendsAtEnd() {
+    fun field_setSelection_then_insertAtCursor_insertsAtMiddle() {
         var currentValue by mutableStateOf("hello")
 
         composeTestRule.setContent {
             CompositionLocalProvider(LocalAnimatedTextEditorCoordinator provides coordinator) {
                 AnimatedTextField(
-                    targetId = "test-field",
+                    targetId = "f-mid",
                     value = currentValue,
                     onValueChange = { currentValue = it },
                     onCommit = {},
@@ -121,47 +115,25 @@ class AnimatedTextSemanticsInstrumentedTest {
             }
         }
 
-        composeTestRule.onNodeWithTag("test-field")
-            .performSemanticsAction(SemanticsActions.InsertTextAtCursor) {
-                it(AnnotatedString("X"))
-            }
-
+        composeTestRule.onNodeWithTag("f-mid")
+            .performSemanticsAction(SemanticsActions.SetSelection) { it(2, 2, false) }
         composeTestRule.waitForIdle()
-        assertEquals("helloX", currentValue)
+
+        composeTestRule.onNodeWithTag("f-mid")
+            .performSemanticsAction(SemanticsActions.InsertTextAtCursor) { it(AnnotatedString("X")) }
+        composeTestRule.waitForIdle()
+
+        assertEquals("heXllo", currentValue)
     }
 
     @Test
-    fun animatedTextField_setText_replacesAll() {
-        var currentValue by mutableStateOf("old")
-
-        composeTestRule.setContent {
-            CompositionLocalProvider(LocalAnimatedTextEditorCoordinator provides coordinator) {
-                AnimatedTextField(
-                    targetId = "test-field",
-                    value = currentValue,
-                    onValueChange = { currentValue = it },
-                    onCommit = {},
-                )
-            }
-        }
-
-        composeTestRule.onNodeWithTag("test-field")
-            .performSemanticsAction(SemanticsActions.SetText) {
-                it(AnnotatedString("new"))
-            }
-
-        composeTestRule.waitForIdle()
-        assertEquals("new", currentValue)
-    }
-
-    @Test
-    fun animatedTextField_setSelection_updatesSelectionRange() {
+    fun field_setSelectionRange_then_insertAtCursor_replacesSelection() {
         var currentValue by mutableStateOf("hello")
 
         composeTestRule.setContent {
             CompositionLocalProvider(LocalAnimatedTextEditorCoordinator provides coordinator) {
                 AnimatedTextField(
-                    targetId = "test-field",
+                    targetId = "f-repl",
                     value = currentValue,
                     onValueChange = { currentValue = it },
                     onCommit = {},
@@ -169,22 +141,91 @@ class AnimatedTextSemanticsInstrumentedTest {
             }
         }
 
-        composeTestRule.onNodeWithTag("test-field")
-            .performSemanticsAction(SemanticsActions.SetSelection) {
-                it(1, 3, false)
-            }
-
+        composeTestRule.onNodeWithTag("f-repl")
+            .performSemanticsAction(SemanticsActions.SetSelection) { it(1, 4, false) }
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithTag("test-field").assert(
-            SemanticsMatcher.expectValue(
-                SemanticsProperties.TextSelectionRange,
-                TextRange(1, 3)
-            )
+
+        composeTestRule.onNodeWithTag("f-repl")
+            .performSemanticsAction(SemanticsActions.InsertTextAtCursor) { it(AnnotatedString("XY")) }
+        composeTestRule.waitForIdle()
+
+        assertEquals("hXYo", currentValue)
+    }
+
+    @Test
+    fun field_emoji_setSelection_then_insertAtCursor_utf8ByteOffsetCorrect() {
+        var currentValue by mutableStateOf("ab")
+
+        composeTestRule.setContent {
+            CompositionLocalProvider(LocalAnimatedTextEditorCoordinator provides coordinator) {
+                AnimatedTextField(
+                    targetId = "f-emoji",
+                    value = currentValue,
+                    onValueChange = { currentValue = it },
+                    onCommit = {},
+                )
+            }
+        }
+
+        composeTestRule.onNodeWithTag("f-emoji")
+            .performSemanticsAction(SemanticsActions.InsertTextAtCursor) { it(AnnotatedString("🙂")) }
+        composeTestRule.waitForIdle()
+        assertEquals("ab🙂", currentValue)
+
+        val utf8LenAfterAppend = currentValue.toByteArray(Charsets.UTF_8).size
+        assertEquals("abc=1byte each + emoji=4bytes => 6", 6, utf8LenAfterAppend)
+
+        composeTestRule.onNodeWithTag("f-emoji")
+            .performSemanticsAction(SemanticsActions.SetSelection) { it(1, 1, false) }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("f-emoji")
+            .performSemanticsAction(SemanticsActions.InsertTextAtCursor) { it(AnnotatedString("😀")) }
+        composeTestRule.waitForIdle()
+        assertEquals("a😀b🙂", currentValue)
+
+        val utf8LenAfterMiddle = currentValue.toByteArray(Charsets.UTF_8).size
+        assertEquals("a(1)+😀(4)+b(1)+🙂(4) = 10", 10, utf8LenAfterMiddle)
+
+        val cursorCharIndex = 1 + "😀".length
+        val cursorUtf8 = TextOffsetUtils.utf8OffsetForCharIndex(currentValue, cursorCharIndex)
+        assertEquals("cursor after a+😀 => byte offset 5", 5, cursorUtf8)
+    }
+
+    @Test
+    fun field_emoji_setSelectionRange_surrogateSafe_then_insertAtCursor_replacesAndUtf8Correct() {
+        var currentValue by mutableStateOf("a🙂b")
+
+        composeTestRule.setContent {
+            CompositionLocalProvider(LocalAnimatedTextEditorCoordinator provides coordinator) {
+                AnimatedTextField(
+                    targetId = "f-emoj-sel",
+                    value = currentValue,
+                    onValueChange = { currentValue = it },
+                    onCommit = {},
+                )
+            }
+        }
+
+        composeTestRule.onNodeWithTag("f-emoj-sel")
+            .performSemanticsAction(SemanticsActions.SetSelection) { it(1, 3, false) }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("f-emoj-sel").assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.TextSelectionRange, TextRange(1, 3))
         )
+
+        composeTestRule.onNodeWithTag("f-emoj-sel")
+            .performSemanticsAction(SemanticsActions.InsertTextAtCursor) { it(AnnotatedString("XY")) }
+        composeTestRule.waitForIdle()
+
+        assertEquals("aXYb", currentValue)
+        val utf8Len = currentValue.toByteArray(Charsets.UTF_8).size
+        assertEquals(4, utf8Len)
     }
 
     @Test
-    fun animatedTextField_disabled_noEditableActions() {
+    fun field_disabled_noEditableActions() {
         composeTestRule.setContent {
             CompositionLocalProvider(LocalAnimatedTextEditorCoordinator provides coordinator) {
                 AnimatedTextField(
@@ -198,25 +239,19 @@ class AnimatedTextSemanticsInstrumentedTest {
         }
 
         val node = composeTestRule.onNodeWithTag("disabled-field")
-        assertFalse(
-            node.fetchSemanticsNode().config.contains(SemanticsActions.SetText)
-        )
-        assertFalse(
-            node.fetchSemanticsNode().config.contains(SemanticsActions.InsertTextAtCursor)
-        )
-        assertFalse(
-            node.fetchSemanticsNode().config.contains(SemanticsActions.SetSelection)
-        )
+        assertFalse(node.fetchSemanticsNode().config.contains(SemanticsActions.SetText))
+        assertFalse(node.fetchSemanticsNode().config.contains(SemanticsActions.InsertTextAtCursor))
+        assertFalse(node.fetchSemanticsNode().config.contains(SemanticsActions.SetSelection))
     }
 
     @Test
-    fun animatedTextArea_insertTextAtCursor_appendsAtEnd() {
+    fun area_setSelection_then_insertAtCursor_insertsAtMiddle() {
         var currentValue by mutableStateOf("hello")
 
         composeTestRule.setContent {
             CompositionLocalProvider(LocalAnimatedTextEditorCoordinator provides coordinator) {
                 AnimatedTextArea(
-                    targetId = "test-area",
+                    targetId = "a-mid",
                     value = currentValue,
                     onValueChange = { currentValue = it },
                     onCommit = {},
@@ -224,23 +259,25 @@ class AnimatedTextSemanticsInstrumentedTest {
             }
         }
 
-        composeTestRule.onNodeWithTag("test-area")
-            .performSemanticsAction(SemanticsActions.InsertTextAtCursor) {
-                it(AnnotatedString("X"))
-            }
-
+        composeTestRule.onNodeWithTag("a-mid")
+            .performSemanticsAction(SemanticsActions.SetSelection) { it(3, 3, false) }
         composeTestRule.waitForIdle()
-        assertEquals("helloX", currentValue)
+
+        composeTestRule.onNodeWithTag("a-mid")
+            .performSemanticsAction(SemanticsActions.InsertTextAtCursor) { it(AnnotatedString("Z")) }
+        composeTestRule.waitForIdle()
+
+        assertEquals("helZlo", currentValue)
     }
 
     @Test
-    fun animatedTextArea_setText_replacesAll() {
-        var currentValue by mutableStateOf("old")
+    fun area_setSelectionRange_then_insertAtCursor_replacesSelection() {
+        var currentValue by mutableStateOf("hello")
 
         composeTestRule.setContent {
             CompositionLocalProvider(LocalAnimatedTextEditorCoordinator provides coordinator) {
                 AnimatedTextArea(
-                    targetId = "test-area",
+                    targetId = "a-repl",
                     value = currentValue,
                     onValueChange = { currentValue = it },
                     onCommit = {},
@@ -248,23 +285,25 @@ class AnimatedTextSemanticsInstrumentedTest {
             }
         }
 
-        composeTestRule.onNodeWithTag("test-area")
-            .performSemanticsAction(SemanticsActions.SetText) {
-                it(AnnotatedString("new"))
-            }
-
+        composeTestRule.onNodeWithTag("a-repl")
+            .performSemanticsAction(SemanticsActions.SetSelection) { it(1, 4, false) }
         composeTestRule.waitForIdle()
-        assertEquals("new", currentValue)
+
+        composeTestRule.onNodeWithTag("a-repl")
+            .performSemanticsAction(SemanticsActions.InsertTextAtCursor) { it(AnnotatedString("PQ")) }
+        composeTestRule.waitForIdle()
+
+        assertEquals("hPQo", currentValue)
     }
 
     @Test
-    fun animatedInlineText_insertTextAtCursor_appendsAtEnd() {
+    fun inline_setSelection_then_insertAtCursor_insertsAtMiddle() {
         var currentValue by mutableStateOf("label")
 
         composeTestRule.setContent {
             CompositionLocalProvider(LocalAnimatedTextEditorCoordinator provides coordinator) {
                 AnimatedInlineText(
-                    targetId = "test-inline",
+                    targetId = "i-mid",
                     value = currentValue,
                     onValueChange = { currentValue = it },
                     onCommit = {},
@@ -272,23 +311,25 @@ class AnimatedTextSemanticsInstrumentedTest {
             }
         }
 
-        composeTestRule.onNodeWithTag("test-inline")
-            .performSemanticsAction(SemanticsActions.InsertTextAtCursor) {
-                it(AnnotatedString("X"))
-            }
-
+        composeTestRule.onNodeWithTag("i-mid")
+            .performSemanticsAction(SemanticsActions.SetSelection) { it(2, 2, false) }
         composeTestRule.waitForIdle()
-        assertEquals("labelX", currentValue)
+
+        composeTestRule.onNodeWithTag("i-mid")
+            .performSemanticsAction(SemanticsActions.InsertTextAtCursor) { it(AnnotatedString("W")) }
+        composeTestRule.waitForIdle()
+
+        assertEquals("laWbel", currentValue)
     }
 
     @Test
-    fun animatedInlineText_setText_replacesAll() {
-        var currentValue by mutableStateOf("old")
+    fun inline_setSelectionRange_then_insertAtCursor_replacesSelection() {
+        var currentValue by mutableStateOf("label")
 
         composeTestRule.setContent {
             CompositionLocalProvider(LocalAnimatedTextEditorCoordinator provides coordinator) {
                 AnimatedInlineText(
-                    targetId = "test-inline",
+                    targetId = "i-repl",
                     value = currentValue,
                     onValueChange = { currentValue = it },
                     onCommit = {},
@@ -296,49 +337,25 @@ class AnimatedTextSemanticsInstrumentedTest {
             }
         }
 
-        composeTestRule.onNodeWithTag("test-inline")
-            .performSemanticsAction(SemanticsActions.SetText) {
-                it(AnnotatedString("new"))
-            }
-
+        composeTestRule.onNodeWithTag("i-repl")
+            .performSemanticsAction(SemanticsActions.SetSelection) { it(1, 3, false) }
         composeTestRule.waitForIdle()
-        assertEquals("new", currentValue)
+
+        composeTestRule.onNodeWithTag("i-repl")
+            .performSemanticsAction(SemanticsActions.InsertTextAtCursor) { it(AnnotatedString("MN")) }
+        composeTestRule.waitForIdle()
+
+        assertEquals("lMNel", currentValue)
     }
 
     @Test
-    fun animatedTextField_emoji_insertTextAtCursor_utf8Correct() {
-        var currentValue by mutableStateOf("abc")
-
-        composeTestRule.setContent {
-            CompositionLocalProvider(LocalAnimatedTextEditorCoordinator provides coordinator) {
-                AnimatedTextField(
-                    targetId = "test-field",
-                    value = currentValue,
-                    onValueChange = { currentValue = it },
-                    onCommit = {},
-                )
-            }
-        }
-
-        composeTestRule.onNodeWithTag("test-field")
-            .performSemanticsAction(SemanticsActions.InsertTextAtCursor) {
-                it(AnnotatedString("🙂"))
-            }
-
-        composeTestRule.waitForIdle()
-        assertEquals("abc🙂", currentValue)
-        val utf8Len = currentValue.toByteArray(Charsets.UTF_8).size
-        assertEquals(7, utf8Len)
-    }
-
-    @Test
-    fun animatedTextField_setSelection_clampedToBounds() {
+    fun field_setSelection_clampedToBounds() {
         var currentValue by mutableStateOf("hi")
 
         composeTestRule.setContent {
             CompositionLocalProvider(LocalAnimatedTextEditorCoordinator provides coordinator) {
                 AnimatedTextField(
-                    targetId = "test-field",
+                    targetId = "f-clamp",
                     value = currentValue,
                     onValueChange = { currentValue = it },
                     onCommit = {},
@@ -346,28 +363,23 @@ class AnimatedTextSemanticsInstrumentedTest {
             }
         }
 
-        composeTestRule.onNodeWithTag("test-field")
-            .performSemanticsAction(SemanticsActions.SetSelection) {
-                it(-1, 100, false)
-            }
-
+        composeTestRule.onNodeWithTag("f-clamp")
+            .performSemanticsAction(SemanticsActions.SetSelection) { it(-1, 100, false) }
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithTag("test-field").assert(
-            SemanticsMatcher.expectValue(
-                SemanticsProperties.TextSelectionRange,
-                TextRange(0, 2)
-            )
+
+        composeTestRule.onNodeWithTag("f-clamp").assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.TextSelectionRange, TextRange(0, 2))
         )
     }
 
     @Test
-    fun animatedTextField_externalValueUpdate_resetsSelection() {
+    fun field_externalValueUpdate_resetsSelection() {
         var currentValue by mutableStateOf("hello")
 
         composeTestRule.setContent {
             CompositionLocalProvider(LocalAnimatedTextEditorCoordinator provides coordinator) {
                 AnimatedTextField(
-                    targetId = "test-field",
+                    targetId = "f-reset",
                     value = currentValue,
                     onValueChange = { currentValue = it },
                     onCommit = {},
@@ -375,27 +387,19 @@ class AnimatedTextSemanticsInstrumentedTest {
             }
         }
 
-        composeTestRule.onNodeWithTag("test-field")
-            .performSemanticsAction(SemanticsActions.SetSelection) {
-                it(2, 4, false)
-            }
+        composeTestRule.onNodeWithTag("f-reset")
+            .performSemanticsAction(SemanticsActions.SetSelection) { it(2, 4, false) }
         composeTestRule.waitForIdle()
 
-        composeTestRule.onNodeWithTag("test-field").assert(
-            SemanticsMatcher.expectValue(
-                SemanticsProperties.TextSelectionRange,
-                TextRange(2, 4)
-            )
+        composeTestRule.onNodeWithTag("f-reset").assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.TextSelectionRange, TextRange(2, 4))
         )
 
         currentValue = "hi"
         composeTestRule.waitForIdle()
 
-        composeTestRule.onNodeWithTag("test-field").assert(
-            SemanticsMatcher.expectValue(
-                SemanticsProperties.TextSelectionRange,
-                TextRange(2)
-            )
+        composeTestRule.onNodeWithTag("f-reset").assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.TextSelectionRange, TextRange(2))
         )
     }
 }

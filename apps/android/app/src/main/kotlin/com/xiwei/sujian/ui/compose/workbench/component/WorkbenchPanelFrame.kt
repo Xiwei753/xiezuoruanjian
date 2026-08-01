@@ -36,6 +36,8 @@ import com.xiwei.sujian.ui.compose.workbench.model.DragDropTarget
 import com.xiwei.sujian.ui.compose.workbench.model.PanelVisibility
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelId
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelState
+import androidx.compose.ui.platform.testTag
+import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 
 @Composable
 fun WorkbenchPanelFrame(
@@ -57,7 +59,7 @@ fun WorkbenchPanelFrame(
     val density = LocalDensity.current
     var isDragging by remember { mutableStateOf(false) }
 
-    Column(modifier = modifier) {
+    Column(modifier = modifier.testTag(SujianSemanticIds.panelFrame(panelState.id.name))) {
         Surface(
             color = MaterialTheme.colorScheme.surfaceVariant,
             tonalElevation = 1.dp,

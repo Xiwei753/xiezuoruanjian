@@ -28,6 +28,8 @@ import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchDragState
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelId
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelState
 import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchReducer
+import androidx.compose.ui.platform.testTag
+import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 
 @Composable
 fun FloatingPanelLayer(
@@ -83,7 +85,8 @@ fun FloatingPanelLayer(
                         width = clampedWidth.dp,
                         height = clampedHeight.dp,
                     )
-                    .zIndex(panel.floatingZIndex.toFloat()),
+                    .zIndex(panel.floatingZIndex.toFloat())
+                    .testTag(SujianSemanticIds.floatingPanel(panel.id.name)),
                 tonalElevation = 4.dp,
                 shadowElevation = 8.dp,
                 shape = androidx.compose.material3.MaterialTheme.shapes.large,
@@ -183,6 +186,7 @@ fun FloatingPanelLayer(
                         .align(androidx.compose.ui.Alignment.BottomEnd)
                         .width(16.dp)
                         .height(16.dp)
+                        .testTag(SujianSemanticIds.floatingResizeHandle(panel.id.name))
                         .pointerInput(panel.id) {
                             detectDragGestures(
                                 onDragEnd = {

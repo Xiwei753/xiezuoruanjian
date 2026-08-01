@@ -34,6 +34,8 @@ import com.xiwei.sujian.ui.compose.workbench.model.DockZone
 import com.xiwei.sujian.ui.compose.workbench.model.TabGroupHitArea
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelId
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelState
+import androidx.compose.ui.platform.testTag
+import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 
 private fun computeTabGroupHitArea(
     groupId: String,
@@ -130,6 +132,7 @@ fun DockHost(
                         ) {
                             if (singleGroupPanels.size > 1) {
                                 DockTabStrip(
+                                    groupId = group.id,
                                     panels = singleGroupPanels,
                                     activeTabId = activePanelId ?: WorkbenchPanelId.ProjectNavigator,
                                     onActivateTab = { panelId -> onActivateTab(group.id, panelId) },
@@ -181,6 +184,7 @@ fun DockHost(
                                     ) {
                                         if (groupPanels.size > 1) {
                                             DockTabStrip(
+                                                groupId = group.id,
                                                 panels = groupPanels,
                                                 activeTabId = activePanelId ?: WorkbenchPanelId.ProjectNavigator,
                                                 onActivateTab = { panelId -> onActivateTab(group.id, panelId) },
@@ -248,6 +252,7 @@ fun DockHost(
                         ) {
                             if (singleGroupPanels.size > 1) {
                                 DockTabStrip(
+                                    groupId = group.id,
                                     panels = singleGroupPanels,
                                     activeTabId = activePanelId ?: WorkbenchPanelId.ProjectNavigator,
                                     onActivateTab = { panelId -> onActivateTab(group.id, panelId) },
@@ -299,6 +304,7 @@ fun DockHost(
                                     ) {
                                         if (groupPanels.size > 1) {
                                             DockTabStrip(
+                                                groupId = group.id,
                                                 panels = groupPanels,
                                                 activeTabId = activePanelId ?: WorkbenchPanelId.ProjectNavigator,
                                                 onActivateTab = { panelId -> onActivateTab(group.id, panelId) },
@@ -371,6 +377,7 @@ fun DockSplitResizeHandle(
     Box(
         modifier = modifier
             .background(handleColor)
+            .testTag(SujianSemanticIds.dockSplitHandle(beforeGroupId))
             .pointerInput(zone, beforeGroupId, afterGroupId) {
                 detectDragGestures(
                     onDragEnd = {},

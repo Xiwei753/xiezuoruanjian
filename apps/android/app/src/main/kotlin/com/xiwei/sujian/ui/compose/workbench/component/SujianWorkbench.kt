@@ -40,6 +40,8 @@ import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelState
 import com.xiwei.sujian.ui.compose.workbench.model.filterTabGroupHitAreas
 import com.xiwei.sujian.ui.compose.workbench.model.upsertTabGroupHitArea
 import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchReducer
+import androidx.compose.ui.platform.testTag
+import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 
 private const val DUAL_SIDE_THRESHOLD_DP = 1200
 
@@ -59,7 +61,7 @@ fun SujianWorkbench(
     var tabGroupHitAreas by remember { mutableStateOf<List<TabGroupHitArea>>(emptyList()) }
     var titleBarPositions by remember { mutableStateOf<Map<WorkbenchPanelId, Pair<Float, Float>>>(emptyMap()) }
 
-    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+    BoxWithConstraints(modifier = modifier.fillMaxSize().testTag(SujianSemanticIds.Workbench)) {
         val maxWidthDp = maxWidth.value
         val maxHeightDp = maxHeight.value
 

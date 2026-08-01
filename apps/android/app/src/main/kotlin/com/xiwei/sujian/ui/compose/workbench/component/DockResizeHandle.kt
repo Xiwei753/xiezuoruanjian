@@ -13,6 +13,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.ui.compose.workbench.model.DockZone
+import androidx.compose.ui.platform.testTag
+import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 
 @Composable
 fun DockResizeHandle(
@@ -33,6 +35,7 @@ fun DockResizeHandle(
     Box(
         modifier = handleModifier
             .background(handleColor)
+            .testTag(SujianSemanticIds.dockResizeHandle(zone.name))
             .pointerInput(zone) {
                 detectDragGestures(
                     onDragEnd = {},

@@ -32,4 +32,14 @@ object SujianSemanticIds {
     fun volume(id: String) = "workspace.volume.$id"
     fun chapter(volumeId: String, chapterId: String) =
         "workspace.chapter.$volumeId.$chapterId"
+
+    const val Workbench = "workbench"
+    fun dockResizeHandle(zone: String) = "workbench.dock_resize.$zone"
+    fun dockSplitHandle(beforeGroup: String) = "workbench.dock_split.$beforeGroup"
+    fun dockTabStrip(groupId: String) = "workbench.tab_strip.$groupId"
+    fun dockTab(groupId: String, panelId: String) = "workbench.tab.$groupId.$panelId"
+    fun floatingPanel(panelId: String) = "workbench.floating.$panelId"
+    fun floatingResizeHandle(panelId: String) = "workbench.floating_resize.$panelId"
+    fun panelLauncherButton(panelId: String) = "workbench.launcher.$panelId"
+    fun panelFrame(panelId: String) = "workbench.panel.$panelId"
 }
