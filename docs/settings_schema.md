@@ -41,8 +41,8 @@ Supersedes: None
 - `editorCoordinatedTextCursorAnimationEnabled`（布尔值，协同光标动画开关，默认 false）
 - `aiEnabled`（布尔值，AI 功能开关，默认 false）
 - `statsDeviceId`（字符串，统计设备 ID，默认自动生成 UUID）
-- `desktopSidebarWidth`（浮点数，桌面端侧边栏宽度像素，默认 240.0；兼容读取 `linux_qt_sidebar_width`、`desktop_sidebar_width`、`linux_sidebar_width`）
-- `desktopEditorWidth`（浮点数，桌面端编辑器宽度像素，默认 0.0；兼容读取 `linux_qt_editor_width`、`desktop_editor_width`）
+- `desktopSidebarWidth`（浮点数，Linux 和 Windows 端侧边栏宽度像素，默认 240.0；兼容读取 `linux_qt_sidebar_width`、`desktop_sidebar_width`、`linux_sidebar_width`）
+- `desktopEditorWidth`（浮点数，Linux 和 Windows 端编辑器宽度像素，默认 0.0；兼容读取 `linux_qt_editor_width`、`desktop_editor_width`）
 - `diagnosticsEnabled`（布尔值，本地诊断日志开关，默认 true，不进入同步、不含敏感数据）
 - `diagnosticsVerbose`（布尔值，本地诊断详细模式，默认 true，不进入同步、不含敏感数据）
 
@@ -77,7 +77,7 @@ Supersedes: None
 - `transport`（字符串，`https_token` 或 `ssh_deploy_key`）
 - `branch`（字符串，默认 `main`）
 - `auto_sync`（布尔值）
-- `sync_interval_seconds`（整数，0 表示仅手动同步）
+- `sync_interval_seconds`（整数，0 表示仅手动同步，否则最小有效值为 60）
 - `username`（字符串）
 - `has_network_permission`（布尔值）
 - `has_network_state_permission`（布尔值）

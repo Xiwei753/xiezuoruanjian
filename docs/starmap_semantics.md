@@ -15,7 +15,7 @@ StarMap 不再是一个强依赖父子拥有权的嵌套树。它是一个**语�
 ### 1. StarMap 本体
 * 它是独立的文档对象，拥有自己的 `starmap_id`、meta、graph 和 layout。
 * 它不依赖父星图（`parent_starmap_id`）才能存在。`parent_starmap_id` 仅作为遗留的兼容组织字段。
-* **删除安全 (Deletion Safety)**：删除 StarMap 时，底层现在会进行深度引用检测 (`find_starmap_references`)。如果该星图被其他星图通过 Embed、Link、Portal 或 DeepTarget Edge 引用，底层将**拒绝删除**并返回引用报告。**不再存在静默的级联删除行为**。如果需要遗留的强制连带删除，必须调用专门的 `delete_starmap_cascade_legacy`。
+* **删除安全 (Deletion Safety)**：删除 StarMap 时，底层现在会进行深度引用检测 (`find_starmap_references`)。如果该星图被其他星图通过 Embed、Link、Portal 或 DeepTarget Edge 引用，底层将**拒绝删除**并返回引用报告。**不再存在静默的级联删除行为**。
 
 ### 2. StarMapEmbed (嵌入实例)
 * 表示当前 StarMap 中嵌入了另一个独立 StarMap 的一个显示实例。
