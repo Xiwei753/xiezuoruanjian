@@ -86,7 +86,7 @@ object ComposeWait {
         var lastDiagnosticValue: String? = null
         try {
             val conditionDescription = if (message != null) message() else "Condition not satisfied"
-            rule.waitUntil(timeoutMs, conditionDescription) {
+            rule.waitUntil(conditionDescription, timeoutMs) {
                 val result = condition()
                 if (!result && diagnostic != null) {
                     lastDiagnosticValue = try { diagnostic() } catch (_: Exception) { "unavailable" }

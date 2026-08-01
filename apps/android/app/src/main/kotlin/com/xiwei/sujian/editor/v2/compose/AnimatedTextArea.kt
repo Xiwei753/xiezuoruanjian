@@ -94,7 +94,7 @@ private fun AnimatedTextAreaWithCoordinator(
     minLineHeight: Dp
 ) {
     var localValue by remember(value) { mutableStateOf(value) }
-    var selectionRange by remember { mutableStateOf(TextRange(value.length)) }
+    var selectionRange by remember(value) { mutableStateOf(TextRange(value.length)) }
     var isEditing by remember { mutableStateOf(false) }
 
     val currentValue by rememberUpdatedState(value)
@@ -126,6 +126,7 @@ private fun AnimatedTextAreaWithCoordinator(
     LaunchedEffect(value) {
         if (value != localValue) {
             localValue = value
+            selectionRange = TextRange(value.length)
             coordinator.updateTargetText(targetId, value)
         }
     }
@@ -195,7 +196,9 @@ private fun AnimatedTextAreaWithCoordinator(
                         setSelection { selStart, selEnd, _ ->
                             val clampedStart = selStart.coerceIn(0, localValue.length)
                             val clampedEnd = selEnd.coerceIn(0, localValue.length)
-                            selectionRange = TextRange(clampedStart, clampedEnd)
+                            val safeStart = if (clampedStart in 1 until localValue.length && localValue[clampedStart].isLowSurrogate()) clampedStart - 1 else clampedStart
+                            val safeEnd = if (clampedEnd in 1 until localValue.length && localValue[clampedEnd].isLowSurrogate()) clampedEnd - 1 else clampedEnd
+                            selectionRange = TextRange(safeStart, safeEnd)
                             true
                         }
                     }

@@ -1,6 +1,8 @@
 package com.xiwei.sujian.editor.v2.compose
 
+import androidx.compose.ui.text.TextRange
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AnimatedTextSemanticsTest {
@@ -39,7 +41,7 @@ class AnimatedTextSemanticsTest {
     fun insertAtCursor_emoji_utf16Utf8OffsetCorrect() {
         val localValue = "abc🙂def"
         val insertText = "X"
-        val cursorUtf16 = 4
+        val cursorUtf16 = 5
         val before = localValue.substring(0, cursorUtf16)
         val after = localValue.substring(cursorUtf16)
         val newText = before + insertText + after
@@ -47,7 +49,7 @@ class AnimatedTextSemanticsTest {
         val utf8Offset = newText.substring(0, newCursor).toByteArray(Charsets.UTF_8).size
         assertEquals("abc🙂X", before + insertText)
         assertEquals("abc🙂Xdef", newText)
-        assertEquals(5, newCursor)
+        assertEquals(6, newCursor)
         assertEquals(8, utf8Offset)
     }
 
@@ -55,7 +57,7 @@ class AnimatedTextSemanticsTest {
     fun insertAtCursor_emojiSelectionReplace_utf8OffsetCorrect() {
         val localValue = "ab🙂cd"
         val selStart = 2
-        val selEnd = 3
+        val selEnd = 4
         val insertText = "XY"
         val before = localValue.substring(0, selStart)
         val after = localValue.substring(selEnd)
@@ -106,7 +108,7 @@ class AnimatedTextSemanticsTest {
         val newText = "abc🙂def"
         val newCursor = newText.length
         val utf8Offset = newText.toByteArray(Charsets.UTF_8).size
-        assertEquals(7, newCursor)
+        assertEquals(8, newCursor)
         assertEquals(10, utf8Offset)
     }
 
@@ -128,5 +130,72 @@ class AnimatedTextSemanticsTest {
         assertEquals(false, hasSetText)
         assertEquals(false, hasInsertTextAtCursor)
         assertEquals(false, hasSetSelection)
+    }
+
+    @Test
+    fun selectionRange_resetsOnExternalValueChange() {
+        val oldValue = "hello"
+        val newValue = "hi"
+        val oldSelection = TextRange(oldValue.length)
+        assertEquals(TextRange(5), oldSelection)
+        val newSelection = TextRange(newValue.length)
+        assertEquals(TextRange(2), newSelection)
+    }
+
+    @Test
+    fun selectionRange_clampedAfterExternalValueChange() {
+        val oldValue = "你好世界"
+        val newValue = "你好"
+        val oldSelection = TextRange(oldValue.length)
+        assertEquals(TextRange(4), oldSelection)
+        val newSelection = TextRange(newValue.length)
+        val clampedStart = newSelection.start.coerceIn(0, newValue.length)
+        val clampedEnd = newSelection.end.coerceIn(0, newValue.length)
+        assertEquals(2, clampedStart)
+        assertEquals(2, clampedEnd)
+    }
+
+    @Test
+    fun selectionRange_surrogatePairNotSplit() {
+        val textWithEmoji = "ab🙂cd"
+        val lowSurrogateIndex = 3
+        assertTrue(textWithEmoji[lowSurrogateIndex].isLowSurrogate())
+        val clampedPos = lowSurrogateIndex.coerceIn(0, textWithEmoji.length)
+        val safePos = if (clampedPos in 1 until textWithEmoji.length && textWithEmoji[clampedPos].isLowSurrogate()) clampedPos - 1 else clampedPos
+        assertEquals(2, safePos)
+    }
+
+    @Test
+    fun setSelection_utf16EmojiBoundaryNotSplit() {
+        val text = "a🙂b"
+        val emojiLowSurrogateIndex = 2
+        val clampedStart = emojiLowSurrogateIndex.coerceIn(0, text.length)
+        val safeStart = if (clampedStart in 1 until text.length && text[clampedStart].isLowSurrogate()) clampedStart - 1 else clampedStart
+        assertEquals(1, safeStart)
+    }
+
+    @Test
+    fun insertTextAtCursor_preservesCoordinatorContract() {
+        val localValue = "hello"
+        val insertText = "X"
+        val selMin = 3
+        val selMax = 3
+        val before = localValue.substring(0, selMin)
+        val after = localValue.substring(selMax)
+        val newText = before + insertText + after
+        val newCursor = selMin + insertText.length
+        val utf8Offset = newText.substring(0, newCursor).toByteArray(Charsets.UTF_8).size
+        assertEquals("helXlo", newText)
+        assertEquals(4, newCursor)
+        assertEquals(4, utf8Offset)
+    }
+
+    @Test
+    fun setText_preservesCoordinatorContract() {
+        val newText = "world"
+        val newCursor = newText.length
+        val utf8Offset = newText.toByteArray(Charsets.UTF_8).size
+        assertEquals(5, newCursor)
+        assertEquals(5, utf8Offset)
     }
 }

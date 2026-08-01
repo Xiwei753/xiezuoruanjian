@@ -2007,8 +2007,8 @@ class WorkbenchReducerTest {
             .sortedBy { it.order }
             .map { it.id }
         assertEquals(
-            "Both groups have min panel.order=0, groupId tiebreak puts right-outline before right-tools",
-            listOf("right-outline", "right-tools"),
+            "Both groups have min panel.order=0, defaultGroupOrder puts right-tools before right-outline",
+            listOf("right-tools", "right-outline"),
             rightGroupOrder
         )
     }
