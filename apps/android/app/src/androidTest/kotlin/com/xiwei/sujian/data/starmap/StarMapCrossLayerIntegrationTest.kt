@@ -81,7 +81,11 @@ class StarMapCrossLayerIntegrationTest {
             testException = t
         } finally {
             try { bridge.closeStarmapStore(starmapId) } catch (cleanup: Throwable) {
-                testException?.addSuppressed(cleanup)
+                if (testException != null) {
+                    testException.addSuppressed(cleanup)
+                } else {
+                    testException = cleanup
+                }
             }
         }
         if (testException != null) throw testException
@@ -120,7 +124,11 @@ class StarMapCrossLayerIntegrationTest {
             testException = t
         } finally {
             try { bridge.closeStarmapStore(starmapId) } catch (cleanup: Throwable) {
-                testException?.addSuppressed(cleanup)
+                if (testException != null) {
+                    testException.addSuppressed(cleanup)
+                } else {
+                    testException = cleanup
+                }
             }
         }
         if (testException != null) throw testException
@@ -164,7 +172,11 @@ class StarMapCrossLayerIntegrationTest {
             testException = t
         } finally {
             try { bridge.closeStarmapStore(starmapId) } catch (cleanup: Throwable) {
-                testException?.addSuppressed(cleanup)
+                if (testException != null) {
+                    testException.addSuppressed(cleanup)
+                } else {
+                    testException = cleanup
+                }
             }
         }
         if (testException != null) throw testException
@@ -214,7 +226,11 @@ class StarMapCrossLayerIntegrationTest {
             testException = t
         } finally {
             try { bridge.closeStarmapStore(starmapId) } catch (cleanup: Throwable) {
-                testException?.addSuppressed(cleanup)
+                if (testException != null) {
+                    testException.addSuppressed(cleanup)
+                } else {
+                    testException = cleanup
+                }
             }
         }
         if (testException != null) throw testException
@@ -255,7 +271,11 @@ class StarMapCrossLayerIntegrationTest {
             testException = t
         } finally {
             try { bridge.closeStarmapStore(starmapId) } catch (cleanup: Throwable) {
-                testException?.addSuppressed(cleanup)
+                if (testException != null) {
+                    testException.addSuppressed(cleanup)
+                } else {
+                    testException = cleanup
+                }
             }
         }
         if (testException != null) throw testException
@@ -299,7 +319,11 @@ class StarMapCrossLayerIntegrationTest {
             testException = t
         } finally {
             try { bridge.closeStarmapStore(starmapId) } catch (cleanup: Throwable) {
-                testException?.addSuppressed(cleanup)
+                if (testException != null) {
+                    testException.addSuppressed(cleanup)
+                } else {
+                    testException = cleanup
+                }
             }
         }
         if (testException != null) throw testException
@@ -338,7 +362,11 @@ class StarMapCrossLayerIntegrationTest {
             testException = t
         } finally {
             try { bridge.closeStarmapStore(starmapId) } catch (cleanup: Throwable) {
-                testException?.addSuppressed(cleanup)
+                if (testException != null) {
+                    testException.addSuppressed(cleanup)
+                } else {
+                    testException = cleanup
+                }
             }
         }
         if (testException != null) throw testException
@@ -377,7 +405,11 @@ class StarMapCrossLayerIntegrationTest {
             testException = t
         } finally {
             try { bridge.closeStarmapStore(starmapId) } catch (cleanup: Throwable) {
-                testException?.addSuppressed(cleanup)
+                if (testException != null) {
+                    testException.addSuppressed(cleanup)
+                } else {
+                    testException = cleanup
+                }
             }
         }
         if (testException != null) throw testException

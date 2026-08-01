@@ -352,8 +352,11 @@ object AndroidTestEnvironment {
     }
 
     fun releaseSession() {
-        currentSession?.releaseSession()
-        currentSession = null
+        try {
+            currentSession?.releaseSession()
+        } finally {
+            currentSession = null
+        }
     }
 
     data class TestProjectData(
