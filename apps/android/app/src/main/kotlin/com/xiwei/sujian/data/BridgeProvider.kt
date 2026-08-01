@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.runtime.SujianAppDependencies
 import java.util.Locale
 import java.util.TimeZone
 
@@ -18,6 +19,10 @@ object BridgeProvider {
     private var networkCallbackRegistered = false
 
     fun getAppServiceBridge(context: Context): AppServiceBridge {
+        val testProvider = SujianAppDependencies.getTestProvider()
+        if (testProvider != null) {
+            return testProvider(context).appServiceBridge
+        }
         return appServiceInstance ?: synchronized(this) {
             appServiceInstance ?: run {
                 val appContext = context.applicationContext

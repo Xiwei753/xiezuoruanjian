@@ -78,6 +78,7 @@ jobs:
         run: chmod +x tools/build_android.sh tools/android/build_native.sh tools/android/verify_apk_abis.sh
 
       - name: Test Rust core
+        if: matrix.abi == 'arm64-v8a'
         run: cargo test -p writer_core ${{ matrix.flavor == 'ai' && '--features ai' || '' }}
 
       - name: Decode Android Keystore
@@ -110,7 +111,7 @@ jobs:
           ./tools/build_android.sh --${{ matrix.flavor }} --abi ${{ matrix.abi }}
 
       - name: Test Android ${{ matrix.flavor }} Debug unit tests
-        if: matrix.abi != 'universal'
+        if: matrix.abi == 'arm64-v8a'
         working-directory: apps/android
         run: ./gradlew test${{ matrix.flavor == 'no-ai' && 'NoAi' || 'Ai' }}DebugUnitTest
 

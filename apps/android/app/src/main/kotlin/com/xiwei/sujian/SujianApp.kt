@@ -26,10 +26,11 @@ class SujianApp : Application(), DefaultLifecycleObserver {
     }
 
     private fun initDiagnostics() {
-        val repo = SettingsRepository(this)
-        val settings = repo.getLocalSettings()
-        DiagnosticsLogger.init(this, settings.diagnosticsEnabled, settings.diagnosticsVerbose)
-        EditorEventRingBuffer.setEnabled(settings.diagnosticsEnabled)
+        val diagPrefs = getSharedPreferences("sujian_diagnostics", MODE_PRIVATE)
+        val diagnosticsEnabled = diagPrefs.getBoolean("diagnostics_enabled", true)
+        val diagnosticsVerbose = diagPrefs.getBoolean("diagnostics_verbose", true)
+        DiagnosticsLogger.init(this, diagnosticsEnabled, diagnosticsVerbose)
+        EditorEventRingBuffer.setEnabled(diagnosticsEnabled)
     }
 
     private fun installCrashHandler() {

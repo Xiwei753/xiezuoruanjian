@@ -314,6 +314,32 @@ def test_emulator_test_download_path_matches_upload_lca(wf, _text):
     )
 
 
+def test_rust_test_has_abi_guard(wf, _text):
+    build_job = wf["jobs"]["build"]
+    steps = build_job.get("steps", [])
+    for s in steps:
+        run_cmd = s.get("run", "")
+        if "cargo test" in run_cmd:
+            condition = s.get("if", "")
+            assert "matrix.abi" in condition, (
+                "Rust test step must have an ABI guard (if: matrix.abi == 'arm64-v8a') "
+                "to avoid duplication in flavor × abi matrix"
+            )
+
+
+def test_jvm_unit_test_has_abi_guard(wf, _text):
+    build_job = wf["jobs"]["build"]
+    steps = build_job.get("steps", [])
+    for s in steps:
+        run_cmd = s.get("run", "")
+        if "gradlew" in run_cmd and "UnitTest" in run_cmd:
+            condition = s.get("if", "")
+            assert "matrix.abi" in condition, (
+                "JVM unit test step must have an ABI guard (if: matrix.abi == 'arm64-v8a') "
+                "to avoid duplication in flavor × abi matrix"
+            )
+
+
 def test_artifact_verify_paths_consistent_with_contract(wf, _text):
     upload_paths = _get_upload_paths_for_native_artifact(wf)
     assert upload_paths is not None, "native-no-ai-x86_64 upload step not found"
@@ -368,6 +394,8 @@ def main():
         test_native_artifact_upload_paths_precise,
         test_emulator_test_download_path_matches_upload_lca,
         test_artifact_verify_paths_consistent_with_contract,
+        test_rust_test_has_abi_guard,
+        test_jvm_unit_test_has_abi_guard,
     ]
     failed = 0
     for t in tests:

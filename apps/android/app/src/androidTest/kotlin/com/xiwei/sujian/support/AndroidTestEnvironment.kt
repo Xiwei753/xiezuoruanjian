@@ -110,7 +110,8 @@ class TestSession private constructor(
         for (dsName in dataStoreDirNames) {
             val dsDir = File(appContext.filesDir, "datastore/$dsName")
             if (dsDir.exists()) {
-                dsDir.deleteRecursively()
+                val deleted = dsDir.deleteRecursively()
+                Assert.assertTrue("Failed to delete test DataStore dir: $dsName (path=${dsDir.absolutePath})", deleted || !dsDir.exists())
             }
         }
         TestWorkspaceFactory.deleteWorkspace(TestWorkspaceFactory.TestWorkspacePaths(
