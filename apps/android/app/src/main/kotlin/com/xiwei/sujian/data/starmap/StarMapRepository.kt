@@ -67,7 +67,7 @@ internal class StarMapRepository(
                         BridgeResult.Success(result.data.toSnapshotResult())
                     }
                 } catch (e: Exception) {
-                    BridgeResult.Error(ResultEnvelope.error("CONVERSION_ERROR", "Failed to convert phased snapshot: ${e.message}"))
+                    BridgeResult.Error(ResultEnvelope.errorOf("CONVERSION_ERROR", "Failed to convert phased snapshot: ${e.message}"))
                 }
             }
             is BridgeResult.Error -> BridgeResult.Error(result.envelope)
@@ -288,7 +288,7 @@ internal class StarMapRepository(
 
     fun saveStarmapLayout(starmapId: String, layout: StarMapLayoutData): BridgeResult<Boolean> {
         val rawCache = cache.get(starmapId) ?: return BridgeResult.Error(
-            ResultEnvelope.error("SNAPSHOT_CACHE_NOT_INITIALIZED", "Starmap cache not initialized for $starmapId. Call getStarmapPhasedSnapshot first.")
+            ResultEnvelope.errorOf("SNAPSHOT_CACHE_NOT_INITIALIZED", "Starmap cache not initialized for $starmapId. Call getStarmapPhasedSnapshot first.")
         )
         val dto = layout.toDto(rawCache)
         return when (val result = bridge.saveStarMapLayout(starmapId, dto)) {
@@ -315,10 +315,10 @@ internal class StarMapRepository(
 
     fun computeEdgeRenders(data: StarMapData): BridgeResult<List<StarMapEdgeRenderData>> {
         val rawCache = cache.get(data.graph.starmapId) ?: return BridgeResult.Error(
-            ResultEnvelope.error("SNAPSHOT_CACHE_NOT_INITIALIZED", "Starmap snapshot cache not initialized for ${data.graph.starmapId}. Call getStarmapPhasedSnapshot first.")
+            ResultEnvelope.errorOf("SNAPSHOT_CACHE_NOT_INITIALIZED", "Starmap snapshot cache not initialized for ${data.graph.starmapId}. Call getStarmapPhasedSnapshot first.")
         )
         val graph = rawCache.graph ?: return BridgeResult.Error(
-            ResultEnvelope.error("STAR_MAP_CACHE_MISSING", "Raw starmap graph is not available in snapshot cache. This should not happen after a successful getStarmapPhasedSnapshot call.")
+            ResultEnvelope.errorOf("STAR_MAP_CACHE_MISSING", "Raw starmap graph is not available in snapshot cache. This should not happen after a successful getStarmapPhasedSnapshot call.")
         )
         return when (val result = bridge.computeStarMapEdgeRenders(graph, data.layout.toDto(rawCache))) {
             is BridgeResult.Success -> BridgeResult.Success(result.data.map { it.toModel() })
@@ -329,7 +329,7 @@ internal class StarMapRepository(
 
     fun hitTestStarmapNode(data: StarMapData, x: Float, y: Float): BridgeResult<String?> {
         val rawCache = cache.get(data.graph.starmapId) ?: return BridgeResult.Error(
-            ResultEnvelope.error("SNAPSHOT_CACHE_NOT_INITIALIZED", "Starmap snapshot cache not initialized for ${data.graph.starmapId}. Call getStarmapPhasedSnapshot first.")
+            ResultEnvelope.errorOf("SNAPSHOT_CACHE_NOT_INITIALIZED", "Starmap snapshot cache not initialized for ${data.graph.starmapId}. Call getStarmapPhasedSnapshot first.")
         )
         return bridge.hitTestStarMapNode(data.layout.toDto(rawCache), x, y)
     }

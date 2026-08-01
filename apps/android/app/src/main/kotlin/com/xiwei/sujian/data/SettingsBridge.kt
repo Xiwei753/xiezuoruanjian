@@ -30,10 +30,10 @@ class SettingsBridge internal constructor(private val holder: WriterAppServiceHo
             BridgeResult.NotLoaded
         } catch (e: WriterException) {
             DiagnosticsLogger.e(TAG, "Native exception: ${e.message}", e)
-            BridgeResult.Error(ResultEnvelope.error(e.toWireErrorCode(), e.message ?: "Unknown native exception"))
+            BridgeResult.Error(ResultEnvelope.errorOf(e.toWireErrorCode(), e.message ?: "Unknown native exception"))
         } catch (e: Exception) {
             DiagnosticsLogger.e(TAG, "Exception: ${e.message}", e)
-            BridgeResult.Error(ResultEnvelope.error("UNKNOWN", e.message ?: "Unknown error"))
+            BridgeResult.Error(ResultEnvelope.errorOf("UNKNOWN", e.message ?: "Unknown error"))
         }
     }
 
@@ -52,10 +52,10 @@ class SettingsBridge internal constructor(private val holder: WriterAppServiceHo
             BridgeResult.NotLoaded
         } catch (e: WriterException) {
             DiagnosticsLogger.e(TAG, "Native exception: ${e.message}", e)
-            BridgeResult.Error(ResultEnvelope.error(e.toWireErrorCode(), e.message ?: "Unknown native exception"))
+            BridgeResult.Error(ResultEnvelope.errorOf(e.toWireErrorCode(), e.message ?: "Unknown native exception"))
         } catch (e: Exception) {
             DiagnosticsLogger.e(TAG, "Exception: ${e.message}", e)
-            BridgeResult.Error(ResultEnvelope.error("UNKNOWN", e.message ?: "Unknown error"))
+            BridgeResult.Error(ResultEnvelope.errorOf("UNKNOWN", e.message ?: "Unknown error"))
         }
     }
 

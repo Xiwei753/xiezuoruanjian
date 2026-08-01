@@ -148,29 +148,19 @@ class TestSujianAppDependencies(
         testLogDir.mkdirs()
         testNoBackupDir.mkdirs()
         if (!testWorkspaceDir.exists()) {
-            testWorkspaceDir.mkdirs()
+            throw AssertionError(
+                "TestSujianAppDependencies: workspace dir does not exist — " +
+                    "TestWorkspaceFactory.createIsolatedWorkspace() must be called first: " +
+                    testWorkspaceDir.absolutePath
+            )
         }
         val manifest = File(testWorkspaceDir, "workspace_manifest.json")
         if (!manifest.exists()) {
-            val initHolder = WriterAppServiceHolder(
-                workspacePath = testWorkspaceDir.absolutePath,
+            throw AssertionError(
+                "TestSujianAppDependencies: workspace_manifest.json does not exist — " +
+                    "TestWorkspaceFactory.initializeWorkspaceViaCore() must have failed silently: " +
+                    manifest.absolutePath
             )
-            try {
-                val result = initHolder.wrapResult { initHolder.service.createWorkspaceIfNeeded() }
-                when (result) {
-                    is BridgeResult.Success -> {}
-                    is BridgeResult.Error -> throw AssertionError(
-                        "TestSujianAppDependencies: createWorkspaceIfNeeded failed: " +
-                            "errorCode=${result.code}, message=${result.message}, " +
-                            "rawError=${result.envelope.rawError}"
-                    )
-                    BridgeResult.NotLoaded -> throw AssertionError(
-                        "TestSujianAppDependencies: native library not loaded during workspace initialization"
-                    )
-                }
-            } finally {
-                initHolder.close()
-            }
         }
     }
 

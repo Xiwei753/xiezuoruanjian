@@ -68,6 +68,14 @@ data class ResultEnvelope<out T>(
             rawError = userMessage
         )
 
+        fun errorOf(errorCode: String, rawError: String): ResultEnvelope<Nothing> = ResultEnvelope(
+            success = false,
+            errorCode = errorCode,
+            messageKey = errorCodeToMessageKey(errorCode),
+            userMessage = null,
+            rawError = rawError
+        )
+
         private fun errorCodeToMessageKey(errorCode: String): String = when (errorCode) {
             "IO_ERROR" -> "error.io"
             "JSON_ERROR" -> "error.json"
