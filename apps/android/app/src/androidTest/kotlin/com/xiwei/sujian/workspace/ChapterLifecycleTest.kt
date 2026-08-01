@@ -115,7 +115,7 @@ class ChapterLifecycleTest {
         val chapterBId = waitForChapterByTitle("交替章节B", testData)
 
         composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterAId)).performClick()
-        waitForEditorBoundToChapter(testData.projectId, testData.volumeId, chapterAId, "交替章节A")
+        waitForEditorBoundToChapter(testData.projectId, testData.volumeId, chapterAId, "交替章节A", "")
 
         val coordinator = session.deps.coordinator
         val targetIdA = "chapter-body:${testData.projectId}:${testData.volumeId}:$chapterAId"
@@ -132,7 +132,7 @@ class ChapterLifecycleTest {
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList, timeoutMs = 5_000)
 
         composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterBId)).performClick()
-        waitForEditorBoundToChapter(testData.projectId, testData.volumeId, chapterBId, "交替章节B")
+        waitForEditorBoundToChapter(testData.projectId, testData.volumeId, chapterBId, "交替章节B", "")
 
         val targetIdB = "chapter-body:${testData.projectId}:${testData.volumeId}:$chapterBId"
         var lastTargetIdB: String? = null
@@ -167,7 +167,7 @@ class ChapterLifecycleTest {
         val chapterBId = waitForChapterByTitle("正文隔离B", testData)
 
         composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterAId)).performClick()
-        waitForEditorBoundToChapter(testData.projectId, testData.volumeId, chapterAId, "正文隔离A")
+        waitForEditorBoundToChapter(testData.projectId, testData.volumeId, chapterAId, "正文隔离A", "")
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(EditorCommitTextAction.commitText("正文-A"))
@@ -177,7 +177,7 @@ class ChapterLifecycleTest {
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList, timeoutMs = 5_000)
 
         composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterBId)).performClick()
-        waitForEditorBoundToChapter(testData.projectId, testData.volumeId, chapterBId, "正文隔离B")
+        waitForEditorBoundToChapter(testData.projectId, testData.volumeId, chapterBId, "正文隔离B", "")
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText(""))
@@ -190,7 +190,7 @@ class ChapterLifecycleTest {
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList, timeoutMs = 5_000)
 
         composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterAId)).performClick()
-        waitForEditorBoundToChapter(testData.projectId, testData.volumeId, chapterAId, "正文隔离A")
+        waitForEditorBoundToChapter(testData.projectId, testData.volumeId, chapterAId, "正文隔离A", "")
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("正文-A"))
@@ -207,7 +207,7 @@ class ChapterLifecycleTest {
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList, timeoutMs = 5_000)
 
         composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterBId)).performClick()
-        waitForEditorBoundToChapter(testData.projectId, testData.volumeId, chapterBId, "正文隔离B")
+        waitForEditorBoundToChapter(testData.projectId, testData.volumeId, chapterBId, "正文隔离B", "")
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("正文-B"))
@@ -225,7 +225,7 @@ class ChapterLifecycleTest {
         volumeId: String,
         chapterId: String,
         expectedTitle: String,
-        expectedContent: String? = null
+        expectedContent: String
     ) {
         val expectedTargetId = "chapter-body:$projectId:$volumeId:$chapterId"
         ComposeWait.waitForEspressoViewCondition(
@@ -243,10 +243,8 @@ class ChapterLifecycleTest {
 
         composeTestRule.onNodeWithText(expectedTitle).assertIsDisplayed()
 
-        if (expectedContent != null) {
-            Espresso.onView(ViewMatchers.withId(R.id.editor_content))
-                .check(EditorViewAssertions.hasDisplayText(expectedContent))
-        }
+        Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+            .check(EditorViewAssertions.hasDisplayText(expectedContent))
     }
 
     private fun waitForChapterByTitle(title: String, testData: AndroidTestEnvironment.TestProjectData): String {

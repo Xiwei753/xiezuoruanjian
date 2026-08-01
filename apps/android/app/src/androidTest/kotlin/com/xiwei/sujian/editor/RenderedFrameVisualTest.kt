@@ -870,18 +870,17 @@ class RenderedFrameVisualTest {
         EditorBitmapCapture.assertBitmapHasContent(finalFrame, "100% frame must have rendered content")
 
         val finalStateSnapshot = captureAnimationStateSnapshot()
-        assertTrue(
-            "After 100% frame draw, transaction must be completed or null",
-            finalStateSnapshot == null
-                    || finalStateSnapshot.transactionState == TransactionState.Completed
+        assertNotNull("Final animation state snapshot must exist after 100% frame draw", finalStateSnapshot)
+        assertEquals(
+            "After 100% insert frame draw, transaction must be completed",
+            TransactionState.Completed,
+            finalStateSnapshot!!.transactionState
         )
-        if (finalStateSnapshot != null) {
-            assertEquals(
-                "After 100% insert frame draw, owned resources must be released",
-                0,
-                finalStateSnapshot.ownedResourceCount
-            )
-        }
+        assertEquals(
+            "After 100% insert frame draw, owned resources must be released",
+            0,
+            finalStateSnapshot.ownedResourceCount
+        )
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("Test"))
@@ -931,18 +930,17 @@ class RenderedFrameVisualTest {
         EditorBitmapCapture.assertBitmapHasContent(finalFrame, "100% delete frame must have rendered content")
 
         val finalStateSnapshot = captureAnimationStateSnapshot()
-        assertTrue(
-            "After 100% delete frame draw, transaction must be completed or null",
-            finalStateSnapshot == null
-                    || finalStateSnapshot.transactionState == TransactionState.Completed
+        assertNotNull("Final animation state snapshot must exist after 100% delete frame draw", finalStateSnapshot)
+        assertEquals(
+            "After 100% delete frame draw, transaction must be completed",
+            TransactionState.Completed,
+            finalStateSnapshot!!.transactionState
         )
-        if (finalStateSnapshot != null) {
-            assertEquals(
-                "After 100% delete frame draw, owned resources must be released",
-                0,
-                finalStateSnapshot.ownedResourceCount
-            )
-        }
+        assertEquals(
+            "After 100% delete frame draw, owned resources must be released",
+            0,
+            finalStateSnapshot.ownedResourceCount
+        )
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("ABE"))
@@ -985,18 +983,17 @@ class RenderedFrameVisualTest {
         EditorBitmapCapture.assertBitmapHasContent(finalFrame, "100% composition frame must have rendered content")
 
         val finalStateSnapshot = captureAnimationStateSnapshot()
-        assertTrue(
-            "After 100% composition frame draw, transaction must be completed or null",
-            finalStateSnapshot == null
-                    || finalStateSnapshot.transactionState == TransactionState.Completed
+        assertNotNull("Final animation state snapshot must exist after 100% composition frame draw", finalStateSnapshot)
+        assertEquals(
+            "After 100% composition frame draw, transaction must be completed",
+            TransactionState.Completed,
+            finalStateSnapshot!!.transactionState
         )
-        if (finalStateSnapshot != null) {
-            assertEquals(
-                "After 100% composition frame draw, owned resources must be released",
-                0,
-                finalStateSnapshot.ownedResourceCount
-            )
-        }
+        assertEquals(
+            "After 100% composition frame draw, owned resources must be released",
+            0,
+            finalStateSnapshot.ownedResourceCount
+        )
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("预输入"))
@@ -1051,18 +1048,17 @@ class RenderedFrameVisualTest {
         EditorBitmapCapture.assertBitmapHasContent(finalFrame, "Final frame after rapid input must have rendered content")
 
         val finalStateSnapshot = captureAnimationStateSnapshot()
-        assertTrue(
-            "After rapid input final frame draw, transaction must be completed or null",
-            finalStateSnapshot == null
-                    || finalStateSnapshot.transactionState == TransactionState.Completed
+        assertNotNull("Final animation state snapshot must exist after rapid input final frame draw", finalStateSnapshot)
+        assertEquals(
+            "After rapid input final frame draw, transaction must be completed",
+            TransactionState.Completed,
+            finalStateSnapshot!!.transactionState
         )
-        if (finalStateSnapshot != null) {
-            assertEquals(
-                "After rapid input final frame draw, owned resources must be released",
-                0,
-                finalStateSnapshot.ownedResourceCount
-            )
-        }
+        assertEquals(
+            "After rapid input final frame draw, owned resources must be released",
+            0,
+            finalStateSnapshot.ownedResourceCount
+        )
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("ABC"))
@@ -1222,18 +1218,17 @@ class RenderedFrameVisualTest {
         }
 
         val finalStateSnapshot = captureAnimationStateSnapshot()
-        assertTrue(
-            "After 100% frame, transaction must be completed (no active animation state)",
-            finalStateSnapshot == null
-                    || finalStateSnapshot.transactionState == TransactionState.Completed
+        assertNotNull("Final animation state snapshot must exist after 100% frame", finalStateSnapshot)
+        assertEquals(
+            "After 100% frame, transaction must be completed",
+            TransactionState.Completed,
+            finalStateSnapshot!!.transactionState
         )
-        if (finalStateSnapshot != null) {
-            assertEquals(
-                "After 100% frame, owned resources must be released (ownedResourceCount must be 0)",
-                0,
-                finalStateSnapshot.ownedResourceCount
-            )
-        }
+        assertEquals(
+            "After 100% frame, owned resources must be released (ownedResourceCount must be 0)",
+            0,
+            finalStateSnapshot.ownedResourceCount
+        )
 
         return FiveProgressResult(frames, visualSnapshots)
     }
@@ -1278,7 +1273,7 @@ class RenderedFrameVisualTest {
     }
 
     private fun assertMidFrameContentRegionHasPixels(frames: List<CapturedFrame>) {
-        if (frames.size < 3) return
+        assertTrue("Must have at least 3 frames for mid-frame content region check", frames.size >= 3)
         val midFrame = frames[2]
         val bounds = midFrame.contentBounds()
         assertTrue("Mid-frame content must have width > 0 for region check", bounds.width() > 0)
@@ -1338,7 +1333,8 @@ class RenderedFrameVisualTest {
     }
 
     private fun assertCrossFrameAlphaProgression(frames: List<CapturedFrame>, labels: List<String>) {
-        if (frames.size < 3 || labels.size < 3) return
+        assertTrue("Must have at least 3 frames for cross-frame alpha progression check", frames.size >= 3)
+        assertTrue("Must have at least 3 labels for cross-frame alpha progression check", labels.size >= 3)
         val perFrameBounds = frames.map { it.contentBounds() }
         for (i in perFrameBounds.indices) {
             assertTrue(
@@ -1395,7 +1391,8 @@ class RenderedFrameVisualTest {
         val nonNullSnapshots = visualSnapshots.mapIndexedNotNull { i, snapshot ->
             if (snapshot != null) Pair(i, snapshot) else null
         }
-        if (nonNullSnapshots.size < 2 || labels.size < 2) return
+        assertTrue("Must have at least 2 non-null visual snapshots for cross-frame logical alpha check", nonNullSnapshots.size >= 2)
+        assertTrue("Must have at least 2 labels for cross-frame logical alpha check", labels.size >= 2)
         val allAlphas = nonNullSnapshots.map { (i, snapshot) ->
             val alphas = snapshot.sliceVisualStates.map { it.currentAlpha }
             for (slice in snapshot.sliceVisualStates) {

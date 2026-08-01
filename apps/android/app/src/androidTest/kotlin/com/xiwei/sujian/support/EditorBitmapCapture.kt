@@ -158,19 +158,16 @@ object EditorBitmapCapture {
         val pixelCopyResult = tryPixelCopy(view, bitmap)
         when (pixelCopyResult) {
             PixelCopyResult.TIMED_OUT ->
-                Assert.fail("PixelCopy timed out during bitmap capture. Use captureSoftwareBitmap() for software rendering tests.")
+                throw AssertionError("PixelCopy timed out during bitmap capture. Use captureSoftwareBitmap() for software rendering tests.")
             PixelCopyResult.FAILED ->
-                Assert.fail("PixelCopy failed during bitmap capture. Use captureSoftwareBitmap() for software rendering tests.")
+                throw AssertionError("PixelCopy failed during bitmap capture. Use captureSoftwareBitmap() for software rendering tests.")
             PixelCopyResult.SUCCESS -> {
                 val backgroundColor = sampleBackgroundColorFromCorners(bitmap)
                 return CapturedFrame(bitmap = bitmap, width = view.width, height = view.height, backgroundColor = backgroundColor, captureMethod = CaptureMethod.PIXEL_COPY)
             }
-            PixelCopyResult.NOT_SUPPORTED -> {}
+            PixelCopyResult.NOT_SUPPORTED ->
+                throw AssertionError("PixelCopy not supported on this device/API level. Use captureSoftwareBitmap() for software rendering tests.")
         }
-
-        drawViewToBitmap(view, bitmap)
-        val backgroundColor = sampleBackgroundColorFromCorners(bitmap)
-        return CapturedFrame(bitmap = bitmap, width = view.width, height = view.height, backgroundColor = backgroundColor, captureMethod = CaptureMethod.SOFTWARE_DRAW)
     }
 
     fun capturePixelCopyOnly(view: SujianEditorView): CapturedFrame {

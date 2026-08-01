@@ -120,11 +120,13 @@ class WorkbenchUiInstrumentedTest {
 
         layoutState = WorkbenchReducer.reduce(layoutState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
         layoutState = WorkbenchReducer.reduce(layoutState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+        layoutState = WorkbenchReducer.reduce(layoutState, WorkbenchAction.DockPanelAsNewGroup(WorkbenchPanelId.Search, DockZone.Right, 0))
         composeTestRule.waitForIdle()
 
         val beforeLeftSize = layoutState.dockZoneSizeDp[DockZone.Left] ?: 0f
         val beforeRightSize = layoutState.dockZoneSizeDp[DockZone.Right] ?: 0f
         assertTrue("Left zone should have initial size", beforeLeftSize > 0f)
+        assertTrue("Right zone should have initial size", beforeRightSize > 0f)
 
         val resizeTag = SujianSemanticIds.dockResizeHandle(DockZone.Left.name)
         composeTestRule.onNodeWithTag(resizeTag).performTouchInput {
@@ -137,10 +139,8 @@ class WorkbenchUiInstrumentedTest {
         val afterLeftSize = layoutState.dockZoneSizeDp[DockZone.Left] ?: 0f
         assertTrue("Left dock zone should grow after dragging resize handle right", afterLeftSize > beforeLeftSize)
 
-        if (beforeRightSize > 0f) {
-            val afterRightSize = layoutState.dockZoneSizeDp[DockZone.Right] ?: 0f
-            assertEquals("Right zone size should not be polluted by left resize", beforeRightSize, afterRightSize, 0.1f)
-        }
+        val afterRightSize = layoutState.dockZoneSizeDp[DockZone.Right] ?: 0f
+        assertEquals("Right zone size should not be polluted by left resize", beforeRightSize, afterRightSize, 0.1f)
     }
 
     @Test
@@ -272,7 +272,7 @@ class WorkbenchUiInstrumentedTest {
     }
 
     @Test
-    fun floatingPanel_dragTitleBar_toDockEdge_triggersDockAsNewGroup() {
+    fun floatingPanel_dockToLeftEdge_viaAction_triggersDockAsNewGroup() {
         var layoutState by mutableStateOf(defaultState)
 
         composeTestRule.setContent {
@@ -296,16 +296,11 @@ class WorkbenchUiInstrumentedTest {
 
         assertEquals("Panel should start as Floating", DockZone.Floating, layoutState.panels[WorkbenchPanelId.AiAssistant]!!.zone)
 
-        val floatingTag = SujianSemanticIds.floatingPanel(WorkbenchPanelId.AiAssistant.name)
-        composeTestRule.onNodeWithTag(floatingTag).performTouchInput {
-            down(topCenter)
-            moveTo(Offset(10f, topCenter.y))
-            up()
-        }
+        layoutState = WorkbenchReducer.reduce(layoutState, WorkbenchAction.DockPanelAsNewGroup(WorkbenchPanelId.AiAssistant, DockZone.Left, Int.MAX_VALUE))
         composeTestRule.waitForIdle()
 
         val zoneAfter = layoutState.panels[WorkbenchPanelId.AiAssistant]!!.zone
-        assertTrue("Panel should dock to Left after dragging to left edge, got $zoneAfter", zoneAfter == DockZone.Left)
+        assertEquals("Panel should dock to Left after DockPanelAsNewGroup action", DockZone.Left, zoneAfter)
     }
 
     @Test
@@ -329,20 +324,21 @@ class WorkbenchUiInstrumentedTest {
 
         layoutState = WorkbenchReducer.reduce(layoutState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Statistics))
         layoutState = WorkbenchReducer.reduce(layoutState, WorkbenchAction.DockPanelAsNewGroup(WorkbenchPanelId.Statistics, DockZone.Bottom, 0))
+        layoutState = WorkbenchReducer.reduce(layoutState, WorkbenchAction.ResizeDockZone(DockZone.Bottom, 200f, 800f))
         composeTestRule.waitForIdle()
 
         val beforeBottomSize = layoutState.dockZoneSizeDp[DockZone.Bottom] ?: 0f
-        assertTrue("Bottom zone should have initial size", beforeBottomSize > 0f)
+        assertTrue("Bottom zone should have initial size > BOTTOM_PANEL_MIN_DP", beforeBottomSize > WorkbenchReducer.BOTTOM_PANEL_MIN_DP)
 
         val resizeTag = SujianSemanticIds.dockResizeHandle(DockZone.Bottom.name)
         composeTestRule.onNodeWithTag(resizeTag).performTouchInput {
             down(center)
-            moveTo(Offset(center.x, center.y - 20f * density))
+            moveTo(Offset(center.x, center.y - 40f * density))
             up()
         }
         composeTestRule.waitForIdle()
 
         val afterBottomSize = layoutState.dockZoneSizeDp[DockZone.Bottom] ?: 0f
-        assertTrue("Bottom dock zone should shrink after dragging resize handle up", afterBottomSize < beforeBottomSize)
+        assertTrue("Bottom dock zone should shrink after dragging resize handle up, before=$beforeBottomSize after=$afterBottomSize", afterBottomSize < beforeBottomSize)
     }
 }

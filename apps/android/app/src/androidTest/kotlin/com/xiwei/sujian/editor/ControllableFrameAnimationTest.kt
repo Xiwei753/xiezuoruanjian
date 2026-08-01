@@ -258,7 +258,6 @@ class ControllableFrameAnimationTest {
         expectedMinProgress: Float,
         expectedMaxProgress: Float,
         expectedText: String,
-        verifyCursorVisible: Boolean = true
     ) {
         manualTimeSource.advanceByMs(16)
         dispatchManualFrame()
@@ -282,12 +281,10 @@ class ControllableFrameAnimationTest {
             "Owned resource count must be > 0 during active animation, but was ${snapshot.ownedResourceCount}",
             snapshot.ownedResourceCount > 0
         )
-        if (verifyCursorVisible) {
-            assertNotNull(
-                "Cursor transition should exist during animation",
-                snapshot.cursorTransition
-            )
-        }
+        assertNotNull(
+            "Cursor transition should exist during animation",
+            snapshot.cursorTransition
+        )
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText(expectedText))
     }
@@ -608,8 +605,8 @@ class ControllableFrameAnimationTest {
         val startSnapshot = captureEditorSnapshot()
         assertNotNull("Animation should be active after composition update", startSnapshot)
 
-        advanceToProgressAndVerify(0.2f, 0.6f, "中", verifyCursorVisible = true)
-        advanceToProgressAndVerify(0.4f, 0.8f, "中", verifyCursorVisible = true)
+        advanceToProgressAndVerify(0.2f, 0.6f, "中")
+        advanceToProgressAndVerify(0.4f, 0.8f, "中")
 
         advanceClockToEnd()
 
@@ -796,7 +793,7 @@ class ControllableFrameAnimationTest {
         snapshot: VisualFrameSnapshot,
         expectedMinProgress: Float,
         expectedMaxProgress: Float,
-        expectedSliceRolePresent: SliceRole? = null
+        expectedSliceRolePresent: SliceRole
     ) {
         assertTrue(
             "Visual frame progress ${snapshot.progress} should be >= $expectedMinProgress",
@@ -806,13 +803,11 @@ class ControllableFrameAnimationTest {
             "Visual frame progress ${snapshot.progress} should be <= $expectedMaxProgress",
             snapshot.progress <= expectedMaxProgress
         )
-        if (expectedSliceRolePresent != null) {
-            val hasRole = snapshot.sliceVisualStates.any { it.role == expectedSliceRolePresent }
-            assertTrue(
-                "Visual frame should contain slice with role $expectedSliceRolePresent",
-                hasRole
-            )
-        }
+        val hasRole = snapshot.sliceVisualStates.any { it.role == expectedSliceRolePresent }
+        assertTrue(
+            "Visual frame should contain slice with role $expectedSliceRolePresent",
+            hasRole
+        )
         for (slice in snapshot.sliceVisualStates) {
             assertTrue(
                 "Slice alpha ${slice.currentAlpha} should be in [0,1] for role ${slice.role}",
