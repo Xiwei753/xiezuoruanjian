@@ -285,6 +285,9 @@ open class SettingsRepository(
     fun listBuiltinThemes(): List<uniffi.writer_core.BuiltinThemeDto> {
         return try {
             settingsBridge.listBuiltinThemes()
+        } catch (e: UnsatisfiedLinkError) {
+            DiagnosticsLogger.w("SettingsRepository", "Native library not loaded, cannot list builtin themes", e)
+            emptyList()
         } catch (e: Exception) {
             DiagnosticsLogger.w("SettingsRepository", "Failed to list builtin themes", e)
             emptyList()
@@ -353,6 +356,8 @@ open class SettingsRepository(
             )
 
             settingsBridge.savePaletteRecord(record)
+        } catch (e: UnsatisfiedLinkError) {
+            DiagnosticsLogger.w("SettingsRepository", "Native library not loaded, cannot save palette to catalog", e)
         } catch (e: Exception) {
             DiagnosticsLogger.w("SettingsRepository", "Failed to save palette to catalog", e)
         }
