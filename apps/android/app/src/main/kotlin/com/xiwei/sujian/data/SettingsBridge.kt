@@ -1,9 +1,7 @@
 package com.xiwei.sujian.data
 
-import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.model.LocalSettings
 import com.xiwei.sujian.model.SyncableSettings
-import uniffi.writer_core.WriterException
 
 /**
  * 设置 领域 Bridge。
@@ -11,9 +9,6 @@ import uniffi.writer_core.WriterException
  * 从 AppServiceBridge 拆出，负责本地设置和可同步设置相关操作。
  */
 class SettingsBridge internal constructor(private val holder: WriterAppServiceHolder) {
-    companion object {
-        private const val TAG = "SettingsBridge"
-    }
 
     fun loadLocalSettings(): BridgeResult<LocalSettings> = holder.wrapResult {
         holder.service.loadLocalSettings().toModel()
@@ -22,18 +17,10 @@ class SettingsBridge internal constructor(private val holder: WriterAppServiceHo
     fun getLocalSettings(): BridgeResult<LocalSettings> = loadLocalSettings()
 
     fun saveLocalSettings(settings: LocalSettings): BridgeResult<Boolean> {
-        return try {
-            val res = holder.service.saveLocalSettings(settings.toDto())
-            BridgeResult.Success(res, ResultEnvelope(success = true, data = res, changedEntities = listOf(ChangedEntity("SettingsSaved"))))
-        } catch (e: UnsatisfiedLinkError) {
-            DiagnosticsLogger.e(TAG, "Native library is not loaded", e)
-            BridgeResult.NotLoaded
-        } catch (e: WriterException) {
-            DiagnosticsLogger.e(TAG, "Native exception: ${e.message}", e)
-            BridgeResult.Error(ResultEnvelope.errorOf(e.toWireErrorCode(), e.message ?: "Unknown native exception"))
-        } catch (e: Exception) {
-            DiagnosticsLogger.e(TAG, "Exception: ${e.message}", e)
-            BridgeResult.Error(ResultEnvelope.errorOf("UNKNOWN", e.message ?: "Unknown error"))
+        return when (val result = holder.wrapResult { holder.service.saveLocalSettings(settings.toDto()) }) {
+            is BridgeResult.Success -> BridgeResult.Success(result.data, ResultEnvelope(success = true, data = result.data, changedEntities = listOf(ChangedEntity("SettingsSaved"))))
+            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
+            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
         }
     }
 
@@ -44,18 +31,10 @@ class SettingsBridge internal constructor(private val holder: WriterAppServiceHo
     fun getSyncableSettings(): BridgeResult<SyncableSettings> = loadSyncableSettings()
 
     fun saveSyncableSettings(settings: SyncableSettings): BridgeResult<Boolean> {
-        return try {
-            val res = holder.service.saveSyncableSettings(settings.toDto())
-            BridgeResult.Success(res, ResultEnvelope(success = true, data = res, changedEntities = listOf(ChangedEntity("SettingsSaved"))))
-        } catch (e: UnsatisfiedLinkError) {
-            DiagnosticsLogger.e(TAG, "Native library is not loaded", e)
-            BridgeResult.NotLoaded
-        } catch (e: WriterException) {
-            DiagnosticsLogger.e(TAG, "Native exception: ${e.message}", e)
-            BridgeResult.Error(ResultEnvelope.errorOf(e.toWireErrorCode(), e.message ?: "Unknown native exception"))
-        } catch (e: Exception) {
-            DiagnosticsLogger.e(TAG, "Exception: ${e.message}", e)
-            BridgeResult.Error(ResultEnvelope.errorOf("UNKNOWN", e.message ?: "Unknown error"))
+        return when (val result = holder.wrapResult { holder.service.saveSyncableSettings(settings.toDto()) }) {
+            is BridgeResult.Success -> BridgeResult.Success(result.data, ResultEnvelope(success = true, data = result.data, changedEntities = listOf(ChangedEntity("SettingsSaved"))))
+            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
+            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
         }
     }
 

@@ -78,14 +78,24 @@ class WorkbenchOrientationInstrumentedTest {
 
     @After
     fun tearDown() {
-        testDataStoreScope.cancel()
-        val fileName = testDataStoreFileName ?: return
-        val context = composeTestRule.activity.applicationContext
-        val dsFile = java.io.File(context.filesDir, "datastore/$fileName")
-        if (dsFile.exists()) {
-            val deleted = dsFile.deleteRecursively()
-            assertTrue("Failed to delete test DataStore: $fileName", deleted || !dsFile.exists())
+        var firstException: Throwable? = null
+        try {
+            testDataStoreScope.cancel()
+        } catch (t: Throwable) {
+            firstException = t
         }
+        try {
+            val fileName = testDataStoreFileName ?: return
+            val context = composeTestRule.activity.applicationContext
+            val dsFile = java.io.File(context.filesDir, "datastore/$fileName")
+            if (dsFile.exists()) {
+                val deleted = dsFile.deleteRecursively()
+                assertTrue("Failed to delete test DataStore: $fileName", deleted || !dsFile.exists())
+            }
+        } catch (t: Throwable) {
+            if (firstException != null) firstException!!.addSuppressed(t) else firstException = t
+        }
+        if (firstException != null) throw firstException
     }
 
     @Test

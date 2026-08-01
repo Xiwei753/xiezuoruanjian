@@ -42,7 +42,6 @@ data class ResultEnvelope<out T>(
     val errorCode: String? = null,
     val messageKey: String? = null,
     val messageArgs: Map<String, String> = emptyMap(),
-    @Deprecated("Core 不再提供 user_message，使用 messageKey 或 rawError") val userMessage: String? = null,
     val rawError: String? = null,
     val warnings: List<String> = emptyList(),
     val changedPaths: List<String> = emptyList(),
@@ -54,20 +53,10 @@ data class ResultEnvelope<out T>(
             data = data
         )
 
-        @Deprecated("使用 messageKey/rawError")
-        fun error(errorCode: String, @Suppress("DEPRECATION") userMessage: String): ResultEnvelope<Nothing> = ResultEnvelope(
-            success = false,
-            errorCode = errorCode,
-            messageKey = errorCodeToMessageKey(errorCode),
-            userMessage = null,
-            rawError = userMessage
-        )
-
         fun errorOf(errorCode: String, rawError: String): ResultEnvelope<Nothing> = ResultEnvelope(
             success = false,
             errorCode = errorCode,
             messageKey = errorCodeToMessageKey(errorCode),
-            userMessage = null,
             rawError = rawError
         )
 
@@ -93,6 +82,7 @@ data class ResultEnvelope<out T>(
             "CONVERSION_ERROR" -> "error.conversion"
             "SNAPSHOT_CACHE_NOT_INITIALIZED" -> "error.snapshot_cache_not_initialized"
             "STAR_MAP_CACHE_MISSING" -> "error.star_map_cache_missing"
+            "UNKNOWN" -> "error.unknown"
             "OTHER" -> "error.other"
             else -> "error.other"
         }
