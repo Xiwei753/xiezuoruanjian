@@ -75,12 +75,11 @@ object TestWorkspaceFactory {
     }
 
     fun deleteWorkspace(paths: TestWorkspacePaths) {
-        try {
-            paths.testRootDir.deleteRecursively()
-        } catch (e: Exception) {
+        val deleted = paths.testRootDir.deleteRecursively()
+        if (!deleted && paths.testRootDir.exists()) {
             throw AssertionError(
                 "TestWorkspaceFactory: Failed to delete test root directory " +
-                    "${paths.testRootDir.absolutePath}: ${e.message}"
+                    paths.testRootDir.absolutePath
             )
         }
     }

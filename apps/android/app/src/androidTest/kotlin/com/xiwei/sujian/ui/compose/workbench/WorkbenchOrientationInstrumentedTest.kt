@@ -13,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.xiwei.sujian.support.AndroidTestEnvironment
 import com.xiwei.sujian.ui.OrientationTestActivity
 import com.xiwei.sujian.ui.compose.workbench.component.SujianWorkbench
 import com.xiwei.sujian.ui.compose.workbench.model.DockZone
@@ -23,7 +24,6 @@ import com.xiwei.sujian.ui.compose.workbench.state.WindowWidthBucket
 import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchLayoutRepository
 import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchReducer
 import kotlinx.coroutines.runBlocking
-import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -31,10 +31,12 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import java.io.File
 
 @RunWith(AndroidJUnit4::class)
 class WorkbenchOrientationInstrumentedTest {
+
+    @get:Rule
+    val testDependenciesRule = AndroidTestEnvironment.TestDependenciesRule()
 
     @get:Rule
     val composeTestRule = createAndroidComposeRule<OrientationTestActivity>()
@@ -54,20 +56,6 @@ class WorkbenchOrientationInstrumentedTest {
             windowWidthBucket = WindowWidthBucket.Large,
             windowMode = "standard",
         )
-    }
-
-    @After
-    fun tearDown() {
-        val context = composeTestRule.activity.applicationContext
-        for (name in listOf("writer_stats", "sujian_device", "sujian_experiments", "sujian_diagnostics")) {
-            val prefs = context.getSharedPreferences(name, android.content.Context.MODE_PRIVATE)
-            prefs.edit().clear().commit()
-            context.deleteSharedPreferences(name)
-        }
-        val dsDir = File(context.filesDir, "datastore/workbench_layout_prefs")
-        if (dsDir.exists()) {
-            dsDir.deleteRecursively()
-        }
     }
 
     @Test

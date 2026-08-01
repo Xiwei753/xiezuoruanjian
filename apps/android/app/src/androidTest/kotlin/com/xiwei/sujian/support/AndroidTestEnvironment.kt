@@ -39,7 +39,8 @@ class TestSession private constructor(
         "sujian_device_$prefsSuffix",
         "writer_stats",
         "sujian_device",
-        "sujian_experiments"
+        "sujian_experiments",
+        "sujian_diagnostics"
     )
     private val dataStoreDirNames = listOf(
         "workbench_layout_prefs"
@@ -400,12 +401,24 @@ object AndroidTestEnvironment {
                     val ctx = instrumentation.targetContext
                     val session = createSession(ctx, animationTimeSource, transactionIdSource, manualFrameClock)
                     SujianAppDependencies.setTestProvider { _ -> session.deps }
+                    var testFailed: Throwable? = null
                     try {
                         base.evaluate()
+                    } catch (t: Throwable) {
+                        testFailed = t
                     } finally {
                         SujianAppDependencies.setTestProvider(null)
-                        releaseSession()
+                        try {
+                            releaseSession()
+                        } catch (cleanup: Throwable) {
+                            if (testFailed != null) {
+                                testFailed.addSuppressed(cleanup)
+                            } else {
+                                testFailed = cleanup
+                            }
+                        }
                     }
+                    if (testFailed != null) throw testFailed
                 }
             }
         }
