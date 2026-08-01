@@ -155,35 +155,23 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
     }
 
     override fun flushStarmapStore(starmapId: String): BridgeResult<Boolean> {
-        return try {
+        return holder.wrapResult {
             holder.service.flushStarmapStore(starmapId)
-            BridgeResult.Success(true)
-        } catch (e: UnsatisfiedLinkError) {
-            BridgeResult.NotLoaded
-        } catch (e: Exception) {
-            BridgeResult.Error(ResultEnvelope.errorOf("FLUSH_ERROR", "Failed to flush starmap store: ${e.message}"))
+            true
         }
     }
 
     override fun closeStarmapStore(starmapId: String): BridgeResult<Boolean> {
-        return try {
+        return holder.wrapResult {
             holder.service.closeStarmapStore(starmapId)
-            BridgeResult.Success(true)
-        } catch (e: UnsatisfiedLinkError) {
-            BridgeResult.NotLoaded
-        } catch (e: Exception) {
-            BridgeResult.Error(ResultEnvelope.errorOf("CLOSE_ERROR", "Failed to close starmap store: ${e.message}"))
+            true
         }
     }
 
     override fun flushAllStarmapStores(): BridgeResult<Boolean> {
-        return try {
+        return holder.wrapResult {
             holder.service.flushAllStarmapStores()
-            BridgeResult.Success(true)
-        } catch (e: UnsatisfiedLinkError) {
-            BridgeResult.NotLoaded
-        } catch (e: Exception) {
-            BridgeResult.Error(ResultEnvelope.errorOf("FLUSH_ALL_ERROR", "Failed to flush all starmap stores: ${e.message}"))
+            true
         }
     }
 }

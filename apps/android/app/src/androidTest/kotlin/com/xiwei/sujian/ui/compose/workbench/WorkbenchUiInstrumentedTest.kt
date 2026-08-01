@@ -22,6 +22,7 @@ import com.xiwei.sujian.ui.compose.workbench.model.PanelVisibility
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchAction
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelId
 import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchReducer
+import com.xiwei.sujian.support.AndroidTestEnvironment
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -29,6 +30,9 @@ import org.junit.Rule
 import org.junit.Test
 
 class WorkbenchUiInstrumentedTest {
+
+    @get:Rule
+    val testDependenciesRule = AndroidTestEnvironment.TestDependenciesRule()
 
     @get:Rule
     val composeTestRule = createComposeRule()

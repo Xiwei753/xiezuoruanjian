@@ -93,6 +93,7 @@ data class ResultEnvelope<out T>(
             "CONVERSION_ERROR" -> "error.conversion"
             "SNAPSHOT_CACHE_NOT_INITIALIZED" -> "error.snapshot_cache_not_initialized"
             "STAR_MAP_CACHE_MISSING" -> "error.star_map_cache_missing"
+            "OTHER" -> "error.other"
             else -> "error.other"
         }
     }
