@@ -27,8 +27,12 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStoreFile
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -50,13 +54,17 @@ class WorkbenchOrientationInstrumentedTest {
     private lateinit var repository: WorkbenchLayoutRepository
     private lateinit var testKey: LayoutStorageKey
     private lateinit var testDataStore: DataStore<Preferences>
+    private lateinit var testDataStoreScope: CoroutineScope
+    private var testDataStoreFileName: String? = null
 
     @Before
     fun setUp() {
         val context = composeTestRule.activity.applicationContext
+        testDataStoreScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        testDataStoreFileName = "workbench_layout_prefs_test_${System.nanoTime()}"
         testDataStore = PreferenceDataStoreFactory.create(
-            scope = kotlinx.coroutines.CoroutineScope(Dispatchers.IO),
-            produceFile = { context.preferencesDataStoreFile("workbench_layout_prefs_test_${System.nanoTime()}") }
+            scope = testDataStoreScope,
+            produceFile = { context.preferencesDataStoreFile(testDataStoreFileName!!) }
         )
         repository = WorkbenchLayoutRepository(context, testDataStore)
         val uniqueId = "test-orient-${System.nanoTime()}"
@@ -66,6 +74,18 @@ class WorkbenchOrientationInstrumentedTest {
             windowWidthBucket = WindowWidthBucket.Large,
             windowMode = "standard",
         )
+    }
+
+    @After
+    fun tearDown() {
+        testDataStoreScope.cancel()
+        val fileName = testDataStoreFileName ?: return
+        val context = composeTestRule.activity.applicationContext
+        val dsFile = java.io.File(context.filesDir, "datastore/$fileName")
+        if (dsFile.exists()) {
+            val deleted = dsFile.deleteRecursively()
+            assertTrue("Failed to delete test DataStore: $fileName", deleted || !dsFile.exists())
+        }
     }
 
     @Test

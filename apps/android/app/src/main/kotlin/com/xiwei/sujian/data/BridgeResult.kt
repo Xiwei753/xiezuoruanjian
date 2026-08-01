@@ -87,6 +87,12 @@ data class ResultEnvelope<out T>(
             "NATIVE_ERROR" -> "error.native_error"
             "PARSE_ERROR" -> "error.parse_error"
             "NOT_IMPLEMENTED_BRIDGE" -> "error.not_implemented_bridge"
+            "FLUSH_ERROR" -> "error.flush"
+            "CLOSE_ERROR" -> "error.close"
+            "FLUSH_ALL_ERROR" -> "error.flush_all"
+            "CONVERSION_ERROR" -> "error.conversion"
+            "SNAPSHOT_CACHE_NOT_INITIALIZED" -> "error.snapshot_cache_not_initialized"
+            "STAR_MAP_CACHE_MISSING" -> "error.star_map_cache_missing"
             else -> "error.other"
         }
     }
