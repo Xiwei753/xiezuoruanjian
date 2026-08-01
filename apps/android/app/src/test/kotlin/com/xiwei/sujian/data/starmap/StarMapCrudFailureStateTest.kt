@@ -37,7 +37,7 @@ class StarMapCrudFailureStateTest {
         assertEquals(1, beforeCount)
 
         val failedResult: BridgeResult<StarMapGraphNode> = BridgeResult.Error(
-            ResultEnvelope.error("NATIVE_ERROR", "add node failed")
+            ResultEnvelope.errorOf("NATIVE_ERROR", "add node failed")
         )
         when (failedResult) {
             is BridgeResult.Error -> {
@@ -69,7 +69,7 @@ class StarMapCrudFailureStateTest {
         assertTrue(cache.get("sm1")!!.nodes.containsKey("n2"))
 
         val failedResult: BridgeResult<Boolean> = BridgeResult.Error(
-            ResultEnvelope.error("NATIVE_ERROR", "delete node failed")
+            ResultEnvelope.errorOf("NATIVE_ERROR", "delete node failed")
         )
         when (failedResult) {
             is BridgeResult.Error -> {
@@ -98,7 +98,7 @@ class StarMapCrudFailureStateTest {
         assertEquals("OriginalTitle", cache.get("sm1")!!.nodes["n1"]!!.title)
 
         val failedResult: BridgeResult<StarMapGraphNode> = BridgeResult.Error(
-            ResultEnvelope.error("NATIVE_ERROR", "update node failed")
+            ResultEnvelope.errorOf("NATIVE_ERROR", "update node failed")
         )
         when (failedResult) {
             is BridgeResult.Error -> {
@@ -127,7 +127,7 @@ class StarMapCrudFailureStateTest {
         assertEquals(0, beforeEdgeCount)
 
         val failedResult: BridgeResult<StarMapGraphEdge> = BridgeResult.Error(
-            ResultEnvelope.error("NATIVE_ERROR", "add edge failed")
+            ResultEnvelope.errorOf("NATIVE_ERROR", "add edge failed")
         )
         when (failedResult) {
             is BridgeResult.Error -> assertNotNull(failedResult.message)
@@ -161,7 +161,7 @@ class StarMapCrudFailureStateTest {
         }
 
         val failedResult: BridgeResult<StarMapGraphNode> = BridgeResult.Error(
-            ResultEnvelope.error("NATIVE_ERROR", "update failed")
+            ResultEnvelope.errorOf("NATIVE_ERROR", "update failed")
         )
         val ok = executeOperation("更新节点", failedResult)
         assertFalse(ok)
@@ -187,7 +187,7 @@ class StarMapCrudFailureStateTest {
         var lastError: String? = null
 
         val failedResult: BridgeResult<StarMapGraphNode> = BridgeResult.Error(
-            ResultEnvelope.error("NATIVE_ERROR", "add failed")
+            ResultEnvelope.errorOf("NATIVE_ERROR", "add failed")
         )
         when (failedResult) {
             is BridgeResult.Error -> lastError = "添加节点失败: ${failedResult.message}"
@@ -223,7 +223,7 @@ class StarMapCrudFailureStateTest {
         assertEquals(0, cache.get("sm1")!!.embeds.size)
 
         val failedResult: BridgeResult<StarMapEmbedData> = BridgeResult.Error(
-            ResultEnvelope.error("NATIVE_ERROR", "add embed failed")
+            ResultEnvelope.errorOf("NATIVE_ERROR", "add embed failed")
         )
         when (failedResult) {
             is BridgeResult.Error -> assertNotNull(failedResult.message)
@@ -260,7 +260,7 @@ class StarMapCrudFailureStateTest {
         assertTrue(cache.get("sm1")!!.links.containsKey("lk1"))
 
         val failedResult: BridgeResult<Boolean> = BridgeResult.Error(
-            ResultEnvelope.error("NATIVE_ERROR", "delete link failed")
+            ResultEnvelope.errorOf("NATIVE_ERROR", "delete link failed")
         )
         when (failedResult) {
             is BridgeResult.Error -> assertNotNull(failedResult.message)
@@ -290,7 +290,7 @@ class StarMapCrudFailureStateTest {
         assertTrue(cache.get("sm1")!!.hyperlinks.containsKey("hl1"))
 
         val failedResult: BridgeResult<Boolean> = BridgeResult.Error(
-            ResultEnvelope.error("NATIVE_ERROR", "delete hyperlink failed")
+            ResultEnvelope.errorOf("NATIVE_ERROR", "delete hyperlink failed")
         )
         when (failedResult) {
             is BridgeResult.Error -> assertNotNull(failedResult.message)

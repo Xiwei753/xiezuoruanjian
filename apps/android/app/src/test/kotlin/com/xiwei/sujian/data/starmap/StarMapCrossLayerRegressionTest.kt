@@ -360,7 +360,7 @@ class StarMapCrossLayerRegressionTest {
         }
 
         val failedResult: BridgeResult<StarMapGraphNode> = BridgeResult.Error(
-            ResultEnvelope.error("NATIVE_ERROR", "update failed")
+            ResultEnvelope.errorOf("NATIVE_ERROR", "update failed")
         )
         val ok = executeOperation("更新节点", failedResult)
         assertFalse(ok)
@@ -390,7 +390,7 @@ class StarMapCrossLayerRegressionTest {
         var lastError: String? = null
 
         val failedResult: BridgeResult<StarMapGraphNode> = BridgeResult.Error(
-            ResultEnvelope.error("NATIVE_ERROR", "add failed")
+            ResultEnvelope.errorOf("NATIVE_ERROR", "add failed")
         )
         when (failedResult) {
             is BridgeResult.Error -> lastError = "添加节点失败: ${failedResult.message}"
@@ -418,7 +418,7 @@ class StarMapCrossLayerRegressionTest {
         var lastError: String? = null
 
         val failedResult: BridgeResult<StarMapGraphEdge> = BridgeResult.Error(
-            ResultEnvelope.error("NATIVE_ERROR", "add edge failed")
+            ResultEnvelope.errorOf("NATIVE_ERROR", "add edge failed")
         )
         when (failedResult) {
             is BridgeResult.Error -> lastError = "添加连线失败: ${failedResult.message}"
@@ -445,7 +445,7 @@ class StarMapCrossLayerRegressionTest {
         var lastError: String? = null
 
         val failedResult: BridgeResult<StarMapGraphNode> = BridgeResult.Error(
-            ResultEnvelope.error("NATIVE_ERROR", "update failed")
+            ResultEnvelope.errorOf("NATIVE_ERROR", "update failed")
         )
         when (failedResult) {
             is BridgeResult.Error -> lastError = "更新节点失败: ${failedResult.message}"
@@ -589,7 +589,7 @@ class StarMapCrossLayerRegressionTest {
         cache.put("sm1", dto.toRawCache())
 
         val saveResult: BridgeResult<Boolean> = BridgeResult.Error(
-            ResultEnvelope.error("IO_ERROR", "disk full")
+            ResultEnvelope.errorOf("IO_ERROR", "disk full")
         )
         when (saveResult) {
             is BridgeResult.Error -> assertEquals("IO_ERROR", saveResult.code)
@@ -625,7 +625,7 @@ class StarMapCrossLayerRegressionTest {
         cache.put("sm1", dto.toRawCache())
 
         val flushResult: BridgeResult<Boolean> = BridgeResult.Error(
-            ResultEnvelope.error("FLUSH_ERROR", "I/O error")
+            ResultEnvelope.errorOf("FLUSH_ERROR", "I/O error")
         )
         when (flushResult) {
             is BridgeResult.Error -> assertEquals("FLUSH_ERROR", flushResult.code)
@@ -640,7 +640,7 @@ class StarMapCrossLayerRegressionTest {
         assertNotNull(cached.graph)
 
         val closeResult: BridgeResult<Boolean> = BridgeResult.Error(
-            ResultEnvelope.error("CLOSE_ERROR", "I/O error")
+            ResultEnvelope.errorOf("CLOSE_ERROR", "I/O error")
         )
         when (closeResult) {
             is BridgeResult.Error -> assertEquals("CLOSE_ERROR", closeResult.code)
@@ -687,7 +687,7 @@ class StarMapCrossLayerRegressionTest {
 
         operationInProgress = true
         val failedResult: BridgeResult<StarMapGraphNode> = BridgeResult.Error(
-            ResultEnvelope.error("NATIVE_ERROR", "failed")
+            ResultEnvelope.errorOf("NATIVE_ERROR", "failed")
         )
         when (failedResult) {
             is BridgeResult.Error -> {

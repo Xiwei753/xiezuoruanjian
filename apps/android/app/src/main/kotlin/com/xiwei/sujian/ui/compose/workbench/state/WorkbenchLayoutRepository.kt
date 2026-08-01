@@ -57,10 +57,12 @@ interface WorkbenchLayoutStore {
 
 class WorkbenchLayoutRepository(
     private val context: Context,
+    private val testDataStore: DataStore<Preferences>? = null,
 ) : WorkbenchLayoutStore {
+    private val dataStore: DataStore<Preferences> get() = testDataStore ?: context.workbenchDataStore
     override suspend fun saveLayout(key: LayoutStorageKey, state: WorkbenchLayoutState) {
         withContext(Dispatchers.IO) {
-            context.workbenchDataStore.edit { prefs ->
+            dataStore.edit { prefs ->
                 val prefix = key.toStorageKey()
                 val dynamicKeysToRemove = prefs.asMap().keys.filter { k ->
                     k.name.startsWith(prefix) && (
@@ -118,7 +120,7 @@ class WorkbenchLayoutRepository(
         val prefix = key.toStorageKey()
         return withContext(Dispatchers.IO) {
             try {
-                val prefs = context.workbenchDataStore.data.first()
+                val prefs = dataStore.data.first()
                 val presetStr = prefs[stringPreferencesKey("${prefix}.preset")] ?: return@withContext null
                 val preset = WorkbenchPreset.entries.find { it.name == presetStr } ?: WorkbenchPreset.Custom
                 val snapshotVersion = prefs[intPreferencesKey("${prefix}.snapshotVersion")] ?: 1

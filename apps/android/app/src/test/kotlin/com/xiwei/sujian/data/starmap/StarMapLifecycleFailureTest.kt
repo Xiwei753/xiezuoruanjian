@@ -40,7 +40,7 @@ class StarMapLifecycleFailureTest {
         cache.put("sm1", dto.toRawCache())
 
         val flushResult: BridgeResult<Boolean> = BridgeResult.Error(
-            ResultEnvelope.error("FLUSH_ERROR", "Failed to flush starmap store: I/O error")
+            ResultEnvelope.errorOf("FLUSH_ERROR", "Failed to flush starmap store: I/O error")
         )
 
         when (flushResult) {
@@ -71,7 +71,7 @@ class StarMapLifecycleFailureTest {
         cache.put("sm1", dto.toRawCache())
 
         val closeResult: BridgeResult<Boolean> = BridgeResult.Error(
-            ResultEnvelope.error("CLOSE_ERROR", "Failed to close starmap store: I/O error")
+            ResultEnvelope.errorOf("CLOSE_ERROR", "Failed to close starmap store: I/O error")
         )
 
         when (closeResult) {
@@ -109,7 +109,7 @@ class StarMapLifecycleFailureTest {
         assertEquals(200f, beforeLayout.y, 0.001f)
 
         val saveResult: BridgeResult<Boolean> = BridgeResult.Error(
-            ResultEnvelope.error("IO_ERROR", "Failed to save layout: disk full")
+            ResultEnvelope.errorOf("IO_ERROR", "Failed to save layout: disk full")
         )
         when (saveResult) {
             is BridgeResult.Error -> {
@@ -147,7 +147,7 @@ class StarMapLifecycleFailureTest {
         cache.put("sm2", dto2.toRawCache())
 
         val flushAllResult: BridgeResult<Boolean> = BridgeResult.Error(
-            ResultEnvelope.error("FLUSH_ALL_ERROR", "Failed to flush all starmap stores")
+            ResultEnvelope.errorOf("FLUSH_ALL_ERROR", "Failed to flush all starmap stores")
         )
         when (flushAllResult) {
             is BridgeResult.Error -> assertEquals("FLUSH_ALL_ERROR", flushAllResult.code)
@@ -167,7 +167,7 @@ class StarMapLifecycleFailureTest {
 
         val rawCache = cache.get("nonexistent")
         if (rawCache == null) {
-            val error = ResultEnvelope.error("SNAPSHOT_CACHE_NOT_INITIALIZED",
+            val error = ResultEnvelope.errorOf("SNAPSHOT_CACHE_NOT_INITIALIZED",
                 "Starmap cache not initialized for nonexistent. Call getStarmapPhasedSnapshot first.")
             assertEquals("SNAPSHOT_CACHE_NOT_INITIALIZED", error.errorCode)
         }
@@ -191,7 +191,7 @@ class StarMapLifecycleFailureTest {
         assertNull(rawCache!!.graph)
 
         if (rawCache.graph == null) {
-            val error = ResultEnvelope.error("STAR_MAP_CACHE_MISSING",
+            val error = ResultEnvelope.errorOf("STAR_MAP_CACHE_MISSING",
                 "Raw starmap graph is not available in snapshot cache.")
             assertEquals("STAR_MAP_CACHE_MISSING", error.errorCode)
         }

@@ -19,12 +19,7 @@ sealed class BridgeResult<out T> {
         val code: String? get() = envelope.errorCode
     }
     object NotLoaded : BridgeResult<Nothing>() {
-        @Suppress("DEPRECATION")
-        val envelope: ResultEnvelope<Nothing> = ResultEnvelope(
-            success = false,
-            errorCode = "NATIVE_NOT_LOADED",
-            userMessage = null
-        )
+        val envelope: ResultEnvelope<Nothing> = ResultEnvelope.errorOf("NATIVE_NOT_LOADED", "Native library not loaded")
     }
 }
 

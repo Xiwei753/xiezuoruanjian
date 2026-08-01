@@ -59,7 +59,7 @@ class StarMapBridgeRepositoryIntegrationTest {
         override fun listStarMaps(): BridgeResult<List<StarMapMetaDto>> = BridgeResult.Success(emptyList())
         override fun getStarMapGraph(starmapId: String): BridgeResult<StarMapGraphDto> {
             getStarMapGraphCallCount++
-            return BridgeResult.Error(ResultEnvelope.error("DEPRECATED", "getStarMapGraph should not be called"))
+            return BridgeResult.Error(ResultEnvelope.errorOf("DEPRECATED", "getStarMapGraph should not be called"))
         }
         override fun createStarMap(title: String, desc: String): BridgeResult<StarMapMetaDto> =
             BridgeResult.Success(StarMapMetaDto("sm1", title, desc, "", null, false, "", 0u, 0u, 0u, 0u, 0u, 0u))
@@ -74,35 +74,35 @@ class StarMapBridgeRepositoryIntegrationTest {
         override fun hitTestStarMapNode(layout: StarMapLayoutDto, x: Float, y: Float): BridgeResult<String?> = BridgeResult.Success(null)
         override fun addStarmapEmbed(starmapId: String, embed: StarMapEmbedDto): BridgeResult<StarMapEmbedDto> = BridgeResult.Success(embed)
         override fun updateStarmapEmbed(starmapId: String, instanceId: String, patch: StarMapEmbedPatchInputDto): BridgeResult<StarMapEmbedDto> =
-            BridgeResult.Error(ResultEnvelope.error("NOT_IMPLEMENTED", "not implemented"))
+            BridgeResult.Error(ResultEnvelope.errorOf("NOT_IMPLEMENTED", "not implemented"))
         override fun deleteStarmapEmbed(starmapId: String, instanceId: String): BridgeResult<Boolean> = BridgeResult.Success(true)
         override fun addStarmapLink(starmapId: String, link: StarMapLinkDto): BridgeResult<StarMapLinkDto> = BridgeResult.Success(link)
         override fun updateStarmapLink(starmapId: String, linkId: String, patch: StarMapLinkPatchInputDto): BridgeResult<StarMapLinkDto> =
-            BridgeResult.Error(ResultEnvelope.error("NOT_IMPLEMENTED", "not implemented"))
+            BridgeResult.Error(ResultEnvelope.errorOf("NOT_IMPLEMENTED", "not implemented"))
         override fun deleteStarmapLink(starmapId: String, linkId: String): BridgeResult<Boolean> = BridgeResult.Success(true)
         override fun addStarmapHyperlink(starmapId: String, hl: StarMapHyperlinkDto): BridgeResult<StarMapHyperlinkDto> = BridgeResult.Success(hl)
         override fun updateStarmapHyperlink(starmapId: String, hyperlinkId: String, patch: StarMapHyperlinkPatchInputDto): BridgeResult<StarMapHyperlinkDto> =
-            BridgeResult.Error(ResultEnvelope.error("NOT_IMPLEMENTED", "not implemented"))
+            BridgeResult.Error(ResultEnvelope.errorOf("NOT_IMPLEMENTED", "not implemented"))
         override fun deleteStarmapHyperlink(starmapId: String, hyperlinkId: String): BridgeResult<Boolean> = BridgeResult.Success(true)
         override fun listStarmapHyperlinks(starmapId: String): BridgeResult<StarMapHyperlinkListWithDiagnosticsDto> =
             BridgeResult.Success(StarMapHyperlinkListWithDiagnosticsDto(emptyList(), emptyList()))
         override fun getStarmapPhasedSnapshot(starmapId: String, request: PhasedSnapshotRequestDto): BridgeResult<StarMapPhasedSnapshotDto> {
             val dto = phasedSnapshotResults[starmapId]
-                ?: return BridgeResult.Error(ResultEnvelope.error("NOT_FOUND", "starmap not found"))
+                ?: return BridgeResult.Error(ResultEnvelope.errorOf("NOT_FOUND", "starmap not found"))
             return BridgeResult.Success(dto)
         }
         override fun findStarmapReferences(targetStarmapId: String): BridgeResult<List<StarMapReferenceDto>> = BridgeResult.Success(emptyList())
         override fun getStarMapMotionPolicy(): BridgeResult<StarMapMotionPolicyDto> =
             BridgeResult.Success(StarMapMotionPolicyDto(false, false, 1f, 3000u, 1f, 5f, 100u, false))
         override fun updateStarMapNode(starmapId: String, nodeId: String, patch: StarMapNodePatchInputDto): BridgeResult<StarMapNodeDto> =
-            updateNodeResult?.invoke() ?: BridgeResult.Error(ResultEnvelope.error("NOT_IMPLEMENTED", "not implemented"))
+            updateNodeResult?.invoke() ?: BridgeResult.Error(ResultEnvelope.errorOf("NOT_IMPLEMENTED", "not implemented"))
         override fun deleteStarMapNode(starmapId: String, nodeId: String): BridgeResult<Boolean> =
             deleteNodeResult?.invoke() ?: BridgeResult.Success(true)
         override fun addStarMapEdge(starmapId: String, edge: StarMapEdgeDto): BridgeResult<StarMapEdgeDto> =
             addEdgeResult?.invoke() ?: BridgeResult.Success(edge)
         override fun deleteStarMapEdge(starmapId: String, edgeId: String): BridgeResult<Boolean> = BridgeResult.Success(true)
         override fun updateStarMapEdge(starmapId: String, edgeId: String, patch: StarMapEdgePatchInputDto): BridgeResult<StarMapEdgeDto> =
-            BridgeResult.Error(ResultEnvelope.error("NOT_IMPLEMENTED", "not implemented"))
+            BridgeResult.Error(ResultEnvelope.errorOf("NOT_IMPLEMENTED", "not implemented"))
         override fun flushStarmapStore(starmapId: String): BridgeResult<Boolean> = BridgeResult.Success(true)
         override fun closeStarmapStore(starmapId: String): BridgeResult<Boolean> = BridgeResult.Success(true)
         override fun flushAllStarmapStores(): BridgeResult<Boolean> = BridgeResult.Success(true)
@@ -290,7 +290,7 @@ class StarMapBridgeRepositoryIntegrationTest {
         )
         val bridge = createFakeBridge(
             phasedSnapshotResults = mutableMapOf("sm1" to dto),
-            addNodeResult = { BridgeResult.Error(ResultEnvelope.error("NATIVE_ERROR", "add failed")) }
+            addNodeResult = { BridgeResult.Error(ResultEnvelope.errorOf("NATIVE_ERROR", "add failed")) }
         )
         val cache = StarMapSnapshotCache()
         val repo = StarMapRepository(bridge, cache)
@@ -335,7 +335,7 @@ class StarMapBridgeRepositoryIntegrationTest {
         )
         val bridge = createFakeBridge(
             phasedSnapshotResults = mutableMapOf("sm1" to dto),
-            deleteNodeResult = { BridgeResult.Error(ResultEnvelope.error("NATIVE_ERROR", "delete failed")) }
+            deleteNodeResult = { BridgeResult.Error(ResultEnvelope.errorOf("NATIVE_ERROR", "delete failed")) }
         )
         val cache = StarMapSnapshotCache()
         val repo = StarMapRepository(bridge, cache)

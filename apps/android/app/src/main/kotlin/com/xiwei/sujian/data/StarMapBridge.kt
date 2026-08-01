@@ -158,6 +158,8 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
         return try {
             holder.service.flushStarmapStore(starmapId)
             BridgeResult.Success(true)
+        } catch (e: UnsatisfiedLinkError) {
+            BridgeResult.NotLoaded
         } catch (e: Exception) {
             BridgeResult.Error(ResultEnvelope.errorOf("FLUSH_ERROR", "Failed to flush starmap store: ${e.message}"))
         }
@@ -167,6 +169,8 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
         return try {
             holder.service.closeStarmapStore(starmapId)
             BridgeResult.Success(true)
+        } catch (e: UnsatisfiedLinkError) {
+            BridgeResult.NotLoaded
         } catch (e: Exception) {
             BridgeResult.Error(ResultEnvelope.errorOf("CLOSE_ERROR", "Failed to close starmap store: ${e.message}"))
         }
@@ -176,6 +180,8 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
         return try {
             holder.service.flushAllStarmapStores()
             BridgeResult.Success(true)
+        } catch (e: UnsatisfiedLinkError) {
+            BridgeResult.NotLoaded
         } catch (e: Exception) {
             BridgeResult.Error(ResultEnvelope.errorOf("FLUSH_ALL_ERROR", "Failed to flush all starmap stores: ${e.message}"))
         }

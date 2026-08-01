@@ -92,6 +92,8 @@ object BridgeProvider {
         try {
             bridge.holder.service.updateNetworkState(isConnected, isMetered, null, null)
             DiagnosticsLogger.d(TAG, "Network state updated: connected=$isConnected, metered=$isMetered")
+        } catch (e: UnsatisfiedLinkError) {
+            DiagnosticsLogger.e(TAG, "Native library not loaded, skipping network state update", e)
         } catch (e: Exception) {
             DiagnosticsLogger.e(TAG, "Failed to update network state", e)
         }

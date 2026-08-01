@@ -23,6 +23,11 @@ import com.xiwei.sujian.ui.compose.workbench.state.LayoutStorageKey
 import com.xiwei.sujian.ui.compose.workbench.state.WindowWidthBucket
 import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchLayoutRepository
 import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchReducer
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.preferencesDataStoreFile
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -44,11 +49,16 @@ class WorkbenchOrientationInstrumentedTest {
     private val defaultState = WorkbenchReducer.computeDefaultLayout()
     private lateinit var repository: WorkbenchLayoutRepository
     private lateinit var testKey: LayoutStorageKey
+    private lateinit var testDataStore: DataStore<Preferences>
 
     @Before
     fun setUp() {
         val context = composeTestRule.activity.applicationContext
-        repository = WorkbenchLayoutRepository(context)
+        testDataStore = PreferenceDataStoreFactory.create(
+            scope = kotlinx.coroutines.CoroutineScope(Dispatchers.IO),
+            produceFile = { context.preferencesDataStoreFile("workbench_layout_prefs_test_${System.nanoTime()}") }
+        )
+        repository = WorkbenchLayoutRepository(context, testDataStore)
         val uniqueId = "test-orient-${System.nanoTime()}"
         testKey = LayoutStorageKey(
             deviceId = uniqueId,
@@ -157,7 +167,7 @@ class WorkbenchOrientationInstrumentedTest {
         }
 
         val context = composeTestRule.activity.applicationContext
-        val newRepository = WorkbenchLayoutRepository(context)
+        val newRepository = WorkbenchLayoutRepository(context, testDataStore)
 
         val loaded = runBlocking {
             newRepository.loadLayout(testKey)

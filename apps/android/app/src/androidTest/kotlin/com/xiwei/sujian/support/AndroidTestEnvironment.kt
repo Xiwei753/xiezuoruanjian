@@ -98,30 +98,48 @@ class TestSession private constructor(
     }
 
     fun releaseSession() {
-        depsHolder.releaseRuntime()
+        var firstException: Throwable? = null
+        try {
+            depsHolder.releaseRuntime()
+        } catch (t: Throwable) {
+            firstException = t
+        }
         val appContext = context.applicationContext
         for (name in prefsFileNames) {
-            val prefs = appContext.getSharedPreferences(name, android.content.Context.MODE_PRIVATE)
-            val cleared = prefs.edit().clear().commit()
-            Assert.assertTrue("Failed to clear test SharedPreferences: $name", cleared)
-            val deleted = appContext.deleteSharedPreferences(name)
-            Assert.assertTrue("Failed to delete test SharedPreferences: $name", deleted)
-        }
-        for (dsName in dataStoreDirNames) {
-            val dsDir = File(appContext.filesDir, "datastore/$dsName")
-            if (dsDir.exists()) {
-                val deleted = dsDir.deleteRecursively()
-                Assert.assertTrue("Failed to delete test DataStore dir: $dsName (path=${dsDir.absolutePath})", deleted || !dsDir.exists())
+            try {
+                val prefs = appContext.getSharedPreferences(name, android.content.Context.MODE_PRIVATE)
+                val cleared = prefs.edit().clear().commit()
+                Assert.assertTrue("Failed to clear test SharedPreferences: $name", cleared)
+                val deleted = appContext.deleteSharedPreferences(name)
+                Assert.assertTrue("Failed to delete test SharedPreferences: $name", deleted)
+            } catch (t: Throwable) {
+                if (firstException != null) firstException.addSuppressed(t) else firstException = t
             }
         }
-        TestWorkspaceFactory.deleteWorkspace(TestWorkspaceFactory.TestWorkspacePaths(
-            testRootDir = testRootDir,
-            workspaceDir = workspaceDir,
-            appDataDir = File(testRootDir, "app_data"),
-            cacheDir = File(testRootDir, "cache"),
-            logDir = File(testRootDir, "logs"),
-            noBackupDir = File(testRootDir, "no_backup"),
-        ))
+        for (dsName in dataStoreDirNames) {
+            try {
+                val dsDir = File(appContext.filesDir, "datastore/$dsName")
+                if (dsDir.exists()) {
+                    val deleted = dsDir.deleteRecursively()
+                    Assert.assertTrue("Failed to delete test DataStore dir: $dsName (path=${dsDir.absolutePath})", deleted || !dsDir.exists())
+                }
+            } catch (t: Throwable) {
+                if (firstException != null) firstException.addSuppressed(t) else firstException = t
+            }
+        }
+        try {
+            TestWorkspaceFactory.deleteWorkspace(TestWorkspaceFactory.TestWorkspacePaths(
+                testRootDir = testRootDir,
+                workspaceDir = workspaceDir,
+                appDataDir = File(testRootDir, "app_data"),
+                cacheDir = File(testRootDir, "cache"),
+                logDir = File(testRootDir, "logs"),
+                noBackupDir = File(testRootDir, "no_backup"),
+            ))
+        } catch (t: Throwable) {
+            if (firstException != null) firstException.addSuppressed(t) else firstException = t
+        }
+        if (firstException != null) throw firstException
     }
 }
 
