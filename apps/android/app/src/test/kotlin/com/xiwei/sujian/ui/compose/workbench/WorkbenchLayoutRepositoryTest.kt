@@ -280,11 +280,10 @@ class WorkbenchLayoutRepositoryTest {
 
     private fun pollutedCustomState(): WorkbenchLayoutState {
         var state = WorkbenchReducer.computeDefaultLayout()
-        state = WorkbenchReducer.reduce(state, WorkbenchAction.CreateDockGroup("custom-a", DockZone.Left, 2))
-        state = WorkbenchReducer.reduce(state, WorkbenchAction.MovePanelToGroup(WorkbenchPanelId.Search, "custom-a"))
+        state = WorkbenchReducer.reduce(state, WorkbenchAction.DockPanelAsNewGroup(WorkbenchPanelId.Search, DockZone.Left, 2))
         state = WorkbenchReducer.reduce(state, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
         state = WorkbenchReducer.reduce(state, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Search))
-        state = WorkbenchReducer.reduce(state, WorkbenchAction.ResizeDockSplit(DockZone.Left, "custom-a", "left-nav", -1000f, 320f))
+        state = WorkbenchReducer.reduce(state, WorkbenchAction.ResizeDockSplit(DockZone.Left, state.panels[WorkbenchPanelId.Search]?.tabGroupId!!, "left-nav", -1000f, 320f))
         return state
     }
 

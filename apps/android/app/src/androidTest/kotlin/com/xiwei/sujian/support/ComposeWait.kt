@@ -11,11 +11,14 @@ object ComposeWait {
         tag: String,
         timeoutMs: Long = DEFAULT_TIMEOUT_MS
     ): SemanticsNodeInteraction {
+        var lastObserved: String? = null
         waitUntil(rule, {
             val nodes = rule.onAllNodes(androidx.compose.ui.test.hasTestTag(tag))
-            nodes.fetchSemanticsNodes().isNotEmpty()
+            val fetched = nodes.fetchSemanticsNodes()
+            lastObserved = if (fetched.isEmpty()) "no nodes" else "${fetched.size} node(s)"
+            fetched.isNotEmpty()
         }, timeoutMs) {
-            "Timed out waiting for tag: $tag"
+            "Timed out waiting for tag: $tag (last observed: $lastObserved)"
         }
         return rule.onNode(androidx.compose.ui.test.hasTestTag(tag))
     }
@@ -79,11 +82,35 @@ object ComposeWait {
         timeoutMs: Long = DEFAULT_TIMEOUT_MS,
         message: (() -> String)? = null
     ) {
+        var lastObservedState: String? = null
         try {
-            rule.waitUntil(timeoutMs, condition)
+            rule.waitUntil(timeoutMs) {
+                rule.waitForIdle()
+                val result = condition()
+                if (!result) {
+                    lastObservedState = try {
+                        val nodes = rule.onAllNodes(
+                            androidx.compose.ui.test.hasTestTag(
+                                com.xiwei.sujian.designsystem.testing.SujianSemanticIds.EditorSaveStatus
+                            )
+                        )
+                        val fetched = nodes.fetchSemanticsNodes()
+                        if (fetched.isEmpty()) "no save-status node" else fetched.first().config.getOrElse(
+                            androidx.compose.ui.semantics.SemanticsProperties.StateDescription
+                        ) { "no state desc" }.toString()
+                    } catch (_: Exception) { "unavailable" }
+                }
+                result
+            }
+        } catch (e: androidx.compose.ui.test.ComposeTimeoutException) {
+            val diag = if (message != null) message() else "Condition not satisfied"
+            throw AssertionError(
+                "$diag. Timeout: ${timeoutMs}ms. Last observed state: $lastObservedState. Original: ${e.message}",
+                e
+            )
         } catch (e: AssertionError) {
             if (message != null) {
-                throw AssertionError("${message()}. Original: ${e.message}", e)
+                throw AssertionError("${message()}. Last observed state: $lastObservedState. Original: ${e.message}", e)
             }
             throw e
         }

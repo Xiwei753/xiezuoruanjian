@@ -256,13 +256,27 @@ class WorkbenchViewModelTest {
         val store = RecordingStore(emptyMap())
         viewModel.initialize(store, testKey)
         advanceUntilIdle()
+        val savesBefore = store.saves.savesFor(testKey).size
         viewModel.dispatchDeferredPersist(WorkbenchAction.ResizeDockZone(DockZone.Left, 10f, 1200f))
         viewModel.dispatchDeferredPersist(WorkbenchAction.ResizeDockZone(DockZone.Left, 20f, 1200f))
+        testScheduler.advanceTimeBy(299)
+        assertEquals(
+            "No new save should occur before 300ms debounce",
+            savesBefore, store.saves.savesFor(testKey).size
+        )
+        testScheduler.advanceTimeBy(1)
         advanceUntilIdle()
-        val savesForTestKey = store.saves.savesFor(testKey)
-        assertTrue("deferred persist should eventually save", savesForTestKey.isNotEmpty())
+        val savesAfter = store.saves.savesFor(testKey).size
+        assertEquals(
+            "Exactly one new save should occur after 300ms debounce",
+            savesBefore + 1, savesAfter
+        )
         val finalLeftSize = viewModel.layoutState.dockZoneSizeDp[DockZone.Left]
-        assertTrue("saved layout must reflect the final (second) resize", savesForTestKey.last().dockZoneSizeDp[DockZone.Left] == finalLeftSize)
+        val savedSnapshot = store.saves.savesFor(testKey).last()
+        assertEquals(
+            "The sole new snapshot must reflect the second (final) resize",
+            finalLeftSize, savedSnapshot.dockZoneSizeDp[DockZone.Left]
+        )
     }
 
     @Test

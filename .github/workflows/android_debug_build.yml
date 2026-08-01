@@ -42,8 +42,6 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          build-root-directory: apps/android
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -168,8 +166,6 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          build-root-directory: apps/android
 
       - name: Download native build artifacts
         uses: actions/download-artifact@v4

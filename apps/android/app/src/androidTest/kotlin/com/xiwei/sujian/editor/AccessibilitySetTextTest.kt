@@ -58,6 +58,7 @@ class AccessibilitySetTextTest {
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(AccessibilitySetTextAction.setText(testText))
 
+        composeTestRule.waitForIdle()
         ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -80,6 +81,7 @@ class AccessibilitySetTextTest {
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(AccessibilitySetTextAction.setText(testText))
 
+        composeTestRule.waitForIdle()
         ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -105,6 +107,7 @@ class AccessibilitySetTextTest {
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(AccessibilitySetTextAction.setText(testText))
 
+        composeTestRule.waitForIdle()
         ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -115,6 +118,7 @@ class AccessibilitySetTextTest {
             .check(EditorViewAssertions.hasSelectionUtf16(expectedUtf16Length, expectedUtf16Length))
 
         activityRule.restartRuntimeAndActivity()
+        composeTestRule.waitForIdle()
 
         navigateToChapterAfterRestart(testData, chapterId)
 
@@ -132,12 +136,14 @@ class AccessibilitySetTextTest {
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(AccessibilitySetTextAction.setText("初始内容"))
+        composeTestRule.waitForIdle()
         ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("初始内容"))
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .perform(AccessibilitySetTextAction.setText("替换后的内容"))
+        composeTestRule.waitForIdle()
         ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("替换后的内容"))

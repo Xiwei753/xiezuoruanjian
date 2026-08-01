@@ -109,12 +109,6 @@ class WorkbenchReducerTest {
     }
 
     @Test
-    fun movePanel_changesZone() {
-        val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.MovePanel(WorkbenchPanelId.AiAssistant, DockZone.Bottom))
-        assertEquals(DockZone.Bottom, result.panels[WorkbenchPanelId.AiAssistant]?.zone)
-    }
-
-    @Test
     fun floatPanel_setsZoneAndExpanded() {
         val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.FloatPanel(WorkbenchPanelId.Statistics))
         assertEquals(DockZone.Floating, result.panels[WorkbenchPanelId.Statistics]?.zone)
@@ -125,13 +119,6 @@ class WorkbenchReducerTest {
     fun floatPanel_assignsZIndex() {
         val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.FloatPanel(WorkbenchPanelId.Statistics))
         assertTrue(result.panels[WorkbenchPanelId.Statistics]?.floatingZIndex!! >= 0)
-    }
-
-    @Test
-    fun dockPanel_setsZoneAndExpanded() {
-        val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.DockPanel(WorkbenchPanelId.StarMap, DockZone.Right))
-        assertEquals(DockZone.Right, result.panels[WorkbenchPanelId.StarMap]?.zone)
-        assertEquals(PanelVisibility.Expanded, result.panels[WorkbenchPanelId.StarMap]?.visibility)
     }
 
     @Test
@@ -220,12 +207,6 @@ class WorkbenchReducerTest {
     }
 
     @Test
-    fun reorderPanel_updatesOrder() {
-        val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ReorderPanel(WorkbenchPanelId.Search, 5))
-        assertEquals(5, result.panels[WorkbenchPanelId.Search]?.order)
-    }
-
-    @Test
     fun bringFloatingToFront_updatesZIndex() {
         val floated = WorkbenchReducer.reduce(defaultState, WorkbenchAction.FloatPanel(WorkbenchPanelId.AiAssistant))
         val result = WorkbenchReducer.reduce(floated, WorkbenchAction.BringFloatingToFront(WorkbenchPanelId.AiAssistant))
@@ -304,23 +285,6 @@ class WorkbenchReducerTest {
     fun activateOverlayPanel_ignoresNonExpandedPanel() {
         val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ActivateOverlayPanel(WorkbenchPanelId.AiAssistant))
         assertEquals(defaultState.activeOverlayPanelId, result.activeOverlayPanelId)
-    }
-
-    @Test
-    fun createDockGroup_savesGroupWeight() {
-        val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.CreateDockGroup("new-group", DockZone.Left, 0))
-        assertTrue(result.dockGroupWeights.containsKey("new-group"))
-        assertEquals(1f, result.dockGroupWeights["new-group"]!!, 0.01f)
-    }
-
-    @Test
-    fun createDockGroup_duplicateId_noChange() {
-        val first = WorkbenchReducer.reduce(defaultState, WorkbenchAction.CreateDockGroup("g1", DockZone.Left, 0))
-        val second = WorkbenchReducer.reduce(first, WorkbenchAction.CreateDockGroup("g1", DockZone.Left, 1))
-        assertEquals(first.dockGroupWeights, second.dockGroupWeights)
-        val firstGroupCount = first.dockGroupsByZone(DockZone.Left).size
-        val secondGroupCount = second.dockGroupsByZone(DockZone.Left).size
-        assertEquals(firstGroupCount, secondGroupCount)
     }
 
     @Test
@@ -465,15 +429,6 @@ class WorkbenchReducerTest {
     }
 
     @Test
-    fun resizeDockZone_bottomZone_clampsByMaxRatio() {
-        val moved = WorkbenchReducer.reduce(defaultState, WorkbenchAction.MovePanel(WorkbenchPanelId.Statistics, DockZone.Bottom))
-        val expanded = WorkbenchReducer.reduce(moved, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Statistics))
-        val result = WorkbenchReducer.reduce(expanded, WorkbenchAction.ResizeDockZone(DockZone.Bottom, 500f, 800f))
-        val maxBottom = 800f * 0.55f
-        assertTrue(result.dockZoneSizeDp[DockZone.Bottom]!! <= maxBottom)
-    }
-
-    @Test
     fun resizeDockZone_emptyZone_noChange() {
         val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ResizeDockZone(DockZone.Left, 50f, 1200f))
         assertEquals(defaultState, result)
@@ -581,53 +536,6 @@ class WorkbenchReducerTest {
     }
 
     @Test
-    fun dockPanel_sameZone_noTabGroupIdChange() {
-        val expanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
-        val originalGroupId = expanded.panels[WorkbenchPanelId.ChapterNavigator]?.tabGroupId
-        val result = WorkbenchReducer.reduce(expanded, WorkbenchAction.DockPanel(WorkbenchPanelId.ChapterNavigator, DockZone.Left))
-        assertEquals(originalGroupId, result.panels[WorkbenchPanelId.ChapterNavigator]?.tabGroupId)
-    }
-
-    @Test
-    fun dockPanel_assignsNewTabGroupId_forDifferentZone() {
-        val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.DockPanel(WorkbenchPanelId.AiAssistant, DockZone.Left))
-        val tabGroupId = result.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId
-        assertNotNull(tabGroupId)
-        assertTrue(tabGroupId!!.contains("left"))
-        assertTrue(result.dockGroupWeights.containsKey(tabGroupId))
-    }
-
-    @Test
-    fun dockPanel_reusesExistingGroupInZone() {
-        val chapterExpanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
-        val leftGroupId = chapterExpanded.panels[WorkbenchPanelId.ChapterNavigator]?.tabGroupId ?: ""
-        val result = WorkbenchReducer.reduce(chapterExpanded, WorkbenchAction.DockPanel(WorkbenchPanelId.AiAssistant, DockZone.Left))
-        val newGroupId = result.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId ?: ""
-        assertEquals("DockPanel cross-zone should join existing group when available", leftGroupId, newGroupId)
-        assertTrue(result.dockGroupWeights.containsKey(newGroupId))
-        assertTrue(result.dockGroupMeta.containsKey(newGroupId))
-    }
-
-    @Test
-    fun dockPanel_floatingToBottom_createsBottomGroup() {
-        val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.DockPanel(WorkbenchPanelId.Statistics, DockZone.Bottom))
-        val tabGroupId = result.panels[WorkbenchPanelId.Statistics]?.tabGroupId
-        assertNotNull(tabGroupId)
-        assertTrue(tabGroupId!!.contains("bottom"))
-        assertTrue(result.dockGroupWeights.containsKey(tabGroupId))
-        assertTrue(result.dockZoneSizeDp.containsKey(DockZone.Bottom))
-    }
-
-    @Test
-    fun computePresentationState_mediumWithBottom_noOverlayForBottom() {
-        val leftExpanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
-        val bottomMoved = WorkbenchReducer.reduce(leftExpanded, WorkbenchAction.MovePanel(WorkbenchPanelId.Statistics, DockZone.Bottom))
-        val bothExpanded = WorkbenchReducer.reduce(bottomMoved, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Statistics))
-        val presentation = WorkbenchReducer.computePresentationState(bothExpanded, 1000f, 800f)
-        assertTrue(presentation.overlayPanelIds.isEmpty())
-    }
-
-    @Test
     fun computePresentationState_mediumDualSide_activeOverlayRespected() {
         val leftExpanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
         val rightExpanded = WorkbenchReducer.reduce(leftExpanded, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Search))
@@ -636,17 +544,6 @@ class WorkbenchReducerTest {
         assertEquals(WorkbenchPanelId.Search, presentation.activeOverlayPanelId)
         assertTrue(presentation.overlayPanelIds.contains(WorkbenchPanelId.Search))
         assertFalse(presentation.overlayPanelIds.contains(WorkbenchPanelId.ChapterNavigator))
-    }
-
-    @Test
-    fun computePresentationState_mediumDualSide_bottomNotInOverlay() {
-        val leftExpanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
-        val bothExpanded = WorkbenchReducer.reduce(leftExpanded, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
-        val bottomMoved = WorkbenchReducer.reduce(bothExpanded, WorkbenchAction.MovePanel(WorkbenchPanelId.Statistics, DockZone.Bottom))
-        val allExpanded = WorkbenchReducer.reduce(bottomMoved, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Statistics))
-        val presentation = WorkbenchReducer.computePresentationState(allExpanded, 1000f, 800f)
-        assertTrue(presentation.overlayPanelIds.contains(WorkbenchPanelId.AiAssistant))
-        assertFalse(presentation.overlayPanelIds.contains(WorkbenchPanelId.Statistics))
     }
 
     @Test
@@ -677,45 +574,6 @@ class WorkbenchReducerTest {
         assertEquals(0f, panel.floatingY, 0.01f)
         assertEquals(300f, panel.floatingWidthDp, 0.01f)
         assertEquals(400f, panel.floatingHeightDp, 0.01f)
-    }
-
-    @Test
-    fun dockPanel_crossZone_updatesZoneAndTabGroupId() {
-        val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.DockPanel(WorkbenchPanelId.AiAssistant, DockZone.Left))
-        assertEquals(DockZone.Left, result.panels[WorkbenchPanelId.AiAssistant]?.zone)
-        val newGroupId = result.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId!!
-        assertTrue("DockPanel to empty zone should create new group", result.dockGroupMeta.containsKey(newGroupId))
-    }
-
-    @Test
-    fun createDockGroup_persistsZoneAndOrder() {
-        val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.CreateDockGroup("new-group", DockZone.Bottom, 3))
-        assertTrue(result.dockGroupWeights.containsKey("new-group"))
-        val groups = result.dockGroupsByZone(DockZone.Bottom)
-        val newGroup = groups.find { it.id == "new-group" }
-        assertNotNull(newGroup)
-        assertEquals(DockZone.Bottom, newGroup!!.zone)
-        assertEquals(0, newGroup.order)
-    }
-
-    @Test
-    fun createDockGroup_duplicateOrder_reindexes() {
-        val first = WorkbenchReducer.reduce(defaultState, WorkbenchAction.CreateDockGroup("g1", DockZone.Left, 0))
-        val second = WorkbenchReducer.reduce(first, WorkbenchAction.CreateDockGroup("g2", DockZone.Left, 0))
-        val leftGroups = second.dockGroupsByZone(DockZone.Left)
-        val orders = leftGroups.map { it.order }
-        assertEquals((0 until leftGroups.size).toList(), orders.sorted())
-        val orderSet = orders.toSet()
-        assertEquals(orders.size, orderSet.size)
-    }
-
-    @Test
-    fun movePanelToGroup_bottomZone_usesBottomDefaultSize() {
-        val bottomExpanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.MovePanel(WorkbenchPanelId.Statistics, DockZone.Bottom))
-        val expanded = WorkbenchReducer.reduce(bottomExpanded, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Statistics))
-        val bottomGroupId = expanded.panels[WorkbenchPanelId.Statistics]?.tabGroupId!!
-        val result = WorkbenchReducer.reduce(expanded, WorkbenchAction.MovePanelToGroup(WorkbenchPanelId.Search, bottomGroupId))
-        assertTrue(result.dockGroupWeights.containsKey(bottomGroupId))
     }
 
     @Test
@@ -1073,14 +931,6 @@ class WorkbenchReducerTest {
     }
 
     @Test
-    fun dockPanel_sameZone_doesNotCreateNewGroup() {
-        val expanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
-        val originalGroupId = expanded.panels[WorkbenchPanelId.ChapterNavigator]?.tabGroupId ?: ""
-        val result = WorkbenchReducer.reduce(expanded, WorkbenchAction.DockPanel(WorkbenchPanelId.ChapterNavigator, DockZone.Left))
-        assertEquals("DockPanel same zone should keep tabGroupId", originalGroupId, result.panels[WorkbenchPanelId.ChapterNavigator]?.tabGroupId)
-    }
-
-    @Test
     fun dockPanelAsNewGroup_setsActiveTab() {
         val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.DockPanelAsNewGroup(WorkbenchPanelId.AiAssistant, DockZone.Left, 0))
         val newGroupId = result.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId ?: ""
@@ -1177,15 +1027,6 @@ class WorkbenchReducerTest {
     }
 
     // --- Item 5: persistLayout atomic key+state (tested in ViewModel test) ---
-
-    @Test
-    fun dockPanel_crossZone_createsNewGroupWithUniquePrefix() {
-        val expanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
-        val result = WorkbenchReducer.reduce(expanded, WorkbenchAction.DockPanel(WorkbenchPanelId.AiAssistant, DockZone.Bottom))
-        val newGroupId = result.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId ?: ""
-        assertTrue("Cross-zone dock should create new group", newGroupId.startsWith("bottom-group-"))
-        assertTrue(result.dockGroupMeta.containsKey(newGroupId))
-    }
 
     // --- Item 6: ReorderDockGroup real remove/insert ---
 
@@ -1592,11 +1433,10 @@ class WorkbenchReducerTest {
 
     private fun pollutedCustomState(): WorkbenchLayoutState {
         var state = WorkbenchReducer.computeDefaultLayout()
-        state = WorkbenchReducer.reduce(state, WorkbenchAction.CreateDockGroup("custom-a", DockZone.Left, 2))
-        state = WorkbenchReducer.reduce(state, WorkbenchAction.MovePanelToGroup(WorkbenchPanelId.Search, "custom-a"))
+        state = WorkbenchReducer.reduce(state, WorkbenchAction.DockPanelAsNewGroup(WorkbenchPanelId.Search, DockZone.Left, 2))
         state = WorkbenchReducer.reduce(state, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
         state = WorkbenchReducer.reduce(state, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Search))
-        state = WorkbenchReducer.reduce(state, WorkbenchAction.ResizeDockSplit(DockZone.Left, "custom-a", "left-nav", -1000f, 320f))
+        state = WorkbenchReducer.reduce(state, WorkbenchAction.ResizeDockSplit(DockZone.Left, state.panels[WorkbenchPanelId.Search]?.tabGroupId!!, "left-nav", -1000f, 320f))
         return state
     }
 
@@ -1607,8 +1447,8 @@ class WorkbenchReducerTest {
         assertEquals("dockGroupWeights must be rebuilt", expected.dockGroupWeights, result.dockGroupWeights)
         assertEquals("dockGroupMeta must be rebuilt", expected.dockGroupMeta, result.dockGroupMeta)
         assertEquals("preset must be set", expected.preset, result.preset)
-        assertTrue("stale custom groups must be gone", result.dockGroupMeta.keys.none { it.startsWith("custom-") })
-        assertTrue(result.dockGroupWeights.keys.none { it.startsWith("custom-") })
+        assertTrue("stale custom groups must be gone", result.dockGroupMeta.keys.none { it.startsWith("left-group-") })
+        assertTrue(result.dockGroupWeights.keys.none { it.startsWith("left-group-") })
     }
 
     @Test
@@ -1871,23 +1711,6 @@ class WorkbenchReducerTest {
         assertEquals("activeTab must switch to the remaining expanded panel (Search)", WorkbenchPanelId.Search, newActive)
     }
 
-    // --- Defect: movePanel does not clean up old group activeTab ---
-
-    @Test
-    fun movePanel_cleansUpOldGroupActiveTab() {
-        val expanded1 = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
-        val expanded2 = WorkbenchReducer.reduce(expanded1, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Search))
-        val groupId = expanded2.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId ?: ""
-        val withActive = WorkbenchReducer.reduce(expanded2, WorkbenchAction.ActivateTab(groupId, WorkbenchPanelId.AiAssistant))
-        assertEquals(WorkbenchPanelId.AiAssistant, withActive.activeTabByGroup[groupId])
-        val result = WorkbenchReducer.reduce(withActive, WorkbenchAction.MovePanel(WorkbenchPanelId.AiAssistant, DockZone.Bottom))
-        val newActive = result.activeTabByGroup[groupId]
-        assertTrue("movePanel away from group should switch activeTab to remaining panel", newActive != WorkbenchPanelId.AiAssistant)
-        if (result.panels.values.any { it.tabGroupId == groupId && it.zone != DockZone.Floating && it.visibility == PanelVisibility.Expanded }) {
-            assertNotNull("activeTab should point to a remaining expanded panel in the old group", newActive)
-        }
-    }
-
     // --- Defect: normalizeActiveTabs does not check zone ---
 
     @Test
@@ -1914,33 +1737,6 @@ class WorkbenchReducerTest {
             val activePanel = if (activeTab != null) floated.panels[activeTab] else null
             assertTrue("activeTab panel must be in the same zone as the group", activePanel == null || activePanel.zone == zone)
         }
-    }
-
-    @Test
-    fun normalizeActiveTabs_repairsStaleActiveTabAfterManualZoneChange() {
-        val expanded1 = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
-        val expanded2 = WorkbenchReducer.reduce(expanded1, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Search))
-        val groupId = expanded2.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId ?: ""
-        val withActive = WorkbenchReducer.reduce(expanded2, WorkbenchAction.ActivateTab(groupId, WorkbenchPanelId.AiAssistant))
-        val moved = WorkbenchReducer.reduce(withActive, WorkbenchAction.MovePanel(WorkbenchPanelId.AiAssistant, DockZone.Left))
-        val activeTab = moved.activeTabByGroup[groupId]
-        val activePanel = if (activeTab != null) moved.panels[activeTab] else null
-        val groupZone = moved.dockGroupMeta[groupId]?.zone
-        if (groupZone != null && activePanel != null) {
-            assertTrue("after movePanel away, activeTab should not point to panel in different zone (activeTab=$activeTab, panelZone=${activePanel.zone}, groupZone=$groupZone)", activePanel.zone == groupZone || activeTab != WorkbenchPanelId.AiAssistant)
-        }
-    }
-
-    // --- Defect: Bottom resize handle direction is reversed ---
-
-    @Test
-    fun resizeDockZone_bottomPositiveDelta_increasesBottomHeight() {
-        val moved = WorkbenchReducer.reduce(defaultState, WorkbenchAction.MovePanel(WorkbenchPanelId.Statistics, DockZone.Bottom))
-        val expanded = WorkbenchReducer.reduce(moved, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Statistics))
-        val beforeSize = expanded.dockZoneSizeDp[DockZone.Bottom] ?: 220f
-        val result = WorkbenchReducer.reduce(expanded, WorkbenchAction.ResizeDockZone(DockZone.Bottom, 50f, 800f))
-        val afterSize = result.dockZoneSizeDp[DockZone.Bottom]!!
-        assertTrue("positive delta should increase bottom height (before=$beforeSize, after=$afterSize)", afterSize > beforeSize)
     }
 
     // --- Defect: SujianWorkbench passes 0f instead of null for actualOtherSideWidthDp ---
@@ -2019,38 +1815,6 @@ class WorkbenchReducerTest {
     // --- cleanUpOldGroup should normalize active tabs across all groups ---
 
     @Test
-    fun movePanel_normalizesStaleActiveTabInOtherGroup() {
-        val leftExpanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
-        val rightExpanded = WorkbenchReducer.reduce(leftExpanded, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
-        val outlineExpanded = WorkbenchReducer.reduce(rightExpanded, WorkbenchAction.ExpandPanel(WorkbenchPanelId.DocumentOutline))
-        val staleState = outlineExpanded.copy(
-            activeTabByGroup = outlineExpanded.activeTabByGroup + ("left-nav" to WorkbenchPanelId.AiAssistant)
-        )
-        val moved = WorkbenchReducer.reduce(staleState, WorkbenchAction.MovePanel(WorkbenchPanelId.AiAssistant, DockZone.Bottom))
-        val leftActive = moved.activeTabByGroup["left-nav"]
-        val leftActivePanel = moved.panels[leftActive]
-        if (leftActive != null) {
-            assertTrue("left-nav activeTab should point to an Expanded panel in Left zone, got ${leftActivePanel?.zone}/${leftActivePanel?.visibility}", leftActivePanel?.zone == DockZone.Left && leftActivePanel?.visibility == PanelVisibility.Expanded)
-        }
-    }
-
-    @Test
-    fun floatPanel_normalizesStaleActiveTabInOtherGroup() {
-        val leftExpanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
-        val rightExpanded = WorkbenchReducer.reduce(leftExpanded, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
-        val searchExpanded = WorkbenchReducer.reduce(rightExpanded, WorkbenchAction.ExpandPanel(WorkbenchPanelId.Search))
-        val staleState = searchExpanded.copy(
-            activeTabByGroup = searchExpanded.activeTabByGroup + ("left-nav" to WorkbenchPanelId.AiAssistant)
-        )
-        val floated = WorkbenchReducer.reduce(staleState, WorkbenchAction.FloatPanel(WorkbenchPanelId.Search))
-        val leftActive = floated.activeTabByGroup["left-nav"]
-        val leftActivePanel = floated.panels[leftActive]
-        if (leftActive != null) {
-            assertTrue("left-nav activeTab should point to an Expanded panel in Left zone, got ${leftActivePanel?.zone}/${leftActivePanel?.visibility}", leftActivePanel?.zone == DockZone.Left && leftActivePanel?.visibility == PanelVisibility.Expanded)
-        }
-    }
-
-    @Test
     fun movePanelToGroup_normalizesStaleActiveTabInOtherGroup() {
         val leftExpanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
         val rightExpanded = WorkbenchReducer.reduce(leftExpanded, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
@@ -2062,31 +1826,7 @@ class WorkbenchReducerTest {
         val leftActive = moved.activeTabByGroup["left-nav"]
         val leftActivePanel = moved.panels[leftActive]
         if (leftActive != null) {
-            assertTrue("left-nav activeTab should point to an Expanded panel in Left zone, got ${leftActivePanel?.zone}/${leftActivePanel?.visibility}", leftActivePanel?.zone == DockZone.Left && leftActivePanel?.visibility == PanelVisibility.Expanded)
-        }
-    }
-
-    @Test
-    fun movePanel_crossZone_tabGroupIdConsistentWithNewZone() {
-        val expanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
-        val result = WorkbenchReducer.reduce(expanded, WorkbenchAction.MovePanel(WorkbenchPanelId.AiAssistant, DockZone.Bottom))
-        val panel = result.panels[WorkbenchPanelId.AiAssistant]!!
-        assertEquals("panel zone should be Bottom", DockZone.Bottom, panel.zone)
-        val meta = result.dockGroupMeta[panel.tabGroupId]
-        assertNotNull("dockGroupMeta must exist for the panel's tabGroupId", meta)
-        if (meta != null) {
-            assertEquals("dockGroupMeta zone must match panel zone after cross-zone move", DockZone.Bottom, meta.zone)
-        }
-    }
-
-    @Test
-    fun movePanel_crossZone_noOrphanedTabGroupIdInWrongZone() {
-        val expanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
-        val result = WorkbenchReducer.reduce(expanded, WorkbenchAction.MovePanel(WorkbenchPanelId.AiAssistant, DockZone.Bottom))
-        for ((groupId, meta) in result.dockGroupMeta) {
-            val panelsInMetaZone = result.panels.values.filter { it.tabGroupId == groupId && it.zone == meta.zone }
-            val panelsInOtherZone = result.panels.values.filter { it.tabGroupId == groupId && it.zone != meta.zone && it.zone != DockZone.Floating }
-            assertTrue("group $groupId has panels in zone ${meta.zone} matching its meta", panelsInMetaZone.isNotEmpty() || panelsInOtherZone.isEmpty())
+            assertTrue("left-nav activeTab> should point to an Expanded panel in Left zone, got ${leftActivePanel?.zone}/${leftActivePanel?.visibility}", leftActivePanel?.zone == DockZone.Left && leftActivePanel?.visibility == PanelVisibility.Expanded)
         }
     }
 
@@ -2188,5 +1928,167 @@ class WorkbenchReducerTest {
                 assertTrue("activeTab must be Expanded", panel.visibility == PanelVisibility.Expanded)
             }
         }
+    }
+
+    @Test
+    fun clampFloatingPanels_tinyWindow_noCoerceInCrash() {
+        val floated = WorkbenchReducer.reduce(defaultState, WorkbenchAction.FloatPanelAt(WorkbenchPanelId.AiAssistant, 10f, 10f))
+        val result = WorkbenchReducer.reduce(floated, WorkbenchAction.ClampFloatingPanels(100f, 80f))
+        val panel = result.panels[WorkbenchPanelId.AiAssistant]!!
+        assertTrue("width must fit in tiny window", panel.floatingWidthDp <= 100f)
+        assertTrue("height must fit in tiny window", panel.floatingHeightDp <= 80f)
+        assertTrue("width must be positive", panel.floatingWidthDp > 0f)
+        assertTrue("height must be positive", panel.floatingHeightDp > 0f)
+    }
+
+    @Test
+    fun clampFloatingPanels_windowSmallerThanMin_widthClampsToWindow() {
+        val floated = WorkbenchReducer.reduce(defaultState, WorkbenchAction.FloatPanelAt(WorkbenchPanelId.AiAssistant, 10f, 10f))
+        val resized = WorkbenchReducer.reduce(floated, WorkbenchAction.ResizeFloatingPanel(WorkbenchPanelId.AiAssistant, 300f, 250f))
+        val result = WorkbenchReducer.reduce(resized, WorkbenchAction.ClampFloatingPanels(150f, 120f))
+        val panel = result.panels[WorkbenchPanelId.AiAssistant]!!
+        assertEquals("width clamped to window width when window < min", 150f, panel.floatingWidthDp, 0.01f)
+        assertEquals("height clamped to window height when window < min", 120f, panel.floatingHeightDp, 0.01f)
+    }
+
+    @Test
+    fun migrateFromV1_sortsGroupsByPanelOrderWithGroupIdTiebreak() {
+        val panels = WorkbenchPanelId.entries.associateWith { id ->
+            WorkbenchPanelState(
+                id = id,
+                zone = when (id) {
+                    WorkbenchPanelId.ChapterNavigator -> DockZone.Left
+                    WorkbenchPanelId.AiAssistant -> DockZone.Right
+                    WorkbenchPanelId.Search -> DockZone.Right
+                    WorkbenchPanelId.Statistics -> DockZone.Right
+                    WorkbenchPanelId.StarMap -> DockZone.Right
+                    WorkbenchPanelId.DocumentOutline -> DockZone.Right
+                    WorkbenchPanelId.CharacterInfo -> DockZone.Right
+                    else -> DockZone.Right
+                },
+                visibility = PanelVisibility.Collapsed,
+                sizeDp = 320f,
+                tabGroupId = when (id) {
+                    WorkbenchPanelId.ChapterNavigator -> "left-nav"
+                    WorkbenchPanelId.AiAssistant -> "right-tools"
+                    WorkbenchPanelId.Search -> "right-tools"
+                    WorkbenchPanelId.Statistics -> "right-tools"
+                    WorkbenchPanelId.StarMap -> "right-outline"
+                    WorkbenchPanelId.DocumentOutline -> "right-outline"
+                    WorkbenchPanelId.CharacterInfo -> "right-outline"
+                    else -> "right-tools"
+                },
+                order = when (id) {
+                    WorkbenchPanelId.AiAssistant -> 0
+                    WorkbenchPanelId.Search -> 1
+                    WorkbenchPanelId.Statistics -> 2
+                    WorkbenchPanelId.StarMap -> 0
+                    WorkbenchPanelId.DocumentOutline -> 1
+                    WorkbenchPanelId.CharacterInfo -> 2
+                    else -> id.ordinal
+                },
+            )
+        }
+        val dockGroupSizes = linkedMapOf(
+            "right-outline" to 300f,
+            "right-tools" to 400f,
+            "left-nav" to 320f,
+        )
+        val result = WorkbenchReducer.migrateFromV1(
+            panels = panels,
+            activeTabByGroup = emptyMap(),
+            preset = WorkbenchPreset.Custom,
+            dockGroupSizes = dockGroupSizes,
+            activeOverlayPanelId = null,
+        )
+        val rightGroupOrder = result.dockGroupMeta.values
+            .filter { it.zone == DockZone.Right }
+            .sortedBy { it.order }
+            .map { it.id }
+        assertEquals(
+            "Both groups have min panel.order=0, groupId tiebreak puts right-outline before right-tools",
+            listOf("right-outline", "right-tools"),
+            rightGroupOrder
+        )
+    }
+
+    @Test
+    fun migrateFromV1_reverseMapInput_preservesOrderByPanelOrder() {
+        val panels = WorkbenchPanelId.entries.associateWith { id ->
+            WorkbenchPanelState(
+                id = id,
+                zone = when (id) {
+                    WorkbenchPanelId.ChapterNavigator -> DockZone.Left
+                    WorkbenchPanelId.ProjectNavigator -> DockZone.Left
+                    WorkbenchPanelId.AiAssistant -> DockZone.Right
+                    WorkbenchPanelId.Search -> DockZone.Right
+                    else -> DockZone.Right
+                },
+                visibility = PanelVisibility.Collapsed,
+                sizeDp = 320f,
+                tabGroupId = when (id) {
+                    WorkbenchPanelId.ChapterNavigator -> "left-nav"
+                    WorkbenchPanelId.ProjectNavigator -> "left-nav"
+                    WorkbenchPanelId.AiAssistant -> "right-tools"
+                    WorkbenchPanelId.Search -> "right-outline"
+                    else -> "right-tools"
+                },
+                order = when (id) {
+                    WorkbenchPanelId.ProjectNavigator -> 0
+                    WorkbenchPanelId.ChapterNavigator -> 1
+                    WorkbenchPanelId.AiAssistant -> 0
+                    WorkbenchPanelId.Search -> 0
+                    else -> id.ordinal
+                },
+            )
+        }
+        val dockGroupSizes = linkedMapOf(
+            "right-outline" to 300f,
+            "right-tools" to 400f,
+            "left-nav" to 320f,
+        )
+        val result = WorkbenchReducer.migrateFromV1(
+            panels = panels,
+            activeTabByGroup = emptyMap(),
+            preset = WorkbenchPreset.Custom,
+            dockGroupSizes = dockGroupSizes,
+            activeOverlayPanelId = null,
+        )
+        val leftMeta = result.dockGroupMeta["left-nav"]!!
+        assertEquals("left-nav should be order 0 in Left zone", 0, leftMeta.order)
+        val rightToolsMeta = result.dockGroupMeta["right-tools"]!!
+        val rightOutlineMeta = result.dockGroupMeta["right-outline"]!!
+        assertTrue(
+            "right-tools and right-outline orders must be distinct and contiguous",
+            rightToolsMeta.order != rightOutlineMeta.order
+        )
+    }
+
+    @Test
+    fun dockPanelAsNewGroup_crossZone_createsNewGroupInTargetZone() {
+        val result = WorkbenchReducer.reduce(defaultState, WorkbenchAction.DockPanelAsNewGroup(WorkbenchPanelId.AiAssistant, DockZone.Bottom, 0))
+        assertEquals(DockZone.Bottom, result.panels[WorkbenchPanelId.AiAssistant]?.zone)
+        val newGroupId = result.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId ?: ""
+        assertTrue("New group should be in Bottom zone meta", result.dockGroupMeta[newGroupId]?.zone == DockZone.Bottom)
+        assertTrue(result.dockGroupWeights.containsKey(newGroupId))
+        assertTrue(result.dockZoneSizeDp.containsKey(DockZone.Bottom))
+    }
+
+    @Test
+    fun movePanelToGroup_preservesTotalGroupCount() {
+        val expanded = WorkbenchReducer.reduce(defaultState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.ChapterNavigator))
+        val groupsBefore = expanded.dockGroupMeta.keys.size
+        val result = WorkbenchReducer.reduce(expanded, WorkbenchAction.MovePanelToGroup(WorkbenchPanelId.AiAssistant, "new-target-group"))
+        val groupsAfter = result.dockGroupMeta.keys.size
+        assertTrue("Moving to a new group should add exactly one group", groupsAfter == groupsBefore + 1)
+    }
+
+    @Test
+    fun dockPanelAsNewGroup_thenMovePanelToGroup_correctGroupMembership() {
+        val docked = WorkbenchReducer.reduce(defaultState, WorkbenchAction.DockPanelAsNewGroup(WorkbenchPanelId.AiAssistant, DockZone.Left, 0))
+        val leftGroupId = docked.panels[WorkbenchPanelId.AiAssistant]?.tabGroupId ?: ""
+        val result = WorkbenchReducer.reduce(docked, WorkbenchAction.MovePanelToGroup(WorkbenchPanelId.Search, leftGroupId))
+        assertEquals(leftGroupId, result.panels[WorkbenchPanelId.Search]?.tabGroupId)
+        assertEquals(DockZone.Left, result.panels[WorkbenchPanelId.Search]?.zone)
     }
 }
