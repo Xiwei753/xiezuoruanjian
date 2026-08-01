@@ -59,6 +59,11 @@ class WorkbenchOrientationInstrumentedTest {
     @After
     fun tearDown() {
         val context = composeTestRule.activity.applicationContext
+        for (name in listOf("writer_stats", "sujian_device", "sujian_experiments", "sujian_diagnostics")) {
+            val prefs = context.getSharedPreferences(name, android.content.Context.MODE_PRIVATE)
+            prefs.edit().clear().commit()
+            context.deleteSharedPreferences(name)
+        }
         val dsDir = File(context.filesDir, "datastore/workbench_layout_prefs")
         if (dsDir.exists()) {
             dsDir.deleteRecursively()

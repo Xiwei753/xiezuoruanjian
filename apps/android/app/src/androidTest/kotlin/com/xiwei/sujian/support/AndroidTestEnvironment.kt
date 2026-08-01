@@ -36,7 +36,10 @@ class TestSession private constructor(
 ) {
     private val prefsFileNames = listOf(
         "sujian_diagnostics_$prefsSuffix",
-        "sujian_device_$prefsSuffix"
+        "sujian_device_$prefsSuffix",
+        "writer_stats",
+        "sujian_device",
+        "sujian_experiments"
     )
     private val dataStoreDirNames = listOf(
         "workbench_layout_prefs"

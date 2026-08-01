@@ -77,7 +77,7 @@ class StarMapCrossLayerIntegrationTest {
 
             assertEquals("getStarMapGraph must not be called", 0, bridge.getStarMapGraphCallCount)
         } finally {
-            bridge.closeStarmapStore(starmapId)
+            try { bridge.closeStarmapStore(starmapId) } catch (_: Throwable) {}
         }
     }
 
@@ -110,7 +110,7 @@ class StarMapCrossLayerIntegrationTest {
 
             assertEquals("getStarMapGraph must not be called", 0, bridge.getStarMapGraphCallCount)
         } finally {
-            bridge.closeStarmapStore(starmapId)
+            try { bridge.closeStarmapStore(starmapId) } catch (_: Throwable) {}
         }
     }
 
@@ -148,7 +148,7 @@ class StarMapCrossLayerIntegrationTest {
 
             assertEquals("getStarMapGraph must not be called", 0, bridge.getStarMapGraphCallCount)
         } finally {
-            bridge.closeStarmapStore(starmapId)
+            try { bridge.closeStarmapStore(starmapId) } catch (_: Throwable) {}
         }
     }
 
@@ -192,7 +192,7 @@ class StarMapCrossLayerIntegrationTest {
 
             assertEquals("getStarMapGraph must not be called", 0, bridge.getStarMapGraphCallCount)
         } finally {
-            bridge.closeStarmapStore(starmapId)
+            try { bridge.closeStarmapStore(starmapId) } catch (_: Throwable) {}
         }
     }
 
@@ -227,7 +227,7 @@ class StarMapCrossLayerIntegrationTest {
 
             assertEquals("getStarMapGraph must not be called", 0, bridge.getStarMapGraphCallCount)
         } finally {
-            bridge.closeStarmapStore(starmapId)
+            try { bridge.closeStarmapStore(starmapId) } catch (_: Throwable) {}
         }
     }
 
@@ -265,7 +265,7 @@ class StarMapCrossLayerIntegrationTest {
 
             assertEquals("getStarMapGraph must not be called", 0, bridge.getStarMapGraphCallCount)
         } finally {
-            bridge.closeStarmapStore(starmapId)
+            try { bridge.closeStarmapStore(starmapId) } catch (_: Throwable) {}
         }
     }
 
@@ -298,7 +298,7 @@ class StarMapCrossLayerIntegrationTest {
 
             assertEquals("getStarMapGraph must not be called", 0, bridge.getStarMapGraphCallCount)
         } finally {
-            bridge.closeStarmapStore(starmapId)
+            try { bridge.closeStarmapStore(starmapId) } catch (_: Throwable) {}
         }
     }
 
@@ -331,7 +331,7 @@ class StarMapCrossLayerIntegrationTest {
 
             assertEquals("getStarMapGraph must not be called", 0, bridge.getStarMapGraphCallCount)
         } finally {
-            bridge.closeStarmapStore(starmapId)
+            try { bridge.closeStarmapStore(starmapId) } catch (_: Throwable) {}
         }
     }
 }
