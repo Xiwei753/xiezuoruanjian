@@ -409,7 +409,6 @@ object AndroidTestEnvironment {
                     } catch (t: Throwable) {
                         testFailed = t
                     } finally {
-                        SujianAppDependencies.setTestProvider(null)
                         try {
                             releaseSession()
                         } catch (cleanup: Throwable) {
@@ -418,6 +417,8 @@ object AndroidTestEnvironment {
                             } else {
                                 testFailed = cleanup
                             }
+                        } finally {
+                            SujianAppDependencies.setTestProvider(null)
                         }
                     }
                     if (testFailed != null) throw testFailed

@@ -106,59 +106,61 @@ class WorkbenchOrientationInstrumentedTest {
         var reportedHeight by mutableStateOf(0f)
 
         val originalOrientation = activity.requestedOrientation
-        activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        try {
+            activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
 
-        composeTestRule.setContent {
-            SujianWorkbench(
-                layoutState = layoutState,
-                onAction = { layoutState = WorkbenchReducer.reduce(layoutState, it) },
-                onWindowSizeChanged = { w, h -> reportedWidth = w; reportedHeight = h },
-                modifier = Modifier.fillMaxSize(),
-                editorContent = { Box(Modifier.size(100.dp)) },
-                panelContent = { _ -> Box(Modifier.size(50.dp)) },
-            )
+            composeTestRule.setContent {
+                SujianWorkbench(
+                    layoutState = layoutState,
+                    onAction = { layoutState = WorkbenchReducer.reduce(layoutState, it) },
+                    onWindowSizeChanged = { w, h -> reportedWidth = w; reportedHeight = h },
+                    modifier = Modifier.fillMaxSize(),
+                    editorContent = { Box(Modifier.size(100.dp)) },
+                    panelContent = { _ -> Box(Modifier.size(50.dp)) },
+                )
+            }
+
+            composeTestRule.waitUntil(10_000L) {
+                reportedWidth > 0f && reportedHeight > 0f && reportedWidth > reportedHeight
+            }
+
+            val landscapeWidth = reportedWidth
+            val landscapeHeight = reportedHeight
+            Log.i("OrientationTest", "Landscape measured: width=$landscapeWidth height=$landscapeHeight")
+            assertTrue("Landscape: width should exceed height, got width=$landscapeWidth height=$landscapeHeight", landscapeWidth > landscapeHeight)
+
+            layoutState = WorkbenchReducer.reduce(layoutState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
+            layoutState = WorkbenchReducer.reduce(layoutState, WorkbenchAction.FloatPanelAt(WorkbenchPanelId.AiAssistant, 900f, 600f))
+            layoutState = WorkbenchReducer.reduce(layoutState, WorkbenchAction.ResizeFloatingPanel(WorkbenchPanelId.AiAssistant, 500f, 400f))
+            composeTestRule.waitForIdle()
+
+            layoutState = WorkbenchReducer.reduce(layoutState, WorkbenchAction.ClampFloatingPanels(landscapeWidth, landscapeHeight))
+            composeTestRule.waitForIdle()
+
+            val landscapePanel = layoutState.panels[WorkbenchPanelId.AiAssistant]!!
+            assertTrue("Landscape: X within bounds", landscapePanel.floatingX <= landscapeWidth)
+            assertTrue("Landscape: Width clamped", landscapePanel.floatingWidthDp <= landscapeWidth)
+
+            activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+
+            composeTestRule.waitUntil(10_000L) {
+                reportedWidth > 0f && reportedHeight > 0f && reportedHeight > reportedWidth
+            }
+
+            val portraitWidth = reportedWidth
+            val portraitHeight = reportedHeight
+            Log.i("OrientationTest", "Portrait measured: width=$portraitWidth height=$portraitHeight")
+            assertTrue("Portrait: height should exceed width, got width=$portraitWidth height=$portraitHeight", portraitHeight > portraitWidth)
+
+            layoutState = WorkbenchReducer.reduce(layoutState, WorkbenchAction.ClampFloatingPanels(portraitWidth, portraitHeight))
+            composeTestRule.waitForIdle()
+
+            val portraitPanel = layoutState.panels[WorkbenchPanelId.AiAssistant]!!
+            assertTrue("Portrait: X within bounds", portraitPanel.floatingX <= portraitWidth)
+            assertTrue("Portrait: Width clamped", portraitPanel.floatingWidthDp <= portraitWidth)
+        } finally {
+            activity.requestedOrientation = originalOrientation
         }
-
-        composeTestRule.waitUntil(10_000L) {
-            reportedWidth > 0f && reportedHeight > 0f && reportedWidth > reportedHeight
-        }
-
-        val landscapeWidth = reportedWidth
-        val landscapeHeight = reportedHeight
-        Log.i("OrientationTest", "Landscape measured: width=$landscapeWidth height=$landscapeHeight")
-        assertTrue("Landscape: width should exceed height, got width=$landscapeWidth height=$landscapeHeight", landscapeWidth > landscapeHeight)
-
-        layoutState = WorkbenchReducer.reduce(layoutState, WorkbenchAction.ExpandPanel(WorkbenchPanelId.AiAssistant))
-        layoutState = WorkbenchReducer.reduce(layoutState, WorkbenchAction.FloatPanelAt(WorkbenchPanelId.AiAssistant, 900f, 600f))
-        layoutState = WorkbenchReducer.reduce(layoutState, WorkbenchAction.ResizeFloatingPanel(WorkbenchPanelId.AiAssistant, 500f, 400f))
-        composeTestRule.waitForIdle()
-
-        layoutState = WorkbenchReducer.reduce(layoutState, WorkbenchAction.ClampFloatingPanels(landscapeWidth, landscapeHeight))
-        composeTestRule.waitForIdle()
-
-        val landscapePanel = layoutState.panels[WorkbenchPanelId.AiAssistant]!!
-        assertTrue("Landscape: X within bounds", landscapePanel.floatingX <= landscapeWidth)
-        assertTrue("Landscape: Width clamped", landscapePanel.floatingWidthDp <= landscapeWidth)
-
-        activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-
-        composeTestRule.waitUntil(10_000L) {
-            reportedWidth > 0f && reportedHeight > 0f && reportedHeight > reportedWidth
-        }
-
-        val portraitWidth = reportedWidth
-        val portraitHeight = reportedHeight
-        Log.i("OrientationTest", "Portrait measured: width=$portraitWidth height=$portraitHeight")
-        assertTrue("Portrait: height should exceed width, got width=$portraitWidth height=$portraitHeight", portraitHeight > portraitWidth)
-
-        layoutState = WorkbenchReducer.reduce(layoutState, WorkbenchAction.ClampFloatingPanels(portraitWidth, portraitHeight))
-        composeTestRule.waitForIdle()
-
-        val portraitPanel = layoutState.panels[WorkbenchPanelId.AiAssistant]!!
-        assertTrue("Portrait: X within bounds", portraitPanel.floatingX <= portraitWidth)
-        assertTrue("Portrait: Width clamped", portraitPanel.floatingWidthDp <= portraitWidth)
-
-        activity.requestedOrientation = originalOrientation
     }
 
     @Test

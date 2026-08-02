@@ -5,18 +5,26 @@ import android.graphics.Color
 import android.graphics.Rect
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.xiwei.sujian.editor.v2.visual.ColorDistance
+import org.junit.After
 import org.junit.Assert.*
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class CapturedFrameBoundsTest {
 
+    @get:Rule
+    val testDependenciesRule = AndroidTestEnvironment.TestDependenciesRule()
+
+    private val createdBitmaps = mutableListOf<Bitmap>()
+
     private fun makeFrame(
         width: Int, height: Int, backgroundColor: Int,
         contentPixels: Set<Pair<Int, Int>>, contentColor: Int
     ): EditorBitmapCapture.CapturedFrame {
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        createdBitmaps.add(bitmap)
         for (y in 0 until height) {
             for (x in 0 until width) {
                 bitmap.setPixel(x, y, backgroundColor)
@@ -29,6 +37,16 @@ class CapturedFrameBoundsTest {
             bitmap = bitmap, width = width, height = height,
             backgroundColor = backgroundColor
         )
+    }
+
+    @After
+    fun tearDown() {
+        for (bitmap in createdBitmaps) {
+            if (!bitmap.isRecycled) {
+                bitmap.recycle()
+            }
+        }
+        createdBitmaps.clear()
     }
 
     @Test
