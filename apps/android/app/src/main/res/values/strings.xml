@@ -166,6 +166,14 @@
     <string name="sync_unrelated_histories">本地与远端历史不相关</string>
     <string name="sync_dirty_repo_blocked">本地有未提交变更，同步被阻止</string>
     <string name="error_other">操作失败</string>
+    <string name="error_flush">数据刷写失败，请检查磁盘状态</string>
+    <string name="error_close">数据关闭失败，请检查磁盘状态</string>
+    <string name="error_flush_all">批量刷写失败，请检查磁盘状态</string>
+    <string name="error_conversion">数据转换失败</string>
+    <string name="error_snapshot_cache_not_initialized">快照缓存未初始化</string>
+    <string name="error_star_map_cache_missing">星图缓存缺失</string>
+    <string name="error_native_not_loaded">Native 库未加载</string>
+    <string name="error_unknown">未知错误</string>
 
     <!-- ErrorUtil -->
     <string name="error_internal">应用内部错误，请查看日志</string>

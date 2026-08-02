@@ -32,6 +32,14 @@ object MessageKeyMapper {
             "error.native_error" -> context.getString(R.string.error_internal)
             "error.parse_error" -> context.getString(R.string.error_json)
             "error.not_implemented_bridge" -> context.getString(R.string.error_not_implemented)
+            "error.flush" -> context.getString(R.string.error_flush)
+            "error.close" -> context.getString(R.string.error_close)
+            "error.flush_all" -> context.getString(R.string.error_flush_all)
+            "error.conversion" -> context.getString(R.string.error_conversion)
+            "error.snapshot_cache_not_initialized" -> context.getString(R.string.error_snapshot_cache_not_initialized)
+            "error.star_map_cache_missing" -> context.getString(R.string.error_star_map_cache_missing)
+            "error.native_not_loaded" -> context.getString(R.string.error_native_not_loaded)
+            "error.unknown" -> context.getString(R.string.error_unknown)
             else -> fallbackMessage(context, errorCode)
         }
     }

@@ -17,6 +17,7 @@ sealed class BridgeResult<out T> {
     ) : BridgeResult<Nothing>() {
         val message: String get() = envelope.messageKey ?: envelope.errorCode ?: ""
         val code: String? get() = envelope.errorCode
+        val fullEnvelope: String get() = "[${envelope.errorCode ?: "UNKNOWN"}] ${envelope.messageKey ?: ""} | ${envelope.rawError ?: ""}"
     }
     object NotLoaded : BridgeResult<Nothing>() {
         val envelope: ResultEnvelope<Nothing> = ResultEnvelope.errorOf("NATIVE_NOT_LOADED", "Native library not loaded")

@@ -47,7 +47,7 @@ class AutoSyncWorker(
         val exclusiveResult = SyncSession.runExclusive { taskId ->
             when (val result = settingsRepository.performSync(config)) {
                 is BridgeResult.Error -> {
-                    DiagnosticsLogger.w(TAG, "AutoSync failed: ${result.message}")
+                    DiagnosticsLogger.w(TAG, "AutoSync failed: ${result.fullEnvelope}")
                     Result.retry()
                 }
                 BridgeResult.NotLoaded -> {

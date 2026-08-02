@@ -37,10 +37,6 @@ class SettingsRepository(
         if (preferencesSuffix.isNotEmpty()) "sujian_diagnostics_$preferencesSuffix" else "sujian_diagnostics",
         android.content.Context.MODE_PRIVATE
     )
-    private val devicePrefs = appContext.getSharedPreferences(
-        if (preferencesSuffix.isNotEmpty()) "sujian_device_$preferencesSuffix" else "sujian_device",
-        android.content.Context.MODE_PRIVATE
-    )
 
     @Volatile
     var lastWarning: String? = null
@@ -61,7 +57,7 @@ class SettingsRepository(
         val fromCore = when (val result = settingsBridge.getLocalSettings()) {
             is BridgeResult.Success -> result.data ?: LocalSettings()
             is BridgeResult.Error -> {
-                warn("Failed to load local settings: ${result.message}")
+                warn("Failed to load local settings: ${result.fullEnvelope}")
                 LocalSettings()
             }
             BridgeResult.NotLoaded -> LocalSettings()
@@ -89,7 +85,7 @@ class SettingsRepository(
                 SettingsSaveResult.Success
             }
             is BridgeResult.Error -> {
-                warn("Failed to save local settings: ${result.message}")
+                warn("Failed to save local settings: ${result.fullEnvelope}")
                 SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.LOCAL_SETTINGS, 0L)))
             }
             BridgeResult.NotLoaded -> SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.LOCAL_SETTINGS, 0L)))
@@ -100,7 +96,7 @@ class SettingsRepository(
         return when (val result = settingsBridge.getSyncableSettings()) {
             is BridgeResult.Success -> result.data ?: SyncableSettings()
             is BridgeResult.Error -> {
-                warn("Failed to load syncable settings: ${result.message}")
+                warn("Failed to load syncable settings: ${result.fullEnvelope}")
                 val defaultSettings = SyncableSettings()
                 defaultSettings
             }
@@ -115,7 +111,7 @@ class SettingsRepository(
                 SettingsSaveResult.Success
             }
             is BridgeResult.Error -> {
-                warn("Failed to save syncable settings: ${result.message}")
+                warn("Failed to save syncable settings: ${result.fullEnvelope}")
                 SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.FONT_SIZE, 0L)))
             }
             BridgeResult.NotLoaded -> SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.FONT_SIZE, 0L)))
@@ -143,7 +139,7 @@ class SettingsRepository(
         return when (val result = syncBridge.loadSyncState()) {
             is BridgeResult.Success -> result.data
             is BridgeResult.Error -> {
-                warn("Failed to load sync state: ${result.message}")
+                warn("Failed to load sync state: ${result.fullEnvelope}")
                 SyncState()
             }
             BridgeResult.NotLoaded -> SyncState()
@@ -154,7 +150,7 @@ class SettingsRepository(
         return when (val result = syncBridge.loadSyncConfig()) {
             is BridgeResult.Success -> result.data.normalize()
             is BridgeResult.Error -> {
-                warn("Failed to load sync config: ${result.message}")
+                warn("Failed to load sync config: ${result.fullEnvelope}")
                 SyncConfig().normalize()
             }
             BridgeResult.NotLoaded -> SyncConfig().normalize()
@@ -168,7 +164,7 @@ class SettingsRepository(
                 SettingsSaveResult.Success
             }
             is BridgeResult.Error -> {
-                warn("Failed to save sync config: ${result.message}")
+                warn("Failed to save sync config: ${result.fullEnvelope}")
                 SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_CONFIG, 0L)))
             }
             BridgeResult.NotLoaded -> SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_CONFIG, 0L)))
@@ -179,7 +175,7 @@ class SettingsRepository(
         return when (val result = syncBridge.loadSyncSecrets()) {
             is BridgeResult.Success -> result.data
             is BridgeResult.Error -> {
-                warn("Failed to load sync secrets: ${result.message}")
+                warn("Failed to load sync secrets: ${result.fullEnvelope}")
                 SyncSecrets()
             }
             BridgeResult.NotLoaded -> SyncSecrets()
@@ -195,7 +191,7 @@ class SettingsRepository(
                 SettingsSaveResult.Success
             }
             is BridgeResult.Error -> {
-                warn("Failed to save sync secrets: ${result.message}")
+                warn("Failed to save sync secrets: ${result.fullEnvelope}")
                 SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_SECRETS, 0L)))
             }
             BridgeResult.NotLoaded -> SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_SECRETS, 0L)))
@@ -226,7 +222,7 @@ class SettingsRepository(
         return when (val result = syncBridge.getSyncCapability()) {
             is BridgeResult.Success -> result.data
             is BridgeResult.Error -> {
-                warn("Failed to get sync capability: ${result.message}")
+                warn("Failed to get sync capability: ${result.fullEnvelope}")
                 SyncCapabilityData()
             }
             BridgeResult.NotLoaded -> SyncCapabilityData()
@@ -239,18 +235,6 @@ class SettingsRepository(
 
     fun dismissMigrationWarning() {
         settingsBridge.dismissMigrationWarning()
-    }
-
-    /**
-     * 保存设备信息到本地 SharedPreferences。
-     * 包含 deviceId、deviceClass、platform，供同步和统计使用。
-     */
-    @Deprecated("Use loadDeviceInfo(): DeviceInfo from Core instead", replaceWith = ReplaceWith("loadDeviceInfo()"))
-    fun saveDeviceInfo(deviceInfo: Map<String, String>) {
-        devicePrefs.edit().apply {
-            deviceInfo.forEach { (key, value) -> putString(key, value) }
-            apply()
-        }
     }
 
     /**
@@ -268,7 +252,7 @@ class SettingsRepository(
         return when (val result = settingsBridge.ensureDeviceInfo(platform, deviceClass)) {
             is BridgeResult.Success -> result.data
             is BridgeResult.Error -> {
-                warn("Failed to write device info: ${result.message}")
+                warn("Failed to write device info: ${result.fullEnvelope}")
                 false
             }
             BridgeResult.NotLoaded -> false
@@ -286,7 +270,7 @@ class SettingsRepository(
         return when (val result = settingsBridge.listBuiltinThemes()) {
             is BridgeResult.Success -> result.data ?: emptyList()
             is BridgeResult.Error -> {
-                warn("Failed to list builtin themes: ${result.message}")
+                warn("Failed to list builtin themes: ${result.fullEnvelope}")
                 emptyList()
             }
             BridgeResult.NotLoaded -> emptyList()
@@ -297,7 +281,7 @@ class SettingsRepository(
         return when (val result = settingsBridge.listPaletteRecords()) {
             is BridgeResult.Success -> result.data ?: emptyList()
             is BridgeResult.Error -> {
-                warn("Failed to list palette records: ${result.message}")
+                warn("Failed to list palette records: ${result.fullEnvelope}")
                 emptyList()
             }
             BridgeResult.NotLoaded -> emptyList()
@@ -308,7 +292,7 @@ class SettingsRepository(
         return when (val result = settingsBridge.loadPaletteRecord(deviceId, fingerprint)) {
             is BridgeResult.Success -> result.data
             is BridgeResult.Error -> {
-                warn("Failed to load palette record: ${result.message}")
+                warn("Failed to load palette record: ${result.fullEnvelope}")
                 null
             }
             BridgeResult.NotLoaded -> null
@@ -319,7 +303,7 @@ class SettingsRepository(
         return when (val result = settingsBridge.deletePaletteRecord(deviceId, fingerprint)) {
             is BridgeResult.Success -> result.data
             is BridgeResult.Error -> {
-                warn("Failed to delete palette record: ${result.message}")
+                warn("Failed to delete palette record: ${result.fullEnvelope}")
                 false
             }
             BridgeResult.NotLoaded -> false
@@ -340,7 +324,7 @@ class SettingsRepository(
             val fingerprint = when (val r = settingsBridge.computePaletteFingerprint(lightScheme, darkScheme)) {
                 is BridgeResult.Success -> r.data
                 is BridgeResult.Error -> {
-                    warn("Failed to compute palette fingerprint: ${r.message}")
+                    warn("Failed to compute palette fingerprint: ${r.fullEnvelope}")
                     return
                 }
                 BridgeResult.NotLoaded -> return
@@ -362,7 +346,7 @@ class SettingsRepository(
             )
 
             when (val saveResult = settingsBridge.savePaletteRecord(record)) {
-                is BridgeResult.Error -> warn("Failed to save palette record: ${saveResult.message}")
+                is BridgeResult.Error -> warn("Failed to save palette record: ${saveResult.fullEnvelope}")
                 BridgeResult.NotLoaded -> warn("Native library not loaded, cannot save palette record")
                 is BridgeResult.Success -> {}
             }

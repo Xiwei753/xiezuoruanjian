@@ -7,7 +7,6 @@ import androidx.lifecycle.ProcessLifecycleOwner
 import com.xiwei.sujian.data.AutoSyncScheduler
 import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.data.BridgeResult
-import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.diagnostics.EditorEventRingBuffer
 import java.io.File
@@ -67,9 +66,9 @@ class SujianApp : Application(), DefaultLifecycleObserver {
 
     override fun onStop(owner: LifecycleOwner) {
         autoSyncScheduler?.stop()
-        val result = BridgeProvider.getStarmapBridge(this).repository.flushAllStarmapStores()
+        val result = BridgeProvider.getStarmapBridge(this).flushAllStarmapStores()
         when (result) {
-            is BridgeResult.Error -> DiagnosticsLogger.e("SujianApp", "flushAllStarmapStores failed: ${result.message}")
+            is BridgeResult.Error -> DiagnosticsLogger.e("SujianApp", "flushAllStarmapStores failed: ${result.fullEnvelope}")
             BridgeResult.NotLoaded -> DiagnosticsLogger.w("SujianApp", "flushAllStarmapStores skipped: native library not loaded")
             is BridgeResult.Success -> {}
         }
