@@ -38,4 +38,69 @@ mod tests {
         assert_eq!(loaded_syncable.font_size, 20.0);
         assert_eq!(loaded_syncable.theme_mode, "system");
     }
+
+    #[test]
+    fn test_local_settings_validation_clamps_values() {
+        use crate::settings::{LocalSettings, ranges};
+        let mut settings = LocalSettings::default();
+
+        settings.editor_font_size = ranges::FONT_SIZE_MIN - 1.0;
+        settings.editor_line_spacing_multiplier = ranges::LINE_SPACING_MIN - 1.0;
+        settings.auto_indent_width = ranges::INDENT_WIDTH_MIN - 1.0;
+        settings.editor_typing_animation_duration_ms = ranges::ANIMATION_DURATION_MIN_MS - 1;
+        settings.editor_smooth_cursor_duration_ms = ranges::ANIMATION_DURATION_MIN_MS - 1;
+        settings.auto_save_delay_ms = ranges::AUTO_SAVE_DELAY_MIN_MS - 1;
+
+        settings.validate();
+
+        assert_eq!(settings.editor_font_size, ranges::FONT_SIZE_MIN);
+        assert_eq!(settings.editor_line_spacing_multiplier, ranges::LINE_SPACING_MIN);
+        assert_eq!(settings.auto_indent_width, ranges::INDENT_WIDTH_MIN);
+        assert_eq!(settings.editor_typing_animation_duration_ms, ranges::ANIMATION_DURATION_MIN_MS);
+        assert_eq!(settings.editor_smooth_cursor_duration_ms, ranges::ANIMATION_DURATION_MIN_MS);
+        assert_eq!(settings.auto_save_delay_ms, ranges::AUTO_SAVE_DELAY_MIN_MS);
+
+        settings.editor_font_size = ranges::FONT_SIZE_MAX + 1.0;
+        settings.editor_line_spacing_multiplier = ranges::LINE_SPACING_MAX + 1.0;
+        settings.auto_indent_width = ranges::INDENT_WIDTH_MAX + 1.0;
+        settings.editor_typing_animation_duration_ms = ranges::ANIMATION_DURATION_MAX_MS + 1;
+        settings.editor_smooth_cursor_duration_ms = ranges::ANIMATION_DURATION_MAX_MS + 1;
+        settings.auto_save_delay_ms = ranges::AUTO_SAVE_DELAY_MAX_MS + 1;
+
+        settings.validate();
+
+        assert_eq!(settings.editor_font_size, ranges::FONT_SIZE_MAX);
+        assert_eq!(settings.editor_line_spacing_multiplier, ranges::LINE_SPACING_MAX);
+        assert_eq!(settings.auto_indent_width, ranges::INDENT_WIDTH_MAX);
+        assert_eq!(settings.editor_typing_animation_duration_ms, ranges::ANIMATION_DURATION_MAX_MS);
+        assert_eq!(settings.editor_smooth_cursor_duration_ms, ranges::ANIMATION_DURATION_MAX_MS);
+        assert_eq!(settings.auto_save_delay_ms, ranges::AUTO_SAVE_DELAY_MAX_MS);
+    }
+    #[test]
+    fn test_ranges_are_valid_and_sane() {
+        use crate::settings::ranges::*;
+
+        // Ensure MIN is strictly less than MAX
+        assert!(FONT_SIZE_MIN < FONT_SIZE_MAX);
+        assert!(LINE_SPACING_MIN < LINE_SPACING_MAX);
+        assert!(INDENT_WIDTH_MIN < INDENT_WIDTH_MAX);
+        assert!(ANIMATION_DURATION_MIN_MS < ANIMATION_DURATION_MAX_MS);
+        assert!(AUTO_SAVE_DELAY_MIN_MS < AUTO_SAVE_DELAY_MAX_MS);
+
+        // Ensure reasonable positive boundaries
+        assert!(FONT_SIZE_MIN > 0.0);
+        assert!(FONT_SIZE_MAX <= 200.0);
+
+        assert!(LINE_SPACING_MIN > 0.0);
+        assert!(LINE_SPACING_MAX <= 10.0);
+
+        assert!(INDENT_WIDTH_MIN >= 0.0);
+        assert!(INDENT_WIDTH_MAX <= 16.0);
+
+        assert!(ANIMATION_DURATION_MIN_MS > 0);
+        assert!(ANIMATION_DURATION_MAX_MS <= 10000);
+
+        assert!(AUTO_SAVE_DELAY_MIN_MS > 0);
+        assert!(AUTO_SAVE_DELAY_MAX_MS <= 3600000); // Max 1 hour
+    }
 }
