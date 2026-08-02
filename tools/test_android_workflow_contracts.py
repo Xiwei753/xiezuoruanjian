@@ -317,27 +317,67 @@ def test_emulator_test_download_path_matches_upload_lca(wf, _text):
 def test_rust_test_has_abi_guard(wf, _text):
     build_job = wf["jobs"]["build"]
     steps = build_job.get("steps", [])
-    for s in steps:
-        run_cmd = s.get("run", "")
-        if "cargo test" in run_cmd:
-            condition = s.get("if", "")
-            assert "matrix.abi" in condition, (
-                "Rust test step must have an ABI guard (if: matrix.abi == 'arm64-v8a') "
-                "to avoid duplication in flavor × abi matrix"
-            )
+    rust_test_steps = [
+        s for s in steps if "cargo test" in s.get("run", "")
+    ]
+    assert len(rust_test_steps) == 1, (
+        f"Expected exactly 1 Rust test step, found {len(rust_test_steps)}"
+    )
+    condition = rust_test_steps[0].get("if", "")
+    assert condition == "matrix.abi == 'arm64-v8a'", (
+        f"Rust test step if condition must be exactly \"matrix.abi == 'arm64-v8a'\", "
+        f"got: {condition!r}"
+    )
 
 
 def test_jvm_unit_test_has_abi_guard(wf, _text):
     build_job = wf["jobs"]["build"]
     steps = build_job.get("steps", [])
+    jvm_test_steps = [
+        s for s in steps
+        if "gradlew" in s.get("run", "") and "UnitTest" in s.get("run", "")
+    ]
+    assert len(jvm_test_steps) == 1, (
+        f"Expected exactly 1 JVM unit test step, found {len(jvm_test_steps)}"
+    )
+    condition = jvm_test_steps[0].get("if", "")
+    assert condition == "matrix.abi == 'arm64-v8a'", (
+        f"JVM unit test step if condition must be exactly \"matrix.abi == 'arm64-v8a'\", "
+        f"got: {condition!r}"
+    )
+
+
+def test_rust_and_jvm_test_execute_once_per_flavor(wf, _text):
+    build_job = wf["jobs"]["build"]
+    matrix = build_job.get("strategy", {}).get("matrix", {})
+    flavors = matrix.get("flavor", [])
+    abis = matrix.get("abi", [])
+    includes = matrix.get("include", [])
+    all_combos = [
+        {"flavor": f, "abi": a}
+        for f in flavors
+        for a in abis
+    ] + includes
+    steps = build_job.get("steps", [])
     for s in steps:
         run_cmd = s.get("run", "")
-        if "gradlew" in run_cmd and "UnitTest" in run_cmd:
-            condition = s.get("if", "")
-            assert "matrix.abi" in condition, (
-                "JVM unit test step must have an ABI guard (if: matrix.abi == 'arm64-v8a') "
-                "to avoid duplication in flavor × abi matrix"
-            )
+        condition = s.get("if", "")
+        if "cargo test" in run_cmd and condition == "matrix.abi == 'arm64-v8a'":
+            matching = [c for c in all_combos if c.get("abi") == "arm64-v8a"]
+            for flavor in flavors:
+                count = sum(1 for c in matching if c.get("flavor") == flavor)
+                assert count == 1, (
+                    f"Rust test should execute exactly once for flavor '{flavor}', "
+                    f"but matrix expands to {count} matching combinations"
+                )
+        if "gradlew" in run_cmd and "UnitTest" in run_cmd and condition == "matrix.abi == 'arm64-v8a'":
+            matching = [c for c in all_combos if c.get("abi") == "arm64-v8a"]
+            for flavor in flavors:
+                count = sum(1 for c in matching if c.get("flavor") == flavor)
+                assert count == 1, (
+                    f"JVM unit test should execute exactly once for flavor '{flavor}', "
+                    f"but matrix expands to {count} matching combinations"
+                )
 
 
 def test_artifact_verify_paths_consistent_with_contract(wf, _text):
@@ -396,6 +436,7 @@ def main():
         test_artifact_verify_paths_consistent_with_contract,
         test_rust_test_has_abi_guard,
         test_jvm_unit_test_has_abi_guard,
+        test_rust_and_jvm_test_execute_once_per_flavor,
     ]
     failed = 0
     for t in tests:

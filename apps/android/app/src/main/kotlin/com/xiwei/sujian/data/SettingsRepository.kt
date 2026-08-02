@@ -23,7 +23,7 @@ import com.xiwei.sujian.model.SyncableSettings
  * - Compose SettingsRoute 保存用户设置
  * - SyncPage 加载/保存同步配置
  */
-open class SettingsRepository(
+class SettingsRepository(
     context: Context,
     bridge: AppServiceBridge? = null,
     preferencesSuffix: String = ""

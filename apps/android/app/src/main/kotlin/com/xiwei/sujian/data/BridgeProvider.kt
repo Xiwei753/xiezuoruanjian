@@ -18,22 +18,10 @@ object BridgeProvider {
     @Volatile
     private var networkCallbackRegistered = false
 
-    @Volatile
-    private var wasTestMode = false
-
-    fun clearTestMode() {
-        wasTestMode = false
-    }
-
     fun getAppServiceBridge(context: Context): AppServiceBridge {
         val testProvider = SujianAppDependencies.getTestProvider()
         if (testProvider != null) {
-            wasTestMode = true
             return testProvider(context).appServiceBridge
-        }
-        if (wasTestMode) {
-            DiagnosticsLogger.w(TAG, "getAppServiceBridge called after test provider cleared; returning NotLoaded-safe stub")
-            return AppServiceBridge(WriterAppServiceHolder("", secureStorageError = "test_mode_no_bridge"))
         }
         return appServiceInstance ?: synchronized(this) {
             appServiceInstance ?: run {

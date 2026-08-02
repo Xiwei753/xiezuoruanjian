@@ -1,6 +1,9 @@
 package com.xiwei.sujian.ui.compose.workbench
 
 import android.content.Context
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.preferencesDataStore
 import androidx.test.core.app.ApplicationProvider
 import com.xiwei.sujian.ui.compose.workbench.model.DockGroupMeta
 import com.xiwei.sujian.ui.compose.workbench.model.DockZone
@@ -31,6 +34,7 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class WorkbenchLayoutRepositoryTest {
 
+    private val Context.testDataStore: DataStore<Preferences> by preferencesDataStore(name = "workbench_layout_prefs_test_${System.nanoTime()}")
     private lateinit var repository: WorkbenchLayoutRepository
     private val testKey = LayoutStorageKey(
         deviceId = "test-device",
@@ -42,7 +46,7 @@ class WorkbenchLayoutRepositoryTest {
     @Before
     fun setUp() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        repository = WorkbenchLayoutRepository(context)
+        repository = WorkbenchLayoutRepository(context, dataStore = context.testDataStore)
     }
 
     @Test

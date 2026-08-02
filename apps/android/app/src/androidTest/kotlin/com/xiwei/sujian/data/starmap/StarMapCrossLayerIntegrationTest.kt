@@ -22,10 +22,12 @@ class StarMapCrossLayerIntegrationTest {
     @get:Rule
     val testRule = AndroidTestEnvironment.TestDependenciesRule()
 
-    private fun realBridgeAndRepo(): Pair<StarMapBridge, StarMapRepository> {
+    private fun countingBridgeAndRepo(): Triple<CallCountingStarMapBridgeOps, StarMapBridge, StarMapRepository> {
         val session = AndroidTestEnvironment.requireCurrentSession()
         val bridge = session.deps.appServiceBridge.starMapBridge
-        return bridge to bridge.repository
+        val countingOps = CallCountingStarMapBridgeOps(bridge)
+        val repo = StarMapRepository(countingOps, StarMapSnapshotCache())
+        return Triple(countingOps, bridge, repo)
     }
 
     private fun requireStarmapId(createResult: BridgeResult<StarMapMeta>, operation: String): String {
@@ -45,7 +47,7 @@ class StarMapCrossLayerIntegrationTest {
 
     @Test
     fun progressiveLoading_threePhases_neverCallsGetStarMapGraph() {
-        val (bridge, repo) = realBridgeAndRepo()
+        val (countingOps, bridge, repo) = countingBridgeAndRepo()
 
         val createResult = repo.createStarmap("跨层渐进加载测试", "验证三阶段不调用getStarMapGraph")
         val starmapId = requireStarmapId(createResult, "progressiveLoading_threePhases")
@@ -76,7 +78,7 @@ class StarMapCrossLayerIntegrationTest {
             val phase3Data = (phase3 as BridgeResult.Success).data.data
             assertTrue("phase3 must have all 3 nodes", phase3Data.graph.nodes.size >= 3)
 
-            assertEquals("getStarMapGraph must not be called", 0, bridge.getStarMapGraphCallCount)
+            assertEquals("getStarMapGraph must not be called", 0, countingOps.getStarMapGraphCallCount)
         } catch (t: Throwable) {
             testException = t
         } finally {
@@ -93,7 +95,7 @@ class StarMapCrossLayerIntegrationTest {
 
     @Test
     fun progressiveLoading_sameRevisionAdvancesThreePhases() {
-        val (bridge, repo) = realBridgeAndRepo()
+        val (countingOps, bridge, repo) = countingBridgeAndRepo()
 
         val createResult = repo.createStarmap("同版本三阶段测试", "验证同一packageRevision连续推进")
         val starmapId = requireStarmapId(createResult, "progressiveLoading_sameRevision")
@@ -119,7 +121,7 @@ class StarMapCrossLayerIntegrationTest {
             val rev3 = (phase3 as BridgeResult.Success).data.data.packageRevision
             assertEquals("phase3 revision must be same as phase1 (no mutations)", rev1, rev3)
 
-            assertEquals("getStarMapGraph must not be called", 0, bridge.getStarMapGraphCallCount)
+            assertEquals("getStarMapGraph must not be called", 0, countingOps.getStarMapGraphCallCount)
         } catch (t: Throwable) {
             testException = t
         } finally {
@@ -136,7 +138,7 @@ class StarMapCrossLayerIntegrationTest {
 
     @Test
     fun dtoModelConversion_fieldsMatchCore() {
-        val (bridge, repo) = realBridgeAndRepo()
+        val (countingOps, bridge, repo) = countingBridgeAndRepo()
 
         val createResult = repo.createStarmap("DTO转换一致性测试", "验证DTO到Model字段一致")
         val starmapId = requireStarmapId(createResult, "dtoModelConversion")
@@ -167,7 +169,7 @@ class StarMapCrossLayerIntegrationTest {
             assertEquals("主题Y", snapshotN2!!.title)
             assertEquals(StarMapNodeKind.Theme, snapshotN2.kind)
 
-            assertEquals("getStarMapGraph must not be called", 0, bridge.getStarMapGraphCallCount)
+            assertEquals("getStarMapGraph must not be called", 0, countingOps.getStarMapGraphCallCount)
         } catch (t: Throwable) {
             testException = t
         } finally {
@@ -184,7 +186,7 @@ class StarMapCrossLayerIntegrationTest {
 
     @Test
     fun incrementalMerge_cacheConsistentWithCore() {
-        val (bridge, repo) = realBridgeAndRepo()
+        val (countingOps, bridge, repo) = countingBridgeAndRepo()
 
         val createResult = repo.createStarmap("增量合并一致性测试", "验证增量合并后缓存与Core一致")
         val starmapId = requireStarmapId(createResult, "incrementalMerge")
@@ -221,7 +223,7 @@ class StarMapCrossLayerIntegrationTest {
             assertTrue("附近节点 must exist", allTitles.contains("附近节点"))
             assertTrue("远处节点 must exist", allTitles.contains("远处节点"))
 
-            assertEquals("getStarMapGraph must not be called", 0, bridge.getStarMapGraphCallCount)
+            assertEquals("getStarMapGraph must not be called", 0, countingOps.getStarMapGraphCallCount)
         } catch (t: Throwable) {
             testException = t
         } finally {
@@ -238,7 +240,7 @@ class StarMapCrossLayerIntegrationTest {
 
     @Test
     fun crudUpdateNode_cacheConsistentWithCore() {
-        val (bridge, repo) = realBridgeAndRepo()
+        val (countingOps, bridge, repo) = countingBridgeAndRepo()
 
         val createResult = repo.createStarmap("更新节点一致性测试", "验证更新后缓存与Core一致")
         val starmapId = requireStarmapId(createResult, "crudUpdateNode")
@@ -266,7 +268,7 @@ class StarMapCrossLayerIntegrationTest {
             assertNotNull("updated node must be in snapshot", nodeInSnapshot)
             assertEquals("更新后标题", nodeInSnapshot!!.title)
 
-            assertEquals("getStarMapGraph must not be called", 0, bridge.getStarMapGraphCallCount)
+            assertEquals("getStarMapGraph must not be called", 0, countingOps.getStarMapGraphCallCount)
         } catch (t: Throwable) {
             testException = t
         } finally {
@@ -283,7 +285,7 @@ class StarMapCrossLayerIntegrationTest {
 
     @Test
     fun crudDeleteNode_cacheConsistentWithCore() {
-        val (bridge, repo) = realBridgeAndRepo()
+        val (countingOps, bridge, repo) = countingBridgeAndRepo()
 
         val createResult = repo.createStarmap("删除节点一致性测试", "验证删除后缓存与Core一致")
         val starmapId = requireStarmapId(createResult, "crudDeleteNode")
@@ -314,7 +316,7 @@ class StarMapCrossLayerIntegrationTest {
             assertNull("deleted node must not be in snapshot", dataAfter.graph.nodes.find { it.id == node2Id })
             assertNotNull("remaining node must be in snapshot", dataAfter.graph.nodes.find { it.id == node1Id })
 
-            assertEquals("getStarMapGraph must not be called", 0, bridge.getStarMapGraphCallCount)
+            assertEquals("getStarMapGraph must not be called", 0, countingOps.getStarMapGraphCallCount)
         } catch (t: Throwable) {
             testException = t
         } finally {
@@ -331,7 +333,7 @@ class StarMapCrossLayerIntegrationTest {
 
     @Test
     fun deleteFlushReload_nodeRemovedAcrossFlushBoundary() {
-        val (bridge, repo) = realBridgeAndRepo()
+        val (countingOps, bridge, repo) = countingBridgeAndRepo()
 
         val createResult = repo.createStarmap("删除冲刷重载测试", "验证删除+flush+reload后节点消失")
         val starmapId = requireStarmapId(createResult, "deleteFlushReload")
@@ -357,7 +359,7 @@ class StarMapCrossLayerIntegrationTest {
             assertNull("deleted node must not appear", afterData.graph.nodes.find { it.id == n2.id })
             assertNotNull("remaining node must appear", afterData.graph.nodes.find { it.id == n1.id })
 
-            assertEquals("getStarMapGraph must not be called", 0, bridge.getStarMapGraphCallCount)
+            assertEquals("getStarMapGraph must not be called", 0, countingOps.getStarMapGraphCallCount)
         } catch (t: Throwable) {
             testException = t
         } finally {
@@ -374,7 +376,7 @@ class StarMapCrossLayerIntegrationTest {
 
     @Test
     fun deleteThenRecreateSameId_restoresNode() {
-        val (bridge, repo) = realBridgeAndRepo()
+        val (countingOps, bridge, repo) = countingBridgeAndRepo()
 
         val createResult = repo.createStarmap("删除重建测试", "验证删除同ID节点后重新添加可恢复")
         val starmapId = requireStarmapId(createResult, "deleteThenRecreateSameId")
@@ -400,7 +402,7 @@ class StarMapCrossLayerIntegrationTest {
             assertNotNull("recreated node must be in snapshot", found)
             assertEquals("recreated node must have new title", "重建标题", found!!.title)
 
-            assertEquals("getStarMapGraph must not be called", 0, bridge.getStarMapGraphCallCount)
+            assertEquals("getStarMapGraph must not be called", 0, countingOps.getStarMapGraphCallCount)
         } catch (t: Throwable) {
             testException = t
         } finally {
