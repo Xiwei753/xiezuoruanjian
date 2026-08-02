@@ -361,9 +361,11 @@ class SettingsRepository(
                 darkScheme = darkScheme
             )
 
-            settingsBridge.savePaletteRecord(record)
-        } catch (e: UnsatisfiedLinkError) {
-            DiagnosticsLogger.w("SettingsRepository", "Native library not loaded, cannot save palette to catalog", e)
+            when (val saveResult = settingsBridge.savePaletteRecord(record)) {
+                is BridgeResult.Error -> warn("Failed to save palette record: ${saveResult.message}")
+                BridgeResult.NotLoaded -> warn("Native library not loaded, cannot save palette record")
+                is BridgeResult.Success -> {}
+            }
         } catch (e: Exception) {
             DiagnosticsLogger.w("SettingsRepository", "Failed to save palette to catalog", e)
         }
