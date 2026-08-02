@@ -283,14 +283,13 @@ open class SettingsRepository(
     }
 
     fun listBuiltinThemes(): List<uniffi.writer_core.BuiltinThemeDto> {
-        return try {
-            settingsBridge.listBuiltinThemes()
-        } catch (e: UnsatisfiedLinkError) {
-            DiagnosticsLogger.w("SettingsRepository", "Native library not loaded, cannot list builtin themes", e)
-            emptyList()
-        } catch (e: Exception) {
-            DiagnosticsLogger.w("SettingsRepository", "Failed to list builtin themes", e)
-            emptyList()
+        return when (val result = settingsBridge.listBuiltinThemes()) {
+            is BridgeResult.Success -> result.data ?: emptyList()
+            is BridgeResult.Error -> {
+                warn("Failed to list builtin themes: ${result.message}")
+                emptyList()
+            }
+            BridgeResult.NotLoaded -> emptyList()
         }
     }
 
@@ -338,7 +337,14 @@ open class SettingsRepository(
             val effectiveDeviceClass = deviceClass
                 ?: deviceInfo.deviceClass.ifEmpty { detectDeviceClass() }
 
-            val fingerprint = settingsBridge.computePaletteFingerprint(lightScheme, darkScheme)
+            val fingerprint = when (val r = settingsBridge.computePaletteFingerprint(lightScheme, darkScheme)) {
+                is BridgeResult.Success -> r.data
+                is BridgeResult.Error -> {
+                    warn("Failed to compute palette fingerprint: ${r.message}")
+                    return
+                }
+                BridgeResult.NotLoaded -> return
+            }
             val paletteId = "$deviceId:$fingerprint"
 
             val record = uniffi.writer_core.ThemePaletteRecordDto(

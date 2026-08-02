@@ -74,20 +74,12 @@ class SettingsBridge internal constructor(private val holder: WriterAppServiceHo
     fun computePaletteFingerprint(
         lightScheme: uniffi.writer_core.ThemeColorSchemeDto,
         darkScheme: uniffi.writer_core.ThemeColorSchemeDto
-    ): String {
-        return try {
-            holder.service.computePaletteFingerprint(lightScheme, darkScheme)
-        } catch (e: UnsatisfiedLinkError) {
-            ""
-        }
+    ): BridgeResult<String> = holder.wrapResult {
+        holder.service.computePaletteFingerprint(lightScheme, darkScheme)
     }
 
-    fun listBuiltinThemes(): List<uniffi.writer_core.BuiltinThemeDto> {
-        return try {
-            holder.service.listBuiltinThemes()
-        } catch (e: UnsatisfiedLinkError) {
-            emptyList()
-        }
+    fun listBuiltinThemes(): BridgeResult<List<uniffi.writer_core.BuiltinThemeDto>> = holder.wrapResult {
+        holder.service.listBuiltinThemes()
     }
 
     fun getSecureStorageWarning(): String? {

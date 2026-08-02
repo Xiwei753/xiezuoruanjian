@@ -71,9 +71,7 @@ class WorkbenchOrientationInstrumentedTest {
             scope = testDataStoreScope,
             produceFile = { context.preferencesDataStoreFile(testDataStoreFileName!!) }
         )
-        repository = object : WorkbenchLayoutRepository(context) {
-            override val overrideDataStore: DataStore<Preferences> = testDataStore
-        }
+        repository = WorkbenchLayoutRepository(context, dataStore = testDataStore)
         val uniqueId = "test-orient-${System.nanoTime()}"
         testKey = LayoutStorageKey(
             deviceId = uniqueId,
@@ -92,12 +90,14 @@ class WorkbenchOrientationInstrumentedTest {
             firstException = t
         }
         try {
-            val fileName = testDataStoreFileName ?: return
-            val context = composeTestRule.activity.applicationContext
-            val dsFile = java.io.File(context.filesDir, "datastore/$fileName")
-            if (dsFile.exists()) {
-                val deleted = dsFile.deleteRecursively()
-                assertTrue("Failed to delete test DataStore: $fileName", deleted || !dsFile.exists())
+            val fileName = testDataStoreFileName
+            if (fileName != null) {
+                val context = composeTestRule.activity.applicationContext
+                val dsFile = java.io.File(context.filesDir, "datastore/$fileName")
+                if (dsFile.exists()) {
+                    val deleted = dsFile.deleteRecursively()
+                    assertTrue("Failed to delete test DataStore: $fileName", deleted || !dsFile.exists())
+                }
             }
         } catch (t: Throwable) {
             if (firstException != null) firstException!!.addSuppressed(t) else firstException = t
@@ -206,9 +206,7 @@ class WorkbenchOrientationInstrumentedTest {
         }
 
         val context = composeTestRule.activity.applicationContext
-        val newRepository = object : WorkbenchLayoutRepository(context) {
-            override val overrideDataStore: DataStore<Preferences> = testDataStore
-        }
+        val newRepository = WorkbenchLayoutRepository(context, dataStore = testDataStore)
 
         val loaded = runBlocking {
             newRepository.loadLayout(testKey)
