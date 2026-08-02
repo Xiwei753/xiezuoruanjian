@@ -21,6 +21,10 @@ object BridgeProvider {
     @Volatile
     private var wasTestMode = false
 
+    fun clearTestMode() {
+        wasTestMode = false
+    }
+
     fun getAppServiceBridge(context: Context): AppServiceBridge {
         val testProvider = SujianAppDependencies.getTestProvider()
         if (testProvider != null) {

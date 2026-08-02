@@ -23,6 +23,9 @@ interface SujianAppDependencies {
 
         fun setTestProvider(provider: ((Context) -> SujianAppDependencies)?) {
             _testProvider = provider
+            if (provider == null) {
+                BridgeProvider.clearTestMode()
+            }
         }
 
         fun getTestProvider(): ((Context) -> SujianAppDependencies)? = _testProvider

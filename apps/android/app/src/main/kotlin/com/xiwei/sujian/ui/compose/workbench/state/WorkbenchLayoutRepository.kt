@@ -55,10 +55,10 @@ interface WorkbenchLayoutStore {
     suspend fun loadLayout(key: LayoutStorageKey): WorkbenchLayoutState?
 }
 
-class WorkbenchLayoutRepository(
+open class WorkbenchLayoutRepository(
     private val context: Context,
-    private val overrideDataStore: DataStore<Preferences>? = null,
 ) : WorkbenchLayoutStore {
+    protected open val overrideDataStore: DataStore<Preferences>? = null
     private val dataStore: DataStore<Preferences> get() = overrideDataStore ?: context.workbenchDataStore
     override suspend fun saveLayout(key: LayoutStorageKey, state: WorkbenchLayoutState) {
         withContext(Dispatchers.IO) {

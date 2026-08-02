@@ -39,16 +39,21 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.RuleChain
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class WorkbenchOrientationInstrumentedTest {
 
-    @get:Rule
-    val testDependenciesRule = AndroidTestEnvironment.TestDependenciesRule()
+    private val testDependenciesRule = AndroidTestEnvironment.TestDependenciesRule()
+    private val _composeTestRule = createAndroidComposeRule<OrientationTestActivity>()
 
     @get:Rule
-    val composeTestRule = createAndroidComposeRule<OrientationTestActivity>()
+    val ruleChain: RuleChain = RuleChain
+        .outerRule(testDependenciesRule)
+        .around(_composeTestRule)
+
+    private val composeTestRule get() = _composeTestRule
 
     private val defaultState = WorkbenchReducer.computeDefaultLayout()
     private lateinit var repository: WorkbenchLayoutRepository
@@ -66,7 +71,9 @@ class WorkbenchOrientationInstrumentedTest {
             scope = testDataStoreScope,
             produceFile = { context.preferencesDataStoreFile(testDataStoreFileName!!) }
         )
-        repository = WorkbenchLayoutRepository(context, testDataStore)
+        repository = object : WorkbenchLayoutRepository(context) {
+            override val overrideDataStore: DataStore<Preferences> = testDataStore
+        }
         val uniqueId = "test-orient-${System.nanoTime()}"
         testKey = LayoutStorageKey(
             deviceId = uniqueId,
@@ -199,7 +206,9 @@ class WorkbenchOrientationInstrumentedTest {
         }
 
         val context = composeTestRule.activity.applicationContext
-        val newRepository = WorkbenchLayoutRepository(context, testDataStore)
+        val newRepository = object : WorkbenchLayoutRepository(context) {
+            override val overrideDataStore: DataStore<Preferences> = testDataStore
+        }
 
         val loaded = runBlocking {
             newRepository.loadLayout(testKey)
