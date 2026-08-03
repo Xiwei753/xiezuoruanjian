@@ -328,6 +328,10 @@ class AndroidInputAdapter(
         if (!isComposing) return
         val replaceStart = compositionReplaceStartUtf8
         val replaceEnd = compositionReplaceEndUtf8
+        android.util.Log.w(
+            "SujianEditorInput",
+            "commitText via COMPOSING path range=[$replaceStart,$replaceEnd) text='$finalText' session=${compositionSessionInfo().first} preedit='$currentCompositionText'"
+        )
 
         val (resultingAnchor, resultingHead) = AndroidTextIndexMap.computeResultingSelectionUtf8(
             mirror.getCommittedText(), newCursorPosition, replaceStart, replaceEnd, finalText
