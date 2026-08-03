@@ -156,8 +156,14 @@ class SujianEditorView @JvmOverloads constructor(
 
     private fun reloadFromKernel() {
         if (pipeline.reloadFromKernel()) {
+            android.util.Log.w(
+                "SujianEditorInput",
+                "reloadFromKernel applied; mirror='${pipeline.getText()}' rev=${pipeline.getRevision()} cursor=${pipeline.getCursorUtf8()}"
+            )
             updateLayoutConfig()
             onContentChanged?.invoke(pipeline.getText())
+        } else {
+            android.util.Log.w("SujianEditorInput", "reloadFromKernel FAILED (no session snapshot)")
         }
     }
 
