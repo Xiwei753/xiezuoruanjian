@@ -1445,6 +1445,7 @@ class RenderedFrameVisualTest {
         composeTestRule.onNodeWithTag(SujianSemanticIds.DialogConfirm).performClick()
 
         val chapterId = waitForChapterByTitle(chapterTitle, testData)
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.chapter(testData.volumeId, chapterId), timeoutMs = 15_000)
         composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterId)).performClick()
 
         waitForEditorReady(testData.projectId, testData.volumeId, chapterId)

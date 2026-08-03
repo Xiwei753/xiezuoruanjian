@@ -317,6 +317,11 @@ class SujianEditorView @JvmOverloads constructor(
         if (timeSource is com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource) {
             timeSource.onFrameTimeNanos(frameTimeNanos)
         }
+        // Advance timeline state at dispatch time (anchor + completion). The draw below
+        // repeats these transitions idempotently, so the animation state does not depend
+        // on when the invalidate-driven draw is actually delivered (a delayed vsync must
+        // not re-anchor or postpone completion of the animation).
+        pipeline.onFrameTick(frameTimeNanos / 1_000_000)
         invalidate()
     }
 

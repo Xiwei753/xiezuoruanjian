@@ -538,6 +538,16 @@ class AndroidEditorPipeline private constructor(
 
     fun currentTimeNanos(): Long = visualRuntime.currentTimeNanos()
 
+    /**
+     * Advance timeline state (first-visible-frame anchor, completion) for a dispatched
+     * frame timestamp without drawing. Called from the host's frame callback so that
+     * animation state is deterministic at dispatch time; the draw path re-applies the
+     * same transitions idempotently.
+     */
+    fun onFrameTick(frameTimeMs: Long) {
+        visualRuntime.onFrameTick(frameTimeMs)
+    }
+
     fun captureAnimationSnapshot(): com.xiwei.sujian.editor.v2.visual.AnimationStateSnapshot? = visualRuntime.captureStateSnapshot()
 
     fun captureVisualFrameSnapshot(): com.xiwei.sujian.editor.v2.visual.VisualFrameSnapshot? = visualRuntime.captureVisualFrameSnapshot()

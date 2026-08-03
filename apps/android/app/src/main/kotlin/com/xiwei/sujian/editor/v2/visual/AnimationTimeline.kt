@@ -10,16 +10,28 @@ package com.xiwei.sujian.editor.v2.visual
  *
  * [progress] returns values in [0f, 1f]. When [durationMs] == 0, progress is 1f
  * (animation completes instantly — the final state should be shown immediately).
+ *
+ * Anchor semantics: when the transaction is submitted with a real timestamp, the
+ * timeline is anchored at the submission moment and immediately enters
+ * [TransactionState.Rendering]. Progress is therefore the exact
+ * elapsed time since the edit — deterministic and independent of when the first frame
+ * happens to be drawn. This matters for the manual-frame test protocol (which advances a
+ * manual clock and reads progress directly) and prevents a delayed or coalesced first
+ * draw from re-anchoring the animation late. Without a submission timestamp (unit-test
+ * construction), the timeline stays [TransactionState.Pending] and anchors at the first
+ * visible frame as before.
  */
 class AnimationTimeline(
     private val durationMs: Long,
     private val submittedAtMs: Long = Long.MIN_VALUE
 ) {
-    private var firstVisibleFrameTimeMs: Long? = null
+    /** Sentinel for "no submission timestamp provided". */
+    private val noSubmission: Boolean = submittedAtMs == Long.MIN_VALUE
+    private var firstVisibleFrameTimeMs: Long? = if (noSubmission) null else submittedAtMs
     private var pauseStartedAtMs: Long? = null
     private var accumulatedPausedDurationMs: Long = 0
     private var pausedProgress: Float = 0f
-    private var state: TransactionState = TransactionState.Pending
+    private var state: TransactionState = if (noSubmission) TransactionState.Pending else TransactionState.Rendering
 
     fun progress(frameTimeMs: Long): Float {
         val start = firstVisibleFrameTimeMs ?: return 0f
@@ -33,11 +45,14 @@ class AnimationTimeline(
 
     fun markFirstVisibleFrame(frameTimeMs: Long) {
         if (firstVisibleFrameTimeMs == null) {
-            // The first visible frame must never be stamped with a time from before the
-            // transaction was submitted: a stale pending frame time (e.g. the last vsync
-            // of the previous animation, drawn after the new submit) would anchor the
-            // timeline in the past and jump the new animation's progress ahead of 0.
-            firstVisibleFrameTimeMs = maxOf(frameTimeMs, submittedAtMs)
+            // Anchoring rules:
+            // - With a real submission timestamp the anchor is the submission moment
+            //   itself: progress counts elapsed time since the edit, and neither a stale
+            //   pending frame time (from before the submit) nor a delayed first draw
+            //   (after the submit) can mis-anchor the animation.
+            // - Without one (unit-test construction) the first visible frame stamps the
+            //   anchor, clamped to never precede a known submission.
+            firstVisibleFrameTimeMs = if (noSubmission) frameTimeMs else submittedAtMs
             state = TransactionState.Rendering
         }
     }

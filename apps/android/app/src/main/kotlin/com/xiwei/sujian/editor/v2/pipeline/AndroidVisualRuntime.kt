@@ -62,6 +62,22 @@ class AndroidVisualRuntime(
         animationEngine.completeIfFinished(frameTimeMs)
     }
 
+    /**
+     * Apply timeline state transitions for a dispatched frame without drawing.
+     *
+     * The frame clock delivers the frame timestamp to the host *before* the draw is
+     * rendered (the draw itself is asynchronous via invalidate → vsync). Running the
+     * anchor/completion transitions here — with the same timestamp the draw will use —
+     * makes the animation state deterministic at dispatch time instead of depending on
+     * when the draw happens to be delivered. The draw path's own tick() repeats these
+     * transitions idempotently, so production (where dispatch and draw share one vsync
+     * timestamp) behaves identically to before.
+     */
+    fun onFrameTick(frameTimeMs: Long) {
+        animationEngine.markFirstVisibleFrame(frameTimeMs)
+        animationEngine.completeIfFinished(frameTimeMs)
+    }
+
     fun hasActiveAnimation(): Boolean = animationEngine.hasActiveAnimation()
 
     fun currentTimeNanos(): Long = animationEngine.currentTimeNanos()

@@ -34,11 +34,19 @@ class AnimationTimelineTest {
     }
 
     @Test
-    fun frameTimeAfterSubmissionAnchorsNormally() {
+    fun frameAfterSubmissionKeepsSubmissionAnchor() {
+        // With a real submission timestamp the timeline is anchored at the submission
+        // moment (deterministic progress since the edit). A later first frame must not
+        // re-anchor the animation: neither a stale frame time (before the submit) nor a
+        // delayed first draw (after the submit) may shift the anchor.
         val timeline = AnimationTimeline(100, submittedAtMs = 320)
+        assertEquals(320L, timeline.getFirstVisibleFrameTimeMs())
+        assertEquals(0f, timeline.progress(320), 0.01f)
+        assertEquals(0.5f, timeline.progress(370), 0.01f)
+        // A late first draw is a no-op on the anchor.
         timeline.markFirstVisibleFrame(350)
-        assertEquals(350L, timeline.getFirstVisibleFrameTimeMs())
-        assertEquals(0.5f, timeline.progress(400), 0.01f)
+        assertEquals(320L, timeline.getFirstVisibleFrameTimeMs())
+        assertEquals(0.5f, timeline.progress(370), 0.01f)
     }
 
     @Test

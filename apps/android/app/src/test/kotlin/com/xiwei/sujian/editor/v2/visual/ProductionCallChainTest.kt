@@ -39,18 +39,26 @@ class ProductionCallChainTest {
             frameTimeMs = choreographerFrameTimeMs
         )
         assertTrue(engine.hasActiveAnimation())
+        // The timeline is anchored at the submission frame time (the frame that carried
+        // the edit), so progress is the exact elapsed time since the edit. The first
+        // draw after submission does not re-anchor it (idempotent).
         val firstDrawFrameTimeMs = choreographerFrameTimeMs + 16L
         engine.markFirstVisibleFrame(firstDrawFrameTimeMs)
         assertEquals(
-            firstDrawFrameTimeMs,
+            choreographerFrameTimeMs,
             engine.getActiveAnimationStartTimeMs()
         )
         assertEquals(
             0f,
+            engine.getTimelineProgress(choreographerFrameTimeMs),
+            0.01f
+        )
+        assertEquals(
+            0.08f,
             engine.getTimelineProgress(firstDrawFrameTimeMs),
             0.01f
         )
-        val midFrameTimeMs = firstDrawFrameTimeMs + 100L
+        val midFrameTimeMs = choreographerFrameTimeMs + 100L
         assertEquals(
             0.5f,
             engine.getTimelineProgress(midFrameTimeMs),
@@ -59,13 +67,13 @@ class ProductionCallChainTest {
         assertFalse(
             engine.isTimelineCompleted(midFrameTimeMs)
         )
-        val threeQuarterFrameTimeMs = firstDrawFrameTimeMs + 150L
+        val threeQuarterFrameTimeMs = choreographerFrameTimeMs + 150L
         assertEquals(
             0.75f,
             engine.getTimelineProgress(threeQuarterFrameTimeMs),
             0.01f
         )
-        val endFrameTimeMs = firstDrawFrameTimeMs + 200L
+        val endFrameTimeMs = choreographerFrameTimeMs + 200L
         assertEquals(
             1f,
             engine.getTimelineProgress(endFrameTimeMs),
@@ -155,6 +163,8 @@ class ProductionCallChainTest {
             "hello", android.text.TextPaint(), 100,
             android.text.Layout.Alignment.ALIGN_NORMAL, 1f, 0f, false
         )
+        // The timeline is anchored at the submission frame time; the first tick after
+        // submission advances progress from there instead of re-anchoring.
         val firstDrawFrameTimeMs = frameTimeMs + 16L
         val frameState = runtime.tick(
             firstDrawFrameTimeMs,
@@ -168,15 +178,15 @@ class ProductionCallChainTest {
         )
         assertNotNull(frameState)
         assertEquals(
-            firstDrawFrameTimeMs,
+            frameTimeMs,
             runtime.getActiveAnimationStartTimeMs()
         )
         assertEquals(
-            0f,
+            0.08f,
             frameState!!.renderInput.timelineProgress,
             0.01f
         )
-        val midFrameTimeMs = firstDrawFrameTimeMs + 100L
+        val midFrameTimeMs = frameTimeMs + 100L
         val midFrameState = runtime.tick(
             midFrameTimeMs,
             layout,

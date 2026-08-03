@@ -730,6 +730,7 @@ class ControllableFrameAnimationTest {
         composeTestRule.onNodeWithTag(SujianSemanticIds.DialogConfirm).performClick()
 
         val chapterId2 = waitForChapterByTitle("切换章节动画测试B", testData)
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.chapter(testData.volumeId, chapterId2), timeoutMs = 15_000)
         composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterId2)).performClick()
 
         waitForEditorReady(testData.projectId, testData.volumeId, chapterId2)
@@ -756,6 +757,7 @@ class ControllableFrameAnimationTest {
         composeTestRule.onNodeWithTag(SujianSemanticIds.DialogConfirm).performClick()
 
         val chapterId = waitForChapterByTitle(chapterTitle, testData)
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.chapter(testData.volumeId, chapterId), timeoutMs = 15_000)
         composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterId)).performClick()
 
         waitForEditorReady(testData.projectId, testData.volumeId, chapterId)
@@ -1381,6 +1383,7 @@ class ControllableFrameAnimationTest {
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList, timeoutMs = 5_000)
 
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.chapter(testData.volumeId, chapterId), timeoutMs = 15_000)
         composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterId)).performClick()
 
         waitForEditorReady(testData.projectId, testData.volumeId, chapterId)

@@ -106,13 +106,16 @@ class AnimationRebaseContractTest {
         engine.registerSnapshots(mapOf(0 to snapshot), SnapshotOwner.OwnedByTransaction(1L))
         engine.submit(transaction)
 
+        // A submitted transaction is anchored at its submission moment (deterministic
+        // progress since the edit) and is immediately Rendering: the frame right after
+        // submit shows the start state (progress 0) with slices and cursor rect.
         val frame = engine.captureFrame(0)
-        assertNotNull("Pending transaction must return a valid frame", frame)
-        assertEquals(TransactionState.Pending, frame!!.state)
+        assertNotNull("Freshly submitted transaction must return a valid frame", frame)
+        assertEquals(TransactionState.Rendering, frame!!.state)
         assertEquals(0f, frame.progress, 0.01f)
-        assertTrue("Pending frame must include slice visual states", frame.sliceVisualStates.isNotEmpty())
+        assertTrue("Start frame must include slice visual states", frame.sliceVisualStates.isNotEmpty())
         assertEquals(0f, frame.sliceVisualStates[0].currentAlpha, 0.01f)
-        assertNotNull("Pending frame must include cursor rect", frame.cursorRect)
+        assertNotNull("Start frame must include cursor rect", frame.cursorRect)
         assertEquals(10f, frame.cursorRect!!.left, 0.01f)
     }
 
