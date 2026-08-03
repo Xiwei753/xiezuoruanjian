@@ -215,4 +215,17 @@ jobs:
           disable-animations: true
           script: |
             adb shell getprop ro.product.cpu.abi
-            cd apps/android && ANDROID_NDK_HOME=$ANDROID_NDK_ROOT ./gradlew connected${{ matrix.flavor == 'no-ai' && 'NoAi' || 'Ai' }}DebugAndroidTest -x build${{ matrix.flavor == 'no-ai' && 'NoAi' || 'Ai' }}DebugWriterNative -Psujian.android.abis=x86_64
+            # Deterministic input: the instrumented tests drive the editor's InputConnection
+            # directly. An active IME on the emulator can inject spurious composition calls
+            # into the editor, so disable every IME before the test run.
+            IME_IDS=$(adb shell ime list -s 2>/dev/null | tr -d '\r')
+            for ime in $IME_IDS; do adb shell ime disable "$ime" || true; done
+            cd apps/android && ANDROID_NDK_HOME=$ANDROID_NDK_ROOT ./gradlew connected${{ matrix.flavor == 'no-ai' && 'NoAi' || 'Ai' }}DebugAndroidTest -x build${{ matrix.flavor == 'no-ai' && 'NoAi' || 'Ai' }}DebugWriterNative -Psujian.android.abis=x86_64 || {
+              echo "===== FAILED TEST DETAILS ====="
+              for xml in $(find app/build/outputs/androidTest-results -name '*.xml' 2>/dev/null); do
+                if grep -q '<failure\|<error' "$xml" 2>/dev/null; then cat "$xml"; fi
+              done
+              echo "===== LOGCAT (tail) ====="
+              adb logcat -d -v threadtime 2>/dev/null | tail -n 500
+              exit 1
+            }

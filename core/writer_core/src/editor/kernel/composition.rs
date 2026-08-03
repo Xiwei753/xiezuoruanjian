@@ -19,9 +19,13 @@ impl EditorKernel {
         old_cursor: Utf8ByteOffset,
         old_selection: Utf8ByteRange,
     ) -> EditorEditOutcome {
-        if self.composition_session.is_some() {
-            return EditorEditOutcome::InvalidRange(self.noop_result(base_revision, old_cursor, old_selection));
-        }
+        // Session-divergence recovery: if a composition session already exists, the
+        // platform has lost track of it (e.g. an aborted IME interaction, or a soft reset
+        // that cleared the adapter's composition state without cancelling the kernel
+        // session). A stale session would reject every subsequent plain commit
+        // (StaleRevision) and block all future compositions, so a new begin is
+        // authoritative: drop the stale session and start fresh with the new range.
+        self.composition_session = None;
         if replace_start > replace_end_exclusive {
             return EditorEditOutcome::InvalidRange(self.noop_result(base_revision, old_cursor, old_selection));
         }

@@ -237,6 +237,11 @@ class AndroidInputAdapter(
 
     fun invalidateCompositionSession() {
         if (isComposing) {
+            // Cancel the kernel-side composition session too: the adapter state and the
+            // kernel session must not diverge. If only the adapter state were cleared, a
+            // later plain commit would be rejected as StaleRevision by the orphaned kernel
+            // session and every subsequent composition begin would fail.
+            sendCancelCompositionToKernel()
             mirror.clearComposition()
             clearCompositionState()
             onCompositionVisualUpdate?.invoke()

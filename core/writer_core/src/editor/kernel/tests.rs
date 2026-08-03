@@ -994,6 +994,66 @@ mod tests {
     }
 
     #[test]
+    fn begin_composition_replaces_stale_session_instead_of_rejecting() {
+        // Session-divergence recovery: when a composition session already exists (e.g.
+        // the platform lost track of it after a soft reset), a new begin is authoritative
+        // and replaces the stale session — otherwise every subsequent plain commit would
+        // be rejected as StaleRevision and future compositions would be blocked.
+        let mut kernel = EditorKernel::with_text("abc".to_string(), 1).unwrap();
+        let first_begin = kernel.apply(EditorCommand::BeginComposition {
+            replace_range: Utf8ByteRange::point(1),
+            expected_revision: EditorRevision::new(0),
+        });
+        assert!(first_begin.is_applied());
+        let first_begin_result = first_begin.into_result();
+        let (first_session_id, first_base_rev, first_gen) = kernel.composition_session_info().unwrap();
+
+        // A second begin (e.g. a fresh IME interaction after the platform lost the
+        // session) must succeed and replace the stale session with a new one.
+        let second_begin = kernel.apply(EditorCommand::BeginComposition {
+            replace_range: Utf8ByteRange::point(2),
+            expected_revision: first_begin_result.new_revision,
+        });
+        assert!(second_begin.is_applied());
+        let second_begin_result = second_begin.into_result();
+        let (second_session_id, _, _) = kernel.composition_session_info().unwrap();
+        assert_ne!(second_session_id, first_session_id);
+
+        // The stale session's id must no longer be accepted: a commit against it is stale.
+        let stale_commit = kernel.apply(EditorCommand::CommitText {
+            byte_range: Utf8ByteRange::point(2),
+            replacement_text: "x".to_string(),
+            resulting_selection_anchor: Utf8ByteOffset::unchecked(3),
+            resulting_selection_head: Utf8ByteOffset::unchecked(3),
+            composition_session_id: EditorSessionId::new(first_session_id),
+            composition_base_revision: EditorRevision::new(first_base_rev),
+            composition_generation: EditorSessionGeneration::new(first_gen),
+            cause: EditorTransactionCause::TypingCommit,
+            expected_revision: second_begin_result.new_revision,
+        });
+        assert!(matches!(stale_commit, EditorEditOutcome::StaleRevision(_)));
+
+        // A commit through the *new* session must apply normally.
+        let (_, second_base_rev, second_gen) = kernel.composition_session_info().unwrap();
+        let commit = kernel.apply(EditorCommand::CommitText {
+            byte_range: Utf8ByteRange::point(2),
+            replacement_text: "y".to_string(),
+            resulting_selection_anchor: Utf8ByteOffset::unchecked(3),
+            resulting_selection_head: Utf8ByteOffset::unchecked(3),
+            composition_session_id: EditorSessionId::new(second_session_id),
+            composition_base_revision: EditorRevision::new(second_base_rev),
+            composition_generation: EditorSessionGeneration::new(second_gen),
+            cause: EditorTransactionCause::TypingCommit,
+            expected_revision: second_begin_result.new_revision,
+        });
+        let result = commit.into_result();
+        assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::CompositionCommit);
+        assert_eq!(kernel.text(), "abyc");
+        // The session is consumed by the commit; the next begin starts clean again.
+        assert!(kernel.composition_session_info().is_none());
+    }
+
+    #[test]
     fn replace_empty_range_has_insert_operation_kind() {
         let mut kernel = EditorKernel::with_text("ABCDE".to_string(), 3).unwrap();
         let result = kernel.apply(EditorCommand::Replace {
