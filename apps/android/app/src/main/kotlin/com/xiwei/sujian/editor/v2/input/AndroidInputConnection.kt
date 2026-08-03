@@ -256,6 +256,11 @@ class AndroidInputConnection(
      */
     override fun setComposingRegion(start: Int, end: Int): Boolean {
         if (start < 0 || end < 0 || start > end) return false
+        android.util.Log.w(
+            "SujianEditorInput",
+            "setComposingRegion [$start,$end) composing=$isComposing",
+            Throwable("setComposingRegion caller")
+        )
         if (adapter.isComposing()) {
             adapter.handleCompositionCancel()
         }
