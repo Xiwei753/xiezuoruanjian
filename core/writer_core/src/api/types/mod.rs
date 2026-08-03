@@ -28,6 +28,8 @@ mod stats_tests;
 mod volume_tests;
 #[cfg(test)]
 mod workspace_tests;
+#[cfg(test)]
+mod settings_tests;
 
 pub use action::*;
 pub use editor::*;
