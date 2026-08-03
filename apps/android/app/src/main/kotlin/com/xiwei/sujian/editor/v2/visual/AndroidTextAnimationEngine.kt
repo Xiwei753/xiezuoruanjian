@@ -106,6 +106,11 @@ class AndroidTextAnimationEngine(
         submittedAtMs: Long = timeSource.nowNanos() / 1_000_000
     ) {
         val oldTransaction = activeTransaction
+        android.util.Log.w(
+            "SujianEditorInput",
+            "submit kind=${preparedAnimation.operationKind} duration=${preparedAnimation.durationMs} submittedAt=$submittedAtMs " +
+                "replacing=${oldTransaction?.operationKind} oldState=${timeline?.getState()} now=${timeSource.nowNanos() / 1_000_000}"
+        )
         val newOwner = SnapshotOwner.OwnedByTransaction(preparedAnimation.transactionId)
 
         val unreferencedNewIds = preparedAnimation.ownedSnapshotIds - preparedAnimation.referencedSnapshotIds

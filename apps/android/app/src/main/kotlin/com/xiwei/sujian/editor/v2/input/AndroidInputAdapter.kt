@@ -32,7 +32,6 @@ class AndroidInputAdapter(
     fun setHostView(view: View) {
         hostView = view
     }
-
     fun getHostView(): View? = hostView
 
     fun applyProfile(profile: TextEditorProfile) {
@@ -128,6 +127,10 @@ class AndroidInputAdapter(
     fun sendCommitTextToKernel(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, resultingSelectionAnchor: Int, resultingSelectionHead: Int, cause: EditorTransactionCauseDto) {
         val (sessionId, baseRev, generation) = compositionSessionInfo()
         val preeditAtCommit = currentCompositionText
+        android.util.Log.w(
+            "SujianEditorInput",
+            "commitText range=[$byteStart,$byteEndExclusive) text='$replacementText' composing=$isComposing session=$sessionId preedit='$preeditAtCommit' cause=$cause"
+        )
         val dto = commandPort.commitComposition(
             byteStart, byteEndExclusive, replacementText,
             resultingSelectionAnchor, resultingSelectionHead,
@@ -141,6 +144,10 @@ class AndroidInputAdapter(
             onPipelineOutput?.invoke(output)
             return
         }
+        android.util.Log.w(
+            "SujianEditorInput",
+            "commitText NOT applied (outcome=${result?.outcome}, dto=${dto != null}); reloading from kernel"
+        )
         clearCompositionState()
         commandPort.reloadFromKernel()
     }
@@ -268,6 +275,11 @@ class AndroidInputAdapter(
                 return
             }
         }
+        android.util.Log.w(
+            "SujianEditorInput",
+            "setComposingText '$preeditText' cursor=$newCursorPosition alreadyComposing=$isComposing sel=[" +
+                "${mirror.getCommittedSelectionStartUtf8()},${mirror.getCommittedSelectionEndUtf8()}] cursorUtf8=${mirror.getCommittedCursorUtf8()}"
+        )
         if (!isComposing) {
             val selStart = mirror.getCommittedSelectionStartUtf8()
             val selEnd = mirror.getCommittedSelectionEndUtf8()
