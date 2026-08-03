@@ -93,7 +93,7 @@ impl WriterCoreApi {
         core.global_search(query, scope, limit, cursor)
     }
 
-    pub(crate) fn search_service_rebuild(&self, project_id: Option<&str>) -> crate::error::Result<crate::search::SearchIndexStatus> {
+    pub fn search_service_rebuild(&self, project_id: Option<&str>) -> crate::error::Result<crate::search::SearchIndexStatus> {
         let core = self.core_instance.lock().unwrap_or_else(|e| e.into_inner());
         core.flush_all_starmap_stores()?;
         core.rebuild_search_index(project_id)
@@ -102,11 +102,6 @@ impl WriterCoreApi {
     pub(crate) fn search_service_status(&self) -> crate::search::SearchIndexStatus {
         let core = self.core_instance.lock().unwrap_or_else(|e| e.into_inner());
         core.get_search_index_status()
-    }
-
-    pub(crate) fn get_starmap_store_package_revision(&self, starmap_id: &str) -> u64 {
-        let core = self.core_instance.lock().unwrap_or_else(|e| e.into_inner());
-        core.get_starmap_store_package_revision(starmap_id)
     }
 
     pub(crate) fn json_string<T: Serialize>(value: &T) -> ApiResult<String> {

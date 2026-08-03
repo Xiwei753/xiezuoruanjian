@@ -77,7 +77,7 @@ impl StarMapStore {
         }
         let node_id_exists = |id: &str| -> bool {
             self.nodes.contains_key(id)
-                || self.graph_meta.as_ref().map_or(false, |m| m.node_ids.contains(&id.to_string()))
+                || self.graph_meta.as_ref().map(|m| m.node_ids.contains(&id.to_owned())).unwrap_or(false)
         };
         let from_valid = edge.from_target.is_some()
             || edge.from_endpoint.is_some()

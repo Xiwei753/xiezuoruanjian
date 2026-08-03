@@ -121,7 +121,7 @@ fn test_execute_action_auto_indent_get_set() {
     let result = core.execute_action("settings.editor.auto_indent.get", "", "").unwrap();
     assert!(result.success);
     let data = result.data.unwrap();
-    assert_eq!(data["enabled"].as_bool().unwrap(), true);
+    assert!(data["enabled"].as_bool().unwrap());
     assert_eq!(data["widthChars"].as_f64().unwrap(), 4.0);
 
     let result = core.execute_action("settings.editor.auto_indent.set", r#"{"widthChars": 2.0}"#, "").unwrap();

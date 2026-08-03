@@ -6,8 +6,6 @@ mod snapshot;
 
 use crate::starmap::package_storage;
 use crate::starmap::types::*;
-use super::meta::GraphMeta;
-use super::types::*;
 
 fn write_to_bucket(dir: &std::path::Path, subdir: &str, id: &str, json: &str) {
         let bucket = package_storage::bucket_for_id(id);

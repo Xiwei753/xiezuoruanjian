@@ -51,7 +51,7 @@ impl SujianEditorItem {
         let session = self.pipeline.composition_mut().composition_session.as_mut()?;
         let old_preedit = session.preedit_text.clone();
         session.update_preedit(text, cursor);
-        let generation = session.last_submitted_generation;
+        let generation = session.last_submitted_generation.value();
         let (composition_byte_start, composition_byte_end) = session.preedit_byte_range_in_virtual_text();
         let virtual_text = session.virtual_text();
 

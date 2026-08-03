@@ -312,13 +312,13 @@ impl EditorEngine {
             committed_text.to_string(),
             range,
             old_preedit_text.to_string(),
-            Utf8ByteRange::from_values(0, committed_text.len()).unwrap_or_else(|| Utf8ByteRange::from_values(0, 0).unwrap()),
+            Utf8ByteRange::from_start_len(0, committed_text.len()),
         );
         let new_revision = CompositionVisualRevision::new(
             committed_text.to_string(),
             range,
             new_preedit_text.to_string(),
-            Utf8ByteRange::from_values(0, committed_text.len()).unwrap_or_else(|| Utf8ByteRange::from_values(0, 0).unwrap()),
+            Utf8ByteRange::from_start_len(0, committed_text.len()),
         );
         let visual_class_kinds = classify_visual_diff(
             &old_revision.virtual_text,

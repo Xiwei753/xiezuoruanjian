@@ -36,8 +36,7 @@ impl EditorKernel {
         }
 
         let old_cursor = self.cursor;
-        let old_selection = Utf8ByteRange::from_values(self.selection_anchor.value(), self.cursor.value())
-            .unwrap_or(Utf8ByteRange::from_values(0, 0).unwrap());
+        let old_selection = Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
 
         match command {
             EditorCommand::Insert { byte_offset, text, cause, .. } => {
@@ -180,13 +179,13 @@ impl EditorKernel {
         self.redo_stack.clear();
 
         let new_revision = self.revision;
-        let new_selection = Utf8ByteRange::from_values(new_cursor_val, new_cursor_val).unwrap();
-        let new_affected = vec![Utf8ByteRange::from_values(byte_offset, byte_offset + text.len()).unwrap()];
+        let new_selection = Utf8ByteRange::point(new_cursor_val);
+        let new_affected = vec![Utf8ByteRange::from_start_len(byte_offset, text.len())];
 
         let display_patches = vec![DisplayPatch {
             base_revision,
             new_revision,
-            replace_byte_range: Utf8ByteRange::from_values(byte_offset, byte_offset).unwrap(),
+            replace_byte_range: Utf8ByteRange::point(byte_offset),
             inserted_text: text.to_string(),
             resulting_selection_byte_range: new_selection,
         }];
@@ -275,13 +274,13 @@ impl EditorKernel {
         self.redo_stack.clear();
 
         let new_revision = self.revision;
-        let new_selection = Utf8ByteRange::from_values(byte_start, byte_start).unwrap();
-        let old_affected = vec![Utf8ByteRange::from_values(byte_start, byte_end_exclusive).unwrap()];
+        let new_selection = Utf8ByteRange::point(byte_start);
+        let old_affected = vec![Utf8ByteRange::from_ordered(byte_start, byte_end_exclusive)];
 
         let display_patches = vec![DisplayPatch {
             base_revision,
             new_revision,
-            replace_byte_range: Utf8ByteRange::from_values(byte_start, byte_end_exclusive).unwrap(),
+            replace_byte_range: Utf8ByteRange::from_ordered(byte_start, byte_end_exclusive),
             inserted_text: String::new(),
             resulting_selection_byte_range: new_selection,
         }];
@@ -371,14 +370,14 @@ impl EditorKernel {
         self.redo_stack.clear();
 
         let new_revision = self.revision;
-        let new_selection = Utf8ByteRange::from_values(new_cursor_val, new_cursor_val).unwrap();
-        let old_affected = vec![Utf8ByteRange::from_values(byte_start, byte_end_exclusive).unwrap()];
-        let new_affected = vec![Utf8ByteRange::from_values(byte_start, byte_start + replacement_text.len()).unwrap()];
+        let new_selection = Utf8ByteRange::point(new_cursor_val);
+        let old_affected = vec![Utf8ByteRange::from_ordered(byte_start, byte_end_exclusive)];
+        let new_affected = vec![Utf8ByteRange::from_start_len(byte_start, replacement_text.len())];
 
         let display_patches = vec![DisplayPatch {
             base_revision,
             new_revision,
-            replace_byte_range: Utf8ByteRange::from_values(byte_start, byte_end_exclusive).unwrap(),
+            replace_byte_range: Utf8ByteRange::from_ordered(byte_start, byte_end_exclusive),
             inserted_text: replacement_text.to_string(),
             resulting_selection_byte_range: new_selection,
         }];
@@ -468,13 +467,13 @@ impl EditorKernel {
         self.redo_stack.clear();
 
         let new_revision = self.revision;
-        let new_selection = Utf8ByteRange::from_values(new_cursor_val, new_cursor_val).unwrap();
-        let new_affected = vec![Utf8ByteRange::from_values(byte_offset, byte_offset + text.len()).unwrap()];
+        let new_selection = Utf8ByteRange::point(new_cursor_val);
+        let new_affected = vec![Utf8ByteRange::from_start_len(byte_offset, text.len())];
 
         let display_patches = vec![DisplayPatch {
             base_revision,
             new_revision,
-            replace_byte_range: Utf8ByteRange::from_values(byte_offset, byte_offset).unwrap(),
+            replace_byte_range: Utf8ByteRange::point(byte_offset),
             inserted_text: text.clone(),
             resulting_selection_byte_range: new_selection,
         }];
@@ -589,18 +588,18 @@ impl EditorKernel {
         self.composition_session = None;
 
         let new_revision = self.revision;
-        let new_selection = Utf8ByteRange::from_values(sel_anchor, sel_head).unwrap();
+        let new_selection = Utf8ByteRange::from_ordered(sel_anchor, sel_head);
         let old_affected = if preedit_byte_len > 0 {
-            vec![Utf8ByteRange::from_values(byte_start, byte_start + preedit_byte_len).unwrap()]
+            vec![Utf8ByteRange::from_start_len(byte_start, preedit_byte_len)]
         } else {
-            vec![Utf8ByteRange::from_values(byte_start, byte_end_exclusive).unwrap()]
+            vec![Utf8ByteRange::from_ordered(byte_start, byte_end_exclusive)]
         };
-        let new_affected = vec![Utf8ByteRange::from_values(byte_start, byte_start + replacement_text.len()).unwrap()];
+        let new_affected = vec![Utf8ByteRange::from_start_len(byte_start, replacement_text.len())];
 
         let display_patches = vec![DisplayPatch {
             base_revision,
             new_revision,
-            replace_byte_range: Utf8ByteRange::from_values(byte_start, byte_end_exclusive).unwrap(),
+            replace_byte_range: Utf8ByteRange::from_ordered(byte_start, byte_end_exclusive),
             inserted_text: replacement_text.to_string(),
             resulting_selection_byte_range: new_selection,
         }];
@@ -740,7 +739,7 @@ impl EditorKernel {
         self.redo_stack.clear();
 
         let new_revision = self.revision;
-        let new_selection = Utf8ByteRange::from_values(new_sel_anchor, new_sel_head).unwrap();
+        let new_selection = Utf8ByteRange::from_ordered(new_sel_anchor, new_sel_head);
 
         let (replace_range, inserted_text) = Self::compute_single_patch(&old_text, &self.text);
         let display_patches = if replace_range.start().value() < replace_range.end().value() || !inserted_text.is_empty() {
@@ -758,7 +757,7 @@ impl EditorKernel {
         let visual_intent = EditorVisualIntent {
             cause,
             operation_kind: EditorOperationKind::Delete,
-            old_affected_byte_ranges: patches.iter().map(|(s, e, _)| Utf8ByteRange::from_values(*s, *e).unwrap()).collect(),
+            old_affected_byte_ranges: patches.iter().map(|(s, e, _)| Utf8ByteRange::from_ordered(*s, *e)).collect(),
             new_affected_byte_ranges: vec![],
             animation_mode: AnimationMode::SystemSuppressed,
             duration_ms: 0,

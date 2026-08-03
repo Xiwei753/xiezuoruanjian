@@ -101,7 +101,7 @@ impl SujianEditorItem {
                     let old_snapshot = self.layout_snapshot_for_text(old_text, width);
                     let old_caret = self.editor_layout.caret_rect(
                         &old_snapshot,
-                        vt.old_selection.head.index,
+                        vt.old_selection.head.index.value(),
                         CaretAffinity::Downstream,
                         scroll_y,
                         viewport_h,
@@ -115,7 +115,7 @@ impl SujianEditorItem {
 
                     let new_caret = self.editor_layout.caret_rect(
                         &insert_snapshot,
-                        vt.new_selection.head.index,
+                        vt.new_selection.head.index.value(),
                         CaretAffinity::Downstream,
                         scroll_y,
                         viewport_h,
@@ -136,7 +136,7 @@ impl SujianEditorItem {
 
                 let old_caret = self.editor_layout.caret_rect(
                     &delete_snapshot,
-                    vt.old_selection.head.index,
+                    vt.old_selection.head.index.value(),
                     CaretAffinity::Downstream,
                     scroll_y,
                     viewport_h,
@@ -151,7 +151,7 @@ impl SujianEditorItem {
                 let new_snapshot = self.layout_snapshot_for_text(text, width);
                 let new_caret = self.editor_layout.caret_rect(
                     &new_snapshot,
-                    vt.new_selection.head.index,
+                    vt.new_selection.head.index.value(),
                     CaretAffinity::Downstream,
                     scroll_y,
                     viewport_h,

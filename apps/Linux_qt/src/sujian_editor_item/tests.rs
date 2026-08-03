@@ -223,7 +223,7 @@ mod tests {
         assert_eq!(vt.kind, EditorAnimationKind::Insert);
         assert_eq!(
             vt.inserted_range,
-            Some((old_text.len(), old_text.len() + idiom.len()))
+            Some(writer_core::editor::Utf8ByteRange::from_values(old_text.len(), old_text.len() + idiom.len()).unwrap())
         );
 
         let mode = SujianEditorItem::animation_mode_from_core(vt.animation_mode);
@@ -234,7 +234,7 @@ mod tests {
             "Cursor should move after idiom commit"
         );
         assert_eq!(
-            tx.new_selection.head.index,
+            tx.new_selection.head.index.value(),
             new_text.len(),
             "Cursor byte offset should be at end of committed text"
         );
@@ -274,7 +274,7 @@ mod tests {
         );
 
         assert_eq!(
-            tx.new_selection.head.index,
+            tx.new_selection.head.index.value(),
             long_candidate.len(),
             "Cursor byte offset should be at end of committed text even without animation"
         );
@@ -299,7 +299,7 @@ mod tests {
             "ImeComposition should not animate"
         );
         assert_eq!(
-            tx_preedit.new_selection.head.index,
+            tx_preedit.new_selection.head.index.value(),
             preedit_text.len(),
             "Preedit cursor should be at end of preedit text"
         );
@@ -318,11 +318,11 @@ mod tests {
         );
 
         assert_eq!(
-            tx_commit.old_selection.head.index, 0,
+            tx_commit.old_selection.head.index.value(), 0,
             "Old cursor should be at start (preedit was cleared)"
         );
         assert_eq!(
-            tx_commit.new_selection.head.index,
+            tx_commit.new_selection.head.index.value(),
             committed.len(),
             "New cursor should be at end of committed text"
         );
@@ -374,8 +374,8 @@ mod tests {
         assert!(vt.is_some());
         let vt = vt.unwrap();
         assert_eq!(vt.kind, EditorAnimationKind::Insert);
-        assert_eq!(vt.old_selection.head.index, 0);
-        assert_eq!(vt.new_selection.head.index, hanzi.len());
+        assert_eq!(vt.old_selection.head.index.value(), 0);
+        assert_eq!(vt.new_selection.head.index.value(), hanzi.len());
 
         let mode = SujianEditorItem::animation_mode_from_core(vt.animation_mode);
         assert_eq!(mode, AnimationMode::GlyphAnimation);
@@ -445,8 +445,8 @@ mod tests {
 
         let reflow_c = ReflowGlyphRect {
             char_: "C".to_string(),
-            byte_start: 4,
-            byte_end: 5,
+            byte_start: writer_core::editor::Utf8ByteOffset::unchecked(4),
+            byte_end: writer_core::editor::Utf8ByteOffset::unchecked(5),
             old_x: 20.0,
             old_y: 0.0,
             old_baseline_y: 16.0,
@@ -459,8 +459,8 @@ mod tests {
         };
         let reflow_d = ReflowGlyphRect {
             char_: "D".to_string(),
-            byte_start: 5,
-            byte_end: 6,
+            byte_start: writer_core::editor::Utf8ByteOffset::unchecked(5),
+            byte_end: writer_core::editor::Utf8ByteOffset::unchecked(6),
             old_x: 30.0,
             old_y: 0.0,
             old_baseline_y: 16.0,
@@ -473,8 +473,8 @@ mod tests {
         };
         let reflow_e = ReflowGlyphRect {
             char_: "E".to_string(),
-            byte_start: 6,
-            byte_end: 7,
+            byte_start: writer_core::editor::Utf8ByteOffset::unchecked(6),
+            byte_end: writer_core::editor::Utf8ByteOffset::unchecked(7),
             old_x: 40.0,
             old_y: 0.0,
             old_baseline_y: 16.0,

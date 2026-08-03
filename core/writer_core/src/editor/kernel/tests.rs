@@ -1,4 +1,5 @@
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod tests {
     use super::super::*;
     use super::super::types::{EditorCommand, DisplayPatch, EditorOperationKind};
@@ -29,7 +30,7 @@ mod tests {
     fn delete_command_produces_display_patch() {
         let mut kernel = EditorKernel::with_text("你好世界".to_string(), 12).unwrap();
         let result = kernel.apply(EditorCommand::Delete {
-            byte_range: Utf8ByteRange::from_values(6, 12).unwrap(),
+            byte_range: Utf8ByteRange::from_ordered(6, 12),
             deleted_text: "世界".to_string(),
             cause: EditorTransactionCause::Delete,
             expected_revision: EditorRevision::new(0),
@@ -44,7 +45,7 @@ mod tests {
     fn replace_command_produces_display_patch() {
         let mut kernel = EditorKernel::with_text("你好世界".to_string(), 12).unwrap();
         let result = kernel.apply(EditorCommand::Replace {
-            byte_range: Utf8ByteRange::from_values(6, 12).unwrap(),
+            byte_range: Utf8ByteRange::from_ordered(6, 12),
             replacement_text: "朋友".to_string(),
             original_text: "世界".to_string(),
             cause: EditorTransactionCause::Typing,
@@ -147,7 +148,7 @@ mod tests {
     fn display_patch_contains_correct_ranges() {
         let mut kernel = EditorKernel::with_text("hello world".to_string(), 11).unwrap();
         let result = kernel.apply(EditorCommand::Replace {
-            byte_range: Utf8ByteRange::from_values(6, 11).unwrap(),
+            byte_range: Utf8ByteRange::from_ordered(6, 11),
             replacement_text: "rust".to_string(),
             original_text: "world".to_string(),
             cause: EditorTransactionCause::Typing,
@@ -155,7 +156,7 @@ mod tests {
         }).into_result();
 
         assert_eq!(result.display_patches.len(), 1);
-        assert_eq!(result.display_patches[0].replace_byte_range, Utf8ByteRange::from_values(6, 11).unwrap());
+        assert_eq!(result.display_patches[0].replace_byte_range, Utf8ByteRange::from_ordered(6, 11));
         assert_eq!(result.display_patches[0].inserted_text, "rust");
     }
 
@@ -245,9 +246,9 @@ mod tests {
         let patch = DisplayPatch {
             base_revision: EditorRevision::new(0),
             new_revision: EditorRevision::new(1),
-            replace_byte_range: Utf8ByteRange::from_values(2, 3).unwrap(),
+            replace_byte_range: Utf8ByteRange::from_ordered(2, 3),
             inserted_text: "c".to_string(),
-            resulting_selection_byte_range: Utf8ByteRange::from_values(3, 3).unwrap(),
+            resulting_selection_byte_range: Utf8ByteRange::point(3),
         };
         let json = serde_json::to_string(&patch).unwrap();
         assert!(json.contains("\"replaceByteRange\":"), "DisplayPatch JSON should use camelCase, got: {}", json);
@@ -272,7 +273,7 @@ mod tests {
     fn composition_commit_modifies_text_via_replace() {
         let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
         let result = kernel.apply(EditorCommand::Replace {
-            byte_range: Utf8ByteRange::from_values(6, 6).unwrap(),
+            byte_range: Utf8ByteRange::point(6),
             replacement_text: "你好".to_string(),
             original_text: String::new(),
             cause: EditorTransactionCause::TypingCommit,
@@ -287,7 +288,7 @@ mod tests {
     fn delete_empty_range_is_noop() {
         let mut kernel = EditorKernel::with_text("abc".to_string(), 3).unwrap();
         let outcome = kernel.apply(EditorCommand::Delete {
-            byte_range: Utf8ByteRange::from_values(2, 2).unwrap(),
+            byte_range: Utf8ByteRange::point(2),
             deleted_text: String::new(),
             cause: EditorTransactionCause::Delete,
             expected_revision: EditorRevision::new(0),
@@ -313,7 +314,7 @@ mod tests {
     fn replace_same_text_produces_patch() {
         let mut kernel = EditorKernel::with_text("abc".to_string(), 3).unwrap();
         let result = kernel.apply(EditorCommand::Replace {
-            byte_range: Utf8ByteRange::from_values(1, 2).unwrap(),
+            byte_range: Utf8ByteRange::from_ordered(1, 2),
             replacement_text: "X".to_string(),
             original_text: "b".to_string(),
             cause: EditorTransactionCause::Typing,
@@ -369,7 +370,7 @@ mod tests {
         assert_eq!(kernel.cursor(), 12);
 
         let result = kernel.apply(EditorCommand::Delete {
-            byte_range: Utf8ByteRange::from_values(6, 12).unwrap(),
+            byte_range: Utf8ByteRange::from_ordered(6, 12),
             deleted_text: "世界".to_string(),
             cause: EditorTransactionCause::Delete,
             expected_revision: result.new_revision,
@@ -440,7 +441,7 @@ mod tests {
     fn atomic_display_patch_for_replace() {
         let mut kernel = EditorKernel::with_text("hello world".to_string(), 11).unwrap();
         let result = kernel.apply(EditorCommand::Replace {
-            byte_range: Utf8ByteRange::from_values(6, 11).unwrap(),
+            byte_range: Utf8ByteRange::from_ordered(6, 11),
             replacement_text: "rust".to_string(),
             original_text: "world".to_string(),
             cause: EditorTransactionCause::Typing,
@@ -448,7 +449,7 @@ mod tests {
         }).into_result();
         assert_eq!(result.display_patches.len(), 1);
         let patch = &result.display_patches[0];
-        assert_eq!(patch.replace_byte_range, Utf8ByteRange::from_values(6, 11).unwrap());
+        assert_eq!(patch.replace_byte_range, Utf8ByteRange::from_ordered(6, 11));
         assert_eq!(patch.inserted_text, "rust");
     }
 
@@ -477,8 +478,8 @@ mod tests {
             "朋友",
         );
         assert_eq!(intent.operation_kind, EditorOperationKind::CompositionUpdate);
-        assert_eq!(intent.old_affected_byte_ranges, vec![Utf8ByteRange::from_values(6, 12).unwrap()]);
-        assert_eq!(intent.new_affected_byte_ranges, vec![Utf8ByteRange::from_values(6, 12).unwrap()]);
+        assert_eq!(intent.old_affected_byte_ranges, vec![Utf8ByteRange::from_ordered(6, 12)]);
+        assert_eq!(intent.new_affected_byte_ranges, vec![Utf8ByteRange::from_ordered(6, 12)]);
     }
 
     #[test]
@@ -547,8 +548,8 @@ mod tests {
         }).into_result();
 
         let outcome = kernel.apply(EditorCommand::DeleteSurrounding {
-            before_byte_range: Utf8ByteRange::from_values(0, 2).unwrap(),
-            after_byte_range: Utf8ByteRange::from_values(7, 9).unwrap(),
+            before_byte_range: Utf8ByteRange::from_ordered(0, 2),
+            after_byte_range: Utf8ByteRange::from_ordered(7, 9),
             cause: EditorTransactionCause::Delete,
             expected_revision: EditorRevision::new(0),
         });
@@ -568,8 +569,8 @@ mod tests {
         }).into_result();
 
         let outcome = kernel.apply(EditorCommand::DeleteSurrounding {
-            before_byte_range: Utf8ByteRange::from_values(0, 2).unwrap(),
-            after_byte_range: Utf8ByteRange::from_values(0, 0).unwrap(),
+            before_byte_range: Utf8ByteRange::from_ordered(0, 2),
+            after_byte_range: Utf8ByteRange::zero(),
             cause: EditorTransactionCause::Delete,
             expected_revision: EditorRevision::new(0),
         });
@@ -589,8 +590,8 @@ mod tests {
         }).into_result();
 
         let outcome = kernel.apply(EditorCommand::DeleteSurrounding {
-            before_byte_range: Utf8ByteRange::from_values(0, 0).unwrap(),
-            after_byte_range: Utf8ByteRange::from_values(4, 5).unwrap(),
+            before_byte_range: Utf8ByteRange::zero(),
+            after_byte_range: Utf8ByteRange::from_ordered(4, 5),
             cause: EditorTransactionCause::Delete,
             expected_revision: EditorRevision::new(0),
         });
@@ -604,14 +605,14 @@ mod tests {
     fn commit_text_with_session_validation() {
         let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
         let begin = kernel.apply(EditorCommand::BeginComposition {
-            replace_range: Utf8ByteRange::from_values(6, 6).unwrap(),
+            replace_range: Utf8ByteRange::point(6),
             expected_revision: EditorRevision::new(0),
         }).into_result();
 
         let (session_id, base_rev, gen) = kernel.composition_session_info().unwrap();
 
         let outcome = kernel.apply(EditorCommand::CommitText {
-            byte_range: Utf8ByteRange::from_values(6, 6).unwrap(),
+            byte_range: Utf8ByteRange::point(6),
             replacement_text: "世界".to_string(),
             resulting_selection_anchor: Utf8ByteOffset::unchecked(12),
             resulting_selection_head: Utf8ByteOffset::unchecked(12),
@@ -631,12 +632,12 @@ mod tests {
     fn commit_text_wrong_session_returns_stale() {
         let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
         kernel.apply(EditorCommand::BeginComposition {
-            replace_range: Utf8ByteRange::from_values(6, 6).unwrap(),
+            replace_range: Utf8ByteRange::point(6),
             expected_revision: EditorRevision::new(0),
         }).into_result();
 
         let outcome = kernel.apply(EditorCommand::CommitText {
-            byte_range: Utf8ByteRange::from_values(6, 6).unwrap(),
+            byte_range: Utf8ByteRange::point(6),
             replacement_text: "世界".to_string(),
             resulting_selection_anchor: Utf8ByteOffset::unchecked(12),
             resulting_selection_head: Utf8ByteOffset::unchecked(12),
@@ -654,14 +655,14 @@ mod tests {
     fn commit_text_empty_string_deletes_range() {
         let mut kernel = EditorKernel::with_text("你好世界".to_string(), 12).unwrap();
         let begin = kernel.apply(EditorCommand::BeginComposition {
-            replace_range: Utf8ByteRange::from_values(6, 12).unwrap(),
+            replace_range: Utf8ByteRange::from_ordered(6, 12),
             expected_revision: EditorRevision::new(0),
         }).into_result();
 
         let (session_id, base_rev, gen) = kernel.composition_session_info().unwrap();
 
         let outcome = kernel.apply(EditorCommand::CommitText {
-            byte_range: Utf8ByteRange::from_values(6, 12).unwrap(),
+            byte_range: Utf8ByteRange::from_ordered(6, 12),
             replacement_text: String::new(),
             resulting_selection_anchor: Utf8ByteOffset::unchecked(6),
             resulting_selection_head: Utf8ByteOffset::unchecked(6),
@@ -680,7 +681,7 @@ mod tests {
     fn finish_composition_materializes_preedit() {
         let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
         let begin = kernel.apply(EditorCommand::BeginComposition {
-            replace_range: Utf8ByteRange::from_values(6, 6).unwrap(),
+            replace_range: Utf8ByteRange::point(6),
             expected_revision: EditorRevision::new(0),
         }).into_result();
 
@@ -711,7 +712,7 @@ mod tests {
     fn finish_composition_empty_preedit_no_text_change() {
         let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
         let begin = kernel.apply(EditorCommand::BeginComposition {
-            replace_range: Utf8ByteRange::from_values(6, 6).unwrap(),
+            replace_range: Utf8ByteRange::point(6),
             expected_revision: EditorRevision::new(0),
         }).into_result();
 
@@ -732,7 +733,7 @@ mod tests {
     fn cancel_composition_preserves_text() {
         let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
         let begin = kernel.apply(EditorCommand::BeginComposition {
-            replace_range: Utf8ByteRange::from_values(3, 6).unwrap(),
+            replace_range: Utf8ByteRange::from_ordered(3, 6),
             expected_revision: EditorRevision::new(0),
         }).into_result();
 
@@ -806,14 +807,14 @@ mod tests {
     fn commit_text_session_range_mismatch_returns_invalid_range() {
         let mut kernel = EditorKernel::with_text("你好世界".to_string(), 12).unwrap();
         let begin = kernel.apply(EditorCommand::BeginComposition {
-            replace_range: Utf8ByteRange::from_values(3, 6).unwrap(),
+            replace_range: Utf8ByteRange::from_ordered(3, 6),
             expected_revision: EditorRevision::new(0),
         }).into_result();
 
         let (session_id, base_rev, gen) = kernel.composition_session_info().unwrap();
 
         let outcome = kernel.apply(EditorCommand::CommitText {
-            byte_range: Utf8ByteRange::from_values(6, 12).unwrap(),
+            byte_range: Utf8ByteRange::from_ordered(6, 12),
             replacement_text: "XX".to_string(),
             resulting_selection_anchor: Utf8ByteOffset::unchecked(8),
             resulting_selection_head: Utf8ByteOffset::unchecked(8),
@@ -832,7 +833,7 @@ mod tests {
         let mut kernel = EditorKernel::with_text("abc".to_string(), 3).unwrap();
         let rev_before = kernel.revision();
         let outcome = kernel.apply(EditorCommand::CommitText {
-            byte_range: Utf8ByteRange::from_values(3, 3).unwrap(),
+            byte_range: Utf8ByteRange::point(3),
             replacement_text: String::new(),
             resulting_selection_anchor: Utf8ByteOffset::unchecked(3),
             resulting_selection_head: Utf8ByteOffset::unchecked(3),
@@ -851,7 +852,7 @@ mod tests {
     fn finish_composition_cursor_at_committed_text_end() {
         let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
         let begin = kernel.apply(EditorCommand::BeginComposition {
-            replace_range: Utf8ByteRange::from_values(6, 6).unwrap(),
+            replace_range: Utf8ByteRange::point(6),
             expected_revision: EditorRevision::new(0),
         }).into_result();
 
@@ -882,7 +883,7 @@ mod tests {
     fn finish_composition_cursor_exceeds_preedit_length_returns_adjusted() {
         let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
         let begin = kernel.apply(EditorCommand::BeginComposition {
-            replace_range: Utf8ByteRange::from_values(6, 6).unwrap(),
+            replace_range: Utf8ByteRange::point(6),
             expected_revision: EditorRevision::new(0),
         }).into_result();
 
@@ -919,8 +920,8 @@ mod tests {
         }).into_result();
 
         let outcome = kernel.apply(EditorCommand::DeleteSurrounding {
-            before_byte_range: Utf8ByteRange::from_values(0, 2).unwrap(),
-            after_byte_range: Utf8ByteRange::from_values(0, 0).unwrap(),
+            before_byte_range: Utf8ByteRange::from_ordered(0, 2),
+            after_byte_range: Utf8ByteRange::zero(),
             cause: EditorTransactionCause::Delete,
             expected_revision: EditorRevision::new(0),
         });

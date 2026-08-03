@@ -247,7 +247,7 @@ impl CompositionState {
     pub fn session_replace_range(&self, fallback_cursor: usize) -> (usize, usize) {
         self.composition_session
             .as_ref()
-            .map(|s| (s.replace_start, s.replace_end_exclusive))
+            .map(|s| (s.replace_start.value(), s.replace_end_exclusive.value()))
             .unwrap_or((fallback_cursor, fallback_cursor))
     }
 
@@ -924,6 +924,7 @@ impl LinuxEditorPipeline {
             if let Some(ref mut vt) = vt {
                 let (affected_byte_start, affected_byte_end) = vt.inserted_range
                     .or(vt.deleted_range)
+                    .map(|r| (r.start().value(), r.end().value()))
                     .unwrap_or_else(|| {
                         let changes = writer_core::editor::diff_plain_text(&vt.old_text, &vt.new_text);
                         let mut min_b = usize::MAX;
@@ -931,12 +932,12 @@ impl LinuxEditorPipeline {
                         for change in &changes {
                             match change {
                                 writer_core::editor::EditorChange::Insert { index, text } => {
-                                    min_b = min_b.min(*index);
-                                    max_b = (*index + text.len()).max(max_b);
+                                    min_b = min_b.min(index.value());
+                                    max_b = (index.value() + text.len()).max(max_b);
                                 }
                                 writer_core::editor::EditorChange::Delete { index, text } => {
-                                    min_b = min_b.min(*index);
-                                    max_b = (*index + text.len()).max(max_b);
+                                    min_b = min_b.min(index.value());
+                                    max_b = (index.value() + text.len()).max(max_b);
                                 }
                                 _ => {}
                             }
@@ -978,13 +979,13 @@ impl LinuxEditorPipeline {
                 );
 
                 let old_caret = old_doc_snapshot.cursor_rect(
-                    vt.old_selection.head.index,
+                    vt.old_selection.head.index.value(),
                     layout::CaretAffinity::Downstream,
                     ctx.scroll_y,
                     ctx.viewport_height,
                 );
                 let new_caret = new_doc_snapshot.cursor_rect(
-                    vt.new_selection.head.index,
+                    vt.new_selection.head.index.value(),
                     layout::CaretAffinity::Downstream,
                     ctx.scroll_y,
                     ctx.viewport_height,

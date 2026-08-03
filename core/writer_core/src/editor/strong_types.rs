@@ -21,7 +21,7 @@ pub(crate) fn ser_range<S: Serializer>(range: &Utf8ByteRange, s: S) -> Result<S:
 
 pub(crate) fn de_range<'de, D: Deserializer<'de>>(d: D) -> Result<Utf8ByteRange, D::Error> {
     let (start, end): (usize, usize) = <(usize, usize)>::deserialize(d)?;
-    Ok(Utf8ByteRange::from_values(start, end).unwrap_or_else(|| Utf8ByteRange::from_values(0, 0).unwrap()))
+    Ok(Utf8ByteRange::from_values(start, end).unwrap_or_else(Utf8ByteRange::zero))
 }
 
 pub(crate) fn ser_opt_range<S: Serializer>(opt: &Option<Utf8ByteRange>, s: S) -> Result<S::Ok, S::Error> {
@@ -36,7 +36,7 @@ pub(crate) fn de_opt_range<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Utf
     Ok(opt.and_then(|(s, e)| Utf8ByteRange::from_values(s, e)))
 }
 
-pub(crate) fn ser_range_vec<S: Serializer>(ranges: &Vec<Utf8ByteRange>, s: S) -> Result<S::Ok, S::Error> {
+pub(crate) fn ser_range_vec<S: Serializer>(ranges: &[Utf8ByteRange], s: S) -> Result<S::Ok, S::Error> {
     let tuples: Vec<(usize, usize)> = ranges.iter().map(|r| (r.start().value(), r.end().value())).collect();
     tuples.serialize(s)
 }
@@ -114,7 +114,7 @@ impl Utf8ByteOffset {
         Self(clamped)
     }
 
-    pub(crate) fn unchecked(offset: usize) -> Self {
+    pub fn unchecked(offset: usize) -> Self {
         Self(offset)
     }
 
@@ -171,7 +171,7 @@ impl Utf8ByteRange {
         }
     }
 
-    pub(crate) fn from_values(start: usize, end: usize) -> Option<Self> {
+    pub fn from_values(start: usize, end: usize) -> Option<Self> {
         if start > end {
             return None;
         }
@@ -179,6 +179,32 @@ impl Utf8ByteRange {
             start: Utf8ByteOffset::unchecked(start),
             end: Utf8ByteOffset::unchecked(end),
         })
+    }
+
+    pub(crate) fn point(offset: usize) -> Self {
+        Self {
+            start: Utf8ByteOffset::unchecked(offset),
+            end: Utf8ByteOffset::unchecked(offset),
+        }
+    }
+
+    pub(crate) fn from_start_len(start: usize, len: usize) -> Self {
+        Self {
+            start: Utf8ByteOffset::unchecked(start),
+            end: Utf8ByteOffset::unchecked(start.saturating_add(len)),
+        }
+    }
+
+    pub(crate) fn from_ordered(start: usize, end: usize) -> Self {
+        let (s, e) = if start <= end { (start, end) } else { (end, start) };
+        Self {
+            start: Utf8ByteOffset::unchecked(s),
+            end: Utf8ByteOffset::unchecked(e),
+        }
+    }
+
+    pub(crate) fn zero() -> Self {
+        Self::point(0)
     }
 
     pub fn start(self) -> Utf8ByteOffset {

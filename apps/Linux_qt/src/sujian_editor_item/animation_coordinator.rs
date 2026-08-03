@@ -28,6 +28,7 @@ use std::time::Instant;
 
 use writer_core::editor::{
     CursorRect, EditorAnimationKind, EditorVisualTransaction, OffsetMap,
+    Utf8ByteOffset, Utf8ByteRange,
 };
 
 pub(crate) use super::transaction_key::VisualTransactionKey;
@@ -158,7 +159,9 @@ impl LinuxEditorAnimationCoordinator {
 
         match vt.kind {
             EditorAnimationKind::Insert => {
-                if let Some((range_start, range_end)) = vt.inserted_range {
+                if let Some(range) = vt.inserted_range {
+                    let range_start = range.start().value();
+                    let range_end = range.end().value();
                     let conflicting = self.prepared_queue.find_conflicting_transaction(range_start, range_end);
                     let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = if let Some(old_key) = conflicting {
                         let mut frames = Vec::new();
@@ -328,14 +331,14 @@ impl LinuxEditorAnimationCoordinator {
                 }
             }
             EditorAnimationKind::Delete => {
-                let deleted_ranges: Vec<(usize, usize)> = if let Some((ds, de)) = vt.deleted_range {
-                    vec![(ds, de)]
+                let deleted_ranges: Vec<(usize, usize)> = if let Some(range) = vt.deleted_range {
+                    vec![(range.start().value(), range.end().value())]
                 } else {
                     let changes = writer_core::editor::diff_plain_text(&vt.old_text, &vt.new_text);
                     let mut ranges = Vec::new();
                     for change in &changes {
                         if let writer_core::editor::EditorChange::Delete { index, text } = change {
-                            let range_start = *index;
+                            let range_start = index.value();
                             let range_end = range_start + text.len();
                             ranges.push((range_start, range_end));
                         }
@@ -1625,8 +1628,8 @@ mod tests {
 
         let offset_map = OffsetMap {
             entries: vec![OffsetMapEntry {
-                old_byte_offset: 0,
-                new_byte_offset: 0,
+                old_byte_offset: Utf8ByteOffset::default(),
+                new_byte_offset: Utf8ByteOffset::default(),
                 length: 200,
                 kind: OffsetMapKind::Identity,
             }],
@@ -1667,8 +1670,8 @@ mod tests {
 
         let offset_map = OffsetMap {
             entries: vec![OffsetMapEntry {
-                old_byte_offset: 0,
-                new_byte_offset: 0,
+                old_byte_offset: Utf8ByteOffset::default(),
+                new_byte_offset: Utf8ByteOffset::default(),
                 length: 200,
                 kind: OffsetMapKind::Identity,
             }],
@@ -1717,8 +1720,8 @@ mod tests {
 
         let offset_map = OffsetMap {
             entries: vec![OffsetMapEntry {
-                old_byte_offset: 0,
-                new_byte_offset: 0,
+                old_byte_offset: Utf8ByteOffset::default(),
+                new_byte_offset: Utf8ByteOffset::default(),
                 length: 200,
                 kind: OffsetMapKind::Identity,
             }],
@@ -1797,8 +1800,8 @@ mod tests {
 
         let offset_map = OffsetMap {
             entries: vec![OffsetMapEntry {
-                old_byte_offset: 0,
-                new_byte_offset: 0,
+                old_byte_offset: Utf8ByteOffset::default(),
+                new_byte_offset: Utf8ByteOffset::default(),
                 length: 200,
                 kind: OffsetMapKind::Identity,
             }],
@@ -1840,8 +1843,8 @@ mod tests {
 
         let offset_map = OffsetMap {
             entries: vec![OffsetMapEntry {
-                old_byte_offset: 0,
-                new_byte_offset: 100,
+                old_byte_offset: Utf8ByteOffset::default(),
+                new_byte_offset: Utf8ByteOffset::unchecked(100),
                 length: 200,
                 kind: OffsetMapKind::Identity,
             }],
@@ -1875,8 +1878,8 @@ mod tests {
 
         let offset_map = OffsetMap {
             entries: vec![OffsetMapEntry {
-                old_byte_offset: 0,
-                new_byte_offset: 0,
+                old_byte_offset: Utf8ByteOffset::default(),
+                new_byte_offset: Utf8ByteOffset::default(),
                 length: 200,
                 kind: OffsetMapKind::Identity,
             }],
@@ -1884,7 +1887,7 @@ mod tests {
         match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
 
         assert!((slices[0].from_document_rect.x - 10.0).abs() < 0.01,
-            "slice 0 should get first rebase frame via tier1 (x=10.0), not second frame via tier3, got x={}", slices[0].from_document_rect.x);
+            "slice 0 should get first rebase frame 10.0 (not second 20.0), got {}", slices[0].from_document_rect.x);
     }
 
     #[test]
@@ -1917,8 +1920,8 @@ mod tests {
 
         let offset_map = OffsetMap {
             entries: vec![OffsetMapEntry {
-                old_byte_offset: 0,
-                new_byte_offset: 0,
+                old_byte_offset: Utf8ByteOffset::default(),
+                new_byte_offset: Utf8ByteOffset::default(),
                 length: 200,
                 kind: OffsetMapKind::Identity,
             }],

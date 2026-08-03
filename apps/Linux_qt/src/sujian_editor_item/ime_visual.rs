@@ -1,3 +1,4 @@
+use writer_core::editor::Utf8ByteOffset;
 use super::*;
 
 impl SujianEditorItem {
@@ -71,8 +72,8 @@ impl SujianEditorItem {
                     h: line_h,
                     char_: ch_str,
                     baseline_y: line_baseline_y,
-                    byte_start: bs,
-                    byte_end: be,
+                    byte_start: Utf8ByteOffset::unchecked(bs),
+                    byte_end: Utf8ByteOffset::unchecked(be),
                 });
                 cum_x += ch_w;
                 byte_offset = be;
@@ -128,8 +129,8 @@ impl SujianEditorItem {
                     h: line_h,
                     char_: ch_str,
                     baseline_y: line_baseline_y,
-                    byte_start: bs,
-                    byte_end: be,
+                    byte_start: Utf8ByteOffset::unchecked(bs),
+                    byte_end: Utf8ByteOffset::unchecked(be),
                 });
                 cum_x += ch_w;
                 byte_offset = be;
@@ -175,8 +176,8 @@ impl SujianEditorItem {
                     h: line_h,
                     char_: ch_str,
                     baseline_y: line_baseline_y,
-                    byte_start: bs,
-                    byte_end: be,
+                    byte_start: Utf8ByteOffset::unchecked(bs),
+                    byte_end: Utf8ByteOffset::unchecked(be),
                 });
                 cum_x += ch_w;
                 byte_offset = be;

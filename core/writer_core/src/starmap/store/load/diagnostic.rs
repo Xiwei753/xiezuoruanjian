@@ -19,10 +19,11 @@ impl StarMapStore {
                 } else {
                     let recovery_len = self.recovery_log.len();
                     if recovery_len > 0 {
-                        let last = self.recovery_log.last().cloned().unwrap();
-                        if last.object_id == *hl_id {
-                            diagnostics.push(last);
-                            continue;
+                        if let Some(last) = self.recovery_log.last().cloned() {
+                            if last.object_id == *hl_id {
+                                diagnostics.push(last);
+                                continue;
+                            }
                         }
                     }
                     diagnostics.push(LoadDiagnostic {
@@ -53,10 +54,11 @@ impl StarMapStore {
                 } else {
                     let recovery_len = self.recovery_log.len();
                     if recovery_len > 0 {
-                        let last = self.recovery_log.last().cloned().unwrap();
-                        if last.object_id == *link_id {
-                            diagnostics.push(last);
-                            continue;
+                        if let Some(last) = self.recovery_log.last().cloned() {
+                            if last.object_id == *link_id {
+                                diagnostics.push(last);
+                                continue;
+                            }
                         }
                     }
                     diagnostics.push(LoadDiagnostic {
@@ -209,14 +211,16 @@ impl StarMapStore {
         }
 
         if has_index_after_rebuild {
-            let edge_relation_index = self.graph_meta.as_ref().unwrap().edge_relation_index.clone();
-            for eri in &edge_relation_index {
-                let refs = extract_eri_node_refs(eri);
-                for node_id in &refs {
-                    if loaded_node_ids.contains(*node_id) {
-                        for other_id in &refs {
-                            if other_id != node_id && !self.nodes.contains_key(*other_id) && !other_id.is_empty() {
-                                adjacent_node_ids.insert(other_id.to_string());
+            if let Some(meta) = self.graph_meta.as_ref() {
+                let edge_relation_index = meta.edge_relation_index.clone();
+                for eri in &edge_relation_index {
+                    let refs = extract_eri_node_refs(eri);
+                    for node_id in &refs {
+                        if loaded_node_ids.contains(*node_id) {
+                            for other_id in &refs {
+                                if other_id != node_id && !self.nodes.contains_key(*other_id) && !other_id.is_empty() {
+                                    adjacent_node_ids.insert(other_id.to_string());
+                                }
                             }
                         }
                     }

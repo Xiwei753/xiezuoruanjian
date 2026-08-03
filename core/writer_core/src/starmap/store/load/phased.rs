@@ -103,7 +103,7 @@ impl StarMapStore {
             .map(|m| m.package_revision)
             .unwrap_or(0);
 
-        diagnostics.extend(self.recovery_log.drain(..));
+        diagnostics.append(&mut self.recovery_log);
         self.recovery_log = diagnostics.clone();
 
         Ok(StarMapStoreResult {
@@ -287,30 +287,32 @@ impl StarMapStore {
             .unwrap_or(false);
 
         if has_index {
-            let edge_relation_index = self.graph_meta.as_ref().unwrap().edge_relation_index.clone();
-            let embed_host_index = self.graph_meta.as_ref().unwrap().embed_host_index.clone();
+            if let Some(meta) = self.graph_meta.as_ref() {
+                let edge_relation_index = meta.edge_relation_index.clone();
+                let embed_host_index = meta.embed_host_index.clone();
 
-            for eri in &edge_relation_index {
-                if self.edges.contains_key(&eri.edge_id) {
-                    continue;
-                }
-                let refs = extract_eri_node_refs(eri);
-                let any_in_viewport = refs.iter().any(|id| viewport_node_ids.contains(*id));
-                if any_in_viewport {
-                    if let Some(edge) = self.try_load_edge(&eri.edge_id) {
-                        self.edges.insert(eri.edge_id.clone(), edge);
+                for eri in &edge_relation_index {
+                    if self.edges.contains_key(&eri.edge_id) {
+                        continue;
+                    }
+                    let refs = extract_eri_node_refs(eri);
+                    let any_in_viewport = refs.iter().any(|id| viewport_node_ids.contains(*id));
+                    if any_in_viewport {
+                        if let Some(edge) = self.try_load_edge(&eri.edge_id) {
+                            self.edges.insert(eri.edge_id.clone(), edge);
+                        }
                     }
                 }
-            }
-            for ehi in &embed_host_index {
-                if self.embeds.contains_key(&ehi.instance_id) {
-                    continue;
-                }
-                let refs = extract_ehi_node_refs(ehi);
-                let any_in_viewport = refs.iter().any(|id| viewport_node_ids.contains(*id));
-                if any_in_viewport {
-                    if let Some(embed) = self.try_load_embed(&ehi.instance_id) {
-                        self.embeds.insert(ehi.instance_id.clone(), embed);
+                for ehi in &embed_host_index {
+                    if self.embeds.contains_key(&ehi.instance_id) {
+                        continue;
+                    }
+                    let refs = extract_ehi_node_refs(ehi);
+                    let any_in_viewport = refs.iter().any(|id| viewport_node_ids.contains(*id));
+                    if any_in_viewport {
+                        if let Some(embed) = self.try_load_embed(&ehi.instance_id) {
+                            self.embeds.insert(ehi.instance_id.clone(), embed);
+                        }
                     }
                 }
             }

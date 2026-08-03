@@ -24,7 +24,7 @@ impl StarMapStore {
                 return;
             }
         }
-        let content = match std::fs::read(&flat_path) {
+        let content = match std::fs::read(flat_path) {
             Ok(c) => c,
             Err(e) => {
                 self.recovery_log.push(LoadDiagnostic {

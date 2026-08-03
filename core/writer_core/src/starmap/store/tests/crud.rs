@@ -366,7 +366,7 @@ use tempfile::TempDir;
         let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
         store2.load_full().unwrap();
         store2.delete_link("l1").unwrap();
-        assert!(store2.deleted_link_ids.contains(&"l1".to_string()),
+        assert!(store2.deleted_link_ids.contains("l1"),
             "delete_link must mark deleted_link_ids");
         assert!(store2.dirty_graph_meta, "delete_link must mark dirty_graph_meta");
         assert!(!store2.graph_meta.as_ref().unwrap().link_ids.contains(&"l1".to_string()),
@@ -506,8 +506,8 @@ use tempfile::TempDir;
         store2.delete_node("n1").unwrap();
         assert!(store2.get_link("l1").is_none(), "delete_node must cascade remove link");
         assert!(store2.get_hyperlink("hl1").is_none(), "delete_node must cascade remove hyperlink");
-        assert!(store2.deleted_link_ids.contains(&"l1".to_string()));
-        assert!(store2.deleted_hyperlink_ids.contains(&"hl1".to_string()));
+        assert!(store2.deleted_link_ids.contains("l1"));
+        assert!(store2.deleted_hyperlink_ids.contains("hl1"));
         assert!(store2.dirty_graph_meta);
 
         store2.enqueue_save(SaveQueueEntry::DeleteNode);

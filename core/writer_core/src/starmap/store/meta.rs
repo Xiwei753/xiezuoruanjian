@@ -31,7 +31,7 @@ pub struct GraphMeta {
     pub deleted_since_last_sync: DeletedSinceLastSync,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeletedSinceLastSync {
     #[serde(default)]
@@ -44,14 +44,6 @@ pub struct DeletionEntry {
     pub object_type: String,
     pub object_id: String,
     pub deleted_at_revision: u64,
-}
-
-impl Default for DeletedSinceLastSync {
-    fn default() -> Self {
-        Self {
-            entries: Vec::new(),
-        }
-    }
 }
 
 impl DeletedSinceLastSync {

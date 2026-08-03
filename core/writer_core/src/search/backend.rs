@@ -13,6 +13,7 @@ fn find_char_boundary_safe(s: &str, byte_pos: usize) -> usize {
     pos
 }
 
+#[derive(Default)]
 pub struct SearchBackend {
     entries: HashMap<String, IndexEntry>,
     scope_index: HashMap<SearchScope, Vec<String>>,
@@ -20,10 +21,7 @@ pub struct SearchBackend {
 
 impl SearchBackend {
     pub fn new() -> Self {
-        Self {
-            entries: HashMap::new(),
-            scope_index: HashMap::new(),
-        }
+        Self::default()
     }
 
     pub fn insert(&mut self, entry: IndexEntry) {

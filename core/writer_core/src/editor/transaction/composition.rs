@@ -376,7 +376,7 @@ impl CompositionSession {
                     previous,
                     new_preedit_text.clone(),
                     new_preedit_cursor_offset,
-                    Utf8ByteRange::from_values(0, self.committed_text_at_start.len()).unwrap_or_else(|| Utf8ByteRange::from_values(0, 0).unwrap()),
+                    Utf8ByteRange::from_start_len(0, self.committed_text_at_start.len()),
                 );
                 rev.revision_id = self.take_revision_id();
                 rev.session_id = self.session_id;
@@ -389,7 +389,7 @@ impl CompositionSession {
                     self.committed_text_at_start.clone(),
                     replace_range,
                     new_preedit_text.clone(),
-                    Utf8ByteRange::from_values(0, self.committed_text_at_start.len()).unwrap_or_else(|| Utf8ByteRange::from_values(0, 0).unwrap()),
+                    Utf8ByteRange::from_start_len(0, self.committed_text_at_start.len()),
                 );
                 rev.revision_id = self.take_revision_id();
                 rev.session_id = self.session_id;
@@ -462,7 +462,7 @@ impl CompositionSession {
                 self.committed_text_at_start.clone(),
                 self.composition_replace_range(),
                 self.preedit_text.clone(),
-                Utf8ByteRange::from_values(0, self.committed_text_at_start.len()).unwrap_or_else(|| Utf8ByteRange::from_values(0, 0).unwrap()),
+                Utf8ByteRange::from_start_len(0, self.committed_text_at_start.len()),
             )
         });
 
@@ -491,7 +491,7 @@ impl CompositionSession {
                 self.committed_text_at_start.clone(),
                 self.composition_replace_range(),
                 self.preedit_text.clone(),
-                Utf8ByteRange::from_values(0, self.committed_text_at_start.len()).unwrap_or_else(|| Utf8ByteRange::from_values(0, 0).unwrap()),
+                Utf8ByteRange::from_start_len(0, self.committed_text_at_start.len()),
             )
         });
 

@@ -31,7 +31,7 @@ impl EditorKernel {
 
         let new_cursor_val = self.cursor;
         let new_revision = self.revision;
-        let new_selection = Utf8ByteRange::from_values(new_cursor_val.value(), new_cursor_val.value()).unwrap();
+        let new_selection = Utf8ByteRange::point(new_cursor_val.value());
 
         let (replace_range, inserted_text) = Self::compute_single_patch(&old_text, &self.text);
 
@@ -103,7 +103,7 @@ impl EditorKernel {
 
         let new_cursor_val = self.cursor;
         let new_revision = self.revision;
-        let new_selection = Utf8ByteRange::from_values(new_cursor_val.value(), new_cursor_val.value()).unwrap();
+        let new_selection = Utf8ByteRange::point(new_cursor_val.value());
 
         let (replace_range, inserted_text) = Self::compute_single_patch(&old_text, &self.text);
 

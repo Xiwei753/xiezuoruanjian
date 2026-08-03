@@ -214,7 +214,7 @@ impl StarMapStore {
 
         self.current_load_phase = Some(LoadPhase::BackgroundFullLoad);
 
-        diagnostics.extend(self.recovery_log.drain(..));
+        diagnostics.append(&mut self.recovery_log);
         self.recovery_log = diagnostics.clone();
 
         Ok(StarMapStoreResult {

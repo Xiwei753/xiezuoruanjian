@@ -1246,7 +1246,7 @@ mod tests {
                 text_color_fingerprint: "t1".into(), density_or_dpr: 2.0,
             },
             slice_roles: vec![crate::editor::AnimatedSliceRole::Insert],
-            slice_document_byte_ranges: vec![crate::editor::strong_types::Utf8ByteRange::from_values(2, 3).unwrap()],
+            slice_document_byte_ranges: vec![crate::editor::strong_types::Utf8ByteRange::from_ordered(2, 3)],
             static_line_patches: Vec::new(),
             cursor_transition_byte_start: crate::editor::strong_types::Utf8ByteOffset::unchecked(2),
             cursor_transition_byte_end: crate::editor::strong_types::Utf8ByteOffset::unchecked(3),

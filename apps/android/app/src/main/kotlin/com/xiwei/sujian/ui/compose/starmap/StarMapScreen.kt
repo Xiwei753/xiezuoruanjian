@@ -152,7 +152,7 @@ internal fun StarMapEditorContent(
                 SujianIconButton(
                     onClick = { onRetrySaves() },
                     icon = SujianIcons.Add,
-                    contentDescription = "重试保存",
+                    contentDescription = stringResource(id = R.string.starmap_retry_save),
                 )
             }
             StarMapCanvas(

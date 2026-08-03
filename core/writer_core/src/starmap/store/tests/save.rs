@@ -204,6 +204,7 @@ use tempfile::TempDir;
         let result = store.flush_save_queue();
 
         let mut perms2 = std::fs::metadata(&nodes_bucket_dir).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
         perms2.set_readonly(false);
         std::fs::set_permissions(&nodes_bucket_dir, perms2).unwrap();
 

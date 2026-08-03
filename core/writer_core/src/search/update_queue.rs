@@ -53,8 +53,7 @@ impl SearchUpdateQueue {
             .filter(|u| {
                 u.target
                     .as_ref()
-                    .and_then(|t| t.project_id.as_deref())
-                    .map_or(true, |pid| pid != project_id)
+                    .and_then(|t| t.project_id.as_deref()) != Some(project_id)
             })
             .collect();
         self.queue = keep.into_iter().collect();

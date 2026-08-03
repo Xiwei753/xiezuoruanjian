@@ -503,7 +503,7 @@ mod tests {
             serde_json::json!({"starmapId": "sm1", "projectId": "p1", "title": "TestMap", "createdAt": 0, "updatedAt": 0}).to_string(),
         ).unwrap();
         std::fs::write(
-&starmap_dir.join("nodes").join("n1.json"),
+starmap_dir.join("nodes").join("n1.json"),
             serde_json::json!({
                 "id": "n1",
                 "title": "MyNode",

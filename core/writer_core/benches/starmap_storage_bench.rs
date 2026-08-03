@@ -24,8 +24,14 @@ fn bench_load_starmap(c: &mut Criterion) {
         embed_instance_ids: vec![],
         link_ids: vec![],
         hyperlink_ids: vec![],
+        edge_relation_index: vec![],
+        embed_host_index: vec![],
+        link_relation_index: vec![],
+        hyperlink_relation_index: vec![],
+        node_kind_counts: std::collections::HashMap::new(),
         package_revision: 0,
         updated_at: 0,
+        deleted_since_last_sync: writer_core::starmap::store::DeletedSinceLastSync::default(),
     };
     fs::create_dir_all(&starmap_dir).unwrap();
     fs::write(

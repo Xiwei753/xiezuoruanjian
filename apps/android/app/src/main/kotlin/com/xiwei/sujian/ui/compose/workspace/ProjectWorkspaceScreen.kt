@@ -282,156 +282,61 @@ private fun CompactWorkspaceContent(
     onNavigateToChapter: ((projectId: String, volumeId: String, chapterId: String) -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
-    val coroutineScope = rememberCoroutineScope()
     val dims = LocalSujianDimensions.current
 
     val visiblePaneRoles = layoutPlan?.visiblePaneRoles
     val editorContentMaxWidthDp = layoutPlan?.editorContentMaxWidthDp ?: 0f
     val pagePaddingDp = layoutPlan?.pagePaddingDp ?: 0f
     val avoidRegions = layoutPlan?.avoidRegions ?: emptyList()
-    val paneMode = layoutPlan?.workspacePaneMode ?: WorkspacePaneMode.SinglePane
-    val showProjectListInExtra = visiblePaneRoles?.showProjectList == true && paneMode == WorkspacePaneMode.ThreePane
-    val listPaneWidthConstraint = layoutPlan?.listPaneWidth
-
-    val coreDirective = rememberCoreLayoutDirective(layoutPlan)
 
     val windowInsetsPadding = computeWindowInsetPadding(avoidRegions)
 
-    val navigator = androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator<WorkspaceDetailConfig>(
-        scaffoldDirective = coreDirective
-    )
-
-    val isDetailExpanded = navigator.scaffoldValue[androidx.compose.material3.adaptive.layout.ThreePaneScaffoldRole.Secondary] == androidx.compose.material3.adaptive.layout.PaneAdaptedValue.Expanded
-
     if (onNavigateToChapter == null) {
-        BackHandler(enabled = navigator.canNavigateBack()) {
-            coroutineScope.launch {
-                navigator.navigateBack()
-            }
-            if (appState.currentChapterId != null) {
-                appState.clearChapterSelection()
-            }
+        BackHandler(enabled = currentChapterId != null) {
+            appState.clearChapterSelection()
         }
 
-        BackHandler(enabled = !navigator.canNavigateBack()) {
+        BackHandler(enabled = currentChapterId == null) {
             appState.clearProjectSelection()
         }
     }
 
-    LaunchedEffect(currentChapterId) {
-        if (currentChapterId != null && currentVolumeId != null) {
-            if (!isDetailExpanded) {
-                navigator.navigateTo(
-                    androidx.compose.material3.adaptive.layout.ThreePaneScaffoldRole.Secondary,
-                    WorkspaceDetailConfig(
-                        volumeId = currentVolumeId,
-                        chapterId = currentChapterId,
-                        chapterTitle = currentChapterTitle
-                    )
-                )
-            }
+    if (currentChapterId != null && currentVolumeId != null && visiblePaneRoles?.showEditor != false) {
+        val editorModifier = Modifier
+            .fillMaxSize()
+            .then(
+                if (editorContentMaxWidthDp > 0f) Modifier.width(editorContentMaxWidthDp.dp)
+                else Modifier
+            )
+            .then(
+                if (pagePaddingDp > 0f) Modifier.padding(horizontal = pagePaddingDp.dp)
+                else Modifier
+            )
+            .then(windowInsetsPadding)
+
+        SujianEditorHost(
+            projectId = currentProjectId,
+            volumeId = currentVolumeId,
+            chapterId = currentChapterId,
+            chapterTitle = currentChapterTitle,
+            modifier = modifier.then(editorModifier),
+        )
+    } else {
+        if (visiblePaneRoles?.showChapterTree != false) {
+            VolumeChapterTree(
+                projectId = currentProjectId,
+                workspaceRepository = workspaceRepository,
+                onSelectChapter = { volumeId, chapterId, chapterTitle ->
+                    appState.selectChapter(volumeId, chapterId, chapterTitle)
+                    onNavigateToChapter?.invoke(currentProjectId, volumeId, chapterId)
+                },
+                onBackToProjects = {
+                    appState.clearProjectSelection()
+                },
+                modifier = modifier.then(windowInsetsPadding)
+            )
         }
     }
-
-    val listPaneModifier = Modifier
-        .fillMaxSize()
-        .then(
-            if (listPaneWidthConstraint != null && listPaneWidthConstraint.maxDp > 0f)
-                Modifier.width(listPaneWidthConstraint.preferredDp.dp.coerceIn(
-                    if (listPaneWidthConstraint.minDp > 0f) listPaneWidthConstraint.minDp.dp else 0.dp,
-                    listPaneWidthConstraint.maxDp.dp
-                ))
-            else Modifier
-        )
-        .then(windowInsetsPadding)
-
-    val hingePadding = computeHingePadding(avoidRegions)
-
-    SujianListDetailScaffoldWithNavigator(
-        navigator = navigator,
-        modifier = modifier.fillMaxSize(),
-        listPane = {
-            if (visiblePaneRoles?.showChapterTree != false) {
-                VolumeChapterTree(
-                    projectId = currentProjectId,
-                    workspaceRepository = workspaceRepository,
-                    onSelectChapter = { volumeId, chapterId, chapterTitle ->
-                        if (onNavigateToChapter != null) {
-                            onNavigateToChapter(currentProjectId, volumeId, chapterId)
-                        } else {
-                            appState.selectChapter(volumeId, chapterId, chapterTitle)
-                            coroutineScope.launch {
-                                navigator.navigateTo(
-                                    androidx.compose.material3.adaptive.layout.ThreePaneScaffoldRole.Secondary,
-                                    WorkspaceDetailConfig(
-                                        volumeId = volumeId,
-                                        chapterId = chapterId,
-                                        chapterTitle = chapterTitle
-                                    )
-                                )
-                            }
-                        }
-                    },
-                    onBackToProjects = {
-                        appState.clearProjectSelection()
-                    },
-                    modifier = listPaneModifier
-                )
-            }
-        },
-        detailPane = {
-            if (visiblePaneRoles?.showEditor != false) {
-                val currentContent = navigator.currentDestination?.contentKey
-                val detailVolumeId = currentContent?.volumeId ?: currentVolumeId
-                val detailChapterId = currentContent?.chapterId ?: currentChapterId
-                val detailChapterTitle = currentContent?.chapterTitle ?: currentChapterTitle
-
-                if (detailVolumeId != null && detailChapterId != null) {
-                    val detailModifier = Modifier
-                        .fillMaxSize()
-                        .then(
-                            if (editorContentMaxWidthDp > 0f) Modifier.width(editorContentMaxWidthDp.dp)
-                            else Modifier
-                        )
-                        .then(
-                            if (pagePaddingDp > 0f) Modifier.padding(horizontal = pagePaddingDp.dp)
-                            else Modifier
-                        )
-                        .then(windowInsetsPadding)
-                        .then(hingePadding)
-
-                    SujianEditorHost(
-                        projectId = currentProjectId,
-                        volumeId = detailVolumeId,
-                        chapterId = detailChapterId,
-                        chapterTitle = detailChapterTitle,
-                        modifier = detailModifier
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier.fillMaxSize().then(windowInsetsPadding),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(stringResource(id = R.string.select_chapter_to_write), modifier = Modifier.padding(dims.space16))
-                    }
-                }
-            }
-        },
-        extraPane = if (showProjectListInExtra) {
-            {
-                ProjectListScreen(
-                    appState = appState,
-                    onSelectProject = { projectId, projectTitle ->
-                        appState.selectProject(projectId, projectTitle)
-                        appState.clearChapterSelection()
-                    },
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .then(windowInsetsPadding)
-                )
-            }
-        } else null,
-    )
 }
 
 @Suppress("DEPRECATION")

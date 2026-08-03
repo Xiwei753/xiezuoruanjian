@@ -10,6 +10,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import com.xiwei.sujian.R
 import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.data.starmap.StarMapRepository
@@ -165,16 +166,16 @@ private fun StarMapEditorScreen(
                     true
                 }
                 is BridgeResult.Error -> {
-                    editorState = editorState.copy(lastError = "${label}失败: ${result.message}", operationInProgress = false)
+                    editorState = editorState.copy(lastError = context.getString(R.string.starmap_op_failed, label, result.message), operationInProgress = false)
                     false
                 }
                 BridgeResult.NotLoaded -> {
-                    editorState = editorState.copy(lastError = "${label}失败: 未加载", operationInProgress = false)
+                    editorState = editorState.copy(lastError = context.getString(R.string.starmap_op_failed_not_loaded, label), operationInProgress = false)
                     false
                 }
             }
         } catch (e: Exception) {
-            editorState = editorState.copy(lastError = "${label}异常: ${e.message}", operationInProgress = false)
+            editorState = editorState.copy(lastError = context.getString(R.string.starmap_op_exception, label, e.message), operationInProgress = false)
             false
         }
     }
@@ -224,14 +225,14 @@ private fun StarMapEditorScreen(
                             editorState = editorState.copy(hasPendingLayoutSave = false, layoutSaveError = null)
                         }
                         is BridgeResult.Error -> {
-                            editorState = editorState.copy(layoutSaveError = "布局保存失败: ${result.message}")
+                            editorState = editorState.copy(layoutSaveError = context.getString(R.string.starmap_layout_save_failed, result.message))
                         }
                         BridgeResult.NotLoaded -> {
-                            editorState = editorState.copy(layoutSaveError = "布局保存失败: 未加载")
+                            editorState = editorState.copy(layoutSaveError = context.getString(R.string.starmap_layout_save_failed_not_loaded))
                         }
                     }
                 } catch (e: Exception) {
-                    editorState = editorState.copy(layoutSaveError = "布局保存异常: ${e.message}")
+                    editorState = editorState.copy(layoutSaveError = context.getString(R.string.starmap_layout_save_exception, e.message))
                 }
             }
         }
@@ -244,14 +245,14 @@ private fun StarMapEditorScreen(
                             editorState = editorState.copy(hasPendingViewportSave = false, viewportSaveError = null)
                         }
                         is BridgeResult.Error -> {
-                            editorState = editorState.copy(viewportSaveError = "视口保存失败: ${result.message}")
+                            editorState = editorState.copy(viewportSaveError = context.getString(R.string.starmap_viewport_save_failed, result.message))
                         }
                         BridgeResult.NotLoaded -> {
-                            editorState = editorState.copy(viewportSaveError = "视口保存失败: 未加载")
+                            editorState = editorState.copy(viewportSaveError = context.getString(R.string.starmap_viewport_save_failed_not_loaded))
                         }
                     }
                 } catch (e: Exception) {
-                    editorState = editorState.copy(viewportSaveError = "视口保存异常: ${e.message}")
+                    editorState = editorState.copy(viewportSaveError = context.getString(R.string.starmap_viewport_save_exception, e.message))
                 }
             }
         }
@@ -295,14 +296,14 @@ private fun StarMapEditorScreen(
                                 editorState = editorState.copy(hasPendingLayoutSave = false, layoutSaveError = null)
                             }
                             is BridgeResult.Error -> {
-                                editorState = editorState.copy(layoutSaveError = "布局保存失败: ${result.message}")
+                                editorState = editorState.copy(layoutSaveError = context.getString(R.string.starmap_layout_save_failed, result.message))
                             }
                             BridgeResult.NotLoaded -> {
-                                editorState = editorState.copy(layoutSaveError = "布局保存失败: 未加载")
+                                editorState = editorState.copy(layoutSaveError = context.getString(R.string.starmap_layout_save_failed_not_loaded))
                             }
                         }
                     } catch (e: Exception) {
-                        editorState = editorState.copy(layoutSaveError = "布局保存异常: ${e.message}")
+                        editorState = editorState.copy(layoutSaveError = context.getString(R.string.starmap_layout_save_exception, e.message))
                     }
                 }
             }
@@ -323,14 +324,14 @@ private fun StarMapEditorScreen(
                                 editorState = editorState.copy(hasPendingViewportSave = false, viewportSaveError = null)
                             }
                             is BridgeResult.Error -> {
-                                editorState = editorState.copy(viewportSaveError = "视口保存失败: ${result.message}")
+                                editorState = editorState.copy(viewportSaveError = context.getString(R.string.starmap_viewport_save_failed, result.message))
                             }
                             BridgeResult.NotLoaded -> {
-                                editorState = editorState.copy(viewportSaveError = "视口保存失败: 未加载")
+                                editorState = editorState.copy(viewportSaveError = context.getString(R.string.starmap_viewport_save_failed_not_loaded))
                             }
                         }
                     } catch (e: Exception) {
-                        editorState = editorState.copy(viewportSaveError = "视口保存异常: ${e.message}")
+                        editorState = editorState.copy(viewportSaveError = context.getString(R.string.starmap_viewport_save_exception, e.message))
                     }
                 }
             }
@@ -354,7 +355,7 @@ private fun StarMapEditorScreen(
                     target.onCommit = { finalText ->
                         if (finalText.isNotBlank() && finalText.trim() != graphNode.title) {
                             coroutineScope.launch {
-                                val ok = executeOperation("更新节点") {
+                                val ok = executeOperation(context.getString(R.string.starmap_update_node)) {
                                     repository().updateStarmapNode(starmapId, geometry.nodeId, title = finalText.trim())
                                 }
                                 if (ok) {
@@ -404,7 +405,7 @@ private fun StarMapEditorScreen(
                 coordinator = coordinator,
                 onUpdate = { newTitle, newKind ->
                     coroutineScope.launch {
-                        val ok = executeOperation("更新节点") {
+                        val ok = executeOperation(context.getString(R.string.starmap_update_node)) {
                             repository().updateStarmapNode(starmapId, nodeId, title = newTitle, kind = newKind)
                         }
                         if (ok) {
@@ -415,7 +416,7 @@ private fun StarMapEditorScreen(
                 },
                 onDelete = {
                     coroutineScope.launch {
-                        val ok = executeOperation("删除节点") {
+                        val ok = executeOperation(context.getString(R.string.starmap_delete_node)) {
                             repository().deleteStarmapNode(starmapId, nodeId)
                         }
                         if (ok) {
@@ -434,7 +435,7 @@ private fun StarMapEditorScreen(
             coordinator = coordinator,
             onConfirm = { title, kind ->
                 coroutineScope.launch {
-                    val ok = executeOperation("添加节点") {
+                    val ok = executeOperation(context.getString(R.string.starmap_add_node)) {
                         val nodeId = java.util.UUID.randomUUID().toString()
                         val node = StarMapGraphNode(
                             id = nodeId,
@@ -458,7 +459,7 @@ private fun StarMapEditorScreen(
             nodes = editorState.starMapData!!.graph.nodes,
             onConfirm = { fromNodeId, toNodeId ->
                 coroutineScope.launch {
-                    val ok = executeOperation("添加连线") {
+                    val ok = executeOperation(context.getString(R.string.starmap_add_edge)) {
                         repository().addStarmapEdge(starmapId, fromNodeId, toNodeId)
                     }
                     if (ok) {

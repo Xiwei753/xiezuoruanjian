@@ -112,7 +112,7 @@ mod tests {
         assert_eq!(new_ids, ordered_ids);
 
         for (i, vol) in new_volumes.iter().enumerate() {
-            assert_eq!(vol.order, i as i32);
+            assert_eq!(vol.order, i32::try_from(i).unwrap_or(i32::MAX));
         }
     }
 

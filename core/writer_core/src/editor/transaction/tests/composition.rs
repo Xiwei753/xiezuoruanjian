@@ -85,7 +85,7 @@ use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange, EditorRevision,
                 preedit_text: "ni".to_string(),
                 preedit_cursor_offset: Utf8ByteOffset::unchecked(2),
                 virtual_text: "helloni".to_string(),
-                affected_paragraph_range: Utf8ByteRange::from_values(0, 7).unwrap(),
+                affected_paragraph_range: Utf8ByteRange::from_ordered(0, 7),
                 line_snapshot_ids: vec![1, 2],
                 cursor_rect: Some(CursorRect { x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
                 decoration_ranges: vec![DecorationSlice {
@@ -120,7 +120,7 @@ use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange, EditorRevision,
                 preedit_text: String::new(),
                 preedit_cursor_offset: Utf8ByteOffset::unchecked(0),
                 virtual_text: String::new(),
-                affected_paragraph_range: Utf8ByteRange::from_values(0, 5).unwrap(),
+                affected_paragraph_range: Utf8ByteRange::from_ordered(0, 5),
                 line_snapshot_ids: Vec::new(),
                 cursor_rect: None,
                 decoration_ranges: Vec::new(),
@@ -184,7 +184,7 @@ use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange, EditorRevision,
                 "hello".to_string(),
                 Utf8ByteRange::from_values(2, 5),
                 "y".to_string(),
-                Utf8ByteRange::from_values(0, 5).unwrap(),
+                Utf8ByteRange::from_ordered(0, 5),
             );
             assert_eq!(rev.virtual_text, "hey");
             assert_eq!(rev.committed_text, "hello");
@@ -197,7 +197,7 @@ use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange, EditorRevision,
                 "abc".to_string(),
                 None,
                 "def".to_string(),
-                Utf8ByteRange::from_values(0, 3).unwrap(),
+                Utf8ByteRange::from_ordered(0, 3),
             );
             assert_eq!(rev.virtual_text, "abcdef");
         }
@@ -235,7 +235,7 @@ use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange, EditorRevision,
                 "hello".to_string(),
                 None,
                 " world".to_string(),
-                Utf8ByteRange::from_values(0, 5).unwrap(),
+                Utf8ByteRange::from_ordered(0, 5),
             );
             // commit 后正文与 virtual_text 相同
             let tx = engine.composition_commit_or_cancel_transaction(
@@ -255,7 +255,7 @@ use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange, EditorRevision,
                 "hello".to_string(),
                 None,
                 " wor".to_string(),
-                Utf8ByteRange::from_values(0, 5).unwrap(),
+                Utf8ByteRange::from_ordered(0, 5),
             );
             // commit 后正文与 virtual_text 不同（候选转换）
             let tx = engine.composition_commit_or_cancel_transaction(
@@ -275,7 +275,7 @@ use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange, EditorRevision,
                 "hello".to_string(),
                 None,
                 " world".to_string(),
-                Utf8ByteRange::from_values(0, 5).unwrap(),
+                Utf8ByteRange::from_ordered(0, 5),
             );
             let tx = engine.composition_commit_or_cancel_transaction(
                 "hello",
@@ -306,7 +306,7 @@ use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange, EditorRevision,
                 "hello".to_string(),
                 None,
                 " world".to_string(),
-                Utf8ByteRange::from_values(0, 5).unwrap(),
+                Utf8ByteRange::from_ordered(0, 5),
             );
             let tx = engine.composition_commit_or_cancel_transaction(
                 "hello",
@@ -335,7 +335,7 @@ use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange, EditorRevision,
                 "hello".to_string(),
                 None,
                 " world".to_string(),
-                Utf8ByteRange::from_values(0, 5).unwrap(),
+                Utf8ByteRange::from_ordered(0, 5),
             );
             let tx = engine.composition_commit_or_cancel_transaction(
                 "hello",
@@ -489,11 +489,11 @@ use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange, EditorRevision,
                 "hello world".to_string(),
                 Utf8ByteRange::from_values(6, 6),
                 "n".to_string(),
-                Utf8ByteRange::from_values(0, 11).unwrap(),
+                Utf8ByteRange::from_ordered(0, 11),
             );
             assert_eq!(rev1.virtual_text, "hello nworld");
             let rev2 = CompositionVisualRevision::from_previous(
-                &rev1, "ni".to_string(), 2, Utf8ByteRange::from_values(0, 11).unwrap(),
+                &rev1, "ni".to_string(), 2, Utf8ByteRange::from_ordered(0, 11),
             );
             assert_eq!(rev2.virtual_text, "hello niworld");
             assert_eq!(rev2.committed_text, "hello world");
@@ -507,7 +507,7 @@ use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange, EditorRevision,
                 "你好世界".to_string(),
                 Utf8ByteRange::from_values(6, 6),
                 "abc".to_string(),
-                Utf8ByteRange::from_values(0, 12).unwrap(),
+                Utf8ByteRange::from_ordered(0, 12),
             );
             let (start, end) = rev.preedit_byte_range_in_virtual_text();
             assert_eq!(start, 6);
@@ -520,7 +520,7 @@ use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange, EditorRevision,
                 "hello".to_string(),
                 None,
                 "world".to_string(),
-                Utf8ByteRange::from_values(0, 5).unwrap(),
+                Utf8ByteRange::from_ordered(0, 5),
             );
             let (start, end) = rev.preedit_byte_range_in_virtual_text();
             assert_eq!(start, 5);
@@ -615,7 +615,7 @@ use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange, EditorRevision,
                 "hello world".to_string(),
                 Utf8ByteRange::from_values(6, 6),
                 "n".to_string(),
-                Utf8ByteRange::from_values(0, 11).unwrap(),
+                Utf8ByteRange::from_ordered(0, 11),
             );
             let tx = engine.composition_update_from_previous(&rev1, "ni", 2);
             assert_eq!(tx.old_revision.virtual_text, "hello nworld");
@@ -630,7 +630,7 @@ use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange, EditorRevision,
                 "hello ".to_string(),
                 Utf8ByteRange::from_values(6, 6),
                 "n".to_string(),
-                Utf8ByteRange::from_values(0, 6).unwrap(),
+                Utf8ByteRange::from_ordered(0, 6),
             );
             let tx1 = engine.composition_update_from_previous(&rev1, "ni", 2);
             assert_eq!(tx1.old_revision.preedit_text, "n");
@@ -649,7 +649,7 @@ use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange, EditorRevision,
                 "hello world".to_string(),
                 Utf8ByteRange::from_values(6, 11),
                 "earth".to_string(),
-                Utf8ByteRange::from_values(0, 11).unwrap(),
+                Utf8ByteRange::from_ordered(0, 11),
             );
             let committed_after = "hello earth";
             let tx = engine.composition_commit_or_cancel_transaction(
@@ -669,7 +669,7 @@ use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange, EditorRevision,
                 "hello world".to_string(),
                 Utf8ByteRange::from_values(6, 11),
                 "earth".to_string(),
-                Utf8ByteRange::from_values(0, 11).unwrap(),
+                Utf8ByteRange::from_ordered(0, 11),
             );
             let tx = engine.composition_commit_or_cancel_transaction(
                 "hello world",
@@ -688,7 +688,7 @@ use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange, EditorRevision,
                 "hello".to_string(),
                 Utf8ByteRange::from_values(5, 5),
                 " world".to_string(),
-                Utf8ByteRange::from_values(0, 5).unwrap(),
+                Utf8ByteRange::from_ordered(0, 5),
             );
             let tx = engine.composition_commit_or_cancel_transaction(
                 "hello",
@@ -706,7 +706,7 @@ use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange, EditorRevision,
                 "hello ".to_string(),
                 Utf8ByteRange::from_values(6, 8),
                 "ni".to_string(),
-                Utf8ByteRange::from_values(0, 8).unwrap(),
+                Utf8ByteRange::from_ordered(0, 8),
             );
             let tx = engine.composition_commit_or_cancel_transaction(
                 "hello ",
@@ -759,7 +759,7 @@ use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange, EditorRevision,
                 preedit_text: "world".to_string(),
                 preedit_cursor_offset: Utf8ByteOffset::unchecked(3),
                 virtual_text: "helloworld".to_string(),
-                affected_paragraph_range: Utf8ByteRange::from_values(0, 5).unwrap(),
+                affected_paragraph_range: Utf8ByteRange::from_ordered(0, 5),
                 line_snapshot_ids: Vec::new(),
                 cursor_rect: None,
                 decoration_ranges: Vec::new(),

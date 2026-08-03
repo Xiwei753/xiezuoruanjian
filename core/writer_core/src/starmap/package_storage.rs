@@ -261,7 +261,7 @@ pub(crate) fn load_layout_sharded(dir: &Path) -> Option<StarMapLayout> {
     if let Ok(entries) = fs::read_dir(&nodes_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().map_or(false, |e| e == "json") {
+            if path.extension() == Some(std::ffi::OsStr::new("json")) {
                 if let Ok(content) = std::fs::read_to_string(&path) {
                     if let Ok(nodes) = serde_json::from_str::<Vec<StarMapLayoutNode>>(&content) {
                         all_nodes.extend(nodes);

@@ -195,12 +195,12 @@ impl StarMapStore {
         }
 
         if any_processed && all_flushed {
-            let node_count = self.graph_meta.as_ref()
-                .map(|m| m.node_ids.len() as u32)
-                .unwrap_or(self.nodes.len() as u32);
-            let edge_count = self.graph_meta.as_ref()
-                .map(|m| m.edge_ids.len() as u32)
-                .unwrap_or(self.edges.len() as u32);
+            let node_count: u32 = self.graph_meta.as_ref()
+                .map(|m| m.node_ids.len().try_into().unwrap_or(u32::MAX))
+                .unwrap_or_else(|| self.nodes.len().try_into().unwrap_or(u32::MAX));
+            let edge_count: u32 = self.graph_meta.as_ref()
+                .map(|m| m.edge_ids.len().try_into().unwrap_or(u32::MAX))
+                .unwrap_or_else(|| self.edges.len().try_into().unwrap_or(u32::MAX));
             let linked_chapters = self.graph_meta.as_ref()
                 .map(|m| *m.node_kind_counts.get("Chapter").unwrap_or(&0))
                 .unwrap_or(0u32);
@@ -344,12 +344,12 @@ impl StarMapStore {
         let written_revision = self.update_graph_meta_file()?;
         self.package_revision = written_revision;
 
-        let node_count = self.graph_meta.as_ref()
-            .map(|m| m.node_ids.len() as u32)
-            .unwrap_or(self.nodes.len() as u32);
-        let edge_count = self.graph_meta.as_ref()
-            .map(|m| m.edge_ids.len() as u32)
-            .unwrap_or(self.edges.len() as u32);
+        let node_count: u32 = self.graph_meta.as_ref()
+            .map(|m| m.node_ids.len().try_into().unwrap_or(u32::MAX))
+            .unwrap_or_else(|| self.nodes.len().try_into().unwrap_or(u32::MAX));
+        let edge_count: u32 = self.graph_meta.as_ref()
+            .map(|m| m.edge_ids.len().try_into().unwrap_or(u32::MAX))
+            .unwrap_or_else(|| self.edges.len().try_into().unwrap_or(u32::MAX));
         let linked_chapters = self.graph_meta.as_ref()
             .map(|m| *m.node_kind_counts.get("Chapter").unwrap_or(&0))
             .unwrap_or(0u32);

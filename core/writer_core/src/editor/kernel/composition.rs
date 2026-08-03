@@ -45,8 +45,7 @@ impl EditorKernel {
             preedit_cursor_utf16: 0,
         });
 
-        let new_selection = Utf8ByteRange::from_values(self.selection_anchor.value(), self.cursor.value())
-            .unwrap_or(Utf8ByteRange::from_values(0, 0).unwrap());
+        let new_selection = Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
         EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
@@ -98,12 +97,12 @@ impl EditorKernel {
         let old_affected = if old_preedit_text.is_empty() {
             vec![]
         } else {
-            vec![Utf8ByteRange::from_values(replace_start, replace_start + old_preedit_text.len()).unwrap()]
+                vec![Utf8ByteRange::from_start_len(replace_start, old_preedit_text.len())]
         };
         let new_affected = if new_preedit_text.is_empty() {
             vec![]
         } else {
-            vec![Utf8ByteRange::from_values(replace_start, replace_start + new_preedit_text.len()).unwrap()]
+            vec![Utf8ByteRange::from_start_len(replace_start, new_preedit_text.len())]
         };
 
         let changed_text: &str = if new_preedit_text.len() >= old_preedit_text.len() {
@@ -126,8 +125,7 @@ impl EditorKernel {
             )
         };
 
-        let new_selection = Utf8ByteRange::from_values(self.selection_anchor.value(), self.cursor.value())
-            .unwrap_or(Utf8ByteRange::from_values(0, 0).unwrap());
+        let new_selection = Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
         EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
@@ -168,8 +166,7 @@ impl EditorKernel {
 
         if session.preedit_text.is_empty() {
             self.composition_session = None;
-            let new_selection = Utf8ByteRange::from_values(self.selection_anchor.value(), self.cursor.value())
-                .unwrap_or(Utf8ByteRange::from_values(0, 0).unwrap());
+            let new_selection = Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
             return EditorEditOutcome::Applied(EditorEditResult {
                 transaction_id: self.take_transaction_id(),
                 base_revision,
@@ -241,12 +238,12 @@ impl EditorKernel {
         self.redo_stack.clear();
 
         let new_revision = self.revision;
-        let new_selection = Utf8ByteRange::from_values(resulting_cursor, resulting_cursor).unwrap();
+        let new_selection = Utf8ByteRange::point(resulting_cursor);
 
         let display_patches = vec![DisplayPatch {
             base_revision,
             new_revision,
-            replace_byte_range: Utf8ByteRange::from_values(replace_start, replace_end).unwrap(),
+            replace_byte_range: Utf8ByteRange::from_ordered(replace_start, replace_end),
             inserted_text: committed_text.clone(),
             resulting_selection_byte_range: new_selection,
         }];
@@ -276,8 +273,8 @@ impl EditorKernel {
             visual_intent: EditorVisualIntent {
                 cause: EditorTransactionCause::TypingCommit,
                 operation_kind: EditorOperationKind::CompositionCommit,
-                old_affected_byte_ranges: vec![Utf8ByteRange::from_values(replace_start, replace_start + committed_text.len()).unwrap()],
-                new_affected_byte_ranges: vec![Utf8ByteRange::from_values(replace_start, replace_start + committed_text.len()).unwrap()],
+                old_affected_byte_ranges: vec![Utf8ByteRange::from_start_len(replace_start, committed_text.len())],
+                new_affected_byte_ranges: vec![Utf8ByteRange::from_start_len(replace_start, committed_text.len())],
                 animation_mode,
                 duration_ms: self.animation_duration_ms,
                 coordinated_cursor: CoordinatedCursor {
@@ -322,9 +319,9 @@ impl EditorKernel {
 
         let preedit_byte_len = session.preedit_text.len();
         let old_affected = if preedit_byte_len > 0 {
-            vec![Utf8ByteRange::from_values(replace_start, replace_start + preedit_byte_len).unwrap()]
+            vec![Utf8ByteRange::from_start_len(replace_start, preedit_byte_len)]
         } else if replace_start != replace_end {
-            vec![Utf8ByteRange::from_values(replace_start, replace_end).unwrap()]
+            vec![Utf8ByteRange::from_ordered(replace_start, replace_end)]
         } else {
             vec![]
         };
@@ -335,8 +332,7 @@ impl EditorKernel {
             AnimationMode::ClusterAnimation
         };
 
-        let new_selection = Utf8ByteRange::from_values(self.selection_anchor.value(), self.cursor.value())
-            .unwrap_or(Utf8ByteRange::from_values(0, 0).unwrap());
+        let new_selection = Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
         EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
@@ -419,12 +415,12 @@ impl EditorKernel {
             old_affected_byte_ranges: if old_preedit_text.is_empty() {
                 vec![]
             } else {
-                vec![Utf8ByteRange::from_values(replace_start, replace_start + old_preedit_text.len()).unwrap()]
+            vec![Utf8ByteRange::from_start_len(replace_start, old_preedit_text.len())]
             },
             new_affected_byte_ranges: if new_preedit_text.is_empty() {
                 vec![]
             } else {
-                vec![Utf8ByteRange::from_values(replace_start, new_end).unwrap()]
+                vec![Utf8ByteRange::from_start_len(replace_start, new_preedit_text.len())]
             },
             animation_mode,
             duration_ms: self.animation_duration_ms,
