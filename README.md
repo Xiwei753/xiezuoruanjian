@@ -9,7 +9,7 @@
 ## 当前平台
 
 - Android：主力移动端。
-- Linux Qt：主力桌面端。
+- Linux Qt：主力 Linux 客户端。
 - Windows：原生客户端路线，独立于 Linux Qt。
 - HarmonyOS：保留原生客户端骨架和 Rust Core 接入。
 
