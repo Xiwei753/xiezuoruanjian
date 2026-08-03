@@ -221,8 +221,10 @@ class AndroidLineSnapshotBuilder {
             //    preventing Canvas.drawBitmap from reading out-of-bounds pixels.
             // 3. sourceRectLeft is at least sourceRectLeft + 1 (minimum 1px width) so that
             //    zero-width clusters (e.g. RTL boundary edge cases) are not silently dropped.
-            val sourceRectLeft = kotlin.math.floor(sourceLeft).toInt().coerceIn(0, bitmapWidth)
-            val sourceRectTop = kotlin.math.floor(sourceTop).toInt().coerceIn(0, bitmapHeight)
+            // Clamping left/top to dimension - 1 keeps the coerceIn range for right/bottom
+            // non-empty when a cluster sits at the exact right/bottom edge.
+            val sourceRectLeft = kotlin.math.floor(sourceLeft).toInt().coerceIn(0, (bitmapWidth - 1).coerceAtLeast(0))
+            val sourceRectTop = kotlin.math.floor(sourceTop).toInt().coerceIn(0, (bitmapHeight - 1).coerceAtLeast(0))
             val sourceRectRight = kotlin.math.ceil(sourceRight).toInt().coerceIn(sourceRectLeft + 1, bitmapWidth)
             val sourceRectBottom = kotlin.math.ceil(sourceBottom).toInt().coerceIn(sourceRectTop + 1, bitmapHeight)
 

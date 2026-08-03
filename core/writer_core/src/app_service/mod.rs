@@ -283,4 +283,40 @@ mod tests {
         let result = svc.text_edit_session_reset(session_id, "你好".to_string(), 4);
         assert_eq!(result, 0);
     }
+
+    #[test]
+    fn editor_kernel_update_composition_accepts_preedit_utf16_cursor_offset() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let svc = WriterAppService::new(dir.path().to_string_lossy().to_string());
+        let load = svc.editor_kernel_load_text(String::new(), 0);
+        assert_eq!(load.outcome, crate::api::EditorEditOutcomeDto::Applied);
+        let begin = svc.editor_kernel_begin_composition(0, 0, load.new_revision);
+        let session = begin.composition_session.expect("composition session");
+        let result = svc.editor_kernel_update_composition(
+            session.session_id,
+            session.generation,
+            "你好".to_string(),
+            2,
+            load.new_revision,
+        );
+        assert_eq!(result.outcome, crate::api::EditorEditOutcomeDto::Applied);
+    }
+
+    #[test]
+    fn editor_kernel_update_composition_rejects_cursor_beyond_preedit() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let svc = WriterAppService::new(dir.path().to_string_lossy().to_string());
+        let load = svc.editor_kernel_load_text(String::new(), 0);
+        assert_eq!(load.outcome, crate::api::EditorEditOutcomeDto::Applied);
+        let begin = svc.editor_kernel_begin_composition(0, 0, load.new_revision);
+        let session = begin.composition_session.expect("composition session");
+        let result = svc.editor_kernel_update_composition(
+            session.session_id,
+            session.generation,
+            "你好".to_string(),
+            3,
+            load.new_revision,
+        );
+        assert_eq!(result.outcome, crate::api::EditorEditOutcomeDto::InvalidOffset);
+    }
 }

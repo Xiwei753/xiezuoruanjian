@@ -201,17 +201,31 @@ class FinalFrameResourceLifecycleTest {
             "tick must set completeAfterDraw=true at 100%",
             frameState!!.completeAfterDraw
         )
-        assertNotNull(
-            "FrameState must contain the transaction (Bitmaps not yet recycled)",
+        assertNull(
+            "Terminal transaction must not be rendered (the static renderer draws the identical final state)",
             frameState.renderInput.transaction
+        )
+        assertNotNull(
+            "Transaction must still be active before completeIfFinished (Bitmaps not yet recycled)",
+            engine.getActiveTransaction()
         )
 
         engine.completeIfFinished(endFrameTimeMs)
 
         val afterDrawSnapshot = engine.captureStateSnapshot(endFrameTimeMs)
-        assertNull(
-            "After completeIfFinished, state snapshot must be null (transaction completed, resources released)",
+        assertNotNull(
+            "After completeIfFinished, terminal state must remain queryable (Completed)",
             afterDrawSnapshot
+        )
+        assertEquals(
+            "After completeIfFinished, transaction state must be Completed",
+            TransactionState.Completed,
+            afterDrawSnapshot!!.transactionState
+        )
+        assertEquals(
+            "After completeIfFinished, all resources must be released",
+            0,
+            afterDrawSnapshot.ownedResourceCount
         )
         assertFalse("After completeIfFinished, no active animation", engine.hasActiveAnimation())
     }
@@ -271,13 +285,31 @@ class FinalFrameResourceLifecycleTest {
             "tick must set completeAfterDraw=true at 100% for delete",
             frameState!!.completeAfterDraw
         )
+        assertNull(
+            "Terminal transaction must not be rendered for delete (static renderer draws the final state)",
+            frameState.renderInput.transaction
+        )
+        assertNotNull(
+            "Transaction must still be active before completeIfFinished for delete",
+            engine.getActiveTransaction()
+        )
 
         engine.completeIfFinished(endFrameTimeMs)
 
         val afterDrawSnapshot = engine.captureStateSnapshot(endFrameTimeMs)
-        assertNull(
-            "After completeIfFinished for delete, state snapshot must be null",
+        assertNotNull(
+            "After completeIfFinished for delete, terminal state must remain queryable (Completed)",
             afterDrawSnapshot
+        )
+        assertEquals(
+            "After completeIfFinished for delete, transaction state must be Completed",
+            TransactionState.Completed,
+            afterDrawSnapshot!!.transactionState
+        )
+        assertEquals(
+            "After completeIfFinished for delete, all resources must be released",
+            0,
+            afterDrawSnapshot.ownedResourceCount
         )
     }
 
@@ -374,9 +406,19 @@ class FinalFrameResourceLifecycleTest {
         assertTrue("completeIfFinished must return true at 100%", completed)
 
         val afterDrawSnapshot = engine.captureStateSnapshot(endFrameTimeMs)
-        assertNull(
-            "After completion, captureStateSnapshot must be null (ownedResourceCount implicitly 0)",
+        assertNotNull(
+            "After completion, terminal state must remain queryable (Completed)",
             afterDrawSnapshot
+        )
+        assertEquals(
+            "After completion, transaction state must be Completed",
+            TransactionState.Completed,
+            afterDrawSnapshot!!.transactionState
+        )
+        assertEquals(
+            "After completion, ownedResourceCount must be 0 (all Bitmaps released)",
+            0,
+            afterDrawSnapshot.ownedResourceCount
         )
     }
 }

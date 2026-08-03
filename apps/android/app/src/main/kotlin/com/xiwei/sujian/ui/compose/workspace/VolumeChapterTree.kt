@@ -10,8 +10,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import com.xiwei.sujian.designsystem.icon.SujianIcons
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import com.xiwei.sujian.editor.v2.compose.AnimatedTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -315,11 +315,12 @@ private fun CreateVolumeDialog(
         dismissText = stringResource(id = R.string.action_cancel),
         onDismiss = onDismiss,
         body = {
-            AnimatedTextField(
-                targetId = "volume-title:new",
+            OutlinedTextField(
                 value = title,
                 onValueChange = { title = it },
-                onCommit = { },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("volume-title:new"),
                 label = { Text(stringResource(id = R.string.hint_volume_title_short)) },
                 singleLine = true
             )
@@ -345,11 +346,12 @@ private fun CreateChapterDialog(
         dismissText = stringResource(id = R.string.action_cancel),
         onDismiss = onDismiss,
         body = {
-            AnimatedTextField(
-                targetId = SujianSemanticIds.ChapterTitleInput,
+            OutlinedTextField(
                 value = title,
                 onValueChange = { title = it },
-                onCommit = { },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag(SujianSemanticIds.ChapterTitleInput),
                 label = { Text(stringResource(id = R.string.hint_chapter_title_short)) },
                 singleLine = true
             )
@@ -450,11 +452,12 @@ private fun RenameDialog(
         dismissText = stringResource(id = R.string.action_cancel),
         onDismiss = onDismiss,
         body = {
-            AnimatedTextField(
-                targetId = "rename:$initialValue",
+            OutlinedTextField(
                 value = newTitle,
                 onValueChange = { newTitle = it },
-                onCommit = { },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("rename:$initialValue"),
                 label = { Text(stringResource(id = R.string.hint_new_title)) },
                 singleLine = true
             )

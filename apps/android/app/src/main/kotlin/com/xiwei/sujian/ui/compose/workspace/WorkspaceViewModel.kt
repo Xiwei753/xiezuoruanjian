@@ -130,6 +130,9 @@ class WorkspaceViewModel(
             withContext(Dispatchers.IO) {
                 try { repo.createChapter(pid, volumeId, title) } catch (_: Exception) { }
             }
+            val expanded = _uiState.value.expandedVolumeIds + volumeId
+            savedStateHandle["expandedVolumeIds"] = expanded
+            _uiState.value = _uiState.value.copy(expandedVolumeIds = expanded)
             loadVolumes()
         }
     }

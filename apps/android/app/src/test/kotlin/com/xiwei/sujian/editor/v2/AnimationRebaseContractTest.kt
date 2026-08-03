@@ -120,7 +120,9 @@ class AnimationRebaseContractTest {
     fun renderingStateReturnsInterpolatedFrame() {
         val engine = AndroidTextAnimationEngine(
             AndroidVisualPlanner(),
-            VisualResourceStore()
+            VisualResourceStore(),
+            ManualAnimationTimeSource(),
+            TransactionIdSource()
         )
         val snapshot = makeSnapshot(1, 0, 0, 10)
         val slices = listOf(

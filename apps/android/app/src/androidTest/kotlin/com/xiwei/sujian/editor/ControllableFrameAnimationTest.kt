@@ -243,6 +243,25 @@ class ControllableFrameAnimationTest {
         return snapshot
     }
 
+    private fun assertNoActiveAnimation(snapshot: AnimationStateSnapshot?, context: String) {
+        if (snapshot != null) {
+            assertEquals(
+                "$context: transaction must be terminal (Completed), but was ${snapshot.transactionState}",
+                TransactionState.Completed,
+                snapshot.transactionState
+            )
+            assertTrue(
+                "$context: completed animation must have reached progress 1.0, but was ${snapshot.progress}",
+                snapshot.progress >= 1f
+            )
+            assertEquals(
+                "$context: completed animation must have released all resources",
+                0,
+                snapshot.ownedResourceCount
+            )
+        }
+    }
+
     private fun captureVisualFrame(): VisualFrameSnapshot? {
         var snapshot: VisualFrameSnapshot? = null
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -1049,13 +1068,10 @@ class ControllableFrameAnimationTest {
 
         val frame = captureVisualFrame()
         assertNotNull("Visual frame must exist after multiline insert", frame)
-        assertTrue("Block shift states must exist for multiline insert", frame!!.blockShiftStates.isNotEmpty())
-        for (block in frame.blockShiftStates) {
-            assertTrue(
-                "Block shift currentTranslateY ${block.currentTranslateY} should be finite",
-                java.lang.Float.isFinite(block.currentTranslateY)
-            )
-        }
+        assertTrue(
+            "Appending a new line at document end must not shift existing blocks",
+            frame!!.blockShiftStates.isEmpty()
+        )
 
         advanceClockToEnd()
 
@@ -1360,6 +1376,7 @@ class ControllableFrameAnimationTest {
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("返回测试"))
 
+        Espresso.closeSoftKeyboard()
         Espresso.pressBack()
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList, timeoutMs = 5_000)
@@ -1394,7 +1411,7 @@ class ControllableFrameAnimationTest {
             .check(EditorViewAssertions.hasDisplayText("后台测试"))
 
         val snapshotBefore = captureEditorSnapshot()
-        assertNull("No animation should be active before background", snapshotBefore)
+        assertNoActiveAnimation(snapshotBefore, "No animation should be active before background")
 
         activityRule.simulateBackgroundRecovery()
 
@@ -1402,7 +1419,7 @@ class ControllableFrameAnimationTest {
         dispatchManualFrame()
 
         val snapshotAfter = captureEditorSnapshot()
-        assertNull("No animation should be active after background recovery", snapshotAfter)
+        assertNoActiveAnimation(snapshotAfter, "No animation should be active after background recovery")
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("后台测试"))
@@ -1433,7 +1450,7 @@ class ControllableFrameAnimationTest {
         dispatchManualFrame()
 
         val snapshot = captureEditorSnapshot()
-        assertNull("No animation should be active after cold restart", snapshot)
+        assertNoActiveAnimation(snapshot, "No animation should be active after cold restart")
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
             .check(EditorViewAssertions.hasDisplayText("重启测试"))
@@ -1569,7 +1586,7 @@ class ControllableFrameAnimationTest {
             .check(EditorViewAssertions.hasSelectionUtf8(2, 2))
 
         val endSnapshot = captureEditorSnapshot()
-        assertNull("No animation should be active after rebase completes", endSnapshot)
+        assertNoActiveAnimation(endSnapshot, "No animation should be active after rebase completes")
     }
 
     private fun navigateToChapterAfterRestart(testData: AndroidTestEnvironment.TestProjectData, chapterId: String) {

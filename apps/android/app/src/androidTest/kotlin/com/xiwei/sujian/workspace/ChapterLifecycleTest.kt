@@ -127,6 +127,7 @@ class ChapterLifecycleTest {
 
         composeTestRule.onNodeWithText("交替章节A").assertIsDisplayed()
 
+        Espresso.closeSoftKeyboard()
         Espresso.pressBack()
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList, timeoutMs = 5_000)
@@ -173,6 +174,7 @@ class ChapterLifecycleTest {
             .perform(EditorCommitTextAction.commitText("正文-A"))
         ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
 
+        Espresso.closeSoftKeyboard()
         Espresso.pressBack()
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList, timeoutMs = 5_000)
 
@@ -186,6 +188,7 @@ class ChapterLifecycleTest {
             .perform(EditorCommitTextAction.commitText("正文-B"))
         ComposeWait.waitForSaveStatus(composeTestRule, "saved", timeoutMs = 15_000)
 
+        Espresso.closeSoftKeyboard()
         Espresso.pressBack()
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList, timeoutMs = 5_000)
 
@@ -203,6 +206,7 @@ class ChapterLifecycleTest {
             coordinator.activeTargetId
         )
 
+        Espresso.closeSoftKeyboard()
         Espresso.pressBack()
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList, timeoutMs = 5_000)
 

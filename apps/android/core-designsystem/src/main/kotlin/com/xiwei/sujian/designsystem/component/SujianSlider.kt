@@ -41,7 +41,7 @@ fun SujianSlider(
     val displayLabel = valueLabel ?: valueFormatter?.invoke(value) ?: String.format("%.1f", value)
 
     Column(modifier = modifier.fillMaxWidth().then(
-        if (semanticId != null) Modifier.testTag(semanticId).semantics(mergeDescendants = true) {}
+        if (semanticId != null) Modifier.semantics(mergeDescendants = true) {}
         else Modifier
     )) {
         Row(

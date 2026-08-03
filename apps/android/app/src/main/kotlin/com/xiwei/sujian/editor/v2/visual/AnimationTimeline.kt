@@ -12,7 +12,8 @@ package com.xiwei.sujian.editor.v2.visual
  * (animation completes instantly — the final state should be shown immediately).
  */
 class AnimationTimeline(
-    private val durationMs: Long
+    private val durationMs: Long,
+    private val submittedAtMs: Long = Long.MIN_VALUE
 ) {
     private var firstVisibleFrameTimeMs: Long? = null
     private var pauseStartedAtMs: Long? = null
@@ -32,7 +33,11 @@ class AnimationTimeline(
 
     fun markFirstVisibleFrame(frameTimeMs: Long) {
         if (firstVisibleFrameTimeMs == null) {
-            firstVisibleFrameTimeMs = frameTimeMs
+            // The first visible frame must never be stamped with a time from before the
+            // transaction was submitted: a stale pending frame time (e.g. the last vsync
+            // of the previous animation, drawn after the new submit) would anchor the
+            // timeline in the past and jump the new animation's progress ahead of 0.
+            firstVisibleFrameTimeMs = maxOf(frameTimeMs, submittedAtMs)
             state = TransactionState.Rendering
         }
     }

@@ -44,7 +44,10 @@ class ManualAnimationTimeSource : AnimationTimeSource {
         require(progress in 0f..1f) { "progress must be in [0, 1]: $progress" }
         require(durationMs >= 0) { "durationMs must be non-negative: $durationMs" }
         val targetMs = startTimeMs + (durationMs * progress).toLong()
-        advanceTo(targetMs * 1_000_000L)
+        // "Advance" must never move the clock backward: a real vsync frame may already
+        // have marked the animation start and advanced the clock past the requested
+        // progress point, in which case the clock stays where it is.
+        advanceTo(maxOf(targetMs * 1_000_000L, currentTimeNanos))
     }
 
     fun advanceToEnd(durationMs: Long, startTimeMs: Long = 0L) {

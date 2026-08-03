@@ -408,9 +408,17 @@ impl EditorKernel {
             )
         };
 
+        let operation_kind = if byte_start == byte_end_exclusive {
+            EditorOperationKind::Insert
+        } else if replacement_text.is_empty() {
+            EditorOperationKind::Delete
+        } else {
+            EditorOperationKind::Replace
+        };
+
         let visual_intent = EditorVisualIntent {
             cause,
-            operation_kind: EditorOperationKind::Replace,
+            operation_kind,
             old_affected_byte_ranges: old_affected,
             new_affected_byte_ranges: new_affected,
             animation_mode,
@@ -585,6 +593,7 @@ impl EditorKernel {
         });
         self.redo_stack.clear();
         let preedit_byte_len = self.composition_session.as_ref().map(|s| s.preedit_text.len()).unwrap_or(0);
+        let is_composition_commit = self.composition_session.is_some();
         self.composition_session = None;
 
         let new_revision = self.revision;
@@ -621,7 +630,15 @@ impl EditorKernel {
 
         let visual_intent = EditorVisualIntent {
             cause,
-            operation_kind: EditorOperationKind::CompositionCommit,
+            operation_kind: if is_composition_commit {
+                EditorOperationKind::CompositionCommit
+            } else if byte_start == byte_end_exclusive {
+                EditorOperationKind::Insert
+            } else if replacement_text.is_empty() {
+                EditorOperationKind::Delete
+            } else {
+                EditorOperationKind::Replace
+            },
             old_affected_byte_ranges: old_affected,
             new_affected_byte_ranges: new_affected,
             animation_mode,

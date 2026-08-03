@@ -722,7 +722,7 @@ fun SettingsListPane(
 ) {
     val dims = LocalSujianDimensions.current
     LazyColumn(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier.fillMaxSize().testTag(SujianSemanticIds.SettingsScreen),
         contentPadding = PaddingValues(dims.space16),
         verticalArrangement = Arrangement.spacedBy(dims.space4),
     ) {

@@ -101,7 +101,7 @@ class AnimatedTextEditorCoordinator(
 
     fun beginEdit(targetId: String, initialSelection: Int? = null): Boolean {
         val target = targets[targetId] ?: return false
-        if (activeTargetId == targetId && editingState == EditingState.EDITING) return true
+        if (activeTargetId == targetId && (editingState == EditingState.EDITING || editingState == EditingState.BINDING)) return true
 
         if (activeTargetId != null && activeTargetId != targetId) {
             val oldTarget = targets[activeTargetId]

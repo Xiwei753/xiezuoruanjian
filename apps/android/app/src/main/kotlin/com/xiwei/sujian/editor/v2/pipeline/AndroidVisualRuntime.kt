@@ -105,11 +105,15 @@ class AndroidVisualRuntime(
         val transaction = animationEngine.getActiveTransaction()
         val progress = animationEngine.getTimelineProgress(frameTimeMs)
         animationEngine.markFirstVisibleFrame(frameTimeMs)
-        val shouldCompleteAfterDraw = transaction != null && animationEngine.isTimelineCompleted(frameTimeMs)
+        val completed = transaction != null && animationEngine.isTimelineCompleted(frameTimeMs)
+        // A completed (terminal) transaction must not be rendered: its slices would be
+        // drawn over the static new-layout text, double-drawing glyphs on stray invalidates.
+        // The static renderer alone produces the identical final visual state.
+        val renderTransaction = if (completed) null else transaction
         val renderInput = FrameRenderInput(
             layout = layout,
             layoutRevision = layoutRevision,
-            transaction = transaction,
+            transaction = renderTransaction,
             timelineProgress = progress,
             searchHighlightsUtf16 = searchHighlightsUtf16,
             viewportWidth = viewportWidth,
@@ -122,6 +126,6 @@ class AndroidVisualRuntime(
             selectionStartUtf16 = selectionStartUtf16,
             selectionEndUtf16 = selectionEndUtf16
         )
-        return FrameState(renderInput, completeAfterDraw = shouldCompleteAfterDraw)
+        return FrameState(renderInput, completeAfterDraw = completed)
     }
 }

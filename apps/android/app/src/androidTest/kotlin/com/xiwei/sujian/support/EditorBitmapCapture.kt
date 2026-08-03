@@ -130,6 +130,14 @@ object EditorBitmapCapture {
         return captureViewBitmap(view)
     }
 
+    /** Content coordinate origin in bitmap coordinates (view padding). Snapshot rects from
+     *  [com.xiwei.sujian.editor.v2.visual.AndroidTextAnimationEngine] use content coordinates;
+     *  add this offset to map them onto the captured view bitmap. */
+    fun editorContentOffset(): Pair<Int, Int> {
+        val view = resolveEditorView()
+        return Pair(view.paddingLeft, view.paddingTop)
+    }
+
     fun capturePixelCopyBitmap(): CapturedFrame {
         val view = resolveEditorView()
         return capturePixelCopyOnly(view)
@@ -178,8 +186,11 @@ object EditorBitmapCapture {
         Assert.assertTrue("PixelCopy requires API 26+", Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
 
         val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
-        val ctx = view.context
-        Assert.assertTrue("View must be attached to an Activity", ctx is android.app.Activity && view.windowToken != null)
+        val activity = findActivity(view)
+        Assert.assertTrue(
+            "View must be attached to an activity window",
+            view.isAttachedToWindow && activity != null
+        )
 
         val result = tryPixelCopy(view, bitmap)
         when (result) {
@@ -208,8 +219,8 @@ object EditorBitmapCapture {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             return PixelCopyResult.NOT_SUPPORTED
         }
-        val ctx = view.context
-        if (ctx !is android.app.Activity || view.windowToken == null) {
+        val activity = findActivity(view)
+        if (activity == null || view.windowToken == null || !view.isAttachedToWindow) {
             return PixelCopyResult.NOT_SUPPORTED
         }
         if (Looper.myLooper() == Looper.getMainLooper()) {
@@ -224,7 +235,7 @@ object EditorBitmapCapture {
         val latch = CountDownLatch(1)
         val captureSucceeded = AtomicBoolean(false)
         try {
-            PixelCopy.request(ctx.window, srcRect, bitmap, { result ->
+            PixelCopy.request(activity.window, srcRect, bitmap, { result ->
                 captureSucceeded.set(result == PixelCopy.SUCCESS)
                 latch.countDown()
             }, Handler(Looper.getMainLooper()))
@@ -239,6 +250,40 @@ object EditorBitmapCapture {
         } catch (_: Exception) {
             return PixelCopyResult.FAILED
         }
+    }
+
+    private fun findActivity(view: SujianEditorView): android.app.Activity? {
+        walkToActivity(view.context)?.let { return it }
+        walkToActivity(view.rootView.context)?.let { return it }
+        // On API 30+ the DecorView context is a DecorContext wrapping ContextImpl, so the
+        // Activity is not reachable through the context chain. Match the decor view against
+        // live activities instead.
+        var activity: android.app.Activity? = null
+        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+            val lifecycleMonitor = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+            for (stage in arrayOf(
+                androidx.test.runner.lifecycle.Stage.RESUMED,
+                androidx.test.runner.lifecycle.Stage.STARTED
+            )) {
+                for (candidate in lifecycleMonitor.getActivitiesInStage(stage)) {
+                    if (candidate.window?.decorView === view.rootView) {
+                        activity = candidate
+                        break
+                    }
+                }
+                if (activity != null) break
+            }
+        }
+        return activity
+    }
+
+    private fun walkToActivity(start: android.content.Context?): android.app.Activity? {
+        var current: android.content.Context? = start
+        while (current != null) {
+            if (current is android.app.Activity) return current
+            current = (current as? android.content.ContextWrapper)?.baseContext
+        }
+        return null
     }
 
     private fun computeSrcRect(view: View): Rect {

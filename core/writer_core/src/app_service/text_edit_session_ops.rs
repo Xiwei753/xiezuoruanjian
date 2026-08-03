@@ -257,23 +257,22 @@ impl super::WriterAppService {
                 Ok(r) => r,
                 Err(_) => return EditorEditResultDto::invalid_range_fallback(),
             };
-            let anchor = match Utf8ByteOffset::try_new(current_text, resulting_selection_anchor as usize) {
-                Ok(o) => o,
-                Err(_) => return EditorEditResultDto::invalid_offset_fallback(),
-            };
-            let head = match Utf8ByteOffset::try_new(current_text, resulting_selection_head as usize) {
-                Ok(o) => o,
-                Err(_) => return EditorEditResultDto::invalid_offset_fallback(),
+            let anchor = Utf8ByteOffset::unchecked(resulting_selection_anchor as usize);
+            let head = Utf8ByteOffset::unchecked(resulting_selection_head as usize);
+            let composition_session_id = if composition_session_id == 0 {
+                EditorSessionId::new(0)
+            } else {
+                match EditorSessionId::try_new(composition_session_id) {
+                    Ok(id) => id,
+                    Err(_) => return EditorEditResultDto::stale_fallback(),
+                }
             };
             let result = s.kernel.apply(EditorCommand::CommitText {
                 byte_range,
                 replacement_text,
                 resulting_selection_anchor: anchor,
                 resulting_selection_head: head,
-                composition_session_id: match EditorSessionId::try_new(composition_session_id) {
-                    Ok(id) => id,
-                    Err(_) => return EditorEditResultDto::stale_fallback(),
-                },
+                composition_session_id,
                 composition_base_revision: EditorRevision::new(composition_base_revision),
                 composition_generation: EditorSessionGeneration::new(composition_generation),
                 cause: core_cause,
@@ -367,11 +366,10 @@ impl super::WriterAppService {
         use crate::editor::EditorCommand;
             use crate::editor::strong_types::{EditorRevision, EditorSessionId, EditorSessionGeneration, Utf8ByteOffset};
         self.with_session_in_registry(session_id, |s| {
-            let current_text = s.kernel.text();
-            let cursor_offset = match Utf8ByteOffset::try_new(current_text, new_preedit_cursor_offset as usize) {
-                Ok(o) => o,
-                Err(_) => return EditorEditResultDto::invalid_offset_fallback(),
-            };
+            let preedit_utf16_len: usize = new_preedit_text.chars().map(|c| c.len_utf16()).sum();
+            if new_preedit_cursor_offset as usize > preedit_utf16_len {
+                return EditorEditResultDto::invalid_offset_fallback();
+            }
             let result = s.kernel.apply(EditorCommand::UpdateComposition {
                 composition_session_id: match EditorSessionId::try_new(composition_session_id) {
                     Ok(id) => id,
@@ -379,7 +377,7 @@ impl super::WriterAppService {
                 },
                 composition_generation: EditorSessionGeneration::new(composition_generation),
                 new_preedit_text,
-                new_preedit_cursor_offset: cursor_offset,
+                new_preedit_cursor_offset: Utf8ByteOffset::unchecked(new_preedit_cursor_offset as usize),
                 expected_revision: EditorRevision::new(expected_revision),
             });
             result.into()

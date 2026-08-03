@@ -22,6 +22,26 @@ class AnimationTimelineTest {
     }
 
     @Test
+    fun staleFrameTimeBeforeSubmissionDoesNotAnchorTimelineInThePast() {
+        // A stale pending frame time from the previous animation must not anchor a newly
+        // submitted timeline before its submission: the first visible frame can only be
+        // stamped at or after the submission moment.
+        val timeline = AnimationTimeline(100, submittedAtMs = 320)
+        timeline.markFirstVisibleFrame(256)
+        assertEquals(320L, timeline.getFirstVisibleFrameTimeMs())
+        assertEquals(0f, timeline.progress(320), 0.01f)
+        assertEquals(0.4f, timeline.progress(360), 0.01f)
+    }
+
+    @Test
+    fun frameTimeAfterSubmissionAnchorsNormally() {
+        val timeline = AnimationTimeline(100, submittedAtMs = 320)
+        timeline.markFirstVisibleFrame(350)
+        assertEquals(350L, timeline.getFirstVisibleFrameTimeMs())
+        assertEquals(0.5f, timeline.progress(400), 0.01f)
+    }
+
+    @Test
     fun progressReachesOneAtDuration() {
         val timeline = AnimationTimeline(100)
         timeline.markFirstVisibleFrame(1000)

@@ -71,11 +71,16 @@ class SujianEditorView @JvmOverloads constructor(
             updateMaxScroll()
             scrollY = scrollY.coerceIn(0f, maxScrollY)
             invalidate()
+            if (pipeline.hasActiveAnimation()) {
+                requestAnimationFrame()
+            }
         }
         id = R.id.editor_content
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
         isFocusable = true
         isFocusableInTouchMode = true
+        val contentInset = (16 * context.resources.displayMetrics.density).toInt()
+        setPadding(contentInset, contentInset, contentInset, contentInset)
     }
 
     fun loadText(text: String, cursorUtf8: Int) {
@@ -208,10 +213,12 @@ class SujianEditorView @JvmOverloads constructor(
         val lineTop = pipeline.getLayoutLineTop(line).toFloat()
         val lineBottom = pipeline.getLayoutLineBottom(line).toFloat()
         val viewHeight = height.toFloat()
-        if (lineTop < scrollY) {
-            scrollY = lineTop
-        } else if (lineBottom > scrollY + viewHeight) {
-            scrollY = lineBottom - viewHeight
+        val contentTop = scrollY - paddingTop
+        val contentBottom = contentTop + viewHeight
+        if (lineTop < contentTop) {
+            scrollY = lineTop + paddingTop
+        } else if (lineBottom > contentBottom) {
+            scrollY = lineBottom - viewHeight + paddingTop
         }
         scrollY = scrollY.coerceIn(0f, maxScrollY)
         invalidate()
@@ -255,11 +262,16 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     private fun updateMaxScroll() {
-        maxScrollY = pipeline.getLayoutMaxScrollY(height)
+        val layoutOverflow = pipeline.getLayoutMaxScrollY(height)
+        maxScrollY = if (layoutOverflow > 0f) {
+            layoutOverflow + paddingTop + paddingBottom
+        } else {
+            0f
+        }
     }
 
     private fun updateLayoutConfig() {
-        pipeline.updateLayout(width.toFloat())
+        pipeline.updateLayout((width - paddingLeft - paddingRight).coerceAtLeast(1).toFloat())
         updateMaxScroll()
         scrollY = scrollY.coerceIn(0f, maxScrollY)
         invalidate()
@@ -276,7 +288,7 @@ class SujianEditorView @JvmOverloads constructor(
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         canvas.save()
-        canvas.translate(-scrollX, -scrollY)
+        canvas.translate(paddingLeft - scrollX, paddingTop - scrollY)
         val searchHighlightsUtf16 = searchHighlights.map { (startUtf8, endUtf8) ->
             Pair(pipeline.utf8ToUtf16(startUtf8), pipeline.utf8ToUtf16(endUtf8))
         }
@@ -376,7 +388,14 @@ class SujianEditorView @JvmOverloads constructor(
                     event.className = android.widget.EditText::class.java.name
                     event.packageName = context.packageName
                     event.setSource(this)
-                    parent?.requestSendAccessibilityEvent(this, event)
+                    val accessibilityManager = context.getSystemService(
+                        android.content.Context.ACCESSIBILITY_SERVICE
+                    ) as? android.view.accessibility.AccessibilityManager
+                    if (accessibilityManager?.isEnabled == true) {
+                        parent?.requestSendAccessibilityEvent(this, event)
+                    } else {
+                        event.recycle()
+                    }
                 }
                 return true
             }
@@ -389,29 +408,29 @@ class SujianEditorView @JvmOverloads constructor(
         if (!isSessionBound) return false
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
-                touchDownX = event.x + scrollX
-                touchDownY = event.y + scrollY
+                touchDownX = event.x + scrollX - paddingLeft
+                touchDownY = event.y + scrollY - paddingTop
                 isDragging = false
                 requestFocus()
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
-                val dx = event.x + scrollX - touchDownX
-                val dy = event.y + scrollY - touchDownY
+                val dx = event.x + scrollX - paddingLeft - touchDownX
+                val dy = event.y + scrollY - paddingTop - touchDownY
                 if (!isDragging && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
                     isDragging = true
                 }
                 if (isDragging && currentProfile.verticalScroll) {
                     scrollY = (scrollY - dy).coerceIn(0f, maxScrollY)
-                    touchDownX = event.x + scrollX
-                    touchDownY = event.y + scrollY
+                    touchDownX = event.x + scrollX - paddingLeft
+                    touchDownY = event.y + scrollY - paddingTop
                     invalidate()
                 }
                 return true
             }
             MotionEvent.ACTION_UP -> {
                 if (!isDragging) {
-                    handleTap(event.x + scrollX, event.y + scrollY)
+                    handleTap(event.x + scrollX - paddingLeft, event.y + scrollY - paddingTop)
                 }
                 isDragging = false
                 return true
@@ -436,6 +455,10 @@ class SujianEditorView @JvmOverloads constructor(
         if (!isSessionBound) return super.onKeyDown(keyCode, event)
         when (keyCode) {
             KeyEvent.KEYCODE_DEL -> {
+                if (inputAdapter.isComposing()) {
+                    inputAdapter.handleCompositionCancel()
+                    return true
+                }
                 val selStart = pipeline.getSelectionStartUtf8()
                 val selEnd = pipeline.getSelectionEndUtf8()
                 if (selStart != selEnd) {
@@ -589,7 +612,13 @@ class SujianEditorView @JvmOverloads constructor(
 
         val info = android.view.inputmethod.CursorAnchorInfo.Builder()
             .setSelectionRange(cursorUtf16, cursorUtf16)
-            .setInsertionMarkerLocation(x, lineTop.toFloat(), lineBottom.toFloat(), lineBottom.toFloat(), android.view.inputmethod.CursorAnchorInfo.FLAG_HAS_VISIBLE_REGION)
+            .setInsertionMarkerLocation(
+                x + paddingLeft - scrollX,
+                lineTop.toFloat() + paddingTop - scrollY,
+                lineBottom.toFloat() + paddingTop - scrollY,
+                lineBottom.toFloat() + paddingTop - scrollY,
+                android.view.inputmethod.CursorAnchorInfo.FLAG_HAS_VISIBLE_REGION
+            )
             .build()
         imm.updateCursorAnchorInfo(this, info)
     }
@@ -746,17 +775,24 @@ class SujianEditorView @JvmOverloads constructor(
     /**
      * Soft reset for persistent sessions on commit (per #541).
      *
-     * Cancels any active animation and invalidates the composition session, but does NOT
-     * close the Rust EditorKernel session or reset the mirror. The Undo/Redo stack and
-     * revision history survive across commits — the persistent session remains bound and
-     * can continue editing. This contrasts with [unbindSession] (used for draft sessions),
-     * which detaches the bridge and closes the Rust session entirely.
+     * Invalidates the composition session, but does NOT close the Rust EditorKernel
+     * session or reset the mirror. The Undo/Redo stack and revision history survive
+     * across commits — the persistent session remains bound and can continue editing.
+     * This contrasts with [unbindSession] (used for draft sessions), which detaches the
+     * bridge and closes the Rust session entirely.
      *
-     * Animation cancellation is necessary because the composition overlay is being removed
-     * — any in-progress composition animation would reference stale preedit state.
+     * The active animation is cancelled only while a composition (preedit) is in flight:
+     * the preedit overlay is being removed and any in-progress composition animation
+     * would reference stale preedit state. For a plain text commit the animation stays
+     * visually valid — its final state equals the committed text's layout — so it must
+     * not be cancelled: commits can be triggered by incidental focus churn (e.g. IME
+     * settle while the user keeps typing), and cancelling the animation there would
+     * destroy the transaction mid-flight and snap the display to the static text.
      */
     fun softResetForPersistentCommit() {
-        pipeline.cancelActiveTransaction()
+        if (inputAdapter.isComposing()) {
+            pipeline.cancelActiveTransaction()
+        }
         inputAdapter.invalidateCompositionSession()
     }
 

@@ -748,8 +748,9 @@ class RenderedFrameVisualTest {
         val snapshot = captureVisualFrameSnapshot()
         val cursorRect = snapshot?.cursorRect
         assertNotNull("Visual frame snapshot must provide cursorRect for cursor layer check", cursorRect)
-        val cursorX = cursorRect!!.left.toInt()
-        val cursorY = ((cursorRect.top + cursorRect.bottom) / 2).toInt()
+        val (padX, padY) = EditorBitmapCapture.editorContentOffset()
+        val cursorX = cursorRect!!.left.toInt() + padX
+        val cursorY = ((cursorRect.top + cursorRect.bottom) / 2).toInt() + padY
         assertTrue(
             "Cursor position must be within bitmap: x=$cursorX < ${frame.width} && y=$cursorY < ${frame.height}",
             cursorX in 0 until frame.width && cursorY in 0 until frame.height
@@ -767,8 +768,8 @@ class RenderedFrameVisualTest {
         val midSnapshot = captureVisualFrameSnapshot()
         val midCursorRect = midSnapshot?.cursorRect
         assertNotNull("Mid-frame visual snapshot must provide cursorRect", midCursorRect)
-        val midCursorX = midCursorRect!!.left.toInt()
-        val midCursorY = ((midCursorRect.top + midCursorRect.bottom) / 2).toInt()
+        val midCursorX = midCursorRect!!.left.toInt() + padX
+        val midCursorY = ((midCursorRect.top + midCursorRect.bottom) / 2).toInt() + padY
         assertTrue(
             "Mid-frame cursor position must be within bitmap: x=$midCursorX < ${midFrame.width} && y=$midCursorY < ${midFrame.height}",
             midCursorX in 0 until midFrame.width && midCursorY in 0 until midFrame.height
@@ -819,7 +820,7 @@ class RenderedFrameVisualTest {
             )
         }
 
-        val snapshot = captureVisualFrameSnapshot()
+        val snapshot = result.visualSnapshots.last()
         assertNotNull("Visual frame snapshot must exist for logical alpha check", snapshot)
         for (slice in snapshot!!.sliceVisualStates) {
             assertTrue(
@@ -1101,8 +1102,9 @@ class RenderedFrameVisualTest {
         val midSnapshot = captureVisualFrameSnapshot()
         val midCursorRect = midSnapshot?.cursorRect
         assertNotNull("Delete mid-frame snapshot must provide cursorRect", midCursorRect)
-        val midCursorX = midCursorRect!!.left.toInt()
-        val midCursorY = ((midCursorRect.top + midCursorRect.bottom) / 2).toInt()
+        val (padX, padY) = EditorBitmapCapture.editorContentOffset()
+        val midCursorX = midCursorRect!!.left.toInt() + padX
+        val midCursorY = ((midCursorRect.top + midCursorRect.bottom) / 2).toInt() + padY
         assertTrue(
             "Delete mid-frame cursor position must be within bitmap",
             midCursorX in 0 until midFrame.width && midCursorY in 0 until midFrame.height
@@ -1202,11 +1204,19 @@ class RenderedFrameVisualTest {
 
         for ((i, progress) in progressValues.withIndex()) {
             manualTimeSource.advanceToProgress(progress, durationMs, startTimeMs)
+            if (i == 4) {
+                val terminalVisual = captureVisualFrameSnapshot()
+                assertNotNull(
+                    "Visual frame snapshot must exist at 100% (terminal state captured before the completing draw)",
+                    terminalVisual
+                )
+                visualSnapshots.add(terminalVisual)
+            }
             dispatchManualFrame()
             frames.add(EditorBitmapCapture.captureEditorBitmap())
 
-            val visualSnapshot = captureVisualFrameSnapshot()
             if (i < 4) {
+                val visualSnapshot = captureVisualFrameSnapshot()
                 assertNotNull(
                     "Visual frame snapshot must exist at ${progressLabels[i]} for logical alpha check",
                     visualSnapshot
@@ -1217,8 +1227,8 @@ class RenderedFrameVisualTest {
                         slice.currentAlpha >= 0f && slice.currentAlpha <= 1f
                     )
                 }
+                visualSnapshots.add(visualSnapshot)
             }
-            visualSnapshots.add(visualSnapshot)
         }
 
         val finalStateSnapshot = captureAnimationStateSnapshot()
@@ -1239,10 +1249,11 @@ class RenderedFrameVisualTest {
     }
 
     private fun assertCursorRegionFromSnapshotRect(frame: CapturedFrame, cursorRect: RectF, messagePrefix: String) {
-        val cursorLeft = cursorRect.left.toInt()
-        val cursorRight = minOf(cursorRect.right.toInt(), frame.width)
-        val cursorTop = cursorRect.top.toInt()
-        val cursorBottom = cursorRect.bottom.toInt()
+        val (padX, padY) = EditorBitmapCapture.editorContentOffset()
+        val cursorLeft = cursorRect.left.toInt() + padX
+        val cursorRight = minOf(cursorRect.right.toInt() + padX, frame.width)
+        val cursorTop = cursorRect.top.toInt() + padY
+        val cursorBottom = cursorRect.bottom.toInt() + padY
         assertTrue(
             "$messagePrefix: cursor region must be valid: right=$cursorRight > left=$cursorLeft && bottom=$cursorBottom > top=$cursorTop",
             cursorRight > cursorLeft && cursorBottom > cursorTop

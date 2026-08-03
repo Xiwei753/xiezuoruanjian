@@ -101,7 +101,10 @@ class AndroidTextAnimationEngine(
      * Unreferenced snapshots (newly captured but unused, or old snapshots no longer needed)
      * are released immediately, preventing unbounded growth during rapid consecutive input.
      */
-    fun submit(preparedAnimation: PreparedVisualTransaction) {
+    fun submit(
+        preparedAnimation: PreparedVisualTransaction,
+        submittedAtMs: Long = timeSource.nowNanos() / 1_000_000
+    ) {
         val oldTransaction = activeTransaction
         val newOwner = SnapshotOwner.OwnedByTransaction(preparedAnimation.transactionId)
 
@@ -160,7 +163,7 @@ class AndroidTextAnimationEngine(
             activeTransaction = preparedAnimation.copy(ownedSnapshotIds = preciseOwnedIds)
         }
 
-        timeline = AnimationTimeline(preparedAnimation.durationMs)
+        timeline = AnimationTimeline(preparedAnimation.durationMs, submittedAtMs)
     }
 
     /**
@@ -229,7 +232,7 @@ class AndroidTextAnimationEngine(
         val affectedNewLineIndices = affectedResult.newLineIndices
         val newSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedNewLineIndices)
         val transaction = prepare(visualIntent, oldRevision, newRevision, oldSnapshots, newSnapshots, rebaseSnapshot)
-        submit(transaction)
+        submit(transaction, effectiveFrameTimeMs)
     }
 
     fun registerSnapshots(snapshots: Map<Int, AndroidLineSnapshot>, owner: SnapshotOwner) {
@@ -292,7 +295,10 @@ class AndroidTextAnimationEngine(
         return captureFrame(frameTimeMs)
     }
 
-    fun hasActiveAnimation(): Boolean = activeTransaction != null && timeline != null
+    fun hasActiveAnimation(): Boolean {
+        val tl = timeline ?: return false
+        return activeTransaction != null && tl.getState() != TransactionState.Completed
+    }
 
     fun currentTimeNanos(): Long = timeSource.nowNanos()
 
@@ -328,6 +334,15 @@ class AndroidTextAnimationEngine(
 
     fun getActiveAnimationStartTimeMs(): Long? = timeline?.getFirstVisibleFrameTimeMs()
 
+    /**
+     * Capture a metadata snapshot of the current animation state.
+     *
+     * Unlike [captureFrame], this is not gated on the timeline state: for a completed
+     * transaction it returns the terminal snapshot (progress 1.0, state [TransactionState.Completed],
+     * ownedResourceCount 0) so tests and diagnostics can verify the animation actually
+     * reached its end. Returns null only when no transaction/timeline exists (idle editor,
+     * after cancel, or on a fresh bind).
+     */
     fun captureStateSnapshot(frameTimeMs: Long): AnimationStateSnapshot? {
         val transaction = activeTransaction ?: return null
         val tl = timeline ?: return null
@@ -392,10 +407,15 @@ class AndroidTextAnimationEngine(
     fun completeIfFinished(frameTimeMs: Long): Boolean {
         val transaction = activeTransaction ?: return false
         val tl = timeline ?: return false
+        if (tl.getState() == TransactionState.Completed) return false
         if (tl.isCompleted(frameTimeMs)) {
             completeTransaction(transaction)
-            activeTransaction = null
-            timeline = null
+            // Terminal state is retained (Completed) so the final animation state stays
+            // queryable via captureStateSnapshot at progress 1.0 — the frame loop stops
+            // because hasActiveAnimation() is false for Completed, and the ownedSnapshotIds
+            // set is emptied so ownedResourceCount reports 0 (bitmaps were already released
+            // by completeTransaction). The next submit/cancel/release replaces or clears it.
+            activeTransaction = transaction.copy(ownedSnapshotIds = emptySet())
             return true
         }
         return false

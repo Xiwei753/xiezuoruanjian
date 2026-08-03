@@ -280,7 +280,7 @@ mod tests {
             expected_revision: EditorRevision::new(0),
         }).into_result();
         assert_eq!(kernel.text(), "你好你好");
-        assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::Replace);
+        assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::Insert);
         assert_eq!(result.visual_intent.cause, EditorTransactionCause::TypingCommit);
     }
 
@@ -464,7 +464,7 @@ mod tests {
         assert_eq!(intent.cause, EditorTransactionCause::ImeComposition);
         assert_eq!(intent.operation_kind, EditorOperationKind::CompositionUpdate);
         assert_eq!(intent.animation_mode, AnimationMode::GlyphAnimation);
-        assert_eq!(intent.duration_ms, 160);
+        assert_eq!(intent.duration_ms, 80);
         assert!(intent.coordinated_cursor.should_animate);
         assert!(!intent.new_affected_byte_ranges.is_empty());
     }
@@ -929,5 +929,109 @@ mod tests {
         assert_eq!(kernel.text(), "CDE");
         assert_eq!(kernel.selection_anchor(), 1);
         assert_eq!(kernel.cursor(), 3);
+    }
+
+    #[test]
+    fn commit_text_without_composition_session_has_insert_operation_kind() {
+        let mut kernel = EditorKernel::with_text("".to_string(), 0).unwrap();
+        let outcome = kernel.apply(EditorCommand::CommitText {
+            byte_range: Utf8ByteRange::point(0),
+            replacement_text: "Hello".to_string(),
+            resulting_selection_anchor: Utf8ByteOffset::unchecked(5),
+            resulting_selection_head: Utf8ByteOffset::unchecked(5),
+            composition_session_id: EditorSessionId::new(0),
+            composition_base_revision: EditorRevision::new(0),
+            composition_generation: EditorSessionGeneration::new(0),
+            cause: EditorTransactionCause::Typing,
+            expected_revision: EditorRevision::new(0),
+        });
+        let result = outcome.into_result();
+        assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::Insert);
+        assert_eq!(kernel.text(), "Hello");
+    }
+
+    #[test]
+    fn commit_text_without_composition_session_delete_has_delete_operation_kind() {
+        let mut kernel = EditorKernel::with_text("ABCDE".to_string(), 3).unwrap();
+        let outcome = kernel.apply(EditorCommand::CommitText {
+            byte_range: Utf8ByteRange::from_ordered(1, 4),
+            replacement_text: "".to_string(),
+            resulting_selection_anchor: Utf8ByteOffset::unchecked(1),
+            resulting_selection_head: Utf8ByteOffset::unchecked(1),
+            composition_session_id: EditorSessionId::new(0),
+            composition_base_revision: EditorRevision::new(0),
+            composition_generation: EditorSessionGeneration::new(0),
+            cause: EditorTransactionCause::Typing,
+            expected_revision: EditorRevision::new(0),
+        });
+        let result = outcome.into_result();
+        assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::Delete);
+        assert_eq!(kernel.text(), "AE");
+    }
+
+    #[test]
+    fn commit_text_with_composition_session_has_composition_commit_operation_kind() {
+        let mut kernel = EditorKernel::with_text("".to_string(), 0).unwrap();
+        let begin = kernel.apply(EditorCommand::BeginComposition {
+            replace_range: Utf8ByteRange::point(0),
+            expected_revision: EditorRevision::new(0),
+        }).into_result();
+        let (session_id, base_rev, gen) = kernel.composition_session_info().unwrap();
+        let outcome = kernel.apply(EditorCommand::CommitText {
+            byte_range: Utf8ByteRange::point(0),
+            replacement_text: "你好".to_string(),
+            resulting_selection_anchor: Utf8ByteOffset::unchecked(6),
+            resulting_selection_head: Utf8ByteOffset::unchecked(6),
+            composition_session_id: EditorSessionId::new(session_id),
+            composition_base_revision: EditorRevision::new(base_rev),
+            composition_generation: EditorSessionGeneration::new(gen),
+            cause: EditorTransactionCause::TypingCommit,
+            expected_revision: begin.new_revision,
+        });
+        let result = outcome.into_result();
+        assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::CompositionCommit);
+        assert_eq!(kernel.text(), "你好");
+    }
+
+    #[test]
+    fn replace_empty_range_has_insert_operation_kind() {
+        let mut kernel = EditorKernel::with_text("ABCDE".to_string(), 3).unwrap();
+        let result = kernel.apply(EditorCommand::Replace {
+            byte_range: Utf8ByteRange::point(3),
+            replacement_text: "X".to_string(),
+            original_text: String::new(),
+            cause: EditorTransactionCause::Typing,
+            expected_revision: EditorRevision::new(0),
+        }).into_result();
+        assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::Insert);
+        assert_eq!(kernel.text(), "ABCXDE");
+    }
+
+    #[test]
+    fn replace_with_empty_replacement_has_delete_operation_kind() {
+        let mut kernel = EditorKernel::with_text("ABCDE".to_string(), 3).unwrap();
+        let result = kernel.apply(EditorCommand::Replace {
+            byte_range: Utf8ByteRange::from_ordered(1, 4),
+            replacement_text: "".to_string(),
+            original_text: "BCD".to_string(),
+            cause: EditorTransactionCause::Delete,
+            expected_revision: EditorRevision::new(0),
+        }).into_result();
+        assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::Delete);
+        assert_eq!(kernel.text(), "AE");
+    }
+
+    #[test]
+    fn replace_non_empty_range_has_replace_operation_kind() {
+        let mut kernel = EditorKernel::with_text("ABCDE".to_string(), 3).unwrap();
+        let result = kernel.apply(EditorCommand::Replace {
+            byte_range: Utf8ByteRange::from_ordered(1, 4),
+            replacement_text: "XY".to_string(),
+            original_text: "BCD".to_string(),
+            cause: EditorTransactionCause::Typing,
+            expected_revision: EditorRevision::new(0),
+        }).into_result();
+        assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::Replace);
+        assert_eq!(kernel.text(), "AXYE");
     }
 }

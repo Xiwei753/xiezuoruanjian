@@ -215,7 +215,11 @@ class AndroidEditorPipeline private constructor(
             if (animationMode != uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED) {
                 val animatedIntent = VisualIntent(
                     cause = result.visualIntent.cause,
-                    operationKind = uniffi.writer_core.EditorOperationKindDto.COMPOSITION_COMMIT,
+                    operationKind = if (preeditText.isEmpty()) {
+                        result.visualIntent.operationKind
+                    } else {
+                        uniffi.writer_core.EditorOperationKindDto.COMPOSITION_COMMIT
+                    },
                     oldAffectedByteRanges = oldAffected,
                     newAffectedByteRanges = newAffected,
                     animationMode = animationMode,
@@ -227,7 +231,11 @@ class AndroidEditorPipeline private constructor(
         }
         return applyEditResultWithIntent(result, VisualIntent(
             cause = result.visualIntent.cause,
-            operationKind = uniffi.writer_core.EditorOperationKindDto.COMPOSITION_COMMIT,
+            operationKind = if (preeditText.isEmpty()) {
+                result.visualIntent.operationKind
+            } else {
+                uniffi.writer_core.EditorOperationKindDto.COMPOSITION_COMMIT
+            },
             oldAffectedByteRanges = oldAffected,
             newAffectedByteRanges = newAffected,
             animationMode = result.visualIntent.animationMode,
@@ -399,7 +407,7 @@ class AndroidEditorPipeline private constructor(
             oldAffectedByteRanges = oldAffected,
             newAffectedByteRanges = newAffected,
             animationMode = animationMode,
-            durationMs = 160L,
+            durationMs = 80L,
             coordinatedCursor = CoordinatedCursor(0, 0, true)
         )
         visualRuntime.prepareAndSubmit(
@@ -442,7 +450,7 @@ class AndroidEditorPipeline private constructor(
             oldAffectedByteRanges = oldAffected,
             newAffectedByteRanges = emptyList(),
             animationMode = uniffi.writer_core.AnimationModeDto.CLUSTER_ANIMATION,
-            durationMs = 160L,
+            durationMs = 80L,
             coordinatedCursor = CoordinatedCursor(0, 0, true)
         )
         visualRuntime.prepareAndSubmit(

@@ -44,7 +44,7 @@ class ActiveAnimationDurationMsTest {
     }
 
     @Test
-    fun afterComplete_activeTransactionIsNull() {
+    fun afterComplete_terminalStateRetainedWithNoResources() {
         val timeSource = ManualAnimationTimeSource()
         val engine = createEngine(timeSource)
         val transaction = PreparedVisualTransaction(
@@ -66,8 +66,17 @@ class ActiveAnimationDurationMsTest {
         timeSource.advanceByMs(16)
         engine.markFirstVisibleFrame(16)
         timeSource.advanceByMs(200)
-        engine.completeIfFinished(216)
-        assertNull("Active transaction should be null after completion", engine.getActiveTransaction())
+        val completed = engine.completeIfFinished(216)
+        assertTrue("completeIfFinished must report completion", completed)
+
+        // Terminal state stays queryable (Completed, progress 1.0, no owned resources) so
+        // tests and diagnostics can verify the animation actually reached its end.
+        val snapshot = engine.captureStateSnapshot(216)
+        assertNotNull("Completed terminal state must remain queryable", snapshot)
+        assertEquals(TransactionState.Completed, snapshot!!.transactionState)
+        assertTrue("Completed progress must be 1.0", snapshot.progress >= 1f)
+        assertEquals("Completed transaction must own no resources", 0, snapshot.ownedResourceCount)
+        assertFalse("hasActiveAnimation must be false after completion", engine.hasActiveAnimation())
     }
 
     @Test
