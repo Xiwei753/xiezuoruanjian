@@ -1,210 +1,181 @@
 package com.xiwei.sujian.editor.v2.input
 
-import android.content.Context
-import android.view.View
-import android.view.inputmethod.InputMethodInfo
-import android.view.inputmethod.InputMethodManager
-import androidx.test.core.app.ApplicationProvider
-import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
-import com.xiwei.sujian.editor.v2.pipeline.InputCommandPort
-import com.xiwei.sujian.editor.v2.pipeline.PipelineOutput
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
-import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
-import uniffi.writer_core.AnimationModeDto
-import uniffi.writer_core.CompositionSessionDto
-import uniffi.writer_core.CoordinatedCursorDto
-import uniffi.writer_core.EditorByteRangeDto
-import uniffi.writer_core.EditorEditOutcomeDto
-import uniffi.writer_core.EditorEditResultDto
-import uniffi.writer_core.EditorOperationKindDto
-import uniffi.writer_core.EditorTransactionCauseDto
-import uniffi.writer_core.EditorVisualIntentDto
 
 /**
- * Contract test for [AndroidInputConnection.setComposingRegion].
+ * Contract tests for [AndroidInputConnection.setComposingRegion] (Issue #589).
  *
- * setComposingRegion is only legitimate when an IME is actually enabled: the
- * InputMethodManagerService mirrors the current selection as a composing region
- * through RemoteInputConnectionImpl whenever no IME is enabled (observed on
- * emulators with all IMEs disabled — every updateSelection() from commitText
- * triggers a spurious call). Accepting those calls would mark the adapter as
- * composing and corrupt subsequent plain commits (text loss, wrong
- * operationKind), so the connection must ignore them while still honouring
- * genuine IME calls.
+ * The pre-#589 behavior gated setComposingRegion on `InputMethodManager.enabledInputMethodList`
+ * and ignored the call when no IME was enabled; it also rejected reversed ranges and ended
+ * with an extra InputMethodManager.updateSelection. Per the Android InputConnection contract
+ * the method must instead:
+ * - reject negative offsets (return false);
+ * - normalize reversed ranges (start > end) to [min, max) before entering composing mode;
+ * - never trigger updateSelection (the committed text and selection do not change);
+ * - accept calls regardless of which (if any) IME is enabled — composition validity is
+ *   managed by the InputConnection lifecycle, the kernel composition session and the
+ *   adapter state machine.
  */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [34], shadows = [RecordingInputMethodManagerShadow::class])
 class AndroidInputConnectionComposingRegionTest {
 
-    private var beginCompositionCalls = 0
+    @Test
+    fun reversedRange_isNormalizedAndEntersComposing() {
+        val h = InputConnectionTestHarness("ABXY", 4)
 
-    private fun buildInputConnection(): Pair<AndroidInputAdapter, AndroidInputConnection> {
-        beginCompositionCalls = 0
-        val mirror = DisplayTextMirror()
-        mirror.loadText("ABXY", 4)
-        val commandPort = FakeInputCommandPort(mirror) { beginCompositionCalls++ }
-        val adapter = AndroidInputAdapter(mirror, commandPort, null)
-        val hostView = View(ApplicationProvider.getApplicationContext())
-        adapter.setHostView(hostView)
-        val connection = AndroidInputConnection(adapter, mirror, commandPort, hostView, null)
-        return adapter to connection
+        val result = h.connection.setComposingRegion(2, 0)
+
+        assertTrue("Reversed range must be accepted and normalized", result)
+        assertTrue("The call must enter composing mode", h.adapter.isComposing())
+        assertEquals("Kernel composition must be started once", 1, h.commandPort.beginCompositionCount)
+        assertEquals("Range must be normalized to [0,2) in UTF-8 bytes", Pair(0, 2), h.adapter.getCompositionRangeUtf8())
+        assertEquals("Preedit must be the normalized region text", "AB", h.adapter.getCompositionText())
+        assertEquals("Committed text must be untouched by the overlay", "ABXY", h.mirror.getCommittedText())
+        assertTrue("Mirror must show the composing overlay", h.mirror.hasComposition())
     }
 
     @Test
-    fun setComposingRegion_withNoEnabledIme_isIgnored() {
-        // Robolectric default: no enabled IME on the device.
-        val (adapter, connection) = buildInputConnection()
+    fun negativeRange_isRejected() {
+        val h = InputConnectionTestHarness("ABXY", 4)
 
-        val result = connection.setComposingRegion(0, 2)
-
-        assertTrue("setComposingRegion must report success even when ignored", result)
-        assertFalse(
-            "With no enabled IME the spurious mirror call must not enter composing mode",
-            adapter.isComposing()
-        )
-        assertEquals("No kernel composition may be started", 0, beginCompositionCalls)
+        assertFalse("Negative start must be rejected", h.connection.setComposingRegion(-1, 2))
+        assertFalse("Negative end must be rejected", h.connection.setComposingRegion(0, -2))
+        assertFalse("Negative offsets must not enter composing mode", h.adapter.isComposing())
+        assertEquals("No kernel composition may be started", 0, h.commandPort.beginCompositionCount)
     }
 
     @Test
-    fun setComposingRegion_withEnabledIme_startsComposition() {
-        val (adapter, connection) = buildInputConnection()
-        val context = ApplicationProvider.getApplicationContext<Context>()
-        val imm = context.getSystemService(InputMethodManager::class.java)
-        assertNotNull("Robolectric must provide an InputMethodManager", imm)
-        shadowOf(imm).setEnabledInputMethodInfoList(
-            listOf(InputMethodInfo("com.example.ime", "com.example.ime.Ime", "Test IME", ""))
-        )
+    fun noEnabledIme_doesNotGateComposing() {
+        // Robolectric's default device has no enabled IME. The deleted behavior ignored
+        // the call in this state; the new contract accepts it — validity is managed by the
+        // InputConnection lifecycle, the kernel session and the adapter state machine.
+        val h = InputConnectionTestHarness("ABXY", 4)
 
-        val result = connection.setComposingRegion(0, 2)
+        val result = h.connection.setComposingRegion(0, 2)
+
+        assertTrue("The call must be accepted with no enabled IME", result)
+        assertTrue("The call must enter composing mode", h.adapter.isComposing())
+        assertEquals("Kernel composition must be started", 1, h.commandPort.beginCompositionCount)
+    }
+
+    @Test
+    fun setComposingRegion_doesNotTriggerUpdateSelection() {
+        val h = InputConnectionTestHarness("hello world", 11)
+        h.connection.setSelection(6, 11) // select "world" (notifies the IME once)
+
+        val before = h.imm.updateSelectionCount
+        val result = h.connection.setComposingRegion(6, 11)
+        assertTrue(result)
+        assertTrue(h.adapter.isComposing())
+
+        assertEquals(
+            "setComposingRegion must not produce an extra selection callback",
+            before, h.imm.updateSelectionCount
+        )
+    }
+
+    @Test
+    fun commitText_stillTriggersSingleUpdateSelection() {
+        // Contrast: commitText changes committed text and selection, so it must keep
+        // notifying the IME exactly once per call.
+        val h = InputConnectionTestHarness("hello world", 11)
+
+        val before = h.imm.updateSelectionCount
+        h.connection.commitText("!", 1)
+
+        assertEquals("commitText must notify the IME exactly once", before + 1, h.imm.updateSelectionCount)
+    }
+
+    @Test
+    fun setSelection_stillTriggersUpdateSelection() {
+        val h = InputConnectionTestHarness("hello world", 11)
+
+        val before = h.imm.updateSelectionCount
+        h.connection.setSelection(6, 11)
+
+        assertEquals("setSelection must notify the IME exactly once", before + 1, h.imm.updateSelectionCount)
+    }
+
+    @Test
+    fun reCorrection_beginsCompositionOnCommittedText() {
+        // LatinIME recorrection: after a selection change the IME calls setComposingRegion
+        // over the already committed word to re-enter composition on it.
+        val h = InputConnectionTestHarness("hello world", 11)
+        h.connection.setSelection(6, 11)
+
+        val result = h.connection.setComposingRegion(6, 11)
 
         assertTrue(result)
-        assertTrue("With an enabled IME the call must enter composing mode", adapter.isComposing())
-        assertEquals("Kernel composition must be started", 1, beginCompositionCalls)
-        assertEquals("Preedit must mirror the composing region text", "AB", adapter.getCompositionText())
+        assertTrue("Re-correction must begin a composition", h.adapter.isComposing())
+        assertEquals("Preedit must be the selected committed text", "world", h.adapter.getCompositionText())
+        assertEquals("Composition range must cover the selected word", Pair(6, 11), h.adapter.getCompositionRangeUtf8())
+        assertEquals("Kernel composition must be started", 1, h.commandPort.beginCompositionCount)
+        assertEquals("Committed text must be unchanged", "hello world", h.mirror.getCommittedText())
+        assertTrue(h.mirror.hasComposition())
     }
 
-    private class FakeInputCommandPort(
-        override val mirror: DisplayTextMirror,
-        private val onBeginComposition: () -> Unit
-    ) : InputCommandPort {
-        override fun insertText(byteOffset: Int, text: String, cause: EditorTransactionCauseDto): PipelineOutput =
-            PipelineOutput.NeedReload
+    @Test
+    fun setComposingRegionWhileComposing_replacesPreviousComposition() {
+        val h = InputConnectionTestHarness("hello world", 11)
+        h.connection.setComposingRegion(6, 11)
+        assertTrue(h.adapter.isComposing())
+        assertEquals("world", h.adapter.getCompositionText())
 
-        override fun deleteRange(byteStart: Int, byteEndExclusive: Int, cause: EditorTransactionCauseDto): PipelineOutput =
-            PipelineOutput.NeedReload
+        val result = h.connection.setComposingRegion(0, 5)
 
-        override fun replaceRangeTyped(
-            byteStart: Int,
-            byteEndExclusive: Int,
-            replacementText: String,
-            originalText: String,
-            cause: EditorTransactionCauseDto,
-            beforePatch: (() -> Unit)?
-        ): PipelineOutput = PipelineOutput.NeedReload
+        assertTrue(result)
+        assertTrue("Composing mode must continue", h.adapter.isComposing())
+        assertEquals("Old preedit must be replaced by the new region", "hello", h.adapter.getCompositionText())
+        assertEquals(Pair(0, 5), h.adapter.getCompositionRangeUtf8())
+        assertEquals("A fresh kernel session must be begun", 2, h.commandPort.beginCompositionCount)
+        assertEquals("Committed text must survive the replacement", "hello world", h.mirror.getCommittedText())
+    }
 
-        override fun setSelectionTyped(anchorByteOffset: Int, headByteOffset: Int): PipelineOutput =
-            PipelineOutput.NeedReload
+    @Test
+    fun multiByteUtf16Offsets_convertToUtf8Bytes() {
+        // "你好世界": each char is 1 UTF-16 unit but 3 UTF-8 bytes. UTF-16 [0,2) is
+        // UTF-8 byte range [0,6).
+        val h = InputConnectionTestHarness("你好世界", 12)
 
-        override fun applyEditResult(result: com.xiwei.sujian.editor.v2.mirror.EditResult, beforePatch: (() -> Unit)?): PipelineOutput =
-            PipelineOutput.NeedReload
+        val result = h.connection.setComposingRegion(0, 2)
 
-        override fun applyCompositionCommit(
-            dto: EditorEditResultDto,
-            preeditText: String
-        ): PipelineOutput = PipelineOutput.NeedReload
+        assertTrue(result)
+        assertTrue(h.adapter.isComposing())
+        assertEquals("你好", h.adapter.getCompositionText())
+        assertEquals(Pair(0, 6), h.adapter.getCompositionRangeUtf8())
+        assertEquals("你好世界", h.mirror.getCommittedText())
+    }
 
-        override fun applyCompositionUpdateAnimated(
-            replaceStartUtf8: Int,
-            replaceEndUtf8: Int,
-            newPreeditText: String,
-            oldPreeditText: String,
-            mirrorUpdate: (() -> Unit)?
-        ) = Unit
+    @Test
+    fun multiByteReversedRange_normalizesInUtf16Space() {
+        // Reversed UTF-16 range [4,2) normalizes to [2,4) = "世界" → UTF-8 bytes [6,12).
+        val h = InputConnectionTestHarness("你好世界", 12)
 
-        override fun applyCompositionCancelAnimated(
-            replaceStartUtf8: Int,
-            replaceEndUtf8: Int,
-            oldPreeditText: String,
-            mirrorUpdate: (() -> Unit)?
-        ) = Unit
+        val result = h.connection.setComposingRegion(4, 2)
 
-        override fun onCompositionUpdated() = Unit
+        assertTrue(result)
+        assertTrue(h.adapter.isComposing())
+        assertEquals("世界", h.adapter.getCompositionText())
+        assertEquals(Pair(6, 12), h.adapter.getCompositionRangeUtf8())
+    }
 
-        override fun reloadFromKernel(): Boolean = false
+    @Test
+    fun mixedAsciiAndMultiByte_reversedRange_convertsCorrectly() {
+        // "a你b": UTF-16 offsets — a=0, 你=[1,2), b=2. UTF-8 bytes — a=[0,1), 你=[1,4), b=[4,5).
+        val h = InputConnectionTestHarness("a你b", 5)
 
-        override fun getCursorUtf8(): Int = 0
+        val result = h.connection.setComposingRegion(2, 1)
 
-        override fun getRevision(): Long = 0
-
-        override fun getText(): String = mirror.getText()
-
-        override fun commitComposition(
-            byteStart: Int,
-            byteEndExclusive: Int,
-            replacementText: String,
-            resultingSelectionAnchor: Int,
-            resultingSelectionHead: Int,
-            compositionSessionId: Long,
-            compositionBaseRevision: Long,
-            compositionGeneration: Long,
-            cause: EditorTransactionCauseDto
-        ): EditorEditResultDto? = null
-
-        override fun deleteSurrounding(
-            beforeByteStart: Int,
-            beforeByteEndExclusive: Int,
-            afterByteStart: Int,
-            afterByteEndExclusive: Int,
-            cause: EditorTransactionCauseDto
-        ): EditorEditResultDto? = null
-
-        override fun beginComposition(replaceStart: Int, replaceEndExclusive: Int): EditorEditResultDto? {
-            onBeginComposition()
-            return EditorEditResultDto(
-                outcome = EditorEditOutcomeDto.APPLIED,
-                transactionId = 1u,
-                baseRevision = 0u,
-                newRevision = 1u,
-                displayPatches = emptyList(),
-                oldSelectionStart = replaceStart.toUInt(),
-                oldSelectionEnd = replaceEndExclusive.toUInt(),
-                newSelectionStart = replaceStart.toUInt(),
-                newSelectionEnd = replaceEndExclusive.toUInt(),
-                visualIntent = EditorVisualIntentDto(
-                    cause = EditorTransactionCauseDto.TYPING,
-                    operationKind = EditorOperationKindDto.COMPOSITION_UPDATE,
-                    oldAffectedByteRanges = listOf(EditorByteRangeDto(replaceStart.toUInt(), replaceEndExclusive.toUInt())),
-                    newAffectedByteRanges = emptyList(),
-                    animationMode = AnimationModeDto.GLYPH_ANIMATION,
-                    durationMs = 200u,
-                    coordinatedCursor = CoordinatedCursorDto(oldByteOffset = 0u, newByteOffset = 0u, shouldAnimate = false)
-                ),
-                compositionSession = CompositionSessionDto(sessionId = 7u, baseRevision = 0u, generation = 0u)
-            )
-        }
-
-        override fun updateComposition(
-            compositionSessionId: Long,
-            compositionGeneration: Long,
-            newPreeditText: String,
-            newPreeditCursorOffset: Int
-        ): EditorEditResultDto? = null
-
-        override fun finishComposition(
-            compositionSessionId: Long,
-            compositionGeneration: Long
-        ): EditorEditResultDto? = null
-
-        override fun cancelComposition(
-            compositionSessionId: Long,
-            compositionGeneration: Long
-        ): EditorEditResultDto? = null
+        assertTrue(result)
+        assertTrue(h.adapter.isComposing())
+        assertEquals("你", h.adapter.getCompositionText())
+        assertEquals(Pair(1, 4), h.adapter.getCompositionRangeUtf8())
     }
 }
