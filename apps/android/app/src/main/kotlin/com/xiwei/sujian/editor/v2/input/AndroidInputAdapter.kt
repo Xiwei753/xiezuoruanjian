@@ -63,6 +63,20 @@ class AndroidInputAdapter(
 
     fun onCreateInputConnection(outAttrs: android.view.inputmethod.EditorInfo?): android.view.inputmethod.InputConnection? {
         val host = hostView ?: return null
+        // InputConnection lifecycle hook (Issue #589): composition state is per-InputConnection,
+        // but the adapter outlives connections. A fresh onCreateInputConnection means the
+        // previous IME binding is over (IME switch, restartInput, focus regain, soft reset),
+        // and Android does not guarantee finishComposingText() before it discards a
+        // connection. Without this cleanup the adapter would keep an orphan composition:
+        // the kernel session stays live and the overlay stays visible while the new
+        // connection's IME knows nothing about them, so the first plain commitText would be
+        // misrouted into the composition-commit path, rejected by the kernel as
+        // STALE_REVISION and dropped (text loss) — the corruption the removed
+        // enabledInputMethodList gate used to guard. Cancelling here aligns the adapter
+        // state machine with the connection lifecycle; the kernel-side session is closed
+        // best-effort too (kernel begin_composition already replaces stale sessions).
+        // No IME enumeration or switch is involved.
+        invalidateCompositionSession()
         if (outAttrs != null) {
             val inputType = when (currentProfile.inputType) {
                 TextInputType.NUMBER -> android.text.InputType.TYPE_CLASS_NUMBER
