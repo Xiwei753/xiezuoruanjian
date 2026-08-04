@@ -173,18 +173,19 @@ echo "  Native dir: $GENERATED_DIR"
 echo ""
 echo "=== 步骤 4: 验证 APK ==="
 APK_DIR="app/build/outputs/apk/$FLAVOR_NAME/debug"
-APK_PATH=$(ls -t "$APK_DIR"/sujian-android-*.apk 2>/dev/null | head -1)
-
+# 注意 set -o pipefail：ls 无匹配会以非零退出，必须 || true 才能走到下面的 fallback。
+APK_PATH=$(ls -t "$APK_DIR"/sujian-android-*.apk 2>/dev/null | head -1 || true)
 if [ -z "$APK_PATH" ]; then
-    APK_PATH="$APK_DIR/app-$VARIANT_NAME.apk"
+    APK_PATH=$(ls -t "$APK_DIR"/app-*.apk 2>/dev/null | head -1 || true)
 fi
 
-if [ ! -f "$APK_PATH" ]; then
-    echo "警告: 未找到 APK 文件，跳过验证"
-else
-    echo "APK 文件: apps/android/$APK_PATH"
-    "$DIR/android/verify_apk_abis.sh" "$APK_PATH" "$ABI_LIST"
+if [ -z "$APK_PATH" ] || [ ! -f "$APK_PATH" ]; then
+    echo "错误: 未找到 APK 文件，无法进行 ABI 验证: $APK_DIR"
+    exit 1
 fi
+
+echo "APK 文件: apps/android/$APK_PATH"
+"$DIR/android/verify_apk_abis.sh" "$APK_PATH" "$ABI_LIST"
 
 echo ""
 echo "构建完成 ✓"

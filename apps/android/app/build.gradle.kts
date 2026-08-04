@@ -113,6 +113,13 @@ android {
     }
 
     sourceSets {
+        // ABI 边界：jniLibs 打包路径只允许 generated/writer-native/<variant>。
+        // main 源集默认的 src/main/jniLibs 必须显式清空，否则本地惰性存放的
+        // 未跟踪 .so（gitignore 的 src/main/jniLibs/）会进入打包路径，造成
+        // ABI 残留混入或陈旧原生库覆盖新产物。
+        getByName("main") {
+            jniLibs.setSrcDirs(emptyList<Any>())
+        }
         getByName("noAi") {
             jniLibs.srcDirs(layout.buildDirectory.dir("generated/writer-native/noAiDebug"))
             kotlin.srcDirs(layout.buildDirectory.dir("generated/writer-uniffi/noAi/kotlin"))

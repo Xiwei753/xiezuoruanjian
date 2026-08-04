@@ -118,12 +118,12 @@ jobs:
       - name: Verify APK ABI
         run: |
           FLAVOR_DIR="${{ matrix.flavor == 'no-ai' && 'noAi' || 'ai' }}"
-          APK_PATH=$(ls apps/android/app/build/outputs/apk/$FLAVOR_DIR/debug/sujian-android-*.apk 2>/dev/null | head -1)
+          APK_PATH=$(ls apps/android/app/build/outputs/apk/$FLAVOR_DIR/debug/sujian-android-*.apk 2>/dev/null | head -1 || true)
           if [ -z "$APK_PATH" ]; then
-            echo "Warning: APK not found for ABI verification"
-          else
-            ./tools/android/verify_apk_abis.sh "$APK_PATH" "${{ matrix.abi }}"
+            echo "::error::ABI verification aborted: renamed APK not found in apps/android/app/build/outputs/apk/$FLAVOR_DIR/debug/"
+            exit 1
           fi
+          ./tools/android/verify_apk_abis.sh "$APK_PATH" "${{ matrix.abi }}"
 
       - name: Upload ${{ matrix.flavor }} ${{ matrix.abi }} Artifact
         uses: actions/upload-artifact@v4

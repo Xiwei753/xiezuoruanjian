@@ -99,7 +99,7 @@ check_elf_arch() {
         local expected_pattern=""
         case "$expected_abi" in
             arm64-v8a) expected_pattern="AArch64\|aarch64\|ARM aarch64" ;;
-            x86_64) expected_pattern="x86-64\|X86-64\|80386" ;;
+            x86_64) expected_pattern="x86-64\|X86-64" ;;
         esac
         if echo "$file_info" | grep -qi "$expected_pattern"; then
             echo "  ELF 架构验证通过 (file): $expected_abi"
