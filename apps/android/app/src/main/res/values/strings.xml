@@ -95,11 +95,15 @@
     <string name="pref_group_about">关于</string>
 
     <!-- 设置列表项说明与当前值 -->
+    <string name="pref_summary_appearance">主题模式与界面显示</string>
     <string name="pref_summary_editor">输入动效、平滑光标与正文排版</string>
     <string name="pref_summary_save">自动保存与保存延迟</string>
+    <string name="pref_summary_sync">同步开关与 GitHub 云端连接</string>
+    <string name="pref_summary_ai">AI 写作辅助开关</string>
+    <string name="pref_summary_diagnostics">诊断日志记录与导出</string>
     <string name="pref_summary_laboratory">实验性功能与调试开关</string>
     <string name="pref_summary_about">版本、工作区路径与应用信息</string>
-    <string name="pref_font_size_value">正文字号 %1$s</string>
+    <string name="pref_value_font_size">%1$s sp</string>
     <string name="pref_state_on">已开启</string>
     <string name="pref_state_off">已关闭</string>
     <string name="pref_ai_enabled">启用 AI</string>

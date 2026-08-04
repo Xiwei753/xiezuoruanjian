@@ -29,6 +29,7 @@ fun SujianListItem(
     headline: String,
     modifier: Modifier = Modifier,
     supportingText: String? = null,
+    valueText: String? = null,
     leadingIcon: ImageVector? = null,
     trailingContent: @Composable (() -> Unit)? = null,
     selected: Boolean = false,
@@ -80,6 +81,16 @@ fun SujianListItem(
                     text = supportingText,
                     style = MaterialTheme.typography.bodySmall,
                     color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
+                )
+            }
+            // 真实当前值独立第二行：与静态功能说明（supportingText）分开，
+            // 由调用方从真实状态读取，保存后随状态即时更新。
+            if (valueText != null) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = valueText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primary.copy(alpha = 0.38f),
                 )
             }
         }

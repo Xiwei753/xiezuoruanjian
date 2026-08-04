@@ -81,8 +81,9 @@ fun ProjectWorkspaceScreen(
     val capabilities = LocalAndroidCapabilities.current
     val isTabletWindow = capabilities.windowSizeClass != WindowSizeClass.Compact
 
-    if (currentProjectId == null) {
-        if (isTabletWindow) {
+    if (isTabletWindow) {
+        // 平板/大屏：未选作品时全窗格作品列表，选中后多窗格工作台。
+        if (currentProjectId == null) {
             ProjectListScreen(
                 appState = appState,
                 onSelectProject = { projectId, projectTitle ->
@@ -91,32 +92,20 @@ fun ProjectWorkspaceScreen(
                 modifier = modifier
             )
         } else {
-            CompactWorkspaceContent(
+            WorkbenchWorkspaceContent(
                 appState = appState,
-                currentProjectId = null,
-                currentVolumeId = null,
-                currentChapterId = null,
-                currentChapterTitle = "",
-                layoutPlan = layoutPlan,
+                currentProjectId = currentProjectId,
+                currentVolumeId = currentVolumeId,
+                currentChapterId = currentChapterId,
+                currentChapterTitle = currentChapterTitle,
                 workspaceRepository = workspaceRepository,
-                workspaceBackState = workspaceBackState,
                 modifier = modifier,
             )
         }
-        return
-    }
-
-    if (isTabletWindow) {
-        WorkbenchWorkspaceContent(
-            appState = appState,
-            currentProjectId = currentProjectId,
-            currentVolumeId = currentVolumeId,
-            currentChapterId = currentChapterId,
-            currentChapterTitle = currentChapterTitle,
-            workspaceRepository = workspaceRepository,
-            modifier = modifier,
-        )
     } else {
+        // 手机模式：无论是否选择作品/章节，都只从这一个固定调用位置组合一次
+        // CompactWorkspaceContent。选择作品/章节只改变工作区状态与 navigator
+        // 内部历史，不重建 composition 调用链，返回历史与预测返回始终有效。
         CompactWorkspaceContent(
             appState = appState,
             currentProjectId = currentProjectId,
@@ -304,12 +293,6 @@ private val WorkspacePaneKey.paneName: String
         WorkspacePaneKey.Editor -> "editor"
     }
 
-private fun expectedWorkspacePane(appState: SujianAppState): WorkspacePaneKey = when {
-    appState.currentProjectId == null -> WorkspacePaneKey.ProjectList
-    appState.currentChapterId == null -> WorkspacePaneKey.ChapterTree
-    else -> WorkspacePaneKey.Editor
-}
-
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
 private fun CompactWorkspaceContent(
@@ -325,16 +308,37 @@ private fun CompactWorkspaceContent(
 ) {
     val coroutineScope = rememberCoroutineScope()
 
-    // navigator 初始窗格与工作区当前选择一致（进程恢复/配置变化后不闪列表）。
-    val initialPane = remember { expectedWorkspacePane(appState) }
+    // navigator 初始历史按当前工作区选择建立完整链条（普通进入、进程恢复、横竖屏/
+    // 窗口形态切换后返回历史始终完整，不把当前窗格当作新根）：
+    // - 作品列表：ProjectList
+    // - 章节树：ProjectList → ChapterTree
+    // - 正文：ProjectList → ChapterTree → Editor
+    // 选择作品/章节只在该 navigator 实例内 navigateTo 追加历史；实例在条件分支重建
+    // 前由本函数唯一调用位置持有，跨选择不销毁。
+    val initialHistory = remember {
+        val chain = mutableListOf(
+            ThreePaneScaffoldDestinationItem(WorkspacePaneKey.ProjectList.role, WorkspacePaneKey.ProjectList),
+        )
+        if (appState.currentProjectId != null) {
+            chain += ThreePaneScaffoldDestinationItem(WorkspacePaneKey.ChapterTree.role, WorkspacePaneKey.ChapterTree)
+            if (appState.currentChapterId != null && appState.currentVolumeId != null) {
+                chain += ThreePaneScaffoldDestinationItem(WorkspacePaneKey.Editor.role, WorkspacePaneKey.Editor)
+            }
+        }
+        chain
+    }
     val navigator = rememberListDetailPaneScaffoldNavigator<WorkspacePaneKey>(
-        initialDestinationHistory = listOf(ThreePaneScaffoldDestinationItem(initialPane.role, initialPane)),
+        initialDestinationHistory = initialHistory,
     )
 
     // 先播放完窗格退出动画，再回写工作区选择状态；避免“画面不动、松手后突然切换”，
     // 也保证顶栏返回与系统返回走完全相同的窗格转换。
     suspend fun backOnePaneAndWriteBack() {
-        navigator.navigateBack(BackNavigationBehavior.PopUntilScaffoldValueChange)
+        // 历史不足两步（如选中作品后、窗格动画尚未完成时立即按返回）不弹栈，
+        // 直接回写选择；避免 navigateBack 在无前驱时清空历史导致当前窗格失步。
+        if (navigator.canNavigateBack()) {
+            navigator.navigateBack(BackNavigationBehavior.PopUntilScaffoldValueChange)
+        }
         when (navigator.currentDestination?.contentKey) {
             WorkspacePaneKey.ProjectList -> {
                 if (appState.currentProjectId != null) {

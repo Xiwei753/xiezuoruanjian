@@ -626,18 +626,17 @@ data class SettingsCategory(
     val titleResId: Int,
     val icon: ImageVector,
     val group: SettingsGroup,
-    val summaryResId: Int? = null,
 )
 
 val settingsCategories = listOf(
     SettingsCategory(SettingsSection.Appearance, R.string.pref_category_appearance, SujianIcons.Palette, SettingsGroup.Appearance),
-    SettingsCategory(SettingsSection.Editor, R.string.pref_category_editor, SujianIcons.Edit, SettingsGroup.Writing, R.string.pref_summary_editor),
-    SettingsCategory(SettingsSection.Save, R.string.pref_category_save, SujianIcons.Save, SettingsGroup.Writing, R.string.pref_summary_save),
+    SettingsCategory(SettingsSection.Editor, R.string.pref_category_editor, SujianIcons.Edit, SettingsGroup.Writing),
+    SettingsCategory(SettingsSection.Save, R.string.pref_category_save, SujianIcons.Save, SettingsGroup.Writing),
     SettingsCategory(SettingsSection.Sync, R.string.pref_category_sync, SujianIcons.CloudSync, SettingsGroup.DataSync),
     SettingsCategory(SettingsSection.Ai, R.string.pref_category_ai, SujianIcons.AutoStories, SettingsGroup.Advanced),
     SettingsCategory(SettingsSection.Diagnostics, R.string.pref_category_diagnostics, SujianIcons.BugReport, SettingsGroup.Advanced),
-    SettingsCategory(SettingsSection.Laboratory, R.string.pref_category_laboratory, SujianIcons.Science, SettingsGroup.Advanced, R.string.pref_summary_laboratory),
-    SettingsCategory(SettingsSection.About, R.string.pref_category_about, SujianIcons.Info, SettingsGroup.About, R.string.pref_summary_about),
+    SettingsCategory(SettingsSection.Laboratory, R.string.pref_category_laboratory, SujianIcons.Science, SettingsGroup.Advanced),
+    SettingsCategory(SettingsSection.About, R.string.pref_category_about, SujianIcons.Info, SettingsGroup.About),
 )
 
 @Parcelize
@@ -787,7 +786,8 @@ fun SettingsListPane(
             items(categories, key = { it.section.name }) { category ->
                 SujianListItem(
                     headline = stringResource(id = category.titleResId),
-                    supportingText = settingsCategorySummary(category, state),
+                    supportingText = settingsCategorySummary(category),
+                    valueText = settingsCategoryValue(category, state),
                     leadingIcon = category.icon,
                     selected = selectedSection == category.section,
                     onClick = { onNavigateToDetail(category.section) },
@@ -816,22 +816,35 @@ fun SettingsListPane(
 }
 
 /**
- * 设置列表项的说明/当前值：优先静态说明；其余显示真实当前值（主题模式、字号、
- * 自动保存、同步、AI、诊断开关），避免列表只有裸标题。
+ * 设置列表项的功能说明（静态文案，不冒充状态）：
+ * 与 [settingsCategoryValue] 的“真实当前值”独立展示，不再二选一。
  */
 @Composable
-private fun settingsCategorySummary(category: SettingsCategory, state: SettingsUiState): String? {
-    if (category.summaryResId != null) {
-        return stringResource(id = category.summaryResId)
-    }
-    return when (category.section) {
+private fun settingsCategorySummary(category: SettingsCategory): String? = when (category.section) {
+    SettingsSection.Appearance -> stringResource(id = R.string.pref_summary_appearance)
+    SettingsSection.Editor -> stringResource(id = R.string.pref_summary_editor)
+    SettingsSection.Save -> stringResource(id = R.string.pref_summary_save)
+    SettingsSection.Sync -> stringResource(id = R.string.pref_summary_sync)
+    SettingsSection.Ai -> stringResource(id = R.string.pref_summary_ai)
+    SettingsSection.Diagnostics -> stringResource(id = R.string.pref_summary_diagnostics)
+    SettingsSection.Laboratory -> stringResource(id = R.string.pref_summary_laboratory)
+    SettingsSection.About -> stringResource(id = R.string.pref_summary_about)
+}
+
+/**
+ * 设置列表项的真实当前值：全部来自真实 [SettingsUiState]，保存后随状态即时更新；
+ * 无当前值可展示的分类（实验室/关于）返回 null，只保留功能说明。
+ */
+@Composable
+private fun settingsCategoryValue(category: SettingsCategory, state: SettingsUiState): String? =
+    when (category.section) {
         SettingsSection.Appearance -> when (state.settings.appearanceMode) {
             "light" -> stringResource(id = R.string.theme_light)
             "dark" -> stringResource(id = R.string.theme_dark)
             else -> stringResource(id = R.string.theme_system)
         }
         SettingsSection.Editor -> stringResource(
-            id = R.string.pref_font_size_value,
+            id = R.string.pref_value_font_size,
             if (state.fontSize % 1f == 0f) state.fontSize.toInt().toString() else state.fontSize.toString(),
         )
         SettingsSection.Save -> if (state.settings.autoSaveEnabled) {
@@ -854,7 +867,6 @@ private fun settingsCategorySummary(category: SettingsCategory, state: SettingsU
         } else {
             stringResource(id = R.string.pref_state_off)
         }
-        SettingsSection.Laboratory -> stringResource(id = R.string.pref_summary_laboratory)
-        SettingsSection.About -> stringResource(id = R.string.pref_summary_about)
+        SettingsSection.Laboratory,
+        SettingsSection.About -> null
     }
-}
