@@ -256,10 +256,26 @@ class AndroidInputConnection(
      */
     override fun setComposingRegion(start: Int, end: Int): Boolean {
         if (start < 0 || end < 0 || start > end) return false
+        // The InputMethodManagerService mirrors the current selection as a composing
+        // region through RemoteInputConnectionImpl whenever no IME is actually enabled
+        // (observed on emulators with all IMEs disabled: every updateSelection() from
+        // commitText triggers a spurious setComposingRegion). IMEs are the only
+        // legitimate callers of setComposingRegion, so with no enabled IME there is no
+        // composition source — accepting these calls would mark the adapter as composing
+        // and corrupt subsequent plain commits (text loss, wrong operationKind).
+        val imm = hostView.context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)
+            as? android.view.inputmethod.InputMethodManager
+        val hasEnabledIme = imm?.enabledInputMethodList?.isNotEmpty() ?: false
+        if (!hasEnabledIme) {
+            android.util.Log.w(
+                "SujianEditorInput",
+                "setComposingRegion [$start,$end) IGNORED (no enabled IME)"
+            )
+            return true
+        }
         android.util.Log.w(
             "SujianEditorInput",
-            "setComposingRegion [$start,$end) composing=${adapter.isComposing()}",
-            Throwable("setComposingRegion caller")
+            "setComposingRegion [$start,$end) composing=${adapter.isComposing()}"
         )
         if (adapter.isComposing()) {
             adapter.handleCompositionCancel()
