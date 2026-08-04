@@ -256,13 +256,12 @@ class AndroidInputConnection(
      */
     override fun setComposingRegion(start: Int, end: Int): Boolean {
         if (start < 0 || end < 0 || start > end) return false
-        // The InputMethodManagerService mirrors the current selection as a composing
-        // region through RemoteInputConnectionImpl whenever no IME is actually enabled
-        // (observed on emulators with all IMEs disabled: every updateSelection() from
-        // commitText triggers a spurious setComposingRegion). IMEs are the only
-        // legitimate callers of setComposingRegion, so with no enabled IME there is no
-        // composition source — accepting these calls would mark the adapter as composing
-        // and corrupt subsequent plain commits (text loss, wrong operationKind).
+        // setComposingRegion is only legitimate when an IME is enabled: it is how an
+        // IME marks a text region as composing (e.g. LatinIME's recorrection path,
+        // which highlights the word before the cursor after a selection change). With
+        // no enabled IME there is no composition source, so any such call is spurious —
+        // accepting it would mark the adapter as composing and corrupt subsequent plain
+        // commits (text loss, wrong operationKind).
         val imm = hostView.context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)
             as? android.view.inputmethod.InputMethodManager
         val hasEnabledIme = imm?.enabledInputMethodList?.isNotEmpty() ?: false
