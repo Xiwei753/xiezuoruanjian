@@ -428,12 +428,23 @@ private val navPopTransition: AnimatedContentTransitionScope<Scene<NavKey>>.() -
 }
 
 private val navPredictivePopTransition:
-    (AnimatedContentTransitionScope<Scene<NavKey>>, Int) -> ContentTransform = { scope, distanceInFraction ->
-        val fraction = (distanceInFraction / 100f).coerceIn(0f, 1f)
-        val duration = (300 * fraction).toInt().coerceAtLeast(1)
-        val exit = fadeOut(animationSpec = tween(duration)) +
-            slideOutHorizontally(animationSpec = tween(duration)) { fullWidth -> (fullWidth * fraction * 0.3f).toInt() }
-        val enter = fadeIn(animationSpec = tween(duration)) +
-            slideInHorizontally(animationSpec = tween(duration)) { fullWidth -> -(fullWidth * fraction * 0.3f).toInt() }
-        enter.togetherWith(exit)
+    (AnimatedContentTransitionScope<Scene<NavKey>>, Int) -> ContentTransform = { _, swipeEdge ->
+    // predictivePopTransitionSpec 的 Int 参数是手势起始边（NavigationEvent.SwipeEdge），
+    // 不是距离比例：当前场景沿手势方向退场，前一场景从对侧入场，
+    // 时长固定（NavDisplay 按手势进度 seek，提交/取消后再按剩余时长收尾）。
+    when (swipeEdge) {
+        androidx.navigationevent.NavigationEvent.EDGE_LEFT -> {
+            val enter = slideInHorizontally(animationSpec = tween(300)) { fullWidth -> -fullWidth / 3 }
+            val exit = slideOutHorizontally(animationSpec = tween(300)) { fullWidth -> fullWidth / 3 }
+            (fadeIn(animationSpec = tween(300)) + enter) togetherWith
+                (fadeOut(animationSpec = tween(300)) + exit)
+        }
+        androidx.navigationevent.NavigationEvent.EDGE_RIGHT -> {
+            val enter = slideInHorizontally(animationSpec = tween(300)) { fullWidth -> fullWidth / 3 }
+            val exit = slideOutHorizontally(animationSpec = tween(300)) { fullWidth -> -fullWidth / 3 }
+            (fadeIn(animationSpec = tween(300)) + enter) togetherWith
+                (fadeOut(animationSpec = tween(300)) + exit)
+        }
+        else -> fadeIn(animationSpec = tween(300)) togetherWith fadeOut(animationSpec = tween(300))
     }
+}

@@ -187,6 +187,11 @@ class AndroidTextAnimationEngine(
             activeTransaction = effectiveTransaction.copy(ownedSnapshotIds = preciseOwnedIds)
             timeline?.complete()
             cursorTimeline?.complete()
+            // 连续输入重基：新事务在旧事务完成前接管，旧快照所有权转移给新事务。
+            com.xiwei.sujian.diagnostics.DiagnosticsEvents.animationRebase(
+                oldTransaction.transactionId,
+                preparedAnimation.transactionId,
+            )
         } else {
             val preciseOwnedIds = preparedAnimation.ownedSnapshotIds - unreferencedNewIds
             activeTransaction = effectiveTransaction.copy(ownedSnapshotIds = preciseOwnedIds)
@@ -317,13 +322,7 @@ class AndroidTextAnimationEngine(
             )
         }
         val p = tl.progress(frameTimeMs)
-        val cursorProgress = cursorTimeline?.let { cursorTl ->
-            if (cursorTl.getState() == TransactionState.Completed || cursorTl.getState() == TransactionState.Cancelled) {
-                null
-            } else {
-                cursorTl.progress(frameTimeMs)
-            }
-        } ?: p
+        val cursorProgress = getCursorTimelineProgress(frameTimeMs) ?: p
         val sliceStates = computeSliceVisualStates(transaction, p)
         val cursorRect = computeCurrentCursorRect(transaction, cursorProgress)
         val blockStates = computeBlockShiftVisualStates(transaction, p)
@@ -386,6 +385,23 @@ class AndroidTextAnimationEngine(
     fun getTimelineProgress(frameTimeMs: Long): Float {
         val tl = timeline ?: return 0f
         return tl.progress(frameTimeMs)
+    }
+
+    /**
+     * 独立光标时间线进度（生产渲染路径使用）。
+     *
+     * 与 [captureFrame] 中的光标进度完全一致：平滑光标开启时，屏幕上的光标
+     * 由 [cursorTimeline]（时长 = min(smoothCursorDurationMs, 文本事务时长)）驱动；
+     * 光标时间线先于文本完成时定格在终点（1f）；关闭（无时间线）时返回 null，
+     * 由调用方回退到文本进度/静态光标。
+     */
+    fun getCursorTimelineProgress(frameTimeMs: Long): Float? {
+        val tl = cursorTimeline ?: return null
+        return when (tl.getState()) {
+            TransactionState.Completed -> 1f
+            TransactionState.Cancelled -> null
+            else -> tl.progress(frameTimeMs)
+        }
     }
 
     fun isTimelineCompleted(frameTimeMs: Long): Boolean {

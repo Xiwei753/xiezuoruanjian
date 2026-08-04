@@ -313,6 +313,11 @@ class EditorViewModel(
                 val content = result.first
                 val meta = result.second
 
+                com.xiwei.sujian.diagnostics.DiagnosticsEvents.chapterLoad(
+                    session.projectId, session.chapterId,
+                    content.toByteArray(Charsets.UTF_8).size, "ok"
+                )
+
                 launch(kotlinx.coroutines.Dispatchers.Main) {
                     if (currentSession?.sessionId != sessionId) return@launch
 

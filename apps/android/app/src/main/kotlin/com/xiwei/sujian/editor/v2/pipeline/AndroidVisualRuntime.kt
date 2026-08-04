@@ -108,6 +108,7 @@ class AndroidVisualRuntime(
         if (layout == null) return null
         val transaction = animationEngine.getActiveTransaction()
         val progress = animationEngine.getTimelineProgress(frameTimeMs)
+        val cursorProgress = animationEngine.getCursorTimelineProgress(frameTimeMs)
         animationEngine.markFirstVisibleFrame(frameTimeMs)
         val completed = transaction != null && animationEngine.isTimelineCompleted(frameTimeMs)
         // A completed (terminal) transaction must not be rendered: its slices would be
@@ -119,6 +120,7 @@ class AndroidVisualRuntime(
             layoutRevision = layoutRevision,
             transaction = renderTransaction,
             timelineProgress = progress,
+            cursorProgress = cursorProgress,
             searchHighlightsUtf16 = searchHighlightsUtf16,
             viewportWidth = viewportWidth,
             viewportHeight = viewportHeight,

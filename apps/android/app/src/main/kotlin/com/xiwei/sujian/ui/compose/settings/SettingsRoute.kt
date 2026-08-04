@@ -38,7 +38,7 @@ import com.xiwei.sujian.data.SaveFailure
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.data.SettingsSaveResult
 import com.xiwei.sujian.designsystem.component.SujianListItem
-import com.xiwei.sujian.designsystem.layout.SujianListDetailScaffold
+import com.xiwei.sujian.designsystem.layout.SujianListDetailScaffoldWithNavigator
 import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.model.LocalSettings
 import com.xiwei.sujian.runtime.LocalSujianAppDependencies
@@ -662,6 +662,9 @@ fun SettingsRoute(
         }
     }
 
+    // 列表—详情窗格与返回/可预见返回必须共享同一个 navigator 实例：
+    // 窗格由 navigator.currentDestination 驱动，返回层级（详情→列表→离开设置）
+    // 与根壳状态同步都依赖同一份导航历史。
     val navigator = rememberListDetailPaneScaffoldNavigator<SettingsSelection>()
     ThreePaneScaffoldPredictiveBackHandler(
         navigator = navigator,
@@ -700,7 +703,8 @@ fun SettingsRoute(
     }
 
     Box(modifier = modifier.fillMaxSize()) {
-        SujianListDetailScaffold<SettingsSelection>(
+        SujianListDetailScaffoldWithNavigator(
+            navigator = navigator,
             modifier = Modifier.fillMaxSize(),
             listPane = {
                 SettingsListPane(

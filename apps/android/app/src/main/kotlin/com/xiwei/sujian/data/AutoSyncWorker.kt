@@ -48,7 +48,7 @@ class AutoSyncWorker(
             when (val result = settingsRepository.performSync(config)) {
                 is BridgeResult.Error -> {
                     DiagnosticsLogger.w(TAG, "AutoSync failed: ${result.fullEnvelope}")
-                com.xiwei.sujian.diagnostics.DiagnosticsEvents.syncEvent("autosync", "failed")
+                    com.xiwei.sujian.diagnostics.DiagnosticsEvents.syncEvent("autosync", "failed")
                     Result.retry()
                 }
                 BridgeResult.NotLoaded -> {

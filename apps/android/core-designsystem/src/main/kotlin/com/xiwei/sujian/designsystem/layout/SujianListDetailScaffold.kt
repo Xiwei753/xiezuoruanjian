@@ -2,38 +2,13 @@ package com.xiwei.sujian.designsystem.layout
 
 import androidx.compose.material3.adaptive.layout.AnimatedPane
 import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffoldRole
-import androidx.compose.material3.adaptive.layout.PaneScaffoldDirective
 import androidx.compose.material3.adaptive.navigation.BackNavigationBehavior
 import androidx.compose.material3.adaptive.navigation.NavigableListDetailPaneScaffold
 import androidx.compose.material3.adaptive.navigation.ThreePaneScaffoldNavigator
-import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import kotlinx.coroutines.launch
-
-@OptIn(androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi::class)
-@Composable
-fun <T : Any> SujianListDetailScaffold(
-    listPane: @Composable SujianListDetailScope<T>.() -> Unit,
-    detailPane: @Composable SujianListDetailScope<T>.() -> Unit,
-    modifier: Modifier = Modifier,
-    extraPane: (@Composable SujianListDetailScope<T>.() -> Unit)? = null,
-    scaffoldDirective: PaneScaffoldDirective? = null,
-) {
-    val navigator = if (scaffoldDirective != null) {
-        rememberListDetailPaneScaffoldNavigator<T>(scaffoldDirective = scaffoldDirective)
-    } else {
-        rememberListDetailPaneScaffoldNavigator<T>()
-    }
-    SujianListDetailScaffoldWithNavigator(
-        navigator = navigator,
-        modifier = modifier,
-        listPane = listPane,
-        detailPane = detailPane,
-        extraPane = extraPane,
-    )
-}
 
 @OptIn(androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi::class)
 @Composable

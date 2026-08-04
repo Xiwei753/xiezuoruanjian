@@ -38,6 +38,13 @@ object DiagnosticsEvents {
 
     fun workspaceBack(target: String) = record("nav.workspace_back", "target" to target)
 
+    /**
+     * 工作区内部可预见返回手势：start / progress / cancel / complete。
+     * 只记录阶段与目标窗格，不记录手势进度数值（避免拖动期间刷屏淹没 RingBuffer）。
+     */
+    fun predictiveBack(target: String, phase: String) =
+        record("nav.predictive_back", "target" to target, "phase" to phase)
+
     // ── 作品/卷/章节 ─────────────────────────────────────────────
 
     fun workspaceSelection(kind: String, id: String) = record("workspace.select", "kind" to kind, "id" to id)

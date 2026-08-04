@@ -8,6 +8,7 @@ data class FrameRenderInput(
     val layoutRevision: AndroidLayoutRevision?,
     val transaction: PreparedVisualTransaction?,
     val timelineProgress: Float,
+    val cursorProgress: Float?,
     val searchHighlightsUtf16: List<Pair<Int, Int>>,
     val viewportWidth: Int,
     val viewportHeight: Int,

@@ -26,6 +26,7 @@ class AndroidRenderRuntime(
             layout = input.layout,
             transaction = input.transaction,
             progress = input.timelineProgress,
+            cursorProgress = input.cursorProgress,
             cursorUtf16 = if (input.cursorVisible) (input.layoutRevision?.cursorUtf16 ?: input.cursorUtf16) else -1,
             cursorX = input.layoutRevision?.cursorX ?: 0f,
             cursorY = input.layoutRevision?.cursorY ?: 0f,
@@ -60,7 +61,9 @@ class AndroidRenderRuntime(
 
             val ct = transaction.cursorTransition
             if (ct != null && ct.shouldAnimate) {
-                animationRenderer.drawAnimatedCursor(canvas, transaction, frame.progress, textRenderer.getCursorPaint())
+                animationRenderer.drawAnimatedCursor(
+                    canvas, transaction, frame.cursorProgress ?: frame.progress, textRenderer.getCursorPaint()
+                )
             } else {
                 textRenderer.drawCursor(canvas, frame.cursorUtf16, frame.cursorX, frame.cursorY, frame.cursorHeight)
             }

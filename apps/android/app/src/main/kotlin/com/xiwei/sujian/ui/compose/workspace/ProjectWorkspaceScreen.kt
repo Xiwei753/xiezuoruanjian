@@ -265,16 +265,45 @@ private fun CompactWorkspaceContent(
     val windowInsetsPadding = computeWindowInsetPadding(avoidRegions)
 
     // 手机窗格返回：正文 → 章节树 → 作品列表，全部在工作区内部完成，
-    // 不触碰全局 back stack。
+    // 不触碰全局 back stack。PredictiveBackHandler 的 block 在手势开始（或普通返回）
+    // 时启动：手势提交 → collect 正常结束 → 切换窗格；手势取消 → 协程被取消，
+    // 不切换。未选中任何作品时（作品列表根），不注册处理器，返回交给全局
+    // NavDisplay（Works 是栈底，由系统收尾）。
     PredictiveBackHandler(enabled = currentChapterId != null) { progressEvents ->
-        progressEvents.collect { }
-        appState.clearChapterSelection()
-        com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceBack("chapter_tree")
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack("chapter_tree", "start")
+        var lastProgressLogMs = 0L
+        try {
+            progressEvents.collect {
+                val now = System.currentTimeMillis()
+                if (now - lastProgressLogMs >= 100) {
+                    lastProgressLogMs = now
+                    com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack("chapter_tree", "progress")
+                }
+            }
+            appState.clearChapterSelection()
+            com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceBack("chapter_tree")
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack("chapter_tree", "cancel")
+            throw e
+        }
     }
-    PredictiveBackHandler(enabled = currentChapterId == null) { progressEvents ->
-        progressEvents.collect { }
-        appState.clearProjectSelection()
-        com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceBack("project_list")
+    PredictiveBackHandler(enabled = currentProjectId != null && currentChapterId == null) { progressEvents ->
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack("project_list", "start")
+        var lastProgressLogMs = 0L
+        try {
+            progressEvents.collect {
+                val now = System.currentTimeMillis()
+                if (now - lastProgressLogMs >= 100) {
+                    lastProgressLogMs = now
+                    com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack("project_list", "progress")
+                }
+            }
+            appState.clearProjectSelection()
+            com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceBack("project_list")
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack("project_list", "cancel")
+            throw e
+        }
     }
 
     if (currentChapterId != null && currentVolumeId != null && visiblePaneRoles?.showEditor != false) {
