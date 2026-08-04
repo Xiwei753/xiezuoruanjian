@@ -282,8 +282,8 @@ impl SyncBackend for GitHubApiBackend {
 // `ReqwestSyncTransport` 已迁移至各平台 crate。
 //
 // 平台端在自己的 crate 中提供基于 reqwest 的 `SyncTransport` 实现：
-// - `writer-platform-linux`：Linux 桌面端
-// - `writer-platform-android`：Android 端
+// - `apps/Linux_qt`：Linux Qt 客户端
+// - `apps/android`：Android 客户端
 //
 // 平台端也可以提供自己的 `SyncTransport` 实现（如使用 Android 特定的 HTTP 客户端）。
 // Core 只依赖 `writer_platform_api::SyncTransport` trait，不直接依赖 reqwest。
