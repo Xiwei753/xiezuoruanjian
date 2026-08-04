@@ -84,11 +84,13 @@ class SujianAppViewModel(
         currentProjectTitle = projectTitle
         savedStateHandle["currentProjectId"] = projectId
         savedStateHandle["currentProjectTitle"] = projectTitle
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceSelection("project", projectId)
     }
 
     fun selectProject(projectId: String) {
         currentProjectId = projectId
         savedStateHandle["currentProjectId"] = projectId
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceSelection("project", projectId)
         val cachedProject = projects.find { it.id == projectId }
         if (cachedProject != null) {
             currentProjectTitle = cachedProject.title
@@ -115,6 +117,7 @@ class SujianAppViewModel(
         savedStateHandle["currentVolumeId"] = volumeId
         savedStateHandle["currentChapterId"] = chapterId
         savedStateHandle["currentChapterTitle"] = chapterTitle
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceSelection("chapter", chapterId)
     }
 
     fun selectChapter(volumeId: String, chapterId: String) {
@@ -122,6 +125,7 @@ class SujianAppViewModel(
         currentChapterId = chapterId
         savedStateHandle["currentVolumeId"] = volumeId
         savedStateHandle["currentChapterId"] = chapterId
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceSelection("chapter", chapterId)
         viewModelScope.launch {
             val title = withContext(Dispatchers.IO) {
                 try {
@@ -142,6 +146,7 @@ class SujianAppViewModel(
         savedStateHandle.remove<String>("currentVolumeId")
         savedStateHandle.remove<String>("currentChapterId")
         savedStateHandle["currentChapterTitle"] = ""
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceClear("chapter")
     }
 
     fun clearProjectSelection() {
@@ -155,6 +160,7 @@ class SujianAppViewModel(
         savedStateHandle.remove<String>("currentVolumeId")
         savedStateHandle.remove<String>("currentChapterId")
         savedStateHandle["currentChapterTitle"] = ""
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceClear("project")
     }
 
     fun updateFoldFeature(info: FoldFeatureInfo) {

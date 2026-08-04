@@ -1,8 +1,6 @@
 package com.xiwei.sujian.ui.compose.workspace
 
-import android.os.Parcel
-import android.os.Parcelable
-import androidx.activity.compose.BackHandler
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -12,7 +10,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
@@ -21,21 +18,16 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
-import com.xiwei.sujian.designsystem.layout.SujianListDetailScope
-import com.xiwei.sujian.designsystem.layout.SujianListDetailScaffoldWithNavigator
 import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.model.AvoidRegion
 import com.xiwei.sujian.model.AvoidRegionKind
-import com.xiwei.sujian.model.WorkspacePaneMode
 import com.xiwei.sujian.platform.api.WindowSizeClass
 import com.xiwei.sujian.ui.compose.LocalAndroidCapabilities
 import com.xiwei.sujian.ui.compose.SujianAppState
-import com.xiwei.sujian.ui.compose.adaptive.rememberCoreLayoutDirective
 import com.xiwei.sujian.ui.compose.editor.SujianEditorHost
 import com.xiwei.sujian.ui.compose.workbench.component.SujianWorkbench
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchAction
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelId
-import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelState
 import com.xiwei.sujian.ui.compose.workbench.panel.AiAssistantPanel
 import com.xiwei.sujian.ui.compose.workbench.panel.ChapterNavigatorPanel
 import com.xiwei.sujian.ui.compose.workbench.panel.ProjectNavigatorPanel
@@ -46,28 +38,26 @@ import com.xiwei.sujian.ui.compose.workbench.state.LayoutStorageKey
 import com.xiwei.sujian.ui.compose.workbench.state.WindowWidthBucket
 import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchLayoutRepository
 import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchViewModel
-import kotlinx.coroutines.launch
 
-@OptIn(androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi::class)
+/**
+ * 写作工作区 — 「作品」一级入口的唯一内容。
+ *
+ * 作品、卷、章节和正文是同一个工作区内的不同数据和窗格状态：
+ * - 当前选择（project/volume/chapter）由 [SujianAppState] 单状态持有，不创建全局 route。
+ * - 手机：作品列表 → 章节树 → 正文 依次为工作区内部窗格，返回只切工作区内部窗格。
+ * - 平板/大屏：正文为主窗格，作品/章节导航与辅助面板由 [SujianWorkbench] 组合。
+ */
 @Composable
 fun ProjectWorkspaceScreen(
     appState: SujianAppState,
-    projectIdOverride: String? = null,
-    volumeIdOverride: String? = null,
-    chapterIdOverride: String? = null,
-    onNavigateToProject: ((projectId: String) -> Unit)? = null,
-    onNavigateToChapter: ((projectId: String, volumeId: String, chapterId: String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    val coroutineScope = rememberCoroutineScope()
     val deps = com.xiwei.sujian.runtime.LocalSujianAppDependencies.current
     val workspaceRepository = deps.workspaceRepository
 
-    val isRouteDriven = onNavigateToProject != null || onNavigateToChapter != null
-
-    val currentProjectId = resolveEffectiveId(projectIdOverride, appState.currentProjectId, isRouteDriven)
-    val currentVolumeId = resolveEffectiveId(volumeIdOverride, appState.currentVolumeId, isRouteDriven)
-    val currentChapterId = resolveEffectiveId(chapterIdOverride, appState.currentChapterId, isRouteDriven)
+    val currentProjectId = appState.currentProjectId
+    val currentVolumeId = appState.currentVolumeId
+    val currentChapterId = appState.currentChapterId
     val currentChapterTitle = appState.currentChapterTitle
     val layoutPlan = appState.currentLayoutPlan
 
@@ -75,11 +65,7 @@ fun ProjectWorkspaceScreen(
         ProjectListScreen(
             appState = appState,
             onSelectProject = { projectId, projectTitle ->
-                if (onNavigateToProject != null) {
-                    onNavigateToProject(projectId)
-                } else {
-                    appState.selectProject(projectId, projectTitle)
-                }
+                appState.selectProject(projectId, projectTitle)
             },
             modifier = modifier
         )
@@ -97,8 +83,6 @@ fun ProjectWorkspaceScreen(
             currentChapterId = currentChapterId,
             currentChapterTitle = currentChapterTitle,
             workspaceRepository = workspaceRepository,
-            onNavigateToProject = onNavigateToProject,
-            onNavigateToChapter = onNavigateToChapter,
             modifier = modifier,
         )
     } else {
@@ -110,8 +94,6 @@ fun ProjectWorkspaceScreen(
             currentChapterTitle = currentChapterTitle,
             layoutPlan = layoutPlan,
             workspaceRepository = workspaceRepository,
-            onNavigateToProject = onNavigateToProject,
-            onNavigateToChapter = onNavigateToChapter,
             modifier = modifier,
         )
     }
@@ -125,8 +107,6 @@ private fun WorkbenchWorkspaceContent(
     currentChapterId: String?,
     currentChapterTitle: String,
     workspaceRepository: com.xiwei.sujian.data.WorkspaceRepository,
-    onNavigateToProject: ((projectId: String) -> Unit)?,
-    onNavigateToChapter: ((projectId: String, volumeId: String, chapterId: String) -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -233,11 +213,7 @@ private fun WorkbenchWorkspaceContent(
                     projectId = currentProjectId,
                     workspaceRepository = workspaceRepository,
                     onSelectChapter = { volumeId, chapterId, chapterTitle ->
-                        if (onNavigateToChapter != null) {
-                            onNavigateToChapter(currentProjectId, volumeId, chapterId)
-                        } else {
-                            appState.selectChapter(volumeId, chapterId, chapterTitle)
-                        }
+                        appState.selectChapter(volumeId, chapterId, chapterTitle)
                     },
                     onBackToProjects = {
                         appState.clearProjectSelection()
@@ -268,7 +244,6 @@ private fun WorkbenchWorkspaceContent(
     )
 }
 
-@OptIn(androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi::class)
 @Composable
 private fun CompactWorkspaceContent(
     appState: SujianAppState,
@@ -278,8 +253,6 @@ private fun CompactWorkspaceContent(
     currentChapterTitle: String,
     layoutPlan: com.xiwei.sujian.model.LayoutPlan?,
     workspaceRepository: com.xiwei.sujian.data.WorkspaceRepository,
-    onNavigateToProject: ((projectId: String) -> Unit)?,
-    onNavigateToChapter: ((projectId: String, volumeId: String, chapterId: String) -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     val dims = LocalSujianDimensions.current
@@ -291,14 +264,17 @@ private fun CompactWorkspaceContent(
 
     val windowInsetsPadding = computeWindowInsetPadding(avoidRegions)
 
-    if (onNavigateToChapter == null) {
-        BackHandler(enabled = currentChapterId != null) {
-            appState.clearChapterSelection()
-        }
-
-        BackHandler(enabled = currentChapterId == null) {
-            appState.clearProjectSelection()
-        }
+    // 手机窗格返回：正文 → 章节树 → 作品列表，全部在工作区内部完成，
+    // 不触碰全局 back stack。
+    PredictiveBackHandler(enabled = currentChapterId != null) { progressEvents ->
+        progressEvents.collect { }
+        appState.clearChapterSelection()
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceBack("chapter_tree")
+    }
+    PredictiveBackHandler(enabled = currentChapterId == null) { progressEvents ->
+        progressEvents.collect { }
+        appState.clearProjectSelection()
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceBack("project_list")
     }
 
     if (currentChapterId != null && currentVolumeId != null && visiblePaneRoles?.showEditor != false) {
@@ -328,7 +304,6 @@ private fun CompactWorkspaceContent(
                 workspaceRepository = workspaceRepository,
                 onSelectChapter = { volumeId, chapterId, chapterTitle ->
                     appState.selectChapter(volumeId, chapterId, chapterTitle)
-                    onNavigateToChapter?.invoke(currentProjectId, volumeId, chapterId)
                 },
                 onBackToProjects = {
                     appState.clearProjectSelection()
@@ -336,34 +311,6 @@ private fun CompactWorkspaceContent(
                 modifier = modifier.then(windowInsetsPadding)
             )
         }
-    }
-}
-
-@Suppress("DEPRECATION")
-private class WorkspaceDetailConfig(
-    val volumeId: String,
-    val chapterId: String,
-    val chapterTitle: String
-) : Parcelable {
-    constructor(parcel: Parcel) : this(
-        parcel.readString() ?: "",
-        parcel.readString() ?: "",
-        parcel.readString() ?: ""
-    )
-
-    override fun writeToParcel(parcel: Parcel, flags: Int) {
-        parcel.writeString(volumeId)
-        parcel.writeString(chapterId)
-        parcel.writeString(chapterTitle)
-    }
-
-    override fun describeContents(): Int = 0
-
-    companion object CREATOR : Parcelable.Creator<WorkspaceDetailConfig> {
-        override fun createFromParcel(parcel: Parcel): WorkspaceDetailConfig =
-            WorkspaceDetailConfig(parcel)
-        override fun newArray(size: Int): Array<WorkspaceDetailConfig?> =
-            arrayOfNulls(size)
     }
 }
 
@@ -389,26 +336,3 @@ private fun computeWindowInsetPadding(avoidRegions: List<AvoidRegion>): Modifier
         bottom = bottomDp.dp
     )
 }
-
-@Composable
-private fun computeHingePadding(avoidRegions: List<AvoidRegion>): Modifier {
-    val horizontalHinges = avoidRegions.filter { it.kind == AvoidRegionKind.HorizontalHinge }
-    if (horizontalHinges.isEmpty()) return Modifier
-    var topDp = 0f
-    var bottomDp = 0f
-    for (hinge in horizontalHinges) {
-        val height = hinge.bottomDp - hinge.topDp
-        if (height > 0f) {
-            topDp = maxOf(topDp, hinge.topDp)
-            bottomDp = maxOf(bottomDp, hinge.bottomDp - hinge.topDp)
-        }
-    }
-    if (topDp == 0f && bottomDp == 0f) return Modifier
-    return Modifier.padding(top = topDp.dp, bottom = bottomDp.dp)
-}
-
-internal fun resolveEffectiveId(
-    overrideValue: String?,
-    appStateValue: String?,
-    isRouteDriven: Boolean
-): String? = if (isRouteDriven) overrideValue else (overrideValue ?: appStateValue)

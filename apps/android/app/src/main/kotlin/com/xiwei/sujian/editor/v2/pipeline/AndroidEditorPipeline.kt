@@ -73,6 +73,20 @@ class AndroidEditorPipeline private constructor(
     private var autoIndentEnabled: Boolean = false
     private var autoIndentWidthSp: Float = 2f
     private var maxLength: Int = 0
+    private var typingAnimationDurationMs: Long = 200L
+
+    /**
+     * 打字动画时长（生产路径：设置 → Editor Host → 输入事务）。
+     * 平台侧构造的 composition 事务（update/commit/cancel）使用该时长，
+     * 与 Rust kernel 的 setAnimationDurationMs 保持一致。
+     */
+    fun setTypingAnimationDurationMs(durationMs: Long) {
+        typingAnimationDurationMs = durationMs.coerceAtLeast(1L)
+    }
+
+    fun setSmoothCursor(enabled: Boolean, durationMs: Long) {
+        visualRuntime.setSmoothCursor(enabled, durationMs)
+    }
 
     fun loadText(text: String, cursorUtf8: Int, @Suppress("UNUSED_PARAMETER") applySecret: Boolean = true): LoadTextResult {
         val result = editPipeline.loadText(text, cursorUtf8)
@@ -223,7 +237,7 @@ class AndroidEditorPipeline private constructor(
                     oldAffectedByteRanges = oldAffected,
                     newAffectedByteRanges = newAffected,
                     animationMode = animationMode,
-                    durationMs = 200L,
+                    durationMs = typingAnimationDurationMs,
                     coordinatedCursor = CoordinatedCursor(0, 0, true)
                 )
                 return applyEditResultWithIntent(result, animatedIntent)
@@ -273,6 +287,8 @@ class AndroidEditorPipeline private constructor(
             return PipelineOutput.NeedReload
         }
 
+        recordEditTransaction(result)
+
         visualRuntime.prepareAndSubmit(
             visualIntent = result.visualIntent,
             layoutEngine = layoutRuntime.layoutEngine,
@@ -284,6 +300,21 @@ class AndroidEditorPipeline private constructor(
         )
 
         return PipelineOutput.Edited(result)
+    }
+
+    private fun recordEditTransaction(result: EditResult) {
+        val oldAffected = result.visualIntent.oldAffectedByteRanges
+        val newAffected = result.visualIntent.newAffectedByteRanges
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.editTransaction(
+            operationKind = result.visualIntent.operationKind.name,
+            oldStart = oldAffected.firstOrNull()?.first ?: 0,
+            oldEndExclusive = oldAffected.firstOrNull()?.second ?: 0,
+            newStart = newAffected.firstOrNull()?.first ?: 0,
+            newEndExclusive = newAffected.firstOrNull()?.second ?: 0,
+            revision = result.newRevision,
+            sessionId = "-",
+            result = if (result.isApplied()) "applied" else if (result.isNoChange()) "no_change" else "other",
+        )
     }
 
     private fun applyEditResultWithIntent(
@@ -407,7 +438,7 @@ class AndroidEditorPipeline private constructor(
             oldAffectedByteRanges = oldAffected,
             newAffectedByteRanges = newAffected,
             animationMode = animationMode,
-            durationMs = 80L,
+            durationMs = typingAnimationDurationMs,
             coordinatedCursor = CoordinatedCursor(0, 0, true)
         )
         visualRuntime.prepareAndSubmit(
@@ -450,7 +481,7 @@ class AndroidEditorPipeline private constructor(
             oldAffectedByteRanges = oldAffected,
             newAffectedByteRanges = emptyList(),
             animationMode = uniffi.writer_core.AnimationModeDto.CLUSTER_ANIMATION,
-            durationMs = 80L,
+            durationMs = typingAnimationDurationMs,
             coordinatedCursor = CoordinatedCursor(0, 0, true)
         )
         visualRuntime.prepareAndSubmit(
@@ -547,14 +578,6 @@ class AndroidEditorPipeline private constructor(
     fun onFrameTick(frameTimeMs: Long) {
         visualRuntime.onFrameTick(frameTimeMs)
     }
-
-    fun captureAnimationSnapshot(): com.xiwei.sujian.editor.v2.visual.AnimationStateSnapshot? = visualRuntime.captureStateSnapshot()
-
-    fun captureVisualFrameSnapshot(): com.xiwei.sujian.editor.v2.visual.VisualFrameSnapshot? = visualRuntime.captureVisualFrameSnapshot()
-
-    fun getActiveAnimationDurationMs(): Long = visualRuntime.getActiveAnimationDurationMs()
-
-    fun getActiveAnimationStartTimeMs(): Long? = visualRuntime.getActiveAnimationStartTimeMs()
 
     fun updateLayout(width: Float) {
         layoutRuntime.setWidth(width)

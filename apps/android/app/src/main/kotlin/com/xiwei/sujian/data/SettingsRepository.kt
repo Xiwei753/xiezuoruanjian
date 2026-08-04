@@ -74,6 +74,7 @@ class SettingsRepository(
         val coreSettings = settings.copy(diagnosticsEnabled = false, diagnosticsVerbose = false, useSelfRenderEditorOnAndroid = false, experimentalFullscreenMode = false)
         return when (val result = settingsBridge.saveLocalSettings(coreSettings)) {
             is BridgeResult.Success -> {
+                com.xiwei.sujian.diagnostics.DiagnosticsEvents.settingsSaved("local_settings", "ok")
                 val effectiveVerbose = if (settings.diagnosticsEnabled) settings.diagnosticsVerbose else false
                 diagPrefs.edit()
                     .putBoolean("diagnostics_enabled", settings.diagnosticsEnabled)
@@ -86,9 +87,13 @@ class SettingsRepository(
             }
             is BridgeResult.Error -> {
                 warn("Failed to save local settings: ${result.fullEnvelope}")
+                com.xiwei.sujian.diagnostics.DiagnosticsEvents.settingsSaved("local_settings", "error")
                 SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.LOCAL_SETTINGS, 0L)))
             }
-            BridgeResult.NotLoaded -> SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.LOCAL_SETTINGS, 0L)))
+            BridgeResult.NotLoaded -> {
+                com.xiwei.sujian.diagnostics.DiagnosticsEvents.settingsSaved("local_settings", "not_loaded")
+                SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.LOCAL_SETTINGS, 0L)))
+            }
         }
     }
 
@@ -108,13 +113,18 @@ class SettingsRepository(
         return when (val result = settingsBridge.saveSyncableSettings(settings)) {
             is BridgeResult.Success -> {
                 CoreSettingsEvents.record(result.envelope)
+                com.xiwei.sujian.diagnostics.DiagnosticsEvents.settingsSaved("font_size", "ok")
                 SettingsSaveResult.Success
             }
             is BridgeResult.Error -> {
                 warn("Failed to save syncable settings: ${result.fullEnvelope}")
+                com.xiwei.sujian.diagnostics.DiagnosticsEvents.settingsSaved("font_size", "error")
                 SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.FONT_SIZE, 0L)))
             }
-            BridgeResult.NotLoaded -> SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.FONT_SIZE, 0L)))
+            BridgeResult.NotLoaded -> {
+                com.xiwei.sujian.diagnostics.DiagnosticsEvents.settingsSaved("font_size", "not_loaded")
+                SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.FONT_SIZE, 0L)))
+            }
         }
     }
 

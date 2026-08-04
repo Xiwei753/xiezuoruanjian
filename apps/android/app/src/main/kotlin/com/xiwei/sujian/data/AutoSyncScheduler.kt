@@ -18,11 +18,13 @@ class AutoSyncScheduler(context: Context) {
     private val appContext = context.applicationContext
 
     fun start() {
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.syncEvent("scheduler", "start")
         scheduleFromSettings(appContext)
         enqueueForegroundCheck(appContext)
     }
 
     fun stop() {
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.syncEvent("scheduler", "stop")
         // Cancel the immediate foreground check when entering background to stop/downgrade sync.
         val workManager = WorkManager.getInstance(appContext)
         workManager.cancelUniqueWork(UNIQUE_FOREGROUND_WORK)
@@ -53,6 +55,7 @@ class AutoSyncScheduler(context: Context) {
             }
 
             if (!shouldSync(config, secrets)) {
+                com.xiwei.sujian.diagnostics.DiagnosticsEvents.syncEvent("scheduler", "skipped_no_config")
                 cancel(appContext)
                 return
             }

@@ -32,7 +32,6 @@ class TestSession private constructor(
     private val context: Context,
     private val animationTimeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource,
     private val transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource,
-    private val manualFrameClock: com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock.ManualFrameClock?
 ) {
     private val prefsFileNames = listOf(
         "sujian_diagnostics_$prefsSuffix",
@@ -53,7 +52,6 @@ class TestSession private constructor(
             context: Context,
             animationTimeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource = com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
             transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource = com.xiwei.sujian.editor.v2.visual.TransactionIdSource(),
-            manualFrameClock: com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock.ManualFrameClock? = null
         ): TestSession {
             val appContext = context.applicationContext
             val paths = TestWorkspaceFactory.createIsolatedWorkspace(appContext)
@@ -67,7 +65,6 @@ class TestSession private constructor(
                 prefsSuffix = prefsSuffix,
                 animationTimeSource = animationTimeSource,
                 transactionIdSource = transactionIdSource,
-                manualFrameClock = manualFrameClock
             )
 
             return TestSession(
@@ -78,7 +75,6 @@ class TestSession private constructor(
                 context = appContext,
                 animationTimeSource = animationTimeSource,
                 transactionIdSource = transactionIdSource,
-                manualFrameClock = manualFrameClock
             )
         }
     }
@@ -91,7 +87,6 @@ class TestSession private constructor(
             prefsSuffix = prefsSuffix,
             animationTimeSource = animationTimeSource,
             transactionIdSource = transactionIdSource,
-            manualFrameClock = manualFrameClock
         )
         SujianAppDependencies.setTestProvider { _ -> depsHolder }
         return depsHolder
@@ -150,7 +145,6 @@ class TestSujianAppDependencies(
     prefsSuffix: String = "",
     private val animationTimeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource = com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
     private val transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource = com.xiwei.sujian.editor.v2.visual.TransactionIdSource(),
-    val manualFrameClock: com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock.ManualFrameClock? = null
 ) : SujianAppDependencies {
     private val appContext = context.applicationContext
     private val resolvedTestRoot = testRootDir ?: File(appContext.cacheDir, "test_workspace_${UUID.randomUUID()}")
@@ -203,8 +197,7 @@ class TestSujianAppDependencies(
     override val appServiceBridge: AppServiceBridge = AppServiceBridge(testHolder)
     override val workspaceRepository: WorkspaceRepository = WorkspaceRepository(appContext, appServiceBridge)
     override val settingsRepository: SettingsRepository = SettingsRepository(appContext, appServiceBridge, prefsSuffix)
-    private val _frameClock = manualFrameClock?.let { com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock(it) }
-    private val _coordinator = lazy { AnimatedTextEditorCoordinator(appContext, appServiceBridge, animationTimeSource, transactionIdSource, _frameClock) }
+    private val _coordinator = lazy { AnimatedTextEditorCoordinator(appContext, appServiceBridge, animationTimeSource, transactionIdSource) }
     override val coordinator: AnimatedTextEditorCoordinator get() = _coordinator.value
     private var runtimeReleased = false
 
@@ -352,9 +345,8 @@ object AndroidTestEnvironment {
         context: Context,
         animationTimeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource = com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
         transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource = com.xiwei.sujian.editor.v2.visual.TransactionIdSource(),
-        manualFrameClock: com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock.ManualFrameClock? = null
     ): TestSession {
-        val session = TestSession.create(context, animationTimeSource, transactionIdSource, manualFrameClock)
+        val session = TestSession.create(context, animationTimeSource, transactionIdSource)
         currentSession = session
         return session
     }
@@ -394,14 +386,13 @@ object AndroidTestEnvironment {
     class TestDependenciesRule(
         private val animationTimeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource = com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
         private val transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource = com.xiwei.sujian.editor.v2.visual.TransactionIdSource(),
-        val manualFrameClock: com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock.ManualFrameClock? = null
     ) : TestRule {
         override fun apply(base: Statement, description: Description): Statement {
             return object : Statement() {
                 override fun evaluate() {
                     val instrumentation = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
                     val ctx = instrumentation.targetContext
-                    val session = createSession(ctx, animationTimeSource, transactionIdSource, manualFrameClock)
+                    val session = createSession(ctx, animationTimeSource, transactionIdSource)
                     SujianAppDependencies.setTestProvider { _ -> session.deps }
                     var testFailed: Throwable? = null
                     try {

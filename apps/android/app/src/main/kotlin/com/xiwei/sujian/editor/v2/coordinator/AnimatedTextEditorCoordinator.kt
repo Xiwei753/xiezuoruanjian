@@ -34,6 +34,19 @@ import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
  * The shared [SujianEditorView] is reused (not recreated) — only the kernel bridge and
  * profile are swapped via [SujianEditorView.bindSession].
  */
+/**
+ * 编辑器动画设置（生产路径：设置页 → Editor Host → 输入事务 → 动画协调器）。
+ *
+ * 由 WritingPane 从 EditorViewModel 的设置状态推入，立即作用于共享 Editor Host；
+ * 新建会话（bindSession）时同样应用当前值。
+ */
+data class EditorAnimationSettings(
+    val typingAnimationEnabled: Boolean = true,
+    val typingAnimationDurationMs: Long = 100L,
+    val smoothCursorEnabled: Boolean = true,
+    val smoothCursorDurationMs: Long = 80L,
+)
+
 class AnimatedTextEditorCoordinator(
     private val context: Context,
     private val appServiceBridge: AppServiceBridge,
@@ -63,6 +76,19 @@ class AnimatedTextEditorCoordinator(
         private set
     var activeTargetTransform: Transform2D by mutableStateOf(Transform2D.IDENTITY)
         private set
+
+    private var editorAnimationSettings: EditorAnimationSettings = EditorAnimationSettings()
+
+    fun getEditorAnimationSettings(): EditorAnimationSettings = editorAnimationSettings
+
+    /** 设置改变后即时作用于当前共享 Editor Host（无需重建会话）。 */
+    fun setEditorAnimationSettings(settings: EditorAnimationSettings) {
+        editorAnimationSettings = settings
+        sharedEditorView?.let { view ->
+            view.setTypingAnimationEnabled(settings.typingAnimationEnabled, settings.typingAnimationDurationMs)
+            view.setSmoothCursorEnabled(settings.smoothCursorEnabled, settings.smoothCursorDurationMs)
+        }
+    }
 
     fun registerTarget(target: EditableTextTarget) {
         targets[target.targetId] = target
@@ -648,6 +674,8 @@ class AnimatedTextEditorCoordinator(
     private fun getOrCreateEditorView(): SujianEditorView {
         return sharedEditorView ?: SujianEditorView(context, animationTimeSource = animationTimeSource, transactionIdSource = transactionIdSource).also {
             it.setFrameClock(windowFrameClock)
+            it.setTypingAnimationEnabled(editorAnimationSettings.typingAnimationEnabled, editorAnimationSettings.typingAnimationDurationMs)
+            it.setSmoothCursorEnabled(editorAnimationSettings.smoothCursorEnabled, editorAnimationSettings.smoothCursorDurationMs)
             sharedEditorView = it
         }
     }
@@ -664,7 +692,10 @@ class AnimatedTextEditorCoordinator(
                 if (id == null || id == 0UL) {
                     Log.e(TAG, "createSession(${target.targetId}): Core returned null/0 session id")
                     null
-                } else id
+                } else {
+                    com.xiwei.sujian.diagnostics.DiagnosticsEvents.sessionLifecycle(id.toString(), "create")
+                    id
+                }
             }
             else -> {
                 Log.e(TAG, "createSession(${target.targetId}): Core session creation failed")

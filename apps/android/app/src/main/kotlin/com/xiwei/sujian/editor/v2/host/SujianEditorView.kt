@@ -310,14 +310,6 @@ class SujianEditorView @JvmOverloads constructor(
 
     override fun needsFrame(): Boolean = pipeline.hasActiveAnimation()
 
-    fun captureAnimationSnapshot(): com.xiwei.sujian.editor.v2.visual.AnimationStateSnapshot? = pipeline.captureAnimationSnapshot()
-
-    fun captureVisualFrameSnapshot(): com.xiwei.sujian.editor.v2.visual.VisualFrameSnapshot? = pipeline.captureVisualFrameSnapshot()
-
-    fun getActiveAnimationDurationMs(): Long = pipeline.getActiveAnimationDurationMs()
-
-    fun getActiveAnimationStartTimeMs(): Long? = pipeline.getActiveAnimationStartTimeMs()
-
     override fun onFrame(frameTimeNanos: Long) {
         pendingFrameTimeNanos = frameTimeNanos
         if (timeSource is com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource) {
@@ -350,7 +342,9 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     override fun onCreateInputConnection(outAttrs: android.view.inputmethod.EditorInfo?): InputConnection? {
-        return inputAdapter.onCreateInputConnection(outAttrs)
+        val ic = inputAdapter.onCreateInputConnection(outAttrs)
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.inputConnection(created = ic != null, sessionBound = isSessionBound)
+        return ic
     }
 
     override fun onCheckIsTextEditor(): Boolean = isSessionBound
@@ -530,6 +524,7 @@ class SujianEditorView @JvmOverloads constructor(
      */
     override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
         super.onWindowFocusChanged(hasWindowFocus)
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.editorFocus(hasWindowFocus)
         if (!hasWindowFocus) {
             pipeline.cancelActiveTransaction()
         }
@@ -556,6 +551,7 @@ class SujianEditorView @JvmOverloads constructor(
     fun setTypingAnimationEnabled(enabled: Boolean, durationMs: Long) {
         pipeline.kernelBridge?.setAnimationEnabled(enabled)
         pipeline.kernelBridge?.setAnimationDurationMs(durationMs)
+        pipeline.setTypingAnimationDurationMs(durationMs)
         if (!enabled) {
             pipeline.cancelActiveTransaction()
         }
@@ -566,11 +562,12 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     private var smoothCursorEnabled: Boolean = true
-    private var smoothCursorDurationMs: Long = 160
+    private var smoothCursorDurationMs: Long = 80
 
     fun setSmoothCursorEnabled(enabled: Boolean, durationMs: Long) {
         smoothCursorEnabled = enabled
         smoothCursorDurationMs = durationMs
+        pipeline.setSmoothCursor(enabled, durationMs)
     }
 
     fun isSmoothCursorEnabled(): Boolean = smoothCursorEnabled

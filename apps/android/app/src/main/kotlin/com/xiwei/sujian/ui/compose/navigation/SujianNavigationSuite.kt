@@ -1,36 +1,59 @@
 package com.xiwei.sujian.ui.compose.navigation
 
-import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import com.xiwei.sujian.designsystem.icon.SujianIcons
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.navigation3.runtime.NavBackStack
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.rememberNavBackStack
+import androidx.navigation3.scene.Scene
 import androidx.navigation3.ui.NavDisplay
 import com.xiwei.sujian.R
-import com.xiwei.sujian.designsystem.theme.LocalSujianMotion
+import com.xiwei.sujian.designsystem.component.SujianTopAppBar
+import com.xiwei.sujian.designsystem.icon.SujianIcons
 import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.platform.api.WindowSizeClass
 import com.xiwei.sujian.ui.compose.LocalAndroidCapabilities
 import com.xiwei.sujian.ui.compose.SujianAppState
 import com.xiwei.sujian.ui.compose.settings.SettingsRoute
+import com.xiwei.sujian.ui.compose.settings.settingsCategories
 import com.xiwei.sujian.ui.compose.starmap.StarMapScreen
 import com.xiwei.sujian.ui.compose.stats.StatsScreen
 import com.xiwei.sujian.ui.compose.workspace.ProjectWorkspaceScreen
@@ -64,14 +87,61 @@ enum class SujianDestination(
 
 private fun SujianRoute.toTopDestination(): SujianDestination = when (this) {
     is SujianRoute.Works -> SujianDestination.Works
-    is SujianRoute.Project -> SujianDestination.Works
-    is SujianRoute.Chapter -> SujianDestination.Works
     is SujianRoute.StarMap -> SujianDestination.StarMap
     is SujianRoute.Stats -> SujianDestination.Stats
     is SujianRoute.Settings -> SujianDestination.Settings
-    is SujianRoute.SettingsDetail -> SujianDestination.Settings
 }
 
+private fun SujianDestination.toRoute(): SujianRoute = when (this) {
+    SujianDestination.Works -> SujianRoute.Works
+    SujianDestination.StarMap -> SujianRoute.StarMap
+    SujianDestination.Stats -> SujianRoute.Stats
+    SujianDestination.Settings -> SujianRoute.Settings
+}
+
+/**
+ * 星图编辑态的一级 TopAppBar 内容。
+ *
+ * 星图编辑是星图目的地内部的窗格状态（不进入全局 back stack），
+ * 其标题、返回和操作按钮通过该状态上抛给唯一根壳的 TopAppBar。
+ */
+@Stable
+class StarMapTopBarState {
+    var title by mutableStateOf("")
+        private set
+    var onBack by mutableStateOf<(() -> Unit)?>(null)
+        private set
+    var actions by mutableStateOf<(@Composable () -> Unit)?>(null)
+        private set
+
+    fun update(
+        title: String,
+        onBack: (() -> Unit)?,
+        actions: (@Composable () -> Unit)?,
+    ) {
+        this.title = title
+        this.onBack = onBack
+        this.actions = actions
+    }
+
+    fun clear() {
+        title = ""
+        onBack = null
+        actions = null
+    }
+}
+
+/**
+ * 唯一根 App 壳 + 全局 Navigation3。
+ *
+ * - 根 [Scaffold] 统一处理 edge-to-edge 的状态栏/导航栏 Insets（[WindowInsets.safeDrawing]）、
+ *   IME Insets（[Modifier.imePadding]）、一级 TopAppBar、NavigationBar/NavigationRail 和全局 Snackbar。
+ * - 全局 back stack 只保留 Works/StarMap/Stats/Settings 四个一级 destination；
+ *   作品/卷/章节（[SujianAppState]）和设置分类（[SettingsSection]）都是目的地内部状态。
+ * - 前进、普通返回和可预见返回全部由 [NavDisplay] 的 transitionSpec / popTransitionSpec /
+ *   predictivePopTransitionSpec 统一驱动，destination 内容外不再包裹 AnimatedContent。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SujianNavigationSuite(
     appState: SujianAppState,
@@ -87,183 +157,116 @@ fun SujianNavigationSuite(
     val backStack = rememberNavBackStack(initialRoute as NavKey)
     val currentRoute = backStack.lastOrNull() as? SujianRoute ?: SujianRoute.Works
     val currentTopDestination = currentRoute.toTopDestination()
-    val motion = LocalSujianMotion.current
     val capabilities = LocalAndroidCapabilities.current
     val isWideScreen = capabilities.windowSizeClass != WindowSizeClass.Compact
+    val snackbarHostState = remember { SnackbarHostState() }
 
-        NavigationSuiteScaffold(
-        navigationSuiteItems = {
-            SujianDestination.entries.forEach { destination ->
-                val semanticTag = when (destination) {
-                    SujianDestination.Works -> SujianSemanticIds.NavigationWorks
-                    SujianDestination.Settings -> SujianSemanticIds.NavigationSettings
-                    else -> null
-                }
-                item(
-                    selected = currentTopDestination == destination,
-                    onClick = {
-                        val targetRoute = when (destination) {
-                            SujianDestination.Works -> SujianRoute.Works
-                            SujianDestination.StarMap -> SujianRoute.StarMap
-                            SujianDestination.Stats -> SujianRoute.Stats
-                            SujianDestination.Settings -> SujianRoute.Settings
-                        }
-                        if (destination == SujianDestination.Works) {
-                            appState.clearProjectSelection()
-                        }
-                        backStack.clear()
-                        backStack.add(targetRoute)
-                    },
-                    modifier = if (semanticTag != null) Modifier.testTag(semanticTag) else Modifier,
-                    icon = {
-                        Icon(
-                            imageVector = if (currentTopDestination == destination) {
-                                destination.selectedIcon
-                            } else {
-                                destination.unselectedIcon
-                            },
-                            contentDescription = stringResource(id = destination.labelResId),
-                        )
-                    },
-                    label = {
-                        Text(text = stringResource(id = destination.labelResId))
-                    },
-                )
+    // 设置壳的列表-详情状态（提升到壳层，供一级 TopAppBar 显示分类标题与返回）。
+    var settingsDetailSection by remember { mutableStateOf<SettingsSection?>(null) }
+    // 星图编辑态的一级 TopAppBar 内容。
+    val starMapTopBarState = remember { StarMapTopBarState() }
+
+    // 离开目的地时清空其内部状态，避免下次进入显示陈旧标题/操作。
+    LaunchedEffect(currentTopDestination) {
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.navigation(currentTopDestination.name)
+        if (currentTopDestination != SujianDestination.StarMap) {
+            starMapTopBarState.clear()
+        }
+        if (currentTopDestination != SujianDestination.Settings) {
+            settingsDetailSection = null
+        }
+    }
+
+    val workspaceBack: (() -> Unit)? = if (currentTopDestination == SujianDestination.Works) {
+        {
+            if (appState.currentChapterId != null) {
+                appState.clearChapterSelection()
+            } else {
+                appState.clearProjectSelection()
             }
-        },
-        modifier = modifier.fillMaxSize(),
-    ) {
+        }
+    } else null
+
+    val topBarTitle = when (currentTopDestination) {
+        SujianDestination.Works -> {
+            if (appState.currentProjectId != null) {
+                appState.currentProjectTitle.ifEmpty { stringResource(id = R.string.title_projects) }
+            } else {
+                stringResource(id = R.string.title_projects)
+            }
+        }
+        SujianDestination.StarMap -> {
+            starMapTopBarState.title.ifEmpty { stringResource(id = R.string.title_starmap) }
+        }
+        SujianDestination.Stats -> stringResource(id = R.string.title_stats)
+        SujianDestination.Settings -> {
+            if (!isWideScreen) {
+                settingsDetailSection
+                    ?.let { section -> settingsCategories.firstOrNull { it.section == section }?.titleResId }
+                    ?.let { stringResource(id = it) }
+                    ?: stringResource(id = R.string.action_settings)
+            } else {
+                stringResource(id = R.string.action_settings)
+            }
+        }
+    }
+
+    val showWorkspaceBack = currentTopDestination == SujianDestination.Works &&
+        !isWideScreen && appState.currentProjectId != null
+    val showSettingsBack = currentTopDestination == SujianDestination.Settings &&
+        !isWideScreen && settingsDetailSection != null
+    val topBarNavigationIcon = when {
+        showWorkspaceBack -> SujianIcons.ArrowBack
+        showSettingsBack -> SujianIcons.ArrowBack
+        currentTopDestination == SujianDestination.StarMap && starMapTopBarState.onBack != null -> SujianIcons.ArrowBack
+        else -> null
+    }
+    val topBarOnNavigationClick = when {
+        showWorkspaceBack -> workspaceBack
+        showSettingsBack -> { { settingsDetailSection = null } }
+        currentTopDestination == SujianDestination.StarMap -> starMapTopBarState.onBack
+        else -> null
+    }
+    val topBarActions: @Composable () -> Unit = {
+        if (currentTopDestination == SujianDestination.StarMap) {
+            starMapTopBarState.actions?.invoke()
+        }
+    }
+
+    val navDisplayContent: @Composable () -> Unit = {
         NavDisplay(
             backStack = backStack,
             onBack = {
-                if (backStack.size > 1) {
+                val handled = backStack.size > 1
+                if (handled) {
                     backStack.removeLastOrNull()
-                    val newTop = backStack.lastOrNull() as? SujianRoute
-                    when {
-                        newTop is SujianRoute.Chapter -> {
-                            appState.selectChapter(newTop.volumeId, newTop.chapterId)
-                        }
-                        newTop is SujianRoute.Project -> {
-                            appState.selectProject(newTop.projectId)
-                            appState.clearChapterSelection()
-                        }
-                        newTop is SujianRoute.Works -> {
-                            appState.clearProjectSelection()
-                        }
-                        newTop is SujianRoute.Settings -> {
-                        }
-                        newTop is SujianRoute.SettingsDetail -> {
-                        }
-                        else -> {
-                            appState.clearProjectSelection()
-                        }
-                    }
-                    true
-                } else false
+                }
+                com.xiwei.sujian.diagnostics.DiagnosticsEvents.navBack(handled)
+                handled
             },
+            transitionSpec = navForwardTransition,
+            popTransitionSpec = navPopTransition,
+            predictivePopTransitionSpec = navPredictivePopTransition,
             entryProvider = { key: NavKey ->
                 when (key) {
-                    is SujianRoute -> NavEntry(key) {
-                        AnimatedContent(
-                            targetState = key,
-                            transitionSpec = {
-                                fadeIn(animationSpec = tween(motion.standardDurationMs, delayMillis = motion.quickDurationMs)) togetherWith
-                                    fadeOut(animationSpec = tween(motion.quickDurationMs))
-                            },
-                            label = "nav-transition",
-                        ) { route ->
-                            when (route) {
-                                is SujianRoute.Works -> ProjectWorkspaceScreen(
-                                    appState = appState,
-                                    onNavigateToProject = { projectId ->
-                                        backStack.add(SujianRoute.Project(projectId))
-                                    },
-                                    onNavigateToChapter = { projectId, volumeId, chapterId ->
-                                        backStack.add(SujianRoute.Project(projectId))
-                                        backStack.add(SujianRoute.Chapter(projectId, volumeId, chapterId))
-                                    },
-                                )
-                                is SujianRoute.Project -> {
-                                    LaunchedEffect(route.projectId) {
-                                        appState.selectProject(route.projectId)
-                                        appState.clearChapterSelection()
+                    is SujianRoute -> NavEntry(key) { route ->
+                        when (route) {
+                            is SujianRoute.Works -> ProjectWorkspaceScreen(
+                                appState = appState,
+                            )
+                            is SujianRoute.StarMap -> StarMapScreen(
+                                topBarState = starMapTopBarState,
+                            )
+                            is SujianRoute.Stats -> StatsScreen()
+                            is SujianRoute.Settings -> SettingsRoute(
+                                onNavigateBack = {
+                                    if (backStack.size > 1) {
+                                        backStack.removeLastOrNull()
                                     }
-                                    ProjectWorkspaceScreen(
-                                        appState = appState,
-                                        projectIdOverride = route.projectId,
-                                        onNavigateToProject = { projectId ->
-                                            backStack.add(SujianRoute.Project(projectId))
-                                        },
-                                        onNavigateToChapter = { projectId, volumeId, chapterId ->
-                                            backStack.add(SujianRoute.Chapter(projectId, volumeId, chapterId))
-                                        },
-                                    )
-                                }
-                                is SujianRoute.Chapter -> {
-                                    LaunchedEffect(route.projectId, route.volumeId, route.chapterId) {
-                                        appState.selectProject(route.projectId)
-                                        appState.selectChapter(route.volumeId, route.chapterId)
-                                    }
-                                    ProjectWorkspaceScreen(
-                                        appState = appState,
-                                        projectIdOverride = route.projectId,
-                                        volumeIdOverride = route.volumeId,
-                                        chapterIdOverride = route.chapterId,
-                                        onNavigateToProject = { projectId ->
-                                            backStack.add(SujianRoute.Project(projectId))
-                                        },
-                                        onNavigateToChapter = { projectId, volumeId, chapterId ->
-                                            backStack.add(SujianRoute.Chapter(projectId, volumeId, chapterId))
-                                        },
-                                    )
-                                }
-                                is SujianRoute.StarMap -> StarMapScreen()
-                                is SujianRoute.Stats -> StatsScreen()
-                                is SujianRoute.Settings -> {
-                                    if (isWideScreen) {
-                                        var section by remember { mutableStateOf(SettingsSection.Appearance) }
-                                        SettingsRoute(
-                                            selectedSection = section,
-                                            onSectionChange = { section = it },
-                                            onNavigateBack = {
-                                                if (backStack.size > 1) {
-                                                    backStack.removeLastOrNull()
-                                                }
-                                            },
-                                        )
-                                    } else {
-                                        SettingsRoute(
-                                            onNavigateToDetail = { section ->
-                                                backStack.add(SujianRoute.SettingsDetail(section))
-                                            },
-                                            onNavigateBack = {
-                                                if (backStack.size > 1) {
-                                                    backStack.removeLastOrNull()
-                                                }
-                                            },
-                                        )
-                                    }
-                                }
-                                is SujianRoute.SettingsDetail -> {
-                                    if (isWideScreen) {
-                                        var section by remember { mutableStateOf(route.section) }
-                                        SettingsRoute(
-                                            selectedSection = section,
-                                            onSectionChange = { section = it },
-                                            initialSection = route.section,
-                                        )
-                                    } else {
-                                        SettingsRoute(
-                                            onNavigateBack = {
-                                                if (backStack.size > 1) {
-                                                    backStack.removeLastOrNull()
-                                                }
-                                            },
-                                            initialSection = route.section,
-                                        )
-                                    }
-                                }
-                            }
+                                },
+                                detailSection = settingsDetailSection,
+                                onDetailSectionChange = { settingsDetailSection = it },
+                            )
                         }
                     }
                     else -> NavEntry(key) {}
@@ -271,4 +274,166 @@ fun SujianNavigationSuite(
             },
         )
     }
+
+    Box(modifier = modifier.fillMaxSize()) {
+    Scaffold(
+        modifier = Modifier.fillMaxSize(),
+        topBar = {
+            SujianTopAppBar(
+                title = topBarTitle,
+                navigationIcon = topBarNavigationIcon,
+                navigationIconContentDescription = stringResource(id = R.string.starmap_back),
+                onNavigationClick = topBarOnNavigationClick,
+                actions = topBarActions,
+            )
+        },
+        bottomBar = {
+            if (!isWideScreen) {
+                NavigationBar {
+                    SujianDestination.entries.forEach { destination ->
+                        NavigationBarItem(
+                            selected = currentTopDestination == destination,
+                            onClick = { navigateToTopDestination(backStack, destination) },
+                            icon = {
+                                Icon(
+                                    imageVector = if (currentTopDestination == destination) {
+                                        destination.selectedIcon
+                                    } else {
+                                        destination.unselectedIcon
+                                    },
+                                    contentDescription = stringResource(id = destination.labelResId),
+                                )
+                            },
+                            label = { Text(text = stringResource(id = destination.labelResId)) },
+                            modifier = navItemModifier(destination),
+                        )
+                    }
+                }
+            }
+        },
+        snackbarHost = {
+            SnackbarHost(hostState = snackbarHostState) { data ->
+                com.xiwei.sujian.designsystem.component.SujianSnackbar(data = data)
+            }
+        },
+        containerColor = MaterialTheme.colorScheme.background,
+        contentWindowInsets = WindowInsets.safeDrawing,
+    ) { innerPadding ->
+        if (isWideScreen) {
+            // 平板/大屏：NavigationRail 位于内容区左侧（不占用 bottomBar 槽位），
+            // 正文内容占满剩余区域。
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .imePadding(),
+            ) {
+                NavigationRail(
+                    modifier = Modifier.fillMaxHeight(),
+                    windowInsets = WindowInsets(0.dp),
+                ) {
+                    SujianDestination.entries.forEach { destination ->
+                        NavigationRailItem(
+                            selected = currentTopDestination == destination,
+                            onClick = { navigateToTopDestination(backStack, destination) },
+                            icon = {
+                                Icon(
+                                    imageVector = if (currentTopDestination == destination) {
+                                        destination.selectedIcon
+                                    } else {
+                                        destination.unselectedIcon
+                                    },
+                                    contentDescription = stringResource(id = destination.labelResId),
+                                )
+                            },
+                            label = { Text(text = stringResource(id = destination.labelResId)) },
+                            modifier = navItemModifier(destination),
+                        )
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                ) {
+                    navDisplayContent()
+                }
+            }
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .imePadding(),
+            ) {
+                navDisplayContent()
+            }
+        }
+    }
+
+        // 全局编辑器宿主层：唯一 Editor Host 覆盖层，按当前一级目的地控制可见性，
+        // 避免工作区编辑器在设置/统计等页面上方残留渲染。
+        val coordinator = com.xiwei.sujian.editor.v2.compose.LocalAnimatedTextEditorCoordinator.current
+        val editorOverlayVisible = currentTopDestination == SujianDestination.Works ||
+            currentTopDestination == SujianDestination.StarMap
+        if (coordinator != null) {
+            com.xiwei.sujian.editor.v2.compose.AnimatedTextEditorSlot(
+                coordinator = coordinator,
+                modifier = Modifier.fillMaxSize(),
+                visible = editorOverlayVisible,
+            )
+        }
+    }
 }
+
+private fun navItemModifier(destination: SujianDestination): Modifier {
+    val semanticTag = when (destination) {
+        SujianDestination.Works -> SujianSemanticIds.NavigationWorks
+        SujianDestination.Settings -> SujianSemanticIds.NavigationSettings
+        else -> null
+    }
+    return if (semanticTag != null) Modifier.testTag(semanticTag) else Modifier
+}
+
+/**
+ * 切换到一级 destination：弹出其上方的所有 route，目标不存在时再加入。
+ *
+ * 不重建栈底（Works 常驻），因此写作工作区选择状态在来回切换时保持不变。
+ */
+private fun navigateToTopDestination(
+    backStack: NavBackStack<NavKey>,
+    destination: SujianDestination,
+) {
+    val target = destination.toRoute()
+    while (backStack.lastOrNull() != target) {
+        backStack.removeLastOrNull()
+    }
+    if (backStack.isEmpty()) {
+        backStack.add(target)
+    }
+}
+
+private val navForwardTransition: AnimatedContentTransitionScope<Scene<NavKey>>.() -> ContentTransform = {
+    val slideIn = slideInHorizontally(animationSpec = tween(220)) { fullWidth -> fullWidth / 8 }
+    val slideOut = slideOutHorizontally(animationSpec = tween(220)) { fullWidth -> -fullWidth / 8 }
+    (fadeIn(animationSpec = tween(180)) + slideIn) togetherWith
+        (fadeOut(animationSpec = tween(150)) + slideOut)
+}
+
+private val navPopTransition: AnimatedContentTransitionScope<Scene<NavKey>>.() -> ContentTransform = {
+    val slideIn = slideInHorizontally(animationSpec = tween(220)) { fullWidth -> -fullWidth / 8 }
+    val slideOut = slideOutHorizontally(animationSpec = tween(220)) { fullWidth -> fullWidth / 8 }
+    (fadeIn(animationSpec = tween(150)) + slideIn) togetherWith
+        (fadeOut(animationSpec = tween(180)) + slideOut)
+}
+
+private val navPredictivePopTransition:
+    (AnimatedContentTransitionScope<Scene<NavKey>>, Int) -> ContentTransform = { scope, distanceInFraction ->
+        val fraction = (distanceInFraction / 100f).coerceIn(0f, 1f)
+        val duration = (300 * fraction).toInt().coerceAtLeast(1)
+        val exit = fadeOut(animationSpec = tween(duration)) +
+            slideOutHorizontally(animationSpec = tween(duration)) { fullWidth -> (fullWidth * fraction * 0.3f).toInt() }
+        val enter = fadeIn(animationSpec = tween(duration)) +
+            slideInHorizontally(animationSpec = tween(duration)) { fullWidth -> -(fullWidth * fraction * 0.3f).toInt() }
+        enter.togetherWith(exit)
+    }

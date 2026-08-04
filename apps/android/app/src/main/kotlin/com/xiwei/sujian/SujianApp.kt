@@ -58,6 +58,7 @@ class SujianApp : Application(), DefaultLifecycleObserver {
     }
 
     override fun onStart(owner: LifecycleOwner) {
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.appLifecycle("start")
         if (autoSyncScheduler == null) {
             autoSyncScheduler = AutoSyncScheduler(this)
         }
@@ -65,6 +66,7 @@ class SujianApp : Application(), DefaultLifecycleObserver {
     }
 
     override fun onStop(owner: LifecycleOwner) {
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.appLifecycle("stop")
         autoSyncScheduler?.stop()
         val result = BridgeProvider.getStarmapBridge(this).flushAllStarmapStores()
         when (result) {

@@ -28,7 +28,6 @@ import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.R
 import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.designsystem.component.SujianCard
-import com.xiwei.sujian.designsystem.layout.SujianScreenScaffold
 import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.model.ProjectWritingStatsItem
 import com.xiwei.sujian.model.WritingStatsSummary
@@ -68,20 +67,17 @@ fun StatsScreen(
         isLoading = false
     }
 
-    SujianScreenScaffold(
-        title = stringResource(id = R.string.title_stats),
-    ) { paddingValues ->
-        if (isLoading) {
-            Box(modifier = modifier.fillMaxSize().padding(paddingValues), contentAlignment = Alignment.Center) {
-                Text(stringResource(id = R.string.loading), style = MaterialTheme.typography.bodyLarge)
-            }
-            return@SujianScreenScaffold
+    if (isLoading) {
+        Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text(stringResource(id = R.string.loading), style = MaterialTheme.typography.bodyLarge)
         }
+        return
+    }
 
-        LazyColumn(
-            contentPadding = PaddingValues(horizontal = dims.space16, vertical = dims.space8),
-            modifier = modifier.fillMaxSize().padding(paddingValues)
-        ) {
+    LazyColumn(
+        contentPadding = PaddingValues(horizontal = dims.space16, vertical = dims.space8),
+        modifier = modifier.fillMaxSize()
+    ) {
         item {
             Text(stringResource(id = R.string.stats_recent_30_days), style = MaterialTheme.typography.titleMedium)
             Spacer(modifier = Modifier.height(dims.space16))
@@ -138,7 +134,6 @@ fun StatsScreen(
                     Text(stringResource(id = R.string.stats_no_data), style = MaterialTheme.typography.bodyLarge)
                 }
             }
-        }
         }
     }
 }

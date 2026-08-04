@@ -168,6 +168,7 @@ class AndroidInputAdapter(
     }
 
     fun sendBeginCompositionToKernel(replaceStart: Int, replaceEndExclusive: Int): Boolean {
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.compositionBegin(replaceStart, replaceEndExclusive)
         val dto = commandPort.beginComposition(replaceStart, replaceEndExclusive) ?: return false
         val result = EditResult.fromDto(dto)
         if (result.isApplied()) {
@@ -185,6 +186,9 @@ class AndroidInputAdapter(
     fun sendUpdateCompositionToKernel(newPreeditText: String, newPreeditCursorOffset: Int): Boolean {
         val (sessionId, _baseRev, generation) = compositionSessionInfo()
         if (sessionId == 0L) return false
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.compositionUpdate(
+            newPreeditText.toByteArray(Charsets.UTF_8).size, newPreeditCursorOffset
+        )
         val dto = commandPort.updateComposition(
             sessionId, generation,
             newPreeditText, newPreeditCursorOffset
@@ -201,6 +205,11 @@ class AndroidInputAdapter(
         val (sessionId, _baseRev, generation) = compositionSessionInfo()
         if (sessionId == 0L) return
         val preeditAtFinish = currentCompositionText
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.compositionCommit(
+            compositionReplaceStartUtf8,
+            compositionReplaceStartUtf8 + preeditAtFinish.toByteArray(Charsets.UTF_8).size,
+            preeditAtFinish.toByteArray(Charsets.UTF_8).size
+        )
         val dto = commandPort.finishComposition(sessionId, generation)
         if (dto != null) {
             val result = EditResult.fromDto(dto)
@@ -218,6 +227,11 @@ class AndroidInputAdapter(
     fun sendCancelCompositionToKernel(): Boolean {
         val (sessionId, _baseRev, generation) = compositionSessionInfo()
         if (sessionId == 0L) return false
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.compositionCancel(
+            compositionReplaceStartUtf8,
+            compositionReplaceStartUtf8 + currentCompositionText.toByteArray(Charsets.UTF_8).size,
+            currentCompositionText.toByteArray(Charsets.UTF_8).size
+        )
         val dto = commandPort.cancelComposition(sessionId, generation)
         if (dto == null) {
             return false

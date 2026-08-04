@@ -3,17 +3,25 @@ package com.xiwei.sujian.ui.compose.settings
 import android.os.Parcelable
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
+import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffoldRole
+import androidx.compose.material3.adaptive.navigation.BackNavigationBehavior
+import androidx.compose.material3.adaptive.navigation.ThreePaneScaffoldPredictiveBackHandler
+import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
 import com.xiwei.sujian.designsystem.icon.SujianIcons
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -617,14 +625,24 @@ val settingsCategories = listOf(
 @Parcelize
 private data class SettingsSelection(val section: SettingsSection) : Parcelable
 
+/**
+ * 设置一级 destination 的唯一内容。
+ *
+ * 设置列表与设置详情共享同一个壳（Material3 Adaptive 列表—详情）：
+ * - 手机：列表与详情在同一壳内切换，详情返回先回列表，再离开设置一级入口；
+ * - 平板/大屏：左侧分类、右侧详情并排；
+ * - 窗口尺寸变化只改变窗格呈现方式，不建立第二套设置状态。
+ *
+ * [detailSection] / [onDetailSectionChange] 由根壳提升持有，供一级 TopAppBar
+ * 显示当前分类标题与返回按钮；详情→列表的可预见返回由
+ * [ThreePaneScaffoldPredictiveBackHandler] 处理。
+ */
 @OptIn(androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi::class)
 @Composable
 fun SettingsRoute(
     onNavigateBack: (() -> Unit)? = null,
-    onNavigateToDetail: ((SettingsSection) -> Unit)? = null,
-    initialSection: SettingsSection? = null,
-    selectedSection: SettingsSection? = null,
-    onSectionChange: ((SettingsSection) -> Unit)? = null,
+    detailSection: SettingsSection? = null,
+    onDetailSectionChange: ((SettingsSection?) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -644,74 +662,70 @@ fun SettingsRoute(
         }
     }
 
-    if (onNavigateToDetail != null) {
-        SettingsListPane(
-            onNavigateToDetail = onNavigateToDetail,
-            selectedSection = null,
-            modifier = modifier,
-        )
-        androidx.compose.material3.SnackbarHost(hostState = snackbarHostState)
-        return
+    val navigator = rememberListDetailPaneScaffoldNavigator<SettingsSelection>()
+    ThreePaneScaffoldPredictiveBackHandler(
+        navigator = navigator,
+        backBehavior = BackNavigationBehavior.PopUntilScaffoldValueChange,
+    )
+
+    // 详情状态同步：navigator 内部变化（如预测性返回完成）回写根壳状态。
+    LaunchedEffect(navigator.currentDestination?.contentKey) {
+        onDetailSectionChange?.invoke(navigator.currentDestination?.contentKey?.section)
     }
 
-    if (initialSection != null && selectedSection == null) {
-        BackHandler(enabled = onNavigateBack != null) {
-            onNavigateBack?.invoke()
+    // 根壳状态变化（分类点击 / 顶栏返回）驱动 navigator 窗格。
+    LaunchedEffect(detailSection) {
+        if (detailSection == null) {
+            if (navigator.canNavigateBack()) {
+                navigator.navigateBack(BackNavigationBehavior.PopUntilScaffoldValueChange)
+            }
+        } else {
+            val key = SettingsSelection(detailSection)
+            if (navigator.currentDestination?.contentKey != key) {
+                navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, key)
+            }
         }
-        SettingsDetailPane(
-            section = initialSection,
-            state = uiState,
-            onIntent = vm::handleIntent,
-            modifier = modifier,
-        )
-        androidx.compose.material3.SnackbarHost(hostState = snackbarHostState)
-        return
     }
 
-    if (selectedSection != null && onSectionChange != null) {
+    val coroutineScope = rememberCoroutineScope()
+
+    // 返回层级：详情 → 列表 → 离开设置一级入口。
+    BackHandler(enabled = navigator.canNavigateBack()) {
+        coroutineScope.launch {
+            navigator.navigateBack(BackNavigationBehavior.PopUntilScaffoldValueChange)
+        }
+    }
+    BackHandler(enabled = !navigator.canNavigateBack() && onNavigateBack != null) {
+        onNavigateBack?.invoke()
+    }
+
+    Box(modifier = modifier.fillMaxSize()) {
         SujianListDetailScaffold<SettingsSelection>(
-            modifier = modifier,
+            modifier = Modifier.fillMaxSize(),
             listPane = {
                 SettingsListPane(
-                    onNavigateToDetail = onSectionChange,
-                    selectedSection = selectedSection,
+                    onNavigateToDetail = { section ->
+                        onDetailSectionChange?.invoke(section)
+                    },
+                    selectedSection = navigator.currentDestination?.contentKey?.section ?: detailSection,
                 )
             },
             detailPane = {
-                SettingsDetailPane(
-                    section = selectedSection,
-                    state = uiState,
-                    onIntent = vm::handleIntent,
-                )
+                val selection = navigator.currentDestination?.contentKey
+                if (selection != null) {
+                    SettingsDetailPane(
+                        section = selection.section,
+                        state = uiState,
+                        onIntent = vm::handleIntent,
+                    )
+                }
             },
         )
-        androidx.compose.material3.SnackbarHost(hostState = snackbarHostState)
-        return
+        androidx.compose.material3.SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier.align(Alignment.BottomCenter),
+        )
     }
-
-    SujianListDetailScaffold<SettingsSelection>(
-        modifier = modifier,
-        listPane = {
-            SettingsListPane(
-                onNavigateToDetail = { section -> navigateToDetail(SettingsSelection(section)) },
-                selectedSection = currentContentKey?.section,
-            )
-        },
-        detailPane = {
-            val selection = currentContentKey
-            if (selection != null) {
-                SettingsDetailPane(
-                    section = selection.section,
-                    state = uiState,
-                    onIntent = vm::handleIntent,
-                )
-            }
-            BackHandler(enabled = selection != null && onNavigateBack != null) {
-                navigateBack()
-            }
-        },
-    )
-    androidx.compose.material3.SnackbarHost(hostState = snackbarHostState)
 }
 
 @Composable

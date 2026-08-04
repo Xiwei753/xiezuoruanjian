@@ -26,7 +26,25 @@ class AndroidTextAnimationEngine(
 ) {
     private var activeTransaction: PreparedVisualTransaction? = null
     private var timeline: AnimationTimeline? = null
+    private var cursorTimeline: AnimationTimeline? = null
     private var animationPolicy: TextAnimationPolicy = TextAnimationPolicy.INHERIT_GLOBAL
+    private var smoothCursorEnabled: Boolean = true
+    private var smoothCursorDurationMs: Long = 80L
+
+    /**
+     * 平滑光标设置（生产路径：设置页 → Editor Host → 输入事务 → 本引擎）。
+     *
+     * 关闭时当前事务的光标过渡立即降级为静态（shouldAnimate=false）；
+     * 开启时光标使用独立的 [cursorTimeline]，时长由 [smoothCursorDurationMs] 控制
+     * （不超过文本事务时长，保证光标与文字同时到达终点）。
+     */
+    fun setSmoothCursor(enabled: Boolean, durationMs: Long) {
+        smoothCursorEnabled = enabled
+        smoothCursorDurationMs = durationMs
+        if (!enabled) {
+            cursorTimeline = null
+        }
+    }
 
     /**
      * Create a prepared visual transaction from old/new layout revisions and line snapshots.
@@ -105,6 +123,16 @@ class AndroidTextAnimationEngine(
         preparedAnimation: PreparedVisualTransaction,
         submittedAtMs: Long = timeSource.nowNanos() / 1_000_000
     ) {
+        val effectiveCursorTransition = if (!smoothCursorEnabled) {
+            preparedAnimation.cursorTransition?.copy(shouldAnimate = false)
+        } else {
+            preparedAnimation.cursorTransition
+        }
+        val effectiveTransaction = if (effectiveCursorTransition !== preparedAnimation.cursorTransition) {
+            preparedAnimation.copy(cursorTransition = effectiveCursorTransition)
+        } else {
+            preparedAnimation
+        }
         val oldTransaction = activeTransaction
         val newOwner = SnapshotOwner.OwnedByTransaction(preparedAnimation.transactionId)
 
@@ -156,14 +184,28 @@ class AndroidTextAnimationEngine(
             // consecutive inputs would grow ownedSnapshotIds unboundedly until the final
             // transaction completes.
             val preciseOwnedIds = (preparedAnimation.ownedSnapshotIds - unreferencedNewIds) + inheritedIds
-            activeTransaction = preparedAnimation.copy(ownedSnapshotIds = preciseOwnedIds)
+            activeTransaction = effectiveTransaction.copy(ownedSnapshotIds = preciseOwnedIds)
             timeline?.complete()
+            cursorTimeline?.complete()
         } else {
             val preciseOwnedIds = preparedAnimation.ownedSnapshotIds - unreferencedNewIds
-            activeTransaction = preparedAnimation.copy(ownedSnapshotIds = preciseOwnedIds)
+            activeTransaction = effectiveTransaction.copy(ownedSnapshotIds = preciseOwnedIds)
         }
 
         timeline = AnimationTimeline(preparedAnimation.durationMs, submittedAtMs)
+        cursorTimeline = if (effectiveCursorTransition?.shouldAnimate == true && preparedAnimation.durationMs > 0L) {
+            AnimationTimeline(
+                minOf(smoothCursorDurationMs.coerceAtLeast(1L), preparedAnimation.durationMs),
+                submittedAtMs
+            )
+        } else {
+            null
+        }
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.animationStart(
+            preparedAnimation.transactionId,
+            preparedAnimation.operationKind.name,
+            preparedAnimation.durationMs
+        )
     }
 
     /**
@@ -182,7 +224,6 @@ class AndroidTextAnimationEngine(
      * [AnimationTimeline.progress] operates in whole milliseconds.
      * The default [ChoreographerAnimationTimeSource] delegates to [System.nanoTime], which is
      * monotonic (unlike [System.currentTimeMillis], which can jump backwards on NTP adjustments).
-     * Tests inject [ManualAnimationTimeSource] to control time precisely.
      */
     fun prepareAndSubmit(
         visualIntent: VisualIntent,
@@ -276,8 +317,15 @@ class AndroidTextAnimationEngine(
             )
         }
         val p = tl.progress(frameTimeMs)
+        val cursorProgress = cursorTimeline?.let { cursorTl ->
+            if (cursorTl.getState() == TransactionState.Completed || cursorTl.getState() == TransactionState.Cancelled) {
+                null
+            } else {
+                cursorTl.progress(frameTimeMs)
+            }
+        } ?: p
         val sliceStates = computeSliceVisualStates(transaction, p)
-        val cursorRect = computeCurrentCursorRect(transaction, p)
+        val cursorRect = computeCurrentCursorRect(transaction, cursorProgress)
         val blockStates = computeBlockShiftVisualStates(transaction, p)
         return VisualFrameSnapshot(
             progress = p,
@@ -304,9 +352,11 @@ class AndroidTextAnimationEngine(
 
     fun cancel() {
         val transaction = activeTransaction ?: return
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.animationCancel(transaction.transactionId)
         cancelTransaction(transaction)
         activeTransaction = null
         timeline = null
+        cursorTimeline = null
     }
 
     /** Cancel the active transaction and release ALL resources in [resourceStore] (not just
@@ -326,58 +376,12 @@ class AndroidTextAnimationEngine(
 
     fun setAnimationPolicy(policy: TextAnimationPolicy) {
         animationPolicy = policy
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.animationPolicy(policy.name)
     }
 
     fun getAnimationPolicy(): TextAnimationPolicy = animationPolicy
 
     fun getActiveTransaction(): PreparedVisualTransaction? = activeTransaction
-
-    fun getActiveAnimationStartTimeMs(): Long? = timeline?.getFirstVisibleFrameTimeMs()
-
-    /**
-     * Capture a metadata snapshot of the current animation state.
-     *
-     * Unlike [captureFrame], this is not gated on the timeline state: for a completed
-     * transaction it returns the terminal snapshot (progress 1.0, state [TransactionState.Completed],
-     * ownedResourceCount 0) so tests and diagnostics can verify the animation actually
-     * reached its end. Returns null only when no transaction/timeline exists (idle editor,
-     * after cancel, or on a fresh bind).
-     */
-    fun captureStateSnapshot(frameTimeMs: Long): AnimationStateSnapshot? {
-        val transaction = activeTransaction ?: return null
-        val tl = timeline ?: return null
-        val p = tl.progress(frameTimeMs)
-        return AnimationStateSnapshot(
-            transactionId = transaction.transactionId,
-            operationKind = transaction.operationKind.name.lowercase(),
-            animationMode = if (transaction.durationMs == 0L) "instant" else "animated",
-            oldAffectedRanges = transaction.animatedSlices
-                .filter { it.role == SliceRole.Delete || it.role == SliceRole.CrossfadeOld }
-                .mapNotNull { slice ->
-                    val start = slice.clusterByteStart
-                    val end = slice.clusterByteEndExclusive
-                    if (start >= 0 && end > start) Pair(start, end) else null
-                },
-            newAffectedRanges = transaction.animatedSlices
-                .filter { it.role == SliceRole.Insert || it.role == SliceRole.CrossfadeNew || it.role == SliceRole.Move }
-                .mapNotNull { slice ->
-                    val start = slice.clusterByteStart
-                    val end = slice.clusterByteEndExclusive
-                    if (start >= 0 && end > start) Pair(start, end) else null
-                },
-            progress = p,
-            sliceRoles = transaction.animatedSlices.map { it.role },
-            cursorTransition = transaction.cursorTransition?.let { ct ->
-                CursorTransitionSnapshot(
-                    fromX = ct.fromX, fromY = ct.fromY, fromHeight = ct.fromHeight,
-                    toX = ct.toX, toY = ct.toY, toHeight = ct.toHeight,
-                    shouldAnimate = ct.shouldAnimate
-                )
-            },
-            ownedResourceCount = transaction.ownedSnapshotIds.size,
-            transactionState = tl.getState()
-        )
-    }
 
     fun getTimelineProgress(frameTimeMs: Long): Float {
         val tl = timeline ?: return 0f
@@ -402,6 +406,7 @@ class AndroidTextAnimationEngine(
      */
     fun markFirstVisibleFrame(frameTimeMs: Long) {
         timeline?.markFirstVisibleFrame(frameTimeMs)
+        cursorTimeline?.markFirstVisibleFrame(frameTimeMs)
     }
 
     fun completeIfFinished(frameTimeMs: Long): Boolean {
@@ -409,6 +414,11 @@ class AndroidTextAnimationEngine(
         val tl = timeline ?: return false
         if (tl.getState() == TransactionState.Completed) return false
         if (tl.isCompleted(frameTimeMs)) {
+            cursorTimeline?.complete()
+            com.xiwei.sujian.diagnostics.DiagnosticsEvents.animationComplete(
+                transaction.transactionId,
+                (frameTimeMs - (tl.getFirstVisibleFrameTimeMs() ?: frameTimeMs)).coerceAtLeast(0L)
+            )
             completeTransaction(transaction)
             // Terminal state is retained (Completed) so the final animation state stays
             // queryable via captureStateSnapshot at progress 1.0 — the frame loop stops

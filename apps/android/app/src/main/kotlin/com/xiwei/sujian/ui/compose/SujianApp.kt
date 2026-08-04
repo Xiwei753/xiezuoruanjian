@@ -21,7 +21,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.data.SyncChangeBus
 import com.xiwei.sujian.data.WorkspaceUseCase
-import com.xiwei.sujian.editor.v2.compose.AnimatedTextEditorSlot
 import com.xiwei.sujian.editor.v2.compose.LocalAnimatedTextEditorCoordinator
 import com.xiwei.sujian.model.Orientation
 import com.xiwei.sujian.model.WindowMetrics
@@ -71,10 +70,16 @@ fun SujianApp(
     DisposableEffect(deps, activityRef) {
         val act = activityRef ?: return@DisposableEffect onDispose { }
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-            if (event == androidx.lifecycle.Lifecycle.Event.ON_DESTROY) {
-                if (!act.isChangingConfigurations) {
-                    deps.release()
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_RESUME -> com.xiwei.sujian.diagnostics.DiagnosticsEvents.activityLifecycle("resume")
+                androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> com.xiwei.sujian.diagnostics.DiagnosticsEvents.activityLifecycle("pause")
+                androidx.lifecycle.Lifecycle.Event.ON_DESTROY -> {
+                    com.xiwei.sujian.diagnostics.DiagnosticsEvents.activityLifecycle("destroy")
+                    if (!act.isChangingConfigurations) {
+                        deps.release()
+                    }
                 }
+                else -> {}
             }
         }
         act.lifecycle.addObserver(observer)
@@ -189,10 +194,6 @@ fun SujianApp(
                 SujianNavigationSuite(
                     appState = appState,
                     initialDestination = initialDestination,
-                    modifier = Modifier.fillMaxSize()
-                )
-                AnimatedTextEditorSlot(
-                    coordinator = coordinator,
                     modifier = Modifier.fillMaxSize()
                 )
             }

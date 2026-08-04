@@ -332,6 +332,9 @@ class EditorViewModel(
 
                 workspaceRepository.recordRecentEdit(session.projectId, session.volumeId, session.chapterId)
             } catch (e: Throwable) {
+                com.xiwei.sujian.diagnostics.DiagnosticsEvents.chapterLoad(
+                    session.projectId, session.chapterId, 0, "error"
+                )
                 launch(kotlinx.coroutines.Dispatchers.Main) {
                     if (currentSession?.sessionId != sessionId) return@launch
                     isLoadingChapter = false
@@ -539,6 +542,7 @@ class EditorViewModel(
         var currentContent = content
         var currentIsAutoSave = isAutoSave
         var lastSaveSuccess = false
+        val saveStartedAt = System.currentTimeMillis()
 
         while (true) {
             val contentToSave = currentContent
@@ -556,6 +560,11 @@ class EditorViewModel(
                     when (result) {
                         is com.xiwei.sujian.data.BridgeResult.Success -> {
                             _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.Saved)
+                            com.xiwei.sujian.diagnostics.DiagnosticsEvents.chapterSave(
+                                session.projectId, session.chapterId,
+                                contentToSave.toByteArray(Charsets.UTF_8).size, "ok",
+                                System.currentTimeMillis() - saveStartedAt
+                            )
                             val pending = pendingSaveContent
                             pendingSaveContent = null
                             if (pending != null && pending != contentToSave) {
@@ -569,6 +578,11 @@ class EditorViewModel(
                         }
                         is com.xiwei.sujian.data.BridgeResult.Error -> {
                             _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+                            com.xiwei.sujian.diagnostics.DiagnosticsEvents.chapterSave(
+                                session.projectId, session.chapterId,
+                                contentToSave.toByteArray(Charsets.UTF_8).size, "error",
+                                System.currentTimeMillis() - saveStartedAt
+                            )
                             if (result.code == "EMPTY_OVERWRITE_BLOCKED") {
                                 if (!currentIsAutoSave) {
                                     _events.send(EditorEvent.ShowSaveFailedDialog(getApplication<Application>().getString(R.string.error_empty_overwrite_dialog)))
@@ -586,6 +600,11 @@ class EditorViewModel(
                         }
                         com.xiwei.sujian.data.BridgeResult.NotLoaded -> {
                             _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+                            com.xiwei.sujian.diagnostics.DiagnosticsEvents.chapterSave(
+                                session.projectId, session.chapterId,
+                                contentToSave.toByteArray(Charsets.UTF_8).size, "not_loaded",
+                                System.currentTimeMillis() - saveStartedAt
+                            )
                             if (!currentIsAutoSave) {
                                 _events.send(EditorEvent.ShowSaveFailedDialog(getApplication<Application>().getString(R.string.error_save_native_not_loaded)))
                             }
@@ -594,6 +613,11 @@ class EditorViewModel(
                     }
                 } catch (e: Throwable) {
                     _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+                    com.xiwei.sujian.diagnostics.DiagnosticsEvents.chapterSave(
+                        session.projectId, session.chapterId,
+                        contentToSave.toByteArray(Charsets.UTF_8).size, "exception",
+                        System.currentTimeMillis() - saveStartedAt
+                    )
                     if (!currentIsAutoSave) {
                         _events.send(EditorEvent.ShowSaveFailedDialog(getApplication<Application>().getString(R.string.error_save_exception, e.message ?: "")))
                     } else {

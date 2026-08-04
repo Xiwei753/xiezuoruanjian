@@ -409,11 +409,14 @@ class EditorEventRingBufferTest {
     fun ringBufferRespectsMaxSize() {
         EditorEventRingBuffer.setEnabled(true)
         EditorEventRingBuffer.clear()
-        for (i in 1..250) {
+        for (i in 1..1250) {
             EditorEventRingBuffer.record(mapOf("event" to "test", "i" to i))
         }
         val snapshot = EditorEventRingBuffer.getSnapshot()
-        assertTrue(snapshot.size <= 200)
+        assertTrue(snapshot.size <= 1000)
+        assertEquals(1000, snapshot.size)
+        // 环形缓冲保留最新事件。
+        assertEquals(1250, snapshot.last()["i"])
         EditorEventRingBuffer.setEnabled(false)
     }
 

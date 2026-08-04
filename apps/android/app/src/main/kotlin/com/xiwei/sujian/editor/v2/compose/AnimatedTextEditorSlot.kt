@@ -27,13 +27,15 @@ import com.xiwei.sujian.ui.compose.theme.EditorThemeAdapter
 @Composable
 fun AnimatedTextEditorSlot(
     coordinator: AnimatedTextEditorCoordinator,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    visible: Boolean = true,
 ) {
     var slotBoundsInWindow by remember { mutableStateOf(Rect.Zero) }
 
     val activeTargetId = coordinator.activeTargetId
     val editingState = coordinator.editingState
-    val isVisible = activeTargetId != null && (editingState == EditingState.BINDING || editingState == EditingState.EDITING)
+    val isVisible = visible && activeTargetId != null &&
+        (editingState == EditingState.BINDING || editingState == EditingState.EDITING)
 
     val targetGeometry = coordinator.activeTargetGeometry
     val targetTransform = coordinator.activeTargetTransform

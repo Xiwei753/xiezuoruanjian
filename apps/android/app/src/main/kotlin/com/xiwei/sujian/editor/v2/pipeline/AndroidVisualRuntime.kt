@@ -82,24 +82,12 @@ class AndroidVisualRuntime(
 
     fun currentTimeNanos(): Long = animationEngine.currentTimeNanos()
 
-    fun captureStateSnapshot(): com.xiwei.sujian.editor.v2.visual.AnimationStateSnapshot? {
-        return animationEngine.captureStateSnapshot(currentTimeNanos() / 1_000_000)
-    }
-
-    fun captureVisualFrameSnapshot(): com.xiwei.sujian.editor.v2.visual.VisualFrameSnapshot? {
-        return animationEngine.captureFrame(currentTimeNanos() / 1_000_000)
-    }
-
-    fun getActiveAnimationDurationMs(): Long {
-        return animationEngine.getActiveTransaction()?.durationMs ?: 0L
-    }
-
-    fun getActiveAnimationStartTimeMs(): Long? {
-        return animationEngine.getActiveAnimationStartTimeMs()
-    }
-
     fun setAnimationPolicy(policy: TextAnimationPolicy) {
         animationEngine.setAnimationPolicy(policy)
+    }
+
+    fun setSmoothCursor(enabled: Boolean, durationMs: Long) {
+        animationEngine.setSmoothCursor(enabled, durationMs)
     }
 
     fun tick(

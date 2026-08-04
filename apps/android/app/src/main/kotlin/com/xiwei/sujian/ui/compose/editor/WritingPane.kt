@@ -34,6 +34,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
 import com.xiwei.sujian.editor.v2.compose.LocalAnimatedTextEditorCoordinator
 import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
+import com.xiwei.sujian.editor.v2.coordinator.EditorAnimationSettings
 import com.xiwei.sujian.editor.v2.coordinator.EditableTextTarget
 import com.xiwei.sujian.editor.v2.coordinator.EditingState
 import com.xiwei.sujian.editor.v2.coordinator.SessionResetSource
@@ -92,6 +93,45 @@ fun WritingPane(
     }
 
     val uiState by viewModel.uiState.collectAsState()
+
+    // 生产动画链：设置状态 → Editor Host → 输入事务 → 动画协调器 → 真实 VSync 渲染。
+    // 章节切换或设置变化后，立即把打字/光标动画设置推入共享 Editor Host，
+    // 不依赖测试注入时钟，设置改变即时生效。
+    LaunchedEffect(uiState.settings, chapterId) {
+        val s = uiState.settings
+        coordinator.setEditorAnimationSettings(
+            EditorAnimationSettings(
+                typingAnimationEnabled = s.typingAnimationEnabled,
+                typingAnimationDurationMs = s.typingAnimationDurationMs,
+                smoothCursorEnabled = s.smoothCursorEnabled,
+                smoothCursorDurationMs = s.smoothCursorDurationMs,
+            )
+        )
+    }
+
+    // 设置页保存后回到工作区时重新加载设置并即时应用（consumeEditorChanged
+    // 由 SettingsRepository 在保存成功时写入）。
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(targetId, lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                viewModel.reloadSettings()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+    LaunchedEffect(targetId) {
+        while (true) {
+            if (com.xiwei.sujian.data.CoreSettingsEvents.consumeEditorChanged()) {
+                viewModel.reloadSettings()
+            }
+            kotlinx.coroutines.delay(1000)
+        }
+    }
+
 
     var localContentGeneration by remember { mutableLongStateOf(0L) }
     var lastSeenContentGeneration by remember { mutableLongStateOf(0L) }

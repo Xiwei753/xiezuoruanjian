@@ -5,7 +5,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 object EditorEventRingBuffer {
 
-    private const val MAX_EVENTS = 200
+    private const val MAX_EVENTS = 1000
     private val enabled = AtomicBoolean(false)
     private val events = ConcurrentLinkedQueue<Map<String, Any?>>()
 

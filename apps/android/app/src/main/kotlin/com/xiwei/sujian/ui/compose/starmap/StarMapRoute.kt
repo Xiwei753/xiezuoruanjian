@@ -31,6 +31,7 @@ import kotlinx.coroutines.withContext
 
 @Composable
 fun StarMapScreen(
+    topBarState: com.xiwei.sujian.ui.compose.navigation.StarMapTopBarState,
     modifier: Modifier = Modifier
 ) {
     var selectedStarmapId by remember { mutableStateOf<String?>(null) }
@@ -38,6 +39,7 @@ fun StarMapScreen(
     if (selectedStarmapId != null) {
         StarMapEditorScreen(
             starmapId = selectedStarmapId!!,
+            topBarState = topBarState,
             onBack = { selectedStarmapId = null },
             modifier = modifier
         )
@@ -117,6 +119,7 @@ private fun StarMapListScreen(
 @Composable
 private fun StarMapEditorScreen(
     starmapId: String,
+    topBarState: com.xiwei.sujian.ui.compose.navigation.StarMapTopBarState,
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -275,6 +278,7 @@ private fun StarMapEditorScreen(
 
     StarMapEditorContent(
         state = editorState,
+        topBarState = topBarState,
         onBack = onBack,
         onAddNodeClick = { showAddNodeDialog = true },
         onAddEdgeClick = { showAddEdgeDialog = true },

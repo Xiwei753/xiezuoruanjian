@@ -12,6 +12,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 
+/**
+ * 素笺紧凑卡片 — 中等圆角、低对比容器色，保持内容层级清晰。
+ * 圆角与内边距回归 #553 重写前的紧凑产品结构，M3 只负责颜色角色与状态。
+ */
 @Composable
 fun SujianCard(
     modifier: Modifier = Modifier,
@@ -20,9 +24,9 @@ fun SujianCard(
     Card(
         modifier = modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
         ),
-        shape = MaterialTheme.shapes.large,
+        shape = MaterialTheme.shapes.medium,
     ) {
         content()
     }
@@ -40,9 +44,9 @@ fun SujianCard(
         modifier = modifier.fillMaxWidth(),
         enabled = enabled,
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
         ),
-        shape = MaterialTheme.shapes.large,
+        shape = MaterialTheme.shapes.medium,
     ) {
         content()
     }
