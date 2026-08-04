@@ -220,24 +220,15 @@ jobs:
             # back as recorrection setComposingRegion calls (LatinIME's onUpdateSelection
             # path), marking the editor as composing and corrupting subsequent plain
             # commits. Wait for the IME service to register (cold boot), then disable
-            # every IME and verify none remains enabled.
-            for i in $(seq 1 15); do
-              IME_IDS=$(adb shell ime list -s 2>/dev/null | tr -d '\r')
-              [ -n "$IME_IDS" ] && break
-              sleep 2
-            done
+            # every IME and verify none remains enabled. Note: android-emulator-runner
+            # executes each script line as its own sh -c, so loops must stay on one line.
+            IME_IDS=""; for i in $(seq 1 15); do IME_IDS=$(adb shell ime list -s 2>/dev/null | tr -d '\r'); [ -n "$IME_IDS" ] && break; sleep 2; done
             echo "IME list before disable: [$IME_IDS]"
             for ime in $IME_IDS; do adb shell ime disable "$ime" || true; done
             adb shell settings put secure enabled_input_methods "" || true
             adb shell settings put secure default_input_method "" || true
             STILL_ENABLED=$(adb shell ime list -s -a 2>/dev/null | tr -d '\r' | grep -E '\(enabled\)' | sed 's/ .*//' || true)
-            if [ -n "$STILL_ENABLED" ]; then
-              echo "WARNING: ime disable did not take effect for [$STILL_ENABLED]; forcing package disable"
-              for ime in $STILL_ENABLED; do
-                pkg=${ime%%/*}
-                adb shell pm disable-user --user 0 "$pkg" || true
-              done
-            fi
+            if [ -n "$STILL_ENABLED" ]; then echo "WARNING: ime disable did not take effect for [$STILL_ENABLED]; forcing package disable"; for ime in $STILL_ENABLED; do pkg=${ime%%/*}; adb shell pm disable-user --user 0 "$pkg" || true; done; fi
             echo "Enabled IMEs after disable: [$(adb shell ime list -s -a 2>/dev/null | tr -d '\r' | grep -E '\(enabled\)' | sed 's/ .*//' || true)]"
             adb logcat -G 16M 2>/dev/null || true
             adb logcat -c 2>/dev/null || true
