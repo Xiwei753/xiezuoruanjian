@@ -136,7 +136,9 @@ class StarMapTopBarState {
  *
  * - 根 [Scaffold] 统一处理 edge-to-edge 的状态栏/导航栏 Insets（[WindowInsets.safeDrawing]）、
  *   IME Insets（[Modifier.imePadding]）、一级 TopAppBar、NavigationBar/NavigationRail 和全局 Snackbar。
- * - 全局 back stack 只保留 Works/StarMap/Stats/Settings 四个一级 destination；
+ * - 全局 back stack 只保留 Works/StarMap/Stats/Settings 四个一级 destination；Works 常驻栈底，
+ *   其余一级 destination 在 Works 之上 push/pop，因此普通返回与可预见返回由 NavDisplay 的
+ *   popTransitionSpec / predictivePopTransitionSpec 统一驱动（手势进度 seek 真实跟手）；
  *   作品/卷/章节（[SujianAppState]）和设置分类（[SettingsSection]）都是目的地内部状态。
  * - 前进、普通返回和可预见返回全部由 [NavDisplay] 的 transitionSpec / popTransitionSpec /
  *   predictivePopTransitionSpec 统一驱动，destination 内容外不再包裹 AnimatedContent。
@@ -148,13 +150,15 @@ fun SujianNavigationSuite(
     initialDestination: String? = null,
     modifier: Modifier = Modifier,
 ) {
-    val initialRoute = when (initialDestination) {
-        "settings" -> SujianRoute.Settings
-        "starmap" -> SujianRoute.StarMap
-        "stats" -> SujianRoute.Stats
-        else -> SujianRoute.Works
+    // deeplink 直接进入非 Works 一级入口时也保持 Works 栈底常驻：
+    // 初始栈即 [Works, X]，保证返回/预测返回始终由 NavDisplay 统一驱动。
+    val initialStack: List<SujianRoute> = when (initialDestination) {
+        "settings" -> listOf(SujianRoute.Works, SujianRoute.Settings)
+        "starmap" -> listOf(SujianRoute.Works, SujianRoute.StarMap)
+        "stats" -> listOf(SujianRoute.Works, SujianRoute.Stats)
+        else -> listOf(SujianRoute.Works)
     }
-    val backStack = rememberNavBackStack(initialRoute as NavKey)
+    val backStack = rememberNavBackStack(*initialStack.toTypedArray())
     val currentRoute = backStack.lastOrNull() as? SujianRoute ?: SujianRoute.Works
     val currentTopDestination = currentRoute.toTopDestination()
     val capabilities = LocalAndroidCapabilities.current
@@ -259,11 +263,6 @@ fun SujianNavigationSuite(
                             )
                             is SujianRoute.Stats -> StatsScreen()
                             is SujianRoute.Settings -> SettingsRoute(
-                                onNavigateBack = {
-                                    if (backStack.size > 1) {
-                                        backStack.removeLastOrNull()
-                                    }
-                                },
                                 detailSection = settingsDetailSection,
                                 onDetailSectionChange = { settingsDetailSection = it },
                             )
@@ -396,21 +395,30 @@ private fun navItemModifier(destination: SujianDestination): Modifier {
 }
 
 /**
- * 切换到一级 destination：弹出其上方的所有 route，目标不存在时再加入。
+ * 切换到一级 destination：Works 常驻栈底，其余 destination 在 Works 之上 push/pop。
  *
- * 不重建栈底（Works 常驻），因此写作工作区选择状态在来回切换时保持不变。
+ * - 栈底恒为 Works（deeplink 直入的非 Works 栈在首次切换时重建为标准形态），
+ *   因此 NavDisplay 的 previousEntries 恒非空，普通返回与可预见返回（手势进度）
+ *   始终由 NavDisplay 统一驱动，不会出现返回被吞或预测返回不可达。
+ * - 切换只改栈形态，不重建写作工作区选择状态（[SujianAppState] 在 ViewModel 层）。
  */
 private fun navigateToTopDestination(
     backStack: NavBackStack<NavKey>,
     destination: SujianDestination,
 ) {
     val target = destination.toRoute()
-    while (backStack.lastOrNull() != target) {
+    if (backStack.isEmpty()) {
+        backStack.add(SujianRoute.Works)
+    }
+    if (backStack.first() != SujianRoute.Works) {
+        backStack.clear()
+        backStack.add(SujianRoute.Works)
+    }
+    while (backStack.size > 1 && backStack.last() != target) {
         backStack.removeLastOrNull()
     }
-    if (backStack.isEmpty()) {
-        backStack.add(target)
-    }
+    if (backStack.last() == target) return
+    backStack.add(target)
 }
 
 private val navForwardTransition: AnimatedContentTransitionScope<Scene<NavKey>>.() -> ContentTransform = {

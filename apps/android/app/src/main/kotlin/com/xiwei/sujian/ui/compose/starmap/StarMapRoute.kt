@@ -36,6 +36,28 @@ fun StarMapScreen(
 ) {
     var selectedStarmapId by remember { mutableStateOf<String?>(null) }
 
+    // 星图编辑是星图目的地内部的窗格状态：返回先退出编辑回列表，不弹出全局 route。
+    // PredictiveBackHandler 手势提交 → 清空选择；取消 → 协程取消，不切换。
+    // 列表层的返回交给全局 NavDisplay（Works 常驻栈底，pop 带真实手势进度）。
+    androidx.activity.compose.PredictiveBackHandler(enabled = selectedStarmapId != null) { progressEvents ->
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack("starmap_editor", "start")
+        var lastProgressLogMs = 0L
+        try {
+            progressEvents.collect {
+                val now = System.currentTimeMillis()
+                if (now - lastProgressLogMs >= 100) {
+                    lastProgressLogMs = now
+                    com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack("starmap_editor", "progress")
+                }
+            }
+            selectedStarmapId = null
+            com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceBack("starmap_editor")
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack("starmap_editor", "cancel")
+            throw e
+        }
+    }
+
     if (selectedStarmapId != null) {
         StarMapEditorScreen(
             starmapId = selectedStarmapId!!,
@@ -44,6 +66,11 @@ fun StarMapScreen(
             modifier = modifier
         )
     } else {
+        // 列表态：清空编辑态顶栏内容（标题/返回/操作），根壳回退到一级标题。
+        // 编辑→列表的窗格返回（顶栏返回或预测返回）都经过此处。
+        LaunchedEffect(Unit) {
+            topBarState.clear()
+        }
         StarMapListScreen(
             onSelectStarmap = { starmapId ->
                 selectedStarmapId = starmapId

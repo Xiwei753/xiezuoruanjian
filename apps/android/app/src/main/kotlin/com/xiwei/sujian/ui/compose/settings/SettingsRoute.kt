@@ -635,12 +635,12 @@ private data class SettingsSelection(val section: SettingsSection) : Parcelable
  *
  * [detailSection] / [onDetailSectionChange] 由根壳提升持有，供一级 TopAppBar
  * 显示当前分类标题与返回按钮；详情→列表的可预见返回由
- * [ThreePaneScaffoldPredictiveBackHandler] 处理。
+ * [ThreePaneScaffoldPredictiveBackHandler] 处理；列表→离开设置一级入口的返回
+ * 由全局 NavDisplay 统一驱动（Works 常驻栈底，pop 带真实手势进度）。
  */
 @OptIn(androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi::class)
 @Composable
 fun SettingsRoute(
-    onNavigateBack: (() -> Unit)? = null,
     detailSection: SettingsSection? = null,
     onDetailSectionChange: ((SettingsSection?) -> Unit)? = null,
     modifier: Modifier = Modifier,
@@ -692,14 +692,13 @@ fun SettingsRoute(
 
     val coroutineScope = rememberCoroutineScope()
 
-    // 返回层级：详情 → 列表 → 离开设置一级入口。
+    // 返回层级：详情 → 列表由列表-详情 navigator 处理；
+    // 列表 → 离开设置一级入口交给全局 NavDisplay（Works 常驻栈底，
+    // predictivePopTransitionSpec 带真实手势进度），不再在本壳内拦截。
     BackHandler(enabled = navigator.canNavigateBack()) {
         coroutineScope.launch {
             navigator.navigateBack(BackNavigationBehavior.PopUntilScaffoldValueChange)
         }
-    }
-    BackHandler(enabled = !navigator.canNavigateBack() && onNavigateBack != null) {
-        onNavigateBack?.invoke()
     }
 
     Box(modifier = modifier.fillMaxSize()) {

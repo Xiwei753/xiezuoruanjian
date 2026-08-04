@@ -1,14 +1,21 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <issues format="6" by="lint 8.9.2" type="baseline" client="gradle" dependencies="false" name="AGP (8.9.2)" variant="all" version="8.9.2">
 
+    <!-- 预存问题（#556 UniFFI flavor isolation 起存在，非本轮引入）：uniffi-bindgen
+         生成的 writer_core.kt 使用 java.lang.ref.Cleaner（API 33+，minSdk 24）。
+         生成绑定禁止手工修改（AGENTS.md），按 noAi/ai 两个变体的实际生成路径记录。 -->
     <issue
         id="NewApi"
         message="Call requires API level 33 (current min is 24): `java.lang.ref.Cleaner#create`"
         errorLine1="    val cleaner = java.lang.ref.Cleaner.create()"
         errorLine2="                                        ~~~~~~">
         <location
-            file="src/main/kotlin/com/xiwei/sujian/uniffi/uniffi/writer_core/writer_core.kt"
-            line="2735"
+            file="build/generated/writer-uniffi/noAi/kotlin/uniffi/writer_core/writer_core.kt"
+            line="2852"
+            column="41"/>
+        <location
+            file="build/generated/writer-uniffi/ai/kotlin/uniffi/writer_core/writer_core.kt"
+            line="2852"
             column="41"/>
     </issue>
 
@@ -18,8 +25,12 @@
         errorLine1="        JavaLangRefCleanable(cleaner.register(value, cleanUpTask))"
         errorLine2="                                     ~~~~~~~~">
         <location
-            file="src/main/kotlin/com/xiwei/sujian/uniffi/uniffi/writer_core/writer_core.kt"
-            line="2738"
+            file="build/generated/writer-uniffi/noAi/kotlin/uniffi/writer_core/writer_core.kt"
+            line="2855"
+            column="38"/>
+        <location
+            file="build/generated/writer-uniffi/ai/kotlin/uniffi/writer_core/writer_core.kt"
+            line="2855"
             column="38"/>
     </issue>
 
@@ -29,8 +40,12 @@
         errorLine1="    override fun clean() = cleanable.clean()"
         errorLine2="                                     ~~~~~">
         <location
-            file="src/main/kotlin/com/xiwei/sujian/uniffi/uniffi/writer_core/writer_core.kt"
-            line="2744"
+            file="build/generated/writer-uniffi/noAi/kotlin/uniffi/writer_core/writer_core.kt"
+            line="2861"
+            column="38"/>
+        <location
+            file="build/generated/writer-uniffi/ai/kotlin/uniffi/writer_core/writer_core.kt"
+            line="2861"
             column="38"/>
     </issue>
 
