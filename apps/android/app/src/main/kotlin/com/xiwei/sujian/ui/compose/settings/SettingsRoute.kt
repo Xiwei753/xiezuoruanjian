@@ -2,13 +2,16 @@ package com.xiwei.sujian.ui.compose.settings
 
 import android.os.Parcelable
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
 import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffoldRole
 import androidx.compose.material3.adaptive.navigation.BackNavigationBehavior
@@ -19,8 +22,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -605,21 +610,34 @@ class SettingsViewModel : ViewModel() {
     }
 }
 
+/**
+ * 设置列表分组（手机列表按组呈现，组内每一项显示标题、说明或当前值与尾箭头）。
+ */
+enum class SettingsGroup(val titleResId: Int) {
+    Appearance(R.string.pref_group_appearance),
+    Writing(R.string.pref_group_writing),
+    DataSync(R.string.pref_group_data_sync),
+    Advanced(R.string.pref_group_advanced),
+    About(R.string.pref_group_about),
+}
+
 data class SettingsCategory(
     val section: SettingsSection,
     val titleResId: Int,
     val icon: ImageVector,
+    val group: SettingsGroup,
+    val summaryResId: Int? = null,
 )
 
 val settingsCategories = listOf(
-    SettingsCategory(SettingsSection.Appearance, R.string.pref_category_appearance, SujianIcons.Palette),
-    SettingsCategory(SettingsSection.Editor, R.string.pref_category_editor, SujianIcons.Edit),
-    SettingsCategory(SettingsSection.Save, R.string.pref_category_save, SujianIcons.Save),
-    SettingsCategory(SettingsSection.Sync, R.string.pref_category_sync, SujianIcons.CloudSync),
-    SettingsCategory(SettingsSection.Ai, R.string.pref_category_ai, SujianIcons.AutoStories),
-    SettingsCategory(SettingsSection.Diagnostics, R.string.pref_category_diagnostics, SujianIcons.BugReport),
-    SettingsCategory(SettingsSection.Laboratory, R.string.pref_category_laboratory, SujianIcons.Science),
-    SettingsCategory(SettingsSection.About, R.string.pref_category_about, SujianIcons.Info),
+    SettingsCategory(SettingsSection.Appearance, R.string.pref_category_appearance, SujianIcons.Palette, SettingsGroup.Appearance),
+    SettingsCategory(SettingsSection.Editor, R.string.pref_category_editor, SujianIcons.Edit, SettingsGroup.Writing, R.string.pref_summary_editor),
+    SettingsCategory(SettingsSection.Save, R.string.pref_category_save, SujianIcons.Save, SettingsGroup.Writing, R.string.pref_summary_save),
+    SettingsCategory(SettingsSection.Sync, R.string.pref_category_sync, SujianIcons.CloudSync, SettingsGroup.DataSync),
+    SettingsCategory(SettingsSection.Ai, R.string.pref_category_ai, SujianIcons.AutoStories, SettingsGroup.Advanced),
+    SettingsCategory(SettingsSection.Diagnostics, R.string.pref_category_diagnostics, SujianIcons.BugReport, SettingsGroup.Advanced),
+    SettingsCategory(SettingsSection.Laboratory, R.string.pref_category_laboratory, SujianIcons.Science, SettingsGroup.Advanced, R.string.pref_summary_laboratory),
+    SettingsCategory(SettingsSection.About, R.string.pref_category_about, SujianIcons.Info, SettingsGroup.About, R.string.pref_summary_about),
 )
 
 @Parcelize
@@ -672,7 +690,14 @@ fun SettingsRoute(
     )
 
     // 详情状态同步：navigator 内部变化（如预测性返回完成）回写根壳状态。
+    // 首次组合跳过（初始 contentKey 恒为 null，回写 null 会覆盖平板进入时根壳
+    // 注入的默认 Appearance，导致右侧详情空白）；后续变化才回写。
+    var syncedOnce by remember { mutableStateOf(false) }
     LaunchedEffect(navigator.currentDestination?.contentKey) {
+        if (!syncedOnce) {
+            syncedOnce = true
+            return@LaunchedEffect
+        }
         onDetailSectionChange?.invoke(navigator.currentDestination?.contentKey?.section)
     }
 
@@ -711,6 +736,7 @@ fun SettingsRoute(
                         onDetailSectionChange?.invoke(section)
                     },
                     selectedSection = navigator.currentDestination?.contentKey?.section ?: detailSection,
+                    state = uiState,
                 )
             },
             detailPane = {
@@ -731,36 +757,104 @@ fun SettingsRoute(
     }
 }
 
+/**
+ * 设置列表：按“外观 / 写作 / 数据与同步 / 高级 / 关于”分组，每一项显示标题、
+ * 说明或当前值，尾部带进入详情的箭头；与详情共享根设置壳与 TopAppBar。
+ */
 @Composable
 fun SettingsListPane(
     onNavigateToDetail: (SettingsSection) -> Unit,
     modifier: Modifier = Modifier,
     selectedSection: SettingsSection? = null,
+    state: SettingsUiState = SettingsUiState(),
 ) {
     val dims = LocalSujianDimensions.current
     LazyColumn(
         modifier = modifier.fillMaxSize().testTag(SujianSemanticIds.SettingsScreen),
-        contentPadding = PaddingValues(dims.space16),
-        verticalArrangement = Arrangement.spacedBy(dims.space4),
+        contentPadding = PaddingValues(vertical = dims.space8),
     ) {
-        items(settingsCategories) { category ->
-            SujianListItem(
-                headline = stringResource(id = category.titleResId),
-                leadingIcon = category.icon,
-                selected = selectedSection == category.section,
-                onClick = { onNavigateToDetail(category.section) },
-                semanticId = when (category.section) {
-                    SettingsSection.Appearance -> SujianSemanticIds.SettingsNavAppearance
-                    SettingsSection.Editor -> SujianSemanticIds.SettingsNavEditor
-                    SettingsSection.Save -> SujianSemanticIds.SettingsNavSave
-                    SettingsSection.Sync -> SujianSemanticIds.SettingsNavSync
-                    SettingsSection.Ai -> SujianSemanticIds.SettingsNavAi
-                    SettingsSection.Diagnostics -> SujianSemanticIds.SettingsNavDiagnostics
-                    SettingsSection.Laboratory -> SujianSemanticIds.SettingsNavLaboratory
-                    SettingsSection.About -> SujianSemanticIds.SettingsNavAbout
-                },
-                modifier = Modifier.fillMaxWidth(),
-            )
+        SettingsGroup.entries.forEach { group ->
+            val categories = settingsCategories.filter { it.group == group }
+            if (categories.isEmpty()) return@forEach
+            item(key = "settings_group_${group.name}") {
+                Text(
+                    text = stringResource(id = group.titleResId),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(horizontal = dims.space16, vertical = dims.space8),
+                )
+            }
+            items(categories, key = { it.section.name }) { category ->
+                SujianListItem(
+                    headline = stringResource(id = category.titleResId),
+                    supportingText = settingsCategorySummary(category, state),
+                    leadingIcon = category.icon,
+                    selected = selectedSection == category.section,
+                    onClick = { onNavigateToDetail(category.section) },
+                    semanticId = when (category.section) {
+                        SettingsSection.Appearance -> SujianSemanticIds.SettingsNavAppearance
+                        SettingsSection.Editor -> SujianSemanticIds.SettingsNavEditor
+                        SettingsSection.Save -> SujianSemanticIds.SettingsNavSave
+                        SettingsSection.Sync -> SujianSemanticIds.SettingsNavSync
+                        SettingsSection.Ai -> SujianSemanticIds.SettingsNavAi
+                        SettingsSection.Diagnostics -> SujianSemanticIds.SettingsNavDiagnostics
+                        SettingsSection.Laboratory -> SujianSemanticIds.SettingsNavLaboratory
+                        SettingsSection.About -> SujianSemanticIds.SettingsNavAbout
+                    },
+                    trailingContent = {
+                        Icon(
+                            imageVector = SujianIcons.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         }
+    }
+}
+
+/**
+ * 设置列表项的说明/当前值：优先静态说明；其余显示真实当前值（主题模式、字号、
+ * 自动保存、同步、AI、诊断开关），避免列表只有裸标题。
+ */
+@Composable
+private fun settingsCategorySummary(category: SettingsCategory, state: SettingsUiState): String? {
+    if (category.summaryResId != null) {
+        return stringResource(id = category.summaryResId)
+    }
+    return when (category.section) {
+        SettingsSection.Appearance -> when (state.settings.appearanceMode) {
+            "light" -> stringResource(id = R.string.theme_light)
+            "dark" -> stringResource(id = R.string.theme_dark)
+            else -> stringResource(id = R.string.theme_system)
+        }
+        SettingsSection.Editor -> stringResource(
+            id = R.string.pref_font_size_value,
+            if (state.fontSize % 1f == 0f) state.fontSize.toInt().toString() else state.fontSize.toString(),
+        )
+        SettingsSection.Save -> if (state.settings.autoSaveEnabled) {
+            stringResource(id = R.string.pref_state_on)
+        } else {
+            stringResource(id = R.string.pref_state_off)
+        }
+        SettingsSection.Sync -> if (state.syncConfig.enabled == true) {
+            stringResource(id = R.string.pref_state_on)
+        } else {
+            stringResource(id = R.string.pref_state_off)
+        }
+        SettingsSection.Ai -> if (state.settings.aiEnabled) {
+            stringResource(id = R.string.pref_state_on)
+        } else {
+            stringResource(id = R.string.pref_state_off)
+        }
+        SettingsSection.Diagnostics -> if (state.settings.diagnosticsEnabled) {
+            stringResource(id = R.string.pref_state_on)
+        } else {
+            stringResource(id = R.string.pref_state_off)
+        }
+        SettingsSection.Laboratory -> stringResource(id = R.string.pref_summary_laboratory)
+        SettingsSection.About -> stringResource(id = R.string.pref_summary_about)
     }
 }

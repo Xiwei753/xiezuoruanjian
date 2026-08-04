@@ -100,6 +100,23 @@ private fun SujianDestination.toRoute(): SujianRoute = when (this) {
 }
 
 /**
+ * 写作工作区内部窗格的顶栏返回入口。
+ *
+ * 工作区手机窗格（作品列表/章节树/正文）由工作区内部的 Material3 Adaptive
+ * navigator 管理，系统返回与顶栏返回必须调用同一套窗格转换；工作区把转换
+ * 入口上抛给唯一根壳的 TopAppBar，避免根壳直接改选择状态造成两套返回路径。
+ */
+@Stable
+class WorkspaceBackState {
+    var onBack by mutableStateOf<(() -> Unit)?>(null)
+        private set
+
+    fun update(onBack: (() -> Unit)?) {
+        this.onBack = onBack
+    }
+}
+
+/**
  * 星图编辑态的一级 TopAppBar 内容。
  *
  * 星图编辑是星图目的地内部的窗格状态（不进入全局 back stack），
@@ -169,9 +186,12 @@ fun SujianNavigationSuite(
     var settingsDetailSection by remember { mutableStateOf<SettingsSection?>(null) }
     // 星图编辑态的一级 TopAppBar 内容。
     val starMapTopBarState = remember { StarMapTopBarState() }
+    // 写作工作区内部窗格的顶栏返回入口（手机窗格转换由工作区内部 navigator 驱动）。
+    val workspaceBackState = remember { WorkspaceBackState() }
 
-    // 离开目的地时清空其内部状态，避免下次进入显示陈旧标题/操作。
-    LaunchedEffect(currentTopDestination) {
+    // 离开目的地时清空其内部状态，避免下次进入显示陈旧标题/操作；
+    // 平板/大屏进入设置时默认选中 Appearance，左右窗格立即完整显示。
+    LaunchedEffect(currentTopDestination, isWideScreen) {
         com.xiwei.sujian.diagnostics.DiagnosticsEvents.navigation(currentTopDestination.name)
         if (currentTopDestination != SujianDestination.StarMap) {
             starMapTopBarState.clear()
@@ -179,16 +199,15 @@ fun SujianNavigationSuite(
         if (currentTopDestination != SujianDestination.Settings) {
             settingsDetailSection = null
         }
+        if (currentTopDestination == SujianDestination.Settings && isWideScreen && settingsDetailSection == null) {
+            settingsDetailSection = SettingsSection.Appearance
+        }
     }
 
+    // 顶栏返回与系统返回共用同一套内部窗格转换：工作区把内部 navigator 的
+    // 返回入口上抛到壳层，根壳只负责在 Works 目的地展示。
     val workspaceBack: (() -> Unit)? = if (currentTopDestination == SujianDestination.Works) {
-        {
-            if (appState.currentChapterId != null) {
-                appState.clearChapterSelection()
-            } else {
-                appState.clearProjectSelection()
-            }
-        }
+        workspaceBackState.onBack
     } else null
 
     val topBarTitle = when (currentTopDestination) {
@@ -231,6 +250,21 @@ fun SujianNavigationSuite(
         currentTopDestination == SujianDestination.StarMap -> starMapTopBarState.onBack
         else -> null
     }
+    // 返回按钮无障碍说明按当前场景动态选择：写作区返回章节列表/返回作品列表、
+    // 设置详情返回设置、星图编辑返回星图列表；不得统一写死为星图返回。
+    val navigationIconContentDescription: String? = when {
+        showWorkspaceBack -> {
+            if (appState.currentChapterId != null) {
+                stringResource(id = R.string.back_to_chapter_list)
+            } else {
+                stringResource(id = R.string.back_to_project_list)
+            }
+        }
+        showSettingsBack -> stringResource(id = R.string.back_to_settings)
+        currentTopDestination == SujianDestination.StarMap && starMapTopBarState.onBack != null ->
+            stringResource(id = R.string.back_to_starmap_list)
+        else -> null
+    }
     val topBarActions: @Composable () -> Unit = {
         if (currentTopDestination == SujianDestination.StarMap) {
             starMapTopBarState.actions?.invoke()
@@ -257,6 +291,7 @@ fun SujianNavigationSuite(
                         when (route) {
                             is SujianRoute.Works -> ProjectWorkspaceScreen(
                                 appState = appState,
+                                workspaceBackState = workspaceBackState,
                             )
                             is SujianRoute.StarMap -> StarMapScreen(
                                 topBarState = starMapTopBarState,
@@ -281,7 +316,7 @@ fun SujianNavigationSuite(
             SujianTopAppBar(
                 title = topBarTitle,
                 navigationIcon = topBarNavigationIcon,
-                navigationIconContentDescription = stringResource(id = R.string.starmap_back),
+                navigationIconContentDescription = navigationIconContentDescription,
                 onNavigationClick = topBarOnNavigationClick,
                 actions = topBarActions,
             )
@@ -456,3 +491,23 @@ private val navPredictivePopTransition:
         else -> fadeIn(animationSpec = tween(300)) togetherWith fadeOut(animationSpec = tween(300))
     }
 }
+
+// ========== 工作区/星图内部窗格的预测返回进度映射 ==========
+
+/**
+ * 把系统返回手势进度（BackEvent.progress，0..1）映射为单窗格状态下内部窗格
+ * 过渡的进度，供工作区与星图的列表—详情 navigator seek。
+ *
+ * 与 Material3 Adaptive 库 `ThreePaneScaffoldPredictiveBackHandler` 内部
+ * `backProgressToStateProgress` 对单窗格（expandedCount == 1）的计算完全一致：
+ * 同一缓动曲线，峰值比例 SinglePaneProgressRatio = 0.1（手势全程为“窥视”，
+ * 提交后由 navigateBack 播放剩余过渡）。不依赖库私有实现，常量与公式照抄，
+ * 保证手势跟手语义与库一致。
+ */
+internal fun predictiveBackStateFraction(progress: Float): Float =
+    PredictiveBackEasing.transform(progress) * SinglePaneProgressRatio
+
+private val PredictiveBackEasing: androidx.compose.animation.core.CubicBezierEasing =
+    androidx.compose.animation.core.CubicBezierEasing(0.1f, 0.1f, 0f, 1f)
+
+internal const val SinglePaneProgressRatio: Float = 0.1f

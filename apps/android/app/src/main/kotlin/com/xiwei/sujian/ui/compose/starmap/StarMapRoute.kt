@@ -1,5 +1,13 @@
 package com.xiwei.sujian.ui.compose.starmap
 
+import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
+import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
+import androidx.compose.material3.adaptive.layout.AnimatedPane
+import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffold
+import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffoldRole
+import androidx.compose.material3.adaptive.layout.calculatePaneScaffoldDirective
+import androidx.compose.material3.adaptive.navigation.BackNavigationBehavior
+import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -23,61 +31,111 @@ import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
 import com.xiwei.sujian.model.StarMapData
 import com.xiwei.sujian.model.StarMapGraphNode
 import com.xiwei.sujian.model.StarMapNodeKind
+import com.xiwei.sujian.ui.compose.navigation.predictiveBackStateFraction
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/**
+ * 星图目的地：列表与编辑是同一个目的地内的窗格状态，由同一个 Material3
+ * Adaptive 列表—详情 navigator 管理。
+ *
+ * - 手机/平板都强制单窗格（保持“列表或编辑全屏”的既有产品结构）；
+ * - 系统返回手势按 BackEvent.progress 真实 seek 窗格过渡（拖动跟手、
+ *   取消回原位、提交完成剩余过渡），顶栏返回调用同一 navigator；
+ * - 列表层返回交给全局 NavDisplay（Works 常驻栈底，pop 带真实手势进度）。
+ */
+@OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
 fun StarMapScreen(
     topBarState: com.xiwei.sujian.ui.compose.navigation.StarMapTopBarState,
     modifier: Modifier = Modifier
 ) {
-    var selectedStarmapId by remember { mutableStateOf<String?>(null) }
+    // 星图列表—编辑窗格共用同一个 Material3 Adaptive 列表—详情 navigator：
+    // 手机/平板都强制单窗格（保持“列表或编辑全屏”的既有产品结构），系统返回手势
+    // 按 BackEvent.progress 真实 seek 窗格过渡；顶栏返回走同一 navigator。
+    val directive = calculatePaneScaffoldDirective(currentWindowAdaptiveInfo())
+        .copy(maxHorizontalPartitions = 1)
+    val navigator = rememberListDetailPaneScaffoldNavigator<String>(
+        scaffoldDirective = directive,
+    )
+    val coroutineScope = rememberCoroutineScope()
+    val currentStarmapId = navigator.currentDestination?.contentKey
 
-    // 星图编辑是星图目的地内部的窗格状态：返回先退出编辑回列表，不弹出全局 route。
-    // PredictiveBackHandler 手势提交 → 清空选择；取消 → 协程取消，不切换。
-    // 列表层的返回交给全局 NavDisplay（Works 常驻栈底，pop 带真实手势进度）。
-    androidx.activity.compose.PredictiveBackHandler(enabled = selectedStarmapId != null) { progressEvents ->
+    // 编辑窗格内容在弹栈过渡期间保持上一次打开的星图：contentKey 在 pop 开始
+    // 即变为 null，若直接读它，退出动画中编辑内容会瞬间消失（手势结束跳变）；
+    // 这里只在向前导航时更新，弹出后由退出动画继续显示旧编辑内容。
+    var editorStarmapId by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(currentStarmapId) {
+        if (currentStarmapId != null) {
+            editorStarmapId = currentStarmapId
+        }
+    }
+
+    // 预测返回：手势拖动时按 BackEvent.progress seek 窗格过渡；取消回到原位；
+    // 提交后播放剩余过渡（navigateBack 挂起至动画完成），动画结束后才复位编辑态
+    // 顶栏（标题/返回/操作），无手势结束跳变。
+    androidx.activity.compose.PredictiveBackHandler(enabled = navigator.canNavigateBack()) { progressEvents ->
         com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack("starmap_editor", "start")
-        var lastProgressLogMs = 0L
         try {
-            progressEvents.collect {
-                val now = System.currentTimeMillis()
-                if (now - lastProgressLogMs >= 100) {
-                    lastProgressLogMs = now
-                    com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack("starmap_editor", "progress")
+            progressEvents.collect { event ->
+                if (event.progress != 0f) {
+                    navigator.seekBack(
+                        BackNavigationBehavior.PopUntilScaffoldValueChange,
+                        predictiveBackStateFraction(event.progress),
+                    )
                 }
             }
-            selectedStarmapId = null
+            navigator.navigateBack(BackNavigationBehavior.PopUntilScaffoldValueChange)
+            topBarState.clear()
             com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceBack("starmap_editor")
-        } catch (e: kotlinx.coroutines.CancellationException) {
+        } catch (e: CancellationException) {
             com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack("starmap_editor", "cancel")
+            withContext(NonCancellable) {
+                navigator.seekBack(BackNavigationBehavior.PopUntilScaffoldValueChange, 0f)
+            }
             throw e
         }
     }
 
-    if (selectedStarmapId != null) {
-        StarMapEditorScreen(
-            starmapId = selectedStarmapId!!,
-            topBarState = topBarState,
-            onBack = { selectedStarmapId = null },
-            modifier = modifier
-        )
-    } else {
-        // 列表态：清空编辑态顶栏内容（标题/返回/操作），根壳回退到一级标题。
-        // 编辑→列表的窗格返回（顶栏返回或预测返回）都经过此处。
-        LaunchedEffect(Unit) {
-            topBarState.clear()
-        }
-        StarMapListScreen(
-            onSelectStarmap = { starmapId ->
-                selectedStarmapId = starmapId
-            },
-            modifier = modifier
-        )
-    }
+    ListDetailPaneScaffold(
+        modifier = modifier,
+        directive = navigator.scaffoldDirective,
+        scaffoldState = navigator.scaffoldState,
+        listPane = {
+            AnimatedPane {
+                StarMapListScreen(
+                    onSelectStarmap = { starmapId ->
+                        coroutineScope.launch {
+                            navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, starmapId)
+                        }
+                    },
+                )
+            }
+        },
+        detailPane = {
+            AnimatedPane {
+                val starmapId = editorStarmapId
+                if (starmapId != null) {
+                    StarMapEditorScreen(
+                        starmapId = starmapId,
+                        topBarState = topBarState,
+                        onBack = {
+                            coroutineScope.launch {
+                                navigator.navigateBack(BackNavigationBehavior.PopUntilScaffoldValueChange)
+                                topBarState.clear()
+                                com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceBack("starmap_editor")
+                            }
+                        },
+                    )
+                }
+            }
+        },
+    )
 }
 
 @Composable

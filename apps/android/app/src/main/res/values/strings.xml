@@ -86,6 +86,22 @@
     <!-- Sync Settings -->
     <string name="pref_category_sync">同步设置 (仅支持 GitHub API 上传同步)</string>
     <string name="pref_category_ai">AI</string>
+
+    <!-- 设置列表分组 -->
+    <string name="pref_group_appearance">外观</string>
+    <string name="pref_group_writing">写作</string>
+    <string name="pref_group_data_sync">数据与同步</string>
+    <string name="pref_group_advanced">高级</string>
+    <string name="pref_group_about">关于</string>
+
+    <!-- 设置列表项说明与当前值 -->
+    <string name="pref_summary_editor">输入动效、平滑光标与正文排版</string>
+    <string name="pref_summary_save">自动保存与保存延迟</string>
+    <string name="pref_summary_laboratory">实验性功能与调试开关</string>
+    <string name="pref_summary_about">版本、工作区路径与应用信息</string>
+    <string name="pref_font_size_value">正文字号 %1$s</string>
+    <string name="pref_state_on">已开启</string>
+    <string name="pref_state_off">已关闭</string>
     <string name="pref_ai_enabled">启用 AI</string>
     <string name="pref_enable_sync">启用同步</string>
     <string name="pref_github_repo">GitHub 仓库地址 (HTTPS)</string>
@@ -396,7 +412,6 @@
     <string name="starmap_create_new">新建星图</string>
     <string name="starmap_hint_title">标题</string>
     <string name="starmap_hint_description">描述（可选）</string>
-    <string name="starmap_back">返回</string>
     <string name="starmap_add_edge">添加连线</string>
     <string name="starmap_add_node">添加节点</string>
     <string name="starmap_load_failed">加载失败</string>
@@ -439,6 +454,9 @@
     <string name="hint_new_title">新标题</string>
     <string name="select_chapter_to_write">选择章节开始写作</string>
     <string name="back_to_project_list">返回作品列表</string>
+    <string name="back_to_chapter_list">返回章节列表</string>
+    <string name="back_to_settings">返回设置</string>
+    <string name="back_to_starmap_list">返回星图列表</string>
     <string name="volume_chapter_title">卷章</string>
     <string name="action_new_volume_short">新建卷</string>
     <string name="volume_chapter_stats">共 %1$d 卷 · %2$d 章 · %3$d 字</string>

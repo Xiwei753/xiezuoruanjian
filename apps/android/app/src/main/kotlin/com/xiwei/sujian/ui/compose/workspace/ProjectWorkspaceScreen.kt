@@ -5,11 +5,21 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
+import androidx.compose.material3.adaptive.layout.AnimatedPane
+import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffold
+import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffoldRole
+import androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem
+import androidx.compose.material3.adaptive.navigation.BackNavigationBehavior
+import androidx.compose.material3.adaptive.navigation.ThreePaneScaffoldNavigator
+import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
@@ -25,6 +35,8 @@ import com.xiwei.sujian.platform.api.WindowSizeClass
 import com.xiwei.sujian.ui.compose.LocalAndroidCapabilities
 import com.xiwei.sujian.ui.compose.SujianAppState
 import com.xiwei.sujian.ui.compose.editor.SujianEditorHost
+import com.xiwei.sujian.ui.compose.navigation.WorkspaceBackState
+import com.xiwei.sujian.ui.compose.navigation.predictiveBackStateFraction
 import com.xiwei.sujian.ui.compose.workbench.component.SujianWorkbench
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchAction
 import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelId
@@ -38,6 +50,10 @@ import com.xiwei.sujian.ui.compose.workbench.state.LayoutStorageKey
 import com.xiwei.sujian.ui.compose.workbench.state.WindowWidthBucket
 import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchLayoutRepository
 import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchViewModel
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 写作工作区 — 「作品」一级入口的唯一内容。
@@ -50,6 +66,7 @@ import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchViewModel
 @Composable
 fun ProjectWorkspaceScreen(
     appState: SujianAppState,
+    workspaceBackState: WorkspaceBackState,
     modifier: Modifier = Modifier
 ) {
     val deps = com.xiwei.sujian.runtime.LocalSujianAppDependencies.current
@@ -61,19 +78,33 @@ fun ProjectWorkspaceScreen(
     val currentChapterTitle = appState.currentChapterTitle
     val layoutPlan = appState.currentLayoutPlan
 
-    if (currentProjectId == null) {
-        ProjectListScreen(
-            appState = appState,
-            onSelectProject = { projectId, projectTitle ->
-                appState.selectProject(projectId, projectTitle)
-            },
-            modifier = modifier
-        )
-        return
-    }
-
     val capabilities = LocalAndroidCapabilities.current
     val isTabletWindow = capabilities.windowSizeClass != WindowSizeClass.Compact
+
+    if (currentProjectId == null) {
+        if (isTabletWindow) {
+            ProjectListScreen(
+                appState = appState,
+                onSelectProject = { projectId, projectTitle ->
+                    appState.selectProject(projectId, projectTitle)
+                },
+                modifier = modifier
+            )
+        } else {
+            CompactWorkspaceContent(
+                appState = appState,
+                currentProjectId = null,
+                currentVolumeId = null,
+                currentChapterId = null,
+                currentChapterTitle = "",
+                layoutPlan = layoutPlan,
+                workspaceRepository = workspaceRepository,
+                workspaceBackState = workspaceBackState,
+                modifier = modifier,
+            )
+        }
+        return
+    }
 
     if (isTabletWindow) {
         WorkbenchWorkspaceContent(
@@ -94,6 +125,7 @@ fun ProjectWorkspaceScreen(
             currentChapterTitle = currentChapterTitle,
             layoutPlan = layoutPlan,
             workspaceRepository = workspaceRepository,
+            workspaceBackState = workspaceBackState,
             modifier = modifier,
         )
     }
@@ -244,103 +276,210 @@ private fun WorkbenchWorkspaceContent(
     )
 }
 
+/**
+ * 工作区内部窗格（仅手机单窗格使用）。
+ *
+ * 作品列表 / 章节树 / 正文是同一个工作区内的不同数据窗格状态，由同一个
+ * Material3 Adaptive 列表—详情 navigator 管理：系统返回、顶栏返回与章节树
+ * 自带返回都调用同一套窗格转换；预测返回手势按 BackEvent.progress 真实
+ * seek 过渡（拖动跟手、取消回原位、提交完成剩余动画）。
+ */
+private enum class WorkspacePaneKey {
+    ProjectList,
+    ChapterTree,
+    Editor,
+}
+
+private val WorkspacePaneKey.role: androidx.compose.material3.adaptive.layout.ThreePaneScaffoldRole
+    get() = when (this) {
+        WorkspacePaneKey.ProjectList -> ListDetailPaneScaffoldRole.List
+        WorkspacePaneKey.ChapterTree -> ListDetailPaneScaffoldRole.Detail
+        WorkspacePaneKey.Editor -> ListDetailPaneScaffoldRole.Extra
+    }
+
+private val WorkspacePaneKey.paneName: String
+    get() = when (this) {
+        WorkspacePaneKey.ProjectList -> "project_list"
+        WorkspacePaneKey.ChapterTree -> "chapter_tree"
+        WorkspacePaneKey.Editor -> "editor"
+    }
+
+private fun expectedWorkspacePane(appState: SujianAppState): WorkspacePaneKey = when {
+    appState.currentProjectId == null -> WorkspacePaneKey.ProjectList
+    appState.currentChapterId == null -> WorkspacePaneKey.ChapterTree
+    else -> WorkspacePaneKey.Editor
+}
+
+@OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
 private fun CompactWorkspaceContent(
     appState: SujianAppState,
-    currentProjectId: String,
+    currentProjectId: String?,
     currentVolumeId: String?,
     currentChapterId: String?,
     currentChapterTitle: String,
     layoutPlan: com.xiwei.sujian.model.LayoutPlan?,
     workspaceRepository: com.xiwei.sujian.data.WorkspaceRepository,
+    workspaceBackState: WorkspaceBackState,
     modifier: Modifier = Modifier,
 ) {
-    val dims = LocalSujianDimensions.current
+    val coroutineScope = rememberCoroutineScope()
 
-    val visiblePaneRoles = layoutPlan?.visiblePaneRoles
+    // navigator 初始窗格与工作区当前选择一致（进程恢复/配置变化后不闪列表）。
+    val initialPane = remember { expectedWorkspacePane(appState) }
+    val navigator = rememberListDetailPaneScaffoldNavigator<WorkspacePaneKey>(
+        initialDestinationHistory = listOf(ThreePaneScaffoldDestinationItem(initialPane.role, initialPane)),
+    )
+
+    // 先播放完窗格退出动画，再回写工作区选择状态；避免“画面不动、松手后突然切换”，
+    // 也保证顶栏返回与系统返回走完全相同的窗格转换。
+    suspend fun backOnePaneAndWriteBack() {
+        navigator.navigateBack(BackNavigationBehavior.PopUntilScaffoldValueChange)
+        when (navigator.currentDestination?.contentKey) {
+            WorkspacePaneKey.ProjectList -> {
+                if (appState.currentProjectId != null) {
+                    appState.clearProjectSelection()
+                    com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceBack("project_list")
+                }
+            }
+            WorkspacePaneKey.ChapterTree -> {
+                if (appState.currentChapterId != null) {
+                    appState.clearChapterSelection()
+                    com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceBack("chapter_tree")
+                }
+            }
+            // 快速连按导致历史被清空（navigator 已回根）：同步清空选择，避免
+            // 作品列表窗格与顶栏标题/返回按钮失步。
+            null -> {
+                if (appState.currentProjectId != null) {
+                    appState.clearProjectSelection()
+                    com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceBack("project_list")
+                }
+            }
+            // 仍在编辑窗格（未发生弹栈）：无需回写。
+            WorkspacePaneKey.Editor -> {}
+        }
+    }
+    val navigateBackWithWriteBack: () -> Unit = {
+        coroutineScope.launch {
+            backOnePaneAndWriteBack()
+        }
+    }
+
+    // 顶栏返回按钮：根壳通过该入口调用与系统返回完全相同的窗格转换。
+    LaunchedEffect(navigator) {
+        workspaceBackState.update(navigateBackWithWriteBack)
+    }
+    DisposableEffect(workspaceBackState) {
+        onDispose {
+            workspaceBackState.update(null)
+        }
+    }
+
+    // 预测返回（系统返回手势）：拖动时按 BackEvent.progress 真实 seek 内部窗格
+    // 过渡（当前窗格跟手退出、后窗格同步显露）；取消回到原位；提交后播放剩余
+    // 过渡，动画完成后才回写选择状态（无手势结束跳变）。未选中作品时不注册
+    // （返回交给全局 NavDisplay，Works 是栈底，由系统收尾）。
+    PredictiveBackHandler(enabled = navigator.canNavigateBack()) { progressEvents ->
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack(
+            navigator.currentDestination?.contentKey?.paneName ?: "workspace",
+            "start",
+        )
+        try {
+            progressEvents.collect { event ->
+                if (event.progress != 0f) {
+                    navigator.seekBack(
+                        BackNavigationBehavior.PopUntilScaffoldValueChange,
+                        predictiveBackStateFraction(event.progress),
+                    )
+                }
+            }
+            backOnePaneAndWriteBack()
+        } catch (e: CancellationException) {
+            com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack("workspace", "cancel")
+            withContext(NonCancellable) {
+                navigator.seekBack(BackNavigationBehavior.PopUntilScaffoldValueChange, 0f)
+            }
+            throw e
+        }
+    }
+
     val editorContentMaxWidthDp = layoutPlan?.editorContentMaxWidthDp ?: 0f
     val pagePaddingDp = layoutPlan?.pagePaddingDp ?: 0f
     val avoidRegions = layoutPlan?.avoidRegions ?: emptyList()
 
     val windowInsetsPadding = computeWindowInsetPadding(avoidRegions)
 
-    // 手机窗格返回：正文 → 章节树 → 作品列表，全部在工作区内部完成，
-    // 不触碰全局 back stack。PredictiveBackHandler 的 block 在手势开始（或普通返回）
-    // 时启动：手势提交 → collect 正常结束 → 切换窗格；手势取消 → 协程被取消，
-    // 不切换。未选中任何作品时（作品列表根），不注册处理器，返回交给全局
-    // NavDisplay（Works 是栈底，由系统收尾）。
-    PredictiveBackHandler(enabled = currentChapterId != null) { progressEvents ->
-        com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack("chapter_tree", "start")
-        var lastProgressLogMs = 0L
-        try {
-            progressEvents.collect {
-                val now = System.currentTimeMillis()
-                if (now - lastProgressLogMs >= 100) {
-                    lastProgressLogMs = now
-                    com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack("chapter_tree", "progress")
+    // 同一 navigator 的列表—详情窗格：三个窗格共享同一份返回历史与过渡状态，
+    // 预测返回、普通返回和顶栏返回全部复用同一套转换。
+    ListDetailPaneScaffold(
+        modifier = modifier,
+        directive = navigator.scaffoldDirective,
+        scaffoldState = navigator.scaffoldState,
+        listPane = {
+            AnimatedPane {
+                ProjectListScreen(
+                    appState = appState,
+                    onSelectProject = { projectId, projectTitle ->
+                        appState.selectProject(projectId, projectTitle)
+                        coroutineScope.launch {
+                            navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, WorkspacePaneKey.ChapterTree)
+                        }
+                    },
+                )
+            }
+        },
+        detailPane = {
+            AnimatedPane {
+                if (currentProjectId != null) {
+                    VolumeChapterTree(
+                        projectId = currentProjectId,
+                        workspaceRepository = workspaceRepository,
+                        onSelectChapter = { volumeId, chapterId, chapterTitle ->
+                            appState.selectChapter(volumeId, chapterId, chapterTitle)
+                            coroutineScope.launch {
+                                navigator.navigateTo(ListDetailPaneScaffoldRole.Extra, WorkspacePaneKey.Editor)
+                            }
+                        },
+                        onBackToProjects = navigateBackWithWriteBack,
+                        modifier = Modifier.then(windowInsetsPadding),
+                    )
                 }
             }
-            appState.clearChapterSelection()
-            com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceBack("chapter_tree")
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack("chapter_tree", "cancel")
-            throw e
-        }
-    }
-    PredictiveBackHandler(enabled = currentProjectId != null && currentChapterId == null) { progressEvents ->
-        com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack("project_list", "start")
-        var lastProgressLogMs = 0L
-        try {
-            progressEvents.collect {
-                val now = System.currentTimeMillis()
-                if (now - lastProgressLogMs >= 100) {
-                    lastProgressLogMs = now
-                    com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack("project_list", "progress")
+        },
+        extraPane = {
+            AnimatedPane {
+                if (currentProjectId != null && currentChapterId != null && currentVolumeId != null) {
+                    val editorModifier = Modifier
+                        .fillMaxSize()
+                        .then(
+                            if (editorContentMaxWidthDp > 0f) Modifier.width(editorContentMaxWidthDp.dp)
+                            else Modifier
+                        )
+                        .then(
+                            if (pagePaddingDp > 0f) Modifier.padding(horizontal = pagePaddingDp.dp)
+                            else Modifier
+                        )
+                        .then(windowInsetsPadding)
+
+                    SujianEditorHost(
+                        projectId = currentProjectId,
+                        volumeId = currentVolumeId,
+                        chapterId = currentChapterId,
+                        chapterTitle = currentChapterTitle,
+                        modifier = editorModifier,
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(stringResource(id = R.string.select_chapter_to_write))
+                    }
                 }
             }
-            appState.clearProjectSelection()
-            com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceBack("project_list")
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack("project_list", "cancel")
-            throw e
-        }
-    }
-
-    if (currentChapterId != null && currentVolumeId != null && visiblePaneRoles?.showEditor != false) {
-        val editorModifier = Modifier
-            .fillMaxSize()
-            .then(
-                if (editorContentMaxWidthDp > 0f) Modifier.width(editorContentMaxWidthDp.dp)
-                else Modifier
-            )
-            .then(
-                if (pagePaddingDp > 0f) Modifier.padding(horizontal = pagePaddingDp.dp)
-                else Modifier
-            )
-            .then(windowInsetsPadding)
-
-        SujianEditorHost(
-            projectId = currentProjectId,
-            volumeId = currentVolumeId,
-            chapterId = currentChapterId,
-            chapterTitle = currentChapterTitle,
-            modifier = modifier.then(editorModifier),
-        )
-    } else {
-        if (visiblePaneRoles?.showChapterTree != false) {
-            VolumeChapterTree(
-                projectId = currentProjectId,
-                workspaceRepository = workspaceRepository,
-                onSelectChapter = { volumeId, chapterId, chapterTitle ->
-                    appState.selectChapter(volumeId, chapterId, chapterTitle)
-                },
-                onBackToProjects = {
-                    appState.clearProjectSelection()
-                },
-                modifier = modifier.then(windowInsetsPadding)
-            )
-        }
-    }
+        },
+    )
 }
 
 @Composable
