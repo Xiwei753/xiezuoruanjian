@@ -225,15 +225,23 @@ jobs:
             # it and set it as the only default IME; other system IMEs stay enabled but
             # are never bound. Note: android-emulator-runner executes each script line as
             # its own sh -c, so loops/multi-statement logic must stay on one line.
+            # `ime list` without -a prints only ENABLED input methods (AOSP
+            # InputMethodManagerService#handleShellCommandListInputMethods ->
+            # getEnabledInputMethodListLocked), and a freshly installed IME is disabled:
+            # polling `ime list -s` for it can never succeed (CI run 30881443871).
+            # Poll `ime list -a -s` for registration, then enable, verify the enabled
+            # list, select as default and verify default_input_method, failing fast on
+            # each step instead of relying on a longer timeout.
             # The connected run below skips the install tasks (-x :app:install*): updating
             # the test APK while it is registered as an input method makes
             # InputMethodManagerService clear the IME's enabled/default state ("Input
             # method reinstalling, clearing additional subtypes"), reverting
             # default_input_method to LatinIME and failing every IME-binding test.
             cd apps/android && ANDROID_NDK_HOME=$ANDROID_NDK_ROOT ./gradlew :app:install${{ matrix.flavor == 'no-ai' && 'NoAi' || 'Ai' }}Debug :app:install${{ matrix.flavor == 'no-ai' && 'NoAi' || 'Ai' }}DebugAndroidTest -x build${{ matrix.flavor == 'no-ai' && 'NoAi' || 'Ai' }}DebugWriterNative -Psujian.android.abis=x86_64
-            TEST_IME="com.xiwei.sujian.test/.testime.TestInputMethodService"; IME_FOUND=""; for i in $(seq 1 15); do IME_FOUND=$(adb shell ime list -s 2>/dev/null | tr -d '\r' | grep -F "$TEST_IME" || true); [ -n "$IME_FOUND" ] && break; sleep 2; done; echo "Test IME registered: [$IME_FOUND]"; [ -n "$IME_FOUND" ] || { echo "::error::Test IME not registered after install: $TEST_IME"; exit 1; }
-            adb shell ime enable com.xiwei.sujian.test/.testime.TestInputMethodService
-            adb shell ime set com.xiwei.sujian.test/.testime.TestInputMethodService
+            TEST_IME="com.xiwei.sujian.test/.testime.TestInputMethodService"; IME_FOUND=""; for i in $(seq 1 15); do IME_FOUND=$(adb shell ime list -a -s 2>/dev/null | tr -d '\r' | grep -F "$TEST_IME" || true); [ -n "$IME_FOUND" ] && break; sleep 2; done; echo "Test IME registered: [$IME_FOUND]"; [ -n "$IME_FOUND" ] || { echo "::error::Test IME not registered after install: $TEST_IME"; exit 1; }
+            adb shell ime enable "$TEST_IME" || { echo "::error::Test IME enable failed: $TEST_IME"; exit 1; }
+            ENABLED_IME=$(adb shell ime list -s 2>/dev/null | tr -d '\r' | grep -F "$TEST_IME" || true); echo "Test IME enabled: [$ENABLED_IME]"; [ -n "$ENABLED_IME" ] || { echo "::error::Test IME not enabled after ime enable: $TEST_IME"; exit 1; }
+            adb shell ime set "$TEST_IME" || { echo "::error::Test IME set failed: $TEST_IME"; exit 1; }
             echo "default_input_method: [$(adb shell settings get secure default_input_method 2>/dev/null | tr -d '\r')]"
             adb logcat -G 16M 2>/dev/null || true
             adb logcat -c 2>/dev/null || true
