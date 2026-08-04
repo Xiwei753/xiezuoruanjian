@@ -382,4 +382,21 @@ class SettingsRepository(
         }
     }
 
+    private val settingsSectionsPrefs = appContext.getSharedPreferences(
+        "sujian_settings_sections", android.content.Context.MODE_PRIVATE
+    )
+
+    fun getExpandedSettingsSections(): Set<com.xiwei.sujian.ui.phone.portrait.SettingsSection> {
+        val saved = settingsSectionsPrefs.getStringSet("expanded_sections", null) ?: emptySet()
+        return saved.mapNotNull { name ->
+            try { com.xiwei.sujian.ui.phone.portrait.SettingsSection.valueOf(name) } catch (_: Exception) { null }
+        }.toSet()
+    }
+
+    fun saveExpandedSettingsSections(sections: Set<com.xiwei.sujian.ui.phone.portrait.SettingsSection>) {
+        settingsSectionsPrefs.edit()
+            .putStringSet("expanded_sections", sections.map { it.name }.toSet())
+            .apply()
+    }
+
 }

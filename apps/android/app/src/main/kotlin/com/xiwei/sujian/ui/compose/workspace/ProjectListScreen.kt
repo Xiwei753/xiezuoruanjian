@@ -38,11 +38,11 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.model.Project
 import com.xiwei.sujian.model.RecentEdit
-import com.xiwei.sujian.ui.compose.SujianAppState
+import com.xiwei.sujian.ui.compose.WorkspaceAppState
 
 @Composable
 fun ProjectListContent(
-    appState: SujianAppState,
+    appState: WorkspaceAppState,
     onSelectProject: (projectId: String, projectTitle: String) -> Unit,
     showFab: Boolean = true,
     modifier: Modifier = Modifier
@@ -154,7 +154,7 @@ fun ProjectListContent(
 
 @Composable
 fun ProjectListScreen(
-    appState: SujianAppState,
+    appState: WorkspaceAppState,
     onSelectProject: (projectId: String, projectTitle: String) -> Unit,
     modifier: Modifier = Modifier
 ) {

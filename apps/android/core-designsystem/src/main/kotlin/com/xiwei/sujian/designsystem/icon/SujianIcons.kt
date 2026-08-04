@@ -23,6 +23,12 @@ import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Science
+import androidx.compose.material.icons.filled.CloudCircle
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.CloudQueue
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
@@ -60,6 +66,11 @@ object SujianIcons {
     val Close = Icons.Filled.Close
     val MenuBook = Icons.Filled.MenuBook
     val OpenInNew = Icons.Filled.OpenInNew
+    val CloudDone = Icons.Filled.CloudDone
+    val CloudError = Icons.Filled.CloudQueue
+    val CloudOff = Icons.Filled.CloudOff
+    val ExpandLess = Icons.Filled.ExpandLess
+    val ExpandMore = Icons.Filled.ExpandMore
     val Search = Icons.Filled.Search
     val SmartToy = Icons.Filled.SmartToy
     val UnfoldLess = Icons.Filled.UnfoldLess

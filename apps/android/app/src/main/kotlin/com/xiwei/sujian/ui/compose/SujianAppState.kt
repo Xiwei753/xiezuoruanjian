@@ -21,45 +21,66 @@ import com.xiwei.sujian.platform.api.FoldPosture
 import com.xiwei.sujian.platform.api.FoldOrientation as PlatformFoldOrientation
 import com.xiwei.sujian.platform.api.OcclusionType
 import com.xiwei.sujian.platform.window.WindowFoldFeatureCollector
-import com.xiwei.sujian.platform.window.AospFoldFeatureInfo
 import androidx.window.layout.FoldingFeature
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.xiwei.sujian.ui.phone.portrait.WorkspaceSessionViewModel
+
+interface WorkspaceAppState {
+    val projects: List<com.xiwei.sujian.model.Project>
+    val recentEdits: List<com.xiwei.sujian.model.RecentEdit>
+    val currentProjectId: String?
+    val currentProjectTitle: String
+    val currentVolumeId: String?
+    val currentChapterId: String?
+    val currentChapterTitle: String
+    fun selectProject(projectId: String, projectTitle: String)
+    fun selectProject(projectId: String)
+    fun selectChapter(volumeId: String, chapterId: String, chapterTitle: String)
+    fun selectChapter(volumeId: String, chapterId: String)
+    fun clearChapterSelection()
+    fun clearProjectSelection()
+    fun refreshProjects()
+    fun refreshRecentEdits()
+    fun createProject(title: String)
+    fun deleteProject(projectId: String)
+    fun renameProject(projectId: String, newTitle: String)
+}
 
 class SujianAppViewModel(
     private val savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
-    var projects by mutableStateOf<List<Project>>(emptyList())
+    var projects by androidx.compose.runtime.mutableStateOf<List<Project>>(emptyList())
         private set
 
-    var recentEdits by mutableStateOf<List<RecentEdit>>(emptyList())
+    var recentEdits by androidx.compose.runtime.mutableStateOf<List<RecentEdit>>(emptyList())
         private set
 
-    var currentProjectId by mutableStateOf<String?>(savedStateHandle["currentProjectId"])
+    var currentProjectId by androidx.compose.runtime.mutableStateOf<String?>(savedStateHandle["currentProjectId"])
         private set
 
-    var currentProjectTitle by mutableStateOf(savedStateHandle["currentProjectTitle"] ?: "")
+    var currentProjectTitle by androidx.compose.runtime.mutableStateOf(savedStateHandle["currentProjectTitle"] ?: "")
         private set
 
-    var currentVolumeId by mutableStateOf<String?>(savedStateHandle["currentVolumeId"])
+    var currentVolumeId by androidx.compose.runtime.mutableStateOf<String?>(savedStateHandle["currentVolumeId"])
         private set
 
-    var currentChapterId by mutableStateOf<String?>(savedStateHandle["currentChapterId"])
+    var currentChapterId by androidx.compose.runtime.mutableStateOf<String?>(savedStateHandle["currentChapterId"])
         private set
 
-    var currentChapterTitle by mutableStateOf(savedStateHandle["currentChapterTitle"] ?: "")
+    var currentChapterTitle by androidx.compose.runtime.mutableStateOf(savedStateHandle["currentChapterTitle"] ?: "")
         private set
 
-    var currentLayoutPlan by mutableStateOf<LayoutPlan?>(null)
+    var currentLayoutPlan by androidx.compose.runtime.mutableStateOf<LayoutPlan?>(null)
         private set
 
-    var foldFeatureInfo by mutableStateOf<FoldFeatureInfo>(FoldFeatureInfo())
+    var foldFeatureInfo by androidx.compose.runtime.mutableStateOf<FoldFeatureInfo>(FoldFeatureInfo())
         private set
 
-    var isLoading by mutableStateOf(false)
+    var isLoading by androidx.compose.runtime.mutableStateOf(false)
         private set
 
     private var workspaceUseCase: WorkspaceUseCase? = null
@@ -263,29 +284,57 @@ class SujianAppViewModel(
 @Stable
 class SujianAppState(
     val viewModel: SujianAppViewModel
-) {
-    val projects: List<Project> get() = viewModel.projects
-    val recentEdits: List<RecentEdit> get() = viewModel.recentEdits
-    val currentProjectId: String? get() = viewModel.currentProjectId
-    val currentProjectTitle: String get() = viewModel.currentProjectTitle
-    val currentVolumeId: String? get() = viewModel.currentVolumeId
-    val currentChapterId: String? get() = viewModel.currentChapterId
-    val currentChapterTitle: String get() = viewModel.currentChapterTitle
+) : WorkspaceAppState {
+    override val projects: List<Project> get() = viewModel.projects
+    override val recentEdits: List<RecentEdit> get() = viewModel.recentEdits
+    override val currentProjectId: String? get() = viewModel.currentProjectId
+    override val currentProjectTitle: String get() = viewModel.currentProjectTitle
+    override val currentVolumeId: String? get() = viewModel.currentVolumeId
+    override val currentChapterId: String? get() = viewModel.currentChapterId
+    override val currentChapterTitle: String get() = viewModel.currentChapterTitle
     val currentLayoutPlan: LayoutPlan? get() = viewModel.currentLayoutPlan
     val foldFeatureInfo: FoldFeatureInfo get() = viewModel.foldFeatureInfo
     val isLoading: Boolean get() = viewModel.isLoading
 
-    fun selectProject(projectId: String, projectTitle: String) = viewModel.selectProject(projectId, projectTitle)
-    fun selectProject(projectId: String) = viewModel.selectProject(projectId)
-    fun selectChapter(volumeId: String, chapterId: String, chapterTitle: String) = viewModel.selectChapter(volumeId, chapterId, chapterTitle)
-    fun selectChapter(volumeId: String, chapterId: String) = viewModel.selectChapter(volumeId, chapterId)
-    fun clearChapterSelection() = viewModel.clearChapterSelection()
-    fun clearProjectSelection() = viewModel.clearProjectSelection()
+    override fun selectProject(projectId: String, projectTitle: String) = viewModel.selectProject(projectId, projectTitle)
+    override fun selectProject(projectId: String) = viewModel.selectProject(projectId)
+    override fun selectChapter(volumeId: String, chapterId: String, chapterTitle: String) = viewModel.selectChapter(volumeId, chapterId, chapterTitle)
+    override fun selectChapter(volumeId: String, chapterId: String) = viewModel.selectChapter(volumeId, chapterId)
+    override fun clearChapterSelection() = viewModel.clearChapterSelection()
+    override fun clearProjectSelection() = viewModel.clearProjectSelection()
     fun updateFoldFeaturesFromAdaptive(features: List<FoldingFeature>, density: Float = 1f) = viewModel.updateFoldFeaturesFromAdaptive(features, density)
     fun resolveLayout(metrics: WindowMetrics): LayoutPlan? = viewModel.resolveLayout(metrics)
-    fun refreshProjects() = viewModel.refreshProjects()
-    fun refreshRecentEdits() = viewModel.refreshRecentEdits()
-    fun createProject(title: String) = viewModel.createProject(title)
-    fun deleteProject(projectId: String) = viewModel.deleteProject(projectId)
-    fun renameProject(projectId: String, newTitle: String) = viewModel.renameProject(projectId, newTitle)
+    override fun refreshProjects() = viewModel.refreshProjects()
+    override fun refreshRecentEdits() = viewModel.refreshRecentEdits()
+    override fun createProject(title: String) = viewModel.createProject(title)
+    override fun deleteProject(projectId: String) = viewModel.deleteProject(projectId)
+    override fun renameProject(projectId: String, newTitle: String) = viewModel.renameProject(projectId, newTitle)
+}
+
+@Stable
+class SujianSessionAppState(
+    val sessionViewModel: WorkspaceSessionViewModel
+) : WorkspaceAppState {
+    override val projects: List<Project> get() = sessionViewModel.projects
+    override val recentEdits: List<RecentEdit> get() = sessionViewModel.recentEdits
+    override val currentProjectId: String? get() = sessionViewModel.currentProjectId
+    override val currentProjectTitle: String get() = sessionViewModel.currentProjectTitle
+    override val currentVolumeId: String? get() = sessionViewModel.currentVolumeId
+    override val currentChapterId: String? get() = sessionViewModel.currentChapterId
+    override val currentChapterTitle: String get() = sessionViewModel.currentChapterTitle
+    val currentLayoutPlan: LayoutPlan? get() = null
+    val foldFeatureInfo: FoldFeatureInfo get() = FoldFeatureInfo()
+    val isLoading: Boolean get() = false
+
+    override fun selectProject(projectId: String, projectTitle: String) = sessionViewModel.selectProject(projectId, projectTitle)
+    override fun selectProject(projectId: String) = sessionViewModel.selectProject(projectId)
+    override fun selectChapter(volumeId: String, chapterId: String, chapterTitle: String) = sessionViewModel.selectChapter(volumeId, chapterId, chapterTitle)
+    override fun selectChapter(volumeId: String, chapterId: String) = sessionViewModel.selectChapter(volumeId, chapterId)
+    override fun clearChapterSelection() = sessionViewModel.clearChapterSelection()
+    override fun clearProjectSelection() = sessionViewModel.clearProjectSelection()
+    override fun refreshProjects() = sessionViewModel.refreshProjects()
+    override fun refreshRecentEdits() = sessionViewModel.refreshRecentEdits()
+    override fun createProject(title: String) = sessionViewModel.createProject(title)
+    override fun deleteProject(projectId: String) = sessionViewModel.deleteProject(projectId)
+    override fun renameProject(projectId: String, newTitle: String) = sessionViewModel.renameProject(projectId, newTitle)
 }

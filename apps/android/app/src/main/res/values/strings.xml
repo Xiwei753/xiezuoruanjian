@@ -12,6 +12,7 @@
     <string name="action_cancel">取消</string>
     <string name="action_create">创建</string>
     <string name="action_search">查找替换</string>
+    <string name="search_hint">全局搜索</string>
     <string name="action_search_next">下一个</string>
     <string name="action_replace">替换</string>
     <string name="action_replace_all">全部替换</string>
