@@ -214,6 +214,36 @@ class AndroidInputConnectionCompositionLifecycleTest {
     }
 
     @Test
+    fun orphanedKernelSession_textChangedSinceBegin_commitMustNotOverwrite() {
+        // External reset (sync / chapter switch) while composing: the kernel text is
+        // replaced and the composition session is dropped, but the adapter still
+        // believes it is composing with the old session id and the old byte range.
+        // The stale commit must NOT be replayed onto the new text — the local range
+        // [6,11) no longer addresses "world" in the new text (it covers "GHIJK"), so
+        // a positional replay would overwrite the wrong characters. The only safe
+        // resolution is a kernel reload.
+        val h = InputConnectionTestHarness("hello world", 11)
+        h.connection.setSelection(6, 11)
+        h.connection.setComposingRegion(6, 11)
+        h.connection.setComposingText("wrld", 1)
+        assertTrue(h.adapter.isComposing())
+
+        // Out-of-band kernel reset while composing (mirror reloaded, session cleared).
+        h.commandPort.simulateExternalReset("ABCDEFGHIJKLMNOP", 0)
+        assertFalse(h.commandPort.hasActiveSession())
+        assertEquals("ABCDEFGHIJKLMNOP", h.mirror.getCommittedText())
+
+        h.connection.commitText("WORLD", 1)
+
+        // The new text must be intact: nothing may be overwritten at the stale range.
+        assertEquals("ABCDEFGHIJKLMNOP", h.mirror.getCommittedText())
+        assertEquals("ABCDEFGHIJKLMNOP", h.commandPort.getKernelText())
+        assertFalse("The stale composition must be finished by the commit", h.adapter.isComposing())
+        assertEquals("The stale commit must be resolved by a kernel reload", 1, h.commandPort.reloadCount)
+        assertTrue("The stale range must never be replayed", h.commandPort.commitCalls.isEmpty())
+    }
+
+    @Test
     fun finishComposingText_withRegionOnly_leavesCommittedTextUnchanged() {
         // Recorrection path: setComposingRegion alone (no setComposingText) followed by
         // finish must land without text loss — the committed text already is the preedit.

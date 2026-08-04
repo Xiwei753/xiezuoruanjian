@@ -668,6 +668,23 @@ class FakeInputCommandPort(
 
     override fun onCompositionUpdated() = Unit
 
+    /**
+     * Simulate an out-of-band kernel text reset (external sync / chapter switch while the
+     * editor is bound): the kernel replaces the committed text, bumps the revision and
+     * drops any composition session — kernel `load_text` semantics — and the mirror is
+     * reloaded from the new snapshot, exactly like `EditPipeline.loadText` does after a
+     * successful `bridge.loadText`. The adapter is NOT notified (same as the real flow:
+     * `SujianEditorView.loadText` never touches the adapter's composition state).
+     */
+    fun simulateExternalReset(newText: String, cursorUtf8: Int) {
+        textBytes = newText.toByteArray(Charsets.UTF_8)
+        revision++
+        selectionAnchorUtf8 = cursorUtf8
+        selectionHeadUtf8 = cursorUtf8
+        clearSession()
+        mirror.loadFromSnapshot(newText, cursorUtf8, revision, cursorUtf8, cursorUtf8)
+    }
+
     override fun reloadFromKernel(): Boolean {
         reloadCount++
         mirror.loadFromSnapshot(

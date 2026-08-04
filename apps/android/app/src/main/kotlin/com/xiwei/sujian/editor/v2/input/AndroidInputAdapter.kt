@@ -351,9 +351,24 @@ class AndroidInputAdapter(
         // Orphaned composition session (Issue #589): the kernel session is stale — the
         // IME binding that started the composition is gone (IME switch / soft reset), so
         // the composition-commit path is rejected (STALE_REVISION). The composition's
-        // replace range is still known locally, so the same replacement is replayed as a
-        // PLAIN commit (sessionId = 0 after clearCompositionState): the text lands
-        // exactly where the user is typing, without loss and without a kernel reload.
+        // replace range is still known locally, so the same replacement can be replayed as
+        // a PLAIN commit (sessionId = 0 after clearCompositionState) — but ONLY while the
+        // committed text is unchanged since the composition began. The kernel bumps the
+        // revision on every committed-text change (load/reset/sync/other edits) while
+        // composition begin/update do NOT, so revision equality between the composition's
+        // base revision and the current kernel revision is exactly the invariant "the byte
+        // range [replaceStart, replaceEnd) still addresses the same text". Replaying a
+        // stale range onto changed text would overwrite the wrong characters (the local
+        // offsets are positional, not content-addressed), so on any revision change the
+        // only safe resolution is a kernel reload — the adapter state must not paper over
+        // the divergence.
+        if (commandPort.getRevision() != baseRev) {
+            clearCompositionState()
+            mirror.clearComposition()
+            commandPort.reloadFromKernel()
+            onCompositionVisualUpdate?.invoke()
+            return
+        }
         clearCompositionState()
         val originalText = extractCommittedTextAt(replaceStart, replaceEnd)
         sendCommitTextToKernel(
