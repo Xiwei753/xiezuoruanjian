@@ -253,34 +253,28 @@ class AndroidInputConnection(
      * converted to UTF-8 byte offsets for the Rust kernel via [AndroidTextIndexMap].
      * The selected text becomes the initial preedit, and the mirror's composition overlay
      * is set up immediately so the IME sees the composing region.
+     *
+     * Contract per Android's InputConnection API:
+     * - Negative offsets are rejected (returns false).
+     * - A reversed range (start > end) is accepted and normalized to [min, max).
+     * - The call does NOT notify InputMethodManager.updateSelection: unlike commitText /
+     *   setComposingText / setSelection / deleteSurrounding, the committed text and the
+     *   selection do not change here, so an extra updateSelection would only re-enter the
+     *   IME recorrection loop (an IME mirrors the selection back as setComposingRegion).
+     *
+     * Composition validity is governed by the InputConnection lifecycle, the kernel
+     * composition session (session id / base revision / generation) and the adapter's
+     * composition state machine — no IME enumeration or enabled-IME gate is used.
      */
     override fun setComposingRegion(start: Int, end: Int): Boolean {
-        if (start < 0 || end < 0 || start > end) return false
-        // setComposingRegion is only legitimate when an IME is enabled: it is how an
-        // IME marks a text region as composing (e.g. LatinIME's recorrection path,
-        // which highlights the word before the cursor after a selection change). With
-        // no enabled IME there is no composition source, so any such call is spurious —
-        // accepting it would mark the adapter as composing and corrupt subsequent plain
-        // commits (text loss, wrong operationKind).
-        val imm = hostView.context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)
-            as? android.view.inputmethod.InputMethodManager
-        val hasEnabledIme = imm?.enabledInputMethodList?.isNotEmpty() ?: false
-        if (!hasEnabledIme) {
-            android.util.Log.w(
-                "SujianEditorInput",
-                "setComposingRegion [$start,$end) IGNORED (no enabled IME)"
-            )
-            return true
-        }
-        android.util.Log.w(
-            "SujianEditorInput",
-            "setComposingRegion [$start,$end) composing=${adapter.isComposing()}"
-        )
+        if (start < 0 || end < 0) return false
+        val normStart = minOf(start, end)
+        val normEnd = maxOf(start, end)
         if (adapter.isComposing()) {
             adapter.handleCompositionCancel()
         }
-        val byteStart = displayUtf16ToRealUtf8(start)
-        val byteEnd = displayUtf16ToRealUtf8(end)
+        val byteStart = displayUtf16ToRealUtf8(normStart)
+        val byteEnd = displayUtf16ToRealUtf8(normEnd)
         val selectedText = extractUtf8Text(byteStart, byteEnd)
         val beginOk = adapter.sendBeginCompositionToKernel(byteStart, byteEnd)
         if (!beginOk) {
@@ -289,7 +283,6 @@ class AndroidInputConnection(
         }
         adapter.startComposingRegion(byteStart, byteEnd, selectedText)
         mirror.updateComposition(byteStart, byteEnd, selectedText)
-        notifySelectionChanged()
         return true
     }
 
