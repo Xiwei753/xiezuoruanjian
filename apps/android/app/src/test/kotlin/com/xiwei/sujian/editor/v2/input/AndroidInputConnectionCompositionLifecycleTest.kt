@@ -156,12 +156,12 @@ class AndroidInputConnectionCompositionLifecycleTest {
     }
 
     @Test
-    fun newInputConnection_clearsOrphanCompositionState() {
-        // Composition state belongs to one InputConnection instance. When the system
-        // recreates the connection (IME switch / restartInput / focus change), the
-        // previous connection's composition must be cancelled: kernel session closed,
-        // overlay removed, committed text restored — otherwise the new connection's
-        // first plain commit would be misrouted into the orphaned composition range.
+    fun newInputConnection_keepsLiveCompositionIntact() {
+        // Composition state is per-InputConnection, but the adapter outlives connections.
+        // Connection recreation (IME switch / restartInput / focus change / spurious
+        // callers like Espresso descriptions) must NOT cancel a live composition — the
+        // kernel session stays valid and the IME is still bound. Validity is governed by
+        // the kernel session/revision, not by connection creation.
         val h = InputConnectionTestHarness("hello world", 11)
         h.connection.setSelection(6, 11)
         h.connection.setComposingRegion(6, 11)
@@ -172,14 +172,45 @@ class AndroidInputConnectionCompositionLifecycleTest {
         val newConnection = h.adapter.onCreateInputConnection(android.view.inputmethod.EditorInfo())
 
         assertNotNull("A new connection must be produced", newConnection)
-        assertFalse("Orphan composition must be cancelled on connection recreation", h.adapter.isComposing())
-        assertEquals("Kernel session must be cancelled", 1, h.commandPort.cancelCompositionCount)
-        assertFalse("No kernel session may survive", h.commandPort.hasActiveSession())
-        assertFalse("Overlay must be cleared", h.mirror.hasComposition())
-        assertEquals("Committed text must be restored", "hello world", h.mirror.getCommittedText())
-        assertFalse("A second recreation must be a no-op (no double cancel)", h.adapter.isComposing())
-        h.adapter.onCreateInputConnection(android.view.inputmethod.EditorInfo())
-        assertEquals("Idle recreation must not cancel again", 1, h.commandPort.cancelCompositionCount)
+        assertTrue("The live composition must survive connection recreation", h.adapter.isComposing())
+        assertEquals("No kernel cancel may be issued", 0, h.commandPort.cancelCompositionCount)
+        assertTrue("The kernel session must survive", h.commandPort.hasActiveSession())
+        assertTrue("The overlay must survive", h.mirror.hasComposition())
+        assertEquals("The preedit must survive", "wrld", h.adapter.getCompositionText())
+
+        // The composition remains fully usable through the fresh connection.
+        newConnection!!.finishComposingText()
+        assertFalse(h.adapter.isComposing())
+        assertEquals("hello wrld", h.mirror.getCommittedText())
+    }
+
+    @Test
+    fun orphanedKernelSession_commitReplaysAsPlainReplace() {
+        // IME switch mid-composition leaves an orphaned kernel session: the adapter still
+        // believes it is composing with a stale session id. The next commitText must be
+        // replayed as a plain replace at the composition range — no text loss, no reload.
+        val h = InputConnectionTestHarness("hello world", 11)
+        h.connection.setSelection(6, 11)
+        h.connection.setComposingRegion(6, 11)
+        h.connection.setComposingText("wrld", 1)
+        assertTrue(h.adapter.isComposing())
+
+        // The kernel session dies out-of-band (new binding reset it).
+        val (sessionId, _, generation) = h.adapter.compositionSessionInfo()
+        h.commandPort.cancelComposition(sessionId, generation.toLong())
+        assertFalse(h.commandPort.hasActiveSession())
+
+        h.connection.commitText("WORLD", 1)
+
+        assertFalse("The stale composition must be finished by the commit", h.adapter.isComposing())
+        assertEquals("The text must land at the composition range", "hello WORLD", h.mirror.getCommittedText())
+        assertEquals("Kernel text must match the mirror", "hello WORLD", h.commandPort.getKernelText())
+        assertEquals("No kernel reload may be needed", 0, h.commandPort.reloadCount)
+        assertEquals(
+            "The replay must be a plain replace",
+            EditorOperationKindDto.REPLACE,
+            h.commandPort.commitCalls.last().operationKind
+        )
     }
 
     @Test

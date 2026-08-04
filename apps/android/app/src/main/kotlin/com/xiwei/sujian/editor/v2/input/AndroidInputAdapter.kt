@@ -63,20 +63,13 @@ class AndroidInputAdapter(
 
     fun onCreateInputConnection(outAttrs: android.view.inputmethod.EditorInfo?): android.view.inputmethod.InputConnection? {
         val host = hostView ?: return null
-        // InputConnection lifecycle hook (Issue #589): composition state is per-InputConnection,
-        // but the adapter outlives connections. A fresh onCreateInputConnection means the
-        // previous IME binding is over (IME switch, restartInput, focus regain, soft reset),
-        // and Android does not guarantee finishComposingText() before it discards a
-        // connection. Without this cleanup the adapter would keep an orphan composition:
-        // the kernel session stays live and the overlay stays visible while the new
-        // connection's IME knows nothing about them, so the first plain commitText would be
-        // misrouted into the composition-commit path, rejected by the kernel as
-        // STALE_REVISION and dropped (text loss) — the corruption the removed
-        // enabledInputMethodList gate used to guard. Cancelling here aligns the adapter
-        // state machine with the connection lifecycle; the kernel-side session is closed
-        // best-effort too (kernel begin_composition already replaces stale sessions).
-        // No IME enumeration or switch is involved.
-        invalidateCompositionSession()
+        // NOTE (Issue #589): composition validity is deliberately NOT tied to
+        // InputConnection creation. onCreateInputConnection is invoked by the system on
+        // IME rebinding AND spuriously by other callers (Espresso view descriptions,
+        // direct connection probing), so cancelling here would destroy live compositions.
+        // Orphaned kernel sessions (IME switch mid-composition) are healed by the
+        // kernel session/revision validation plus the adapter's stale-session retry paths
+        // (see handleCompositionCommitWithText / handleCompositionUpdate).
         if (outAttrs != null) {
             val inputType = when (currentProfile.inputType) {
                 TextInputType.NUMBER -> android.text.InputType.TYPE_CLASS_NUMBER
@@ -355,8 +348,25 @@ class AndroidInputAdapter(
                 return
             }
         }
+        // Orphaned composition session (Issue #589): the kernel session is stale — the
+        // IME binding that started the composition is gone (IME switch / soft reset), so
+        // the composition-commit path is rejected (STALE_REVISION). The composition's
+        // replace range is still known locally, so the same replacement is replayed as a
+        // PLAIN commit (sessionId = 0 after clearCompositionState): the text lands
+        // exactly where the user is typing, without loss and without a kernel reload.
         clearCompositionState()
-        commandPort.reloadFromKernel()
+        val originalText = extractCommittedTextAt(replaceStart, replaceEnd)
+        sendCommitTextToKernel(
+            replaceStart, replaceEnd, finalText, originalText,
+            resultingAnchor, resultingHead,
+            EditorTransactionCauseDto.TYPING
+        )
+    }
+
+    private fun extractCommittedTextAt(byteStart: Int, byteEndExclusive: Int): String {
+        val bytes = mirror.getCommittedText().toByteArray(Charsets.UTF_8)
+        if (byteStart < 0 || byteEndExclusive > bytes.size || byteStart > byteEndExclusive) return ""
+        return String(bytes.copyOfRange(byteStart, byteEndExclusive), Charsets.UTF_8)
     }
 
     fun handleCompositionFinish() {
