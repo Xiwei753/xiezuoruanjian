@@ -364,6 +364,20 @@
     <string name="sync_error">Sync failed</string>
     <string name="core_not_loaded">Native Core not loaded</string>
     <string name="unexpected_error">Unexpected error</string>
+    <string name="sync_terminal_failure">Sync encountered an unrecoverable error</string>
+    <string name="sync_retryable_failure">Sync encountered a temporary error, retryable</string>
+    <string name="sync_retryable_network">Sync encountered a network error, retryable</string>
+    <string name="sync_retryable_io">Sync encountered an I/O error, retryable</string>
+    <string name="sync_conflict">Sync conflict, manual resolution needed</string>
+    <string name="sync_dirty_repository">Local uncommitted changes, sync blocked</string>
+    <string name="sync_protocol_error">Sync protocol error</string>
+    <string name="sync_native_unavailable">Native Core not loaded</string>
+    <string name="sync_fatal">Sync encountered an unrecoverable error</string>
+    <string name="sync_unconfigured">Sync not configured</string>
+    <string name="sync_disabled">Sync not enabled</string>
+    <string name="sync_busy">Sync in progress</string>
+    <string name="sync_unknown">Unknown sync error</string>
+    <string name="save_config_or_secrets_failed">Failed to save sync config or credentials</string>
     <string name="sync_diag_ok">OK</string>
     <string name="sync_diag_fail">Fail</string>
 

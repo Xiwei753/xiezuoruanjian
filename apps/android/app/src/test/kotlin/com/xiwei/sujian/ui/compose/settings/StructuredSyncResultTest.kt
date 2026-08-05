@@ -95,7 +95,7 @@ class StructuredSyncResultTest {
 
     @Test
     fun errorResultsUseMessageKeyNotRawString() {
-        val errorKeys = listOf("dry_run_error", "diagnostics_error", "sync_error", "sync_terminal_failure", "unexpected_error")
+        val errorKeys = listOf("sync_fatal", "sync_retryable_network", "sync_auth_failed", "sync_terminal_failure", "unexpected_error")
         for (key in errorKeys) {
             val result = StructuredSyncResult(
                 statusCode = "error",

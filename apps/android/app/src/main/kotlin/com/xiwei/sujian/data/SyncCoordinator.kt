@@ -14,8 +14,18 @@ sealed class SyncOutcome {
     data object Disabled : SyncOutcome()
     data object Unconfigured : SyncOutcome()
     data object Busy : SyncOutcome()
-    data class RetryableFailure(val status: SyncStatus) : SyncOutcome()
-    data class TerminalFailure(val status: SyncStatus) : SyncOutcome()
+    /**
+     * #592 三：携带具体 [SyncFailureKind]，使正式同步、试运行、连接诊断
+     * 全部通过 kind.messageKey() 获得同一用户提示映射。
+     */
+    data class RetryableFailure(
+        val status: SyncStatus,
+        val kind: SyncFailureKind = SyncFailureKind.fromSyncStatus(status),
+    ) : SyncOutcome()
+    data class TerminalFailure(
+        val status: SyncStatus,
+        val kind: SyncFailureKind = SyncFailureKind.fromSyncStatus(status),
+    ) : SyncOutcome()
 }
 
 class SyncCoordinator(
@@ -100,16 +110,16 @@ class SyncCoordinator(
         SyncStatus.BranchMissingRecovered -> SyncOutcome.Completed(result)
 
         SyncStatus.RecoverableError,
-        SyncStatus.Error -> SyncOutcome.RetryableFailure(result.status)
+        SyncStatus.Error -> SyncOutcome.RetryableFailure(result.status, SyncFailureKind.fromSyncStatus(result.status))
 
         SyncStatus.Conflict,
         SyncStatus.PartialConflict,
         SyncStatus.FatalError,
-        SyncStatus.DirtyRepoBlocked -> SyncOutcome.TerminalFailure(result.status)
+        SyncStatus.DirtyRepoBlocked -> SyncOutcome.TerminalFailure(result.status, SyncFailureKind.fromSyncStatus(result.status))
 
         SyncStatus.Syncing -> {
             DiagnosticsLogger.w("SyncCoordinator", "performSync returned Syncing — protocol error, mapping to terminal failure")
-            SyncOutcome.TerminalFailure(SyncStatus.FatalError)
+            SyncOutcome.TerminalFailure(SyncStatus.FatalError, SyncFailureKind.Fatal)
         }
         SyncStatus.Idle,
         SyncStatus.ConfiguredNotTested -> SyncOutcome.Unconfigured

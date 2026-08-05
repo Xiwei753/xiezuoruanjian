@@ -443,9 +443,9 @@ class SettingsViewModel(
                 is SyncOutcome.Busy ->
                     SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_busy"))
                 is SyncOutcome.RetryableFailure ->
-                    SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_retryable_failure"))
+                    SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = syncOutcome.kind.messageKey()))
                 is SyncOutcome.TerminalFailure ->
-                    SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_terminal_failure"))
+                    SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = syncOutcome.kind.messageKey()))
                 else ->
                     SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_unknown"))
             }

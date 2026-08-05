@@ -328,6 +328,18 @@
     <string name="sync_already_running">同步正在执行中，请稍后再试</string>
     <string name="sync_terminal_failure">同步遇到不可恢复错误</string>
     <string name="sync_retryable_failure">同步遇到临时错误，可重试</string>
+    <string name="sync_retryable_network">同步遇到网络错误，可重试</string>
+    <string name="sync_retryable_io">同步遇到读写错误，可重试</string>
+    <string name="sync_conflict">同步遇到冲突，需要手动处理</string>
+    <string name="sync_dirty_repository">本地有未提交变更，同步被阻止</string>
+    <string name="sync_protocol_error">同步协议错误</string>
+    <string name="sync_native_unavailable">Native Core 未加载</string>
+    <string name="sync_fatal">同步遇到不可恢复错误</string>
+    <string name="sync_unconfigured">同步未配置</string>
+    <string name="sync_disabled">同步未启用</string>
+    <string name="sync_busy">同步正在执行中</string>
+    <string name="sync_unknown">未知同步错误</string>
+    <string name="save_config_or_secrets_failed">保存同步配置或凭据失败</string>
 
     <!-- WorkspaceRepository Exception messages -->
     <string name="repo_workspace_init_failed">工作区初始化失败: %1$s</string>

@@ -26,17 +26,31 @@ enum class SyncFailureKind {
     }
 
     fun toOutcome(): SyncOutcome = when (this) {
-        RetryableNetwork -> SyncOutcome.RetryableFailure(com.xiwei.sujian.model.SyncStatus.RecoverableError)
-        RetryableIo -> SyncOutcome.RetryableFailure(com.xiwei.sujian.model.SyncStatus.RecoverableError)
-        Authentication -> SyncOutcome.TerminalFailure(com.xiwei.sujian.model.SyncStatus.FatalError)
-        Conflict -> SyncOutcome.TerminalFailure(com.xiwei.sujian.model.SyncStatus.Conflict)
-        DirtyRepository -> SyncOutcome.TerminalFailure(com.xiwei.sujian.model.SyncStatus.DirtyRepoBlocked)
-        Protocol -> SyncOutcome.TerminalFailure(com.xiwei.sujian.model.SyncStatus.FatalError)
-        NativeUnavailable -> SyncOutcome.TerminalFailure(com.xiwei.sujian.model.SyncStatus.FatalError)
-        Fatal -> SyncOutcome.TerminalFailure(com.xiwei.sujian.model.SyncStatus.FatalError)
+        RetryableNetwork -> SyncOutcome.RetryableFailure(com.xiwei.sujian.model.SyncStatus.RecoverableError, RetryableNetwork)
+        RetryableIo -> SyncOutcome.RetryableFailure(com.xiwei.sujian.model.SyncStatus.RecoverableError, RetryableIo)
+        Authentication -> SyncOutcome.TerminalFailure(com.xiwei.sujian.model.SyncStatus.FatalError, Authentication)
+        Conflict -> SyncOutcome.TerminalFailure(com.xiwei.sujian.model.SyncStatus.Conflict, Conflict)
+        DirtyRepository -> SyncOutcome.TerminalFailure(com.xiwei.sujian.model.SyncStatus.DirtyRepoBlocked, DirtyRepository)
+        Protocol -> SyncOutcome.TerminalFailure(com.xiwei.sujian.model.SyncStatus.FatalError, Protocol)
+        NativeUnavailable -> SyncOutcome.TerminalFailure(com.xiwei.sujian.model.SyncStatus.FatalError, NativeUnavailable)
+        Fatal -> SyncOutcome.TerminalFailure(com.xiwei.sujian.model.SyncStatus.FatalError, Fatal)
     }
 
     companion object {
+        /**
+         * #592 三：Core 返回的 SyncResult.status 到失败类型的映射。
+         * 用于正式同步成功路径中 Core 报告的失败状态，与 Bridge 错误码路径共用同一类型。
+         */
+        fun fromSyncStatus(status: com.xiwei.sujian.model.SyncStatus): SyncFailureKind = when (status) {
+            com.xiwei.sujian.model.SyncStatus.RecoverableError,
+            com.xiwei.sujian.model.SyncStatus.Error -> RetryableNetwork
+            com.xiwei.sujian.model.SyncStatus.Conflict,
+            com.xiwei.sujian.model.SyncStatus.PartialConflict -> Conflict
+            com.xiwei.sujian.model.SyncStatus.DirtyRepoBlocked -> DirtyRepository
+            com.xiwei.sujian.model.SyncStatus.FatalError -> Fatal
+            else -> Fatal
+        }
+
         fun fromErrorCode(code: String?): SyncFailureKind = when (code) {
             "SYNC_NETWORK_UNAVAILABLE", "SYNC_RATE_LIMITED" -> RetryableNetwork
             "IO_ERROR" -> RetryableIo

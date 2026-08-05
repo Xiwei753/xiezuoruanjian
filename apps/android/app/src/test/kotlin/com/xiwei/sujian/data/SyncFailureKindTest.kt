@@ -1,6 +1,7 @@
 package com.xiwei.sujian.data
 
 import org.junit.Assert.assertEquals
+import com.xiwei.sujian.data.SyncOutcome
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -69,5 +70,38 @@ class SyncFailureKindTest {
             assertTrue("$kind should be TerminalFailure, got $outcome",
                 outcome is SyncOutcome.TerminalFailure)
         }
+    }
+
+    /**
+     * #592 三：toOutcome 必须保留具体 kind，使正式同步、试运行、连接诊断
+     * 全部通过 kind.messageKey() 获得同一用户提示映射。
+     */
+    @Test
+    fun toOutcome_preservesKindForAllKinds() {
+        SyncFailureKind.entries.forEach { kind ->
+            val outcome = kind.toOutcome()
+            val recoveredKind = when (outcome) {
+                is SyncOutcome.RetryableFailure -> outcome.kind
+                is SyncOutcome.TerminalFailure -> outcome.kind
+                else -> null
+            }
+            assertEquals("toOutcome must preserve kind for $kind", kind, recoveredKind)
+        }
+    }
+
+    @Test
+    fun fromSyncStatus_mapsCoreStatusesToCorrectKinds() {
+        assertEquals(SyncFailureKind.RetryableNetwork,
+            SyncFailureKind.fromSyncStatus(com.xiwei.sujian.model.SyncStatus.RecoverableError))
+        assertEquals(SyncFailureKind.RetryableNetwork,
+            SyncFailureKind.fromSyncStatus(com.xiwei.sujian.model.SyncStatus.Error))
+        assertEquals(SyncFailureKind.Conflict,
+            SyncFailureKind.fromSyncStatus(com.xiwei.sujian.model.SyncStatus.Conflict))
+        assertEquals(SyncFailureKind.Conflict,
+            SyncFailureKind.fromSyncStatus(com.xiwei.sujian.model.SyncStatus.PartialConflict))
+        assertEquals(SyncFailureKind.DirtyRepository,
+            SyncFailureKind.fromSyncStatus(com.xiwei.sujian.model.SyncStatus.DirtyRepoBlocked))
+        assertEquals(SyncFailureKind.Fatal,
+            SyncFailureKind.fromSyncStatus(com.xiwei.sujian.model.SyncStatus.FatalError))
     }
 }
