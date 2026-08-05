@@ -106,6 +106,8 @@ class AndroidVisualRuntime(
         animationEngine.resume(frameTimeMs)
     }
 
+    fun isAnimationPaused(): Boolean = animationEngine.isPaused()
+
     fun tick(
         frameTimeMs: Long,
         layout: android.text.Layout?,

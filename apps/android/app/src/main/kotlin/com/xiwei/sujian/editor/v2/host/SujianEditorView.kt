@@ -617,6 +617,11 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun isReduceMotionEnabled(): Boolean = reduceMotionEnabled
 
+    /**
+     * #595 六：当前动画是否因窗口失焦而暂停 — 供宿主派生 [EditorAttachmentState.Paused]。
+     */
+    fun isAnimationPaused(): Boolean = pipeline.isAnimationPaused()
+
     fun applyThemeColorsFromAdapter(colors: com.xiwei.sujian.ui.compose.theme.EditorThemeColors) {
         lastAppliedThemeColors = colors
         _themeBackgroundColor = colors.background

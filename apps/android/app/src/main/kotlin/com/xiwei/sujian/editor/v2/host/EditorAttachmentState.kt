@@ -2,6 +2,7 @@ package com.xiwei.sujian.editor.v2.host
 
 import com.xiwei.sujian.editor.v2.coordinator.ProjectionSnapshot
 import com.xiwei.sujian.editor.v2.coordinator.TargetSnapshot
+import com.xiwei.sujian.editor.v2.coordinator.WindowBindingState
 
 /**
  * #595 六：窗口附着 sealed 状态机 — 区分临时失焦、窗口解绑和业务关闭。
@@ -57,3 +58,40 @@ data class EditorFrameSnapshot(
     val viewportHeight: Int,
     val hasActiveAnimation: Boolean,
 )
+
+
+/**
+ * #595 六：从规范会话级 [WindowBindingState] 派生窗口附着状态 — 纯函数，不引入并行状态机。
+ *
+ * [WindowBindingState] 是唯一规范绑定状态机（由 [com.xiwei.sujian.editor.v2.coordinator.EditorSessionCoordinator] 维护）；
+ * 本函数把它投影为窗口附着语义，并叠加窗口级 [paused] 标志（来自 View 焦点变化）。
+ *
+ * - [WindowBindingState.Attached] + paused=true → [EditorAttachmentState.Paused]
+ * - [WindowBindingState.Committing]/[Cancelling] 仍视为已附着（事务进行中）
+ * - [WindowBindingState.Detaching] 视为已解绑（瞬态，snapshot 已捕获）
+ */
+fun attachmentStateFromBinding(
+    state: WindowBindingState,
+    paused: Boolean,
+    frameSnapshot: EditorFrameSnapshot?,
+    projectionSnapshot: ProjectionSnapshot?,
+): EditorAttachmentState = when (state) {
+    WindowBindingState.Idle -> EditorAttachmentState.Idle
+    is WindowBindingState.Attaching -> EditorAttachmentState.Attaching(state.windowId, state.targetId, state.sessionId)
+    is WindowBindingState.Attached -> if (paused && frameSnapshot != null) {
+        EditorAttachmentState.Paused(state.targetId, state.sessionId, frameSnapshot)
+    } else {
+        EditorAttachmentState.Attached(state.windowId, state.targetId, state.sessionId)
+    }
+    is WindowBindingState.Detaching -> EditorAttachmentState.Detached(
+        targetId = "",
+        sessionId = 0UL,
+        sessionSnapshot = state.snapshot,
+        projectionSnapshot = projectionSnapshot,
+    )
+    is WindowBindingState.Detached -> EditorAttachmentState.Detached(
+        state.targetId, state.sessionId, state.snapshot, projectionSnapshot,
+    )
+    is WindowBindingState.Committing -> EditorAttachmentState.Attached("", state.targetId, state.sessionId)
+    is WindowBindingState.Cancelling -> EditorAttachmentState.Attached("", state.targetId, state.sessionId)
+}

@@ -104,6 +104,8 @@ class AndroidEditorPipeline private constructor(
         visualRuntime.resume(frameTimeMs)
     }
 
+    fun isAnimationPaused(): Boolean = visualRuntime.isAnimationPaused()
+
     fun loadText(text: String, cursorUtf8: Int, @Suppress("UNUSED_PARAMETER") applySecret: Boolean = true): LoadTextResult {
         val result = editPipeline.loadText(text, cursorUtf8)
         if (result is LoadTextResult.Loaded) {

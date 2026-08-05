@@ -11,6 +11,10 @@ import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import com.xiwei.sujian.editor.v2.host.TextEditSessionBridge
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.projection.TargetDisplayRuntime
+import com.xiwei.sujian.editor.v2.host.EditorAttachmentState
+import com.xiwei.sujian.editor.v2.host.EditorFrameSnapshot
+import com.xiwei.sujian.editor.v2.host.attachmentStateFromBinding
+import com.xiwei.sujian.editor.v2.motion.EditorMotionPolicy
 
 /**
  * #592 一/四：窗口层宿主 — 每个 Activity/窗口创建一份，持有全部窗口/渲染对象：
@@ -156,9 +160,41 @@ class EditorWindowHost(
     /**
      * #595 三：原子应用 [EditorMotionPolicy] — 一次更新文字、光标、协同、时长和 reduce-motion。
      */
-    fun applyMotionPolicy(policy: com.xiwei.sujian.editor.v2.motion.EditorMotionPolicy) {
+    fun applyMotionPolicy(policy: EditorMotionPolicy) {
         val effective = policy.effective()
         setEditorAnimationSettings(EditorAnimationSettings.fromMotionPolicy(effective))
+    }
+
+    /**
+     * #595 三：当前动画策略 — 从规范设置派生的单一可观察事实源（不可变）。
+     * UI 收集该值向下传递，[applyMotionPolicy] 原子更新。
+     */
+    val motionPolicy: EditorMotionPolicy
+        get() = getEditorAnimationSettings().toMotionPolicy()
+
+    /**
+     * #595 六：窗口附着状态 — 从规范 [WindowBindingState] 派生，不引入并行状态机。
+     * 叠加窗口级暂停标志（来自 [SujianEditorView.isAnimationPaused]）。
+     */
+    val attachmentState: EditorAttachmentState
+        get() {
+            val view = sharedEditorView
+            val paused = view != null && view.isAnimationPaused()
+            val frame = if (paused) currentFrameSnapshot() else null
+            val projection = activeTargetId?.let { sessionCoordinator.getProjectionSnapshot(it) }
+            return attachmentStateFromBinding(windowBindingState, paused, frame, projection)
+        }
+
+    private fun currentFrameSnapshot(): EditorFrameSnapshot? {
+        val view = sharedEditorView ?: return null
+        if (view.width <= 0 || view.height <= 0) return null
+        return EditorFrameSnapshot(
+            scrollX = view.getScrollXPos(),
+            scrollY = view.getScrollYPos(),
+            viewportWidth = view.width,
+            viewportHeight = view.height,
+            hasActiveAnimation = view.needsFrame(),
+        )
     }
 
     // ── Edit operations (orchestrates session + window) ──
