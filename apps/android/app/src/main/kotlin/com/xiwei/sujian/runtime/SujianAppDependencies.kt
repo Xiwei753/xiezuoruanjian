@@ -41,7 +41,16 @@ class DefaultSujianAppDependencies(context: Context) : SujianAppDependencies {
     override val appServiceBridge: AppServiceBridge = BridgeProvider.getAppServiceBridge(appContext)
     override val workspaceRepository: WorkspaceRepository = WorkspaceRepository(appContext, appServiceBridge)
     override val settingsRepository: SettingsRepository = SettingsRepository(appContext, appServiceBridge)
-    override val coordinator: AnimatedTextEditorCoordinator = AnimatedTextEditorCoordinator(appContext, appServiceBridge)
+
+    /**
+     * 编辑器协调器是 UI 侧组件（构造即创建 Choreographer 帧时钟，必须运行在
+     * 带 Looper 的主线程）。容器构造可能发生在 WorkManager 后台线程
+     * （进程由 Worker 拉起时无任何 UI 组合），因此必须惰性创建：
+     * 只有首次 UI 组合访问时才在 UI 线程构造。
+     */
+    override val coordinator: AnimatedTextEditorCoordinator by lazy {
+        AnimatedTextEditorCoordinator(appContext, appServiceBridge)
+    }
     override val syncStatusRepository: SyncStatusRepository = SyncStatusRepository(settingsRepository)
     override val syncCoordinator: SyncCoordinator = SyncCoordinator(settingsRepository, syncStatusRepository)
 

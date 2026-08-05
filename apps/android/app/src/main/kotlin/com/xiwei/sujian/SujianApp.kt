@@ -16,9 +16,16 @@ import java.io.FileWriter
 class SujianApp : Application(), DefaultLifecycleObserver, com.xiwei.sujian.runtime.SujianAppDependenciesProvider {
 
     private var autoSyncScheduler: AutoSyncScheduler? = null
-    private var _dependencies: com.xiwei.sujian.runtime.SujianAppDependencies? = null
+
+    /**
+     * 进程级唯一依赖容器：默认线程安全 lazy 保证 UI 线程与 WorkManager
+     * 后台线程首次并发访问也只构造一个实例，避免出现两份
+     * SyncStatusRepository StateFlow / SyncCoordinator 互相覆盖。
+     */
+    private val dependenciesDelegate: Lazy<com.xiwei.sujian.runtime.SujianAppDependencies> =
+        lazy { com.xiwei.sujian.runtime.DefaultSujianAppDependencies(this) }
     override val dependencies: com.xiwei.sujian.runtime.SujianAppDependencies
-        get() = _dependencies ?: com.xiwei.sujian.runtime.DefaultSujianAppDependencies(this).also { _dependencies = it }
+        get() = dependenciesDelegate.value
 
     override fun onCreate() {
         super<Application>.onCreate()
