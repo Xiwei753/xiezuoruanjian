@@ -194,8 +194,6 @@ private fun PhonePortraitSuite(
     LaunchedEffect(Unit) {
         val workspaceUC = com.xiwei.sujian.data.WorkspaceUseCase(deps.workspaceRepository)
         sessionVm.initialize(deps.workspaceRepository, workspaceUC)
-        com.xiwei.sujian.data.SyncStatusRepository.initialize(deps.settingsRepository)
-        com.xiwei.sujian.data.SyncStatusRepository.refreshState()
     }
 
     PhonePortraitShell(

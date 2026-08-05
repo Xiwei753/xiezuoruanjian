@@ -5,8 +5,9 @@ import androidx.compose.runtime.compositionLocalOf
 import com.xiwei.sujian.data.AppServiceBridge
 import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.data.SettingsRepository
+import com.xiwei.sujian.data.SyncCoordinator
+import com.xiwei.sujian.data.SyncStatusRepository
 import com.xiwei.sujian.data.WorkspaceRepository
-import com.xiwei.sujian.data.WorkspaceUseCase
 import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
 
 interface SujianAppDependencies {
@@ -39,6 +40,11 @@ class DefaultSujianAppDependencies(context: Context) : SujianAppDependencies {
     override val workspaceRepository: WorkspaceRepository = WorkspaceRepository(appContext, appServiceBridge)
     override val settingsRepository: SettingsRepository = SettingsRepository(appContext, appServiceBridge)
     override val coordinator: AnimatedTextEditorCoordinator = AnimatedTextEditorCoordinator(appContext, appServiceBridge)
+
+    init {
+        SyncStatusRepository.initialize(settingsRepository)
+        SyncCoordinator.initialize(settingsRepository)
+    }
 
     override fun release() {
         coordinator.releaseHost()

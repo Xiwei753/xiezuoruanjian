@@ -4,7 +4,7 @@ import android.content.Context
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
-import com.xiwei.sujian.model.SyncStatus
+import com.xiwei.sujian.model.SyncTrigger
 
 class AutoSyncWorker(
     appContext: Context,
@@ -44,42 +44,15 @@ class AutoSyncWorker(
         }
         if (elapsed != null && elapsed < interval) return Result.success()
 
-        val exclusiveResult = SyncSession.runExclusive { taskId ->
-            // 自动同步开始立即变黄；结束由成功/失败状态发布绿/红。
-            SyncStatusRepository.notifySyncStarted()
-            when (val result = settingsRepository.performSync(config)) {
-                is BridgeResult.Error -> {
-                    DiagnosticsLogger.w(TAG, "AutoSync failed: ${result.fullEnvelope}")
-                    com.xiwei.sujian.diagnostics.DiagnosticsEvents.syncEvent("autosync", "failed")
-                    Result.retry()
-                }
-                BridgeResult.NotLoaded -> {
-                    DiagnosticsLogger.w(TAG, "AutoSync skipped: native core not loaded")
-                    Result.retry()
-                }
-                is BridgeResult.Success -> {
-                    val status = result.data.status
-                    if (isSuccessfulStatus(status)) {
-                        SyncStatusRepository.notifySyncSuccess()
-                    } else {
-                        SyncStatusRepository.notifySyncFailed()
-                    }
-                    Result.success()
-                }
-            }
+        SyncCoordinator.initialize(settingsRepository)
+        val result = SyncCoordinator.runSync(SyncTrigger.Auto)
+        return if (result != null) {
+            com.xiwei.sujian.diagnostics.DiagnosticsEvents.syncEvent("autosync", "completed")
+            Result.success()
+        } else {
+            com.xiwei.sujian.diagnostics.DiagnosticsEvents.syncEvent("autosync", "skipped")
+            Result.retry()
         }
-
-        return when (exclusiveResult) {
-            is ExclusiveResult.Busy -> Result.retry()
-            is ExclusiveResult.Success -> exclusiveResult.value
-        }
-    }
-
-    private fun isSuccessfulStatus(status: SyncStatus): Boolean {
-        return status == SyncStatus.Success ||
-            status == SyncStatus.NoChanges ||
-            status == SyncStatus.LatestWinsApplied ||
-            status == SyncStatus.BranchMissingRecovered
     }
 
     companion object {

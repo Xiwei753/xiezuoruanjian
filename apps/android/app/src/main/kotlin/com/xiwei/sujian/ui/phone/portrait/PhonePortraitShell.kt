@@ -37,9 +37,11 @@ import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.scene.Scene
 import androidx.navigation3.ui.NavDisplay
+import com.xiwei.sujian.data.SyncCoordinator
 import com.xiwei.sujian.data.SyncStatusRepository
 import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.designsystem.component.SujianSnackbar
+import com.xiwei.sujian.model.SyncTrigger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
@@ -57,8 +59,6 @@ fun PhonePortraitShell(
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
 
-    // 唯一工作区导航状态：PhoneWorkspaceNavigationState 持有唯一 Material3 Adaptive
-    // navigator；初始历史由会话恢复的选择推导，之后位置一律从当前 destination 推导。
     val initialHistory = remember {
         val chain = mutableListOf<ThreePaneScaffoldDestinationItem<WorkspacePaneKey>>(
             ThreePaneScaffoldDestinationItem(WorkspacePaneKey.ProjectList.role, WorkspacePaneKey.ProjectList),
@@ -89,7 +89,6 @@ fun PhonePortraitShell(
 
     val activity = LocalActivity.current as? ComponentActivity
 
-    // 顶栏返回、系统返回（NavDisplay 之外的根栈返回）、页面返回与预测返回共用同一 back 入口。
     val handleBack: suspend () -> Boolean = {
         when {
             backStack.lastOrNull() is PhoneSettingsRoute -> {
@@ -148,7 +147,7 @@ fun PhonePortraitShell(
                 onSearch = { },
                 onSync = {
                     coroutineScope.launch {
-                        SyncStatusRepository.manualSync()
+                        SyncCoordinator.runSync(SyncTrigger.Manual)
                     }
                 },
                 syncState = syncState,
@@ -232,7 +231,6 @@ private fun PhoneRootContent(
     val isEditor = stateHolder.selectedRoot == PhoneRoot.Works &&
         workspaceNavState.currentLocation is WorkspaceLocation.Editor
     val contentPadding = if (isEditor) {
-        // 正文模式只保留底部安全区，顶部由编辑器自身的顶部安全区处理，背景延伸进顶栏区域。
         PaddingValues(bottom = innerPadding.calculateBottomPadding())
     } else {
         innerPadding

@@ -18,9 +18,10 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.data.SyncStatusRepository
-import kotlinx.coroutines.launch
 import com.xiwei.sujian.data.WorkspaceUseCase
 import com.xiwei.sujian.editor.v2.compose.LocalAnimatedTextEditorCoordinator
 import com.xiwei.sujian.model.Orientation
@@ -38,6 +39,7 @@ import com.xiwei.sujian.platform.vendor.VendorAdapterRegistry
 import com.xiwei.sujian.runtime.DefaultSujianAppDependencies
 import com.xiwei.sujian.runtime.LocalSujianAppDependencies
 import com.xiwei.sujian.runtime.SujianAppDependencies
+import kotlinx.coroutines.launch
 
 val LocalAndroidCapabilities = androidx.compose.runtime.compositionLocalOf<AndroidCapabilities> {
     AndroidCapabilities()
@@ -72,7 +74,6 @@ fun SujianApp(
         val act = activityRef ?: return@DisposableEffect onDispose { }
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
             when (event) {
-                androidx.lifecycle.Lifecycle.Event.ON_RESUME -> com.xiwei.sujian.diagnostics.DiagnosticsEvents.activityLifecycle("resume")
                 androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> com.xiwei.sujian.diagnostics.DiagnosticsEvents.activityLifecycle("pause")
                 androidx.lifecycle.Lifecycle.Event.ON_DESTROY -> {
                     com.xiwei.sujian.diagnostics.DiagnosticsEvents.activityLifecycle("destroy")
@@ -100,19 +101,11 @@ fun SujianApp(
 
     if (activity != null) {
         val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-        DisposableEffect(lifecycleOwner) {
-            val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-                if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
-                    kotlinx.coroutines.MainScope().launch {
-                        SyncStatusRepository.refreshState()
-                    }
-                    vm.refreshProjects()
-                    vm.refreshRecentEdits()
-                }
-            }
-            lifecycleOwner.lifecycle.addObserver(observer)
-            onDispose {
-                lifecycleOwner.lifecycle.removeObserver(observer)
+        LaunchedEffect(lifecycleOwner) {
+            lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                SyncStatusRepository.refreshState()
+                vm.refreshProjects()
+                vm.refreshRecentEdits()
             }
         }
     }

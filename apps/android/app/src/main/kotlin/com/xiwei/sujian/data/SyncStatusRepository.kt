@@ -1,7 +1,6 @@
 package com.xiwei.sujian.data
 
 import com.xiwei.sujian.model.SyncIndicatorState
-import com.xiwei.sujian.model.SyncResult
 import com.xiwei.sujian.model.SyncStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -33,59 +32,6 @@ object SyncStatusRepository {
 
     fun notifyUnconfigured() {
         _state.value = SyncIndicatorState.Unconfigured
-    }
-
-    suspend fun manualSync() {
-        val repo = settingsRepository ?: return
-        val config = withContext(Dispatchers.IO) { repo.loadSyncConfig() }
-        if (config.enabled != true) {
-            _state.value = SyncIndicatorState.Unconfigured
-            return
-        }
-        _state.value = SyncIndicatorState.Syncing
-        val result = SyncSession.runExclusive { _ ->
-            withContext(Dispatchers.IO) {
-                repo.performSync(config)
-            }
-        }
-        when (result) {
-            is ExclusiveResult.Busy -> refreshState()
-            is ExclusiveResult.Success -> resolveBridgeResult(result.value)
-        }
-    }
-
-    private fun resolveBridgeResult(result: BridgeResult<SyncResult>) {
-        when (result) {
-            is BridgeResult.Success -> resolveSyncStatus(result.data.status)
-            is BridgeResult.Error -> _state.value = SyncIndicatorState.Failed
-            BridgeResult.NotLoaded -> _state.value = SyncIndicatorState.Failed
-        }
-    }
-
-    private fun resolveSyncStatus(status: SyncStatus) {
-        when (status) {
-            SyncStatus.Success,
-            SyncStatus.NoChanges,
-            SyncStatus.LatestWinsApplied,
-            SyncStatus.BranchMissingRecovered -> {
-                _state.value = SyncIndicatorState.Synced
-            }
-            SyncStatus.Conflict,
-            SyncStatus.PartialConflict,
-            SyncStatus.RecoverableError,
-            SyncStatus.FatalError,
-            SyncStatus.DirtyRepoBlocked,
-            SyncStatus.Error -> {
-                _state.value = SyncIndicatorState.Failed
-            }
-            SyncStatus.Syncing -> {
-                _state.value = SyncIndicatorState.Syncing
-            }
-            SyncStatus.Idle,
-            SyncStatus.ConfiguredNotTested -> {
-                _state.value = SyncIndicatorState.Unconfigured
-            }
-        }
     }
 
     suspend fun refreshState() {
