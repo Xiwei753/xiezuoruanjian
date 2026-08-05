@@ -699,3 +699,51 @@ fn test_settings_auto_indent_contract() {
     assert_eq!(json["autoIndentEnabled"], true);
     assert_eq!(json["autoIndentWidth"], 4.0);
 }
+
+#[test]
+fn test_device_info_dto_contract() {
+    let dto = crate::api::types::DeviceInfoDto {
+        device_id: "test_device".to_string(),
+        device_class: "desktop".to_string(),
+        platform: "windows".to_string(),
+    };
+
+    let json = serde_json::to_value(&dto).unwrap();
+    assert_eq!(json["device_id"], "test_device");
+    assert_eq!(json["device_class"], "desktop");
+    assert_eq!(json["platform"], "windows");
+
+    let deserialized: crate::api::types::DeviceInfoDto = serde_json::from_value(json).unwrap();
+    assert_eq!(deserialized, dto);
+}
+
+#[test]
+fn test_sync_config_dto_contract() {
+    let dto = crate::api::types::SyncConfigDto {
+        enabled: true,
+        backend_type: "git".to_string(),
+        remote_url: "https://example.com/repo.git".to_string(),
+        transport: "https".to_string(),
+        branch: "main".to_string(),
+        auto_sync: true,
+        sync_interval_seconds: 300,
+        username: "user".to_string(),
+        has_network_permission: true,
+        has_network_state_permission: true,
+    };
+
+    let json = serde_json::to_value(&dto).unwrap();
+    assert_eq!(json["enabled"], true);
+    assert_eq!(json["backend_type"], "git");
+    assert_eq!(json["remote_url"], "https://example.com/repo.git");
+    assert_eq!(json["transport"], "https");
+    assert_eq!(json["branch"], "main");
+    assert_eq!(json["auto_sync"], true);
+    assert_eq!(json["sync_interval_seconds"], 300);
+    assert_eq!(json["username"], "user");
+    assert_eq!(json["has_network_permission"], true);
+    assert_eq!(json["has_network_state_permission"], true);
+
+    let deserialized: crate::api::types::SyncConfigDto = serde_json::from_value(json).unwrap();
+    assert_eq!(deserialized, dto);
+}
