@@ -23,16 +23,24 @@ open class CapabilityProvider(private val context: Context) {
         val current = _capabilities.value
         val windowSizeClass = config.toWindowSizeClass()
         val hasHardwareKeyboard = config.keyboard != Configuration.KEYBOARD_NOKEYS
+        val sawFoldable = current.foldPosture != FoldPosture.None ||
+            current.deviceCategory == DeviceCategory.Foldable
         _capabilities.value = current.copy(
             windowSizeClass = windowSizeClass,
             hasHardwareKeyboard = hasHardwareKeyboard,
+            deviceCategory = detectDeviceCategory(config, sawFoldable),
         )
     }
 
     fun updateFromFoldFeatures(features: List<androidx.window.layout.DisplayFeature>) {
         val current = _capabilities.value
         val foldPosture = features.toFoldPosture()
-        _capabilities.value = current.copy(foldPosture = foldPosture)
+        val sawFoldable = foldPosture != FoldPosture.None ||
+            current.deviceCategory == DeviceCategory.Foldable
+        _capabilities.value = current.copy(
+            foldPosture = foldPosture,
+            deviceCategory = detectDeviceCategory(context.resources.configuration, sawFoldable),
+        )
     }
 
     fun registerInputDeviceListener() {
@@ -135,6 +143,7 @@ open class CapabilityProvider(private val context: Context) {
             sdkInt = Build.VERSION.SDK_INT,
             windowSizeClass = config.toWindowSizeClass(),
             foldPosture = FoldPosture.None,
+            deviceCategory = detectDeviceCategory(config, sawFoldable = false),
             hasHardwareKeyboard = config.keyboard != Configuration.KEYBOARD_NOKEYS,
             availablePointerKinds = availablePointerKinds,
             activePointerKind = activePointerKind,
@@ -155,6 +164,17 @@ open class CapabilityProvider(private val context: Context) {
             screenWidthDp >= 840 -> WindowSizeClass.Expanded
             screenWidthDp >= 600 -> WindowSizeClass.Medium
             else -> WindowSizeClass.Compact
+        }
+    }
+
+    private fun detectDeviceCategory(config: Configuration, sawFoldable: Boolean): DeviceCategory {
+        val isTablet = config.smallestScreenWidthDp >= 600 ||
+            (config.screenLayout and Configuration.SCREENLAYOUT_SIZE_MASK) >=
+            Configuration.SCREENLAYOUT_SIZE_LARGE
+        return when {
+            sawFoldable -> DeviceCategory.Foldable
+            isTablet -> DeviceCategory.Tablet
+            else -> DeviceCategory.Phone
         }
     }
 

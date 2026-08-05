@@ -7,70 +7,54 @@ import org.junit.Test
 
 class PhoneWorkspaceNavigationStateTest {
     @Test
-    fun initialLocation_isProjectList() {
-        val state = PhoneWorkspaceNavigationState()
-        assertTrue(state.currentLocation is WorkspaceLocation.ProjectList)
+    fun derive_nullDestination_isProjectList() {
+        assertEquals(WorkspaceLocation.ProjectList, deriveWorkspaceLocation(null))
     }
 
     @Test
-    fun navigateToChapterTree_updatesLocation() {
-        val state = PhoneWorkspaceNavigationState()
-        state.navigateToChapterTree("p1")
-        assertTrue(state.currentLocation is WorkspaceLocation.ChapterTree)
-        assertEquals("p1", (state.currentLocation as WorkspaceLocation.ChapterTree).projectId)
+    fun derive_projectListDestination_isProjectList() {
+        assertEquals(
+            WorkspaceLocation.ProjectList,
+            deriveWorkspaceLocation(WorkspacePaneKey.ProjectList),
+        )
     }
 
     @Test
-    fun navigateToEditor_updatesLocation() {
-        val state = PhoneWorkspaceNavigationState()
-        state.navigateToEditor("p1", "v1", "c1")
-        val loc = state.currentLocation as WorkspaceLocation.Editor
-        assertEquals("p1", loc.projectId)
-        assertEquals("v1", loc.volumeId)
-        assertEquals("c1", loc.chapterId)
+    fun derive_chapterTreeDestination_carriesProjectId() {
+        val location = deriveWorkspaceLocation(WorkspacePaneKey.ChapterTree("p1"))
+        assertTrue(location is WorkspaceLocation.ChapterTree)
+        assertEquals("p1", (location as WorkspaceLocation.ChapterTree).projectId)
     }
 
     @Test
-    fun back_fromEditor_goesToChapterTree() {
-        val state = PhoneWorkspaceNavigationState()
-        state.navigateToEditor("p1", "v1", "c1")
-        val handled = state.back()
-        assertTrue(handled)
-        assertTrue(state.currentLocation is WorkspaceLocation.ChapterTree)
-        assertEquals("p1", (state.currentLocation as WorkspaceLocation.ChapterTree).projectId)
+    fun derive_editorDestination_carriesAllIds() {
+        val location = deriveWorkspaceLocation(WorkspacePaneKey.Editor("p1", "v1", "c1"))
+        assertTrue(location is WorkspaceLocation.Editor)
+        val editor = location as WorkspaceLocation.Editor
+        assertEquals("p1", editor.projectId)
+        assertEquals("v1", editor.volumeId)
+        assertEquals("c1", editor.chapterId)
     }
 
     @Test
-    fun back_fromChapterTree_goesToProjectList() {
-        val state = PhoneWorkspaceNavigationState()
-        state.navigateToChapterTree("p1")
-        val handled = state.back()
-        assertTrue(handled)
-        assertTrue(state.currentLocation is WorkspaceLocation.ProjectList)
+    fun derive_chapterTreeToProjectList_returnsRootLocation() {
+        assertEquals(
+            WorkspaceLocation.ProjectList,
+            deriveWorkspaceLocation(WorkspacePaneKey.ProjectList),
+        )
     }
 
     @Test
-    fun back_fromProjectList_returnsFalse() {
-        val state = PhoneWorkspaceNavigationState()
-        val handled = state.back()
-        assertFalse(handled)
-    }
-
-    @Test
-    fun back_fullStack_returnsToProjectList() {
-        val state = PhoneWorkspaceNavigationState()
-        state.navigateToChapterTree("p1")
-        state.navigateToEditor("p1", "v1", "c1")
-        state.back()
-        state.back()
-        assertTrue(state.currentLocation is WorkspaceLocation.ProjectList)
-    }
-
-    @Test
-    fun navigateToProjectList_resetsToProjectList() {
-        val state = PhoneWorkspaceNavigationState()
-        state.navigateToEditor("p1", "v1", "c1")
-        state.navigateToProjectList()
-        assertTrue(state.currentLocation is WorkspaceLocation.ProjectList)
+    fun back_chain_editorToChapterTreeToProjectList_hasNoSecondLocationCopy() {
+        // 位置唯一事实来源是 destination 键：章节树位置携带 projectId，
+        // 正文位置携带 project/volume/chapter，不依赖外部镜像状态。
+        val editorKey = WorkspacePaneKey.Editor("p1", "v1", "c1")
+        val chapterTreeKey = WorkspacePaneKey.ChapterTree("p1")
+        assertEquals(
+            WorkspaceLocation.ChapterTree("p1"),
+            deriveWorkspaceLocation(chapterTreeKey),
+        )
+        assertEquals(editorKey.projectId, (deriveWorkspaceLocation(editorKey) as WorkspaceLocation.Editor).projectId)
+        assertFalse(deriveWorkspaceLocation(chapterTreeKey) is WorkspaceLocation.Editor)
     }
 }

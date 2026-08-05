@@ -32,10 +32,18 @@ enum class WindowSizeClass {
     Expanded,
 }
 
+/** 设备类别 — 普通手机、平板、折叠设备（折叠设备按是否有折叠特征判定）。 */
+enum class DeviceCategory {
+    Phone,
+    Tablet,
+    Foldable,
+}
+
 data class AndroidCapabilities(
     val sdkInt: Int = Build.VERSION.SDK_INT,
     val windowSizeClass: WindowSizeClass = WindowSizeClass.Compact,
     val foldPosture: FoldPosture = FoldPosture.None,
+    val deviceCategory: DeviceCategory = DeviceCategory.Phone,
     val hasHardwareKeyboard: Boolean = false,
     val availablePointerKinds: Set<PointerKind> = setOf(PointerKind.Touch),
     val activePointerKind: PointerKind = PointerKind.Touch,

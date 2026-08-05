@@ -45,6 +45,8 @@ class AutoSyncWorker(
         if (elapsed != null && elapsed < interval) return Result.success()
 
         val exclusiveResult = SyncSession.runExclusive { taskId ->
+            // 自动同步开始立即变黄；结束由成功/失败状态发布绿/红。
+            SyncStatusRepository.notifySyncStarted()
             when (val result = settingsRepository.performSync(config)) {
                 is BridgeResult.Error -> {
                     DiagnosticsLogger.w(TAG, "AutoSync failed: ${result.fullEnvelope}")

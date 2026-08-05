@@ -136,10 +136,13 @@ fun SujianNavigationSuite(
 ) {
     val capabilities = LocalAndroidCapabilities.current
     val configuration = androidx.compose.ui.platform.LocalConfiguration.current
-    val isCompact = capabilities.windowSizeClass == WindowSizeClass.Compact
-    val isPortrait = configuration.screenHeightDp > configuration.screenWidthDp
-    val hasNoFold = capabilities.foldPosture == com.xiwei.sujian.platform.api.FoldPosture.None
-    val isPhonePortrait = isCompact && isPortrait && hasNoFold
+    val isPhonePortrait = resolvePhonePortraitPolicy(
+        windowSizeClass = capabilities.windowSizeClass,
+        screenWidthDp = configuration.screenWidthDp,
+        screenHeightDp = configuration.screenHeightDp,
+        foldPosture = capabilities.foldPosture,
+        deviceCategory = capabilities.deviceCategory,
+    )
 
     if (isPhonePortrait) {
         PhonePortraitSuite(
@@ -154,6 +157,22 @@ fun SujianNavigationSuite(
         )
     }
 }
+
+/**
+ * 普通手机竖屏判定 — 同时满足：Compact 宽度、当前高度大于宽度、
+ * 无折叠特征（foldPosture None）、设备类别为普通 phone。
+ */
+internal fun resolvePhonePortraitPolicy(
+    windowSizeClass: WindowSizeClass,
+    screenWidthDp: Int,
+    screenHeightDp: Int,
+    foldPosture: com.xiwei.sujian.platform.api.FoldPosture,
+    deviceCategory: com.xiwei.sujian.platform.api.DeviceCategory,
+): Boolean =
+    windowSizeClass == WindowSizeClass.Compact &&
+        screenHeightDp > screenWidthDp &&
+        foldPosture == com.xiwei.sujian.platform.api.FoldPosture.None &&
+        deviceCategory == com.xiwei.sujian.platform.api.DeviceCategory.Phone
 
 @Composable
 private fun PhonePortraitSuite(
@@ -170,7 +189,6 @@ private fun PhonePortraitSuite(
             initialExpandedSections = initialSections,
         )
     }
-    val workspaceNavState = remember { com.xiwei.sujian.ui.phone.portrait.PhoneWorkspaceNavigationState() }
     val sessionVm: WorkspaceSessionViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 
     LaunchedEffect(Unit) {
@@ -182,7 +200,6 @@ private fun PhonePortraitSuite(
 
     PhonePortraitShell(
         stateHolder = stateHolder,
-        workspaceNavState = workspaceNavState,
         sessionViewModel = sessionVm,
         workspaceRepository = deps.workspaceRepository,
         modifier = modifier,

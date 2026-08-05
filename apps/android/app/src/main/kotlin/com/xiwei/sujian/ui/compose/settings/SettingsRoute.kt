@@ -17,6 +17,7 @@ import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffoldRole
 import androidx.compose.material3.adaptive.navigation.BackNavigationBehavior
 import androidx.compose.material3.adaptive.navigation.ThreePaneScaffoldPredictiveBackHandler
 import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
+import com.xiwei.sujian.data.SyncStatusRepository
 import com.xiwei.sujian.designsystem.icon.SujianIcons
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -467,6 +468,9 @@ class SettingsViewModel : ViewModel() {
 
                         val capability = repo.getSyncCapability()
                         if (!capability.canRun) {
+                            if (type == SyncCommandType.PERFORM_SYNC) {
+                                SyncStatusRepository.notifyUnconfigured()
+                            }
                             return@withContext SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "blocked", messageKey = capability.blockMessageKey ?: "sync_not_ready"))
                         }
 
@@ -514,9 +518,17 @@ class SettingsViewModel : ViewModel() {
                                 }
                             }
                             SyncCommandType.PERFORM_SYNC -> {
+                                // 设置页手动同步同样经过统一同步主链发布状态：
+                                // 取得执行权 -> Syncing，成功/失败 -> Synced/Failed。
+                                SyncStatusRepository.notifySyncStarted()
                                 when (val r = repo.performSync(config)) {
                                     is BridgeResult.Success -> {
                                         val sync = r.data
+                                        if (sync.error == null) {
+                                            SyncStatusRepository.notifySyncSuccess()
+                                        } else {
+                                            SyncStatusRepository.notifySyncFailed()
+                                        }
                                         val counts = SyncCounts(
                                             uploaded = sync.uploadedFiles.size,
                                             downloaded = sync.downloadedFiles.size,
@@ -533,8 +545,14 @@ class SettingsViewModel : ViewModel() {
                                             sanitizedDiagnostic = if (sync.error != null) "sync_failed" else null
                                         ))
                                     }
-                                    is BridgeResult.Error -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_error", sanitizedDiagnostic = r.message))
-                                    BridgeResult.NotLoaded -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "core_not_loaded"))
+                                    is BridgeResult.Error -> {
+                                        SyncStatusRepository.notifySyncFailed()
+                                        SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_error", sanitizedDiagnostic = r.message))
+                                    }
+                                    BridgeResult.NotLoaded -> {
+                                        SyncStatusRepository.notifySyncFailed()
+                                        SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "core_not_loaded"))
+                                    }
                                 }
                             }
                         }

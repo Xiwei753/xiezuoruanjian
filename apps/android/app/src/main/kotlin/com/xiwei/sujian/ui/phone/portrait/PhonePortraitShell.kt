@@ -12,24 +12,26 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
+import androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem
+import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.rememberNavBackStack
@@ -38,13 +40,15 @@ import androidx.navigation3.ui.NavDisplay
 import com.xiwei.sujian.data.SyncStatusRepository
 import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.designsystem.component.SujianSnackbar
-import com.xiwei.sujian.model.SyncIndicatorState
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
+@OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
 fun PhonePortraitShell(
     stateHolder: PhonePortraitStateHolder,
-    workspaceNavState: PhoneWorkspaceNavigationState,
     sessionViewModel: WorkspaceSessionViewModel,
     workspaceRepository: WorkspaceRepository,
     modifier: Modifier = Modifier,
@@ -53,16 +57,40 @@ fun PhonePortraitShell(
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
 
+    // 唯一工作区导航状态：PhoneWorkspaceNavigationState 持有唯一 Material3 Adaptive
+    // navigator；初始历史由会话恢复的选择推导，之后位置一律从当前 destination 推导。
+    val initialHistory = remember {
+        val chain = mutableListOf<ThreePaneScaffoldDestinationItem<WorkspacePaneKey>>(
+            ThreePaneScaffoldDestinationItem(WorkspacePaneKey.ProjectList.role, WorkspacePaneKey.ProjectList),
+        )
+        val projectId = sessionViewModel.currentProjectId
+        if (projectId != null) {
+            chain += ThreePaneScaffoldDestinationItem(
+                WorkspacePaneKey.ChapterTree(projectId).role,
+                WorkspacePaneKey.ChapterTree(projectId),
+            )
+            val volumeId = sessionViewModel.currentVolumeId
+            val chapterId = sessionViewModel.currentChapterId
+            if (volumeId != null && chapterId != null) {
+                chain += ThreePaneScaffoldDestinationItem(
+                    WorkspacePaneKey.Editor(projectId, volumeId, chapterId).role,
+                    WorkspacePaneKey.Editor(projectId, volumeId, chapterId),
+                )
+            }
+        }
+        chain
+    }
+    val navigator = rememberListDetailPaneScaffoldNavigator(initialDestinationHistory = initialHistory)
+    val workspaceNavState = remember { PhoneWorkspaceNavigationState(navigator) }
+
     val backStack = rememberNavBackStack(PhoneRootRoute.Root)
     val currentRoute = backStack.lastOrNull()
     val chromeSpec = stateHolder.chromeSpec(currentRoute, workspaceNavState.currentLocation, syncState)
 
     val activity = LocalActivity.current as? ComponentActivity
 
-    val isEditor = stateHolder.selectedRoot == PhoneRoot.Works &&
-        workspaceNavState.currentLocation is WorkspaceLocation.Editor
-
-    val handleBack: () -> Boolean = {
+    // 顶栏返回、系统返回（NavDisplay 之外的根栈返回）、页面返回与预测返回共用同一 back 入口。
+    val handleBack: suspend () -> Boolean = {
         when {
             backStack.lastOrNull() is PhoneSettingsRoute -> {
                 backStack.removeLastOrNull()
@@ -75,18 +103,27 @@ fun PhonePortraitShell(
         }
     }
 
-    PredictiveBackHandler(enabled = stateHolder.selectedRoot == PhoneRoot.Works &&
-        workspaceNavState.currentLocation !is WorkspaceLocation.ProjectList) { progressEvents ->
+    PredictiveBackHandler(
+        enabled = stateHolder.selectedRoot == PhoneRoot.Works &&
+            backStack.lastOrNull() !is PhoneSettingsRoute.Settings &&
+            workspaceNavState.canNavigateBack,
+    ) { progressEvents ->
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack("shell", "start")
         try {
             progressEvents.collect { event ->
                 if (event.progress != 0f) {
-                    com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack("shell", "progress")
+                    workspaceNavState.seekBack(
+                        com.xiwei.sujian.ui.compose.navigation.predictiveBackStateFraction(event.progress),
+                    )
                 }
             }
             val handled = handleBack()
             com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack("shell", if (handled) "complete" else "unhandled")
-        } catch (e: kotlinx.coroutines.CancellationException) {
+        } catch (e: CancellationException) {
             com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack("shell", "cancel")
+            withContext(NonCancellable) {
+                workspaceNavState.seekBack(0f)
+            }
             throw e
         }
     }
@@ -97,9 +134,10 @@ fun PhonePortraitShell(
             PhoneTopBar(
                 spec = chromeSpec,
                 onBack = {
-                    val handled = handleBack()
-                    if (!handled) {
-                        activity?.onBackPressedDispatcher?.onBackPressed()
+                    coroutineScope.launch {
+                        if (!handleBack()) {
+                            activity?.onBackPressedDispatcher?.onBackPressed()
+                        }
                     }
                 },
                 onSettings = {
@@ -135,9 +173,10 @@ fun PhonePortraitShell(
         NavDisplay(
             backStack = backStack,
             onBack = {
-                val handled = handleBack()
-                com.xiwei.sujian.diagnostics.DiagnosticsEvents.navBack(handled)
-                handled
+                coroutineScope.launch {
+                    handleBack()
+                }
+                com.xiwei.sujian.diagnostics.DiagnosticsEvents.navBack(true)
             },
             transitionSpec = phoneForwardTransition,
             popTransitionSpec = phonePopTransition,
@@ -150,12 +189,7 @@ fun PhonePortraitShell(
                             sessionViewModel = sessionViewModel,
                             workspaceRepository = workspaceRepository,
                             innerPadding = innerPadding,
-                            onBack = {
-                                val handled = handleBack()
-                                if (!handled) {
-                                    activity?.onBackPressedDispatcher?.onBackPressed()
-                                }
-                            },
+                            editorTopSafeArea = innerPadding.calculateTopPadding(),
                             modifier = Modifier.fillMaxSize().imePadding(),
                         )
                     }
@@ -191,16 +225,15 @@ private fun PhoneRootContent(
     workspaceNavState: PhoneWorkspaceNavigationState,
     sessionViewModel: WorkspaceSessionViewModel,
     workspaceRepository: WorkspaceRepository,
-    innerPadding: androidx.compose.foundation.layout.PaddingValues,
-    onBack: () -> Unit,
+    innerPadding: PaddingValues,
+    editorTopSafeArea: androidx.compose.ui.unit.Dp,
     modifier: Modifier = Modifier,
 ) {
     val isEditor = stateHolder.selectedRoot == PhoneRoot.Works &&
         workspaceNavState.currentLocation is WorkspaceLocation.Editor
     val contentPadding = if (isEditor) {
-        androidx.compose.foundation.layout.PaddingValues(
-            bottom = innerPadding.calculateBottomPadding()
-        )
+        // 正文模式只保留底部安全区，顶部由编辑器自身的顶部安全区处理，背景延伸进顶栏区域。
+        PaddingValues(bottom = innerPadding.calculateBottomPadding())
     } else {
         innerPadding
     }
@@ -214,7 +247,7 @@ private fun PhoneRootContent(
                     workspaceNavState = workspaceNavState,
                     sessionViewModel = sessionViewModel,
                     workspaceRepository = workspaceRepository,
-                    onBack = onBack,
+                    editorTopSafeArea = editorTopSafeArea,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
