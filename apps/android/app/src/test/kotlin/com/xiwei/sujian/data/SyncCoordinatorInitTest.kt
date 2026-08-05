@@ -1,8 +1,6 @@
 package com.xiwei.sujian.data
 
-import com.xiwei.sujian.model.SyncIndicatorState
 import com.xiwei.sujian.model.SyncStatus
-import com.xiwei.sujian.model.SyncTrigger
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -61,5 +59,20 @@ class SyncCoordinatorInitTest {
             val outcome = SyncOutcome.TerminalFailure(status)
             assertTrue("Expected TerminalFailure for $status", outcome is SyncOutcome.TerminalFailure)
         }
+    }
+
+    @Test
+    fun syncingStatus_isTerminalFailure_protocolError() {
+        // #592 三：performSync 返回 Syncing 是协议错误 → TerminalFailure(FatalError)
+        val outcome = SyncOutcome.TerminalFailure(SyncStatus.FatalError)
+        assertTrue(outcome is SyncOutcome.TerminalFailure)
+        assertEquals(SyncStatus.FatalError, (outcome as SyncOutcome.TerminalFailure).status)
+    }
+
+    @Test
+    fun notLoaded_isTerminalFailure_fatalError() {
+        // #592 三：原生库未加载是致命错误 → TerminalFailure(FatalError)
+        val outcome = SyncOutcome.TerminalFailure(SyncStatus.FatalError)
+        assertTrue(outcome is SyncOutcome.TerminalFailure)
     }
 }

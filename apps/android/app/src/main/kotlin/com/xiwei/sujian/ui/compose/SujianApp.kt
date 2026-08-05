@@ -36,7 +36,6 @@ import com.xiwei.sujian.ui.compose.theme.ThemeStore
 import com.xiwei.sujian.ui.compose.theme.rememberThemeController
 import com.xiwei.sujian.platform.aosp.VendorAdapterSetup
 import com.xiwei.sujian.platform.vendor.VendorAdapterRegistry
-import com.xiwei.sujian.runtime.DefaultSujianAppDependencies
 import com.xiwei.sujian.runtime.LocalSujianAppDependencies
 import com.xiwei.sujian.runtime.SujianAppDependencies
 import kotlinx.coroutines.launch
@@ -53,11 +52,13 @@ fun SujianApp(
     val vm: SujianAppViewModel = viewModel()
     val appState = remember { SujianAppState(vm) }
     val app = context.applicationContext as? com.xiwei.sujian.SujianApp
+    // #592 一：Compose UI 必须从同一个 Application 进程级容器取得依赖实例，
+    // 不能再次 DefaultAppServiceContainer(context) 创建第二份容器。
+    // 后台 Worker 也从同一容器取依赖，保证 SyncStatusRepository StateFlow
+    // 和 SyncCoordinator 全进程唯一。
     val deps = remember {
         val testProvider = SujianAppDependencies.getTestProvider()
-        testProvider?.invoke(context) ?: (app?.dependencies ?: DefaultSujianAppDependencies(
-            com.xiwei.sujian.runtime.DefaultAppServiceContainer(context)
-        ))
+        testProvider?.invoke(context) ?: requireNotNull(app).dependencies
     }
     val activityRef = androidx.activity.compose.LocalActivity.current as? androidx.activity.ComponentActivity
     val windowCoordinator = remember {
