@@ -58,7 +58,9 @@ class AutoSyncWorker(
                 is BridgeResult.Success -> {
                     val status = result.data.status
                     if (isSuccessfulStatus(status)) {
-                        SyncChangeBus.notifyChanged()
+                        SyncStatusRepository.notifySyncSuccess()
+                    } else {
+                        SyncStatusRepository.notifySyncFailed()
                     }
                     Result.success()
                 }

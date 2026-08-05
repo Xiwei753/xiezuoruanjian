@@ -135,9 +135,11 @@ fun SujianIconButton(
     tonal: Boolean = false,
     outlined: Boolean = false,
     semanticId: String? = null,
+    iconTint: Color? = null,
 ) {
     val dimensions = LocalSujianDimensions.current
     val tagModifier = modifier.then(if (semanticId != null) Modifier.testTag(semanticId) else Modifier)
+    val tint = iconTint ?: Color.Unspecified
     when {
         outlined -> androidx.compose.material3.OutlinedIconButton(
             onClick = onClick,
@@ -149,6 +151,7 @@ fun SujianIconButton(
                     imageVector = icon,
                     contentDescription = contentDescription,
                     modifier = Modifier.size(dimensions.iconSizeMedium),
+                    tint = tint,
                 )
             }
         }
@@ -162,6 +165,7 @@ fun SujianIconButton(
                     imageVector = icon,
                     contentDescription = contentDescription,
                     modifier = Modifier.size(dimensions.iconSizeMedium),
+                    tint = tint,
                 )
             }
         }
@@ -175,6 +179,7 @@ fun SujianIconButton(
                     imageVector = icon,
                     contentDescription = contentDescription,
                     modifier = Modifier.size(dimensions.iconSizeMedium),
+                    tint = tint,
                 )
             }
         }

@@ -20,15 +20,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
-import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.designsystem.component.SujianIconButton
 import com.xiwei.sujian.designsystem.icon.SujianIcons
 import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.runtime.LocalSujianAppDependencies
+import com.xiwei.sujian.ui.compose.navigation.SettingsSection
 import com.xiwei.sujian.ui.compose.settings.SettingsDetailPane
 import com.xiwei.sujian.ui.compose.settings.SettingsIntent
 import com.xiwei.sujian.ui.compose.settings.SettingsUiState
@@ -129,7 +128,7 @@ private fun SettingsExpandableSection(
         if (isExpanded) {
             Column(modifier = Modifier.padding(horizontal = dims.space16)) {
                 SettingsDetailPane(
-                    section = toNavigationSettingsSection(section),
+                    section = section,
                     state = state,
                     onIntent = onIntent,
                 )
@@ -148,16 +147,4 @@ private fun sectionInfo(section: SettingsSection): Pair<Int, androidx.compose.ui
         SettingsSection.Diagnostics -> R.string.pref_category_diagnostics to SujianIcons.BugReport
         SettingsSection.Laboratory -> R.string.pref_category_laboratory to SujianIcons.Science
         SettingsSection.About -> R.string.pref_category_about to SujianIcons.Info
-    }
-
-private fun toNavigationSettingsSection(section: SettingsSection): com.xiwei.sujian.ui.compose.navigation.SettingsSection =
-    when (section) {
-        SettingsSection.Appearance -> com.xiwei.sujian.ui.compose.navigation.SettingsSection.Appearance
-        SettingsSection.Editor -> com.xiwei.sujian.ui.compose.navigation.SettingsSection.Editor
-        SettingsSection.Save -> com.xiwei.sujian.ui.compose.navigation.SettingsSection.Save
-        SettingsSection.Sync -> com.xiwei.sujian.ui.compose.navigation.SettingsSection.Sync
-        SettingsSection.Ai -> com.xiwei.sujian.ui.compose.navigation.SettingsSection.Ai
-        SettingsSection.Diagnostics -> com.xiwei.sujian.ui.compose.navigation.SettingsSection.Diagnostics
-        SettingsSection.Laboratory -> com.xiwei.sujian.ui.compose.navigation.SettingsSection.Laboratory
-        SettingsSection.About -> com.xiwei.sujian.ui.compose.navigation.SettingsSection.About
     }

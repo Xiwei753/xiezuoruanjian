@@ -19,7 +19,8 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.xiwei.sujian.data.SyncChangeBus
+import com.xiwei.sujian.data.SyncStatusRepository
+import kotlinx.coroutines.launch
 import com.xiwei.sujian.data.WorkspaceUseCase
 import com.xiwei.sujian.editor.v2.compose.LocalAnimatedTextEditorCoordinator
 import com.xiwei.sujian.model.Orientation
@@ -102,10 +103,11 @@ fun SujianApp(
         DisposableEffect(lifecycleOwner) {
             val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
                 if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
-                    if (SyncChangeBus.consumeChanged()) {
-                        vm.refreshProjects()
-                        vm.refreshRecentEdits()
+                    kotlinx.coroutines.MainScope().launch {
+                        SyncStatusRepository.refreshState()
                     }
+                    vm.refreshProjects()
+                    vm.refreshRecentEdits()
                 }
             }
             lifecycleOwner.lifecycle.addObserver(observer)

@@ -1,6 +1,7 @@
 package com.xiwei.sujian.ui.phone.portrait
 
 import androidx.navigation3.runtime.NavKey
+import com.xiwei.sujian.model.SyncIndicatorState
 
 data class PhoneChromeSpec(
     val title: String?,
@@ -15,7 +16,9 @@ data class PhoneChromeSpec(
 object PhoneChromePolicy {
     fun resolve(
         route: NavKey?,
-        uiState: PhonePortraitUiState,
+        selectedRoot: PhoneRoot,
+        workspaceLocation: WorkspaceLocation,
+        syncState: SyncIndicatorState,
     ): PhoneChromeSpec = when (route) {
         is PhoneSettingsRoute.Settings -> PhoneChromeSpec(
             title = "设置",
@@ -26,15 +29,20 @@ object PhoneChromePolicy {
             showSettings = false,
             showBottomBar = false,
         )
-        is PhoneRootRoute.Root -> resolveRootChrome(uiState)
-        else -> resolveRootChrome(uiState)
+        is PhoneRootRoute.Root -> resolveRootChrome(selectedRoot, workspaceLocation)
+        else -> resolveRootChrome(selectedRoot, workspaceLocation)
     }
 
-    private fun resolveRootChrome(uiState: PhonePortraitUiState): PhoneChromeSpec {
-        val isEditor = uiState.workspaceLocation is WorkspaceLocation.Editor
+    private fun resolveRootChrome(
+        selectedRoot: PhoneRoot,
+        workspaceLocation: WorkspaceLocation,
+    ): PhoneChromeSpec {
+        val isWorks = selectedRoot == PhoneRoot.Works
+        val isEditor = isWorks && workspaceLocation is WorkspaceLocation.Editor
+        val showBack = isWorks && workspaceLocation !is WorkspaceLocation.ProjectList
         return PhoneChromeSpec(
-            title = when (uiState.selectedRoot) {
-                PhoneRoot.Works -> when (uiState.workspaceLocation) {
+            title = when (selectedRoot) {
+                PhoneRoot.Works -> when (workspaceLocation) {
                     is WorkspaceLocation.ProjectList -> "素笺写作"
                     is WorkspaceLocation.ChapterTree -> null
                     is WorkspaceLocation.Editor -> null
@@ -42,7 +50,7 @@ object PhoneChromePolicy {
                 PhoneRoot.StarMap -> "素笺写作"
                 PhoneRoot.Stats -> "素笺写作"
             },
-            showBack = uiState.workspaceLocation !is WorkspaceLocation.ProjectList,
+            showBack = showBack,
             appBarTransparent = isEditor,
             showSync = true,
             showSearch = true,

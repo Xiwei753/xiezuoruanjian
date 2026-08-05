@@ -21,20 +21,6 @@ sealed interface WorkspaceLocation {
     ) : WorkspaceLocation
 }
 
-enum class SyncIndicatorState {
-    Unconfigured,
-    Syncing,
-    Synced,
-    Failed,
-}
-
-data class PhonePortraitUiState(
-    val selectedRoot: PhoneRoot,
-    val workspaceLocation: WorkspaceLocation,
-    val expandedSettingsSections: Set<SettingsSection>,
-    val syncState: SyncIndicatorState,
-)
-
 sealed interface PhoneRootRoute : Parcelable, NavKey {
     @Parcelize
     @Serializable
@@ -45,16 +31,4 @@ sealed interface PhoneSettingsRoute : Parcelable, NavKey {
     @Parcelize
     @Serializable
     data object Settings : PhoneSettingsRoute
-}
-
-@Serializable
-enum class SettingsSection {
-    Appearance,
-    Editor,
-    Save,
-    Sync,
-    Ai,
-    Diagnostics,
-    Laboratory,
-    About,
 }

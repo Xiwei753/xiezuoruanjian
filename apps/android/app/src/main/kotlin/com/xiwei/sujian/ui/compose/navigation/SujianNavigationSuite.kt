@@ -58,7 +58,6 @@ import com.xiwei.sujian.ui.compose.stats.StatsScreen
 import com.xiwei.sujian.ui.compose.workspace.ProjectWorkspaceScreen
 import com.xiwei.sujian.ui.phone.portrait.PhonePortraitShell
 import com.xiwei.sujian.ui.phone.portrait.PhonePortraitStateHolder
-import com.xiwei.sujian.ui.phone.portrait.SyncStatusStore
 import com.xiwei.sujian.ui.phone.portrait.WorkspaceSessionViewModel
 
 enum class SujianDestination(
@@ -136,9 +135,13 @@ fun SujianNavigationSuite(
     modifier: Modifier = Modifier,
 ) {
     val capabilities = LocalAndroidCapabilities.current
-    val isWideScreen = capabilities.windowSizeClass != WindowSizeClass.Compact
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+    val isCompact = capabilities.windowSizeClass == WindowSizeClass.Compact
+    val isPortrait = configuration.screenHeightDp > configuration.screenWidthDp
+    val hasNoFold = capabilities.foldPosture == com.xiwei.sujian.platform.api.FoldPosture.None
+    val isPhonePortrait = isCompact && isPortrait && hasNoFold
 
-    if (!isWideScreen) {
+    if (isPhonePortrait) {
         PhonePortraitSuite(
             appState = appState,
             modifier = modifier,
@@ -158,27 +161,28 @@ private fun PhonePortraitSuite(
     modifier: Modifier = Modifier,
 ) {
     val deps = com.xiwei.sujian.runtime.LocalSujianAppDependencies.current
-    val syncStatusStore = remember { SyncStatusStore(deps.settingsRepository) }
     val initialSections = remember { deps.settingsRepository.getExpandedSettingsSections() }
     val stateHolder = remember {
         PhonePortraitStateHolder(
-            syncStatusStore = syncStatusStore,
             onSaveExpandedSections = { sections ->
                 deps.settingsRepository.saveExpandedSettingsSections(sections)
             },
             initialExpandedSections = initialSections,
         )
     }
+    val workspaceNavState = remember { com.xiwei.sujian.ui.phone.portrait.PhoneWorkspaceNavigationState() }
     val sessionVm: WorkspaceSessionViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 
     LaunchedEffect(Unit) {
         val workspaceUC = com.xiwei.sujian.data.WorkspaceUseCase(deps.workspaceRepository)
         sessionVm.initialize(deps.workspaceRepository, workspaceUC)
-        syncStatusStore.refreshState()
+        com.xiwei.sujian.data.SyncStatusRepository.initialize(deps.settingsRepository)
+        com.xiwei.sujian.data.SyncStatusRepository.refreshState()
     }
 
     PhonePortraitShell(
         stateHolder = stateHolder,
+        workspaceNavState = workspaceNavState,
         sessionViewModel = sessionVm,
         workspaceRepository = deps.workspaceRepository,
         modifier = modifier,

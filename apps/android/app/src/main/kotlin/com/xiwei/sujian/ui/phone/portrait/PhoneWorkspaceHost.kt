@@ -3,6 +3,10 @@ package com.xiwei.sujian.ui.phone.portrait
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
 import androidx.compose.material3.adaptive.layout.AnimatedPane
@@ -17,6 +21,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.R
 import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.ui.compose.SujianSessionAppState
@@ -44,12 +49,10 @@ private val WorkspacePaneKey.role: androidx.compose.material3.adaptive.layout.Th
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
 fun PhoneWorkspaceHost(
+    workspaceNavState: PhoneWorkspaceNavigationState,
     sessionViewModel: WorkspaceSessionViewModel,
     workspaceRepository: WorkspaceRepository,
-    onOpenProject: (String) -> Unit,
-    onOpenChapter: (String, String, String) -> Unit,
     onBack: () -> Unit,
-    onWorkspaceLocationChanged: (WorkspaceLocation) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -81,7 +84,7 @@ fun PhoneWorkspaceHost(
                     sessionViewModel.clearProjectSelection()
                     com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceBack("project_list")
                 }
-                onWorkspaceLocationChanged(WorkspaceLocation.ProjectList)
+                workspaceNavState.navigateToProjectList()
             }
             WorkspacePaneKey.ChapterTree -> {
                 if (sessionViewModel.currentChapterId != null) {
@@ -90,7 +93,7 @@ fun PhoneWorkspaceHost(
                 }
                 val pid = sessionViewModel.currentProjectId
                 if (pid != null) {
-                    onWorkspaceLocationChanged(WorkspaceLocation.ChapterTree(pid))
+                    workspaceNavState.navigateToChapterTree(pid)
                 }
             }
             null -> {
@@ -98,7 +101,7 @@ fun PhoneWorkspaceHost(
                     sessionViewModel.clearProjectSelection()
                     com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceBack("project_list")
                 }
-                onWorkspaceLocationChanged(WorkspaceLocation.ProjectList)
+                workspaceNavState.navigateToProjectList()
             }
             WorkspacePaneKey.Editor -> { }
         }
@@ -139,6 +142,13 @@ fun PhoneWorkspaceHost(
     val currentChapterId = sessionViewModel.currentChapterId
     val currentChapterTitle = sessionViewModel.currentChapterTitle
 
+    val isEditor = workspaceNavState.currentLocation is WorkspaceLocation.Editor
+    val statusBarTopPadding = if (isEditor) {
+        WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    } else {
+        0.dp
+    }
+
     ListDetailPaneScaffold(
         modifier = modifier,
         directive = navigator.scaffoldDirective,
@@ -149,7 +159,7 @@ fun PhoneWorkspaceHost(
                     appState = sessionAppState,
                     onSelectProject = { projectId, projectTitle ->
                         sessionViewModel.selectProject(projectId, projectTitle)
-                        onOpenProject(projectId)
+                        workspaceNavState.navigateToChapterTree(projectId)
                         coroutineScope.launch {
                             navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, WorkspacePaneKey.ChapterTree)
                         }
@@ -165,7 +175,7 @@ fun PhoneWorkspaceHost(
                         workspaceRepository = workspaceRepository,
                         onSelectChapter = { volumeId, chapterId, chapterTitle ->
                             sessionViewModel.selectChapter(volumeId, chapterId, chapterTitle)
-                            onOpenChapter(currentProjectId, volumeId, chapterId)
+                            workspaceNavState.navigateToEditor(currentProjectId, volumeId, chapterId)
                             coroutineScope.launch {
                                 navigator.navigateTo(ListDetailPaneScaffoldRole.Extra, WorkspacePaneKey.Editor)
                             }
@@ -183,7 +193,9 @@ fun PhoneWorkspaceHost(
                         volumeId = currentVolumeId,
                         chapterId = currentChapterId,
                         chapterTitle = currentChapterTitle,
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(top = statusBarTopPadding),
                     )
                 } else {
                     Box(

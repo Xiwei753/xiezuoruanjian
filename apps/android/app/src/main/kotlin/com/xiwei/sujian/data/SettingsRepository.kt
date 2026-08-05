@@ -386,14 +386,14 @@ class SettingsRepository(
         "sujian_settings_sections", android.content.Context.MODE_PRIVATE
     )
 
-    fun getExpandedSettingsSections(): Set<com.xiwei.sujian.ui.phone.portrait.SettingsSection> {
+    fun getExpandedSettingsSections(): Set<com.xiwei.sujian.ui.compose.navigation.SettingsSection> {
         val saved = settingsSectionsPrefs.getStringSet("expanded_sections", null) ?: emptySet()
         return saved.mapNotNull { name ->
-            try { com.xiwei.sujian.ui.phone.portrait.SettingsSection.valueOf(name) } catch (_: Exception) { null }
+            try { com.xiwei.sujian.ui.compose.navigation.SettingsSection.valueOf(name) } catch (_: Exception) { null }
         }.toSet()
     }
 
-    fun saveExpandedSettingsSections(sections: Set<com.xiwei.sujian.ui.phone.portrait.SettingsSection>) {
+    fun saveExpandedSettingsSections(sections: Set<com.xiwei.sujian.ui.compose.navigation.SettingsSection>) {
         settingsSectionsPrefs.edit()
             .putStringSet("expanded_sections", sections.map { it.name }.toSet())
             .apply()

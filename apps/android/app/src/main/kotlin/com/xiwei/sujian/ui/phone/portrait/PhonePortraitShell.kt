@@ -2,6 +2,7 @@ package com.xiwei.sujian.ui.phone.portrait
 
 import androidx.activity.compose.LocalActivity
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.core.tween
@@ -12,19 +13,21 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.navigation3.runtime.NavEntry
@@ -32,43 +35,60 @@ import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.scene.Scene
 import androidx.navigation3.ui.NavDisplay
-import com.xiwei.sujian.data.SyncChangeBus
+import com.xiwei.sujian.data.SyncStatusRepository
 import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.designsystem.component.SujianSnackbar
-import com.xiwei.sujian.ui.compose.navigation.StarMapTopBarState
-import com.xiwei.sujian.ui.compose.stats.StatsScreen
-import com.xiwei.sujian.ui.compose.starmap.StarMapScreen
+import com.xiwei.sujian.model.SyncIndicatorState
+import kotlinx.coroutines.launch
 
 @Composable
 fun PhonePortraitShell(
     stateHolder: PhonePortraitStateHolder,
+    workspaceNavState: PhoneWorkspaceNavigationState,
     sessionViewModel: WorkspaceSessionViewModel,
     workspaceRepository: WorkspaceRepository,
     modifier: Modifier = Modifier,
 ) {
-    val syncState by stateHolder.syncStatusStore.state.collectAsState()
+    val syncState by SyncStatusRepository.state.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
-    val starMapTopBarState = remember { StarMapTopBarState() }
+    val coroutineScope = rememberCoroutineScope()
 
     val backStack = rememberNavBackStack(PhoneRootRoute.Root)
     val currentRoute = backStack.lastOrNull()
-    val chromeSpec = stateHolder.chromeSpec(currentRoute)
-
-    LaunchedEffect(Unit) {
-        while (true) {
-            kotlinx.coroutines.delay(2000)
-            if (SyncChangeBus.consumeChanged()) {
-                stateHolder.syncStatusStore.refreshState()
-            }
-        }
-    }
+    val chromeSpec = stateHolder.chromeSpec(currentRoute, workspaceNavState.currentLocation, syncState)
 
     val activity = LocalActivity.current as? ComponentActivity
 
-    val contentColor = if (chromeSpec.appBarTransparent) {
-        Color.Transparent
-    } else {
-        MaterialTheme.colorScheme.background
+    val isEditor = stateHolder.selectedRoot == PhoneRoot.Works &&
+        workspaceNavState.currentLocation is WorkspaceLocation.Editor
+
+    val handleBack: () -> Boolean = {
+        when {
+            backStack.lastOrNull() is PhoneSettingsRoute -> {
+                backStack.removeLastOrNull()
+                true
+            }
+            stateHolder.selectedRoot == PhoneRoot.Works -> {
+                workspaceNavState.back()
+            }
+            else -> false
+        }
+    }
+
+    PredictiveBackHandler(enabled = stateHolder.selectedRoot == PhoneRoot.Works &&
+        workspaceNavState.currentLocation !is WorkspaceLocation.ProjectList) { progressEvents ->
+        try {
+            progressEvents.collect { event ->
+                if (event.progress != 0f) {
+                    com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack("shell", "progress")
+                }
+            }
+            val handled = handleBack()
+            com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack("shell", if (handled) "complete" else "unhandled")
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack("shell", "cancel")
+            throw e
+        }
     }
 
     Scaffold(
@@ -77,7 +97,7 @@ fun PhonePortraitShell(
             PhoneTopBar(
                 spec = chromeSpec,
                 onBack = {
-                    val handled = handlePhoneBack(backStack, stateHolder)
+                    val handled = handleBack()
                     if (!handled) {
                         activity?.onBackPressedDispatcher?.onBackPressed()
                     }
@@ -88,7 +108,11 @@ fun PhonePortraitShell(
                     }
                 },
                 onSearch = { },
-                onSync = { stateHolder.onEvent(PhonePortraitEvent.ManualSync) },
+                onSync = {
+                    coroutineScope.launch {
+                        SyncStatusRepository.manualSync()
+                    }
+                },
                 syncState = syncState,
             )
         },
@@ -105,13 +129,13 @@ fun PhonePortraitShell(
                 SujianSnackbar(data = data)
             }
         },
-        containerColor = contentColor,
+        containerColor = MaterialTheme.colorScheme.background,
         contentWindowInsets = WindowInsets.safeDrawing,
     ) { innerPadding ->
         NavDisplay(
             backStack = backStack,
             onBack = {
-                val handled = handlePhoneBack(backStack, stateHolder)
+                val handled = handleBack()
                 com.xiwei.sujian.diagnostics.DiagnosticsEvents.navBack(handled)
                 handled
             },
@@ -122,13 +146,15 @@ fun PhonePortraitShell(
                     is PhoneRootRoute -> NavEntry(key) {
                         PhoneRootContent(
                             stateHolder = stateHolder,
+                            workspaceNavState = workspaceNavState,
                             sessionViewModel = sessionViewModel,
                             workspaceRepository = workspaceRepository,
                             innerPadding = innerPadding,
-                            starMapTopBarState = starMapTopBarState,
-                            backStack = backStack,
-                            onUnhandledBack = {
-                                activity?.onBackPressedDispatcher?.onBackPressed()
+                            onBack = {
+                                val handled = handleBack()
+                                if (!handled) {
+                                    activity?.onBackPressedDispatcher?.onBackPressed()
+                                }
                             },
                             modifier = Modifier.fillMaxSize().imePadding(),
                         )
@@ -154,81 +180,47 @@ fun PhonePortraitShell(
         com.xiwei.sujian.editor.v2.compose.AnimatedTextEditorSlot(
             coordinator = coordinator,
             modifier = Modifier.fillMaxSize(),
-            visible = stateHolder.selectedRoot == PhoneRoot.Works || stateHolder.selectedRoot == PhoneRoot.StarMap,
+            visible = stateHolder.selectedRoot == PhoneRoot.Works,
         )
-    }
-}
-
-private fun handlePhoneBack(
-    backStack: MutableList<NavKey>,
-    stateHolder: PhonePortraitStateHolder,
-): Boolean {
-    if (backStack.lastOrNull() is PhoneSettingsRoute) {
-        backStack.removeLastOrNull()
-        return true
-    }
-    when (val location = stateHolder.workspaceLocation) {
-        is WorkspaceLocation.Editor -> {
-            stateHolder.onEvent(PhonePortraitEvent.OpenProject(location.projectId))
-            return true
-        }
-        is WorkspaceLocation.ChapterTree -> {
-            stateHolder.onEvent(PhonePortraitEvent.SelectRoot(PhoneRoot.Works))
-            return true
-        }
-        is WorkspaceLocation.ProjectList -> return false
     }
 }
 
 @Composable
 private fun PhoneRootContent(
     stateHolder: PhonePortraitStateHolder,
+    workspaceNavState: PhoneWorkspaceNavigationState,
     sessionViewModel: WorkspaceSessionViewModel,
     workspaceRepository: WorkspaceRepository,
     innerPadding: androidx.compose.foundation.layout.PaddingValues,
-    starMapTopBarState: StarMapTopBarState,
-    backStack: MutableList<NavKey>,
-    onUnhandledBack: () -> Unit,
+    onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val isEditor = stateHolder.selectedRoot == PhoneRoot.Works &&
+        workspaceNavState.currentLocation is WorkspaceLocation.Editor
+    val contentPadding = if (isEditor) {
+        androidx.compose.foundation.layout.PaddingValues(
+            bottom = innerPadding.calculateBottomPadding()
+        )
+    } else {
+        innerPadding
+    }
+
     Box(
-        modifier = modifier.padding(innerPadding),
+        modifier = modifier.padding(contentPadding),
     ) {
         when (stateHolder.selectedRoot) {
             PhoneRoot.Works -> {
                 PhoneWorkspaceHost(
+                    workspaceNavState = workspaceNavState,
                     sessionViewModel = sessionViewModel,
                     workspaceRepository = workspaceRepository,
-                    onOpenProject = { stateHolder.onEvent(PhonePortraitEvent.OpenProject(it)) },
-                    onOpenChapter = { projectId, volumeId, chapterId ->
-                        stateHolder.onEvent(PhonePortraitEvent.OpenChapter(projectId, volumeId, chapterId))
-                    },
-                    onBack = {
-                        val handled = handlePhoneBack(backStack, stateHolder)
-                        if (!handled) onUnhandledBack()
-                    },
-                    onWorkspaceLocationChanged = { location ->
-                        when (location) {
-                            is WorkspaceLocation.ProjectList ->
-                                stateHolder.onEvent(PhonePortraitEvent.SelectRoot(PhoneRoot.Works))
-                            is WorkspaceLocation.ChapterTree ->
-                                stateHolder.onEvent(PhonePortraitEvent.OpenProject(location.projectId))
-                            is WorkspaceLocation.Editor ->
-                                stateHolder.onEvent(PhonePortraitEvent.OpenChapter(
-                                    location.projectId, location.volumeId, location.chapterId))
-                        }
-                    },
+                    onBack = onBack,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
-            PhoneRoot.StarMap -> {
-                StarMapScreen(
-                    topBarState = starMapTopBarState,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
+            PhoneRoot.StarMap -> { }
             PhoneRoot.Stats -> {
-                StatsScreen(
+                com.xiwei.sujian.ui.compose.stats.StatsScreen(
                     modifier = Modifier.fillMaxSize(),
                 )
             }
