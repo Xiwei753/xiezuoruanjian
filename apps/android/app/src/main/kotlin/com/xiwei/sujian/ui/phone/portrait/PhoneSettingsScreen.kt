@@ -14,7 +14,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -40,14 +39,10 @@ fun PhoneSettingsScreen(
     onToggleSection: (SettingsSection) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val vm: SettingsViewModel = viewModel()
-    val uiState by vm.uiState.collectAsState()
     val deps = LocalSujianAppDependencies.current
+    val vm: SettingsViewModel = viewModel(factory = SettingsViewModel.Factory(deps.settingsRepository, deps.syncCoordinator))
+    val uiState by vm.uiState.collectAsState()
     val dims = LocalSujianDimensions.current
-
-    LaunchedEffect(Unit) {
-        vm.initialize(deps.settingsRepository, deps.syncCoordinator)
-    }
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -75,11 +70,11 @@ fun PhoneSettingsScreen(
             }
         }
 
-        items(SettingsSection.entries, key = { it.name }) { section ->
+        items(settingsCategories, key = { it.section.name }) { category ->
             SettingsExpandableSection(
-                section = section,
-                isExpanded = expandedSections.contains(section),
-                onToggle = { onToggleSection(section) },
+                section = category.section,
+                isExpanded = expandedSections.contains(category.section),
+                onToggle = { onToggleSection(category.section) },
                 state = uiState,
                 onIntent = vm::handleIntent,
             )

@@ -140,10 +140,10 @@ private data class SyncCommandIoResult(
     val isSuccess: Boolean get() = structuredResult.statusCode == "ok"
 }
 
-class SettingsViewModel : ViewModel() {
-    private var settingsRepo: SettingsRepository? = null
-    private var syncCoordinator: com.xiwei.sujian.data.SyncCoordinator? = null
-    private var initialized = false
+class SettingsViewModel(
+    private val settingsRepo: SettingsRepository,
+    private val syncCoordinator: com.xiwei.sujian.data.SyncCoordinator,
+) : ViewModel() {
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
 
@@ -169,6 +169,7 @@ class SettingsViewModel : ViewModel() {
     private fun hasUnsavedSyncSecrets() = syncSecretsRevision != syncSecretsPersistedRevision
 
     init {
+        loadInitial()
         viewModelScope.launch {
             for (command in saveChannel) {
                 mergeCommand(command)
@@ -190,23 +191,17 @@ class SettingsViewModel : ViewModel() {
         }
     }
 
-    fun initialize(repo: SettingsRepository, coordinator: com.xiwei.sujian.data.SyncCoordinator) {
-        if (initialized && settingsRepo != null) {
-            settingsRepo = repo
-            syncCoordinator = coordinator
-            return
-        }
-        settingsRepo = repo
-        syncCoordinator = coordinator
-        initialized = true
-        loadInitial()
-        viewModelScope.launch {
-            flushPending()
+    class Factory(
+        private val repo: SettingsRepository,
+        private val coordinator: com.xiwei.sujian.data.SyncCoordinator,
+    ) : androidx.lifecycle.ViewModelProvider.Factory {
+        override fun <T : ViewModel> create(modelClass: Class<T>): T {
+            return modelClass.cast(SettingsViewModel(repo, coordinator)) as T
         }
     }
 
     private fun loadInitial() {
-        val repo = settingsRepo ?: return
+        val repo = settingsRepo
         viewModelScope.launch {
             val snapshotLocalRev = localRevision
             val snapshotFontSizeRev = fontSizeRevision
@@ -242,7 +237,7 @@ class SettingsViewModel : ViewModel() {
     }
 
     private suspend fun flushPending() {
-        val repo = settingsRepo ?: return
+        val repo = settingsRepo
         val cmds = pendingCommands
         if (cmds.local == null && cmds.fontSize == null && cmds.syncConfig == null && cmds.syncSecrets == null) return
         pendingCommands = PendingCommands()
@@ -409,14 +404,14 @@ class SettingsViewModel : ViewModel() {
             }
             is SettingsIntent.Refresh -> mergeRefresh()
             is SettingsIntent.CaptureDynamicColor -> {
-                val repo = settingsRepo ?: return
+                val repo = settingsRepo
                 viewModelScope.launch {
                     val records = withContext(Dispatchers.IO) { repo.listPaletteRecords() }
                     _uiState.update { it.copy(paletteRecords = records) }
                 }
             }
             is SettingsIntent.DeletePalette -> {
-                val repo = settingsRepo ?: return
+                val repo = settingsRepo
                 viewModelScope.launch {
                     withContext(Dispatchers.IO) { repo.deletePaletteRecord(intent.deviceId, intent.fingerprint) }
                     val records = withContext(Dispatchers.IO) { repo.listPaletteRecords() }
@@ -430,7 +425,7 @@ class SettingsViewModel : ViewModel() {
     }
 
     private fun executeSyncCommand(type: SyncCommandType) {
-        val repo = settingsRepo ?: return
+        val repo = settingsRepo
         val config = _uiState.value.syncConfig
         val secrets = _uiState.value.syncSecrets
 
@@ -473,7 +468,7 @@ class SettingsViewModel : ViewModel() {
                     }
                     syncConfigPersistedRevision = syncConfigRevision
                     syncSecretsPersistedRevision = syncSecretsRevision
-                    val coordinator = syncCoordinator ?: return@launch
+                    val coordinator = syncCoordinator
                     val syncOutcome = coordinator.runSync(SyncTrigger.SettingsPage)
                     val ioResult = when (syncOutcome) {
                         is com.xiwei.sujian.data.SyncOutcome.Completed -> {
@@ -615,7 +610,7 @@ class SettingsViewModel : ViewModel() {
     }
 
     private fun mergeRefresh() {
-        val repo = settingsRepo ?: return
+        val repo = settingsRepo
         viewModelScope.launch {
             val current = _uiState.value
             val settings = withContext(Dispatchers.IO) { repo.getLocalSettings() }
@@ -704,14 +699,10 @@ fun SettingsRoute(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val vm: SettingsViewModel = viewModel()
+    val deps = LocalSujianAppDependencies.current
+    val vm: SettingsViewModel = viewModel(factory = SettingsViewModel.Factory(deps.settingsRepository, deps.syncCoordinator))
     val uiState by vm.uiState.collectAsState()
     val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
-    val deps = LocalSujianAppDependencies.current
-
-    LaunchedEffect(Unit) {
-        vm.initialize(deps.settingsRepository, deps.syncCoordinator)
-    }
 
     @Suppress("LocalContextGetResourceValueCall")
     LaunchedEffect(Unit) {

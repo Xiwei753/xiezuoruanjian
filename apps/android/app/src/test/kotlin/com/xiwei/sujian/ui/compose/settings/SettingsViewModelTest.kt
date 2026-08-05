@@ -12,23 +12,31 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class SettingsViewModelTest {
 
+    private fun createVm(): SettingsViewModel {
+        val context = org.robolectric.RuntimeEnvironment.getApplication()
+        val repo = com.xiwei.sujian.data.SettingsRepository(context)
+        val syncStatusRepo = com.xiwei.sujian.data.SyncStatusRepository(repo)
+        val coordinator = com.xiwei.sujian.data.SyncCoordinator(repo, syncStatusRepo)
+        return SettingsViewModel(repo, coordinator)
+    }
+
     @Test
     fun `handleIntent UpdateLocal updates uiState settings`() {
-        val vm = SettingsViewModel()
+        val vm = createVm()
         vm.handleIntent(SettingsIntent.UpdateLocal { it.copy(editorFontSize = 18f) })
         assertEquals(18f, vm.uiState.value.settings.editorFontSize, 0.01f)
     }
 
     @Test
     fun `handleIntent UpdateFontSize updates uiState fontSize`() {
-        val vm = SettingsViewModel()
+        val vm = createVm()
         vm.handleIntent(SettingsIntent.UpdateFontSize(20f))
         assertEquals(20f, vm.uiState.value.fontSize, 0.01f)
     }
 
     @Test
     fun `handleIntent UpdateSyncConfig updates uiState syncConfig`() {
-        val vm = SettingsViewModel()
+        val vm = createVm()
         val config = com.xiwei.sujian.model.SyncConfig(autoSync = true)
         vm.handleIntent(SettingsIntent.UpdateSyncConfig(config))
         assertEquals(true, vm.uiState.value.syncConfig.autoSync)
@@ -36,7 +44,7 @@ class SettingsViewModelTest {
 
     @Test
     fun `handleIntent UpdateSyncSecrets updates uiState syncSecrets`() {
-        val vm = SettingsViewModel()
+        val vm = createVm()
         val secrets = com.xiwei.sujian.model.SyncSecrets(token = "test-token")
         vm.handleIntent(SettingsIntent.UpdateSyncSecrets(secrets))
         assertEquals("test-token", vm.uiState.value.syncSecrets.token)
@@ -44,14 +52,14 @@ class SettingsViewModelTest {
 
     @Test
     fun `handleIntent Refresh keeps uiState at defaults when no repo injected`() {
-        val vm = SettingsViewModel()
+        val vm = createVm()
         vm.handleIntent(SettingsIntent.Refresh)
         assertEquals(16f, vm.uiState.value.fontSize, 0.01f)
     }
 
     @Test
     fun `consumeSaveError clears saveErrorResId`() {
-        val vm = SettingsViewModel()
+        val vm = createVm()
         vm.handleIntent(SettingsIntent.UpdateFontSize(20f))
         vm.consumeSaveError()
         assertNull(vm.uiState.value.saveErrorResId)

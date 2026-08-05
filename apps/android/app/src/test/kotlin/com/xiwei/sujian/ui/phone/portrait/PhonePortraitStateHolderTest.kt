@@ -69,12 +69,12 @@ class PhonePortraitStateHolderRestoreTest {
     }
 
     @Test
-    fun initialRoot_starMapIsIgnoredEvenAsInitial() {
+    fun initialRoot_starMapFallsBackToWorks() {
         val holder = PhonePortraitStateHolder(
             initialRoot = PhoneRoot.StarMap,
             onSaveExpandedSections = { },
             initialExpandedSections = emptySet(),
         )
-        assertEquals(PhoneRoot.StarMap, holder.selectedRoot)
+        assertEquals(PhoneRoot.Works, holder.selectedRoot)
     }
 }

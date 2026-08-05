@@ -1,6 +1,5 @@
 package com.xiwei.sujian.ui.phone.portrait
 
-import com.xiwei.sujian.model.SyncIndicatorState
 import com.xiwei.sujian.ui.compose.navigation.SettingsSection
 
 sealed interface PhonePortraitEvent {

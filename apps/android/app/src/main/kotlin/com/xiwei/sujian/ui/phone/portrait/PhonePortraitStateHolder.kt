@@ -14,7 +14,7 @@ class PhonePortraitStateHolder(
     private val onSaveExpandedSections: (Set<SettingsSection>) -> Unit,
     initialExpandedSections: Set<SettingsSection> = emptySet(),
 ) {
-    var selectedRoot by mutableStateOf(initialRoot)
+    var selectedRoot by mutableStateOf(if (initialRoot == PhoneRoot.StarMap) PhoneRoot.Works else initialRoot)
         private set
 
     var expandedSettingsSections by mutableStateOf(initialExpandedSections)
