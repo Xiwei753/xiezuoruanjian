@@ -358,23 +358,27 @@ class SettingsViewModel(
     ) {
         _uiState.update { it.copy(performSyncState = SyncCommandState.RUNNING, structuredSyncResult = null, lastCommandType = SyncCommandType.PERFORM_SYNC) }
         try {
-            val configSaveResult = withContext(Dispatchers.IO) { repo.saveSyncConfig(command.config) }
-            if (configSaveResult is SettingsSaveResult.Failed) {
-                _uiState.update { it.copy(performSyncState = SyncCommandState.FAILURE, structuredSyncResult = StructuredSyncResult(statusCode = "error", messageKey = "save_config_failed")) }
-                return
-            }
-            val secretsSaveResult = withContext(Dispatchers.IO) { repo.saveSyncSecrets(command.secrets) }
-            if (secretsSaveResult is SettingsSaveResult.Failed) {
-                if (syncConfigRevision == command.configRevision) {
-                    syncConfigPersistedRevision = command.configRevision
-                }
-                _uiState.update { it.copy(performSyncState = SyncCommandState.FAILURE, structuredSyncResult = StructuredSyncResult(statusCode = "error", messageKey = "save_secrets_failed")) }
-                return
-            }
+            // 串行事务只写入“本次捕获 revision 对应的值”。若保存期间已有更新版本的
+            // 修改合并/排队（revision 不再匹配），说明更优值已由 executeSave 或后续
+            // 命令写入，此处跳过旧值覆盖；persisted 标记同样只在 revision 匹配时推进，
+            // 不得把更新版本误标记为已保存（#592：不能反向覆盖已同步的配置）。
             if (syncConfigRevision == command.configRevision) {
+                val configSaveResult = withContext(Dispatchers.IO) { repo.saveSyncConfig(command.config) }
+                if (configSaveResult is SettingsSaveResult.Failed) {
+                    _uiState.update { it.copy(performSyncState = SyncCommandState.FAILURE, structuredSyncResult = StructuredSyncResult(statusCode = "error", messageKey = "save_config_failed")) }
+                    return
+                }
                 syncConfigPersistedRevision = command.configRevision
             }
             if (syncSecretsRevision == command.secretsRevision) {
+                val secretsSaveResult = withContext(Dispatchers.IO) { repo.saveSyncSecrets(command.secrets) }
+                if (secretsSaveResult is SettingsSaveResult.Failed) {
+                    if (syncConfigRevision == command.configRevision) {
+                        syncConfigPersistedRevision = command.configRevision
+                    }
+                    _uiState.update { it.copy(performSyncState = SyncCommandState.FAILURE, structuredSyncResult = StructuredSyncResult(statusCode = "error", messageKey = "save_secrets_failed")) }
+                    return
+                }
                 syncSecretsPersistedRevision = command.secretsRevision
             }
             val syncOutcome = syncCoordinator.runSync(command.trigger)
@@ -550,73 +554,14 @@ class SettingsViewModel(
                 successStateField = { copy(testConnectionState = SyncCommandState.SUCCESS) }
                 failureStateField = { copy(testConnectionState = SyncCommandState.FAILURE) }
             }
-            SyncCommandType.PERFORM_SYNC -> {
-                runningStateField = { copy(performSyncState = SyncCommandState.RUNNING, structuredSyncResult = null, lastCommandType = SyncCommandType.PERFORM_SYNC) }
-                successStateField = { copy(performSyncState = SyncCommandState.SUCCESS) }
-                failureStateField = { copy(performSyncState = SyncCommandState.FAILURE) }
-            }
+            // “保存并同步”不走 executeSyncCommand：SettingsIntent.PerformSync 统一通过
+            // SaveSyncAndRun 命令进入 saveChannel 串行事务（保存+同步同一队列，见 #592）。
+            SyncCommandType.PERFORM_SYNC -> throw IllegalStateException("PERFORM_SYNC must go through SaveSyncAndRun transaction")
         }
 
         viewModelScope.launch {
             try {
-                if (type == SyncCommandType.PERFORM_SYNC) {
-                    _uiState.update { it.runningStateField() }
-                    val saveResult = withContext(Dispatchers.IO) { repo.saveSyncConfig(config) }
-                    if (saveResult is SettingsSaveResult.Failed) {
-                        _uiState.update { it.failureStateField().copy(structuredSyncResult = StructuredSyncResult(statusCode = "error", messageKey = "save_config_failed")) }
-                        return@launch
-                    }
-                    val secretsResult = withContext(Dispatchers.IO) { repo.saveSyncSecrets(secrets) }
-                    if (secretsResult is SettingsSaveResult.Failed) {
-                        syncConfigPersistedRevision = syncConfigRevision
-                        _uiState.update { it.failureStateField().copy(structuredSyncResult = StructuredSyncResult(statusCode = "error", messageKey = "save_secrets_failed")) }
-                        return@launch
-                    }
-                    syncConfigPersistedRevision = syncConfigRevision
-                    syncSecretsPersistedRevision = syncSecretsRevision
-                    val coordinator = syncCoordinator
-                    val syncOutcome = coordinator.runSync(SyncTrigger.SettingsPage)
-                    val ioResult = when (syncOutcome) {
-                        is com.xiwei.sujian.data.SyncOutcome.Completed -> {
-                            val sr = syncOutcome.result
-                            val counts = SyncCounts(
-                                uploaded = sr.uploadedFiles.size,
-                                downloaded = sr.downloadedFiles.size,
-                                deletedRemote = sr.remoteDeletes.size,
-                                deletedLocal = sr.localDeletes.size,
-                                conflicts = sr.conflicts.size,
-                                overwritten = sr.overwrittenFiles.size,
-                                ignored = sr.ignoredFiles.size
-                            )
-                            SyncCommandIoResult(true, true, StructuredSyncResult(
-                                statusCode = if (sr.error == null) "ok" else "error",
-                                messageKey = "sync_perform_result",
-                                counts = counts,
-                                sanitizedDiagnostic = if (sr.error != null) "sync_failed" else null
-                            ))
-                        }
-                        is com.xiwei.sujian.data.SyncOutcome.Unconfigured ->
-                            SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_unconfigured"))
-                        is com.xiwei.sujian.data.SyncOutcome.Disabled ->
-                            SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_disabled"))
-                        is com.xiwei.sujian.data.SyncOutcome.Busy ->
-                            SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_busy"))
-                        is com.xiwei.sujian.data.SyncOutcome.RetryableFailure ->
-                            SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_retryable_failure"))
-                        is com.xiwei.sujian.data.SyncOutcome.TerminalFailure ->
-                            SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_terminal_failure"))
-                        else ->
-                            SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_unknown"))
-                    }
-                    _uiState.update { current ->
-                        if (ioResult.isSuccess) {
-                            current.successStateField().copy(structuredSyncResult = ioResult.structuredResult)
-                        } else {
-                            current.failureStateField().copy(structuredSyncResult = ioResult.structuredResult)
-                        }
-                    }
-                } else {
-                    val exclusiveResult = SyncSession.runExclusive { _ ->
+                val exclusiveResult = SyncSession.runExclusive { _ ->
                         _uiState.update { it.runningStateField() }
                         withContext(Dispatchers.IO) {
                             val saveResult = repo.saveSyncConfig(config)
@@ -677,7 +622,9 @@ class SettingsViewModel(
                                         BridgeResult.NotLoaded -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "core_not_loaded"))
                                     }
                                 }
-                                else -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "unknown_command"))
+                                // 保存并同步不允许走到这里：SettingsIntent.PerformSync 统一通过
+                                // SaveSyncAndRun 串行事务执行，见 #592。
+                                SyncCommandType.PERFORM_SYNC -> throw IllegalStateException("PERFORM_SYNC must go through SaveSyncAndRun transaction")
                             }
                             syncResult
                         }
@@ -700,7 +647,6 @@ class SettingsViewModel(
                             }
                         }
                     }
-                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

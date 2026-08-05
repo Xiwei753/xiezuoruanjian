@@ -95,4 +95,38 @@ class SettingsViewModelTest {
         assertEquals("secret", cmd.secrets.token)
         assertEquals(4L, cmd.revision)
     }
+
+    @Test
+    fun `handleIntent PerformSync ends in terminal failure via serial transaction`() {
+        val vm = createVm()
+        val config = com.xiwei.sujian.model.SyncConfig(
+            enabled = false,
+            autoSync = false,
+            remoteUrl = "https://unit.example/repo.git",
+        )
+        vm.handleIntent(SettingsIntent.UpdateSyncConfig(config))
+        // 保存并同步必须走 SaveSyncAndRun 串行事务（保存队列），并结束在明确终态：
+        // 未配置 → 失败；不允许绕过保存队列或停留在 RUNNING/IDLE（#592）。
+        vm.handleIntent(SettingsIntent.PerformSync)
+        awaitUntil(
+            predicate = { vm.uiState.value.performSyncState == SyncCommandState.FAILURE },
+            message = "PerformSync must end in terminal FAILURE state via SaveSyncAndRun transaction",
+        )
+        assertEquals(SyncCommandState.FAILURE, vm.uiState.value.performSyncState)
+    }
+
+    private fun awaitUntil(
+        predicate: () -> Boolean,
+        message: String,
+        timeoutMs: Long = 15_000,
+    ) {
+        val shadow = org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper())
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            shadow.idle()
+            if (predicate()) return
+            Thread.sleep(10)
+        }
+        org.junit.Assert.fail("$message (within ${timeoutMs}ms)")
+    }
 }
