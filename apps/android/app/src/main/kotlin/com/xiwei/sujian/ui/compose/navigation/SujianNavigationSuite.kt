@@ -159,7 +159,16 @@ private fun PhonePortraitSuite(
 ) {
     val deps = com.xiwei.sujian.runtime.LocalSujianAppDependencies.current
     val syncStatusStore = remember { SyncStatusStore(deps.settingsRepository) }
-    val stateHolder = remember { PhonePortraitStateHolder(syncStatusStore, deps.settingsRepository) }
+    val initialSections = remember { deps.settingsRepository.getExpandedSettingsSections() }
+    val stateHolder = remember {
+        PhonePortraitStateHolder(
+            syncStatusStore = syncStatusStore,
+            onSaveExpandedSections = { sections ->
+                deps.settingsRepository.saveExpandedSettingsSections(sections)
+            },
+            initialExpandedSections = initialSections,
+        )
+    }
     val sessionVm: WorkspaceSessionViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 
     LaunchedEffect(Unit) {
@@ -266,7 +275,6 @@ private fun WideScreenSuite(
                         when (route) {
                             is SujianRoute.Works -> ProjectWorkspaceScreen(
                                 appState = appState,
-                                workspaceBackState = remember { WorkspaceBackState() },
                             )
                             is SujianRoute.StarMap -> StarMapScreen(
                                 topBarState = starMapTopBarState,
@@ -349,16 +357,6 @@ private fun WideScreenSuite(
             visible = currentTopDestination == SujianDestination.Works ||
                 currentTopDestination == SujianDestination.StarMap,
         )
-    }
-}
-
-@Stable
-class WorkspaceBackState {
-    var onBack by androidx.compose.runtime.mutableStateOf<(() -> Unit)?>(null)
-        private set
-
-    fun update(onBack: (() -> Unit)?) {
-        this.onBack = onBack
     }
 }
 

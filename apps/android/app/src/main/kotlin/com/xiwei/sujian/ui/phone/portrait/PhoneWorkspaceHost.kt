@@ -49,6 +49,7 @@ fun PhoneWorkspaceHost(
     onOpenProject: (String) -> Unit,
     onOpenChapter: (String, String, String) -> Unit,
     onBack: () -> Unit,
+    onWorkspaceLocationChanged: (WorkspaceLocation) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -80,11 +81,16 @@ fun PhoneWorkspaceHost(
                     sessionViewModel.clearProjectSelection()
                     com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceBack("project_list")
                 }
+                onWorkspaceLocationChanged(WorkspaceLocation.ProjectList)
             }
             WorkspacePaneKey.ChapterTree -> {
                 if (sessionViewModel.currentChapterId != null) {
                     sessionViewModel.clearChapterSelection()
                     com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceBack("chapter_tree")
+                }
+                val pid = sessionViewModel.currentProjectId
+                if (pid != null) {
+                    onWorkspaceLocationChanged(WorkspaceLocation.ChapterTree(pid))
                 }
             }
             null -> {
@@ -92,6 +98,7 @@ fun PhoneWorkspaceHost(
                     sessionViewModel.clearProjectSelection()
                     com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceBack("project_list")
                 }
+                onWorkspaceLocationChanged(WorkspaceLocation.ProjectList)
             }
             WorkspacePaneKey.Editor -> { }
         }
