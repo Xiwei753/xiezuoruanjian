@@ -24,29 +24,39 @@ class SujianAppDependenciesSingletonTest {
     private fun app(): SujianApp = RuntimeEnvironment.getApplication() as SujianApp
 
     @Test
-    fun dependencies_repeatedAccess_returnsSameInstance() {
-        val deps = app().dependencies
-        assertSame(deps, app().dependencies)
+    fun appContainer_repeatedAccess_returnsSameInstance() {
+        val container = app().appContainer
+        assertSame(container, app().appContainer)
     }
 
     @Test
-    fun dependencies_syncStateFlowAndCoordinator_areUniquePerProcess() {
-        val first = app().dependencies
-        val second = app().dependencies
+    fun appContainer_syncStateFlowAndCoordinator_areUniquePerProcess() {
+        val first = app().appContainer
+        val second = app().appContainer
         assertSame(first.syncStatusRepository, second.syncStatusRepository)
         assertSame(first.syncCoordinator, second.syncCoordinator)
     }
 
     @Test
-    fun dependencies_concurrentFirstAccess_createsSingleInstance() {
-        val deps = app()
-        val seen = java.util.Collections.synchronizedList(mutableListOf<SujianAppDependencies>())
+    fun appContainer_concurrentFirstAccess_createsSingleInstance() {
+        val app = app()
+        val seen = java.util.Collections.synchronizedList(mutableListOf<com.xiwei.sujian.runtime.AppServiceContainer>())
         val threads = (1..8).map {
-            Thread { seen.add(deps.dependencies) }
+            Thread { seen.add(app.appContainer) }
         }
         threads.forEach { it.start() }
         threads.forEach { it.join() }
         assertEquals(1, seen.distinct().size)
-        assertSame(seen.first(), deps.dependencies)
+        assertSame(seen.first(), app.appContainer)
+    }
+
+    @Test
+    fun dependencies_delegatesToAppContainer() {
+        val app = app()
+        val deps = app.dependencies
+        val container = app.appContainer
+        assertSame(container.appServiceBridge, deps.appServiceBridge)
+        assertSame(container.syncStatusRepository, deps.syncStatusRepository)
+        assertSame(container.syncCoordinator, deps.syncCoordinator)
     }
 }

@@ -22,10 +22,13 @@ class SujianApp : Application(), DefaultLifecycleObserver, com.xiwei.sujian.runt
      * 后台线程首次并发访问也只构造一个实例，避免出现两份
      * SyncStatusRepository StateFlow / SyncCoordinator 互相覆盖。
      */
-    private val dependenciesDelegate: Lazy<com.xiwei.sujian.runtime.SujianAppDependencies> =
-        lazy { com.xiwei.sujian.runtime.DefaultSujianAppDependencies(this) }
+    private val appContainerDelegate: Lazy<com.xiwei.sujian.runtime.AppServiceContainer> =
+        lazy { com.xiwei.sujian.runtime.DefaultAppServiceContainer(this) }
+    val appContainer: com.xiwei.sujian.runtime.AppServiceContainer
+        get() = appContainerDelegate.value
+
     override val dependencies: com.xiwei.sujian.runtime.SujianAppDependencies
-        get() = dependenciesDelegate.value
+        get() = com.xiwei.sujian.runtime.DefaultSujianAppDependencies(appContainer)
 
     override fun onCreate() {
         super<Application>.onCreate()

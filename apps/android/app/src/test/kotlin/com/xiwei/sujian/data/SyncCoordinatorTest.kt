@@ -37,4 +37,10 @@ class SyncCoordinatorTest {
         )
         assertEquals(6, outcomes.distinctBy { it::class }.size)
     }
+
+    @Test
+    fun syncingStatus_mapsToRetryableFailure_notCompleted() {
+        val outcome = SyncOutcome.RetryableFailure(com.xiwei.sujian.model.SyncStatus.Error)
+        assertEquals(SyncOutcome.RetryableFailure::class, outcome::class)
+    }
 }

@@ -23,6 +23,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.data.WorkspaceUseCase
 import com.xiwei.sujian.editor.v2.compose.LocalAnimatedTextEditorCoordinator
+import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
 import com.xiwei.sujian.model.Orientation
 import com.xiwei.sujian.model.WindowMetrics
 import com.xiwei.sujian.platform.api.AndroidCapabilities
@@ -51,9 +52,26 @@ fun SujianApp(
     val context = LocalContext.current
     val vm: SujianAppViewModel = viewModel()
     val appState = remember { SujianAppState(vm) }
+    val app = context.applicationContext as? com.xiwei.sujian.SujianApp
     val deps = remember {
         val testProvider = SujianAppDependencies.getTestProvider()
-        testProvider?.invoke(context) ?: DefaultSujianAppDependencies(context)
+        testProvider?.invoke(context) ?: (app?.dependencies ?: DefaultSujianAppDependencies(
+            com.xiwei.sujian.runtime.DefaultAppServiceContainer(context)
+        ))
+    }
+    val activityRef = androidx.activity.compose.LocalActivity.current as? androidx.activity.ComponentActivity
+    val windowCoordinator = remember {
+        com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator(
+            context.applicationContext, deps.appServiceBridge
+        )
+    }
+    DisposableEffect(windowCoordinator, activityRef) {
+        val act = activityRef ?: return@DisposableEffect onDispose { }
+        onDispose {
+            if (!act.isChangingConfigurations) {
+                windowCoordinator.releaseHost()
+            }
+        }
     }
     val themeController = rememberThemeController(context, deps.settingsRepository)
     val vendorRegistry = remember { VendorAdapterRegistry().also { VendorAdapterSetup.ensureInitialized(it) } }
@@ -67,8 +85,6 @@ fun SujianApp(
             capabilityProvider.unregisterInputDeviceListener()
         }
     }
-
-    val activityRef = androidx.activity.compose.LocalActivity.current as? androidx.activity.ComponentActivity
     DisposableEffect(deps, activityRef) {
         val act = activityRef ?: return@DisposableEffect onDispose { }
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
@@ -76,9 +92,6 @@ fun SujianApp(
                 androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> com.xiwei.sujian.diagnostics.DiagnosticsEvents.activityLifecycle("pause")
                 androidx.lifecycle.Lifecycle.Event.ON_DESTROY -> {
                     com.xiwei.sujian.diagnostics.DiagnosticsEvents.activityLifecycle("destroy")
-                    if (!act.isChangingConfigurations) {
-                        deps.release()
-                    }
                 }
                 else -> {}
             }
@@ -88,7 +101,7 @@ fun SujianApp(
             act.lifecycle.removeObserver(observer)
         }
     }
-    val coordinator = deps.coordinator
+
 
     LaunchedEffect(Unit) {
         val workspaceUC = WorkspaceUseCase(deps.workspaceRepository)
@@ -160,7 +173,7 @@ fun SujianApp(
     SujianTheme(uiState = uiState) {
         CompositionLocalProvider(
             LocalAndroidCapabilities provides capabilities,
-            LocalAnimatedTextEditorCoordinator provides coordinator,
+            LocalAnimatedTextEditorCoordinator provides windowCoordinator,
             LocalSujianAppDependencies provides deps,
         ) {
             Box(

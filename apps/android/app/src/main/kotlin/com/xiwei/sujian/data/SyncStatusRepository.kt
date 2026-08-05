@@ -31,31 +31,35 @@ class SyncStatusRepository(
     }
 
     suspend fun refreshState() {
-        val indicatorState = withContext(Dispatchers.IO) {
-            val config = settingsRepository.loadSyncConfig()
-            val capability = settingsRepository.getSyncCapability()
-            when {
-                config.enabled != true -> SyncIndicatorState.Unconfigured
-                !capability.canRun -> SyncIndicatorState.Unconfigured
-                else -> {
-                    val syncState = settingsRepository.loadSyncState()
-                    when (syncState.status) {
-                        SyncStatus.Syncing -> SyncIndicatorState.Syncing
-                        SyncStatus.Success,
-                        SyncStatus.NoChanges,
-                        SyncStatus.LatestWinsApplied,
-                        SyncStatus.BranchMissingRecovered -> SyncIndicatorState.Synced
-                        SyncStatus.Conflict,
-                        SyncStatus.PartialConflict,
-                        SyncStatus.RecoverableError,
-                        SyncStatus.FatalError,
-                        SyncStatus.DirtyRepoBlocked,
-                        SyncStatus.Error -> SyncIndicatorState.Failed
-                        SyncStatus.Idle,
-                        SyncStatus.ConfiguredNotTested -> SyncIndicatorState.Unconfigured
+        val indicatorState = try {
+            withContext(Dispatchers.IO) {
+                val config = settingsRepository.loadSyncConfig()
+                val capability = settingsRepository.getSyncCapability()
+                when {
+                    config.enabled != true -> SyncIndicatorState.Unconfigured
+                    !capability.canRun -> SyncIndicatorState.Unconfigured
+                    else -> {
+                        val syncState = settingsRepository.loadSyncState()
+                        when (syncState.status) {
+                            SyncStatus.Syncing -> SyncIndicatorState.Syncing
+                            SyncStatus.Success,
+                            SyncStatus.NoChanges,
+                            SyncStatus.LatestWinsApplied,
+                            SyncStatus.BranchMissingRecovered -> SyncIndicatorState.Synced
+                            SyncStatus.Conflict,
+                            SyncStatus.PartialConflict,
+                            SyncStatus.RecoverableError,
+                            SyncStatus.FatalError,
+                            SyncStatus.DirtyRepoBlocked,
+                            SyncStatus.Error -> SyncIndicatorState.Failed
+                            SyncStatus.Idle,
+                            SyncStatus.ConfiguredNotTested -> SyncIndicatorState.Unconfigured
+                        }
                     }
                 }
             }
+        } catch (_: Exception) {
+            _state.value
         }
         _state.value = indicatorState
     }

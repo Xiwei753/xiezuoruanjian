@@ -200,7 +200,7 @@ class TestSujianAppDependencies(
     override val syncStatusRepository: com.xiwei.sujian.data.SyncStatusRepository = com.xiwei.sujian.data.SyncStatusRepository(settingsRepository)
     override val syncCoordinator: com.xiwei.sujian.data.SyncCoordinator = com.xiwei.sujian.data.SyncCoordinator(settingsRepository, syncStatusRepository)
     private val _coordinator = lazy { AnimatedTextEditorCoordinator(appContext, appServiceBridge, animationTimeSource, transactionIdSource) }
-    override val coordinator: AnimatedTextEditorCoordinator get() = _coordinator.value
+    val coordinator: AnimatedTextEditorCoordinator get() = _coordinator.value
     private var runtimeReleased = false
 
     fun releaseRuntime() {
@@ -210,10 +210,6 @@ class TestSujianAppDependencies(
             coordinator.releaseHost()
         }
         testHolder.close()
-    }
-
-    override fun release() {
-        releaseRuntime()
     }
 }
 

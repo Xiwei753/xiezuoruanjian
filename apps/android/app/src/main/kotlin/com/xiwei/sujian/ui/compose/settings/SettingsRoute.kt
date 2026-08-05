@@ -63,6 +63,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.parcelize.Parcelize
 import com.xiwei.sujian.data.ExclusiveResult
 import com.xiwei.sujian.data.SyncCoordinator
+import com.xiwei.sujian.data.SyncOutcome
 import com.xiwei.sujian.data.SyncSession
 import com.xiwei.sujian.model.SyncTrigger
 
@@ -121,6 +122,14 @@ sealed interface SettingsSaveCommand {
         val secrets: com.xiwei.sujian.model.SyncSecrets,
         val revision: Long,
     ) : SettingsSaveCommand
+
+    data class SaveSyncAndRun(
+        val config: com.xiwei.sujian.model.SyncConfig,
+        val configRevision: Long,
+        val secrets: com.xiwei.sujian.model.SyncSecrets,
+        val secretsRevision: Long,
+        val trigger: SyncTrigger,
+    ) : SettingsSaveCommand
 }
 
 private data class PendingCommands(
@@ -128,6 +137,7 @@ private data class PendingCommands(
     val fontSize: SettingsSaveCommand.FontSize? = null,
     val syncConfig: SettingsSaveCommand.SyncConfig? = null,
     val syncSecrets: SettingsSaveCommand.SyncSecrets? = null,
+    val syncAndRun: SettingsSaveCommand.SaveSyncAndRun? = null,
 )
 
 enum class SyncCommandType { DRY_RUN, TEST_CONNECTION, PERFORM_SYNC }
@@ -188,6 +198,7 @@ class SettingsViewModel(
             is SettingsSaveCommand.FontSize -> pendingCommands.copy(fontSize = command)
             is SettingsSaveCommand.SyncConfig -> pendingCommands.copy(syncConfig = command)
             is SettingsSaveCommand.SyncSecrets -> pendingCommands.copy(syncSecrets = command)
+            is SettingsSaveCommand.SaveSyncAndRun -> pendingCommands.copy(syncAndRun = command)
         }
     }
 
@@ -239,9 +250,9 @@ class SettingsViewModel(
     private suspend fun flushPending() {
         val repo = settingsRepo
         val cmds = pendingCommands
-        if (cmds.local == null && cmds.fontSize == null && cmds.syncConfig == null && cmds.syncSecrets == null) return
+        if (cmds.local == null && cmds.fontSize == null && cmds.syncConfig == null && cmds.syncSecrets == null && cmds.syncAndRun == null) return
         pendingCommands = PendingCommands()
-        executeSave(repo, cmds.local, cmds.fontSize, cmds.syncConfig, cmds.syncSecrets)
+        executeSave(repo, cmds.local, cmds.fontSize, cmds.syncConfig, cmds.syncSecrets, cmds.syncAndRun)
     }
 
     private suspend fun executeSave(
@@ -250,6 +261,7 @@ class SettingsViewModel(
         fontSize: SettingsSaveCommand.FontSize?,
         syncConfig: SettingsSaveCommand.SyncConfig?,
         syncSecrets: SettingsSaveCommand.SyncSecrets?,
+        syncAndRun: SettingsSaveCommand.SaveSyncAndRun?,
     ) {
         val failures = mutableListOf<SaveFailure>()
 
@@ -334,6 +346,87 @@ class SettingsViewModel(
         } else if (local != null || fontSize != null || syncConfig != null || syncSecrets != null) {
             _uiState.update { it.copy(saveErrorResId = null) }
         }
+
+        if (syncAndRun != null) {
+            executeSyncAndRun(repo, syncAndRun)
+        }
+    }
+
+    private suspend fun executeSyncAndRun(
+        repo: SettingsRepository,
+        command: SettingsSaveCommand.SaveSyncAndRun,
+    ) {
+        _uiState.update { it.copy(performSyncState = SyncCommandState.RUNNING, structuredSyncResult = null, lastCommandType = SyncCommandType.PERFORM_SYNC) }
+        try {
+            val configSaveResult = withContext(Dispatchers.IO) { repo.saveSyncConfig(command.config) }
+            if (configSaveResult is SettingsSaveResult.Failed) {
+                _uiState.update { it.copy(performSyncState = SyncCommandState.FAILURE, structuredSyncResult = StructuredSyncResult(statusCode = "error", messageKey = "save_config_failed")) }
+                return
+            }
+            val secretsSaveResult = withContext(Dispatchers.IO) { repo.saveSyncSecrets(command.secrets) }
+            if (secretsSaveResult is SettingsSaveResult.Failed) {
+                if (syncConfigRevision == command.configRevision) {
+                    syncConfigPersistedRevision = command.configRevision
+                }
+                _uiState.update { it.copy(performSyncState = SyncCommandState.FAILURE, structuredSyncResult = StructuredSyncResult(statusCode = "error", messageKey = "save_secrets_failed")) }
+                return
+            }
+            if (syncConfigRevision == command.configRevision) {
+                syncConfigPersistedRevision = command.configRevision
+            }
+            if (syncSecretsRevision == command.secretsRevision) {
+                syncSecretsPersistedRevision = command.secretsRevision
+            }
+            val syncOutcome = syncCoordinator.runSync(command.trigger)
+            val ioResult = when (syncOutcome) {
+                is SyncOutcome.Completed -> {
+                    val sr = syncOutcome.result
+                    val counts = SyncCounts(
+                        uploaded = sr.uploadedFiles.size,
+                        downloaded = sr.downloadedFiles.size,
+                        deletedRemote = sr.remoteDeletes.size,
+                        deletedLocal = sr.localDeletes.size,
+                        conflicts = sr.conflicts.size,
+                        overwritten = sr.overwrittenFiles.size,
+                        ignored = sr.ignoredFiles.size
+                    )
+                    SyncCommandIoResult(true, true, StructuredSyncResult(
+                        statusCode = if (sr.error == null) "ok" else "error",
+                        messageKey = "sync_perform_result",
+                        counts = counts,
+                        sanitizedDiagnostic = if (sr.error != null) "sync_failed" else null
+                    ))
+                }
+                is SyncOutcome.Unconfigured ->
+                    SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_unconfigured"))
+                is SyncOutcome.Disabled ->
+                    SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_disabled"))
+                is SyncOutcome.Busy ->
+                    SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_busy"))
+                is SyncOutcome.RetryableFailure ->
+                    SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_retryable_failure"))
+                is SyncOutcome.TerminalFailure ->
+                    SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_terminal_failure"))
+                else ->
+                    SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_unknown"))
+            }
+            _uiState.update { current ->
+                if (ioResult.isSuccess) {
+                    current.copy(performSyncState = SyncCommandState.SUCCESS, structuredSyncResult = ioResult.structuredResult, lastCommandType = SyncCommandType.PERFORM_SYNC)
+                } else {
+                    current.copy(performSyncState = SyncCommandState.FAILURE, structuredSyncResult = ioResult.structuredResult, lastCommandType = SyncCommandType.PERFORM_SYNC)
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _uiState.update { it.copy(performSyncState = SyncCommandState.FAILURE, structuredSyncResult = StructuredSyncResult(statusCode = "error", messageKey = "unexpected_error", sanitizedDiagnostic = e.message), lastCommandType = SyncCommandType.PERFORM_SYNC) }
+        }
+        try {
+            val refreshedCapability = withContext(Dispatchers.IO) { repo.getSyncCapability() }
+            val refreshedWarning = withContext(Dispatchers.IO) { repo.getSecureStorageWarning() }
+            _uiState.update { it.copy(syncCapability = refreshedCapability, secureStorageWarning = refreshedWarning) }
+        } catch (_: Exception) { }
     }
 
     private suspend fun rollbackFailures(repo: SettingsRepository, failures: List<SaveFailure>) {
@@ -420,7 +513,20 @@ class SettingsViewModel(
             }
             is SettingsIntent.DryRun -> executeSyncCommand(SyncCommandType.DRY_RUN)
             is SettingsIntent.TestConnection -> executeSyncCommand(SyncCommandType.TEST_CONNECTION)
-            is SettingsIntent.PerformSync -> executeSyncCommand(SyncCommandType.PERFORM_SYNC)
+            is SettingsIntent.PerformSync -> {
+                val currentConfig = _uiState.value.syncConfig
+                val currentSecrets = _uiState.value.syncSecrets
+                val configRev = ++syncConfigRevision
+                val secretsRev = ++syncSecretsRevision
+                _uiState.update { it.copy(syncConfig = currentConfig, syncSecrets = currentSecrets) }
+                saveChannel.trySend(SettingsSaveCommand.SaveSyncAndRun(
+                    config = currentConfig,
+                    configRevision = configRev,
+                    secrets = currentSecrets,
+                    secretsRevision = secretsRev,
+                    trigger = SyncTrigger.SettingsPage,
+                ))
+            }
         }
     }
 
