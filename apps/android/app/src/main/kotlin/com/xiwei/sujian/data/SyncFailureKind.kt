@@ -10,6 +10,21 @@ enum class SyncFailureKind {
     NativeUnavailable,
     Fatal;
 
+    /**
+     * #592 四：统一用户提示映射 — 正式同步、试运行、连接诊断全部使用同一 messageKey，
+     * 不再各自拼接 dry_run_error / diagnostics_error。
+     */
+    fun messageKey(): String = when (this) {
+        RetryableNetwork -> "sync_retryable_network"
+        RetryableIo -> "sync_retryable_io"
+        Authentication -> "sync_auth_failed"
+        Conflict -> "sync_conflict"
+        DirtyRepository -> "sync_dirty_repository"
+        Protocol -> "sync_protocol_error"
+        NativeUnavailable -> "sync_native_unavailable"
+        Fatal -> "sync_fatal"
+    }
+
     fun toOutcome(): SyncOutcome = when (this) {
         RetryableNetwork -> SyncOutcome.RetryableFailure(com.xiwei.sujian.model.SyncStatus.RecoverableError)
         RetryableIo -> SyncOutcome.RetryableFailure(com.xiwei.sujian.model.SyncStatus.RecoverableError)

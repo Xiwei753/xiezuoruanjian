@@ -7,7 +7,8 @@ import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.data.WriterAppServiceHolder
-import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
+import com.xiwei.sujian.editor.v2.coordinator.EditorSessionCoordinator
+import com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost
 import com.xiwei.sujian.runtime.SujianAppDependencies
 import com.xiwei.sujian.ui.MainActivity
 import uniffi.writer_core.PlatformDto
@@ -199,8 +200,10 @@ class TestSujianAppDependencies(
     override val settingsRepository: SettingsRepository = SettingsRepository(appContext, appServiceBridge, prefsSuffix)
     override val syncStatusRepository: com.xiwei.sujian.data.SyncStatusRepository = com.xiwei.sujian.data.SyncStatusRepository(settingsRepository)
     override val syncCoordinator: com.xiwei.sujian.data.SyncCoordinator = com.xiwei.sujian.data.SyncCoordinator(settingsRepository, syncStatusRepository)
-    private val _coordinator = lazy { AnimatedTextEditorCoordinator(appContext, appServiceBridge, animationTimeSource, transactionIdSource) }
-    val coordinator: AnimatedTextEditorCoordinator get() = _coordinator.value
+    private val _sessionCoordinator = lazy { EditorSessionCoordinator(appServiceBridge, animationTimeSource, transactionIdSource) }
+    val sessionCoordinator: EditorSessionCoordinator get() = _sessionCoordinator.value
+    private val _coordinator = lazy { EditorWindowHost(appContext, _sessionCoordinator.value, appServiceBridge, animationTimeSource, transactionIdSource) }
+    val coordinator: EditorWindowHost get() = _coordinator.value
     private var runtimeReleased = false
 
     fun releaseRuntime() {

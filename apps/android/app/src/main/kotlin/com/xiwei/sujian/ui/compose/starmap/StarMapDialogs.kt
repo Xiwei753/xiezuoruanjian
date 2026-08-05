@@ -15,7 +15,7 @@ import com.xiwei.sujian.designsystem.icon.SujianIcons
 import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.editor.v2.compose.AnimatedTextArea
 import com.xiwei.sujian.editor.v2.compose.AnimatedTextField
-import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
+import com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -32,7 +32,7 @@ import com.xiwei.sujian.model.StarMapNodeKind
 
 @Composable
 internal fun StarMapCreateDialog(
-    coordinator: AnimatedTextEditorCoordinator,
+    coordinator: EditorWindowHost,
     onConfirm: (title: String, description: String) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -86,7 +86,7 @@ internal fun StarMapCreateDialog(
 
 @Composable
 internal fun StarMapAddNodeDialog(
-    coordinator: AnimatedTextEditorCoordinator,
+    coordinator: EditorWindowHost,
     onConfirm: (title: String, kind: StarMapNodeKind) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -188,7 +188,7 @@ internal fun StarMapAddEdgeDialog(
 @Composable
 internal fun NodeEditPanel(
     node: StarMapGraphNode,
-    coordinator: AnimatedTextEditorCoordinator,
+    coordinator: EditorWindowHost,
     onUpdate: (title: String, kind: StarMapNodeKind) -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit

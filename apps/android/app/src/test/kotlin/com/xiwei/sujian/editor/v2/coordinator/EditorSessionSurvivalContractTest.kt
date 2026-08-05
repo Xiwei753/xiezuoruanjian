@@ -8,18 +8,24 @@ class EditorSessionSurvivalContractTest {
     @Test
     fun editorSessionViewModel_existsAndCanBeCreated() {
         val vm = EditorSessionViewModel()
-        assertTrue(vm.coordinator == null)
+        assertTrue(vm.sessionCoordinator == null)
     }
 
     @Test
-    fun releaseWindowOnly_existsOnCoordinator() {
-        val method = AnimatedTextEditorCoordinator::class.java.getMethod("releaseWindowOnly")
+    fun releaseWindow_existsOnWindowHost() {
+        val method = EditorWindowHost::class.java.getMethod("releaseWindow")
         assertTrue(method != null)
     }
 
     @Test
-    fun releaseHost_existsOnCoordinator() {
-        val method = AnimatedTextEditorCoordinator::class.java.getMethod("releaseHost")
+    fun releaseHost_existsOnWindowHost() {
+        val method = EditorWindowHost::class.java.getMethod("releaseHost")
+        assertTrue(method != null)
+    }
+
+    @Test
+    fun releaseHost_existsOnSessionCoordinator() {
+        val method = EditorSessionCoordinator::class.java.getMethod("releaseHost")
         assertTrue(method != null)
     }
 

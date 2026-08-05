@@ -23,8 +23,8 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.data.WorkspaceUseCase
-import com.xiwei.sujian.editor.v2.compose.LocalAnimatedTextEditorCoordinator
-import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
+import com.xiwei.sujian.editor.v2.compose.LocalEditorWindowHost
+import com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost
 import com.xiwei.sujian.model.Orientation
 import com.xiwei.sujian.model.WindowMetrics
 import com.xiwei.sujian.platform.api.AndroidCapabilities
@@ -63,17 +63,25 @@ fun SujianApp(
     }
     val activityRef = androidx.activity.compose.LocalActivity.current as? androidx.activity.ComponentActivity
     val sessionVm: com.xiwei.sujian.editor.v2.coordinator.EditorSessionViewModel = viewModel()
-    val windowCoordinator = sessionVm.getOrCreateCoordinator(
-        context.applicationContext, deps.appServiceBridge,
+    val sessionCoordinator = sessionVm.getOrCreateSessionCoordinator(
+        deps.appServiceBridge,
         com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
         com.xiwei.sujian.editor.v2.visual.TransactionIdSource(),
     )
-    // #592 三：配置变化时只释放窗口宿主（View、FrameClock），Rust 会话由
+    // #592 一：EditorWindowHost 是窗口级宿主，每个窗口创建一份。
+    // #592 二：配置变化时只释放窗口宿主（View、FrameClock），Rust 会话由
     // EditorSessionViewModel 持有并跨配置变化存活；Activity 永久结束时
     // ViewModel.onCleared() 调用 releaseHost() 关闭全部会话。
+    val windowCoordinator = remember(sessionCoordinator) {
+        EditorWindowHost(
+            context.applicationContext, sessionCoordinator, deps.appServiceBridge,
+            com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
+            com.xiwei.sujian.editor.v2.visual.TransactionIdSource(),
+        )
+    }
     DisposableEffect(windowCoordinator) {
         onDispose {
-            windowCoordinator.releaseWindowOnly()
+            windowCoordinator.releaseWindow()
         }
     }
     val themeController = rememberThemeController(context, deps.settingsRepository)
@@ -176,7 +184,7 @@ fun SujianApp(
     SujianTheme(uiState = uiState) {
         CompositionLocalProvider(
             LocalAndroidCapabilities provides capabilities,
-            LocalAnimatedTextEditorCoordinator provides windowCoordinator,
+            LocalEditorWindowHost provides windowCoordinator,
             LocalSujianAppDependencies provides deps,
         ) {
             Box(

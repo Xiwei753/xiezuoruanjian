@@ -32,7 +32,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
-import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
+import com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost
 import com.xiwei.sujian.editor.v2.coordinator.EditableTextTarget
 import com.xiwei.sujian.editor.v2.coordinator.EditingState
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
@@ -51,11 +51,11 @@ fun AnimatedTextArea(
     enabled: Boolean = true,
     minLines: Int = profile.minLines,
     maxLines: Int = profile.maxLines,
-    coordinator: AnimatedTextEditorCoordinator? = null
+    coordinator: EditorWindowHost? = null
 ) {
-    val effectiveCoordinator = coordinator ?: LocalAnimatedTextEditorCoordinator.current
+    val effectiveCoordinator = coordinator ?: LocalEditorWindowHost.current
         ?: throw IllegalStateException(
-            "AnimatedTextArea($targetId) requires an AnimatedTextEditorCoordinator. " +
+            "AnimatedTextArea($targetId) requires an EditorWindowHost. " +
             "Every Activity must provide one via CompositionLocal or the coordinator parameter."
         )
     val dims = LocalSujianDimensions.current
@@ -91,7 +91,7 @@ private fun AnimatedTextAreaWithCoordinator(
     enabled: Boolean,
     @Suppress("UNUSED_PARAMETER") minLines: Int,
     @Suppress("UNUSED_PARAMETER") maxLines: Int,
-    coordinator: AnimatedTextEditorCoordinator,
+    coordinator: EditorWindowHost,
     minLineHeight: Dp
 ) {
     var localValue by remember { mutableStateOf(value) }

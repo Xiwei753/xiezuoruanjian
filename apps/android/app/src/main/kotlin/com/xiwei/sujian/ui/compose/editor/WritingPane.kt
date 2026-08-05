@@ -32,8 +32,8 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
-import com.xiwei.sujian.editor.v2.compose.LocalAnimatedTextEditorCoordinator
-import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
+import com.xiwei.sujian.editor.v2.compose.LocalEditorWindowHost
+import com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost
 import com.xiwei.sujian.editor.v2.coordinator.EditorAnimationSettings
 import com.xiwei.sujian.editor.v2.coordinator.EditableTextTarget
 import com.xiwei.sujian.editor.v2.coordinator.EditingState
@@ -47,7 +47,7 @@ import com.xiwei.sujian.runtime.LocalSujianAppDependencies
 import androidx.compose.ui.viewinterop.AndroidView
 
 /**
- * 章节正文编辑面板 — 连接 EditorViewModel 与 AnimatedTextEditorCoordinator。
+ * 章节正文编辑面板 — 连接 EditorViewModel 与 EditorWindowHost。
  *
  * 核心职责：
  * - 将 ViewModel 的 content 状态同步到 Coordinator 的持久会话
@@ -76,9 +76,9 @@ fun WritingPane(
         viewModel.initialize(deps.workspaceRepository, deps.settingsRepository)
     }
 
-    val coordinator = LocalAnimatedTextEditorCoordinator.current
+    val coordinator = LocalEditorWindowHost.current
         ?: throw IllegalStateException(
-            "WritingPane requires an AnimatedTextEditorCoordinator in the CompositionLocal. " +
+            "WritingPane requires an EditorWindowHost in the CompositionLocal. " +
             "Ensure the host Activity or Fragment provides one via CompositionLocalProvider."
         )
 

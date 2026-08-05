@@ -29,7 +29,7 @@ import androidx.compose.ui.semantics.setSelection
 import androidx.compose.ui.semantics.textSelectionRange
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.platform.testTag
-import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
+import com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost
 import com.xiwei.sujian.editor.v2.coordinator.EditableTextTarget
 import com.xiwei.sujian.editor.v2.coordinator.EditingState
 import com.xiwei.sujian.editor.v2.coordinator.SecretPolicy
@@ -48,11 +48,11 @@ fun AnimatedTextField(
     placeholder: @Composable (() -> Unit)? = null,
     enabled: Boolean = true,
     singleLine: Boolean = profile.singleLine,
-    coordinator: AnimatedTextEditorCoordinator? = null
+    coordinator: EditorWindowHost? = null
 ) {
-    val effectiveCoordinator = coordinator ?: LocalAnimatedTextEditorCoordinator.current
+    val effectiveCoordinator = coordinator ?: LocalEditorWindowHost.current
         ?: throw IllegalStateException(
-            "AnimatedTextField($targetId) requires an AnimatedTextEditorCoordinator. " +
+            "AnimatedTextField($targetId) requires an EditorWindowHost. " +
             "Every Activity must provide one via CompositionLocal or the coordinator parameter."
         )
 
@@ -84,7 +84,7 @@ private fun AnimatedTextFieldWithCoordinator(
     placeholder: @Composable (() -> Unit)?,
     enabled: Boolean,
     singleLine: Boolean,
-    coordinator: AnimatedTextEditorCoordinator
+    coordinator: EditorWindowHost
 ) {
     var localValue by remember { mutableStateOf(value) }
     var selectionRange by remember { mutableStateOf(TextRange(value.length)) }

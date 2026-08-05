@@ -730,7 +730,7 @@ class AndroidEditorPipeline private constructor(
      * but preserves the pipeline infrastructure (LayoutEngine, VisualPlanner, Renderer,
      * ResourceStore, InputAdapter) so the shared host can be rebound without recreating
      * the full pipeline. Per #541, this corresponds to the resetForReuse lifecycle step
-     * when the AnimatedTextEditorCoordinator switches between EditableTextTargets.
+     * when the EditorWindowHost switches between EditableTextTargets.
      *
      * Uses [AndroidTextAnimationEngine.cancel] (not [resetForSession]) because the
      * ResourceStore is shared across targets — [cancel] releases only the active

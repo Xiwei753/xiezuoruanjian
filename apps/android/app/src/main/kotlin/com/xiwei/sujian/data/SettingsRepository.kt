@@ -208,6 +208,26 @@ class SettingsRepository(
         }
     }
 
+    /**
+     * #592 三：仓库级提交协议 — 同步配置与凭据作为单一事务保存。
+     *
+     * 固定顺序：暂存 config → 暂存 secrets → 两项都成功即提交。
+     * 若 secrets 保存失败，回滚 config 到旧值，避免留下配置与凭据不匹配的半提交状态。
+     * 正式同步、试运行和连接诊断都只能读取已经完整提交的同一组数据。
+     */
+    fun commitSyncProfile(config: SyncConfig, secrets: SyncSecrets): SettingsSaveResult {
+        val oldConfig = loadSyncConfig()
+        val configResult = saveSyncConfig(config)
+        if (configResult is SettingsSaveResult.Failed) return configResult
+        val secretsResult = saveSyncSecrets(secrets)
+        if (secretsResult is SettingsSaveResult.Failed) {
+            warn("commitSyncProfile: secrets save failed, rolling back config to previous value")
+            saveSyncConfig(oldConfig)
+            return secretsResult
+        }
+        return SettingsSaveResult.Success
+    }
+
     fun aiAvailable(): Boolean {
         return BridgeProvider.getAiStatus(appContext)
     }

@@ -23,8 +23,8 @@ import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.data.starmap.StarMapRepository
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
-import com.xiwei.sujian.editor.v2.compose.LocalAnimatedTextEditorCoordinator
-import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
+import com.xiwei.sujian.editor.v2.compose.LocalEditorWindowHost
+import com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost
 import com.xiwei.sujian.editor.v2.coordinator.EditableTextTarget
 import com.xiwei.sujian.editor.v2.coordinator.EditingState
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
@@ -149,9 +149,9 @@ private fun StarMapListScreen(
     var isLoading by remember { mutableStateOf(true) }
     var showCreateDialog by remember { mutableStateOf(false) }
 
-    val coordinator = LocalAnimatedTextEditorCoordinator.current
+    val coordinator = LocalEditorWindowHost.current
         ?: throw IllegalStateException(
-            "StarMapListScreen requires an AnimatedTextEditorCoordinator. " +
+            "StarMapListScreen requires an EditorWindowHost. " +
             "Ensure the host Activity provides one via CompositionLocalProvider."
         )
 
@@ -215,9 +215,9 @@ private fun StarMapEditorScreen(
     var showAddEdgeDialog by remember { mutableStateOf(false) }
     var viewportSaveJob by remember { mutableStateOf<Job?>(null) }
 
-    val coordinator = LocalAnimatedTextEditorCoordinator.current
+    val coordinator = LocalEditorWindowHost.current
         ?: throw IllegalStateException(
-            "StarMapCanvasScreen requires an AnimatedTextEditorCoordinator. " +
+            "StarMapCanvasScreen requires an EditorWindowHost. " +
             "Ensure the host Activity provides one via CompositionLocalProvider."
         )
 

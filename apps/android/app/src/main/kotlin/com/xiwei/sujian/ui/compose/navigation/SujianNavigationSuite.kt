@@ -392,7 +392,7 @@ private fun WideScreenSuite(
         }
     }
 
-    val coordinator = com.xiwei.sujian.editor.v2.compose.LocalAnimatedTextEditorCoordinator.current
+    val coordinator = com.xiwei.sujian.editor.v2.compose.LocalEditorWindowHost.current
     if (coordinator != null) {
         com.xiwei.sujian.editor.v2.compose.AnimatedTextEditorSlot(
             coordinator = coordinator,

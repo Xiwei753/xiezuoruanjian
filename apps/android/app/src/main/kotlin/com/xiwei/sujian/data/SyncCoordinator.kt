@@ -84,7 +84,7 @@ class SyncCoordinator(
         } catch (e: Exception) {
             DiagnosticsEvents.syncEvent(trigger.name.lowercase(), "exception: " + e.message)
             syncStatusRepository.notifySyncFailed()
-            return SyncFailureKind.RetryableNetwork.toOutcome()
+            return SyncFailureKind.Fatal.toOutcome()
         }
     }
 

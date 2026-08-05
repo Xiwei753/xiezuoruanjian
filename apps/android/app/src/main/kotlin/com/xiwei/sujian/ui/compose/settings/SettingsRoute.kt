@@ -396,13 +396,11 @@ class SettingsViewModel(
         secrets: com.xiwei.sujian.model.SyncSecrets,
         secretsRevision: Long,
     ): Boolean {
-        val configSaveResult = withContext(Dispatchers.IO) { settingsRepo.saveSyncConfig(config) }
-        if (configSaveResult is SettingsSaveResult.Failed) return false
+        val commitResult = withContext(Dispatchers.IO) { settingsRepo.commitSyncProfile(config, secrets) }
+        if (commitResult is SettingsSaveResult.Failed) return false
         if (syncConfigRevision == configRevision) {
             syncConfigPersistedRevision = configRevision
         }
-        val secretsSaveResult = withContext(Dispatchers.IO) { settingsRepo.saveSyncSecrets(secrets) }
-        if (secretsSaveResult is SettingsSaveResult.Failed) return false
         if (syncSecretsRevision == secretsRevision) {
             syncSecretsPersistedRevision = secretsRevision
         }
@@ -502,8 +500,8 @@ class SettingsViewModel(
                                 counts = counts
                             ))
                         }
-                        is BridgeResult.Error -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "dry_run_error", sanitizedDiagnostic = r.message))
-                        BridgeResult.NotLoaded -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_terminal_failure", sanitizedDiagnostic = SyncFailureKind.NativeUnavailable.name))
+                        is BridgeResult.Error -> { val kind = SyncFailureKind.fromErrorCode(r.code); SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = kind.messageKey(), sanitizedDiagnostic = r.message)) }
+                        BridgeResult.NotLoaded -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = SyncFailureKind.NativeUnavailable.messageKey(), sanitizedDiagnostic = SyncFailureKind.NativeUnavailable.name))
                     }
                 }
             }
@@ -564,8 +562,8 @@ class SettingsViewModel(
                                 sanitizedDiagnostic = if (!diag.success) "connection_failed" else null
                             ))
                         }
-                        is BridgeResult.Error -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "diagnostics_error", sanitizedDiagnostic = r.message))
-                        BridgeResult.NotLoaded -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_terminal_failure", sanitizedDiagnostic = SyncFailureKind.NativeUnavailable.name))
+                        is BridgeResult.Error -> { val kind = SyncFailureKind.fromErrorCode(r.code); SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = kind.messageKey(), sanitizedDiagnostic = r.message)) }
+                        BridgeResult.NotLoaded -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = SyncFailureKind.NativeUnavailable.messageKey(), sanitizedDiagnostic = SyncFailureKind.NativeUnavailable.name))
                     }
                 }
             }

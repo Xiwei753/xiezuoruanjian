@@ -26,7 +26,7 @@ import androidx.compose.ui.semantics.setSelection
 import androidx.compose.ui.semantics.insertTextAtCursor
 import androidx.compose.ui.semantics.textSelectionRange
 import androidx.compose.ui.text.TextRange
-import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
+import com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost
 import com.xiwei.sujian.editor.v2.coordinator.EditableTextTarget
 import com.xiwei.sujian.editor.v2.coordinator.EditingState
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
@@ -40,11 +40,11 @@ fun AnimatedInlineText(
     modifier: Modifier = Modifier,
     profile: TextEditorProfile = TextEditorProfile.CanvasLabel,
     enabled: Boolean = true,
-    coordinator: AnimatedTextEditorCoordinator? = null
+    coordinator: EditorWindowHost? = null
 ) {
-    val effectiveCoordinator = coordinator ?: LocalAnimatedTextEditorCoordinator.current
+    val effectiveCoordinator = coordinator ?: LocalEditorWindowHost.current
         ?: throw IllegalStateException(
-            "AnimatedInlineText($targetId) requires an AnimatedTextEditorCoordinator. " +
+            "AnimatedInlineText($targetId) requires an EditorWindowHost. " +
             "Ensure the host Activity provides one via CompositionLocalProvider."
         )
 

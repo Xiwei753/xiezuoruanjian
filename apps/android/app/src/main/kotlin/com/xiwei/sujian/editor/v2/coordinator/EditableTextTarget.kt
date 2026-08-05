@@ -10,7 +10,7 @@ import androidx.compose.runtime.setValue
  *
  * Per #541: each target represents a UI/business object (project title, chapter body,
  * search query, starmap node, etc.) that can be activated for editing via
- * [AnimatedTextEditorCoordinator.beginEdit]. The [targetId] is a namespaced string
+ * [EditorWindowHost.beginEdit]. The [targetId] is a namespaced string
  * (e.g. "chapter-title:{chapterId}") that identifies the business object; it is
  * separate from the Rust TextEditSessionId which represents an editing transaction.
  *

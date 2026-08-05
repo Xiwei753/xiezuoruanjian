@@ -19,14 +19,14 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.xiwei.sujian.data.BridgeProvider
-import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
+import com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost
 import com.xiwei.sujian.editor.v2.coordinator.EditingState
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import com.xiwei.sujian.ui.compose.theme.EditorThemeAdapter
 
 @Composable
 fun AnimatedTextEditorSlot(
-    coordinator: AnimatedTextEditorCoordinator,
+    coordinator: EditorWindowHost,
     modifier: Modifier = Modifier,
     visible: Boolean = true,
 ) {
@@ -123,21 +123,22 @@ fun AnimatedTextEditorSlot(
     }
 }
 
-val LocalAnimatedTextEditorCoordinator = androidx.compose.runtime.compositionLocalOf<AnimatedTextEditorCoordinator?> {
+val LocalEditorWindowHost = androidx.compose.runtime.compositionLocalOf<EditorWindowHost?> {
     null
 }
 
 @Composable
-fun rememberAnimatedTextEditorCoordinator(
+fun rememberEditorWindowHost(
     animationTimeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource = com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
     transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource = com.xiwei.sujian.editor.v2.visual.TransactionIdSource()
-): AnimatedTextEditorCoordinator {
+): EditorWindowHost {
     val context = LocalContext.current
-    val existing = LocalAnimatedTextEditorCoordinator.current
+    val existing = LocalEditorWindowHost.current
     return remember {
         existing ?: run {
             val bridge = BridgeProvider.getAppServiceBridge(context)
-            AnimatedTextEditorCoordinator(context, bridge, animationTimeSource, transactionIdSource)
+            val session = com.xiwei.sujian.editor.v2.coordinator.EditorSessionCoordinator(bridge, animationTimeSource, transactionIdSource)
+            EditorWindowHost(context, session, bridge, animationTimeSource, transactionIdSource)
         }
     }
 }
