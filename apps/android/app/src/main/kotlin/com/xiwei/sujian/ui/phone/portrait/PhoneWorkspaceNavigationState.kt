@@ -2,6 +2,7 @@ package com.xiwei.sujian.ui.phone.portrait
 
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
 import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffoldRole
+import androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem
 import androidx.compose.material3.adaptive.navigation.BackNavigationBehavior
 import androidx.compose.material3.adaptive.navigation.ThreePaneScaffoldNavigator
 import androidx.compose.runtime.Stable
@@ -49,4 +50,44 @@ class PhoneWorkspaceNavigationState(
     suspend fun seekBack(progress: Float) {
         navigator.seekBack(BackNavigationBehavior.PopUntilScaffoldValueChange, progress)
     }
+}
+
+/**
+ * 从会话恢复目的地一次性构建 navigator 初始历史（唯一实现；测试复用同一契约）。
+ * 恢复目的地由 [WorkspaceSessionViewModel] 在会话就绪后给出，
+ * 之后导航只使用 navigator 自己保存/恢复的历史，不再从业务字段反复重建。
+ */
+@OptIn(ExperimentalMaterial3AdaptiveApi::class)
+internal fun buildInitialHistory(
+    destination: SessionRestoreState.Destination,
+): List<ThreePaneScaffoldDestinationItem<WorkspacePaneKey>> = when (destination) {
+    is SessionRestoreState.Destination.ProjectList -> listOf(
+        ThreePaneScaffoldDestinationItem(WorkspacePaneKey.ProjectList.role, WorkspacePaneKey.ProjectList),
+    )
+    is SessionRestoreState.Destination.ChapterTree -> listOf(
+        ThreePaneScaffoldDestinationItem(WorkspacePaneKey.ProjectList.role, WorkspacePaneKey.ProjectList),
+        ThreePaneScaffoldDestinationItem(
+            WorkspacePaneKey.ChapterTree(destination.projectId).role,
+            WorkspacePaneKey.ChapterTree(destination.projectId),
+        ),
+    )
+    is SessionRestoreState.Destination.Editor -> listOf(
+        ThreePaneScaffoldDestinationItem(WorkspacePaneKey.ProjectList.role, WorkspacePaneKey.ProjectList),
+        ThreePaneScaffoldDestinationItem(
+            WorkspacePaneKey.ChapterTree(destination.projectId).role,
+            WorkspacePaneKey.ChapterTree(destination.projectId),
+        ),
+        ThreePaneScaffoldDestinationItem(
+            WorkspacePaneKey.Editor(
+                destination.projectId,
+                destination.volumeId,
+                destination.chapterId,
+            ).role,
+            WorkspacePaneKey.Editor(
+                destination.projectId,
+                destination.volumeId,
+                destination.chapterId,
+            ),
+        ),
+    )
 }

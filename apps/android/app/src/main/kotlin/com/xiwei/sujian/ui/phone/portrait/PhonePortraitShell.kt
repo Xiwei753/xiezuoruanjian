@@ -24,7 +24,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
-import androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem
 import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -72,26 +71,9 @@ fun PhonePortraitShell(
         return
     }
 
-    val restoredProjectId = restoreState.projectId
-    val restoredVolumeId = restoreState.volumeId
-    val restoredChapterId = restoreState.chapterId
-    val initialHistory = remember(restoredProjectId, restoredVolumeId, restoredChapterId) {
-        val chain = mutableListOf<ThreePaneScaffoldDestinationItem<WorkspacePaneKey>>(
-            ThreePaneScaffoldDestinationItem(WorkspacePaneKey.ProjectList.role, WorkspacePaneKey.ProjectList),
-        )
-        if (restoredProjectId != null) {
-            chain += ThreePaneScaffoldDestinationItem(
-                WorkspacePaneKey.ChapterTree(restoredProjectId).role,
-                WorkspacePaneKey.ChapterTree(restoredProjectId),
-            )
-            if (restoredVolumeId != null && restoredChapterId != null) {
-                chain += ThreePaneScaffoldDestinationItem(
-                    WorkspacePaneKey.Editor(restoredProjectId, restoredVolumeId, restoredChapterId).role,
-                    WorkspacePaneKey.Editor(restoredProjectId, restoredVolumeId, restoredChapterId),
-                )
-            }
-        }
-        chain
+    // 会话就绪后一次性建立完整历史，之后只使用 navigator 自己保存/恢复的历史。
+    val initialHistory = remember(restoreState.destination) {
+        buildInitialHistory(restoreState.destination)
     }
     val navigator = rememberListDetailPaneScaffoldNavigator(initialDestinationHistory = initialHistory)
     val workspaceNavState = remember { PhoneWorkspaceNavigationState(navigator) }

@@ -1,49 +1,40 @@
 package com.xiwei.sujian.ui.phone.portrait
 
+import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+@OptIn(ExperimentalMaterial3AdaptiveApi::class)
 class PhoneWorkspaceNavigationRestoreTest {
 
     @Test
     fun initialHistory_noProject_projectListOnly() {
-        val projectId: String? = null
-        val volumeId: String? = null
-        val chapterId: String? = null
-        val chain = buildExpectedChain(projectId, volumeId, chapterId)
+        val chain = buildInitialHistory(SessionRestoreState.Destination.ProjectList)
         assertEquals(1, chain.size)
-        assertEquals(WorkspacePaneKey.ProjectList, chain[0])
+        assertEquals(WorkspacePaneKey.ProjectList, chain[0].contentKey)
     }
 
     @Test
     fun initialHistory_hasProjectNoChapter_projectListAndChapterTree() {
-        val chain = buildExpectedChain("p1", null, null)
+        val chain = buildInitialHistory(SessionRestoreState.Destination.ChapterTree("p1"))
         assertEquals(2, chain.size)
-        assertEquals(WorkspacePaneKey.ProjectList, chain[0])
-        assertTrue(chain[1] is WorkspacePaneKey.ChapterTree)
-        assertEquals("p1", (chain[1] as WorkspacePaneKey.ChapterTree).projectId)
+        assertEquals(WorkspacePaneKey.ProjectList, chain[0].contentKey)
+        assertTrue(chain[1].contentKey is WorkspacePaneKey.ChapterTree)
+        assertEquals("p1", (chain[1].contentKey as WorkspacePaneKey.ChapterTree).projectId)
     }
 
     @Test
     fun initialHistory_hasProjectAndChapter_fullChain() {
-        val chain = buildExpectedChain("p1", "v1", "c1")
+        val chain = buildInitialHistory(SessionRestoreState.Destination.Editor("p1", "v1", "c1"))
         assertEquals(3, chain.size)
-        assertEquals(WorkspacePaneKey.ProjectList, chain[0])
-        assertTrue(chain[1] is WorkspacePaneKey.ChapterTree)
-        assertTrue(chain[2] is WorkspacePaneKey.Editor)
-        val editor = chain[2] as WorkspacePaneKey.Editor
+        assertEquals(WorkspacePaneKey.ProjectList, chain[0].contentKey)
+        assertTrue(chain[1].contentKey is WorkspacePaneKey.ChapterTree)
+        assertTrue(chain[2].contentKey is WorkspacePaneKey.Editor)
+        val editor = chain[2].contentKey as WorkspacePaneKey.Editor
         assertEquals("p1", editor.projectId)
         assertEquals("v1", editor.volumeId)
         assertEquals("c1", editor.chapterId)
-    }
-
-    @Test
-    fun initialHistory_volumeWithoutChapter_treatedAsProjectOnly() {
-        val chain = buildExpectedChain("p1", "v1", null)
-        assertEquals(2, chain.size)
-        assertEquals(WorkspacePaneKey.ProjectList, chain[0])
-        assertTrue(chain[1] is WorkspacePaneKey.ChapterTree)
     }
 
     @Test
@@ -58,21 +49,6 @@ class PhoneWorkspaceNavigationRestoreTest {
         assertTrue(locations[1] is WorkspaceLocation.ChapterTree)
         assertTrue(locations[2] is WorkspaceLocation.Editor)
     }
-
-    private fun buildExpectedChain(
-        projectId: String?,
-        volumeId: String?,
-        chapterId: String?,
-    ): List<WorkspacePaneKey> {
-        val chain = mutableListOf<WorkspacePaneKey>(WorkspacePaneKey.ProjectList)
-        if (projectId != null) {
-            chain += WorkspacePaneKey.ChapterTree(projectId)
-            if (volumeId != null && chapterId != null) {
-                chain += WorkspacePaneKey.Editor(projectId, volumeId, chapterId)
-            }
-        }
-        return chain
-    }
 }
 
 
@@ -80,22 +56,23 @@ class SessionRestoreStateTest {
 
     @Test
     fun loadingState_isDistinctFromReady() {
-        val loading = SessionRestoreState.Loading
-        val ready = SessionRestoreState.Ready(projectId = null, volumeId = null, chapterId = null)
+        val loading: SessionRestoreState = SessionRestoreState.Loading
+        val ready: SessionRestoreState = SessionRestoreState.Ready(SessionRestoreState.Destination.ProjectList)
         assert(loading != ready)
     }
 
     @Test
-    fun readyState_holdsProjectId() {
-        val ready = SessionRestoreState.Ready(projectId = "p1", volumeId = "v1", chapterId = "c1")
-        assertEquals("p1", ready.projectId)
-        assertEquals("v1", ready.volumeId)
-        assertEquals("c1", ready.chapterId)
+    fun readyEditor_holdsAllIds() {
+        val ready = SessionRestoreState.Ready(SessionRestoreState.Destination.Editor("p1", "v1", "c1"))
+        val destination = (ready as SessionRestoreState.Ready).destination as SessionRestoreState.Destination.Editor
+        assertEquals("p1", destination.projectId)
+        assertEquals("v1", destination.volumeId)
+        assertEquals("c1", destination.chapterId)
     }
 
     @Test
-    fun readyState_canHaveNullIds() {
-        val ready = SessionRestoreState.Ready(projectId = null, volumeId = null, chapterId = null)
-        assertEquals(null, ready.projectId)
+    fun readyProjectList_holdsNoIds() {
+        val ready = SessionRestoreState.Ready(SessionRestoreState.Destination.ProjectList)
+        assertTrue((ready as SessionRestoreState.Ready).destination is SessionRestoreState.Destination.ProjectList)
     }
 }

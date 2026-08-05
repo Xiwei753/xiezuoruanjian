@@ -16,11 +16,19 @@ import kotlinx.coroutines.withContext
 
 sealed interface SessionRestoreState {
     data object Loading : SessionRestoreState
-    data class Ready(
-        val projectId: String?,
-        val volumeId: String?,
-        val chapterId: String?,
-    ) : SessionRestoreState
+
+    /** 会话恢复目的地 — 唯一用于一次性构建 navigator 初始历史，之后不再从业务字段重建导航。 */
+    sealed interface Destination {
+        data object ProjectList : Destination
+        data class ChapterTree(val projectId: String) : Destination
+        data class Editor(
+            val projectId: String,
+            val volumeId: String,
+            val chapterId: String,
+        ) : Destination
+    }
+
+    data class Ready(val destination: Destination) : SessionRestoreState
 }
 
 class WorkspaceSessionViewModel(
@@ -60,11 +68,23 @@ class WorkspaceSessionViewModel(
         workspaceUseCase = workspaceUC
         refreshProjects()
         refreshRecentEdits()
-        restoreState = SessionRestoreState.Ready(
-            projectId = currentProjectId,
-            volumeId = currentVolumeId,
-            chapterId = currentChapterId,
-        )
+        restoreState = SessionRestoreState.Ready(currentRestoreDestination())
+    }
+
+    /**
+     * 从已持久化的业务选择推导恢复目的地：正文需要 project+volume+chapter 齐备，
+     * 否则回退到章节树；无项目时回退到作品列表。
+     */
+    private fun currentRestoreDestination(): SessionRestoreState.Destination {
+        val projectId = currentProjectId
+        val volumeId = currentVolumeId
+        val chapterId = currentChapterId
+        return when {
+            projectId == null -> SessionRestoreState.Destination.ProjectList
+            volumeId != null && chapterId != null ->
+                SessionRestoreState.Destination.Editor(projectId, volumeId, chapterId)
+            else -> SessionRestoreState.Destination.ChapterTree(projectId)
+        }
     }
 
     fun selectProject(projectId: String, projectTitle: String) {

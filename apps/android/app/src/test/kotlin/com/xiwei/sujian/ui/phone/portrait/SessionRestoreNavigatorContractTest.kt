@@ -1,67 +1,67 @@
 package com.xiwei.sujian.ui.phone.portrait
 
+import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+/**
+ * 会话恢复 → navigator 初始历史契约：
+ * 只有 [SessionRestoreState.Ready] 后才构建历史；每个目的地映射唯一固定链，
+ * 与 PhonePortraitShell 共用生产实现 [buildInitialHistory]，测试不复制第二份逻辑。
+ */
+@OptIn(ExperimentalMaterial3AdaptiveApi::class)
 class SessionRestoreNavigatorContractTest {
 
     @Test
-    fun loadingState_noRestoredIds_navigatorNotCreated() {
+    fun loadingState_isNotReady() {
         val state: SessionRestoreState = SessionRestoreState.Loading
         assertFalse(state is SessionRestoreState.Ready)
     }
 
     @Test
-    fun readyState_withNullIds_navigatorCreatedWithProjectListOnly() {
-        val state: SessionRestoreState = SessionRestoreState.Ready(projectId = null, volumeId = null, chapterId = null)
-        val ready = state as SessionRestoreState.Ready
-        val chain = buildChain(ready.projectId, ready.volumeId, ready.chapterId)
+    fun readyProjectList_buildsSingleDestinationHistory() {
+        val chain = buildInitialHistory(SessionRestoreState.Destination.ProjectList)
         assertEquals(1, chain.size)
-        assertEquals(WorkspacePaneKey.ProjectList, chain[0])
+        assertEquals(WorkspacePaneKey.ProjectList, chain[0].contentKey)
     }
 
     @Test
-    fun readyState_withProject_navigatorCreatedWithChapterTree() {
-        val state: SessionRestoreState = SessionRestoreState.Ready(projectId = "p1", volumeId = null, chapterId = null)
-        val ready = state as SessionRestoreState.Ready
-        val chain = buildChain(ready.projectId, ready.volumeId, ready.chapterId)
+    fun readyChapterTree_buildsProjectListAndChapterTree() {
+        val chain = buildInitialHistory(SessionRestoreState.Destination.ChapterTree("p1"))
         assertEquals(2, chain.size)
-        assertTrue(chain[1] is WorkspacePaneKey.ChapterTree)
+        assertEquals(WorkspacePaneKey.ProjectList, chain[0].contentKey)
+        assertTrue(chain[1].contentKey is WorkspacePaneKey.ChapterTree)
+        assertEquals("p1", (chain[1].contentKey as WorkspacePaneKey.ChapterTree).projectId)
     }
 
     @Test
-    fun readyState_withEditor_navigatorCreatedWithFullHistory() {
-        val state: SessionRestoreState = SessionRestoreState.Ready(projectId = "p1", volumeId = "v1", chapterId = "c1")
-        val ready = state as SessionRestoreState.Ready
-        val chain = buildChain(ready.projectId, ready.volumeId, ready.chapterId)
+    fun readyEditor_buildsFullHistory() {
+        val chain = buildInitialHistory(SessionRestoreState.Destination.Editor("p1", "v1", "c1"))
         assertEquals(3, chain.size)
-        assertTrue(chain[2] is WorkspacePaneKey.Editor)
+        assertEquals(WorkspacePaneKey.ProjectList, chain[0].contentKey)
+        assertEquals(WorkspacePaneKey.ChapterTree("p1"), chain[1].contentKey)
+        assertEquals(WorkspacePaneKey.Editor("p1", "v1", "c1"), chain[2].contentKey)
     }
 
     @Test
     fun loadingToReady_transitionRebuildsHistory() {
         val loading: SessionRestoreState = SessionRestoreState.Loading
         assertFalse(loading is SessionRestoreState.Ready)
-        val ready: SessionRestoreState = SessionRestoreState.Ready(projectId = "p1", volumeId = "v1", chapterId = "c1")
+        val ready: SessionRestoreState = SessionRestoreState.Ready(
+            SessionRestoreState.Destination.Editor("p1", "v1", "c1"),
+        )
         assertTrue(ready is SessionRestoreState.Ready)
-        val chain = buildChain((ready as SessionRestoreState.Ready).projectId, ready.volumeId, ready.chapterId)
+        val chain = buildInitialHistory((ready as SessionRestoreState.Ready).destination)
         assertEquals(3, chain.size)
     }
 
-    private fun buildChain(
-        projectId: String?,
-        volumeId: String?,
-        chapterId: String?,
-    ): List<WorkspacePaneKey> {
-        val chain = mutableListOf<WorkspacePaneKey>(WorkspacePaneKey.ProjectList)
-        if (projectId != null) {
-            chain += WorkspacePaneKey.ChapterTree(projectId)
-            if (volumeId != null && chapterId != null) {
-                chain += WorkspacePaneKey.Editor(projectId, volumeId, chapterId)
-            }
-        }
-        return chain
+    @Test
+    fun historyRoles_followPaneScaffoldRoles() {
+        val chain = buildInitialHistory(SessionRestoreState.Destination.Editor("p1", "v1", "c1"))
+        assertEquals(WorkspacePaneKey.ProjectList.role, chain[0].pane)
+        assertEquals(WorkspacePaneKey.ChapterTree("p1").role, chain[1].pane)
+        assertEquals(WorkspacePaneKey.Editor("p1", "v1", "c1").role, chain[2].pane)
     }
 }
