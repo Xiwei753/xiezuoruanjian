@@ -53,6 +53,10 @@ impl WriterCoreApi {
     ) -> Self {
         let mut core = WriterCore::new(&workspace_path);
         core.sync_transport = sync_transport_factory.clone();
+        // #592 五：secure storage 必须注入 facade，load/save_sync_secrets 与
+        // 按 generation 保存的凭据才能真正写入平台 Keystore；此前只挂在
+        // WriterCoreApi 上，facade 侧永远走文件路径。
+        core.secure_storage = secure_storage.clone();
         Self {
             workspace_path: workspace_path.as_ref().to_path_buf(),
             sync_transport: sync_transport_factory,

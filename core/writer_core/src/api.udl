@@ -331,6 +331,13 @@ enum WriterError {
     "InvalidDeleteTarget",
     "SyncConflict",
     "SyncFailed",
+    "RetryableNetwork",
+    "RetryableIo",
+    "Authentication",
+    "Conflict",
+    "DirtyRepository",
+    "Protocol",
+    "Fatal",
     "Other"
 };
 
@@ -1066,6 +1073,15 @@ interface WriterAppService {
 
     [Throws=WriterError]
     boolean save_sync_secrets(SyncSecretsDto secrets);
+
+    [Throws=WriterError]
+    void set_sync_secrets_override(SyncSecretsDto secrets);
+
+    [Throws=WriterError]
+    boolean save_sync_secrets_for_generation(u64 generation, SyncSecretsDto secrets);
+
+    [Throws=WriterError]
+    SyncSecretsDto? load_sync_secrets_for_generation(u64 generation);
 
     [Throws=WriterError]
     SyncStateDto load_sync_state();

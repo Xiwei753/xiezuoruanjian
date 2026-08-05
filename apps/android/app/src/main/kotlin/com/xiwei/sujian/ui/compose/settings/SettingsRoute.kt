@@ -500,7 +500,7 @@ class SettingsViewModel(
                                 counts = counts
                             ))
                         }
-                        is BridgeResult.Error -> { val kind = SyncFailureKind.fromErrorCode(r.code); SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = kind.messageKey(), sanitizedDiagnostic = r.message)) }
+                        is BridgeResult.Error -> { val kind = r.syncFailureKind ?: SyncFailureKind.Fatal; SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = kind.messageKey(), sanitizedDiagnostic = r.message)) }
                         BridgeResult.NotLoaded -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = SyncFailureKind.NativeUnavailable.messageKey(), sanitizedDiagnostic = SyncFailureKind.NativeUnavailable.name))
                     }
                 }
@@ -562,7 +562,7 @@ class SettingsViewModel(
                                 sanitizedDiagnostic = if (!diag.success) "connection_failed" else null
                             ))
                         }
-                        is BridgeResult.Error -> { val kind = SyncFailureKind.fromErrorCode(r.code); SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = kind.messageKey(), sanitizedDiagnostic = r.message)) }
+                        is BridgeResult.Error -> { val kind = r.syncFailureKind ?: SyncFailureKind.Fatal; SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = kind.messageKey(), sanitizedDiagnostic = r.message)) }
                         BridgeResult.NotLoaded -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = SyncFailureKind.NativeUnavailable.messageKey(), sanitizedDiagnostic = SyncFailureKind.NativeUnavailable.name))
                     }
                 }

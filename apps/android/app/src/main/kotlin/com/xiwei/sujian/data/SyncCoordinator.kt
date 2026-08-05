@@ -35,6 +35,12 @@ class SyncCoordinator(
     /**
      * #592 四：统一异常边界 — 每条路径必须结束在明确终态。
      *
+     * #592 六：一次同步操作只使用同一份不可变 SyncProfileSnapshot
+     * （generation + config + secrets）。调用方（AutoSyncWorker 等）可传入
+     * 预先取得的 snapshot，避免二次读取；未传入时在锁内取一次完整快照。
+     * snapshot 的 secrets 通过进程级 override 注入 Rust，整个操作不再从磁盘
+     * 二次读取 config/secrets。
+     *
      * 所有失败路径通过 [SyncFailureKind] 唯一分类：
      * - CancellationException → 原样抛出
      * - RetryableNetwork / RetryableIo → RetryableFailure，红色
@@ -45,12 +51,18 @@ class SyncCoordinator(
      * BridgeResult.NotLoaded 与 errorCode "NATIVE_NOT_LOADED" 统一进入 NativeUnavailable，
      * 不再分别维护字符串白名单和独立分支。
      */
-    suspend fun runSync(trigger: SyncTrigger): SyncOutcome {
+    suspend fun runSync(trigger: SyncTrigger, snapshot: SyncProfileSnapshot? = null): SyncOutcome {
         DiagnosticsEvents.syncEvent(trigger.name.lowercase(), "start")
         try {
-            val config = withContext(Dispatchers.IO) {
-                SyncProfileGate.snapshotExclusive { settingsRepository.loadSyncConfig() }
+            val profile = snapshot ?: withContext(Dispatchers.IO) {
+                SyncProfileGate.snapshotExclusive { settingsRepository.snapshotSyncProfile() }
             }
+            if (profile == null) {
+                DiagnosticsLogger.w("SyncCoordinator", "Sync profile snapshot unavailable — Fatal")
+                syncStatusRepository.notifySyncFailed()
+                return SyncFailureKind.Fatal.toOutcome()
+            }
+            val config = profile.config
             if (config.enabled != true) {
                 syncStatusRepository.notifyUnconfigured()
                 return SyncOutcome.Unconfigured
@@ -59,6 +71,11 @@ class SyncCoordinator(
             if (!capability.canRun) {
                 syncStatusRepository.notifyUnconfigured()
                 return SyncOutcome.Disabled
+            }
+
+            // #592 六：整个操作只使用这份 snapshot 的凭据。
+            withContext(Dispatchers.IO) {
+                settingsRepository.setSyncSecretsOverride(profile.secrets)
             }
 
             val exclusiveResult = SyncSession.runExclusive { _ ->
@@ -100,8 +117,12 @@ class SyncCoordinator(
         }
     }
 
+    /**
+     * #592 七：类型化失败直接来自 Bridge 边界（WriterException 变体），
+     * 不再维护 Android 字符串错误码表；未知错误默认 Fatal。
+     */
     internal fun classifyFailure(error: BridgeResult.Error): SyncFailureKind =
-        SyncFailureKind.fromErrorCode(error.code)
+        SyncFailureKind.fromBridgeError(error)
 
 
 

@@ -15,19 +15,18 @@ class AutoSyncWorker(
             ?.dependencies
             ?: return Result.failure()
         val settingsRepository = deps.settingsRepository
-        val config = try {
-            settingsRepository.loadSyncConfig()
+        // #592 六：一次只读取一份完整不可变快照（generation + config + secrets），
+        // 后续整个操作（shouldSync 判定 + runSync）只使用这份 snapshot。
+        val snapshot = try {
+            SyncProfileGate.snapshotExclusive { settingsRepository.snapshotSyncProfile() }
         } catch (e: Exception) {
-            DiagnosticsLogger.w(TAG, "Unable to load sync config", e)
+            DiagnosticsLogger.w(TAG, "Unable to load sync profile snapshot", e)
+            return Result.retry()
+        } ?: run {
+            DiagnosticsLogger.w(TAG, "Sync profile snapshot unavailable")
             return Result.success()
         }
-        val secrets = try {
-            settingsRepository.loadSyncSecrets()
-        } catch (e: Exception) {
-            DiagnosticsLogger.w(TAG, "Unable to load sync secrets", e)
-            return Result.success()
-        }
-        if (!AutoSyncScheduler.shouldSync(config, secrets)) return Result.success()
+        if (!AutoSyncScheduler.shouldSync(snapshot.config, snapshot.secrets)) return Result.success()
 
         val state = try {
             settingsRepository.loadSyncState()
@@ -37,7 +36,7 @@ class AutoSyncWorker(
         }
 
         val interval = when {
-            config.syncIntervalSeconds != null && config.syncIntervalSeconds > 0 -> config.syncIntervalSeconds.toLong()
+            snapshot.config.syncIntervalSeconds != null && snapshot.config.syncIntervalSeconds > 0 -> snapshot.config.syncIntervalSeconds.toLong()
             else -> DEFAULT_INTERVAL_SECONDS
         }
         val elapsed = if (state.lastSyncTime != null && state.lastSyncTime > 0) {
@@ -47,7 +46,7 @@ class AutoSyncWorker(
         }
         if (elapsed != null && elapsed < interval) return Result.success()
 
-        val outcome = deps.syncCoordinator.runSync(SyncTrigger.Auto)
+        val outcome = deps.syncCoordinator.runSync(SyncTrigger.Auto, snapshot)
         return when (outcome) {
             is com.xiwei.sujian.data.SyncOutcome.Completed -> {
                 com.xiwei.sujian.diagnostics.DiagnosticsEvents.syncEvent("autosync", "completed")

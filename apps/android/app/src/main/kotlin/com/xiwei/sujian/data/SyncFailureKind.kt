@@ -51,7 +51,19 @@ enum class SyncFailureKind {
             else -> Fatal
         }
 
-        fun fromErrorCode(code: String?): SyncFailureKind = when (code) {
+        /**
+         * #592 七：从 Bridge 边界的类型化失败直接推导；未知/非同步错误默认 Fatal，
+         * 只有明确网络或 IO 失败可以重试。不再维护 Android 字符串错误码表。
+         */
+        fun fromBridgeError(error: com.xiwei.sujian.data.BridgeResult.Error): SyncFailureKind =
+            error.syncFailureKind ?: Fatal
+
+        /**
+         * #592 七：遗留字符串错误码映射 — 仅用于非 BridgeResult.Error 路径的兜底。
+         * 主分类路径已改为 [com.xiwei.sujian.data.BridgeResult.Error.syncFailureKind]
+         * （WriterException 变体直接推导），新错误码不再依赖字符串表。
+         */
+        fun fromLegacyErrorCode(code: String?): SyncFailureKind = when (code) {
             "SYNC_NETWORK_UNAVAILABLE", "SYNC_RATE_LIMITED" -> RetryableNetwork
             "IO_ERROR" -> RetryableIo
             "NATIVE_NOT_LOADED" -> NativeUnavailable

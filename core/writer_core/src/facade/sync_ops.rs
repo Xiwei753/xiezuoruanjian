@@ -130,6 +130,85 @@ impl super::WriterCore {
         self.load_sync_secrets_from_file()
     }
 
+    /// #592 五：进程级 secrets override — 一次同步操作只使用同一份 snapshot 的凭据，
+    /// 不再从磁盘二次读取。由 app_service 在同步启动前设置。
+    pub fn set_secrets_override(&mut self, secrets: Option<crate::sync::SyncSecrets>) {
+        self.secrets_override = secrets;
+    }
+
+    pub(crate) fn has_secrets_override(&self) -> bool {
+        self.secrets_override.is_some()
+    }
+
+    /// #592 五：按 generation 保存凭据到安全存储（key: sync_token_g{N}）。
+    /// 凭据按 generation 保存，activeGeneration 提交前旧 generation 的凭据仍可读取。
+    pub fn save_sync_secrets_for_generation(
+        &self,
+        generation: u64,
+        secrets: &crate::sync::SyncSecrets,
+    ) -> crate::error::Result<()> {
+        let key = format!("sync_token_g{}", generation);
+        if let Some(ref storage) = self.secure_storage {
+            if let Some(token) = &secrets.token {
+                storage
+                    .set_secret(&key, token.as_bytes())
+                    .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+            } else {
+                storage
+                    .delete_secret(&key)
+                    .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+            }
+            return Ok(());
+        }
+        // 无 secure storage（测试/桌面直连）：按 generation 落文件，与 live 槽同构。
+        let secrets_path = self.workspace_path.join(format!(
+            "app-meta/sync/sync_secrets_g{}.local.json",
+            generation
+        ));
+        if let Some(parent) = secrets_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let content = serde_json::to_string_pretty(secrets)
+            .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+        let parent = secrets_path.parent().unwrap_or_else(|| std::path::Path::new(""));
+        let tmp = parent.join(format!("sync_secrets_g{}.local.json.tmp", generation));
+        std::fs::write(&tmp, content)?;
+        std::fs::rename(&tmp, &secrets_path)?;
+        Ok(())
+    }
+
+    /// #592 五：读取指定 generation 的安全存储凭据；缺失返回 None。
+    pub fn load_sync_secrets_for_generation(
+        &self,
+        generation: u64,
+    ) -> crate::error::Result<Option<crate::sync::SyncSecrets>> {
+        let key = format!("sync_token_g{}", generation);
+        if let Some(ref storage) = self.secure_storage {
+            if let Ok(Some(bytes)) = storage.get_secret(&key) {
+                if let Ok(token) = String::from_utf8(bytes) {
+                    if !token.is_empty() {
+                        return Ok(Some(crate::sync::SyncSecrets {
+                            token: Some(token),
+                            ssh_private_key: None,
+                        }));
+                    }
+                }
+            }
+            return Ok(None);
+        }
+        let secrets_path = self.workspace_path.join(format!(
+            "app-meta/sync/sync_secrets_g{}.local.json",
+            generation
+        ));
+        if !secrets_path.exists() {
+            return Ok(None);
+        }
+        let content = std::fs::read_to_string(&secrets_path)?;
+        let secrets: crate::sync::SyncSecrets = serde_json::from_str(&content)
+            .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+        Ok(Some(secrets))
+    }
+
     fn load_sync_secrets_from_file(&self) -> crate::error::Result<crate::sync::SyncSecrets> {
         let secrets_path = self
             .workspace_path

@@ -37,6 +37,8 @@ class SettingsRepository(
         if (preferencesSuffix.isNotEmpty()) "sujian_diagnostics_$preferencesSuffix" else "sujian_diagnostics",
         android.content.Context.MODE_PRIVATE
     )
+    private val profileStore by lazy { SyncProfileStore(appContext) }
+    private val configJson = com.google.gson.Gson()
 
     @Volatile
     var lastWarning: String? = null
@@ -167,10 +169,100 @@ class SettingsRepository(
         }
     }
 
+    /**
+     * #592 五：严格读取同步配置 — Bridge 失败时返回 null 而非默认配置。
+     * 提交协议用它区分"读取失败"与"真实默认值"，避免把默认配置当旧值回滚。
+     */
+    fun loadSyncConfigStrict(): SyncConfig? {
+        return when (val result = syncBridge.loadSyncConfig()) {
+            is BridgeResult.Success -> result.data?.normalize()
+            is BridgeResult.Error -> {
+                warn("Strict load sync config failed: ${result.fullEnvelope}")
+                null
+            }
+            BridgeResult.NotLoaded -> null
+        }
+    }
+
+    /** #592 五：严格读取同步凭据 — Bridge 失败时返回 null。 */
+    fun loadSyncSecretsStrict(): SyncSecrets? {
+        return when (val result = syncBridge.loadSyncSecrets()) {
+            is BridgeResult.Success -> result.data
+            is BridgeResult.Error -> {
+                warn("Strict load sync secrets failed: ${result.fullEnvelope}")
+                null
+            }
+            BridgeResult.NotLoaded -> null
+        }
+    }
+
+    /**
+     * #592 六：统一仓库读取一次完整不可变快照（generation + config + secrets）。
+     * 必须在 SyncProfileGate.snapshotExclusive 内调用，保证与提交互斥。
+     * 读取失败返回 null（调用方按 Fatal 处理，不再回退默认配置）。
+     */
+    suspend fun snapshotSyncProfile(): SyncProfileSnapshot? {
+        val state = profileStore.readState()
+        // #592 五：读取者只读取 activeGeneration 对应的完整版本。
+        // committed_config_json 只随 activeGeneration 原子推进，永远属于活动版本；
+        // staged 但未提交的 config（失败/崩溃遗留）不会被当作完整版本。
+        val config = if (state.hasCommittedProfile) {
+            runCatching { configJson.fromJson(state.committedConfigJson, SyncConfig::class.java) }
+                .getOrNull()
+                ?.normalize()
+                ?: return null
+        } else {
+            loadSyncConfigStrict() ?: return null
+        }
+        // 凭据按 generation 保存在安全存储；legacy（从未提交过）回退 live 槽。
+        val generationSecrets = loadSyncSecretsForGeneration(state.activeGeneration)
+        val secrets = when {
+            generationSecrets != null && (generationSecrets.token?.isNotEmpty() == true) -> generationSecrets
+            state.hasCommittedProfile -> null
+            else -> loadSyncSecretsStrict()
+        } ?: return null
+        return SyncProfileSnapshot(state.activeGeneration, config, secrets)
+    }
+
+    /**
+     * #592 六：把一次同步操作使用的完整 snapshot 凭据写入进程级 override，
+     * 使 performSync/dryRun/diagnostics 的 Rust 侧不再从磁盘二次读取 secrets。
+     */
+    fun setSyncSecretsOverride(secrets: SyncSecrets) {
+        when (val result = appBridge.setSyncSecretsOverride(secrets)) {
+            is BridgeResult.Success -> { }
+            is BridgeResult.Error -> warn("Failed to set sync secrets override: ${result.fullEnvelope}")
+            BridgeResult.NotLoaded -> warn("Sync secrets override skipped: native library not loaded")
+        }
+    }
+
+    /** 按 generation 保存凭据到安全存储（#592 五）。 */
+    fun saveSyncSecretsForGeneration(generation: Long, secrets: SyncSecrets): SettingsSaveResult {
+        return when (val result = appBridge.saveSyncSecretsForGeneration(generation.toULong(), secrets)) {
+            is BridgeResult.Success -> SettingsSaveResult.Success
+            is BridgeResult.Error -> {
+                warn("Failed to save staged sync secrets for generation $generation: ${result.fullEnvelope}")
+                SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_SECRETS, generation)))
+            }
+            BridgeResult.NotLoaded -> SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_SECRETS, generation)))
+        }
+    }
+
+    /** 读取指定 generation 的安全存储凭据；缺失返回 null。 */
+    fun loadSyncSecretsForGeneration(generation: Long): SyncSecrets? {
+        return when (val result = appBridge.loadSyncSecretsForGeneration(generation.toULong())) {
+            is BridgeResult.Success -> result.data?.takeIf { it.token?.isNotEmpty() == true }
+            is BridgeResult.Error -> {
+                warn("Failed to load staged sync secrets for generation $generation: ${result.fullEnvelope}")
+                null
+            }
+            BridgeResult.NotLoaded -> null
+        }
+    }
+
     fun saveSyncConfig(config: SyncConfig): SettingsSaveResult {
         return when (val result = syncBridge.saveSyncConfig(config)) {
             is BridgeResult.Success -> {
-                AutoSyncScheduler.scheduleFromSettings(appContext)
                 SettingsSaveResult.Success
             }
             is BridgeResult.Error -> {
@@ -209,40 +301,58 @@ class SettingsRepository(
     }
 
     /**
-     * #592 三：仓库级提交协议 — 同步配置与凭据作为单一事务保存。
+     * #592 五：版本化提交同步配置与凭据 — 写 stagedConfig(generation=N) →
+     * 写 stagedSecrets(generation=N) → 两项成功后原子更新 activeGeneration=N。
      *
-     * 固定顺序：暂存 config → 暂存 secrets → 两项都成功即提交。
-     * 若 secrets 保存失败，回滚 config 到旧值，避免留下配置与凭据不匹配的半提交状态。
-     * 正式同步、试运行和连接诊断都只能读取已经完整提交的同一组数据。
+     * - 旧 config/secrets 在写入前通过严格读取捕获；读取失败时直接中止，
+     *   不产生任何写入，因此不再需要"失败后写回旧配置"（旧实现无法区分
+     *   读取失败与默认值，可能用默认配置覆盖真实配置）。
+     * - secrets 按 generation 保存到安全存储（saveSyncSecretsForGeneration），
+     *   同时更新 live 槽供 Rust 内部读取。
+     * - 只有 activeGeneration 提交成功后 AutoSyncScheduler 才更新 WorkManager，
+     *   且直接使用应用容器中的仓库（本仓库），不新建 SettingsRepository 读半成品。
+     * - 失败时旧 generation 继续有效：读取者只读取 activeGeneration 对应的完整版本。
      */
-    fun commitSyncProfile(config: SyncConfig, secrets: SyncSecrets): SettingsSaveResult {
+    suspend fun commitSyncProfile(config: SyncConfig, secrets: SyncSecrets): SettingsSaveResult {
         return SyncProfileGate.commitExclusive {
-            // #592 四：记录旧 config 是否成功读取；读取失败时 oldConfig 为默认值，
-            // 回滚时不得用默认值覆盖，而是标记为无法回滚并告警。
-            var oldConfigLoaded = false
-            val oldConfig = try {
-                val c = loadSyncConfig()
-                oldConfigLoaded = true
-                c
-            } catch (e: Exception) {
-                warn("commitSyncProfile: failed to load old config for rollback: ${e.message}")
-                SyncConfig().normalize()
+            val oldConfig = loadSyncConfigStrict()
+            if (oldConfig == null) {
+                warn("commitSyncProfile: strict read of old config failed — aborting before any write")
+                return@commitExclusive SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_CONFIG, 0L)))
             }
-            val configResult = saveSyncConfig(config)
+            if (loadSyncSecretsStrict() == null) {
+                warn("commitSyncProfile: strict read of old secrets failed — aborting before any write")
+                return@commitExclusive SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_SECRETS, 0L)))
+            }
+            val generation = profileStore.nextGeneration()
+            val normalized = config.normalize()
+
+            // 1) stagedConfig(generation=N)：写入 Core 配置存储并记录 staged 标记。
+            val configResult = saveSyncConfig(normalized)
             if (configResult is SettingsSaveResult.Failed) return@commitExclusive configResult
-            val secretsResult = saveSyncSecrets(secrets)
+            profileStore.stageConfig(generation, configJson.toJson(normalized))
+
+            // 2) stagedSecrets(generation=N)：凭据按 generation 写入安全存储 + live 槽。
+            val secretsResult = saveSyncSecretsForGeneration(generation, secrets)
             if (secretsResult is SettingsSaveResult.Failed) {
-                if (oldConfigLoaded) {
-                    warn("commitSyncProfile: secrets save failed, rolling back config to previous value")
-                    val rollbackResult = saveSyncConfig(oldConfig)
-                    if (rollbackResult is SettingsSaveResult.Failed) {
-                        warn("commitSyncProfile: config rollback ALSO failed — config and secrets are in inconsistent state")
-                    }
-                } else {
-                    warn("commitSyncProfile: secrets save failed and old config was unavailable — cannot roll back, config and secrets may be inconsistent")
-                }
+                // 不写回旧配置（旧 generation 仍由 activeGeneration 标记继续有效）。
+                warn("commitSyncProfile: staged secrets save failed for generation $generation — " +
+                    "active generation unchanged, readers keep using the committed version")
                 return@commitExclusive secretsResult
             }
+            val liveSecretsResult = saveSyncSecrets(secrets)
+            if (liveSecretsResult is SettingsSaveResult.Failed) {
+                warn("commitSyncProfile: live secrets save failed for generation $generation — " +
+                    "generation-staged secrets remain valid for readers")
+            }
+            profileStore.stageSecrets(generation)
+
+            // 3) 原子更新 activeGeneration=N（单一 DataStore updateData，
+            //    committed_config_json 与 activeGeneration 同时推进）。
+            profileStore.commitGeneration(generation, configJson.toJson(normalized))
+
+            // 4) 只有提交成功后调度 WorkManager；使用本仓库（应用容器实例）。
+            AutoSyncScheduler.scheduleFromSettings(appContext, this)
             SettingsSaveResult.Success
         }
     }

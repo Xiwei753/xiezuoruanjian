@@ -38,6 +38,35 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// #592 五：设置进程级 secrets override — 一次同步操作只使用同一份 snapshot 凭据。
+    pub fn set_sync_secrets_override(&self, secrets: SyncSecretsDto) -> ApiResult<()> {
+        self.core().set_secrets_override(Some(secrets.into()));
+        Ok(())
+    }
+
+    /// #592 五：按 generation 保存凭据到安全存储。
+    pub fn save_sync_secrets_for_generation(
+        &self,
+        generation: u64,
+        secrets: SyncSecretsDto,
+    ) -> ApiResult<bool> {
+        self.core()
+            .save_sync_secrets_for_generation(generation, &secrets.into())
+            .map(|_| true)
+            .map_err(Into::into)
+    }
+
+    /// #592 五：读取指定 generation 的安全存储凭据；缺失返回 None。
+    pub fn load_sync_secrets_for_generation(
+        &self,
+        generation: u64,
+    ) -> ApiResult<Option<SyncSecretsDto>> {
+        self.core()
+            .load_sync_secrets_for_generation(generation)
+            .map(|opt| opt.map(Into::into))
+            .map_err(Into::into)
+    }
+
     /// 加载同步状态（上次同步时间、远端 commit 等）。
     pub fn load_sync_state(&self) -> ApiResult<SyncStateDto> {
         self.core()

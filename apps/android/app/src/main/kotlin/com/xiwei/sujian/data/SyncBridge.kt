@@ -36,6 +36,19 @@ class SyncBridge internal constructor(private val holder: WriterAppServiceHolder
         holder.service.saveSyncSecrets(secrets.toDto())
     }
 
+    // #592 五/六：进程级 override 与按 generation 保存凭据。
+    fun setSyncSecretsOverride(secrets: SyncSecrets): BridgeResult<Unit> = holder.wrapResult {
+        holder.service.setSyncSecretsOverride(secrets.toDto())
+    }
+
+    fun saveSyncSecretsForGeneration(generation: ULong, secrets: SyncSecrets): BridgeResult<Boolean> = holder.wrapResult {
+        holder.service.saveSyncSecretsForGeneration(generation, secrets.toDto())
+    }
+
+    fun loadSyncSecretsForGeneration(generation: ULong): BridgeResult<SyncSecrets?> = holder.wrapResult {
+        holder.service.loadSyncSecretsForGeneration(generation)?.toModel()
+    }
+
     fun loadSyncState(): BridgeResult<SyncState> = holder.wrapResult {
         holder.service.loadSyncState().toModel()
     }

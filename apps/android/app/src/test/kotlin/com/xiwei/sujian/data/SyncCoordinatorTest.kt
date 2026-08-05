@@ -52,48 +52,45 @@ class SyncCoordinatorTest {
     }
 
     @Test
-    fun bridgeError_retryableCodes_classifyCorrectly() {
-        val networkCodes = listOf("SYNC_NETWORK_UNAVAILABLE", "SYNC_RATE_LIMITED")
-        networkCodes.forEach { code ->
-            val error = BridgeResult.Error(
-                com.xiwei.sujian.data.ResultEnvelope.errorOf(code, "test")
-            )
-            val kind = SyncFailureKind.fromErrorCode(error.code)
-            assertTrue("$code should be RetryableNetwork, got $kind",
-                kind == SyncFailureKind.RetryableNetwork)
-        }
-        val error = BridgeResult.Error(
-            com.xiwei.sujian.data.ResultEnvelope.errorOf("IO_ERROR", "test")
+    fun bridgeError_typedKinds_classifyCorrectly() {
+        // #592 七：类型化失败直接来自 Bridge 边界（WriterException 变体），
+        // 不再通过 Android 字符串错误码表分类。
+        val networkError = BridgeResult.Error(
+            com.xiwei.sujian.data.ResultEnvelope.errorOf("RETRYABLE_NETWORK", "test"),
+            syncFailureKind = SyncFailureKind.RetryableNetwork,
         )
-        assertEquals(SyncFailureKind.RetryableIo, SyncFailureKind.fromErrorCode(error.code))
+        assertEquals(SyncFailureKind.RetryableNetwork, SyncFailureKind.fromBridgeError(networkError))
+        val ioError = BridgeResult.Error(
+            com.xiwei.sujian.data.ResultEnvelope.errorOf("RETRYABLE_IO", "test"),
+            syncFailureKind = SyncFailureKind.RetryableIo,
+        )
+        assertEquals(SyncFailureKind.RetryableIo, SyncFailureKind.fromBridgeError(ioError))
     }
 
     @Test
-    fun nativeNotLoaded_isNativeUnavailable_notRetryableNetwork() {
-        val error = BridgeResult.Error(
-            com.xiwei.sujian.data.ResultEnvelope.errorOf("NATIVE_NOT_LOADED", "test")
+    fun bridgeError_unknownKind_defaultsToFatal() {
+        // #592 七：未知错误默认 Fatal，只有明确网络或 IO 失败可以重试。
+        val unknown = BridgeResult.Error(
+            com.xiwei.sujian.data.ResultEnvelope.errorOf("SOME_FUTURE_CODE", "test")
         )
-        val kind = SyncFailureKind.fromErrorCode(error.code)
-        assertEquals(SyncFailureKind.NativeUnavailable, kind)
-        assertTrue(kind.toOutcome() is SyncOutcome.TerminalFailure)
+        assertEquals(SyncFailureKind.Fatal, SyncFailureKind.fromBridgeError(unknown))
     }
 
     @Test
-    fun bridgeError_terminalCodes_classifyAsTerminal() {
-        val authCodes = listOf("SYNC_AUTH_FAILED")
-        authCodes.forEach { code ->
-            assertEquals(SyncFailureKind.Authentication, SyncFailureKind.fromErrorCode(code))
-        }
-        val conflictCodes = listOf("SYNC_CONFLICT", "SYNC_DOCUMENT_CONFLICT",
-            "SYNC_CHECKOUT_CONFLICT", "SYNC_SETTINGS_CONFLICT", "SYNC_CONFLICT_DETECTED")
-        conflictCodes.forEach { code ->
-            assertEquals(SyncFailureKind.Conflict, SyncFailureKind.fromErrorCode(code))
-        }
-        val protocolCodes = listOf("SYNC_NON_FAST_FORWARD", "SYNC_UNRELATED_HISTORIES",
-            "SYNC_INCOMPLETE_TRANSACTION")
-        protocolCodes.forEach { code ->
-            assertEquals(SyncFailureKind.Protocol, SyncFailureKind.fromErrorCode(code))
-        }
+    fun legacyErrorCode_mappingStillCoversOldCodes() {
+        // 遗留映射仅作非 BridgeResult.Error 路径兜底；主路径已类型化。
+        assertEquals(SyncFailureKind.RetryableNetwork,
+            SyncFailureKind.fromLegacyErrorCode("SYNC_NETWORK_UNAVAILABLE"))
+        assertEquals(SyncFailureKind.RetryableIo,
+            SyncFailureKind.fromLegacyErrorCode("IO_ERROR"))
+        assertEquals(SyncFailureKind.NativeUnavailable,
+            SyncFailureKind.fromLegacyErrorCode("NATIVE_NOT_LOADED"))
+        assertEquals(SyncFailureKind.Authentication,
+            SyncFailureKind.fromLegacyErrorCode("SYNC_AUTH_FAILED"))
+        assertEquals(SyncFailureKind.Conflict,
+            SyncFailureKind.fromLegacyErrorCode("SYNC_CONFLICT"))
+        assertEquals(SyncFailureKind.Protocol,
+            SyncFailureKind.fromLegacyErrorCode("SYNC_INCOMPLETE_TRANSACTION"))
     }
 
     @Test

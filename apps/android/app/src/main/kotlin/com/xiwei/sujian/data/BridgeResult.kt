@@ -13,7 +13,12 @@ package com.xiwei.sujian.data
 sealed class BridgeResult<out T> {
     data class Success<out T>(val data: T, val envelope: ResultEnvelope<T> = ResultEnvelope.success(data)) : BridgeResult<T>()
     data class Error(
-        val envelope: ResultEnvelope<Nothing>
+        val envelope: ResultEnvelope<Nothing>,
+        /**
+         * #592 七：Core/Bridge 边界的类型化同步失败。由 WriterException 变体直接推导，
+         * 不再维护 Android 字符串错误码表；null 表示非同步错误或未知类型，默认 Fatal。
+         */
+        val syncFailureKind: SyncFailureKind? = null,
     ) : BridgeResult<Nothing>() {
         val message: String get() = envelope.messageKey ?: envelope.errorCode ?: ""
         val code: String? get() = envelope.errorCode

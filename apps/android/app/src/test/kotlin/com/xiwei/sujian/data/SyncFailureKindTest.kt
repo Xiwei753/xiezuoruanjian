@@ -31,10 +31,10 @@ class SyncFailureKindTest {
     }
 
     @Test
-    fun fromErrorCode_unknownCodeReturnsFatal() {
-        assertEquals(SyncFailureKind.Fatal, SyncFailureKind.fromErrorCode("UNKNOWN_ERROR"))
-        assertEquals(SyncFailureKind.Fatal, SyncFailureKind.fromErrorCode(null))
-        assertEquals(SyncFailureKind.Fatal, SyncFailureKind.fromErrorCode(""))
+    fun fromLegacyErrorCode_unknownCodeReturnsFatal() {
+        assertEquals(SyncFailureKind.Fatal, SyncFailureKind.fromLegacyErrorCode("UNKNOWN_ERROR"))
+        assertEquals(SyncFailureKind.Fatal, SyncFailureKind.fromLegacyErrorCode(null))
+        assertEquals(SyncFailureKind.Fatal, SyncFailureKind.fromLegacyErrorCode(""))
     }
 
     @Test

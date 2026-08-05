@@ -71,7 +71,32 @@ internal fun WriterException.toWireErrorCode(): String = when (this) {
     is WriterException.InvalidDeleteTarget -> "INVALID_DELETE_TARGET"
     is WriterException.SyncConflict -> "SYNC_CONFLICT"
     is WriterException.SyncFailed -> "SYNC_FAILED"
+    is WriterException.RetryableNetwork -> "RETRYABLE_NETWORK"
+    is WriterException.RetryableIo -> "RETRYABLE_IO"
+    is WriterException.Authentication -> "AUTHENTICATION"
+    is WriterException.Conflict -> "CONFLICT"
+    is WriterException.DirtyRepository -> "DIRTY_REPOSITORY"
+    is WriterException.Protocol -> "PROTOCOL"
+    is WriterException.Fatal -> "FATAL"
     is WriterException.Other -> "OTHER"
+}
+
+/**
+ * #592 七：Core/Bridge 边界的类型化失败 — 由 WriterException 变体直接推导，
+ * 不维护字符串错误码表。未知错误默认 Fatal，只有明确网络或 IO 失败可重试。
+ */
+internal fun WriterException.toSyncFailureKind(): SyncFailureKind? = when (this) {
+    is WriterException.RetryableNetwork -> SyncFailureKind.RetryableNetwork
+    is WriterException.RetryableIo -> SyncFailureKind.RetryableIo
+    is WriterException.Authentication -> SyncFailureKind.Authentication
+    is WriterException.Conflict,
+    is WriterException.SyncConflict -> SyncFailureKind.Conflict
+    is WriterException.DirtyRepository -> SyncFailureKind.DirtyRepository
+    is WriterException.Protocol -> SyncFailureKind.Protocol
+    is WriterException.Fatal -> SyncFailureKind.Fatal
+    // 明确 I/O 失败可重试；其余（Io/Json/Other/旧 SyncFailed 等）视为未知 → null → Fatal。
+    is WriterException.Io -> SyncFailureKind.RetryableIo
+    else -> null
 }
 
 internal fun ProjectDto.toModel() = Project(id, title, createdAt, updatedAt)

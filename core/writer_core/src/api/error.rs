@@ -46,6 +46,28 @@ pub enum WriterError {
     /// 同步失败——网络/认证/API 等非冲突性错误
     #[error("Sync failed: {0}")]
     SyncFailed(String),
+    // --- #592 七：类型化同步失败 ---
+    /// 明确网络失败（网络不可用/限流）——可重试
+    #[error("Retryable network failure: {0}")]
+    RetryableNetwork(String),
+    /// 明确 I/O 失败（磁盘临时不可用等）——可重试
+    #[error("Retryable IO failure: {0}")]
+    RetryableIo(String),
+    /// 认证失败（Token 无效/权限不足）——需用户干预
+    #[error("Sync authentication failure: {0}")]
+    Authentication(String),
+    /// 同步冲突（正文/设置/checkout 冲突）——需用户决策
+    #[error("Sync conflict (typed): {0}")]
+    Conflict(String),
+    /// 本地仓库脏（非白名单文件被修改）——需用户处理
+    #[error("Dirty repository blocked: {0}")]
+    DirtyRepository(String),
+    /// 协议错误（non-fast-forward / unrelated histories / 不完整事务）
+    #[error("Sync protocol error: {0}")]
+    Protocol(String),
+    /// 未知/程序错误——默认不可重试
+    #[error("Fatal sync failure: {0}")]
+    Fatal(String),
     #[error("Other error: {0}")]
     Other(String),
 }
@@ -67,8 +89,14 @@ impl WriterError {
             WriterError::InvalidDeleteTarget(_) => "INVALID_DELETE_TARGET",
             WriterError::SyncConflict(_) => "SYNC_CONFLICT",
             WriterError::SyncFailed(_) => "SYNC_FAILED",
-            WriterError::Other(_) => "OTHER",
-        }
+            WriterError::RetryableNetwork(_) => "RETRYABLE_NETWORK",
+            WriterError::RetryableIo(_) => "RETRYABLE_IO",
+            WriterError::Authentication(_) => "AUTHENTICATION",
+            WriterError::Conflict(_) => "CONFLICT",
+            WriterError::DirtyRepository(_) => "DIRTY_REPOSITORY",
+            WriterError::Protocol(_) => "PROTOCOL",
+            WriterError::Fatal(_) => "FATAL",
+            WriterError::Other(_) => "OTHER",        }
     }
 
     /// 返回稳定的 i18n message key，供 UI 层做本地化映射。
@@ -88,8 +116,14 @@ impl WriterError {
             WriterError::InvalidDeleteTarget(_) => "error.invalid_delete_target",
             WriterError::SyncConflict(_) => "error.sync_conflict",
             WriterError::SyncFailed(_) => "error.sync_failed",
-            WriterError::Other(_) => "error.other",
-        }
+            WriterError::RetryableNetwork(_) => "error.sync_retryable_network",
+            WriterError::RetryableIo(_) => "error.sync_retryable_io",
+            WriterError::Authentication(_) => "error.sync_auth_failed",
+            WriterError::Conflict(_) => "error.sync_conflict",
+            WriterError::DirtyRepository(_) => "error.sync_dirty_repository",
+            WriterError::Protocol(_) => "error.sync_protocol_error",
+            WriterError::Fatal(_) => "error.sync_fatal",
+            WriterError::Other(_) => "error.other",        }
     }
 
     /// 结构化错误参数，供 UI 层做本地化模板插值。
@@ -116,6 +150,27 @@ impl WriterError {
                 m.insert("detail".into(), detail.clone());
             }
             WriterError::SyncFailed(detail) => {
+                m.insert("detail".into(), detail.clone());
+            }
+            WriterError::RetryableNetwork(detail) => {
+                m.insert("detail".into(), detail.clone());
+            }
+            WriterError::RetryableIo(detail) => {
+                m.insert("detail".into(), detail.clone());
+            }
+            WriterError::Authentication(detail) => {
+                m.insert("detail".into(), detail.clone());
+            }
+            WriterError::Conflict(detail) => {
+                m.insert("detail".into(), detail.clone());
+            }
+            WriterError::DirtyRepository(detail) => {
+                m.insert("detail".into(), detail.clone());
+            }
+            WriterError::Protocol(detail) => {
+                m.insert("detail".into(), detail.clone());
+            }
+            WriterError::Fatal(detail) => {
                 m.insert("detail".into(), detail.clone());
             }
             WriterError::Io(detail) => {
@@ -157,58 +212,80 @@ impl From<crate::error::Error> for WriterError {
             Error::NotImplemented => WriterError::NotImplemented,
             Error::RefuseToDeleteWorkspaceRoot => WriterError::RefuseToDeleteWorkspaceRoot,
             Error::InvalidDeleteTarget(s) => WriterError::InvalidDeleteTarget(s),
-            Error::SyncAuthFailed { reason } => WriterError::SyncFailed(reason),
-            Error::SyncNetworkUnavailable { reason } => WriterError::SyncFailed(reason),
+            Error::SyncAuthFailed { reason } => WriterError::Authentication(reason),
+            Error::SyncNetworkUnavailable { reason } => WriterError::RetryableNetwork(reason),
             Error::SyncRateLimited { retry_after_secs } => {
-                WriterError::SyncFailed(format!("rate_limited: retry_after={}", retry_after_secs))
+                WriterError::RetryableNetwork(format!("rate_limited: retry_after={}", retry_after_secs))
             }
             Error::SyncDocumentConflict {
                 path,
                 local_hash,
                 remote_hash,
-            } => WriterError::SyncConflict(format!(
+            } => WriterError::Conflict(format!(
                 "path={} local={} remote={}",
                 path, local_hash, remote_hash
             )),
             Error::SyncIncompleteTransaction {
                 transaction_id,
                 missing_files,
-            } => WriterError::Other(format!(
+            } => WriterError::Protocol(format!(
                 "incomplete_transaction: tx_id={} missing={}",
                 transaction_id,
                 missing_files.join(",")
             )),
             Error::SyncCheckoutConflict { summary_json } => {
-                WriterError::SyncConflict(format!("checkout_conflict: {}", summary_json))
+                WriterError::Conflict(format!("checkout_conflict: {}", summary_json))
             }
             Error::SyncSettingsConflict { details_json } => {
-                WriterError::SyncConflict(format!("settings_conflict: {}", details_json))
+                WriterError::Conflict(format!("settings_conflict: {}", details_json))
             }
             Error::SyncConflictDetected => {
-                WriterError::SyncConflict("SyncConflict_Detected".to_string())
+                WriterError::Conflict("SyncConflict_Detected".to_string())
             }
             Error::SyncNonFastForward { detail } => {
-                WriterError::SyncFailed(format!("non_fast_forward: {}", detail))
+                WriterError::Protocol(format!("non_fast_forward: {}", detail))
             }
             Error::SyncUnrelatedHistories { detail } => {
-                WriterError::SyncFailed(format!("unrelated_histories: {}", detail))
+                WriterError::Protocol(format!("unrelated_histories: {}", detail))
             }
             Error::SyncRemoteBranchNotFound { detail } => {
-                WriterError::SyncFailed(format!("remote_branch_not_found: {}", detail))
+                WriterError::Protocol(format!("remote_branch_not_found: {}", detail))
             }
             Error::SyncGithubApiError {
                 category,
                 context,
                 status,
                 body_preview,
-            } => WriterError::SyncFailed(format!(
-                "github_api_error: category={} context={} status={} body={}",
-                category, context, status, body_preview
-            )),
+            } => {
+                // #592 七：GitHub API 错误按类别映射为类型化失败；
+                // 只有明确网络/认证类别进入对应类型，其余默认 Fatal。
+                let cat = crate::sync::types::SyncErrorCategory::from_code(&category, "");
+                match cat {
+                    crate::sync::types::SyncErrorCategory::TokenMissing
+                    | crate::sync::types::SyncErrorCategory::TokenInvalid
+                    | crate::sync::types::SyncErrorCategory::TokenPermissionDenied
+                    | crate::sync::types::SyncErrorCategory::AuthError
+                    | crate::sync::types::SyncErrorCategory::GithubUnauthorized
+                    | crate::sync::types::SyncErrorCategory::GithubForbidden => WriterError::Authentication(
+                        format!("github_api_error: category={} context={} status={}", category, context, status),
+                    ),
+                    crate::sync::types::SyncErrorCategory::GithubNetworkFailed
+                    | crate::sync::types::SyncErrorCategory::DnsFailed
+                    | crate::sync::types::SyncErrorCategory::TlsFailed
+                    | crate::sync::types::SyncErrorCategory::NetworkProbeFailed
+                    | crate::sync::types::SyncErrorCategory::ApiRateLimited => WriterError::RetryableNetwork(
+                        format!("github_api_error: category={} context={} status={}", category, context, status),
+                    ),
+                    _ => WriterError::Fatal(format!(
+                        "github_api_error: category={} context={} status={} body={}",
+                        category, context, status, body_preview
+                    )),
+                }
+            }
             Error::DiskFull {
                 path,
                 required_bytes,
-            } => WriterError::Io(format!(
+            } => WriterError::RetryableIo(format!(
                 "disk_full: path={} required={}",
                 path, required_bytes
             )),
@@ -274,5 +351,54 @@ mod tests {
         let err = WriterError::SyncFailed("network timeout".into());
         let p = err.params();
         assert_eq!(p.get("detail").unwrap(), "network timeout");
+    }
+
+    #[test]
+    fn test_typed_sync_failure_codes() {
+        // #592 七：类型化失败的错误码是跨端契约，不得落入 "OTHER"。
+        assert_eq!(WriterError::RetryableNetwork("n".into()).code(), "RETRYABLE_NETWORK");
+        assert_eq!(WriterError::RetryableIo("n".into()).code(), "RETRYABLE_IO");
+        assert_eq!(WriterError::Authentication("n".into()).code(), "AUTHENTICATION");
+        assert_eq!(WriterError::Conflict("n".into()).code(), "CONFLICT");
+        assert_eq!(WriterError::DirtyRepository("n".into()).code(), "DIRTY_REPOSITORY");
+        assert_eq!(WriterError::Protocol("n".into()).code(), "PROTOCOL");
+        assert_eq!(WriterError::Fatal("n".into()).code(), "FATAL");
+    }
+
+    #[test]
+    fn test_from_error_maps_to_typed_kinds() {
+        // #592 七：Core 内部错误映射到类型化失败，不再折叠为笼统 SyncFailed。
+        use crate::error::Error;
+        let auth = WriterError::from(Error::SyncAuthFailed { reason: "bad token".into() });
+        assert!(matches!(auth, WriterError::Authentication(_)));
+        let net = WriterError::from(Error::SyncNetworkUnavailable { reason: "dns".into() });
+        assert!(matches!(net, WriterError::RetryableNetwork(_)));
+        let conflict = WriterError::from(Error::SyncDocumentConflict {
+            path: "a".into(),
+            local_hash: "l".into(),
+            remote_hash: "r".into(),
+        });
+        assert!(matches!(conflict, WriterError::Conflict(_)));
+        let nff = WriterError::from(Error::SyncNonFastForward { detail: "x".into() });
+        assert!(matches!(nff, WriterError::Protocol(_)));
+        let incomplete = WriterError::from(Error::SyncIncompleteTransaction {
+            transaction_id: "t".into(),
+            missing_files: vec!["f".into()],
+        });
+        assert!(matches!(incomplete, WriterError::Protocol(_)));
+        let github_auth = WriterError::from(Error::SyncGithubApiError {
+            category: "token_invalid".into(),
+            context: "c".into(),
+            status: 401,
+            body_preview: "b".into(),
+        });
+        assert!(matches!(github_auth, WriterError::Authentication(_)));
+        let github_net = WriterError::from(Error::SyncGithubApiError {
+            category: "dns_failed".into(),
+            context: "c".into(),
+            status: 0,
+            body_preview: "b".into(),
+        });
+        assert!(matches!(github_net, WriterError::RetryableNetwork(_)));
     }
 }

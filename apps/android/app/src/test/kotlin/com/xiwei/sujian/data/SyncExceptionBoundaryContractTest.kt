@@ -22,25 +22,25 @@ import org.junit.Test
 class SyncExceptionBoundaryContractTest {
 
     @Test
-    fun nativeNotLoaded_classifiesAsNativeUnavailable() {
-        val error = BridgeResult.Error(
-            com.xiwei.sujian.data.ResultEnvelope.errorOf("NATIVE_NOT_LOADED", "test")
-        )
-        val kind = SyncFailureKind.fromErrorCode(error.code)
-        assertEquals(SyncFailureKind.NativeUnavailable, kind)
+    fun nativeNotLoaded_object_mapsToNativeUnavailable() {
+        // #592 七：NotLoaded 是独立 Bridge 对象，不再用字符串错误码表分类；
+        // SyncCoordinator 把 NotLoaded 统一映射为 NativeUnavailable。
+        val outcome = SyncFailureKind.NativeUnavailable.toOutcome()
+        assertTrue(outcome is SyncOutcome.TerminalFailure)
+        assertEquals(SyncFailureKind.NativeUnavailable, (outcome as SyncOutcome.TerminalFailure).kind)
     }
 
     @Test
-    fun nativeNotLoaded_errorCode_and_notLoaded_converge() {
-        val fromErrorCode = SyncFailureKind.fromErrorCode("NATIVE_NOT_LOADED")
-        assertEquals(SyncFailureKind.NativeUnavailable, fromErrorCode)
-        val outcome = fromErrorCode.toOutcome()
+    fun nativeNotLoaded_legacyCode_and_notLoaded_converge() {
+        val fromLegacy = SyncFailureKind.fromLegacyErrorCode("NATIVE_NOT_LOADED")
+        assertEquals(SyncFailureKind.NativeUnavailable, fromLegacy)
+        val outcome = fromLegacy.toOutcome()
         assertTrue(outcome is SyncOutcome.TerminalFailure)
     }
 
     @Test
     fun authFailure_isAuthentication() {
-        assertEquals(SyncFailureKind.Authentication, SyncFailureKind.fromErrorCode("SYNC_AUTH_FAILED"))
+        assertEquals(SyncFailureKind.Authentication, SyncFailureKind.fromLegacyErrorCode("SYNC_AUTH_FAILED"))
     }
 
     @Test
@@ -53,7 +53,7 @@ class SyncExceptionBoundaryContractTest {
             "SYNC_CONFLICT_DETECTED",
         )
         conflictCodes.forEach { code ->
-            assertEquals("$code should be Conflict", SyncFailureKind.Conflict, SyncFailureKind.fromErrorCode(code))
+            assertEquals("$code should be Conflict", SyncFailureKind.Conflict, SyncFailureKind.fromLegacyErrorCode(code))
         }
     }
 
@@ -65,7 +65,7 @@ class SyncExceptionBoundaryContractTest {
             "SYNC_INCOMPLETE_TRANSACTION",
         )
         protocolCodes.forEach { code ->
-            assertEquals("$code should be Protocol", SyncFailureKind.Protocol, SyncFailureKind.fromErrorCode(code))
+            assertEquals("$code should be Protocol", SyncFailureKind.Protocol, SyncFailureKind.fromLegacyErrorCode(code))
         }
     }
 

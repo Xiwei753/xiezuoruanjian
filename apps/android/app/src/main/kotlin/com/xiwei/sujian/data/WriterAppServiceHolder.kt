@@ -113,7 +113,11 @@ class WriterAppServiceHolder(
             BridgeResult.NotLoaded
         } catch (e: WriterException) {
             DiagnosticsLogger.e(TAG, "Native exception: ${e.message}", e)
-            BridgeResult.Error(ResultEnvelope.errorOf(e.toWireErrorCode(), e.message ?: "Unknown native exception"))
+            // #592 七：类型化失败在 Bridge 边界由 WriterException 变体直接推导。
+            BridgeResult.Error(
+                ResultEnvelope.errorOf(e.toWireErrorCode(), e.message ?: "Unknown native exception"),
+                syncFailureKind = e.toSyncFailureKind(),
+            )
         } catch (e: Exception) {
             DiagnosticsLogger.e(TAG, "Exception: ${e.message}", e)
             BridgeResult.Error(ResultEnvelope.errorOf("UNKNOWN", e.message ?: "Unknown error"))

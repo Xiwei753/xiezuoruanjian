@@ -14,12 +14,15 @@ import com.xiwei.sujian.model.SyncConfig
 import com.xiwei.sujian.model.SyncSecrets
 import java.util.concurrent.TimeUnit
 
-class AutoSyncScheduler(context: Context) {
+class AutoSyncScheduler(context: Context, private val settingsRepository: SettingsRepository? = null) {
     private val appContext = context.applicationContext
 
     fun start() {
         com.xiwei.sujian.diagnostics.DiagnosticsEvents.syncEvent("scheduler", "start")
-        scheduleFromSettings(appContext)
+        val repo = settingsRepository
+        if (repo != null) {
+            kotlinx.coroutines.runBlocking { scheduleFromSettings(appContext, repo) }
+        }
         enqueueForegroundCheck(appContext)
     }
 
@@ -36,23 +39,20 @@ class AutoSyncScheduler(context: Context) {
         private const val UNIQUE_FOREGROUND_WORK = "writer_auto_sync_foreground"
         private const val DEFAULT_INTERVAL_SECONDS = 300L
 
-        fun scheduleFromSettings(context: Context) {
+        /**
+         * #592 六：只在 activeGeneration 提交成功后由 [SettingsRepository.commitSyncProfile]
+         * 调用；直接使用应用容器中的仓库实例，不再新建 SettingsRepository 读取半成品。
+         */
+        suspend fun scheduleFromSettings(context: Context, settingsRepository: SettingsRepository) {
             val appContext = context.applicationContext
-            val settingsRepository = SettingsRepository(appContext)
-            val config = try {
-                settingsRepository.loadSyncConfig()
-            } catch (e: Exception) {
-                DiagnosticsLogger.w(TAG, "Unable to load sync config for scheduling", e)
+            val snapshot = settingsRepository.snapshotSyncProfile()
+            if (snapshot == null) {
+                DiagnosticsLogger.w(TAG, "Unable to load committed sync profile for scheduling")
                 cancel(appContext)
                 return
             }
-            val secrets = try {
-                settingsRepository.loadSyncSecrets()
-            } catch (e: Exception) {
-                DiagnosticsLogger.w(TAG, "Unable to load sync secrets for scheduling", e)
-                cancel(appContext)
-                return
-            }
+            val config = snapshot.config
+            val secrets = snapshot.secrets
 
             if (!shouldSync(config, secrets)) {
                 com.xiwei.sujian.diagnostics.DiagnosticsEvents.syncEvent("scheduler", "skipped_no_config")
