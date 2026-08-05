@@ -73,7 +73,7 @@ class SujianApp : Application(), DefaultLifecycleObserver, com.xiwei.sujian.runt
     override fun onStart(owner: LifecycleOwner) {
         com.xiwei.sujian.diagnostics.DiagnosticsEvents.appLifecycle("start")
         if (autoSyncScheduler == null) {
-            autoSyncScheduler = AutoSyncScheduler(this)
+            autoSyncScheduler = AutoSyncScheduler(this, appContainer.settingsRepository)
         }
         autoSyncScheduler?.start()
     }
