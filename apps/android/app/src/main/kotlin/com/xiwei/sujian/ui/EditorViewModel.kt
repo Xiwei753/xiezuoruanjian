@@ -78,6 +78,7 @@ data class EditorSettingsState(
     val smoothCursorEnabled: Boolean = true,
     val smoothCursorDurationMs: Long = 80L,
     val coordinatedTextCursorAnimationEnabled: Boolean = true,
+    val reduceMotion: Boolean = false,
     val autoSaveEnabled: Boolean = true,
     val autoSaveDelayMs: Long = 1500L
 )
@@ -275,6 +276,23 @@ class EditorViewModel(
         )
     }
 
+    /**
+     * #595 三: 读取 Android 系统无障碍"减少动画"设置（Animator 时长缩放为 0 时启用）。
+     * 这是系统级偏好，不属于 Core 编辑器设置；初始值与 Core 默认一致（false）。
+     */
+    private fun isSystemReduceMotionEnabled(): Boolean {
+        return try {
+            val scale = android.provider.Settings.Global.getFloat(
+                getApplication<android.app.Application>().contentResolver,
+                android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
+                1f,
+            )
+            scale == 0f
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     fun reloadSettings() {
         viewModelScope.launch {
             val settings = settingsRepository.getLocalSettings()
@@ -297,6 +315,7 @@ class EditorViewModel(
                     smoothCursorEnabled = settings.editorSmoothCursorEnabled,
                     smoothCursorDurationMs = settings.editorSmoothCursorDurationMs.toLong(),
                     coordinatedTextCursorAnimationEnabled = settings.editorCoordinatedTextCursorAnimationEnabled,
+                    reduceMotion = isSystemReduceMotionEnabled(),
                     autoSaveEnabled = settings.autoSaveEnabled,
                     autoSaveDelayMs = settings.autoSaveDelayMs
                 )

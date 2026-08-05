@@ -287,18 +287,27 @@ class AndroidTextAnimationEngine(
         beforePatch: (() -> Unit)? = null,
         frameTimeMs: Long? = null
     ) {
-        if (animationPolicy == TextAnimationPolicy.SYSTEM_SUPPRESSED) {
-            // Animation suppressed, but mirror/layout must still update so the
-            // display reflects the new text state. beforePatch runs first (e.g.
-            // to hide stale static text), then mirrorUpdate applies the edit,
-            // then requestLayout rebuilds the visual layout. Skipping all three
-            // would leave the display showing stale text.
+        val textSuppressed = animationPolicy == TextAnimationPolicy.SYSTEM_SUPPRESSED || reduceMotion
+        val effectiveFrameTimeMs = frameTimeMs ?: (timeSource.nowNanos() / 1_000_000)
+
+        if (textSuppressed && !smoothCursorEnabled) {
+            // Both text and cursor suppressed (or reduce-motion): static update only.
+            // beforePatch runs first (e.g. to hide stale static text), then mirrorUpdate
+            // applies the edit, then requestLayout rebuilds the visual layout.
             beforePatch?.invoke()
             mirrorUpdate?.invoke()
             layoutEngine.requestLayout()
             return
         }
-        val effectiveFrameTimeMs = frameTimeMs ?: (timeSource.nowNanos() / 1_000_000)
+
+        if (textSuppressed && smoothCursorEnabled) {
+            // #595 四: CursorOnly transaction — text static, cursor animates via the
+            // same FrameClock. Text slices are suppressed (SYSTEM_SUPPRESSED mode → no
+            // slices from the planner), but the cursor transition is preserved so the
+            // cursor timeline drives smooth cursor movement from the same VSync source.
+            submitCursorOnlyTransaction(visualIntent, layoutEngine, mirrorUpdate, beforePatch, effectiveFrameTimeMs)
+            return
+        }
         val rebaseSnapshot = captureRebaseSnapshot(effectiveFrameTimeMs)
 
         val oldRevision = layoutEngine.captureImmutableRevision()
@@ -329,6 +338,36 @@ class AndroidTextAnimationEngine(
         val newSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedNewLineIndices)
         val transaction = prepare(visualIntent, oldRevision, newRevision, oldSnapshots, newSnapshots, rebaseSnapshot)
         submit(transaction, effectiveFrameTimeMs)
+    }
+
+    /**
+     * #595 四: CursorOnly transaction — 文字静态更新，光标由同一 FrameClock 平滑移动。
+     *
+     * 当 textEnabled=false 但 cursorEnabled=true 时调用。mirror/layout 先静态更新
+     * （文字立即落到新状态），然后用 SYSTEM_SUPPRESSED 动画模式构造一个无文字切片
+     * 但保留 cursorTransition 的事务，submit 创建 cursorTimeline 驱动光标平滑移动。
+     * 事务时长设为光标时长，保证文字时间线不会先于光标完成而提前停止帧请求。
+     */
+    private fun submitCursorOnlyTransaction(
+        visualIntent: VisualIntent,
+        layoutEngine: AndroidLayoutEngine,
+        mirrorUpdate: (() -> Unit)?,
+        beforePatch: (() -> Unit)?,
+        frameTimeMs: Long,
+    ) {
+        val rebaseSnapshot = captureRebaseSnapshot(frameTimeMs)
+        val oldRevision = layoutEngine.captureImmutableRevision()
+        beforePatch?.invoke()
+        mirrorUpdate?.invoke()
+        layoutEngine.requestLayout()
+        val newRevision = layoutEngine.getCurrentRevision()
+        val cursorDuration = smoothCursorDurationMs.coerceAtLeast(1L)
+        val cursorOnlyIntent = visualIntent.copy(
+            animationMode = uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED,
+            durationMs = cursorDuration,
+        )
+        val transaction = prepare(cursorOnlyIntent, oldRevision, newRevision, emptyMap(), emptyMap(), rebaseSnapshot)
+        submit(transaction, frameTimeMs)
     }
 
     fun registerSnapshots(snapshots: Map<Int, AndroidLineSnapshot>, owner: SnapshotOwner) {
@@ -393,8 +432,12 @@ class AndroidTextAnimationEngine(
     }
 
     fun hasActiveAnimation(): Boolean {
-        val tl = timeline ?: return false
-        return activeTransaction != null && tl.getState() != TransactionState.Completed
+        if (activeTransaction == null) return false
+        val tl = timeline
+        if (tl != null && tl.getState() != TransactionState.Completed) return true
+        val ctl = cursorTimeline
+        if (ctl != null && ctl.getState() != TransactionState.Completed) return true
+        return false
     }
 
     fun currentTimeNanos(): Long = timeSource.nowNanos()

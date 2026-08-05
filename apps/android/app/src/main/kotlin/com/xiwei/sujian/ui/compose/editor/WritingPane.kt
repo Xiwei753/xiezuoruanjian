@@ -31,7 +31,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
 import com.xiwei.sujian.editor.v2.compose.LocalEditorWindowHost
 import com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost
-import com.xiwei.sujian.editor.v2.coordinator.EditorAnimationSettings
 import com.xiwei.sujian.editor.v2.coordinator.EditableTextTarget
 import com.xiwei.sujian.editor.v2.coordinator.EditingState
 import com.xiwei.sujian.editor.v2.coordinator.SessionResetSource
@@ -95,13 +94,15 @@ fun WritingPane(
     // 不依赖测试注入时钟，设置改变即时生效。
     LaunchedEffect(uiState.settings, chapterId) {
         val s = uiState.settings
-        coordinator.setEditorAnimationSettings(
-            EditorAnimationSettings(
-                typingAnimationEnabled = s.typingAnimationEnabled,
-                typingAnimationDurationMs = s.typingAnimationDurationMs,
-                smoothCursorEnabled = s.smoothCursorEnabled,
-                smoothCursorDurationMs = s.smoothCursorDurationMs,
+        // #595 三: 走 applyMotionPolicy 原子应用文字、光标、协同、时长和 reduce-motion。
+        coordinator.applyMotionPolicy(
+            com.xiwei.sujian.editor.v2.motion.EditorMotionPolicy(
+                textEnabled = s.typingAnimationEnabled,
+                textDurationMillis = s.typingAnimationDurationMs,
+                cursorEnabled = s.smoothCursorEnabled,
+                cursorDurationMillis = s.smoothCursorDurationMs,
                 coordinated = s.coordinatedTextCursorAnimationEnabled,
+                reduceMotion = s.reduceMotion,
             )
         )
     }

@@ -154,6 +154,9 @@ class EditorWindowHost(
             view.setSmoothCursorEnabled(settings.smoothCursorEnabled, settings.smoothCursorDurationMs)
             view.setCoordinatedAnimationEnabled(settings.coordinated)
             view.setReduceMotion(settings.reduceMotion)
+            // #595 四: kernel animation_enabled = text OR cursor，使 Rust
+            // CoordinatedCursor.should_animate 在仅关闭文字动画时仍正确上报光标移动。
+            view.setKernelAnimationEnabled(settings.typingAnimationEnabled || settings.smoothCursorEnabled)
         }
     }
 
@@ -171,6 +174,13 @@ class EditorWindowHost(
      */
     val motionPolicy: EditorMotionPolicy
         get() = getEditorAnimationSettings().toMotionPolicy()
+
+    /**
+     * #595 三：动画策略 StateFlow — 只读可观察的单一事实源（不可变）。
+     * UI 生命周期感知地收集该值，[applyMotionPolicy] 原子更新全部字段。
+     */
+    val motionPolicyFlow: kotlinx.coroutines.flow.StateFlow<EditorMotionPolicy>
+        get() = sessionCoordinator.motionPolicyFlow
 
     /**
      * #595 六：窗口附着状态 — 从规范 [WindowBindingState] 派生，不引入并行状态机。
@@ -244,8 +254,10 @@ class EditorWindowHost(
             rebuildProjectionFromSnapshot(targetId, null)
         }
 
-        // #592 三：把投影运行时接到当前窗口的 FrameClock，使投影动画按真实 VSync 推进。
-        targetProjections[targetId]?.setFrameClock(windowFrameClock)
+        // #595 七: 活动编辑时 SujianEditorView 是唯一的 FrameClock listener。
+        // 投影运行时不接到 FrameClock — 它只在非活动预览（ReadonlyChapterPreview）时
+        // 静态绘制，避免与 SujianEditorView 的 pipeline runtime 形成双驱动。
+        // 投影的 mirror 在 detach/rebind 时从 session snapshot 重建。
 
         installContentCallback(view, target)
         installCommitRequestedCallback(view)
@@ -604,6 +616,7 @@ class EditorWindowHost(
             it.setSmoothCursorEnabled(settings.smoothCursorEnabled, settings.smoothCursorDurationMs)
             it.setCoordinatedAnimationEnabled(settings.coordinated)
             it.setReduceMotion(settings.reduceMotion)
+            it.setKernelAnimationEnabled(settings.typingAnimationEnabled || settings.smoothCursorEnabled)
             sharedEditorView = it
         }
     }

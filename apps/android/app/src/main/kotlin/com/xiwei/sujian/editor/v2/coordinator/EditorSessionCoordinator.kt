@@ -7,6 +7,10 @@ import androidx.compose.runtime.setValue
 import com.xiwei.sujian.data.AppServiceBridge
 import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.editor.v2.host.TextEditSessionBridge
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import com.xiwei.sujian.editor.v2.motion.EditorMotionPolicy
 
 /**
  * #592 四：窗口绑定状态机 — 会话层唯一的窗口生命周期事实。
@@ -107,12 +111,17 @@ class EditorSessionCoordinator(
     var lastCommittedText: String? by mutableStateOf(null)
         private set
 
-    private var editorAnimationSettings: EditorAnimationSettings = EditorAnimationSettings()
+    private val _editorAnimationSettingsFlow = MutableStateFlow(EditorAnimationSettings())
+    val editorAnimationSettingsFlow: StateFlow<EditorAnimationSettings> = _editorAnimationSettingsFlow.asStateFlow()
 
-    fun getEditorAnimationSettings(): EditorAnimationSettings = editorAnimationSettings
+    private val _motionPolicyFlow = MutableStateFlow(EditorMotionPolicy())
+    val motionPolicyFlow: StateFlow<EditorMotionPolicy> = _motionPolicyFlow.asStateFlow()
+
+    fun getEditorAnimationSettings(): EditorAnimationSettings = _editorAnimationSettingsFlow.value
 
     fun setEditorAnimationSettings(settings: EditorAnimationSettings) {
-        editorAnimationSettings = settings
+        _editorAnimationSettingsFlow.value = settings
+        _motionPolicyFlow.value = settings.toMotionPolicy()
     }
 
     // ── 纯数据目标元数据（窗口层 registerTarget/updateTargetSpec 镜像）──

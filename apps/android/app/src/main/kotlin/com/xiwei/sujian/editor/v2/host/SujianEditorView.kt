@@ -564,16 +564,29 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     fun setTypingAnimationEnabled(enabled: Boolean, durationMs: Long) {
-        pipeline.kernelBridge?.setAnimationEnabled(enabled)
         pipeline.kernelBridge?.setAnimationDurationMs(durationMs)
         pipeline.setTypingAnimationDurationMs(durationMs)
         if (!enabled) {
             pipeline.cancelActiveTransaction()
         }
+        // #595 四: 不在此切换 kernel animation_enabled — 它在 Rust 同时控制文字动画模式
+        // 和 CoordinatedCursor.should_animate。kernel animation_enabled 由
+        // setKernelAnimationEnabled(textEnabled || cursorEnabled) 原子设置，保证
+        // 仅关闭文字动画时光标语义仍被正确上报。文字切片在平台层通过 animationPolicy
+        // (SYSTEM_SUPPRESSED) 抑制，走 CursorOnly 事务路径。
         pipeline.setAnimationPolicy(
             if (enabled) com.xiwei.sujian.editor.v2.visual.TextAnimationPolicy.ENABLED
             else com.xiwei.sujian.editor.v2.visual.TextAnimationPolicy.SYSTEM_SUPPRESSED
         )
+    }
+
+    /**
+     * #595 四: 原子设置 kernel animation_enabled = textEnabled || cursorEnabled。
+     * 当仅关闭文字动画但光标动画开启时，kernel 保持 enabled，使 Rust
+     * CoordinatedCursor.should_animate 正确上报光标移动语义。
+     */
+    fun setKernelAnimationEnabled(enabled: Boolean) {
+        pipeline.kernelBridge?.setAnimationEnabled(enabled)
     }
 
     private var smoothCursorEnabled: Boolean = true
