@@ -1,10 +1,8 @@
 package com.xiwei.sujian.ui.phone.portrait
 
-import android.content.Context
-import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.data.SettingsRepository
+import com.xiwei.sujian.data.SyncChangeBus
 import com.xiwei.sujian.data.SyncSession
-import com.xiwei.sujian.model.SyncConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -56,6 +54,11 @@ class SyncStatusStore(
                 settingsRepository.performSync(config)
             }
         }
-        refreshState()
+        if (result is com.xiwei.sujian.data.ExclusiveResult.Busy) {
+            refreshState()
+        } else {
+            SyncChangeBus.notifyChanged()
+            refreshState()
+        }
     }
 }

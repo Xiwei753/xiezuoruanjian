@@ -18,7 +18,7 @@ object PhoneChromePolicy {
         uiState: PhonePortraitUiState,
     ): PhoneChromeSpec = when (route) {
         is PhoneSettingsRoute.Settings -> PhoneChromeSpec(
-            title = null,
+            title = "设置",
             showBack = true,
             appBarTransparent = false,
             showSync = false,

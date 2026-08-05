@@ -1,6 +1,5 @@
 package com.xiwei.sujian.ui.phone.portrait
 
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.activity.ComponentActivity
 import androidx.compose.animation.AnimatedContentTransitionScope
@@ -22,6 +21,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -32,6 +32,7 @@ import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.scene.Scene
 import androidx.navigation3.ui.NavDisplay
+import com.xiwei.sujian.data.SyncChangeBus
 import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.designsystem.component.SujianSnackbar
 import com.xiwei.sujian.ui.compose.navigation.StarMapTopBarState
@@ -53,13 +54,16 @@ fun PhonePortraitShell(
     val currentRoute = backStack.lastOrNull()
     val chromeSpec = stateHolder.chromeSpec(currentRoute)
 
-    val activity = LocalActivity.current as? ComponentActivity
-    BackHandler {
-        val handled = handlePhoneBack(backStack, stateHolder)
-        if (!handled) {
-            activity?.onBackPressedDispatcher?.onBackPressed()
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(2000)
+            if (SyncChangeBus.consumeChanged()) {
+                stateHolder.syncStatusStore.refreshState()
+            }
         }
     }
+
+    val activity = LocalActivity.current as? ComponentActivity
 
     val contentColor = if (chromeSpec.appBarTransparent) {
         Color.Transparent
