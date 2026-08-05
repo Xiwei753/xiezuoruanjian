@@ -1,9 +1,6 @@
 package com.xiwei.sujian.editor.v2.coordinator
 
 import android.util.Log
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import com.xiwei.sujian.data.AppServiceBridge
 import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.editor.v2.host.TextEditSessionBridge
@@ -80,7 +77,7 @@ data class ProjectionSnapshot(
  * Undo/Redo 所属 session、活动目标、窗口绑定状态机与编辑事务。
  *
  * 不持有 View、Activity、Choreographer、WindowDisplayFrameClock、窗口几何、
- * Compose mutableState 回调、TextPaint、TargetDisplayRuntime。
+ * Compose mutableState、TextPaint、TargetDisplayRuntime。
  * 由 Activity 级 ViewModel 持有，跨配置变化存活；窗口/渲染对象全部在
  * [EditorWindowHost]（窗口层）。
  */
@@ -98,18 +95,27 @@ class EditorSessionCoordinator(
 
     private var activeSessionId: ULong? = null
 
-    var activeTargetId: String? by mutableStateOf(null)
-        private set
-    var editingState: EditingState by mutableStateOf(EditingState.IDLE)
-        private set
-    var windowBindingState: WindowBindingState by mutableStateOf(WindowBindingState.Idle)
-        private set
+    // #595 二：会话层不持有 Compose mutableState — 用 StateFlow 暴露给 Compose 消费者，
+    // 值 getter 供非 Compose 调用方读取当前值。
+    private val _activeTargetIdFlow = MutableStateFlow<String?>(null)
+    val activeTargetIdFlow: StateFlow<String?> = _activeTargetIdFlow.asStateFlow()
+    val activeTargetId: String? get() = _activeTargetIdFlow.value
 
-    var targetDecorationsVersion by mutableStateOf(0L)
-        private set
+    private val _editingStateFlow = MutableStateFlow(EditingState.IDLE)
+    val editingStateFlow: StateFlow<EditingState> = _editingStateFlow.asStateFlow()
+    val editingState: EditingState get() = _editingStateFlow.value
 
-    var lastCommittedText: String? by mutableStateOf(null)
-        private set
+    private val _windowBindingStateFlow = MutableStateFlow<WindowBindingState>(WindowBindingState.Idle)
+    val windowBindingStateFlow: StateFlow<WindowBindingState> = _windowBindingStateFlow.asStateFlow()
+    val windowBindingState: WindowBindingState get() = _windowBindingStateFlow.value
+
+    private val _targetDecorationsVersionFlow = MutableStateFlow(0L)
+    val targetDecorationsVersionFlow: StateFlow<Long> = _targetDecorationsVersionFlow.asStateFlow()
+    val targetDecorationsVersion: Long get() = _targetDecorationsVersionFlow.value
+
+    private val _lastCommittedTextFlow = MutableStateFlow<String?>(null)
+    val lastCommittedTextFlow: StateFlow<String?> = _lastCommittedTextFlow.asStateFlow()
+    val lastCommittedText: String? get() = _lastCommittedTextFlow.value
 
     private val _editorAnimationSettingsFlow = MutableStateFlow(EditorAnimationSettings())
     val editorAnimationSettingsFlow: StateFlow<EditorAnimationSettings> = _editorAnimationSettingsFlow.asStateFlow()
@@ -184,13 +190,13 @@ class EditorSessionCoordinator(
             return
         }
         val snapshot = if (validateSession(sessionId)) queryTargetSnapshot(targetId) else null
-        windowBindingState = WindowBindingState.Detaching(snapshot)
+        _windowBindingStateFlow.value = WindowBindingState.Detaching(snapshot)
         if (activeTargetId == targetId) {
-            activeTargetId = null
+            _activeTargetIdFlow.value = null
             activeSessionId = null
         }
-        editingState = EditingState.IDLE
-        windowBindingState = WindowBindingState.Detached(targetId, sessionId, snapshot)
+        _editingStateFlow.value = EditingState.IDLE
+        _windowBindingStateFlow.value = WindowBindingState.Detached(targetId, sessionId, snapshot)
         com.xiwei.sujian.diagnostics.DiagnosticsEvents.sessionLifecycle(
             sessionId.toString(), "window_detached"
         )
@@ -201,8 +207,8 @@ class EditorSessionCoordinator(
      * 由 [EditorWindowHost.beginEdit] 在视图绑定后调用。
      */
     fun completeWindowAttach(windowId: String, targetId: String, sessionId: ULong) {
-        windowBindingState = WindowBindingState.Attached(windowId, targetId, sessionId)
-        editingState = EditingState.EDITING
+        _windowBindingStateFlow.value = WindowBindingState.Attached(windowId, targetId, sessionId)
+        _editingStateFlow.value = EditingState.EDITING
     }
 
     /**
@@ -230,11 +236,11 @@ class EditorSessionCoordinator(
         targetTexts.remove(targetId)
         projectionSnapshots.remove(targetId)
         if (activeTargetId == targetId) {
-            activeTargetId = null
+            _activeTargetIdFlow.value = null
             activeSessionId = null
         }
-        editingState = EditingState.IDLE
-        windowBindingState = WindowBindingState.Idle
+        _editingStateFlow.value = EditingState.IDLE
+        _windowBindingStateFlow.value = WindowBindingState.Idle
     }
 
     private fun clearWindowAttach(targetId: String) {
@@ -244,11 +250,11 @@ class EditorSessionCoordinator(
         targetTexts.remove(targetId)
         projectionSnapshots.remove(targetId)
         if (activeTargetId == targetId) {
-            activeTargetId = null
+            _activeTargetIdFlow.value = null
             activeSessionId = null
         }
-        editingState = EditingState.IDLE
-        windowBindingState = WindowBindingState.Idle
+        _editingStateFlow.value = EditingState.IDLE
+        _windowBindingStateFlow.value = WindowBindingState.Idle
     }
 
     /**
@@ -271,13 +277,13 @@ class EditorSessionCoordinator(
         }
 
         if (activeTargetId != null && activeTargetId != targetId) {
-            editingState = EditingState.REBINDING
+            _editingStateFlow.value = EditingState.REBINDING
             if (!commitActiveSession(null)) {
                 cancelActiveSession()
             }
         }
 
-        editingState = EditingState.BINDING
+        _editingStateFlow.value = EditingState.BINDING
 
         val textForSession = targetText
         val sel = initialSelection ?: textForSession.toByteArray(Charsets.UTF_8).size
@@ -305,14 +311,14 @@ class EditorSessionCoordinator(
         if (sessionId == null || sessionId == 0UL) {
             Log.e(TAG, "prepareSessionForEdit($targetId): session creation returned invalid id=$sessionId, aborting")
             persistentSessionIds.remove(targetId)
-            editingState = EditingState.IDLE
-            windowBindingState = WindowBindingState.Idle
+            _editingStateFlow.value = EditingState.IDLE
+            _windowBindingStateFlow.value = WindowBindingState.Idle
             return null
         }
 
-        activeTargetId = targetId
+        _activeTargetIdFlow.value = targetId
         activeSessionId = sessionId
-        windowBindingState = WindowBindingState.Attaching(windowId, targetId, sessionId)
+        _windowBindingStateFlow.value = WindowBindingState.Attaching(windowId, targetId, sessionId)
 
         // #592 一：复用既有持久 session 时携带真实 snapshot；新建 session 无 snapshot。
         val snapshot = if (reusedExistingSession) queryTargetSnapshot(targetId) else null
@@ -320,7 +326,7 @@ class EditorSessionCoordinator(
     }
 
     fun forceEditingState(state: EditingState) {
-        editingState = state
+        _editingStateFlow.value = state
     }
 
     /**
@@ -337,9 +343,9 @@ class EditorSessionCoordinator(
         val windowBound = windowBindingState is WindowBindingState.Attached ||
             windowBindingState is WindowBindingState.Attaching
 
-        editingState = EditingState.COMMITTING
+        _editingStateFlow.value = EditingState.COMMITTING
         if (windowBound) {
-            windowBindingState = WindowBindingState.Committing(targetId, sessionId)
+            _windowBindingStateFlow.value = WindowBindingState.Committing(targetId, sessionId)
         }
         if (finalText != null) {
             targetTexts[targetId] = finalText
@@ -348,11 +354,11 @@ class EditorSessionCoordinator(
             closeSession(sessionId)
             persistentSessionIds.remove(targetId)
         }
-        activeTargetId = null
+        _activeTargetIdFlow.value = null
         activeSessionId = null
-        editingState = EditingState.IDLE
-        windowBindingState = WindowBindingState.Idle
-        lastCommittedText = if (targetProfiles[targetId]?.secretPolicy == SecretPolicy.MASK_AND_CLEAR_ON_COMMIT) null else finalText
+        _editingStateFlow.value = EditingState.IDLE
+        _windowBindingStateFlow.value = WindowBindingState.Idle
+        _lastCommittedTextFlow.value = if (targetProfiles[targetId]?.secretPolicy == SecretPolicy.MASK_AND_CLEAR_ON_COMMIT) null else finalText
         return true
     }
 
@@ -365,16 +371,16 @@ class EditorSessionCoordinator(
         val windowBound = windowBindingState is WindowBindingState.Attached ||
             windowBindingState is WindowBindingState.Attaching
 
-        editingState = EditingState.CANCELLING
+        _editingStateFlow.value = EditingState.CANCELLING
         if (windowBound) {
-            windowBindingState = WindowBindingState.Cancelling(targetId, sessionId)
+            _windowBindingStateFlow.value = WindowBindingState.Cancelling(targetId, sessionId)
         }
         closeSession(sessionId)
         persistentSessionIds.remove(targetId)
-        activeTargetId = null
+        _activeTargetIdFlow.value = null
         activeSessionId = null
-        editingState = EditingState.IDLE
-        windowBindingState = WindowBindingState.Idle
+        _editingStateFlow.value = EditingState.IDLE
+        _windowBindingStateFlow.value = WindowBindingState.Idle
         return true
     }
 
@@ -421,7 +427,7 @@ class EditorSessionCoordinator(
         if (state is WindowBindingState.Detached && state.targetId == targetId) {
             val sid = persistentSessionIds[targetId] ?: return
             val snapshot = if (validateSession(sid)) queryTargetSnapshot(targetId) else null
-            windowBindingState = WindowBindingState.Detached(targetId, sid, snapshot)
+            _windowBindingStateFlow.value = WindowBindingState.Detached(targetId, sid, snapshot)
         }
     }
 
@@ -504,7 +510,7 @@ class EditorSessionCoordinator(
 
     override fun setTargetDecorations(targetId: String, decorations: TargetDecorations) {
         targetDecorations[targetId] = decorations
-        targetDecorationsVersion++
+        _targetDecorationsVersionFlow.value++
     }
 
     fun getTargetDecorations(targetId: String): TargetDecorations? = targetDecorations[targetId]
@@ -561,9 +567,9 @@ class EditorSessionCoordinator(
         targetPersistentFlags.clear()
         targetTexts.clear()
         projectionSnapshots.clear()
-        editingState = EditingState.RELEASED
-        windowBindingState = WindowBindingState.Idle
-        activeTargetId = null
+        _editingStateFlow.value = EditingState.RELEASED
+        _windowBindingStateFlow.value = WindowBindingState.Idle
+        _activeTargetIdFlow.value = null
         activeSessionId = null
     }
 

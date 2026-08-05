@@ -3,6 +3,7 @@ package com.xiwei.sujian.editor.v2.compose
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost
@@ -26,8 +27,9 @@ fun WritingEditorSurface(
     targetId: String,
     modifier: Modifier = Modifier,
 ) {
-    val isActiveTarget = coordinator.activeTargetId == targetId
-    val editingState = coordinator.editingState
+    val activeTargetId = coordinator.activeTargetIdFlow.collectAsState().value
+    val editingState = coordinator.editingStateFlow.collectAsState().value
+    val isActiveTarget = activeTargetId == targetId
     val isEditing = isActiveTarget &&
         (editingState == EditingState.BINDING || editingState == EditingState.EDITING)
 

@@ -263,7 +263,7 @@ fun WritingPane(
             }
         } else {
             @Suppress("UNUSED_EXPRESSION")
-            (coordinator.targetDecorationsVersion)
+            (coordinator.targetDecorationsVersionFlow.collectAsState().value)
             com.xiwei.sujian.editor.v2.compose.WritingEditorSurface(
                 coordinator = coordinator,
                 targetId = targetId,

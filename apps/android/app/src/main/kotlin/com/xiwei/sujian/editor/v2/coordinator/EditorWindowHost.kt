@@ -15,6 +15,7 @@ import com.xiwei.sujian.editor.v2.host.EditorAttachmentState
 import com.xiwei.sujian.editor.v2.host.EditorFrameSnapshot
 import com.xiwei.sujian.editor.v2.host.attachmentStateFromBinding
 import com.xiwei.sujian.editor.v2.motion.EditorMotionPolicy
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * #592 一/四：窗口层宿主 — 每个 Activity/窗口创建一份，持有全部窗口/渲染对象：
@@ -52,6 +53,14 @@ class EditorWindowHost(
         private set
 
     // ── Delegated session-level state ──
+    // #595 二：会话层用 StateFlow 暴露，窗口层转发给 Compose 消费者用 collectAsState()。
+    // 值 getter 供非 Compose 调用方读取当前值。
+
+    val activeTargetIdFlow: StateFlow<String?> get() = sessionCoordinator.activeTargetIdFlow
+    val editingStateFlow: StateFlow<EditingState> get() = sessionCoordinator.editingStateFlow
+    val windowBindingStateFlow: StateFlow<WindowBindingState> get() = sessionCoordinator.windowBindingStateFlow
+    val targetDecorationsVersionFlow: StateFlow<Long> get() = sessionCoordinator.targetDecorationsVersionFlow
+    val lastCommittedTextFlow: StateFlow<String?> get() = sessionCoordinator.lastCommittedTextFlow
 
     val activeTargetId: String? get() = sessionCoordinator.activeTargetId
     val editingState: EditingState get() = sessionCoordinator.editingState
