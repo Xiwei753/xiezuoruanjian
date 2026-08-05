@@ -7,42 +7,107 @@ import androidx.compose.runtime.setValue
 import com.xiwei.sujian.data.AppServiceBridge
 import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.editor.v2.host.TextEditSessionBridge
-import com.xiwei.sujian.editor.v2.projection.TargetDisplayRuntime
-import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 
 /**
- * #592 一：会话层协调器 — 只管理 Rust session、正文状态、Undo/Redo、活动目标、
- * 投影纯数据状态、编辑事务与 revision。
+ * #592 四：窗口绑定状态机 — 会话层唯一的窗口生命周期事实。
  *
- * 不得持有 View、Activity、Choreographer、WindowDisplayFrameClock、窗口几何回调、Compose lambda。
- * 由 Activity 级 ViewModel 持有，跨配置变化存活。
+ * - [Idle]：无窗口绑定、无活动会话。
+ * - [Attaching]：窗口正在绑定（beginEdit 进行中）。
+ * - [Attached]：窗口已绑定，输入法/渲染活跃。
+ * - [Detaching]：窗口销毁中，正在保存 snapshot。
+ * - [Detached]：窗口已销毁，Rust session 与 snapshot 保留，等待新窗口附着。
+ * - [Committing] / [Cancelling]：编辑事务结束中。
+ *
+ * Detached 状态下 commit/cancel 不再依赖 target 对象存在：正文已通过
+ * onTextChanged 流式保存，业务关闭（[EditorSessionCoordinator.closeTarget]）
+ * 直接关闭 Rust session 并回到 Idle。
+ */
+sealed interface WindowBindingState {
+    data object Idle : WindowBindingState
+    data class Attaching(
+        val windowId: String,
+        val targetId: String,
+        val sessionId: ULong,
+    ) : WindowBindingState
+    data class Attached(
+        val windowId: String,
+        val targetId: String,
+        val sessionId: ULong,
+    ) : WindowBindingState
+    data class Detaching(val snapshot: TargetSnapshot?) : WindowBindingState
+    data class Detached(
+        val targetId: String,
+        val sessionId: ULong,
+        val snapshot: TargetSnapshot?,
+    ) : WindowBindingState
+    data class Committing(val targetId: String, val sessionId: ULong) : WindowBindingState
+    data class Cancelling(val targetId: String, val sessionId: ULong) : WindowBindingState
+}
+
+/**
+ * #592 三：业务级关闭原因 — 由 workspace 导航事件明确给出，不能从
+ * DisposableEffect 推断业务对象是否结束。
+ */
+enum class SessionCloseReason {
+    /** 用户从正文返回章节列表/作品列表（workspace 导航离开 Editor 目的地）。 */
+    WORKSPACE_NAVIGATION,
+    /** 章节切换（旧章节 session 关闭，新章节新建 session）。 */
+    CHAPTER_SWITCH,
+    /** 章节/作品被删除。 */
+    DELETE,
+}
+
+/**
+ * #592 四：会话层持有的纯数据投影状态 — 不含 View、TextPaint、FrameClock、
+ * Rect/Transform 或 Compose mutableState。窗口层在销毁/附着时读写。
+ */
+data class ProjectionSnapshot(
+    val scrollX: Float = 0f,
+    val scrollY: Float = 0f,
+    val viewportWidth: Float = 0f,
+    val viewportHeight: Float = 0f,
+    val fontSizePx: Float = 0f,
+    val lineSpacingMultiplier: Float = 0f,
+    val themeColors: ThemeColorsSnapshot? = null,
+)
+
+/**
+ * #592 一/四：会话层协调器 — 只管理 Rust session、正文/选区纯数据快照、
+ * Undo/Redo 所属 session、活动目标、窗口绑定状态机与编辑事务。
+ *
+ * 不持有 View、Activity、Choreographer、WindowDisplayFrameClock、窗口几何、
+ * Compose mutableState 回调、TextPaint、TargetDisplayRuntime。
+ * 由 Activity 级 ViewModel 持有，跨配置变化存活；窗口/渲染对象全部在
+ * [EditorWindowHost]（窗口层）。
  */
 class EditorSessionCoordinator(
     private val appServiceBridge: AppServiceBridge,
-    private val animationTimeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource,
-    private val transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource,
 ) : SessionCommandPort {
 
-    private val targets = mutableMapOf<String, EditableTextTarget>()
-    private var activeSessionId: ULong? = null
+    // ── 纯会话状态 ──
+    private val targetProfiles = mutableMapOf<String, TextEditorProfile>()
+    private val targetPersistentFlags = mutableMapOf<String, Boolean>()
+    private val targetTexts = mutableMapOf<String, String>()
     private val persistentSessionIds = mutableMapOf<String, ULong>()
-    private val targetProjections = mutableMapOf<String, TargetDisplayRuntime>()
-
-    var targetDecorationsVersion by mutableStateOf(0L)
-        private set
     private val targetDecorations = mutableMapOf<String, TargetDecorations>()
+    private val projectionSnapshots = mutableMapOf<String, ProjectionSnapshot>()
+
+    private var activeSessionId: ULong? = null
 
     var activeTargetId: String? by mutableStateOf(null)
         private set
     var editingState: EditingState by mutableStateOf(EditingState.IDLE)
         private set
+    var windowBindingState: WindowBindingState by mutableStateOf(WindowBindingState.Idle)
+        private set
 
-    var onTargetContentChanged: ((targetId: String, newText: String) -> Unit)? = null
-
-    private var editorAnimationSettings: EditorAnimationSettings = EditorAnimationSettings()
+    var targetDecorationsVersion by mutableStateOf(0L)
+        private set
 
     var lastCommittedText: String? by mutableStateOf(null)
         private set
+
+    private var editorAnimationSettings: EditorAnimationSettings = EditorAnimationSettings()
 
     fun getEditorAnimationSettings(): EditorAnimationSettings = editorAnimationSettings
 
@@ -50,208 +115,268 @@ class EditorSessionCoordinator(
         editorAnimationSettings = settings
     }
 
+    // ── 纯数据目标元数据（窗口层 registerTarget/updateTargetSpec 镜像）──
+
     fun registerTarget(target: EditableTextTarget) {
-        targets[target.targetId] = target
+        targetProfiles[target.targetId] = target.profile
+        targetPersistentFlags[target.targetId] = target.isPersistent
+        targetTexts[target.targetId] = target.currentText
     }
 
     fun updateTargetSpec(
         targetId: String,
-        onTextChanged: ((String) -> Unit)? = null,
-        onCommit: ((String) -> Unit)? = null,
-        onCancel: (() -> Unit)? = null,
-        onEditingStateChanged: ((EditingState) -> Unit)? = null,
         profile: TextEditorProfile? = null,
         currentText: String? = null
     ) {
-        val target = targets[targetId] ?: return
-        onTextChanged?.let { target.onTextChanged = it }
-        onCommit?.let { target.onCommit = it }
-        onCancel?.let { target.onCancel = it }
-        onEditingStateChanged?.let { target.onEditingStateChanged = it }
-        profile?.let { target.updateProfile(it) }
-        currentText?.let { target.updateText(it) }
-    }
-
-    fun unregisterTarget(targetId: String) {
-        if (activeTargetId == targetId && editingState != EditingState.COMMITTING && editingState != EditingState.CANCELLING) {
-            cancelActiveSession()
-        }
-        val persistentSessionId = persistentSessionIds.remove(targetId)
-        if (persistentSessionId != null) {
-            closeSession(persistentSessionId)
-        }
-        targetProjections.remove(targetId)?.release()
-        targetDecorations.remove(targetId)
-        targets.remove(targetId)
-    }
-
-    /**
-     * #592 一：窗口配置变化时解除窗口绑定，不关闭持久 Rust session。
-     *
-     * persistent target：移除窗口层 target 引用和投影 runtime，保留 Rust session、
-     * 活动会话状态和纯数据装饰，使新窗口可复用同一 session 跨配置变化存活。
-     * 非 persistent target：回退到 unregisterTarget，关闭临时 session。
-     *
-     * 由 Compose onDispose 调用；关闭持久 session 必须由明确业务事件
-     * （章节关闭、永久删除、onCleared）触发，不得由配置变化触发。
-     */
-    fun detachTarget(targetId: String) {
-        val target = targets[targetId]
-        if (target != null && !target.isPersistent) {
-            unregisterTarget(targetId)
-            return
-        }
-        targetProjections.remove(targetId)?.release()
-        targets.remove(targetId)
+        profile?.let { targetProfiles[targetId] = it }
+        currentText?.let { targetTexts[targetId] = it }
     }
 
     fun updateTargetText(targetId: String, text: String) {
-        targets[targetId]?.updateText(text)
+        targetTexts[targetId] = text
     }
 
-    fun getTargetGeometry(targetId: String): android.graphics.Rect? = targets[targetId]?.currentGeometry
+    fun getTargetText(targetId: String): String? = targetTexts[targetId]
 
-    fun getTargetText(targetId: String): String? = targets[targetId]?.currentText
+    fun isTargetPersistent(targetId: String): Boolean = targetPersistentFlags[targetId] ?: false
 
     fun getPersistentSessionId(targetId: String): ULong? = persistentSessionIds[targetId]
 
-    fun isTargetPersistent(targetId: String): Boolean = targets[targetId]?.isPersistent ?: false
+    // ── 纯数据投影快照（窗口层读写）──
 
-    fun getTarget(targetId: String): EditableTextTarget? = targets[targetId]
+    fun saveProjectionSnapshot(targetId: String, snapshot: ProjectionSnapshot) {
+        projectionSnapshots[targetId] = snapshot
+    }
+
+    fun getProjectionSnapshot(targetId: String): ProjectionSnapshot? = projectionSnapshots[targetId]
+
+    // ── 窗口绑定状态机 ──
 
     /**
-     * 准备会话绑定 — 处理重绑定逻辑（提交/取消旧目标），创建/复用 session，
-     * 设置活动状态。返回绑定信息或 null（失败时）。
+     * #592 二：Compose onDispose 唯一入口 — 只解除窗口绑定，不关闭持久 Rust session。
+     *
+     * persistent target：捕获真实 snapshot 并进入 [WindowBindingState.Detached]，
+     * Rust session、Undo/Redo、revision、纯数据装饰全部保留，新窗口可自动附着。
+     * 非 persistent（草稿）target：关闭临时 session 并回到 Idle。
+     *
+     * 关闭持久 session 必须由业务事件 [closeTarget] 触发（返回章节列表、切换章节、
+     * 删除章节），配置变化不改变 workspace route，因此不会关闭 session。
      */
-    fun prepareSessionForEdit(targetId: String, initialSelection: Int?): SessionBindInfo? {
-        val target = targets[targetId] ?: return null
+    fun detachWindowBinding(windowId: String, targetId: String) {
+        val isPersistent = targetPersistentFlags[targetId] ?: false
+        val sessionId = persistentSessionIds[targetId]
+        if (!isPersistent || sessionId == null) {
+            // 草稿会话或已无持久会话：直接关闭/清理窗口引用
+            if (sessionId != null && sessionId != 0UL) {
+                closeSession(sessionId)
+                persistentSessionIds.remove(targetId)
+            }
+            clearWindowAttach(targetId)
+            return
+        }
+        val snapshot = if (validateSession(sessionId)) queryTargetSnapshot(targetId) else null
+        windowBindingState = WindowBindingState.Detaching(snapshot)
+        if (activeTargetId == targetId) {
+            activeTargetId = null
+            activeSessionId = null
+        }
+        editingState = EditingState.IDLE
+        windowBindingState = WindowBindingState.Detached(targetId, sessionId, snapshot)
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.sessionLifecycle(
+            sessionId.toString(), "window_detached"
+        )
+    }
+
+    /**
+     * #592 二：窗口绑定完成（视图已 bind/attach 成功）。
+     * 由 [EditorWindowHost.beginEdit] 在视图绑定后调用。
+     */
+    fun completeWindowAttach(windowId: String, targetId: String, sessionId: ULong) {
+        windowBindingState = WindowBindingState.Attached(windowId, targetId, sessionId)
+        editingState = EditingState.EDITING
+    }
+
+    /**
+     * #592 三：业务级关闭 — 由 workspace 导航事件调用（返回章节列表、切换章节、
+     * 删除章节）。与窗口解绑 [detachWindowBinding] 分开：关闭会销毁 Rust session，
+     * 解绑只解除窗口引用。
+     *
+     * 无论处于 Attached/Detached/Idle 都能完整收口状态；Detached 时不再依赖
+     * target 对象存在（正文已流式保存），直接关闭 session。
+     */
+    fun closeTarget(targetId: String, reason: SessionCloseReason) {
+        if (activeTargetId == targetId) {
+            commitActiveSession(null)
+        }
+        val sessionId = persistentSessionIds.remove(targetId)
+        if (sessionId != null && sessionId != 0UL) {
+            closeSession(sessionId)
+            com.xiwei.sujian.diagnostics.DiagnosticsEvents.sessionLifecycle(
+                sessionId.toString(), "close_target:${reason.name.lowercase()}"
+            )
+        }
+        targetDecorations.remove(targetId)
+        targetProfiles.remove(targetId)
+        targetPersistentFlags.remove(targetId)
+        targetTexts.remove(targetId)
+        projectionSnapshots.remove(targetId)
+        if (activeTargetId == targetId) {
+            activeTargetId = null
+            activeSessionId = null
+        }
+        editingState = EditingState.IDLE
+        windowBindingState = WindowBindingState.Idle
+    }
+
+    private fun clearWindowAttach(targetId: String) {
+        targetDecorations.remove(targetId)
+        targetProfiles.remove(targetId)
+        targetPersistentFlags.remove(targetId)
+        targetTexts.remove(targetId)
+        projectionSnapshots.remove(targetId)
+        if (activeTargetId == targetId) {
+            activeTargetId = null
+            activeSessionId = null
+        }
+        editingState = EditingState.IDLE
+        windowBindingState = WindowBindingState.Idle
+    }
+
+    /**
+     * 准备会话绑定 — 创建/复用 session 并设置活动状态。
+     * 返回绑定信息或 null（失败时）。
+     *
+     * #592 一：复用既有持久 session 时，绑定信息携带 Rust 的真实
+     * textEditSessionSnapshot（text/revision/cursor/selection），窗口层据此执行
+     * attachSnapshot，不再用新 Compose target 的正文/末尾光标执行 loadText
+     * （那会 revision+1 并清空 Undo/Redo）。
+     */
+    fun prepareSessionForEdit(targetId: String, initialSelection: Int?, windowId: String): SessionBindInfo? {
+        val isPersistent = targetPersistentFlags[targetId] ?: false
+        val targetText = targetTexts[targetId] ?: ""
+        val profile = targetProfiles[targetId] ?: TextEditorProfile()
+
         if (activeTargetId == targetId && (editingState == EditingState.EDITING || editingState == EditingState.BINDING)) {
             val sid = activeSessionId ?: return null
-            return SessionBindInfo(sid, target.currentText, initialSelection ?: target.currentText.toByteArray(Charsets.UTF_8).size, target.profile, target.isPersistent)
+            return SessionBindInfo(sid, targetText, initialSelection ?: targetText.toByteArray(Charsets.UTF_8).size, profile, isPersistent, snapshot = queryTargetSnapshot(targetId))
         }
 
         if (activeTargetId != null && activeTargetId != targetId) {
-            val oldTarget = targets[activeTargetId]
             editingState = EditingState.REBINDING
-            oldTarget?.onEditingStateChanged?.invoke(EditingState.REBINDING)
-            if (!commitActiveSessionInternal(null)) {
-                cancelActiveSessionInternal()
+            if (!commitActiveSession(null)) {
+                cancelActiveSession()
             }
         }
 
         editingState = EditingState.BINDING
-        target.onEditingStateChanged?.invoke(EditingState.BINDING)
 
-        val textForSession = target.currentText
+        val textForSession = targetText
         val sel = initialSelection ?: textForSession.toByteArray(Charsets.UTF_8).size
-        val sessionId = if (target.isPersistent) {
+        // #592 一：仅对调用前已存在的持久 session 携带真实 snapshot（重绑定/窗口重建）；
+        // 新建 session 走正常 bindSession/loadText 路径。
+        var reusedExistingSession = false
+        val sessionId = if (isPersistent) {
             val existing = persistentSessionIds[targetId]
             if (existing != null && validateSession(existing)) {
+                reusedExistingSession = true
                 existing
             } else {
                 persistentSessionIds.remove(targetId)
                 if (existing != null) {
                     closeSession(existing)
                 }
-                createSession(target, textForSession, sel)?.also {
+                createSession(targetId, textForSession, sel, isPersistent)?.also {
                     persistentSessionIds[targetId] = it
                 }
             }
         } else {
-            createSession(target, textForSession, sel)
+            createSession(targetId, textForSession, sel, isPersistent)
         }
 
         if (sessionId == null || sessionId == 0UL) {
             Log.e(TAG, "prepareSessionForEdit($targetId): session creation returned invalid id=$sessionId, aborting")
             persistentSessionIds.remove(targetId)
             editingState = EditingState.IDLE
-            target.onEditingStateChanged?.invoke(EditingState.IDLE)
+            windowBindingState = WindowBindingState.Idle
             return null
         }
 
         activeTargetId = targetId
         activeSessionId = sessionId
+        windowBindingState = WindowBindingState.Attaching(windowId, targetId, sessionId)
 
-        return SessionBindInfo(sessionId, textForSession, sel, target.profile, target.isPersistent)
+        // #592 一：复用既有持久 session 时携带真实 snapshot；新建 session 无 snapshot。
+        val snapshot = if (reusedExistingSession) queryTargetSnapshot(targetId) else null
+        return SessionBindInfo(sessionId, textForSession, sel, profile, isPersistent, snapshot = snapshot)
     }
 
     fun forceEditingState(state: EditingState) {
         editingState = state
-        val targetId = activeTargetId
-        if (targetId != null) {
-            targets[targetId]?.onEditingStateChanged?.invoke(state)
-        }
     }
 
+    /**
+     * 提交活动编辑会话。
+     *
+     * - Attached：persistent 会话保持打开（软重置语义），由窗口层继续复用。
+     * - Detached/非持久：直接关闭 Rust session（正文已通过 onTextChanged 流式保存）。
+     * 不依赖 target 对象存在，Detached 状态下也能完整收口。
+     */
     fun commitActiveSession(finalText: String?): Boolean {
-        return commitActiveSessionInternal(finalText)
-    }
-
-    private fun commitActiveSessionInternal(finalText: String?): Boolean {
         val targetId = activeTargetId ?: return false
-        val target = targets[targetId] ?: return false
         val sessionId = activeSessionId ?: return false
+        val isPersistent = targetPersistentFlags[targetId] ?: false
+        val windowBound = windowBindingState is WindowBindingState.Attached ||
+            windowBindingState is WindowBindingState.Attaching
 
         editingState = EditingState.COMMITTING
-        target.onEditingStateChanged?.invoke(EditingState.COMMITTING)
-
-        if (finalText != null) {
-            target.onCommit?.invoke(finalText)
-            target.updateText(finalText)
+        if (windowBound) {
+            windowBindingState = WindowBindingState.Committing(targetId, sessionId)
         }
-
-        if (!target.isPersistent) {
+        if (finalText != null) {
+            targetTexts[targetId] = finalText
+        }
+        if (!isPersistent || !windowBound) {
             closeSession(sessionId)
             persistentSessionIds.remove(targetId)
-            if (target.profile.secretPolicy == SecretPolicy.MASK_AND_CLEAR_ON_COMMIT) {
-                target.updateText("")
-            }
         }
-
         activeTargetId = null
         activeSessionId = null
-
         editingState = EditingState.IDLE
-        target.onEditingStateChanged?.invoke(EditingState.IDLE)
-        lastCommittedText = if (target.profile.secretPolicy == SecretPolicy.MASK_AND_CLEAR_ON_COMMIT) null else finalText
+        windowBindingState = WindowBindingState.Idle
+        lastCommittedText = if (targetProfiles[targetId]?.secretPolicy == SecretPolicy.MASK_AND_CLEAR_ON_COMMIT) null else finalText
         return true
     }
 
+    /**
+     * 取消活动编辑会话 — Detached 状态下同样完整收口（关闭 session，不依赖 target 对象）。
+     */
     fun cancelActiveSession(): Boolean {
-        return cancelActiveSessionInternal()
-    }
-
-    private fun cancelActiveSessionInternal(): Boolean {
         val targetId = activeTargetId ?: return false
-        val target = targets[targetId] ?: return false
         val sessionId = activeSessionId ?: return false
+        val windowBound = windowBindingState is WindowBindingState.Attached ||
+            windowBindingState is WindowBindingState.Attaching
 
         editingState = EditingState.CANCELLING
-        target.onEditingStateChanged?.invoke(EditingState.CANCELLING)
-
-        target.onCancel?.invoke()
-
+        if (windowBound) {
+            windowBindingState = WindowBindingState.Cancelling(targetId, sessionId)
+        }
         closeSession(sessionId)
         persistentSessionIds.remove(targetId)
-
         activeTargetId = null
         activeSessionId = null
-
         editingState = EditingState.IDLE
-        target.onEditingStateChanged?.invoke(EditingState.IDLE)
+        windowBindingState = WindowBindingState.Idle
         return true
     }
 
     fun resetPersistentSession(targetId: String, text: String, cursorUtf8: Int, source: SessionResetSource = SessionResetSource.EXTERNAL) {
         if (source == SessionResetSource.LOCAL_CONTENT_CHANGED) return
-
-        val target = targets[targetId] ?: return
-        if (!target.isPersistent) return
+        if (targetPersistentFlags[targetId] != true) return
 
         val sessionId = persistentSessionIds[targetId]
         if (sessionId == null) {
-            target.updateText(text)
-            val newSessionId = createSession(target, text, cursorUtf8)
+            targetTexts[targetId] = text
+            val newSessionId = createSession(targetId, text, cursorUtf8, true)
             if (newSessionId == null || newSessionId == 0UL) {
                 Log.e(TAG, "resetPersistentSession($targetId): failed to create session for empty/missing persistent session")
                 return
@@ -260,6 +385,7 @@ class EditorSessionCoordinator(
             if (targetId == activeTargetId) {
                 activeSessionId = newSessionId
             }
+            refreshDetachedSnapshot(targetId)
             return
         }
 
@@ -273,11 +399,21 @@ class EditorSessionCoordinator(
 
         when (appServiceBridge.textEditSessionReset(sessionId, text, cursorUtf8.toUInt())) {
             is BridgeResult.Success -> {
-                targets[targetId]?.updateText(text)
+                targetTexts[targetId] = text
             }
             else -> { }
         }
-        updateTargetProjection(targetId)
+        refreshDetachedSnapshot(targetId)
+    }
+
+    /** Detached 状态下外部内容重置后，刷新保留的 snapshot，新窗口附着时读到最新状态。 */
+    private fun refreshDetachedSnapshot(targetId: String) {
+        val state = windowBindingState
+        if (state is WindowBindingState.Detached && state.targetId == targetId) {
+            val sid = persistentSessionIds[targetId] ?: return
+            val snapshot = if (validateSession(sid)) queryTargetSnapshot(targetId) else null
+            windowBindingState = WindowBindingState.Detached(targetId, sid, snapshot)
+        }
     }
 
     // ── SessionCommandPort implementation (bridge-level, no View) ──
@@ -300,7 +436,11 @@ class EditorSessionCoordinator(
         }
     }
 
-    override fun applyTargetCommand(targetId: String, command: TargetCommand): TargetCommandResult {
+    /**
+     * Bridge 级命令执行（不接触投影/View）— 由窗口层 [EditorWindowHost.applyTargetCommand]
+     * 在取得结果后负责应用到活动 View 或非活动投影运行时。
+     */
+    fun executeTargetCommand(targetId: String, command: TargetCommand): TargetCommandResult {
         val sessionId = persistentSessionIds[targetId]
             ?: return TargetCommandResult.Failed(TargetCommandError.NO_PERSISTENT_SESSION)
         if (!validateSession(sessionId)) {
@@ -310,9 +450,6 @@ class EditorSessionCoordinator(
         val snapshotBefore = queryTargetSnapshot(targetId)
             ?: return TargetCommandResult.Failed(TargetCommandError.SNAPSHOT_UNAVAILABLE)
 
-        val projectionForRevision = targetProjections[targetId]
-        val effectiveRevision = projectionForRevision?.getRevision() ?: snapshotBefore.revision
-
         val bridge = TextEditSessionBridge(appServiceBridge, sessionId)
         val dtoResult = when (command) {
             is TargetCommand.Replace -> {
@@ -320,19 +457,19 @@ class EditorSessionCoordinator(
                     command.byteStart, command.byteEndExclusive,
                     command.replacementText, command.originalText,
                     uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
-                    effectiveRevision
+                    snapshotBefore.revision
                 )
             }
             is TargetCommand.ReplaceAll -> {
                 bridge.replaceAll(
                     command.searchText, command.replacementText,
-                    effectiveRevision
+                    snapshotBefore.revision
                 )
             }
             is TargetCommand.SetSelection -> {
                 bridge.setSelection(
                     command.anchorUtf8, command.headUtf8,
-                    effectiveRevision
+                    snapshotBefore.revision
                 )
             }
         }
@@ -346,148 +483,36 @@ class EditorSessionCoordinator(
             return TargetCommandResult.Failed(TargetCommandError.KERNEL_REJECTED)
         }
 
-        val applyProjection = targetProjections[targetId]
-        if (applyProjection != null) {
-            applyProjection.applyEditResult(editResult)
-            val decorations = targetDecorations[targetId]
-            if (decorations != null) {
-                applyProjection.setSearchHighlights(decorations.searchHighlightsUtf8)
-                if (decorations.selectionStartUtf8 >= 0 && decorations.selectionEndUtf8 >= 0) {
-                    applyProjection.setSelection(decorations.selectionStartUtf8, decorations.selectionEndUtf8)
-                }
-            }
-        } else {
-            updateTargetProjection(targetId)
-        }
-
-        targetDecorationsVersion++
-
         val snapshotAfter = queryTargetSnapshot(targetId)
             ?: return TargetCommandResult.Failed(TargetCommandError.SNAPSHOT_UNAVAILABLE)
 
-        targets[targetId]?.updateText(snapshotAfter.text)
-        if (targetId != activeTargetId) {
-            onTargetContentChanged?.invoke(targetId, snapshotAfter.text)
-        }
-
+        targetTexts[targetId] = snapshotAfter.text
         return TargetCommandResult.Success(snapshotAfter)
     }
+
+    override fun applyTargetCommand(targetId: String, command: TargetCommand): TargetCommandResult =
+        executeTargetCommand(targetId, command)
 
     override fun setTargetDecorations(targetId: String, decorations: TargetDecorations) {
         targetDecorations[targetId] = decorations
         targetDecorationsVersion++
-        val projection = targetProjections[targetId]
-        if (projection != null) {
-            if (decorations.searchHighlightsUtf8.isEmpty() &&
-                decorations.selectionStartUtf8 < 0 && decorations.selectionEndUtf8 < 0) {
-                projection.clearDecorations()
-            } else {
-                projection.setSearchHighlights(decorations.searchHighlightsUtf8)
-                if (decorations.selectionStartUtf8 >= 0 && decorations.selectionEndUtf8 >= 0) {
-                    projection.setSelection(decorations.selectionStartUtf8, decorations.selectionEndUtf8)
-                }
-            }
-        }
     }
 
-    // ── Projection management ──
-
-    fun getTargetProjection(targetId: String): TargetDisplayRuntime? {
-        return targetProjections[targetId]
-    }
-
-    fun saveActiveTargetProjection(
-        scrollX: Float, scrollY: Float, viewportW: Int, viewportH: Int,
-        fontSize: Float, lineSpacing: Float,
-        themeColors: ThemeColorsSnapshot?,
-    ) {
-        val targetId = activeTargetId ?: return
-        val target = targets[targetId] ?: return
-        if (!target.isPersistent) return
-
-        val projection = getOrCreateProjection(targetId, target)
-        val snapshot = queryTargetSnapshot(targetId)
-        if (snapshot != null) {
-            projection.updateFromSnapshot(snapshot.text, snapshot.cursorUtf8, snapshot.revision)
-        }
-        projection.setScrollPosition(scrollX, scrollY)
-        projection.setViewportSize(viewportW, viewportH)
-        projection.setFontSize(fontSize)
-        projection.setLineSpacingMultiplier(lineSpacing)
-        if (themeColors != null) {
-            projection.setThemeColors(
-                themeColors.text, themeColors.cursor, themeColors.selection,
-                themeColors.composing, themeColors.background, themeColors.searchHighlight
-            )
-        }
-        val decorations = targetDecorations[targetId]
-        if (decorations != null) {
-            projection.setSearchHighlights(decorations.searchHighlightsUtf8)
-            if (decorations.selectionStartUtf8 >= 0 && decorations.selectionEndUtf8 >= 0) {
-                projection.setSelection(decorations.selectionStartUtf8, decorations.selectionEndUtf8)
-            }
-        }
-    }
-
-    private fun updateTargetProjection(targetId: String) {
-        val target = targets[targetId] ?: return
-        if (!target.isPersistent) return
-        val snapshot = queryTargetSnapshot(targetId) ?: return
-        val projection = getOrCreateProjection(targetId, target)
-        projection.updateFromSnapshot(snapshot.text, snapshot.cursorUtf8, snapshot.revision)
-        val decorations = targetDecorations[targetId]
-        if (decorations != null) {
-            projection.setSearchHighlights(decorations.searchHighlightsUtf8)
-            if (decorations.selectionStartUtf8 >= 0 && decorations.selectionEndUtf8 >= 0) {
-                projection.setSelection(decorations.selectionStartUtf8, decorations.selectionEndUtf8)
-            }
-        }
-    }
-
-    private fun getOrCreateProjection(targetId: String, target: EditableTextTarget): TargetDisplayRuntime {
-        return targetProjections.getOrPut(targetId) {
-            val mirror = DisplayTextMirror()
-            val textPaint = android.text.TextPaint().apply {
-                textSize = target.profile.fontSizePx.coerceAtLeast(1f)
-                isAntiAlias = true
-            }
-            TargetDisplayRuntime(mirror, textPaint, animationTimeSource, transactionIdSource)
-        }
-    }
-
-    /**
-     * #592 三：把投影运行时接到当前窗口的 FrameClock，使投影动画按真实 VSync 推进。
-     *
-     * 传入 null 解除绑定（窗口销毁前），避免已释放的 FrameClock 继续驱动投影。
-     * 由 [EditorWindowHost] 在 beginEdit/releaseWindow 调用，不在会话层自建时钟。
-     */
-    fun setProjectionFrameClock(targetId: String, frameClock: WindowDisplayFrameClock?) {
-        val target = targets[targetId] ?: return
-        if (!target.isPersistent) return
-        if (frameClock == null) {
-            targetProjections[targetId]?.setFrameClock(null)
-            return
-        }
-        val projection = getOrCreateProjection(targetId, target)
-        projection.setFrameClock(frameClock)
-        if (target.profile.secretPolicy == SecretPolicy.MASK_AND_CLEAR_ON_COMMIT) {
-            projection.setSecretMasked(true)
-        }
-    }
+    fun getTargetDecorations(targetId: String): TargetDecorations? = targetDecorations[targetId]
 
     // ── Session lifecycle ──
 
-    private fun createSession(target: EditableTextTarget, text: String, cursorByteOffset: Int): ULong? {
+    private fun createSession(targetId: String, text: String, cursorByteOffset: Int, isPersistent: Boolean): ULong? {
         return when (val result = appServiceBridge.textEditSessionCreate(
-            target.targetId,
+            targetId,
             text,
             cursorByteOffset.toUInt(),
-            target.isPersistent
+            isPersistent
         )) {
             is BridgeResult.Success -> {
                 val id = result.data
                 if (id == null || id == 0UL) {
-                    Log.e(TAG, "createSession(${target.targetId}): Core returned null/0 session id")
+                    Log.e(TAG, "createSession($targetId): Core returned null/0 session id")
                     null
                 } else {
                     com.xiwei.sujian.diagnostics.DiagnosticsEvents.sessionLifecycle(id.toString(), "create")
@@ -495,7 +520,7 @@ class EditorSessionCoordinator(
                 }
             }
             else -> {
-                Log.e(TAG, "createSession(${target.targetId}): Core session creation failed")
+                Log.e(TAG, "createSession($targetId): Core session creation failed")
                 null
             }
         }
@@ -516,16 +541,21 @@ class EditorSessionCoordinator(
 
     fun releaseHost() {
         if (activeTargetId != null) {
-            cancelActiveSessionInternal()
+            cancelActiveSession()
         }
         persistentSessionIds.values.forEach { sessionId ->
             closeSession(sessionId)
         }
         persistentSessionIds.clear()
-        targetProjections.values.forEach { it.release() }
-        targetProjections.clear()
         targetDecorations.clear()
+        targetProfiles.clear()
+        targetPersistentFlags.clear()
+        targetTexts.clear()
+        projectionSnapshots.clear()
         editingState = EditingState.RELEASED
+        windowBindingState = WindowBindingState.Idle
+        activeTargetId = null
+        activeSessionId = null
     }
 
     companion object {
@@ -539,6 +569,12 @@ data class SessionBindInfo(
     val selection: Int,
     val profile: TextEditorProfile,
     val isPersistent: Boolean,
+    /**
+     * #592 一：既有持久 session 的真实 Rust snapshot（text/revision/cursor/selection）。
+     * 非 null 时窗口层必须走 attachSession（不调用 textEditSessionLoadText），
+     * 保证 Undo/Redo 与 composition 不被重置；新建 session 为 null。
+     */
+    val snapshot: TargetSnapshot? = null,
 )
 
 data class ThemeColorsSnapshot(

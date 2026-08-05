@@ -48,6 +48,16 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun getScrollXPos(): Float = scrollX
     fun getScrollYPos(): Float = scrollY
+
+    /**
+     * #592 三：窗口重建/重绑定时恢复会话层投影保存的滚动位置。
+     * 滚动值先夹到有效范围，布局尚未就绪时由后续 updateMaxScroll 收敛。
+     */
+    fun setScrollPosition(sx: Float, sy: Float) {
+        scrollX = sx.coerceAtLeast(0f)
+        scrollY = sy.coerceAtLeast(0f)
+        invalidate()
+    }
     private var searchHighlights: List<Pair<Int, Int>> = emptyList()
     private var pendingLayoutNeeded: Boolean = false
     private var frameClock: WindowDisplayFrameClock? = null
@@ -664,6 +674,40 @@ class SujianEditorView @JvmOverloads constructor(
         initialText: String,
         initialCursorUtf8: Int
     ) {
+        bindSessionInternal(sessionBridge, profile)
+        if (initialText.isNotEmpty()) {
+            applyProfileToPipeline(profile, initialText, initialCursorUtf8)
+        } else {
+            applyProfileToPipeline(profile)
+            pipeline.loadText("", 0)
+        }
+    }
+
+    /**
+     * #592 一：附着既有持久会话 — 与 [bindSession] 的区别是绝不对 Rust 调用
+     * textEditSessionLoadText：snapshot 的 text/revision/cursor/selection 直接装入
+     * Android mirror/layout，Rust revision 不变、Undo/Redo 保留、composition 不重置。
+     * 仅用于窗口重建/重新绑定；新正文载入或外部内容重置仍走 [bindSession]/
+     * [loadText]。
+     */
+    fun attachSession(
+        sessionBridge: EditorKernelBridge,
+        profile: TextEditorProfile,
+        text: String,
+        revision: Long,
+        cursorUtf8: Int,
+        selStartUtf8: Int,
+        selEndUtf8: Int,
+    ) {
+        bindSessionInternal(sessionBridge, profile)
+        applyProfileToPipeline(profile)
+        pipeline.attachSnapshot(text, revision, cursorUtf8, selStartUtf8, selEndUtf8)
+    }
+
+    private fun bindSessionInternal(
+        sessionBridge: EditorKernelBridge,
+        profile: TextEditorProfile,
+    ) {
         if (isSessionBound) {
             onContentChanged = null
             onCommitRequested = null
@@ -673,7 +717,6 @@ class SujianEditorView @JvmOverloads constructor(
         kernelBridge = sessionBridge
         currentProfile = profile
         isSessionBound = true
-        applyProfileToPipeline(profile, initialText, initialCursorUtf8)
         requestFocus()
     }
 

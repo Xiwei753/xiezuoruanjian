@@ -65,8 +65,6 @@ fun SujianApp(
     val sessionVm: com.xiwei.sujian.editor.v2.coordinator.EditorSessionViewModel = viewModel()
     val sessionCoordinator = sessionVm.getOrCreateSessionCoordinator(
         deps.appServiceBridge,
-        com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
-        com.xiwei.sujian.editor.v2.visual.TransactionIdSource(),
     )
     // #592 一：EditorWindowHost 是窗口级宿主，每个窗口创建一份。
     // #592 二：配置变化时只释放窗口宿主（View、FrameClock），Rust 会话由

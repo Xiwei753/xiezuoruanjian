@@ -127,7 +127,7 @@ private fun AnimatedTextFieldWithCoordinator(
     DisposableEffect(targetId) {
         coordinator.registerTarget(target)
         onDispose {
-            coordinator.detachTarget(targetId)
+            coordinator.detachWindowBinding(coordinator.windowId, targetId)
         }
     }
 

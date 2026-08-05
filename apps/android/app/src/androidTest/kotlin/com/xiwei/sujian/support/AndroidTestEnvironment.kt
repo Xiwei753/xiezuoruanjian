@@ -200,7 +200,7 @@ class TestSujianAppDependencies(
     override val settingsRepository: SettingsRepository = SettingsRepository(appContext, appServiceBridge, prefsSuffix)
     override val syncStatusRepository: com.xiwei.sujian.data.SyncStatusRepository = com.xiwei.sujian.data.SyncStatusRepository(settingsRepository)
     override val syncCoordinator: com.xiwei.sujian.data.SyncCoordinator = com.xiwei.sujian.data.SyncCoordinator(settingsRepository, syncStatusRepository)
-    private val _sessionCoordinator = lazy { EditorSessionCoordinator(appServiceBridge, animationTimeSource, transactionIdSource) }
+    private val _sessionCoordinator = lazy { EditorSessionCoordinator(appServiceBridge) }
     val sessionCoordinator: EditorSessionCoordinator get() = _sessionCoordinator.value
     private val _coordinator = lazy { EditorWindowHost(appContext, _sessionCoordinator.value, appServiceBridge, animationTimeSource, transactionIdSource) }
     val coordinator: EditorWindowHost get() = _coordinator.value

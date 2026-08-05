@@ -137,7 +137,7 @@ fun rememberEditorWindowHost(
     return remember {
         existing ?: run {
             val bridge = BridgeProvider.getAppServiceBridge(context)
-            val session = com.xiwei.sujian.editor.v2.coordinator.EditorSessionCoordinator(bridge, animationTimeSource, transactionIdSource)
+            val session = com.xiwei.sujian.editor.v2.coordinator.EditorSessionCoordinator(bridge)
             EditorWindowHost(context, session, bridge, animationTimeSource, transactionIdSource)
         }
     }

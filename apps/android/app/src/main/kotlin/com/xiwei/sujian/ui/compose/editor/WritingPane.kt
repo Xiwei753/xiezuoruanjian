@@ -133,6 +133,7 @@ fun WritingPane(
     var localContentGeneration by remember { mutableLongStateOf(0L) }
     var lastSeenContentGeneration by remember { mutableLongStateOf(0L) }
     var lastChapterId by remember { mutableStateOf("") }
+    var lastTargetId by remember { mutableStateOf("") }
     var externalContentHash by remember { mutableLongStateOf(0L) }
 
     val target = remember(targetId) {
@@ -159,14 +160,16 @@ fun WritingPane(
     DisposableEffect(targetId) {
         coordinator.registerTarget(target)
         onDispose {
-            coordinator.detachTarget(targetId)
+            coordinator.detachWindowBinding(coordinator.windowId, targetId)
         }
     }
 
     LaunchedEffect(chapterId) {
         if (chapterId != lastChapterId && lastChapterId.isNotEmpty()) {
-            if (coordinator.activeTargetId == targetId) {
-                coordinator.cancelActiveEdit()
+            // #592 三：章节切换是业务级关闭 — 显式关闭旧章节持久 session
+            // （不得从 DisposableEffect 推断业务对象是否结束）。
+            if (lastTargetId.isNotEmpty()) {
+                coordinator.closeTarget(lastTargetId, com.xiwei.sujian.editor.v2.coordinator.SessionCloseReason.CHAPTER_SWITCH)
             }
             coordinator.resetPersistentSession(
                 targetId,
@@ -179,6 +182,7 @@ fun WritingPane(
             externalContentHash = 0L
         }
         lastChapterId = chapterId
+        lastTargetId = targetId
     }
 
     LaunchedEffect(uiState.content, chapterId) {

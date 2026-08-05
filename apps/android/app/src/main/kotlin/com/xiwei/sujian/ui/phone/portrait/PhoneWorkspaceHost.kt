@@ -11,8 +11,11 @@ import androidx.compose.material3.adaptive.layout.AnimatedPane
 import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -38,10 +41,29 @@ fun PhoneWorkspaceHost(
     val coroutineScope = rememberCoroutineScope()
     val sessionAppState = remember { SujianSessionAppState(sessionViewModel) }
 
+    // #592 三：workspace 导航离开正文时业务级关闭章节 session。
+    // 配置变化不会改变 workspace route（navigator 历史由 rememberSaveable 保留），
+    // 因此不会触发关闭；只有用户真正返回章节列表/作品列表或切换章节才关闭。
+    var lastWorkspaceLocation by remember {
+        mutableStateOf<WorkspaceLocation?>(null)
+    }
+    // 窗口层宿主在组合中读取；LaunchedEffect 内不能读取 CompositionLocal。
+    val editorHost = com.xiwei.sujian.editor.v2.compose.LocalEditorWindowHost.current
+
     // 会话业务选择与导航位置的对账：导航位置回退到章节列表时清 chapter 选择，
     // 回退到作品列表时清 project 选择；进入正文不清除任何选择。
     LaunchedEffect(workspaceNavState.currentLocation) {
-        when (val location = workspaceNavState.currentLocation) {
+        val location = workspaceNavState.currentLocation
+        val previous = lastWorkspaceLocation
+        lastWorkspaceLocation = location
+        val previousEditor = previous as? WorkspaceLocation.Editor
+        if (previousEditor != null && location !is WorkspaceLocation.Editor) {
+            editorHost?.closeTarget(
+                "chapter-body:${previousEditor.projectId}:${previousEditor.volumeId}:${previousEditor.chapterId}",
+                com.xiwei.sujian.editor.v2.coordinator.SessionCloseReason.WORKSPACE_NAVIGATION,
+            )
+        }
+        when (location) {
             is WorkspaceLocation.ProjectList -> {
                 if (sessionViewModel.currentProjectId != null) {
                     sessionViewModel.clearProjectSelection()

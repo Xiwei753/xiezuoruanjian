@@ -14,14 +14,10 @@ class EditorSessionViewModel : ViewModel() {
 
     fun getOrCreateSessionCoordinator(
         appServiceBridge: AppServiceBridge,
-        animationTimeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource,
-        transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource,
     ): EditorSessionCoordinator {
         sessionCoordinator?.let { return it }
         val c = EditorSessionCoordinator(
             appServiceBridge,
-            animationTimeSource,
-            transactionIdSource,
         )
         sessionCoordinator = c
         return c

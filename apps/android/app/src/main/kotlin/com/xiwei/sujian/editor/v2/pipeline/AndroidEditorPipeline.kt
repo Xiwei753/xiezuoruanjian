@@ -97,6 +97,26 @@ class AndroidEditorPipeline private constructor(
         return result
     }
 
+    /**
+     * #592 一：附着既有会话快照 — 只重建本地 mirror/layout，不调用 Rust loadText。
+     *
+     * 用于窗口重建/重新绑定场景：从 textEditSessionSnapshot 读取的
+     * text/revision/cursor/selection 直接装入 Android mirror，Rust revision 不变、
+     * Undo/Redo 不清空、composition 不重置。
+     * textEditSessionLoadText 只允许用于新正文载入或明确的外部内容重置。
+     */
+    fun attachSnapshot(
+        text: String,
+        revision: Long,
+        cursorUtf8: Int,
+        selStartUtf8: Int,
+        selEndUtf8: Int,
+    ) {
+        editPipeline.loadFromSnapshot(text, cursorUtf8, revision, selStartUtf8, selEndUtf8)
+        resetAfterLoad()
+        layoutRuntime.rebuildDisplayProjection()
+    }
+
     override fun insertText(byteOffset: Int, text: String, cause: EditorTransactionCauseDto): PipelineOutput {
         if (autoIndentEnabled && text == "\n") {
             val indentPrefix = computeAutoIndentPrefix()

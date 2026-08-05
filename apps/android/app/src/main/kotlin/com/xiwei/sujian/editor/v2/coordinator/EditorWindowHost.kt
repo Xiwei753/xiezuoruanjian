@@ -9,13 +9,18 @@ import com.xiwei.sujian.data.AppServiceBridge
 import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import com.xiwei.sujian.editor.v2.host.TextEditSessionBridge
+import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
+import com.xiwei.sujian.editor.v2.projection.TargetDisplayRuntime
 
 /**
- * #592 一：窗口层宿主 — 每个 Activity/窗口创建一份，只管理 SujianEditorView、
- * WindowDisplayFrameClock、IME 与焦点、窗口几何和变换、当前窗口的目标回调。
+ * #592 一/四：窗口层宿主 — 每个 Activity/窗口创建一份，持有全部窗口/渲染对象：
+ * EditableTextTarget（含 Compose/ViewModel 回调、Rect、Transform、mutableState）、
+ * TargetDisplayRuntime、TextPaint、Android 动画时间源、WindowDisplayFrameClock、
+ * IME 与 View 回调、onTargetContentChanged。
  *
- * 窗口销毁时调用 [releaseWindow] 完整释放 View 和 FrameClock，但保留 Rust 会话；
- * 新窗口创建后从 [EditorSessionCoordinator] 读取活动 session 和目标快照并重新绑定。
+ * 会话层 [EditorSessionCoordinator] 只保存纯会话状态；窗口销毁时调用
+ * [releaseWindow] 释放 View/FrameClock/投影运行时但保留 Rust 会话，
+ * 新窗口从 coordinator 读取 session snapshot 并重新附着。
  *
  * 不得持有自建 CoroutineScope、Context（除 application context）、仓库、同步 I/O。
  */
@@ -27,6 +32,12 @@ class EditorWindowHost(
     private val transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource,
     frameClock: WindowDisplayFrameClock? = null,
 ) : SessionCommandPort {
+
+    /** #592 二：窗口标识 — 同一窗口内的 Compose onDispose 用它调用 detachWindowBinding。 */
+    val windowId: String = "window:${System.identityHashCode(this)}"
+
+    private val targets = mutableMapOf<String, EditableTextTarget>()
+    private val targetProjections = mutableMapOf<String, TargetDisplayRuntime>()
 
     private var sharedEditorView: SujianEditorView? = null
     val windowFrameClock: WindowDisplayFrameClock = frameClock ?: WindowDisplayFrameClock()
@@ -40,15 +51,19 @@ class EditorWindowHost(
 
     val activeTargetId: String? get() = sessionCoordinator.activeTargetId
     val editingState: EditingState get() = sessionCoordinator.editingState
+    val windowBindingState: WindowBindingState get() = sessionCoordinator.windowBindingState
     val targetDecorationsVersion: Long get() = sessionCoordinator.targetDecorationsVersion
     val lastCommittedText: String? get() = sessionCoordinator.lastCommittedText
-    var onTargetContentChanged: ((targetId: String, newText: String) -> Unit)?
-        get() = sessionCoordinator.onTargetContentChanged
-        set(value) { sessionCoordinator.onTargetContentChanged = value }
 
-    // ── Target management (delegated) ──
+    /** #592 四：窗口层回调 — 非活动 target 命令执行后通知业务层。 */
+    var onTargetContentChanged: ((targetId: String, newText: String) -> Unit)? = null
 
-    fun registerTarget(target: EditableTextTarget) = sessionCoordinator.registerTarget(target)
+    // ── Target management (window-owned objects, pure metadata mirrored to session layer) ──
+
+    fun registerTarget(target: EditableTextTarget) {
+        targets[target.targetId] = target
+        sessionCoordinator.registerTarget(target)
+    }
 
     fun updateTargetSpec(
         targetId: String,
@@ -58,35 +73,73 @@ class EditorWindowHost(
         onEditingStateChanged: ((EditingState) -> Unit)? = null,
         profile: TextEditorProfile? = null,
         currentText: String? = null
-    ) = sessionCoordinator.updateTargetSpec(targetId, onTextChanged, onCommit, onCancel, onEditingStateChanged, profile, currentText)
+    ) {
+        val target = targets[targetId] ?: return
+        onTextChanged?.let { target.onTextChanged = it }
+        onCommit?.let { target.onCommit = it }
+        onCancel?.let { target.onCancel = it }
+        onEditingStateChanged?.let { target.onEditingStateChanged = it }
+        profile?.let { target.updateProfile(it) }
+        currentText?.let { target.updateText(it) }
+        sessionCoordinator.updateTargetSpec(targetId, profile = profile, currentText = currentText)
+    }
 
-    fun unregisterTarget(targetId: String) = sessionCoordinator.unregisterTarget(targetId)
+    fun detachWindowBinding(windowId: String, targetId: String) {
+        val isPersistent = sessionCoordinator.isTargetPersistent(targetId)
+        if (isPersistent) {
+            saveActiveTargetProjection(targetId)
+            targetProjections.remove(targetId)?.release()
+        }
+        targets.remove(targetId)
+        sessionCoordinator.detachWindowBinding(windowId, targetId)
+    }
 
-    fun detachTarget(targetId: String) = sessionCoordinator.detachTarget(targetId)
+    /**
+     * #592 三：业务级关闭 — 由 workspace 导航事件调用（返回章节列表、切换章节、
+     * 删除章节）。与窗口解绑分开：关闭销毁 Rust session，解绑只解除窗口引用。
+     * 若当前 View 仍绑定该会话，先解除绑定避免 IME 输入命中已关闭的 session。
+     */
+    fun closeTarget(targetId: String, reason: SessionCloseReason) {
+        if (activeTargetId == targetId) {
+            sharedEditorView?.let { view ->
+                view.unbindSession("target_close")
+            }
+        }
+        targetProjections.remove(targetId)?.release()
+        targets.remove(targetId)
+        sessionCoordinator.closeTarget(targetId, reason)
+        if (activeTargetId == null) {
+            activeTargetGeometry = Rect()
+            activeTargetTransform = Transform2D.IDENTITY
+        }
+    }
 
     fun updateTargetGeometry(targetId: String, geometry: Rect) {
-        sessionCoordinator.getTarget(targetId)?.updateGeometry(geometry)
+        targets[targetId]?.updateGeometry(geometry)
         if (targetId == activeTargetId) {
             activeTargetGeometry = geometry
         }
     }
 
     fun updateTargetTransform(targetId: String, transform: Transform2D) {
-        sessionCoordinator.getTarget(targetId)?.updateTransform(transform)
+        targets[targetId]?.updateTransform(transform)
         if (targetId == activeTargetId) {
             activeTargetTransform = transform
         }
     }
 
-    fun updateTargetText(targetId: String, text: String) = sessionCoordinator.updateTargetText(targetId, text)
+    fun updateTargetText(targetId: String, text: String) {
+        targets[targetId]?.updateText(text)
+        sessionCoordinator.updateTargetText(targetId, text)
+    }
 
-    fun getTargetGeometry(targetId: String): Rect? = sessionCoordinator.getTargetGeometry(targetId)
+    fun getTargetGeometry(targetId: String): Rect? = targets[targetId]?.currentGeometry
 
     fun getTargetText(targetId: String): String? = sessionCoordinator.getTargetText(targetId)
 
     fun getPersistentSessionId(targetId: String): ULong? = sessionCoordinator.getPersistentSessionId(targetId)
 
-    fun getTargetProjection(targetId: String) = sessionCoordinator.getTargetProjection(targetId)
+    fun getTargetProjection(targetId: String): TargetDisplayRuntime? = targetProjections[targetId]
 
     fun getEditorAnimationSettings(): EditorAnimationSettings = sessionCoordinator.getEditorAnimationSettings()
 
@@ -101,20 +154,52 @@ class EditorWindowHost(
     // ── Edit operations (orchestrates session + window) ──
 
     fun beginEdit(targetId: String, initialSelection: Int? = null): Boolean {
-        saveActiveTargetProjection()
+        // #592 三：业务已关闭（closeTarget）或未注册的 target 拒绝重新绑定 —
+        // 防止导航离开正文的过渡期间 beginEdit 重新触发并复活已关闭的 session。
+        if (targets[targetId] == null) return false
+        val currentActiveId = sessionCoordinator.activeTargetId
+        if (currentActiveId != null && currentActiveId != targetId) {
+            // 重绑定到不同 target：先把旧活动目标的滚动/视口状态存入会话层纯数据快照。
+            saveActiveTargetProjection(currentActiveId)
+        }
         clearActiveCallbacks()
-        val bindInfo = sessionCoordinator.prepareSessionForEdit(targetId, initialSelection) ?: return false
+        // 重绑定到不同 target：通知旧 target 回调 REBINDING（窗口层回调归属）。
+        val oldActiveId = sessionCoordinator.activeTargetId
+        if (oldActiveId != null && oldActiveId != targetId) {
+            targets[oldActiveId]?.onEditingStateChanged?.invoke(EditingState.REBINDING)
+        }
+        val bindInfo = sessionCoordinator.prepareSessionForEdit(targetId, initialSelection, windowId) ?: return false
 
-        val target = sessionCoordinator.getTarget(targetId) ?: return false
+        val target = targets[targetId] ?: return false
         activeTargetGeometry = target.currentGeometry
         activeTargetTransform = target.currentTransform
+        target.onEditingStateChanged?.invoke(EditingState.BINDING)
 
         val view = getOrCreateEditorView()
         val bridge = TextEditSessionBridge(appServiceBridge, bindInfo.sessionId)
-        view.bindSession(bridge, bindInfo.profile, bindInfo.text, bindInfo.selection)
+        // #592 一：复用既有持久 session 时执行 attachSnapshot（不调用
+        // textEditSessionLoadText，Rust revision/Undo/Redo/composition 保持）；
+        // 新建 session 或外部内容重置才走 bindSession/loadText。
+        val snapshot = bindInfo.snapshot
+        if (snapshot != null) {
+            view.attachSession(
+                sessionBridge = bridge,
+                profile = bindInfo.profile,
+                text = snapshot.text,
+                revision = snapshot.revision,
+                cursorUtf8 = snapshot.cursorUtf8,
+                selStartUtf8 = snapshot.selectionAnchorUtf8,
+                selEndUtf8 = snapshot.selectionHeadUtf8,
+            )
+            restoreProjectionScroll(view, targetId)
+            rebuildProjectionFromSnapshot(targetId, snapshot)
+        } else {
+            view.bindSession(bridge, bindInfo.profile, bindInfo.text, bindInfo.selection)
+            rebuildProjectionFromSnapshot(targetId, null)
+        }
 
         // #592 三：把投影运行时接到当前窗口的 FrameClock，使投影动画按真实 VSync 推进。
-        sessionCoordinator.setProjectionFrameClock(targetId, windowFrameClock)
+        targetProjections[targetId]?.setFrameClock(windowFrameClock)
 
         installContentCallback(view, target)
         installCommitRequestedCallback(view)
@@ -125,7 +210,8 @@ class EditorWindowHost(
             activeTargetGeometry = geometry
         }
 
-        sessionCoordinator.forceEditingState(EditingState.EDITING)
+        sessionCoordinator.completeWindowAttach(windowId, targetId, bindInfo.sessionId)
+        target.onEditingStateChanged?.invoke(EditingState.EDITING)
 
         view.post {
             view.requestFocus()
@@ -134,6 +220,57 @@ class EditorWindowHost(
         }
 
         return true
+    }
+
+    /**
+     * #592 三：重新附着窗口后恢复投影保存的滚动位置（配置变化/返回重进时）。
+     * 会话层保存的是纯数据 scrollX/scrollY，这里应用到当前窗口的 View。
+     */
+    private fun restoreProjectionScroll(view: SujianEditorView, targetId: String) {
+        val snapshot = sessionCoordinator.getProjectionSnapshot(targetId) ?: return
+        view.setScrollPosition(snapshot.scrollX, snapshot.scrollY)
+    }
+
+    /**
+     * #592 一/三：从真实 snapshot（或新建 session 的初值）重建窗口层投影运行时。
+     * 投影属于窗口层；会话层只保存纯数据快照，跨配置变化由这里重建。
+     */
+    private fun rebuildProjectionFromSnapshot(targetId: String, snapshot: TargetSnapshot?) {
+        val target = targets[targetId] ?: return
+        val projection = getOrCreateProjection(targetId, target)
+        if (snapshot != null) {
+            projection.updateFromSnapshot(snapshot.text, snapshot.cursorUtf8, snapshot.revision)
+        }
+        val decorations = sessionCoordinator.getTargetDecorations(targetId)
+        if (decorations != null) {
+            applyDecorationsToProjection(projection, decorations)
+        }
+        val pure = sessionCoordinator.getProjectionSnapshot(targetId)
+        if (pure != null) {
+            projection.setScrollPosition(pure.scrollX, pure.scrollY)
+            if (pure.viewportWidth > 0f) projection.setWidth(pure.viewportWidth)
+            if (pure.viewportHeight > 0f) projection.setViewportSize(pure.viewportWidth.toInt(), pure.viewportHeight.toInt())
+            if (pure.fontSizePx > 0f) projection.setFontSize(pure.fontSizePx)
+            if (pure.lineSpacingMultiplier > 0f) projection.setLineSpacingMultiplier(pure.lineSpacingMultiplier)
+            if (pure.themeColors != null) {
+                projection.setThemeColors(
+                    pure.themeColors.text, pure.themeColors.cursor, pure.themeColors.selection,
+                    pure.themeColors.composing, pure.themeColors.background, pure.themeColors.searchHighlight
+                )
+            }
+        }
+    }
+
+    private fun applyDecorationsToProjection(projection: TargetDisplayRuntime, decorations: TargetDecorations) {
+        if (decorations.searchHighlightsUtf8.isEmpty() &&
+            decorations.selectionStartUtf8 < 0 && decorations.selectionEndUtf8 < 0) {
+            projection.clearDecorations()
+        } else {
+            projection.setSearchHighlights(decorations.searchHighlightsUtf8)
+            if (decorations.selectionStartUtf8 >= 0 && decorations.selectionEndUtf8 >= 0) {
+                projection.setSelection(decorations.selectionStartUtf8, decorations.selectionEndUtf8)
+            }
+        }
     }
 
     fun commitActiveEdit(): Boolean {
@@ -150,8 +287,10 @@ class EditorWindowHost(
                 view.unbindSession("commit")
             }
         }
-        return sessionCoordinator.commitActiveSession(finalText).also {
-            if (it) {
+        val target = targets[targetId]
+        return sessionCoordinator.commitActiveSession(finalText).also { success ->
+            if (success) {
+                target?.onEditingStateChanged?.invoke(EditingState.IDLE)
                 activeTargetGeometry = Rect()
                 activeTargetTransform = Transform2D.IDENTITY
             }
@@ -163,8 +302,11 @@ class EditorWindowHost(
         sharedEditorView?.let { view ->
             view.unbindSession("cancel")
         }
-        return sessionCoordinator.cancelActiveSession().also {
-            if (it) {
+        val targetId = activeTargetId
+        val target = targetId?.let { targets[it] }
+        return sessionCoordinator.cancelActiveSession().also { success ->
+            if (success) {
+                target?.onEditingStateChanged?.invoke(EditingState.IDLE)
                 activeTargetGeometry = Rect()
                 activeTargetTransform = Transform2D.IDENTITY
             }
@@ -179,9 +321,20 @@ class EditorWindowHost(
                 view.loadText(text, cursorUtf8)
             }
         }
+        // 重建投影，保持窗口层预览与 Rust 状态一致
+        val snapshot = sessionCoordinator.queryTargetSnapshot(targetId)
+        if (snapshot != null) {
+            rebuildProjectionFromSnapshot(targetId, snapshot)
+        } else {
+            val target = targets[targetId]
+            if (target != null && sessionCoordinator.getPersistentSessionId(targetId) != null) {
+                val projection = getOrCreateProjection(targetId, target)
+                projection.updateFromSnapshot(text, cursorUtf8, projection.getRevision())
+            }
+        }
     }
 
-    // ── SessionCommandPort (uses view pipeline when available) ──
+    // ── SessionCommandPort (view pipeline when active, projection for inactive) ──
 
     override fun queryTargetSnapshot(targetId: String): TargetSnapshot? = sessionCoordinator.queryTargetSnapshot(targetId)
 
@@ -215,7 +368,27 @@ class EditorWindowHost(
                 return TargetCommandResult.Success(snapshotAfter)
             }
         }
-        return sessionCoordinator.applyTargetCommand(targetId, command)
+        // 非活动目标：先执行 bridge 命令，再把结果应用到窗口层投影
+        val result = sessionCoordinator.executeTargetCommand(targetId, command)
+        if (result is TargetCommandResult.Success) {
+            val target = targets[targetId]
+            if (target != null) {
+                val projection = getOrCreateProjection(targetId, target)
+                projection.updateFromSnapshot(
+                    result.snapshot.text,
+                    result.snapshot.cursorUtf8,
+                    result.snapshot.revision,
+                )
+                val decorations = sessionCoordinator.getTargetDecorations(targetId)
+                if (decorations != null) {
+                    applyDecorationsToProjection(projection, decorations)
+                }
+            }
+            if (targetId != activeTargetId) {
+                onTargetContentChanged?.invoke(targetId, result.snapshot.text)
+            }
+        }
+        return result
     }
 
     override fun setTargetDecorations(targetId: String, decorations: TargetDecorations) {
@@ -232,6 +405,10 @@ class EditorWindowHost(
                     view.setSelectionRange(decorations.selectionStartUtf8, decorations.selectionEndUtf8)
                 }
             }
+        }
+        val projection = targetProjections[targetId]
+        if (projection != null) {
+            applyDecorationsToProjection(projection, decorations)
         }
     }
 
@@ -252,23 +429,27 @@ class EditorWindowHost(
     // ── Window lifecycle ──
 
     /**
-     * #592 二：窗口销毁时完整释放 View 和 FrameClock，但保留 Rust 会话。
-     * activeTargetId 和 activeSessionId 由会话协调层统一维护，
-     * 不再出现"有活动 session 但没有窗口绑定"的不可描述状态。
+     * #592 二：窗口销毁时完整释放 View/FrameClock/投影运行时，但保留 Rust 会话。
+     * 窗口状态由会话层窗口绑定状态机统一维护，新窗口创建后通过
+     * [beginEdit] 的 attach 路径自动附着旧 session。
      */
     fun releaseWindow() {
         clearActiveCallbacks()
-        // #592 三：窗口销毁前解除投影 FrameClock 绑定，避免已释放时钟继续驱动投影。
         val activeId = activeTargetId
         if (activeId != null) {
-            sessionCoordinator.setProjectionFrameClock(activeId, null)
+            // #592 三：窗口销毁前把滚动/选区/装饰等状态存入会话层纯数据快照
+            saveActiveTargetProjection(activeId)
         }
+        // #592 三：窗口销毁前解除投影 FrameClock 绑定，避免已释放时钟继续驱动投影。
+        targetProjections.values.forEach { it.setFrameClock(null) }
         sharedEditorView?.let { view ->
             view.unbindSession("config_change")
             view.setFrameClock(null)
             view.release()
         }
         sharedEditorView = null
+        targetProjections.values.forEach { it.release() }
+        targetProjections.clear()
         windowFrameClock.release()
         activeTargetGeometry = Rect()
         activeTargetTransform = Transform2D.IDENTITY
@@ -289,6 +470,9 @@ class EditorWindowHost(
             view.release()
         }
         sharedEditorView = null
+        targetProjections.values.forEach { it.setFrameClock(null) }
+        targetProjections.values.forEach { it.release() }
+        targetProjections.clear()
         windowFrameClock.release()
         sessionCoordinator.releaseHost()
         activeTargetGeometry = Rect()
@@ -327,9 +511,12 @@ class EditorWindowHost(
         }
     }
 
-    private fun saveActiveTargetProjection() {
-        val targetId = activeTargetId ?: return
-        if (!sessionCoordinator.isTargetPersistent(targetId)) return
+    /**
+     * #592 三：把窗口滚动/视口/字体/主题/装饰保存为会话层纯数据快照。
+     * 不依赖 target 对象存在（窗口销毁时序晚于 Compose onDispose），
+     * 只依赖 View 和投影运行时。
+     */
+    private fun saveActiveTargetProjection(targetId: String) {
         val view = sharedEditorView ?: return
         val themeColors = view.getPipelineThemeColors()
         val themeSnapshot = if (themeColors != null) {
@@ -338,13 +525,29 @@ class EditorWindowHost(
                 themeColors.composing, themeColors.background, themeColors.searchHighlight
             )
         } else null
-        sessionCoordinator.saveActiveTargetProjection(
-            view.getScrollXPos(), view.getScrollYPos(),
-            view.width, view.height,
-            view.getPipelineTextPaintSize(),
-            view.getPipelineLineSpacingMultiplier(),
-            themeSnapshot,
+        sessionCoordinator.saveProjectionSnapshot(
+            targetId,
+            ProjectionSnapshot(
+                scrollX = view.getScrollXPos(),
+                scrollY = view.getScrollYPos(),
+                viewportWidth = view.width.toFloat(),
+                viewportHeight = view.height.toFloat(),
+                fontSizePx = view.getPipelineTextPaintSize(),
+                lineSpacingMultiplier = view.getPipelineLineSpacingMultiplier(),
+                themeColors = themeSnapshot,
+            ),
         )
+    }
+
+    private fun getOrCreateProjection(targetId: String, target: EditableTextTarget): TargetDisplayRuntime {
+        return targetProjections.getOrPut(targetId) {
+            val mirror = DisplayTextMirror()
+            val textPaint = android.text.TextPaint().apply {
+                textSize = target.profile.fontSizePx.coerceAtLeast(1f)
+                isAntiAlias = true
+            }
+            TargetDisplayRuntime(mirror, textPaint, animationTimeSource, transactionIdSource)
+        }
     }
 
     private fun getOrCreateEditorView(): SujianEditorView {
