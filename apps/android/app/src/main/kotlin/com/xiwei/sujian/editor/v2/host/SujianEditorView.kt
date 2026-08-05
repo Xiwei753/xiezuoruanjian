@@ -525,18 +525,23 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     /**
-     * Cancel active animation when the window loses focus.
+     * #595 六：窗口焦点变化 — 临时失焦暂停并保存可见帧，不永久取消事务。
      *
-     * Animation Bitmaps hold references to the View's Canvas; continuing to render after
-     * window focus loss can produce stale frames or leak hardware resources. Cancelling
-     * here is safe because the user cannot observe the animation while the window is not
-     * focused — the next focus gain will render the final static state from the mirror.
+     * IME 切换、系统浮层、权限弹窗、导航转场和窗口重建都可能造成短暂失焦。
+     * 将所有失焦都解释为"丢弃动画事务"会让输入动画随机中断。
+     * 只有业务关闭或永久释放才取消事务并释放 bitmap。
      */
     override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
         super.onWindowFocusChanged(hasWindowFocus)
         com.xiwei.sujian.diagnostics.DiagnosticsEvents.editorFocus(hasWindowFocus)
+        val frameTimeMs = timeSource.nowNanos() / 1_000_000
         if (!hasWindowFocus) {
-            pipeline.cancelActiveTransaction()
+            pipeline.pauseAnimation(frameTimeMs)
+        } else {
+            pipeline.resumeAnimation(frameTimeMs)
+            if (pipeline.hasActiveAnimation()) {
+                requestAnimationFrame()
+            }
         }
     }
 
@@ -590,12 +595,27 @@ class SujianEditorView @JvmOverloads constructor(
     fun getAutoIndentWidthSp(): Float = pipeline.getAutoIndentWidthSp()
 
     private var coordinatedAnimationEnabled: Boolean = true
+    private var reduceMotionEnabled: Boolean = false
 
+    /**
+     * #595 三/九：协同动画设置 — 真正进入 AndroidEditorPipeline/AndroidTextAnimationEngine。
+     */
     fun setCoordinatedAnimationEnabled(enabled: Boolean) {
         coordinatedAnimationEnabled = enabled
+        pipeline.setCoordinatedAnimationEnabled(enabled)
     }
 
     fun isCoordinatedAnimationEnabled(): Boolean = coordinatedAnimationEnabled
+
+    /**
+     * #595 三：reduce-motion 设置 — 降级所有动画为静态更新。
+     */
+    fun setReduceMotion(enabled: Boolean) {
+        reduceMotionEnabled = enabled
+        pipeline.setReduceMotion(enabled)
+    }
+
+    fun isReduceMotionEnabled(): Boolean = reduceMotionEnabled
 
     fun applyThemeColorsFromAdapter(colors: com.xiwei.sujian.ui.compose.theme.EditorThemeColors) {
         lastAppliedThemeColors = colors

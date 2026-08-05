@@ -21,9 +21,6 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInWindow
 
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.testTag
@@ -44,7 +41,6 @@ import com.xiwei.sujian.ui.SaveStatus
 import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.runtime.LocalSujianAppDependencies
-import androidx.compose.ui.viewinterop.AndroidView
 
 /**
  * 章节正文编辑面板 — 连接 EditorViewModel 与 EditorWindowHost。
@@ -105,6 +101,7 @@ fun WritingPane(
                 typingAnimationDurationMs = s.typingAnimationDurationMs,
                 smoothCursorEnabled = s.smoothCursorEnabled,
                 smoothCursorDurationMs = s.smoothCursorDurationMs,
+                coordinated = s.coordinatedTextCursorAnimationEnabled,
             )
         )
     }
@@ -264,39 +261,13 @@ fun WritingPane(
                 CircularProgressIndicator()
             }
         } else {
-            val isActiveTarget = coordinator.activeTargetId == targetId
             @Suppress("UNUSED_EXPRESSION")
             (coordinator.targetDecorationsVersion)
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .onGloballyPositioned { coordinates ->
-                        val position = coordinates.positionInWindow()
-                        val size = coordinates.size
-                        val rect = Rect(
-                            position.x, position.y,
-                            position.x + size.width, position.y + size.height
-                        )
-                        coordinator.updateTargetGeometry(targetId, android.graphics.Rect(
-                            rect.left.toInt(), rect.top.toInt(),
-                            rect.right.toInt(), rect.bottom.toInt()
-                        ))
-                        if (!isActiveTarget) {
-                            val projection = coordinator.getTargetProjection(targetId)
-                            if (projection != null) {
-                                projection.setWidth(size.width.toFloat())
-                            }
-                        }
-                    }
-            ) {
-                if (!isActiveTarget) {
-                    val projection = coordinator.getTargetProjection(targetId)
-                    if (projection != null && projection.getText().isNotEmpty()) {
-                        ReadonlyChapterPreview(projection = projection)
-                    }
-                }
-            }
+            com.xiwei.sujian.editor.v2.compose.WritingEditorSurface(
+                coordinator = coordinator,
+                targetId = targetId,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+            )
         }
     }
 }

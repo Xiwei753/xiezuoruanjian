@@ -148,7 +148,17 @@ class EditorWindowHost(
         sharedEditorView?.let { view ->
             view.setTypingAnimationEnabled(settings.typingAnimationEnabled, settings.typingAnimationDurationMs)
             view.setSmoothCursorEnabled(settings.smoothCursorEnabled, settings.smoothCursorDurationMs)
+            view.setCoordinatedAnimationEnabled(settings.coordinated)
+            view.setReduceMotion(settings.reduceMotion)
         }
+    }
+
+    /**
+     * #595 三：原子应用 [EditorMotionPolicy] — 一次更新文字、光标、协同、时长和 reduce-motion。
+     */
+    fun applyMotionPolicy(policy: com.xiwei.sujian.editor.v2.motion.EditorMotionPolicy) {
+        val effective = policy.effective()
+        setEditorAnimationSettings(EditorAnimationSettings.fromMotionPolicy(effective))
     }
 
     // ── Edit operations (orchestrates session + window) ──
@@ -556,6 +566,8 @@ class EditorWindowHost(
             val settings = sessionCoordinator.getEditorAnimationSettings()
             it.setTypingAnimationEnabled(settings.typingAnimationEnabled, settings.typingAnimationDurationMs)
             it.setSmoothCursorEnabled(settings.smoothCursorEnabled, settings.smoothCursorDurationMs)
+            it.setCoordinatedAnimationEnabled(settings.coordinated)
+            it.setReduceMotion(settings.reduceMotion)
             sharedEditorView = it
         }
     }

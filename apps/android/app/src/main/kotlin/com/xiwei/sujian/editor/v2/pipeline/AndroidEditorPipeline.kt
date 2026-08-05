@@ -88,6 +88,22 @@ class AndroidEditorPipeline private constructor(
         visualRuntime.setSmoothCursor(enabled, durationMs)
     }
 
+    fun setCoordinatedAnimationEnabled(enabled: Boolean) {
+        visualRuntime.setCoordinatedAnimationEnabled(enabled)
+    }
+
+    fun setReduceMotion(enabled: Boolean) {
+        visualRuntime.setReduceMotion(enabled)
+    }
+
+    fun pauseAnimation(frameTimeMs: Long) {
+        visualRuntime.pause(frameTimeMs)
+    }
+
+    fun resumeAnimation(frameTimeMs: Long) {
+        visualRuntime.resume(frameTimeMs)
+    }
+
     fun loadText(text: String, cursorUtf8: Int, @Suppress("UNUSED_PARAMETER") applySecret: Boolean = true): LoadTextResult {
         val result = editPipeline.loadText(text, cursorUtf8)
         if (result is LoadTextResult.Loaded) {

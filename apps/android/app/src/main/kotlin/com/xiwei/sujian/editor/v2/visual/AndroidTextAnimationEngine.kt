@@ -30,6 +30,8 @@ class AndroidTextAnimationEngine(
     private var animationPolicy: TextAnimationPolicy = TextAnimationPolicy.INHERIT_GLOBAL
     private var smoothCursorEnabled: Boolean = true
     private var smoothCursorDurationMs: Long = 80L
+    private var coordinatedEnabled: Boolean = true
+    private var reduceMotion: Boolean = false
 
     /**
      * 平滑光标设置（生产路径：设置页 → Editor Host → 输入事务 → 本引擎）。
@@ -45,6 +47,52 @@ class AndroidTextAnimationEngine(
             cursorTimeline = null
         }
     }
+
+    /**
+     * #595 三/四：协同动画设置 — 控制文字和光标是否使用同一视觉事务。
+     *
+     * - coordinated=true：光标时长 = min(cursorDurationMs, textDurationMs)，
+     *   文字和光标同一首帧、同一 rebase snapshot、光标先完成后停在终点。
+     * - coordinated=false：光标可使用独立时长（不受文字时长限制），
+     *   但仍由同一个 View、同一个 renderer、同一个 VSync 时间源驱动。
+     */
+    fun setCoordinatedAnimationEnabled(enabled: Boolean) {
+        coordinatedEnabled = enabled
+    }
+
+    fun isCoordinatedAnimationEnabled(): Boolean = coordinatedEnabled
+
+    /**
+     * #595 三：reduce-motion 设置 — 降级所有动画为静态更新。
+     */
+    fun setReduceMotion(enabled: Boolean) {
+        reduceMotion = enabled
+        if (enabled) {
+            animationPolicy = TextAnimationPolicy.SYSTEM_SUPPRESSED
+            cursorTimeline = null
+        }
+    }
+
+    fun isReduceMotion(): Boolean = reduceMotion
+
+    /**
+     * #595 六：暂停动画 — 临时失焦时保存当前可见帧，不永久取消事务。
+     * 窗口重新获得焦点时从保存帧继续或稳定落到事务终态。
+     */
+    fun pause(frameTimeMs: Long) {
+        timeline?.pause(frameTimeMs)
+        cursorTimeline?.pause(frameTimeMs)
+    }
+
+    /**
+     * #595 六：恢复动画 — 窗口重新获得焦点时从暂停帧继续。
+     */
+    fun resume(frameTimeMs: Long) {
+        timeline?.resume(frameTimeMs)
+        cursorTimeline?.resume(frameTimeMs)
+    }
+
+    fun isPaused(): Boolean = timeline?.isPaused() == true
 
     /**
      * Create a prepared visual transaction from old/new layout revisions and line snapshots.
@@ -199,10 +247,12 @@ class AndroidTextAnimationEngine(
 
         timeline = AnimationTimeline(preparedAnimation.durationMs, submittedAtMs)
         cursorTimeline = if (effectiveCursorTransition?.shouldAnimate == true && preparedAnimation.durationMs > 0L) {
-            AnimationTimeline(
-                minOf(smoothCursorDurationMs.coerceAtLeast(1L), preparedAnimation.durationMs),
-                submittedAtMs
-            )
+            val cursorDuration = if (coordinatedEnabled) {
+                minOf(smoothCursorDurationMs.coerceAtLeast(1L), preparedAnimation.durationMs)
+            } else {
+                smoothCursorDurationMs.coerceAtLeast(1L)
+            }
+            AnimationTimeline(cursorDuration, submittedAtMs)
         } else {
             null
         }

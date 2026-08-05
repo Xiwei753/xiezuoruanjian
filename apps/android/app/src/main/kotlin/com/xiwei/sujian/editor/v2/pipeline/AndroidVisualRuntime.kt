@@ -90,6 +90,22 @@ class AndroidVisualRuntime(
         animationEngine.setSmoothCursor(enabled, durationMs)
     }
 
+    fun setCoordinatedAnimationEnabled(enabled: Boolean) {
+        animationEngine.setCoordinatedAnimationEnabled(enabled)
+    }
+
+    fun setReduceMotion(enabled: Boolean) {
+        animationEngine.setReduceMotion(enabled)
+    }
+
+    fun pause(frameTimeMs: Long) {
+        animationEngine.pause(frameTimeMs)
+    }
+
+    fun resume(frameTimeMs: Long) {
+        animationEngine.resume(frameTimeMs)
+    }
+
     fun tick(
         frameTimeMs: Long,
         layout: android.text.Layout?,

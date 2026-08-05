@@ -203,14 +203,6 @@ fun PhonePortraitShell(
         )
     }
 
-    val coordinator = com.xiwei.sujian.editor.v2.compose.LocalEditorWindowHost.current
-    if (coordinator != null) {
-        com.xiwei.sujian.editor.v2.compose.AnimatedTextEditorSlot(
-            coordinator = coordinator,
-            modifier = Modifier.fillMaxSize(),
-            visible = stateHolder.selectedRoot == PhoneRoot.Works,
-        )
-    }
 }
 
 @Composable
