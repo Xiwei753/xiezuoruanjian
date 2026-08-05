@@ -455,9 +455,19 @@ class EditorSessionCoordinator(
         }
     }
 
-    fun setProjectionFrameClock(targetId: String, frameClock: WindowDisplayFrameClock) {
+    /**
+     * #592 三：把投影运行时接到当前窗口的 FrameClock，使投影动画按真实 VSync 推进。
+     *
+     * 传入 null 解除绑定（窗口销毁前），避免已释放的 FrameClock 继续驱动投影。
+     * 由 [EditorWindowHost] 在 beginEdit/releaseWindow 调用，不在会话层自建时钟。
+     */
+    fun setProjectionFrameClock(targetId: String, frameClock: WindowDisplayFrameClock?) {
         val target = targets[targetId] ?: return
         if (!target.isPersistent) return
+        if (frameClock == null) {
+            targetProjections[targetId]?.setFrameClock(null)
+            return
+        }
         val projection = getOrCreateProjection(targetId, target)
         projection.setFrameClock(frameClock)
         if (target.profile.secretPolicy == SecretPolicy.MASK_AND_CLEAR_ON_COMMIT) {

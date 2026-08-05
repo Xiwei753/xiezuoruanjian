@@ -113,6 +113,9 @@ class EditorWindowHost(
         val bridge = TextEditSessionBridge(appServiceBridge, bindInfo.sessionId)
         view.bindSession(bridge, bindInfo.profile, bindInfo.text, bindInfo.selection)
 
+        // #592 三：把投影运行时接到当前窗口的 FrameClock，使投影动画按真实 VSync 推进。
+        sessionCoordinator.setProjectionFrameClock(targetId, windowFrameClock)
+
         installContentCallback(view, target)
         installCommitRequestedCallback(view)
         installCancelRequestedCallback(view)
@@ -255,6 +258,11 @@ class EditorWindowHost(
      */
     fun releaseWindow() {
         clearActiveCallbacks()
+        // #592 三：窗口销毁前解除投影 FrameClock 绑定，避免已释放时钟继续驱动投影。
+        val activeId = activeTargetId
+        if (activeId != null) {
+            sessionCoordinator.setProjectionFrameClock(activeId, null)
+        }
         sharedEditorView?.let { view ->
             view.unbindSession("config_change")
             view.setFrameClock(null)

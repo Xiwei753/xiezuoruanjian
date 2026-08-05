@@ -217,13 +217,30 @@ class SettingsRepository(
      */
     fun commitSyncProfile(config: SyncConfig, secrets: SyncSecrets): SettingsSaveResult {
         return SyncProfileGate.commitExclusive {
-            val oldConfig = loadSyncConfig()
+            // #592 四：记录旧 config 是否成功读取；读取失败时 oldConfig 为默认值，
+            // 回滚时不得用默认值覆盖，而是标记为无法回滚并告警。
+            var oldConfigLoaded = false
+            val oldConfig = try {
+                val c = loadSyncConfig()
+                oldConfigLoaded = true
+                c
+            } catch (e: Exception) {
+                warn("commitSyncProfile: failed to load old config for rollback: ${e.message}")
+                SyncConfig().normalize()
+            }
             val configResult = saveSyncConfig(config)
             if (configResult is SettingsSaveResult.Failed) return@commitExclusive configResult
             val secretsResult = saveSyncSecrets(secrets)
             if (secretsResult is SettingsSaveResult.Failed) {
-                warn("commitSyncProfile: secrets save failed, rolling back config to previous value")
-                saveSyncConfig(oldConfig)
+                if (oldConfigLoaded) {
+                    warn("commitSyncProfile: secrets save failed, rolling back config to previous value")
+                    val rollbackResult = saveSyncConfig(oldConfig)
+                    if (rollbackResult is SettingsSaveResult.Failed) {
+                        warn("commitSyncProfile: config rollback ALSO failed — config and secrets are in inconsistent state")
+                    }
+                } else {
+                    warn("commitSyncProfile: secrets save failed and old config was unavailable — cannot roll back, config and secrets may be inconsistent")
+                }
                 return@commitExclusive secretsResult
             }
             SettingsSaveResult.Success
