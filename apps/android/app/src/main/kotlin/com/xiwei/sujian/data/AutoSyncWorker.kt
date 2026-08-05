@@ -11,7 +11,10 @@ class AutoSyncWorker(
     workerParams: WorkerParameters
 ) : CoroutineWorker(appContext, workerParams) {
     override suspend fun doWork(): Result {
-        val settingsRepository = SettingsRepository(applicationContext)
+        val deps = (applicationContext as? com.xiwei.sujian.runtime.SujianAppDependenciesProvider)
+            ?.dependencies
+            ?: return Result.failure()
+        val settingsRepository = deps.settingsRepository
         val config = try {
             settingsRepository.loadSyncConfig()
         } catch (e: Exception) {
@@ -44,14 +47,29 @@ class AutoSyncWorker(
         }
         if (elapsed != null && elapsed < interval) return Result.success()
 
-        SyncCoordinator.initialize(settingsRepository)
-        val result = SyncCoordinator.runSync(SyncTrigger.Auto)
-        return if (result != null) {
-            com.xiwei.sujian.diagnostics.DiagnosticsEvents.syncEvent("autosync", "completed")
-            Result.success()
-        } else {
-            com.xiwei.sujian.diagnostics.DiagnosticsEvents.syncEvent("autosync", "skipped")
-            Result.retry()
+        val outcome = deps.syncCoordinator.runSync(SyncTrigger.Auto)
+        return when (outcome) {
+            is com.xiwei.sujian.data.SyncOutcome.Completed -> {
+                com.xiwei.sujian.diagnostics.DiagnosticsEvents.syncEvent("autosync", "completed")
+                Result.success()
+            }
+            is com.xiwei.sujian.data.SyncOutcome.Unconfigured,
+            is com.xiwei.sujian.data.SyncOutcome.Disabled -> {
+                com.xiwei.sujian.diagnostics.DiagnosticsEvents.syncEvent("autosync", "unconfigured")
+                Result.success()
+            }
+            is com.xiwei.sujian.data.SyncOutcome.Busy -> {
+                com.xiwei.sujian.diagnostics.DiagnosticsEvents.syncEvent("autosync", "busy")
+                Result.retry()
+            }
+            is com.xiwei.sujian.data.SyncOutcome.RetryableFailure -> {
+                com.xiwei.sujian.diagnostics.DiagnosticsEvents.syncEvent("autosync", "retryable_failure")
+                Result.retry()
+            }
+            is com.xiwei.sujian.data.SyncOutcome.TerminalFailure -> {
+                com.xiwei.sujian.diagnostics.DiagnosticsEvents.syncEvent("autosync", "terminal_failure")
+                Result.failure()
+            }
         }
     }
 

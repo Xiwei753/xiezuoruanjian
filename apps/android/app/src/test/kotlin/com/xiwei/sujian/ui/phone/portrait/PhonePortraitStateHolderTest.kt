@@ -45,3 +45,36 @@ class PhonePortraitStateHolderTest {
         assertTrue(savedSections.first().contains(SettingsSection.Sync))
     }
 }
+
+
+class PhonePortraitStateHolderRestoreTest {
+
+    @Test
+    fun initialRoot_defaultsToWorks() {
+        val holder = PhonePortraitStateHolder(
+            onSaveExpandedSections = { },
+            initialExpandedSections = emptySet(),
+        )
+        assertEquals(PhoneRoot.Works, holder.selectedRoot)
+    }
+
+    @Test
+    fun initialRoot_canBeRestoredToStats() {
+        val holder = PhonePortraitStateHolder(
+            initialRoot = PhoneRoot.Stats,
+            onSaveExpandedSections = { },
+            initialExpandedSections = emptySet(),
+        )
+        assertEquals(PhoneRoot.Stats, holder.selectedRoot)
+    }
+
+    @Test
+    fun initialRoot_starMapIsIgnoredEvenAsInitial() {
+        val holder = PhonePortraitStateHolder(
+            initialRoot = PhoneRoot.StarMap,
+            onSaveExpandedSections = { },
+            initialExpandedSections = emptySet(),
+        )
+        assertEquals(PhoneRoot.StarMap, holder.selectedRoot)
+    }
+}

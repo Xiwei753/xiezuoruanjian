@@ -14,9 +14,21 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+sealed interface SessionRestoreState {
+    data object Loading : SessionRestoreState
+    data class Ready(
+        val projectId: String?,
+        val volumeId: String?,
+        val chapterId: String?,
+    ) : SessionRestoreState
+}
+
 class WorkspaceSessionViewModel(
     private val savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
+
+    var restoreState by mutableStateOf<SessionRestoreState>(SessionRestoreState.Loading)
+        private set
 
     var projects by mutableStateOf<List<Project>>(emptyList())
         private set
@@ -48,6 +60,11 @@ class WorkspaceSessionViewModel(
         workspaceUseCase = workspaceUC
         refreshProjects()
         refreshRecentEdits()
+        restoreState = SessionRestoreState.Ready(
+            projectId = currentProjectId,
+            volumeId = currentVolumeId,
+            chapterId = currentChapterId,
+        )
     }
 
     fun selectProject(projectId: String, projectTitle: String) {

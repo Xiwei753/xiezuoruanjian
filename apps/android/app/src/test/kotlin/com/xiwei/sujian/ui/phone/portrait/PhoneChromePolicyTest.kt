@@ -15,7 +15,7 @@ class PhoneChromePolicyTest {
             workspaceLocation = WorkspaceLocation.ProjectList,
             syncState = SyncIndicatorState.Synced,
         )
-        assertEquals("设置", spec.title)
+        assertEquals(null, spec.title)
         assertTrue(spec.showBack)
         assertFalse(spec.appBarTransparent)
         assertFalse(spec.showSync)

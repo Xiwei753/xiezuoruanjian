@@ -21,7 +21,7 @@ object PhoneChromePolicy {
         syncState: SyncIndicatorState,
     ): PhoneChromeSpec = when (route) {
         is PhoneSettingsRoute.Settings -> PhoneChromeSpec(
-            title = "设置",
+            title = null,
             showBack = true,
             appBarTransparent = false,
             showSync = false,

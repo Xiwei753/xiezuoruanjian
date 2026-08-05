@@ -46,7 +46,7 @@ fun PhoneSettingsScreen(
     val dims = LocalSujianDimensions.current
 
     LaunchedEffect(Unit) {
-        vm.initialize(deps.settingsRepository)
+        vm.initialize(deps.settingsRepository, deps.syncCoordinator)
     }
 
     LazyColumn(

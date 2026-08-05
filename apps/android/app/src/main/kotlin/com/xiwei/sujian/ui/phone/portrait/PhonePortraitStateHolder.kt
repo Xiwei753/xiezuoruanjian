@@ -10,10 +10,11 @@ import com.xiwei.sujian.ui.compose.navigation.SettingsSection
 
 @Stable
 class PhonePortraitStateHolder(
+    initialRoot: PhoneRoot = PhoneRoot.Works,
     private val onSaveExpandedSections: (Set<SettingsSection>) -> Unit,
     initialExpandedSections: Set<SettingsSection> = emptySet(),
 ) {
-    var selectedRoot by mutableStateOf(PhoneRoot.Works)
+    var selectedRoot by mutableStateOf(initialRoot)
         private set
 
     var expandedSettingsSections by mutableStateOf(initialExpandedSections)

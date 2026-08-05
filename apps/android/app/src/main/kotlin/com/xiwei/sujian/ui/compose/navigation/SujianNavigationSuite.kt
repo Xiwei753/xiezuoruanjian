@@ -57,6 +57,7 @@ import com.xiwei.sujian.ui.compose.starmap.StarMapScreen
 import com.xiwei.sujian.ui.compose.stats.StatsScreen
 import com.xiwei.sujian.ui.compose.workspace.ProjectWorkspaceScreen
 import com.xiwei.sujian.ui.phone.portrait.PhonePortraitShell
+import com.xiwei.sujian.ui.phone.portrait.PhoneRoot
 import com.xiwei.sujian.ui.phone.portrait.PhonePortraitStateHolder
 import com.xiwei.sujian.ui.phone.portrait.WorkspaceSessionViewModel
 
@@ -180,14 +181,38 @@ private fun PhonePortraitSuite(
     modifier: Modifier = Modifier,
 ) {
     val deps = com.xiwei.sujian.runtime.LocalSujianAppDependencies.current
-    val initialSections = remember { deps.settingsRepository.getExpandedSettingsSections() }
-    val stateHolder = remember {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val uiPrefs = remember { com.xiwei.sujian.ui.phone.portrait.PhoneUiPreferences(context) }
+    val initialSections = remember {
+        val names = uiPrefs.getExpandedSettingsSections()
+        names.mapNotNull { name ->
+            try { com.xiwei.sujian.ui.compose.navigation.SettingsSection.valueOf(name) } catch (_: Exception) { null }
+        }.toSet()
+    }
+    val savedRootName = uiPrefs.getSelectedPhoneRoot()
+    var savedRoot by androidx.compose.runtime.saveable.rememberSaveable(
+        key = "phone_selected_root",
+        stateSaver = androidx.compose.runtime.saveable.Saver(
+            save = { it.name },
+            restore = { name -> PhoneRoot.entries.find { it.name == name } ?: PhoneRoot.Works }
+        )
+    ) { androidx.compose.runtime.mutableStateOf(
+        savedRootName?.let { name -> PhoneRoot.entries.find { it.name == name } } ?: PhoneRoot.Works
+    ) }
+    val stateHolder = remember(savedRoot) {
         PhonePortraitStateHolder(
+            initialRoot = savedRoot,
             onSaveExpandedSections = { sections ->
-                deps.settingsRepository.saveExpandedSettingsSections(sections)
+                uiPrefs.saveExpandedSettingsSections(sections.map { it.name }.toSet())
             },
             initialExpandedSections = initialSections,
         )
+    }
+    androidx.compose.runtime.DisposableEffect(stateHolder) {
+        onDispose {
+            savedRoot = stateHolder.selectedRoot
+            uiPrefs.saveSelectedPhoneRoot(stateHolder.selectedRoot.name)
+        }
     }
     val sessionVm: WorkspaceSessionViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 

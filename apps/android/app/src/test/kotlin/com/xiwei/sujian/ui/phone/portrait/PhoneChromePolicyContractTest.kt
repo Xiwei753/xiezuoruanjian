@@ -64,7 +64,7 @@ class PhoneChromePolicyContractTest {
     }
 
     @Test
-    fun settingsRoute_noActionsNoBottomBar() {
+    fun settingsRoute_noActionsNoBottomBarNoTitle() {
         val spec = PhoneChromePolicy.resolve(
             route = PhoneSettingsRoute.Settings,
             selectedRoot = PhoneRoot.Works,
@@ -76,6 +76,7 @@ class PhoneChromePolicyContractTest {
         assertFalse(spec.showSettings)
         assertFalse(spec.showBottomBar)
         assertTrue(spec.showBack)
+        assertEquals(null, spec.title)
     }
 
     @Test

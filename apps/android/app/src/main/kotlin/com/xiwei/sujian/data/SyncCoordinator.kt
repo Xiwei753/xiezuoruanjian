@@ -8,44 +8,34 @@ import com.xiwei.sujian.model.SyncTrigger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-/**
- * 唯一同步协调器 — 所有同步入口统一收口。
- *
- * 固定流程：检查配置和能力 → 取得 SyncSession 执行权 → 立即发布 Syncing →
- * 执行同步 → 按真实 SyncStatus 发布 Synced 或 Failed → 持久化最终同步状态。
- *
- * 顶栏手动同步、AutoSyncWorker、前台服务同步、设置页同步和导入/拉取同步
- * 全部调用 [runSync]，不再自行切换状态。
- */
-object SyncCoordinator {
-    private lateinit var settingsRepository: SettingsRepository
+sealed class SyncOutcome {
+    data class Completed(val result: SyncResult) : SyncOutcome()
+    data object Disabled : SyncOutcome()
+    data object Unconfigured : SyncOutcome()
+    data object Busy : SyncOutcome()
+    data class RetryableFailure(val status: SyncStatus) : SyncOutcome()
+    data class TerminalFailure(val status: SyncStatus) : SyncOutcome()
+}
 
-    fun initialize(settingsRepository: SettingsRepository) {
-        this.settingsRepository = settingsRepository
-    }
-
-    /**
-     * 统一同步主链。
-     *
-     * @return 同步结果；调用方为 AutoSyncWorker 等后台入口时，
-     *   可用返回值判断 WorkManager Result。
-     *   返回 null 表示未配置或仓库未初始化，调用方应视为无操作。
-     */
-    suspend fun runSync(trigger: SyncTrigger): SyncResult? {
-        if (!::settingsRepository.isInitialized) return null
+class SyncCoordinator(
+    private val settingsRepository: SettingsRepository,
+    private val syncStatusRepository: SyncStatusRepository,
+) {
+    suspend fun runSync(trigger: SyncTrigger): SyncOutcome {
+        DiagnosticsEvents.syncEvent(trigger.name.lowercase(), "start")
         val config = withContext(Dispatchers.IO) { settingsRepository.loadSyncConfig() }
         if (config.enabled != true) {
-            SyncStatusRepository.notifyUnconfigured()
-            return null
+            syncStatusRepository.notifyUnconfigured()
+            return SyncOutcome.Unconfigured
         }
         val capability = withContext(Dispatchers.IO) { settingsRepository.getSyncCapability() }
         if (!capability.canRun) {
-            SyncStatusRepository.notifyUnconfigured()
-            return null
+            syncStatusRepository.notifyUnconfigured()
+            return SyncOutcome.Disabled
         }
 
         val exclusiveResult = SyncSession.runExclusive { _ ->
-            SyncStatusRepository.notifySyncStarted()
+            syncStatusRepository.notifySyncStarted()
             val bridgeResult = withContext(Dispatchers.IO) { settingsRepository.performSync(config) }
             resolveAndPublish(bridgeResult)
             bridgeResult
@@ -53,23 +43,43 @@ object SyncCoordinator {
 
         return when (exclusiveResult) {
             is ExclusiveResult.Busy -> {
-                SyncStatusRepository.refreshState()
-                null
+                syncStatusRepository.refreshState()
+                SyncOutcome.Busy
             }
             is ExclusiveResult.Success -> {
                 when (val br = exclusiveResult.value) {
-                    is BridgeResult.Success -> br.data
-                    else -> null
+                    is BridgeResult.Success -> mapToOutcome(br.data)
+                    is BridgeResult.Error -> SyncOutcome.RetryableFailure(SyncStatus.Error)
+                    BridgeResult.NotLoaded -> SyncOutcome.RetryableFailure(SyncStatus.Error)
                 }
             }
         }
     }
 
+    private fun mapToOutcome(result: SyncResult): SyncOutcome = when (result.status) {
+        SyncStatus.Success,
+        SyncStatus.NoChanges,
+        SyncStatus.LatestWinsApplied,
+        SyncStatus.BranchMissingRecovered -> SyncOutcome.Completed(result)
+
+        SyncStatus.RecoverableError,
+        SyncStatus.Error -> SyncOutcome.RetryableFailure(result.status)
+
+        SyncStatus.Conflict,
+        SyncStatus.PartialConflict,
+        SyncStatus.FatalError,
+        SyncStatus.DirtyRepoBlocked -> SyncOutcome.TerminalFailure(result.status)
+
+        SyncStatus.Syncing -> SyncOutcome.Completed(result)
+        SyncStatus.Idle,
+        SyncStatus.ConfiguredNotTested -> SyncOutcome.Unconfigured
+    }
+
     private fun resolveAndPublish(result: BridgeResult<SyncResult>) {
         when (result) {
             is BridgeResult.Success -> resolveSyncStatus(result.data.status)
-            is BridgeResult.Error -> SyncStatusRepository.notifySyncFailed()
-            BridgeResult.NotLoaded -> SyncStatusRepository.notifySyncFailed()
+            is BridgeResult.Error -> syncStatusRepository.notifySyncFailed()
+            BridgeResult.NotLoaded -> syncStatusRepository.notifySyncFailed()
         }
     }
 
@@ -79,7 +89,7 @@ object SyncCoordinator {
             SyncStatus.NoChanges,
             SyncStatus.LatestWinsApplied,
             SyncStatus.BranchMissingRecovered -> {
-                SyncStatusRepository.notifySyncSuccess()
+                syncStatusRepository.notifySyncSuccess()
             }
             SyncStatus.Conflict,
             SyncStatus.PartialConflict,
@@ -87,14 +97,14 @@ object SyncCoordinator {
             SyncStatus.FatalError,
             SyncStatus.DirtyRepoBlocked,
             SyncStatus.Error -> {
-                SyncStatusRepository.notifySyncFailed()
+                syncStatusRepository.notifySyncFailed()
             }
             SyncStatus.Syncing -> {
-                SyncStatusRepository.notifySyncStarted()
+                syncStatusRepository.notifySyncStarted()
             }
             SyncStatus.Idle,
             SyncStatus.ConfiguredNotTested -> {
-                SyncStatusRepository.notifyUnconfigured()
+                syncStatusRepository.notifyUnconfigured()
             }
         }
     }

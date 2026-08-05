@@ -18,9 +18,14 @@ enum class PhoneRoot {
  * 唯一工作区导航目的地键 — 由 [PhoneWorkspaceNavigationState] 持有的
  * Material3 Adaptive navigator 使用；导航位置从当前 destination 推导。
  */
-sealed interface WorkspacePaneKey {
+sealed interface WorkspacePaneKey : Parcelable {
+    @Parcelize
     data object ProjectList : WorkspacePaneKey
+
+    @Parcelize
     data class ChapterTree(val projectId: String) : WorkspacePaneKey
+
+    @Parcelize
     data class Editor(
         val projectId: String,
         val volumeId: String,

@@ -142,6 +142,7 @@ private data class SyncCommandIoResult(
 
 class SettingsViewModel : ViewModel() {
     private var settingsRepo: SettingsRepository? = null
+    private var syncCoordinator: com.xiwei.sujian.data.SyncCoordinator? = null
     private var initialized = false
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
@@ -189,12 +190,14 @@ class SettingsViewModel : ViewModel() {
         }
     }
 
-    fun initialize(repo: SettingsRepository) {
+    fun initialize(repo: SettingsRepository, coordinator: com.xiwei.sujian.data.SyncCoordinator) {
         if (initialized && settingsRepo != null) {
             settingsRepo = repo
+            syncCoordinator = coordinator
             return
         }
         settingsRepo = repo
+        syncCoordinator = coordinator
         initialized = true
         loadInitial()
         viewModelScope.launch {
@@ -457,39 +460,53 @@ class SettingsViewModel : ViewModel() {
             try {
                 if (type == SyncCommandType.PERFORM_SYNC) {
                     _uiState.update { it.runningStateField() }
-                    withContext(Dispatchers.IO) {
-                        val saveResult = repo.saveSyncConfig(config)
-                        if (saveResult is SettingsSaveResult.Failed) {
-                            return@withContext SyncCommandIoResult(false, false, StructuredSyncResult(statusCode = "error", messageKey = "save_config_failed"))
-                        }
-                        val secretsResult = repo.saveSyncSecrets(secrets)
-                        if (secretsResult is SettingsSaveResult.Failed) {
-                            return@withContext SyncCommandIoResult(true, false, StructuredSyncResult(statusCode = "error", messageKey = "save_secrets_failed"))
-                        }
+                    val saveResult = withContext(Dispatchers.IO) { repo.saveSyncConfig(config) }
+                    if (saveResult is SettingsSaveResult.Failed) {
+                        _uiState.update { it.failureStateField().copy(structuredSyncResult = StructuredSyncResult(statusCode = "error", messageKey = "save_config_failed")) }
+                        return@launch
                     }
-                    SyncCoordinator.initialize(repo)
-                    val syncResult = SyncCoordinator.runSync(SyncTrigger.SettingsPage)
-                    val ioResult = if (syncResult != null) {
-                        val counts = SyncCounts(
-                            uploaded = syncResult.uploadedFiles.size,
-                            downloaded = syncResult.downloadedFiles.size,
-                            deletedRemote = syncResult.remoteDeletes.size,
-                            deletedLocal = syncResult.localDeletes.size,
-                            conflicts = syncResult.conflicts.size,
-                            overwritten = syncResult.overwrittenFiles.size,
-                            ignored = syncResult.ignoredFiles.size
-                        )
-                        SyncCommandIoResult(true, true, StructuredSyncResult(
-                            statusCode = if (syncResult.error == null) "ok" else "error",
-                            messageKey = "sync_perform_result",
-                            counts = counts,
-                            sanitizedDiagnostic = if (syncResult.error != null) "sync_failed" else null
-                        ))
-                    } else {
-                        SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_unconfigured"))
+                    val secretsResult = withContext(Dispatchers.IO) { repo.saveSyncSecrets(secrets) }
+                    if (secretsResult is SettingsSaveResult.Failed) {
+                        syncConfigPersistedRevision = syncConfigRevision
+                        _uiState.update { it.failureStateField().copy(structuredSyncResult = StructuredSyncResult(statusCode = "error", messageKey = "save_secrets_failed")) }
+                        return@launch
                     }
                     syncConfigPersistedRevision = syncConfigRevision
                     syncSecretsPersistedRevision = syncSecretsRevision
+                    val coordinator = syncCoordinator ?: return@launch
+                    val syncOutcome = coordinator.runSync(SyncTrigger.SettingsPage)
+                    val ioResult = when (syncOutcome) {
+                        is com.xiwei.sujian.data.SyncOutcome.Completed -> {
+                            val sr = syncOutcome.result
+                            val counts = SyncCounts(
+                                uploaded = sr.uploadedFiles.size,
+                                downloaded = sr.downloadedFiles.size,
+                                deletedRemote = sr.remoteDeletes.size,
+                                deletedLocal = sr.localDeletes.size,
+                                conflicts = sr.conflicts.size,
+                                overwritten = sr.overwrittenFiles.size,
+                                ignored = sr.ignoredFiles.size
+                            )
+                            SyncCommandIoResult(true, true, StructuredSyncResult(
+                                statusCode = if (sr.error == null) "ok" else "error",
+                                messageKey = "sync_perform_result",
+                                counts = counts,
+                                sanitizedDiagnostic = if (sr.error != null) "sync_failed" else null
+                            ))
+                        }
+                        is com.xiwei.sujian.data.SyncOutcome.Unconfigured ->
+                            SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_unconfigured"))
+                        is com.xiwei.sujian.data.SyncOutcome.Disabled ->
+                            SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_disabled"))
+                        is com.xiwei.sujian.data.SyncOutcome.Busy ->
+                            SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_busy"))
+                        is com.xiwei.sujian.data.SyncOutcome.RetryableFailure ->
+                            SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_retryable_failure"))
+                        is com.xiwei.sujian.data.SyncOutcome.TerminalFailure ->
+                            SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_terminal_failure"))
+                        else ->
+                            SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_unknown"))
+                    }
                     _uiState.update { current ->
                         if (ioResult.isSuccess) {
                             current.successStateField().copy(structuredSyncResult = ioResult.structuredResult)
@@ -693,7 +710,7 @@ fun SettingsRoute(
     val deps = LocalSujianAppDependencies.current
 
     LaunchedEffect(Unit) {
-        vm.initialize(deps.settingsRepository)
+        vm.initialize(deps.settingsRepository, deps.syncCoordinator)
     }
 
     @Suppress("LocalContextGetResourceValueCall")

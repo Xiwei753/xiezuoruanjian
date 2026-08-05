@@ -13,9 +13,12 @@ import java.io.File
 import java.io.PrintWriter
 import java.io.FileWriter
 
-class SujianApp : Application(), DefaultLifecycleObserver {
+class SujianApp : Application(), DefaultLifecycleObserver, com.xiwei.sujian.runtime.SujianAppDependenciesProvider {
 
     private var autoSyncScheduler: AutoSyncScheduler? = null
+    private var _dependencies: com.xiwei.sujian.runtime.SujianAppDependencies? = null
+    override val dependencies: com.xiwei.sujian.runtime.SujianAppDependencies
+        get() = _dependencies ?: com.xiwei.sujian.runtime.DefaultSujianAppDependencies(this).also { _dependencies = it }
 
     override fun onCreate() {
         super<Application>.onCreate()

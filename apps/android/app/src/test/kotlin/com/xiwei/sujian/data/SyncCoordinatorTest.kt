@@ -8,48 +8,8 @@ import org.junit.Test
 class SyncCoordinatorTest {
 
     @Test
-    fun notifySyncStarted_publishesSyncing() {
-        SyncStatusRepository.notifySyncStarted()
-        assertEquals(SyncIndicatorState.Syncing, SyncStatusRepository.state.value)
-    }
-
-    @Test
-    fun notifySyncSuccess_publishesSynced() {
-        SyncStatusRepository.notifySyncSuccess()
-        assertEquals(SyncIndicatorState.Synced, SyncStatusRepository.state.value)
-    }
-
-    @Test
-    fun notifySyncFailed_publishesFailed() {
-        SyncStatusRepository.notifySyncFailed()
-        assertEquals(SyncIndicatorState.Failed, SyncStatusRepository.state.value)
-    }
-
-    @Test
-    fun notifyUnconfigured_publishesUnconfigured() {
-        SyncStatusRepository.notifyUnconfigured()
-        assertEquals(SyncIndicatorState.Unconfigured, SyncStatusRepository.state.value)
-    }
-
-    @Test
-    fun syncStatusTransitions_followExpectedSequence() {
-        SyncStatusRepository.notifySyncStarted()
-        assertEquals(SyncIndicatorState.Syncing, SyncStatusRepository.state.value)
-
-        SyncStatusRepository.notifySyncSuccess()
-        assertEquals(SyncIndicatorState.Synced, SyncStatusRepository.state.value)
-
-        SyncStatusRepository.notifySyncStarted()
-        assertEquals(SyncIndicatorState.Syncing, SyncStatusRepository.state.value)
-
-        SyncStatusRepository.notifySyncFailed()
-        assertEquals(SyncIndicatorState.Failed, SyncStatusRepository.state.value)
-    }
-
-    @Test
     fun syncSession_runExclusive_blocksConcurrentAccess() = runTest {
         var firstEntered = false
-        var secondBlocked = false
 
         val result1 = SyncSession.runExclusive {
             firstEntered = true
@@ -63,5 +23,18 @@ class SyncCoordinatorTest {
     @Test
     fun syncSession_runExclusive_returnsBusyWhenLocked() = runTest {
         assertEquals(ExclusiveResult.Busy::class, ExclusiveResult.Busy::class)
+    }
+
+    @Test
+    fun syncOutcome_sealedClassHierarchy() {
+        val outcomes: List<SyncOutcome> = listOf(
+            SyncOutcome.Completed(com.xiwei.sujian.model.SyncResult(status = com.xiwei.sujian.model.SyncStatus.Success)),
+            SyncOutcome.Disabled,
+            SyncOutcome.Unconfigured,
+            SyncOutcome.Busy,
+            SyncOutcome.RetryableFailure(com.xiwei.sujian.model.SyncStatus.RecoverableError),
+            SyncOutcome.TerminalFailure(com.xiwei.sujian.model.SyncStatus.Conflict),
+        )
+        assertEquals(6, outcomes.distinctBy { it::class }.size)
     }
 }

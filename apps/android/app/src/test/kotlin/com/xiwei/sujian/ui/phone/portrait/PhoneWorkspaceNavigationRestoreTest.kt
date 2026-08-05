@@ -74,3 +74,28 @@ class PhoneWorkspaceNavigationRestoreTest {
         return chain
     }
 }
+
+
+class SessionRestoreStateTest {
+
+    @Test
+    fun loadingState_isDistinctFromReady() {
+        val loading = SessionRestoreState.Loading
+        val ready = SessionRestoreState.Ready(projectId = null, volumeId = null, chapterId = null)
+        assert(loading != ready)
+    }
+
+    @Test
+    fun readyState_holdsProjectId() {
+        val ready = SessionRestoreState.Ready(projectId = "p1", volumeId = "v1", chapterId = "c1")
+        assertEquals("p1", ready.projectId)
+        assertEquals("v1", ready.volumeId)
+        assertEquals("c1", ready.chapterId)
+    }
+
+    @Test
+    fun readyState_canHaveNullIds() {
+        val ready = SessionRestoreState.Ready(projectId = null, volumeId = null, chapterId = null)
+        assertEquals(null, ready.projectId)
+    }
+}

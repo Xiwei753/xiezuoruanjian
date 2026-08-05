@@ -74,10 +74,11 @@ fun rememberThemeController(context: Context, settingsRepository: SettingsReposi
     }
 
     val lifecycleOwner = LocalLifecycleOwner.current
+    val deps = com.xiwei.sujian.runtime.LocalSujianAppDependencies.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                val syncState = com.xiwei.sujian.data.SyncStatusRepository.state.value
+                val syncState = deps.syncStatusRepository.state.value
                 if (syncState == com.xiwei.sujian.model.SyncIndicatorState.Synced) {
                     ThemeStore.onSyncCompleted()
                 }

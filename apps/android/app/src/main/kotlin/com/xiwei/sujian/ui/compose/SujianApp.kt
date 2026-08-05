@@ -21,7 +21,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.xiwei.sujian.data.SyncStatusRepository
 import com.xiwei.sujian.data.WorkspaceUseCase
 import com.xiwei.sujian.editor.v2.compose.LocalAnimatedTextEditorCoordinator
 import com.xiwei.sujian.model.Orientation
@@ -103,7 +102,7 @@ fun SujianApp(
         val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
         LaunchedEffect(lifecycleOwner) {
             lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-                SyncStatusRepository.refreshState()
+                deps.syncStatusRepository.refreshState()
                 vm.refreshProjects()
                 vm.refreshRecentEdits()
             }

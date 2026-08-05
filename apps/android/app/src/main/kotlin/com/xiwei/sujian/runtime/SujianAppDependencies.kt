@@ -15,6 +15,8 @@ interface SujianAppDependencies {
     val settingsRepository: SettingsRepository
     val appServiceBridge: AppServiceBridge
     val coordinator: AnimatedTextEditorCoordinator
+    val syncStatusRepository: SyncStatusRepository
+    val syncCoordinator: SyncCoordinator
 
     fun release()
 
@@ -40,11 +42,8 @@ class DefaultSujianAppDependencies(context: Context) : SujianAppDependencies {
     override val workspaceRepository: WorkspaceRepository = WorkspaceRepository(appContext, appServiceBridge)
     override val settingsRepository: SettingsRepository = SettingsRepository(appContext, appServiceBridge)
     override val coordinator: AnimatedTextEditorCoordinator = AnimatedTextEditorCoordinator(appContext, appServiceBridge)
-
-    init {
-        SyncStatusRepository.initialize(settingsRepository)
-        SyncCoordinator.initialize(settingsRepository)
-    }
+    override val syncStatusRepository: SyncStatusRepository = SyncStatusRepository(settingsRepository)
+    override val syncCoordinator: SyncCoordinator = SyncCoordinator(settingsRepository, syncStatusRepository)
 
     override fun release() {
         coordinator.releaseHost()

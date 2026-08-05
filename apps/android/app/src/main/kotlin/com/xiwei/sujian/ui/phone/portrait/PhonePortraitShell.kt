@@ -39,6 +39,7 @@ import androidx.navigation3.scene.Scene
 import androidx.navigation3.ui.NavDisplay
 import com.xiwei.sujian.data.SyncCoordinator
 import com.xiwei.sujian.data.SyncStatusRepository
+import com.xiwei.sujian.runtime.LocalSujianAppDependencies
 import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.designsystem.component.SujianSnackbar
 import com.xiwei.sujian.model.SyncTrigger
@@ -55,26 +56,28 @@ fun PhonePortraitShell(
     workspaceRepository: WorkspaceRepository,
     modifier: Modifier = Modifier,
 ) {
-    val syncState by SyncStatusRepository.state.collectAsState()
+    val deps = LocalSujianAppDependencies.current
+    val syncState by deps.syncStatusRepository.state.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
 
-    val initialHistory = remember {
+    val restoreState = sessionViewModel.restoreState
+    val restoredProjectId = (restoreState as? SessionRestoreState.Ready)?.projectId
+    val restoredVolumeId = (restoreState as? SessionRestoreState.Ready)?.volumeId
+    val restoredChapterId = (restoreState as? SessionRestoreState.Ready)?.chapterId
+    val initialHistory = remember(restoreState) {
         val chain = mutableListOf<ThreePaneScaffoldDestinationItem<WorkspacePaneKey>>(
             ThreePaneScaffoldDestinationItem(WorkspacePaneKey.ProjectList.role, WorkspacePaneKey.ProjectList),
         )
-        val projectId = sessionViewModel.currentProjectId
-        if (projectId != null) {
+        if (restoredProjectId != null) {
             chain += ThreePaneScaffoldDestinationItem(
-                WorkspacePaneKey.ChapterTree(projectId).role,
-                WorkspacePaneKey.ChapterTree(projectId),
+                WorkspacePaneKey.ChapterTree(restoredProjectId).role,
+                WorkspacePaneKey.ChapterTree(restoredProjectId),
             )
-            val volumeId = sessionViewModel.currentVolumeId
-            val chapterId = sessionViewModel.currentChapterId
-            if (volumeId != null && chapterId != null) {
+            if (restoredVolumeId != null && restoredChapterId != null) {
                 chain += ThreePaneScaffoldDestinationItem(
-                    WorkspacePaneKey.Editor(projectId, volumeId, chapterId).role,
-                    WorkspacePaneKey.Editor(projectId, volumeId, chapterId),
+                    WorkspacePaneKey.Editor(restoredProjectId, restoredVolumeId, restoredChapterId).role,
+                    WorkspacePaneKey.Editor(restoredProjectId, restoredVolumeId, restoredChapterId),
                 )
             }
         }
@@ -147,7 +150,7 @@ fun PhonePortraitShell(
                 onSearch = { },
                 onSync = {
                     coroutineScope.launch {
-                        SyncCoordinator.runSync(SyncTrigger.Manual)
+                        deps.syncCoordinator.runSync(SyncTrigger.Manual)
                     }
                 },
                 syncState = syncState,
