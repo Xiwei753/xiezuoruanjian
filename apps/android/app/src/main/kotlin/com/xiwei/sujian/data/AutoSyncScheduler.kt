@@ -45,7 +45,11 @@ class AutoSyncScheduler(context: Context, private val settingsRepository: Settin
          */
         suspend fun scheduleFromSettings(context: Context, settingsRepository: SettingsRepository) {
             val appContext = context.applicationContext
-            val snapshot = settingsRepository.snapshotSyncProfile()
+            // #592 六：调度器的 snapshot 读取与配置提交/同步启动共用同一把进程级
+            // Mutex 串行管理。调用方（SettingsRepository.commitSyncProfile）必须在
+            // commitExclusive 释放后才调用本函数（scheduleFromSettings 会获取
+            // snapshotExclusive，同一把锁内重入会自死锁）。
+            val snapshot = SyncProfileGate.snapshotExclusive { settingsRepository.snapshotSyncProfile() }
             if (snapshot == null) {
                 DiagnosticsLogger.w(TAG, "Unable to load committed sync profile for scheduling")
                 cancel(appContext)

@@ -314,7 +314,7 @@ class SettingsRepository(
      * - 失败时旧 generation 继续有效：读取者只读取 activeGeneration 对应的完整版本。
      */
     suspend fun commitSyncProfile(config: SyncConfig, secrets: SyncSecrets): SettingsSaveResult {
-        return SyncProfileGate.commitExclusive {
+        val committed = SyncProfileGate.commitExclusive {
             val oldConfig = loadSyncConfigStrict()
             if (oldConfig == null) {
                 warn("commitSyncProfile: strict read of old config failed — aborting before any write")
@@ -350,11 +350,15 @@ class SettingsRepository(
             // 3) 原子更新 activeGeneration=N（单一 DataStore updateData，
             //    committed_config_json 与 activeGeneration 同时推进）。
             profileStore.commitGeneration(generation, configJson.toJson(normalized))
-
-            // 4) 只有提交成功后调度 WorkManager；使用本仓库（应用容器实例）。
-            AutoSyncScheduler.scheduleFromSettings(appContext, this)
             SettingsSaveResult.Success
         }
+        // 4) 只有提交成功后调度 WorkManager，且必须在 commitExclusive 释放之后：
+        //    scheduleFromSettings 会获取 snapshotExclusive，锁内调用会自死锁。
+        //    直接使用本仓库（应用容器实例），不新建 SettingsRepository 读半成品。
+        if (committed is SettingsSaveResult.Success) {
+            AutoSyncScheduler.scheduleFromSettings(appContext, this)
+        }
+        return committed
     }
 
     fun aiAvailable(): Boolean {
