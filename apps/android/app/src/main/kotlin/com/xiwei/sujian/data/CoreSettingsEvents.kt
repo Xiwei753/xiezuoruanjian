@@ -1,32 +1,26 @@
 package com.xiwei.sujian.data
 
-import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 
-/**
- * Stores Core-emitted settings events until resumed UI components consume them.
- */
 object CoreSettingsEvents {
     private const val SETTINGS_SAVED = "SettingsSaved"
 
-    private val changed = AtomicBoolean(false)
-    private val editorChanged = AtomicBoolean(false)
+    private val _settingsChanged = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val settingsChanged: SharedFlow<Unit> = _settingsChanged.asSharedFlow()
+
+    private val _editorSettingsChanged = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val editorSettingsChanged: SharedFlow<Unit> = _editorSettingsChanged.asSharedFlow()
 
     fun record(envelope: ResultEnvelope<*>) {
         if (envelope.changedEntities.none { it.entityType == SETTINGS_SAVED }) return
-        changed.set(true)
-        editorChanged.set(true)
+        _settingsChanged.tryEmit(Unit)
+        _editorSettingsChanged.tryEmit(Unit)
     }
 
     fun markEditorChanged() {
-        changed.set(true)
-        editorChanged.set(true)
-    }
-
-    fun consumeChanged(): Boolean {
-        return changed.getAndSet(false)
-    }
-
-    fun consumeEditorChanged(): Boolean {
-        return editorChanged.getAndSet(false)
+        _settingsChanged.tryEmit(Unit)
+        _editorSettingsChanged.tryEmit(Unit)
     }
 }

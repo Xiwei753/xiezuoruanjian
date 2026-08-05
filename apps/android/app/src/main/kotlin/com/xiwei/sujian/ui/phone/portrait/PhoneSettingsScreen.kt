@@ -29,6 +29,7 @@ import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.runtime.LocalSujianAppDependencies
 import com.xiwei.sujian.ui.compose.navigation.SettingsSection
 import com.xiwei.sujian.ui.compose.settings.SettingsDetailPane
+import com.xiwei.sujian.ui.compose.settings.settingsCategories
 import com.xiwei.sujian.ui.compose.settings.SettingsIntent
 import com.xiwei.sujian.ui.compose.settings.SettingsUiState
 import com.xiwei.sujian.ui.compose.settings.SettingsViewModel
@@ -96,7 +97,7 @@ private fun SettingsExpandableSection(
     modifier: Modifier = Modifier,
 ) {
     val dims = LocalSujianDimensions.current
-    val (titleResId, icon) = sectionInfo(section)
+    val (titleResId, icon) = settingsCategories.find { it.section == section }?.let { it.titleResId to it.icon } ?: (0 to SujianIcons.Info)
 
     Column(modifier = modifier.fillMaxWidth().animateContentSize()) {
         Row(
@@ -137,14 +138,4 @@ private fun SettingsExpandableSection(
     }
 }
 
-private fun sectionInfo(section: SettingsSection): Pair<Int, androidx.compose.ui.graphics.vector.ImageVector> =
-    when (section) {
-        SettingsSection.Appearance -> R.string.pref_category_appearance to SujianIcons.Palette
-        SettingsSection.Editor -> R.string.pref_category_editor to SujianIcons.Edit
-        SettingsSection.Save -> R.string.pref_category_save to SujianIcons.Save
-        SettingsSection.Sync -> R.string.pref_category_sync to SujianIcons.CloudSync
-        SettingsSection.Ai -> R.string.pref_category_ai to SujianIcons.AutoStories
-        SettingsSection.Diagnostics -> R.string.pref_category_diagnostics to SujianIcons.BugReport
-        SettingsSection.Laboratory -> R.string.pref_category_laboratory to SujianIcons.Science
-        SettingsSection.About -> R.string.pref_category_about to SujianIcons.Info
-    }
+

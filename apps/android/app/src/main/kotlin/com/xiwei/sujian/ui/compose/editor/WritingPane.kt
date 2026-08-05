@@ -109,8 +109,8 @@ fun WritingPane(
         )
     }
 
-    // 设置页保存后回到工作区时重新加载设置并即时应用（consumeEditorChanged
-    // 由 SettingsRepository 在保存成功时写入）。
+    // 设置变更通过 CoreSettingsEvents.editorSettingsChanged SharedFlow 推送，
+    // ON_RESUME 兜底处理进程恢复场景。
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     DisposableEffect(targetId, lifecycleOwner) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
@@ -124,11 +124,8 @@ fun WritingPane(
         }
     }
     LaunchedEffect(targetId) {
-        while (true) {
-            if (com.xiwei.sujian.data.CoreSettingsEvents.consumeEditorChanged()) {
-                viewModel.reloadSettings()
-            }
-            kotlinx.coroutines.delay(1000)
+        com.xiwei.sujian.data.CoreSettingsEvents.editorSettingsChanged.collect {
+            viewModel.reloadSettings()
         }
     }
 

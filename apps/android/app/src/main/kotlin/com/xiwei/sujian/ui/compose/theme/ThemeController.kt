@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.res.Configuration
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.remember
 import androidx.lifecycle.Lifecycle
@@ -76,9 +77,6 @@ fun rememberThemeController(context: Context, settingsRepository: SettingsReposi
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                if (com.xiwei.sujian.data.CoreSettingsEvents.consumeChanged()) {
-                    ThemeStore.onSyncCompleted()
-                }
                 val syncState = com.xiwei.sujian.data.SyncStatusRepository.state.value
                 if (syncState == com.xiwei.sujian.model.SyncIndicatorState.Synced) {
                     ThemeStore.onSyncCompleted()
@@ -93,6 +91,13 @@ fun rememberThemeController(context: Context, settingsRepository: SettingsReposi
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        com.xiwei.sujian.data.CoreSettingsEvents.settingsChanged.collect {
+            ThemeStore.onSyncCompleted()
+            controller.reload()
         }
     }
 
