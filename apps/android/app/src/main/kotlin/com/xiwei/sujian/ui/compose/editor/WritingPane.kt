@@ -159,7 +159,7 @@ fun WritingPane(
     DisposableEffect(targetId) {
         coordinator.registerTarget(target)
         onDispose {
-            coordinator.unregisterTarget(targetId)
+            coordinator.detachTarget(targetId)
         }
     }
 

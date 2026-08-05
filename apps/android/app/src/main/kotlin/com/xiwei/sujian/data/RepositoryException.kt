@@ -13,4 +13,7 @@ package com.xiwei.sujian.data
  * - 领域 Bridge 返回错误时抛出
  * - ViewModel 中通过 try-catch 捕获并展示给用户
  */
-class RepositoryException(message: String) : RuntimeException(message)
+class RepositoryException(
+    message: String,
+    val kind: SyncFailureKind = SyncFailureKind.Fatal,
+) : RuntimeException(message)

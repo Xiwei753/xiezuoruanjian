@@ -85,6 +85,26 @@ class EditorSessionCoordinator(
         targets.remove(targetId)
     }
 
+    /**
+     * #592 一：窗口配置变化时解除窗口绑定，不关闭持久 Rust session。
+     *
+     * persistent target：移除窗口层 target 引用和投影 runtime，保留 Rust session、
+     * 活动会话状态和纯数据装饰，使新窗口可复用同一 session 跨配置变化存活。
+     * 非 persistent target：回退到 unregisterTarget，关闭临时 session。
+     *
+     * 由 Compose onDispose 调用；关闭持久 session 必须由明确业务事件
+     * （章节关闭、永久删除、onCleared）触发，不得由配置变化触发。
+     */
+    fun detachTarget(targetId: String) {
+        val target = targets[targetId]
+        if (target != null && !target.isPersistent) {
+            unregisterTarget(targetId)
+            return
+        }
+        targetProjections.remove(targetId)?.release()
+        targets.remove(targetId)
+    }
+
     fun updateTargetText(targetId: String, text: String) {
         targets[targetId]?.updateText(text)
     }

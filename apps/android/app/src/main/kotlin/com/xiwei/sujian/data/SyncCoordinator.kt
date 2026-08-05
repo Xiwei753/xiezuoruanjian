@@ -48,7 +48,9 @@ class SyncCoordinator(
     suspend fun runSync(trigger: SyncTrigger): SyncOutcome {
         DiagnosticsEvents.syncEvent(trigger.name.lowercase(), "start")
         try {
-            val config = withContext(Dispatchers.IO) { settingsRepository.loadSyncConfig() }
+            val config = withContext(Dispatchers.IO) {
+                SyncProfileGate.snapshotExclusive { settingsRepository.loadSyncConfig() }
+            }
             if (config.enabled != true) {
                 syncStatusRepository.notifyUnconfigured()
                 return SyncOutcome.Unconfigured
@@ -90,7 +92,7 @@ class SyncCoordinator(
         } catch (e: RepositoryException) {
             DiagnosticsEvents.syncEvent(trigger.name.lowercase(), "repository_exception: " + e.message)
             syncStatusRepository.notifySyncFailed()
-            return SyncFailureKind.Fatal.toOutcome()
+            return e.kind.toOutcome()
         } catch (e: Exception) {
             DiagnosticsEvents.syncEvent(trigger.name.lowercase(), "exception: " + e.message)
             syncStatusRepository.notifySyncFailed()
@@ -109,9 +111,9 @@ class SyncCoordinator(
         SyncStatus.LatestWinsApplied,
         SyncStatus.BranchMissingRecovered -> SyncOutcome.Completed(result)
 
-        SyncStatus.RecoverableError,
-        SyncStatus.Error -> SyncOutcome.RetryableFailure(result.status, SyncFailureKind.fromSyncStatus(result.status))
+        SyncStatus.RecoverableError -> SyncOutcome.RetryableFailure(result.status, SyncFailureKind.fromSyncStatus(result.status))
 
+        SyncStatus.Error,
         SyncStatus.Conflict,
         SyncStatus.PartialConflict,
         SyncStatus.FatalError,

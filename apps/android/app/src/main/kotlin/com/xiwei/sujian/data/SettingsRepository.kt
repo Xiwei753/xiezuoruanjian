@@ -216,16 +216,18 @@ class SettingsRepository(
      * 正式同步、试运行和连接诊断都只能读取已经完整提交的同一组数据。
      */
     fun commitSyncProfile(config: SyncConfig, secrets: SyncSecrets): SettingsSaveResult {
-        val oldConfig = loadSyncConfig()
-        val configResult = saveSyncConfig(config)
-        if (configResult is SettingsSaveResult.Failed) return configResult
-        val secretsResult = saveSyncSecrets(secrets)
-        if (secretsResult is SettingsSaveResult.Failed) {
-            warn("commitSyncProfile: secrets save failed, rolling back config to previous value")
-            saveSyncConfig(oldConfig)
-            return secretsResult
+        return SyncProfileGate.commitExclusive {
+            val oldConfig = loadSyncConfig()
+            val configResult = saveSyncConfig(config)
+            if (configResult is SettingsSaveResult.Failed) return@commitExclusive configResult
+            val secretsResult = saveSyncSecrets(secrets)
+            if (secretsResult is SettingsSaveResult.Failed) {
+                warn("commitSyncProfile: secrets save failed, rolling back config to previous value")
+                saveSyncConfig(oldConfig)
+                return@commitExclusive secretsResult
+            }
+            SettingsSaveResult.Success
         }
-        return SettingsSaveResult.Success
     }
 
     fun aiAvailable(): Boolean {

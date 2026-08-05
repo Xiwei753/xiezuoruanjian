@@ -62,6 +62,8 @@ class EditorWindowHost(
 
     fun unregisterTarget(targetId: String) = sessionCoordinator.unregisterTarget(targetId)
 
+    fun detachTarget(targetId: String) = sessionCoordinator.detachTarget(targetId)
+
     fun updateTargetGeometry(targetId: String, geometry: Rect) {
         sessionCoordinator.getTarget(targetId)?.updateGeometry(geometry)
         if (targetId == activeTargetId) {

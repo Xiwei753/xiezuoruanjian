@@ -47,4 +47,14 @@ class CommitSyncProfileContractTest {
         )
         assertTrue(method != null)
     }
+
+    @Test
+    fun syncProfileGate_commitExclusive_preservesReturnValue() {
+        assertEquals("committed", SyncProfileGate.commitExclusive { "committed" })
+    }
+
+    @Test
+    fun syncProfileGate_snapshotExclusive_preservesReturnValue() {
+        assertEquals(42, SyncProfileGate.snapshotExclusive { 42 })
+    }
 }

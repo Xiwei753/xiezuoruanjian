@@ -93,7 +93,7 @@ class SyncFailureKindTest {
     fun fromSyncStatus_mapsCoreStatusesToCorrectKinds() {
         assertEquals(SyncFailureKind.RetryableNetwork,
             SyncFailureKind.fromSyncStatus(com.xiwei.sujian.model.SyncStatus.RecoverableError))
-        assertEquals(SyncFailureKind.RetryableNetwork,
+        assertEquals(SyncFailureKind.Fatal,
             SyncFailureKind.fromSyncStatus(com.xiwei.sujian.model.SyncStatus.Error))
         assertEquals(SyncFailureKind.Conflict,
             SyncFailureKind.fromSyncStatus(com.xiwei.sujian.model.SyncStatus.Conflict))

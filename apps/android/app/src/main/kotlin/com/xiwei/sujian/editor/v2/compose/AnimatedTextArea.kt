@@ -135,7 +135,7 @@ private fun AnimatedTextAreaWithCoordinator(
     DisposableEffect(targetId) {
         coordinator.registerTarget(target)
         onDispose {
-            coordinator.unregisterTarget(targetId)
+            coordinator.detachTarget(targetId)
         }
     }
 

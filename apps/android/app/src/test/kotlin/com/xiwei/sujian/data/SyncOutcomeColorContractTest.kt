@@ -43,7 +43,7 @@ class SyncOutcomeColorContractTest {
 
     @Test
     fun retryableFailure_mapsToFailed() {
-        val statuses = listOf(SyncStatus.RecoverableError, SyncStatus.Error)
+        val statuses = listOf(SyncStatus.RecoverableError)
         statuses.forEach { status ->
             val outcome = SyncOutcome.RetryableFailure(status)
             assertEquals("Expected Failed for $status", SyncIndicatorState.Failed, outcome.expectedIndicator())
@@ -52,7 +52,7 @@ class SyncOutcomeColorContractTest {
 
     @Test
     fun terminalFailure_mapsToFailed() {
-        val statuses = listOf(SyncStatus.Conflict, SyncStatus.PartialConflict, SyncStatus.FatalError, SyncStatus.DirtyRepoBlocked)
+        val statuses = listOf(SyncStatus.Error, SyncStatus.Conflict, SyncStatus.PartialConflict, SyncStatus.FatalError, SyncStatus.DirtyRepoBlocked)
         statuses.forEach { status ->
             val outcome = SyncOutcome.TerminalFailure(status)
             assertEquals("Expected Failed for $status", SyncIndicatorState.Failed, outcome.expectedIndicator())

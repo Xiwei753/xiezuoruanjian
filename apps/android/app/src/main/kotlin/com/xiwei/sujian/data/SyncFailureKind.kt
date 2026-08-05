@@ -42,8 +42,8 @@ enum class SyncFailureKind {
          * 用于正式同步成功路径中 Core 报告的失败状态，与 Bridge 错误码路径共用同一类型。
          */
         fun fromSyncStatus(status: com.xiwei.sujian.model.SyncStatus): SyncFailureKind = when (status) {
-            com.xiwei.sujian.model.SyncStatus.RecoverableError,
-            com.xiwei.sujian.model.SyncStatus.Error -> RetryableNetwork
+            com.xiwei.sujian.model.SyncStatus.RecoverableError -> RetryableNetwork
+            com.xiwei.sujian.model.SyncStatus.Error -> Fatal
             com.xiwei.sujian.model.SyncStatus.Conflict,
             com.xiwei.sujian.model.SyncStatus.PartialConflict -> Conflict
             com.xiwei.sujian.model.SyncStatus.DirtyRepoBlocked -> DirtyRepository

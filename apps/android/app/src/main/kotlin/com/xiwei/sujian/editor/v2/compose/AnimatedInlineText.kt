@@ -89,7 +89,7 @@ fun AnimatedInlineText(
     DisposableEffect(targetId) {
         effectiveCoordinator.registerTarget(target)
         onDispose {
-            effectiveCoordinator.unregisterTarget(targetId)
+            effectiveCoordinator.detachTarget(targetId)
         }
     }
 

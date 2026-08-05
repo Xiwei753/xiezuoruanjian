@@ -449,18 +449,18 @@ private fun StarMapEditorScreen(
                                 }
                                 if (ok) {
                                     editorState = editorState.copy(editingNodeId = null)
-                                    coordinator.unregisterTarget(targetId)
+                                    coordinator.detachTarget(targetId)
                                     loadStarMap()
                                 }
                             }
                         } else {
                             editorState = editorState.copy(editingNodeId = null)
-                            coordinator.unregisterTarget(targetId)
+                            coordinator.detachTarget(targetId)
                         }
                     }
                 target.onCancel = {
                         editorState = editorState.copy(editingNodeId = null)
-                        coordinator.unregisterTarget(targetId)
+                        coordinator.detachTarget(targetId)
                     }
                 target.onEditingStateChanged = { state ->
                         if (state == EditingState.IDLE || state == EditingState.RELEASED) {
