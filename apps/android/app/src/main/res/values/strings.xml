@@ -326,6 +326,8 @@
     <string name="sync_block_secure_storage_unavailable">安全存储不可用，无法保存同步凭据</string>
     <string name="sync_migration_warning">旧版凭据迁移失败，请重新输入同步 Token</string>
     <string name="sync_already_running">同步正在执行中，请稍后再试</string>
+    <string name="sync_terminal_failure">同步遇到不可恢复错误</string>
+    <string name="sync_retryable_failure">同步遇到临时错误，可重试</string>
 
     <!-- WorkspaceRepository Exception messages -->
     <string name="repo_workspace_init_failed">工作区初始化失败: %1$s</string>

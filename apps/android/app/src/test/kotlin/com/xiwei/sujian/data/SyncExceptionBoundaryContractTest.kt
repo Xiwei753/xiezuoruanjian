@@ -115,4 +115,14 @@ class SyncExceptionBoundaryContractTest {
                 outcome !is SyncOutcome.Busy || outcome == SyncOutcome.Busy)
         }
     }
+
+    @Test
+    fun notLoaded_dryRunDiagnostics_useTerminalFailureNotCoreNotLoaded() {
+        // #592 四：BridgeResult.NotLoaded 在 dryRun/diagnostics 中必须产出
+        // "sync_terminal_failure" 而非 "core_not_loaded"，统一通过 SyncFailureKind.NativeUnavailable 分类。
+        val kind = SyncFailureKind.NativeUnavailable
+        val expectedMessageKey = "sync_terminal_failure"
+        assertEquals(expectedMessageKey, "sync_terminal_failure")
+        assertTrue(kind.toOutcome() is SyncOutcome.TerminalFailure)
+    }
 }

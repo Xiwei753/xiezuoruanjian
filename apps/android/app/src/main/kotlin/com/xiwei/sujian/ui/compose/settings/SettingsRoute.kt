@@ -64,6 +64,7 @@ import kotlinx.parcelize.Parcelize
 import com.xiwei.sujian.data.ExclusiveResult
 import com.xiwei.sujian.data.SyncCoordinator
 import com.xiwei.sujian.data.SyncOutcome
+import com.xiwei.sujian.data.SyncFailureKind
 import com.xiwei.sujian.data.SyncSession
 import com.xiwei.sujian.model.SyncTrigger
 
@@ -502,7 +503,7 @@ class SettingsViewModel(
                             ))
                         }
                         is BridgeResult.Error -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "dry_run_error", sanitizedDiagnostic = r.message))
-                        BridgeResult.NotLoaded -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "core_not_loaded"))
+                        BridgeResult.NotLoaded -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_terminal_failure", sanitizedDiagnostic = SyncFailureKind.NativeUnavailable.name))
                     }
                 }
             }
@@ -564,7 +565,7 @@ class SettingsViewModel(
                             ))
                         }
                         is BridgeResult.Error -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "diagnostics_error", sanitizedDiagnostic = r.message))
-                        BridgeResult.NotLoaded -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "core_not_loaded"))
+                        BridgeResult.NotLoaded -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_terminal_failure", sanitizedDiagnostic = SyncFailureKind.NativeUnavailable.name))
                     }
                 }
             }
