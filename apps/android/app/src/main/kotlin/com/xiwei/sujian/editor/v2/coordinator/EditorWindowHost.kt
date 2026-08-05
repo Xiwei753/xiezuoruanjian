@@ -2,9 +2,6 @@ package com.xiwei.sujian.editor.v2.coordinator
 
 import android.content.Context
 import android.graphics.Rect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import com.xiwei.sujian.data.AppServiceBridge
 import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
@@ -47,10 +44,9 @@ class EditorWindowHost(
     private var sharedEditorView: SujianEditorView? = null
     val windowFrameClock: WindowDisplayFrameClock = frameClock ?: WindowDisplayFrameClock()
 
-    var activeTargetGeometry: Rect by mutableStateOf(Rect())
-        private set
-    var activeTargetTransform: Transform2D by mutableStateOf(Transform2D.IDENTITY)
-        private set
+    // #595 一：窗口坐标追踪（activeTargetGeometry/activeTargetTransform）已随根壳
+    // 覆盖层 AnimatedTextEditorSlot 一并删除。正文编辑器现在由 WritingEditorSurface
+    // 在正文 Box 内直接持有 AndroidView，使用局部坐标，不再需要窗口级几何缓存。
 
     // ── Delegated session-level state ──
     // #595 二：会话层用 StateFlow 暴露，窗口层转发给 Compose 消费者用 collectAsState()。
@@ -121,24 +117,14 @@ class EditorWindowHost(
         targetProjections.remove(targetId)?.release()
         targets.remove(targetId)
         sessionCoordinator.closeTarget(targetId, reason)
-        if (activeTargetId == null) {
-            activeTargetGeometry = Rect()
-            activeTargetTransform = Transform2D.IDENTITY
-        }
     }
 
     fun updateTargetGeometry(targetId: String, geometry: Rect) {
         targets[targetId]?.updateGeometry(geometry)
-        if (targetId == activeTargetId) {
-            activeTargetGeometry = geometry
-        }
     }
 
     fun updateTargetTransform(targetId: String, transform: Transform2D) {
         targets[targetId]?.updateTransform(transform)
-        if (targetId == activeTargetId) {
-            activeTargetTransform = transform
-        }
     }
 
     fun updateTargetText(targetId: String, text: String) {
@@ -236,8 +222,6 @@ class EditorWindowHost(
         val bindInfo = sessionCoordinator.prepareSessionForEdit(targetId, initialSelection, windowId) ?: return false
 
         val target = targets[targetId] ?: return false
-        activeTargetGeometry = target.currentGeometry
-        activeTargetTransform = target.currentTransform
         target.onEditingStateChanged?.invoke(EditingState.BINDING)
 
         val view = getOrCreateEditorView()
@@ -271,11 +255,6 @@ class EditorWindowHost(
         installContentCallback(view, target)
         installCommitRequestedCallback(view)
         installCancelRequestedCallback(view)
-
-        val geometry = target.currentGeometry
-        if (geometry.width() > 0 && geometry.height() > 0) {
-            activeTargetGeometry = geometry
-        }
 
         sessionCoordinator.completeWindowAttach(windowId, targetId, bindInfo.sessionId)
         target.onEditingStateChanged?.invoke(EditingState.EDITING)
@@ -358,8 +337,6 @@ class EditorWindowHost(
         return sessionCoordinator.commitActiveSession(finalText).also { success ->
             if (success) {
                 target?.onEditingStateChanged?.invoke(EditingState.IDLE)
-                activeTargetGeometry = Rect()
-                activeTargetTransform = Transform2D.IDENTITY
             }
         }
     }
@@ -374,8 +351,6 @@ class EditorWindowHost(
         return sessionCoordinator.cancelActiveSession().also { success ->
             if (success) {
                 target?.onEditingStateChanged?.invoke(EditingState.IDLE)
-                activeTargetGeometry = Rect()
-                activeTargetTransform = Transform2D.IDENTITY
             }
         }
     }
@@ -518,8 +493,6 @@ class EditorWindowHost(
         targetProjections.values.forEach { it.release() }
         targetProjections.clear()
         windowFrameClock.release()
-        activeTargetGeometry = Rect()
-        activeTargetTransform = Transform2D.IDENTITY
     }
 
     /**
@@ -542,8 +515,6 @@ class EditorWindowHost(
         targetProjections.clear()
         windowFrameClock.release()
         sessionCoordinator.releaseHost()
-        activeTargetGeometry = Rect()
-        activeTargetTransform = Transform2D.IDENTITY
     }
 
     // ── Private helpers ──
