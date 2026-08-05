@@ -18,7 +18,7 @@ import kotlinx.coroutines.withContext
  * 全部调用 [runSync]，不再自行切换状态。
  */
 object SyncCoordinator {
-    private var settingsRepository: SettingsRepository? = null
+    private lateinit var settingsRepository: SettingsRepository
 
     fun initialize(settingsRepository: SettingsRepository) {
         this.settingsRepository = settingsRepository
@@ -32,13 +32,13 @@ object SyncCoordinator {
      *   返回 null 表示未配置或仓库未初始化，调用方应视为无操作。
      */
     suspend fun runSync(trigger: SyncTrigger): SyncResult? {
-        val repo = settingsRepository ?: return null
-        val config = withContext(Dispatchers.IO) { repo.loadSyncConfig() }
+        if (!::settingsRepository.isInitialized) return null
+        val config = withContext(Dispatchers.IO) { settingsRepository.loadSyncConfig() }
         if (config.enabled != true) {
             SyncStatusRepository.notifyUnconfigured()
             return null
         }
-        val capability = withContext(Dispatchers.IO) { repo.getSyncCapability() }
+        val capability = withContext(Dispatchers.IO) { settingsRepository.getSyncCapability() }
         if (!capability.canRun) {
             SyncStatusRepository.notifyUnconfigured()
             return null
@@ -46,7 +46,7 @@ object SyncCoordinator {
 
         val exclusiveResult = SyncSession.runExclusive { _ ->
             SyncStatusRepository.notifySyncStarted()
-            val bridgeResult = withContext(Dispatchers.IO) { repo.performSync(config) }
+            val bridgeResult = withContext(Dispatchers.IO) { settingsRepository.performSync(config) }
             resolveAndPublish(bridgeResult)
             bridgeResult
         }

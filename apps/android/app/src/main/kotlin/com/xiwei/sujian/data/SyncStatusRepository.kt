@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 
 object SyncStatusRepository {
-    private var settingsRepository: SettingsRepository? = null
+    private lateinit var settingsRepository: SettingsRepository
 
     private val _state = MutableStateFlow(SyncIndicatorState.Unconfigured)
     val state: StateFlow<SyncIndicatorState> = _state.asStateFlow()
@@ -35,15 +35,15 @@ object SyncStatusRepository {
     }
 
     suspend fun refreshState() {
-        val repo = settingsRepository ?: return
+        if (!::settingsRepository.isInitialized) return
         val indicatorState = withContext(Dispatchers.IO) {
-            val config = repo.loadSyncConfig()
-            val capability = repo.getSyncCapability()
+            val config = settingsRepository.loadSyncConfig()
+            val capability = settingsRepository.getSyncCapability()
             when {
                 config.enabled != true -> SyncIndicatorState.Unconfigured
                 !capability.canRun -> SyncIndicatorState.Unconfigured
                 else -> {
-                    val syncState = repo.loadSyncState()
+                    val syncState = settingsRepository.loadSyncState()
                     when (syncState.status) {
                         SyncStatus.Syncing -> SyncIndicatorState.Syncing
                         SyncStatus.Success,
