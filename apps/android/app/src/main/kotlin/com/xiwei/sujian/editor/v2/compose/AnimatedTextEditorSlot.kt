@@ -66,11 +66,8 @@ fun AnimatedTextEditorSlot(
 
     val themeColors = EditorThemeAdapter.extractColors()
 
-    DisposableEffect(Unit) {
-        onDispose {
-            coordinator.releaseHost()
-        }
-    }
+    // #592 三：窗口宿主释放由 SujianApp DisposableEffect 统一处理，
+    // 此 slot 不再自行 releaseHost，避免重复释放与配置变化时的竞态。
 
     Box(
         modifier = modifier

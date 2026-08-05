@@ -16,7 +16,7 @@ import org.junit.runner.RunWith
 /**
  * “保存并同步”串行事务契约（#592 三）：
  *
- * - PerformSync 必须通过 SaveSyncAndRun 命令进入 saveChannel 串行队列，
+ * - PerformSync 必须通过 SaveAndRunSync 命令进入 saveChannel 串行队列，
  *   不允许绕过保存队列直接写 config/secrets；
  * - 事务只保存“捕获 revision 对应的值”：若保存期间已有更新版本的修改排队/合并，
  *   事务不得用旧值反向覆盖磁盘新值，也不得把更新版本误标记为已保存；
@@ -106,7 +106,7 @@ class SyncSaveAndRunTransactionContractTest {
             Thread.sleep(50)
         }
         fail(
-            "SaveSyncAndRun transaction did not reach terminal state within ${timeoutMs}ms; " +
+            "SaveAndRunSync transaction did not reach terminal state within ${timeoutMs}ms; " +
                 "state=${vm.uiState.value.performSyncState}",
         )
     }

@@ -105,12 +105,12 @@ class SettingsViewModelTest {
             remoteUrl = "https://unit.example/repo.git",
         )
         vm.handleIntent(SettingsIntent.UpdateSyncConfig(config))
-        // 保存并同步必须走 SaveSyncAndRun 串行事务（保存队列），并结束在明确终态：
+        // 保存并同步必须走 SaveAndRunSync 串行事务（保存队列屏障），并结束在明确终态：
         // 未配置 → 失败；不允许绕过保存队列或停留在 RUNNING/IDLE（#592）。
         vm.handleIntent(SettingsIntent.PerformSync)
         awaitUntil(
             predicate = { vm.uiState.value.performSyncState == SyncCommandState.FAILURE },
-            message = "PerformSync must end in terminal FAILURE state via SaveSyncAndRun transaction",
+            message = "PerformSync must end in terminal FAILURE state via SaveAndRunSync transaction",
         )
         assertEquals(SyncCommandState.FAILURE, vm.uiState.value.performSyncState)
     }

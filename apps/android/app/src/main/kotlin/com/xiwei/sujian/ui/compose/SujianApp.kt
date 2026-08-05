@@ -20,6 +20,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.data.WorkspaceUseCase
 import com.xiwei.sujian.editor.v2.compose.LocalAnimatedTextEditorCoordinator
@@ -66,12 +67,12 @@ fun SujianApp(
             context.applicationContext, deps.appServiceBridge
         )
     }
-    DisposableEffect(windowCoordinator, activityRef) {
-        val act = activityRef ?: return@DisposableEffect onDispose { }
+    // #592 三：每次组合离开都释放窗口宿主，包括配置变化。
+    // 旧实例的 releaseHost 清理 View、FrameClock 和 Rust 会话；
+    // 新 Activity 的 remember 创建新实例，从 ViewModel 恢复 session 状态。
+    DisposableEffect(windowCoordinator) {
         onDispose {
-            if (!act.isChangingConfigurations) {
-                windowCoordinator.releaseHost()
-            }
+            windowCoordinator.releaseHost()
         }
     }
     val themeController = rememberThemeController(context, deps.settingsRepository)

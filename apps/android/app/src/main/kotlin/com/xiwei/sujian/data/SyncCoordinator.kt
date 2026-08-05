@@ -54,7 +54,6 @@ class SyncCoordinator(
 
             return when (exclusiveResult) {
                 is ExclusiveResult.Busy -> {
-                    syncStatusRepository.refreshState()
                     SyncOutcome.Busy
                 }
                 is ExclusiveResult.Success -> {

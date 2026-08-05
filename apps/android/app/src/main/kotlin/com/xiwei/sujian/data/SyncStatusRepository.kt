@@ -58,6 +58,8 @@ class SyncStatusRepository(
                     }
                 }
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (_: Exception) {
             _state.value
         }

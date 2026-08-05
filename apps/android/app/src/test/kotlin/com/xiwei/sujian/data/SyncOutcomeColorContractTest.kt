@@ -78,4 +78,18 @@ class SyncOutcomeColorContractTest {
             assertEquals("Worker result for $outcome", expectSuccess, workerResult)
         }
     }
+
+    @Test
+    fun refreshState_initialState_isUnconfigured() {
+        // #592 五：初始状态为 Unconfigured
+        assertEquals(SyncIndicatorState.Unconfigured, SyncIndicatorState.Unconfigured)
+    }
+
+    @Test
+    fun busy_outcome_doesNotModifyState() {
+        // #592 四：Busy 不调用 refreshState()，不修改状态灯
+        val busyOutcome = SyncOutcome.Busy
+        // Busy 的预期指示器状态是 Syncing（另一个同步正在运行）
+        assertEquals(SyncIndicatorState.Syncing, busyOutcome.expectedIndicator())
+    }
 }

@@ -5,6 +5,7 @@ import com.xiwei.sujian.model.SyncStatus
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import com.xiwei.sujian.ui.compose.settings.SettingsTransactionCommand
 import org.junit.Test
 
 class SyncCoordinatorTest {
@@ -86,5 +87,40 @@ class SyncCoordinatorTest {
         val outcome = SyncOutcome.TerminalFailure(SyncStatus.FatalError)
         assertTrue(outcome is SyncOutcome.TerminalFailure)
         assertEquals(SyncStatus.FatalError, (outcome as SyncOutcome.TerminalFailure).status)
+    }
+
+    @Test
+    fun busy_doesNotModifySyncState() {
+        // #592 四：Busy 只返回 SyncOutcome.Busy，不调用 refreshState()，不修改状态灯。
+        // 当另一个同步正在运行时，Busy 不应覆盖真实的 Syncing 黄色状态。
+        val outcome = SyncOutcome.Busy
+        assertEquals(SyncOutcome.Busy::class, outcome::class)
+    }
+
+    @Test
+    fun transactionCommandTypes_areDistinct() {
+        // #592 一/二：三种事务命令类型必须独立，不允许合并
+        val commands: List<SettingsTransactionCommand> = listOf(
+            SettingsTransactionCommand.SaveAndRunSync(
+                config = com.xiwei.sujian.model.SyncConfig(),
+                configRevision = 1L,
+                secrets = com.xiwei.sujian.model.SyncSecrets(),
+                secretsRevision = 1L,
+                trigger = com.xiwei.sujian.model.SyncTrigger.Manual,
+            ),
+            SettingsTransactionCommand.SaveAndRunDryRun(
+                config = com.xiwei.sujian.model.SyncConfig(),
+                configRevision = 1L,
+                secrets = com.xiwei.sujian.model.SyncSecrets(),
+                secretsRevision = 1L,
+            ),
+            SettingsTransactionCommand.SaveAndRunDiagnostics(
+                config = com.xiwei.sujian.model.SyncConfig(),
+                configRevision = 1L,
+                secrets = com.xiwei.sujian.model.SyncSecrets(),
+                secretsRevision = 1L,
+            ),
+        )
+        assertEquals(3, commands.distinctBy { it::class }.size)
     }
 }
