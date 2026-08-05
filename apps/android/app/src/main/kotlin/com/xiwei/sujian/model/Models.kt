@@ -52,7 +52,7 @@ data class LocalSettings(
     val statsDeviceId: String? = null,
     val desktopSidebarWidth: Double = 240.0,
     val desktopEditorWidth: Double = 0.0,
-    val editorCoordinatedTextCursorAnimationEnabled: Boolean = false,
+    val editorCoordinatedTextCursorAnimationEnabled: Boolean = true,
     val diagnosticsEnabled: Boolean = true,
     val diagnosticsVerbose: Boolean = true,
     val useSelfRenderEditorOnAndroid: Boolean = true,
