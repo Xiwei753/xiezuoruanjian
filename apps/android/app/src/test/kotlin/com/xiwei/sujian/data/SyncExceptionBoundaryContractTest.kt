@@ -1,5 +1,7 @@
 package com.xiwei.sujian.data
 
+import com.xiwei.sujian.data.BridgeResult
+import com.xiwei.sujian.data.SyncFailureKind
 import com.xiwei.sujian.model.SyncStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -20,24 +22,29 @@ import org.junit.Test
 class SyncExceptionBoundaryContractTest {
 
     @Test
-    fun retryableErrorCodes_areExactlyDefined() {
-        val expected = setOf(
-            "SYNC_NETWORK_UNAVAILABLE",
-            "SYNC_RATE_LIMITED",
-            "IO_ERROR",
-            "NATIVE_NOT_LOADED",
+    fun nativeNotLoaded_classifiesAsNativeUnavailable() {
+        val error = BridgeResult.Error(
+            com.xiwei.sujian.data.ResultEnvelope.errorOf("NATIVE_NOT_LOADED", "test")
         )
-        assertEquals(expected, SyncCoordinator.RETRYABLE_ERROR_CODES)
+        val kind = SyncFailureKind.fromErrorCode(error.code)
+        assertEquals(SyncFailureKind.NativeUnavailable, kind)
     }
 
     @Test
-    fun authFailure_isNotRetryable() {
-        assertTrue("SYNC_AUTH_FAILED should be terminal",
-            "SYNC_AUTH_FAILED" !in SyncCoordinator.RETRYABLE_ERROR_CODES)
+    fun nativeNotLoaded_errorCode_and_notLoaded_converge() {
+        val fromErrorCode = SyncFailureKind.fromErrorCode("NATIVE_NOT_LOADED")
+        assertEquals(SyncFailureKind.NativeUnavailable, fromErrorCode)
+        val outcome = fromErrorCode.toOutcome()
+        assertTrue(outcome is SyncOutcome.TerminalFailure)
     }
 
     @Test
-    fun conflictErrors_areNotRetryable() {
+    fun authFailure_isAuthentication() {
+        assertEquals(SyncFailureKind.Authentication, SyncFailureKind.fromErrorCode("SYNC_AUTH_FAILED"))
+    }
+
+    @Test
+    fun conflictErrors_areConflictKind() {
         val conflictCodes = listOf(
             "SYNC_CONFLICT",
             "SYNC_DOCUMENT_CONFLICT",
@@ -46,19 +53,19 @@ class SyncExceptionBoundaryContractTest {
             "SYNC_CONFLICT_DETECTED",
         )
         conflictCodes.forEach { code ->
-            assertTrue("$code should be terminal", code !in SyncCoordinator.RETRYABLE_ERROR_CODES)
+            assertEquals("$code should be Conflict", SyncFailureKind.Conflict, SyncFailureKind.fromErrorCode(code))
         }
     }
 
     @Test
-    fun protocolErrors_areNotRetryable() {
+    fun protocolErrors_areProtocolKind() {
         val protocolCodes = listOf(
             "SYNC_NON_FAST_FORWARD",
             "SYNC_UNRELATED_HISTORIES",
             "SYNC_INCOMPLETE_TRANSACTION",
         )
         protocolCodes.forEach { code ->
-            assertTrue("$code should be terminal", code !in SyncCoordinator.RETRYABLE_ERROR_CODES)
+            assertEquals("$code should be Protocol", SyncFailureKind.Protocol, SyncFailureKind.fromErrorCode(code))
         }
     }
 

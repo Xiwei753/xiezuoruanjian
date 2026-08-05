@@ -23,13 +23,17 @@ class SyncCoordinator(
     private val syncStatusRepository: SyncStatusRepository,
 ) {
     /**
-     * #592 三：统一异常边界 — 每条路径必须结束在明确终态。
+     * #592 四：统一异常边界 — 每条路径必须结束在明确终态。
      *
+     * 所有失败路径通过 [SyncFailureKind] 唯一分类：
      * - CancellationException → 原样抛出
-     * - 临时网络/IO 异常 → RetryableFailure，红色
-     * - 配置、冲突、脏仓库、致命协议错误 → TerminalFailure，红色
+     * - RetryableNetwork / RetryableIo → RetryableFailure，红色
+     * - Authentication / Conflict / DirtyRepository / Protocol / NativeUnavailable / Fatal → TerminalFailure，红色
      * - 未配置或关闭 → Unconfigured/Disabled，灰色
      * - performSync 返回 Syncing → 协议错误，TerminalFailure
+     *
+     * BridgeResult.NotLoaded 与 errorCode "NATIVE_NOT_LOADED" 统一进入 NativeUnavailable，
+     * 不再分别维护字符串白名单和独立分支。
      */
     suspend fun runSync(trigger: SyncTrigger): SyncOutcome {
         DiagnosticsEvents.syncEvent(trigger.name.lowercase(), "start")
@@ -59,11 +63,10 @@ class SyncCoordinator(
                 is ExclusiveResult.Success -> {
                     when (val br = exclusiveResult.value) {
                         is BridgeResult.Success -> mapToOutcome(br.data)
-                        is BridgeResult.Error -> classifyBridgeError(br)
+                        is BridgeResult.Error -> classifyFailure(br).toOutcome()
                         BridgeResult.NotLoaded -> {
-                            // 原生库未加载是致命错误，不可重试
-                            DiagnosticsLogger.w("SyncCoordinator", "Native library not loaded — terminal failure")
-                            SyncOutcome.TerminalFailure(SyncStatus.FatalError)
+                            DiagnosticsLogger.w("SyncCoordinator", "Native library not loaded — NativeUnavailable")
+                            SyncFailureKind.NativeUnavailable.toOutcome()
                         }
                     }
                 }
@@ -71,37 +74,24 @@ class SyncCoordinator(
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: IOException) {
-            // 临时 IO/网络异常 → 可重试
             DiagnosticsEvents.syncEvent(trigger.name.lowercase(), "io_exception: " + e.message)
             syncStatusRepository.notifySyncFailed()
-            return SyncOutcome.RetryableFailure(SyncStatus.RecoverableError)
+            return SyncFailureKind.RetryableIo.toOutcome()
         } catch (e: RepositoryException) {
-            // 仓库层异常按配置/协议错误处理 → 不可重试
             DiagnosticsEvents.syncEvent(trigger.name.lowercase(), "repository_exception: " + e.message)
             syncStatusRepository.notifySyncFailed()
-            return SyncOutcome.TerminalFailure(SyncStatus.FatalError)
+            return SyncFailureKind.Fatal.toOutcome()
         } catch (e: Exception) {
-            // 其他未知异常 → 可重试（保守策略：可能是临时网络/系统问题）
             DiagnosticsEvents.syncEvent(trigger.name.lowercase(), "exception: " + e.message)
             syncStatusRepository.notifySyncFailed()
-            return SyncOutcome.RetryableFailure(SyncStatus.Error)
+            return SyncFailureKind.RetryableNetwork.toOutcome()
         }
     }
 
-    /**
-     * BridgeResult.Error 按 errorCode 分类：
-     * - 网络相关/IO 相关/可重试 → RetryableFailure
-     * - 认证/冲突/协议/配置错误 → TerminalFailure
-     */
-    private fun classifyBridgeError(error: BridgeResult.Error): SyncOutcome {
-        val code = error.code
-        val isRetryable = code in RETRYABLE_ERROR_CODES
-        return if (isRetryable) {
-            SyncOutcome.RetryableFailure(SyncStatus.RecoverableError)
-        } else {
-            SyncOutcome.TerminalFailure(SyncStatus.FatalError)
-        }
-    }
+    internal fun classifyFailure(error: BridgeResult.Error): SyncFailureKind =
+        SyncFailureKind.fromErrorCode(error.code)
+
+
 
     private fun mapToOutcome(result: SyncResult): SyncOutcome = when (result.status) {
         SyncStatus.Success,
@@ -118,7 +108,6 @@ class SyncCoordinator(
         SyncStatus.DirtyRepoBlocked -> SyncOutcome.TerminalFailure(result.status)
 
         SyncStatus.Syncing -> {
-            // performSync 返回 Syncing 是协议错误，不可重试
             DiagnosticsLogger.w("SyncCoordinator", "performSync returned Syncing — protocol error, mapping to terminal failure")
             SyncOutcome.TerminalFailure(SyncStatus.FatalError)
         }
@@ -159,15 +148,5 @@ class SyncCoordinator(
                 syncStatusRepository.notifyUnconfigured()
             }
         }
-    }
-
-    companion object {
-        /** 可重试的 Bridge errorCode：网络不可用、限流、临时 IO 错误 */
-        internal val RETRYABLE_ERROR_CODES = setOf(
-            "SYNC_NETWORK_UNAVAILABLE",
-            "SYNC_RATE_LIMITED",
-            "IO_ERROR",
-            "NATIVE_NOT_LOADED",
-        )
     }
 }

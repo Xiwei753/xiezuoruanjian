@@ -1,6 +1,8 @@
 package com.xiwei.sujian.data
 
 import com.xiwei.sujian.model.SyncIndicatorState
+import com.xiwei.sujian.data.BridgeResult
+import com.xiwei.sujian.data.SyncFailureKind
 import com.xiwei.sujian.model.SyncStatus
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -50,26 +52,47 @@ class SyncCoordinatorTest {
     }
 
     @Test
-    fun bridgeError_retryableCodes_mapToRetryableFailure() {
-        // #592 三：网络不可用、限流、IO 错误 → 可重试
-        val retryableCodes = listOf("SYNC_NETWORK_UNAVAILABLE", "SYNC_RATE_LIMITED", "IO_ERROR", "NATIVE_NOT_LOADED")
-        retryableCodes.forEach { code ->
-            assertTrue("$code should be in RETRYABLE_ERROR_CODES",
-                code in SyncCoordinator.RETRYABLE_ERROR_CODES)
+    fun bridgeError_retryableCodes_classifyCorrectly() {
+        val networkCodes = listOf("SYNC_NETWORK_UNAVAILABLE", "SYNC_RATE_LIMITED")
+        networkCodes.forEach { code ->
+            val error = BridgeResult.Error(
+                com.xiwei.sujian.data.ResultEnvelope.errorOf(code, "test")
+            )
+            val kind = SyncFailureKind.fromErrorCode(error.code)
+            assertTrue("$code should be RetryableNetwork, got $kind",
+                kind == SyncFailureKind.RetryableNetwork)
         }
+        val error = BridgeResult.Error(
+            com.xiwei.sujian.data.ResultEnvelope.errorOf("IO_ERROR", "test")
+        )
+        assertEquals(SyncFailureKind.RetryableIo, SyncFailureKind.fromErrorCode(error.code))
     }
 
     @Test
-    fun bridgeError_terminalCodes_mapToTerminalFailure() {
-        // #592 三：认证失败、冲突、协议错误 → 不可重试
-        val terminalCodes = listOf(
-            "SYNC_AUTH_FAILED", "SYNC_CONFLICT", "SYNC_DOCUMENT_CONFLICT",
-            "SYNC_CHECKOUT_CONFLICT", "SYNC_SETTINGS_CONFLICT",
-            "SYNC_NON_FAST_FORWARD", "SYNC_UNRELATED_HISTORIES",
+    fun nativeNotLoaded_isNativeUnavailable_notRetryableNetwork() {
+        val error = BridgeResult.Error(
+            com.xiwei.sujian.data.ResultEnvelope.errorOf("NATIVE_NOT_LOADED", "test")
         )
-        terminalCodes.forEach { code ->
-            assertTrue("$code should NOT be in RETRYABLE_ERROR_CODES",
-                code !in SyncCoordinator.RETRYABLE_ERROR_CODES)
+        val kind = SyncFailureKind.fromErrorCode(error.code)
+        assertEquals(SyncFailureKind.NativeUnavailable, kind)
+        assertTrue(kind.toOutcome() is SyncOutcome.TerminalFailure)
+    }
+
+    @Test
+    fun bridgeError_terminalCodes_classifyAsTerminal() {
+        val authCodes = listOf("SYNC_AUTH_FAILED")
+        authCodes.forEach { code ->
+            assertEquals(SyncFailureKind.Authentication, SyncFailureKind.fromErrorCode(code))
+        }
+        val conflictCodes = listOf("SYNC_CONFLICT", "SYNC_DOCUMENT_CONFLICT",
+            "SYNC_CHECKOUT_CONFLICT", "SYNC_SETTINGS_CONFLICT", "SYNC_CONFLICT_DETECTED")
+        conflictCodes.forEach { code ->
+            assertEquals(SyncFailureKind.Conflict, SyncFailureKind.fromErrorCode(code))
+        }
+        val protocolCodes = listOf("SYNC_NON_FAST_FORWARD", "SYNC_UNRELATED_HISTORIES",
+            "SYNC_INCOMPLETE_TRANSACTION")
+        protocolCodes.forEach { code ->
+            assertEquals(SyncFailureKind.Protocol, SyncFailureKind.fromErrorCode(code))
         }
     }
 

@@ -200,7 +200,10 @@ class SettingsViewModel(
     init {
         loadInitial()
         viewModelScope.launch {
-            for (item in saveChannel) {
+            var nextItem: QueueItem? = null
+            while (true) {
+                val item = nextItem ?: saveChannel.receive()
+                nextItem = null
                 when (item) {
                     is QueueItem.Save -> {
                         mergeCommand(item.command)
@@ -209,17 +212,13 @@ class SettingsViewModel(
                             if (next is QueueItem.Save) {
                                 mergeCommand(next.command)
                             } else {
-                                if (next != null) {
-                                    // Put the non-save item back by re-sending; Channel is UNLIMITED so trySend always succeeds
-                                    saveChannel.trySend(next)
-                                }
+                                nextItem = next
                                 break
                             }
                         }
                         flushPending()
                     }
                     is QueueItem.Transaction -> {
-                        // Transaction is a barrier: flush any pending saves first, then execute the transaction
                         flushPending()
                         executeTransaction(item.command)
                     }
@@ -396,19 +395,14 @@ class SettingsViewModel(
         secrets: com.xiwei.sujian.model.SyncSecrets,
         secretsRevision: Long,
     ): Boolean {
+        val configSaveResult = withContext(Dispatchers.IO) { settingsRepo.saveSyncConfig(config) }
+        if (configSaveResult is SettingsSaveResult.Failed) return false
         if (syncConfigRevision == configRevision) {
-            val configSaveResult = withContext(Dispatchers.IO) { settingsRepo.saveSyncConfig(config) }
-            if (configSaveResult is SettingsSaveResult.Failed) return false
             syncConfigPersistedRevision = configRevision
         }
+        val secretsSaveResult = withContext(Dispatchers.IO) { settingsRepo.saveSyncSecrets(secrets) }
+        if (secretsSaveResult is SettingsSaveResult.Failed) return false
         if (syncSecretsRevision == secretsRevision) {
-            val secretsSaveResult = withContext(Dispatchers.IO) { settingsRepo.saveSyncSecrets(secrets) }
-            if (secretsSaveResult is SettingsSaveResult.Failed) {
-                if (syncConfigRevision == configRevision) {
-                    syncConfigPersistedRevision = configRevision
-                }
-                return false
-            }
             syncSecretsPersistedRevision = secretsRevision
         }
         return true

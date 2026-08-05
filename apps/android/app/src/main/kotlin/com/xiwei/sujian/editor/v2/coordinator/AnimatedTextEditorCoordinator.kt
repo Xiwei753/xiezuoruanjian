@@ -381,6 +381,18 @@ class AnimatedTextEditorCoordinator(
         sharedEditorView?.updateHostGeometry(width, height)
     }
 
+    fun releaseWindowOnly() {
+        clearActiveCallbacks()
+        sharedEditorView?.let { view ->
+            view.unbindSession("config_change")
+            view.setFrameClock(null)
+            view.release()
+        }
+        sharedEditorView = null
+        windowFrameClock.release()
+        editingState = EditingState.IDLE
+    }
+
     fun releaseHost() {
         clearActiveCallbacks()
         if (activeTargetId != null) {

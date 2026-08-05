@@ -62,17 +62,18 @@ fun SujianApp(
         testProvider?.invoke(context) ?: requireNotNull(app).dependencies
     }
     val activityRef = androidx.activity.compose.LocalActivity.current as? androidx.activity.ComponentActivity
-    val windowCoordinator = remember {
-        com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator(
-            context.applicationContext, deps.appServiceBridge
-        )
-    }
-    // #592 三：每次组合离开都释放窗口宿主，包括配置变化。
-    // 旧实例的 releaseHost 清理 View、FrameClock 和 Rust 会话；
-    // 新 Activity 的 remember 创建新实例，从 ViewModel 恢复 session 状态。
+    val sessionVm: com.xiwei.sujian.editor.v2.coordinator.EditorSessionViewModel = viewModel()
+    val windowCoordinator = sessionVm.getOrCreateCoordinator(
+        context.applicationContext, deps.appServiceBridge,
+        com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
+        com.xiwei.sujian.editor.v2.visual.TransactionIdSource(),
+    )
+    // #592 三：配置变化时只释放窗口宿主（View、FrameClock），Rust 会话由
+    // EditorSessionViewModel 持有并跨配置变化存活；Activity 永久结束时
+    // ViewModel.onCleared() 调用 releaseHost() 关闭全部会话。
     DisposableEffect(windowCoordinator) {
         onDispose {
-            windowCoordinator.releaseHost()
+            windowCoordinator.releaseWindowOnly()
         }
     }
     val themeController = rememberThemeController(context, deps.settingsRepository)
