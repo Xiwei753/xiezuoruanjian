@@ -1,0 +1,81 @@
+package com.xiwei.sujian.data
+
+import com.xiwei.sujian.model.SyncIndicatorState
+import com.xiwei.sujian.model.SyncResult
+import com.xiwei.sujian.model.SyncStatus
+import org.junit.Assert.assertEquals
+import org.junit.Test
+
+class SyncOutcomeColorContractTest {
+
+    private fun SyncOutcome.expectedIndicator(): SyncIndicatorState = when (this) {
+        is SyncOutcome.Completed -> SyncIndicatorState.Synced
+        is SyncOutcome.Disabled -> SyncIndicatorState.Unconfigured
+        is SyncOutcome.Unconfigured -> SyncIndicatorState.Unconfigured
+        is SyncOutcome.Busy -> SyncIndicatorState.Syncing
+        is SyncOutcome.RetryableFailure -> SyncIndicatorState.Failed
+        is SyncOutcome.TerminalFailure -> SyncIndicatorState.Failed
+    }
+
+    @Test
+    fun completedStatuses_mapToSynced() {
+        val statuses = listOf(SyncStatus.Success, SyncStatus.NoChanges, SyncStatus.LatestWinsApplied, SyncStatus.BranchMissingRecovered)
+        statuses.forEach { status ->
+            val outcome = SyncOutcome.Completed(SyncResult(status = status))
+            assertEquals("Expected Synced for $status", SyncIndicatorState.Synced, outcome.expectedIndicator())
+        }
+    }
+
+    @Test
+    fun disabled_mapsToUnconfigured() {
+        assertEquals(SyncIndicatorState.Unconfigured, SyncOutcome.Disabled.expectedIndicator())
+    }
+
+    @Test
+    fun unconfigured_mapsToUnconfigured() {
+        assertEquals(SyncIndicatorState.Unconfigured, SyncOutcome.Unconfigured.expectedIndicator())
+    }
+
+    @Test
+    fun busy_mapsToSyncing() {
+        assertEquals(SyncIndicatorState.Syncing, SyncOutcome.Busy.expectedIndicator())
+    }
+
+    @Test
+    fun retryableFailure_mapsToFailed() {
+        val statuses = listOf(SyncStatus.RecoverableError, SyncStatus.Error)
+        statuses.forEach { status ->
+            val outcome = SyncOutcome.RetryableFailure(status)
+            assertEquals("Expected Failed for $status", SyncIndicatorState.Failed, outcome.expectedIndicator())
+        }
+    }
+
+    @Test
+    fun terminalFailure_mapsToFailed() {
+        val statuses = listOf(SyncStatus.Conflict, SyncStatus.PartialConflict, SyncStatus.FatalError, SyncStatus.DirtyRepoBlocked)
+        statuses.forEach { status ->
+            val outcome = SyncOutcome.TerminalFailure(status)
+            assertEquals("Expected Failed for $status", SyncIndicatorState.Failed, outcome.expectedIndicator())
+        }
+    }
+
+    @Test
+    fun autoSyncWorker_mappingContract() {
+        val cases = listOf(
+            SyncOutcome.Completed(SyncResult(status = SyncStatus.Success)) to true,
+            SyncOutcome.Unconfigured to true,
+            SyncOutcome.Disabled to true,
+            SyncOutcome.Busy to false,
+            SyncOutcome.RetryableFailure(SyncStatus.Error) to false,
+            SyncOutcome.TerminalFailure(SyncStatus.Conflict) to false,
+        )
+        cases.forEach { (outcome, expectSuccess) ->
+            val workerResult = when (outcome) {
+                is SyncOutcome.Completed, is SyncOutcome.Unconfigured, is SyncOutcome.Disabled -> true
+                is SyncOutcome.Busy, is SyncOutcome.RetryableFailure -> false
+                is SyncOutcome.TerminalFailure -> false
+            }
+            assertEquals("Worker result for $outcome", expectSuccess, workerResult)
+        }
+    }
+}

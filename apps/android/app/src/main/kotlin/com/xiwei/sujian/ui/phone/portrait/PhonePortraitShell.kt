@@ -62,10 +62,20 @@ fun PhonePortraitShell(
     val coroutineScope = rememberCoroutineScope()
 
     val restoreState = sessionViewModel.restoreState
-    val restoredProjectId = (restoreState as? SessionRestoreState.Ready)?.projectId
-    val restoredVolumeId = (restoreState as? SessionRestoreState.Ready)?.volumeId
-    val restoredChapterId = (restoreState as? SessionRestoreState.Ready)?.chapterId
-    val initialHistory = remember(restoreState) {
+
+    if (restoreState !is SessionRestoreState.Ready) {
+        Scaffold(
+            modifier = modifier.fillMaxSize(),
+            containerColor = MaterialTheme.colorScheme.background,
+            contentWindowInsets = WindowInsets.safeDrawing,
+        ) { _ -> }
+        return
+    }
+
+    val restoredProjectId = restoreState.projectId
+    val restoredVolumeId = restoreState.volumeId
+    val restoredChapterId = restoreState.chapterId
+    val initialHistory = remember(restoredProjectId, restoredVolumeId, restoredChapterId) {
         val chain = mutableListOf<ThreePaneScaffoldDestinationItem<WorkspacePaneKey>>(
             ThreePaneScaffoldDestinationItem(WorkspacePaneKey.ProjectList.role, WorkspacePaneKey.ProjectList),
         )
