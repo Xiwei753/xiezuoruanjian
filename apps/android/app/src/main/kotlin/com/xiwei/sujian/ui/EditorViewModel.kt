@@ -86,6 +86,9 @@ data class EditorSettingsState(
 data class EditorUiState(
     val loading: Boolean = false,
     val content: String = "",
+    /** #595 一：当前已加载章节正文的真实文件 hash（ChapterMeta.hash）—
+     *  外部替换协议据此判断 Repository 版本新旧，不再由 UI 猜测。 */
+    val chapterHash: String = "",
     val chapterTitle: String = "",
     val chapterNote: String? = null,
     val saveStatus: SaveStatus = SaveStatus.Idle,
@@ -122,6 +125,12 @@ class EditorViewModel(
 
     private val _events = Channel<EditorEvent>(Channel.BUFFERED)
     val events = _events.receiveAsFlow()
+
+    // #595 一：Repository 真实来源的正文更新事件流 — 章节内容加载完成时发出，
+    // 携带 ChapterMeta 的真实 fileHash。WritingPane 收集该事件执行外部替换协议，
+    // 不再根据字符串差异伪造 revision/source。
+    private val _documentUpdates = Channel<com.xiwei.sujian.editor.v2.coordinator.EditorDocumentUpdate>(Channel.BUFFERED)
+    val documentUpdates: kotlinx.coroutines.flow.Flow<com.xiwei.sujian.editor.v2.coordinator.EditorDocumentUpdate> = _documentUpdates.receiveAsFlow()
 
     private var currentSession: EditorSession? = null
 
@@ -350,9 +359,21 @@ class EditorViewModel(
                     _uiState.value = _uiState.value.copy(
                         loading = false,
                         content = content,
+                        chapterHash = meta.hash,
                         chapterNote = meta.note,
                         editorEnabled = true,
                         saveStatus = SaveStatus.Idle
+                    )
+                    // #595 一：Repository 加载完成即发出真实来源事件（真实 hash）。
+                    // WritingPane 据此决定是否执行外部替换协议；revision 只作参考，
+                    // 最终 SessionState.revision 来自 reset 后的真实 Rust snapshot。
+                    _documentUpdates.trySend(
+                        com.xiwei.sujian.editor.v2.coordinator.EditorDocumentUpdate.RepositoryLoaded(
+                            targetId = "chapter-body:${session.projectId}:${session.volumeId}:${session.chapterId}",
+                            text = content,
+                            fileHash = meta.hash,
+                            revision = 0L,
+                        )
                     )
                     previousText = content
                     initialWordCount = calculateWordCount(content)

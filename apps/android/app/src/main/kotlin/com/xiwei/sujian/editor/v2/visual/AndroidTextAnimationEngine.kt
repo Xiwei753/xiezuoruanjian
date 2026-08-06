@@ -603,13 +603,17 @@ class AndroidTextAnimationEngine(
     }
 
     /**
-     * Release all snapshots owned by this transaction and mark the timeline completed.
+     * Release all snapshots owned by this transaction and mark BOTH timelines completed.
      *
      * Invariant: [transaction.ownedSnapshotIds] is the *precise* ownership set computed by
      * [submit] — it contains only (a) newly captured snapshots referenced by slices/patches,
      * and (b) old-transaction snapshots inherited via ownership transfer. Unreferenced snapshots
      * were already released during [submit], so this method releases exactly the right set
      * without scanning slices or patches.
+     *
+     * #595 七：文字轨和光标轨都必须进入终态。只 complete 文字 timeline 而留下
+     * cursorTimeline 非 Completed，会让 hasActiveAnimation() 持续返回 true，
+     * FrameClock 永久 repost 造成无意义耗电。
      */
     private fun completeTransaction(transaction: PreparedVisualTransaction) {
         val owner = SnapshotOwner.OwnedByTransaction(transaction.transactionId)
@@ -617,15 +621,17 @@ class AndroidTextAnimationEngine(
             resourceStore.release(snapshotId, owner)
         }
         timeline?.complete()
+        cursorTimeline?.complete()
     }
 
-    /** Same ownership invariant as [completeTransaction]; timeline is cancelled instead. */
+    /** Same ownership invariant as [completeTransaction]; both timelines are cancelled instead. */
     private fun cancelTransaction(transaction: PreparedVisualTransaction) {
         val owner = SnapshotOwner.OwnedByTransaction(transaction.transactionId)
         for (snapshotId in transaction.ownedSnapshotIds) {
             resourceStore.release(snapshotId, owner)
         }
         timeline?.cancel()
+        cursorTimeline?.cancel()
     }
 
     /**

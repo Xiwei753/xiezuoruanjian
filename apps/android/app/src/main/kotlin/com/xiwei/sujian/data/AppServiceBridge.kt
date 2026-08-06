@@ -93,8 +93,9 @@ class AppServiceBridge(val holder: WriterAppServiceHolder) {
     fun saveSyncConfig(config: SyncConfig) = syncBridge.saveSyncConfig(config)
     fun loadSyncSecrets() = syncBridge.loadSyncSecrets()
     fun saveSyncSecrets(secrets: SyncSecrets) = syncBridge.saveSyncSecrets(secrets)
-    // #592 五/六：进程级 override 与按 generation 保存凭据。
+    // #592 五/六/#595 十：进程级 override（操作作用域凭据）与按 generation 保存凭据。
     fun setSyncSecretsOverride(secrets: SyncSecrets) = syncBridge.setSyncSecretsOverride(secrets)
+    fun clearSyncSecretsOverride() = syncBridge.clearSyncSecretsOverride()
     fun saveSyncSecretsForGeneration(generation: ULong, secrets: SyncSecrets) = syncBridge.saveSyncSecretsForGeneration(generation, secrets)
     fun loadSyncSecretsForGeneration(generation: ULong) = syncBridge.loadSyncSecretsForGeneration(generation)
     fun loadSyncState() = syncBridge.loadSyncState()

@@ -1078,6 +1078,9 @@ interface WriterAppService {
     void set_sync_secrets_override(SyncSecretsDto secrets);
 
     [Throws=WriterError]
+    void clear_sync_secrets_override();
+
+    [Throws=WriterError]
     boolean save_sync_secrets_for_generation(u64 generation, SyncSecretsDto secrets);
 
     [Throws=WriterError]

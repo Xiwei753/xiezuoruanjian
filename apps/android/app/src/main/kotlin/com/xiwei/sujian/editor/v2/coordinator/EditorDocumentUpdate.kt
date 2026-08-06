@@ -28,6 +28,11 @@ sealed interface EditorDocumentUpdate {
         override val revision: Long,
         val transactionId: Long,
         val operationKind: EditorOperationKind = EditorOperationKind.INSERT,
+        /** #595 四：本次编辑后 Rust 的真实选区（UTF-8 字节）。
+         *  由 View 从 pipeline mirror 读取，会话层据此更新唯一 SessionState，
+         *  不再沿用旧 selection。-1 表示调用方未携带（保留旧值）。 */
+        val selectionAnchorUtf8: Int = -1,
+        val selectionHeadUtf8: Int = -1,
     ) : EditorDocumentUpdate
 
     @Immutable
@@ -36,6 +41,23 @@ sealed interface EditorDocumentUpdate {
         override val text: String,
         override val revision: Long,
         val source: ExternalSource,
+    ) : EditorDocumentUpdate
+
+    /**
+     * #595 一：Repository 真实来源的正文更新事件。
+     *
+     * 由 [com.xiwei.sujian.ui.EditorViewModel] 在章节内容加载完成时发出，
+     * 携带 ChapterMeta 的真实 fileHash 和版本号，不再由 UI 根据字符串差异伪造
+     * revision/source。revision 只在会话已存在时用作新旧判断参考；
+     * 最终进入 [EditorSessionState] 的 revision 永远来自 reset 后的真实 Rust snapshot。
+     */
+    @Immutable
+    data class RepositoryLoaded(
+        override val targetId: String,
+        override val text: String,
+        /** Repository 章节文件的真实 hash（ChapterMeta.hash）— 新旧判断依据。 */
+        val fileHash: String,
+        override val revision: Long,
     ) : EditorDocumentUpdate
 }
 

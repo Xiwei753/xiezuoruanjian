@@ -25,6 +25,12 @@ impl super::WriterAppService {
         Ok(())
     }
 
+    /** #595 十：清除进程级 secrets override（同步操作结束后由平台层调用）。 */
+    pub fn clear_sync_secrets_override(&self) -> Result<(), WriterError> {
+        self.api.core().set_secrets_override(None);
+        Ok(())
+    }
+
     /** #592 五：按 generation 保存凭据到安全存储。 */
     pub fn save_sync_secrets_for_generation(
         &self,

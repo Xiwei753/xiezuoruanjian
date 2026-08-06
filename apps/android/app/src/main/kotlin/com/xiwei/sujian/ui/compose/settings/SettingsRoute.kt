@@ -256,8 +256,8 @@ class SettingsViewModel(
 
             val settings = withContext(Dispatchers.IO) { repo.getLocalSettings() }
             val fontSize = withContext(Dispatchers.IO) { repo.getEffectiveFontSize() }
-            val syncConfig = withContext(Dispatchers.IO) { repo.loadSyncConfig() }
-            val syncSecrets = withContext(Dispatchers.IO) { repo.loadSyncSecrets() }
+            // #595 八：UI 初始化读取活动 generation 的完整 snapshot，不再读 live legacy 槽。
+            val committedProfile = withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile() }
             val syncCapability = withContext(Dispatchers.IO) { repo.getSyncCapability() }
             val secureStorageWarning = withContext(Dispatchers.IO) { repo.getSecureStorageWarning() }
             val builtinThemes = withContext(Dispatchers.IO) { repo.listBuiltinThemes() }
@@ -269,8 +269,8 @@ class SettingsViewModel(
                 SettingsUiState(
                     settings = if (localRevision == snapshotLocalRev) settings else current.settings,
                     fontSize = if (fontSizeRevision == snapshotFontSizeRev) fontSize else current.fontSize,
-                    syncConfig = if (syncConfigRevision == snapshotSyncConfigRev) syncConfig else current.syncConfig,
-                    syncSecrets = if (syncSecretsRevision == snapshotSyncSecretsRev) syncSecrets else current.syncSecrets,
+                    syncConfig = if (syncConfigRevision == snapshotSyncConfigRev) committedProfile?.first ?: current.syncConfig else current.syncConfig,
+                    syncSecrets = if (syncSecretsRevision == snapshotSyncSecretsRev) committedProfile?.second ?: current.syncSecrets else current.syncSecrets,
                     syncCapability = syncCapability,
                     secureStorageWarning = secureStorageWarning,
                     builtinThemes = builtinThemes,
@@ -331,31 +331,43 @@ class SettingsViewModel(
         var syncConfigSaved = false
         var syncSecretsSaved = false
 
-        if (syncConfig != null) {
-            val result = withContext(Dispatchers.IO) { repo.saveSyncConfig(syncConfig.config) }
-            when (result) {
+        // #595 八：同步配置/凭据的普通自动保存不再分别排队
+        // UpdateSyncConfig → saveSyncConfig() / UpdateSyncSecrets → saveSyncSecrets()
+        // （那会绕过 generation 提交协议，造成 live 槽与 committed profile 双真相）。
+        // 捕获同一时刻的完整 SyncProfileDraft：未变更的一方取当前 UI 值（
+        // 上次已提交/已加载值），通过 commitSyncProfile 一次性原子提交。
+        if (syncConfig != null || syncSecrets != null) {
+            val draftConfig = syncConfig?.config ?: _uiState.value.syncConfig
+            val draftSecrets = syncSecrets?.secrets ?: _uiState.value.syncSecrets
+            val commitResult = withContext(Dispatchers.IO) {
+                repo.commitSyncProfile(draftConfig, draftSecrets)
+            }
+            when (commitResult) {
                 is SettingsSaveResult.Success -> {
-                    syncConfigPersistedRevision = syncConfig.revision
-                    syncConfigSaved = true
-                }
-                is SettingsSaveResult.Failed -> {
-                    if (syncConfigRevision == syncConfig.revision) {
-                        failures.add(SaveFailure(SaveField.SYNC_CONFIG, syncConfig.revision))
+                    if (syncConfig != null && syncConfigRevision == syncConfig.revision) {
+                        syncConfigPersistedRevision = syncConfig.revision
+                        syncConfigSaved = true
+                    }
+                    if (syncSecrets != null && syncSecretsRevision == syncSecrets.revision) {
+                        syncSecretsPersistedRevision = syncSecrets.revision
+                        syncSecretsSaved = true
                     }
                 }
-            }
-        }
-
-        if (syncSecrets != null) {
-            val result = withContext(Dispatchers.IO) { repo.saveSyncSecrets(syncSecrets.secrets) }
-            when (result) {
-                is SettingsSaveResult.Success -> {
-                    syncSecretsPersistedRevision = syncSecrets.revision
-                    syncSecretsSaved = true
-                }
                 is SettingsSaveResult.Failed -> {
-                    if (syncSecretsRevision == syncSecrets.revision) {
-                        failures.add(SaveFailure(SaveField.SYNC_SECRETS, syncSecrets.revision))
+                    for (failure in commitResult.failures) {
+                        when (failure.field) {
+                            SaveField.SYNC_CONFIG -> {
+                                if (syncConfig != null && syncConfigRevision == syncConfig.revision) {
+                                    failures.add(failure)
+                                }
+                            }
+                            SaveField.SYNC_SECRETS -> {
+                                if (syncSecrets != null && syncSecretsRevision == syncSecrets.revision) {
+                                    failures.add(failure)
+                                }
+                            }
+                            else -> { }
+                        }
                     }
                 }
             }
@@ -483,25 +495,35 @@ class SettingsViewModel(
                     if (!capability.canRun) {
                         return@withContext SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "blocked", messageKey = capability.blockMessageKey ?: "sync_not_ready"))
                     }
-                    when (val r = settingsRepo.performSyncDryRun(command.config)) {
-                        is BridgeResult.Success -> {
-                            val plan = r.data
-                            val counts = SyncCounts(
-                                uploaded = plan.filesToUpload.size,
-                                downloaded = plan.filesToDownload.size,
-                                deletedRemote = plan.filesToDeleteRemote.size,
-                                deletedLocal = plan.filesToDeleteLocal.size,
-                                conflicts = plan.conflicts.size,
-                                ignored = plan.ignoredFiles.size
-                            )
-                            SyncCommandIoResult(true, true, StructuredSyncResult(
-                                statusCode = "ok",
-                                messageKey = "sync_dry_run_result",
-                                counts = counts
-                            ))
+                    // #595 十：操作作用域凭据 — 锁内设置 override（失败立即终止），
+                    // 结束后清除；不得使用上次正式同步留下的旧 token。
+                    val overrideOk = settingsRepo.setSyncSecretsOverrideStrict(command.secrets)
+                    if (!overrideOk) {
+                        return@withContext SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_credentials_override_failed"))
+                    }
+                    try {
+                        when (val r = settingsRepo.performSyncDryRun(command.config)) {
+                            is BridgeResult.Success -> {
+                                val plan = r.data
+                                val counts = SyncCounts(
+                                    uploaded = plan.filesToUpload.size,
+                                    downloaded = plan.filesToDownload.size,
+                                    deletedRemote = plan.filesToDeleteRemote.size,
+                                    deletedLocal = plan.filesToDeleteLocal.size,
+                                    conflicts = plan.conflicts.size,
+                                    ignored = plan.ignoredFiles.size
+                                )
+                                SyncCommandIoResult(true, true, StructuredSyncResult(
+                                    statusCode = "ok",
+                                    messageKey = "sync_dry_run_result",
+                                    counts = counts
+                                ))
+                            }
+                            is BridgeResult.Error -> { val kind = r.syncFailureKind ?: SyncFailureKind.Fatal; SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = kind.messageKey(), sanitizedDiagnostic = r.message)) }
+                            BridgeResult.NotLoaded -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = SyncFailureKind.NativeUnavailable.messageKey(), sanitizedDiagnostic = SyncFailureKind.NativeUnavailable.name))
                         }
-                        is BridgeResult.Error -> { val kind = r.syncFailureKind ?: SyncFailureKind.Fatal; SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = kind.messageKey(), sanitizedDiagnostic = r.message)) }
-                        BridgeResult.NotLoaded -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = SyncFailureKind.NativeUnavailable.messageKey(), sanitizedDiagnostic = SyncFailureKind.NativeUnavailable.name))
+                    } finally {
+                        settingsRepo.clearSyncSecretsOverride()
                     }
                 }
             }
@@ -547,23 +569,33 @@ class SettingsViewModel(
                     if (!capability.canRun) {
                         return@withContext SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "blocked", messageKey = capability.blockMessageKey ?: "sync_not_ready"))
                     }
-                    when (val r = settingsRepo.performSyncDiagnostics(command.config)) {
-                        is BridgeResult.Success -> {
-                            val diag = r.data
-                            SyncCommandIoResult(true, true, StructuredSyncResult(
-                                statusCode = if (diag.success) "ok" else "fail",
-                                messageKey = "sync_test_connection_result",
-                                messageArgs = mapOf(
-                                    "network" to if (diag.networkOk) "ok" else "fail",
-                                    "auth" to if (diag.authOk) "ok" else "fail",
-                                    "repo" to if (diag.repoOk) "ok" else "fail",
-                                    "branch" to if (diag.branchOk) "ok" else "fail"
-                                ),
-                                sanitizedDiagnostic = if (!diag.success) "connection_failed" else null
-                            ))
+                    // #595 十：操作作用域凭据 — 锁内设置 override（失败立即终止），
+                    // 结束后清除；不得使用上次正式同步留下的旧 token。
+                    val overrideOk = settingsRepo.setSyncSecretsOverrideStrict(command.secrets)
+                    if (!overrideOk) {
+                        return@withContext SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_credentials_override_failed"))
+                    }
+                    try {
+                        when (val r = settingsRepo.performSyncDiagnostics(command.config)) {
+                            is BridgeResult.Success -> {
+                                val diag = r.data
+                                SyncCommandIoResult(true, true, StructuredSyncResult(
+                                    statusCode = if (diag.success) "ok" else "fail",
+                                    messageKey = "sync_test_connection_result",
+                                    messageArgs = mapOf(
+                                        "network" to if (diag.networkOk) "ok" else "fail",
+                                        "auth" to if (diag.authOk) "ok" else "fail",
+                                        "repo" to if (diag.repoOk) "ok" else "fail",
+                                        "branch" to if (diag.branchOk) "ok" else "fail"
+                                    ),
+                                    sanitizedDiagnostic = if (!diag.success) "connection_failed" else null
+                                ))
+                            }
+                            is BridgeResult.Error -> { val kind = r.syncFailureKind ?: SyncFailureKind.Fatal; SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = kind.messageKey(), sanitizedDiagnostic = r.message)) }
+                            BridgeResult.NotLoaded -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = SyncFailureKind.NativeUnavailable.messageKey(), sanitizedDiagnostic = SyncFailureKind.NativeUnavailable.name))
                         }
-                        is BridgeResult.Error -> { val kind = r.syncFailureKind ?: SyncFailureKind.Fatal; SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = kind.messageKey(), sanitizedDiagnostic = r.message)) }
-                        BridgeResult.NotLoaded -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = SyncFailureKind.NativeUnavailable.messageKey(), sanitizedDiagnostic = SyncFailureKind.NativeUnavailable.name))
+                    } finally {
+                        settingsRepo.clearSyncSecretsOverride()
                     }
                 }
             }
@@ -618,17 +650,18 @@ class SettingsViewModel(
             }
             SaveField.SYNC_CONFIG -> {
                 if (syncConfigRevision != failure.revision) return
-                val config = withContext(Dispatchers.IO) { repo.loadSyncConfig() }
+                // #595 八：回滚读取活动 generation 的完整 snapshot，不再读 live 槽。
+                val profile = withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile() }
                 if (syncConfigRevision != failure.revision) return
                 syncConfigRevision = syncConfigPersistedRevision
-                _uiState.update { it.copy(syncConfig = config) }
+                _uiState.update { it.copy(syncConfig = profile?.first ?: it.syncConfig) }
             }
             SaveField.SYNC_SECRETS -> {
                 if (syncSecretsRevision != failure.revision) return
-                val secrets = withContext(Dispatchers.IO) { repo.loadSyncSecrets() }
+                val profile = withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile() }
                 if (syncSecretsRevision != failure.revision) return
                 syncSecretsRevision = syncSecretsPersistedRevision
-                _uiState.update { it.copy(syncSecrets = secrets) }
+                _uiState.update { it.copy(syncSecrets = profile?.second ?: it.syncSecrets) }
             }
         }
     }
@@ -716,8 +749,8 @@ class SettingsViewModel(
             val current = _uiState.value
             val settings = withContext(Dispatchers.IO) { repo.getLocalSettings() }
             val fontSize = withContext(Dispatchers.IO) { repo.getEffectiveFontSize() }
-            val syncConfig = withContext(Dispatchers.IO) { repo.loadSyncConfig() }
-            val syncSecrets = withContext(Dispatchers.IO) { repo.loadSyncSecrets() }
+            // #595 八：刷新读取活动 generation 的完整 snapshot，不再读 live legacy 槽。
+            val committedProfile = withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile() }
             val syncCapability = withContext(Dispatchers.IO) { repo.getSyncCapability() }
             val secureStorageWarning = withContext(Dispatchers.IO) { repo.getSecureStorageWarning() }
             val builtinThemes = withContext(Dispatchers.IO) { repo.listBuiltinThemes() }
@@ -728,8 +761,8 @@ class SettingsViewModel(
                 SettingsUiState(
                     settings = if (!hasUnsavedLocal()) settings else current.settings,
                     fontSize = if (!hasUnsavedFontSize()) fontSize else current.fontSize,
-                    syncConfig = if (!hasUnsavedSyncConfig()) syncConfig else current.syncConfig,
-                    syncSecrets = if (!hasUnsavedSyncSecrets()) syncSecrets else current.syncSecrets,
+                    syncConfig = if (!hasUnsavedSyncConfig()) committedProfile?.first ?: current.syncConfig else current.syncConfig,
+                    syncSecrets = if (!hasUnsavedSyncSecrets()) committedProfile?.second ?: current.syncSecrets else current.syncSecrets,
                     syncCapability = syncCapability,
                     secureStorageWarning = secureStorageWarning,
                     builtinThemes = builtinThemes,

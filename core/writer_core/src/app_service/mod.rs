@@ -319,4 +319,19 @@ mod tests {
         );
         assert_eq!(result.outcome, crate::api::EditorEditOutcomeDto::InvalidOffset);
     }
+
+    #[test]
+    fn sync_secrets_override_set_and_clear_cycle() {
+        // #595 十：set → has_override=true；clear → has_override=false。
+        // 清除后 refresh_secrets_override 才会从磁盘重新填充，陈旧凭据不会泄漏。
+        let dir = tempfile::TempDir::new().unwrap();
+        let svc = WriterAppService::new(dir.path().to_string_lossy().to_string());
+        let secrets = crate::api::SyncSecretsDto {
+            token: Some("token-a".to_string()),
+        };
+        svc.set_sync_secrets_override(secrets).expect("set override");
+        assert!(svc.api.core().has_secrets_override());
+        svc.clear_sync_secrets_override().expect("clear override");
+        assert!(!svc.api.core().has_secrets_override());
+    }
 }

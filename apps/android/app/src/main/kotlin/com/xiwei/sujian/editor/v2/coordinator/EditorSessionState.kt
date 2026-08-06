@@ -22,6 +22,8 @@ data class EditorSessionState(
     val lastAppliedTransactionId: Long = 0L,
     val origin: EditorSessionOrigin = EditorSessionOrigin.NONE,
     val bindingState: WindowBindingState = WindowBindingState.Idle,
+    /** #595 一：最后应用的 Repository 正文 hash — 幂等去重 RepositoryLoaded 事件。 */
+    val lastRepositoryHash: String = "",
 )
 
 /**

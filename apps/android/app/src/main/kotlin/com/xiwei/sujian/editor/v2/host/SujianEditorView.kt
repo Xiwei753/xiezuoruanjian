@@ -61,7 +61,6 @@ class SujianEditorView @JvmOverloads constructor(
         invalidate()
     }
     private var searchHighlights: List<Pair<Int, Int>> = emptyList()
-    private var pendingLayoutNeeded: Boolean = false
     private var frameClock: WindowDisplayFrameClock? = null
     private var isRegisteredWithClock: Boolean = false
     @Volatile
@@ -92,17 +91,6 @@ class SujianEditorView @JvmOverloads constructor(
         isFocusableInTouchMode = true
         val contentInset = (16 * context.resources.displayMetrics.density).toInt()
         setPadding(contentInset, contentInset, contentInset, contentInset)
-    }
-
-    fun loadText(text: String, cursorUtf8: Int) {
-        val result = pipeline.loadText(text, cursorUtf8)
-        if (result is AndroidEditorPipeline.LoadTextResult.Loaded) {
-            if (width > 0) {
-                updateLayoutConfig()
-            } else {
-                pendingLayoutNeeded = true
-            }
-        }
     }
 
     fun insertText(byteOffset: Int, text: String, cause: EditorTransactionCauseDto = EditorTransactionCauseDto.TYPING) {
@@ -157,11 +145,15 @@ class SujianEditorView @JvmOverloads constructor(
                         // #595 解决二：本地输入回调携带 text/revision/transactionId/operationKind
                         // 四元组 — operationKind 来自 Rust EditResult 的 VisualIntent，
                         // 会话层 LocalInput 据此记录本次编辑类型（插入/删除/替换/选区/合成）。
+                        // #595 四：同时携带编辑后的真实选区（pipeline mirror），
+                        // 会话层唯一 SessionState 不再沿用旧 selection。
                         onLocalEdit?.invoke(
                             editText,
                             output.result.newRevision,
                             output.result.transactionId,
-                            output.result.visualIntent.operationKind.toEditorOperationKind()
+                            output.result.visualIntent.operationKind.toEditorOperationKind(),
+                            pipeline.getSelectionStartUtf8(),
+                            pipeline.getSelectionEndUtf8(),
                         )
                     }
                     onContentChanged?.invoke(editText)
@@ -188,7 +180,10 @@ class SujianEditorView @JvmOverloads constructor(
             )
             updateLayoutConfig()
             val reloadText = pipeline.getText()
-            onLocalEdit?.invoke(reloadText, pipeline.getRevision(), 0L, EditorOperationKind.REPLACE)
+            onLocalEdit?.invoke(
+                reloadText, pipeline.getRevision(), 0L, EditorOperationKind.REPLACE,
+                pipeline.getSelectionStartUtf8(), pipeline.getSelectionEndUtf8(),
+            )
             onContentChanged?.invoke(reloadText)
         } else {
             android.util.Log.w("SujianEditorInput", "reloadFromKernel FAILED (no session snapshot)")
@@ -291,7 +286,6 @@ class SujianEditorView @JvmOverloads constructor(
         super.onSizeChanged(w, h, oldw, oldh)
         if (w > 0) {
             updateLayoutConfig()
-            pendingLayoutNeeded = false
         }
     }
 
@@ -583,11 +577,7 @@ class SujianEditorView @JvmOverloads constructor(
      * #595 解决二：operationKind 由 Rust EditResult 的 VisualIntent 映射而来，
      * 随 [EditorDocumentUpdate.LocalInput] 记录本次编辑语义。
      */
-    var onLocalEdit: ((text: String, revision: Long, transactionId: Long, operationKind: EditorOperationKind) -> Unit)? = null
-
-    fun setText(text: String) {
-        loadText(text, 0)
-    }
+    var onLocalEdit: ((text: String, revision: Long, transactionId: Long, operationKind: EditorOperationKind, selectionAnchorUtf8: Int, selectionHeadUtf8: Int) -> Unit)? = null
 
     fun setTypingAnimationEnabled(enabled: Boolean, durationMs: Long) {
         pipeline.kernelBridge?.setAnimationDurationMs(durationMs)
@@ -725,28 +715,34 @@ class SujianEditorView @JvmOverloads constructor(
      *
      * Per #541 lifecycle: bindSession → Editing. After this call, [isSessionBound] is true
      * and the host can create a valid InputConnection.
+     *
+     * #595 二：只在 snapshot 不可用（理论上不应发生）的 fallback 路径使用 —
+     * 正常新建/复用都走 [attachSession]（createSession 已把正文装入 kernel）。
+     * 返回 false 表示 kernel loadText 失败。
      */
     fun bindSession(
         sessionBridge: EditorKernelBridge,
         profile: TextEditorProfile,
         initialText: String,
         initialCursorUtf8: Int
-    ) {
+    ): Boolean {
         bindSessionInternal(sessionBridge, profile)
-        if (initialText.isNotEmpty()) {
+        val loaded = if (initialText.isNotEmpty()) {
             applyProfileToPipeline(profile, initialText, initialCursorUtf8)
         } else {
             applyProfileToPipeline(profile)
-            pipeline.loadText("", 0)
+            pipeline.loadText("", 0) is AndroidEditorPipeline.LoadTextResult.Loaded
         }
+        return loaded
     }
 
     /**
      * #592 一：附着既有持久会话 — 与 [bindSession] 的区别是绝不对 Rust 调用
      * textEditSessionLoadText：snapshot 的 text/revision/cursor/selection 直接装入
      * Android mirror/layout，Rust revision 不变、Undo/Redo 保留、composition 不重置。
-     * 仅用于窗口重建/重新绑定；新正文载入或外部内容重置仍走 [bindSession]/
-     * [loadText]。
+     * 仅用于窗口重建/重新绑定；#595 二：新建 session 也走本路径（createSession 已把
+     * 初始正文装入 kernel，是唯一一次 Core 命令）。
+     * 返回 true（本地 mirror 装载不会失败）。
      */
     fun attachSession(
         sessionBridge: EditorKernelBridge,
@@ -756,10 +752,35 @@ class SujianEditorView @JvmOverloads constructor(
         cursorUtf8: Int,
         selStartUtf8: Int,
         selEndUtf8: Int,
-    ) {
+    ): Boolean {
         bindSessionInternal(sessionBridge, profile)
         applyProfileToPipeline(profile)
         pipeline.attachSnapshot(text, revision, cursorUtf8, selStartUtf8, selEndUtf8)
+        return true
+    }
+
+    /**
+     * #595 二：同一 session 的外部内容重置 — 不解除既有绑定。
+     *
+     * 与 [attachSession] 的区别：不调用 bindSessionInternal（不解绑/不清回调/
+     * 不隐藏 IME/不丢焦点）。Core 侧 reset 已把新正文装入同一 kernel session，
+     * 这里只把真实 snapshot 重装到本地 mirror/layout。外部替换发生在用户
+     * 正在输入时，解绑重绑会闪 IME 并破坏输入法状态。
+     */
+    fun attachSnapshotSameSession(
+        sessionBridge: EditorKernelBridge,
+        profile: TextEditorProfile,
+        text: String,
+        revision: Long,
+        cursorUtf8: Int,
+        selStartUtf8: Int,
+        selEndUtf8: Int,
+    ) {
+        kernelBridge = sessionBridge
+        currentProfile = profile
+        pipeline.attachSnapshot(text, revision, cursorUtf8, selStartUtf8, selEndUtf8)
+        updateLayoutConfig()
+        invalidate()
     }
 
     private fun bindSessionInternal(
@@ -779,7 +800,7 @@ class SujianEditorView @JvmOverloads constructor(
         requestFocus()
     }
 
-    private fun applyProfileToPipeline(profile: TextEditorProfile, initialText: String? = null, initialCursorUtf8: Int = 0) {
+    private fun applyProfileToPipeline(profile: TextEditorProfile, initialText: String? = null, initialCursorUtf8: Int = 0): Boolean {
         inputAdapter.applyProfile(profile)
         pipeline.setAutoIndent(
             profile.autoIndentPolicy == com.xiwei.sujian.editor.v2.coordinator.AutoIndentPolicy.INDENT_ON_ENTER,
@@ -816,8 +837,9 @@ class SujianEditorView @JvmOverloads constructor(
             pipeline.setSecretDisplayMode(false)
         }
         if (initialText != null) {
-            pipeline.loadText(initialText, initialCursorUtf8, applySecret = true)
+            return pipeline.loadText(initialText, initialCursorUtf8, applySecret = true) is AndroidEditorPipeline.LoadTextResult.Loaded
         }
+        return true
     }
 
     fun updateEditorProfile(profile: TextEditorProfile) {
@@ -870,7 +892,6 @@ class SujianEditorView @JvmOverloads constructor(
         scrollY = 0f
         maxScrollY = 0f
         searchHighlights = emptyList()
-        pendingLayoutNeeded = false
         pipeline.resetForReuse()
         invalidate()
     }

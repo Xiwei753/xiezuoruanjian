@@ -44,6 +44,14 @@ impl WriterCoreApi {
         Ok(())
     }
 
+    /// #595 十：清除进程级 secrets override — 同步操作结束后调用，
+    /// 陈旧凭据不得泄漏到后续操作（refresh_secrets_override 在已有 override 时
+    /// 不会重新读取磁盘）。
+    pub fn clear_sync_secrets_override(&self) -> ApiResult<()> {
+        self.core().set_secrets_override(None);
+        Ok(())
+    }
+
     /// #592 五：按 generation 保存凭据到安全存储。
     pub fn save_sync_secrets_for_generation(
         &self,

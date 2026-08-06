@@ -74,15 +74,31 @@ class SyncCoordinator(
             }
 
             // #592 六：整个操作只使用这份 snapshot 的凭据。
-            withContext(Dispatchers.IO) {
-                settingsRepository.setSyncSecretsOverride(profile.secrets)
-            }
-
+            // #595 十：override 必须在取得同步独占锁（runExclusive）之后写入，
+            // 两个同步同时触发时不可能出现“A 写入 token A、B 写入 token B、
+            // A 实际使用 token B”；设置失败立即终止（不静默继续）；
+            // 操作结束后 finally 清除 override，陈旧凭据不得泄漏到后续操作
+            // （Core 的 refresh_secrets_override 在已有 override 时不再读磁盘）。
             val exclusiveResult = SyncSession.runExclusive { _ ->
                 syncStatusRepository.notifySyncStarted()
-                val bridgeResult = withContext(Dispatchers.IO) { settingsRepository.performSync(config) }
-                resolveAndPublish(bridgeResult)
-                bridgeResult
+                val overrideOk = withContext(Dispatchers.IO) {
+                    settingsRepository.setSyncSecretsOverrideStrict(profile.secrets)
+                }
+                if (!overrideOk) {
+                    val error = BridgeResult.Error(
+                        ResultEnvelope.errorOf("SYNC_CREDENTIALS_OVERRIDE_FAILED", "Failed to set sync credentials override"),
+                        SyncFailureKind.Fatal,
+                    )
+                    resolveAndPublish(error)
+                    return@runExclusive error
+                }
+                try {
+                    val bridgeResult = withContext(Dispatchers.IO) { settingsRepository.performSync(config) }
+                    resolveAndPublish(bridgeResult)
+                    bridgeResult
+                } finally {
+                    withContext(Dispatchers.IO) { settingsRepository.clearSyncSecretsOverride() }
+                }
             }
 
             return when (exclusiveResult) {

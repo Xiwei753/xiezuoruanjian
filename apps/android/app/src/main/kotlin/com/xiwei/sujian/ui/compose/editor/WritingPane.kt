@@ -176,38 +176,89 @@ fun WritingPane(
     // #595 一：收集会话层唯一 SessionState — 用 revision 判断本地/外部更新。
     val sessionState by coordinator.sessionStateFlow.collectAsStateWithLifecycle()
 
+    // #595 一：收集 Repository 真实来源事件（真实 fileHash）— 章节加载完成时
+    // ViewModel 发出，执行外部替换协议；不再根据字符串差异伪造 revision/source。
+    val currentUiState by rememberUpdatedState(uiState)
+
+    // 外部内容变更（同步/撤销/程序化替换）：用真实 fileHash 走同一外部替换协议；
+    // 只有内容与 SessionState 不一致且 hash 是新版本时才 reset（幂等）。
+    fun applyExternalContent(text: String, fileHash: String) {
+        if (coordinator.sessionCoordinator.shouldApplyRepositoryLoad(
+                com.xiwei.sujian.editor.v2.coordinator.EditorDocumentUpdate.RepositoryLoaded(
+                    targetId = targetId, text = text, fileHash = fileHash, revision = 0L,
+                )
+            )
+        ) {
+            coordinator.resetPersistentSession(
+                targetId,
+                text,
+                text.toByteArray(Charsets.UTF_8).size,
+                SessionResetSource.EXTERNAL
+            )
+            if (coordinator.activeTargetId != targetId) {
+                coordinator.beginEdit(targetId, text.toByteArray(Charsets.UTF_8).size)
+            }
+        }
+    }
+
+    LaunchedEffect(targetId) {
+        viewModel.documentUpdates.collect { update ->
+            if (update is com.xiwei.sujian.editor.v2.coordinator.EditorDocumentUpdate.RepositoryLoaded &&
+                update.targetId == targetId && !currentUiState.loading
+            ) {
+                if (coordinator.sessionCoordinator.shouldApplyRepositoryLoad(update)) {
+                    applyExternalContent(update.text, update.fileHash)
+                    coordinator.sessionCoordinator.applyRepositoryLoaded(update)
+                }
+            }
+        }
+    }
+
     LaunchedEffect(uiState.content, chapterId) {
         if (!uiState.loading) {
             // #595 一：用 sessionState.text 和 origin 判断本地/外部更新，不依赖 revision 比较。
             // onLocalEdit 先更新 sessionStateFlow（text/revision/origin=LOCAL_INPUT），
             // 后通知 ViewModel 更新 uiState.content。当 LaunchedEffect 触发时，
             // sessionState.text 已与 uiState.content 一致 → 本地更新，不 reset。
-            // 真实外部更新时 sessionState.text 与 uiState.content 不一致 → 外部更新，reset。
+            // 真实外部更新时 sessionState.text 与 uiState.content 不一致 → 外部更新，
+            // 走 RepositoryLoaded（真实 chapterHash）或 ExternalReplace 兜底。
             if (sessionState.origin == com.xiwei.sujian.editor.v2.coordinator.EditorSessionOrigin.LOCAL_INPUT
                 && sessionState.text == uiState.content
             ) {
                 // 本地输入产生的 UI 回显 — sessionState 已更新，
-                // 只同步 targetText，不触发 resetPersistentSession。
+                // 只同步 target 正文，不触发 resetPersistentSession。
                 coordinator.updateTargetText(targetId, uiState.content)
             } else if (uiState.content != sessionState.text) {
-                // 真实外部更新（Repository/Sync/Undo）— 内容与 SessionState 不一致，
-                // 确认是新的外部版本后执行 reset 协议。
-                val externalUpdate = com.xiwei.sujian.editor.v2.coordinator.EditorDocumentUpdate.ExternalReplace(
-                    targetId = targetId,
-                    text = uiState.content,
-                    revision = (sessionState.revision + 1).coerceAtLeast(1L),
-                    source = com.xiwei.sujian.editor.v2.coordinator.ExternalSource.REPOSITORY_LOAD,
-                )
-                if (coordinator.sessionCoordinator.shouldApplyExternalReplace(externalUpdate)) {
-                    coordinator.resetPersistentSession(
-                        targetId,
-                        uiState.content,
-                        uiState.content.toByteArray(Charsets.UTF_8).size,
-                        SessionResetSource.EXTERNAL
+                if (uiState.chapterHash.isNotEmpty()) {
+                    applyExternalContent(uiState.content, uiState.chapterHash)
+                    coordinator.sessionCoordinator.applyRepositoryLoaded(
+                        com.xiwei.sujian.editor.v2.coordinator.EditorDocumentUpdate.RepositoryLoaded(
+                            targetId = targetId,
+                            text = uiState.content,
+                            fileHash = uiState.chapterHash,
+                            revision = 0L,
+                        )
                     )
-                    coordinator.sessionCoordinator.applyExternalReplace(externalUpdate)
-                    if (coordinator.activeTargetId != targetId) {
-                        coordinator.beginEdit(targetId, uiState.content.toByteArray(Charsets.UTF_8).size)
+                } else {
+                    // 异常态（无 hash）：ExternalReplace 兜底 — revision 只作新旧参考，
+                    // applyExternalReplace 会从 reset 后的真实 snapshot 读取最终 revision。
+                    val externalUpdate = com.xiwei.sujian.editor.v2.coordinator.EditorDocumentUpdate.ExternalReplace(
+                        targetId = targetId,
+                        text = uiState.content,
+                        revision = (sessionState.revision + 1).coerceAtLeast(1L),
+                        source = com.xiwei.sujian.editor.v2.coordinator.ExternalSource.REPOSITORY_LOAD,
+                    )
+                    if (coordinator.sessionCoordinator.shouldApplyExternalReplace(externalUpdate)) {
+                        coordinator.resetPersistentSession(
+                            targetId,
+                            uiState.content,
+                            uiState.content.toByteArray(Charsets.UTF_8).size,
+                            SessionResetSource.EXTERNAL
+                        )
+                        coordinator.sessionCoordinator.applyExternalReplace(externalUpdate)
+                        if (coordinator.activeTargetId != targetId) {
+                            coordinator.beginEdit(targetId, uiState.content.toByteArray(Charsets.UTF_8).size)
+                        }
                     }
                 }
             }

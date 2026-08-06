@@ -2,6 +2,7 @@ package com.xiwei.sujian.editor.v2.coordinator
 
 import android.content.Context
 import android.graphics.Rect
+import android.util.Log
 import com.xiwei.sujian.data.AppServiceBridge
 import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
@@ -54,6 +55,7 @@ class EditorWindowHost(
 
     private data class PendingViewBind(
         val targetId: String,
+        val sessionId: ULong,
         val bridge: TextEditSessionBridge,
         val profile: TextEditorProfile,
         val text: String,
@@ -99,7 +101,6 @@ class EditorWindowHost(
         onCancel: (() -> Unit)? = null,
         onEditingStateChanged: ((EditingState) -> Unit)? = null,
         profile: TextEditorProfile? = null,
-        currentText: String? = null
     ) {
         val target = targets[targetId] ?: return
         onTextChanged?.let { target.onTextChanged = it }
@@ -107,8 +108,7 @@ class EditorWindowHost(
         onCancel?.let { target.onCancel = it }
         onEditingStateChanged?.let { target.onEditingStateChanged = it }
         profile?.let { target.updateProfile(it) }
-        currentText?.let { target.updateText(it) }
-        sessionCoordinator.updateTargetSpec(targetId, profile = profile, currentText = currentText)
+        sessionCoordinator.updateTargetSpec(targetId, profile = profile)
     }
 
     fun detachWindowBinding(windowId: String, targetId: String) {
@@ -117,6 +117,9 @@ class EditorWindowHost(
             saveActiveTargetProjection(targetId)
         }
         targets.remove(targetId)
+        // #595 三：解绑必须清除 pendingViewBind — 否则下一个窗口的 View 会用
+        // 已关闭/已释放的 session bridge 执行绑定。
+        pendingViewBind = null
         sessionCoordinator.detachWindowBinding(windowId, targetId)
     }
 
@@ -132,6 +135,8 @@ class EditorWindowHost(
             }
         }
         targets.remove(targetId)
+        // #595 三：业务关闭同样清除 pendingViewBind，防止 attachView 绑定已关闭的 session。
+        pendingViewBind = null
         sessionCoordinator.closeTarget(targetId, reason)
     }
 
@@ -144,8 +149,10 @@ class EditorWindowHost(
     }
 
     fun updateTargetText(targetId: String, text: String) {
+        // #595 四：窗口层只更新 target 对象（Compose 侧正文来源）；
+        // 会话层正文唯一事实源是 sessionStateFlow（applyLocalEdit 已更新），
+        // 不再存在 targetTexts 第二份正文缓存。
         targets[targetId]?.updateText(text)
-        sessionCoordinator.updateTargetText(targetId, text)
     }
 
     fun getTargetGeometry(targetId: String): Rect? = targets[targetId]?.currentGeometry
@@ -236,14 +243,19 @@ class EditorWindowHost(
         if (oldActiveId != null && oldActiveId != targetId) {
             targets[oldActiveId]?.onEditingStateChanged?.invoke(EditingState.REBINDING)
         }
-        val bindInfo = sessionCoordinator.prepareSessionForEdit(targetId, initialSelection, windowId) ?: return false
-
         val target = targets[targetId] ?: return false
+        // #595 四：新建 session 的初始正文来自窗口层 target（Compose 唯一正文来源），
+        // 会话层不再维护 targetTexts 第二份正文缓存。
+        val bindInfo = sessionCoordinator.prepareSessionForEdit(
+            targetId, target.currentText, initialSelection, windowId,
+        ) ?: return false
+
         target.onEditingStateChanged?.invoke(EditingState.BINDING)
 
         val bridge = TextEditSessionBridge(appServiceBridge, bindInfo.sessionId)
         val pending = PendingViewBind(
             targetId = targetId,
+            sessionId = bindInfo.sessionId,
             bridge = bridge,
             profile = bindInfo.profile,
             text = bindInfo.text,
@@ -252,22 +264,28 @@ class EditorWindowHost(
         )
 
         // #595 三：如果 AndroidView.factory 已创建 View（重新绑定场景），直接在现有
-        // View 上执行 session 绑定。否则存为 pendingViewBind，等 attachView 在
-        // Compose 提供的 Context 创建的 View 上执行绑定。
+        // View 上执行 session 绑定并进入 Attached；否则只存 pendingViewBind，
+        // 状态保持 Attaching（prepareSessionForEdit 已设置），等 attachView 在
+        // Compose 提供的 Context 创建的 View 上完成真实绑定后才 completeWindowAttach。
+        // 禁止在 View 尚未创建/绑定时提前进入 Attached。
         val view = sharedEditorView
         if (view != null) {
-            performViewBind(view, pending, target)
-            sessionCoordinator.completeWindowAttach(windowId, targetId, bindInfo.sessionId)
-            target.onEditingStateChanged?.invoke(EditingState.EDITING)
-            view.post {
-                view.requestFocus()
-                val imm = context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
-                imm?.showSoftInput(view, 0)
+            if (performViewBind(view, pending, target)) {
+                sessionCoordinator.completeWindowAttach(windowId, targetId, bindInfo.sessionId)
+                target.onEditingStateChanged?.invoke(EditingState.EDITING)
+                view.post {
+                    view.requestFocus()
+                    val imm = context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+                    imm?.showSoftInput(view, 0)
+                }
+            } else {
+                // 绑定失败：回到 Detached/Idle，不能留下没有 View 绑定的 Attached 状态。
+                pendingViewBind = null
+                sessionCoordinator.detachWindowBinding(windowId, targetId)
+                return false
             }
         } else {
             pendingViewBind = pending
-            sessionCoordinator.completeWindowAttach(windowId, targetId, bindInfo.sessionId)
-            target.onEditingStateChanged?.invoke(EditingState.EDITING)
         }
 
         return true
@@ -278,6 +296,8 @@ class EditorWindowHost(
      * 纯函数，供绑定和测试使用。
      */
     companion object {
+        private const val TAG = "EditorWindowHost"
+
         fun constraintFor(profile: TextEditorProfile?): TargetMotionConstraint {
             if (profile == null) return TargetMotionConstraint()
             return when (profile.animationPolicy) {
@@ -289,17 +309,20 @@ class EditorWindowHost(
     }
 
     // #595 三：在 View 上执行 session 绑定 — 由 beginEdit（View 已存在）或
-    // attachView（AndroidView.factory 刚创建 View）调用。
+    // attachView（AndroidView.factory 刚创建 View）调用。返回 false 表示绑定失败
+    //（kernel load 失败/无 snapshot），调用方必须回到 Detached/Idle，
+    // 不得进入没有真实 View 绑定的 Attached。
     // #592 一：复用既有持久 session 时执行 attachSnapshot（不调用
     // textEditSessionLoadText，Rust revision/Undo/Redo/composition 保持）；
-    // 新建 session 或外部内容重置才走 bindSession/loadText。
+    // #595 二：新建 session 同样 attachSnapshot（createSession 已把初始正文装入
+    // kernel，是唯一一次 Core 命令）— 不再对同一 session 二次 loadText。
     private fun performViewBind(
         view: SujianEditorView,
         pending: PendingViewBind,
         target: EditableTextTarget,
-    ) {
+    ): Boolean {
         val snapshot = pending.snapshot
-        if (snapshot != null) {
+        val bound = if (snapshot != null) {
             view.attachSession(
                 sessionBridge = pending.bridge,
                 profile = pending.profile,
@@ -310,8 +333,13 @@ class EditorWindowHost(
                 selEndUtf8 = snapshot.selectionHeadUtf8,
             )
             restoreProjectionScroll(view, pending.targetId)
+            true
         } else {
             view.bindSession(pending.bridge, pending.profile, pending.text, pending.selection)
+        }
+        if (!bound) {
+            Log.w(TAG, "performViewBind(${pending.targetId}): session bind failed, aborting window attach")
+            return false
         }
 
         // #595 七: 活动编辑时 SujianEditorView 是唯一的 FrameClock listener。
@@ -323,6 +351,7 @@ class EditorWindowHost(
         // #595 四：绑定完成后应用 target 约束后的有效动画策略 — 全局策略 + profile 约束
         // 在唯一计算点（effectivePolicyFor）合成，一次传入 View/引擎/Rust kernel。
         applyPolicyToView(view, pending.targetId)
+        return true
     }
 
     /**
@@ -371,14 +400,40 @@ class EditorWindowHost(
     }
 
     fun resetPersistentSession(targetId: String, text: String, cursorUtf8: Int, source: SessionResetSource = SessionResetSource.EXTERNAL) {
+        // #595 二：Core 侧只允许一次 reset 命令（textEditSessionReset / createSession）。
+        // 完成后 View 不得再次 loadText（那是第二次 Core 命令，会 revision+1、
+        // 重复清空 Undo/Redo/composition）— 只从真实 snapshot attach 到本地镜像。
         sessionCoordinator.resetPersistentSession(targetId, text, cursorUtf8, source)
         if (targetId == activeTargetId) {
             val view = sharedEditorView
             if (view != null) {
-                view.loadText(text, cursorUtf8)
+                attachSnapshotToView(targetId, view)
             }
         }
         // 非活动预览直接读取会话层 snapshot（getChapterPreviewState），无需重建投影运行时。
+    }
+
+    /**
+     * #595 二：把真实 Rust snapshot（reset 后的 text/revision/cursor/selection）
+     * 只装入 Android mirror/layout — 不调用 textEditSessionLoadText。
+     * 使用 attachSnapshotSameSession：同一 session 不解除绑定，
+     * 不清回调、不隐藏 IME、不丢焦点（外部替换可能发生在输入过程中）。
+     */
+    private fun attachSnapshotToView(targetId: String, view: SujianEditorView) {
+        val snapshot = sessionCoordinator.queryTargetSnapshot(targetId) ?: return
+        val sessionId = sessionCoordinator.getPersistentSessionId(targetId) ?: return
+        val profile = targets[targetId]?.profile ?: TextEditorProfile()
+        val bridge = TextEditSessionBridge(appServiceBridge, sessionId)
+        view.attachSnapshotSameSession(
+            sessionBridge = bridge,
+            profile = profile,
+            text = snapshot.text,
+            revision = snapshot.revision,
+            cursorUtf8 = snapshot.cursorUtf8,
+            selStartUtf8 = snapshot.selectionAnchorUtf8,
+            selEndUtf8 = snapshot.selectionHeadUtf8,
+        )
+        applyPolicyToView(view, targetId)
     }
 
     // ── SessionCommandPort (view pipeline when active, projection for inactive) ──
@@ -411,7 +466,7 @@ class EditorWindowHost(
                 }
                 val snapshotAfter = sessionCoordinator.queryTargetSnapshot(targetId)
                     ?: return TargetCommandResult.Failed(TargetCommandError.SNAPSHOT_UNAVAILABLE)
-                sessionCoordinator.updateTargetText(targetId, snapshotAfter.text)
+                targets[targetId]?.updateText(snapshotAfter.text)
                 return TargetCommandResult.Success(snapshotAfter)
             }
         }
@@ -457,7 +512,10 @@ class EditorWindowHost(
 
     /**
      * #595 三：AndroidView.factory 创建 View 后立即附着到窗口 —
-     * 设置 sharedEditorView 引用，由 beginEdit 完成 session 绑定。
+     * 设置 sharedEditorView 引用，并处理 beginEdit 留下的 pending session 绑定。
+     *
+     * 只有 performViewBind 成功后（真实 View 已绑定 session）才 completeWindowAttach：
+     * Attached 必须表示屏幕上的 View 已绑定；绑定失败回到 Detached/Idle。
      */
     fun attachView(windowId: String, targetId: String, view: SujianEditorView) {
         sharedEditorView = view
@@ -469,12 +527,22 @@ class EditorWindowHost(
             pendingViewBind = null
             val target = targets[targetId]
             if (target != null) {
-                performViewBind(view, pending, target)
-                view.post {
-                    view.requestFocus()
-                    val imm = context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
-                    imm?.showSoftInput(view, 0)
+                if (performViewBind(view, pending, target)) {
+                    sessionCoordinator.completeWindowAttach(windowId, targetId, pending.sessionId)
+                    target.onEditingStateChanged?.invoke(EditingState.EDITING)
+                    view.post {
+                        view.requestFocus()
+                        val imm = context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+                        imm?.showSoftInput(view, 0)
+                    }
+                } else {
+                    // 绑定失败：回到 Detached/Idle，清除 pending，
+                    // 不留下没有 View 绑定的 Attached 状态。
+                    sessionCoordinator.detachWindowBinding(windowId, targetId)
                 }
+            } else {
+                // target 已被业务关闭（closeTarget）— 丢弃 pending，不绑定。
+                sessionCoordinator.detachWindowBinding(windowId, targetId)
             }
         }
     }
@@ -558,7 +626,7 @@ class EditorWindowHost(
         // #595 一：类型化本地编辑回调 — 先更新会话层唯一 SessionState（revision/transactionId），
         // 再通知 ViewModel 保存。ViewModel 不再靠字符串比较猜测来源，
         // WritingPane 收集 sessionStateFlow 发现 revision 已应用，不触发 reset。
-        view.onLocalEdit = { text, revision, transactionId, operationKind ->
+        view.onLocalEdit = { text, revision, transactionId, operationKind, selectionAnchorUtf8, selectionHeadUtf8 ->
             sessionCoordinator.applyLocalEdit(
                 EditorDocumentUpdate.LocalInput(
                     targetId = target.targetId,
@@ -566,6 +634,8 @@ class EditorWindowHost(
                     revision = revision,
                     transactionId = transactionId,
                     operationKind = operationKind,
+                    selectionAnchorUtf8 = selectionAnchorUtf8,
+                    selectionHeadUtf8 = selectionHeadUtf8,
                 )
             )
         }

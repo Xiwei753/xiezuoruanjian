@@ -85,7 +85,6 @@ class EditorSessionCoordinator(
     // ── 纯会话状态 ──
     private val targetProfiles = mutableMapOf<String, TextEditorProfile>()
     private val targetPersistentFlags = mutableMapOf<String, Boolean>()
-    private val targetTexts = mutableMapOf<String, String>()
     private val persistentSessionIds = mutableMapOf<String, ULong>()
     private val targetDecorations = mutableMapOf<String, TargetDecorations>()
     private val projectionSnapshots = mutableMapOf<String, ProjectionSnapshot>()
@@ -140,28 +139,32 @@ class EditorSessionCoordinator(
      *
      * 由 [EditorWindowHost.installContentCallback] 在 SujianEditorView 产生
      * EditResult 后调用。revision/transactionId 来自 Rust EditResult，
+     * selectionAnchor/Head 来自 pipeline mirror（真实选区）；
      * WritingPane 收集 [sessionStateFlow] 发现 revision 已应用，只更新保存状态。
      */
     fun applyLocalEdit(update: EditorDocumentUpdate.LocalInput) {
-        targetTexts[update.targetId] = update.text
+        val previous = _sessionStateFlow.value
         _sessionStateFlow.value = EditorSessionState(
             targetId = update.targetId,
             sessionId = persistentSessionIds[update.targetId],
             text = update.text,
             revision = update.revision,
-            selectionAnchorUtf8 = _sessionStateFlow.value.selectionAnchorUtf8,
-            selectionHeadUtf8 = _sessionStateFlow.value.selectionHeadUtf8,
+            selectionAnchorUtf8 = if (update.selectionAnchorUtf8 >= 0) update.selectionAnchorUtf8 else previous.selectionAnchorUtf8,
+            selectionHeadUtf8 = if (update.selectionHeadUtf8 >= 0) update.selectionHeadUtf8 else previous.selectionHeadUtf8,
             lastAppliedTransactionId = update.transactionId,
             origin = EditorSessionOrigin.LOCAL_INPUT,
             bindingState = _windowBindingStateFlow.value,
+            lastRepositoryHash = previous.lastRepositoryHash,
         )
     }
 
     /**
-     * #595 一：应用外部正文替换 — 与当前 Rust snapshot revision/content 比较，
+     * #595 一：外部正文替换 — 与当前 Rust snapshot revision/content 比较，
      * 只有确认是新的外部版本时才返回 true（调用方执行 reset 协议）。
      *
      * 本地输入产生的 UI 回显不会进入此方法（WritingPane 用 revision 判断）。
+     * 返回 true 时 revision 字段作为新旧判断参考；最终 SessionState.revision
+     * 由 [applyExternalReplace] 从 reset 后的真实 snapshot 读取。
      */
     fun shouldApplyExternalReplace(update: EditorDocumentUpdate.ExternalReplace): Boolean {
         val current = _sessionStateFlow.value
@@ -174,20 +177,74 @@ class EditorSessionCoordinator(
     }
 
     /**
+     * #595 一：Repository 加载事件的幂等判断 — 真实 fileHash 与内容双重校验。
+     *
+     * - 同一 hash 已应用（幂等重放）→ false；
+     * - 内容与当前 session 一致 → false（无需 reset）。
+     * 不再由 UI 伪造 revision/source 参与判断；本地输入与加载的竞态由
+     * ViewModel 的 loading/inputFrozen/sessionId 守卫拦截，加载事件不会
+     * 在用户输入进行中落地。
+     */
+    fun shouldApplyRepositoryLoad(update: EditorDocumentUpdate.RepositoryLoaded): Boolean {
+        if (update.fileHash.isEmpty()) return false
+        val current = _sessionStateFlow.value
+        if (current.targetId != update.targetId) return true
+        if (current.lastRepositoryHash == update.fileHash && current.text == update.text) return false
+        if (current.text == update.text) return false
+        return true
+    }
+
+    /**
      * #595 一：外部替换已执行后更新 SessionState。
+     *
+     * revision 必须来自 reset 后的真实 Rust snapshot（[queryTargetSnapshot]），
+     * 不允许 UI 传入的猜测值进入唯一状态源。
      */
     fun applyExternalReplace(update: EditorDocumentUpdate.ExternalReplace) {
-        targetTexts[update.targetId] = update.text
+        val realSnapshot = queryTargetSnapshot(update.targetId)
+        val realRevision = realSnapshot?.revision ?: update.revision
+        val realText = realSnapshot?.text ?: update.text
+        val realAnchor = realSnapshot?.selectionAnchorUtf8 ?: 0
+        val realHead = realSnapshot?.selectionHeadUtf8
+            ?: (realSnapshot?.cursorUtf8 ?: update.text.toByteArray(Charsets.UTF_8).size)
+        val previous = _sessionStateFlow.value
         _sessionStateFlow.value = EditorSessionState(
             targetId = update.targetId,
             sessionId = persistentSessionIds[update.targetId],
-            text = update.text,
-            revision = update.revision,
-            selectionAnchorUtf8 = 0,
-            selectionHeadUtf8 = update.text.toByteArray(Charsets.UTF_8).size,
+            text = realText,
+            revision = realRevision,
+            selectionAnchorUtf8 = realAnchor,
+            selectionHeadUtf8 = realHead,
             lastAppliedTransactionId = 0L,
             origin = EditorSessionOrigin.EXTERNAL_REPLACE,
             bindingState = _windowBindingStateFlow.value,
+            lastRepositoryHash = previous.lastRepositoryHash,
+        )
+    }
+
+    /**
+     * #595 一：Repository 加载事件已执行后更新 SessionState —
+     * 记录真实 fileHash（幂等去重）并同步真实 snapshot revision。
+     */
+    fun applyRepositoryLoaded(update: EditorDocumentUpdate.RepositoryLoaded) {
+        val realSnapshot = queryTargetSnapshot(update.targetId)
+        val realRevision = realSnapshot?.revision ?: update.revision
+        val realText = realSnapshot?.text ?: update.text
+        val realAnchor = realSnapshot?.selectionAnchorUtf8 ?: 0
+        val realHead = realSnapshot?.selectionHeadUtf8
+            ?: (realSnapshot?.cursorUtf8 ?: update.text.toByteArray(Charsets.UTF_8).size)
+        val previous = _sessionStateFlow.value
+        _sessionStateFlow.value = EditorSessionState(
+            targetId = update.targetId,
+            sessionId = persistentSessionIds[update.targetId],
+            text = realText,
+            revision = realRevision,
+            selectionAnchorUtf8 = realAnchor,
+            selectionHeadUtf8 = realHead,
+            lastAppliedTransactionId = 0L,
+            origin = EditorSessionOrigin.EXTERNAL_REPLACE,
+            bindingState = _windowBindingStateFlow.value,
+            lastRepositoryHash = update.fileHash,
         )
     }
 
@@ -196,20 +253,13 @@ class EditorSessionCoordinator(
     fun registerTarget(target: EditableTextTarget) {
         targetProfiles[target.targetId] = target.profile
         targetPersistentFlags[target.targetId] = target.isPersistent
-        targetTexts[target.targetId] = target.currentText
     }
 
     fun updateTargetSpec(
         targetId: String,
         profile: TextEditorProfile? = null,
-        currentText: String? = null
     ) {
         profile?.let { targetProfiles[targetId] = it }
-        currentText?.let { targetTexts[targetId] = it }
-    }
-
-    fun updateTargetText(targetId: String, text: String) {
-        targetTexts[targetId] = text
     }
 
     fun isTargetPersistent(targetId: String): Boolean = targetPersistentFlags[targetId] ?: false
@@ -255,7 +305,11 @@ class EditorSessionCoordinator(
             activeSessionId = null
         }
         _editingStateFlow.value = EditingState.IDLE
-        _windowBindingStateFlow.value = WindowBindingState.Detached(targetId, sessionId, snapshot)
+        val detached = WindowBindingState.Detached(targetId, sessionId, snapshot)
+        _windowBindingStateFlow.value = detached
+        // #595 四：窗口解绑必须同步唯一 SessionState 的 bindingState，
+        // 否则跨配置恢复时 SessionState 仍宣称 Attached。
+        _sessionStateFlow.value = _sessionStateFlow.value.copy(bindingState = detached)
         com.xiwei.sujian.diagnostics.DiagnosticsEvents.sessionLifecycle(
             sessionId.toString(), "window_detached"
         )
@@ -263,9 +317,27 @@ class EditorSessionCoordinator(
 
     /**
      * #592 二：窗口绑定完成（视图已 bind/attach 成功）。
-     * 由 [EditorWindowHost.beginEdit] 在视图绑定后调用。
+     * 由 [EditorWindowHost] 在 View 真实绑定成功后调用。
+     *
+     * #595 三：防御性状态守卫 — Attached 只能从 Attaching 进入。
+     * View 尚未创建/绑定时（Idle/Detached/Detaching）调用本方法会被拒绝，
+     * 保证“Attached 一定表示屏幕上的 View 已绑定 session”。
      */
     fun completeWindowAttach(windowId: String, targetId: String, sessionId: ULong) {
+        val current = _windowBindingStateFlow.value
+        // 幂等重入：已经是同一 target/session 的 Attached（如 beginEdit 重复调用）保持现状。
+        if (current is WindowBindingState.Attached &&
+            current.targetId == targetId && current.sessionId == sessionId
+        ) {
+            return
+        }
+        // #595 三：Attached 只能从 Attaching 进入 — View 尚未创建/绑定时
+        // （Idle/Detached/Detaching）调用会被拒绝，保证“Attached 一定表示
+        // 屏幕上的 View 已绑定 session”。
+        if (current !is WindowBindingState.Attaching || current.targetId != targetId) {
+            Log.w(TAG, "completeWindowAttach($targetId): current state $current is not Attaching for target — ignoring (Attached requires a bound View)")
+            return
+        }
         _windowBindingStateFlow.value = WindowBindingState.Attached(windowId, targetId, sessionId)
         _editingStateFlow.value = EditingState.EDITING
         _sessionStateFlow.value = _sessionStateFlow.value.copy(
@@ -295,7 +367,6 @@ class EditorSessionCoordinator(
         targetDecorations.remove(targetId)
         targetProfiles.remove(targetId)
         targetPersistentFlags.remove(targetId)
-        targetTexts.remove(targetId)
         projectionSnapshots.remove(targetId)
         if (activeTargetId == targetId) {
             _activeTargetIdFlow.value = null
@@ -303,13 +374,17 @@ class EditorSessionCoordinator(
         }
         _editingStateFlow.value = EditingState.IDLE
         _windowBindingStateFlow.value = WindowBindingState.Idle
+        // #595 四：业务关闭后 SessionState 必须回到 Idle —
+        // 不允许残留旧 target/旧 binding/旧 revision。
+        if (_sessionStateFlow.value.targetId == targetId || sessionId != null) {
+            _sessionStateFlow.value = EditorSessionState()
+        }
     }
 
     private fun clearWindowAttach(targetId: String) {
         targetDecorations.remove(targetId)
         targetProfiles.remove(targetId)
         targetPersistentFlags.remove(targetId)
-        targetTexts.remove(targetId)
         projectionSnapshots.remove(targetId)
         if (activeTargetId == targetId) {
             _activeTargetIdFlow.value = null
@@ -317,6 +392,10 @@ class EditorSessionCoordinator(
         }
         _editingStateFlow.value = EditingState.IDLE
         _windowBindingStateFlow.value = WindowBindingState.Idle
+        // #595 四：非持久 target 解绑后 SessionState 回到 Idle。
+        if (_sessionStateFlow.value.targetId == targetId) {
+            _sessionStateFlow.value = EditorSessionState()
+        }
     }
 
     /**
@@ -327,15 +406,17 @@ class EditorSessionCoordinator(
      * textEditSessionSnapshot（text/revision/cursor/selection），窗口层据此执行
      * attachSnapshot，不再用新 Compose target 的正文/末尾光标执行 loadText
      * （那会 revision+1 并清空 Undo/Redo）。
+     * #595 二：新建 session 同样携带 create 后的真实 snapshot（createSession 已
+     * 接收初始正文，是唯一一次 Core 命令），窗口层 attachSnapshot 只重建本地镜像，
+     * 不再对同一 session 二次 loadText。
      */
-    fun prepareSessionForEdit(targetId: String, initialSelection: Int?, windowId: String): SessionBindInfo? {
+    fun prepareSessionForEdit(targetId: String, initialText: String, initialSelection: Int?, windowId: String): SessionBindInfo? {
         val isPersistent = targetPersistentFlags[targetId] ?: false
-        val targetText = targetTexts[targetId] ?: ""
         val profile = targetProfiles[targetId] ?: TextEditorProfile()
 
         if (activeTargetId == targetId && (editingState == EditingState.EDITING || editingState == EditingState.BINDING)) {
             val sid = activeSessionId ?: return null
-            return SessionBindInfo(sid, targetText, initialSelection ?: targetText.toByteArray(Charsets.UTF_8).size, profile, isPersistent, snapshot = queryTargetSnapshot(targetId))
+            return SessionBindInfo(sid, initialText, initialSelection ?: initialText.toByteArray(Charsets.UTF_8).size, profile, isPersistent, snapshot = querySnapshotForSession(sid))
         }
 
         if (activeTargetId != null && activeTargetId != targetId) {
@@ -347,15 +428,14 @@ class EditorSessionCoordinator(
 
         _editingStateFlow.value = EditingState.BINDING
 
-        val textForSession = targetText
+        val textForSession = initialText
         val sel = initialSelection ?: textForSession.toByteArray(Charsets.UTF_8).size
-        // #592 一：仅对调用前已存在的持久 session 携带真实 snapshot（重绑定/窗口重建）；
-        // 新建 session 走正常 bindSession/loadText 路径。
-        var reusedExistingSession = false
+        // #592 一：复用既有持久 session 时携带真实 snapshot（重绑定/窗口重建）；
+        // #595 二：新建 session 也在 create 后立即读取真实 snapshot（createSession 已
+        // 把初始正文装入 kernel，禁止再走 bindSession/loadText 二次 Core 命令）。
         val sessionId = if (isPersistent) {
             val existing = persistentSessionIds[targetId]
             if (existing != null && validateSession(existing)) {
-                reusedExistingSession = true
                 existing
             } else {
                 persistentSessionIds.remove(targetId)
@@ -380,11 +460,13 @@ class EditorSessionCoordinator(
 
         _activeTargetIdFlow.value = targetId
         activeSessionId = sessionId
-        _windowBindingStateFlow.value = WindowBindingState.Attaching(windowId, targetId, sessionId)
+        val attaching = WindowBindingState.Attaching(windowId, targetId, sessionId)
+        _windowBindingStateFlow.value = attaching
 
-        // #595 一：更新唯一 SessionState — 新建 session 用初始正文/光标，
-        // 复用既有 session 用真实 snapshot。
-        val snapshot = if (reusedExistingSession) queryTargetSnapshot(targetId) else null
+        // #595 一/二：更新唯一 SessionState — 无论新建还是复用、持久还是草稿，
+        // 都用真实 snapshot（createSession 已把初始正文装入 kernel，是唯一一次
+        // Core 命令；草稿 session 未注册 persistentSessionIds，按 sessionId 直读）。
+        val snapshot = querySnapshotForSession(sessionId)
         _sessionStateFlow.value = if (snapshot != null) {
             EditorSessionState(
                 targetId = targetId,
@@ -395,7 +477,7 @@ class EditorSessionCoordinator(
                 selectionHeadUtf8 = snapshot.selectionHeadUtf8,
                 lastAppliedTransactionId = 0L,
                 origin = EditorSessionOrigin.INITIAL_LOAD,
-                bindingState = WindowBindingState.Attaching(windowId, targetId, sessionId),
+                bindingState = attaching,
             )
         } else {
             EditorSessionState(
@@ -407,7 +489,7 @@ class EditorSessionCoordinator(
                 selectionHeadUtf8 = sel,
                 lastAppliedTransactionId = 0L,
                 origin = EditorSessionOrigin.INITIAL_LOAD,
-                bindingState = WindowBindingState.Attaching(windowId, targetId, sessionId),
+                bindingState = attaching,
             )
         }
         return SessionBindInfo(sessionId, textForSession, sel, profile, isPersistent, snapshot = snapshot)
@@ -435,9 +517,7 @@ class EditorSessionCoordinator(
         if (windowBound) {
             _windowBindingStateFlow.value = WindowBindingState.Committing(targetId, sessionId)
         }
-        if (finalText != null) {
-            targetTexts[targetId] = finalText
-        }
+        // #595 四：正文在 SessionState 中（applyLocalEdit 已更新），不再维护第二份正文缓存。
         if (!isPersistent || !windowBound) {
             closeSession(sessionId)
             persistentSessionIds.remove(targetId)
@@ -446,6 +526,8 @@ class EditorSessionCoordinator(
         activeSessionId = null
         _editingStateFlow.value = EditingState.IDLE
         _windowBindingStateFlow.value = WindowBindingState.Idle
+        // #595 四：提交清除后 SessionState 必须回到 Idle — 不允许残留旧 target/旧 binding。
+        _sessionStateFlow.value = EditorSessionState()
         _lastCommittedTextFlow.value = if (targetProfiles[targetId]?.secretPolicy == SecretPolicy.MASK_AND_CLEAR_ON_COMMIT) null else finalText
         return true
     }
@@ -469,6 +551,8 @@ class EditorSessionCoordinator(
         activeSessionId = null
         _editingStateFlow.value = EditingState.IDLE
         _windowBindingStateFlow.value = WindowBindingState.Idle
+        // #595 四：取消清除后 SessionState 必须回到 Idle。
+        _sessionStateFlow.value = EditorSessionState()
         return true
     }
 
@@ -478,7 +562,6 @@ class EditorSessionCoordinator(
 
         val sessionId = persistentSessionIds[targetId]
         if (sessionId == null) {
-            targetTexts[targetId] = text
             val newSessionId = createSession(targetId, text, cursorUtf8, true)
             if (newSessionId == null || newSessionId == 0UL) {
                 Log.e(TAG, "resetPersistentSession($targetId): failed to create session for empty/missing persistent session")
@@ -501,9 +584,7 @@ class EditorSessionCoordinator(
         }
 
         when (appServiceBridge.textEditSessionReset(sessionId, text, cursorUtf8.toUInt())) {
-            is BridgeResult.Success -> {
-                targetTexts[targetId] = text
-            }
+            is BridgeResult.Success -> { }
             else -> { }
         }
         refreshDetachedSnapshot(targetId)
@@ -521,8 +602,8 @@ class EditorSessionCoordinator(
 
     // ── SessionCommandPort implementation (bridge-level, no View) ──
 
-    override fun queryTargetSnapshot(targetId: String): TargetSnapshot? {
-        val sessionId = persistentSessionIds[targetId] ?: return null
+    /** 按 sessionId 直接读取真实 snapshot（不依赖 persistentSessionIds 注册）。 */
+    private fun querySnapshotForSession(sessionId: ULong): TargetSnapshot? {
         if (!validateSession(sessionId)) return null
         return when (val result = appServiceBridge.textEditSessionSnapshot(sessionId)) {
             is BridgeResult.Success -> {
@@ -537,6 +618,11 @@ class EditorSessionCoordinator(
             }
             else -> null
         }
+    }
+
+    override fun queryTargetSnapshot(targetId: String): TargetSnapshot? {
+        val sessionId = persistentSessionIds[targetId] ?: return null
+        return querySnapshotForSession(sessionId)
     }
 
     /**
@@ -589,7 +675,6 @@ class EditorSessionCoordinator(
         val snapshotAfter = queryTargetSnapshot(targetId)
             ?: return TargetCommandResult.Failed(TargetCommandError.SNAPSHOT_UNAVAILABLE)
 
-        targetTexts[targetId] = snapshotAfter.text
         return TargetCommandResult.Success(snapshotAfter)
     }
 
@@ -653,12 +738,12 @@ class EditorSessionCoordinator(
         targetDecorations.clear()
         targetProfiles.clear()
         targetPersistentFlags.clear()
-        targetTexts.clear()
         projectionSnapshots.clear()
         _editingStateFlow.value = EditingState.RELEASED
         _windowBindingStateFlow.value = WindowBindingState.Idle
         _activeTargetIdFlow.value = null
         activeSessionId = null
+        _sessionStateFlow.value = EditorSessionState()
     }
 
     companion object {
