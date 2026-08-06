@@ -174,6 +174,15 @@ private fun WorkbenchWorkspaceContent(
                     chapterId = currentChapterId,
                     chapterTitle = currentChapterTitle,
                     modifier = editorModifier,
+                    // #595 一：章节切换保存/加载失败 → 回滚选择到旧章节；
+                    // 无旧章节（首次进入失败）→ 清除章节选择（回到章节导航面板）。
+                    onChapterSwitchFailed = { _, oldVolumeId, oldChapterId, oldChapterTitle ->
+                        if (oldVolumeId != null && oldChapterId != null) {
+                            appState.selectChapter(oldVolumeId, oldChapterId, oldChapterTitle)
+                        } else {
+                            appState.clearChapterSelection()
+                        }
+                    },
                 )
             } else {
                 Box(

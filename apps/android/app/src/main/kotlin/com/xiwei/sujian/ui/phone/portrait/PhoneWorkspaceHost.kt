@@ -142,6 +142,21 @@ fun PhoneWorkspaceHost(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .padding(top = if (isEditor) editorTopSafeArea else 0.dp),
+                            // #595 一：章节切换保存/加载失败 → 回滚选择到旧章节；
+                            // 无旧章节（首次进入失败）→ 清除章节选择并返回章节树。
+                            onChapterSwitchFailed = { oldProjectId, oldVolumeId, oldChapterId, oldChapterTitle ->
+                                if (oldVolumeId != null && oldChapterId != null) {
+                                    sessionViewModel.selectChapter(oldVolumeId, oldChapterId, oldChapterTitle)
+                                    coroutineScope.launch {
+                                        workspaceNavState.navigateToEditor(oldProjectId, oldVolumeId, oldChapterId)
+                                    }
+                                } else {
+                                    sessionViewModel.clearChapterSelection()
+                                    coroutineScope.launch {
+                                        workspaceNavState.back()
+                                    }
+                                }
+                            },
                         )
                     } else {
                         Box(

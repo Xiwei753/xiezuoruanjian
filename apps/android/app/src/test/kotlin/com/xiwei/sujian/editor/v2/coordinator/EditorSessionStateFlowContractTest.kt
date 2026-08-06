@@ -11,7 +11,7 @@ import java.lang.reflect.Method
  * #595 一：EditorSessionCoordinator sessionStateFlow 契约测试。
  *
  * 验证本地输入更新 SessionState（revision/transactionId/origin=LOCAL_INPUT），
- * 外部替换用 revision 判断是否需要 reset。
+ * 外部加载用真实 fileHash 判断是否需要 reset（#595 二：不再伪造 revision）。
  */
 class EditorSessionStateFlowContractTest {
 
@@ -25,21 +25,34 @@ class EditorSessionStateFlowContractTest {
     }
 
     @Test
-    fun shouldApplyExternalReplaceExistsOnSessionCoordinator() {
+    fun shouldApplyRepositoryLoadExistsOnSessionCoordinator() {
         val method = EditorSessionCoordinator::class.java.methods.firstOrNull {
-            it.name == "shouldApplyExternalReplace" && it.parameterTypes.size == 1 &&
-            it.parameterTypes[0] == EditorDocumentUpdate.ExternalReplace::class.java
+            it.name == "shouldApplyRepositoryLoad" && it.parameterTypes.size == 1 &&
+            it.parameterTypes[0] == EditorDocumentUpdate.RepositoryLoaded::class.java
         }
-        assertNotNull("EditorSessionCoordinator must have shouldApplyExternalReplace(ExternalReplace)", method)
+        assertNotNull("EditorSessionCoordinator must have shouldApplyRepositoryLoad(RepositoryLoaded)", method)
     }
 
     @Test
-    fun applyExternalReplaceExistsOnSessionCoordinator() {
+    fun applyRepositoryLoadedExistsOnSessionCoordinator() {
         val method = EditorSessionCoordinator::class.java.methods.firstOrNull {
-            it.name == "applyExternalReplace" && it.parameterTypes.size == 1 &&
-            it.parameterTypes[0] == EditorDocumentUpdate.ExternalReplace::class.java
+            it.name == "applyRepositoryLoaded" && it.parameterTypes.size == 1 &&
+            it.parameterTypes[0] == EditorDocumentUpdate.RepositoryLoaded::class.java
         }
-        assertNotNull("EditorSessionCoordinator must have applyExternalReplace(ExternalReplace)", method)
+        assertNotNull("EditorSessionCoordinator must have applyRepositoryLoaded(RepositoryLoaded)", method)
+    }
+
+    @Test
+    fun fabricatedExternalReplaceProtocol_removed() {
+        // #595 二：外部更新不得再由 UI 伪造 revision/source。
+        assertTrue(
+            "shouldApplyExternalReplace must be removed",
+            EditorSessionCoordinator::class.java.methods.none { it.name == "shouldApplyExternalReplace" },
+        )
+        assertTrue(
+            "applyExternalReplace must be removed",
+            EditorSessionCoordinator::class.java.methods.none { it.name == "applyExternalReplace" },
+        )
     }
 
     @Test
@@ -85,42 +98,46 @@ class EditorSessionStateFlowContractTest {
     }
 
     @Test
-    fun externalReplaceWithSameRevisionAndTextDoesNotNeedReset() {
+    fun repositoryLoadWithSameHashAndTextDoesNotNeedReset() {
+        // #595 一：同一 fileHash 且内容一致 → 幂等重放，不 reset。
         val currentState = EditorSessionState(
             targetId = "t1",
             text = "text",
             revision = 5L,
-            origin = EditorSessionOrigin.LOCAL_INPUT,
+            origin = EditorSessionOrigin.EXTERNAL_REPLACE,
+            lastRepositoryHash = "hash-1",
         )
-        val external = EditorDocumentUpdate.ExternalReplace("t1", "text", 5L, ExternalSource.SYNC_MERGE)
-        // Same revision and text → no reset
-        assertFalse(currentState.revision == external.revision && currentState.text == external.text == false)
-        assertTrue(currentState.revision == external.revision && currentState.text == external.text)
+        val load = EditorDocumentUpdate.RepositoryLoaded("t1", "text", "hash-1", 0L)
+        val alreadyApplied = currentState.lastRepositoryHash == load.fileHash &&
+            currentState.text == load.text
+        assertTrue("Same hash + same text must be idempotent (no reset)", alreadyApplied)
     }
 
     @Test
-    fun externalReplaceWithNewerRevisionNeedsReset() {
+    fun repositoryLoadWithNewContentNeedsReset() {
         val currentState = EditorSessionState(
             targetId = "t1",
             text = "old",
             revision = 3L,
-            origin = EditorSessionOrigin.LOCAL_INPUT,
+            lastRepositoryHash = "hash-1",
         )
-        val external = EditorDocumentUpdate.ExternalReplace("t1", "new", 10L, ExternalSource.REPOSITORY_LOAD)
-        // Local revision < external revision → reset needed
-        assertTrue(currentState.revision < external.revision)
+        val load = EditorDocumentUpdate.RepositoryLoaded("t1", "new", "hash-2", 0L)
+        val needsReset = currentState.text != load.text
+        assertTrue("Different content must trigger reset protocol", needsReset)
     }
 
     @Test
-    fun externalReplaceWithStaleRevisionDoesNotNeedReset() {
+    fun repositoryLoadWithSameContentDoesNotNeedReset() {
+        // #595 一：内容与当前 session 一致 → 无需 reset（即使 hash 不同，内容相同）。
         val currentState = EditorSessionState(
             targetId = "t1",
-            text = "local edit",
+            text = "same",
             revision = 10L,
             origin = EditorSessionOrigin.LOCAL_INPUT,
+            lastRepositoryHash = "hash-1",
         )
-        val external = EditorDocumentUpdate.ExternalReplace("t1", "stale", 5L, ExternalSource.SYNC_MERGE)
-        // Local input with newer revision → no reset
-        assertTrue(currentState.origin == EditorSessionOrigin.LOCAL_INPUT && currentState.revision >= external.revision)
+        val load = EditorDocumentUpdate.RepositoryLoaded("t1", "same", "hash-2", 0L)
+        val needsReset = currentState.text != load.text
+        assertFalse("Same content must not reset even with different hash", needsReset)
     }
 }

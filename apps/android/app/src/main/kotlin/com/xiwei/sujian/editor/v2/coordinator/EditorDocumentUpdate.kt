@@ -11,9 +11,10 @@ import androidx.compose.runtime.Immutable
  * - [LocalInput]：IME/键盘输入经 Rust EditResult 产生，携带 transactionId。
  *   会话层先更新唯一 SessionState，再通知 ViewModel 保存；UI 回显带同一 revision，
  *   WritingPane 发现 revision 已应用，只更新保存状态，不 reset session。
- * - [ExternalReplace]：Repository/Sync/Undo/ProgrammaticReplace 产生。
- *   与当前 Rust snapshot revision/content 比较，只有确认是新的外部版本时
- *   执行 replace/reset 协议。
+ * - [RepositoryLoaded]：Repository 真实来源的正文版本事件，携带真实 fileHash。
+ *   #595 二：已删除 ExternalReplace/ExternalSource — UI 不得再伪造
+ *   revision+1/source；外部更新只由真实来源事件驱动，最终 revision 永远来自
+ *   reset 后的真实 Rust snapshot。
  */
 @Immutable
 sealed interface EditorDocumentUpdate {
@@ -35,14 +36,6 @@ sealed interface EditorDocumentUpdate {
         val selectionHeadUtf8: Int = -1,
     ) : EditorDocumentUpdate
 
-    @Immutable
-    data class ExternalReplace(
-        override val targetId: String,
-        override val text: String,
-        override val revision: Long,
-        val source: ExternalSource,
-    ) : EditorDocumentUpdate
-
     /**
      * #595 一：Repository 真实来源的正文更新事件。
      *
@@ -59,14 +52,6 @@ sealed interface EditorDocumentUpdate {
         val fileHash: String,
         override val revision: Long,
     ) : EditorDocumentUpdate
-}
-
-@Immutable
-enum class ExternalSource {
-    REPOSITORY_LOAD,
-    SYNC_MERGE,
-    UNDO_RESTORE,
-    PROGRAMMATIC_REPLACE,
 }
 
 @Immutable

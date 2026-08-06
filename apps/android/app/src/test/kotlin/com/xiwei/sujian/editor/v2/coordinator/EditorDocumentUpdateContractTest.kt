@@ -7,10 +7,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * #595 一：EditorDocumentUpdate 类型化正文更新协议契约测试。
+ * #595 一/二：EditorDocumentUpdate 类型化正文更新协议契约测试。
  *
- * 验证 LocalInput 和 ExternalReplace 的来源区分、revision 携带和
- * 替代 generation/hashCode 启发式判断的正确性。
+ * 验证 LocalInput（本地输入）与 RepositoryLoaded（真实来源外部加载）的
+ * 来源区分、revision/hash 携带和替代 generation/hashCode 启发式判断的正确性。
+ * #595 二：ExternalReplace/ExternalSource 已删除 — UI 不得伪造 revision/source，
+ * 外部更新只由真实来源事件驱动。
  */
 class EditorDocumentUpdateContractTest {
 
@@ -30,34 +32,43 @@ class EditorDocumentUpdateContractTest {
     }
 
     @Test
-    fun externalReplaceCarriesSource() {
-        val update = EditorDocumentUpdate.ExternalReplace(
+    fun repositoryLoadedCarriesRealFileHash() {
+        val update = EditorDocumentUpdate.RepositoryLoaded(
             targetId = "chapter-body:p:v:c",
-            text = "replaced",
-            revision = 10L,
-            source = ExternalSource.SYNC_MERGE,
+            text = "loaded",
+            fileHash = "sha256:abc123",
+            revision = 0L,
         )
         assertEquals("chapter-body:p:v:c", update.targetId)
-        assertEquals("replaced", update.text)
-        assertEquals(10L, update.revision)
-        assertEquals(ExternalSource.SYNC_MERGE, update.source)
+        assertEquals("loaded", update.text)
+        assertEquals("sha256:abc123", update.fileHash)
+        assertEquals(0L, update.revision)
     }
 
     @Test
-    fun localInputAndExternalReplaceAreDistinctTypes() {
+    fun localInputAndRepositoryLoadedAreDistinctTypes() {
         val local = EditorDocumentUpdate.LocalInput("t", "text", 1L, 100L)
-        val external = EditorDocumentUpdate.ExternalReplace("t", "text", 1L, ExternalSource.REPOSITORY_LOAD)
-        assertNotEquals("LocalInput and ExternalReplace must be distinct", local, external)
+        val external = EditorDocumentUpdate.RepositoryLoaded("t", "text", "hash-1", 0L)
+        assertNotEquals("LocalInput and RepositoryLoaded must be distinct", local, external)
     }
 
     @Test
-    fun externalSourceDistinguishesAllOrigins() {
-        val sources = ExternalSource.values()
-        assertEquals(4, sources.size)
-        assertTrue(sources.contains(ExternalSource.REPOSITORY_LOAD))
-        assertTrue(sources.contains(ExternalSource.SYNC_MERGE))
-        assertTrue(sources.contains(ExternalSource.UNDO_RESTORE))
-        assertTrue(sources.contains(ExternalSource.PROGRAMMATIC_REPLACE))
+    fun uiMustNotFabricateExternalReplace() {
+        // #595 二：UI 不再持有 ExternalReplace/ExternalSource 伪造入口 —
+        // 任何字符串差异都不能现场构造“更高 revision”覆盖编辑状态。
+        val fabricatedReplaceClass = EditorDocumentUpdate::class.java.declaredClasses.firstOrNull {
+            it.simpleName == "ExternalReplace"
+        }
+        assertTrue(
+            "EditorDocumentUpdate.ExternalReplace must be removed (#595 二)",
+            fabricatedReplaceClass == null,
+        )
+        val fabricatedSourceClass = try {
+            Class.forName("com.xiwei.sujian.editor.v2.coordinator.ExternalSource")
+        } catch (_: ClassNotFoundException) {
+            null
+        }
+        assertTrue("ExternalSource enum must be removed (#595 二)", fabricatedSourceClass == null)
     }
 
     @Test

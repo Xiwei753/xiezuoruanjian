@@ -58,8 +58,6 @@ class EditorWindowHost(
         val sessionId: ULong,
         val bridge: TextEditSessionBridge,
         val profile: TextEditorProfile,
-        val text: String,
-        val selection: Int,
         val snapshot: TargetSnapshot?,
     )
 
@@ -258,8 +256,6 @@ class EditorWindowHost(
             sessionId = bindInfo.sessionId,
             bridge = bridge,
             profile = bindInfo.profile,
-            text = bindInfo.text,
-            selection = bindInfo.selection,
             snapshot = bindInfo.snapshot,
         )
 
@@ -310,37 +306,34 @@ class EditorWindowHost(
 
     // #595 三：在 View 上执行 session 绑定 — 由 beginEdit（View 已存在）或
     // attachView（AndroidView.factory 刚创建 View）调用。返回 false 表示绑定失败
-    //（kernel load 失败/无 snapshot），调用方必须回到 Detached/Idle，
+    //（无真实 snapshot），调用方必须回到 Detached/Idle，
     // 不得进入没有真实 View 绑定的 Attached。
     // #592 一：复用既有持久 session 时执行 attachSnapshot（不调用
     // textEditSessionLoadText，Rust revision/Undo/Redo/composition 保持）；
     // #595 二：新建 session 同样 attachSnapshot（createSession 已把初始正文装入
-    // kernel，是唯一一次 Core 命令）— 不再对同一 session 二次 loadText。
+    // kernel，是唯一一次 Core 命令）。
+    // #595 三：snapshot 缺失（create 后读不到）视为绑定失败 — 禁止回退到
+    // bindSession/loadText 对同一 session 执行第二次 Core loadText。
     private fun performViewBind(
         view: SujianEditorView,
         pending: PendingViewBind,
         target: EditableTextTarget,
     ): Boolean {
         val snapshot = pending.snapshot
-        val bound = if (snapshot != null) {
-            view.attachSession(
-                sessionBridge = pending.bridge,
-                profile = pending.profile,
-                text = snapshot.text,
-                revision = snapshot.revision,
-                cursorUtf8 = snapshot.cursorUtf8,
-                selStartUtf8 = snapshot.selectionAnchorUtf8,
-                selEndUtf8 = snapshot.selectionHeadUtf8,
-            )
-            restoreProjectionScroll(view, pending.targetId)
-            true
-        } else {
-            view.bindSession(pending.bridge, pending.profile, pending.text, pending.selection)
-        }
-        if (!bound) {
-            Log.w(TAG, "performViewBind(${pending.targetId}): session bind failed, aborting window attach")
-            return false
-        }
+            ?: run {
+                Log.w(TAG, "performViewBind(${pending.targetId}): no real kernel snapshot — refusing bind to avoid a second Core loadText on the same session")
+                return false
+            }
+        view.attachSession(
+            sessionBridge = pending.bridge,
+            profile = pending.profile,
+            text = snapshot.text,
+            revision = snapshot.revision,
+            cursorUtf8 = snapshot.cursorUtf8,
+            selStartUtf8 = snapshot.selectionAnchorUtf8,
+            selEndUtf8 = snapshot.selectionHeadUtf8,
+        )
+        restoreProjectionScroll(view, pending.targetId)
 
         // #595 七: 活动编辑时 SujianEditorView 是唯一的 FrameClock listener。
         // 非活动预览只使用会话层 snapshot 派生的纯静态 ChapterPreviewState。

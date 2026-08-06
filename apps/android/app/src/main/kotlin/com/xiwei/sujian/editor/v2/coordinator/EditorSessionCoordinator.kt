@@ -159,24 +159,6 @@ class EditorSessionCoordinator(
     }
 
     /**
-     * #595 一：外部正文替换 — 与当前 Rust snapshot revision/content 比较，
-     * 只有确认是新的外部版本时才返回 true（调用方执行 reset 协议）。
-     *
-     * 本地输入产生的 UI 回显不会进入此方法（WritingPane 用 revision 判断）。
-     * 返回 true 时 revision 字段作为新旧判断参考；最终 SessionState.revision
-     * 由 [applyExternalReplace] 从 reset 后的真实 snapshot 读取。
-     */
-    fun shouldApplyExternalReplace(update: EditorDocumentUpdate.ExternalReplace): Boolean {
-        val current = _sessionStateFlow.value
-        if (current.targetId != update.targetId) return true
-        // 同一 revision 且内容相同 — 已是最新，不需要 reset
-        if (current.revision == update.revision && current.text == update.text) return false
-        // 本地输入产生的更新（origin == LOCAL_INPUT）且 revision >= 外部 revision — 本地更新，不 reset
-        if (current.origin == EditorSessionOrigin.LOCAL_INPUT && current.revision >= update.revision) return false
-        return true
-    }
-
-    /**
      * #595 一：Repository 加载事件的幂等判断 — 真实 fileHash 与内容双重校验。
      *
      * - 同一 hash 已应用（幂等重放）→ false；
@@ -184,6 +166,9 @@ class EditorSessionCoordinator(
      * 不再由 UI 伪造 revision/source 参与判断；本地输入与加载的竞态由
      * ViewModel 的 loading/inputFrozen/sessionId 守卫拦截，加载事件不会
      * 在用户输入进行中落地。
+     * #595 二：已删除 shouldApplyExternalReplace/applyExternalReplace —
+     * 外部正文只由真实来源事件（RepositoryLoaded 真实 fileHash）驱动，
+     * UI 不得再构造 revision+1 的伪造 ExternalReplace。
      */
     fun shouldApplyRepositoryLoad(update: EditorDocumentUpdate.RepositoryLoaded): Boolean {
         if (update.fileHash.isEmpty()) return false
@@ -192,34 +177,6 @@ class EditorSessionCoordinator(
         if (current.lastRepositoryHash == update.fileHash && current.text == update.text) return false
         if (current.text == update.text) return false
         return true
-    }
-
-    /**
-     * #595 一：外部替换已执行后更新 SessionState。
-     *
-     * revision 必须来自 reset 后的真实 Rust snapshot（[queryTargetSnapshot]），
-     * 不允许 UI 传入的猜测值进入唯一状态源。
-     */
-    fun applyExternalReplace(update: EditorDocumentUpdate.ExternalReplace) {
-        val realSnapshot = queryTargetSnapshot(update.targetId)
-        val realRevision = realSnapshot?.revision ?: update.revision
-        val realText = realSnapshot?.text ?: update.text
-        val realAnchor = realSnapshot?.selectionAnchorUtf8 ?: 0
-        val realHead = realSnapshot?.selectionHeadUtf8
-            ?: (realSnapshot?.cursorUtf8 ?: update.text.toByteArray(Charsets.UTF_8).size)
-        val previous = _sessionStateFlow.value
-        _sessionStateFlow.value = EditorSessionState(
-            targetId = update.targetId,
-            sessionId = persistentSessionIds[update.targetId],
-            text = realText,
-            revision = realRevision,
-            selectionAnchorUtf8 = realAnchor,
-            selectionHeadUtf8 = realHead,
-            lastAppliedTransactionId = 0L,
-            origin = EditorSessionOrigin.EXTERNAL_REPLACE,
-            bindingState = _windowBindingStateFlow.value,
-            lastRepositoryHash = previous.lastRepositoryHash,
-        )
     }
 
     /**
@@ -416,7 +373,7 @@ class EditorSessionCoordinator(
 
         if (activeTargetId == targetId && (editingState == EditingState.EDITING || editingState == EditingState.BINDING)) {
             val sid = activeSessionId ?: return null
-            return SessionBindInfo(sid, initialText, initialSelection ?: initialText.toByteArray(Charsets.UTF_8).size, profile, isPersistent, snapshot = querySnapshotForSession(sid))
+            return SessionBindInfo(sid, profile, isPersistent, snapshot = querySnapshotForSession(sid))
         }
 
         if (activeTargetId != null && activeTargetId != targetId) {
@@ -492,7 +449,7 @@ class EditorSessionCoordinator(
                 bindingState = attaching,
             )
         }
-        return SessionBindInfo(sessionId, textForSession, sel, profile, isPersistent, snapshot = snapshot)
+        return SessionBindInfo(sessionId, profile, isPersistent, snapshot = snapshot)
     }
 
     fun forceEditingState(state: EditingState) {
@@ -753,14 +710,13 @@ class EditorSessionCoordinator(
 
 data class SessionBindInfo(
     val sessionId: ULong,
-    val text: String,
-    val selection: Int,
     val profile: TextEditorProfile,
     val isPersistent: Boolean,
     /**
      * #592 一：既有持久 session 的真实 Rust snapshot（text/revision/cursor/selection）。
      * 非 null 时窗口层必须走 attachSession（不调用 textEditSessionLoadText），
      * 保证 Undo/Redo 与 composition 不被重置；新建 session 为 null。
+     * #595 三：snapshot 为 null 时窗口层拒绝绑定（不允许 fallback 二次 loadText）。
      */
     val snapshot: TargetSnapshot? = null,
 )

@@ -46,6 +46,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withContext
 
 enum class SaveStatus {
     Idle,
@@ -60,6 +61,27 @@ data class EditorSession(
     val projectId: String,
     val volumeId: String,
     val chapterId: String
+)
+
+/**
+ * #595 一：章节切换事务结果 — 导航目标与 ViewModel 当前章节只能从同一个
+ * committed 状态派生，保存/加载失败必须回滚，不能只把 loading 改回 false。
+ *
+ * - [Success]：旧章节保存成功且新章节内容已加载提交（currentSession/content/loading 一致）。
+ * - [SaveFailed]：旧章节保存失败，currentSession 仍指向旧章节，调用方必须回滚导航。
+ * - [LoadFailed]：新章节加载失败，currentSession 已回退到旧章节，调用方必须回滚导航。
+ */
+sealed interface ChapterSwitchResult {
+    data class Success(val session: EditorSession, val content: String) : ChapterSwitchResult
+    data class SaveFailed(val current: EditorSession) : ChapterSwitchResult
+    data class LoadFailed(val requested: ChapterKey) : ChapterSwitchResult
+}
+
+/** 章节三元组 — 切换失败时携带请求目标，供回滚/重试识别。 */
+data class ChapterKey(
+    val projectId: String,
+    val volumeId: String,
+    val chapterId: String,
 )
 
 sealed class SaveCommand {
@@ -160,11 +182,13 @@ class EditorViewModel(
     private var isLoadingChapter = false
     private var inputFrozen = false
 
-    suspend fun switchChapter(projectId: String, volumeId: String, chapterId: String, chapterTitle: String) {
+    suspend fun switchChapter(projectId: String, volumeId: String, chapterId: String, chapterTitle: String): ChapterSwitchResult {
         val oldSession = currentSession
+        // #595 一：事务回滚需要旧章节标题 — 先捕获，加载失败时恢复。
+        val oldChapterTitle = _uiState.value.chapterTitle
 
         if (oldSession != null && oldSession.projectId == projectId && oldSession.volumeId == volumeId && oldSession.chapterId == chapterId) {
-            return
+            return ChapterSwitchResult.Success(oldSession, _uiState.value.content)
         }
 
         inputFrozen = true
@@ -228,11 +252,14 @@ class EditorViewModel(
             }
 
             if (!saveOk) {
+                // #595 一：保存失败必须返回明确失败结果 — 不能只把 loading 改回 false。
+                // currentSession 仍指向旧章节，调用方（WritingPane）据此回滚导航到
+                // activeChapterKey，否则会出现“新标题 + 旧正文”分裂和写入错误章节。
                 _uiState.value = _uiState.value.copy(loading = false)
                 saveCommandChannel = Channel<SaveCommand>(Channel.UNLIMITED)
                 startSaveActor()
                 inputFrozen = false
-                return
+                return ChapterSwitchResult.SaveFailed(oldSession)
             }
         } else {
             saveActorJob?.cancel()
@@ -257,8 +284,18 @@ class EditorViewModel(
         contentExplicitlyCleared = false
         startSaveActor()
         reloadSettings()
-        loadChapter(newSession)
+        // #595 一：加载在事务内完成 — 只有内容就绪后 switchChapter 才返回 Success。
+        // 加载失败时回退 currentSession 与标题，返回 LoadFailed 让调用方回滚导航。
+        val loaded = loadChapter(newSession)
         inputFrozen = false
+        if (!loaded) {
+            // #595 一：不能让 currentSession 指向未加载内容的章节 —
+            // 否则回滚导航后再次输入/自动保存会把旧正文写入新章节。
+            currentSession = oldSession
+            _uiState.value = _uiState.value.copy(chapterTitle = oldChapterTitle)
+            return ChapterSwitchResult.LoadFailed(ChapterKey(projectId, volumeId, chapterId))
+        }
+        return ChapterSwitchResult.Success(newSession, _uiState.value.content)
     }
 
     fun initChapter(projectId: String, volumeId: String, chapterId: String, chapterTitle: String) {
@@ -280,7 +317,9 @@ class EditorViewModel(
         contentExplicitlyCleared = false
         startSaveActor()
         reloadSettings()
-        loadChapter(currentSession!!)
+        viewModelScope.launch {
+            loadChapter(currentSession!!)
+        }
     }
 
     fun initErrorState(errorMessage: String) {
@@ -339,65 +378,69 @@ class EditorViewModel(
         }
     }
 
-    private fun loadChapter(session: EditorSession) {
+    /**
+     * #595 一：加载章节内容并在成功时一次性提交 loading=false/content/hash。
+     * 返回是否加载成功；失败时调用方（switchChapter 事务）负责回退会话指针。
+     */
+    private suspend fun loadChapter(session: EditorSession): Boolean {
         isLoadingChapter = true
         val sessionId = session.sessionId
-        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            try {
-                val result = workspaceRepository.getChapterContentWithMeta(session.projectId, session.volumeId, session.chapterId)
-                val content = result.first
-                val meta = result.second
-
-                com.xiwei.sujian.diagnostics.DiagnosticsEvents.chapterLoad(
-                    session.projectId, session.chapterId,
-                    content.toByteArray(Charsets.UTF_8).size, "ok"
-                )
-
-                launch(kotlinx.coroutines.Dispatchers.Main) {
-                    if (currentSession?.sessionId != sessionId) return@launch
-
-                    _uiState.value = _uiState.value.copy(
-                        loading = false,
-                        content = content,
-                        chapterHash = meta.hash,
-                        chapterNote = meta.note,
-                        editorEnabled = true,
-                        saveStatus = SaveStatus.Idle
-                    )
-                    // #595 一：Repository 加载完成即发出真实来源事件（真实 hash）。
-                    // WritingPane 据此决定是否执行外部替换协议；revision 只作参考，
-                    // 最终 SessionState.revision 来自 reset 后的真实 Rust snapshot。
-                    _documentUpdates.trySend(
-                        com.xiwei.sujian.editor.v2.coordinator.EditorDocumentUpdate.RepositoryLoaded(
-                            targetId = "chapter-body:${session.projectId}:${session.volumeId}:${session.chapterId}",
-                            text = content,
-                            fileHash = meta.hash,
-                            revision = 0L,
-                        )
-                    )
-                    previousText = content
-                    initialWordCount = calculateWordCount(content)
-                    sessionStartTime = System.currentTimeMillis()
-                    updateStats(content)
-                    isLoadingChapter = false
-                }
-
-                workspaceRepository.recordRecentEdit(session.projectId, session.volumeId, session.chapterId)
-            } catch (e: Throwable) {
-                com.xiwei.sujian.diagnostics.DiagnosticsEvents.chapterLoad(
-                    session.projectId, session.chapterId, 0, "error"
-                )
-                launch(kotlinx.coroutines.Dispatchers.Main) {
-                    if (currentSession?.sessionId != sessionId) return@launch
-                    isLoadingChapter = false
-                    _uiState.value = _uiState.value.copy(
-                        loading = false,
-                        editorEnabled = false,
-                        saveStatus = SaveStatus.Idle
-                    )
-                    emitErrorEvent(getApplication<Application>().getString(R.string.error_load_chapter_failed, e.message ?: ""))
-                }
+        return try {
+            val result = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                workspaceRepository.getChapterContentWithMeta(session.projectId, session.volumeId, session.chapterId)
             }
+            val content = result.first
+            val meta = result.second
+
+            com.xiwei.sujian.diagnostics.DiagnosticsEvents.chapterLoad(
+                session.projectId, session.chapterId,
+                content.toByteArray(Charsets.UTF_8).size, "ok"
+            )
+
+            if (currentSession?.sessionId != sessionId) return false
+
+            _uiState.value = _uiState.value.copy(
+                loading = false,
+                content = content,
+                chapterHash = meta.hash,
+                chapterNote = meta.note,
+                editorEnabled = true,
+                saveStatus = SaveStatus.Idle
+            )
+            // #595 一：Repository 加载完成即发出真实来源事件（真实 hash）。
+            // WritingPane 据此决定是否执行外部替换协议；revision 只作参考，
+            // 最终 SessionState.revision 来自 reset 后的真实 Rust snapshot。
+            _documentUpdates.trySend(
+                com.xiwei.sujian.editor.v2.coordinator.EditorDocumentUpdate.RepositoryLoaded(
+                    targetId = "chapter-body:${session.projectId}:${session.volumeId}:${session.chapterId}",
+                    text = content,
+                    fileHash = meta.hash,
+                    revision = 0L,
+                )
+            )
+            previousText = content
+            initialWordCount = calculateWordCount(content)
+            sessionStartTime = System.currentTimeMillis()
+            updateStats(content)
+            isLoadingChapter = false
+
+            withContext(kotlinx.coroutines.Dispatchers.IO) {
+                workspaceRepository.recordRecentEdit(session.projectId, session.volumeId, session.chapterId)
+            }
+            true
+        } catch (e: Throwable) {
+            com.xiwei.sujian.diagnostics.DiagnosticsEvents.chapterLoad(
+                session.projectId, session.chapterId, 0, "error"
+            )
+            if (currentSession?.sessionId != sessionId) return false
+            isLoadingChapter = false
+            _uiState.value = _uiState.value.copy(
+                loading = false,
+                editorEnabled = false,
+                saveStatus = SaveStatus.Idle
+            )
+            emitErrorEvent(getApplication<Application>().getString(R.string.error_load_chapter_failed, e.message ?: ""))
+            false
         }
     }
 

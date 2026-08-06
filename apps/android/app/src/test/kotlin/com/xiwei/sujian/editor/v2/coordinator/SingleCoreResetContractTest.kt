@@ -108,14 +108,17 @@ class SingleCoreResetContractTest {
     }
 
     @Test
-    fun bindSession_returnsBooleanForFailureDetection() {
+    fun bindSession_doubleCoreLoadEntry_removed() {
+        // #595 三：bindSession（snapshot 缺失时对同一 session 二次 loadText 的
+        // fallback 入口）必须删除 — performViewBind 只接受真实 snapshot 的
+        // attachSession 路径，禁止 create/reset 后再调用同 session 的 loadText。
         val method = com.xiwei.sujian.editor.v2.host.SujianEditorView::class.java.methods.firstOrNull {
-            it.name == "bindSession" &&
-            it.returnType == Boolean::class.javaPrimitiveType
+            it.name == "bindSession"
         }
         assertTrue(
-            "bindSession must return Boolean so bind failure can abort window attach (#595 三)",
-            method != null,
+            "bindSession must be removed — it was the second Core loadText entry " +
+            "(createSession(initialText) + bindSession→loadText 双重写入, #595 三)",
+            method == null,
         )
     }
 

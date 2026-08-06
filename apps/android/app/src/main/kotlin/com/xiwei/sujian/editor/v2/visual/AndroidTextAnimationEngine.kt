@@ -554,7 +554,14 @@ class AndroidTextAnimationEngine(
                 (frameTimeMs - (tl.getFirstVisibleFrameTimeMs() ?: frameTimeMs)).coerceAtLeast(0L)
             )
             completeTransaction(transaction)
-            activeTransaction = transaction.copy(ownedSnapshotIds = emptySet())
+            // #595 六：统一终态 — 事务对象与两条 timeline 全部离开引擎。
+            // 旧实现只把 activeTransaction 换成 ownedSnapshotIds=emptySet() 的副本，
+            // 事务对象仍留在引擎中：下一次 submit 会误发 rebase 事件，且引擎无法
+            // 表达 Completed/Idle 统一终态。完成后 activeTransaction==null，
+            // hasActiveAnimation()==false，FrameClock 停止 repost。
+            activeTransaction = null
+            timeline = null
+            cursorTimeline = null
             return true
         }
         return false

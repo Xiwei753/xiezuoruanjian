@@ -62,7 +62,13 @@ fun WritingPane(
     volumeId: String,
     chapterId: String,
     chapterTitle: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /**
+     * #595 一：章节切换事务失败回调（保存失败/加载失败）。
+     * 参数是回滚目标（旧章节）；旧章节不存在时传 null（应清除章节选择/回到章节树）。
+     * 由工作区宿主把工作区导航回滚到 activeChapterKey，不能只把 loading 改回 false。
+     */
+    onChapterSwitchFailed: ((oldProjectId: String, oldVolumeId: String?, oldChapterId: String?, oldChapterTitle: String) -> Unit)? = null,
 ) {
     val viewModel: EditorViewModel = viewModel()
     val deps = LocalSujianAppDependencies.current
@@ -82,9 +88,8 @@ fun WritingPane(
         "chapter-body:$projectId:$volumeId:$chapterId"
     }
 
-    LaunchedEffect(projectId, volumeId, chapterId) {
-        viewModel.switchChapter(projectId, volumeId, chapterId, chapterTitle)
-    }
+    // 章节切换由下方的事务 LaunchedEffect 驱动（switchChapter 在事务内调用），
+    // 这里不再 fire-and-forget 调用 — 避免同一个章节切换执行两次保存/加载。
 
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
@@ -127,8 +132,14 @@ fun WritingPane(
     }
 
 
+    var lastProjectId by remember { mutableStateOf("") }
+    var lastVolumeId by remember { mutableStateOf("") }
     var lastChapterId by remember { mutableStateOf("") }
+    var lastChapterTitle by remember { mutableStateOf("") }
     var lastTargetId by remember { mutableStateOf("") }
+    // #595 一：切换失败标记 — 阻止 beginEdit/外部替换协议用旧章节正文创建新章节
+    // session（“新 target 使用旧内容创建 Rust session”）；回滚重组合到旧章节后自然失效。
+    var failedSwitchTarget by remember { mutableStateOf<String?>(null) }
     // #595 一：删除 localContentGeneration/lastSeenContentGeneration/externalContentHash —
     // 改用 EditorSessionState.text 和 origin 判断本地/外部更新，不依赖 revision 比较。
 
@@ -158,19 +169,41 @@ fun WritingPane(
         }
     }
 
-    LaunchedEffect(chapterId) {
-        if (chapterId != lastChapterId && lastChapterId.isNotEmpty()) {
-            // #592 三：章节切换是业务级关闭 — 显式关闭旧章节持久 session
-            // （不得从 DisposableEffect 推断业务对象是否结束）。
-            if (lastTargetId.isNotEmpty()) {
-                coordinator.closeTarget(lastTargetId, com.xiwei.sujian.editor.v2.coordinator.SessionCloseReason.CHAPTER_SWITCH)
+    // #595 一：章节切换事务 — 保存旧章节 → 加载新章节 → 提交成功才关闭旧章节 session；
+    // 保存/加载失败时回滚工作区导航（onChapterSwitchFailed），旧 session 保留以便无损恢复。
+    // 旧的 LaunchedEffect(chapterId) 立即 closeTarget(CHAPTER_SWITCH) 已删除：
+    // 切换失败时旧 session 必须先保留，不能提前关闭。
+    LaunchedEffect(projectId, volumeId, chapterId) {
+        val sameChapter = lastChapterId.isNotEmpty() &&
+            lastProjectId == projectId && lastVolumeId == volumeId && lastChapterId == chapterId
+        if (!sameChapter) {
+            when (val result = viewModel.switchChapter(projectId, volumeId, chapterId, chapterTitle)) {
+                is com.xiwei.sujian.ui.ChapterSwitchResult.Success -> {
+                    // #595 一：只有保存+加载都成功，旧章节才是业务级关闭（CHAPTER_SWITCH）。
+                    if (lastTargetId.isNotEmpty() && lastTargetId != targetId) {
+                        coordinator.closeTarget(lastTargetId, com.xiwei.sujian.editor.v2.coordinator.SessionCloseReason.CHAPTER_SWITCH)
+                    }
+                    failedSwitchTarget = null
+                }
+                is com.xiwei.sujian.ui.ChapterSwitchResult.SaveFailed,
+                is com.xiwei.sujian.ui.ChapterSwitchResult.LoadFailed -> {
+                    // #595 一：保存/加载失败 → 回滚工作区选择到旧章节（activeChapterKey）。
+                    // 在回滚完成前禁止 beginEdit/外部替换协议使用旧正文创建新章节 session。
+                    failedSwitchTarget = targetId
+                    onChapterSwitchFailed?.invoke(
+                        lastProjectId.takeIf { it.isNotEmpty() } ?: projectId,
+                        lastVolumeId.takeIf { it.isNotEmpty() },
+                        lastChapterId.takeIf { it.isNotEmpty() },
+                        lastChapterTitle,
+                    )
+                }
             }
-            // #595 一：不再用旧章节的 uiState.content 对新章节 resetPersistentSession —
-            // switchChapter 已同步置 loading（保存窗口期编辑器隐藏），新章节 session
-            // 由 beginEdit 在内容加载完成后用真实正文创建；外部替换协议兜底一致。
+            lastProjectId = projectId
+            lastVolumeId = volumeId
+            lastChapterId = chapterId
+            lastChapterTitle = chapterTitle
+            lastTargetId = targetId
         }
-        lastChapterId = chapterId
-        lastTargetId = targetId
     }
 
     // #595 一：收集会话层唯一 SessionState — 用 revision 判断本地/外部更新。
@@ -215,57 +248,39 @@ fun WritingPane(
     }
 
     LaunchedEffect(uiState.content, chapterId) {
+        if (failedSwitchTarget == targetId) return@LaunchedEffect
         if (!uiState.loading) {
             // #595 一：用 sessionState.text 和 origin 判断本地/外部更新，不依赖 revision 比较。
             // onLocalEdit 先更新 sessionStateFlow（text/revision/origin=LOCAL_INPUT），
             // 后通知 ViewModel 更新 uiState.content。当 LaunchedEffect 触发时，
             // sessionState.text 已与 uiState.content 一致 → 本地更新，不 reset。
-            // 真实外部更新时 sessionState.text 与 uiState.content 不一致 → 外部更新，
-            // 走 RepositoryLoaded（真实 chapterHash）或 ExternalReplace 兜底。
+            // 真实外部更新只走 RepositoryLoaded（真实 chapterHash）事件 —
+            // #595 二：不再伪造 revision/source（删除 ExternalReplace 兜底：
+            // revision+1 不是真实版本，任何字符串差异都可能覆盖编辑状态）。
+            // 无 hash（异常态）不做外部替换，等待下一次真实加载事件。
             if (sessionState.origin == com.xiwei.sujian.editor.v2.coordinator.EditorSessionOrigin.LOCAL_INPUT
                 && sessionState.text == uiState.content
             ) {
                 // 本地输入产生的 UI 回显 — sessionState 已更新，
                 // 只同步 target 正文，不触发 resetPersistentSession。
                 coordinator.updateTargetText(targetId, uiState.content)
-            } else if (uiState.content != sessionState.text) {
-                if (uiState.chapterHash.isNotEmpty()) {
-                    applyExternalContent(uiState.content, uiState.chapterHash)
-                    coordinator.sessionCoordinator.applyRepositoryLoaded(
-                        com.xiwei.sujian.editor.v2.coordinator.EditorDocumentUpdate.RepositoryLoaded(
-                            targetId = targetId,
-                            text = uiState.content,
-                            fileHash = uiState.chapterHash,
-                            revision = 0L,
-                        )
-                    )
-                } else {
-                    // 异常态（无 hash）：ExternalReplace 兜底 — revision 只作新旧参考，
-                    // applyExternalReplace 会从 reset 后的真实 snapshot 读取最终 revision。
-                    val externalUpdate = com.xiwei.sujian.editor.v2.coordinator.EditorDocumentUpdate.ExternalReplace(
+            } else if (uiState.content != sessionState.text && uiState.chapterHash.isNotEmpty()) {
+                applyExternalContent(uiState.content, uiState.chapterHash)
+                coordinator.sessionCoordinator.applyRepositoryLoaded(
+                    com.xiwei.sujian.editor.v2.coordinator.EditorDocumentUpdate.RepositoryLoaded(
                         targetId = targetId,
                         text = uiState.content,
-                        revision = (sessionState.revision + 1).coerceAtLeast(1L),
-                        source = com.xiwei.sujian.editor.v2.coordinator.ExternalSource.REPOSITORY_LOAD,
+                        fileHash = uiState.chapterHash,
+                        revision = 0L,
                     )
-                    if (coordinator.sessionCoordinator.shouldApplyExternalReplace(externalUpdate)) {
-                        coordinator.resetPersistentSession(
-                            targetId,
-                            uiState.content,
-                            uiState.content.toByteArray(Charsets.UTF_8).size,
-                            SessionResetSource.EXTERNAL
-                        )
-                        coordinator.sessionCoordinator.applyExternalReplace(externalUpdate)
-                        if (coordinator.activeTargetId != targetId) {
-                            coordinator.beginEdit(targetId, uiState.content.toByteArray(Charsets.UTF_8).size)
-                        }
-                    }
-                }
+                )
             }
         }
     }
 
     LaunchedEffect(targetId, uiState.loading) {
+        // #595 一：切换失败的目标禁止 beginEdit — 否则会用旧章节正文创建新章节 session。
+        if (failedSwitchTarget == targetId) return@LaunchedEffect
         if (coordinator.activeTargetId != targetId && !uiState.loading) {
             coordinator.updateTargetText(targetId, uiState.content)
             coordinator.beginEdit(targetId, uiState.content.toByteArray(Charsets.UTF_8).size)

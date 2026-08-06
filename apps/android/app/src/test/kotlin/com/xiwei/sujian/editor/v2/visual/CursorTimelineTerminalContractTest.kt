@@ -69,6 +69,13 @@ class CursorTimelineTerminalContractTest {
             "otherwise FrameClock reposts forever (#595 七)",
             engine.hasActiveAnimation(),
         )
+        // #595 六：统一终态 — 事务对象必须离开引擎，不能以 emptySet() 副本残留。
+        // 残留副本会让下一次 submit 误发 rebase 事件，且引擎无法表达 Completed/Idle。
+        assertTrue(
+            "After completion the transaction object must leave the engine — " +
+            "activeTransaction must be null (#595 六)",
+            engine.getActiveTransaction() == null,
+        )
     }
 
     @Test
@@ -99,5 +106,9 @@ class CursorTimelineTerminalContractTest {
         assertTrue("New transaction active after rebase", engine.hasActiveAnimation())
         engine.completeIfFinished(400L)
         assertFalse("Rebased transaction reaches terminal state", engine.hasActiveAnimation())
+        assertTrue(
+            "Rebased transaction must also leave the engine after completion (#595 六)",
+            engine.getActiveTransaction() == null,
+        )
     }
 }
