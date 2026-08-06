@@ -7,6 +7,7 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
     id("kotlin-parcelize")
     alias(libs.plugins.detekt)
+    alias(libs.plugins.ktlint)
 }
 
 fun queryGitCommitCount(): Int {
@@ -128,6 +129,11 @@ android {
         getByName("ai") {
             jniLibs.srcDirs(layout.buildDirectory.dir("generated/writer-native/aiDebug"))
             kotlin.srcDirs(layout.buildDirectory.dir("generated/writer-uniffi/ai/kotlin"))
+        }
+        // #597：架构测试独立源集 — 与普通单元测试分离，避免每次都跑静态检查。
+        // 运行方式：./gradlew testArchNoAiDebug
+        getByName("testNoAi") {
+            kotlin.srcDirs("src/testArch/kotlin")
         }
         // AI flavor 专属测试源集：只放 ai 变体才需要的单元/设备测试。
         // noAi 变体不依赖这些测试，避免 noAi 误触 AI 路径（AGENTS.md 跨平台边界）。
@@ -364,6 +370,22 @@ detekt {
     buildUponDefaultConfig = true
     parallel = true
     ignoreFailures = false
+    // 包含 Gradle Kotlin 脚本（.kts）的扫描（Issue #597）。
+    source.setFrom(
+        files("src/main/kotlin", "src/test/kotlin", "src/debug/kotlin", "src/release/kotlin")
+            .asFileTree
+            .matching { include("**/*.kt", "**/*.kts") }
+    )
+}
+
+// ktlint 格式检查配置。
+// 排除构建产物与 UniFFI 生成绑定：生成代码不可手改（AGENTS.md）。
+ktlint {
+    android = true
+    ignoreFailures = false
+    filter {
+        exclude("**/build/**", "**/generated/**")
+    }
 }
 
 // 排除构建产物与 UniFFI 生成绑定：生成代码不可手改（AGENTS.md），
@@ -371,4 +393,30 @@ detekt {
 // Detekt task 继承自 SourceTask，exclude(vararg) 是标准 Gradle API。
 tasks.withType<io.gitlab.arturbosch.detekt.Detekt>().configureEach {
     exclude("**/build/**", "**/generated/**")
+}
+
+// #597：架构测试与普通单元测试分离。
+// 架构测试已移入 src/testArch/kotlin（testNoAi 源集），不再混在 src/test 中。
+// 普通单元测试：./gradlew testNoAiDebugUnitTest
+// 架构约束测试：./gradlew testNoAiDebugUnitTest --tests "com.xiwei.sujian.arch.*"
+// 注意：testNoAi 源集同时包含 src/test 和 src/testArch，两个目录的测试都会被编译。
+// 如需只跑普通单元测试（排除架构测试），可用：
+//   ./gradlew testNoAiDebugUnitTest --tests "com.xiwei.sujian.ui.*" --tests "com.xiwei.sujian.editor.*"
+
+
+// #597：注册独立的架构测试任务，方便直接运行 ./gradlew testArchNoAiDebug
+tasks.register("testArchNoAiDebug") {
+    group = "verification"
+    description = "Runs architecture constraint tests (src/testArch)"
+    dependsOn("testNoAiDebugUnitTest")
+}
+
+// 当请求 testArchNoAiDebug 时，自动为 testNoAiDebugUnitTest 添加架构测试过滤
+val isArchTestRequested = gradle.startParameter.taskNames.any { it.contains("testArchNoAiDebug") }
+if (isArchTestRequested) {
+    tasks.matching { it.name == "testNoAiDebugUnitTest" }.configureEach {
+        (this as org.gradle.api.tasks.testing.Test).filter {
+            includeTestsMatching("com.xiwei.sujian.arch.*")
+        }
+    }
 }

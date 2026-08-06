@@ -84,6 +84,7 @@ fun rememberStarMapColors(): StarMapColors {
         )
     }
 }
+ @Suppress("CognitiveComplexMethod", "LongMethod", "LongParameterList") // #597 技术债：待重构拆分
 
 @Composable
 fun StarMapCanvas(
@@ -302,6 +303,7 @@ private fun hitTestNode(
     }
     return null
 }
+ @Suppress("CyclomaticComplexMethod", "LongParameterList") // #597 技术债：待重构拆分
 
 private fun DrawScope.drawEdgeRender(
     edge: StarMapEdgeRenderData,
@@ -366,6 +368,7 @@ private fun DrawScope.drawEdgeRender(
         )
     }
 }
+ @Suppress("LongParameterList") // #597 技术债：待重构拆分
 
 private fun DrawScope.drawNode(
     layoutNode: StarMapLayoutNodeData,

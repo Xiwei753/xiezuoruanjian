@@ -1,11 +1,12 @@
-package com.xiwei.sujian.editor.v2.coordinator
+package com.xiwei.sujian.arch
 
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 /**
- * #595 五：updateSessionState transform 纯函数契约测试。
+ * #595 五：updateSessionState transform 纯函数架构约束测试 — 源码静态检查。
  *
  * MutableStateFlow.update 的 transform 在 CAS 竞争时会重新执行。
  * transform 内写外部 store（mutableMap）违反纯函数契约 — 重复执行
@@ -14,13 +15,17 @@ import org.junit.Test
  * 本测试验证所有 updateSessionState 调用的 transform 内不直接调用
  * store.put / store.update / store.remove — store 写入只在 transform 外
  * 通过 pendingRecord?.let { store.put(it) } 执行。
+ *
+ * 这是源码静态结构约束（transform 体不写 store），不是运行时行为测试
+ * （运行时行为由 TransformPurityTest 用真实 applyLocalEdit 驱动验证
+ * store 记录与 SessionState 一致）。
  */
-class TransformPurityContractTest {
+class EditorSessionCoordinatorTransformArchitectureTest {
 
     private fun coordinatorSource(): String {
-        val path = System.getProperty("user.dir") +
+        val path = System.getProperty("user.dir")!! +
             "/src/main/kotlin/com/xiwei/sujian/editor/v2/coordinator/EditorSessionCoordinator.kt"
-        return java.io.File(path).readText()
+        return File(path).readText()
     }
 
     /**

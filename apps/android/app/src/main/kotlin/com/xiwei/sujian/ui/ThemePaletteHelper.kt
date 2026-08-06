@@ -3,6 +3,7 @@ package com.xiwei.sujian.ui
 import android.content.Context
 import android.os.Build
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.model.ThemeColorScheme
 
 object ThemePaletteHelper {
 
@@ -13,8 +14,8 @@ object ThemePaletteHelper {
         return try {
             val lightScheme = androidx.compose.material3.dynamicLightColorScheme(context)
             val darkScheme = androidx.compose.material3.dynamicDarkColorScheme(context)
-            val lightDto = colorSchemeToDto(lightScheme)
-            val darkDto = colorSchemeToDto(darkScheme)
+            val lightDto = colorSchemeToAppDto(lightScheme)
+            val darkDto = colorSchemeToAppDto(darkScheme)
             DynamicColorResult(lightScheme = lightDto, darkScheme = darkDto)
         } catch (e: Exception) {
             DiagnosticsLogger.w(TAG, "Failed to extract dynamic color schemes", e)
@@ -22,10 +23,10 @@ object ThemePaletteHelper {
         }
     }
 
-    private fun colorSchemeToDto(
+    private fun colorSchemeToAppDto(
         scheme: androidx.compose.material3.ColorScheme
-    ): uniffi.writer_core.ThemeColorSchemeDto {
-        return uniffi.writer_core.ThemeColorSchemeDto(
+    ): ThemeColorScheme {
+        return ThemeColorScheme(
             primary = colorToHex(scheme.primary),
             onPrimary = colorToHex(scheme.onPrimary),
             primaryContainer = colorToHex(scheme.primaryContainer),
@@ -90,7 +91,7 @@ object ThemePaletteHelper {
     }
 
     data class DynamicColorResult(
-        val lightScheme: uniffi.writer_core.ThemeColorSchemeDto,
-        val darkScheme: uniffi.writer_core.ThemeColorSchemeDto,
+        val lightScheme: ThemeColorScheme,
+        val darkScheme: ThemeColorScheme,
     )
 }

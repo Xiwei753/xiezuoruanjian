@@ -614,9 +614,9 @@ class SettingsRepository(
         }
     }
 
-    fun listBuiltinThemes(): List<uniffi.writer_core.BuiltinThemeDto> {
+    fun listBuiltinThemes(): List<com.xiwei.sujian.model.BuiltinTheme> {
         return when (val result = settingsBridge.listBuiltinThemes()) {
-            is BridgeResult.Success -> result.data ?: emptyList()
+            is BridgeResult.Success -> (result.data ?: emptyList()).map { ThemeDtoMapper.fromDto(it) }
             is BridgeResult.Error -> {
                 warn("Failed to list builtin themes: ${result.fullEnvelope}")
                 emptyList()
@@ -625,9 +625,9 @@ class SettingsRepository(
         }
     }
 
-    fun listPaletteRecords(): List<uniffi.writer_core.ThemePaletteRecordDto> {
+    fun listPaletteRecords(): List<com.xiwei.sujian.model.ThemePaletteRecord> {
         return when (val result = settingsBridge.listPaletteRecords()) {
-            is BridgeResult.Success -> result.data ?: emptyList()
+            is BridgeResult.Success -> (result.data ?: emptyList()).map { ThemeDtoMapper.fromDto(it) }
             is BridgeResult.Error -> {
                 warn("Failed to list palette records: ${result.fullEnvelope}")
                 emptyList()
@@ -636,9 +636,9 @@ class SettingsRepository(
         }
     }
 
-    fun loadPaletteRecord(deviceId: String, fingerprint: String): uniffi.writer_core.ThemePaletteRecordDto? {
+    fun loadPaletteRecord(deviceId: String, fingerprint: String): com.xiwei.sujian.model.ThemePaletteRecord? {
         return when (val result = settingsBridge.loadPaletteRecord(deviceId, fingerprint)) {
-            is BridgeResult.Success -> result.data
+            is BridgeResult.Success -> result.data?.let { ThemeDtoMapper.fromDto(it) }
             is BridgeResult.Error -> {
                 warn("Failed to load palette record: ${result.fullEnvelope}")
                 null
@@ -659,17 +659,19 @@ class SettingsRepository(
     }
 
     fun saveDynamicColorPaletteToCatalog(
-        lightScheme: uniffi.writer_core.ThemeColorSchemeDto,
-        darkScheme: uniffi.writer_core.ThemeColorSchemeDto,
+        lightScheme: com.xiwei.sujian.model.ThemeColorScheme,
+        darkScheme: com.xiwei.sujian.model.ThemeColorScheme,
         deviceClass: String? = null
     ) {
         try {
+            val lightDto = ThemeDtoMapper.toDto(lightScheme)
+            val darkDto = ThemeDtoMapper.toDto(darkScheme)
             val deviceInfo = loadDeviceInfo()
             val deviceId = deviceInfo.deviceId.ifEmpty { "legacy" }
             val effectiveDeviceClass = deviceClass
                 ?: deviceInfo.deviceClass.ifEmpty { detectDeviceClass() }
 
-            val fingerprint = when (val r = settingsBridge.computePaletteFingerprint(lightScheme, darkScheme)) {
+            val fingerprint = when (val r = settingsBridge.computePaletteFingerprint(lightDto, darkDto)) {
                 is BridgeResult.Success -> r.data
                 is BridgeResult.Error -> {
                     warn("Failed to compute palette fingerprint: ${r.fullEnvelope}")
@@ -689,8 +691,8 @@ class SettingsRepository(
                 sourceDeviceClass = effectiveDeviceClass,
                 capturedAtMs = System.currentTimeMillis(),
                 variant = "system_selected",
-                lightScheme = lightScheme,
-                darkScheme = darkScheme
+                lightScheme = lightDto,
+                darkScheme = darkDto
             )
 
             when (val saveResult = settingsBridge.savePaletteRecord(record)) {
@@ -720,4 +722,49 @@ class SettingsRepository(
         }
     }
 
+
+    // ── UI 层安全方法：不暴露 BridgeResult ──
+
+    /**
+     * UI 层安全的试运行方法 — 返回 [SyncDryRunOutcome] 而非 BridgeResult。
+     * UI 层不应直接引用 BridgeResult（架构分层规则）。
+     */
+    fun performSyncDryRunTyped(config: SyncConfig): SyncDryRunOutcome {
+        return when (val result = performSyncDryRun(config)) {
+            is BridgeResult.Success -> SyncDryRunOutcome.Success(result.data)
+            is BridgeResult.Error -> SyncDryRunOutcome.Error(
+                syncFailureKind = result.syncFailureKind ?: SyncFailureKind.Fatal,
+                message = result.message,
+            )
+            BridgeResult.NotLoaded -> SyncDryRunOutcome.NotLoaded
+        }
+    }
+
+    /**
+     * UI 层安全的连接诊断方法 — 返回 [SyncDiagnosticsOutcome] 而非 BridgeResult。
+     */
+    fun performSyncDiagnosticsTyped(config: SyncConfig): SyncDiagnosticsOutcome {
+        return when (val result = performSyncDiagnostics(config)) {
+            is BridgeResult.Success -> SyncDiagnosticsOutcome.Success(result.data)
+            is BridgeResult.Error -> SyncDiagnosticsOutcome.Error(
+                syncFailureKind = result.syncFailureKind ?: SyncFailureKind.Fatal,
+                message = result.message,
+            )
+            BridgeResult.NotLoaded -> SyncDiagnosticsOutcome.NotLoaded
+        }
+    }
+}
+
+/** 试运行结果 — 替代 BridgeResult<SyncPlan> 的 app 层类型。 */
+sealed class SyncDryRunOutcome {
+    data class Success(val plan: com.xiwei.sujian.model.SyncPlan) : SyncDryRunOutcome()
+    data class Error(val syncFailureKind: SyncFailureKind, val message: String) : SyncDryRunOutcome()
+    data object NotLoaded : SyncDryRunOutcome()
+}
+
+/** 连接诊断结果 — 替代 BridgeResult<SyncDiagnosticsResult> 的 app 层类型。 */
+sealed class SyncDiagnosticsOutcome {
+    data class Success(val result: com.xiwei.sujian.model.SyncDiagnosticsResult) : SyncDiagnosticsOutcome()
+    data class Error(val syncFailureKind: SyncFailureKind, val message: String) : SyncDiagnosticsOutcome()
+    data object NotLoaded : SyncDiagnosticsOutcome()
 }

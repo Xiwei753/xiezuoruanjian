@@ -20,7 +20,7 @@ class ThemeController(private val settingsRepository: SettingsRepository) {
     val uiState: StateFlow<ThemeUiState>
         get() = store.uiState
 
-    val paletteRecords: StateFlow<List<uniffi.writer_core.ThemePaletteRecordDto>>
+    val paletteRecords: StateFlow<List<com.xiwei.sujian.model.ThemePaletteRecord>>
         get() = store.paletteRecords
 
     fun reload() {

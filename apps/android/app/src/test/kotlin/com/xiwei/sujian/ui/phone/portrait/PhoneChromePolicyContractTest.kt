@@ -80,7 +80,7 @@ class PhoneChromePolicyContractTest {
     }
 
     @Test
-    fun starMap_noBackButton() {
+    fun starMap_showsStarMapTitle() {
         val spec = PhoneChromePolicy.resolve(
             route = PhoneRootRoute.Root,
             selectedRoot = PhoneRoot.StarMap,
@@ -88,7 +88,7 @@ class PhoneChromePolicyContractTest {
             syncState = SyncIndicatorState.Synced,
         )
         assertFalse(spec.showBack)
-        assertEquals("素笺写作", spec.title)
+        assertEquals("星图", spec.title)
     }
 
     @Test

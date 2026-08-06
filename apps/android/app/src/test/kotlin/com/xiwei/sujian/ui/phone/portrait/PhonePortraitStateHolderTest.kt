@@ -27,9 +27,9 @@ class PhonePortraitStateHolderTest {
     }
 
     @Test
-    fun selectRoot_starMap_isIgnored() {
+    fun selectRoot_starMap_updatesRoot() {
         holder.onEvent(PhonePortraitEvent.SelectRoot(PhoneRoot.StarMap))
-        assertEquals(PhoneRoot.Works, holder.selectedRoot)
+        assertEquals(PhoneRoot.StarMap, holder.selectedRoot)
     }
 
     @Test
@@ -55,10 +55,10 @@ class PhonePortraitStateHolderTest {
     }
 
     @Test
-    fun selectRoot_starMap_neverWritesStarMap() {
+    fun selectRoot_starMap_writesStarMap() {
         holder.onEvent(PhonePortraitEvent.SelectRoot(PhoneRoot.StarMap))
-        assertTrue(savedRoots.isEmpty())
-        assertEquals(PhoneRoot.Works, holder.selectedRoot)
+        assertEquals(listOf("StarMap"), savedRoots)
+        assertEquals(PhoneRoot.StarMap, holder.selectedRoot)
     }
 }
 
@@ -85,20 +85,20 @@ class PhonePortraitStateHolderRestoreTest {
     }
 
     @Test
-    fun initialRoot_starMapFallsBackToWorks() {
+    fun initialRoot_canBeRestoredToStarMap() {
         val holder = PhonePortraitStateHolder(
             initialRoot = PhoneRoot.StarMap,
             onSaveExpandedSections = { },
             initialExpandedSections = emptySet(),
         )
-        assertEquals(PhoneRoot.Works, holder.selectedRoot)
+        assertEquals(PhoneRoot.StarMap, holder.selectedRoot)
     }
 }
 
 
 /**
  * Saver 契约：配置变化/进程恢复时 save pass 读取状态当前值，restore 原样恢复；
- * 统计页停留、折叠分类、星图回退都必须符合真实持久化语义。
+ * 统计页停留、折叠分类、星图恢复都必须符合真实持久化语义。
  *
  * 测试类实现 [SaverScope]，按框架内部相同方式（with(saver) { save(value) }）
  * 驱动 Saver 的扩展成员 save。
@@ -162,10 +162,10 @@ class PhonePortraitStateHolderSaverTest : SaverScope {
     }
 
     @Test
-    fun saver_restoreStarMap_fallsBackToWorks() {
+    fun saver_restoreStarMap_restoresStarMap() {
         val restored = PhonePortraitStateHolder.saver().restore(listOf(PhoneRoot.StarMap.name))
         assertTrue(restored != null)
-        assertEquals(PhoneRoot.Works, restored!!.selectedRoot)
+        assertEquals(PhoneRoot.StarMap, restored!!.selectedRoot)
     }
 
     @Test

@@ -4,7 +4,6 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
-import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.model.ChapterMeta
 import com.xiwei.sujian.model.ProjectStats

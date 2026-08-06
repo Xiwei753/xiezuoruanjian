@@ -2,6 +2,7 @@ package com.xiwei.sujian.designsystem.testing
 
 object SujianSemanticIds {
     const val NavigationWorks = "navigation.works"
+    const val NavigationStarMap = "navigation.starmap"
     const val NavigationSettings = "navigation.settings"
 
     const val SettingsScreen = "settings.screen"
@@ -27,6 +28,13 @@ object SujianSemanticIds {
 
     const val EditorContent = "editor.content"
     const val EditorSaveStatus = "editor.save_status"
+
+    const val StarMapScreen = "starmap.screen"
+    const val StarMapList = "starmap.list"
+    const val StarMapCreate = "starmap.create"
+    const val StarMapEditor = "starmap.editor"
+    const val StarMapCanvas = "starmap.canvas"
+    const val StarMapLoadError = "starmap.load_error"
 
     fun project(projectId: String) = "workspace.project.$projectId"
     fun volume(id: String) = "workspace.volume.$id"

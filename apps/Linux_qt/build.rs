@@ -8,6 +8,7 @@
 //! - `cargo build` 时自动执行
 //! - QML 文件修改后触发重新编译
 
+#![allow(clippy::excessive_nesting, clippy::too_many_lines)]
 use semver::Version;
 use std::fs;
 use std::path::{Path, PathBuf};

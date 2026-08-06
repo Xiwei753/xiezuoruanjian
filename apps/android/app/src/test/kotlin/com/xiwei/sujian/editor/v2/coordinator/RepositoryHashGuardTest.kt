@@ -1,3 +1,4 @@
+@file:Suppress("StringLiteralDuplication") // 测试固件字符串天然重复
 package com.xiwei.sujian.editor.v2.coordinator
 
 import org.junit.Assert.assertEquals

@@ -2,22 +2,23 @@ package com.xiwei.sujian.ui.compose.theme
 
 import android.content.Context
 import com.xiwei.sujian.data.CoreSettingsEvents
+import com.xiwei.sujian.data.ThemeDtoMapper
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.model.LocalSettings
 import com.xiwei.sujian.ui.ThemePaletteHelper
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import uniffi.writer_core.BuiltinThemeDto
-import uniffi.writer_core.ThemePaletteRecordDto
+import com.xiwei.sujian.model.BuiltinTheme
+import com.xiwei.sujian.model.ThemePaletteRecord
 
 object ThemeStore {
 
     private val _uiState = MutableStateFlow(ThemeUiState())
     val uiState: StateFlow<ThemeUiState> = _uiState.asStateFlow()
 
-    private val _paletteRecords = MutableStateFlow<List<ThemePaletteRecordDto>>(emptyList())
-    val paletteRecords: StateFlow<List<ThemePaletteRecordDto>> = _paletteRecords.asStateFlow()
+    private val _paletteRecords = MutableStateFlow<List<ThemePaletteRecord>>(emptyList())
+    val paletteRecords: StateFlow<List<ThemePaletteRecord>> = _paletteRecords.asStateFlow()
 
     private var _foldDeviceClass: String? = null
     private var _systemIsDark: Boolean = false
@@ -154,7 +155,7 @@ object ThemeStore {
         }
     }
 
-    private fun resolveBuiltinTheme(repo: SettingsRepository, settings: LocalSettings): BuiltinThemeDto? {
+    private fun resolveBuiltinTheme(repo: SettingsRepository, settings: LocalSettings): BuiltinTheme? {
         if (settings.selectedBuiltinThemeId.isEmpty()) return null
         return try {
             repo.listBuiltinThemes().find { it.themeId == settings.selectedBuiltinThemeId }
@@ -163,7 +164,7 @@ object ThemeStore {
         }
     }
 
-    private fun resolvePaletteRecord(repo: SettingsRepository, settings: LocalSettings): ThemePaletteRecordDto? {
+    private fun resolvePaletteRecord(repo: SettingsRepository, settings: LocalSettings): ThemePaletteRecord? {
         if (settings.selectedPaletteId.isEmpty()) return null
         return try {
             val parts = settings.selectedPaletteId.split(":")

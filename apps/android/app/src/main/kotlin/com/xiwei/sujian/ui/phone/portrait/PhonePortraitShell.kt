@@ -1,4 +1,7 @@
+@file:Suppress("StringLiteralDuplication") // #597 技术债：协议字符串天然重复
+
 package com.xiwei.sujian.ui.phone.portrait
+
 
 import androidx.activity.compose.LocalActivity
 import androidx.activity.ComponentActivity
@@ -31,6 +34,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.rememberNavBackStack
@@ -42,10 +47,14 @@ import com.xiwei.sujian.runtime.LocalSujianAppDependencies
 import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.designsystem.component.SujianSnackbar
 import com.xiwei.sujian.model.SyncTrigger
+import com.xiwei.sujian.ui.compose.navigation.StarMapTopBarState
+import com.xiwei.sujian.ui.compose.starmap.StarMapScreen
+import com.xiwei.sujian.ui.compose.starmap.StarMapViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+ @Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod", "LongMethod") // #597 技术债：待重构拆分
 
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
@@ -67,7 +76,7 @@ fun PhonePortraitShell(
             modifier = modifier.fillMaxSize(),
             containerColor = MaterialTheme.colorScheme.background,
             contentWindowInsets = WindowInsets.safeDrawing,
-        ) { _ -> }
+        ) { innerPadding -> Box(Modifier.padding(innerPadding)) }
         return
     }
 
@@ -83,11 +92,17 @@ fun PhonePortraitShell(
     val chromeSpec = stateHolder.chromeSpec(currentRoute, workspaceNavState.currentLocation, syncState)
 
     val activity = LocalActivity.current as? ComponentActivity
+    val starMapVm: StarMapViewModel = viewModel(factory = StarMapViewModel.Factory(LocalContext.current))
+    val starMapTopBarState = remember { StarMapTopBarState() }
 
     val handleBack: suspend () -> Boolean = {
         when {
             backStack.lastOrNull() is PhoneSettingsRoute -> {
                 backStack.removeLastOrNull()
+                true
+            }
+            stateHolder.selectedRoot == PhoneRoot.StarMap && starMapTopBarState.onBack != null -> {
+                starMapTopBarState.onBack?.invoke()
                 true
             }
             stateHolder.selectedRoot == PhoneRoot.Works -> {
@@ -182,6 +197,8 @@ fun PhonePortraitShell(
                             workspaceNavState = workspaceNavState,
                             sessionViewModel = sessionViewModel,
                             workspaceRepository = workspaceRepository,
+                            starMapVm = starMapVm,
+                            starMapTopBarState = starMapTopBarState,
                             innerPadding = innerPadding,
                             editorTopSafeArea = innerPadding.calculateTopPadding(),
                             modifier = Modifier.fillMaxSize().imePadding(),
@@ -204,6 +221,7 @@ fun PhonePortraitShell(
     }
 
 }
+ @Suppress("LongParameterList") // #597 技术债：待重构拆分
 
 @Composable
 private fun PhoneRootContent(
@@ -211,6 +229,8 @@ private fun PhoneRootContent(
     workspaceNavState: PhoneWorkspaceNavigationState,
     sessionViewModel: WorkspaceSessionViewModel,
     workspaceRepository: WorkspaceRepository,
+    starMapVm: StarMapViewModel,
+    starMapTopBarState: StarMapTopBarState,
     innerPadding: PaddingValues,
     editorTopSafeArea: androidx.compose.ui.unit.Dp,
     modifier: Modifier = Modifier,
@@ -236,7 +256,13 @@ private fun PhoneRootContent(
                     modifier = Modifier.fillMaxSize(),
                 )
             }
-            PhoneRoot.StarMap -> { }
+            PhoneRoot.StarMap -> {
+                StarMapScreen(
+                    topBarState = starMapTopBarState,
+                    viewModel = starMapVm,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
             PhoneRoot.Stats -> {
                 com.xiwei.sujian.ui.compose.stats.StatsScreen(
                     modifier = Modifier.fillMaxSize(),

@@ -192,6 +192,7 @@ sealed class EditorEvent {
     data class ToastMessage(val message: String) : EditorEvent()
     data class ShowSaveFailedDialog(val message: String) : EditorEvent()
 }
+ @Suppress("LargeClass", "TooManyFunctions") // #597 技术债：待重构拆分
 
 class EditorViewModel(
     application: Application
@@ -287,6 +288,7 @@ class EditorViewModel(
                 )
             }
             val currentHash = _uiState.value.chapterHash
+            @Suppress("ComplexCondition") // #597 技术债：条件过复杂，待拆分
             if (meta.hash.isNotEmpty() &&
                 meta.hash != currentHash &&
                 content != _uiState.value.content &&
@@ -460,6 +462,7 @@ class EditorViewModel(
             inputFrozen = false
         }
     }
+ @Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod", "LongMethod") // #597 技术债：待重构拆分
 
     private suspend fun switchChapterLocked(
         isLatest: () -> Boolean,
@@ -473,6 +476,7 @@ class EditorViewModel(
         val oldUiState = _uiState.value
         val oldContentExplicitlyCleared = contentExplicitlyCleared
 
+        @Suppress("ComplexCondition") // #597 技术债：条件过复杂，待拆分
         if (oldSession != null && oldSession.projectId == projectId && oldSession.volumeId == volumeId && oldSession.chapterId == chapterId) {
             return ChapterSwitchResult.Success(oldSession, _uiState.value.content)
         }
@@ -710,6 +714,7 @@ class EditorViewModel(
 
     fun initChapter(projectId: String, volumeId: String, chapterId: String, chapterTitle: String) {
         val existing = currentSession
+        @Suppress("ComplexCondition") // #597 技术债：条件过复杂，待拆分
         if (existing != null && existing.projectId == projectId && existing.volumeId == volumeId && existing.chapterId == chapterId) {
             return
         }
@@ -1005,6 +1010,7 @@ class EditorViewModel(
      * - 空正文 + 未编辑（全新空章节，磁盘与屏幕一致）→ 直接 flush（回执来自加载）；
      * - 空正文 + 已编辑但未清空 → 防御性失败（磁盘与屏幕不一致）。
      */
+    @Suppress("CognitiveComplexMethod") // #597 技术债：待重构拆分
     fun requestSave(): kotlinx.coroutines.Deferred<Boolean> {
         val session = currentSession
         val deferred = kotlinx.coroutines.CompletableDeferred<Boolean>()
@@ -1156,6 +1162,7 @@ class EditorViewModel(
             }
         }
     }
+ @Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod", "LongMethod") // #597 技术债：待重构拆分
 
     private suspend fun performSave(content: String, session: EditorSession, isAutoSave: Boolean, revisionAtEnqueue: Long = 0L): Boolean {
         if (content.trim().isEmpty()) {

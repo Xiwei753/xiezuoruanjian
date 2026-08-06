@@ -1,18 +1,25 @@
-package com.xiwei.sujian.editor.v2.coordinator
+package com.xiwei.sujian.arch
 
+import com.xiwei.sujian.editor.v2.coordinator.EditorSessionCoordinator
+import com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost
+import com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.lang.reflect.Method
 
 /**
- * #595 七：单一 VSync 帧驱动契约测试 — 验证活动编辑时 SujianEditorView 是唯一的
- * FrameClock listener，投影运行时不接到 FrameClock（避免双驱动）。
+ * #595 七：单一 VSync 帧驱动架构约束测试 — 静态结构检查。
  *
- * beginEdit 不再为活动 target 调用 targetProjections[targetId]?.setFrameClock(windowFrameClock)；
- * 投影只在非活动预览（ReadonlyChapterPreview）时静态绘制。
+ * 验证活动编辑时 SujianEditorView 是唯一的 FrameClock listener，投影运行时不接到
+ * FrameClock（避免双驱动）。这些是类/字段/方法存在性约束，属于架构层结构检查，
+ * 不是运行时行为测试（运行时行为由 SingleFrameDriveTest 用假时钟驱动验证）。
+ *
+ * - EditorWindowHost 拥有唯一的 WindowDisplayFrameClock 字段；
+ * - EditorSessionCoordinator 不拥有 WindowDisplayFrameClock（会话层只持纯数据）；
+ * - EditorWindowHost 暴露 beginEdit / releaseWindow 生命周期入口。
  */
-class SingleFrameDriveContractTest {
+class EditorFrameClockArchitectureTest {
 
     @Test
     fun windowHost_ownsSingleFrameClock() {

@@ -258,40 +258,45 @@ fn detect_connectivity_and_metered() -> (bool, bool) {
 }
 
 fn check_nmcli_metered() -> bool {
-    if let Ok(output) = std::process::Command::new("nmcli")
+    let output = match std::process::Command::new("nmcli")
         .args(["-t", "-f", "METERED", "dev", "show"])
         .output()
     {
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            for line in stdout.lines() {
-                if let Some(value) = line.strip_prefix("METERED:") {
-                    let v = value.trim();
-                    return v == "yes" || v == "guess-yes";
-                }
-            }
+        Ok(o) => o,
+        Err(_) => return false,
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        if let Some(value) = line.strip_prefix("METERED:") {
+            let v = value.trim();
+            return v == "yes" || v == "guess-yes";
         }
     }
     false
 }
 
 fn check_network_connectivity() -> bool {
-    if let Ok(entries) = std::fs::read_dir("/sys/class/net") {
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let name_str = name.to_string_lossy();
-            if name_str == "lo" {
-                continue;
-            }
-            let operstate_path = std::path::Path::new("/sys/class/net")
-                .join(name_str.as_ref())
-                .join("operstate");
-            if let Ok(state) = std::fs::read_to_string(&operstate_path) {
-                let state = state.trim();
-                if state == "up" {
-                    return true;
-                }
-            }
+    let entries = match std::fs::read_dir("/sys/class/net") {
+        Ok(e) => e,
+        Err(_) => return false,
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str == "lo" {
+            continue;
+        }
+        let operstate_path = std::path::Path::new("/sys/class/net")
+            .join(name_str.as_ref())
+            .join("operstate");
+        let Ok(state) = std::fs::read_to_string(&operstate_path) else {
+            continue;
+        };
+        if state.trim() == "up" {
+            return true;
         }
     }
     false

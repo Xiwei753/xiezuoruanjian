@@ -91,6 +91,32 @@ internal object ArchTestSupport {
     }
 
     /**
+     * 检查文件中是否存在引用了 [prefix] 但不属于任何 [allowedFqns] 的行。
+     *
+     * 典型场景：检查文件是否引用了 `uniffi.writer_core` 前缀但只允许
+     * `uniffi.writer_core.EditorTransactionCauseDto` 等特定类型。
+     * 逐行检查：如果某行包含 [prefix] 但不包含任何 [allowedFqns] 中的全限定名，
+     * 则该行构成违规。
+     *
+     * @return 违规行号到行内容的映射，空表示无违规
+     */
+    fun findForbiddenPrefixRefs(
+        file: File,
+        prefix: String,
+        allowedFqns: List<String>,
+    ): Map<Int, String> {
+        if (!file.exists()) return emptyMap()
+        val violations = mutableMapOf<Int, String>()
+        file.readText().lineSequence().forEachIndexed { index, rawLine ->
+            val line = stripLineComment(rawLine)
+            if (line.contains(prefix) && allowedFqns.none { line.contains(it) }) {
+                violations[index + 1] = rawLine.trim()
+            }
+        }
+        return violations
+    }
+
+    /**
      * 读取文件所有 import 语句中的全限定名（去掉 import 前缀）。
      */
     fun importsOf(file: File): List<String> {

@@ -16,6 +16,7 @@ import com.xiwei.sujian.designsystem.component.SujianCard
 import com.xiwei.sujian.designsystem.component.SujianFab
 import com.xiwei.sujian.designsystem.component.SujianIconButton
 import com.xiwei.sujian.designsystem.icon.SujianIcons
+import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -23,6 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import com.xiwei.sujian.R
 import com.xiwei.sujian.model.StarMapViewportData
@@ -33,7 +35,7 @@ import com.xiwei.sujian.ui.compose.navigation.StarMapTopBarState
  * 这里只渲染列表内容与新建 FAB。
  */
 @Composable
-internal fun StarMapListContent(
+fun StarMapListContent(
     state: StarMapListUiState,
     onSelectStarmap: (String) -> Unit,
     onCreateClick: () -> Unit,
@@ -82,7 +84,10 @@ internal fun StarMapListContent(
             onClick = onCreateClick,
             icon = SujianIcons.Add,
             contentDescription = stringResource(id = R.string.starmap_create_new),
-            modifier = Modifier.align(Alignment.BottomEnd).padding(dims.space16),
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(dims.space16)
+                .testTag(SujianSemanticIds.StarMapCreate),
         )
     }
 }
@@ -91,8 +96,9 @@ internal fun StarMapListContent(
  * 星图编辑器 — 标题、返回和操作按钮通过 [topBarState] 上抛给唯一根壳的
  * 一级 TopAppBar；正文只渲染画布与节点编辑面板。
  */
+@Suppress("CognitiveComplexMethod", "LongParameterList") // #597 技术债：待重构拆分
 @Composable
-internal fun StarMapEditorContent(
+fun StarMapEditorContent(
     state: StarMapEditorUiState,
     topBarState: StarMapTopBarState,
     onBack: () -> Unit,
@@ -165,10 +171,15 @@ internal fun StarMapEditorContent(
                 onNodeTap = onNodeTap,
                 onNodeDoubleTap = onNodeDoubleTap,
                 editingNodeId = state.editingNodeId,
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.fillMaxSize().testTag(SujianSemanticIds.StarMapCanvas)
             )
         } else {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .testTag(SujianSemanticIds.StarMapLoadError),
+                contentAlignment = Alignment.Center,
+            ) {
                 Text(stringResource(id = R.string.starmap_load_failed), style = MaterialTheme.typography.bodyLarge)
             }
         }

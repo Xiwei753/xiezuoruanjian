@@ -32,6 +32,7 @@ class RecordingInputMethodManagerShadow : ShadowInputMethodManager() {
     }
 
     @Implementation
+    @Suppress("ProtectedMemberInFinalClass") // Robolectric Shadow 要求 protected
     protected fun updateSelection(
         view: View?,
         selStart: Int,

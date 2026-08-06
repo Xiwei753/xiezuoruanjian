@@ -47,7 +47,7 @@ object PhoneChromePolicy {
                     is WorkspaceLocation.ChapterTree -> null
                     is WorkspaceLocation.Editor -> null
                 }
-                PhoneRoot.StarMap -> "素笺写作"
+                PhoneRoot.StarMap -> "星图"
                 PhoneRoot.Stats -> "素笺写作"
             },
             showBack = showBack,

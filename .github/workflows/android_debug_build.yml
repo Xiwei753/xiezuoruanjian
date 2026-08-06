@@ -107,7 +107,7 @@ jobs:
           export ANDROID_NDK_HOME=$ANDROID_NDK_ROOT
           ./tools/build_android.sh --${{ matrix.flavor }} --abi ${{ matrix.abi }}
 
-      - name: Verify APK ABI（ABI 一致性）
+      - name: Verify APK ABI
         run: |
           FLAVOR_DIR="${{ matrix.flavor == 'no-ai' && 'noAi' || 'ai' }}"
           APK_PATH=$(ls apps/android/app/build/outputs/apk/$FLAVOR_DIR/debug/sujian-android-*.apk 2>/dev/null | head -1 || true)
@@ -123,7 +123,26 @@ jobs:
           name: sujian-android-${{ matrix.flavor }}-${{ matrix.abi }}-debug
           path: apps/android/app/build/outputs/apk/${{ matrix.flavor == 'no-ai' && 'noAi' || 'ai' }}/debug/sujian-android-*.apk
 
-      - name: Upload native build artifacts for emulator test
+      # === Independent UniFFI binding artifacts: no-ai flavor x86_64 ===
+      - name: Upload no-ai UniFFI bindings
+        if: matrix.flavor == 'no-ai' && matrix.abi == 'x86_64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: uniffi-bindings-no-ai
+          path: apps/android/app/build/generated/writer-uniffi/noAi/
+          retention-days: 1
+
+      # === Independent UniFFI binding artifacts: ai flavor x86_64 ===
+      - name: Upload ai UniFFI bindings
+        if: matrix.flavor == 'ai' && matrix.abi == 'x86_64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: uniffi-bindings-ai
+          path: apps/android/app/build/generated/writer-uniffi/ai/
+          retention-days: 1
+
+      # === Native build artifacts: no-ai flavor x86_64 (for emulator test) ===
+      - name: Upload native build artifacts for no-ai emulator test
         if: matrix.flavor == 'no-ai' && matrix.abi == 'x86_64'
         uses: actions/upload-artifact@v4
         with:
@@ -133,6 +152,18 @@ jobs:
             apps/android/app/build/generated/writer-uniffi/
           retention-days: 1
 
+      # === Native build artifacts: ai flavor x86_64 (for emulator test) ===
+      - name: Upload native build artifacts for ai emulator test
+        if: matrix.flavor == 'ai' && matrix.abi == 'x86_64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-ai-x86_64
+          path: |
+            apps/android/app/build/generated/writer-native/
+            apps/android/app/build/generated/writer-uniffi/
+          retention-days: 1
+
+  # === Rust Core common tests (no AI feature) ===
   core-common-test:
     name: Core 通用测试
     runs-on: ubuntu-24.04
@@ -152,9 +183,31 @@ jobs:
       - name: Core 通用测试（功能回归 / Rust 安全与类型问题）
         run: cargo test -p writer_core
 
+  # === Rust Core AI-specific tests ===
+  core-ai-test:
+    name: Core AI 专项测试
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: core-ai-test
+          cache-on-failure: true
+
+      - name: Core AI 专项测试（AI feature gate / AI 服务契约）
+        run: cargo test -p writer_core --features ai --test ai_feature
+
+  # === Android common unit tests (noAi, reusing pre-generated UniFFI bindings) ===
   android-unit-test:
     name: Android 通用单元测试
     runs-on: ubuntu-24.04
+    needs: build
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -170,14 +223,31 @@ jobs:
 
       - name: Make gradlew executable
         run: chmod +x apps/android/gradlew
+
+      - name: Download no-ai UniFFI bindings
+        uses: actions/download-artifact@v4
+        with:
+          name: uniffi-bindings-no-ai
+          path: apps/android/app/build/generated/writer-uniffi/noAi/
+
+      - name: Verify UniFFI bindings
+        run: |
+          UNIFFI_DIR="apps/android/app/build/generated/writer-uniffi/noAi/kotlin/uniffi"
+          if [ ! -d "$UNIFFI_DIR" ]; then
+            echo "::error::UniFFI bindings artifact missing: $UNIFFI_DIR"
+            exit 1
+          fi
+          echo "UniFFI bindings verified successfully."
 
       - name: Android 通用单元测试（Android 平台错误）
         working-directory: apps/android
-        run: ./gradlew testNoAiDebugUnitTest
+        run: ./gradlew testNoAiDebugUnitTest -x buildNoAiDebugWriterNative
 
+  # === Android AI-specific unit tests (ai, reusing pre-generated AI UniFFI bindings) ===
   android-ai-test:
     name: Android AI 专项单元测试
     runs-on: ubuntu-24.04
+    needs: build
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -194,18 +264,34 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x apps/android/gradlew
 
+      - name: Download ai UniFFI bindings
+        uses: actions/download-artifact@v4
+        with:
+          name: uniffi-bindings-ai
+          path: apps/android/app/build/generated/writer-uniffi/ai/
+
+      - name: Verify AI UniFFI bindings
+        run: |
+          UNIFFI_DIR="apps/android/app/build/generated/writer-uniffi/ai/kotlin/uniffi"
+          if [ ! -d "$UNIFFI_DIR" ]; then
+            echo "::error::AI UniFFI bindings artifact missing: $UNIFFI_DIR"
+            exit 1
+          fi
+          echo "AI UniFFI bindings verified successfully."
+
       - name: Android AI 专项测试（AI 专项错误）
         working-directory: apps/android
-        run: ./gradlew testAiDebugUnitTest
+        run: ./gradlew testAiDebugUnitTest -x buildAiDebugWriterNative
 
+  # === Emulator instrumented tests (no-ai + ai / x86_64) ===
   emulator-test:
-    name: Emulator 仪器化测试（no-ai / x86_64）
+    name: Emulator 仪器化测试（${{ matrix.flavor }} / x86_64）
     runs-on: ubuntu-24.04
     needs: build
     strategy:
       fail-fast: false
       matrix:
-        flavor: [no-ai]
+        flavor: [no-ai, ai]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -229,17 +315,19 @@ jobs:
       - name: Download native build artifacts
         uses: actions/download-artifact@v4
         with:
-          name: native-no-ai-x86_64
+          name: native-${{ matrix.flavor }}-x86_64
           path: apps/android/app/build/generated/
 
       - name: Verify native artifacts
         run: |
-          SO_PATH="apps/android/app/build/generated/writer-native/noAiDebug/x86_64/libuniffi_writer_core.so"
+          FLAVOR_VARIANT="${{ matrix.flavor == 'no-ai' && 'noAiDebug' || 'aiDebug' }}"
+          FLAVOR_DIR="${{ matrix.flavor == 'no-ai' && 'noAi' || 'ai' }}"
+          SO_PATH="apps/android/app/build/generated/writer-native/${FLAVOR_VARIANT}/x86_64/libuniffi_writer_core.so"
           if [ ! -f "$SO_PATH" ]; then
             echo "::error::Native library artifact missing: $SO_PATH"
             exit 1
           fi
-          UNIFFI_DIR="apps/android/app/build/generated/writer-uniffi/noAi/kotlin/uniffi"
+          UNIFFI_DIR="apps/android/app/build/generated/writer-uniffi/${FLAVOR_DIR}/kotlin/uniffi"
           if [ ! -d "$UNIFFI_DIR" ]; then
             echo "::error::UniFFI bindings artifact missing: $UNIFFI_DIR"
             exit 1
@@ -273,29 +361,8 @@ jobs:
           disable-animations: true
           script: |
             adb shell getprop ro.product.cpu.abi
-            # Deterministic input: the instrumented tests drive a real InputMethodService
-            # (deterministic test IME inside the androidTest APK, see
-            # apps/android/app/src/androidTest/java/com/xiwei/sujian/test/testime and
-            # kotlin/com/xiwei/sujian/testime). It is
-            # passive and only acts on explicit startService commands, so no recorrection
-            # or updateSelection interference can corrupt the editor. Install app + test
-            # APKs first, wait until the test IME is registered (cold boot), then enable
-            # it and set it as the only default IME; other system IMEs stay enabled but
-            # are never bound. Note: android-emulator-runner executes each script line as
-            # its own sh -c, so loops/multi-statement logic must stay on one line.
-            # `ime list` without -a prints only ENABLED input methods (AOSP
-            # InputMethodManagerService#handleShellCommandListInputMethods ->
-            # getEnabledInputMethodListLocked), and a freshly installed IME is disabled:
-            # polling `ime list -s` for it can never succeed (CI run 30881443871).
-            # Poll `ime list -a -s` for registration, then enable, verify the enabled
-            # list, select as default and verify default_input_method, failing fast on
-            # each step instead of relying on a longer timeout.
-            # The connected run below skips the install tasks (-x :app:install*): updating
-            # the test APK while it is registered as an input method makes
-            # InputMethodManagerService clear the IME's enabled/default state ("Input
-            # method reinstalling, clearing additional subtypes"), reverting
-            # default_input_method to LatinIME and failing every IME-binding test.
-            cd apps/android && ANDROID_NDK_HOME=$ANDROID_NDK_ROOT ./gradlew :app:install${{ matrix.flavor == 'no-ai' && 'NoAi' || 'Ai' }}Debug :app:install${{ matrix.flavor == 'no-ai' && 'NoAi' || 'Ai' }}DebugAndroidTest -x build${{ matrix.flavor == 'no-ai' && 'NoAi' || 'Ai' }}DebugWriterNative -Psujian.android.abis=x86_64
+            FLAVOR_CAP="${{ matrix.flavor == 'no-ai' && 'NoAi' || 'Ai' }}"
+            cd apps/android && ANDROID_NDK_HOME=$ANDROID_NDK_ROOT ./gradlew :app:install${FLAVOR_CAP}Debug :app:install${FLAVOR_CAP}DebugAndroidTest -x build${FLAVOR_CAP}DebugWriterNative -Psujian.android.abis=x86_64
             TEST_IME="com.xiwei.sujian.test/.testime.TestInputMethodService"; IME_FOUND=""; for i in $(seq 1 15); do IME_FOUND=$(adb shell ime list -a -s 2>/dev/null | tr -d '\r' | grep -F "$TEST_IME" || true); [ -n "$IME_FOUND" ] && break; sleep 2; done; echo "Test IME registered: [$IME_FOUND]"; [ -n "$IME_FOUND" ] || { echo "::error::Test IME not registered after install: $TEST_IME"; exit 1; }
             adb shell ime enable "$TEST_IME" || { echo "::error::Test IME enable failed: $TEST_IME"; exit 1; }
             ENABLED_IME=$(adb shell ime list -s 2>/dev/null | tr -d '\r' | grep -F "$TEST_IME" || true); echo "Test IME enabled: [$ENABLED_IME]"; [ -n "$ENABLED_IME" ] || { echo "::error::Test IME not enabled after ime enable: $TEST_IME"; exit 1; }
@@ -304,4 +371,4 @@ jobs:
             adb logcat -G 16M 2>/dev/null || true
             adb logcat -c 2>/dev/null || true
             ( adb logcat -v threadtime > "$RUNNER_TEMP/sujian-editor-logcat.log" 2>&1 & ) || true
-            cd apps/android && ANDROID_NDK_HOME=$ANDROID_NDK_ROOT ./gradlew connected${{ matrix.flavor == 'no-ai' && 'NoAi' || 'Ai' }}DebugAndroidTest -x :app:install${{ matrix.flavor == 'no-ai' && 'NoAi' || 'Ai' }}Debug -x :app:install${{ matrix.flavor == 'no-ai' && 'NoAi' || 'Ai' }}DebugAndroidTest -x build${{ matrix.flavor == 'no-ai' && 'NoAi' || 'Ai' }}DebugWriterNative -Psujian.android.abis=x86_64 || ( echo '===== FAILED TEST XMLS ====='; find app/build/outputs/androidTest-results -name '*.xml' -exec grep -l -e '<failure' -e '<error' {} \; -exec cat {} \; 2>/dev/null; echo '===== APP LOGCAT (file) ====='; grep -E 'SujianEditorInput|SujianTestIme|SujianApp|AnimatedTextEditorCoordinator|TestRunner' "$RUNNER_TEMP/sujian-editor-logcat.log" 2>/dev/null | tail -n 600; exit 1 )
+            cd apps/android && ANDROID_NDK_HOME=$ANDROID_NDK_ROOT ./gradlew connected${FLAVOR_CAP}DebugAndroidTest -x :app:install${FLAVOR_CAP}Debug -x :app:install${FLAVOR_CAP}DebugAndroidTest -x build${FLAVOR_CAP}DebugWriterNative -Psujian.android.abis=x86_64 || ( echo '===== FAILED TEST XMLS ====='; find app/build/outputs/androidTest-results -name '*.xml' -exec grep -l -e '<failure' -e '<error' {} \; -exec cat {} \; 2>/dev/null; echo '===== APP LOGCAT (file) ====='; grep -E 'SujianEditorInput|SujianTestIme|SujianApp|AnimatedTextEditorCoordinator|TestRunner' "$RUNNER_TEMP/sujian-editor-logcat.log" 2>/dev/null | tail -n 600; exit 1 )

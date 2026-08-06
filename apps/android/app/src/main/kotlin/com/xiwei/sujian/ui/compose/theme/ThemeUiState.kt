@@ -1,8 +1,8 @@
 package com.xiwei.sujian.ui.compose.theme
 
 import com.xiwei.sujian.designsystem.theme.ColorSource
-import uniffi.writer_core.BuiltinThemeDto
-import uniffi.writer_core.ThemePaletteRecordDto
+import com.xiwei.sujian.model.BuiltinTheme
+import com.xiwei.sujian.model.ThemePaletteRecord
 
 data class ThemeUiState(
     val appearanceMode: String = "system",
@@ -10,9 +10,9 @@ data class ThemeUiState(
     val dynamicColorEnabled: Boolean = false,
     val selectedBuiltinThemeId: String = "",
     val selectedPaletteId: String = "",
-    val selectedBuiltinTheme: BuiltinThemeDto? = null,
-    val selectedPaletteRecord: ThemePaletteRecordDto? = null,
-    val paletteRecords: List<ThemePaletteRecordDto> = emptyList(),
+    val selectedBuiltinTheme: BuiltinTheme? = null,
+    val selectedPaletteRecord: ThemePaletteRecord? = null,
+    val paletteRecords: List<ThemePaletteRecord> = emptyList(),
     val systemIsDark: Boolean = false,
 ) {
     val isDark: Boolean

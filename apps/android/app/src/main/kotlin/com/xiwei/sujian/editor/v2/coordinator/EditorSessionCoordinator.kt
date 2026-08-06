@@ -188,6 +188,7 @@ sealed interface ExternalResetResult {
  * #595 二：正文版本使用 [DocumentVersion]（Repository/Core 锚点），
  * 不再使用进程内 contentVersion 计数器。
  */
+@Suppress("LargeClass", "TooManyFunctions") // #597 技术债：待重构拆分
 class EditorSessionCoordinator(
     private val appServiceBridge: AppServiceBridge,
 ) : SessionCommandPort {
@@ -350,6 +351,7 @@ class EditorSessionCoordinator(
      * #595 二：必须携带窗口绑定时的 [EditorInputLease] — 旧章节 View 在切换
      * 提交后晚到的输入（epoch/target 不匹配）被拒绝，不得写入新章节会话。
      */
+    @Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod") // #597 技术债：待重构拆分
     fun applyLocalEdit(update: EditorDocumentUpdate.LocalInput) {
         if (!isInputLeaseCurrent(update.lease, update.targetId)) {
             Log.w(TAG, "applyLocalEdit(${update.targetId}): stale input lease rejected")
@@ -810,6 +812,7 @@ class EditorSessionCoordinator(
         invalidateInputLease()
         // 2. 一次性提交旧活动目标（若仍是活动状态）。
         val oldActive = activeTargetId
+        @Suppress("CollapsibleIfStatements") // commitActiveSession 有副作用，拆分更清晰
         if (oldActive != null && oldActive != handle.targetId) {
             if (!commitActiveSession(null)) {
                 cancelActiveSession()
@@ -1057,6 +1060,7 @@ class EditorSessionCoordinator(
      * 窗口层 beginEdit 复用同一 session，completeWindowAttach 时替换为真实 windowId。
      * #595 四：sessionId 写入 store 记录 — 非持久 target 同样记录。
      */
+    @Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod", "LongMethod") // #597 技术债：待重构拆分
     fun prepareSessionForEdit(
         targetId: String,
         initialText: String,

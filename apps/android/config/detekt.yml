@@ -1,60 +1,60 @@
 # Detekt 配置 — 跨平台写作软件 Android 端
 #
 # buildUponDefaultConfig = true：在 detekt 默认配置之上覆盖以下规则。
-# 复杂度阈值对齐 AGENTS.md「从根因修改、不保留无调用代码」原则，
-# 防止平台客户端累积过长的 UI/桥接函数。
 #
-# 任务范围只要求 complexity 规则集。detekt 默认的其他规则集（style/naming/
-# potential-bugs/performance/coroutine/empty-blocks/exceptions/comments）
-# 对现有未全量格式化/未全量 lint 的代码报数千违规，逐个加精确例外不可行，
-# 统一格式化与命名整改是独立的后续任务。故在此显式禁用非 complexity 规则集，
-# 本配置只守复杂度结构红线。格式由 .editorconfig + IDE/ktlint 负责。
+# 启用的规则集：
+# - complexity: 复杂度红线（认知复杂度、圈复杂度、方法长度、类大小等）
+# - style: 代码风格关键规则（不必要的抽象/let/括号、潜在bug模式等）
+# - naming: 命名规范（变量、函数、类命名）
 #
-# formatting 规则集不启用（需 detekt-formatting plugin artifact），原因同上。
+# 禁用的规则集（现有代码未全量整改，逐个启用是独立后续任务）：
+# - comments / empty-blocks / exceptions / performance / potential-bugs
 #
-# 注意：detekt 1.23.8 的 complexity 规则集不包含 ReturnCount
-# （该规则在 detekt 1.23.x 中被移除），故不在此配置。
-# ReturnCount 的等价约束由 CyclomaticComplexMethod 间接覆盖。
+# 格式由 .editorconfig + IDE/ktlint 负责，不需要 detekt-formatting plugin。
+# 兼容 Detekt 1.23.8 + Kotlin 2.0.21。
+#
+# 排除原则（Issue #597）：
+# - SujianNavigationSuite/PhonePortraitShell/StarMapRoute/EditorViewModel/
+#   EditorSessionCoordinator/StarMapCanvas/StarMapScreen/SettingsRoute/
+#   SujianApp/WritingPane 不做整文件排除，必须被规则实际检查。
+# - 其他超标文件保留精确例外，每条附原因注释，排除列表不无限制增长。
+# - 优先调整阈值或重构代码，而非增加排除。
 
 complexity:
   active: true
   CognitiveComplexMethod:
     active: true
     threshold: 15
-    # 现有代码技术债：认知复杂度超标，已登记精确文件例外。
-    # 重构拆分是独立后续任务（AGENTS.md：从根因修改）。
     excludes:
-      - "**/kotlin/com/xiwei/sujian/data/AutoSyncWorker.kt"
-      - "**/kotlin/com/xiwei/sujian/data/SettingsRepository.kt"
-      - "**/kotlin/com/xiwei/sujian/data/SyncCoordinator.kt"
+      # --- 数据层：同步/设置逻辑，条件分支密集，待拆分状态机 ---
+      - "**/kotlin/com/xiwei/sujian/data/AutoSyncWorker.kt"              # 同步Worker，多分支错误处理
+      - "**/kotlin/com/xiwei/sujian/data/SettingsRepository.kt"          # 设置仓储，多条件映射
+      - "**/kotlin/com/xiwei/sujian/data/SyncCoordinator.kt"            # 同步协调器，多阶段状态判断
+      # --- 星图缓存：多条件缓存失效与重建 ---
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapSnapshotCache.kt"
-      - "**/kotlin/com/xiwei/sujian/editor/v2/compose/AnimatedTextField.kt"
-      - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/EditorSessionCoordinator.kt"
-      - "**/kotlin/com/xiwei/sujian/editor/v2/host/SujianEditorView.kt"
-      - "**/kotlin/com/xiwei/sujian/editor/v2/input/AndroidInputAdapter.kt"
-      - "**/kotlin/com/xiwei/sujian/editor/v2/input/AndroidInputConnection.kt"
-      - "**/kotlin/com/xiwei/sujian/editor/v2/input/FakeInputCommandPort.kt"
-      - "**/kotlin/com/xiwei/sujian/editor/v2/pipeline/AndroidEditorPipeline.kt"
-      - "**/kotlin/com/xiwei/sujian/editor/v2/projection/DisplayTextProjection.kt"
-      - "**/kotlin/com/xiwei/sujian/editor/v2/visual/AndroidTextAnimationEngine.kt"
-      - "**/kotlin/com/xiwei/sujian/editor/v2/visual/AndroidVisualPlanner.kt"
+      # --- 编辑器：Compose动画/平台桥接/输入法协议，分支天然密集 ---
+      - "**/kotlin/com/xiwei/sujian/editor/v2/compose/AnimatedTextField.kt"       # Compose动画状态组合
+      - "**/kotlin/com/xiwei/sujian/editor/v2/host/SujianEditorView.kt"          # 平台桥接层条件分支
+      - "**/kotlin/com/xiwei/sujian/editor/v2/input/AndroidInputAdapter.kt"       # InputConnection协议分支
+      - "**/kotlin/com/xiwei/sujian/editor/v2/input/AndroidInputConnection.kt"    # InputConnection协议分支
+      - "**/kotlin/com/xiwei/sujian/editor/v2/input/FakeInputCommandPort.kt"      # 测试替身，模拟完整协议
+      - "**/kotlin/com/xiwei/sujian/editor/v2/pipeline/AndroidEditorPipeline.kt"  # 多阶段处理管线
+      - "**/kotlin/com/xiwei/sujian/editor/v2/projection/DisplayTextProjection.kt" # 多条件文本渲染
+      - "**/kotlin/com/xiwei/sujian/editor/v2/visual/AndroidTextAnimationEngine.kt" # 多阶段动画调度
+      - "**/kotlin/com/xiwei/sujian/editor/v2/visual/AndroidVisualPlanner.kt"       # 多分支布局计算
       - "**/kotlin/com/xiwei/sujian/editor/v2/visual/planner/AffectedLayoutPlanner.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/visual/planner/BlockShiftPlanner.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/visual/planner/InsertDeletePlanner.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/visual/planner/MoveCrossfadePlanner.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/visual/planner/RebasePlanner.kt"
+      # --- 平台安全：Android Keystore API条件分支多 ---
       - "**/kotlin/com/xiwei/sujian/platform/AndroidKeystoreSecureStorage.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/EditorViewModel.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/SujianApp.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/editor/WritingPane.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/navigation/SujianNavigationSuite.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/settings/AppearanceSettings.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/settings/SettingsRoute.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/settings/SyncSettings.kt"
+      # --- 设置界面：多设置项组合条件 ---
+      - "**/kotlin/com/xiwei/sujian/ui/compose/settings/AppearanceSettings.kt"   # 外观设置多条件
+      - "**/kotlin/com/xiwei/sujian/ui/compose/settings/SyncSettings.kt"         # 同步设置多条件
+      # --- 测试：契约测试多分支断言 ---
       - "**/kotlin/com/xiwei/sujian/ui/compose/settings/TransactionBarrierOrderContractTest.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapCanvas.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapScreen.kt"
+      # --- 统计/主题/工作台/工作区：多条件展示与布局 ---
       - "**/kotlin/com/xiwei/sujian/ui/compose/stats/StatsScreen.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/theme/SujianTheme.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/theme/ThemeController.kt"
@@ -68,29 +68,30 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/state/WorkbenchViewModel.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workspace/ProjectWorkspaceScreen.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workspace/VolumeChapterTree.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/phone/portrait/PhonePortraitShell.kt"
+      # --- 手机端：多条件布局 ---
       - "**/kotlin/com/xiwei/sujian/ui/phone/portrait/PhoneTopBar.kt"
       - "**/kotlin/com/xiwei/sujian/ui/phone/portrait/PhoneWorkspaceHost.kt"
+      # --- 设计系统组件：多参数组合 ---
       - "**/kotlin/com/xiwei/sujian/designsystem/component/SujianListItem.kt"
       - "**/kotlin/com/xiwei/sujian/designsystem/component/SujianSlider.kt"
       - "**/kotlin/com/xiwei/sujian/designsystem/component/SujianSwitchRow.kt"
   CyclomaticComplexMethod:
     active: true
     threshold: 15
-    # 现有代码技术债：圈复杂度超标，已登记精确文件例外。
-    # 重构拆分是独立后续任务（AGENTS.md：从根因修改）。
     excludes:
+      # --- 数据层：桥接映射/同步逻辑，多分支错误处理 ---
       - "**/kotlin/com/xiwei/sujian/data/AutoSyncWorker.kt"
-      - "**/kotlin/com/xiwei/sujian/data/BridgeMappers.kt"
-      - "**/kotlin/com/xiwei/sujian/data/BridgeResult.kt"
-      - "**/kotlin/com/xiwei/sujian/data/MessageKeyMapper.kt"
+      - "**/kotlin/com/xiwei/sujian/data/BridgeMappers.kt"               # 桥接映射多分支
+      - "**/kotlin/com/xiwei/sujian/data/BridgeResult.kt"                # 桥接结果多分支
+      - "**/kotlin/com/xiwei/sujian/data/MessageKeyMapper.kt"            # 消息键映射多分支
       - "**/kotlin/com/xiwei/sujian/data/SyncCoordinator.kt"
+      # --- 星图缓存 ---
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapSnapshotCache.kt"
-      - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/EditorSessionCoordinator.kt"
+      # --- 编辑器：输入法/管线/视觉规划，分支密集 ---
       - "**/kotlin/com/xiwei/sujian/editor/v2/input/AndroidInputAdapter.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/input/AndroidInputConnection.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/input/FakeInputCommandPort.kt"
-      - "**/kotlin/com/xiwei/sujian/editor/v2/layout/AndroidLayoutEngine.kt"
+      - "**/kotlin/com/xiwei/sujian/editor/v2/layout/AndroidLayoutEngine.kt"     # 布局引擎多分支
       - "**/kotlin/com/xiwei/sujian/editor/v2/pipeline/AndroidEditorPipeline.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/projection/DisplayTextProjection.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/visual/AndroidVisualPlanner.kt"
@@ -99,44 +100,40 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/editor/v2/visual/planner/InsertDeletePlanner.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/visual/planner/MoveCrossfadePlanner.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/visual/planner/RebasePlanner.kt"
+      # --- 平台安全 ---
       - "**/kotlin/com/xiwei/sujian/platform/AndroidKeystoreSecureStorage.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/EditorViewModel.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/SujianApp.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/editor/WritingPane.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/navigation/SujianNavigationSuite.kt"
+      # --- 设置界面 ---
       - "**/kotlin/com/xiwei/sujian/ui/compose/settings/AppearanceSettings.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/settings/SettingsRoute.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/settings/SyncSettings.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapCanvas.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt"
+      # --- 统计/主题/工作台 ---
       - "**/kotlin/com/xiwei/sujian/ui/compose/stats/StatsScreen.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/theme/SujianTheme.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/WorkbenchReducerTest.kt"
+      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/WorkbenchReducerTest.kt" # 测试：多分支断言
       - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/component/DockHost.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/component/SujianWorkbench.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/state/WorkbenchLayoutRepository.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/state/WorkbenchReducer.kt"
+      # --- 工作区/手机端 ---
       - "**/kotlin/com/xiwei/sujian/ui/compose/workspace/ProjectWorkspaceScreen.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workspace/VolumeChapterTree.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/phone/portrait/PhonePortraitShell.kt"
       - "**/kotlin/com/xiwei/sujian/ui/phone/portrait/PhoneTopBar.kt"
       - "**/kotlin/com/xiwei/sujian/ui/phone/portrait/PhoneWorkspaceHost.kt"
   LongMethod:
     active: true
     threshold: 80
-    # 现有代码技术债：方法过长超标，已登记精确文件例外。
-    # 重构拆分是独立后续任务（AGENTS.md：从根因修改）。
     excludes:
+      # --- 数据层：同步逻辑长方法 ---
       - "**/kotlin/com/xiwei/sujian/data/SyncCoordinator.kt"
+      # --- 星图测试：契约测试长方法 ---
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapCrossLayerRegressionTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapProgressiveLoadingContractTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapRoundTripTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapSnapshotCache.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapSnapshotConsistencyTest.kt"
+      # --- 编辑器：Compose动画/布局/管线/视觉规划，长方法 ---
       - "**/kotlin/com/xiwei/sujian/editor/v2/compose/AnimatedInlineText.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/compose/AnimatedTextArea.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/compose/AnimatedTextField.kt"
-      - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/EditorSessionCoordinator.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/layout/AndroidLayoutEngine.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/pipeline/AndroidEditorPipeline.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/projection/DisplayTextProjection.kt"
@@ -145,18 +142,15 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/editor/v2/visual/planner/InsertDeletePlanner.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/visual/planner/MoveCrossfadePlanner.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/visual/planner/RebasePlanner.kt"
+      # --- 平台安全 ---
       - "**/kotlin/com/xiwei/sujian/platform/AndroidKeystoreSecureStorage.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/EditorViewModel.kt"
+      # --- UI测试 ---
       - "**/kotlin/com/xiwei/sujian/ui/ThemePaletteHelperTest.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/SujianApp.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/editor/WritingPane.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/navigation/SujianNavigationSuite.kt"
+      # --- 设置界面长Composable ---
       - "**/kotlin/com/xiwei/sujian/ui/compose/settings/AppearanceSettings.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/settings/EditorSettings.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/settings/SettingsRoute.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/settings/SyncSettings.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapCanvas.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt"
+      # --- 统计/工作台/工作区 ---
       - "**/kotlin/com/xiwei/sujian/ui/compose/stats/StatsScreen.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/component/DockHost.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/component/FloatingPanelLayer.kt"
@@ -166,24 +160,22 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/ui/compose/workspace/ProjectListScreen.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workspace/ProjectWorkspaceScreen.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workspace/VolumeChapterTree.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/phone/portrait/PhonePortraitShell.kt"
       - "**/kotlin/com/xiwei/sujian/ui/phone/portrait/PhoneWorkspaceHost.kt"
   LargeClass:
     active: true
     threshold: 500
-    # 现有代码技术债：类过大超标，已登记精确文件例外。
-    # 重构拆分是独立后续任务（AGENTS.md：从根因修改）。
     excludes:
+      # --- 数据层：设置仓储大类 ---
       - "**/kotlin/com/xiwei/sujian/data/SettingsRepository.kt"
+      # --- 星图测试大类 ---
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapCrossLayerRegressionTest.kt"
-      - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/EditorSessionCoordinator.kt"
+      # --- 编辑器：宿主/管线/规划器大类 ---
       - "**/kotlin/com/xiwei/sujian/editor/v2/host/SujianEditorView.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/input/FakeInputCommandPort.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/pipeline/AndroidEditorPipeline.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/visual/planner/AffectedLayoutPlanner.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/visual/planner/InsertDeletePlanner.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/EditorViewModel.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/settings/SettingsRoute.kt"
+      # --- 工作台Reducer大类 ---
       - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/WorkbenchReducerTest.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/state/WorkbenchReducer.kt"
   LongParameterList:
@@ -191,22 +183,24 @@ complexity:
     functionThreshold: 7
     constructorThreshold: 10
     ignoreDefaultParameters: false
-    # 现有代码技术债：参数列表过长超标，已登记精确文件例外。
-    # 重构拆分是独立后续任务（AGENTS.md：从根因修改）。
     excludes:
+      # --- 设计系统组件：Compose多参数API设计 ---
       - "**/kotlin/com/xiwei/sujian/designsystem/theme/SujianTheme.kt"
       - "**/kotlin/com/xiwei/sujian/designsystem/component/SujianSwitchRow.kt"
       - "**/kotlin/com/xiwei/sujian/designsystem/component/SujianSlider.kt"
       - "**/kotlin/com/xiwei/sujian/designsystem/component/SujianListItem.kt"
       - "**/kotlin/com/xiwei/sujian/designsystem/component/SujianDialog.kt"
       - "**/kotlin/com/xiwei/sujian/designsystem/component/SujianButton.kt"
+      # --- 数据层桥接：FFI桥接函数参数由Core契约决定 ---
       - "**/kotlin/com/xiwei/sujian/data/AppServiceBridge.kt"
       - "**/kotlin/com/xiwei/sujian/data/StatsBridge.kt"
       - "**/kotlin/com/xiwei/sujian/data/WorkspaceRepository.kt"
       - "**/kotlin/com/xiwei/sujian/data/WriterAppServiceHolder.kt"
       - "**/kotlin/com/xiwei/sujian/data/WritingBridge.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapBridgeRepositoryIntegrationTest.kt"
+      # --- 诊断事件：多字段事件数据类 ---
       - "**/kotlin/com/xiwei/sujian/diagnostics/DiagnosticsEvents.kt"
+      # --- 编辑器：Compose动画/管线/视觉，参数由渲染协议决定 ---
       - "**/kotlin/com/xiwei/sujian/editor/v2/compose/AnimatedInlineText.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/compose/AnimatedTextArea.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/compose/AnimatedTextField.kt"
@@ -220,38 +214,36 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/editor/v2/visual/AndroidVisualPlanner.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/visual/planner/InsertDeletePlanner.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/visual/planner/MoveCrossfadePlanner.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapCanvas.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapScreen.kt"
+      # --- 工作台组件：多面板布局参数 ---
       - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/component/DockHost.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/component/FloatingPanelLayer.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/component/WorkbenchPanelFrame.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workspace/ProjectWorkspaceScreen.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/phone/portrait/PhonePortraitShell.kt"
+      # --- 手机端 ---
       - "**/kotlin/com/xiwei/sujian/ui/phone/portrait/PhoneTopBar.kt"
   NestedBlockDepth:
     active: true
     threshold: 4
-    # 现有代码技术债：嵌套块过深超标，已登记精确文件例外。
-    # 重构拆分是独立后续任务（AGENTS.md：从根因修改）。
     excludes:
+      # --- 编辑器宿主：平台桥接层嵌套回调 ---
       - "**/kotlin/com/xiwei/sujian/editor/v2/host/SujianEditorView.kt"
+      # --- 输入法：InputConnection协议嵌套 ---
       - "**/kotlin/com/xiwei/sujian/editor/v2/input/AndroidInputConnection.kt"
+      # --- 视觉规划器：多分支布局嵌套 ---
       - "**/kotlin/com/xiwei/sujian/editor/v2/visual/planner/AffectedLayoutPlanner.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/visual/planner/BlockShiftPlanner.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/visual/planner/InsertDeletePlanner.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/visual/planner/MoveCrossfadePlanner.kt"
+      # --- 平台安全 ---
       - "**/kotlin/com/xiwei/sujian/platform/AndroidKeystoreSecureStorage.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/settings/SettingsRoute.kt"
   ComplexCondition:
     active: true
     threshold: 4
-    # 现有代码技术债：条件过复杂超标，已登记精确文件例外。
-    # 重构拆分是独立后续任务（AGENTS.md：从根因修改）。
     excludes:
+      # --- 编辑器：平台桥接/测试替身复杂条件 ---
       - "**/kotlin/com/xiwei/sujian/editor/v2/host/SujianEditorView.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/input/FakeInputCommandPort.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/EditorViewModel.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/settings/SettingsRoute.kt"
+      # --- 工作台Reducer/工作区：多状态组合条件 ---
       - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/state/WorkbenchReducer.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workspace/ProjectWorkspaceScreen.kt"
   TooManyFunctions:
@@ -259,9 +251,8 @@ complexity:
     thresholdInFiles: 30
     thresholdInClasses: 20
     thresholdInObjects: 20
-    # 现有代码技术债：函数过多超标，已登记精确文件例外。
-    # 重构拆分是独立后续任务（AGENTS.md：从根因修改）。
     excludes:
+      # --- 数据层桥接：FFI桥接函数由Core契约决定 ---
       - "**/kotlin/com/xiwei/sujian/data/AppServiceBridge.kt"
       - "**/kotlin/com/xiwei/sujian/data/BridgeMappers.kt"
       - "**/kotlin/com/xiwei/sujian/data/LayoutPolicyBridge.kt"
@@ -272,11 +263,12 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapBridgeOps.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapCrossLayerRegressionTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapRepository.kt"
+      # --- 诊断事件：多字段事件枚举 ---
       - "**/kotlin/com/xiwei/sujian/diagnostics/DiagnosticsEvents.kt"
       - "**/kotlin/com/xiwei/sujian/diagnostics/DiagnosticsTest.kt"
+      # --- 编辑器：管线/协调器/输入法，函数由协议决定 ---
       - "**/kotlin/com/xiwei/sujian/editor/v2/AndroidTextIndexMapTest.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/compose/AnimatedTextSemanticsTest.kt"
-      - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/EditorSessionCoordinator.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/EditorWindowHost.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/TextEditorProfileTest.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/host/SelectionOnlySessionCallbackContractTest.kt"
@@ -290,7 +282,7 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/editor/v2/pipeline/EditorCommandPort.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/projection/DisplayTextProjectionTest.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/visual/AndroidTextAnimationEngine.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/EditorViewModel.kt"
+      # --- UI状态/工作台测试 ---
       - "**/kotlin/com/xiwei/sujian/ui/compose/SujianAppState.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/WorkbenchLayoutRepositoryTest.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/WorkbenchReducerTest.kt"
@@ -299,10 +291,10 @@ complexity:
   StringLiteralDuplication:
     active: true
     threshold: 3
-    # 现有代码技术债：字符串字面量重复超标，已登记精确文件例外。
-    # 重构拆分是独立后续任务（AGENTS.md：从根因修改）。
     excludes:
+      # --- 架构目录 ---
       - "**/arch/**"
+      # --- 数据层：桥接/同步/仓储，协议字符串天然重复 ---
       - "**/kotlin/com/xiwei/sujian/SujianApp.kt"
       - "**/kotlin/com/xiwei/sujian/data/AutoSyncScheduler.kt"
       - "**/kotlin/com/xiwei/sujian/data/AutoSyncWorker.kt"
@@ -315,6 +307,7 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/data/SyncProfileGenerationContractTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/SyncSecretsOverrideScopedContractTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/WorkspaceRepository.kt"
+      # --- 星图：桥接/缓存/测试，协议键重复 ---
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapBridgeRepositoryIntegrationTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapCacheContractTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapCrossLayerRegressionTest.kt"
@@ -326,10 +319,12 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapSemanticMapperTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapSnapshotCache.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapSnapshotConsistencyTest.kt"
+      # --- 诊断：日志/导出，格式字符串重复 ---
       - "**/kotlin/com/xiwei/sujian/diagnostics/DiagnosticsEvents.kt"
       - "**/kotlin/com/xiwei/sujian/diagnostics/DiagnosticsExporter.kt"
       - "**/kotlin/com/xiwei/sujian/diagnostics/DiagnosticsLogger.kt"
       - "**/kotlin/com/xiwei/sujian/diagnostics/DiagnosticsTest.kt"
+      # --- 编辑器：契约测试断言字符串重复 ---
       - "**/kotlin/com/xiwei/sujian/editor/v2/compose/AnimatedTextSemanticsTest.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/AttachedRequiresViewBindContractTest.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/DocumentVersionCausalityContractTest.kt"
@@ -349,19 +344,21 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/editor/v2/pipeline/EditPipelineTest.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/projection/DisplayTextProjectionTest.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/projection/SecretProjectionAtomicityTest.kt"
+      # --- 实验设置 ---
       - "**/kotlin/com/xiwei/sujian/labs/ExperimentalSettingsRepository.kt"
+      # --- 平台安全 ---
       - "**/kotlin/com/xiwei/sujian/platform/AndroidKeystoreSecureStorage.kt"
+      # --- UI测试/工具 ---
       - "**/kotlin/com/xiwei/sujian/ui/ChapterSwitchGateTest.kt"
       - "**/kotlin/com/xiwei/sujian/ui/EditorViewModelChapterSwitchContractTest.kt"
       - "**/kotlin/com/xiwei/sujian/ui/ErrorUtil.kt"
       - "**/kotlin/com/xiwei/sujian/ui/ErrorUtilTest.kt"
       - "**/kotlin/com/xiwei/sujian/ui/SyncMergeEmitDedupTest.kt"
       - "**/kotlin/com/xiwei/sujian/ui/ThemePaletteHelperTest.kt"
+      # --- UI状态/设置/工作台 ---
       - "**/kotlin/com/xiwei/sujian/ui/compose/SujianAppState.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/settings/AppearanceSettings.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/settings/SettingsRoute.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/settings/StructuredSyncResultTest.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/theme/ThemeUiState.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/WorkbenchLayoutRepositoryTest.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/WorkbenchReducerTest.kt"
@@ -370,23 +367,167 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/state/WorkbenchReducer.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workspace/ProjectWorkspaceScreen.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workspace/WorkspaceViewModel.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/phone/portrait/PhonePortraitShell.kt"
       - "**/kotlin/com/xiwei/sujian/ui/phone/portrait/WorkspaceSessionViewModel.kt"
+      # --- 编辑器协调器测试：断言字符串重复 ---
+      - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/DocumentOperationLeaseTest.kt"
+      - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/PreparedSessionTransactionTest.kt"
+      - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/ResetSnapshotCommitTest.kt"
+      - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/SessionLayerNoMutableStateTest.kt"
+      - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/TransformPurityTest.kt"
   NamedArguments:
     active: true
 
-# 禁用非 complexity 规则集（任务范围外，现有代码未全量整改）。
+style:
+  active: true
+  # 启用关键风格规则，禁用对现有代码噪音过大的规则。
+  # 格式类规则（缩进/换行/空格等）由 .editorconfig + ktlint 负责。
+  # 以下仅列出需要覆盖默认值的规则（buildUponDefaultConfig = true）。
+  # 默认启用的低噪音规则（保留默认）：EqualsNullCall / ExplicitItLambdaParameter /
+  # ModifierOrder / ObjectLiteralToLambda /
+  # OptionalAbstractKeyword / ProtectedMemberInFinalClass /
+  # RedundantHigherOrderMapUsage / UselessCallOnNotNull
+  CollapsibleIfStatements:
+    active: true
+  UnnecessaryLet:
+    active: true
+  UnnecessaryParentheses:
+    active: false    # 现有代码大量括号用于可读性（动画/位运算），整改代价大
+  UntilInsteadOfRangeTo:
+    active: true
+  # --- 以下规则默认启用但对现有代码噪音过大，显式禁用 ---
+  LoopWithTooManyJumpStatements:
+    active: false    # 视觉规划器循环多跳转点，整改代价大
+  DestructuringDeclarationWithTooManyEntries:
+    active: false    # 现有代码有大量解构声明
+  ForbiddenComment:
+    active: false    # TODO/FIXME注释是合法的工作标记
+  ForbiddenVoid:
+    active: false    # Void在部分Java互操作中必要
+  FunctionOnlyReturningConstant:
+    active: false    # 常量函数在特定模式中有用
+  MagicNumber:
+    active: false    # UI代码大量硬编码尺寸/颜色，整改代价大
+  MaxLineLength:
+    active: false    # 格式由editorconfig+ktlint负责
+  MayBeConst:
+    active: false    # 现有代码大量非const顶层val，整改范围大
+  NewLineAtEndOfFile:
+    active: false    # 格式由editorconfig+ktlint负责
+  NestedClassesVisibility:
+    active: false    # 嵌套类可见性在现有代码中不一致
+  ReturnCount:
+    active: false    # 现有代码多返回点方法多
+  SafeCast:
+    active: false    # 安全转换模式在现有代码中广泛使用
+  SerialVersionUIDInSerializableClass:
+    active: false    # serialVersionUID在Android Parcelable中不适用
+  ThrowsCount:
+    active: false    # 现有代码多异常抛出点多
+  UnnecessaryAbstractClass:
+    active: false    # 抽象类在现有架构中有设计用途
+  UnnecessaryApply:
+    active: false    # apply在构建器模式中广泛使用
+  UnnecessaryFilter:
+    active: false    # filter模式在现有代码中常见
+  UnnecessaryInheritance:
+    active: false    # 显式继承在现有代码中有文档价值
+  UnusedImports:
+    active: false    # IDE可自动修复，暂不作为门禁阻断
+  UnusedParameter:
+    active: false    # 接口/覆写方法常有未用参数
+  UnusedPrivateClass:
+    active: false    # 可能存在暂时未使用的私有类
+  UnusedPrivateMember:
+    active: false    # 可能存在暂时未使用的私有成员
+  UnusedPrivateProperty:
+    active: false    # 可能存在暂时未使用的私有属性
+  UseAnyOrNoneInsteadOfFind:
+    active: false    # find语义在部分场景更清晰
+  UseArrayLiteralsInAnnotations:
+    active: false    # 现有注解格式不一致
+  UseCheckNotNull:
+    active: false
+  UseCheckOrError:
+    active: false    # 现有代码混用require/check/throw
+  UseDataClass:
+    active: false    # 数据类转换影响序列化兼容性
+  UseIfInsteadOfWhen:
+    active: false    # when表达式可读性优于if链，不强制
+  UseIsNullOrEmpty:
+    active: false    # 现有代码有自定义空判断逻辑
+  UseOrEmpty:
+    active: false
+  UseRequire:
+    active: false
+  UseRequireNotNull:
+    active: false    # 现有代码混用require/check/throw
+  UtilityClassWithPublicConstructor:
+    active: false    # 工具类模式在现有代码中常见
+  VarCouldBeVal:
+    active: false    # 现有代码大量var可改val，整改范围大
+  WildcardImport:
+    active: false    # 现有代码大量通配符导入
+  SpacingBetweenPackageAndImports:
+    active: false    # 格式由editorconfig+ktlint负责
+  NoTabs:
+    active: false    # 格式由editorconfig+ktlint负责
+  TrailingWhitespace:
+    active: false    # 格式由editorconfig+ktlint负责
+  ExpressionBodySyntax:
+    active: false    # 表达式体风格不强制
+  DataClassContainsFunctions:
+    active: false    # 数据类含函数在现有代码中常见
+  RedundantVisibilityModifierRule:
+    active: false    # 显式public在Android代码中有文档价值
+
+naming:
+  active: true
+  # 启用关键命名规则，确保类/函数/变量命名可读。
+  # 默认启用的规则（保留默认）：ClassNaming / ConstructorParameterNaming /
+  # FunctionNaming / FunctionParameterNaming / ObjectPropertyNaming /
+  # PackageNaming / TopLevelPropertyNaming / VariableNaming
+  FunctionNaming:
+    active: true
+    functionPattern: '[a-z][a-zA-Z0-9]*'
+    excludeClassPattern: '$^'
+    ignoreAnnotated:
+      - 'Composable'
+  # --- 以下规则默认启用但对现有代码噪音过大，显式禁用 ---
+  EnumNaming:
+    active: false          # 现有枚举可能有非标准命名
+  InvalidPackageDeclaration:
+    active: false          # 文件路径与包声明可能不一致
+  MatchingDeclarationName:
+    active: false          # 文件名与类名可能不一致（多类文件）
+  MemberNameEqualsClassName:
+    active: false          # 构造函数参数与类同名是常见模式
+  NoNameShadowing:
+    active: false          # 内外层同名变量是常见Kotlin模式
+  NonBooleanPropertyPrefixedWithIs:
+    active: false          # Android惯用is前缀非布尔属性
+  BooleanPropertyNaming:
+    active: false          # 布尔属性命名模式在现有代码中不一致
+  LambdaParameterNaming:
+    active: false          # Lambda参数命名在现有代码中不一致
+  ForbiddenClassName:
+    active: false          # 类名限制对现有代码过于严格
+  FunctionMaxLength:
+    active: false
+  FunctionMinLength:
+    active: false
+  VariableMaxLength:
+    active: false
+  VariableMinLength:
+    active: false
+
+# 禁用非核心规则集（现有代码未全量整改，逐个启用是独立后续任务）。
 comments:
   active: false
 empty-blocks:
   active: false
 exceptions:
   active: false
-naming:
-  active: false
 performance:
   active: false
 potential-bugs:
-  active: false
-style:
   active: false

@@ -70,16 +70,19 @@ class PhoneChromePolicyTest {
     }
 
     @Test
-    fun starMap_doesNotInheritWorkspaceChrome() {
+    fun starMap_showsStarMapTitleNoBack() {
         val spec = PhoneChromePolicy.resolve(
             route = PhoneRootRoute.Root,
             selectedRoot = PhoneRoot.StarMap,
-            workspaceLocation = WorkspaceLocation.Editor("p1", "v1", "c1"),
+            workspaceLocation = WorkspaceLocation.ProjectList,
             syncState = SyncIndicatorState.Synced,
         )
-        assertEquals("素笺写作", spec.title)
+        assertEquals("星图", spec.title)
         assertFalse(spec.showBack)
         assertFalse(spec.appBarTransparent)
+        assertTrue(spec.showSync)
+        assertTrue(spec.showSearch)
+        assertTrue(spec.showSettings)
         assertTrue(spec.showBottomBar)
     }
 

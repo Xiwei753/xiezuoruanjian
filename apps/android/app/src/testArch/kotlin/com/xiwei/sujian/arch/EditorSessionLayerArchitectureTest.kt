@@ -1,5 +1,7 @@
-package com.xiwei.sujian.editor.v2.coordinator
+package com.xiwei.sujian.arch
 
+import com.xiwei.sujian.editor.v2.coordinator.EditorSessionCoordinator
+import com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost
 import kotlinx.coroutines.flow.StateFlow
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -7,11 +9,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * #595 二/三：会话层不持有 Compose mutableState 契约测试。
+ * #595 二/三：会话层不持有 Compose mutableState 架构约束测试 — 静态结构检查。
  *
  * Issue #595 要求会话层（EditorSessionCoordinator）只保留 Core session 与纯数据
  * snapshot，不持有 View、Context、Rect、TextPaint、FrameClock、mutableState 或
- * 窗口回调。本测试验证：
+ * 窗口回调。本测试验证字段/方法存在性约束（结构检查），不是运行时行为测试
+ * （运行时行为由 SessionLayerNoMutableStateTest 用真实状态变化验证）。
  *
  * - 可观察状态通过唯一 [EditorSessionState] 快照 StateFlow 暴露（sessionStateFlow）；
  * - 三个独立 stateIn 派生流（activeTargetIdFlow / editingStateFlow /
@@ -20,7 +23,7 @@ import org.junit.Test
  * - 非 Compose 调用方通过 value getter 读取当前值；
  * - 会话层不持有 Compose mutableStateOf 字段。
  */
-class SessionLayerNoMutableStateContractTest {
+class EditorSessionLayerArchitectureTest {
 
     private val valueGetters = listOf(
         "getActiveTargetId",

@@ -1,4 +1,6 @@
+@file:Suppress("StringLiteralDuplication") // #597 技术债：协议字符串天然重复
 package com.xiwei.sujian.ui.compose.settings
+
 
 import android.os.Parcelable
 import androidx.activity.compose.BackHandler
@@ -39,7 +41,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
-import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.data.SaveField
 import com.xiwei.sujian.data.SaveFailure
 import com.xiwei.sujian.data.SettingsRepository
@@ -66,6 +67,8 @@ import com.xiwei.sujian.data.ExclusiveResult
 import com.xiwei.sujian.data.SyncCoordinator
 import com.xiwei.sujian.data.SyncOutcome
 import com.xiwei.sujian.data.SyncFailureKind
+import com.xiwei.sujian.data.SyncDryRunOutcome
+import com.xiwei.sujian.data.SyncDiagnosticsOutcome
 import com.xiwei.sujian.data.SyncSession
 import com.xiwei.sujian.model.SyncTrigger
 
@@ -128,8 +131,8 @@ data class SettingsUiState(
     val syncSecrets: com.xiwei.sujian.model.SyncSecrets = com.xiwei.sujian.model.SyncSecrets(),
     val syncCapability: com.xiwei.sujian.model.SyncCapabilityData = com.xiwei.sujian.model.SyncCapabilityData(),
     val secureStorageWarning: String? = null,
-    val builtinThemes: List<uniffi.writer_core.BuiltinThemeDto> = emptyList(),
-    val paletteRecords: List<uniffi.writer_core.ThemePaletteRecordDto> = emptyList(),
+    val builtinThemes: List<com.xiwei.sujian.model.BuiltinTheme> = emptyList(),
+    val paletteRecords: List<com.xiwei.sujian.model.ThemePaletteRecord> = emptyList(),
     val aiAvailable: Boolean = false,
     val workspacePath: String = "",
     val versionInfo: String = "",
@@ -218,6 +221,7 @@ private data class SyncCommandIoResult(
 ) {
     val isSuccess: Boolean get() = structuredResult.statusCode == "ok"
 }
+ @Suppress("LargeClass") // #597 技术债：待重构拆分
 
 class SettingsViewModel(
     private val settingsRepo: SettingsRepository,
@@ -298,6 +302,7 @@ class SettingsViewModel(
             return modelClass.cast(SettingsViewModel(repo, coordinator)) as T
         }
     }
+ @Suppress("CognitiveComplexMethod") // #597 技术债：待重构拆分
 
     private fun loadInitial() {
         val repo = settingsRepo
@@ -341,10 +346,12 @@ class SettingsViewModel(
     private suspend fun flushPending() {
         val repo = settingsRepo
         val cmds = pendingCommands
+        @Suppress("ComplexCondition") // #597 技术债：条件过复杂，待拆分
         if (cmds.local == null && cmds.fontSize == null && cmds.syncConfig == null && cmds.syncSecrets == null) return
         pendingCommands = PendingCommands()
         executeSave(repo, cmds.local, cmds.fontSize, cmds.syncConfig, cmds.syncSecrets)
     }
+ @Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod", "LongMethod", "NestedBlockDepth", "ComplexCondition") // #597 技术债：待重构拆分
 
     private suspend fun executeSave(
         repo: SettingsRepository,
@@ -473,6 +480,7 @@ class SettingsViewModel(
         }
         return true
     }
+ @Suppress("CyclomaticComplexMethod") // #597 技术债：待重构拆分
 
     private suspend fun executeSyncTransaction(
         command: SettingsTransactionCommand.SaveAndRunSync,
@@ -533,6 +541,7 @@ class SettingsViewModel(
             refreshSyncProfileState()
         } catch (_: Exception) { }
     }
+ @Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod") // #597 技术债：待重构拆分
 
     private suspend fun executeDryRunTransaction(
         command: SettingsTransactionCommand.SaveAndRunDryRun,
@@ -566,9 +575,9 @@ class SettingsViewModel(
                         return@withContext SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_credentials_override_failed"))
                     }
                     try {
-                        when (val r = settingsRepo.performSyncDryRun(command.config)) {
-                            is BridgeResult.Success -> {
-                                val plan = r.data
+                        when (val r = settingsRepo.performSyncDryRunTyped(command.config)) {
+                            is SyncDryRunOutcome.Success -> {
+                                val plan = r.plan
                                 val counts = SyncCounts(
                                     uploaded = plan.filesToUpload.size,
                                     downloaded = plan.filesToDownload.size,
@@ -583,8 +592,8 @@ class SettingsViewModel(
                                     counts = counts
                                 ))
                             }
-                            is BridgeResult.Error -> { val kind = r.syncFailureKind ?: SyncFailureKind.Fatal; SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = kind.messageKey(), sanitizedDiagnostic = r.message)) }
-                            BridgeResult.NotLoaded -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = SyncFailureKind.NativeUnavailable.messageKey(), sanitizedDiagnostic = SyncFailureKind.NativeUnavailable.name))
+                            is SyncDryRunOutcome.Error -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = r.syncFailureKind.messageKey(), sanitizedDiagnostic = r.message)) 
+                            SyncDryRunOutcome.NotLoaded -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = SyncFailureKind.NativeUnavailable.messageKey(), sanitizedDiagnostic = SyncFailureKind.NativeUnavailable.name))
                         }
                     } finally {
                         settingsRepo.clearSyncSecretsOverride()
@@ -616,6 +625,7 @@ class SettingsViewModel(
             refreshSyncProfileState()
         } catch (_: Exception) { }
     }
+ @Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod") // #597 技术债：待重构拆分
 
     private suspend fun executeDiagnosticsTransaction(
         command: SettingsTransactionCommand.SaveAndRunDiagnostics,
@@ -648,9 +658,9 @@ class SettingsViewModel(
                         return@withContext SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_credentials_override_failed"))
                     }
                     try {
-                        when (val r = settingsRepo.performSyncDiagnostics(command.config)) {
-                            is BridgeResult.Success -> {
-                                val diag = r.data
+                        when (val r = settingsRepo.performSyncDiagnosticsTyped(command.config)) {
+                            is SyncDiagnosticsOutcome.Success -> {
+                                val diag = r.result
                                 SyncCommandIoResult(true, true, StructuredSyncResult(
                                     statusCode = if (diag.success) "ok" else "fail",
                                     messageKey = "sync_test_connection_result",
@@ -663,8 +673,8 @@ class SettingsViewModel(
                                     sanitizedDiagnostic = if (!diag.success) "connection_failed" else null
                                 ))
                             }
-                            is BridgeResult.Error -> { val kind = r.syncFailureKind ?: SyncFailureKind.Fatal; SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = kind.messageKey(), sanitizedDiagnostic = r.message)) }
-                            BridgeResult.NotLoaded -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = SyncFailureKind.NativeUnavailable.messageKey(), sanitizedDiagnostic = SyncFailureKind.NativeUnavailable.name))
+                            is SyncDiagnosticsOutcome.Error -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = r.syncFailureKind.messageKey(), sanitizedDiagnostic = r.message)) 
+                            SyncDiagnosticsOutcome.NotLoaded -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = SyncFailureKind.NativeUnavailable.messageKey(), sanitizedDiagnostic = SyncFailureKind.NativeUnavailable.name))
                         }
                     } finally {
                         settingsRepo.clearSyncSecretsOverride()
@@ -734,6 +744,7 @@ class SettingsViewModel(
             rollbackIfRevisionMatches(repo, failure)
         }
     }
+ @Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod") // #597 技术债：待重构拆分
 
     private suspend fun rollbackIfRevisionMatches(repo: SettingsRepository, failure: SaveFailure) {
         when (failure.field) {
@@ -846,6 +857,7 @@ class SettingsViewModel(
             }
         }
     }
+ @Suppress("CognitiveComplexMethod") // #597 技术债：待重构拆分
 
     private fun mergeRefresh() {
         val repo = settingsRepo
@@ -932,6 +944,7 @@ private data class SettingsSelection(val section: SettingsSection) : Parcelable
  * [ThreePaneScaffoldPredictiveBackHandler] 处理；列表→离开设置一级入口的返回
  * 由全局 NavDisplay 统一驱动（Works 常驻栈底，pop 带真实手势进度）。
  */
+@Suppress("CognitiveComplexMethod") // #597 技术债：待重构拆分
 @OptIn(androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi::class)
 @Composable
 fun SettingsRoute(
@@ -1108,6 +1121,7 @@ private fun settingsCategorySummary(category: SettingsCategory): String? = when 
  * 设置列表项的真实当前值：全部来自真实 [SettingsUiState]，保存后随状态即时更新；
  * 无当前值可展示的分类（实验室/关于）返回 null，只保留功能说明。
  */
+@Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod") // #597 技术债：待重构拆分
 @Composable
 private fun settingsCategoryValue(category: SettingsCategory, state: SettingsUiState): String? =
     when (category.section) {

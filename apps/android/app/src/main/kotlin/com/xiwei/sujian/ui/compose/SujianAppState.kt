@@ -6,7 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
-import com.xiwei.sujian.data.BridgeProvider
+import com.xiwei.sujian.data.LayoutPolicyRepositoryProvider
 import com.xiwei.sujian.data.WorkspaceUseCase
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.model.FoldFeatureInfo
@@ -217,7 +217,7 @@ class SujianAppViewModel(
 
     fun resolveLayout(metrics: WindowMetrics): LayoutPlan? {
         val ctx = appContext ?: return null
-        val bridge = BridgeProvider.getLayoutPolicyBridge(ctx)
+        val bridge = LayoutPolicyRepositoryProvider.getLayoutPolicyBridge(ctx)
         val plan = bridge.resolveLayout(metrics)
         currentLayoutPlan = plan
         return plan

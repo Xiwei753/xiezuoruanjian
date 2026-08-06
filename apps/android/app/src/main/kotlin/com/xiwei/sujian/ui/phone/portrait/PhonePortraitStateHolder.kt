@@ -15,6 +15,8 @@ import com.xiwei.sujian.ui.compose.navigation.SettingsSection
  * 不持有自建 CoroutineScope、Context、仓库或同步 I/O；持久化通过
  * [saver] 与回调在状态变化时同步写出，配置变化/进程恢复由 Compose
  * save pass 读取当前状态完成恢复。
+ *
+ * #597：星图入口已开放，选择星图时正常切换到 StarMap 页面。
  */
 @Stable
 class PhonePortraitStateHolder(
@@ -23,7 +25,7 @@ class PhonePortraitStateHolder(
     private val onSaveExpandedSections: (Set<SettingsSection>) -> Unit = {},
     initialExpandedSections: Set<SettingsSection> = emptySet(),
 ) {
-    var selectedRoot by mutableStateOf(if (initialRoot == PhoneRoot.StarMap) PhoneRoot.Works else initialRoot)
+    var selectedRoot by mutableStateOf(initialRoot)
         private set
 
     var expandedSettingsSections by mutableStateOf(initialExpandedSections)
@@ -46,8 +48,6 @@ class PhonePortraitStateHolder(
     }
 
     private fun onSelectRoot(root: PhoneRoot) {
-        // 星图未开放：入口保留但完全无响应，也绝不写入 StarMap。
-        if (root == PhoneRoot.StarMap) return
         selectedRoot = root
         onSaveSelectedRoot(root.name)
     }
@@ -67,7 +67,7 @@ class PhonePortraitStateHolder(
         /**
          * 正式 rememberSaveable Saver：保存一级入口与设置折叠状态。
          * save pass 在组合离开前读取状态当前值，因此配置变化时
-         * 用户停留在统计页/正文等位置都能被如实恢复；星图仍回退到作品页。
+         * 用户停留在统计页/星图页/正文等位置都能被如实恢复。
          */
         fun saver(
             onSaveSelectedRoot: (String) -> Unit = {},

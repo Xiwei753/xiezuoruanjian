@@ -14,7 +14,7 @@ import com.xiwei.sujian.designsystem.theme.SujianTypography
 import com.xiwei.sujian.designsystem.theme.hexToColor
 
 private fun schemeFromRecord(
-    record: uniffi.writer_core.ThemePaletteRecordDto,
+    record: com.xiwei.sujian.model.ThemePaletteRecord,
     isDark: Boolean
 ): androidx.compose.material3.ColorScheme {
     val scheme = if (isDark) record.darkScheme else record.lightScheme
@@ -72,7 +72,7 @@ private fun schemeFromRecord(
 }
 
 private fun schemeFromBuiltin(
-    theme: uniffi.writer_core.BuiltinThemeDto,
+    theme: com.xiwei.sujian.model.BuiltinTheme,
     isDark: Boolean
 ): androidx.compose.material3.ColorScheme {
     val scheme = if (isDark) theme.darkScheme else theme.lightScheme

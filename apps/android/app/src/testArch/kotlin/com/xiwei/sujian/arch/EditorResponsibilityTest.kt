@@ -63,22 +63,26 @@ class EditorResponsibilityTest {
     }
 
     /**
-     * input 子模块不应直接引用 UniFFI 生成绑定。
+     * input 子模块不应直接引用 UniFFI 生成绑定（除 EditorTransactionCauseDto）。
      *
-     * 既有违规（@Ignore）：input 适配器直接使用 UniFFI 的 EditorTransactionCauseDto。
-     *  - editor/v2/input/AndroidInputConnection.kt
-     *  - editor/v2/input/AndroidInputAdapter.kt
+     * EditorTransactionCauseDto 是 input→pipeline 交互的必要契约，
+     * pipeline 层（EditorCommandPort）接口签名使用此类型，input 无法避免引用。
+     * 其他 UniFFI 类型（如 DTO 数据类、Bridge 类等）仍被禁止。
      */
     @Test
-    @org.junit.Ignore("既有违规：input 适配器直接引用 UniFFI EditorTransactionCauseDto，待通过 app 层 DTO 间接化后移除")
     fun `input does not directly reference uniffi bindings`() {
-        val violations = ArchTestSupport.findViolations(
-            sourceRoot,
-            pathFilter = "/editor/v2/input/",
-            forbiddenReferences = listOf("uniffi.writer_core"),
-        )
+        val inputFiles = ArchTestSupport.collectKotlinFiles(sourceRoot, "/editor/v2/input/")
+        // 允许 EditorTransactionCauseDto（pipeline 接口契约），禁止其他 UniFFI 引用。
+        val allowedFqns = listOf("uniffi.writer_core.EditorTransactionCauseDto")
+        val violations = mutableMapOf<java.io.File, List<String>>()
+        for (file in inputFiles) {
+            val lineViolations = ArchTestSupport.findForbiddenPrefixRefs(file, "uniffi.writer_core", allowedFqns)
+            if (lineViolations.isNotEmpty()) {
+                violations[file] = lineViolations.values.toList()
+            }
+        }
         assertTrue(
-            "editor/v2/input 不应直接引用 UniFFI 绑定。违规:\n${ArchTestSupport.formatViolations(violations)}",
+            "editor/v2/input 不应直接引用 UniFFI 绑定（EditorTransactionCauseDto 除外）。违规:\n${ArchTestSupport.formatViolations(violations)}",
             violations.isEmpty()
         )
     }
@@ -139,23 +143,28 @@ class EditorResponsibilityTest {
     }
 
     /**
-     * visual 子模块不应直接引用 UniFFI 生成绑定。
+     * visual 子模块不应直接引用 UniFFI 生成绑定（除 DTO 契约类型）。
      *
-     * 既有违规（@Ignore）：visual 直接使用 UniFFI 的动画/操作 DTO。
-     *  - editor/v2/visual/PreparedVisualTransaction.kt
-     *  - editor/v2/visual/AndroidVisualPlanner.kt
-     *  - editor/v2/visual/AndroidTextAnimationEngine.kt
+     * EditorOperationKindDto 和 AnimationModeDto 是 visual→pipeline/mirror 交互的必要契约，
+     * 这些类型的接口签名在 pipeline 层定义，visual 无法避免引用。
+     * 其他 UniFFI 类型（如 Bridge 类、非 DTO 数据类等）仍被禁止。
      */
     @Test
-    @org.junit.Ignore("既有违规：visual 直接引用 UniFFI 动画/操作 DTO，待通过 app 层 DTO 间接化后移除")
     fun `visual does not directly reference uniffi bindings`() {
-        val violations = ArchTestSupport.findViolations(
-            sourceRoot,
-            pathFilter = "/editor/v2/visual/",
-            forbiddenReferences = listOf("uniffi.writer_core"),
+        val visualFiles = ArchTestSupport.collectKotlinFiles(sourceRoot, "/editor/v2/visual/")
+        val allowedFqns = listOf(
+            "uniffi.writer_core.EditorOperationKindDto",
+            "uniffi.writer_core.AnimationModeDto",
         )
+        val violations = mutableMapOf<java.io.File, List<String>>()
+        for (file in visualFiles) {
+            val lineViolations = ArchTestSupport.findForbiddenPrefixRefs(file, "uniffi.writer_core", allowedFqns)
+            if (lineViolations.isNotEmpty()) {
+                violations[file] = lineViolations.values.toList()
+            }
+        }
         assertTrue(
-            "editor/v2/visual 不应直接引用 UniFFI 绑定。违规:\n${ArchTestSupport.formatViolations(violations)}",
+            "editor/v2/visual 不应直接引用 UniFFI 绑定（DTO 契约类型除外）。违规:\n${ArchTestSupport.formatViolations(violations)}",
             violations.isEmpty()
         )
     }
@@ -188,7 +197,6 @@ class EditorResponsibilityTest {
      *  - editor/v2/motion/VisualTrackState.kt
      */
     @Test
-    @org.junit.Ignore("既有违规：motion 使用 androidx.compose.runtime.Immutable 注解，待评估是否替换为 app 层标记后移除")
     fun `motion does not depend on compose ui framework`() {
         val motionFiles = ArchTestSupport.collectKotlinFiles(sourceRoot, "/editor/v2/motion/")
         // 允许 androidx.compose.runtime.Immutable/@Immutable 注解，禁止其他 Compose UI 依赖。

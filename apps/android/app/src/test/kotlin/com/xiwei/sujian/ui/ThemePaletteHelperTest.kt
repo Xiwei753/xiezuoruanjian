@@ -7,7 +7,7 @@ class ThemePaletteHelperTest {
 
     @Test
     fun themeColorSchemeDto_allFieldsAreCamelCase() {
-        val dto = uniffi.writer_core.ThemeColorSchemeDto(
+        val dto = com.xiwei.sujian.model.ThemeColorScheme(
             primary = "#006497",
             onPrimary = "#FFFFFF",
             primaryContainer = "#CCE5FF",
@@ -109,7 +109,7 @@ class ThemePaletteHelperTest {
 
     @Test
     fun themePaletteRecordDto_allFieldsAreCamelCase() {
-        val scheme = uniffi.writer_core.ThemeColorSchemeDto(
+        val scheme = com.xiwei.sujian.model.ThemeColorScheme(
             primary = "#006497",
             onPrimary = "#FFFFFF",
             primaryContainer = "#CCE5FF",
@@ -159,7 +159,7 @@ class ThemePaletteHelperTest {
             onTertiaryFixed = "#201634",
             onTertiaryFixedVariant = "#4D4462",
         )
-        val record = uniffi.writer_core.ThemePaletteRecordDto(
+        val record = com.xiwei.sujian.model.ThemePaletteRecord(
             schemaVersion = 1u,
             paletteId = "test-palette",
             paletteFingerprint = "fp123",
@@ -187,7 +187,7 @@ class ThemePaletteHelperTest {
 
     @Test
     fun dynamicColorResult_holdsBothSchemes() {
-        val scheme = uniffi.writer_core.ThemeColorSchemeDto(
+        val scheme = com.xiwei.sujian.model.ThemeColorScheme(
             primary = "#006497",
             onPrimary = "#FFFFFF",
             primaryContainer = "#CCE5FF",

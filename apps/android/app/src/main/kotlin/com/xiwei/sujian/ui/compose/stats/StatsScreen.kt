@@ -26,7 +26,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.R
-import com.xiwei.sujian.data.BridgeProvider
+import com.xiwei.sujian.data.StatsRepositoryProvider
 import com.xiwei.sujian.designsystem.component.SujianCard
 import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.model.ProjectWritingStatsItem
@@ -53,7 +53,7 @@ fun StatsScreen(
 
         withContext(Dispatchers.IO) {
             try {
-                val bridge = BridgeProvider.getStatsBridge(context)
+                val bridge = StatsRepositoryProvider.getStatsBridge(context)
                 when (val result = bridge.getWritingStatsSummary(startDate, endDate)) {
                     is com.xiwei.sujian.data.BridgeResult.Success -> summary = result.data
                     else -> {}

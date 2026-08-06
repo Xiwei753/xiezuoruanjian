@@ -383,6 +383,40 @@ fn mixed() {
             MODULE.ALLOWED_EXCEPTIONS.update(original)
 
     # ------------------------------------------------------------------
+    # 回归测试：Issue #597 移除的例外不得重新添加
+    # ------------------------------------------------------------------
+
+    def test_removed_kotlin_god_file_exceptions_not_readded(self) -> None:
+        """Issue #597 要求拆分的 Kotlin 文件可重新加入 god-file 白名单，
+        但原因必须包含具体技术理由和拆分/重构计划关键词。"""
+        removed_paths = {
+            Path("apps/android/app/src/main/kotlin/com/xiwei/sujian/ui/EditorViewModel.kt"),
+            Path("apps/android/app/src/main/kotlin/com/xiwei/sujian/ui/compose/settings/SettingsRoute.kt"),
+            Path("apps/android/app/src/main/kotlin/com/xiwei/sujian/editor/v2/coordinator/EditorSessionCoordinator.kt"),
+        }
+        required_keywords = ("拆分", "重构")
+        for (path, rule), reason in MODULE.ALLOWED_EXCEPTIONS.items():
+            if rule == "god-file" and path in removed_paths:
+                self.assertTrue(
+                    any(kw in reason for kw in required_keywords),
+                    f"Issue #597 文件 {path} 重新加入白名单时，"
+                    f"原因必须包含具体技术理由和拆分/重构计划关键词；"
+                    f"当前原因: {reason}",
+                )
+
+    def test_whitelist_entry_reasons_are_substantive(self) -> None:
+        """白名单原因必须说明'为什么不能拆分'而非'为什么大'。"""
+        weak_patterns = ("行数略增", "行数增加", "重格式化")
+        for (path, rule), reason in MODULE.ALLOWED_EXCEPTIONS.items():
+            for pattern in weak_patterns:
+                self.assertNotIn(
+                    pattern,
+                    reason,
+                    f"白名单 {path}({rule}) 原因包含弱理由'{pattern}'；"
+                    f"应说明为什么不能拆分而非为什么大",
+                )
+
+    # ------------------------------------------------------------------
     # 路径判断单元测试
     # ------------------------------------------------------------------
 

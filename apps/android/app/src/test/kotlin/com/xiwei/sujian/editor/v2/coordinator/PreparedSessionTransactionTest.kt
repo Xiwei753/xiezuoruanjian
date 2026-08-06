@@ -11,7 +11,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * #595 一：无副作用章节预准备契约测试。
+ * #595 一：无副作用章节预准备行为测试。
  *
  * 规则（issue 解决一）：准备阶段只允许读取 B 的记录、验证或新建 B session、
  * 读取 snapshot、返回 [PreparedSessionHandle]；禁止 commit/cancel A、修改
@@ -20,12 +20,16 @@ import org.robolectric.annotation.Config
  * 一次性执行 A→B 切换；Abort 按 newlyCreated 区分：新建才关闭 session，
  * 借用的既有 session 恢复 previousRecord。
  *
- * 测试环境无 native（session 创建返回 NotLoaded），因此 prepare 失败路径与
- * 手工构造 handle 的 commit/abort 路径在这里验证纯状态契约。
+ * 本测试通过真实驱动 [EditorSessionCoordinator] 的状态变化（registerTargetMeta /
+ * applyLocalEdit / prepareTargetSessionForCommit / commitPreparedSession /
+ * releasePreparedTarget）并断言可观察的 [EditorSessionState] 与 store 记录结果，
+ * 验证预准备事务的无副作用与原子提交契约。测试环境无 native（session 创建返回
+ * NotLoaded），因此 prepare 失败路径与手工构造 handle 的 commit/abort 路径在这里
+ * 验证纯状态契约。
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
-class PreparedSessionTransactionContractTest {
+class PreparedSessionTransactionTest {
 
     private fun createCoordinator(): EditorSessionCoordinator {
         return EditorSessionCoordinator(com.xiwei.sujian.data.AppServiceBridge(

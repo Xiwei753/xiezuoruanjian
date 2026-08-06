@@ -44,6 +44,7 @@ import kotlinx.coroutines.launch
 val LocalAndroidCapabilities = androidx.compose.runtime.compositionLocalOf<AndroidCapabilities> {
     AndroidCapabilities()
 }
+ @Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod", "LongMethod") // #597 技术债：待重构拆分
 
 @Composable
 fun SujianApp(

@@ -1,6 +1,6 @@
 package com.xiwei.sujian.editor.v2.motion
 
-import androidx.compose.runtime.Immutable
+import com.xiwei.sujian.model.Immutable
 import com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction
 
 /**

@@ -63,6 +63,7 @@ import com.xiwei.sujian.runtime.LocalSujianAppDependencies
  * 才显示编辑器；切换事务提交后、导航落地前，旧 pane 不显示 View、
  * 不安装输入回调，旧章节最后一次输入不可能写进新章节。
  */
+@Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod", "LongMethod") // #597 技术债：待重构拆分
 @Composable
 fun WritingPane(
     projectId: String,
