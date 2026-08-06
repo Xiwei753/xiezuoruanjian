@@ -3,92 +3,54 @@ package com.xiwei.sujian.editor.v2.coordinator
 import androidx.compose.runtime.Immutable
 
 /**
- * #595 一/二：带来源、contentVersion 和 revision 的唯一正文更新协议。
+ * #595 一/二/四：类型化正文更新协议。
  *
- * 替代 WritingPane 中 localContentGeneration / lastSeenContentGeneration /
- * externalContentHash / String.hashCode() 启发式来源判断。
+ * ## 直接回调事件（View → 会话层，不走事件总线）
  *
  * - [LocalInput]：IME/键盘输入经 Rust EditResult 产生，携带 transactionId。
- *   会话层先更新唯一 SessionState，再通知 ViewModel 保存；UI 回显带同一 revision，
- *   WritingPane 发现 revision 已应用，只更新保存状态，不 reset session。
- * - [RepositoryLoaded]：Repository 真实来源的正文版本事件，携带真实 fileHash。
- * - [SyncMerged]：同步合并后磁盘正文变更事件，携带 manifestRevision。
- * - [UndoRestored]：撤销/恢复后正文变更事件，携带 snapshotId。
- * - [ProgrammaticReplace]：程序化批量替换后正文变更事件，携带 commandId。
+ * - [UndoRestored]：撤销/恢复后正文变更，携带 snapshotId/transactionId。
+ * - [ProgrammaticReplace]：程序化替换后正文变更，携带 commandId/transactionId。
  *
- * #595 二：已删除 ExternalReplace/ExternalSource — UI 不得再伪造
- * revision+1/source；外部更新只由真实来源事件驱动，最终 revision 永远来自
- * reset 后的真实 Rust snapshot。事件进入 reducer 后比较 targetId、
- * contentVersion、Rust revision 和 lastAppliedTransactionId，只有确认
- * 事件属于当前章节且版本更新时才对 Core 执行一次 reset。
+ * 这些事件在 [EditorWindowHost.installContentCallback] 中由 View 的
+ * onLocalEdit / onExternalEdit 同步回调直接送入会话层 reducer，
+ * 不经 [com.xiwei.sujian.ui.TargetDocumentUpdateBus]。
+ *
+ * ## 事件总线事实（[TargetDocumentFact]）
+ *
+ * Repository 加载与同步合并走按 target 分区的事件总线。总线保存每个 target 的
+ * 完整文档事实（text + sourceVersion + baseVersion），新 collector 读到的是当前
+ * 文档事实；同 sourceVersion 重放由 reducer 幂等忽略，不会再次执行副作用。
+ *
+ * #595 二：已删除 ExternalReplace/ExternalSource — UI 不得伪造 revision/source；
+ * 外部更新只由真实来源事实驱动，最终 revision 永远来自 reset 后的真实 Rust snapshot。
+ * 已删除 contentVersion（进程内事件序号）— 新旧判断由 [DocumentVersion] 锚点完成。
  */
 @Immutable
 sealed interface EditorDocumentUpdate {
     val targetId: String
     val text: String
     val revision: Long
-    /** #595 二：全局递增的正文版本号 — 由 [EditorSessionCoordinator.nextContentVersion] 产生。
-     *  reducer 据此判断事件新旧，旧事件（contentVersion <= lastAppliedContentVersion）被跳过。 */
-    val contentVersion: Long
+    val transactionId: Long
 
     @Immutable
     data class LocalInput(
         override val targetId: String,
         override val text: String,
         override val revision: Long,
-        override val contentVersion: Long,
-        val transactionId: Long,
+        override val transactionId: Long,
         val operationKind: EditorOperationKind = EditorOperationKind.INSERT,
         /** #595 四：本次编辑后 Rust 的真实选区（UTF-8 字节）。
-         *  由 View 从 pipeline mirror 读取，会话层据此更新唯一 SessionState，
-         *  不再沿用旧 selection。-1 表示调用方未携带（保留旧值）。 */
+         *  由 View 从 pipeline mirror 读取，会话层据此更新唯一 SessionState。
+         *  -1 表示调用方未携带（保留旧值）。 */
         val selectionAnchorUtf8: Int = -1,
         val selectionHeadUtf8: Int = -1,
-    ) : EditorDocumentUpdate
-
-    /**
-     * #595 一：Repository 真实来源的正文更新事件。
-     *
-     * 由 [com.xiwei.sujian.ui.EditorViewModel] 在章节内容加载完成时发出，
-     * 携带 ChapterMeta 的真实 fileHash 和版本号，不再由 UI 根据字符串差异伪造
-     * revision/source。revision 只在会话已存在时用作新旧判断参考；
-     * 最终进入 [EditorSessionState] 的 revision 永远来自 reset 后的真实 Rust snapshot。
-     */
-    @Immutable
-    data class RepositoryLoaded(
-        override val targetId: String,
-        override val text: String,
-        /** Repository 章节文件的真实 hash（ChapterMeta.hash）— 新旧判断依据。 */
-        val fileHash: String,
-        override val revision: Long,
-        override val contentVersion: Long,
-    ) : EditorDocumentUpdate
-
-    /**
-     * #595 二：同步合并后磁盘正文变更事件。
-     *
-     * 由 [com.xiwei.sujian.ui.EditorViewModel] 在同步完成且当前章节磁盘内容
-     * 已变更时发出。携带同步 manifestRevision 用于版本比较。
-     * WritingPane 收集后经 [EditorSessionCoordinator.shouldApplyExternalUpdate]
-     * 判断是否执行一次 Core reset。
-     */
-    @Immutable
-    data class SyncMerged(
-        override val targetId: String,
-        override val text: String,
-        /** 同步 manifest 的版本号 — 用于版本比较。 */
-        val manifestRevision: Long,
-        /** 合并后磁盘文件的真实 hash — 幂等去重。 */
-        val fileHash: String,
-        override val revision: Long,
-        override val contentVersion: Long,
     ) : EditorDocumentUpdate
 
     /**
      * #595 二：撤销/恢复后正文变更事件。
      *
      * 由 [EditorWindowHost] 在 SujianEditorView.performUndo/performRedo 产生
-     * EditResult 后发出。携带 snapshotId 用于版本比较。
+     * EditResult 后发出（PipelineOutput 携带来源，无可变侧信道）。
      * 撤销/恢复是本地发起的操作，revision 来自 Rust EditResult，
      * 但来源被类型化以区分于普通本地输入。
      */
@@ -99,8 +61,7 @@ sealed interface EditorDocumentUpdate {
         /** Rust 快照 ID — 用于版本比较。 */
         val snapshotId: Long,
         override val revision: Long,
-        override val contentVersion: Long,
-        val transactionId: Long,
+        override val transactionId: Long,
         val selectionAnchorUtf8: Int = -1,
         val selectionHeadUtf8: Int = -1,
     ) : EditorDocumentUpdate
@@ -108,8 +69,8 @@ sealed interface EditorDocumentUpdate {
     /**
      * #595 二：程序化批量替换后正文变更事件。
      *
-     * 由 [EditorWindowHost] 在 applyTargetCommand(ReplaceAll) 产生
-     * EditResult 后发出。携带 commandId 用于版本比较。
+     * 由 [EditorWindowHost] 在 applyTargetCommand(ReplaceAll/Replace) 产生
+     * EditResult 后发出（PipelineOutput 携带 PROGRAMMATIC 来源，无可变侧信道）。
      * 程序化替换是本地发起的操作，revision 来自 Rust EditResult，
      * 但来源被类型化以区分于普通本地输入。
      */
@@ -120,12 +81,40 @@ sealed interface EditorDocumentUpdate {
         /** 程序化命令 ID — 用于版本比较。 */
         val commandId: Long,
         override val revision: Long,
-        override val contentVersion: Long,
-        val transactionId: Long,
+        override val transactionId: Long,
         val selectionAnchorUtf8: Int = -1,
         val selectionHeadUtf8: Int = -1,
     ) : EditorDocumentUpdate
 }
+
+/** 文档事实来源 — 决定事实应用后的 [EditorSessionOrigin]。 */
+@Immutable
+enum class DocumentFactOrigin {
+    /** Repository 章节加载（真实 fileHash）。 */
+    REPOSITORY_LOAD,
+    /** 同步合并后磁盘正文变更。 */
+    SYNC_MERGED,
+}
+
+/**
+ * #595 二：事件总线保存的每 target 完整文档事实 — 不是"最后一个事件对象"。
+ *
+ * 由 [com.xiwei.sujian.ui.EditorViewModel] 在章节加载完成 / 同步合并检测时发布。
+ * WritingPane collector 经 [EditorSessionCoordinator.shouldApplyExternalContent]
+ * 判断是否执行一次 Core reset；同 sourceVersion 重放幂等忽略。
+ */
+@Immutable
+data class TargetDocumentFact(
+    val targetId: String,
+    val text: String,
+    /** 本次事实的文档版本（contentHash + 同步锚点）。 */
+    val sourceVersion: DocumentVersion,
+    /** 本地正文基于的版本 — 用于判断外部更新是否基于旧 base。 */
+    val baseVersion: DocumentVersion,
+    val origin: DocumentFactOrigin,
+    /** 仅供参考的 Rust revision；最终 revision 来自 reset 后的真实 snapshot。 */
+    val revision: Long = 0L,
+)
 
 @Immutable
 enum class EditorOperationKind {

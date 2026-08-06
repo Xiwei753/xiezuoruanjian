@@ -98,6 +98,9 @@ class AppServiceBridge(val holder: WriterAppServiceHolder) {
     fun clearSyncSecretsOverride() = syncBridge.clearSyncSecretsOverride()
     fun saveSyncSecretsForGeneration(generation: ULong, secrets: SyncSecrets) = syncBridge.saveSyncSecretsForGeneration(generation, secrets)
     fun loadSyncSecretsForGeneration(generation: ULong) = syncBridge.loadSyncSecretsForGeneration(generation)
+
+    /** #595 五：删除指定 generation 的安全存储凭据（旧版本清理）。 */
+    fun deleteSyncSecretsForGeneration(generation: ULong) = syncBridge.deleteSyncSecretsForGeneration(generation)
     fun loadSyncState() = syncBridge.loadSyncState()
     fun getSyncCapability() = syncBridge.getSyncCapability()
     fun performSyncDiagnostics(config: SyncConfig) = syncBridge.performSyncDiagnostics(config)

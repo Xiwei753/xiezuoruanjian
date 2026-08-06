@@ -92,6 +92,23 @@ class SyncProfileStore(context: Context) {
         }
     }
 
+    /**
+     * #595 五：清理崩溃遗留的未提交 staged 标记 — staged 标记不是
+     * [activeGeneration] 时清除（staged 但从未提交的 generation 在下次
+     * 提交时会被覆盖，这里主动清理避免 DataStore 残留）。
+     */
+    suspend fun clearStaleStagedMarkers(activeGeneration: Long) {
+        dataStore.edit { prefs ->
+            if ((prefs[PREF_STAGED_CONFIG_GEN] ?: -1L) != activeGeneration) {
+                prefs.remove(PREF_STAGED_CONFIG_GEN)
+                prefs.remove(PREF_STAGED_CONFIG_JSON)
+            }
+            if ((prefs[PREF_STAGED_SECRETS_GEN] ?: -1L) != activeGeneration) {
+                prefs.remove(PREF_STAGED_SECRETS_GEN)
+            }
+        }
+    }
+
     /** 测试隔离：清空全部提交状态。 */
     suspend fun clear() {
         dataStore.edit { prefs ->
@@ -157,15 +174,4 @@ sealed interface SyncProfileReadResult {
     data class Found(val snapshot: SyncProfileSnapshot) : SyncProfileReadResult
     data class NotConfigured(val snapshot: SyncProfileSnapshot) : SyncProfileReadResult
     data class Failed(val kind: SyncFailureKind, val message: String?) : SyncProfileReadResult
-}
-
-/**
- * #595 五：将 [SyncProfileReadResult] 解包为 config+secrets Pair — 供仅需
- * config/secrets 内容的调用方使用。[Failed] 返回 null（保留当前值），
- * [Found]/[NotConfigured] 返回 snapshot 中的 config+secrets。
- */
-fun SyncProfileReadResult.toConfigSecretsOrNull(): Pair<SyncConfig, SyncSecrets>? = when (this) {
-    is SyncProfileReadResult.Found -> snapshot.config to snapshot.secrets
-    is SyncProfileReadResult.NotConfigured -> snapshot.config to snapshot.secrets
-    is SyncProfileReadResult.Failed -> null
 }

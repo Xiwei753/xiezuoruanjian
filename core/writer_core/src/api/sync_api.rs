@@ -75,6 +75,13 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// #595 五：删除指定 generation 的安全存储凭据（旧版本清理）。
+    pub fn delete_sync_secrets_for_generation(&self, generation: u64) -> ApiResult<()> {
+        self.core()
+            .delete_sync_secrets_for_generation(generation)
+            .map_err(Into::into)
+    }
+
     /// 加载同步状态（上次同步时间、远端 commit 等）。
     pub fn load_sync_state(&self) -> ApiResult<SyncStateDto> {
         self.core()

@@ -54,6 +54,11 @@ class SyncBridge internal constructor(private val holder: WriterAppServiceHolder
         holder.service.loadSyncSecretsForGeneration(generation)?.toModel()
     }
 
+    /** #595 五：删除指定 generation 的安全存储凭据（旧版本清理）。 */
+    fun deleteSyncSecretsForGeneration(generation: ULong): BridgeResult<Unit> = holder.wrapResult {
+        holder.service.deleteSyncSecretsForGeneration(generation)
+    }
+
     fun loadSyncState(): BridgeResult<SyncState> = holder.wrapResult {
         holder.service.loadSyncState().toModel()
     }

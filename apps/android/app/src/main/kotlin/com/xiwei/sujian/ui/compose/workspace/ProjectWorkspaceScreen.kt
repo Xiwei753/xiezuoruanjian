@@ -21,8 +21,10 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
 import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
+import com.xiwei.sujian.editor.v2.compose.LocalEditorWindowHost
 import com.xiwei.sujian.model.AvoidRegion
 import com.xiwei.sujian.model.AvoidRegionKind
+import com.xiwei.sujian.runtime.LocalSujianAppDependencies
 import com.xiwei.sujian.ui.compose.SujianAppState
 import com.xiwei.sujian.ui.compose.editor.SujianEditorHost
 import com.xiwei.sujian.ui.compose.workbench.component.SujianWorkbench
@@ -100,9 +102,23 @@ private fun WorkbenchWorkspaceContent(
     val configuration = LocalConfiguration.current
     val dims = LocalSujianDimensions.current
     val workbenchVm: WorkbenchViewModel = viewModel()
-    // #595 一：章节切换事务入口 — 与 WritingPane 内的 EditorViewModel 共享同一
-    // Activity 级实例（viewModel() 解析到同一 ViewModelStoreOwner）。
-    val editorViewModel: com.xiwei.sujian.ui.EditorViewModel = viewModel()
+    val deps = LocalSujianAppDependencies.current
+    // #595 一：章节切换事务入口 — 显式 Factory 注入进程级容器依赖 + 会话层协调器。
+    // 与 WritingPane 内 viewModel(factory=...) 解析到同一 Activity 级实例。
+    val editorHost = LocalEditorWindowHost.current
+    val editorViewModel: com.xiwei.sujian.ui.EditorViewModel = viewModel(
+        factory = com.xiwei.sujian.ui.EditorViewModel.Factory(context.applicationContext as android.app.Application, deps, editorHost?.sessionCoordinator)
+    )
+    // #595 一：尽早初始化 — 章节导航面板里的 requestOpenChapter 需要在 WritingPane
+    // 组合前就具备 Repository 与 session 协调器（提交前预准备 Rust session）。
+    LaunchedEffect(Unit) {
+        editorViewModel.initialize(
+            deps.workspaceRepository,
+            deps.settingsRepository,
+            deps.syncStatusRepository,
+            editorHost?.sessionCoordinator,
+        )
+    }
     val coroutineScope = rememberCoroutineScope()
 
     val widthDp = configuration.screenWidthDp

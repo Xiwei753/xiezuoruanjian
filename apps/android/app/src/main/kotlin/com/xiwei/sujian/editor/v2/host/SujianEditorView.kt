@@ -48,9 +48,6 @@ class SujianEditorView @JvmOverloads constructor(
     private var scrollY: Float = 0f
     private var maxScrollY: Float = 0f
 
-    /** #595 二：标记当前 pipeline 输出的编辑来源 — 区分普通输入、撤销/恢复、程序化替换。 */
-    private var pendingEditSource: EditorEditSource = EditorEditSource.NORMAL
-
     fun getScrollXPos(): Float = scrollX
     fun getScrollYPos(): Float = scrollY
 
@@ -106,24 +103,24 @@ class SujianEditorView @JvmOverloads constructor(
         handlePipelineOutput(output)
     }
 
-    fun replaceRangeTyped(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto = EditorTransactionCauseDto.TYPING, beforePatch: (() -> Unit)? = null) {
-        val output = pipeline.replaceRangeTyped(byteStart, byteEndExclusive, replacementText, originalText, cause, beforePatch)
+    fun replaceRangeTyped(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto = EditorTransactionCauseDto.TYPING, beforePatch: (() -> Unit)? = null, source: EditorEditSource = EditorEditSource.NORMAL) {
+        val output = pipeline.replaceRangeTyped(byteStart, byteEndExclusive, replacementText, originalText, cause, beforePatch, source)
         handlePipelineOutput(output)
     }
 
-    fun setSelectionTyped(anchorByteOffset: Int, headByteOffset: Int) {
-        val output = pipeline.setSelectionTyped(anchorByteOffset, headByteOffset)
+    fun setSelectionTyped(anchorByteOffset: Int, headByteOffset: Int, source: EditorEditSource = EditorEditSource.NORMAL) {
+        val output = pipeline.setSelectionTyped(anchorByteOffset, headByteOffset, source)
         handlePipelineOutput(output)
     }
 
     fun performUndo() {
-        pendingEditSource = EditorEditSource.UNDO
+        // #595 四：来源由 PipelineOutput 天然携带（UNDO），无可变侧信道。
         val output = pipeline.performUndo()
         handlePipelineOutput(output)
     }
 
     fun performRedo() {
-        pendingEditSource = EditorEditSource.REDO
+        // #595 四：来源由 PipelineOutput 天然携带（REDO），无可变侧信道。
         val output = pipeline.performRedo()
         handlePipelineOutput(output)
     }
@@ -143,9 +140,11 @@ class SujianEditorView @JvmOverloads constructor(
                 scrollY = scrollY.coerceIn(0f, maxScrollY)
                 if (!suppressContentCallback && output.result.isApplied()) {
                     val editText = pipeline.getText()
-                    val source = pendingEditSource
-                    // #595 二：根据编辑来源分派 — 撤销/恢复/程序化替换走 onExternalEdit
-                    // 类型化事件，普通输入走 onLocalEdit。两者都先更新会话层唯一 SessionState。
+                    val source = output.source
+                    // #595 二/四：根据输出携带的来源分派 — 撤销/恢复/程序化替换走
+                    // onExternalEdit 类型化事件，普通输入走 onLocalEdit。来源在命令
+                    // 与 PipelineOutput 本身携带，不再使用 pendingEditSource 可变
+                    // 侧信道（NeedReload/Stale 不会污染下一条命令的来源分类）。
                     // #595 五：selection-only 操作（CURSOR_ONLY）没有 displayPatches，
                     // 但会话层 selection 必须更新 — 回调不受 displayPatches 门控，
                     // 只有 onContentChanged（ViewModel 保存）仍按文字 patch 门控。
@@ -172,7 +171,6 @@ class SujianEditorView @JvmOverloads constructor(
                         onContentChanged?.invoke(editText)
                     }
                 }
-                pendingEditSource = EditorEditSource.NORMAL
                 invalidate()
                 if (pipeline.hasActiveAnimation()) {
                     requestAnimationFrame()
@@ -269,11 +267,13 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     fun replaceRange(start: Int, end: Int, newText: String) {
-        replaceRangeTyped(start, end, newText, "", EditorTransactionCauseDto.PROGRAMMATIC)
+        // #595 四：程序化替换入口显式携带 PROGRAMMATIC 来源 —
+        // 其他程序化入口不再误走普通本地输入路径。
+        replaceRangeTyped(start, end, newText, "", EditorTransactionCauseDto.PROGRAMMATIC, source = EditorEditSource.PROGRAMMATIC)
     }
 
     fun replaceAll(searchStr: String, replaceStr: String) {
-        pendingEditSource = EditorEditSource.PROGRAMMATIC
+        // #595 四：来源由 PipelineOutput 天然携带（PROGRAMMATIC），无可变侧信道。
         val output = pipeline.replaceAll(searchStr, replaceStr)
         if (output != null) {
             handlePipelineOutput(output)
@@ -1012,9 +1012,9 @@ interface EditorKernelBridge {
 }
 
 /**
- * #595 二：编辑来源标记 — 区分普通输入、撤销/恢复、程序化替换。
- * 由 [SujianEditorView] 在 performUndo/performRedo/replaceAll 时设置，
- * [SujianEditorView.handlePipelineOutputInternal] 读取后分派到不同回调。
+ * #595 二/四：编辑来源标记 — 区分普通输入、撤销/恢复、程序化替换。
+ * 由 pipeline 命令与 [PipelineOutput.Edited.source] 天然携带，
+ * 不再使用 View 上的可变侧信道标记。
  */
 enum class EditorEditSource {
     NORMAL,

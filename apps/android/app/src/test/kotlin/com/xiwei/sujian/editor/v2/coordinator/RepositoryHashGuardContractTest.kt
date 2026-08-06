@@ -6,16 +6,14 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * #595 二：Reducer 同 hash 守卫契约测试。
+ * #595 二：Reducer 文档版本守卫契约测试。
  *
- * 规则（“正文事件版本顺序”一节）：同一个 hash 的事件无论正文当前是否因本地输入
- * 发生变化，都不能再次作为新 Repository 版本覆盖正文 — hash 相同意味着仓库/磁盘
- * 内容没有变化，正文差异只可能来自本地输入/未保存内容。
- *
- * 覆盖场景（issue 原文）：加载 H1 / 正文 A → 用户输入得到正文 B，lastRepositoryHash
- * 仍是 H1 → 旧 RepositoryLoaded(H1, A) 晚到 → 不得因正文不同而再次应用 A（本地
- * 未保存内容不得被旧加载事件覆盖）。SyncMerged 的同一规则：迟到的同 hash 合并
- * 事件不得覆盖本地输入。
+ * 规则（issue 解决二）：
+ * - 同 sourceVersion 重放 → IgnoreReplay（幂等，新 collector 读到当前文档事实
+ *   也不会再次执行副作用）；
+ * - localDirty=true → IgnoreDirtyConflict — 禁止直接 reset（本地未保存内容
+ *   不得被旧加载/迟到合并事件覆盖）；
+ * - 正文一致 → IgnoreSameContent（无需 reset）。
  */
 class RepositoryHashGuardContractTest {
 
@@ -26,28 +24,34 @@ class RepositoryHashGuardContractTest {
     }
 
     @Test
-    fun repositoryLoaded_sameHash_neverReappliesOverLocalInput() {
+    fun repositoryLoad_sameVersion_neverReappliesOverLocalInput() {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
 
         // 加载 H1 / 正文 A
-        val load = EditorDocumentUpdate.RepositoryLoaded("t1", "A", fileHash = "hash-1", revision = 0L, contentVersion = 1L)
-        assertTrue(coordinator.shouldApplyRepositoryLoad(load))
-        coordinator.applyRepositoryLoaded(load)
-        assertEquals("hash-1", coordinator.sessionState.lastRepositoryHash)
+        val load = TargetDocumentFact(
+            "t1", "A",
+            DocumentVersion(contentHash = "hash-1"),
+            DocumentVersion(),
+            DocumentFactOrigin.REPOSITORY_LOAD,
+        )
+        coordinator.applyExternalContentFact(load)
+        assertEquals("hash-1", coordinator.sessionState.committedVersion.contentHash)
 
-        // 用户输入得到正文 B（lastRepositoryHash 仍是 H1）
+        // 用户输入得到正文 B（committedVersion 仍是 H1，localDirty=true）
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("t1", "B", revision = 1L, contentVersion = 2L, transactionId = 7L)
+            EditorDocumentUpdate.LocalInput("t1", "B", revision = 1L, transactionId = 7L)
         )
         assertEquals("B", coordinator.sessionState.text)
+        assertTrue(coordinator.sessionState.localDirty)
 
-        // 旧的 RepositoryLoaded(H1, A) 晚到（contentVersion 更新，但 hash 相同）
-        val lateLoad = EditorDocumentUpdate.RepositoryLoaded("t1", "A", fileHash = "hash-1", revision = 0L, contentVersion = 3L)
-        assertFalse(
-            "#595 二：同一 hash 的加载事件不得覆盖本地输入（issue：旧 RepositoryLoaded " +
-            "因正文不同再次应用 A → 本地未保存内容被旧加载事件覆盖）",
-            coordinator.shouldApplyRepositoryLoad(lateLoad),
+        // 旧的 RepositoryLoaded(H1, A) 重放 → 幂等忽略（同 sourceVersion 先于
+        // dirty 判断），不得覆盖本地输入（issue：旧加载事件不得覆盖本地未保存内容）。
+        val decision = coordinator.shouldApplyExternalContent(load)
+        assertTrue(
+            "#595 二：同版本重放必须被忽略（IgnoreReplay），不得覆盖本地输入",
+            decision == ExternalContentDecision.IgnoreReplay ||
+                decision == ExternalContentDecision.IgnoreDirtyConflict,
         )
         // 状态必须保持本地输入 B
         assertEquals("B", coordinator.sessionState.text)
@@ -55,85 +59,135 @@ class RepositoryHashGuardContractTest {
     }
 
     @Test
-    fun repositoryLoaded_sameHash_replayIsIdempotent() {
+    fun repositoryLoad_sameVersion_notDirty_replayIsIdempotent() {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
 
-        val first = EditorDocumentUpdate.RepositoryLoaded("t1", "A", fileHash = "hash-1", revision = 0L, contentVersion = 1L)
-        assertTrue(coordinator.shouldApplyRepositoryLoad(first))
-        coordinator.applyRepositoryLoaded(first)
+        val first = TargetDocumentFact(
+            "t1", "A",
+            DocumentVersion(contentHash = "hash-1"),
+            DocumentVersion(),
+            DocumentFactOrigin.REPOSITORY_LOAD,
+        )
+        coordinator.applyExternalContentFact(first)
 
-        // 同一 hash + 同一正文重放：幂等，不 reset。
-        assertFalse(
-            "同一 hash 重放必须被拒绝（无论正文是否相同）",
-            coordinator.shouldApplyRepositoryLoad(first),
+        // 同一 sourceVersion 重放：幂等忽略。
+        assertEquals(
+            "同 sourceVersion 重放必须 IgnoreReplay",
+            ExternalContentDecision.IgnoreReplay,
+            coordinator.shouldApplyExternalContent(first),
         )
     }
 
     @Test
-    fun repositoryLoaded_newHash_stillApplies() {
+    fun repositoryLoad_newVersion_stillApplies() {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
 
-        val first = EditorDocumentUpdate.RepositoryLoaded("t1", "A", fileHash = "hash-1", revision = 0L, contentVersion = 1L)
-        coordinator.applyRepositoryLoaded(first)
+        val first = TargetDocumentFact(
+            "t1", "A",
+            DocumentVersion(contentHash = "hash-1"),
+            DocumentVersion(),
+            DocumentFactOrigin.REPOSITORY_LOAD,
+        )
+        coordinator.applyExternalContentFact(first)
 
-        // 新 hash（仓库内容真实变化）→ 仍可应用。
-        val second = EditorDocumentUpdate.RepositoryLoaded("t1", "C", fileHash = "hash-2", revision = 0L, contentVersion = 2L)
-        assertTrue("新 hash 的加载事件必须可应用", coordinator.shouldApplyRepositoryLoad(second))
+        // 新版本（仓库内容真实变化）→ 仍可应用。
+        val second = TargetDocumentFact(
+            "t1", "C",
+            DocumentVersion(contentHash = "hash-2"),
+            DocumentVersion(contentHash = "hash-1"),
+            DocumentFactOrigin.REPOSITORY_LOAD,
+        )
+        assertEquals("新版本的加载事实必须可应用", ExternalContentDecision.Apply, coordinator.shouldApplyExternalContent(second))
     }
 
     @Test
-    fun syncMerged_sameHash_neverReappliesOverLocalInput() {
+    fun syncMerged_sameVersion_neverReappliesOverLocalInput() {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
 
-        // 同步合并 H1 → 应用
-        val merge = EditorDocumentUpdate.SyncMerged("t1", "C", manifestRevision = 1L, fileHash = "hash-1", revision = 0L, contentVersion = 1L)
-        assertTrue(coordinator.shouldApplyExternalUpdate(merge))
-        coordinator.applySyncMerged(merge)
-        assertEquals("hash-1", coordinator.sessionState.lastRepositoryHash)
+        // 同步合并 H1 → 记录版本
+        val merge = TargetDocumentFact(
+            "t1", "C",
+            DocumentVersion(contentHash = "hash-1", syncManifestRevision = 1L),
+            DocumentVersion(),
+            DocumentFactOrigin.SYNC_MERGED,
+        )
+        coordinator.applyExternalContentFact(merge)
+        assertEquals("hash-1", coordinator.sessionState.committedVersion.contentHash)
 
-        // 用户输入得到 D（lastRepositoryHash 仍是 H1）
+        // 用户输入得到 D（committedVersion 仍是 H1，localDirty=true）
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("t1", "D", revision = 1L, contentVersion = 2L, transactionId = 9L)
+            EditorDocumentUpdate.LocalInput("t1", "D", revision = 1L, transactionId = 9L)
         )
 
-        // 下一个同步周期重复发射同一 hash 的合并事件（contentVersion 更新）
-        val reEmit = EditorDocumentUpdate.SyncMerged("t1", "C", manifestRevision = 2L, fileHash = "hash-1", revision = 0L, contentVersion = 3L)
-        assertFalse(
-            "#595 二：同一 hash 的合并事件不得覆盖本地输入 — 磁盘正文未变化时，" +
-            "正文差异只可能来自本地输入",
-            coordinator.shouldApplyExternalUpdate(reEmit),
+        // 下一个同步周期重复发射同一版本的合并事实 → 幂等忽略，不得覆盖本地输入。
+        val decision = coordinator.shouldApplyExternalContent(merge)
+        assertTrue(
+            "#595 二：同版本合并事实必须被忽略（IgnoreReplay），不得覆盖本地输入",
+            decision == ExternalContentDecision.IgnoreReplay ||
+                decision == ExternalContentDecision.IgnoreDirtyConflict,
         )
         assertEquals("D", coordinator.sessionState.text)
         assertEquals(EditorSessionOrigin.LOCAL_INPUT, coordinator.sessionState.origin)
     }
 
     @Test
-    fun syncMerged_newHash_stillApplies() {
+    fun syncMerged_newVersion_stillApplies() {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
 
-        val first = EditorDocumentUpdate.SyncMerged("t1", "C", manifestRevision = 1L, fileHash = "hash-1", revision = 0L, contentVersion = 1L)
-        coordinator.applySyncMerged(first)
+        val first = TargetDocumentFact(
+            "t1", "C",
+            DocumentVersion(contentHash = "hash-1", syncManifestRevision = 1L),
+            DocumentVersion(),
+            DocumentFactOrigin.SYNC_MERGED,
+        )
+        coordinator.applyExternalContentFact(first)
 
-        // 新 hash（磁盘内容真实变化）→ 仍可应用。
-        val second = EditorDocumentUpdate.SyncMerged("t1", "E", manifestRevision = 2L, fileHash = "hash-2", revision = 0L, contentVersion = 2L)
-        assertTrue("新 hash 的合并事件必须可应用", coordinator.shouldApplyExternalUpdate(second))
+        // 新版本（磁盘内容真实变化）→ 仍可应用。
+        val second = TargetDocumentFact(
+            "t1", "E",
+            DocumentVersion(contentHash = "hash-2", syncManifestRevision = 2L),
+            DocumentVersion(contentHash = "hash-1"),
+            DocumentFactOrigin.SYNC_MERGED,
+        )
+        assertEquals("新版本的合并事实必须可应用", ExternalContentDecision.Apply, coordinator.shouldApplyExternalContent(second))
     }
 
     @Test
-    fun syncMerged_emptyHash_usesVersionAndTextRulesOnly() {
+    fun syncMerged_emptyVersion_isRejected() {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
 
-        // 空 fileHash 不触发 hash 守卫 — 版本旧则拒绝，版本新且正文不同则应用。
-        val first = EditorDocumentUpdate.SyncMerged("t1", "C", manifestRevision = 1L, fileHash = "", revision = 0L, contentVersion = 1L)
-        assertTrue(coordinator.shouldApplyExternalUpdate(first))
-        coordinator.applySyncMerged(first)
+        val empty = TargetDocumentFact(
+            "t1", "C", DocumentVersion(), DocumentVersion(), DocumentFactOrigin.SYNC_MERGED,
+        )
+        assertEquals("空版本锚点必须被拒绝", ExternalContentDecision.IgnoreEmptyVersion, coordinator.shouldApplyExternalContent(empty))
+    }
 
-        val old = EditorDocumentUpdate.SyncMerged("t1", "X", manifestRevision = 1L, fileHash = "", revision = 0L, contentVersion = 0L)
-        assertFalse("旧 contentVersion 必须被拒绝", coordinator.shouldApplyExternalUpdate(old))
+    @Test
+    fun sameContentDifferentVersion_isIgnoredWithoutReset() {
+        val coordinator = createCoordinator()
+        coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
+
+        // 会话正文已是 "C"（如预准备 session 装载），外部事实正文相同 → IgnoreSameContent。
+        coordinator.applyLocalEdit(
+            EditorDocumentUpdate.LocalInput("t1", "C", revision = 1L, transactionId = 1L)
+        )
+        coordinator.markSaved("t1", DocumentVersion(contentHash = "saved-c"))
+        assertFalse(coordinator.sessionState.localDirty)
+
+        val sameText = TargetDocumentFact(
+            "t1", "C",
+            DocumentVersion(contentHash = "hash-2"),
+            DocumentVersion(contentHash = "hash-1"),
+            DocumentFactOrigin.REPOSITORY_LOAD,
+        )
+        assertEquals(
+            ExternalContentDecision.IgnoreSameContent,
+            coordinator.shouldApplyExternalContent(sameText),
+        )
     }
 }

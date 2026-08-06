@@ -3,13 +3,17 @@ package com.xiwei.sujian.editor.v2.coordinator
 import androidx.compose.runtime.Immutable
 
 /**
- * #595 一：会话层唯一可观察状态 — 替代 targetTexts 并行缓存与 generation/hashCode 猜测。
+ * #595 一/二：会话层唯一可观察状态。
  *
  * 由 [EditorSessionCoordinator] 维护，通过 [StateFlow] 暴露给 Compose 消费者。
- * 包含当前正文、revision、选区、最后应用的事务 ID 和来源类型。
+ * 包含当前正文、revision、选区、最后应用的事务 ID、来源类型和文档版本事实。
  *
  * WritingPane 收集该状态：本地输入时 revision 已在 SessionState 中更新，
  * UI 回显只更新保存状态，不触发 resetPersistentSession。
+ *
+ * #595 二：lastRepositoryHash/lastAppliedContentVersion（进程内事件序号）已删除，
+ * 版本事实由 [committedVersion]/[sessionBaseVersion]/[localDirty] 表达 —
+ * 锚点是 Repository/Core 的真实文档版本（contentHash + 同步 manifest）。
  */
 @Immutable
 data class EditorSessionState(
@@ -22,14 +26,16 @@ data class EditorSessionState(
     val lastAppliedTransactionId: Long = 0L,
     val origin: EditorSessionOrigin = EditorSessionOrigin.NONE,
     val bindingState: WindowBindingState = WindowBindingState.Idle,
-    /** #595 一：最后应用的 Repository 正文 hash — 幂等去重 RepositoryLoaded 事件。 */
-    val lastRepositoryHash: String = "",
     /** #595 三：编辑状态 — 从唯一 SessionState 派生，不再独立可写。 */
     val editingState: EditingState = EditingState.IDLE,
     /** #595 三：活动目标 ID — 从唯一 SessionState 派生，不再独立可写。 */
     val activeTargetId: String? = null,
-    /** #595 二：最后应用的外部更新 contentVersion — 旧事件（<= 此值）被 reducer 跳过。 */
-    val lastAppliedContentVersion: Long = 0L,
+    /** #595 二：最后应用的文档版本 — 同 sourceVersion 重放被幂等忽略。 */
+    val committedVersion: DocumentVersion = DocumentVersion(),
+    /** #595 二：Rust session 创建/重置时基于的文档版本 — 外部事件据此判断是否基于旧 base。 */
+    val sessionBaseVersion: DocumentVersion = DocumentVersion(),
+    /** #595 二：存在尚未落盘的本地编辑 — true 时外部版本禁止直接 reset（冲突路径）。 */
+    val localDirty: Boolean = false,
 )
 
 /**

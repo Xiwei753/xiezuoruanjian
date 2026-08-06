@@ -440,10 +440,13 @@ class EditorWindowHost(
                 val commandPort = view.getPipeline()
                 when (command) {
                     is TargetCommand.Replace -> {
+                        // #595 四：程序化替换命令显式携带 PROGRAMMATIC 来源 —
+                        // 输出天然携带来源，不再依赖 View 侧可变标记。
                         val pipelineOutput = commandPort.replaceRangeTyped(
                             command.byteStart, command.byteEndExclusive,
                             command.replacementText, command.originalText,
-                            uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC
+                            uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
+                            source = com.xiwei.sujian.editor.v2.host.EditorEditSource.PROGRAMMATIC,
                         )
                         view.handlePipelineOutput(pipelineOutput)
                     }
@@ -624,7 +627,6 @@ class EditorWindowHost(
                     targetId = target.targetId,
                     text = text,
                     revision = revision,
-                    contentVersion = sessionCoordinator.nextContentVersion(),
                     transactionId = transactionId,
                     operationKind = operationKind,
                     selectionAnchorUtf8 = selectionAnchorUtf8,
@@ -632,10 +634,9 @@ class EditorWindowHost(
                 )
             )
         }
-        // #595 二：类型化外部编辑回调 — 撤销/恢复/程序化替换走类型化事件，
-        // 区分来源并携带 contentVersion，由 Coordinator 的 applyExternalUpdate 统一处理。
+        // #595 二/四：类型化外部编辑回调 — 撤销/恢复/程序化替换走类型化事件，
+        // 来源由 PipelineOutput 天然携带，由 Coordinator 的 apply* 统一处理。
         view.onExternalEdit = { source, text, revision, transactionId, selectionAnchorUtf8, selectionHeadUtf8 ->
-            val contentVersion = sessionCoordinator.nextContentVersion()
             when (source) {
                 com.xiwei.sujian.editor.v2.host.EditorEditSource.UNDO,
                 com.xiwei.sujian.editor.v2.host.EditorEditSource.REDO -> {
@@ -645,7 +646,6 @@ class EditorWindowHost(
                             text = text,
                             snapshotId = transactionId,
                             revision = revision,
-                            contentVersion = contentVersion,
                             transactionId = transactionId,
                             selectionAnchorUtf8 = selectionAnchorUtf8,
                             selectionHeadUtf8 = selectionHeadUtf8,
@@ -659,7 +659,6 @@ class EditorWindowHost(
                             text = text,
                             commandId = transactionId,
                             revision = revision,
-                            contentVersion = contentVersion,
                             transactionId = transactionId,
                             selectionAnchorUtf8 = selectionAnchorUtf8,
                             selectionHeadUtf8 = selectionHeadUtf8,
@@ -673,7 +672,6 @@ class EditorWindowHost(
                             targetId = target.targetId,
                             text = text,
                             revision = revision,
-                            contentVersion = contentVersion,
                             transactionId = transactionId,
                             operationKind = EditorOperationKind.REPLACE,
                             selectionAnchorUtf8 = selectionAnchorUtf8,

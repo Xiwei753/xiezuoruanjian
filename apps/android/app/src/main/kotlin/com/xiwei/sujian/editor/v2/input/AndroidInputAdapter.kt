@@ -122,12 +122,12 @@ class AndroidInputAdapter(
     }
 
     fun sendReplaceToKernel(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto) {
-        val output = commandPort.replaceRangeTyped(byteStart, byteEndExclusive, replacementText, originalText, cause, null)
+        val output = commandPort.replaceRangeTyped(byteStart, byteEndExclusive, replacementText, originalText, cause, null, com.xiwei.sujian.editor.v2.host.EditorEditSource.NORMAL)
         onPipelineOutput?.invoke(output)
     }
 
     fun sendSetSelectionToKernel(anchorByteOffset: Int, headByteOffset: Int) {
-        val output = commandPort.setSelectionTyped(anchorByteOffset, headByteOffset)
+        val output = commandPort.setSelectionTyped(anchorByteOffset, headByteOffset, com.xiwei.sujian.editor.v2.host.EditorEditSource.NORMAL)
         onPipelineOutput?.invoke(output)
     }
 
@@ -163,7 +163,7 @@ class AndroidInputAdapter(
             cause
         ) ?: return
         val result = EditResult.fromDto(dto)
-        val output = commandPort.applyEditResult(result, null)
+        val output = commandPort.applyEditResult(result, null, com.xiwei.sujian.editor.v2.host.EditorEditSource.NORMAL)
         onPipelineOutput?.invoke(output)
     }
 

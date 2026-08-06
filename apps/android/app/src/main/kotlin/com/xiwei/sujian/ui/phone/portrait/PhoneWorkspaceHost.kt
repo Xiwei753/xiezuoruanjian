@@ -18,11 +18,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.R
 import com.xiwei.sujian.data.WorkspaceRepository
+import com.xiwei.sujian.editor.v2.compose.LocalEditorWindowHost
+import com.xiwei.sujian.runtime.LocalSujianAppDependencies
 import com.xiwei.sujian.ui.ChapterSwitchResult
 import com.xiwei.sujian.ui.EditorViewModel
 import com.xiwei.sujian.ui.compose.SujianSessionAppState
@@ -43,9 +46,24 @@ fun PhoneWorkspaceHost(
 ) {
     val coroutineScope = rememberCoroutineScope()
     val sessionAppState = remember { SujianSessionAppState(sessionViewModel) }
-    // #595 一：章节切换事务入口 — 与 WritingPane 内的 EditorViewModel 共享同一
-    // Activity 级实例（viewModel() 解析到同一 ViewModelStoreOwner）。
-    val editorViewModel: EditorViewModel = viewModel()
+    val context = LocalContext.current
+    val deps = LocalSujianAppDependencies.current
+    // #595 一：章节切换事务入口 — 显式 Factory 注入进程级容器依赖 + 会话层协调器。
+    // 与 WritingPane 内 viewModel(factory=...) 解析到同一 Activity 级实例。
+    val editorHost = LocalEditorWindowHost.current
+    val editorViewModel: EditorViewModel = viewModel(
+        factory = EditorViewModel.Factory(context.applicationContext as android.app.Application, deps, editorHost?.sessionCoordinator)
+    )
+    // #595 一：尽早初始化 — 章节树里的 requestOpenChapter 需要在 WritingPane
+    // 组合前就具备 Repository 与 session 协调器（提交前预准备 Rust session）。
+    LaunchedEffect(Unit) {
+        editorViewModel.initialize(
+            deps.workspaceRepository,
+            deps.settingsRepository,
+            deps.syncStatusRepository,
+            editorHost?.sessionCoordinator,
+        )
+    }
 
     // #592 三：workspace 导航离开正文时业务级关闭章节 session。
     // 配置变化不会改变 workspace route（navigator 历史由 rememberSaveable 保留），
@@ -53,9 +71,6 @@ fun PhoneWorkspaceHost(
     var lastWorkspaceLocation by remember {
         mutableStateOf<WorkspaceLocation?>(null)
     }
-    // 窗口层宿主在组合中读取；LaunchedEffect 内不能读取 CompositionLocal。
-    val editorHost = com.xiwei.sujian.editor.v2.compose.LocalEditorWindowHost.current
-
     // 会话业务选择与导航位置的对账：导航位置回退到章节列表时清 chapter 选择，
     // 回退到作品列表时清 project 选择；进入正文不清除任何选择。
     LaunchedEffect(workspaceNavState.currentLocation) {

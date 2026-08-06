@@ -258,6 +258,45 @@ mod tests {
     }
 
     #[test]
+    fn test_facade_generation_secrets_save_load_delete() {
+        // #595 五：generation 凭据生命周期 — save → load → delete。
+        let temp_dir = tempdir().unwrap();
+        let core = WriterCore::new(temp_dir.path());
+        core.create_workspace().unwrap();
+
+        let secrets = crate::sync::SyncSecrets {
+            token: Some("generation_token_7".to_string()),
+            ssh_private_key: None,
+        };
+        core.save_sync_secrets_for_generation(7, &secrets).unwrap();
+
+        let loaded = core
+            .load_sync_secrets_for_generation(7)
+            .unwrap()
+            .expect("generation 7 secrets must exist after save");
+        assert_eq!(
+            loaded.token.as_ref().unwrap(),
+            "generation_token_7"
+        );
+
+        // 未保存的 generation 读取为 None。
+        assert!(core.load_sync_secrets_for_generation(99).unwrap().is_none());
+
+        // 删除后读取为 None；重复删除是幂等成功。
+        core.delete_sync_secrets_for_generation(7).unwrap();
+        assert!(core.load_sync_secrets_for_generation(7).unwrap().is_none());
+        core.delete_sync_secrets_for_generation(7).unwrap();
+
+        // 删除不影响其他 generation。
+        core.save_sync_secrets_for_generation(8, &secrets).unwrap();
+        core.delete_sync_secrets_for_generation(7).unwrap();
+        assert!(core
+            .load_sync_secrets_for_generation(8)
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
     fn test_load_sync_config_migrates_git_backend_for_github_https_remote() {
         let temp_dir = tempdir().unwrap();
         let core = WriterCore::new(temp_dir.path());

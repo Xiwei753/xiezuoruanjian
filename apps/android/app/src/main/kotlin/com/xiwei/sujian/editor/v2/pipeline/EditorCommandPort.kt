@@ -1,5 +1,6 @@
 package com.xiwei.sujian.editor.v2.pipeline
 
+import com.xiwei.sujian.editor.v2.host.EditorEditSource
 import com.xiwei.sujian.editor.v2.host.EditorKernelBridge
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.mirror.EditResult
@@ -9,9 +10,9 @@ import uniffi.writer_core.EditorTransactionCauseDto
 interface InputCommandPort {
     fun insertText(byteOffset: Int, text: String, cause: EditorTransactionCauseDto): PipelineOutput
     fun deleteRange(byteStart: Int, byteEndExclusive: Int, cause: EditorTransactionCauseDto): PipelineOutput
-    fun replaceRangeTyped(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto, beforePatch: (() -> Unit)?): PipelineOutput
-    fun setSelectionTyped(anchorByteOffset: Int, headByteOffset: Int): PipelineOutput
-    fun applyEditResult(result: EditResult, beforePatch: (() -> Unit)?): PipelineOutput
+    fun replaceRangeTyped(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto, beforePatch: (() -> Unit)?, source: EditorEditSource): PipelineOutput
+    fun setSelectionTyped(anchorByteOffset: Int, headByteOffset: Int, source: EditorEditSource): PipelineOutput
+    fun applyEditResult(result: EditResult, beforePatch: (() -> Unit)?, source: EditorEditSource): PipelineOutput
     fun applyCompositionCommit(dto: EditorEditResultDto, preeditText: String): PipelineOutput
     fun applyCompositionUpdateAnimated(replaceStartUtf8: Int, replaceEndUtf8: Int, newPreeditText: String, oldPreeditText: String, mirrorUpdate: (() -> Unit)?)
     fun applyCompositionCancelAnimated(replaceStartUtf8: Int, replaceEndUtf8: Int, oldPreeditText: String, mirrorUpdate: (() -> Unit)?)
@@ -32,9 +33,9 @@ interface InputCommandPort {
 interface EditorCommandPort {
     fun insertText(byteOffset: Int, text: String, cause: EditorTransactionCauseDto): PipelineOutput
     fun deleteRange(byteStart: Int, byteEndExclusive: Int, cause: EditorTransactionCauseDto): PipelineOutput
-    fun replaceRangeTyped(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto, beforePatch: (() -> Unit)? = null): PipelineOutput
-    fun setSelectionTyped(anchorByteOffset: Int, headByteOffset: Int): PipelineOutput
-    fun applyEditResult(result: EditResult, beforePatch: (() -> Unit)? = null): PipelineOutput
+    fun replaceRangeTyped(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto, beforePatch: (() -> Unit)? = null, source: EditorEditSource = EditorEditSource.NORMAL): PipelineOutput
+    fun setSelectionTyped(anchorByteOffset: Int, headByteOffset: Int, source: EditorEditSource = EditorEditSource.NORMAL): PipelineOutput
+    fun applyEditResult(result: EditResult, beforePatch: (() -> Unit)? = null, source: EditorEditSource = EditorEditSource.NORMAL): PipelineOutput
     fun applyCompositionCommit(dto: EditorEditResultDto, preeditText: String): PipelineOutput
     fun applyCompositionUpdateAnimated(replaceStartUtf8: Int, replaceEndUtf8: Int, newPreeditText: String, oldPreeditText: String, mirrorUpdate: (() -> Unit)? = null)
     fun applyCompositionCancelAnimated(replaceStartUtf8: Int, replaceEndUtf8: Int, oldPreeditText: String, mirrorUpdate: (() -> Unit)? = null)

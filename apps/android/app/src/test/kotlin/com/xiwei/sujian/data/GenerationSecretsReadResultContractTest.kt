@@ -14,6 +14,7 @@ import org.junit.Test
  *
  * 修复：引入 GenerationSecretsReadResult / SyncProfileReadResult sealed interface，
  * 类型化区分 Found / NotConfigured / Failed。
+ * #595 五：toConfigSecretsOrNull 已在生产路径删除 — 调用方直接消费类型化结果。
  */
 class GenerationSecretsReadResultContractTest {
 
@@ -61,6 +62,19 @@ class GenerationSecretsReadResultContractTest {
     }
 
     @Test
+    fun deleteSyncSecretsForGeneration_existsOnSettingsRepository() {
+        // #595 五：SettingsRepository 提供旧 generation 凭据删除（Long 参数，
+        // 无 inline-class 名称 mangling）。
+        val method = SettingsRepository::class.java.methods.firstOrNull {
+            it.name == "deleteSyncSecretsForGeneration" && it.parameterTypes.size == 1
+        }
+        assertNotNull(
+            "SettingsRepository must expose deleteSyncSecretsForGeneration (#595 五)",
+            method,
+        )
+    }
+
+    @Test
     fun generationSecretsReadResult_Failed_carriesSyncFailureKind() {
         val failed = GenerationSecretsReadResult.Failed(SyncFailureKind.NativeUnavailable, "msg")
         assertEquals(SyncFailureKind.NativeUnavailable, failed.kind)
@@ -81,27 +95,5 @@ class GenerationSecretsReadResultContractTest {
         assertTrue("NotConfigured must carry snapshot", notConfigured.snapshot == snapshot)
         assertEquals(SyncFailureKind.Fatal, failed.kind)
         assertEquals("err", failed.message)
-    }
-
-    @Test
-    fun toConfigSecretsOrNull_mapsFailedToNull() {
-        val failed = SyncProfileReadResult.Failed(SyncFailureKind.Fatal, "err")
-        assertEquals(
-            "Failed must map to null in toConfigSecretsOrNull",
-            null,
-            failed.toConfigSecretsOrNull(),
-        )
-    }
-
-    @Test
-    fun toConfigSecretsOrNull_mapsFoundAndNotConfiguredToPair() {
-        val config = com.xiwei.sujian.model.SyncConfig(enabled = true)
-        val secrets = com.xiwei.sujian.model.SyncSecrets(token = "tok")
-        val snapshot = SyncProfileSnapshot(1L, config, secrets)
-        val found = SyncProfileReadResult.Found(snapshot)
-        val pair = found.toConfigSecretsOrNull()
-        assertNotNull(pair)
-        assertEquals(config, pair!!.first)
-        assertEquals(secrets, pair.second)
     }
 }

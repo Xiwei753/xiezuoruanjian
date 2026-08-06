@@ -7,6 +7,7 @@ import com.xiwei.sujian.editor.v2.mirror.EditResult
 import com.xiwei.sujian.editor.v2.mirror.VisualIntent
 import com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
+import com.xiwei.sujian.editor.v2.host.EditorEditSource
 import com.xiwei.sujian.editor.v2.host.EditorKernelBridge
 import com.xiwei.sujian.editor.v2.projection.DisplayTextProjection
 import uniffi.writer_core.EditorTransactionCauseDto
@@ -38,7 +39,14 @@ import uniffi.writer_core.EditorTransactionCauseDto
  * of a long document.
  */
 sealed class PipelineOutput {
-    data class Edited(val result: EditResult) : PipelineOutput()
+    /**
+     * #595 四：输出天然携带编辑来源 — 不再使用 View 上的 pendingEditSource
+     * 可变侧信道（NeedReload/Stale 输出不再污染下一条命令的来源分类）。
+     */
+    data class Edited(
+        val result: EditResult,
+        val source: EditorEditSource = EditorEditSource.NORMAL,
+    ) : PipelineOutput()
     object NeedReload : PipelineOutput()
     object StaleOrInvalid : PipelineOutput()
 }
@@ -153,34 +161,34 @@ class AndroidEditorPipeline private constructor(
         return applyEditResult(result)
     }
 
-    override fun replaceRangeTyped(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto, beforePatch: (() -> Unit)?): PipelineOutput {
+    override fun replaceRangeTyped(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto, beforePatch: (() -> Unit)?, source: EditorEditSource): PipelineOutput {
         val result = editPipeline.replaceRange(byteStart, byteEndExclusive, replacementText, originalText, cause)
             ?: return PipelineOutput.StaleOrInvalid
-        return applyEditResult(result, beforePatch)
+        return applyEditResult(result, beforePatch, source)
     }
 
-    override fun setSelectionTyped(anchorByteOffset: Int, headByteOffset: Int): PipelineOutput {
+    override fun setSelectionTyped(anchorByteOffset: Int, headByteOffset: Int, source: EditorEditSource): PipelineOutput {
         val result = editPipeline.setSelection(anchorByteOffset, headByteOffset)
             ?: return PipelineOutput.StaleOrInvalid
-        return applyEditResult(result)
+        return applyEditResult(result, source = source)
     }
 
     fun performUndo(): PipelineOutput {
         val result = editPipeline.undo()
             ?: return PipelineOutput.StaleOrInvalid
-        return applyEditResult(result)
+        return applyEditResult(result, source = EditorEditSource.UNDO)
     }
 
     fun performRedo(): PipelineOutput {
         val result = editPipeline.redo()
             ?: return PipelineOutput.StaleOrInvalid
-        return applyEditResult(result)
+        return applyEditResult(result, source = EditorEditSource.REDO)
     }
 
     fun replaceAll(searchStr: String, replaceStr: String): PipelineOutput {
         val result = editPipeline.replaceAll(searchStr, replaceStr)
             ?: return PipelineOutput.StaleOrInvalid
-        return applyEditResult(result)
+        return applyEditResult(result, source = EditorEditSource.PROGRAMMATIC)
     }
 
     /**
@@ -310,7 +318,8 @@ class AndroidEditorPipeline private constructor(
      */
     override fun applyEditResult(
         result: EditResult,
-        beforePatch: (() -> Unit)?
+        beforePatch: (() -> Unit)?,
+        source: EditorEditSource,
     ): PipelineOutput {
         if (result.isStale()) {
             return PipelineOutput.StaleOrInvalid
@@ -337,7 +346,7 @@ class AndroidEditorPipeline private constructor(
             beforePatch = beforePatch
         )
 
-        return PipelineOutput.Edited(result)
+        return PipelineOutput.Edited(result, source)
     }
 
     private fun recordEditTransaction(result: EditResult) {
@@ -358,7 +367,8 @@ class AndroidEditorPipeline private constructor(
     private fun applyEditResultWithIntent(
         result: EditResult,
         visualIntent: VisualIntent,
-        beforePatch: (() -> Unit)? = null
+        beforePatch: (() -> Unit)? = null,
+        source: EditorEditSource = EditorEditSource.NORMAL,
     ): PipelineOutput {
         if (result.isStale()) {
             return PipelineOutput.StaleOrInvalid
@@ -383,7 +393,7 @@ class AndroidEditorPipeline private constructor(
             beforePatch = beforePatch
         )
 
-        return PipelineOutput.Edited(result)
+        return PipelineOutput.Edited(result, source)
     }
 
     /**

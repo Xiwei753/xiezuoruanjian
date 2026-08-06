@@ -1087,6 +1087,9 @@ interface WriterAppService {
     SyncSecretsDto? load_sync_secrets_for_generation(u64 generation);
 
     [Throws=WriterError]
+    void delete_sync_secrets_for_generation(u64 generation);
+
+    [Throws=WriterError]
     SyncStateDto load_sync_state();
 
     [Throws=WriterError]

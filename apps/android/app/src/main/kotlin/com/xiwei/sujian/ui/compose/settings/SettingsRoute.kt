@@ -66,7 +66,6 @@ import com.xiwei.sujian.data.SyncCoordinator
 import com.xiwei.sujian.data.SyncOutcome
 import com.xiwei.sujian.data.SyncFailureKind
 import com.xiwei.sujian.data.SyncSession
-import com.xiwei.sujian.data.toConfigSecretsOrNull
 import com.xiwei.sujian.model.SyncTrigger
 
 enum class SyncCommandState { IDLE, RUNNING, SUCCESS, FAILURE }
@@ -430,9 +429,8 @@ class SettingsViewModel(
         }
 
         if (syncConfigSaved || syncSecretsSaved) {
-            val refreshedCapability = withContext(Dispatchers.IO) { repo.getSyncCapability() }
-            val refreshedWarning = withContext(Dispatchers.IO) { repo.getSecureStorageWarning() }
-            _uiState.update { it.copy(syncCapability = refreshedCapability, secureStorageWarning = refreshedWarning) }
+            // #595 五：成功提交后一次性更新 config/secrets/loadState/capability/warning。
+            refreshSyncProfileState()
         }
 
         if (failures.isNotEmpty()) {
@@ -530,9 +528,8 @@ class SettingsViewModel(
             _uiState.update { it.copy(performSyncState = SyncCommandState.FAILURE, structuredSyncResult = StructuredSyncResult(statusCode = "error", messageKey = "unexpected_error", sanitizedDiagnostic = e.message), lastCommandType = SyncCommandType.PERFORM_SYNC) }
         }
         try {
-            val refreshedCapability = withContext(Dispatchers.IO) { settingsRepo.getSyncCapability() }
-            val refreshedWarning = withContext(Dispatchers.IO) { settingsRepo.getSecureStorageWarning() }
-            _uiState.update { it.copy(syncCapability = refreshedCapability, secureStorageWarning = refreshedWarning) }
+            // #595 五：成功保存并运行后一次性刷新完整同步 profile 状态。
+            refreshSyncProfileState()
         } catch (_: Exception) { }
     }
 
@@ -604,9 +601,8 @@ class SettingsViewModel(
             _uiState.update { it.copy(dryRunState = SyncCommandState.FAILURE, structuredSyncResult = StructuredSyncResult(statusCode = "error", messageKey = "unexpected_error", sanitizedDiagnostic = e.message)) }
         }
         try {
-            val refreshedCapability = withContext(Dispatchers.IO) { settingsRepo.getSyncCapability() }
-            val refreshedWarning = withContext(Dispatchers.IO) { settingsRepo.getSecureStorageWarning() }
-            _uiState.update { it.copy(syncCapability = refreshedCapability, secureStorageWarning = refreshedWarning) }
+            // #595 五：成功保存并试运行后一次性刷新完整同步 profile 状态。
+            refreshSyncProfileState()
         } catch (_: Exception) { }
     }
 
@@ -682,6 +678,37 @@ class SettingsViewModel(
         } catch (_: Exception) { }
     }
 
+
+    /**
+     * #595 五：成功保存或重新加载 profile 后，一次性更新 syncConfig、syncSecrets、
+     * syncProfileLoadState、syncCapability、secureStorageWarning —
+     * 用户修好配置后旧红色错误提示立即消失，不再残留。
+     */
+    private suspend fun refreshSyncProfileState() {
+        val repo = settingsRepo
+        val current = _uiState.value
+        val committedProfile = withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile() }
+        val refreshedCapability = withContext(Dispatchers.IO) { repo.getSyncCapability() }
+        val refreshedWarning = withContext(Dispatchers.IO) { repo.getSecureStorageWarning() }
+        _uiState.update {
+            it.copy(
+                syncConfig = if (!hasUnsavedSyncConfig()) {
+                    committedProfile.toSyncProfileLoadState().confirmedConfig ?: it.syncConfig
+                } else {
+                    it.syncConfig
+                },
+                syncSecrets = if (!hasUnsavedSyncSecrets()) {
+                    committedProfile.toSyncProfileLoadState().confirmedSecrets ?: it.syncSecrets
+                } else {
+                    it.syncSecrets
+                },
+                syncProfileLoadState = committedProfile.toSyncProfileLoadState(),
+                syncCapability = refreshedCapability,
+                secureStorageWarning = refreshedWarning,
+            )
+        }
+    }
+
     private suspend fun rollbackFailures(repo: SettingsRepository, failures: List<SaveFailure>) {
         for (failure in failures) {
             rollbackIfRevisionMatches(repo, failure)
@@ -706,18 +733,19 @@ class SettingsViewModel(
             }
             SaveField.SYNC_CONFIG -> {
                 if (syncConfigRevision != failure.revision) return
-                // #595 八：回滚读取活动 generation 的完整 snapshot，不再读 live 槽。
+                // #595 八/五：回滚读取活动 generation 的完整 snapshot，不再读 live 槽；
+                // 类型化处理 — Failed 保留当前 UI 值（不静默退化为默认值/null）。
                 val profile = withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile() }
                 if (syncConfigRevision != failure.revision) return
                 syncConfigRevision = syncConfigPersistedRevision
-                _uiState.update { it.copy(syncConfig = profile.toConfigSecretsOrNull()?.first ?: it.syncConfig) }
+                _uiState.update { it.copy(syncConfig = profile.toSyncProfileLoadState().confirmedConfig ?: it.syncConfig) }
             }
             SaveField.SYNC_SECRETS -> {
                 if (syncSecretsRevision != failure.revision) return
                 val profile = withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile() }
                 if (syncSecretsRevision != failure.revision) return
                 syncSecretsRevision = syncSecretsPersistedRevision
-                _uiState.update { it.copy(syncSecrets = profile.toConfigSecretsOrNull()?.second ?: it.syncSecrets) }
+                _uiState.update { it.copy(syncSecrets = profile.toSyncProfileLoadState().confirmedSecrets ?: it.syncSecrets) }
             }
         }
     }

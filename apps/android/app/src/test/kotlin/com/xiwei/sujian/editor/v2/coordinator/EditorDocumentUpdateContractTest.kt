@@ -1,7 +1,6 @@
 package com.xiwei.sujian.editor.v2.coordinator
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -9,10 +8,11 @@ import org.junit.Test
 /**
  * #595 一/二：EditorDocumentUpdate 类型化正文更新协议契约测试。
  *
- * 验证 LocalInput（本地输入）与 RepositoryLoaded（真实来源外部加载）的
- * 来源区分、revision/hash 携带和替代 generation/hashCode 启发式判断的正确性。
- * #595 二：ExternalReplace/ExternalSource 已删除 — UI 不得伪造 revision/source，
- * 外部更新只由真实来源事件驱动。
+ * 验证 LocalInput（本地输入）与 TargetDocumentFact（Repository 加载/同步合并
+ * 文档事实）的来源区分、revision/版本锚点携带。
+ * #595 二：ExternalReplace/ExternalSource 已删除；contentVersion（进程内事件
+ * 序号）已删除 — 新旧判断由 DocumentVersion（contentHash + manifest 锚点）完成，
+ * 事件总线保存每个 target 的完整文档事实而非"最后一个事件对象"。
  */
 class EditorDocumentUpdateContractTest {
 
@@ -22,7 +22,6 @@ class EditorDocumentUpdateContractTest {
             targetId = "chapter-body:p:v:c",
             text = "hello",
             revision = 5L,
-            contentVersion = 1L,
             transactionId = 42L,
         )
         assertEquals("chapter-body:p:v:c", update.targetId)
@@ -33,25 +32,30 @@ class EditorDocumentUpdateContractTest {
     }
 
     @Test
-    fun repositoryLoadedCarriesRealFileHash() {
-        val update = EditorDocumentUpdate.RepositoryLoaded(
+    fun documentFactCarriesRealVersionAnchors() {
+        val fact = TargetDocumentFact(
             targetId = "chapter-body:p:v:c",
             text = "loaded",
-            fileHash = "sha256:abc123",
-            revision = 0L,
-            contentVersion = 1L,
+            sourceVersion = DocumentVersion(contentHash = "sha256:abc123"),
+            baseVersion = DocumentVersion(),
+            origin = DocumentFactOrigin.REPOSITORY_LOAD,
         )
-        assertEquals("chapter-body:p:v:c", update.targetId)
-        assertEquals("loaded", update.text)
-        assertEquals("sha256:abc123", update.fileHash)
-        assertEquals(0L, update.revision)
+        assertEquals("chapter-body:p:v:c", fact.targetId)
+        assertEquals("loaded", fact.text)
+        assertEquals("sha256:abc123", fact.sourceVersion.contentHash)
+        assertEquals(DocumentFactOrigin.REPOSITORY_LOAD, fact.origin)
     }
 
     @Test
-    fun localInputAndRepositoryLoadedAreDistinctTypes() {
-        val local = EditorDocumentUpdate.LocalInput("t", "text", 1L, 1L, 100L)
-        val external = EditorDocumentUpdate.RepositoryLoaded("t", "text", "hash-1", 0L, contentVersion = 1L)
-        assertNotEquals("LocalInput and RepositoryLoaded must be distinct", local, external)
+    fun localInputAndDocumentFactAreDistinctTypes() {
+        val local = EditorDocumentUpdate.LocalInput("t", "text", 1L, 100L)
+        val fact = TargetDocumentFact(
+            "t", "text",
+            DocumentVersion(contentHash = "hash-1"),
+            DocumentVersion(),
+            DocumentFactOrigin.REPOSITORY_LOAD,
+        )
+        assertNotEquals("LocalInput and TargetDocumentFact must be distinct", local, fact)
     }
 
     @Test
@@ -74,6 +78,29 @@ class EditorDocumentUpdateContractTest {
     }
 
     @Test
+    fun uiCounterContentVersionIsRemoved() {
+        // #595 二：contentVersion（进程内事件序号）必须已删除 —
+        // 版本锚点是 DocumentVersion。
+        val updateClass = EditorDocumentUpdate.LocalInput::class.java
+        assertTrue(
+            "LocalInput must not carry contentVersion (#595 二)",
+            updateClass.declaredFields.none { it.name == "contentVersion" },
+        )
+        assertTrue(
+            "EditorSessionState must not carry lastAppliedContentVersion (#595 二)",
+            EditorSessionState::class.java.declaredFields.none { it.name == "lastAppliedContentVersion" },
+        )
+        assertTrue(
+            "EditorSessionState must not carry lastRepositoryHash (#595 二)",
+            EditorSessionState::class.java.declaredFields.none { it.name == "lastRepositoryHash" },
+        )
+        assertTrue(
+            "EditorSessionCoordinator must not expose nextContentVersion (#595 二)",
+            EditorSessionCoordinator::class.java.methods.none { it.name == "nextContentVersion" },
+        )
+    }
+
+    @Test
     fun editorSessionStateDefaultsToNone() {
         val state = EditorSessionState()
         assertEquals(null, state.targetId)
@@ -81,13 +108,16 @@ class EditorDocumentUpdateContractTest {
         assertEquals(0L, state.revision)
         assertEquals(EditorSessionOrigin.NONE, state.origin)
         assertEquals(WindowBindingState.Idle, state.bindingState)
+        assertEquals(DocumentVersion(), state.committedVersion)
+        assertEquals(DocumentVersion(), state.sessionBaseVersion)
+        assertTrue(!state.localDirty)
     }
 
     @Test
     fun localInputPreservesRevisionAcrossUiRoundTrip() {
         // 模拟本地输入：IME → Rust EditResult(rev=5) → applyLocalEdit → SessionState(rev=5)
         // WritingPane 收集 sessionStateFlow 发现 rev=5 已应用，不触发 reset
-        val update = EditorDocumentUpdate.LocalInput("t", "new text", 5L, 1L, 42L)
+        val update = EditorDocumentUpdate.LocalInput("t", "new text", 5L, 42L)
         val state = EditorSessionState(
             targetId = update.targetId,
             text = update.text,
@@ -98,5 +128,13 @@ class EditorDocumentUpdateContractTest {
         assertEquals(5L, state.revision)
         assertEquals(42L, state.lastAppliedTransactionId)
         assertEquals(EditorSessionOrigin.LOCAL_INPUT, state.origin)
+    }
+
+    @Test
+    fun documentVersionEmptyWhenNoAnchors() {
+        assertTrue(DocumentVersion().isEmpty)
+        assertTrue(!DocumentVersion(contentHash = "h").isEmpty)
+        assertTrue(!DocumentVersion(repositoryRevision = 3L).isEmpty)
+        assertTrue(!DocumentVersion(syncManifestRevision = 5L).isEmpty)
     }
 }

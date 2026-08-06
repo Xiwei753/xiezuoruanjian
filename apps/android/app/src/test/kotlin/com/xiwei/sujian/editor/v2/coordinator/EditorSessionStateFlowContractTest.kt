@@ -5,13 +5,13 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.lang.reflect.Method
 
 /**
- * #595 一：EditorSessionCoordinator sessionStateFlow 契约测试。
+ * #595 一/二：EditorSessionCoordinator sessionStateFlow 契约测试。
  *
  * 验证本地输入更新 SessionState（revision/transactionId/origin=LOCAL_INPUT），
- * 外部加载用真实 fileHash 判断是否需要 reset（#595 二：不再伪造 revision）。
+ * 外部文档事实用 DocumentVersion 判断是否需要 reset（#595 二：不再伪造 revision、
+ * 不再使用进程内 contentVersion）。
  */
 class EditorSessionStateFlowContractTest {
 
@@ -25,21 +25,21 @@ class EditorSessionStateFlowContractTest {
     }
 
     @Test
-    fun shouldApplyRepositoryLoadExistsOnSessionCoordinator() {
+    fun shouldApplyExternalContentExistsOnSessionCoordinator() {
         val method = EditorSessionCoordinator::class.java.methods.firstOrNull {
-            it.name == "shouldApplyRepositoryLoad" && it.parameterTypes.size == 1 &&
-            it.parameterTypes[0] == EditorDocumentUpdate.RepositoryLoaded::class.java
+            it.name == "shouldApplyExternalContent" && it.parameterTypes.size == 1 &&
+            it.parameterTypes[0] == TargetDocumentFact::class.java
         }
-        assertNotNull("EditorSessionCoordinator must have shouldApplyRepositoryLoad(RepositoryLoaded)", method)
+        assertNotNull("EditorSessionCoordinator must have shouldApplyExternalContent(TargetDocumentFact)", method)
     }
 
     @Test
-    fun applyRepositoryLoadedExistsOnSessionCoordinator() {
+    fun applyExternalContentFactExistsOnSessionCoordinator() {
         val method = EditorSessionCoordinator::class.java.methods.firstOrNull {
-            it.name == "applyRepositoryLoaded" && it.parameterTypes.size == 1 &&
-            it.parameterTypes[0] == EditorDocumentUpdate.RepositoryLoaded::class.java
+            it.name == "applyExternalContentFact" && it.parameterTypes.size == 1 &&
+            it.parameterTypes[0] == TargetDocumentFact::class.java
         }
-        assertNotNull("EditorSessionCoordinator must have applyRepositoryLoaded(RepositoryLoaded)", method)
+        assertNotNull("EditorSessionCoordinator must have applyExternalContentFact(TargetDocumentFact)", method)
     }
 
     @Test
@@ -52,6 +52,14 @@ class EditorSessionStateFlowContractTest {
         assertTrue(
             "applyExternalReplace must be removed",
             EditorSessionCoordinator::class.java.methods.none { it.name == "applyExternalReplace" },
+        )
+        assertTrue(
+            "shouldApplyRepositoryLoad (old event API) must be removed",
+            EditorSessionCoordinator::class.java.methods.none { it.name == "shouldApplyRepositoryLoad" },
+        )
+        assertTrue(
+            "shouldApplyExternalUpdate (old event API) must be removed",
+            EditorSessionCoordinator::class.java.methods.none { it.name == "shouldApplyExternalUpdate" },
         )
     }
 
@@ -84,7 +92,7 @@ class EditorSessionStateFlowContractTest {
 
     @Test
     fun localInputUpdatePreservesRevisionInSessionState() {
-        val update = EditorDocumentUpdate.LocalInput("t1", "hello", 7L, 1L, 99L)
+        val update = EditorDocumentUpdate.LocalInput("t1", "hello", 7L, 99L)
         val state = EditorSessionState(
             targetId = update.targetId,
             text = update.text,
@@ -98,46 +106,37 @@ class EditorSessionStateFlowContractTest {
     }
 
     @Test
-    fun repositoryLoadWithSameHashAndTextDoesNotNeedReset() {
-        // #595 一：同一 fileHash 且内容一致 → 幂等重放，不 reset。
-        val currentState = EditorSessionState(
-            targetId = "t1",
-            text = "text",
-            revision = 5L,
-            origin = EditorSessionOrigin.EXTERNAL_REPLACE,
-            lastRepositoryHash = "hash-1",
+    fun documentFactWithSameVersionAndText_doesNotNeedReset() {
+        // #595 二：同 sourceVersion 且正文一致 → 幂等重放，不 reset。
+        val fact = TargetDocumentFact(
+            "t1", "text",
+            DocumentVersion(contentHash = "hash-1"),
+            DocumentVersion(),
+            DocumentFactOrigin.REPOSITORY_LOAD,
         )
-        val load = EditorDocumentUpdate.RepositoryLoaded("t1", "text", "hash-1", 0L, contentVersion = 1L)
-        val alreadyApplied = currentState.lastRepositoryHash == load.fileHash &&
-            currentState.text == load.text
-        assertTrue("Same hash + same text must be idempotent (no reset)", alreadyApplied)
+        val coordinator = EditorSessionCoordinator(com.xiwei.sujian.data.AppServiceBridge(
+            com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595_stateflow")
+        ))
+        coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
+        coordinator.applyExternalContentFact(fact)
+        assertEquals(
+            "同版本重放必须 IgnoreReplay",
+            ExternalContentDecision.IgnoreReplay,
+            coordinator.shouldApplyExternalContent(fact),
+        )
     }
 
     @Test
-    fun repositoryLoadWithNewContentNeedsReset() {
-        val currentState = EditorSessionState(
-            targetId = "t1",
-            text = "old",
-            revision = 3L,
-            lastRepositoryHash = "hash-1",
+    fun documentFactWithNewContentNeedsReset() {
+        // #595 二：不同版本 + 正文不同 + 非 dirty → Apply。
+        val coordinator = EditorSessionCoordinator(com.xiwei.sujian.data.AppServiceBridge(
+            com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595_stateflow")
+        ))
+        coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
+        coordinator.applyExternalContentFact(
+            TargetDocumentFact("t1", "old", DocumentVersion(contentHash = "hash-1"), DocumentVersion(), DocumentFactOrigin.REPOSITORY_LOAD)
         )
-        val load = EditorDocumentUpdate.RepositoryLoaded("t1", "new", "hash-2", 0L, contentVersion = 1L)
-        val needsReset = currentState.text != load.text
-        assertTrue("Different content must trigger reset protocol", needsReset)
-    }
-
-    @Test
-    fun repositoryLoadWithSameContentDoesNotNeedReset() {
-        // #595 一：内容与当前 session 一致 → 无需 reset（即使 hash 不同，内容相同）。
-        val currentState = EditorSessionState(
-            targetId = "t1",
-            text = "same",
-            revision = 10L,
-            origin = EditorSessionOrigin.LOCAL_INPUT,
-            lastRepositoryHash = "hash-1",
-        )
-        val load = EditorDocumentUpdate.RepositoryLoaded("t1", "same", "hash-2", 0L, contentVersion = 1L)
-        val needsReset = currentState.text != load.text
-        assertFalse("Same content must not reset even with different hash", needsReset)
+        val load = TargetDocumentFact("t1", "new", DocumentVersion(contentHash = "hash-2"), DocumentVersion(contentHash = "hash-1"), DocumentFactOrigin.REPOSITORY_LOAD)
+        assertEquals("Different content must trigger reset protocol", ExternalContentDecision.Apply, coordinator.shouldApplyExternalContent(load))
     }
 }

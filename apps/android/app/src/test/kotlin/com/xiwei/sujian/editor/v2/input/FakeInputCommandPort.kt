@@ -515,7 +515,8 @@ class FakeInputCommandPort(
         replacementText: String,
         originalText: String,
         cause: EditorTransactionCauseDto,
-        beforePatch: (() -> Unit)?
+        beforePatch: (() -> Unit)?,
+        source: com.xiwei.sujian.editor.v2.host.EditorEditSource
     ): PipelineOutput {
         if (byteStart > byteEndExclusive || byteEndExclusive > textBytes.size ||
             !isCharBoundary(byteStart) || !isCharBoundary(byteEndExclusive)) return PipelineOutput.StaleOrInvalid
@@ -533,7 +534,7 @@ class FakeInputCommandPort(
         return PipelineOutput.Edited(EditResult.fromDto(dto))
     }
 
-    override fun setSelectionTyped(anchorByteOffset: Int, headByteOffset: Int): PipelineOutput {
+    override fun setSelectionTyped(anchorByteOffset: Int, headByteOffset: Int, source: com.xiwei.sujian.editor.v2.host.EditorEditSource): PipelineOutput {
         if (anchorByteOffset > textBytes.size || headByteOffset > textBytes.size ||
             !isCharBoundary(anchorByteOffset) || !isCharBoundary(headByteOffset)) return PipelineOutput.StaleOrInvalid
         val dto = EditorEditResultDto(
@@ -635,10 +636,10 @@ class FakeInputCommandPort(
         )
     }
 
-    override fun applyEditResult(result: EditResult, beforePatch: (() -> Unit)?): PipelineOutput {
+    override fun applyEditResult(result: EditResult, beforePatch: (() -> Unit)?, source: com.xiwei.sujian.editor.v2.host.EditorEditSource): PipelineOutput {
         beforePatch?.invoke()
         mirror.applyEditResult(result)
-        return PipelineOutput.Edited(result)
+        return PipelineOutput.Edited(result, source)
     }
 
     override fun applyCompositionCommit(dto: EditorEditResultDto, preeditText: String): PipelineOutput {

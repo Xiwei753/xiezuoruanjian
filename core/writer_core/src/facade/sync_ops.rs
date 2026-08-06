@@ -209,6 +209,28 @@ impl super::WriterCore {
         Ok(Some(secrets))
     }
 
+    /// #595 五：删除指定 generation 的安全存储凭据（key: sync_token_g{N}）。
+    /// 用于 generation 提交成功后的旧版本清理：保留 current + previous 一个
+    /// 可回滚版本，删除更旧 generation 的凭据；缺失/已删除视为成功。
+    pub fn delete_sync_secrets_for_generation(&self, generation: u64) -> crate::error::Result<()> {
+        let key = format!("sync_token_g{}", generation);
+        if let Some(ref storage) = self.secure_storage {
+            storage
+                .delete_secret(&key)
+                .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+            return Ok(());
+        }
+        // 无 secure storage（测试/桌面直连）：删除按 generation 落的文件。
+        let secrets_path = self.workspace_path.join(format!(
+            "app-meta/sync/sync_secrets_g{}.local.json",
+            generation
+        ));
+        if secrets_path.exists() {
+            std::fs::remove_file(&secrets_path)?;
+        }
+        Ok(())
+    }
+
     fn load_sync_secrets_from_file(&self) -> crate::error::Result<crate::sync::SyncSecrets> {
         let secrets_path = self
             .workspace_path

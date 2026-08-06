@@ -112,10 +112,13 @@ class SecretProjectionAtomicityTest {
         val pipelineClazz = Class.forName("com.xiwei.sujian.editor.v2.pipeline.AndroidEditorPipeline")
         val editResultClazz = Class.forName("com.xiwei.sujian.editor.v2.mirror.EditResult")
         val functionType = kotlin.jvm.functions.Function0::class.java
+        val sourceType = com.xiwei.sujian.editor.v2.host.EditorEditSource::class.java
+        // #595 四：applyEditResult(result, beforePatch, source) — 来源随命令传递。
         val applyMethod = pipelineClazz.getDeclaredMethod(
             "applyEditResult",
             editResultClazz,
-            functionType
+            functionType,
+            sourceType
         )
         assertNotNull(applyMethod)
     }

@@ -6,14 +6,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * #595 二：EditorDocumentUpdate 类型化事件与 contentVersion 版本比较契约测试。
+ * #595 二/四：EditorDocumentUpdate 类型化事件与文档版本比较契约测试。
  *
  * 验证：
- * - 5 种事件子类型存在且携带 contentVersion；
- * - shouldApplyExternalUpdate 按 contentVersion 判断新旧；
+ * - 直接回调事件（LocalInput/UndoRestored/ProgrammaticReplace）不携带
+ *   contentVersion（进程内事件序号已删除）；
+ * - TargetDocumentFact 携带 DocumentVersion 锚点（contentHash + manifest）；
+ * - shouldApplyExternalContent 按版本锚点 + localDirty 判断；
  * - applySyncMerged/applyUndoRestored/applyProgrammaticReplace 设置正确 origin；
- * - applyExternalUpdate 统一分派；
- * - nextContentVersion 单调递增。
+ * - PipelineOutput 天然携带 EditorEditSource（无可变侧信道）。
  */
 class EditorDocumentUpdateTypedEventsContractTest {
 
@@ -24,34 +25,35 @@ class EditorDocumentUpdateTypedEventsContractTest {
     }
 
     @Test
-    fun allFiveSubtypesExist() {
-        val localInput = EditorDocumentUpdate.LocalInput("t", "text", 1L, 1L, 1L)
-        val repoLoaded = EditorDocumentUpdate.RepositoryLoaded("t", "text", "hash", 0L, 1L)
-        val syncMerged = EditorDocumentUpdate.SyncMerged("t", "text", 1L, "hash", 0L, 1L)
-        val undoRestored = EditorDocumentUpdate.UndoRestored("t", "text", 1L, 0L, 1L, 1L)
-        val programmaticReplace = EditorDocumentUpdate.ProgrammaticReplace("t", "text", 1L, 0L, 1L, 1L)
+    fun directCallbackEventsCarryTransactionIds() {
+        val localInput = EditorDocumentUpdate.LocalInput("t", "text", 1L, 1L)
+        val undoRestored = EditorDocumentUpdate.UndoRestored("t", "text", 1L, 0L, 1L)
+        val programmaticReplace = EditorDocumentUpdate.ProgrammaticReplace("t", "text", 1L, 0L, 1L)
 
-        assertEquals(1L, localInput.contentVersion)
-        assertEquals(1L, repoLoaded.contentVersion)
-        assertEquals(1L, syncMerged.contentVersion)
-        assertEquals(1L, undoRestored.contentVersion)
-        assertEquals(1L, programmaticReplace.contentVersion)
+        assertEquals(1L, localInput.transactionId)
+        assertEquals(1L, undoRestored.transactionId)
+        assertEquals(1L, programmaticReplace.transactionId)
+        // #595 二：直接回调事件不再携带 contentVersion。
+        assertFalse(
+            EditorDocumentUpdate.LocalInput::class.java.declaredFields.any { it.name == "contentVersion" },
+        )
     }
 
     @Test
-    fun syncMerged_carriesManifestRevisionAndFileHash() {
-        val update = EditorDocumentUpdate.SyncMerged(
+    fun syncMergedFact_carriesManifestAnchorAndFileHash() {
+        val fact = TargetDocumentFact(
             targetId = "t1",
             text = "merged text",
-            manifestRevision = 42L,
-            fileHash = "sync-hash-1",
-            revision = 0L,
-            contentVersion = 1L,
+            sourceVersion = DocumentVersion(contentHash = "sync-hash-1", syncManifestRevision = 42L),
+            baseVersion = DocumentVersion(contentHash = "base-hash"),
+            origin = DocumentFactOrigin.SYNC_MERGED,
         )
-        assertEquals("t1", update.targetId)
-        assertEquals("merged text", update.text)
-        assertEquals(42L, update.manifestRevision)
-        assertEquals("sync-hash-1", update.fileHash)
+        assertEquals("t1", fact.targetId)
+        assertEquals("merged text", fact.text)
+        assertEquals("sync-hash-1", fact.sourceVersion.contentHash)
+        assertEquals(42L, fact.sourceVersion.syncManifestRevision)
+        assertEquals("base-hash", fact.baseVersion.contentHash)
+        assertEquals(DocumentFactOrigin.SYNC_MERGED, fact.origin)
     }
 
     @Test
@@ -61,7 +63,6 @@ class EditorDocumentUpdateTypedEventsContractTest {
             text = "restored",
             snapshotId = 99L,
             revision = 5L,
-            contentVersion = 1L,
             transactionId = 7L,
         )
         assertEquals(99L, update.snapshotId)
@@ -76,7 +77,6 @@ class EditorDocumentUpdateTypedEventsContractTest {
             text = "replaced",
             commandId = 55L,
             revision = 3L,
-            contentVersion = 1L,
             transactionId = 8L,
         )
         assertEquals(55L, update.commandId)
@@ -85,51 +85,120 @@ class EditorDocumentUpdateTypedEventsContractTest {
     }
 
     @Test
-    fun nextContentVersion_isMonotonicallyIncreasing() {
+    fun sameSourceVersionReplay_isRejected() {
         val coordinator = createCoordinator()
-        val v1 = coordinator.nextContentVersion()
-        val v2 = coordinator.nextContentVersion()
-        val v3 = coordinator.nextContentVersion()
-        assertTrue("v2 > v1", v2 > v1)
-        assertTrue("v3 > v2", v3 > v2)
+        coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
+        val fact = TargetDocumentFact(
+            "t1", "text v1",
+            DocumentVersion(contentHash = "hash-1"),
+            DocumentVersion(),
+            DocumentFactOrigin.SYNC_MERGED,
+        )
+        // 首次 Apply（同正文时经 applyExternalContentFact 记录版本）。
+        coordinator.applyExternalContentFact(fact)
+        assertEquals("hash-1", coordinator.sessionState.committedVersion.contentHash)
+
+        // 同 sourceVersion 重放 → IgnoreReplay。
+        assertEquals(
+            ExternalContentDecision.IgnoreReplay,
+            coordinator.shouldApplyExternalContent(fact),
+        )
     }
 
     @Test
-    fun shouldApplyExternalUpdate_rejectsOldContentVersion() {
+    fun olderSyncManifestVersion_isRejected() {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
-        // Apply first update with contentVersion=5
-        val first = EditorDocumentUpdate.SyncMerged("t1", "text v1", 1L, "hash-1", 0L, 5L)
-        assertTrue(coordinator.shouldApplyExternalUpdate(first))
-        coordinator.applySyncMerged(first)
-        assertEquals(5L, coordinator.sessionState.lastAppliedContentVersion)
+        val newer = TargetDocumentFact(
+            "t1", "text v2",
+            DocumentVersion(contentHash = "hash-2", syncManifestRevision = 200L),
+            DocumentVersion(),
+            DocumentFactOrigin.SYNC_MERGED,
+        )
+        coordinator.applyExternalContentFact(newer)
 
-        // Old event with contentVersion=3 (<= 5) must be rejected
-        val old = EditorDocumentUpdate.SyncMerged("t1", "text v2", 2L, "hash-2", 0L, 3L)
-        assertFalse("Old contentVersion must be rejected", coordinator.shouldApplyExternalUpdate(old))
+        // manifest 更旧（100 < 200）→ IgnoreOlder。
+        val older = TargetDocumentFact(
+            "t1", "text v3",
+            DocumentVersion(contentHash = "hash-3", syncManifestRevision = 100L),
+            DocumentVersion(),
+            DocumentFactOrigin.SYNC_MERGED,
+        )
+        assertEquals(
+            ExternalContentDecision.IgnoreOlder,
+            coordinator.shouldApplyExternalContent(older),
+        )
     }
 
     @Test
-    fun shouldApplyExternalUpdate_acceptsNewContentVersion() {
+    fun localDirty_blocksExternalReset() {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
-        val first = EditorDocumentUpdate.SyncMerged("t1", "text v1", 1L, "hash-1", 0L, 1L)
-        assertTrue(coordinator.shouldApplyExternalUpdate(first))
-        coordinator.applySyncMerged(first)
+        // 本地输入 → localDirty=true
+        coordinator.applyLocalEdit(
+            EditorDocumentUpdate.LocalInput("t1", "本地未保存输入", 3L, 7L, selectionAnchorUtf8 = 2, selectionHeadUtf8 = 4)
+        )
+        assertTrue(coordinator.sessionState.localDirty)
 
-        // New event with contentVersion=10 (> 1) and different text must be accepted
-        val newUpdate = EditorDocumentUpdate.SyncMerged("t1", "text v2", 2L, "hash-2", 0L, 10L)
-        assertTrue("New contentVersion must be accepted", coordinator.shouldApplyExternalUpdate(newUpdate))
+        // 外部同步下载 → 冲突，禁止直接 reset。
+        val fact = TargetDocumentFact(
+            "t1", "远端合并正文",
+            DocumentVersion(contentHash = "hash-new", syncManifestRevision = 500L),
+            DocumentVersion(contentHash = "hash-old"),
+            DocumentFactOrigin.SYNC_MERGED,
+        )
+        assertEquals(
+            ExternalContentDecision.IgnoreDirtyConflict,
+            coordinator.shouldApplyExternalContent(fact),
+        )
     }
 
     @Test
-    fun applySyncMerged_setsSyncMergedOrigin() {
+    fun notDirty_differentVersion_applies() {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
-        val update = EditorDocumentUpdate.SyncMerged("t1", "synced text", 1L, "hash-1", 0L, 1L)
-        coordinator.applySyncMerged(update)
+        val first = TargetDocumentFact(
+            "t1", "repo v1",
+            DocumentVersion(contentHash = "hash-1"),
+            DocumentVersion(),
+            DocumentFactOrigin.REPOSITORY_LOAD,
+        )
+        coordinator.applyExternalContentFact(first)
+        assertFalse(coordinator.sessionState.localDirty)
+
+        val second = TargetDocumentFact(
+            "t1", "repo v2",
+            DocumentVersion(contentHash = "hash-2"),
+            DocumentVersion(contentHash = "hash-1"),
+            DocumentFactOrigin.REPOSITORY_LOAD,
+        )
+        assertEquals(ExternalContentDecision.Apply, coordinator.shouldApplyExternalContent(second))
+    }
+
+    @Test
+    fun emptyVersion_isRejected() {
+        val coordinator = createCoordinator()
+        coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
+        val noVersion = TargetDocumentFact(
+            "t1", "x", DocumentVersion(), DocumentVersion(), DocumentFactOrigin.SYNC_MERGED,
+        )
+        assertEquals(ExternalContentDecision.IgnoreEmptyVersion, coordinator.shouldApplyExternalContent(noVersion))
+    }
+
+    @Test
+    fun applySyncMergedFact_setsSyncMergedOrigin() {
+        val coordinator = createCoordinator()
+        coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
+        val fact = TargetDocumentFact(
+            "t1", "synced text",
+            DocumentVersion(contentHash = "hash-1"),
+            DocumentVersion(),
+            DocumentFactOrigin.SYNC_MERGED,
+        )
+        coordinator.applyExternalContentFact(fact)
         assertEquals(EditorSessionOrigin.SYNC_MERGED, coordinator.sessionState.origin)
-        assertEquals(1L, coordinator.sessionState.lastAppliedContentVersion)
+        assertEquals("hash-1", coordinator.sessionState.committedVersion.contentHash)
+        assertFalse(coordinator.sessionState.localDirty)
     }
 
     @Test
@@ -137,7 +206,7 @@ class EditorDocumentUpdateTypedEventsContractTest {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
         val update = EditorDocumentUpdate.UndoRestored(
-            "t1", "undo text", 1L, 5L, 1L, 10L,
+            "t1", "undo text", 1L, 5L, 10L,
             selectionAnchorUtf8 = 2, selectionHeadUtf8 = 4,
         )
         coordinator.applyUndoRestored(update)
@@ -147,7 +216,6 @@ class EditorDocumentUpdateTypedEventsContractTest {
         assertEquals(10L, coordinator.sessionState.lastAppliedTransactionId)
         assertEquals(2, coordinator.sessionState.selectionAnchorUtf8)
         assertEquals(4, coordinator.sessionState.selectionHeadUtf8)
-        assertEquals(1L, coordinator.sessionState.lastAppliedContentVersion)
     }
 
     @Test
@@ -155,7 +223,7 @@ class EditorDocumentUpdateTypedEventsContractTest {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
         val update = EditorDocumentUpdate.ProgrammaticReplace(
-            "t1", "replaced text", 1L, 3L, 1L, 8L,
+            "t1", "replaced text", 1L, 3L, 8L,
             selectionAnchorUtf8 = 0, selectionHeadUtf8 = 5,
         )
         coordinator.applyProgrammaticReplace(update)
@@ -163,31 +231,26 @@ class EditorDocumentUpdateTypedEventsContractTest {
         assertEquals("replaced text", coordinator.sessionState.text)
         assertEquals(3L, coordinator.sessionState.revision)
         assertEquals(8L, coordinator.sessionState.lastAppliedTransactionId)
-        assertEquals(1L, coordinator.sessionState.lastAppliedContentVersion)
     }
 
     @Test
-    fun applyExternalUpdate_dispatchesToCorrectApplyMethod() {
+    fun markSaved_clearsLocalDirtyAndRecordsVersion() {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
+        coordinator.applyLocalEdit(EditorDocumentUpdate.LocalInput("t1", "typed", 3L, 7L))
+        assertTrue(coordinator.sessionState.localDirty)
 
-        // SyncMerged
-        coordinator.applyExternalUpdate(
-            EditorDocumentUpdate.SyncMerged("t1", "sync", 1L, "h1", 0L, 1L)
-        )
-        assertEquals(EditorSessionOrigin.SYNC_MERGED, coordinator.sessionState.origin)
+        coordinator.markSaved("t1", DocumentVersion(contentHash = "saved-hash"))
+        assertFalse("保存成功后 localDirty 必须清除", coordinator.sessionState.localDirty)
 
-        // UndoRestored
-        coordinator.applyExternalUpdate(
-            EditorDocumentUpdate.UndoRestored("t1", "undo", 2L, 1L, 2L, 1L)
+        // 保存后外部新版本（基于已保存内容）→ 可应用（不冲突）。
+        val fact = TargetDocumentFact(
+            "t1", "merged",
+            DocumentVersion(contentHash = "merged-hash", syncManifestRevision = 3L),
+            DocumentVersion(contentHash = "saved-hash"),
+            DocumentFactOrigin.SYNC_MERGED,
         )
-        assertEquals(EditorSessionOrigin.UNDO_RESTORED, coordinator.sessionState.origin)
-
-        // ProgrammaticReplace
-        coordinator.applyExternalUpdate(
-            EditorDocumentUpdate.ProgrammaticReplace("t1", "prog", 3L, 2L, 3L, 1L)
-        )
-        assertEquals(EditorSessionOrigin.PROGRAMMATIC_REPLACE, coordinator.sessionState.origin)
+        assertEquals(ExternalContentDecision.Apply, coordinator.shouldApplyExternalContent(fact))
     }
 
     @Test
@@ -197,6 +260,18 @@ class EditorDocumentUpdateTypedEventsContractTest {
         assertTrue(com.xiwei.sujian.editor.v2.host.EditorEditSource.values().contains(com.xiwei.sujian.editor.v2.host.EditorEditSource.UNDO))
         assertTrue(com.xiwei.sujian.editor.v2.host.EditorEditSource.values().contains(com.xiwei.sujian.editor.v2.host.EditorEditSource.REDO))
         assertTrue(com.xiwei.sujian.editor.v2.host.EditorEditSource.values().contains(com.xiwei.sujian.editor.v2.host.EditorEditSource.PROGRAMMATIC))
+    }
+
+    @Test
+    fun pipelineOutputCarriesEditSource() {
+        // #595 四：PipelineOutput.Edited 携带来源 — 撤销/恢复/程序化替换
+        // 不再通过 View 可变侧信道标记。
+        assertTrue(
+            com.xiwei.sujian.editor.v2.pipeline.PipelineOutput.Edited::class.java.declaredFields.any { it.name == "source" },
+        )
+        assertFalse(
+            com.xiwei.sujian.editor.v2.host.SujianEditorView::class.java.declaredFields.any { it.name == "pendingEditSource" },
+        )
     }
 
     @Test

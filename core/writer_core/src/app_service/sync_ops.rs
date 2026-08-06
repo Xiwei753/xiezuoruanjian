@@ -49,6 +49,14 @@ impl super::WriterAppService {
         self.api.load_sync_secrets_for_generation(generation)
     }
 
+    /** #595 五：删除指定 generation 的安全存储凭据（旧版本清理）。 */
+    pub fn delete_sync_secrets_for_generation(
+        &self,
+        generation: u64,
+    ) -> Result<(), WriterError> {
+        self.api.delete_sync_secrets_for_generation(generation)
+    }
+
     pub fn perform_sync_diagnostics(
         &self,
         config: SyncConfigDto,

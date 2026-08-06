@@ -330,6 +330,14 @@ class SettingsRepository(
     }
 
     /**
+     * #595 五：删除指定 generation 的安全存储凭据（旧版本清理）。
+     * 保留 current + previous 一个可回滚版本，删除更旧 generation 的凭据。
+     */
+    fun deleteSyncSecretsForGeneration(generation: Long): BridgeResult<Unit> {
+        return appBridge.deleteSyncSecretsForGeneration(generation.toULong())
+    }
+
+    /**
      * #595 五：读取指定 generation 的安全存储凭据 — 类型化结果，不再把"没有 token"
      * 和"读取失败"压成同一个 null。
      *
@@ -471,7 +479,17 @@ class SettingsRepository(
             //    committed_config_json 与 activeGeneration 同时推进）。
             profileStore.commitGeneration(generation, configJson.toJson(normalized))
 
-            // 5) 提交成功后镜像到 live 槽（兼容旧 Core API；失败不影响权威读取）。
+            // 5) #595 五：提交成功后执行安全清理 — 保留 current + previous 一个
+            //    可回滚版本，删除更旧 generation 的凭据；清理崩溃遗留的
+            //    未提交 staged generation 标记。清理失败只记录类型化错误，
+            //    不回滚已成功的提交（旧凭据只是安全存储中的冗余条目）。
+            val cleanupResult = cleanupStaleGenerationCredentials(generation)
+            if (cleanupResult is SettingsSaveResult.Failed) {
+                warn("commitSyncProfile: generation cleanup reported typed failures: " +
+                    cleanupResult.failures.joinToString { "gen=${it.revision} field=${it.field}" })
+            }
+
+            // 6) 提交成功后镜像到 live 槽（兼容旧 Core API；失败不影响权威读取）。
             val liveConfigResult = saveSyncConfig(normalized)
             if (liveConfigResult is SettingsSaveResult.Failed) {
                 warn("commitSyncProfile: live config mirror update failed for generation $generation — " +
@@ -484,13 +502,45 @@ class SettingsRepository(
             }
             SettingsSaveResult.Success
         }
-        // 6) 只有提交成功后调度 WorkManager，且必须在 commitExclusive 释放之后：
+        // 7) 只有提交成功后调度 WorkManager，且必须在 commitExclusive 释放之后：
         //    scheduleFromSettings 会获取 snapshotExclusive，锁内调用会自死锁。
         //    直接使用本仓库（应用容器实例），不新建 SettingsRepository 读半成品。
         if (committed is SettingsSaveResult.Success) {
             AutoSyncScheduler.scheduleFromSettings(appContext, this)
         }
         return committed
+    }
+
+    /**
+     * #595 五：提交成功后的安全清理 — 保留 current + previous 一个可回滚版本，
+     * 删除更旧 generation 的安全存储凭据；清理崩溃遗留的未提交 staged 标记。
+     * 返回类型化结果（失败不改变已提交的 activeGeneration）。
+     */
+    private suspend fun cleanupStaleGenerationCredentials(current: Long): SettingsSaveResult {
+        val failures = mutableListOf<SaveFailure>()
+        var gen = current - 2
+        while (gen >= 1L) {
+            when (appBridge.deleteSyncSecretsForGeneration(gen.toULong())) {
+                is BridgeResult.Success -> { }
+                is BridgeResult.Error -> {
+                    failures.add(SaveFailure(SaveField.SYNC_SECRETS, gen))
+                }
+                BridgeResult.NotLoaded -> {
+                    failures.add(SaveFailure(SaveField.SYNC_SECRETS, gen))
+                }
+            }
+            gen--
+        }
+        try {
+            profileStore.clearStaleStagedMarkers(current)
+        } catch (e: Exception) {
+            warn("cleanupStaleGenerationCredentials: failed to clear stale staged markers: ${e.message}")
+        }
+        return if (failures.isEmpty()) {
+            SettingsSaveResult.Success
+        } else {
+            SettingsSaveResult.Failed(failures)
+        }
     }
 
     fun aiAvailable(): Boolean {
