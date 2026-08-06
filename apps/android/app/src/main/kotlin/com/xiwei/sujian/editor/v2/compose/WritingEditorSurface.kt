@@ -7,7 +7,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost
-import com.xiwei.sujian.editor.v2.coordinator.EditingState
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import com.xiwei.sujian.ui.compose.theme.EditorThemeAdapter
 
@@ -27,21 +26,25 @@ fun WritingEditorSurface(
     targetId: String,
     modifier: Modifier = Modifier,
 ) {
-    val activeTargetId = coordinator.activeTargetIdFlow.collectAsStateWithLifecycle().value
-    val editingState = coordinator.editingStateFlow.collectAsStateWithLifecycle().value
-    val isActiveTarget = activeTargetId == targetId
-    val isEditing = isActiveTarget &&
-        (editingState == EditingState.BINDING || editingState == EditingState.EDITING)
-
-    // #595 八：消费 EditorAttachmentState 决定渲染策略。
-    // Attached/Attaching/Paused → 显示编辑器；Detached/Idle → 显示预览。
+    // #595 八：消费 EditorAttachmentState 决定渲染策略 — 不再只是派生投影。
+    // Attached/Attaching/Paused 且 targetId 匹配 → 显示编辑器；
+    // Detached/Idle → 显示预览。
     // attachmentState 从规范 windowBindingState 派生，叠加窗口级暂停标志。
     val attachmentState = coordinator.attachmentState
+    val showEditor = when (attachmentState) {
+        is com.xiwei.sujian.editor.v2.host.EditorAttachmentState.Attached ->
+            attachmentState.targetId == targetId
+        is com.xiwei.sujian.editor.v2.host.EditorAttachmentState.Attaching ->
+            attachmentState.targetId == targetId
+        is com.xiwei.sujian.editor.v2.host.EditorAttachmentState.Paused ->
+            attachmentState.targetId == targetId
+        else -> false
+    }
 
     val themeColors = EditorThemeAdapter.extractColors()
 
     Box(modifier = modifier) {
-        if (isEditing) {
+        if (showEditor) {
             // #595 三：AndroidView 正式拥有 View 生命周期 —
             // factory 用传入的 Context 创建 View（Compose 官方模型），
             // 不返回宿主提前创建、长期缓存的 View。
@@ -64,9 +67,10 @@ fun WritingEditorSurface(
                 modifier = Modifier.fillMaxSize(),
             )
         } else {
-            val projection = coordinator.getTargetProjection(targetId)
-            if (projection != null && projection.getText().isNotEmpty()) {
-                com.xiwei.sujian.ui.compose.editor.ReadonlyChapterPreview(projection = projection)
+            // #595 九：预览用纯静态 ChapterPreviewState，不经 TargetDisplayRuntime。
+            val previewState = coordinator.getChapterPreviewState(targetId)
+            if (previewState != null && previewState.text.isNotEmpty()) {
+                com.xiwei.sujian.ui.compose.editor.ReadonlyChapterPreview(previewState = previewState)
             }
         }
     }

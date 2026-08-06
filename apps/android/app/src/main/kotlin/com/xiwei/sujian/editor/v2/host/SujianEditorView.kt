@@ -149,12 +149,13 @@ class SujianEditorView @JvmOverloads constructor(
                 scrollY = scrollY.coerceIn(0f, maxScrollY)
                 if (!suppressContentCallback && output.result.displayPatches.isNotEmpty()) {
                     val editText = pipeline.getText()
-                    onContentChanged?.invoke(editText)
-                    // #595 一：类型化本地编辑回调 — 传递 revision/transactionId，
-                    // 会话层据此更新唯一 SessionState，ViewModel 不再靠字符串比较猜测来源。
+                    // #595 一：先更新会话层唯一 SessionState（revision/transactionId），
+                    // 再通知 ViewModel 保存。确保 WritingPane 的 LaunchedEffect(uiState.content)
+                    // 触发时 sessionStateFlow 已是最新，不会误判为外部更新而 reset session。
                     if (output.result.isApplied()) {
                         onLocalEdit?.invoke(editText, output.result.newRevision, output.result.transactionId)
                     }
+                    onContentChanged?.invoke(editText)
                 }
                 invalidate()
                 if (pipeline.hasActiveAnimation()) {
@@ -178,8 +179,8 @@ class SujianEditorView @JvmOverloads constructor(
             )
             updateLayoutConfig()
             val reloadText = pipeline.getText()
-            onContentChanged?.invoke(reloadText)
             onLocalEdit?.invoke(reloadText, pipeline.getRevision(), 0L)
+            onContentChanged?.invoke(reloadText)
         } else {
             android.util.Log.w("SujianEditorInput", "reloadFromKernel FAILED (no session snapshot)")
         }

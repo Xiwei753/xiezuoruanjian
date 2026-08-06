@@ -14,7 +14,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -131,8 +130,7 @@ fun WritingPane(
     var lastChapterId by remember { mutableStateOf("") }
     var lastTargetId by remember { mutableStateOf("") }
     // #595 一：删除 localContentGeneration/lastSeenContentGeneration/externalContentHash —
-    // 改用 EditorSessionState.revision 判断本地/外部更新。
-    var lastAppliedRevision by remember { mutableLongStateOf(0L) }
+    // 改用 EditorSessionState.text 和 origin 判断本地/外部更新，不依赖 revision 比较。
 
     val target = remember(targetId) {
         EditableTextTarget(targetId = targetId)
@@ -173,7 +171,6 @@ fun WritingPane(
                 uiState.content.toByteArray(Charsets.UTF_8).size,
                 SessionResetSource.CHAPTER_SWITCH
             )
-            lastAppliedRevision = 0L
         }
         lastChapterId = chapterId
         lastTargetId = targetId
@@ -184,9 +181,15 @@ fun WritingPane(
 
     LaunchedEffect(uiState.content, chapterId) {
         if (!uiState.loading) {
-            val currentRevision = sessionState.revision
-            if (currentRevision == lastAppliedRevision && sessionState.origin == com.xiwei.sujian.editor.v2.coordinator.EditorSessionOrigin.LOCAL_INPUT) {
-                // 本地输入产生的 UI 回显 — revision 已在 SessionState 中更新，
+            // #595 一：用 sessionState.text 和 origin 判断本地/外部更新，不依赖 revision 比较。
+            // onLocalEdit 先更新 sessionStateFlow（text/revision/origin=LOCAL_INPUT），
+            // 后通知 ViewModel 更新 uiState.content。当 LaunchedEffect 触发时，
+            // sessionState.text 已与 uiState.content 一致 → 本地更新，不 reset。
+            // 真实外部更新时 sessionState.text 与 uiState.content 不一致 → 外部更新，reset。
+            if (sessionState.origin == com.xiwei.sujian.editor.v2.coordinator.EditorSessionOrigin.LOCAL_INPUT
+                && sessionState.text == uiState.content
+            ) {
+                // 本地输入产生的 UI 回显 — sessionState 已更新，
                 // 只同步 targetText，不触发 resetPersistentSession。
                 coordinator.updateTargetText(targetId, uiState.content)
             } else if (uiState.content != sessionState.text) {
@@ -195,7 +198,7 @@ fun WritingPane(
                 val externalUpdate = com.xiwei.sujian.editor.v2.coordinator.EditorDocumentUpdate.ExternalReplace(
                     targetId = targetId,
                     text = uiState.content,
-                    revision = (currentRevision + 1).coerceAtLeast(1L),
+                    revision = (sessionState.revision + 1).coerceAtLeast(1L),
                     source = com.xiwei.sujian.editor.v2.coordinator.ExternalSource.REPOSITORY_LOAD,
                 )
                 if (coordinator.sessionCoordinator.shouldApplyExternalReplace(externalUpdate)) {
@@ -211,7 +214,6 @@ fun WritingPane(
                     }
                 }
             }
-            lastAppliedRevision = currentRevision
         }
     }
 

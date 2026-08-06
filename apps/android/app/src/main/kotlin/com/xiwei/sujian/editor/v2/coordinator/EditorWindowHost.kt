@@ -8,6 +8,8 @@ import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import com.xiwei.sujian.editor.v2.host.TextEditSessionBridge
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.projection.TargetDisplayRuntime
+import com.xiwei.sujian.editor.v2.projection.ChapterPreviewState
+import com.xiwei.sujian.editor.v2.projection.TextRange
 import com.xiwei.sujian.editor.v2.host.EditorAttachmentState
 import com.xiwei.sujian.editor.v2.host.EditorFrameSnapshot
 import com.xiwei.sujian.editor.v2.host.attachmentStateFromBinding
@@ -156,6 +158,29 @@ class EditorWindowHost(
     fun getPersistentSessionId(targetId: String): ULong? = sessionCoordinator.getPersistentSessionId(targetId)
 
     fun getTargetProjection(targetId: String): TargetDisplayRuntime? = targetProjections[targetId]
+
+    /**
+     * #595 九：非活动章节预览的纯静态状态 — 不经 TargetDisplayRuntime，
+     * 直接从会话层 snapshot 和装饰构建，不含动画引擎或 Bitmap 资源。
+     */
+    fun getChapterPreviewState(targetId: String): ChapterPreviewState? {
+        val snapshot = sessionCoordinator.queryTargetSnapshot(targetId) ?: return null
+        val decorations = sessionCoordinator.getTargetDecorations(targetId)
+        val searchHighlights = decorations?.searchHighlightsUtf8?.map {
+            TextRange(it.first, it.second)
+        } ?: emptyList()
+        val selection = if (decorations != null &&
+            decorations.selectionStartUtf8 >= 0 && decorations.selectionEndUtf8 >= 0
+        ) {
+            TextRange(decorations.selectionStartUtf8, decorations.selectionEndUtf8)
+        } else null
+        return ChapterPreviewState(
+            text = snapshot.text,
+            revision = snapshot.revision,
+            selection = selection,
+            searchHighlights = searchHighlights,
+        )
+    }
 
     fun getEditorAnimationSettings(): EditorAnimationSettings = sessionCoordinator.getEditorAnimationSettings()
 
