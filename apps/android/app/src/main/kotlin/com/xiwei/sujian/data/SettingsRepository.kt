@@ -518,18 +518,21 @@ class SettingsRepository(
      */
     private suspend fun cleanupStaleGenerationCredentials(current: Long): SettingsSaveResult {
         val failures = mutableListOf<SaveFailure>()
-        var gen = current - 2
-        while (gen >= 1L) {
-            when (appBridge.deleteSyncSecretsForGeneration(gen.toULong())) {
-                is BridgeResult.Success -> { }
-                is BridgeResult.Error -> {
-                    failures.add(SaveFailure(SaveField.SYNC_SECRETS, gen))
-                }
-                BridgeResult.NotLoaded -> {
-                    failures.add(SaveFailure(SaveField.SYNC_SECRETS, gen))
+        // #595 五：保留 current + previous 一个可回滚版本，删除更旧 generation 的凭据。
+        // 删除边界由纯函数 [generationCleanupRange] 决定（契约测试固定该边界）。
+        val range = generationCleanupRange(current)
+        if (range != null) {
+            for (gen in range) {
+                when (appBridge.deleteSyncSecretsForGeneration(gen.toULong())) {
+                    is BridgeResult.Success -> { }
+                    is BridgeResult.Error -> {
+                        failures.add(SaveFailure(SaveField.SYNC_SECRETS, gen))
+                    }
+                    BridgeResult.NotLoaded -> {
+                        failures.add(SaveFailure(SaveField.SYNC_SECRETS, gen))
+                    }
                 }
             }
-            gen--
         }
         try {
             profileStore.clearStaleStagedMarkers(current)

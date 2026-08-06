@@ -136,6 +136,25 @@ class SyncProfileStore(context: Context) {
 }
 
 /**
+ * #595 五：旧 generation 凭据清理范围 — 保留 current + previous 一个可回滚版本，
+ * 删除更旧（< current - 1）generation 的凭据。
+ *
+ * 纯函数（无 native/DataStore 依赖），供
+ * [SettingsRepository.cleanupStaleGenerationCredentials] 决定删除边界：
+ * - current = 1：无可删除 generation（只存在当前版本）；
+ * - current = 2：保留 2 与 1（previous），无删除；
+ * - current = 3：删除 1，保留 3 与 2；
+ * - current = N：删除 1..N-2，保留 N 与 N-1。
+ *
+ * 返回 null 表示没有需要删除的 generation，调用方跳过删除循环。
+ */
+internal fun generationCleanupRange(current: Long): LongRange? {
+    val lastToDelete = current - 2
+    if (lastToDelete < 1L) return null
+    return 1L..lastToDelete
+}
+
+/**
  * #592 六：一次同步操作使用的完整不可变配置快照。
  *
  * 正式同步、自动同步、试运行和连接诊断都先从统一仓库取得一次完整 snapshot，
