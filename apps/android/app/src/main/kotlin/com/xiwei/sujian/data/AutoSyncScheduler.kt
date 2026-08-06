@@ -49,11 +49,15 @@ class AutoSyncScheduler(context: Context, private val settingsRepository: Settin
             // Mutex 串行管理。调用方（SettingsRepository.commitSyncProfile）必须在
             // commitExclusive 释放后才调用本函数（scheduleFromSettings 会获取
             // snapshotExclusive，同一把锁内重入会自死锁）。
-            val snapshot = SyncProfileGate.snapshotExclusive { settingsRepository.snapshotSyncProfile() }
-            if (snapshot == null) {
-                DiagnosticsLogger.w(TAG, "Unable to load committed sync profile for scheduling")
-                cancel(appContext)
-                return
+            val snapshotResult = SyncProfileGate.snapshotExclusive { settingsRepository.snapshotSyncProfile() }
+            val snapshot = when (snapshotResult) {
+                is SyncProfileReadResult.Found -> snapshotResult.snapshot
+                is SyncProfileReadResult.NotConfigured -> snapshotResult.snapshot
+                is SyncProfileReadResult.Failed -> {
+                    DiagnosticsLogger.w(TAG, "Sync profile snapshot failed: ${snapshotResult.message}")
+                    cancel(appContext)
+                    return
+                }
             }
             val config = snapshot.config
             val secrets = snapshot.secrets

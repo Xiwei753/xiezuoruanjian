@@ -197,11 +197,14 @@ class SettingsRepository(
     }
 
     /**
-     * #592 六：统一仓库读取一次完整不可变快照（generation + config + secrets）。
+     * #592 六 / #595 五：统一仓库读取一次完整不可变快照（generation + config + secrets）。
      * 必须在 SyncProfileGate.snapshotExclusive 内调用，保证与提交互斥。
-     * 读取失败返回 null（调用方按 Fatal 处理，不再回退默认配置）。
+     *
+     * #595 五：返回 [SyncProfileReadResult] — 不再把"没有 token"和"读取失败"压成
+     * 同一个 null。config 解析失败或凭据读取失败返回 [SyncProfileReadResult.Failed]，
+     * 凭据为空返回 [SyncProfileReadResult.NotConfigured]，凭据非空返回 [SyncProfileReadResult.Found]。
      */
-    suspend fun snapshotSyncProfile(): SyncProfileSnapshot? {
+    suspend fun snapshotSyncProfile(): SyncProfileReadResult {
         val state = profileStore.readState()
         // #592 五：读取者只读取 activeGeneration 对应的完整版本。
         // committed_config_json 只随 activeGeneration 原子推进，永远属于活动版本；
@@ -210,20 +213,36 @@ class SettingsRepository(
             runCatching { configJson.fromJson(state.committedConfigJson, SyncConfig::class.java) }
                 .getOrNull()
                 ?.normalize()
-                ?: return null
+                ?: return SyncProfileReadResult.Failed(
+                    SyncFailureKind.Fatal, "Committed config JSON parse failed"
+                )
         } else {
-            loadSyncConfigStrict() ?: return null
+            loadSyncConfigStrict() ?: return SyncProfileReadResult.Failed(
+                SyncFailureKind.Fatal, "Sync config load failed"
+            )
         }
         // 凭据按 generation 保存在安全存储；legacy（从未提交过）回退 live 槽。
-        // #595 九：已提交的 generation 是权威 — 缺失/空的 generation 凭据表示
-        // “未配置凭据”，不是读取失败（迁移未配置用户时安全存储中没有 token 条目）。
+        // #595 五：类型化区分"未配置"与"读取失败" — Failed 不再转换成 SyncSecrets()。
         val generationSecrets = loadSyncSecretsForGeneration(state.activeGeneration)
-        val secrets = when {
-            generationSecrets != null -> generationSecrets
-            state.hasCommittedProfile -> SyncSecrets()
-            else -> loadSyncSecretsStrict()
-        } ?: return null
-        return SyncProfileSnapshot(state.activeGeneration, config, secrets)
+        val secrets: SyncSecrets = when (generationSecrets) {
+            is GenerationSecretsReadResult.Found -> generationSecrets.secrets
+            is GenerationSecretsReadResult.NotConfigured -> {
+                if (state.hasCommittedProfile) {
+                    SyncSecrets()
+                } else {
+                    loadSyncSecretsStrict() ?: SyncSecrets()
+                }
+            }
+            is GenerationSecretsReadResult.Failed -> {
+                return SyncProfileReadResult.Failed(generationSecrets.kind, generationSecrets.message)
+            }
+        }
+        val snapshot = SyncProfileSnapshot(state.activeGeneration, config, secrets)
+        return if (secrets.token?.isNotEmpty() == true) {
+            SyncProfileReadResult.Found(snapshot)
+        } else {
+            SyncProfileReadResult.NotConfigured(snapshot)
+        }
     }
 
     /**
@@ -264,12 +283,14 @@ class SettingsRepository(
     }
 
     /**
-     * #595 八：UI 初始化和刷新读取活动 generation 的完整 snapshot，
+     * #595 八 / #595 五：UI 初始化和刷新读取活动 generation 的完整 snapshot，
      * 不再读取 live legacy 槽（镜像槽不参与权威读取）。
+     *
+     * #595 五：返回 [SyncProfileReadResult] — 设置页可据此区分"未配置"（NotConfigured，
+     * 显示空 token）与"读取失败"（Failed，显示类型化错误），不再把两者压成同一个 null。
      */
-    suspend fun loadCommittedSyncProfile(): Pair<SyncConfig, SyncSecrets>? {
-        val snapshot = SyncProfileGate.snapshotExclusive { snapshotSyncProfile() } ?: return null
-        return snapshot.config to snapshot.secrets
+    suspend fun loadCommittedSyncProfile(): SyncProfileReadResult {
+        return SyncProfileGate.snapshotExclusive { snapshotSyncProfile() }
     }
 
     /** 按 generation 保存凭据到安全存储（#592 五）。 */
@@ -284,15 +305,32 @@ class SettingsRepository(
         }
     }
 
-    /** 读取指定 generation 的安全存储凭据；缺失返回 null。 */
-    fun loadSyncSecretsForGeneration(generation: Long): SyncSecrets? {
+    /**
+     * #595 五：读取指定 generation 的安全存储凭据 — 类型化结果，不再把"没有 token"
+     * 和"读取失败"压成同一个 null。
+     *
+     * - [GenerationSecretsReadResult.Found]：安全存储中存在有效凭据。
+     * - [GenerationSecretsReadResult.NotConfigured]：凭据条目缺失或 token 为空。
+     * - [GenerationSecretsReadResult.Failed]：安全存储读取失败、解密失败或原生库未加载。
+     */
+    fun loadSyncSecretsForGeneration(generation: Long): GenerationSecretsReadResult {
         return when (val result = appBridge.loadSyncSecretsForGeneration(generation.toULong())) {
-            is BridgeResult.Success -> result.data?.takeIf { it.token?.isNotEmpty() == true }
-            is BridgeResult.Error -> {
-                warn("Failed to load staged sync secrets for generation $generation: ${result.fullEnvelope}")
-                null
+            is BridgeResult.Success -> {
+                val secrets = result.data
+                if (secrets != null && secrets.token?.isNotEmpty() == true) {
+                    GenerationSecretsReadResult.Found(secrets)
+                } else {
+                    GenerationSecretsReadResult.NotConfigured
+                }
             }
-            BridgeResult.NotLoaded -> null
+            is BridgeResult.Error -> {
+                val kind = result.syncFailureKind ?: SyncFailureKind.Fatal
+                warn("Failed to load staged sync secrets for generation $generation: ${result.fullEnvelope}")
+                GenerationSecretsReadResult.Failed(kind, result.fullEnvelope)
+            }
+            BridgeResult.NotLoaded -> GenerationSecretsReadResult.Failed(
+                SyncFailureKind.NativeUnavailable, "Native library not loaded"
+            )
         }
     }
 

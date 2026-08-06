@@ -2,6 +2,7 @@ package com.xiwei.sujian.editor.v2.coordinator
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -128,5 +129,110 @@ class EditorSessionStateSingleSourceContractTest {
             "targetTexts parallel text cache must be removed (#595 四)",
             field,
         )
+    }
+
+    @Test
+    fun activeTargetIdFlow_isNotIndependentMutableStateFlow() {
+        // #595 三：_activeTargetIdFlow 必须已删除 — activeTargetIdFlow 从 sessionStateFlow 派生。
+        val field = EditorSessionCoordinator::class.java.declaredFields.firstOrNull {
+            it.name == "_activeTargetIdFlow"
+        }
+        assertNull(
+            "_activeTargetIdFlow must be removed — activeTargetIdFlow derives from sessionStateFlow (#595 三)",
+            field,
+        )
+    }
+
+    @Test
+    fun editingStateFlow_isNotIndependentMutableStateFlow() {
+        // #595 三：_editingStateFlow 必须已删除 — editingStateFlow 从 sessionStateFlow 派生。
+        val field = EditorSessionCoordinator::class.java.declaredFields.firstOrNull {
+            it.name == "_editingStateFlow"
+        }
+        assertNull(
+            "_editingStateFlow must be removed — editingStateFlow derives from sessionStateFlow (#595 三)",
+            field,
+        )
+    }
+
+    @Test
+    fun windowBindingStateFlow_isNotIndependentMutableStateFlow() {
+        // #595 三：_windowBindingStateFlow 必须已删除 — windowBindingStateFlow 从 sessionStateFlow 派生。
+        val field = EditorSessionCoordinator::class.java.declaredFields.firstOrNull {
+            it.name == "_windowBindingStateFlow"
+        }
+        assertNull(
+            "_windowBindingStateFlow must be removed — windowBindingStateFlow derives from sessionStateFlow (#595 三)",
+            field,
+        )
+    }
+
+    @Test
+    fun sessionStateFlow_isOnlyWritableMutableStateFlow() {
+        // #595 三：_sessionStateFlow 是会话层唯一可写 MutableStateFlow<EditorSessionState>。
+        val field = EditorSessionCoordinator::class.java.declaredFields.firstOrNull {
+            it.name == "_sessionStateFlow"
+        }
+        assertNotNull(
+            "_sessionStateFlow must exist as the single writable MutableStateFlow<EditorSessionState>",
+            field,
+        )
+    }
+
+    @Test
+    fun editorSessionState_containsEditingStateAndActiveTargetId() {
+        // #595 三：EditorSessionState 必须包含 editingState 和 activeTargetId 字段，
+        // 使 activeTargetIdFlow/editingStateFlow 能从 sessionStateFlow 派生。
+        val editingStateField = EditorSessionState::class.java.declaredFields.firstOrNull {
+            it.name == "editingState"
+        }
+        assertNotNull(
+            "EditorSessionState must contain editingState field (#595 三)",
+            editingStateField,
+        )
+        val activeTargetIdField = EditorSessionState::class.java.declaredFields.firstOrNull {
+            it.name == "activeTargetId"
+        }
+        assertNotNull(
+            "EditorSessionState must contain activeTargetId field (#595 三)",
+            activeTargetIdField,
+        )
+    }
+
+    @Test
+    fun updateSessionState_isSingleReducerEntry() {
+        // #595 三：updateSessionState 是唯一状态更新入口（reducer）。
+        val method = EditorSessionCoordinator::class.java.declaredMethods.firstOrNull {
+            it.name == "updateSessionState"
+        }
+        assertNotNull(
+            "updateSessionState must exist as the single reducer entry point (#595 三)",
+            method,
+        )
+    }
+
+    @Test
+    fun activeTargetId_derivedFromSessionState() {
+        // #595 三：activeTargetId getter 从 sessionStateFlow.value.activeTargetId 派生。
+        val coordinator = createCoordinator()
+        // 初始状态：activeTargetId 为 null
+        assertNull(coordinator.activeTargetId)
+        assertEquals(coordinator.sessionState.activeTargetId, coordinator.activeTargetId)
+    }
+
+    @Test
+    fun editingState_derivedFromSessionState() {
+        // #595 三：editingState getter 从 sessionStateFlow.value.editingState 派生。
+        val coordinator = createCoordinator()
+        assertEquals(EditingState.IDLE, coordinator.editingState)
+        assertEquals(coordinator.sessionState.editingState, coordinator.editingState)
+    }
+
+    @Test
+    fun windowBindingState_derivedFromSessionState() {
+        // #595 三：windowBindingState getter 从 sessionStateFlow.value.bindingState 派生。
+        val coordinator = createCoordinator()
+        assertEquals(WindowBindingState.Idle, coordinator.windowBindingState)
+        assertEquals(coordinator.sessionState.bindingState, coordinator.windowBindingState)
     }
 }

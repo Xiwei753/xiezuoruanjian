@@ -248,33 +248,18 @@ fun WritingPane(
     }
 
     LaunchedEffect(uiState.content, chapterId) {
+        // #595 二：WritingPane 只消费类型化 EditorDocumentUpdate 事件，不再观察
+        // 字符串差异后自行触发外部 reset。外部正文变更（同步/撤销/程序化替换）
+        // 全部由 LaunchedEffect(targetId) 收集 viewModel.documentUpdates 事件驱动，
+        // 携带真实 fileHash 和 contentVersion，由 reducer 判断版本新旧。
+        // 此处只处理本地输入的 target 正文同步 — onLocalEdit 先更新 sessionStateFlow，
+        // 后通知 ViewModel 更新 uiState.content，sessionState.text 已与之一致。
         if (failedSwitchTarget == targetId) return@LaunchedEffect
-        if (!uiState.loading) {
-            // #595 一：用 sessionState.text 和 origin 判断本地/外部更新，不依赖 revision 比较。
-            // onLocalEdit 先更新 sessionStateFlow（text/revision/origin=LOCAL_INPUT），
-            // 后通知 ViewModel 更新 uiState.content。当 LaunchedEffect 触发时，
-            // sessionState.text 已与 uiState.content 一致 → 本地更新，不 reset。
-            // 真实外部更新只走 RepositoryLoaded（真实 chapterHash）事件 —
-            // #595 二：不再伪造 revision/source（删除 ExternalReplace 兜底：
-            // revision+1 不是真实版本，任何字符串差异都可能覆盖编辑状态）。
-            // 无 hash（异常态）不做外部替换，等待下一次真实加载事件。
-            if (sessionState.origin == com.xiwei.sujian.editor.v2.coordinator.EditorSessionOrigin.LOCAL_INPUT
-                && sessionState.text == uiState.content
-            ) {
-                // 本地输入产生的 UI 回显 — sessionState 已更新，
-                // 只同步 target 正文，不触发 resetPersistentSession。
-                coordinator.updateTargetText(targetId, uiState.content)
-            } else if (uiState.content != sessionState.text && uiState.chapterHash.isNotEmpty()) {
-                applyExternalContent(uiState.content, uiState.chapterHash)
-                coordinator.sessionCoordinator.applyRepositoryLoaded(
-                    com.xiwei.sujian.editor.v2.coordinator.EditorDocumentUpdate.RepositoryLoaded(
-                        targetId = targetId,
-                        text = uiState.content,
-                        fileHash = uiState.chapterHash,
-                        revision = 0L,
-                    )
-                )
-            }
+        if (!uiState.loading &&
+            sessionState.origin == com.xiwei.sujian.editor.v2.coordinator.EditorSessionOrigin.LOCAL_INPUT &&
+            sessionState.text == uiState.content
+        ) {
+            coordinator.updateTargetText(targetId, uiState.content)
         }
     }
 

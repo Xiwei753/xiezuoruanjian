@@ -17,14 +17,19 @@ class AutoSyncWorker(
         val settingsRepository = deps.settingsRepository
         // #592 六：一次只读取一份完整不可变快照（generation + config + secrets），
         // 后续整个操作（shouldSync 判定 + runSync）只使用这份 snapshot。
-        val snapshot = try {
+        val snapshotResult = try {
             SyncProfileGate.snapshotExclusive { settingsRepository.snapshotSyncProfile() }
         } catch (e: Exception) {
             DiagnosticsLogger.w(TAG, "Unable to load sync profile snapshot", e)
             return Result.retry()
-        } ?: run {
-            DiagnosticsLogger.w(TAG, "Sync profile snapshot unavailable")
-            return Result.success()
+        }
+        val snapshot = when (snapshotResult) {
+            is SyncProfileReadResult.Found -> snapshotResult.snapshot
+            is SyncProfileReadResult.NotConfigured -> snapshotResult.snapshot
+            is SyncProfileReadResult.Failed -> {
+                DiagnosticsLogger.w(TAG, "Sync profile snapshot failed: ${snapshotResult.message}")
+                return Result.success()
+            }
         }
         if (!AutoSyncScheduler.shouldSync(snapshot.config, snapshot.secrets)) return Result.success()
 

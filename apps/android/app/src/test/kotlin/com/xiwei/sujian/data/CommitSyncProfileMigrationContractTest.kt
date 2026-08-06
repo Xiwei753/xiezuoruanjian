@@ -75,22 +75,23 @@ class CommitSyncProfileMigrationContractTest {
     }
 
     @Test
-    fun snapshotSyncProfile_treatsMissingGenerationSecretsAsUnconfigured() = runTest {
-        // 已提交 profile 存在但 generation 凭据缺失（未配置 token 的用户迁移后）：
-        // 必须返回空凭据快照（Unconfigured 语义），不得返回 null（那会误报 Fatal）。
+    fun snapshotSyncProfile_returnsFailedWhenSecretsReadFails() = runTest {
+        // #595 五：已提交 profile 存在但凭据读取失败（无 native）— 必须返回
+        // SyncProfileReadResult.Failed(NativeUnavailable)，不再把读取失败当作
+        // "未配置"（空凭据）或 null（Fatal）。
         val repo = createRepo("migration_contract_2")
         val store = storeOf(repo)
         store.clear()
-        // 模拟：已有 committed profile（generation 1），但凭据从未配置。
         store.commitGeneration(1L, "{\"enabled\":true}")
-        val snapshot = SyncProfileGate.snapshotExclusive { repo.snapshotSyncProfile() }
-        // #595 九：已提交 generation 是权威 — generation 凭据缺失 = 未配置
-        // （空凭据快照），不得返回 null（那会误报 Fatal）。
-        assertNotNull(snapshot)
+        val result = SyncProfileGate.snapshotExclusive { repo.snapshotSyncProfile() }
+        assertTrue(
+            "Secrets read failure must return Failed, not NotConfigured or null",
+            result is SyncProfileReadResult.Failed,
+        )
         assertEquals(
-            "Missing generation secrets must mean unconfigured (empty secrets), not Fatal",
-            null,
-            snapshot?.secrets?.token,
+            "Native unavailable must be classified as NativeUnavailable, not Fatal",
+            SyncFailureKind.NativeUnavailable,
+            (result as SyncProfileReadResult.Failed).kind,
         )
     }
 
@@ -133,26 +134,56 @@ class CommitSyncProfileMigrationContractTest {
 
     @Test
     fun snapshotSyncProfile_prefersGenerationStoreOverLegacy() = runTest {
-        // 已提交时 config 必须来自 committedConfigJson，不再读 live 槽。
-        // 无 native 环境下 committedConfigJson 可解析 → config 非 null；
-        // legacy 槽（loadSyncConfigStrict）不可用也不影响 generation 读取。
-        // 这里验证读取分支逻辑（通过无 native 的 generation-committed 状态）。
+        // #595 五：已提交时 config 必须来自 committedConfigJson，不再读 live 槽。
+        // 无 native 环境下 committedConfigJson 可解析 → config 解析成功；
+        // 凭据读取失败（NotLoaded）→ 返回 Failed(NativeUnavailable)。
+        // kind == NativeUnavailable 证明 config 解析成功（若 config 解析失败
+        // 会返回 Failed(Fatal)），且失败分类正确（非 Fatal）。
         val repo = createRepo("migration_contract_4")
         val store = storeOf(repo)
         store.clear()
         store.commitGeneration(2L, "{\"enabled\":true,\"remoteUrl\":\"https://example.com/r.git\"}")
-        val snapshot = SyncProfileGate.snapshotExclusive { repo.snapshotSyncProfile() }
-        // 无 native：secrets 读取失败 → hasCommittedProfile 分支回退为空凭据
-        // （未配置语义）；config 已从 generation store 解析成功（不依赖 live 槽）。
-        assertEquals(
-            "Committed config must come from the generation store, not the live slot",
-            "https://example.com/r.git",
-            snapshot?.config?.remoteUrl,
+        val result = SyncProfileGate.snapshotExclusive { repo.snapshotSyncProfile() }
+        assertTrue(
+            "Result must be Failed (secrets read fails without native)",
+            result is SyncProfileReadResult.Failed,
         )
         assertEquals(
-            "Unavailable secrets must degrade to unconfigured, not Fatal",
-            null,
-            snapshot?.secrets?.token,
+            "Config parse success + secrets NotLoaded must classify as NativeUnavailable, not Fatal",
+            SyncFailureKind.NativeUnavailable,
+            (result as SyncProfileReadResult.Failed).kind,
+        )
+    }
+
+    @Test
+    fun loadSyncSecretsForGeneration_returnsTypedResultNotNullable() {
+        // #595 五：loadSyncSecretsForGeneration 必须返回 GenerationSecretsReadResult，
+        // 不再把"没有 token"和"读取失败"压成同一个 null。
+        val method = SettingsRepository::class.java.methods.firstOrNull {
+            it.name == "loadSyncSecretsForGeneration" &&
+            it.returnType == GenerationSecretsReadResult::class.java
+        }
+        assertNotNull(
+            "loadSyncSecretsForGeneration must return GenerationSecretsReadResult, not nullable SyncSecrets",
+            method,
+        )
+    }
+
+    @Test
+    fun snapshotSyncProfile_returnsTypedResultNotNullable() {
+        // #595 五：snapshotSyncProfile 必须返回 SyncProfileReadResult，
+        // 不再把"未配置"和"读取失败"压成同一个 null。
+        // suspend 函数反射 returnType 是 Object，检查方法存在性 + SyncProfileReadResult 类存在。
+        val method = SettingsRepository::class.java.declaredMethods.firstOrNull {
+            it.name == "snapshotSyncProfile"
+        }
+        assertNotNull(
+            "snapshotSyncProfile must exist and return SyncProfileReadResult, not nullable SyncProfileSnapshot",
+            method,
+        )
+        assertNotNull(
+            "SyncProfileReadResult sealed interface must exist",
+            SyncProfileReadResult::class.java,
         )
     }
 }

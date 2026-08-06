@@ -66,6 +66,7 @@ import com.xiwei.sujian.data.SyncCoordinator
 import com.xiwei.sujian.data.SyncOutcome
 import com.xiwei.sujian.data.SyncFailureKind
 import com.xiwei.sujian.data.SyncSession
+import com.xiwei.sujian.data.toConfigSecretsOrNull
 import com.xiwei.sujian.model.SyncTrigger
 
 enum class SyncCommandState { IDLE, RUNNING, SUCCESS, FAILURE }
@@ -269,8 +270,8 @@ class SettingsViewModel(
                 SettingsUiState(
                     settings = if (localRevision == snapshotLocalRev) settings else current.settings,
                     fontSize = if (fontSizeRevision == snapshotFontSizeRev) fontSize else current.fontSize,
-                    syncConfig = if (syncConfigRevision == snapshotSyncConfigRev) committedProfile?.first ?: current.syncConfig else current.syncConfig,
-                    syncSecrets = if (syncSecretsRevision == snapshotSyncSecretsRev) committedProfile?.second ?: current.syncSecrets else current.syncSecrets,
+                    syncConfig = if (syncConfigRevision == snapshotSyncConfigRev) committedProfile.toConfigSecretsOrNull()?.first ?: current.syncConfig else current.syncConfig,
+                    syncSecrets = if (syncSecretsRevision == snapshotSyncSecretsRev) committedProfile.toConfigSecretsOrNull()?.second ?: current.syncSecrets else current.syncSecrets,
                     syncCapability = syncCapability,
                     secureStorageWarning = secureStorageWarning,
                     builtinThemes = builtinThemes,
@@ -654,14 +655,14 @@ class SettingsViewModel(
                 val profile = withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile() }
                 if (syncConfigRevision != failure.revision) return
                 syncConfigRevision = syncConfigPersistedRevision
-                _uiState.update { it.copy(syncConfig = profile?.first ?: it.syncConfig) }
+                _uiState.update { it.copy(syncConfig = profile.toConfigSecretsOrNull()?.first ?: it.syncConfig) }
             }
             SaveField.SYNC_SECRETS -> {
                 if (syncSecretsRevision != failure.revision) return
                 val profile = withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile() }
                 if (syncSecretsRevision != failure.revision) return
                 syncSecretsRevision = syncSecretsPersistedRevision
-                _uiState.update { it.copy(syncSecrets = profile?.second ?: it.syncSecrets) }
+                _uiState.update { it.copy(syncSecrets = profile.toConfigSecretsOrNull()?.second ?: it.syncSecrets) }
             }
         }
     }
@@ -761,8 +762,8 @@ class SettingsViewModel(
                 SettingsUiState(
                     settings = if (!hasUnsavedLocal()) settings else current.settings,
                     fontSize = if (!hasUnsavedFontSize()) fontSize else current.fontSize,
-                    syncConfig = if (!hasUnsavedSyncConfig()) committedProfile?.first ?: current.syncConfig else current.syncConfig,
-                    syncSecrets = if (!hasUnsavedSyncSecrets()) committedProfile?.second ?: current.syncSecrets else current.syncSecrets,
+                    syncConfig = if (!hasUnsavedSyncConfig()) committedProfile.toConfigSecretsOrNull()?.first ?: current.syncConfig else current.syncConfig,
+                    syncSecrets = if (!hasUnsavedSyncSecrets()) committedProfile.toConfigSecretsOrNull()?.second ?: current.syncSecrets else current.syncSecrets,
                     syncCapability = syncCapability,
                     secureStorageWarning = secureStorageWarning,
                     builtinThemes = builtinThemes,

@@ -24,6 +24,10 @@ data class EditorSessionState(
     val bindingState: WindowBindingState = WindowBindingState.Idle,
     /** #595 一：最后应用的 Repository 正文 hash — 幂等去重 RepositoryLoaded 事件。 */
     val lastRepositoryHash: String = "",
+    /** #595 三：编辑状态 — 从唯一 SessionState 派生，不再独立可写。 */
+    val editingState: EditingState = EditingState.IDLE,
+    /** #595 三：活动目标 ID — 从唯一 SessionState 派生，不再独立可写。 */
+    val activeTargetId: String? = null,
 )
 
 /**

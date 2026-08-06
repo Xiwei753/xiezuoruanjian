@@ -54,13 +54,19 @@ class SyncCoordinator(
     suspend fun runSync(trigger: SyncTrigger, snapshot: SyncProfileSnapshot? = null): SyncOutcome {
         DiagnosticsEvents.syncEvent(trigger.name.lowercase(), "start")
         try {
-            val profile = snapshot ?: withContext(Dispatchers.IO) {
-                SyncProfileGate.snapshotExclusive { settingsRepository.snapshotSyncProfile() }
-            }
-            if (profile == null) {
-                DiagnosticsLogger.w("SyncCoordinator", "Sync profile snapshot unavailable — Fatal")
-                syncStatusRepository.notifySyncFailed()
-                return SyncFailureKind.Fatal.toOutcome()
+            val profile: SyncProfileSnapshot = snapshot ?: run {
+                val result = withContext(Dispatchers.IO) {
+                    SyncProfileGate.snapshotExclusive { settingsRepository.snapshotSyncProfile() }
+                }
+                when (result) {
+                    is SyncProfileReadResult.Found -> result.snapshot
+                    is SyncProfileReadResult.NotConfigured -> result.snapshot
+                    is SyncProfileReadResult.Failed -> {
+                        DiagnosticsLogger.w("SyncCoordinator", "Sync profile snapshot failed: ${result.message}")
+                        syncStatusRepository.notifySyncFailed()
+                        return result.kind.toOutcome()
+                    }
+                }
             }
             val config = profile.config
             if (config.enabled != true) {

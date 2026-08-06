@@ -129,3 +129,43 @@ data class SyncProfileSnapshot(
     val config: SyncConfig,
     val secrets: SyncSecrets,
 )
+
+/**
+ * #595 五：generation 凭据读取的类型化结果 — 不再把"没有 token"和"读取失败"
+ * 压成同一个 null。
+ *
+ * - [Found]：安全存储中存在有效凭据（token 非空）。
+ * - [NotConfigured]：该 generation 没有凭据条目或 token 为空 — 用户确实未配置。
+ * - [Failed]：安全存储读取失败、解密失败或原生库未加载 — 不得当作"未配置"。
+ */
+sealed interface GenerationSecretsReadResult {
+    data class Found(val secrets: SyncSecrets) : GenerationSecretsReadResult
+    data object NotConfigured : GenerationSecretsReadResult
+    data class Failed(val kind: SyncFailureKind, val message: String?) : GenerationSecretsReadResult
+}
+
+/**
+ * #595 五：同步配置完整快照读取的类型化结果。
+ *
+ * - [Found]：config + secrets 均成功读取，凭据非空。
+ * - [NotConfigured]：config 读取成功，但凭据为空（用户未配置 token）。
+ *   snapshot 仍携带 config 和空 secrets，调用方可据此显示"未配置"而非"错误"。
+ * - [Failed]：config 解析失败或凭据读取失败 — 向设置页和同步状态返回类型化错误，
+ *   不得转换成 [SyncSecrets] 或 null。
+ */
+sealed interface SyncProfileReadResult {
+    data class Found(val snapshot: SyncProfileSnapshot) : SyncProfileReadResult
+    data class NotConfigured(val snapshot: SyncProfileSnapshot) : SyncProfileReadResult
+    data class Failed(val kind: SyncFailureKind, val message: String?) : SyncProfileReadResult
+}
+
+/**
+ * #595 五：将 [SyncProfileReadResult] 解包为 config+secrets Pair — 供仅需
+ * config/secrets 内容的调用方使用。[Failed] 返回 null（保留当前值），
+ * [Found]/[NotConfigured] 返回 snapshot 中的 config+secrets。
+ */
+fun SyncProfileReadResult.toConfigSecretsOrNull(): Pair<SyncConfig, SyncSecrets>? = when (this) {
+    is SyncProfileReadResult.Found -> snapshot.config to snapshot.secrets
+    is SyncProfileReadResult.NotConfigured -> snapshot.config to snapshot.secrets
+    is SyncProfileReadResult.Failed -> null
+}

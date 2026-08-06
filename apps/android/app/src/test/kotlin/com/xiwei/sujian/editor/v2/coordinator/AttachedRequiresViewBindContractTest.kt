@@ -104,10 +104,12 @@ class AttachedRequiresViewBindContractTest {
         coordinator: EditorSessionCoordinator,
         state: WindowBindingState,
     ) {
-        val field = EditorSessionCoordinator::class.java.getDeclaredField("_windowBindingStateFlow")
+        // #595 三：_windowBindingStateFlow 已改为从 _sessionStateFlow 派生，
+        // 通过 _sessionStateFlow.copy(bindingState = state) 设置。
+        val field = EditorSessionCoordinator::class.java.getDeclaredField("_sessionStateFlow")
         field.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val flow = field.get(coordinator) as kotlinx.coroutines.flow.MutableStateFlow<WindowBindingState>
-        flow.value = state
+        val flow = field.get(coordinator) as kotlinx.coroutines.flow.MutableStateFlow<EditorSessionState>
+        flow.value = flow.value.copy(bindingState = state)
     }
 }
