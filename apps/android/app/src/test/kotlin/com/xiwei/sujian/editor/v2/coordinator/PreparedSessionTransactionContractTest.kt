@@ -109,18 +109,62 @@ class PreparedSessionTransactionContractTest {
 
     @Test
     fun commitPreparedSession_rejectsHandleMismatchingRecord() {
-        // 防御：记录仍必须指向 handle 的 session（无并发修改/已回滚）。
+        // #595 一：防御 — 复用既有 session 时，记录已不再指向该 session → 拒绝提交。
+        // 新建事务不要求记录已存在 handle.sessionId（prepare 不写 store），故 reject
+        // 场景改为复用事务：handle 声称复用 7UL，但记录 sessionId 仍是 0UL。
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
         val handle = PreparedSessionHandle(
             targetId = "b",
-            sessionId = 7UL, // 记录中不存在该 session
+            sessionId = 7UL,
             snapshot = TargetSnapshot("textB", 5, 1L, 0, 5),
+            newlyCreated = false,
+            previousRecord = EditorSessionRecord("b", sessionId = 7UL),
+        )
+        assertFalse("复用事务记录不再指向 handle session 必须拒绝提交", coordinator.commitPreparedSession(handle))
+        assertNull(coordinator.sessionState.targetId)
+    }
+
+    @Test
+    fun commitPreparedSession_newlyCreatedWritesStoreSessionId() {
+        // #595 一：新建 session（prepare 不写 store，记录 sessionId=0UL）提交时必须
+        // 把 handle.sessionId 写入正式记录 — 旧实现要求 record.sessionId==handle.sessionId，
+        // 新建 session（0UL != 7UL）永远失败，首次打开新章节必然 LoadFailed。
+        val coordinator = createCoordinator()
+        coordinator.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
+        val handle = PreparedSessionHandle(
+            targetId = "b",
+            sessionId = 7UL,
+            snapshot = TargetSnapshot("textB", 5, 2L, 0, 5),
             newlyCreated = true,
             previousRecord = null,
         )
-        assertFalse("session 与记录不一致必须拒绝提交", coordinator.commitPreparedSession(handle))
-        assertNull(coordinator.sessionState.targetId)
+        assertTrue("新建 session 提交必须成功（不要求记录已存在该 sessionId）", coordinator.commitPreparedSession(handle))
+        val state = coordinator.sessionState
+        assertEquals(7UL, state.sessionId)
+        assertEquals("b", state.activeTargetId)
+        assertEquals("textB", state.text)
+        assertEquals(2L, state.revision)
+        // store 记录的 sessionId 必须与 SessionState 一致（不再分裂为 0UL）。
+        assertEquals(7UL, coordinator.getPersistentSessionId("b"))
+    }
+
+    @Test
+    fun commitPreparedSession_newlyCreatedRejectsIfRecordReplaced() {
+        // #595 一：新建事务期间记录被并发替换为有效 session（9UL）→ prepare 前值
+        // 是 0UL，但记录已是 9UL，句柄失效，拒绝提交。
+        val coordinator = createCoordinator()
+        coordinator.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
+        val handle = PreparedSessionHandle(
+            targetId = "b",
+            sessionId = 7UL,
+            snapshot = TargetSnapshot("textB", 5, 2L, 0, 5),
+            newlyCreated = true,
+            previousRecord = null,
+        )
+        // 模拟并发：直接通过复用事务把记录 sessionId 占用为 9UL。
+        coordinator.commitPreparedSession(handle.copy(sessionId = 9UL))
+        assertFalse("记录已被并发占用为 9UL，原句柄失效必须拒绝", coordinator.commitPreparedSession(handle))
     }
 
     @Test

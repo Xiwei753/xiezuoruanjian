@@ -137,6 +137,22 @@ sealed interface ExternalContentDecision {
 }
 
 /**
+ * #595 五：外部正文 reset 的可提交事务结果 — 替代旧 resetPersistentSession 返回 Unit。
+ *
+ * 旧实现 reset 失败（Core textEditSessionReset 失败、session 无效、非持久 target）
+ * 时只进入空分支，WritingPane 仍无条件执行 applyExternalContentFact +
+ * applyExternalContentToUi，导致 Rust session（旧正文）/ SessionStore（新版本）/
+ * ViewModel（新正文+hash）三份状态分裂。
+ *
+ * - [Success]：Core reset 成功，携带真实 snapshot — 调用方据此一次性提交会话事实与 UI；
+ * - [Failed]：reset 未执行或 Core 失败 — 调用方必须保持旧正文与旧版本，不得推进任何状态。
+ */
+sealed interface ExternalResetResult {
+    data class Success(val snapshot: TargetSnapshot) : ExternalResetResult
+    data object Failed : ExternalResetResult
+}
+
+/**
  * #592 一/四：#595 四：会话层协调器 — 只管理 Rust session、正文/选区纯数据快照、
  * Undo/Redo 所属 session、活动目标、窗口绑定状态机与编辑事务。
  *
@@ -478,9 +494,15 @@ class EditorSessionCoordinator(
         if (doc.text == fact.text) return ExternalContentDecision.IgnoreSameContent
         // 空 committed（从未建立版本事实）→ 首次应用（章节首次加载）。
         if (doc.committedVersion.isEmpty) return ExternalContentDecision.Apply
-        // 正文不同且版本不可比较 → 类型化冲突，禁止盲目覆盖。
+        // #595 四：正文不同且版本不可比较 — Repository 加载（用户主动打开章节）
+        // 信任磁盘内容直接 Apply；同步合并不得盲目覆盖（Git 回退/外部修改/迟到 IO），
+        // 进入 IgnoreUncomparableConflict 由调用方走重新读取/三方合并/冲突路径。
         if (!isComparable(doc.committedVersion, fact.sourceVersion)) {
-            return ExternalContentDecision.IgnoreUncomparableConflict
+            return if (fact.origin == DocumentFactOrigin.REPOSITORY_LOAD) {
+                ExternalContentDecision.Apply
+            } else {
+                ExternalContentDecision.IgnoreUncomparableConflict
+            }
         }
         return ExternalContentDecision.Apply
     }
@@ -711,7 +733,16 @@ class EditorSessionCoordinator(
      */
     fun commitPreparedSession(handle: PreparedSessionHandle, windowId: String = "prepared"): Boolean {
         val record = store.record(handle.targetId) ?: return false
-        if (record.sessionId != handle.sessionId) return false
+        // #595 一：句柄仍有效 — 新建事务要求记录 sessionId 仍是 prepare 前的值
+        // （prepare 不修改 store；previousRecord.sessionId 是事务前值，默认 0UL）；
+        // 复用事务要求记录仍指向同一 session。不能要求"记录已存在 handle.sessionId"，
+        // 否则新建 session（prepare 不写 store）永远无法提交。
+        val expectedSessionId = if (handle.newlyCreated) {
+            handle.previousRecord?.sessionId ?: 0UL
+        } else {
+            handle.sessionId
+        }
+        if (record.sessionId != expectedSessionId) return false
         // 1. 冻结并撤销 A 的输入 lease。
         invalidateInputLease()
         // 2. 一次性提交旧活动目标（若仍是活动状态）。
@@ -725,8 +756,24 @@ class EditorSessionCoordinator(
         val snapshot = handle.snapshot
         val attaching = WindowBindingState.Attaching(windowId, handle.targetId, handle.sessionId)
         updateSessionState { _ ->
+            // #595 一：提交时把 handle.sessionId + snapshot 写入 B 的正式记录 —
+            // prepare 不修改 store，commit 是唯一写入点，保证 store 与 SessionState 一致。
             val rec = store.record(handle.targetId)
             val doc = rec?.documentState ?: DocumentState()
+            store.put(
+                (rec ?: EditorSessionRecord(
+                    targetId = handle.targetId,
+                    persistent = handle.previousRecord?.persistent ?: false,
+                )).copy(sessionId = handle.sessionId)
+                    .withDocumentState {
+                        it.copy(
+                            text = snapshot.text,
+                            revision = snapshot.revision,
+                            selectionAnchorUtf8 = snapshot.selectionAnchorUtf8,
+                            selectionHeadUtf8 = snapshot.selectionHeadUtf8,
+                        )
+                    }
+            )
             EditorSessionState(
                 targetId = handle.targetId,
                 sessionId = handle.sessionId,
@@ -1101,50 +1148,61 @@ class EditorSessionCoordinator(
         return true
     }
 
-    fun resetPersistentSession(targetId: String, text: String, cursorUtf8: Int, source: SessionResetSource = SessionResetSource.EXTERNAL) {
-        if (source == SessionResetSource.LOCAL_CONTENT_CHANGED) return
+    fun resetPersistentSession(targetId: String, text: String, cursorUtf8: Int, source: SessionResetSource = SessionResetSource.EXTERNAL): ExternalResetResult {
+        // #595 五：返回可提交事务结果 — reset 未执行或 Core 失败时返回 Failed，
+        // 调用方不得推进 SessionStore/ViewModel 状态（旧实现返回 Unit，WritingPane
+        // 无条件推进导致三份状态分裂）。
+        if (source == SessionResetSource.LOCAL_CONTENT_CHANGED) return ExternalResetResult.Failed
         val record = store.record(targetId)
-        if (record?.persistent != true) return
+        if (record?.persistent != true) return ExternalResetResult.Failed
 
-        var sessionId = record.sessionId
+        val sessionId = record.sessionId
         if (sessionId == 0UL) {
             val newSessionId = createSession(targetId, text, cursorUtf8, true)
             if (newSessionId == null || newSessionId == 0UL) {
                 Log.e(TAG, "resetPersistentSession($targetId): failed to create session for empty/missing persistent session")
-                return
+                return ExternalResetResult.Failed
             }
             store.update(targetId) { it.copy(sessionId = newSessionId) }
             if (targetId == activeTargetId) {
                 // #595 三：活动 session 只存在于 SessionState 快照中 — 重建后同步快照。
                 updateSessionState { it.copy(sessionId = newSessionId) }
             }
-            refreshDetachedSnapshot(targetId)
-            return
+            val snapshot = refreshDetachedSnapshot(targetId)
+            return ExternalResetResult.Success(snapshot ?: TargetSnapshot(text, cursorUtf8, 0L, cursorUtf8, cursorUtf8))
         }
 
         if (!validateSession(sessionId)) {
             Log.w(TAG, "resetPersistentSession($targetId): session $sessionId no longer valid, deleting and recreating")
             store.update(targetId) { it.copy(sessionId = 0UL) }
             closeSession(sessionId)
-            resetPersistentSession(targetId, text, cursorUtf8, source)
-            return
+            return resetPersistentSession(targetId, text, cursorUtf8, source)
         }
 
-        when (appServiceBridge.textEditSessionReset(sessionId, text, cursorUtf8.toUInt())) {
-            is BridgeResult.Success -> { }
-            else -> { }
+        return when (val result = appServiceBridge.textEditSessionReset(sessionId, text, cursorUtf8.toUInt())) {
+            is BridgeResult.Success -> {
+                val snapshot = refreshDetachedSnapshot(targetId)
+                ExternalResetResult.Success(snapshot ?: TargetSnapshot(text, cursorUtf8, 0L, cursorUtf8, cursorUtf8))
+            }
+            else -> {
+                Log.e(TAG, "resetPersistentSession($targetId): Core textEditSessionReset failed — 保持旧正文与旧版本")
+                ExternalResetResult.Failed
+            }
         }
-        refreshDetachedSnapshot(targetId)
     }
 
-    /** Detached 状态下外部内容重置后，刷新保留的 snapshot，新窗口附着时读到最新状态。 */
-    private fun refreshDetachedSnapshot(targetId: String) {
+    /**
+     * Detached 状态下外部内容重置后，刷新保留的 snapshot，新窗口附着时读到最新状态。
+     * #595 五：返回 reset 后的真实 snapshot 供 [resetPersistentSession] 上报。
+     */
+    private fun refreshDetachedSnapshot(targetId: String): TargetSnapshot? {
+        val snapshot = queryTargetSnapshot(targetId)
         val state = windowBindingState
         if (state is WindowBindingState.Detached && state.targetId == targetId) {
-            val sid = store.record(targetId)?.sessionId ?: return
-            val snapshot = if (validateSession(sid)) queryTargetSnapshot(targetId) else null
+            val sid = store.record(targetId)?.sessionId ?: return snapshot
             updateSessionState { it.copy(bindingState = WindowBindingState.Detached(targetId, sid, snapshot)) }
         }
+        return snapshot
     }
 
     // ── SessionCommandPort implementation (bridge-level, no View) ──

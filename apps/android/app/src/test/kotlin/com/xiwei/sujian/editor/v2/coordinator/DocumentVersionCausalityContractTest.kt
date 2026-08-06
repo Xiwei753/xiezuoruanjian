@@ -195,4 +195,50 @@ class DocumentVersionCausalityContractTest {
         assertFalse(v.isEmpty)
         assertTrue(DocumentVersion::class.java.declaredFields.none { it.name == "syncManifestRevision" })
     }
+
+    @Test
+    fun repositoryLoadUncomparable_appliesTrustingDisk() {
+        // #595 四：Repository 加载（用户主动打开章节）版本不可比较时仍 Apply —
+        // 用户主动加载信任磁盘内容（Git 回退/外部修改后用户想看到磁盘）。
+        // 旧实现 loadChapter 自行填 parentVersion=previousCommitted 伪造后代；
+        // 新实现不填 parent，shouldApplyExternalContent 对 REPOSITORY_LOAD 放行。
+        val coordinator = createCoordinator()
+        coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
+        coordinator.applyExternalContentFact(
+            TargetDocumentFact("t1", "v1", DocumentVersion(contentHash = "hash-1"), DocumentVersion(), DocumentFactOrigin.REPOSITORY_LOAD)
+        )
+        val reloaded = TargetDocumentFact(
+            "t1", "v2-disk-changed",
+            DocumentVersion(contentHash = "hash-2"), // 无 parent，不伪称后代
+            DocumentVersion(),
+            DocumentFactOrigin.REPOSITORY_LOAD,
+        )
+        assertEquals(
+            "REPOSITORY_LOAD 不可比较时信任磁盘直接 Apply",
+            ExternalContentDecision.Apply,
+            coordinator.shouldApplyExternalContent(reloaded),
+        )
+    }
+
+    @Test
+    fun syncMergedUncomparable_remainsConflict() {
+        // #595 四：同步合并版本不可比较（Git 回退/外部修改/迟到 IO）→ 冲突，
+        // 不得盲目覆盖用户输入（与 REPOSITORY_LOAD 区分）。
+        val coordinator = createCoordinator()
+        coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
+        coordinator.applyExternalContentFact(
+            TargetDocumentFact("t1", "v1", DocumentVersion(contentHash = "hash-1"), DocumentVersion(), DocumentFactOrigin.REPOSITORY_LOAD)
+        )
+        val merged = TargetDocumentFact(
+            "t1", "v2-sync",
+            DocumentVersion(contentHash = "hash-2", syncCommitId = "commit-2"), // 无 parent
+            DocumentVersion(),
+            DocumentFactOrigin.SYNC_MERGED,
+        )
+        assertEquals(
+            "SYNC_MERGED 不可比较时必须冲突，不盲目覆盖",
+            ExternalContentDecision.IgnoreUncomparableConflict,
+            coordinator.shouldApplyExternalContent(merged),
+        )
+    }
 }

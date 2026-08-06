@@ -398,18 +398,20 @@ class EditorWindowHost(
         }
     }
 
-    fun resetPersistentSession(targetId: String, text: String, cursorUtf8: Int, source: SessionResetSource = SessionResetSource.EXTERNAL) {
-        // #595 二：Core 侧只允许一次 reset 命令（textEditSessionReset / createSession）。
+    fun resetPersistentSession(targetId: String, text: String, cursorUtf8: Int, source: SessionResetSource = SessionResetSource.EXTERNAL): ExternalResetResult {
+        // #595 二/五：Core 侧只允许一次 reset 命令（textEditSessionReset / createSession）。
         // 完成后 View 不得再次 loadText（那是第二次 Core 命令，会 revision+1、
         // 重复清空 Undo/Redo/composition）— 只从真实 snapshot attach 到本地镜像。
-        sessionCoordinator.resetPersistentSession(targetId, text, cursorUtf8, source)
-        if (targetId == activeTargetId) {
+        // #595 五：返回可提交事务结果 — reset 失败时返回 Failed，调用方不得推进 UI/会话事实。
+        val result = sessionCoordinator.resetPersistentSession(targetId, text, cursorUtf8, source)
+        if (result is ExternalResetResult.Success && targetId == activeTargetId) {
             val view = sharedEditorView
             if (view != null) {
                 attachSnapshotToView(targetId, view)
             }
         }
         // 非活动预览直接读取会话层 snapshot（getChapterPreviewState），无需重建投影运行时。
+        return result
     }
 
     /**

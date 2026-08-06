@@ -804,15 +804,11 @@ class EditorViewModel(
             // 同步前 flush 不把"从未保存"误判为假成功。
             saveReceipts.record(chapterTargetId(session.projectId, session.volumeId, session.chapterId), 0L, meta.hash)
             val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
-            // #595 五：重新加载时磁盘版本携带 parentVersion=该 target 上次已知版本 —
-            // 磁盘内容与已提交版本构成因果链，reducer 可比较并安全 reset；
-            // 首次加载（committed 为空）直接可应用。
-            val previousCommitted = _sessionCoordinator?.documentCommittedVersionFor(targetId) ?: DocumentVersion()
-            val loadedVersion = if (previousCommitted.isEmpty) {
-                DocumentVersion(contentHash = meta.hash)
-            } else {
-                DocumentVersion(contentHash = meta.hash, parentVersion = previousCommitted)
-            }
+            // #595 四：Android 不自行填写 parentVersion — 磁盘版本可能来自 Git 回退、
+            // 外部修改或迟到 IO，不能伪称为上次 committed 的后代。版本因果只能由
+            // Core/Repository 返回（当前 Core 尚无独立章节 revision，保持无 parent）。
+            // shouldApplyExternalContent 对 REPOSITORY_LOAD 信任磁盘内容直接 Apply。
+            val loadedVersion = DocumentVersion(contentHash = meta.hash)
             // #595 二：Repository 加载完成即发布文档事实（真实 hash 锚点）。
             // 最终 revision 来自 reset 后的真实 Rust snapshot。
             emitDocumentFact(
@@ -866,6 +862,7 @@ class EditorViewModel(
             saveStatus = SaveStatus.Saved,
         )
         contentDirty = false
+        contentExplicitlyCleared = false
         // #595 七：同步合并内容已由 Core 写入磁盘 — 记录回执（revision 取
         // reset 后的真实 session revision），同步后 flush 不误判为未保存。
         val revision = _sessionCoordinator?.sessionState?.revision ?: 0L
@@ -986,9 +983,15 @@ class EditorViewModel(
      * - 空正文 + 已编辑但未清空 → 防御性失败（磁盘与屏幕不一致）。
      */
     fun requestSave(): kotlinx.coroutines.Deferred<Boolean> {
-        val content = _uiState.value.content
         val session = currentSession
         val deferred = kotlinx.coroutines.CompletableDeferred<Boolean>()
+        // #595 二：原子取得文档 flush 快照 — 正文与 revision 在同一时刻读取。
+        // 旧实现调用时读 _uiState.content（正文 A），协程内读 sessionState.revision
+        // （revision 2），保存正文 A 却把回执记为 revision 2。现在两者在 main 线程
+        // 同步代码中连续取得，协程只使用这份不可变快照。
+        val flushState = _sessionCoordinator?.sessionState
+        val content = flushState?.text ?: _uiState.value.content
+        val requiredRevision = flushState?.revision ?: 0L
         viewModelScope.launch {
             if (session == null) {
                 // 无活动章节：没有本地输入需要保护。
@@ -996,8 +999,6 @@ class EditorViewModel(
                 return@launch
             }
             val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
-            // #595 七：flush 屏障要求的 revision = 请求时刻屏幕正文的 Rust revision。
-            val requiredRevision = _sessionCoordinator?.sessionState?.revision ?: 0L
             if (content.trim().isEmpty()) {
                 if (contentExplicitlyCleared) {
                     val sendResult = saveCommandChannel.trySend(SaveCommand.Clear(session, requiredRevision))
@@ -1052,13 +1053,16 @@ class EditorViewModel(
                         }
                     }
                     is SaveCommand.Flush -> {
-                        // #595 七：Flush 是指定 target 和 revision 的持久化屏障 —
+                        // #595 二/七：Flush 是指定 target 和 revision 的持久化屏障 —
                         // 只有确认该 revision 对应正文已经得到保存回执（且与
                         // committedVersion 一致）才返回成功。删除跨章节全局 lastSaveResult。
+                        // #595 二：再次确认活动文档仍基于该 snapshot — 保存后又输入会让
+                        // sessionState.revision 前进，不再等于 requiredRustRevision，
+                        // flush 失败，同步中止（旧实现只比较回执 revision，不确认当前活动 revision）。
                         val committed = _sessionCoordinator?.documentCommittedVersionFor(cmd.targetId)
-                        cmd.reply.complete(
-                            saveReceipts.canFlush(cmd.targetId, cmd.requiredRustRevision, committed?.contentHash)
-                        )
+                        val receiptOk = saveReceipts.canFlush(cmd.targetId, cmd.requiredRustRevision, committed?.contentHash)
+                        val currentRevision = _sessionCoordinator?.sessionState?.revision ?: 0L
+                        cmd.reply.complete(receiptOk && currentRevision == cmd.requiredRustRevision)
                     }
                 }
             }
@@ -1078,6 +1082,11 @@ class EditorViewModel(
                             saveStatus = SaveStatus.Saved
                         )
                         previousText = ""
+                        // #595 三：清空落盘成功后统一清理 dirty/cleared — 否则下次同步
+                        // requestSave 仍见 contentExplicitlyCleared=true 重复发送 Clear，
+                        // 再次触发空覆盖保护（旧实现分散在多套可写状态未统一清理）。
+                        contentDirty = false
+                        contentExplicitlyCleared = false
                         val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
                         // #595 七：清空落盘后记录回执（revision 精确锚定）。
                         saveReceipts.record(targetId, revisionAtEnqueue, savedHash)
@@ -1166,6 +1175,9 @@ class EditorViewModel(
                                 targetId,
                                 DocumentVersion(contentHash = savedHash),
                             )
+                            // #595 三：保存成功后统一清理 ViewModel dirty 标记 —
+                            // 与 DocumentState.localDirty（markSaved 已清）保持一致。
+                            contentDirty = false
                             val pending = pendingSaveContent
                             pendingSaveContent = null
                             if (pending != null && pending != contentToSave) {

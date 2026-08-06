@@ -231,16 +231,18 @@ fun WritingPane(
     // #595 一/二：外部文档事实（RepositoryLoaded/SyncMerged）— 调用方已通过
     // shouldApplyExternalContent 确认版本更新与本地 dirty 状态，此处只执行
     // Core reset 和 UI 同步，不再重复构造事件做检查。
-    fun applyExternalContent(text: String, fileHash: String) {
-        coordinator.resetPersistentSession(
+    fun applyExternalContent(text: String, fileHash: String): com.xiwei.sujian.editor.v2.coordinator.ExternalResetResult {
+        // #595 五：返回 reset 结果 — 调用方据此决定是否推进会话事实与 UI。
+        val result = coordinator.resetPersistentSession(
             targetId,
             text,
             text.toByteArray(Charsets.UTF_8).size,
             SessionResetSource.EXTERNAL
         )
-        if (coordinator.activeTargetId != targetId) {
+        if (result is com.xiwei.sujian.editor.v2.coordinator.ExternalResetResult.Success && coordinator.activeTargetId != targetId) {
             coordinator.beginEdit(targetId, text.toByteArray(Charsets.UTF_8).size)
         }
+        return result
     }
 
     LaunchedEffect(targetId) {
@@ -250,12 +252,17 @@ fun WritingPane(
             if (currentUiState.loading) return@collect
             when (val decision = coordinator.sessionCoordinator.shouldApplyExternalContent(fact)) {
                 ExternalContentDecision.Apply -> {
-                    applyExternalContent(fact.text, fact.sourceVersion.contentHash)
-                    coordinator.sessionCoordinator.applyExternalContentFact(fact)
-                    if (fact.origin == com.xiwei.sujian.editor.v2.coordinator.DocumentFactOrigin.SYNC_MERGED) {
-                        // #595 三：同步合并同时更新 ViewModel 正文/hash/保存状态/字数 —
-                        // 磁盘、Rust session、ViewModel 三方保持一致。
-                        currentViewModel.applyExternalContentToUi(targetId, fact.text, fact.sourceVersion.contentHash)
+                    val resetResult = applyExternalContent(fact.text, fact.sourceVersion.contentHash)
+                    if (resetResult is com.xiwei.sujian.editor.v2.coordinator.ExternalResetResult.Success) {
+                        // #595 五：仅 Core reset 成功才一次性提交会话事实与 UI —
+                        // reset 失败时保持旧正文与旧版本，不得推进任何状态（旧实现
+                        // 无条件推进导致 Rust session/SessionStore/ViewModel 三份分裂）。
+                        coordinator.sessionCoordinator.applyExternalContentFact(fact)
+                        if (fact.origin == com.xiwei.sujian.editor.v2.coordinator.DocumentFactOrigin.SYNC_MERGED) {
+                            // #595 三：同步合并同时更新 ViewModel 正文/hash/保存状态/字数 —
+                            // 磁盘、Rust session、ViewModel 三方保持一致。
+                            currentViewModel.applyExternalContentToUi(targetId, fact.text, fact.sourceVersion.contentHash)
+                        }
                     }
                 }
                 ExternalContentDecision.IgnoreSameContent -> {
