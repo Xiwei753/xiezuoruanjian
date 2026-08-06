@@ -241,7 +241,14 @@ class EditorViewModel(
         // 注册携带 owner token（本 VM 实例）：旧实例 onCleared 只能关闭自己的
         // 注册，不能清掉新实例的 flusher（Activity 重建/生命周期交错防护）。
         if (gateRegistration == null) {
-            gateRegistration = WorkspaceDocumentGate.register(this) { requestSave().await() }
+            gateRegistration = WorkspaceDocumentGate.register(
+            this,
+            flush = { requestSave().await() },
+            documentIdentity = {
+                val lease = _sessionCoordinator?.currentInputLease()
+                if (lease != null) "${lease.targetId}:${lease.sessionId}:${lease.epoch}" else null
+            },
+        )
         }
     }
 
@@ -344,6 +351,22 @@ class EditorViewModel(
      * Flush 屏障只放行"该 revision 的正文已得到保存回执"的 target。
      */
     private val saveReceipts = DocumentSaveReceiptTracker()
+
+    /**
+     * #595 四：从当前活动会话构造保存令牌 — 包含完整文档身份
+     * （target/session/epoch/revision/hash），不只比较 revision 数字。
+     */
+    private fun buildSaveToken(targetId: String, revision: Long, hash: String): DocumentSaveReceiptTracker.SaveToken {
+        val lease = _sessionCoordinator?.currentInputLease()
+        return DocumentSaveReceiptTracker.SaveToken(
+            operationId = 0L,
+            targetId = targetId,
+            coreSessionId = lease?.sessionId ?: 0UL,
+            inputEpoch = lease?.epoch ?: 0L,
+            rustRevision = revision,
+            textHash = hash,
+        )
+    }
 
     /**
      * #595 七：屏幕正文是否自加载/外部应用以来被编辑过 — 未编辑的空章节
@@ -475,7 +498,7 @@ class EditorViewModel(
                             when (val result = workspaceRepository.saveChapterContent(oldSession.projectId, oldSession.volumeId, oldSession.chapterId, content)) {
                                 is com.xiwei.sujian.data.BridgeResult.Success -> {
                                     result.data?.contentHash?.let { hash ->
-                                        saveReceipts.record(oldTargetId, oldRevision, hash)
+                                        saveReceipts.record(buildSaveToken(oldTargetId, oldRevision, hash))
                                     }
                                     true
                                 }
@@ -504,7 +527,7 @@ class EditorViewModel(
                             when (val result = workspaceRepository.clearChapterContent(oldSession.projectId, oldSession.volumeId, oldSession.chapterId)) {
                                 is com.xiwei.sujian.data.BridgeResult.Success -> {
                                     result.data?.contentHash?.let { hash ->
-                                        saveReceipts.record(oldTargetId, oldRevision, hash)
+                                        saveReceipts.record(buildSaveToken(oldTargetId, oldRevision, hash))
                                     }
                                     true
                                 }
@@ -802,7 +825,7 @@ class EditorViewModel(
             contentDirty = false
             // #595 七：加载即记录磁盘版本回执（revision 0 — 尚未编辑，屏幕与磁盘一致），
             // 同步前 flush 不把"从未保存"误判为假成功。
-            saveReceipts.record(chapterTargetId(session.projectId, session.volumeId, session.chapterId), 0L, meta.hash)
+            saveReceipts.record(buildSaveToken(chapterTargetId(session.projectId, session.volumeId, session.chapterId), 0L, meta.hash))
             val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
             // #595 四：Android 不自行填写 parentVersion — 磁盘版本可能来自 Git 回退、
             // 外部修改或迟到 IO，不能伪称为上次 committed 的后代。版本因果只能由
@@ -866,7 +889,7 @@ class EditorViewModel(
         // #595 七：同步合并内容已由 Core 写入磁盘 — 记录回执（revision 取
         // reset 后的真实 session revision），同步后 flush 不误判为未保存。
         val revision = _sessionCoordinator?.sessionState?.revision ?: 0L
-        saveReceipts.record(targetId, revision, fileHash)
+        saveReceipts.record(buildSaveToken(targetId, revision, fileHash))
         previousText = text
         updateStats(text)
     }
@@ -985,21 +1008,19 @@ class EditorViewModel(
     fun requestSave(): kotlinx.coroutines.Deferred<Boolean> {
         val session = currentSession
         val deferred = kotlinx.coroutines.CompletableDeferred<Boolean>()
-        // #595 二：原子取得文档 flush 快照 — 正文与 revision 在同一时刻读取。
-        // 旧实现调用时读 _uiState.content（正文 A），协程内读 sessionState.revision
-        // （revision 2），保存正文 A 却把回执记为 revision 2。现在两者在 main 线程
-        // 同步代码中连续取得，协程只使用这份不可变快照。
-        val flushState = _sessionCoordinator?.sessionState
-        val content = flushState?.text ?: _uiState.value.content
-        val requiredRevision = flushState?.revision ?: 0L
-        // #595 二：验证 currentSession 与 sessionState 属于同一 target —
-        // 章节切换期间 currentSession 已更新为 B 但 sessionState.activeTargetId
-        // 仍是 A（commitPreparedSession 尚未执行），此时不得把 A 的正文保存到 B。
+        // #595 二：签发文档操作租约 — 一次性取得完整不可变文档快照，
+        // 不再拼接 currentSession + sessionState 两个独立状态源。
+        val lease = _sessionCoordinator?.issueDocumentOperationLease()
+        val content = lease?.text ?: _uiState.value.content
+        val requiredRevision = lease?.rustRevision ?: 0L
+        // #595 二：lease 校验 — currentSession 的 target 必须与 lease 的 target 一致，
+        // 且 lease 的 session/epoch 仍有效。任一不匹配返回失败，不拼接字段。
         // 旧实现组合 currentSession（ViewModel 字段）与全局 sessionState（Coordinator
         // StateFlow）两个独立状态源，交错时形成 A 正文 → B 章节的错误保存。
-        if (session != null && flushState != null && flushState.activeTargetId != null) {
+        if (session != null && lease != null) {
             val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
-            if (flushState.activeTargetId != targetId) {
+            if (lease.targetId != targetId ||
+                !_sessionCoordinator!!.isDocumentOperationLeaseCurrent(lease)) {
                 deferred.complete(false)
                 return deferred
             }
@@ -1072,7 +1093,7 @@ class EditorViewModel(
                         // sessionState.revision 前进，不再等于 requiredRustRevision，
                         // flush 失败，同步中止（旧实现只比较回执 revision，不确认当前活动 revision）。
                         val committed = _sessionCoordinator?.documentCommittedVersionFor(cmd.targetId)
-                        val receiptOk = saveReceipts.canFlush(cmd.targetId, cmd.requiredRustRevision, committed?.contentHash)
+                        val receiptOk = saveReceipts.canFlush(buildSaveToken(cmd.targetId, cmd.requiredRustRevision, committed?.contentHash ?: ""), committed?.contentHash)
                         val currentRevision = _sessionCoordinator?.sessionState?.revision ?: 0L
                         cmd.reply.complete(receiptOk && currentRevision == cmd.requiredRustRevision)
                     }
@@ -1101,7 +1122,7 @@ class EditorViewModel(
                         contentExplicitlyCleared = false
                         val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
                         // #595 七：清空落盘后记录回执（revision 精确锚定）。
-                        saveReceipts.record(targetId, revisionAtEnqueue, savedHash)
+                        saveReceipts.record(buildSaveToken(targetId, revisionAtEnqueue, savedHash))
                         // #595 二/六：保存成功上报 — 保存回执作为文档提交原子推进
                         // committed/sessionBase/lastSaved + 清除 localDirty，
                         // 同步合并以磁盘版本为基础可安全应用。
@@ -1173,7 +1194,7 @@ class EditorViewModel(
                             )
                             val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
                             // #595 七：保存落盘后记录回执（revision 精确锚定）。
-                            saveReceipts.record(targetId, currentRevision, savedHash)
+                            saveReceipts.record(buildSaveToken(targetId, currentRevision, savedHash))
                             // #595 三：保存回执按 revision 条件提交 — 只有当前活动
                             // revision 仍等于保存时的 revision 才标记 Saved、清 dirty、
                             // markSaved。用户在保存 IO 期间继续输入（revision 前进）时，

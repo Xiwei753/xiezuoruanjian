@@ -127,9 +127,13 @@ class ResetSnapshotCommitContractTest {
         assertTrue("requestSave method end must be found", methodEnd > methodStart)
         val body = source.substring(methodStart, methodEnd)
         assertTrue(
-            "requestSave must validate currentSession targetId matches sessionState.activeTargetId — " +
-            "章节切换期间 currentSession=B 但 sessionState=A 时不得把 A 正文保存到 B (#595 二)",
-            body.contains("flushState.activeTargetId != targetId"),
+            "requestSave must validate currentSession targetId matches lease targetId — " +
+            "章节切换期间 currentSession=B 但 lease=A 时不得把 A 正文保存到 B (#595 二)",
+            body.contains("lease.targetId != targetId"),
+        )
+        assertTrue(
+            "requestSave must validate lease is still current via DocumentOperationLease (#595 二)",
+            body.contains("isDocumentOperationLeaseCurrent(lease)"),
         )
         assertTrue(
             "requestSave must return false on targetId mismatch — no cross-chapter save (#595 二)",

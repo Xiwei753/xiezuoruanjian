@@ -27,10 +27,10 @@ class WorkspaceDocumentGateTest {
     @Test
     fun flusherReturningTrue_flushSucceeds() = runTest {
         var flushed = false
-        val registration = WorkspaceDocumentGate.register(Any()) {
+        val registration = WorkspaceDocumentGate.register(Any(), flush = {
             flushed = true
             true
-        }
+        })
         assertTrue(WorkspaceDocumentGate.flushActiveDocument())
         assertTrue("flush 回调必须被调用", flushed)
         registration.close()
@@ -38,7 +38,7 @@ class WorkspaceDocumentGateTest {
 
     @Test
     fun flusherReturningFalse_flushFailsAndBlocksSync() = runTest {
-        val registration = WorkspaceDocumentGate.register(Any()) { false }
+        val registration = WorkspaceDocumentGate.register(Any(), flush = { false })
         assertFalse(
             "flush 失败必须阻止同步继续（本地输入未落盘）",
             WorkspaceDocumentGate.flushActiveDocument(),
@@ -48,7 +48,7 @@ class WorkspaceDocumentGateTest {
 
     @Test
     fun flusherThrowing_flushFails() = runTest {
-        val registration = WorkspaceDocumentGate.register(Any()) { throw IllegalStateException("save failed") }
+        val registration = WorkspaceDocumentGate.register(Any(), flush = { throw IllegalStateException("save failed") })
         assertFalse("flush 异常必须映射为失败", WorkspaceDocumentGate.flushActiveDocument())
         registration.close()
     }
@@ -56,8 +56,8 @@ class WorkspaceDocumentGateTest {
     @Test
     fun latestRegisteredFlusherWins() = runTest {
         var firstCalled = false
-        val first = WorkspaceDocumentGate.register(Any()) { firstCalled = true; true }
-        val second = WorkspaceDocumentGate.register(Any()) { false }
+        val first = WorkspaceDocumentGate.register(Any(), flush = { firstCalled = true; true })
+        val second = WorkspaceDocumentGate.register(Any(), flush = { false })
         assertFalse(WorkspaceDocumentGate.flushActiveDocument())
         assertFalse("旧 flusher 不得再被调用", firstCalled)
         first.close()
@@ -72,8 +72,8 @@ class WorkspaceDocumentGateTest {
         var newCalled = false
         val oldOwner = Any()
         val newOwner = Any()
-        val oldRegistration = WorkspaceDocumentGate.register(oldOwner) { oldCalled = true; true }
-        val newRegistration = WorkspaceDocumentGate.register(newOwner) { newCalled = true; true }
+        val oldRegistration = WorkspaceDocumentGate.register(oldOwner, flush = { oldCalled = true; true })
+        val newRegistration = WorkspaceDocumentGate.register(newOwner, flush = { newCalled = true; true })
         // 旧实例先销毁 — 只允许清除自己的注册。
         oldRegistration.close()
         assertTrue("新实例的 flusher 必须仍被调用", WorkspaceDocumentGate.flushActiveDocument())
@@ -88,8 +88,8 @@ class WorkspaceDocumentGateTest {
         // 同一 owner 重新注册（initialize 幂等）— 新回调生效。
         var firstCalled = false
         val owner = Any()
-        val first = WorkspaceDocumentGate.register(owner) { firstCalled = true; true }
-        val second = WorkspaceDocumentGate.register(owner) { false }
+        val first = WorkspaceDocumentGate.register(owner, flush = { firstCalled = true; true })
+        val second = WorkspaceDocumentGate.register(owner, flush = { false })
         assertFalse(WorkspaceDocumentGate.flushActiveDocument())
         assertFalse(firstCalled)
         first.close()

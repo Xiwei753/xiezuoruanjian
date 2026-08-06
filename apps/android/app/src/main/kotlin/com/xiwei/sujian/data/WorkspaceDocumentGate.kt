@@ -15,12 +15,17 @@ import java.util.concurrent.atomic.AtomicReference
  * （旧实现是进程级 AtomicReference 裸覆盖：旧实例销毁会把新实例的 flusher
  * 清掉，之后同步会认为"没有活动编辑器"直接继续执行）。
  *
+ * #595 三：同步全过程持有文档身份 lease — flush 后取一次文档身份，
+ * 同步完成后校验是否仍匹配。章节切换/关闭导致身份变化时不应用同步结果，
+ * 新输入作为下一代 dirty 文档继续保存。
+ *
  * 本对象只持有协作回调，不复制同步状态机，不维护第二份业务真相。
  */
 object WorkspaceDocumentGate {
     private class Holder(
         val owner: Any,
         val flush: suspend () -> Boolean,
+        val documentIdentity: () -> String?,
     )
 
     private val holder = AtomicReference<Holder?>(null)
@@ -29,9 +34,16 @@ object WorkspaceDocumentGate {
      * 注册活动正文 flush 回调（EditorViewModel.initialize 时调用）。
      * 返回的 [Registration] 必须由同一实例在 onCleared 时 close。
      * 同 owner 重复注册替换当前回调，但旧 [Registration] 只清除自己的 Holder。
+     *
+     * [documentIdentity] 返回当前活动文档的身份标识（targetId:sessionId:epoch），
+     * 同步前后校验文档身份是否变化。
      */
-    fun register(owner: Any, flush: suspend () -> Boolean): Registration {
-        val h = Holder(owner, flush)
+    fun register(
+        owner: Any,
+        flush: suspend () -> Boolean,
+        documentIdentity: () -> String? = { null },
+    ): Registration {
+        val h = Holder(owner, flush, documentIdentity)
         holder.set(h)
         return Registration(h)
     }
@@ -60,4 +72,11 @@ object WorkspaceDocumentGate {
             false
         }
     }
+
+    /**
+     * #595 三：当前活动文档身份 — 同步前后校验文档是否仍是同一 target/session/epoch。
+     * 无注册回调时返回 null（无活动编辑器，不需要校验）。
+     */
+    fun activeDocumentIdentity(): String? = holder.get()?.documentIdentity()
 }
+

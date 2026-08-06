@@ -98,6 +98,8 @@ class SyncCoordinator(
                         SyncFailureKind.DocumentSaveFailed,
                     )
                 }
+                // #595 三：签发文档身份 lease — 同步前后校验文档是否仍是同一 target/session/epoch。
+                val identityBeforeSync = WorkspaceDocumentGate.activeDocumentIdentity()
                 syncStatusRepository.notifySyncStarted()
                 val overrideOk = withContext(Dispatchers.IO) {
                     settingsRepository.setSyncSecretsOverrideStrict(profile.secrets)
@@ -112,6 +114,18 @@ class SyncCoordinator(
                 }
                 try {
                     val bridgeResult = withContext(Dispatchers.IO) { settingsRepository.performSync(config) }
+                    // #595 三：校验文档身份 — 同步期间章节切换/关闭导致身份变化时，
+                    // 不应用同步结果，新输入作为下一代 dirty 文档继续保存。
+                    val identityAfterSync = WorkspaceDocumentGate.activeDocumentIdentity()
+                    if (identityBeforeSync != null && identityAfterSync != null && identityBeforeSync != identityAfterSync) {
+                        DiagnosticsLogger.w("SyncCoordinator", "Document identity changed during sync — result not applied: $identityBeforeSync -> $identityAfterSync")
+                        val staleError = BridgeResult.Error(
+                            ResultEnvelope.errorOf("DOCUMENT_IDENTITY_CHANGED", "Active document changed during sync — result not applied"),
+                            SyncFailureKind.DocumentSaveFailed,
+                        )
+                        resolveAndPublish(staleError)
+                        return@runExclusive staleError
+                    }
                     resolveAndPublish(bridgeResult)
                     bridgeResult
                 } finally {

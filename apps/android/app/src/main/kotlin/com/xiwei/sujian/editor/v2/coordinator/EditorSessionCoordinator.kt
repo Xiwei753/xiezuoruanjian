@@ -90,6 +90,27 @@ data class EditorInputLease(
 )
 
 /**
+ * #595 二：文档操作租约 — 保存/同步开始时由会话层一次性签发，
+ * 包含完整的不可变文档快照。操作期间据此校验当前活动文档是否仍是同一
+ * target/session/epoch/revision；任一字段不匹配则操作中止，不拼接
+ * ViewModel 字段与全局 SessionState。
+ *
+ * 与 [EditorInputLease] 的区别：EditorInputLease 是窗口级输入租约（每次
+ * 编辑回调携带，epoch 在章节切换/关闭/解绑时递增）；DocumentOperationLease
+ * 是文档级操作租约（保存/同步开始时签发，携带完整快照，操作期间冻结）。
+ */
+@Immutable
+data class DocumentOperationLease(
+    val operationId: Long,
+    val targetId: String,
+    val coreSessionId: ULong,
+    val inputEpoch: Long,
+    val rustRevision: Long,
+    val text: String,
+    val committedVersion: DocumentVersion,
+)
+
+/**
  * #595 一：无副作用章节预准备句柄 — 由 [EditorSessionCoordinator.prepareTargetSessionForCommit]
  * 返回，是章节切换事务在最终 requestId 校验前取得的唯一预准备产物。
  *
@@ -215,6 +236,9 @@ class EditorSessionCoordinator(
     @Volatile
     private var inputLeaseEpoch = 0L
 
+    /** #595 二：文档操作 ID 生成器 — 每次签发 DocumentOperationLease 递增。 */
+    private val operationIdCounter = java.util.concurrent.atomic.AtomicLong(0)
+
     /**
      * 窗口绑定成功时签发当前 lease — 窗口层在 performViewBind 时取得，
      * 之后每次 onLocalEdit/onExternalEdit/onContentChanged 提交都携带。
@@ -229,6 +253,44 @@ class EditorSessionCoordinator(
     /** 使当前所有输入 lease 失效 — 旧 View 晚到的回调不能再进入会话层。 */
     fun invalidateInputLease() {
         inputLeaseEpoch++
+    }
+
+    /**
+     * #595 二：签发文档操作租约 — 保存/同步开始时一次性取得完整不可变文档快照。
+     *
+     * 包含 target/session/epoch/revision/text/committedVersion 全部字段，
+     * 调用方不再自行拼接 currentSession + sessionState。无活动 target 或
+     * 无 session 时返回 null（无可操作的文档）。
+     */
+    fun issueDocumentOperationLease(): DocumentOperationLease? {
+        val s = _sessionStateFlow.value
+        val targetId = s.activeTargetId ?: return null
+        val sessionId = s.sessionId ?: return null
+        val record = store.record(targetId) ?: return null
+        return DocumentOperationLease(
+            operationId = operationIdCounter.incrementAndGet(),
+            targetId = targetId,
+            coreSessionId = sessionId,
+            inputEpoch = inputLeaseEpoch,
+            rustRevision = s.revision,
+            text = s.text,
+            committedVersion = record.documentState.committedVersion,
+        )
+    }
+
+    /**
+     * #595 二：校验文档操作租约是否仍匹配当前活动文档。
+     *
+     * 保存/同步返回后由同一 reducer 判断：
+     * - target/session/epoch 完全一致 → 操作有效；
+     * - 任一字段不匹配 → 只记录旧版本确实落盘，当前文档保持 Unsaved。
+     */
+    fun isDocumentOperationLeaseCurrent(lease: DocumentOperationLease): Boolean {
+        val s = _sessionStateFlow.value
+        if (s.activeTargetId != lease.targetId) return false
+        val expectedSession = s.sessionId ?: return false
+        if (expectedSession != lease.coreSessionId) return false
+        return inputLeaseEpoch == lease.inputEpoch
     }
 
     /**
@@ -293,6 +355,7 @@ class EditorSessionCoordinator(
             Log.w(TAG, "applyLocalEdit(${update.targetId}): stale input lease rejected")
             return
         }
+        var pendingRecord: EditorSessionRecord? = null
         updateSessionState { previous ->
             val existing = store.record(update.targetId)
             val previousDoc = existing?.documentState ?: DocumentState()
@@ -305,26 +368,24 @@ class EditorSessionCoordinator(
             } else {
                 contentChanged
             }
-            store.put(
-                existing?.copy(
-                    documentState = previousDoc.copy(
-                        text = update.text,
-                        revision = update.revision,
-                        selectionAnchorUtf8 = if (update.selectionAnchorUtf8 >= 0) update.selectionAnchorUtf8 else previousDoc.selectionAnchorUtf8,
-                        selectionHeadUtf8 = if (update.selectionHeadUtf8 >= 0) update.selectionHeadUtf8 else previousDoc.selectionHeadUtf8,
-                        lastAppliedTransactionId = update.transactionId,
-                        localDirty = dirty,
-                    ),
-                ) ?: EditorSessionRecord(
-                    targetId = update.targetId,
-                    documentState = DocumentState(
-                        text = update.text,
-                        revision = update.revision,
-                        selectionAnchorUtf8 = if (update.selectionAnchorUtf8 >= 0) update.selectionAnchorUtf8 else 0,
-                        selectionHeadUtf8 = if (update.selectionHeadUtf8 >= 0) update.selectionHeadUtf8 else 0,
-                        lastAppliedTransactionId = update.transactionId,
-                        localDirty = true,
-                    ),
+            pendingRecord = existing?.copy(
+                documentState = previousDoc.copy(
+                    text = update.text,
+                    revision = update.revision,
+                    selectionAnchorUtf8 = if (update.selectionAnchorUtf8 >= 0) update.selectionAnchorUtf8 else previousDoc.selectionAnchorUtf8,
+                    selectionHeadUtf8 = if (update.selectionHeadUtf8 >= 0) update.selectionHeadUtf8 else previousDoc.selectionHeadUtf8,
+                    lastAppliedTransactionId = update.transactionId,
+                    localDirty = dirty,
+                ),
+            ) ?: EditorSessionRecord(
+                targetId = update.targetId,
+                documentState = DocumentState(
+                    text = update.text,
+                    revision = update.revision,
+                    selectionAnchorUtf8 = if (update.selectionAnchorUtf8 >= 0) update.selectionAnchorUtf8 else 0,
+                    selectionHeadUtf8 = if (update.selectionHeadUtf8 >= 0) update.selectionHeadUtf8 else 0,
+                    lastAppliedTransactionId = update.transactionId,
+                    localDirty = true,
                 ),
             )
             EditorSessionState(
@@ -344,6 +405,7 @@ class EditorSessionCoordinator(
                 localDirty = dirty,
             )
         }
+        pendingRecord?.let { store.put(it) }
     }
 
     /**
@@ -358,6 +420,7 @@ class EditorSessionCoordinator(
             Log.w(TAG, "applyUndoRestored(${update.targetId}): stale input lease rejected")
             return
         }
+        var pendingRecord: EditorSessionRecord? = null
         updateSessionState { previous ->
             val existing = store.record(update.targetId)
             val previousDoc = existing?.documentState ?: DocumentState()
@@ -366,15 +429,14 @@ class EditorSessionCoordinator(
                 ?: 0UL
             val contentChanged = update.text != previousDoc.text
             val dirty = previousDoc.localDirty || contentChanged
-            store.put(
-                existing?.copy(
-                    documentState = previousDoc.copy(
-                        text = update.text,
-                        revision = update.revision,
-                        selectionAnchorUtf8 = if (update.selectionAnchorUtf8 >= 0) update.selectionAnchorUtf8 else previousDoc.selectionAnchorUtf8,
-                        selectionHeadUtf8 = if (update.selectionHeadUtf8 >= 0) update.selectionHeadUtf8 else previousDoc.selectionHeadUtf8,
-                        lastAppliedTransactionId = update.transactionId,
-                        localDirty = dirty,
+            pendingRecord = existing?.copy(
+                documentState = previousDoc.copy(
+                    text = update.text,
+                    revision = update.revision,
+                    selectionAnchorUtf8 = if (update.selectionAnchorUtf8 >= 0) update.selectionAnchorUtf8 else previousDoc.selectionAnchorUtf8,
+                    selectionHeadUtf8 = if (update.selectionHeadUtf8 >= 0) update.selectionHeadUtf8 else previousDoc.selectionHeadUtf8,
+                    lastAppliedTransactionId = update.transactionId,
+                    localDirty = dirty,
                     ),
                 ) ?: EditorSessionRecord(
                     targetId = update.targetId,
@@ -385,8 +447,7 @@ class EditorSessionCoordinator(
                         lastAppliedTransactionId = update.transactionId,
                         localDirty = true,
                     ),
-                ),
-            )
+                )
             EditorSessionState(
                 targetId = update.targetId,
                 sessionId = sessionId,
@@ -404,6 +465,7 @@ class EditorSessionCoordinator(
                 localDirty = dirty,
             )
         }
+        pendingRecord?.let { store.put(it) }
     }
 
     /**
@@ -416,6 +478,7 @@ class EditorSessionCoordinator(
             Log.w(TAG, "applyProgrammaticReplace(${update.targetId}): stale input lease rejected")
             return
         }
+        var pendingRecord: EditorSessionRecord? = null
         updateSessionState { previous ->
             val existing = store.record(update.targetId)
             val previousDoc = existing?.documentState ?: DocumentState()
@@ -424,15 +487,14 @@ class EditorSessionCoordinator(
                 ?: 0UL
             val contentChanged = update.text != previousDoc.text
             val dirty = previousDoc.localDirty || contentChanged
-            store.put(
-                existing?.copy(
-                    documentState = previousDoc.copy(
-                        text = update.text,
-                        revision = update.revision,
-                        selectionAnchorUtf8 = if (update.selectionAnchorUtf8 >= 0) update.selectionAnchorUtf8 else previousDoc.selectionAnchorUtf8,
-                        selectionHeadUtf8 = if (update.selectionHeadUtf8 >= 0) update.selectionHeadUtf8 else previousDoc.selectionHeadUtf8,
-                        lastAppliedTransactionId = update.transactionId,
-                        localDirty = dirty,
+            pendingRecord = existing?.copy(
+                documentState = previousDoc.copy(
+                    text = update.text,
+                    revision = update.revision,
+                    selectionAnchorUtf8 = if (update.selectionAnchorUtf8 >= 0) update.selectionAnchorUtf8 else previousDoc.selectionAnchorUtf8,
+                    selectionHeadUtf8 = if (update.selectionHeadUtf8 >= 0) update.selectionHeadUtf8 else previousDoc.selectionHeadUtf8,
+                    lastAppliedTransactionId = update.transactionId,
+                    localDirty = dirty,
                     ),
                 ) ?: EditorSessionRecord(
                     targetId = update.targetId,
@@ -443,8 +505,7 @@ class EditorSessionCoordinator(
                         lastAppliedTransactionId = update.transactionId,
                         localDirty = true,
                     ),
-                ),
-            )
+                )
             EditorSessionState(
                 targetId = update.targetId,
                 sessionId = sessionId,
@@ -462,6 +523,7 @@ class EditorSessionCoordinator(
                 localDirty = dirty,
             )
         }
+        pendingRecord?.let { store.put(it) }
     }
 
     // ── #595 二：外部文档事实（Repository 加载 / 同步合并）──
@@ -554,6 +616,7 @@ class EditorSessionCoordinator(
      * 因此 lastSavedVersion 同步推进。
      */
     fun applyExternalContentFact(fact: TargetDocumentFact) {
+        var pendingRecord: EditorSessionRecord? = null
         updateSessionState { previous ->
             val record = store.record(fact.targetId)
             val previousDoc = record?.documentState ?: DocumentState()
@@ -563,10 +626,8 @@ class EditorSessionCoordinator(
                 lastSavedVersion = fact.sourceVersion,
                 localDirty = false,
             )
-            store.put(
-                record?.copy(documentState = newDoc)
-                    ?: EditorSessionRecord(targetId = fact.targetId, documentState = newDoc),
-            )
+            pendingRecord = record?.copy(documentState = newDoc)
+                ?: EditorSessionRecord(targetId = fact.targetId, documentState = newDoc)
             // 无活动 target（state.targetId == null）时同样把文档事实反映到可观察状态；
             // 活动 target 属于其他章节时只更新 store 记录，不清掉活动状态。
             if (previous.targetId != fact.targetId && previous.targetId != null) return@updateSessionState previous
@@ -581,6 +642,7 @@ class EditorSessionCoordinator(
                 },
             )
         }
+        pendingRecord?.let { store.put(it) }
     }
 
     /**
@@ -599,29 +661,30 @@ class EditorSessionCoordinator(
      */
     fun markSaved(targetId: String, savedVersion: DocumentVersion) {
         if (savedVersion.isEmpty) return
-        store.update(targetId) { record ->
-            record.withDocumentState {
-                it.copy(
-                    committedVersion = savedVersion,
-                    sessionBaseVersion = savedVersion,
-                    lastSavedVersion = savedVersion,
-                    localDirty = false,
-                )
-            }
-        }
-        if (_sessionStateFlow.value.targetId == targetId) {
-            updateSessionState { state ->
-                if (state.targetId == targetId) {
-                    state.copy(
+        var pendingRecord: EditorSessionRecord? = null
+        updateSessionState { state ->
+            val record = store.record(targetId)
+            if (record != null) {
+                pendingRecord = record.withDocumentState {
+                    it.copy(
                         committedVersion = savedVersion,
                         sessionBaseVersion = savedVersion,
+                        lastSavedVersion = savedVersion,
                         localDirty = false,
                     )
-                } else {
-                    state
                 }
             }
+            if (state.targetId == targetId) {
+                state.copy(
+                    committedVersion = savedVersion,
+                    sessionBaseVersion = savedVersion,
+                    localDirty = false,
+                )
+            } else {
+                state
+            }
         }
+        pendingRecord?.let { store.put(it) }
     }
 
     /**
@@ -755,25 +818,24 @@ class EditorSessionCoordinator(
         // 3. 激活 B — 通过唯一 reducer 原子推进。
         val snapshot = handle.snapshot
         val attaching = WindowBindingState.Attaching(windowId, handle.targetId, handle.sessionId)
+        var pendingRecord: EditorSessionRecord? = null
         updateSessionState { _ ->
             // #595 一：提交时把 handle.sessionId + snapshot 写入 B 的正式记录 —
             // prepare 不修改 store，commit 是唯一写入点，保证 store 与 SessionState 一致。
             val rec = store.record(handle.targetId)
             val doc = rec?.documentState ?: DocumentState()
-            store.put(
-                (rec ?: EditorSessionRecord(
-                    targetId = handle.targetId,
-                    persistent = handle.previousRecord?.persistent ?: false,
-                )).copy(sessionId = handle.sessionId)
-                    .withDocumentState {
-                        it.copy(
-                            text = snapshot.text,
-                            revision = snapshot.revision,
-                            selectionAnchorUtf8 = snapshot.selectionAnchorUtf8,
-                            selectionHeadUtf8 = snapshot.selectionHeadUtf8,
-                        )
-                    }
-            )
+            pendingRecord = (rec ?: EditorSessionRecord(
+                targetId = handle.targetId,
+                persistent = handle.previousRecord?.persistent ?: false,
+            )).copy(sessionId = handle.sessionId)
+                .withDocumentState {
+                    it.copy(
+                        text = snapshot.text,
+                        revision = snapshot.revision,
+                        selectionAnchorUtf8 = snapshot.selectionAnchorUtf8,
+                        selectionHeadUtf8 = snapshot.selectionHeadUtf8,
+                    )
+                }
             EditorSessionState(
                 targetId = handle.targetId,
                 sessionId = handle.sessionId,
@@ -791,6 +853,7 @@ class EditorSessionCoordinator(
                 localDirty = doc.localDirty,
             )
         }
+        pendingRecord?.let { store.put(it) }
         com.xiwei.sujian.diagnostics.DiagnosticsEvents.sessionLifecycle(
             handle.sessionId.toString(), "commit_prepared"
         )
@@ -1212,17 +1275,16 @@ class EditorSessionCoordinator(
             closeSession(sessionId)
             return ExternalResetResult.Failed
         }
+        var pendingRecord: EditorSessionRecord? = null
         updateSessionState { previous ->
             val rec = store.record(targetId)
-            store.put(
-                (rec ?: EditorSessionRecord(targetId = targetId, persistent = true)).copy(
-                    sessionId = sessionId,
-                    documentState = (rec?.documentState ?: DocumentState()).copy(
-                        text = snapshot.text,
-                        revision = snapshot.revision,
-                        selectionAnchorUtf8 = snapshot.selectionAnchorUtf8,
-                        selectionHeadUtf8 = snapshot.selectionHeadUtf8,
-                    ),
+            pendingRecord = (rec ?: EditorSessionRecord(targetId = targetId, persistent = true)).copy(
+                sessionId = sessionId,
+                documentState = (rec?.documentState ?: DocumentState()).copy(
+                    text = snapshot.text,
+                    revision = snapshot.revision,
+                    selectionAnchorUtf8 = snapshot.selectionAnchorUtf8,
+                    selectionHeadUtf8 = snapshot.selectionHeadUtf8,
                 ),
             )
             if (previous.targetId != targetId) return@updateSessionState previous
@@ -1235,6 +1297,7 @@ class EditorSessionCoordinator(
                 origin = EditorSessionOrigin.EXTERNAL_REPLACE,
             )
         }
+        pendingRecord?.let { store.put(it) }
         if (oldSessionIdToClose != null && oldSessionIdToClose != 0UL && oldSessionIdToClose != sessionId) {
             closeSession(oldSessionIdToClose)
         }
