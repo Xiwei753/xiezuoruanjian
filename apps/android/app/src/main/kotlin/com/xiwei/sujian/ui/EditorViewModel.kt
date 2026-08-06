@@ -992,6 +992,18 @@ class EditorViewModel(
         val flushState = _sessionCoordinator?.sessionState
         val content = flushState?.text ?: _uiState.value.content
         val requiredRevision = flushState?.revision ?: 0L
+        // #595 二：验证 currentSession 与 sessionState 属于同一 target —
+        // 章节切换期间 currentSession 已更新为 B 但 sessionState.activeTargetId
+        // 仍是 A（commitPreparedSession 尚未执行），此时不得把 A 的正文保存到 B。
+        // 旧实现组合 currentSession（ViewModel 字段）与全局 sessionState（Coordinator
+        // StateFlow）两个独立状态源，交错时形成 A 正文 → B 章节的错误保存。
+        if (session != null && flushState != null && flushState.activeTargetId != null) {
+            val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
+            if (flushState.activeTargetId != targetId) {
+                deferred.complete(false)
+                return deferred
+            }
+        }
         viewModelScope.launch {
             if (session == null) {
                 // 无活动章节：没有本地输入需要保护。
