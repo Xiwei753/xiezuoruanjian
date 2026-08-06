@@ -1149,9 +1149,13 @@ class EditorSessionCoordinator(
     }
 
     fun resetPersistentSession(targetId: String, text: String, cursorUtf8: Int, source: SessionResetSource = SessionResetSource.EXTERNAL): ExternalResetResult {
-        // #595 五：返回可提交事务结果 — reset 未执行或 Core 失败时返回 Failed，
+        // #595 一/五：返回可提交事务结果 — reset 未执行或 Core 失败时返回 Failed，
         // 调用方不得推进 SessionStore/ViewModel 状态（旧实现返回 Unit，WritingPane
         // 无条件推进导致三份状态分裂）。
+        // #595 一：禁止构造 revision=0 的兜底 snapshot — Core reset/create 成功后
+        // 必须再次读取真实 snapshot，读取失败则整个操作失败（旧实现用输入参数补
+        // revision=0 快照，调用方仍当成功，导致 Rust session/SessionStore/ViewModel
+        // 三份状态分裂）。
         if (source == SessionResetSource.LOCAL_CONTENT_CHANGED) return ExternalResetResult.Failed
         val record = store.record(targetId)
         if (record?.persistent != true) return ExternalResetResult.Failed
@@ -1164,12 +1168,7 @@ class EditorSessionCoordinator(
                 return ExternalResetResult.Failed
             }
             store.update(targetId) { it.copy(sessionId = newSessionId) }
-            if (targetId == activeTargetId) {
-                // #595 三：活动 session 只存在于 SessionState 快照中 — 重建后同步快照。
-                updateSessionState { it.copy(sessionId = newSessionId) }
-            }
-            val snapshot = refreshDetachedSnapshot(targetId)
-            return ExternalResetResult.Success(snapshot ?: TargetSnapshot(text, cursorUtf8, 0L, cursorUtf8, cursorUtf8))
+            return commitResetSnapshot(targetId, newSessionId)
         }
 
         if (!validateSession(sessionId)) {
@@ -1180,15 +1179,57 @@ class EditorSessionCoordinator(
         }
 
         return when (val result = appServiceBridge.textEditSessionReset(sessionId, text, cursorUtf8.toUInt())) {
-            is BridgeResult.Success -> {
-                val snapshot = refreshDetachedSnapshot(targetId)
-                ExternalResetResult.Success(snapshot ?: TargetSnapshot(text, cursorUtf8, 0L, cursorUtf8, cursorUtf8))
-            }
+            is BridgeResult.Success -> commitResetSnapshot(targetId, sessionId)
             else -> {
                 Log.e(TAG, "resetPersistentSession($targetId): Core textEditSessionReset failed — 保持旧正文与旧版本")
                 ExternalResetResult.Failed
             }
         }
+    }
+
+    /**
+     * #595 一：原子提交 reset 后的真实 snapshot — 一次性更新 store 记录与活动
+     * SessionState 的 text/revision/selection，消除 Rust session（新正文）/
+     * SessionStore（旧正文）/ViewModel（新正文+hash）三份状态分裂。
+     *
+     * snapshot 读取失败时返回 [ExternalResetResult.Failed] — 禁止构造 revision=0
+     * 的兜底 snapshot（旧实现用输入参数补出来的快照不是 Rust 返回的真实 snapshot，
+     * 调用方仍当成功，随后 requestSave 从 sessionState.text 取旧正文保存回磁盘）。
+     */
+    private fun commitResetSnapshot(targetId: String, sessionId: ULong): ExternalResetResult {
+        val snapshot = querySnapshotForSession(sessionId)
+        if (snapshot == null) {
+            Log.e(TAG, "commitResetSnapshot($targetId): snapshot read failed after reset — returning Failed, no fallback snapshot")
+            return ExternalResetResult.Failed
+        }
+        updateSessionState { previous ->
+            val rec = store.record(targetId)
+            store.put(
+                (rec ?: EditorSessionRecord(targetId = targetId, persistent = true)).copy(
+                    sessionId = sessionId,
+                    documentState = (rec?.documentState ?: DocumentState()).copy(
+                        text = snapshot.text,
+                        revision = snapshot.revision,
+                        selectionAnchorUtf8 = snapshot.selectionAnchorUtf8,
+                        selectionHeadUtf8 = snapshot.selectionHeadUtf8,
+                    ),
+                ),
+            )
+            if (previous.targetId != targetId) return@updateSessionState previous
+            previous.copy(
+                sessionId = sessionId,
+                text = snapshot.text,
+                revision = snapshot.revision,
+                selectionAnchorUtf8 = snapshot.selectionAnchorUtf8,
+                selectionHeadUtf8 = snapshot.selectionHeadUtf8,
+                origin = EditorSessionOrigin.EXTERNAL_REPLACE,
+            )
+        }
+        val state = windowBindingState
+        if (state is WindowBindingState.Detached && state.targetId == targetId) {
+            updateSessionState { it.copy(bindingState = WindowBindingState.Detached(targetId, sessionId, snapshot)) }
+        }
+        return ExternalResetResult.Success(snapshot)
     }
 
     /**

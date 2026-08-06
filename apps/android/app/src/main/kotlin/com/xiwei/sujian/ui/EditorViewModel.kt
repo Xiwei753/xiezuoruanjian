@@ -1154,12 +1154,6 @@ class EditorViewModel(
                     when (result) {
                         is com.xiwei.sujian.data.BridgeResult.Success -> {
                             val savedHash = result.data?.contentHash ?: ""
-                            _uiState.value = _uiState.value.copy(
-                                saveStatus = SaveStatus.Saved,
-                                // #595 六：保存成功推进 EditorUiState.chapterHash —
-                                // 磁盘/Rust session/ViewModel 三方版本一致。
-                                chapterHash = savedHash,
-                            )
                             com.xiwei.sujian.diagnostics.DiagnosticsEvents.chapterSave(
                                 session.projectId, session.chapterId,
                                 contentToSave.toByteArray(Charsets.UTF_8).size, "ok",
@@ -1168,25 +1162,33 @@ class EditorViewModel(
                             val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
                             // #595 七：保存落盘后记录回执（revision 精确锚定）。
                             saveReceipts.record(targetId, currentRevision, savedHash)
-                            // #595 二/六：保存成功上报 — 保存回执作为文档提交原子推进
-                            // committed/sessionBase/lastSaved + 清除 localDirty
-                            // （同步合并以磁盘为基础，可以安全应用）。
-                            _sessionCoordinator?.markSaved(
-                                targetId,
-                                DocumentVersion(contentHash = savedHash),
-                            )
-                            // #595 三：保存成功后统一清理 ViewModel dirty 标记 —
-                            // 与 DocumentState.localDirty（markSaved 已清）保持一致。
-                            contentDirty = false
+                            // #595 三：保存回执按 revision 条件提交 — 只有当前活动
+                            // revision 仍等于保存时的 revision 才标记 Saved、清 dirty、
+                            // markSaved。用户在保存 IO 期间继续输入（revision 前进）时，
+                            // 只记录回执，不覆盖新输入产生的 UI 状态/dirty/chapterHash
+                            // （旧实现无条件设 Saved，页面错误显示"已保存"，B 未落盘）。
+                            val activeRevision = _sessionCoordinator?.sessionState?.revision ?: currentRevision
+                            if (activeRevision == currentRevision) {
+                                _uiState.value = _uiState.value.copy(
+                                    saveStatus = SaveStatus.Saved,
+                                    chapterHash = savedHash,
+                                )
+                                _sessionCoordinator?.markSaved(
+                                    targetId,
+                                    DocumentVersion(contentHash = savedHash),
+                                )
+                                contentDirty = false
+                            } else {
+                                _uiState.value = _uiState.value.copy(
+                                    saveStatus = SaveStatus.Unsaved,
+                                )
+                            }
                             val pending = pendingSaveContent
                             pendingSaveContent = null
                             if (pending != null && pending != contentToSave) {
                                 currentContent = pending
                                 currentIsAutoSave = true
                                 lastSaveSuccess = true
-                                // #595 七：待保存内容比入队内容新 — 回执 revision 使用
-                                // 当前屏幕 revision（对应 pending 内容），否则 flush
-                                // 屏障会把已落盘的新内容误判为未保存。
                                 currentRevision = _sessionCoordinator?.sessionState?.revision ?: currentRevision
                             } else {
                                 lastSaveSuccess = true
