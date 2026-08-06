@@ -12,6 +12,7 @@ import com.xiwei.sujian.editor.v2.host.EditorAttachmentState
 import com.xiwei.sujian.editor.v2.host.EditorFrameSnapshot
 import com.xiwei.sujian.editor.v2.host.attachmentStateFromBinding
 import com.xiwei.sujian.editor.v2.motion.EditorMotionPolicy
+import com.xiwei.sujian.ui.compose.theme.EditorThemeAdapter
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -57,6 +58,7 @@ class EditorWindowHost(
     val windowBindingStateFlow: StateFlow<WindowBindingState> get() = sessionCoordinator.windowBindingStateFlow
     val targetDecorationsVersionFlow: StateFlow<Long> get() = sessionCoordinator.targetDecorationsVersionFlow
     val lastCommittedTextFlow: StateFlow<String?> get() = sessionCoordinator.lastCommittedTextFlow
+    val sessionStateFlow: StateFlow<EditorSessionState> get() = sessionCoordinator.sessionStateFlow
 
     val activeTargetId: String? get() = sessionCoordinator.activeTargetId
     val editingState: EditingState get() = sessionCoordinator.editingState
@@ -144,23 +146,30 @@ class EditorWindowHost(
 
     fun setEditorAnimationSettings(settings: EditorAnimationSettings) {
         sessionCoordinator.setEditorAnimationSettings(settings)
+        val effective = settings.toMotionPolicy().effective()
         sharedEditorView?.let { view ->
-            view.setTypingAnimationEnabled(settings.typingAnimationEnabled, settings.typingAnimationDurationMs)
-            view.setSmoothCursorEnabled(settings.smoothCursorEnabled, settings.smoothCursorDurationMs)
-            view.setCoordinatedAnimationEnabled(settings.coordinated)
-            view.setReduceMotion(settings.reduceMotion)
-            // #595 四: kernel animation_enabled = text OR cursor，使 Rust
-            // CoordinatedCursor.should_animate 在仅关闭文字动画时仍正确上报光标移动。
-            view.setKernelAnimationEnabled(settings.typingAnimationEnabled || settings.smoothCursorEnabled)
+            view.setTypingAnimationEnabled(effective.textEnabled, effective.textDurationMillis)
+            view.setSmoothCursorEnabled(effective.cursorEnabled, effective.cursorDurationMillis)
+            view.setCoordinatedAnimationEnabled(effective.coordinated)
+            view.setReduceMotion(effective.reduceMotion)
+            view.setKernelAnimationEnabled(effective.textEnabled || effective.cursorEnabled)
         }
     }
 
     /**
-     * #595 三：原子应用 [EditorMotionPolicy] — 一次更新文字、光标、协同、时长和 reduce-motion。
+     * #595 三/七：原子应用 [EditorMotionPolicy] — 唯一可写事实源。
+     * 一次更新文字、光标、协同、时长和 reduce-motion，同步推送到活动 View。
      */
     fun applyMotionPolicy(policy: EditorMotionPolicy) {
         val effective = policy.effective()
-        setEditorAnimationSettings(EditorAnimationSettings.fromMotionPolicy(effective))
+        sessionCoordinator.applyMotionPolicy(effective)
+        sharedEditorView?.let { view ->
+            view.setTypingAnimationEnabled(effective.textEnabled, effective.textDurationMillis)
+            view.setSmoothCursorEnabled(effective.cursorEnabled, effective.cursorDurationMillis)
+            view.setCoordinatedAnimationEnabled(effective.coordinated)
+            view.setReduceMotion(effective.reduceMotion)
+            view.setKernelAnimationEnabled(effective.textEnabled || effective.cursorEnabled)
+        }
     }
 
     /**
@@ -168,7 +177,7 @@ class EditorWindowHost(
      * UI 收集该值向下传递，[applyMotionPolicy] 原子更新。
      */
     val motionPolicy: EditorMotionPolicy
-        get() = getEditorAnimationSettings().toMotionPolicy()
+        get() = sessionCoordinator.getMotionPolicy()
 
     /**
      * #595 三：动画策略 StateFlow — 只读可观察的单一事实源（不可变）。
@@ -464,6 +473,55 @@ class EditorWindowHost(
         sharedEditorView = view
     }
 
+    /**
+     * #595 三：在 AndroidView.factory 中用传入的 Context 创建 View —
+     * 不返回宿主提前创建、长期缓存的 View。Compose 官方模型要求 factory 创建 View。
+     */
+    fun createWindowView(context: Context): SujianEditorView {
+        return SujianEditorView(context, animationTimeSource = animationTimeSource, transactionIdSource = transactionIdSource).also { view ->
+            view.setFrameClock(windowFrameClock)
+            val policy = motionPolicy.effective()
+            view.setTypingAnimationEnabled(policy.textEnabled, policy.textDurationMillis)
+            view.setSmoothCursorEnabled(policy.cursorEnabled, policy.cursorDurationMillis)
+            view.setCoordinatedAnimationEnabled(policy.coordinated)
+            view.setReduceMotion(policy.reduceMotion)
+            view.setKernelAnimationEnabled(policy.textEnabled || policy.cursorEnabled)
+            sharedEditorView = view
+        }
+    }
+
+    /**
+     * #595 三：AndroidView.factory 创建 View 后立即附着到窗口 —
+     * 设置 sharedEditorView 引用，由 beginEdit 完成 session 绑定。
+     */
+    fun attachView(windowId: String, targetId: String, view: SujianEditorView) {
+        sharedEditorView = view
+    }
+
+    /**
+     * #595 三：AndroidView.onRelease — View 已离开 Composition 且不会再被 Compose 使用。
+     * 解除双向引用、InputConnection、FrameClock 和 callback，不能只设置 GONE。
+     */
+    fun detachView(windowId: String, targetId: String, view: SujianEditorView) {
+        clearActiveCallbacks()
+        view.unbindSession("compose_release")
+        view.setFrameClock(null)
+        if (sharedEditorView === view) {
+            sharedEditorView = null
+        }
+    }
+
+    /**
+     * #595 三：AndroidView.update — 应用主题和几何更新到 View。
+     */
+    fun updateView(view: SujianEditorView, themeColors: com.xiwei.sujian.ui.compose.theme.EditorThemeColors) {
+        EditorThemeAdapter.applyToView(view, themeColors)
+        view.visibility = android.view.View.VISIBLE
+        if (view.width > 0 && view.height > 0) {
+            updateHostGeometry(view.width.toFloat(), view.height.toFloat())
+        }
+    }
+
     fun updateHostGeometry(width: Float, height: Float) {
         sharedEditorView?.updateHostGeometry(width, height)
     }
@@ -523,6 +581,19 @@ class EditorWindowHost(
         view.onContentChanged = { newText ->
             target.onTextChanged?.invoke(newText)
         }
+        // #595 一：类型化本地编辑回调 — 先更新会话层唯一 SessionState（revision/transactionId），
+        // 再通知 ViewModel 保存。ViewModel 不再靠字符串比较猜测来源，
+        // WritingPane 收集 sessionStateFlow 发现 revision 已应用，不触发 reset。
+        view.onLocalEdit = { text, revision, transactionId ->
+            sessionCoordinator.applyLocalEdit(
+                EditorDocumentUpdate.LocalInput(
+                    targetId = target.targetId,
+                    text = text,
+                    revision = revision,
+                    transactionId = transactionId,
+                )
+            )
+        }
         view.onSearchHighlightsCleared = {
             sessionCoordinator.setTargetDecorations(target.targetId, TargetDecorations())
         }
@@ -543,6 +614,7 @@ class EditorWindowHost(
     private fun clearActiveCallbacks() {
         sharedEditorView?.let { view ->
             view.onContentChanged = null
+            view.onLocalEdit = null
             view.onCommitRequested = null
             view.onCancelRequested = null
             view.onSearchHighlightsCleared = null
@@ -591,12 +663,12 @@ class EditorWindowHost(
     private fun getOrCreateEditorView(): SujianEditorView {
         return sharedEditorView ?: SujianEditorView(context, animationTimeSource = animationTimeSource, transactionIdSource = transactionIdSource).also {
             it.setFrameClock(windowFrameClock)
-            val settings = sessionCoordinator.getEditorAnimationSettings()
-            it.setTypingAnimationEnabled(settings.typingAnimationEnabled, settings.typingAnimationDurationMs)
-            it.setSmoothCursorEnabled(settings.smoothCursorEnabled, settings.smoothCursorDurationMs)
-            it.setCoordinatedAnimationEnabled(settings.coordinated)
-            it.setReduceMotion(settings.reduceMotion)
-            it.setKernelAnimationEnabled(settings.typingAnimationEnabled || settings.smoothCursorEnabled)
+            val policy = motionPolicy.effective()
+            it.setTypingAnimationEnabled(policy.textEnabled, policy.textDurationMillis)
+            it.setSmoothCursorEnabled(policy.cursorEnabled, policy.cursorDurationMillis)
+            it.setCoordinatedAnimationEnabled(policy.coordinated)
+            it.setReduceMotion(policy.reduceMotion)
+            it.setKernelAnimationEnabled(policy.textEnabled || policy.cursorEnabled)
             sharedEditorView = it
         }
     }

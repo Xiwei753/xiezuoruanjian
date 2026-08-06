@@ -128,11 +128,14 @@ class AndroidVisualRuntime(
         val progress = animationEngine.getTimelineProgress(frameTimeMs)
         val cursorProgress = animationEngine.getCursorTimelineProgress(frameTimeMs)
         animationEngine.markFirstVisibleFrame(frameTimeMs)
-        val completed = transaction != null && animationEngine.isTimelineCompleted(frameTimeMs)
-        // A completed (terminal) transaction must not be rendered: its slices would be
-        // drawn over the static new-layout text, double-drawing glyphs on stray invalidates.
-        // The static renderer alone produces the identical final visual state.
-        val renderTransaction = if (completed) null else transaction
+        // #595 五：文字轨和光标轨分别判断终态。
+        // 文字完成后用静态新布局继续绘制，但光标仍在同一个 View 和 FrameClock 中
+        // 平滑移动到终点；只有文字轨和光标轨都结束，整个视觉事务才进入终态。
+        val textFinished = animationEngine.isTextTimelineCompleted(frameTimeMs)
+        val cursorFinished = animationEngine.isCursorTimelineCompleted(frameTimeMs)
+        val transactionComplete = transaction != null && textFinished && cursorFinished
+        // 文字完成后不渲染文字切片（避免 double-draw），但光标仍可继续动画。
+        val renderTransaction = if (textFinished) null else transaction
         val renderInput = FrameRenderInput(
             layout = layout,
             layoutRevision = layoutRevision,
@@ -150,6 +153,26 @@ class AndroidVisualRuntime(
             selectionStartUtf16 = selectionStartUtf16,
             selectionEndUtf16 = selectionEndUtf16
         )
-        return FrameState(renderInput, completeAfterDraw = completed)
+        return FrameState(renderInput, completeAfterDraw = transactionComplete)
+    }
+
+    /**
+     * #595 五：获取视觉事务文字轨和光标轨的明确终态 — 供宿主查询渲染策略。
+     */
+    fun visualTrackState(frameTimeMs: Long): com.xiwei.sujian.editor.v2.motion.VisualTrackState {
+        val transaction = animationEngine.getActiveTransaction()
+        if (transaction == null) return com.xiwei.sujian.editor.v2.motion.VisualTrackState.Idle
+        val textFinished = animationEngine.isTextTimelineCompleted(frameTimeMs)
+        val cursorFinished = animationEngine.isCursorTimelineCompleted(frameTimeMs)
+        val transactionComplete = textFinished && cursorFinished
+        return com.xiwei.sujian.editor.v2.motion.VisualTrackState(
+            renderTextTransaction = if (textFinished) null else transaction,
+            renderCursorTransition = !cursorFinished,
+            textProgress = animationEngine.getTimelineProgress(frameTimeMs),
+            cursorProgress = animationEngine.getCursorTimelineProgress(frameTimeMs),
+            textFinished = textFinished,
+            cursorFinished = cursorFinished,
+            transactionComplete = transactionComplete,
+        )
     }
 }

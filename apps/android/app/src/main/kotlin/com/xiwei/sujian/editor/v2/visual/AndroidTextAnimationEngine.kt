@@ -503,6 +503,27 @@ class AndroidTextAnimationEngine(
     }
 
     /**
+     * #595 五：光标轨是否已完成 — 光标 timeline 不存在或已结束。
+     * 非协同模式下光标时长可长于文字时长，文字完成后光标仍可继续。
+     */
+    fun isCursorTimelineCompleted(frameTimeMs: Long): Boolean {
+        val ctl = cursorTimeline ?: return true
+        return ctl.isCompleted(frameTimeMs)
+    }
+
+    /**
+     * #595 五：文字轨是否已完成 — 文字 timeline 不存在或已结束。
+     */
+    fun isTextTimelineCompleted(frameTimeMs: Long): Boolean = isTimelineCompleted(frameTimeMs)
+
+    /**
+     * #595 五：整个视觉事务是否完成 — 文字轨和光标轨都结束。
+     */
+    fun isTransactionCompleted(frameTimeMs: Long): Boolean {
+        return isTextTimelineCompleted(frameTimeMs) && isCursorTimelineCompleted(frameTimeMs)
+    }
+
+    /**
      * Transition the timeline from Pending to Rendering on the first onDraw after submit.
      *
      * Must be called from the host's draw path (e.g. View.onDraw / Compose draw callback)
@@ -522,18 +543,17 @@ class AndroidTextAnimationEngine(
         val transaction = activeTransaction ?: return false
         val tl = timeline ?: return false
         if (tl.getState() == TransactionState.Completed) return false
-        if (tl.isCompleted(frameTimeMs)) {
-            cursorTimeline?.complete()
+        // #595 五：只有文字轨和光标轨都完成才结束整个事务。
+        // 文字完成后光标仍可继续（非协同模式光标时长 > 文字时长）。
+        // 文字完成后释放文字切片 Bitmap，但保留光标过渡所需的不可变几何和事务标识。
+        val textFinished = tl.isCompleted(frameTimeMs)
+        val cursorFinished = isCursorTimelineCompleted(frameTimeMs)
+        if (textFinished && cursorFinished) {
             com.xiwei.sujian.diagnostics.DiagnosticsEvents.animationComplete(
                 transaction.transactionId,
                 (frameTimeMs - (tl.getFirstVisibleFrameTimeMs() ?: frameTimeMs)).coerceAtLeast(0L)
             )
             completeTransaction(transaction)
-            // Terminal state is retained (Completed) so the final animation state stays
-            // queryable via captureStateSnapshot at progress 1.0 — the frame loop stops
-            // because hasActiveAnimation() is false for Completed, and the ownedSnapshotIds
-            // set is emptied so ownedResourceCount reports 0 (bitmaps were already released
-            // by completeTransaction). The next submit/cancel/release replaces or clears it.
             activeTransaction = transaction.copy(ownedSnapshotIds = emptySet())
             return true
         }

@@ -148,7 +148,13 @@ class SujianEditorView @JvmOverloads constructor(
                 updateMaxScroll()
                 scrollY = scrollY.coerceIn(0f, maxScrollY)
                 if (!suppressContentCallback && output.result.displayPatches.isNotEmpty()) {
-                    onContentChanged?.invoke(pipeline.getText())
+                    val editText = pipeline.getText()
+                    onContentChanged?.invoke(editText)
+                    // #595 一：类型化本地编辑回调 — 传递 revision/transactionId，
+                    // 会话层据此更新唯一 SessionState，ViewModel 不再靠字符串比较猜测来源。
+                    if (output.result.isApplied()) {
+                        onLocalEdit?.invoke(editText, output.result.newRevision, output.result.transactionId)
+                    }
                 }
                 invalidate()
                 if (pipeline.hasActiveAnimation()) {
@@ -171,7 +177,9 @@ class SujianEditorView @JvmOverloads constructor(
                 "reloadFromKernel applied; mirror='${pipeline.getText()}' rev=${pipeline.getRevision()} cursor=${pipeline.getCursorUtf8()}"
             )
             updateLayoutConfig()
-            onContentChanged?.invoke(pipeline.getText())
+            val reloadText = pipeline.getText()
+            onContentChanged?.invoke(reloadText)
+            onLocalEdit?.invoke(reloadText, pipeline.getRevision(), 0L)
         } else {
             android.util.Log.w("SujianEditorInput", "reloadFromKernel FAILED (no session snapshot)")
         }
@@ -318,7 +326,9 @@ class SujianEditorView @JvmOverloads constructor(
         canvas.restore()
     }
 
-    override fun needsFrame(): Boolean = pipeline.hasActiveAnimation()
+    // #595 六：暂停时不持续请求 VSync — hasActiveAnimation && !isAnimationPaused。
+    // 暂停时停止重投 Choreographer.postFrameCallback()，恢复时显式 requestFrame()。
+    override fun needsFrame(): Boolean = pipeline.hasActiveAnimation() && !pipeline.isAnimationPaused()
 
     override fun onFrame(frameTimeNanos: Long) {
         pendingFrameTimeNanos = frameTimeNanos
@@ -559,6 +569,15 @@ class SujianEditorView @JvmOverloads constructor(
 
     var onContentChanged: ((String) -> Unit)? = null
 
+    /**
+     * #595 一：类型化本地编辑回调 — 传递 text/revision/transactionId。
+     *
+     * 由 [EditorWindowHost.installContentCallback] 设置，回调中先调用
+     * [EditorSessionCoordinator.applyLocalEdit] 更新唯一 SessionState，
+     * 再通知 ViewModel 保存。替代仅传字符串的 [onContentChanged]。
+     */
+    var onLocalEdit: ((text: String, revision: Long, transactionId: Long) -> Unit)? = null
+
     fun setText(text: String) {
         loadText(text, 0)
     }
@@ -748,6 +767,7 @@ class SujianEditorView @JvmOverloads constructor(
     ) {
         if (isSessionBound) {
             onContentChanged = null
+            onLocalEdit = null
             onCommitRequested = null
             onCancelRequested = null
             unbindSession("rebind")
@@ -770,13 +790,11 @@ class SujianEditorView @JvmOverloads constructor(
             }
         }
         commitOnFocusLoss = profile.commitOnFocusLoss
-        if (profile.animationPolicy == com.xiwei.sujian.editor.v2.coordinator.AnimationPolicy.SYSTEM_SUPPRESSED) {
-            pipeline.kernelBridge?.setAnimationEnabled(false)
-            pipeline.setAnimationPolicy(com.xiwei.sujian.editor.v2.visual.TextAnimationPolicy.SYSTEM_SUPPRESSED)
-        } else {
-            pipeline.kernelBridge?.setAnimationEnabled(true)
-            pipeline.setAnimationPolicy(com.xiwei.sujian.editor.v2.visual.TextAnimationPolicy.INHERIT_GLOBAL)
-        }
+        // #595 四：applyProfileToPipeline 只处理 input type、行数、选择、复制粘贴、换行等
+        // profile 内容，不再直接写动画开关。动画开关由全局 EditorMotionPolicy 唯一控制，
+        // 通过 setTypingAnimationEnabled/setSmoothCursorEnabled/setCoordinatedAnimationEnabled
+        // 一次性传入。profile 的 animationPolicy 仅作为约束（SYSTEM_SUPPRESSED → forceStatic），
+        // 由 EditorWindowHost 在计算 effectivePolicy 时应用。
         if (profile.cursorPolicy == com.xiwei.sujian.editor.v2.coordinator.CursorPolicy.HIDDEN) {
             pipeline.setCursorVisible(false)
         } else {
@@ -825,6 +843,7 @@ class SujianEditorView @JvmOverloads constructor(
         inputAdapter.invalidateCompositionSession()
         inputAdapter.onPerformEditorAction = null
         onContentChanged = null
+        onLocalEdit = null
         onCommitRequested = null
         onCancelRequested = null
         kernelBridge = null

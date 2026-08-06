@@ -12,7 +12,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -87,7 +87,7 @@ fun WritingPane(
         viewModel.switchChapter(projectId, volumeId, chapterId, chapterTitle)
     }
 
-    val uiState by viewModel.uiState.collectAsState()
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
     // 生产动画链：设置状态 → Editor Host → 输入事务 → 动画协调器 → 真实 VSync 渲染。
     // 章节切换或设置变化后，立即把打字/光标动画设置推入共享 Editor Host，
@@ -128,11 +128,11 @@ fun WritingPane(
     }
 
 
-    var localContentGeneration by remember { mutableLongStateOf(0L) }
-    var lastSeenContentGeneration by remember { mutableLongStateOf(0L) }
     var lastChapterId by remember { mutableStateOf("") }
     var lastTargetId by remember { mutableStateOf("") }
-    var externalContentHash by remember { mutableLongStateOf(0L) }
+    // #595 一：删除 localContentGeneration/lastSeenContentGeneration/externalContentHash —
+    // 改用 EditorSessionState.revision 判断本地/外部更新。
+    var lastAppliedRevision by remember { mutableLongStateOf(0L) }
 
     val target = remember(targetId) {
         EditableTextTarget(targetId = targetId)
@@ -141,13 +141,11 @@ fun WritingPane(
     val currentViewModel by rememberUpdatedState(viewModel)
 
     target.onTextChanged = { newText ->
-        localContentGeneration++
-        lastSeenContentGeneration = localContentGeneration
+        // #595 一：本地输入不再维护 generation — onLocalEdit 已在 EditorWindowHost
+        // 中更新 sessionStateFlow.revision，WritingPane 用 revision 判断来源。
         currentViewModel.onContentChanged(newText)
     }
     target.onCommit = { finalText ->
-        localContentGeneration++
-        lastSeenContentGeneration = localContentGeneration
         currentViewModel.onContentChanged(finalText)
     }
     target.onCancel = {}
@@ -175,37 +173,45 @@ fun WritingPane(
                 uiState.content.toByteArray(Charsets.UTF_8).size,
                 SessionResetSource.CHAPTER_SWITCH
             )
-            localContentGeneration = 0L
-            lastSeenContentGeneration = 0L
-            externalContentHash = 0L
+            lastAppliedRevision = 0L
         }
         lastChapterId = chapterId
         lastTargetId = targetId
     }
 
+    // #595 一：收集会话层唯一 SessionState — 用 revision 判断本地/外部更新。
+    val sessionState by coordinator.sessionStateFlow.collectAsStateWithLifecycle()
+
     LaunchedEffect(uiState.content, chapterId) {
         if (!uiState.loading) {
-            if (localContentGeneration != lastSeenContentGeneration) {
-                lastSeenContentGeneration = localContentGeneration
+            val currentRevision = sessionState.revision
+            if (currentRevision == lastAppliedRevision && sessionState.origin == com.xiwei.sujian.editor.v2.coordinator.EditorSessionOrigin.LOCAL_INPUT) {
+                // 本地输入产生的 UI 回显 — revision 已在 SessionState 中更新，
+                // 只同步 targetText，不触发 resetPersistentSession。
                 coordinator.updateTargetText(targetId, uiState.content)
-            } else {
-                val contentHash = uiState.content.hashCode().toLong()
-                if (externalContentHash != contentHash) {
-                    externalContentHash = contentHash
-                    val kernelText = coordinator.getTargetText(targetId)
-                    if (kernelText != uiState.content) {
-                        coordinator.resetPersistentSession(
-                            targetId,
-                            uiState.content,
-                            uiState.content.toByteArray(Charsets.UTF_8).size,
-                            SessionResetSource.EXTERNAL
-                        )
-                        if (coordinator.activeTargetId != targetId) {
-                            coordinator.beginEdit(targetId, uiState.content.toByteArray(Charsets.UTF_8).size)
-                        }
+            } else if (uiState.content != sessionState.text) {
+                // 真实外部更新（Repository/Sync/Undo）— 内容与 SessionState 不一致，
+                // 确认是新的外部版本后执行 reset 协议。
+                val externalUpdate = com.xiwei.sujian.editor.v2.coordinator.EditorDocumentUpdate.ExternalReplace(
+                    targetId = targetId,
+                    text = uiState.content,
+                    revision = (currentRevision + 1).coerceAtLeast(1L),
+                    source = com.xiwei.sujian.editor.v2.coordinator.ExternalSource.REPOSITORY_LOAD,
+                )
+                if (coordinator.sessionCoordinator.shouldApplyExternalReplace(externalUpdate)) {
+                    coordinator.resetPersistentSession(
+                        targetId,
+                        uiState.content,
+                        uiState.content.toByteArray(Charsets.UTF_8).size,
+                        SessionResetSource.EXTERNAL
+                    )
+                    coordinator.sessionCoordinator.applyExternalReplace(externalUpdate)
+                    if (coordinator.activeTargetId != targetId) {
+                        coordinator.beginEdit(targetId, uiState.content.toByteArray(Charsets.UTF_8).size)
                     }
                 }
             }
+            lastAppliedRevision = currentRevision
         }
     }
 
@@ -263,7 +269,7 @@ fun WritingPane(
             }
         } else {
             @Suppress("UNUSED_EXPRESSION")
-            (coordinator.targetDecorationsVersionFlow.collectAsState().value)
+            (coordinator.targetDecorationsVersionFlow.collectAsStateWithLifecycle().value)
             com.xiwei.sujian.editor.v2.compose.WritingEditorSurface(
                 coordinator = coordinator,
                 targetId = targetId,

@@ -3,7 +3,7 @@ package com.xiwei.sujian.editor.v2.compose
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost
@@ -27,34 +27,39 @@ fun WritingEditorSurface(
     targetId: String,
     modifier: Modifier = Modifier,
 ) {
-    val activeTargetId = coordinator.activeTargetIdFlow.collectAsState().value
-    val editingState = coordinator.editingStateFlow.collectAsState().value
+    val activeTargetId = coordinator.activeTargetIdFlow.collectAsStateWithLifecycle().value
+    val editingState = coordinator.editingStateFlow.collectAsStateWithLifecycle().value
     val isActiveTarget = activeTargetId == targetId
     val isEditing = isActiveTarget &&
         (editingState == EditingState.BINDING || editingState == EditingState.EDITING)
+
+    // #595 八：消费 EditorAttachmentState 决定渲染策略。
+    // Attached/Attaching/Paused → 显示编辑器；Detached/Idle → 显示预览。
+    // attachmentState 从规范 windowBindingState 派生，叠加窗口级暂停标志。
+    val attachmentState = coordinator.attachmentState
 
     val themeColors = EditorThemeAdapter.extractColors()
 
     Box(modifier = modifier) {
         if (isEditing) {
+            // #595 三：AndroidView 正式拥有 View 生命周期 —
+            // factory 用传入的 Context 创建 View（Compose 官方模型），
+            // 不返回宿主提前创建、长期缓存的 View。
+            // 普通正文 Surface 不是 Lazy 列表 View 池复用场景，删除 onReset。
+            // onRelease 完整解绑双向引用、InputConnection、FrameClock 和 callback。
             AndroidView(
                 factory = { ctx ->
-                    val view = coordinator.obtainSharedEditorView()
+                    val view = coordinator.createWindowView(ctx)
+                    coordinator.attachView(coordinator.windowId, targetId, view)
                     EditorThemeAdapter.applyToView(view, themeColors)
                     view
                 },
                 update = { view ->
-                    EditorThemeAdapter.applyToView(view, themeColors)
-                    view.visibility = android.view.View.VISIBLE
-                    if (view.width > 0 && view.height > 0) {
-                        coordinator.updateHostGeometry(view.width.toFloat(), view.height.toFloat())
-                    }
-                },
-                onReset = { view ->
-                    view.resetForReuse()
+                    coordinator.updateView(view, themeColors)
                 },
                 onRelease = { view ->
-                    view.visibility = android.view.View.GONE
+                    coordinator.detachView(coordinator.windowId, targetId, view)
+                    view.release()
                 },
                 modifier = Modifier.fillMaxSize(),
             )

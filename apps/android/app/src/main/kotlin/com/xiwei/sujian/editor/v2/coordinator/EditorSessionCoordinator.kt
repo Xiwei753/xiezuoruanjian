@@ -117,17 +117,87 @@ class EditorSessionCoordinator(
     val lastCommittedTextFlow: StateFlow<String?> = _lastCommittedTextFlow.asStateFlow()
     val lastCommittedText: String? get() = _lastCommittedTextFlow.value
 
-    private val _editorAnimationSettingsFlow = MutableStateFlow(EditorAnimationSettings())
-    val editorAnimationSettingsFlow: StateFlow<EditorAnimationSettings> = _editorAnimationSettingsFlow.asStateFlow()
-
+    // #595 七：只保留一个可写事实源 — MutableStateFlow<EditorMotionPolicy>。
+    // EditorAnimationSettings 不再单独存储为 StateFlow，改为从 motionPolicy 派生计算。
     private val _motionPolicyFlow = MutableStateFlow(EditorMotionPolicy())
     val motionPolicyFlow: StateFlow<EditorMotionPolicy> = _motionPolicyFlow.asStateFlow()
 
-    fun getEditorAnimationSettings(): EditorAnimationSettings = _editorAnimationSettingsFlow.value
+    // #595 一：会话层唯一可观察状态 — 替代 targetTexts 并行缓存与 generation/hashCode 猜测。
+    // 本地输入时 revision 已在此更新，WritingPane 收集该状态发现 revision 已应用，
+    // 只更新保存状态，不触发 resetPersistentSession。
+    private val _sessionStateFlow = MutableStateFlow(EditorSessionState())
+    val sessionStateFlow: StateFlow<EditorSessionState> = _sessionStateFlow.asStateFlow()
+    val sessionState: EditorSessionState get() = _sessionStateFlow.value
+
+    fun getEditorAnimationSettings(): EditorAnimationSettings = EditorAnimationSettings.fromMotionPolicy(_motionPolicyFlow.value)
 
     fun setEditorAnimationSettings(settings: EditorAnimationSettings) {
-        _editorAnimationSettingsFlow.value = settings
         _motionPolicyFlow.value = settings.toMotionPolicy()
+    }
+
+    /**
+     * #595 三/七：原子应用 [EditorMotionPolicy] — 唯一可写事实源。
+     */
+    fun applyMotionPolicy(policy: EditorMotionPolicy) {
+        _motionPolicyFlow.value = policy
+    }
+
+    fun getMotionPolicy(): EditorMotionPolicy = _motionPolicyFlow.value
+
+    /**
+     * #595 一：应用本地 IME/键盘编辑 — 更新唯一 SessionState，不触发 reset。
+     *
+     * 由 [EditorWindowHost.installContentCallback] 在 SujianEditorView 产生
+     * EditResult 后调用。revision/transactionId 来自 Rust EditResult，
+     * WritingPane 收集 [sessionStateFlow] 发现 revision 已应用，只更新保存状态。
+     */
+    fun applyLocalEdit(update: EditorDocumentUpdate.LocalInput) {
+        targetTexts[update.targetId] = update.text
+        _sessionStateFlow.value = EditorSessionState(
+            targetId = update.targetId,
+            sessionId = persistentSessionIds[update.targetId],
+            text = update.text,
+            revision = update.revision,
+            selectionAnchorUtf8 = _sessionStateFlow.value.selectionAnchorUtf8,
+            selectionHeadUtf8 = _sessionStateFlow.value.selectionHeadUtf8,
+            lastAppliedTransactionId = update.transactionId,
+            origin = EditorSessionOrigin.LOCAL_INPUT,
+            bindingState = _windowBindingStateFlow.value,
+        )
+    }
+
+    /**
+     * #595 一：应用外部正文替换 — 与当前 Rust snapshot revision/content 比较，
+     * 只有确认是新的外部版本时才返回 true（调用方执行 reset 协议）。
+     *
+     * 本地输入产生的 UI 回显不会进入此方法（WritingPane 用 revision 判断）。
+     */
+    fun shouldApplyExternalReplace(update: EditorDocumentUpdate.ExternalReplace): Boolean {
+        val current = _sessionStateFlow.value
+        if (current.targetId != update.targetId) return true
+        // 同一 revision 且内容相同 — 已是最新，不需要 reset
+        if (current.revision == update.revision && current.text == update.text) return false
+        // 本地输入产生的更新（origin == LOCAL_INPUT）且 revision >= 外部 revision — 本地更新，不 reset
+        if (current.origin == EditorSessionOrigin.LOCAL_INPUT && current.revision >= update.revision) return false
+        return true
+    }
+
+    /**
+     * #595 一：外部替换已执行后更新 SessionState。
+     */
+    fun applyExternalReplace(update: EditorDocumentUpdate.ExternalReplace) {
+        targetTexts[update.targetId] = update.text
+        _sessionStateFlow.value = EditorSessionState(
+            targetId = update.targetId,
+            sessionId = persistentSessionIds[update.targetId],
+            text = update.text,
+            revision = update.revision,
+            selectionAnchorUtf8 = 0,
+            selectionHeadUtf8 = update.text.toByteArray(Charsets.UTF_8).size,
+            lastAppliedTransactionId = 0L,
+            origin = EditorSessionOrigin.EXTERNAL_REPLACE,
+            bindingState = _windowBindingStateFlow.value,
+        )
     }
 
     // ── 纯数据目标元数据（窗口层 registerTarget/updateTargetSpec 镜像）──
@@ -209,6 +279,9 @@ class EditorSessionCoordinator(
     fun completeWindowAttach(windowId: String, targetId: String, sessionId: ULong) {
         _windowBindingStateFlow.value = WindowBindingState.Attached(windowId, targetId, sessionId)
         _editingStateFlow.value = EditingState.EDITING
+        _sessionStateFlow.value = _sessionStateFlow.value.copy(
+            bindingState = WindowBindingState.Attached(windowId, targetId, sessionId),
+        )
     }
 
     /**
@@ -320,8 +393,34 @@ class EditorSessionCoordinator(
         activeSessionId = sessionId
         _windowBindingStateFlow.value = WindowBindingState.Attaching(windowId, targetId, sessionId)
 
-        // #592 一：复用既有持久 session 时携带真实 snapshot；新建 session 无 snapshot。
+        // #595 一：更新唯一 SessionState — 新建 session 用初始正文/光标，
+        // 复用既有 session 用真实 snapshot。
         val snapshot = if (reusedExistingSession) queryTargetSnapshot(targetId) else null
+        _sessionStateFlow.value = if (snapshot != null) {
+            EditorSessionState(
+                targetId = targetId,
+                sessionId = sessionId,
+                text = snapshot.text,
+                revision = snapshot.revision,
+                selectionAnchorUtf8 = snapshot.selectionAnchorUtf8,
+                selectionHeadUtf8 = snapshot.selectionHeadUtf8,
+                lastAppliedTransactionId = 0L,
+                origin = EditorSessionOrigin.INITIAL_LOAD,
+                bindingState = WindowBindingState.Attaching(windowId, targetId, sessionId),
+            )
+        } else {
+            EditorSessionState(
+                targetId = targetId,
+                sessionId = sessionId,
+                text = textForSession,
+                revision = 0L,
+                selectionAnchorUtf8 = sel,
+                selectionHeadUtf8 = sel,
+                lastAppliedTransactionId = 0L,
+                origin = EditorSessionOrigin.INITIAL_LOAD,
+                bindingState = WindowBindingState.Attaching(windowId, targetId, sessionId),
+            )
+        }
         return SessionBindInfo(sessionId, textForSession, sel, profile, isPersistent, snapshot = snapshot)
     }
 
