@@ -200,7 +200,11 @@ class EditorSessionCoordinator(
         if (current.targetId != update.targetId) return true
         // #595 二：旧事件（contentVersion 已应用）跳过
         if (update.contentVersion <= current.lastAppliedContentVersion) return false
-        if (current.lastRepositoryHash == update.fileHash && current.text == update.text) return false
+        // #595 二：同一 hash 永不重新应用 — hash 相同意味着 Repository 内容没有
+        // 变化，正文差异只可能来自本地输入/未保存内容；迟到的同 hash 加载事件
+        // 不得覆盖本地输入（“加载 H1/A → 输入得到 B → 旧 RepositoryLoaded(H1,A)
+        // 晚到 → 因正文不同再次应用 A → 本地未保存内容被旧加载事件覆盖”）。
+        if (current.lastRepositoryHash == update.fileHash) return false
         if (current.text == update.text) return false
         return true
     }
@@ -215,6 +219,16 @@ class EditorSessionCoordinator(
         val current = _sessionStateFlow.value
         if (current.targetId != update.targetId) return true
         if (update.contentVersion <= current.lastAppliedContentVersion) return false
+        // #595 二：携带 fileHash 的事件（SyncMerged）同一 hash 永不重新应用 —
+        // hash 相同意味着磁盘正文没有变化，正文差异只可能来自本地输入/未保存
+        // 内容；迟到的同 hash 合并事件不得覆盖本地输入（与 RepositoryLoaded
+        // 的 lastRepositoryHash 守卫同一规则）。
+        if (update is EditorDocumentUpdate.SyncMerged &&
+            update.fileHash.isNotEmpty() &&
+            current.lastRepositoryHash == update.fileHash
+        ) {
+            return false
+        }
         if (current.text == update.text && current.revision == update.revision) return false
         return true
     }

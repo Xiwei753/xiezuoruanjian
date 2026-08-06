@@ -193,7 +193,11 @@ class EditorViewModel(
                 session.projectId, session.volumeId, session.chapterId
             )
             val currentHash = _uiState.value.chapterHash
-            if (meta.hash.isNotEmpty() && meta.hash != currentHash && content != _uiState.value.content) {
+            if (meta.hash.isNotEmpty() &&
+                meta.hash != currentHash &&
+                content != _uiState.value.content &&
+                syncMergeEmitDedup.shouldEmit(meta.hash)
+            ) {
                 val syncState = try { settingsRepository.loadSyncState() } catch (_: Exception) { null }
                 emitDocumentUpdate(
                     com.xiwei.sujian.editor.v2.coordinator.EditorDocumentUpdate.SyncMerged(
@@ -269,6 +273,13 @@ class EditorViewModel(
     private var previousText: String = ""
     private var isLoadingChapter = false
     private var inputFrozen = false
+
+    // #595 二：同步合并事件发射去重 — 每个章节只发射一次同一 fileHash 的 SyncMerged。
+    // 同步合并应用后 uiState.chapterHash 不更新（会话层 lastRepositoryHash 与
+    // ViewModel chapterHash 是两份事实），发射守卫若只看 chapterHash 会在每个
+    // 同步周期重复发射同一合并事件；reducer 的 lastRepositoryHash 守卫虽能拦截，
+    // 发射端仍应去重。章节提交时 reset（见 switchChapterLocked/initChapter）。
+    private val syncMergeEmitDedup = SyncMergeEmitDedup()
 
     // #595 一：章节切换串行门 — 同一时间只允许一个切换事务执行；
     // 请求序号保证旧请求不得在新请求之后提交或报告失败（过期 → Stale）。
@@ -412,6 +423,10 @@ class EditorViewModel(
                 chapterId = chapterId
             )
             currentSession = newSession
+            // #595 二：章节提交后重置同步合并发射去重 — 重新进入章节后允许
+            // 同一 hash 的 SyncMerged 再次发射（正文由 RepositoryLoaded 装载，
+            // SyncMerged 只报告新磁盘变化）。
+            syncMergeEmitDedup.reset()
 
             _uiState.value = _uiState.value.copy(
                 loading = true,
@@ -461,6 +476,8 @@ class EditorViewModel(
             volumeId = volumeId,
             chapterId = chapterId
         )
+        // #595 二：章节提交后重置同步合并发射去重（与 switchChapterLocked 一致）。
+        syncMergeEmitDedup.reset()
         _uiState.value = _uiState.value.copy(
             loading = true,
             chapterTitle = chapterTitle
