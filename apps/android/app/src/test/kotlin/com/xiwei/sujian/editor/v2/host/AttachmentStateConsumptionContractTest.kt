@@ -1,95 +1,82 @@
 package com.xiwei.sujian.editor.v2.host
 
-import com.xiwei.sujian.editor.v2.coordinator.ProjectionSnapshot
-import com.xiwei.sujian.editor.v2.coordinator.TargetSnapshot
+import com.xiwei.sujian.editor.v2.compose.shouldShowEditor
 import com.xiwei.sujian.editor.v2.coordinator.WindowBindingState
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * #595 八：EditorAttachmentState 被实际消费决定渲染策略的契约测试。
+ * #595 八：正文 Surface 渲染决策消费规范 [WindowBindingState] 的契约测试。
  *
- * WritingEditorSurface 用 attachmentState 的类型和 targetId 匹配决定显示编辑器还是预览：
- * - Attached/Attaching/Paused 且 targetId 匹配 → 显示编辑器
- * - Detached/Idle → 显示预览
+ * WritingEditorSurface 用 [shouldShowEditor]（纯函数）消费会话层唯一规范状态机
+ * [WindowBindingState]，决定显示编辑器还是预览：
+ * - Attaching/Attached/Committing/Cancelling 且 targetId 匹配 → 显示编辑器
+ * - Idle/Detaching/Detached → 显示预览
+ *
+ * 不再存在第二套 EditorAttachmentState 派生类型 — 临时失焦（动画暂停）不改变
+ * binding 状态，Attached 时编辑器始终显示，暂停/恢复由 View 内部处理。
  */
 class AttachmentStateConsumptionContractTest {
 
-    private val frame = EditorFrameSnapshot(
-        scrollX = 0f, scrollY = 0f,
-        viewportWidth = 100, viewportHeight = 200,
-        hasActiveAnimation = false,
-    )
-
-    private fun showEditor(state: EditorAttachmentState, targetId: String): Boolean = when (state) {
-        is EditorAttachmentState.Attached -> state.targetId == targetId
-        is EditorAttachmentState.Attaching -> state.targetId == targetId
-        is EditorAttachmentState.Paused -> state.targetId == targetId
-        else -> false
-    }
-
     @Test
     fun attachedWithMatchingTargetShowsEditor() {
-        val state = EditorAttachmentState.Attached("w1", "t1", 7UL)
-        assertTrue("Attached with matching target must show editor", showEditor(state, "t1"))
+        assertTrue(
+            "Attached with matching target must show editor",
+            shouldShowEditor(WindowBindingState.Attached("w1", "t1", 7UL), "t1"),
+        )
     }
 
     @Test
     fun attachedWithDifferentTargetShowsPreview() {
-        val state = EditorAttachmentState.Attached("w1", "t1", 7UL)
-        assertFalse("Attached with different target must show preview", showEditor(state, "t2"))
+        assertFalse(
+            "Attached with different target must show preview",
+            shouldShowEditor(WindowBindingState.Attached("w1", "t1", 7UL), "t2"),
+        )
     }
 
     @Test
     fun attachingWithMatchingTargetShowsEditor() {
-        val state = EditorAttachmentState.Attaching("w1", "t1", 7UL)
-        assertTrue("Attaching with matching target must show editor", showEditor(state, "t1"))
+        assertTrue(
+            "Attaching with matching target must show editor",
+            shouldShowEditor(WindowBindingState.Attaching("w1", "t1", 7UL), "t1"),
+        )
     }
 
     @Test
-    fun pausedWithMatchingTargetShowsEditor() {
-        val state = EditorAttachmentState.Paused("t1", 7UL, frame)
-        assertTrue("Paused with matching target must show editor", showEditor(state, "t1"))
+    fun committingWithMatchingTargetShowsEditor() {
+        assertTrue(
+            "Committing with matching target must keep editor visible",
+            shouldShowEditor(WindowBindingState.Committing("t1", 7UL), "t1"),
+        )
+    }
+
+    @Test
+    fun cancellingWithMatchingTargetShowsEditor() {
+        assertTrue(
+            "Cancelling with matching target must keep editor visible",
+            shouldShowEditor(WindowBindingState.Cancelling("t1", 7UL), "t1"),
+        )
     }
 
     @Test
     fun detachedShowsPreview() {
-        val state = EditorAttachmentState.Detached("t1", 7UL, null)
-        assertFalse("Detached must show preview", showEditor(state, "t1"))
+        assertFalse(
+            "Detached must show preview",
+            shouldShowEditor(WindowBindingState.Detached("t1", 7UL, null), "t1"),
+        )
+    }
+
+    @Test
+    fun detachingShowsPreview() {
+        assertFalse(
+            "Detaching must show preview",
+            shouldShowEditor(WindowBindingState.Detaching(null), "t1"),
+        )
     }
 
     @Test
     fun idleShowsPreview() {
-        assertFalse("Idle must show preview", showEditor(EditorAttachmentState.Idle, "t1"))
-    }
-
-    @Test
-    fun releasingShowsPreview() {
-        assertFalse("Releasing must show preview", showEditor(EditorAttachmentState.Releasing, "t1"))
-    }
-
-    @Test
-    fun pausedFromAttachedAndPausedFlag() {
-        val state = attachmentStateFromBinding(
-            WindowBindingState.Attached("w1", "t1", 7UL),
-            paused = true,
-            frameSnapshot = frame,
-            projectionSnapshot = null,
-        )
-        assertTrue("Attached + paused must derive Paused", state is EditorAttachmentState.Paused)
-        assertTrue("Paused must show editor", showEditor(state, "t1"))
-    }
-
-    @Test
-    fun attachedWithoutPauseDerivesAttached() {
-        val state = attachmentStateFromBinding(
-            WindowBindingState.Attached("w1", "t1", 7UL),
-            paused = false,
-            frameSnapshot = null,
-            projectionSnapshot = null,
-        )
-        assertTrue("Attached without pause must derive Attached", state is EditorAttachmentState.Attached)
-        assertTrue("Attached must show editor", showEditor(state, "t1"))
+        assertFalse("Idle must show preview", shouldShowEditor(WindowBindingState.Idle, "t1"))
     }
 }

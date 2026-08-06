@@ -6,25 +6,25 @@ import com.xiwei.sujian.data.AppServiceBridge
 import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import com.xiwei.sujian.editor.v2.host.TextEditSessionBridge
-import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
-import com.xiwei.sujian.editor.v2.projection.TargetDisplayRuntime
 import com.xiwei.sujian.editor.v2.projection.ChapterPreviewState
 import com.xiwei.sujian.editor.v2.projection.TextRange
-import com.xiwei.sujian.editor.v2.host.EditorAttachmentState
-import com.xiwei.sujian.editor.v2.host.EditorFrameSnapshot
-import com.xiwei.sujian.editor.v2.host.attachmentStateFromBinding
 import com.xiwei.sujian.editor.v2.motion.EditorMotionPolicy
+import com.xiwei.sujian.editor.v2.motion.TargetMotionConstraint
 import com.xiwei.sujian.ui.compose.theme.EditorThemeAdapter
 import kotlinx.coroutines.flow.StateFlow
 
 /**
  * #592 一/四：窗口层宿主 — 每个 Activity/窗口创建一份，持有全部窗口/渲染对象：
  * EditableTextTarget（含 Compose/ViewModel 回调、Rect、Transform、mutableState）、
- * TargetDisplayRuntime、TextPaint、Android 动画时间源、WindowDisplayFrameClock、
- * IME 与 View 回调、onTargetContentChanged。
+ * SujianEditorView（唯一视觉运行时）、TextPaint、Android 动画时间源、
+ * WindowDisplayFrameClock、IME 与 View 回调、onTargetContentChanged。
+ *
+ * #595 九：窗口层不再创建 TargetDisplayRuntime 第二套动画运行时 — 非活动预览只使用
+ * 会话层 snapshot 派生的纯静态 [ChapterPreviewState]，活动编辑只有 SujianEditorView
+ * 持有动画 runtime 和 Bitmap 资源。
  *
  * 会话层 [EditorSessionCoordinator] 只保存纯会话状态；窗口销毁时调用
- * [releaseWindow] 释放 View/FrameClock/投影运行时但保留 Rust 会话，
+ * [releaseWindow] 释放 View/FrameClock 但保留 Rust 会话，
  * 新窗口从 coordinator 读取 session snapshot 并重新附着。
  *
  * 不得持有自建 CoroutineScope、Context（除 application context）、仓库、同步 I/O。
@@ -42,7 +42,6 @@ class EditorWindowHost(
     val windowId: String = "window:${System.identityHashCode(this)}"
 
     private val targets = mutableMapOf<String, EditableTextTarget>()
-    private val targetProjections = mutableMapOf<String, TargetDisplayRuntime>()
 
     private var sharedEditorView: SujianEditorView? = null
     val windowFrameClock: WindowDisplayFrameClock = frameClock ?: WindowDisplayFrameClock()
@@ -116,7 +115,6 @@ class EditorWindowHost(
         val isPersistent = sessionCoordinator.isTargetPersistent(targetId)
         if (isPersistent) {
             saveActiveTargetProjection(targetId)
-            targetProjections.remove(targetId)?.release()
         }
         targets.remove(targetId)
         sessionCoordinator.detachWindowBinding(windowId, targetId)
@@ -133,7 +131,6 @@ class EditorWindowHost(
                 view.unbindSession("target_close")
             }
         }
-        targetProjections.remove(targetId)?.release()
         targets.remove(targetId)
         sessionCoordinator.closeTarget(targetId, reason)
     }
@@ -153,11 +150,7 @@ class EditorWindowHost(
 
     fun getTargetGeometry(targetId: String): Rect? = targets[targetId]?.currentGeometry
 
-    fun getTargetText(targetId: String): String? = sessionCoordinator.getTargetText(targetId)
-
     fun getPersistentSessionId(targetId: String): ULong? = sessionCoordinator.getPersistentSessionId(targetId)
-
-    fun getTargetProjection(targetId: String): TargetDisplayRuntime? = targetProjections[targetId]
 
     /**
      * #595 九：非活动章节预览的纯静态状态 — 不经 TargetDisplayRuntime，
@@ -182,42 +175,42 @@ class EditorWindowHost(
         )
     }
 
-    fun getEditorAnimationSettings(): EditorAnimationSettings = sessionCoordinator.getEditorAnimationSettings()
-
-    fun setEditorAnimationSettings(settings: EditorAnimationSettings) {
-        sessionCoordinator.setEditorAnimationSettings(settings)
-        val effective = settings.toMotionPolicy().effective()
-        sharedEditorView?.let { view ->
-            view.setTypingAnimationEnabled(effective.textEnabled, effective.textDurationMillis)
-            view.setSmoothCursorEnabled(effective.cursorEnabled, effective.cursorDurationMillis)
-            view.setCoordinatedAnimationEnabled(effective.coordinated)
-            view.setReduceMotion(effective.reduceMotion)
-            view.setKernelAnimationEnabled(effective.textEnabled || effective.cursorEnabled)
-        }
-    }
-
     /**
-     * #595 三/七：原子应用 [EditorMotionPolicy] — 唯一可写事实源。
-     * 一次更新文字、光标、协同、时长和 reduce-motion，同步推送到活动 View。
+     * #595 三/四/七：原子应用 [EditorMotionPolicy] — 唯一可写事实源。
+     * 一次更新文字、光标、协同、时长和 reduce-motion；target profile 只作为约束
+     * （SYSTEM_SUPPRESSED → forceStatic）在唯一计算点参与 effectivePolicy，
+     * 不会成为第二个动画状态写入者。同步推送到活动 View。
      */
     fun applyMotionPolicy(policy: EditorMotionPolicy) {
-        val effective = policy.effective()
-        sessionCoordinator.applyMotionPolicy(effective)
+        sessionCoordinator.applyMotionPolicy(policy)
         sharedEditorView?.let { view ->
-            view.setTypingAnimationEnabled(effective.textEnabled, effective.textDurationMillis)
-            view.setSmoothCursorEnabled(effective.cursorEnabled, effective.cursorDurationMillis)
-            view.setCoordinatedAnimationEnabled(effective.coordinated)
-            view.setReduceMotion(effective.reduceMotion)
-            view.setKernelAnimationEnabled(effective.textEnabled || effective.cursorEnabled)
+            applyPolicyToView(view, activeTargetId)
         }
     }
 
     /**
-     * #595 三：当前动画策略 — 从规范设置派生的单一可观察事实源（不可变）。
-     * UI 收集该值向下传递，[applyMotionPolicy] 原子更新。
+     * #595 四：唯一有效策略计算点 — globalPolicy.apply(profileConstraint).effective()。
+     * profile 的 animationPolicy（SYSTEM_SUPPRESSED → forceStatic）只在此作为约束。
      */
-    val motionPolicy: EditorMotionPolicy
-        get() = sessionCoordinator.getMotionPolicy()
+    private fun effectivePolicyFor(targetId: String?): EditorMotionPolicy {
+        val global = sessionCoordinator.getMotionPolicy()
+        val constraint = targetId?.let { profileConstraintFor(it) } ?: TargetMotionConstraint()
+        return constraint.apply(global).effective()
+    }
+
+    private fun profileConstraintFor(targetId: String): TargetMotionConstraint {
+        val profile = targets[targetId]?.profile ?: return TargetMotionConstraint()
+        return constraintFor(profile)
+    }
+
+    private fun applyPolicyToView(view: SujianEditorView, targetId: String?) {
+        val effective = effectivePolicyFor(targetId)
+        view.setTypingAnimationEnabled(effective.textEnabled, effective.textDurationMillis)
+        view.setSmoothCursorEnabled(effective.cursorEnabled, effective.cursorDurationMillis)
+        view.setCoordinatedAnimationEnabled(effective.coordinated)
+        view.setReduceMotion(effective.reduceMotion)
+        view.setKernelAnimationEnabled(effective.textEnabled || effective.cursorEnabled)
+    }
 
     /**
      * #595 三：动画策略 StateFlow — 只读可观察的单一事实源（不可变）。
@@ -225,31 +218,6 @@ class EditorWindowHost(
      */
     val motionPolicyFlow: kotlinx.coroutines.flow.StateFlow<EditorMotionPolicy>
         get() = sessionCoordinator.motionPolicyFlow
-
-    /**
-     * #595 六：窗口附着状态 — 从规范 [WindowBindingState] 派生，不引入并行状态机。
-     * 叠加窗口级暂停标志（来自 [SujianEditorView.isAnimationPaused]）。
-     */
-    val attachmentState: EditorAttachmentState
-        get() {
-            val view = sharedEditorView
-            val paused = view != null && view.isAnimationPaused()
-            val frame = if (paused) currentFrameSnapshot() else null
-            val projection = activeTargetId?.let { sessionCoordinator.getProjectionSnapshot(it) }
-            return attachmentStateFromBinding(windowBindingState, paused, frame, projection)
-        }
-
-    private fun currentFrameSnapshot(): EditorFrameSnapshot? {
-        val view = sharedEditorView ?: return null
-        if (view.width <= 0 || view.height <= 0) return null
-        return EditorFrameSnapshot(
-            scrollX = view.getScrollXPos(),
-            scrollY = view.getScrollYPos(),
-            viewportWidth = view.width,
-            viewportHeight = view.height,
-            hasActiveAnimation = view.needsFrame(),
-        )
-    }
 
     // ── Edit operations (orchestrates session + window) ──
 
@@ -305,6 +273,21 @@ class EditorWindowHost(
         return true
     }
 
+    /**
+     * #595 四：根据 target profile 的 animationPolicy 计算有效动画约束。
+     * 纯函数，供绑定和测试使用。
+     */
+    companion object {
+        fun constraintFor(profile: TextEditorProfile?): TargetMotionConstraint {
+            if (profile == null) return TargetMotionConstraint()
+            return when (profile.animationPolicy) {
+                AnimationPolicy.SYSTEM_SUPPRESSED -> TargetMotionConstraint(forceStatic = true)
+                AnimationPolicy.ENABLED -> TargetMotionConstraint()
+                AnimationPolicy.INHERIT_GLOBAL -> TargetMotionConstraint()
+            }
+        }
+    }
+
     // #595 三：在 View 上执行 session 绑定 — 由 beginEdit（View 已存在）或
     // attachView（AndroidView.factory 刚创建 View）调用。
     // #592 一：复用既有持久 session 时执行 attachSnapshot（不调用
@@ -327,20 +310,19 @@ class EditorWindowHost(
                 selEndUtf8 = snapshot.selectionHeadUtf8,
             )
             restoreProjectionScroll(view, pending.targetId)
-            rebuildProjectionFromSnapshot(pending.targetId, snapshot)
         } else {
             view.bindSession(pending.bridge, pending.profile, pending.text, pending.selection)
-            rebuildProjectionFromSnapshot(pending.targetId, null)
         }
 
         // #595 七: 活动编辑时 SujianEditorView 是唯一的 FrameClock listener。
-        // 投影运行时不接到 FrameClock — 它只在非活动预览（ReadonlyChapterPreview）时
-        // 静态绘制，避免与 SujianEditorView 的 pipeline runtime 形成双驱动。
-        // 投影的 mirror 在 detach/rebind 时从 session snapshot 重建。
+        // 非活动预览只使用会话层 snapshot 派生的纯静态 ChapterPreviewState。
 
         installContentCallback(view, target)
         installCommitRequestedCallback(view)
         installCancelRequestedCallback(view)
+        // #595 四：绑定完成后应用 target 约束后的有效动画策略 — 全局策略 + profile 约束
+        // 在唯一计算点（effectivePolicyFor）合成，一次传入 View/引擎/Rust kernel。
+        applyPolicyToView(view, pending.targetId)
     }
 
     /**
@@ -350,48 +332,6 @@ class EditorWindowHost(
     private fun restoreProjectionScroll(view: SujianEditorView, targetId: String) {
         val snapshot = sessionCoordinator.getProjectionSnapshot(targetId) ?: return
         view.setScrollPosition(snapshot.scrollX, snapshot.scrollY)
-    }
-
-    /**
-     * #592 一/三：从真实 snapshot（或新建 session 的初值）重建窗口层投影运行时。
-     * 投影属于窗口层；会话层只保存纯数据快照，跨配置变化由这里重建。
-     */
-    private fun rebuildProjectionFromSnapshot(targetId: String, snapshot: TargetSnapshot?) {
-        val target = targets[targetId] ?: return
-        val projection = getOrCreateProjection(targetId, target)
-        if (snapshot != null) {
-            projection.updateFromSnapshot(snapshot.text, snapshot.cursorUtf8, snapshot.revision)
-        }
-        val decorations = sessionCoordinator.getTargetDecorations(targetId)
-        if (decorations != null) {
-            applyDecorationsToProjection(projection, decorations)
-        }
-        val pure = sessionCoordinator.getProjectionSnapshot(targetId)
-        if (pure != null) {
-            projection.setScrollPosition(pure.scrollX, pure.scrollY)
-            if (pure.viewportWidth > 0f) projection.setWidth(pure.viewportWidth)
-            if (pure.viewportHeight > 0f) projection.setViewportSize(pure.viewportWidth.toInt(), pure.viewportHeight.toInt())
-            if (pure.fontSizePx > 0f) projection.setFontSize(pure.fontSizePx)
-            if (pure.lineSpacingMultiplier > 0f) projection.setLineSpacingMultiplier(pure.lineSpacingMultiplier)
-            if (pure.themeColors != null) {
-                projection.setThemeColors(
-                    pure.themeColors.text, pure.themeColors.cursor, pure.themeColors.selection,
-                    pure.themeColors.composing, pure.themeColors.background, pure.themeColors.searchHighlight
-                )
-            }
-        }
-    }
-
-    private fun applyDecorationsToProjection(projection: TargetDisplayRuntime, decorations: TargetDecorations) {
-        if (decorations.searchHighlightsUtf8.isEmpty() &&
-            decorations.selectionStartUtf8 < 0 && decorations.selectionEndUtf8 < 0) {
-            projection.clearDecorations()
-        } else {
-            projection.setSearchHighlights(decorations.searchHighlightsUtf8)
-            if (decorations.selectionStartUtf8 >= 0 && decorations.selectionEndUtf8 >= 0) {
-                projection.setSelection(decorations.selectionStartUtf8, decorations.selectionEndUtf8)
-            }
-        }
     }
 
     fun commitActiveEdit(): Boolean {
@@ -438,17 +378,7 @@ class EditorWindowHost(
                 view.loadText(text, cursorUtf8)
             }
         }
-        // 重建投影，保持窗口层预览与 Rust 状态一致
-        val snapshot = sessionCoordinator.queryTargetSnapshot(targetId)
-        if (snapshot != null) {
-            rebuildProjectionFromSnapshot(targetId, snapshot)
-        } else {
-            val target = targets[targetId]
-            if (target != null && sessionCoordinator.getPersistentSessionId(targetId) != null) {
-                val projection = getOrCreateProjection(targetId, target)
-                projection.updateFromSnapshot(text, cursorUtf8, projection.getRevision())
-            }
-        }
+        // 非活动预览直接读取会话层 snapshot（getChapterPreviewState），无需重建投影运行时。
     }
 
     // ── SessionCommandPort (view pipeline when active, projection for inactive) ──
@@ -485,25 +415,10 @@ class EditorWindowHost(
                 return TargetCommandResult.Success(snapshotAfter)
             }
         }
-        // 非活动目标：先执行 bridge 命令，再把结果应用到窗口层投影
+        // 非活动目标：只执行 bridge 命令，预览直接读取会话层 snapshot（getChapterPreviewState）
         val result = sessionCoordinator.executeTargetCommand(targetId, command)
-        if (result is TargetCommandResult.Success) {
-            val target = targets[targetId]
-            if (target != null) {
-                val projection = getOrCreateProjection(targetId, target)
-                projection.updateFromSnapshot(
-                    result.snapshot.text,
-                    result.snapshot.cursorUtf8,
-                    result.snapshot.revision,
-                )
-                val decorations = sessionCoordinator.getTargetDecorations(targetId)
-                if (decorations != null) {
-                    applyDecorationsToProjection(projection, decorations)
-                }
-            }
-            if (targetId != activeTargetId) {
-                onTargetContentChanged?.invoke(targetId, result.snapshot.text)
-            }
+        if (result is TargetCommandResult.Success && targetId != activeTargetId) {
+            onTargetContentChanged?.invoke(targetId, result.snapshot.text)
         }
         return result
     }
@@ -523,20 +438,9 @@ class EditorWindowHost(
                 }
             }
         }
-        val projection = targetProjections[targetId]
-        if (projection != null) {
-            applyDecorationsToProjection(projection, decorations)
-        }
     }
 
     // ── View management ──
-
-    fun getSharedEditorView(): SujianEditorView? = sharedEditorView
-
-    fun setSharedEditorView(view: SujianEditorView) {
-        sharedEditorView = view
-    }
-
     /**
      * #595 三：在 AndroidView.factory 中用传入的 Context 创建 View —
      * 不返回宿主提前创建、长期缓存的 View。Compose 官方模型要求 factory 创建 View。
@@ -544,12 +448,9 @@ class EditorWindowHost(
     fun createWindowView(context: Context): SujianEditorView {
         return SujianEditorView(context, animationTimeSource = animationTimeSource, transactionIdSource = transactionIdSource).also { view ->
             view.setFrameClock(windowFrameClock)
-            val policy = motionPolicy.effective()
-            view.setTypingAnimationEnabled(policy.textEnabled, policy.textDurationMillis)
-            view.setSmoothCursorEnabled(policy.cursorEnabled, policy.cursorDurationMillis)
-            view.setCoordinatedAnimationEnabled(policy.coordinated)
-            view.setReduceMotion(policy.reduceMotion)
-            view.setKernelAnimationEnabled(policy.textEnabled || policy.cursorEnabled)
+            // #595 四：创建时按活动 target（若有）应用全局策略 + profile 约束；
+            // 绑定完成后 performViewBind 会用 pending.targetId 的约束再次应用。
+            applyPolicyToView(view, pendingViewBind?.targetId ?: activeTargetId)
             sharedEditorView = view
         }
     }
@@ -620,16 +521,12 @@ class EditorWindowHost(
             // #592 三：窗口销毁前把滚动/选区/装饰等状态存入会话层纯数据快照
             saveActiveTargetProjection(activeId)
         }
-        // #592 三：窗口销毁前解除投影 FrameClock 绑定，避免已释放时钟继续驱动投影。
-        targetProjections.values.forEach { it.setFrameClock(null) }
         sharedEditorView?.let { view ->
             view.unbindSession("config_change")
             view.setFrameClock(null)
             view.release()
         }
         sharedEditorView = null
-        targetProjections.values.forEach { it.release() }
-        targetProjections.clear()
         windowFrameClock.release()
     }
 
@@ -648,9 +545,6 @@ class EditorWindowHost(
             view.release()
         }
         sharedEditorView = null
-        targetProjections.values.forEach { it.setFrameClock(null) }
-        targetProjections.values.forEach { it.release() }
-        targetProjections.clear()
         windowFrameClock.release()
         sessionCoordinator.releaseHost()
     }
@@ -702,42 +596,19 @@ class EditorWindowHost(
     }
 
     /**
-     * #592 三：把窗口滚动/视口/字体/主题/装饰保存为会话层纯数据快照。
+     * #592 三：把窗口滚动位置保存为会话层纯数据快照。
      * 不依赖 target 对象存在（窗口销毁时序晚于 Compose onDispose），
-     * 只依赖 View 和投影运行时。
+     * 只依赖 View。
      */
     private fun saveActiveTargetProjection(targetId: String) {
         val view = sharedEditorView ?: return
-        val themeColors = view.getPipelineThemeColors()
-        val themeSnapshot = if (themeColors != null) {
-            ThemeColorsSnapshot(
-                themeColors.text, themeColors.cursor, themeColors.selection,
-                themeColors.composing, themeColors.background, themeColors.searchHighlight
-            )
-        } else null
         sessionCoordinator.saveProjectionSnapshot(
             targetId,
             ProjectionSnapshot(
                 scrollX = view.getScrollXPos(),
                 scrollY = view.getScrollYPos(),
-                viewportWidth = view.width.toFloat(),
-                viewportHeight = view.height.toFloat(),
-                fontSizePx = view.getPipelineTextPaintSize(),
-                lineSpacingMultiplier = view.getPipelineLineSpacingMultiplier(),
-                themeColors = themeSnapshot,
             ),
         )
-    }
-
-    private fun getOrCreateProjection(targetId: String, target: EditableTextTarget): TargetDisplayRuntime {
-        return targetProjections.getOrPut(targetId) {
-            val mirror = DisplayTextMirror()
-            val textPaint = android.text.TextPaint().apply {
-                textSize = target.profile.fontSizePx.coerceAtLeast(1f)
-                isAntiAlias = true
-            }
-            TargetDisplayRuntime(mirror, textPaint, animationTimeSource, transactionIdSource)
-        }
     }
 
 }

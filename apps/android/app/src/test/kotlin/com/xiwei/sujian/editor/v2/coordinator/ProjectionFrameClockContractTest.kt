@@ -5,11 +5,11 @@ import org.junit.Test
 import java.lang.reflect.Method
 
 /**
- * #592 三/四：投影 FrameClock 归属窗口层契约测试。
+ * #592 三/四 + #595 九：投影运行时归属与第二套运行时删除契约测试。
  *
- * 窗口销毁时由窗口层解除投影 FrameClock 绑定（targetProjections 属于
- * EditorWindowHost），避免已释放时钟继续驱动投影；会话层不再持有
- * TargetDisplayRuntime/FrameClock。
+ * - 窗口销毁时由窗口层释放 FrameClock；会话层不持有 TargetDisplayRuntime/FrameClock。
+ * - #595 九：EditorWindowHost 不再创建/持有 TargetDisplayRuntime 第二套动画运行时 —
+ *   非活动预览只使用会话层 snapshot 派生的纯静态 ChapterPreviewState。
  */
 class ProjectionFrameClockContractTest {
 
@@ -54,13 +54,22 @@ class ProjectionFrameClockContractTest {
     }
 
     @Test
-    fun editorWindowHost_ownsProjectionRuntimes() {
+    fun editorWindowHost_noSecondAnimationRuntime() {
+        // #595 九：预览纯静态化后，EditorWindowHost 不得再持有 TargetDisplayRuntime 第二套运行时。
         val hasProjectionsField = EditorWindowHost::class.java.declaredFields.any {
             it.name == "targetProjections"
         }
         assertTrue(
-            "EditorWindowHost must own TargetDisplayRuntime map after #592 四",
-            hasProjectionsField
+            "EditorWindowHost must NOT hold TargetDisplayRuntime map after #595 九 " +
+            "(preview is pure static ChapterPreviewState)",
+            !hasProjectionsField
+        )
+        val runtimeField = EditorWindowHost::class.java.declaredFields.any {
+            it.type.simpleName == "TargetDisplayRuntime"
+        }
+        assertTrue(
+            "EditorWindowHost must not hold any TargetDisplayRuntime field after #595 九",
+            !runtimeField
         )
     }
 }

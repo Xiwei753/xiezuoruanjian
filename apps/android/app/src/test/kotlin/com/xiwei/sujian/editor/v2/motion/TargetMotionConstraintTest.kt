@@ -1,12 +1,19 @@
 package com.xiwei.sujian.editor.v2.motion
 
+import com.xiwei.sujian.editor.v2.coordinator.AnimationPolicy
+import com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost
+import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Assert.assertEquals
 import org.junit.Test
 
 /**
  * #595 四：TargetMotionConstraint 契约测试 — 验证约束应用不成为第二个动画状态写入者。
+ *
+ * profile 只是约束条件：SYSTEM_SUPPRESSED（Search/Token/RepositoryUrl/BranchName/
+ * ReplaceQuery）→ forceStatic；INHERIT_GLOBAL / ENABLED → 无约束。
+ * effectivePolicy = globalPolicy.apply(profileConstraint).effective() 只在一个计算点合成。
  */
 class TargetMotionConstraintTest {
 
@@ -58,5 +65,42 @@ class TargetMotionConstraintTest {
         val result = constraint.apply(effective)
         assertFalse("reduce-motion disables text", result.textEnabled)
         assertFalse("reduce-motion disables cursor", result.cursorEnabled)
+    }
+
+    // ── #595 四：profile → 约束的生产映射（EditorWindowHost.constraintFor）──
+
+    @Test
+    fun systemSuppressedProfileYieldsForceStatic() {
+        // Search/Token/RepositoryUrl/BranchName/ReplaceQuery 都是 SYSTEM_SUPPRESSED
+        val constraint = EditorWindowHost.constraintFor(TextEditorProfile.SearchQuery)
+        assertTrue("SearchQuery must be forceStatic", constraint.forceStatic)
+
+        val policy = EditorMotionPolicy(textEnabled = true, cursorEnabled = true, coordinated = true)
+        val effective = constraint.apply(policy).effective()
+        assertFalse("SYSTEM_SUPPRESSED profile must suppress text", effective.textEnabled)
+        assertFalse("SYSTEM_SUPPRESSED profile must suppress cursor", effective.cursorEnabled)
+    }
+
+    @Test
+    fun documentBodyProfileYieldsNoConstraint() {
+        val constraint = EditorWindowHost.constraintFor(TextEditorProfile.DocumentBody)
+        assertEquals(TargetMotionConstraint(), constraint)
+    }
+
+    @Test
+    fun shortTitleProfileYieldsNoConstraint() {
+        val constraint = EditorWindowHost.constraintFor(TextEditorProfile.ShortTitle)
+        assertEquals(TargetMotionConstraint(), constraint)
+    }
+
+    @Test
+    fun nullProfileYieldsNoConstraint() {
+        assertEquals(TargetMotionConstraint(), EditorWindowHost.constraintFor(null))
+    }
+
+    @Test
+    fun explicitEnabledPolicyYieldsNoConstraint() {
+        val profile = TextEditorProfile(animationPolicy = AnimationPolicy.ENABLED)
+        assertEquals(TargetMotionConstraint(), EditorWindowHost.constraintFor(profile))
     }
 }

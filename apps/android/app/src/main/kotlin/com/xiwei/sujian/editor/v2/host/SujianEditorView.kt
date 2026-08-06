@@ -72,7 +72,6 @@ class SujianEditorView @JvmOverloads constructor(
     private var _themeBackgroundColor: Int = Color.WHITE
 
     fun getThemeBackgroundColor(): Int = _themeBackgroundColor
-    private var lastAppliedThemeColors: com.xiwei.sujian.ui.compose.theme.EditorThemeColors? = null
 
     init {
         inputAdapter.setHostView(this)
@@ -562,12 +561,6 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun getPipeline(): EditorCommandPort = pipeline
 
-    fun getPipelineTextPaintSize(): Float = textPaint.textSize
-
-    fun getPipelineLineSpacingMultiplier(): Float = lineSpacingMultiplier
-
-    fun getPipelineThemeColors(): com.xiwei.sujian.ui.compose.theme.EditorThemeColors? = lastAppliedThemeColors
-
     var onContentChanged: ((String) -> Unit)? = null
 
     /**
@@ -650,13 +643,7 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun isReduceMotionEnabled(): Boolean = reduceMotionEnabled
 
-    /**
-     * #595 六：当前动画是否因窗口失焦而暂停 — 供宿主派生 [EditorAttachmentState.Paused]。
-     */
-    fun isAnimationPaused(): Boolean = pipeline.isAnimationPaused()
-
     fun applyThemeColorsFromAdapter(colors: com.xiwei.sujian.ui.compose.theme.EditorThemeColors) {
-        lastAppliedThemeColors = colors
         _themeBackgroundColor = colors.background
         textPaint.color = colors.text
         pipeline.setRendererThemeColors(

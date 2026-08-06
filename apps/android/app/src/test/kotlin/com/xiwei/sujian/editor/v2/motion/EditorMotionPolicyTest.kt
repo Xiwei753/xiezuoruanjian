@@ -1,14 +1,13 @@
 package com.xiwei.sujian.editor.v2.motion
 
-import com.xiwei.sujian.editor.v2.coordinator.EditorAnimationSettings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * #595 三：EditorMotionPolicy 契约测试 — 验证不可变策略的初始值、reduce-motion
- * 降级和与 EditorAnimationSettings 的互转。
+ * #595 三/十：EditorMotionPolicy 契约测试 — 验证不可变策略的初始值、reduce-motion
+ * 降级。EditorAnimationSettings 桥接类型已删除，策略字段直接作为唯一事实源。
  */
 class EditorMotionPolicyTest {
 
@@ -50,7 +49,7 @@ class EditorMotionPolicyTest {
     }
 
     @Test
-    fun roundTripToAnimationSettingsPreservesAllFields() {
+    fun policyIsImmutableDataClassWithAllFields() {
         val policy = EditorMotionPolicy(
             textEnabled = true,
             textDurationMillis = 150L,
@@ -59,24 +58,15 @@ class EditorMotionPolicyTest {
             coordinated = true,
             reduceMotion = false,
         )
-        val settings = EditorAnimationSettings.fromMotionPolicy(policy)
-        assertEquals(policy.textEnabled, settings.typingAnimationEnabled)
-        assertEquals(policy.textDurationMillis, settings.typingAnimationDurationMs)
-        assertEquals(policy.cursorEnabled, settings.smoothCursorEnabled)
-        assertEquals(policy.cursorDurationMillis, settings.smoothCursorDurationMs)
-        assertEquals(policy.coordinated, settings.coordinated)
-        assertEquals(policy.reduceMotion, settings.reduceMotion)
-
-        val restored = settings.toMotionPolicy()
-        assertEquals(policy, restored)
-    }
-
-    @Test
-    fun animationSettingsDefaultsMatchCoreDefaults() {
-        val settings = EditorAnimationSettings()
-        assertTrue("Default typing animation enabled", settings.typingAnimationEnabled)
-        assertTrue("Default smooth cursor enabled", settings.smoothCursorEnabled)
-        assertTrue("Default coordinated enabled", settings.coordinated)
-        assertFalse("Default reduce motion disabled", settings.reduceMotion)
+        assertEquals(true, policy.textEnabled)
+        assertEquals(150L, policy.textDurationMillis)
+        assertEquals(false, policy.cursorEnabled)
+        assertEquals(60L, policy.cursorDurationMillis)
+        assertEquals(true, policy.coordinated)
+        assertEquals(false, policy.reduceMotion)
+        // 复制修改不影响原实例 — 不可变性契约
+        val copy = policy.copy(cursorEnabled = true)
+        assertFalse("original must stay unchanged", policy.cursorEnabled)
+        assertTrue("copy must reflect change", copy.cursorEnabled)
     }
 }

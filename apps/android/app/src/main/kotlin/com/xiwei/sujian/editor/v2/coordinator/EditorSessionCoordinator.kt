@@ -61,15 +61,12 @@ enum class SessionCloseReason {
 /**
  * #592 四：会话层持有的纯数据投影状态 — 不含 View、TextPaint、FrameClock、
  * Rect/Transform 或 Compose mutableState。窗口层在销毁/附着时读写。
+ * #595 九：仅保留滚动位置（配置变化/返回重进时恢复 View 滚动），
+ * 字体/主题/视口等视觉配置由 Compose 主题和 profile 权威提供，不再保存。
  */
 data class ProjectionSnapshot(
     val scrollX: Float = 0f,
     val scrollY: Float = 0f,
-    val viewportWidth: Float = 0f,
-    val viewportHeight: Float = 0f,
-    val fontSizePx: Float = 0f,
-    val lineSpacingMultiplier: Float = 0f,
-    val themeColors: ThemeColorsSnapshot? = null,
 )
 
 /**
@@ -128,12 +125,6 @@ class EditorSessionCoordinator(
     private val _sessionStateFlow = MutableStateFlow(EditorSessionState())
     val sessionStateFlow: StateFlow<EditorSessionState> = _sessionStateFlow.asStateFlow()
     val sessionState: EditorSessionState get() = _sessionStateFlow.value
-
-    fun getEditorAnimationSettings(): EditorAnimationSettings = EditorAnimationSettings.fromMotionPolicy(_motionPolicyFlow.value)
-
-    fun setEditorAnimationSettings(settings: EditorAnimationSettings) {
-        _motionPolicyFlow.value = settings.toMotionPolicy()
-    }
 
     /**
      * #595 三/七：原子应用 [EditorMotionPolicy] — 唯一可写事实源。
@@ -220,8 +211,6 @@ class EditorSessionCoordinator(
     fun updateTargetText(targetId: String, text: String) {
         targetTexts[targetId] = text
     }
-
-    fun getTargetText(targetId: String): String? = targetTexts[targetId]
 
     fun isTargetPersistent(targetId: String): Boolean = targetPersistentFlags[targetId] ?: false
 
@@ -689,13 +678,4 @@ data class SessionBindInfo(
      * 保证 Undo/Redo 与 composition 不被重置；新建 session 为 null。
      */
     val snapshot: TargetSnapshot? = null,
-)
-
-data class ThemeColorsSnapshot(
-    val text: Int,
-    val cursor: Int,
-    val selection: Int,
-    val composing: Int,
-    val background: Int,
-    val searchHighlight: Int,
 )
