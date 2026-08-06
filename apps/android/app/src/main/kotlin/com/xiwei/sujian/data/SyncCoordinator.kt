@@ -54,17 +54,6 @@ class SyncCoordinator(
     suspend fun runSync(trigger: SyncTrigger, snapshot: SyncProfileSnapshot? = null): SyncOutcome {
         DiagnosticsEvents.syncEvent(trigger.name.lowercase(), "start")
         try {
-            // #595 三：同步前统一 flush 活动正文 session 到 Repository —
-            // 否则同步下载的新正文可能直接覆盖尚未落盘的本地输入（Core 同步
-            // 只能以磁盘内容为三方合并基础）。flush 失败则中止同步（类型化失败），
-            // 不允许在本地输入未保存的情况下继续。
-            val flushOk = WorkspaceDocumentGate.flushActiveDocument()
-            if (!flushOk) {
-                DiagnosticsLogger.w("SyncCoordinator", "Active document flush failed before sync — aborting")
-                syncStatusRepository.notifySyncFailed()
-                return SyncOutcome.TerminalFailure(SyncStatus.Error, SyncFailureKind.Fatal)
-            }
-
             val profile: SyncProfileSnapshot = snapshot ?: run {
                 val result = withContext(Dispatchers.IO) {
                     SyncProfileGate.snapshotExclusive { settingsRepository.snapshotSyncProfile() }
@@ -96,7 +85,19 @@ class SyncCoordinator(
             // A 实际使用 token B”；设置失败立即终止（不静默继续）；
             // 操作结束后 finally 清除 override，陈旧凭据不得泄漏到后续操作
             // （Core 的 refresh_secrets_override 在已有 override 时不再读磁盘）。
+            // #595 三：活动正文 flush 与同步执行必须在同一独占锁内串行 —
+            // flush 保存磁盘版本后同步立即以该版本为 base；如果 flush 在锁外，
+            // 两个同步触发可交叉 flush/执行，正文版本屏障失效。
             val exclusiveResult = SyncSession.runExclusive { _ ->
+                val flushOk = WorkspaceDocumentGate.flushActiveDocument()
+                if (!flushOk) {
+                    DiagnosticsLogger.w("SyncCoordinator", "Active document flush failed before sync — aborting (typed DocumentSaveFailed)")
+                    syncStatusRepository.notifySyncFailed()
+                    return@runExclusive BridgeResult.Error(
+                        ResultEnvelope.errorOf("DOCUMENT_FLUSH_FAILED", "Active document could not be persisted before sync"),
+                        SyncFailureKind.DocumentSaveFailed,
+                    )
+                }
                 syncStatusRepository.notifySyncStarted()
                 val overrideOk = withContext(Dispatchers.IO) {
                     settingsRepository.setSyncSecretsOverrideStrict(profile.secrets)

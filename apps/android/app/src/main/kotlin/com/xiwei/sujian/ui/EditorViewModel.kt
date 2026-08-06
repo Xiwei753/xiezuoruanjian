@@ -60,6 +60,7 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.data.WorkspaceDocumentGate
 import com.xiwei.sujian.data.WorkspaceRepository
+import com.xiwei.sujian.data.DocumentSaveReceiptTracker
 import com.xiwei.sujian.editor.v2.coordinator.DocumentFactOrigin
 import com.xiwei.sujian.editor.v2.coordinator.DocumentVersion
 import com.xiwei.sujian.editor.v2.coordinator.EditorSessionCoordinator
@@ -126,9 +127,33 @@ data class ChapterKey(
 )
 
 sealed class SaveCommand {
-    data class Save(val content: String, val session: EditorSession) : SaveCommand()
-    data class Clear(val session: EditorSession) : SaveCommand()
-    data class Flush(val reply: kotlinx.coroutines.CompletableDeferred<Boolean>) : SaveCommand()
+    /**
+     * #595 七：保存命令携带入队时的 Rust session revision — 保存回执按
+     * （target, revision）记录，flush 屏障据此验证"该 revision 的正文已落盘"。
+     */
+    data class Save(
+        val content: String,
+        val session: EditorSession,
+        val revisionAtEnqueue: Long,
+    ) : SaveCommand()
+
+    /** #595 七：类型化清空文档操作（ClearDocument）— 删除全部正文/菜单清空共用。 */
+    data class Clear(
+        val session: EditorSession,
+        val revisionAtEnqueue: Long,
+    ) : SaveCommand()
+
+    /**
+     * #595 七：指定 target 和 revision 的持久化屏障 — 只有确认该 revision
+     * 对应正文已经得到保存回执（且与 committedVersion 一致）才返回成功。
+     * 删除跨章节全局 lastSaveResult。
+     */
+    data class Flush(
+        val targetId: String,
+        val sessionId: String,
+        val requiredRustRevision: Long,
+        val reply: kotlinx.coroutines.CompletableDeferred<Boolean>,
+    ) : SaveCommand()
 }
 
 data class EditorSettingsState(
@@ -212,9 +237,12 @@ class EditorViewModel(
         if (sessionCoordinator != null && _sessionCoordinator !== sessionCoordinator) {
             _sessionCoordinator = sessionCoordinator
         }
-        // #595 三：同步前统一 flush 活动正文（WorkspaceDocumentGate）。
-        // 同一进程同一时刻只有一个活动正文 VM，直接注册。
-        WorkspaceDocumentGate.registerFlusher { requestSave().await() }
+        // #595 三/四：同步前统一 flush 活动正文（WorkspaceDocumentGate）。
+        // 注册携带 owner token（本 VM 实例）：旧实例 onCleared 只能关闭自己的
+        // 注册，不能清掉新实例的 flusher（Activity 重建/生命周期交错防护）。
+        if (gateRegistration == null) {
+            gateRegistration = WorkspaceDocumentGate.register(this) { requestSave().await() }
+        }
     }
 
     private fun restartSyncObserver() {
@@ -233,9 +261,14 @@ class EditorViewModel(
     }
 
     /**
-     * #595 二/三：同步完成后检查当前章节磁盘内容是否变更 —
+     * #595 二/三/五：同步完成后检查当前章节磁盘内容是否变更 —
      * 变更时发布版本化文档事实（[TargetDocumentFact]），WritingPane 据此
      * 执行一次 Core reset 以反映同步合并后的新正文。
+     *
+     * #595 五：baseVersion 按 target 从 EditorSessionStore 读取（活动状态属于
+     * 其他 target 时不得使用全局 committedVersion）；sourceVersion 使用真实
+     * commit/manifest ID（lastSyncedCommit），不再用 lastSyncTime 时间锚点；
+     * parentVersion=同步前磁盘版本 — 后续 flush/应用据此判断因果顺序。
      */
     private suspend fun checkSyncMergedChapter() {
         val session = currentSession ?: return
@@ -253,14 +286,16 @@ class EditorViewModel(
                 syncMergeEmitDedup.shouldEmit(meta.hash)
             ) {
                 val syncState = try { settingsRepository.loadSyncState() } catch (_: Exception) { null }
-                val baseVersion = _sessionCoordinator?.sessionState?.committedVersion ?: DocumentVersion()
+                val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
+                val baseVersion = _sessionCoordinator?.documentCommittedVersionFor(targetId) ?: DocumentVersion()
                 emitDocumentFact(
                     TargetDocumentFact(
-                        targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId),
+                        targetId = targetId,
                         text = content,
                         sourceVersion = DocumentVersion(
                             contentHash = meta.hash,
-                            syncManifestRevision = syncState?.lastSyncTime,
+                            syncCommitId = syncState?.lastSyncedCommit,
+                            parentVersion = baseVersion,
                         ),
                         baseVersion = baseVersion,
                         origin = DocumentFactOrigin.SYNC_MERGED,
@@ -304,6 +339,22 @@ class EditorViewModel(
     private var saveActorJob: kotlinx.coroutines.Job? = null
     private var contentExplicitlyCleared = false
 
+    /**
+     * #595 七：按 target 的保存回执（替代旧全局 lastSaveResult）—
+     * Flush 屏障只放行"该 revision 的正文已得到保存回执"的 target。
+     */
+    private val saveReceipts = DocumentSaveReceiptTracker()
+
+    /**
+     * #595 七：屏幕正文是否自加载/外部应用以来被编辑过 — 未编辑的空章节
+     * （磁盘与屏幕一致）允许直接 flush；编辑过的正文必须得到保存回执。
+     */
+    @Volatile
+    private var contentDirty = false
+
+    /** #595 四：WorkspaceDocumentGate 注册句柄 — onCleared 只关闭自己的注册。 */
+    private var gateRegistration: com.xiwei.sujian.data.WorkspaceDocumentGate.Registration? = null
+
     private val statsDeviceId: String by lazy {
         val prefs = application.getSharedPreferences("writer_stats", android.content.Context.MODE_PRIVATE)
         var id = prefs.getString("device_id", null)
@@ -339,10 +390,10 @@ class EditorViewModel(
      * #595 一：章节切换统一事务入口（手机竖屏、大屏工作台共用）。
      *
      * 固定顺序：串行门 → requestId 校验 → 冻结旧章节输入 → 保存旧章节 →
-     * 加载新章节 → 预准备 Rust session → 再次校验 requestId → 一次性提交
-     * active/正文/hash/标题/session → 返回 Success。调用方只在 Success 之后
-     * 提交业务选择和 Navigator；失败时旧 EditorUiState 完整恢复、Navigator
-     * 完全不变化。
+     * 加载新章节 → 无副作用预准备 Rust session（[PreparedSessionHandle]）→
+     * 再次校验 requestId → 一次性提交（active/正文/hash/标题/session）→
+     * 返回 Success。调用方只在 Success 之后提交业务选择和 Navigator；失败时
+     * 旧 EditorUiState 完整恢复、Navigator 完全不变化。
      *
      * - 过期请求（事务执行期间有更新请求排队）在每个可见提交边界回滚临时
      *   状态并返回 [ChapterSwitchResult.Stale] — 不保存可见状态、不导航；
@@ -404,7 +455,7 @@ class EditorViewModel(
         }
 
         inputFrozen = true
-        var preparedTargetId: String? = null
+        var preparedHandle: com.xiwei.sujian.editor.v2.coordinator.PreparedSessionHandle? = null
         try {
             // #595 一/转场：切换章节时同步置 loading — 在旧章节保存完成前就隐藏编辑器。
             _uiState.value = _uiState.value.copy(loading = true)
@@ -415,11 +466,19 @@ class EditorViewModel(
                 saveCommandChannel.close()
 
                 val content = _uiState.value.content
+                val oldTargetId = chapterTargetId(oldSession.projectId, oldSession.volumeId, oldSession.chapterId)
+                // #595 七：保存旧章节也记录保存回执（revision 在保存时从会话层读取）。
+                val oldRevision = _sessionCoordinator?.sessionState?.revision ?: 0L
                 val saveOk = if (content.trim().isNotEmpty()) {
                     saveMutex.withLock {
                         try {
                             when (val result = workspaceRepository.saveChapterContent(oldSession.projectId, oldSession.volumeId, oldSession.chapterId, content)) {
-                                is com.xiwei.sujian.data.BridgeResult.Success -> true
+                                is com.xiwei.sujian.data.BridgeResult.Success -> {
+                                    result.data?.contentHash?.let { hash ->
+                                        saveReceipts.record(oldTargetId, oldRevision, hash)
+                                    }
+                                    true
+                                }
                                 is com.xiwei.sujian.data.BridgeResult.Error -> {
                                     _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
                                     emitErrorEvent(getApplication<Application>().getString(R.string.error_save_failed, result.message))
@@ -443,7 +502,12 @@ class EditorViewModel(
                     saveMutex.withLock {
                         try {
                             when (val result = workspaceRepository.clearChapterContent(oldSession.projectId, oldSession.volumeId, oldSession.chapterId)) {
-                                is com.xiwei.sujian.data.BridgeResult.Success -> true
+                                is com.xiwei.sujian.data.BridgeResult.Success -> {
+                                    result.data?.contentHash?.let { hash ->
+                                        saveReceipts.record(oldTargetId, oldRevision, hash)
+                                    }
+                                    true
+                                }
                                 is com.xiwei.sujian.data.BridgeResult.Error -> {
                                     _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
                                     emitErrorEvent(getApplication<Application>().getString(R.string.error_save_failed, result.message))
@@ -519,14 +583,11 @@ class EditorViewModel(
                 return ChapterSwitchResult.Stale
             }
 
-            // #595 一：为 B 预准备 Rust session + 有效 snapshot/bind plan —
+            // #595 一：为 B 无副作用预准备 Rust session + 有效 snapshot/bind plan —
             // 在提交前完成，导航后编辑器立即可用；失败时 A 完全不变。
             val content = _uiState.value.content
-            preparedTargetId = chapterTargetId(projectId, volumeId, chapterId)
-            val prepared = prepareTargetSession(preparedTargetId, content)
-            if (!prepared) {
-                rollbackPreparedSession(preparedTargetId)
-                preparedTargetId = null
+            preparedHandle = prepareTargetSession(chapterTargetId(projectId, volumeId, chapterId), content)
+            if (preparedHandle == null) {
                 currentSession = oldSession
                 _uiState.value = oldUiState.copy(loading = false)
                 contentExplicitlyCleared = oldContentExplicitlyCleared
@@ -535,11 +596,25 @@ class EditorViewModel(
             }
             // #595 一：可见提交边界 3 — session 预准备后再次校验 requestId。
             if (!isLatest()) {
-                rollbackPreparedSession(preparedTargetId)
-                preparedTargetId = null
+                rollbackPreparedSession(preparedHandle)
+                preparedHandle = null
                 restoreAfterSwitch(oldSession, oldUiState, oldContentExplicitlyCleared)
                 return ChapterSwitchResult.Stale
             }
+
+            // #595 一：最终提交 — 一次性执行 A→B 切换（冻结 A 输入 lease、
+            // 提交 A、激活 B）。失败必须回滚到旧章节。
+            val coordinator = _sessionCoordinator
+            if (coordinator == null || !coordinator.commitPreparedSession(preparedHandle)) {
+                rollbackPreparedSession(preparedHandle)
+                preparedHandle = null
+                currentSession = oldSession
+                _uiState.value = oldUiState.copy(loading = false)
+                contentExplicitlyCleared = oldContentExplicitlyCleared
+                inputFrozen = false
+                return ChapterSwitchResult.LoadFailed(ChapterKey(projectId, volumeId, chapterId))
+            }
+            preparedHandle = null
 
             // #595 一：提交完成后的独立操作 — recordRecentEdit/统计失败只记录
             // 自身错误，不得回滚已成功打开的正文。
@@ -559,8 +634,8 @@ class EditorViewModel(
         } catch (e: kotlinx.coroutines.CancellationException) {
             // #595 一：取消不是失败 — 恢复旧状态后向上重抛，让更新的请求
             // （若有）从一致状态开始；不允许把取消当普通加载失败回滚导航。
-            if (preparedTargetId != null) {
-                rollbackPreparedSession(preparedTargetId)
+            if (preparedHandle != null) {
+                rollbackPreparedSession(preparedHandle)
             }
             restoreAfterSwitch(oldSession, oldUiState, oldContentExplicitlyCleared)
             throw e
@@ -569,25 +644,15 @@ class EditorViewModel(
         }
     }
 
-    /** 回滚到旧章节：释放预准备的临时 session，恢复 A 为活动 target。 */
+    /** 回滚到旧章节：释放预准备的临时 session，恢复 A 的活动状态（A 未被事务触碰）。 */
     private suspend fun restoreAfterSwitch(
         oldSession: EditorSession?,
         oldUiState: EditorUiState,
         oldContentExplicitlyCleared: Boolean,
     ) {
-        val coordinator = _sessionCoordinator
-        if (coordinator != null && oldSession != null) {
-            val oldTargetId = chapterTargetId(oldSession.projectId, oldSession.volumeId, oldSession.chapterId)
-            if (!coordinator.isTargetRegistered(oldTargetId)) {
-                coordinator.registerTargetMeta(oldTargetId, TextEditorProfile.DocumentBody, persistent = true)
-            }
-            val cursorUtf8 = oldUiState.content.toByteArray(Charsets.UTF_8).size
-            try {
-                coordinator.prepareSessionForEdit(oldTargetId, oldUiState.content, cursorUtf8)
-            } catch (_: Exception) {
-                // 恢复失败不阻塞状态回滚 — 新 pane 的 beginEdit 会再次尝试。
-            }
-        }
+        // #595 一：无副作用预准备不修改 A 的会话状态（不 commit/cancel A、
+        // 不切换 activeTargetId），回滚无需重新 prepare A — A 的 Rust session ID、
+        // Undo/Redo、composition、selection 与事务前完全一致。
         currentSession = oldSession
         _uiState.value = oldUiState.copy(loading = false)
         contentExplicitlyCleared = oldContentExplicitlyCleared
@@ -597,28 +662,27 @@ class EditorViewModel(
         inputFrozen = false
     }
 
-    /** 释放切换事务预准备的临时 session（过期/失败时）。 */
-    private fun rollbackPreparedSession(targetId: String) {
+    /** 释放切换事务预准备的临时 session（过期/失败时 — 按 Abort 规则）。 */
+    private fun rollbackPreparedSession(handle: com.xiwei.sujian.editor.v2.coordinator.PreparedSessionHandle) {
         try {
-            _sessionCoordinator?.releasePreparedTarget(targetId)
+            _sessionCoordinator?.releasePreparedTarget(handle)
         } catch (_: Exception) {
             // 释放失败不阻塞回滚
         }
     }
 
     /**
-     * #595 一：为章节预准备 Rust session — 注册 target 元数据并取得
-     * 有效 snapshot/bind plan。返回 false 表示 session 不可用
+     * #595 一：为章节无副作用预准备 Rust session — 注册 target 元数据并返回
+     * [PreparedSessionHandle]（snapshot/bind plan）。返回 null 表示 session 不可用
      * （提交前检测，避免导航后才发现编辑器不可用）。
      */
-    private fun prepareTargetSession(targetId: String, content: String): Boolean {
-        val coordinator = _sessionCoordinator ?: return false
+    private fun prepareTargetSession(targetId: String, content: String): com.xiwei.sujian.editor.v2.coordinator.PreparedSessionHandle? {
+        val coordinator = _sessionCoordinator ?: return null
         if (!coordinator.isTargetRegistered(targetId)) {
             coordinator.registerTargetMeta(targetId, TextEditorProfile.DocumentBody, persistent = true)
         }
         val cursorUtf8 = content.toByteArray(Charsets.UTF_8).size
-        val bindInfo = coordinator.prepareSessionForEdit(targetId, content, cursorUtf8)
-        return bindInfo != null && bindInfo.snapshot != null
+        return coordinator.prepareTargetSessionForCommit(targetId, content, cursorUtf8)
     }
 
     fun initChapter(projectId: String, volumeId: String, chapterId: String, chapterTitle: String) {
@@ -735,13 +799,27 @@ class EditorViewModel(
                 editorEnabled = true,
                 saveStatus = SaveStatus.Idle
             )
+            contentDirty = false
+            // #595 七：加载即记录磁盘版本回执（revision 0 — 尚未编辑，屏幕与磁盘一致），
+            // 同步前 flush 不把"从未保存"误判为假成功。
+            saveReceipts.record(chapterTargetId(session.projectId, session.volumeId, session.chapterId), 0L, meta.hash)
+            val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
+            // #595 五：重新加载时磁盘版本携带 parentVersion=该 target 上次已知版本 —
+            // 磁盘内容与已提交版本构成因果链，reducer 可比较并安全 reset；
+            // 首次加载（committed 为空）直接可应用。
+            val previousCommitted = _sessionCoordinator?.documentCommittedVersionFor(targetId) ?: DocumentVersion()
+            val loadedVersion = if (previousCommitted.isEmpty) {
+                DocumentVersion(contentHash = meta.hash)
+            } else {
+                DocumentVersion(contentHash = meta.hash, parentVersion = previousCommitted)
+            }
             // #595 二：Repository 加载完成即发布文档事实（真实 hash 锚点）。
             // 最终 revision 来自 reset 后的真实 Rust snapshot。
             emitDocumentFact(
                 TargetDocumentFact(
-                    targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId),
+                    targetId = targetId,
                     text = content,
-                    sourceVersion = DocumentVersion(contentHash = meta.hash),
+                    sourceVersion = loadedVersion,
                     baseVersion = DocumentVersion(),
                     origin = DocumentFactOrigin.REPOSITORY_LOAD,
                 )
@@ -787,6 +865,11 @@ class EditorViewModel(
             chapterHash = fileHash,
             saveStatus = SaveStatus.Saved,
         )
+        contentDirty = false
+        // #595 七：同步合并内容已由 Core 写入磁盘 — 记录回执（revision 取
+        // reset 后的真实 session revision），同步后 flush 不误判为未保存。
+        val revision = _sessionCoordinator?.sessionState?.revision ?: 0L
+        saveReceipts.record(targetId, revision, fileHash)
         previousText = text
         updateStats(text)
     }
@@ -812,7 +895,17 @@ class EditorViewModel(
             saveStatus = SaveStatus.Unsaved
         )
 
-        contentExplicitlyCleared = false
+        // #595 七：空正文不能靠字符串猜测"是否要保存" — 用户把非空正文编辑为空
+        // 是类型化 ClearDocument 语义（随后 autosave/requestSave 走 Clear 落盘，
+        // 经过 Core 空覆盖保护）；非空编辑则撤销清空意图。
+        contentDirty = true
+        if (newContent.isEmpty()) {
+            if (currentState.content.isNotEmpty()) {
+                contentExplicitlyCleared = true
+            }
+        } else {
+            contentExplicitlyCleared = false
+        }
         scheduleAutoSave(newContent)
         scheduleStatsUpdate(newContent)
 
@@ -849,11 +942,13 @@ class EditorViewModel(
             if (!_uiState.value.settings.autoSaveEnabled) return@launch
             delay(delayMs)
             if (_uiState.value.saveStatus == SaveStatus.Unsaved) {
-                if (content.trim().isEmpty() && !contentExplicitlyCleared) {
-                } else if (content.trim().isEmpty() && contentExplicitlyCleared) {
-                    saveCommandChannel.trySend(SaveCommand.Clear(session))
-                } else {
-                    saveCommandChannel.trySend(SaveCommand.Save(content, session))
+                // #595 七：保存命令携带入队时的 Rust session revision — 回执按
+                // (target, revision) 记录，Flush 屏障据此验证 revision 对应正文已落盘。
+                val revision = _sessionCoordinator?.sessionState?.revision ?: 0L
+                if (content.trim().isEmpty() && contentExplicitlyCleared) {
+                    saveCommandChannel.trySend(SaveCommand.Clear(session, revision))
+                } else if (content.trim().isNotEmpty()) {
+                    saveCommandChannel.trySend(SaveCommand.Save(content, session, revision))
                 }
             }
         }
@@ -882,28 +977,48 @@ class EditorViewModel(
         )
     }
 
+    /**
+     * #595 三/七：同步前 flush — 把当前屏幕正文（revision 精确锚定）推入保存队列
+     * 并等待持久化屏障：只有该 revision 的正文已得到保存回执才返回 true。
+     *
+     * - 空正文 + 显式清空（删除全部内容/菜单清空）→ ClearDocument；
+     * - 空正文 + 未编辑（全新空章节，磁盘与屏幕一致）→ 直接 flush（回执来自加载）；
+     * - 空正文 + 已编辑但未清空 → 防御性失败（磁盘与屏幕不一致）。
+     */
     fun requestSave(): kotlinx.coroutines.Deferred<Boolean> {
         val content = _uiState.value.content
         val session = currentSession
         val deferred = kotlinx.coroutines.CompletableDeferred<Boolean>()
         viewModelScope.launch {
-            if (session != null) {
-                if (content.trim().isEmpty() && contentExplicitlyCleared) {
-                    val sendResult = saveCommandChannel.trySend(SaveCommand.Clear(session))
+            if (session == null) {
+                // 无活动章节：没有本地输入需要保护。
+                deferred.complete(true)
+                return@launch
+            }
+            val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
+            // #595 七：flush 屏障要求的 revision = 请求时刻屏幕正文的 Rust revision。
+            val requiredRevision = _sessionCoordinator?.sessionState?.revision ?: 0L
+            if (content.trim().isEmpty()) {
+                if (contentExplicitlyCleared) {
+                    val sendResult = saveCommandChannel.trySend(SaveCommand.Clear(session, requiredRevision))
                     if (sendResult.isFailure) {
                         deferred.complete(false)
                         return@launch
                     }
-                } else if (content.trim().isNotEmpty()) {
-                    val sendResult = saveCommandChannel.trySend(SaveCommand.Save(content, session))
-                    if (sendResult.isFailure) {
-                        deferred.complete(false)
-                        return@launch
-                    }
+                } else if (contentDirty) {
+                    // 编辑过但未确认清空 — 磁盘与屏幕不一致，不得报告假成功。
+                    deferred.complete(false)
+                    return@launch
+                }
+            } else {
+                val sendResult = saveCommandChannel.trySend(SaveCommand.Save(content, session, requiredRevision))
+                if (sendResult.isFailure) {
+                    deferred.complete(false)
+                    return@launch
                 }
             }
             val flushReply = CompletableDeferred<Boolean>()
-            val flushResult = saveCommandChannel.trySend(SaveCommand.Flush(flushReply))
+            val flushResult = saveCommandChannel.trySend(SaveCommand.Flush(targetId, session.sessionId, requiredRevision, flushReply))
             if (flushResult.isFailure) {
                 deferred.complete(false)
                 return@launch
@@ -917,10 +1032,9 @@ class EditorViewModel(
     fun clearChapterContent() {
         val session = currentSession ?: return
         contentExplicitlyCleared = true
-        saveCommandChannel.trySend(SaveCommand.Clear(session))
+        val revision = _sessionCoordinator?.sessionState?.revision ?: 0L
+        saveCommandChannel.trySend(SaveCommand.Clear(session, revision))
     }
-
-    private var lastSaveResult: Boolean = true
 
     private fun startSaveActor() {
         saveActorJob?.cancel()
@@ -929,37 +1043,50 @@ class EditorViewModel(
                 when (cmd) {
                     is SaveCommand.Save -> {
                         if (cmd.session.sessionId == currentSession?.sessionId) {
-                            lastSaveResult = performSave(cmd.content, cmd.session, isAutoSave = true)
+                            performSave(cmd.content, cmd.session, isAutoSave = true, revisionAtEnqueue = cmd.revisionAtEnqueue)
                         }
                     }
                     is SaveCommand.Clear -> {
                         if (cmd.session.sessionId == currentSession?.sessionId) {
-                            lastSaveResult = clearChapterContentInternal(cmd.session)
+                            clearChapterContentInternal(cmd.session, cmd.revisionAtEnqueue)
                         }
                     }
                     is SaveCommand.Flush -> {
-                        cmd.reply.complete(lastSaveResult)
+                        // #595 七：Flush 是指定 target 和 revision 的持久化屏障 —
+                        // 只有确认该 revision 对应正文已经得到保存回执（且与
+                        // committedVersion 一致）才返回成功。删除跨章节全局 lastSaveResult。
+                        val committed = _sessionCoordinator?.documentCommittedVersionFor(cmd.targetId)
+                        cmd.reply.complete(
+                            saveReceipts.canFlush(cmd.targetId, cmd.requiredRustRevision, committed?.contentHash)
+                        )
                     }
                 }
             }
         }
     }
 
-    private suspend fun clearChapterContentInternal(session: EditorSession): Boolean {
+    private suspend fun clearChapterContentInternal(session: EditorSession, revisionAtEnqueue: Long = 0L): Boolean {
         return saveMutex.withLock {
             try {
                 val result = workspaceRepository.clearChapterContent(session.projectId, session.volumeId, session.chapterId)
                 when (result) {
                     is com.xiwei.sujian.data.BridgeResult.Success -> {
+                        val savedHash = result.data?.contentHash ?: ""
                         _uiState.value = _uiState.value.copy(
                             content = "",
+                            chapterHash = savedHash,
                             saveStatus = SaveStatus.Saved
                         )
                         previousText = ""
-                        // #595 二：保存成功上报 — 清除 localDirty，同步合并可安全应用。
+                        val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
+                        // #595 七：清空落盘后记录回执（revision 精确锚定）。
+                        saveReceipts.record(targetId, revisionAtEnqueue, savedHash)
+                        // #595 二/六：保存成功上报 — 保存回执作为文档提交原子推进
+                        // committed/sessionBase/lastSaved + 清除 localDirty，
+                        // 同步合并以磁盘版本为基础可安全应用。
                         _sessionCoordinator?.markSaved(
-                            chapterTargetId(session.projectId, session.volumeId, session.chapterId),
-                            DocumentVersion(contentHash = result.data?.contentHash ?: ""),
+                            targetId,
+                            DocumentVersion(contentHash = savedHash),
                         )
                         true
                     }
@@ -988,10 +1115,10 @@ class EditorViewModel(
         }
     }
 
-    private suspend fun performSave(content: String, session: EditorSession, isAutoSave: Boolean): Boolean {
+    private suspend fun performSave(content: String, session: EditorSession, isAutoSave: Boolean, revisionAtEnqueue: Long = 0L): Boolean {
         if (content.trim().isEmpty()) {
             if (contentExplicitlyCleared) {
-                return clearChapterContentInternal(session)
+                return clearChapterContentInternal(session, revisionAtEnqueue)
             }
             return false
         }
@@ -999,6 +1126,7 @@ class EditorViewModel(
         var currentContent = content
         var currentIsAutoSave = isAutoSave
         var lastSaveSuccess = false
+        var currentRevision = revisionAtEnqueue
         val saveStartedAt = System.currentTimeMillis()
 
         while (true) {
@@ -1016,17 +1144,27 @@ class EditorViewModel(
                     val result = workspaceRepository.saveChapterContent(session.projectId, session.volumeId, session.chapterId, contentToSave)
                     when (result) {
                         is com.xiwei.sujian.data.BridgeResult.Success -> {
-                            _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.Saved)
+                            val savedHash = result.data?.contentHash ?: ""
+                            _uiState.value = _uiState.value.copy(
+                                saveStatus = SaveStatus.Saved,
+                                // #595 六：保存成功推进 EditorUiState.chapterHash —
+                                // 磁盘/Rust session/ViewModel 三方版本一致。
+                                chapterHash = savedHash,
+                            )
                             com.xiwei.sujian.diagnostics.DiagnosticsEvents.chapterSave(
                                 session.projectId, session.chapterId,
                                 contentToSave.toByteArray(Charsets.UTF_8).size, "ok",
                                 System.currentTimeMillis() - saveStartedAt
                             )
-                            // #595 二：保存成功上报 — 记录 lastSavedVersion 并清除
-                            // localDirty（同步合并以磁盘为基础，可以安全应用）。
+                            val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
+                            // #595 七：保存落盘后记录回执（revision 精确锚定）。
+                            saveReceipts.record(targetId, currentRevision, savedHash)
+                            // #595 二/六：保存成功上报 — 保存回执作为文档提交原子推进
+                            // committed/sessionBase/lastSaved + 清除 localDirty
+                            // （同步合并以磁盘为基础，可以安全应用）。
                             _sessionCoordinator?.markSaved(
-                                chapterTargetId(session.projectId, session.volumeId, session.chapterId),
-                                DocumentVersion(contentHash = result.data?.contentHash ?: ""),
+                                targetId,
+                                DocumentVersion(contentHash = savedHash),
                             )
                             val pending = pendingSaveContent
                             pendingSaveContent = null
@@ -1034,6 +1172,10 @@ class EditorViewModel(
                                 currentContent = pending
                                 currentIsAutoSave = true
                                 lastSaveSuccess = true
+                                // #595 七：待保存内容比入队内容新 — 回执 revision 使用
+                                // 当前屏幕 revision（对应 pending 内容），否则 flush
+                                // 屏障会把已落盘的新内容误判为未保存。
+                                currentRevision = _sessionCoordinator?.sessionState?.revision ?: currentRevision
                             } else {
                                 lastSaveSuccess = true
                                 return true
@@ -1119,6 +1261,9 @@ class EditorViewModel(
         syncObserverJob?.cancel()
         autoSaveJob?.cancel()
         saveCommandChannel.close()
+        // #595 四：只关闭自己的 gate 注册 — 新实例的 flusher 不被旧实例清除。
+        gateRegistration?.close()
+        gateRegistration = null
         try {
             val session = currentSession
             val content = _uiState.value.content
@@ -1139,8 +1284,6 @@ class EditorViewModel(
             workspaceRepository.flushRecentEdits()
         } catch (_: Exception) {
         }
-        // #595 三：ViewModel 销毁后不再有活动正文可 flush。
-        WorkspaceDocumentGate.registerFlusher(null)
     }
 
     private fun calculateWordCount(text: String): Int {

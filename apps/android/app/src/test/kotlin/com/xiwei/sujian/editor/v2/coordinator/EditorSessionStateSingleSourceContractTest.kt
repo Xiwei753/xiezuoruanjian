@@ -106,10 +106,11 @@ class EditorSessionStateSingleSourceContractTest {
         // 同一 sourceVersion 重放：幂等，不 reset。
         assertEquals("Same version replay must be idempotent", ExternalContentDecision.IgnoreReplay, coordinator.shouldApplyExternalContent(first))
 
-        // 新版本 + 新内容：应用。
+        // 新版本 + 新内容：应用（#595 五：加载事实携带 parentVersion=上次已知版本，
+        // 与 committed 构成因果链 → 可比较）。
         val second = TargetDocumentFact(
             "t1", "repo text v2",
-            DocumentVersion(contentHash = "hash-2"),
+            DocumentVersion(contentHash = "hash-2", parentVersion = DocumentVersion(contentHash = "hash-1")),
             DocumentVersion(contentHash = "hash-1"),
             DocumentFactOrigin.REPOSITORY_LOAD,
         )

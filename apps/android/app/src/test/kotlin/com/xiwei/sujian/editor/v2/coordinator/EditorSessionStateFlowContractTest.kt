@@ -128,7 +128,7 @@ class EditorSessionStateFlowContractTest {
 
     @Test
     fun documentFactWithNewContentNeedsReset() {
-        // #595 二：不同版本 + 正文不同 + 非 dirty → Apply。
+        // #595 二/五：不同版本 + 正文不同 + 非 dirty → 版本可比较（父链含 committed）→ Apply。
         val coordinator = EditorSessionCoordinator(com.xiwei.sujian.data.AppServiceBridge(
             com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595_stateflow")
         ))
@@ -136,7 +136,36 @@ class EditorSessionStateFlowContractTest {
         coordinator.applyExternalContentFact(
             TargetDocumentFact("t1", "old", DocumentVersion(contentHash = "hash-1"), DocumentVersion(), DocumentFactOrigin.REPOSITORY_LOAD)
         )
-        val load = TargetDocumentFact("t1", "new", DocumentVersion(contentHash = "hash-2"), DocumentVersion(contentHash = "hash-1"), DocumentFactOrigin.REPOSITORY_LOAD)
-        assertEquals("Different content must trigger reset protocol", ExternalContentDecision.Apply, coordinator.shouldApplyExternalContent(load))
+        val load = TargetDocumentFact(
+            "t1", "new",
+            DocumentVersion(contentHash = "hash-2", parentVersion = DocumentVersion(contentHash = "hash-1")),
+            DocumentVersion(contentHash = "hash-1"),
+            DocumentFactOrigin.REPOSITORY_LOAD,
+        )
+        assertEquals("Different content with comparable parent must trigger reset protocol", ExternalContentDecision.Apply, coordinator.shouldApplyExternalContent(load))
+    }
+
+    @Test
+    fun documentFactWithUncomparableVersion_doesNotDefaultToApply() {
+        // #595 五：不同 hash + 无共同 revision 锚点 + 父链不含 committed →
+        // 不得默认 Apply（旧实现当作"可应用"，旧 IO 结果最后返回会覆盖本地）。
+        val coordinator = EditorSessionCoordinator(com.xiwei.sujian.data.AppServiceBridge(
+            com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595_stateflow")
+        ))
+        coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
+        coordinator.applyExternalContentFact(
+            TargetDocumentFact("t1", "old", DocumentVersion(contentHash = "hash-1"), DocumentVersion(), DocumentFactOrigin.REPOSITORY_LOAD)
+        )
+        val unrelated = TargetDocumentFact(
+            "t1", "different",
+            DocumentVersion(contentHash = "hash-9", syncCommitId = "commit-9"),
+            DocumentVersion(),
+            DocumentFactOrigin.SYNC_MERGED,
+        )
+        assertEquals(
+            "不可比较的不同版本必须进入冲突路径",
+            ExternalContentDecision.IgnoreUncomparableConflict,
+            coordinator.shouldApplyExternalContent(unrelated),
+        )
     }
 }

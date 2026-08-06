@@ -334,6 +334,10 @@
     <string name="sync_dirty_repository">本地有未提交变更，同步被阻止</string>
     <string name="sync_protocol_error">同步协议错误</string>
     <string name="sync_native_unavailable">Native Core 未加载</string>
+    <string name="sync_document_save_failed">活动正文保存失败，同步已中止</string>
+    <string name="sync_document_revision_changed">正文在保存后又有新输入，同步已中止</string>
+    <string name="sync_document_conflict">正文版本冲突，需要手动处理</string>
+    <string name="sync_document_unavailable">无法验证活动正文状态，同步已中止</string>
     <string name="sync_fatal">同步遇到不可恢复错误</string>
     <string name="sync_unconfigured">同步未配置</string>
     <string name="sync_disabled">同步未启用</string>

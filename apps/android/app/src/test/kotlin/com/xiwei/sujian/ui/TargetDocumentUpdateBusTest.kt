@@ -109,7 +109,7 @@ class TargetDocumentUpdateBusTest {
             TargetDocumentFact(
                 targetId = "t1",
                 text = "merged",
-                sourceVersion = DocumentVersion(contentHash = "h9", syncManifestRevision = 42L),
+                sourceVersion = DocumentVersion(contentHash = "h9", syncCommitId = "commit-42"),
                 baseVersion = DocumentVersion(contentHash = "h8"),
                 origin = DocumentFactOrigin.SYNC_MERGED,
             )
@@ -117,7 +117,7 @@ class TargetDocumentUpdateBusTest {
         val fact = bus.updates("t1").first()
         assertEquals("merged", fact.text)
         assertEquals("h9", fact.sourceVersion.contentHash)
-        assertEquals(42L, fact.sourceVersion.syncManifestRevision)
+        assertEquals("commit-42", fact.sourceVersion.syncCommitId)
         assertEquals("h8", fact.baseVersion.contentHash)
         assertEquals(DocumentFactOrigin.SYNC_MERGED, fact.origin)
     }

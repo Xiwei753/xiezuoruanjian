@@ -121,16 +121,68 @@ class EditorSessionStoreContractTest {
     }
 
     @Test
-    fun releasePreparedTarget_removesRecordAndResetsOwnState() {
+    fun releasePreparedTarget_newlyCreated_removesOnlyOwnSessionRecord() {
+        // #595 一：newlyCreated=true → 只关闭本事务新建的 session 并移除仍指向
+        // 该 session 的记录；不修改全局 SessionState（准备阶段从未修改它）。
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("t1", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(EditorDocumentUpdate.LocalInput("t1", "text", 1L, 1L))
         assertEquals("t1", coordinator.sessionState.targetId)
 
-        coordinator.releasePreparedTarget("t1")
+        val handle = PreparedSessionHandle(
+            targetId = "t1",
+            sessionId = 0UL,
+            snapshot = TargetSnapshot("text", 4, 1L, 0, 4),
+            newlyCreated = true,
+            previousRecord = null,
+        )
+        coordinator.releasePreparedTarget(handle)
         assertFalse(coordinator.isTargetRegistered("t1"))
-        assertNull(coordinator.sessionState.targetId)
-        assertEquals(WindowBindingState.Idle, coordinator.sessionState.bindingState)
+    }
+
+    @Test
+    fun releasePreparedTarget_borrowed_restoresPreviousRecordAndKeepsSession() {
+        // #595 一/二：newlyCreated=false（借用的既有 session）→ 恢复事务前记录，
+        // 不关闭 session — 回滚不得销毁事务开始前已经存在的 B session 与 Undo 历史。
+        val coordinator = createCoordinator()
+        val previous = EditorSessionRecord(
+            targetId = "t1",
+            sessionId = 7UL,
+            persistent = true,
+            documentState = DocumentState(
+                text = "original",
+                revision = 3L,
+                committedVersion = DocumentVersion(contentHash = "hash-original"),
+                sessionBaseVersion = DocumentVersion(contentHash = "hash-original"),
+                lastSavedVersion = DocumentVersion(contentHash = "hash-original"),
+                localDirty = false,
+            ),
+        )
+        // 事务预准备期间记录被写入新 snapshot（模拟 prepare 后的记录状态）。
+        coordinator.registerTargetMeta("t1", TextEditorProfile.DocumentBody, persistent = true)
+        coordinator.applyExternalContentFact(
+            TargetDocumentFact(
+                "t1", "prepared",
+                DocumentVersion(contentHash = "hash-prepared"),
+                DocumentVersion(),
+                DocumentFactOrigin.REPOSITORY_LOAD,
+            )
+        )
+
+        val handle = PreparedSessionHandle(
+            targetId = "t1",
+            sessionId = 0UL,
+            snapshot = TargetSnapshot("prepared", 8, 1L, 0, 8),
+            newlyCreated = false,
+            previousRecord = previous,
+        )
+        coordinator.releasePreparedTarget(handle)
+
+        // 借用 session 不关闭：记录恢复为事务前的文档事实（正文/版本/选区）。
+        assertTrue(coordinator.isTargetRegistered("t1"))
+        assertEquals(7UL, coordinator.getPersistentSessionId("t1"))
+        // 全局状态不被回滚触碰（准备阶段无副作用 — 只更新 store 记录）。
+        assertEquals(EditorSessionOrigin.EXTERNAL_REPLACE, coordinator.sessionState.origin)
     }
 
     @Test

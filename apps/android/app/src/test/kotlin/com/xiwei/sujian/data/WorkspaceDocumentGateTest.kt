@@ -7,17 +7,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * #595 三：WorkspaceDocumentGate 契约测试。
+ * #595 三/四：WorkspaceDocumentGate 契约测试。
  *
- * 规则（issue 解决三）：手动同步、自动同步、试运行和连接诊断启动前
+ * 规则（issue 解决三/四）：手动同步、自动同步、试运行和连接诊断启动前
  * 统一 flush 活动 Editor session 到 Repository；flush 失败则同步必须中止，
  * 否则同步下载的新正文可能直接覆盖尚未落盘的本地输入。
+ * 注册携带 owner token — 旧实例的 close 不得清除新实例的注册。
  */
 class WorkspaceDocumentGateTest {
 
     @Test
     fun noFlusherRegistered_flushSucceeds() = runTest {
-        WorkspaceDocumentGate.registerFlusher(null)
         assertTrue(
             "无活动编辑器时必须放行同步（没有本地输入需要保护）",
             WorkspaceDocumentGate.flushActiveDocument(),
@@ -27,40 +27,75 @@ class WorkspaceDocumentGateTest {
     @Test
     fun flusherReturningTrue_flushSucceeds() = runTest {
         var flushed = false
-        WorkspaceDocumentGate.registerFlusher {
+        val registration = WorkspaceDocumentGate.register(Any()) {
             flushed = true
             true
         }
         assertTrue(WorkspaceDocumentGate.flushActiveDocument())
         assertTrue("flush 回调必须被调用", flushed)
-        WorkspaceDocumentGate.registerFlusher(null)
+        registration.close()
     }
 
     @Test
     fun flusherReturningFalse_flushFailsAndBlocksSync() = runTest {
-        WorkspaceDocumentGate.registerFlusher { false }
+        val registration = WorkspaceDocumentGate.register(Any()) { false }
         assertFalse(
             "flush 失败必须阻止同步继续（本地输入未落盘）",
             WorkspaceDocumentGate.flushActiveDocument(),
         )
-        WorkspaceDocumentGate.registerFlusher(null)
+        registration.close()
     }
 
     @Test
     fun flusherThrowing_flushFails() = runTest {
-        WorkspaceDocumentGate.registerFlusher { throw IllegalStateException("save failed") }
+        val registration = WorkspaceDocumentGate.register(Any()) { throw IllegalStateException("save failed") }
         assertFalse("flush 异常必须映射为失败", WorkspaceDocumentGate.flushActiveDocument())
-        WorkspaceDocumentGate.registerFlusher(null)
+        registration.close()
     }
 
     @Test
     fun latestRegisteredFlusherWins() = runTest {
         var firstCalled = false
-        WorkspaceDocumentGate.registerFlusher { firstCalled = true; true }
-        WorkspaceDocumentGate.registerFlusher { false }
+        val first = WorkspaceDocumentGate.register(Any()) { firstCalled = true; true }
+        val second = WorkspaceDocumentGate.register(Any()) { false }
         assertFalse(WorkspaceDocumentGate.flushActiveDocument())
         assertFalse("旧 flusher 不得再被调用", firstCalled)
-        WorkspaceDocumentGate.registerFlusher(null)
+        first.close()
+        second.close()
+    }
+
+    @Test
+    fun oldOwnerClose_doesNotClearNewOwnerRegistration() = runTest {
+        // #595 四：旧 ViewModel 的 onCleared（close）不得清除新实例的注册 —
+        // Activity 重建/生命周期交错时 flusher 必须仍然有效。
+        var oldCalled = false
+        var newCalled = false
+        val oldOwner = Any()
+        val newOwner = Any()
+        val oldRegistration = WorkspaceDocumentGate.register(oldOwner) { oldCalled = true; true }
+        val newRegistration = WorkspaceDocumentGate.register(newOwner) { newCalled = true; true }
+        // 旧实例先销毁 — 只允许清除自己的注册。
+        oldRegistration.close()
+        assertTrue("新实例的 flusher 必须仍被调用", WorkspaceDocumentGate.flushActiveDocument())
+        assertFalse("旧实例的 flusher 不得再被调用", oldCalled)
+        assertTrue(newCalled)
+        newRegistration.close()
+        assertTrue("注销后无活动编辑器放行", WorkspaceDocumentGate.flushActiveDocument())
+    }
+
+    @Test
+    fun sameOwnerReregister_replacesFlusher() = runTest {
+        // 同一 owner 重新注册（initialize 幂等）— 新回调生效。
+        var firstCalled = false
+        val owner = Any()
+        val first = WorkspaceDocumentGate.register(owner) { firstCalled = true; true }
+        val second = WorkspaceDocumentGate.register(owner) { false }
+        assertFalse(WorkspaceDocumentGate.flushActiveDocument())
+        assertFalse(firstCalled)
+        first.close()
+        // 旧注册 close 时 owner 已不是当前持有者 — 不得清掉同 owner 的新注册。
+        assertFalse("同 owner 新注册必须仍然有效", WorkspaceDocumentGate.flushActiveDocument())
+        second.close()
     }
 
     @Test

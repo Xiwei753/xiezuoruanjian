@@ -8,6 +8,14 @@ enum class SyncFailureKind {
     DirtyRepository,
     Protocol,
     NativeUnavailable,
+    /** #595 三：同步前活动正文保存失败 — 本地输入未落盘，同步必须中止。 */
+    DocumentSaveFailed,
+    /** #595 三：flush 时屏幕正文 revision 与已保存 revision 不一致（保存后又输入）。 */
+    DocumentRevisionChanged,
+    /** #595 三：文档版本冲突 — 需重新读取/三方合并，禁止盲目覆盖。 */
+    DocumentConflict,
+    /** #595 三：无法读取/验证活动文档状态。 */
+    DocumentUnavailable,
     Fatal;
 
     /**
@@ -22,6 +30,10 @@ enum class SyncFailureKind {
         DirtyRepository -> "sync_dirty_repository"
         Protocol -> "sync_protocol_error"
         NativeUnavailable -> "sync_native_unavailable"
+        DocumentSaveFailed -> "sync_document_save_failed"
+        DocumentRevisionChanged -> "sync_document_revision_changed"
+        DocumentConflict -> "sync_document_conflict"
+        DocumentUnavailable -> "sync_document_unavailable"
         Fatal -> "sync_fatal"
     }
 
@@ -33,6 +45,10 @@ enum class SyncFailureKind {
         DirtyRepository -> SyncOutcome.TerminalFailure(com.xiwei.sujian.model.SyncStatus.DirtyRepoBlocked, DirtyRepository)
         Protocol -> SyncOutcome.TerminalFailure(com.xiwei.sujian.model.SyncStatus.FatalError, Protocol)
         NativeUnavailable -> SyncOutcome.TerminalFailure(com.xiwei.sujian.model.SyncStatus.FatalError, NativeUnavailable)
+        DocumentSaveFailed -> SyncOutcome.TerminalFailure(com.xiwei.sujian.model.SyncStatus.FatalError, DocumentSaveFailed)
+        DocumentRevisionChanged -> SyncOutcome.TerminalFailure(com.xiwei.sujian.model.SyncStatus.FatalError, DocumentRevisionChanged)
+        DocumentConflict -> SyncOutcome.TerminalFailure(com.xiwei.sujian.model.SyncStatus.Conflict, DocumentConflict)
+        DocumentUnavailable -> SyncOutcome.TerminalFailure(com.xiwei.sujian.model.SyncStatus.FatalError, DocumentUnavailable)
         Fatal -> SyncOutcome.TerminalFailure(com.xiwei.sujian.model.SyncStatus.FatalError, Fatal)
     }
 
@@ -43,7 +59,8 @@ enum class SyncFailureKind {
      */
     fun isTransientReadFailure(): Boolean = when (this) {
         RetryableNetwork, RetryableIo, NativeUnavailable -> true
-        Authentication, Conflict, DirtyRepository, Protocol, Fatal -> false
+        Authentication, Conflict, DirtyRepository, Protocol, Fatal,
+        DocumentSaveFailed, DocumentRevisionChanged, DocumentConflict, DocumentUnavailable -> false
     }
 
     companion object {

@@ -135,6 +135,6 @@ class EditorDocumentUpdateContractTest {
         assertTrue(DocumentVersion().isEmpty)
         assertTrue(!DocumentVersion(contentHash = "h").isEmpty)
         assertTrue(!DocumentVersion(repositoryRevision = 3L).isEmpty)
-        assertTrue(!DocumentVersion(syncManifestRevision = 5L).isEmpty)
+        assertTrue(!DocumentVersion(syncCommitId = "commit-5").isEmpty)
     }
 }

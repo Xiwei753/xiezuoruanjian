@@ -92,10 +92,11 @@ class RepositoryHashGuardContractTest {
         )
         coordinator.applyExternalContentFact(first)
 
-        // 新版本（仓库内容真实变化）→ 仍可应用。
+        // 新版本（仓库内容真实变化）→ 仍可应用（#595 五：加载事实携带
+        // parentVersion=上次已知版本，与 committed 构成因果链）。
         val second = TargetDocumentFact(
             "t1", "C",
-            DocumentVersion(contentHash = "hash-2"),
+            DocumentVersion(contentHash = "hash-2", parentVersion = DocumentVersion(contentHash = "hash-1")),
             DocumentVersion(contentHash = "hash-1"),
             DocumentFactOrigin.REPOSITORY_LOAD,
         )
@@ -110,7 +111,7 @@ class RepositoryHashGuardContractTest {
         // 同步合并 H1 → 记录版本
         val merge = TargetDocumentFact(
             "t1", "C",
-            DocumentVersion(contentHash = "hash-1", syncManifestRevision = 1L),
+            DocumentVersion(contentHash = "hash-1", syncCommitId = "commit-1"),
             DocumentVersion(),
             DocumentFactOrigin.SYNC_MERGED,
         )
@@ -140,7 +141,7 @@ class RepositoryHashGuardContractTest {
 
         val first = TargetDocumentFact(
             "t1", "C",
-            DocumentVersion(contentHash = "hash-1", syncManifestRevision = 1L),
+            DocumentVersion(contentHash = "hash-1", syncCommitId = "commit-1"),
             DocumentVersion(),
             DocumentFactOrigin.SYNC_MERGED,
         )
@@ -149,7 +150,7 @@ class RepositoryHashGuardContractTest {
         // 新版本（磁盘内容真实变化）→ 仍可应用。
         val second = TargetDocumentFact(
             "t1", "E",
-            DocumentVersion(contentHash = "hash-2", syncManifestRevision = 2L),
+            DocumentVersion(contentHash = "hash-2", syncCommitId = "commit-2", parentVersion = DocumentVersion(contentHash = "hash-1")),
             DocumentVersion(contentHash = "hash-1"),
             DocumentFactOrigin.SYNC_MERGED,
         )

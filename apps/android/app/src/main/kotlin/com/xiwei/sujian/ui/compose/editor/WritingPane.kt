@@ -146,7 +146,6 @@ fun WritingPane(
     var lastVolumeId by remember { mutableStateOf("") }
     var lastChapterId by remember { mutableStateOf("") }
     var lastChapterTitle by remember { mutableStateOf("") }
-    var lastTargetId by remember { mutableStateOf("") }
     // #595 一：切换失败标记 — 阻止 beginEdit/外部替换协议用旧章节正文创建新章节
     // session（“新 target 使用旧内容创建 Rust session”）；回滚重组合到旧章节后自然失效。
     var failedSwitchTarget by remember { mutableStateOf<String?>(null) }
@@ -178,25 +177,27 @@ fun WritingPane(
     }
 
     // #595 一：章节切换收口 — 宿主已用 requestOpenChapter 预提交章节
-    // （保存/加载/session 预准备成功后才导航）；pane 只负责关闭旧 target。
+    // （保存/加载/session 预准备成功后才导航）；pane 只负责旧 target 的窗口解绑
+    // （DisposableEffect onDispose 的 detachWindowBinding）。
+    // #595 一：章节切换不业务关闭旧章节的持久 session — 快速连续点击章节时
+    // 原章节的 Undo/Redo 历史保留（persistent session 留在 store 的 Detached
+    // 状态）；返回章节列表/作品列表时由 PhoneWorkspaceHost 以
+    // WORKSPACE_NAVIGATION 关闭。
     // 深链/恢复路径（currentSession 不是本 pane 章节）仍走 switchChapter 事务。
     LaunchedEffect(projectId, volumeId, chapterId) {
         val sameChapter = lastChapterId.isNotEmpty() &&
             lastProjectId == projectId && lastVolumeId == volumeId && lastChapterId == chapterId
         if (!sameChapter) {
             if (currentViewModel.isCurrentChapter(projectId, volumeId, chapterId)) {
-                // #595 一：宿主已预提交该章节 — 直接收口旧 target 并进入编辑。
-                if (lastTargetId.isNotEmpty() && lastTargetId != targetId) {
-                    coordinator.closeTarget(lastTargetId, com.xiwei.sujian.editor.v2.coordinator.SessionCloseReason.CHAPTER_SWITCH)
-                }
+                // #595 一：宿主已预提交该章节 — 直接进入编辑（旧 target 由
+                // DisposableEffect onDispose 解绑，session 保留）。
                 failedSwitchTarget = null
             } else {
                 when (val result = viewModel.switchChapter(projectId, volumeId, chapterId, chapterTitle)) {
                     is com.xiwei.sujian.ui.ChapterSwitchResult.Success -> {
-                        // #595 一：只有保存+加载+session 预准备都成功，旧章节才是业务级关闭。
-                        if (lastTargetId.isNotEmpty() && lastTargetId != targetId) {
-                            coordinator.closeTarget(lastTargetId, com.xiwei.sujian.editor.v2.coordinator.SessionCloseReason.CHAPTER_SWITCH)
-                        }
+                        // #595 一：只有保存+加载+session 预准备都成功，旧章节才
+                        // 由事务提交（commitPreparedSession 保留其持久 session）；
+                        // 窗口解绑由 DisposableEffect onDispose 完成。
                         failedSwitchTarget = null
                     }
                     is com.xiwei.sujian.ui.ChapterSwitchResult.SaveFailed,
@@ -219,7 +220,6 @@ fun WritingPane(
             lastVolumeId = volumeId
             lastChapterId = chapterId
             lastChapterTitle = chapterTitle
-            lastTargetId = targetId
         }
     }
 
@@ -273,6 +273,13 @@ fun WritingPane(
                 ExternalContentDecision.IgnoreOlder,
                 ExternalContentDecision.IgnoreEmptyVersion -> {
                     // 重放/更旧/无版本锚点 — 忽略。
+                }
+                ExternalContentDecision.IgnoreUncomparableConflict -> {
+                    // #595 五：不同版本但不可比较（无共同 revision 锚点/父链）—
+                    // 不得盲目覆盖；进入重新读取/三方合并/冲突路径（类型化通知）。
+                    if (fact.origin == com.xiwei.sujian.editor.v2.coordinator.DocumentFactOrigin.SYNC_MERGED) {
+                        currentViewModel.notifySyncMergeConflict()
+                    }
                 }
             }
         }

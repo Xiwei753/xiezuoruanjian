@@ -44,14 +44,14 @@ class EditorDocumentUpdateTypedEventsContractTest {
         val fact = TargetDocumentFact(
             targetId = "t1",
             text = "merged text",
-            sourceVersion = DocumentVersion(contentHash = "sync-hash-1", syncManifestRevision = 42L),
+            sourceVersion = DocumentVersion(contentHash = "sync-hash-1", syncCommitId = "commit-42"),
             baseVersion = DocumentVersion(contentHash = "base-hash"),
             origin = DocumentFactOrigin.SYNC_MERGED,
         )
         assertEquals("t1", fact.targetId)
         assertEquals("merged text", fact.text)
         assertEquals("sync-hash-1", fact.sourceVersion.contentHash)
-        assertEquals(42L, fact.sourceVersion.syncManifestRevision)
+        assertEquals("commit-42", fact.sourceVersion.syncCommitId)
         assertEquals("base-hash", fact.baseVersion.contentHash)
         assertEquals(DocumentFactOrigin.SYNC_MERGED, fact.origin)
     }
@@ -106,21 +106,21 @@ class EditorDocumentUpdateTypedEventsContractTest {
     }
 
     @Test
-    fun olderSyncManifestVersion_isRejected() {
+    fun olderRepositoryRevision_isRejected() {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
         val newer = TargetDocumentFact(
             "t1", "text v2",
-            DocumentVersion(contentHash = "hash-2", syncManifestRevision = 200L),
+            DocumentVersion(contentHash = "hash-2", repositoryRevision = 200L),
             DocumentVersion(),
             DocumentFactOrigin.SYNC_MERGED,
         )
         coordinator.applyExternalContentFact(newer)
 
-        // manifest 更旧（100 < 200）→ IgnoreOlder。
+        // revision 更旧（100 < 200）→ IgnoreOlder。
         val older = TargetDocumentFact(
             "t1", "text v3",
-            DocumentVersion(contentHash = "hash-3", syncManifestRevision = 100L),
+            DocumentVersion(contentHash = "hash-3", repositoryRevision = 100L),
             DocumentVersion(),
             DocumentFactOrigin.SYNC_MERGED,
         )
@@ -143,7 +143,7 @@ class EditorDocumentUpdateTypedEventsContractTest {
         // 外部同步下载 → 冲突，禁止直接 reset。
         val fact = TargetDocumentFact(
             "t1", "远端合并正文",
-            DocumentVersion(contentHash = "hash-new", syncManifestRevision = 500L),
+            DocumentVersion(contentHash = "hash-new", syncCommitId = "commit-500"),
             DocumentVersion(contentHash = "hash-old"),
             DocumentFactOrigin.SYNC_MERGED,
         )
@@ -168,7 +168,7 @@ class EditorDocumentUpdateTypedEventsContractTest {
 
         val second = TargetDocumentFact(
             "t1", "repo v2",
-            DocumentVersion(contentHash = "hash-2"),
+            DocumentVersion(contentHash = "hash-2", parentVersion = DocumentVersion(contentHash = "hash-1")),
             DocumentVersion(contentHash = "hash-1"),
             DocumentFactOrigin.REPOSITORY_LOAD,
         )
@@ -246,7 +246,7 @@ class EditorDocumentUpdateTypedEventsContractTest {
         // 保存后外部新版本（基于已保存内容）→ 可应用（不冲突）。
         val fact = TargetDocumentFact(
             "t1", "merged",
-            DocumentVersion(contentHash = "merged-hash", syncManifestRevision = 3L),
+            DocumentVersion(contentHash = "merged-hash", syncCommitId = "commit-3", parentVersion = DocumentVersion(contentHash = "saved-hash")),
             DocumentVersion(contentHash = "saved-hash"),
             DocumentFactOrigin.SYNC_MERGED,
         )

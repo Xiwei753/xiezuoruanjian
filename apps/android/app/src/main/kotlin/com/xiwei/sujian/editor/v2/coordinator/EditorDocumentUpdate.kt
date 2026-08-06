@@ -31,6 +31,12 @@ sealed interface EditorDocumentUpdate {
     val text: String
     val revision: Long
     val transactionId: Long
+    /**
+     * #595 二：窗口绑定时的输入 lease — 会话层 reducer 只接受仍匹配当前
+     * 活动 target/session/epoch 的事件；章节切换提交后旧 View 晚到的
+     * 事件被拒绝，不能写入新章节的会话。
+     */
+    val lease: EditorInputLease
 
     @Immutable
     data class LocalInput(
@@ -44,6 +50,7 @@ sealed interface EditorDocumentUpdate {
          *  -1 表示调用方未携带（保留旧值）。 */
         val selectionAnchorUtf8: Int = -1,
         val selectionHeadUtf8: Int = -1,
+        override val lease: EditorInputLease = EditorInputLease(targetId, 0UL, 0L),
     ) : EditorDocumentUpdate
 
     /**
@@ -64,6 +71,7 @@ sealed interface EditorDocumentUpdate {
         override val transactionId: Long,
         val selectionAnchorUtf8: Int = -1,
         val selectionHeadUtf8: Int = -1,
+        override val lease: EditorInputLease = EditorInputLease(targetId, 0UL, 0L),
     ) : EditorDocumentUpdate
 
     /**
@@ -84,6 +92,7 @@ sealed interface EditorDocumentUpdate {
         override val transactionId: Long,
         val selectionAnchorUtf8: Int = -1,
         val selectionHeadUtf8: Int = -1,
+        override val lease: EditorInputLease = EditorInputLease(targetId, 0UL, 0L),
     ) : EditorDocumentUpdate
 }
 

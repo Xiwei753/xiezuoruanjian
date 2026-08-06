@@ -372,6 +372,10 @@
     <string name="sync_dirty_repository">Local uncommitted changes, sync blocked</string>
     <string name="sync_protocol_error">Sync protocol error</string>
     <string name="sync_native_unavailable">Native Core not loaded</string>
+    <string name="sync_document_save_failed">Active document save failed, sync aborted</string>
+    <string name="sync_document_revision_changed">Document changed after save, sync aborted</string>
+    <string name="sync_document_conflict">Document version conflict, manual resolution needed</string>
+    <string name="sync_document_unavailable">Cannot verify active document state, sync aborted</string>
     <string name="sync_fatal">Sync encountered an unrecoverable error</string>
     <string name="sync_unconfigured">Sync not configured</string>
     <string name="sync_disabled">Sync not enabled</string>

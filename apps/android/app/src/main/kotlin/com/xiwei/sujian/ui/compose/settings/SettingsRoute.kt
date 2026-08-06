@@ -18,6 +18,7 @@ import androidx.compose.material3.adaptive.navigation.BackNavigationBehavior
 import androidx.compose.material3.adaptive.navigation.ThreePaneScaffoldPredictiveBackHandler
 import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
 import com.xiwei.sujian.data.SyncStatusRepository
+import com.xiwei.sujian.data.WorkspaceDocumentGate
 import com.xiwei.sujian.designsystem.icon.SujianIcons
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -543,6 +544,16 @@ class SettingsViewModel(
                 return
             }
             val exclusiveResult = SyncSession.runExclusive { _ ->
+                // #595 三：试运行与正式同步共用同一文档事务链 — 启动前先
+                // flush 活动正文到 Repository，失败按类型化错误中止（不得
+                // 以未落盘的本地输入为 base 做试运行）。
+                val flushOk = WorkspaceDocumentGate.flushActiveDocument()
+                if (!flushOk) {
+                    return@runExclusive SyncCommandIoResult(
+                        true, true,
+                        StructuredSyncResult(statusCode = "error", messageKey = "sync_document_save_failed"),
+                    )
+                }
                 withContext(Dispatchers.IO) {
                     val capability = settingsRepo.getSyncCapability()
                     if (!capability.canRun) {
@@ -616,6 +627,15 @@ class SettingsViewModel(
                 return
             }
             val exclusiveResult = SyncSession.runExclusive { _ ->
+                // #595 三：连接诊断与正式同步共用同一文档事务链 — 启动前先
+                // flush 活动正文到 Repository，失败按类型化错误中止。
+                val flushOk = WorkspaceDocumentGate.flushActiveDocument()
+                if (!flushOk) {
+                    return@runExclusive SyncCommandIoResult(
+                        true, true,
+                        StructuredSyncResult(statusCode = "error", messageKey = "sync_document_save_failed"),
+                    )
+                }
                 withContext(Dispatchers.IO) {
                     val capability = settingsRepo.getSyncCapability()
                     if (!capability.canRun) {

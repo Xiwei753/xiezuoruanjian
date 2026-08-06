@@ -17,8 +17,8 @@ class SyncFailureKindTest {
         keys.forEach { key ->
             assertTrue("messageKey should be non-empty: $key", key.isNotEmpty())
         }
-        assertEquals("All 8 kinds should have unique messageKeys",
-            8, keys.distinct().size)
+        assertEquals("All kinds should have unique messageKeys (incl. #595 三 document failures)",
+            SyncFailureKind.entries.size, keys.distinct().size)
     }
 
     @Test

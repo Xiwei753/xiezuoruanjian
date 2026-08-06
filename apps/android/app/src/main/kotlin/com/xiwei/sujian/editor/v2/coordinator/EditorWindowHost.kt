@@ -322,6 +322,14 @@ class EditorWindowHost(
                 Log.w(TAG, "performViewBind(${pending.targetId}): no real kernel snapshot — refusing bind to avoid a second Core loadText on the same session")
                 return false
             }
+        // #595 二：窗口绑定成功时签发输入 lease — 之后每次 onLocalEdit/
+        // onExternalEdit/onContentChanged 提交都携带；章节切换提交/业务关闭/
+        // 窗口解绑会使 epoch 失效，旧 View 晚到一帧的输入被会话层拒绝。
+        val lease = sessionCoordinator.currentInputLease()
+        if (lease == null) {
+            Log.w(TAG, "performViewBind(${pending.targetId}): no active input lease — refusing bind")
+            return false
+        }
         view.attachSession(
             sessionBridge = pending.bridge,
             profile = pending.profile,
@@ -336,7 +344,7 @@ class EditorWindowHost(
         // #595 七: 活动编辑时 SujianEditorView 是唯一的 FrameClock listener。
         // 非活动预览只使用会话层 snapshot 派生的纯静态 ChapterPreviewState。
 
-        installContentCallback(view, target)
+        installContentCallback(view, target, lease)
         installCommitRequestedCallback(view)
         installCancelRequestedCallback(view)
         // #595 四：绑定完成后应用 target 约束后的有效动画策略 — 全局策略 + profile 约束
@@ -613,14 +621,17 @@ class EditorWindowHost(
 
     // ── Private helpers ──
 
-    private fun installContentCallback(view: SujianEditorView, target: EditableTextTarget) {
+    private fun installContentCallback(view: SujianEditorView, target: EditableTextTarget, lease: EditorInputLease) {
         view.onContentChanged = { newText ->
-            target.onTextChanged?.invoke(newText)
+            // #595 二：onContentChanged 同样携带输入 lease — 章节切换提交后
+            // 旧 View 晚到的正文回显不能进入新章节的 ViewModel。
+            if (sessionCoordinator.isInputLeaseCurrent(lease, target.targetId)) {
+                target.onTextChanged?.invoke(newText)
+            }
         }
         // #595 一/二：类型化本地编辑回调 — 先更新会话层唯一 SessionState（revision/transactionId），
         // 再通知 ViewModel 保存。ViewModel 不再靠字符串比较猜测来源，
         // WritingPane 收集 sessionStateFlow 发现 revision 已应用，不触发 reset。
-        // contentVersion 由 Coordinator 的全局递增源产生。
         view.onLocalEdit = { text, revision, transactionId, operationKind, selectionAnchorUtf8, selectionHeadUtf8 ->
             sessionCoordinator.applyLocalEdit(
                 EditorDocumentUpdate.LocalInput(
@@ -631,6 +642,7 @@ class EditorWindowHost(
                     operationKind = operationKind,
                     selectionAnchorUtf8 = selectionAnchorUtf8,
                     selectionHeadUtf8 = selectionHeadUtf8,
+                    lease = lease,
                 )
             )
         }
@@ -649,6 +661,7 @@ class EditorWindowHost(
                             transactionId = transactionId,
                             selectionAnchorUtf8 = selectionAnchorUtf8,
                             selectionHeadUtf8 = selectionHeadUtf8,
+                            lease = lease,
                         )
                     )
                 }
@@ -662,6 +675,7 @@ class EditorWindowHost(
                             transactionId = transactionId,
                             selectionAnchorUtf8 = selectionAnchorUtf8,
                             selectionHeadUtf8 = selectionHeadUtf8,
+                            lease = lease,
                         )
                     )
                 }
@@ -676,6 +690,7 @@ class EditorWindowHost(
                             operationKind = EditorOperationKind.REPLACE,
                             selectionAnchorUtf8 = selectionAnchorUtf8,
                             selectionHeadUtf8 = selectionHeadUtf8,
+                            lease = lease,
                         )
                     )
                 }
