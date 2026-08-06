@@ -45,6 +45,21 @@ class EditorWindowHost(
     private var sharedEditorView: SujianEditorView? = null
     val windowFrameClock: WindowDisplayFrameClock = frameClock ?: WindowDisplayFrameClock()
 
+    // #595 三：pendingViewBind — beginEdit 在 AndroidView.factory 之前执行时，
+    // View 尚未由 Compose 创建。将 session 绑定参数暂存，等 attachView（factory 内调用）
+    // 在 Compose 提供的 Context 创建的 View 上执行绑定。避免 beginEdit 用 Host context
+    // 创建的 View 与 AndroidView.factory 用 Compose context 创建的 View 不一致。
+    private var pendingViewBind: PendingViewBind? = null
+
+    private data class PendingViewBind(
+        val targetId: String,
+        val bridge: TextEditSessionBridge,
+        val profile: TextEditorProfile,
+        val text: String,
+        val selection: Int,
+        val snapshot: TargetSnapshot?,
+    )
+
     // #595 一：窗口坐标追踪（activeTargetGeometry/activeTargetTransform）已随根壳
     // 覆盖层 AnimatedTextEditorSlot 一并删除。正文编辑器现在由 WritingEditorSurface
     // 在正文 Box 内直接持有 AndroidView，使用局部坐标，不再需要窗口级几何缓存。
@@ -233,27 +248,64 @@ class EditorWindowHost(
         val target = targets[targetId] ?: return false
         target.onEditingStateChanged?.invoke(EditingState.BINDING)
 
-        val view = getOrCreateEditorView()
         val bridge = TextEditSessionBridge(appServiceBridge, bindInfo.sessionId)
-        // #592 一：复用既有持久 session 时执行 attachSnapshot（不调用
-        // textEditSessionLoadText，Rust revision/Undo/Redo/composition 保持）；
-        // 新建 session 或外部内容重置才走 bindSession/loadText。
-        val snapshot = bindInfo.snapshot
+        val pending = PendingViewBind(
+            targetId = targetId,
+            bridge = bridge,
+            profile = bindInfo.profile,
+            text = bindInfo.text,
+            selection = bindInfo.selection,
+            snapshot = bindInfo.snapshot,
+        )
+
+        // #595 三：如果 AndroidView.factory 已创建 View（重新绑定场景），直接在现有
+        // View 上执行 session 绑定。否则存为 pendingViewBind，等 attachView 在
+        // Compose 提供的 Context 创建的 View 上执行绑定。
+        val view = sharedEditorView
+        if (view != null) {
+            performViewBind(view, pending, target)
+            sessionCoordinator.completeWindowAttach(windowId, targetId, bindInfo.sessionId)
+            target.onEditingStateChanged?.invoke(EditingState.EDITING)
+            view.post {
+                view.requestFocus()
+                val imm = context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+                imm?.showSoftInput(view, 0)
+            }
+        } else {
+            pendingViewBind = pending
+            sessionCoordinator.completeWindowAttach(windowId, targetId, bindInfo.sessionId)
+            target.onEditingStateChanged?.invoke(EditingState.EDITING)
+        }
+
+        return true
+    }
+
+    // #595 三：在 View 上执行 session 绑定 — 由 beginEdit（View 已存在）或
+    // attachView（AndroidView.factory 刚创建 View）调用。
+    // #592 一：复用既有持久 session 时执行 attachSnapshot（不调用
+    // textEditSessionLoadText，Rust revision/Undo/Redo/composition 保持）；
+    // 新建 session 或外部内容重置才走 bindSession/loadText。
+    private fun performViewBind(
+        view: SujianEditorView,
+        pending: PendingViewBind,
+        target: EditableTextTarget,
+    ) {
+        val snapshot = pending.snapshot
         if (snapshot != null) {
             view.attachSession(
-                sessionBridge = bridge,
-                profile = bindInfo.profile,
+                sessionBridge = pending.bridge,
+                profile = pending.profile,
                 text = snapshot.text,
                 revision = snapshot.revision,
                 cursorUtf8 = snapshot.cursorUtf8,
                 selStartUtf8 = snapshot.selectionAnchorUtf8,
                 selEndUtf8 = snapshot.selectionHeadUtf8,
             )
-            restoreProjectionScroll(view, targetId)
-            rebuildProjectionFromSnapshot(targetId, snapshot)
+            restoreProjectionScroll(view, pending.targetId)
+            rebuildProjectionFromSnapshot(pending.targetId, snapshot)
         } else {
-            view.bindSession(bridge, bindInfo.profile, bindInfo.text, bindInfo.selection)
-            rebuildProjectionFromSnapshot(targetId, null)
+            view.bindSession(pending.bridge, pending.profile, pending.text, pending.selection)
+            rebuildProjectionFromSnapshot(pending.targetId, null)
         }
 
         // #595 七: 活动编辑时 SujianEditorView 是唯一的 FrameClock listener。
@@ -264,17 +316,6 @@ class EditorWindowHost(
         installContentCallback(view, target)
         installCommitRequestedCallback(view)
         installCancelRequestedCallback(view)
-
-        sessionCoordinator.completeWindowAttach(windowId, targetId, bindInfo.sessionId)
-        target.onEditingStateChanged?.invoke(EditingState.EDITING)
-
-        view.post {
-            view.requestFocus()
-            val imm = context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
-            imm?.showSoftInput(view, 0)
-        }
-
-        return true
     }
 
     /**
@@ -467,8 +508,6 @@ class EditorWindowHost(
 
     fun getSharedEditorView(): SujianEditorView? = sharedEditorView
 
-    fun obtainSharedEditorView(): SujianEditorView = getOrCreateEditorView()
-
     fun setSharedEditorView(view: SujianEditorView) {
         sharedEditorView = view
     }
@@ -496,6 +535,22 @@ class EditorWindowHost(
      */
     fun attachView(windowId: String, targetId: String, view: SujianEditorView) {
         sharedEditorView = view
+        // #595 三：AndroidView.factory 创建 View 后，检查 beginEdit 留下的 pending
+        // session 绑定。在 Compose 提供的 Context 创建的 View 上执行绑定，
+        // 确保 session 绑定在显示的 View 上而非被丢弃的临时 View 上。
+        val pending = pendingViewBind
+        if (pending != null && pending.targetId == targetId) {
+            pendingViewBind = null
+            val target = targets[targetId]
+            if (target != null) {
+                performViewBind(view, pending, target)
+                view.post {
+                    view.requestFocus()
+                    val imm = context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+                    imm?.showSoftInput(view, 0)
+                }
+            }
+        }
     }
 
     /**
@@ -660,16 +715,4 @@ class EditorWindowHost(
         }
     }
 
-    private fun getOrCreateEditorView(): SujianEditorView {
-        return sharedEditorView ?: SujianEditorView(context, animationTimeSource = animationTimeSource, transactionIdSource = transactionIdSource).also {
-            it.setFrameClock(windowFrameClock)
-            val policy = motionPolicy.effective()
-            it.setTypingAnimationEnabled(policy.textEnabled, policy.textDurationMillis)
-            it.setSmoothCursorEnabled(policy.cursorEnabled, policy.cursorDurationMillis)
-            it.setCoordinatedAnimationEnabled(policy.coordinated)
-            it.setReduceMotion(policy.reduceMotion)
-            it.setKernelAnimationEnabled(policy.textEnabled || policy.cursorEnabled)
-            sharedEditorView = it
-        }
-    }
 }
