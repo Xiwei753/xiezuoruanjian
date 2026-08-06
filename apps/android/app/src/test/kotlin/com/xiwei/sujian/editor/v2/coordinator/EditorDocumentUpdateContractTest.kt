@@ -22,6 +22,7 @@ class EditorDocumentUpdateContractTest {
             targetId = "chapter-body:p:v:c",
             text = "hello",
             revision = 5L,
+            contentVersion = 1L,
             transactionId = 42L,
         )
         assertEquals("chapter-body:p:v:c", update.targetId)
@@ -38,6 +39,7 @@ class EditorDocumentUpdateContractTest {
             text = "loaded",
             fileHash = "sha256:abc123",
             revision = 0L,
+            contentVersion = 1L,
         )
         assertEquals("chapter-body:p:v:c", update.targetId)
         assertEquals("loaded", update.text)
@@ -47,8 +49,8 @@ class EditorDocumentUpdateContractTest {
 
     @Test
     fun localInputAndRepositoryLoadedAreDistinctTypes() {
-        val local = EditorDocumentUpdate.LocalInput("t", "text", 1L, 100L)
-        val external = EditorDocumentUpdate.RepositoryLoaded("t", "text", "hash-1", 0L)
+        val local = EditorDocumentUpdate.LocalInput("t", "text", 1L, 1L, 100L)
+        val external = EditorDocumentUpdate.RepositoryLoaded("t", "text", "hash-1", 0L, contentVersion = 1L)
         assertNotEquals("LocalInput and RepositoryLoaded must be distinct", local, external)
     }
 
@@ -85,7 +87,7 @@ class EditorDocumentUpdateContractTest {
     fun localInputPreservesRevisionAcrossUiRoundTrip() {
         // 模拟本地输入：IME → Rust EditResult(rev=5) → applyLocalEdit → SessionState(rev=5)
         // WritingPane 收集 sessionStateFlow 发现 rev=5 已应用，不触发 reset
-        val update = EditorDocumentUpdate.LocalInput("t", "new text", 5L, 42L)
+        val update = EditorDocumentUpdate.LocalInput("t", "new text", 5L, 1L, 42L)
         val state = EditorSessionState(
             targetId = update.targetId,
             text = update.text,

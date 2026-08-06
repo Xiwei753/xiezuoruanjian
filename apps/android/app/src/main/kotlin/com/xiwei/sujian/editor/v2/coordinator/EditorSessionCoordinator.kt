@@ -129,6 +129,11 @@ class EditorSessionCoordinator(
     private val _motionPolicyFlow = MutableStateFlow(EditorMotionPolicy())
     val motionPolicyFlow: StateFlow<EditorMotionPolicy> = _motionPolicyFlow.asStateFlow()
 
+    // #595 二：全局递增正文版本号源 — 所有 EditorDocumentUpdate 事件产生方调用
+    // nextContentVersion() 获取版本号，reducer 据此判断事件新旧。
+    private val contentVersionSource = java.util.concurrent.atomic.AtomicLong(0L)
+    fun nextContentVersion(): Long = contentVersionSource.incrementAndGet()
+
     /**
      * #595 三：唯一状态更新入口（reducer）— 所有会话状态变化通过此方法原子推进
      * [_sessionStateFlow]。不得在其他位置直接赋值 [_sessionStateFlow] 或派生 Flow。
@@ -169,6 +174,7 @@ class EditorSessionCoordinator(
                 lastRepositoryHash = previous.lastRepositoryHash,
                 editingState = previous.editingState,
                 activeTargetId = previous.activeTargetId,
+                lastAppliedContentVersion = maxOf(previous.lastAppliedContentVersion, update.contentVersion),
             )
         }
     }
@@ -189,8 +195,24 @@ class EditorSessionCoordinator(
         if (update.fileHash.isEmpty()) return false
         val current = _sessionStateFlow.value
         if (current.targetId != update.targetId) return true
+        // #595 二：旧事件（contentVersion 已应用）跳过
+        if (update.contentVersion <= current.lastAppliedContentVersion) return false
         if (current.lastRepositoryHash == update.fileHash && current.text == update.text) return false
         if (current.text == update.text) return false
+        return true
+    }
+
+    /**
+     * #595 二：通用外部更新幂等判断 — 比较targetId、contentVersion、fileHash/text。
+     *
+     * 适用于 [EditorDocumentUpdate.SyncMerged]、[EditorDocumentUpdate.UndoRestored]、
+     * [EditorDocumentUpdate.ProgrammaticReplace]。只有事件属于当前章节且版本更新时才返回 true。
+     */
+    fun shouldApplyExternalUpdate(update: EditorDocumentUpdate): Boolean {
+        val current = _sessionStateFlow.value
+        if (current.targetId != update.targetId) return true
+        if (update.contentVersion <= current.lastAppliedContentVersion) return false
+        if (current.text == update.text && current.revision == update.revision) return false
         return true
     }
 
@@ -219,7 +241,100 @@ class EditorSessionCoordinator(
                 lastRepositoryHash = update.fileHash,
                 editingState = previous.editingState,
                 activeTargetId = previous.activeTargetId,
+                lastAppliedContentVersion = maxOf(previous.lastAppliedContentVersion, update.contentVersion),
             )
+        }
+    }
+
+    /**
+     * #595 二：同步合并事件已执行后更新 SessionState —
+     * 记录 manifestRevision 和真实 snapshot。
+     */
+    fun applySyncMerged(update: EditorDocumentUpdate.SyncMerged) {
+        val realSnapshot = queryTargetSnapshot(update.targetId)
+        val realRevision = realSnapshot?.revision ?: update.revision
+        val realText = realSnapshot?.text ?: update.text
+        val realAnchor = realSnapshot?.selectionAnchorUtf8 ?: 0
+        val realHead = realSnapshot?.selectionHeadUtf8
+            ?: (realSnapshot?.cursorUtf8 ?: update.text.toByteArray(Charsets.UTF_8).size)
+        updateSessionState { previous ->
+            EditorSessionState(
+                targetId = update.targetId,
+                sessionId = persistentSessionIds[update.targetId],
+                text = realText,
+                revision = realRevision,
+                selectionAnchorUtf8 = realAnchor,
+                selectionHeadUtf8 = realHead,
+                lastAppliedTransactionId = 0L,
+                origin = EditorSessionOrigin.SYNC_MERGED,
+                bindingState = previous.bindingState,
+                lastRepositoryHash = update.fileHash,
+                editingState = previous.editingState,
+                activeTargetId = previous.activeTargetId,
+                lastAppliedContentVersion = maxOf(previous.lastAppliedContentVersion, update.contentVersion),
+            )
+        }
+    }
+
+    /**
+     * #595 二：撤销/恢复事件已执行后更新 SessionState —
+     * revision/transactionId 来自 Rust EditResult，来源标记为 UNDO_RESTORED。
+     */
+    fun applyUndoRestored(update: EditorDocumentUpdate.UndoRestored) {
+        updateSessionState { previous ->
+            EditorSessionState(
+                targetId = update.targetId,
+                sessionId = persistentSessionIds[update.targetId],
+                text = update.text,
+                revision = update.revision,
+                selectionAnchorUtf8 = if (update.selectionAnchorUtf8 >= 0) update.selectionAnchorUtf8 else previous.selectionAnchorUtf8,
+                selectionHeadUtf8 = if (update.selectionHeadUtf8 >= 0) update.selectionHeadUtf8 else previous.selectionHeadUtf8,
+                lastAppliedTransactionId = update.transactionId,
+                origin = EditorSessionOrigin.UNDO_RESTORED,
+                bindingState = previous.bindingState,
+                lastRepositoryHash = previous.lastRepositoryHash,
+                editingState = previous.editingState,
+                activeTargetId = previous.activeTargetId,
+                lastAppliedContentVersion = maxOf(previous.lastAppliedContentVersion, update.contentVersion),
+            )
+        }
+    }
+
+    /**
+     * #595 二：程序化替换事件已执行后更新 SessionState —
+     * revision/transactionId 来自 Rust EditResult，来源标记为 PROGRAMMATIC_REPLACE。
+     */
+    fun applyProgrammaticReplace(update: EditorDocumentUpdate.ProgrammaticReplace) {
+        updateSessionState { previous ->
+            EditorSessionState(
+                targetId = update.targetId,
+                sessionId = persistentSessionIds[update.targetId],
+                text = update.text,
+                revision = update.revision,
+                selectionAnchorUtf8 = if (update.selectionAnchorUtf8 >= 0) update.selectionAnchorUtf8 else previous.selectionAnchorUtf8,
+                selectionHeadUtf8 = if (update.selectionHeadUtf8 >= 0) update.selectionHeadUtf8 else previous.selectionHeadUtf8,
+                lastAppliedTransactionId = update.transactionId,
+                origin = EditorSessionOrigin.PROGRAMMATIC_REPLACE,
+                bindingState = previous.bindingState,
+                lastRepositoryHash = previous.lastRepositoryHash,
+                editingState = previous.editingState,
+                activeTargetId = previous.activeTargetId,
+                lastAppliedContentVersion = maxOf(previous.lastAppliedContentVersion, update.contentVersion),
+            )
+        }
+    }
+
+    /**
+     * #595 二：通用外部更新应用 — 根据事件类型分派到具体 apply 方法。
+     * 由 WritingPane 在 shouldApplyExternalUpdate 返回 true 后调用。
+     */
+    fun applyExternalUpdate(update: EditorDocumentUpdate) {
+        when (update) {
+            is EditorDocumentUpdate.RepositoryLoaded -> applyRepositoryLoaded(update)
+            is EditorDocumentUpdate.SyncMerged -> applySyncMerged(update)
+            is EditorDocumentUpdate.UndoRestored -> applyUndoRestored(update)
+            is EditorDocumentUpdate.ProgrammaticReplace -> applyProgrammaticReplace(update)
+            is EditorDocumentUpdate.LocalInput -> applyLocalEdit(update)
         }
     }
 

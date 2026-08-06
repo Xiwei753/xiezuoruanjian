@@ -616,21 +616,74 @@ class EditorWindowHost(
         view.onContentChanged = { newText ->
             target.onTextChanged?.invoke(newText)
         }
-        // #595 一：类型化本地编辑回调 — 先更新会话层唯一 SessionState（revision/transactionId），
+        // #595 一/二：类型化本地编辑回调 — 先更新会话层唯一 SessionState（revision/transactionId），
         // 再通知 ViewModel 保存。ViewModel 不再靠字符串比较猜测来源，
         // WritingPane 收集 sessionStateFlow 发现 revision 已应用，不触发 reset。
+        // contentVersion 由 Coordinator 的全局递增源产生。
         view.onLocalEdit = { text, revision, transactionId, operationKind, selectionAnchorUtf8, selectionHeadUtf8 ->
             sessionCoordinator.applyLocalEdit(
                 EditorDocumentUpdate.LocalInput(
                     targetId = target.targetId,
                     text = text,
                     revision = revision,
+                    contentVersion = sessionCoordinator.nextContentVersion(),
                     transactionId = transactionId,
                     operationKind = operationKind,
                     selectionAnchorUtf8 = selectionAnchorUtf8,
                     selectionHeadUtf8 = selectionHeadUtf8,
                 )
             )
+        }
+        // #595 二：类型化外部编辑回调 — 撤销/恢复/程序化替换走类型化事件，
+        // 区分来源并携带 contentVersion，由 Coordinator 的 applyExternalUpdate 统一处理。
+        view.onExternalEdit = { source, text, revision, transactionId, selectionAnchorUtf8, selectionHeadUtf8 ->
+            val contentVersion = sessionCoordinator.nextContentVersion()
+            when (source) {
+                com.xiwei.sujian.editor.v2.host.EditorEditSource.UNDO,
+                com.xiwei.sujian.editor.v2.host.EditorEditSource.REDO -> {
+                    sessionCoordinator.applyUndoRestored(
+                        EditorDocumentUpdate.UndoRestored(
+                            targetId = target.targetId,
+                            text = text,
+                            snapshotId = transactionId,
+                            revision = revision,
+                            contentVersion = contentVersion,
+                            transactionId = transactionId,
+                            selectionAnchorUtf8 = selectionAnchorUtf8,
+                            selectionHeadUtf8 = selectionHeadUtf8,
+                        )
+                    )
+                }
+                com.xiwei.sujian.editor.v2.host.EditorEditSource.PROGRAMMATIC -> {
+                    sessionCoordinator.applyProgrammaticReplace(
+                        EditorDocumentUpdate.ProgrammaticReplace(
+                            targetId = target.targetId,
+                            text = text,
+                            commandId = transactionId,
+                            revision = revision,
+                            contentVersion = contentVersion,
+                            transactionId = transactionId,
+                            selectionAnchorUtf8 = selectionAnchorUtf8,
+                            selectionHeadUtf8 = selectionHeadUtf8,
+                        )
+                    )
+                }
+                com.xiwei.sujian.editor.v2.host.EditorEditSource.NORMAL -> {
+                    // NORMAL 不应走 onExternalEdit，回退到 applyLocalEdit
+                    sessionCoordinator.applyLocalEdit(
+                        EditorDocumentUpdate.LocalInput(
+                            targetId = target.targetId,
+                            text = text,
+                            revision = revision,
+                            contentVersion = contentVersion,
+                            transactionId = transactionId,
+                            operationKind = EditorOperationKind.REPLACE,
+                            selectionAnchorUtf8 = selectionAnchorUtf8,
+                            selectionHeadUtf8 = selectionHeadUtf8,
+                        )
+                    )
+                }
+            }
         }
         view.onSearchHighlightsCleared = {
             sessionCoordinator.setTargetDecorations(target.targetId, TargetDecorations())
@@ -653,6 +706,7 @@ class EditorWindowHost(
         sharedEditorView?.let { view ->
             view.onContentChanged = null
             view.onLocalEdit = null
+            view.onExternalEdit = null
             view.onCommitRequested = null
             view.onCancelRequested = null
             view.onSearchHighlightsCleared = null

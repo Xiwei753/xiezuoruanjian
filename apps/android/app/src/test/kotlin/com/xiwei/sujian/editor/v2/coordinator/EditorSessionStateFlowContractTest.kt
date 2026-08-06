@@ -84,7 +84,7 @@ class EditorSessionStateFlowContractTest {
 
     @Test
     fun localInputUpdatePreservesRevisionInSessionState() {
-        val update = EditorDocumentUpdate.LocalInput("t1", "hello", 7L, 99L)
+        val update = EditorDocumentUpdate.LocalInput("t1", "hello", 7L, 1L, 99L)
         val state = EditorSessionState(
             targetId = update.targetId,
             text = update.text,
@@ -107,7 +107,7 @@ class EditorSessionStateFlowContractTest {
             origin = EditorSessionOrigin.EXTERNAL_REPLACE,
             lastRepositoryHash = "hash-1",
         )
-        val load = EditorDocumentUpdate.RepositoryLoaded("t1", "text", "hash-1", 0L)
+        val load = EditorDocumentUpdate.RepositoryLoaded("t1", "text", "hash-1", 0L, contentVersion = 1L)
         val alreadyApplied = currentState.lastRepositoryHash == load.fileHash &&
             currentState.text == load.text
         assertTrue("Same hash + same text must be idempotent (no reset)", alreadyApplied)
@@ -121,7 +121,7 @@ class EditorSessionStateFlowContractTest {
             revision = 3L,
             lastRepositoryHash = "hash-1",
         )
-        val load = EditorDocumentUpdate.RepositoryLoaded("t1", "new", "hash-2", 0L)
+        val load = EditorDocumentUpdate.RepositoryLoaded("t1", "new", "hash-2", 0L, contentVersion = 1L)
         val needsReset = currentState.text != load.text
         assertTrue("Different content must trigger reset protocol", needsReset)
     }
@@ -136,7 +136,7 @@ class EditorSessionStateFlowContractTest {
             origin = EditorSessionOrigin.LOCAL_INPUT,
             lastRepositoryHash = "hash-1",
         )
-        val load = EditorDocumentUpdate.RepositoryLoaded("t1", "same", "hash-2", 0L)
+        val load = EditorDocumentUpdate.RepositoryLoaded("t1", "same", "hash-2", 0L, contentVersion = 1L)
         val needsReset = currentState.text != load.text
         assertFalse("Same content must not reset even with different hash", needsReset)
     }

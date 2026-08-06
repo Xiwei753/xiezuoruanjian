@@ -48,6 +48,9 @@ class SujianEditorView @JvmOverloads constructor(
     private var scrollY: Float = 0f
     private var maxScrollY: Float = 0f
 
+    /** #595 二：标记当前 pipeline 输出的编辑来源 — 区分普通输入、撤销/恢复、程序化替换。 */
+    private var pendingEditSource: EditorEditSource = EditorEditSource.NORMAL
+
     fun getScrollXPos(): Float = scrollX
     fun getScrollYPos(): Float = scrollY
 
@@ -114,11 +117,13 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     fun performUndo() {
+        pendingEditSource = EditorEditSource.UNDO
         val output = pipeline.performUndo()
         handlePipelineOutput(output)
     }
 
     fun performRedo() {
+        pendingEditSource = EditorEditSource.REDO
         val output = pipeline.performRedo()
         handlePipelineOutput(output)
     }
@@ -138,24 +143,36 @@ class SujianEditorView @JvmOverloads constructor(
                 scrollY = scrollY.coerceIn(0f, maxScrollY)
                 if (!suppressContentCallback && output.result.isApplied()) {
                     val editText = pipeline.getText()
-                    // #595 一：先更新会话层唯一 SessionState（revision/transactionId），
-                    // 再通知 ViewModel 保存。确保 WritingPane 的 LaunchedEffect(uiState.content)
-                    // 触发时 sessionStateFlow 已是最新，不会误判为外部更新而 reset session。
+                    val source = pendingEditSource
+                    // #595 二：根据编辑来源分派 — 撤销/恢复/程序化替换走 onExternalEdit
+                    // 类型化事件，普通输入走 onLocalEdit。两者都先更新会话层唯一 SessionState。
                     // #595 五：selection-only 操作（CURSOR_ONLY）没有 displayPatches，
-                    // 但会话层 selection 必须更新 — onLocalEdit 不受 displayPatches 门控，
+                    // 但会话层 selection 必须更新 — 回调不受 displayPatches 门控，
                     // 只有 onContentChanged（ViewModel 保存）仍按文字 patch 门控。
-                    onLocalEdit?.invoke(
-                        editText,
-                        output.result.newRevision,
-                        output.result.transactionId,
-                        output.result.visualIntent.operationKind.toEditorOperationKind(),
-                        pipeline.getSelectionStartUtf8(),
-                        pipeline.getSelectionEndUtf8(),
-                    )
+                    if (source != EditorEditSource.NORMAL) {
+                        onExternalEdit?.invoke(
+                            source,
+                            editText,
+                            output.result.newRevision,
+                            output.result.transactionId,
+                            pipeline.getSelectionStartUtf8(),
+                            pipeline.getSelectionEndUtf8(),
+                        )
+                    } else {
+                        onLocalEdit?.invoke(
+                            editText,
+                            output.result.newRevision,
+                            output.result.transactionId,
+                            output.result.visualIntent.operationKind.toEditorOperationKind(),
+                            pipeline.getSelectionStartUtf8(),
+                            pipeline.getSelectionEndUtf8(),
+                        )
+                    }
                     if (output.result.displayPatches.isNotEmpty()) {
                         onContentChanged?.invoke(editText)
                     }
                 }
+                pendingEditSource = EditorEditSource.NORMAL
                 invalidate()
                 if (pipeline.hasActiveAnimation()) {
                     requestAnimationFrame()
@@ -256,6 +273,7 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     fun replaceAll(searchStr: String, replaceStr: String) {
+        pendingEditSource = EditorEditSource.PROGRAMMATIC
         val output = pipeline.replaceAll(searchStr, replaceStr)
         if (output != null) {
             handlePipelineOutput(output)
@@ -576,6 +594,15 @@ class SujianEditorView @JvmOverloads constructor(
      * 随 [EditorDocumentUpdate.LocalInput] 记录本次编辑语义。
      */
     var onLocalEdit: ((text: String, revision: Long, transactionId: Long, operationKind: EditorOperationKind, selectionAnchorUtf8: Int, selectionHeadUtf8: Int) -> Unit)? = null
+
+    /**
+     * #595 二：类型化外部编辑回调 — 撤销/恢复/程序化替换产生 EditResult 后调用。
+     *
+     * 由 [EditorWindowHost.installContentCallback] 设置，回调中根据 source 构造
+     * [EditorDocumentUpdate.UndoRestored] 或 [EditorDocumentUpdate.ProgrammaticReplace]，
+     * 调用 [EditorSessionCoordinator.applyExternalUpdate] 更新唯一 SessionState。
+     */
+    var onExternalEdit: ((source: EditorEditSource, text: String, revision: Long, transactionId: Long, selectionAnchorUtf8: Int, selectionHeadUtf8: Int) -> Unit)? = null
 
     fun setTypingAnimationEnabled(enabled: Boolean, durationMs: Long) {
         pipeline.kernelBridge?.setAnimationDurationMs(durationMs)
@@ -982,4 +1009,16 @@ interface EditorKernelBridge {
     fun replaceAll(search: String, replacement: String, expectedRevision: Long): uniffi.writer_core.EditorEditResultDto?
     fun insertLineBreak(byteOffset: Int, autoIndentPrefix: String, cause: uniffi.writer_core.EditorTransactionCauseDto, expectedRevision: Long): uniffi.writer_core.EditorEditResultDto?
     fun sessionSnapshot(): uniffi.writer_core.EditorSessionSnapshotDto?
+}
+
+/**
+ * #595 二：编辑来源标记 — 区分普通输入、撤销/恢复、程序化替换。
+ * 由 [SujianEditorView] 在 performUndo/performRedo/replaceAll 时设置，
+ * [SujianEditorView.handlePipelineOutputInternal] 读取后分派到不同回调。
+ */
+enum class EditorEditSource {
+    NORMAL,
+    UNDO,
+    REDO,
+    PROGRAMMATIC,
 }

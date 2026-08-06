@@ -28,6 +28,8 @@ data class EditorSessionState(
     val editingState: EditingState = EditingState.IDLE,
     /** #595 三：活动目标 ID — 从唯一 SessionState 派生，不再独立可写。 */
     val activeTargetId: String? = null,
+    /** #595 二：最后应用的外部更新 contentVersion — 旧事件（<= 此值）被 reducer 跳过。 */
+    val lastAppliedContentVersion: Long = 0L,
 )
 
 /**
@@ -39,4 +41,10 @@ enum class EditorSessionOrigin {
     LOCAL_INPUT,
     EXTERNAL_REPLACE,
     INITIAL_LOAD,
+    /** #595 二：同步合并后外部替换。 */
+    SYNC_MERGED,
+    /** #595 二：撤销/恢复后正文变更。 */
+    UNDO_RESTORED,
+    /** #595 二：程序化批量替换后正文变更。 */
+    PROGRAMMATIC_REPLACE,
 }

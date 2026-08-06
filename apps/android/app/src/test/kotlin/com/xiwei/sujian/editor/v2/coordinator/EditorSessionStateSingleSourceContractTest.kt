@@ -37,6 +37,7 @@ class EditorSessionStateSingleSourceContractTest {
                 targetId = "t1",
                 text = "你好世界",
                 revision = 3L,
+                contentVersion = 1L,
                 transactionId = 7L,
                 selectionAnchorUtf8 = 3,
                 selectionHeadUtf8 = 9,
@@ -57,7 +58,7 @@ class EditorSessionStateSingleSourceContractTest {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = false))
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("t1", "text", 1L, 1L, selectionAnchorUtf8 = 2, selectionHeadUtf8 = 4)
+            EditorDocumentUpdate.LocalInput("t1", "text", 1L, 1L, 1L, selectionAnchorUtf8 = 2, selectionHeadUtf8 = 4)
         )
         coordinator.detachWindowBinding("w1", "t1")
         assertEquals(
@@ -73,7 +74,7 @@ class EditorSessionStateSingleSourceContractTest {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("t1", "text", 1L, 1L, selectionAnchorUtf8 = 2, selectionHeadUtf8 = 4)
+            EditorDocumentUpdate.LocalInput("t1", "text", 1L, 1L, 1L, selectionAnchorUtf8 = 2, selectionHeadUtf8 = 4)
         )
         coordinator.closeTarget("t1", SessionCloseReason.WORKSPACE_NAVIGATION)
         val state = coordinator.sessionState
@@ -90,7 +91,7 @@ class EditorSessionStateSingleSourceContractTest {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
 
-        val first = EditorDocumentUpdate.RepositoryLoaded("t1", "repo text v1", fileHash = "hash-1", revision = 0L)
+        val first = EditorDocumentUpdate.RepositoryLoaded("t1", "repo text v1", fileHash = "hash-1", revision = 0L, contentVersion = 1L)
         assertTrue("New repository version must apply", coordinator.shouldApplyRepositoryLoad(first))
         coordinator.applyRepositoryLoaded(first)
 
@@ -102,7 +103,7 @@ class EditorSessionStateSingleSourceContractTest {
         assertFalse("Same hash+content replay must be idempotent", coordinator.shouldApplyRepositoryLoad(first))
 
         // 新 hash + 新内容：应用。
-        val second = EditorDocumentUpdate.RepositoryLoaded("t1", "repo text v2", fileHash = "hash-2", revision = 0L)
+        val second = EditorDocumentUpdate.RepositoryLoaded("t1", "repo text v2", fileHash = "hash-2", revision = 0L, contentVersion = 2L)
         assertTrue("New repository hash must apply", coordinator.shouldApplyRepositoryLoad(second))
         coordinator.applyRepositoryLoaded(second)
         state = coordinator.sessionState
@@ -115,7 +116,7 @@ class EditorSessionStateSingleSourceContractTest {
     fun repositoryLoaded_emptyHashIsRejected() {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
-        val noHash = EditorDocumentUpdate.RepositoryLoaded("t1", "x", fileHash = "", revision = 0L)
+        val noHash = EditorDocumentUpdate.RepositoryLoaded("t1", "x", fileHash = "", revision = 0L, contentVersion = 1L)
         assertFalse("Empty fileHash must be rejected", coordinator.shouldApplyRepositoryLoad(noHash))
     }
 

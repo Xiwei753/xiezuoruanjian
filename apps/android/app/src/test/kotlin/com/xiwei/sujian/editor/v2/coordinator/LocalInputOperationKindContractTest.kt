@@ -79,6 +79,7 @@ class LocalInputOperationKindContractTest {
             targetId = "t1",
             text = "typed",
             revision = 7L,
+            contentVersion = 1L,
             transactionId = 42L,
             operationKind = EditorOperationKind.INSERT,
         )
@@ -87,7 +88,7 @@ class LocalInputOperationKindContractTest {
         assertEquals(42L, update.transactionId)
         assertEquals(EditorOperationKind.INSERT, update.operationKind)
         // 默认值兜底：未显式传 operationKind 时（旧路径）按 INSERT 处理。
-        val legacy = EditorDocumentUpdate.LocalInput("t1", "x", 1L, 0L)
+        val legacy = EditorDocumentUpdate.LocalInput("t1", "x", 1L, 1L, 0L)
         assertEquals(EditorOperationKind.INSERT, legacy.operationKind)
     }
 

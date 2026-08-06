@@ -31,6 +31,10 @@ package com.xiwei.sujian.ui
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import androidx.lifecycle.viewModelScope
 import com.xiwei.sujian.R
 import com.xiwei.sujian.data.SettingsRepository
@@ -133,13 +137,75 @@ class EditorViewModel(
 
     private var _workspaceRepository: WorkspaceRepository? = null
     private var _settingsRepository: SettingsRepository? = null
+    private var _syncStatusRepository: com.xiwei.sujian.data.SyncStatusRepository? = null
     private val workspaceRepository: WorkspaceRepository get() = _workspaceRepository ?: WorkspaceRepository(getApplication())
     private val settingsRepository: SettingsRepository get() = _settingsRepository ?: SettingsRepository(getApplication())
+    private val syncStatusRepository: com.xiwei.sujian.data.SyncStatusRepository? get() = _syncStatusRepository
+
+    private val syncObserverScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var syncObserverJob: kotlinx.coroutines.Job? = null
 
     fun initialize(workspaceRepo: WorkspaceRepository, settingsRepo: SettingsRepository) {
         if (_workspaceRepository != null) return
         _workspaceRepository = workspaceRepo
         _settingsRepository = settingsRepo
+    }
+
+    /**
+     * #595 二：带同步状态观察的初始化 — 同步完成后检查当前章节磁盘内容是否变更，
+     * 若变更则发出 [EditorDocumentUpdate.SyncMerged] 事件，WritingPane 据此执行
+     * 一次 Core reset 以反映同步合并后的新正文。
+     */
+    fun initialize(
+        workspaceRepo: WorkspaceRepository,
+        settingsRepo: SettingsRepository,
+        syncStatusRepo: com.xiwei.sujian.data.SyncStatusRepository,
+    ) {
+        if (_workspaceRepository == null) {
+            _workspaceRepository = workspaceRepo
+            _settingsRepository = settingsRepo
+        }
+        if (_syncStatusRepository == syncStatusRepo) return
+        _syncStatusRepository = syncStatusRepo
+        syncObserverJob?.cancel()
+        syncObserverJob = syncObserverScope.launch {
+            var lastSynced = false
+            syncStatusRepo.state.collect { state ->
+                val isSynced = state == com.xiwei.sujian.model.SyncIndicatorState.Synced
+                if (isSynced && !lastSynced) {
+                    checkSyncMergedChapter()
+                }
+                lastSynced = isSynced
+            }
+        }
+    }
+
+    private suspend fun checkSyncMergedChapter() {
+        val session = currentSession ?: return
+        if (inputFrozen || _uiState.value.loading) return
+        try {
+            val (content, meta) = workspaceRepository.getChapterContentWithMeta(
+                session.projectId, session.volumeId, session.chapterId
+            )
+            val currentHash = _uiState.value.chapterHash
+            if (meta.hash.isNotEmpty() && meta.hash != currentHash && content != _uiState.value.content) {
+                val syncState = try { settingsRepository.loadSyncState() } catch (_: Exception) { null }
+                _documentUpdates.trySend(
+                    com.xiwei.sujian.editor.v2.coordinator.EditorDocumentUpdate.SyncMerged(
+                        targetId = "chapter-body:${session.projectId}:${session.volumeId}:${session.chapterId}",
+                        text = content,
+                        manifestRevision = syncState?.lastSyncTime ?: System.currentTimeMillis(),
+                        fileHash = meta.hash,
+                        revision = 0L,
+                        contentVersion = contentVersionSupplier(),
+                    )
+                )
+            }
+        } catch (_: kotlinx.coroutines.CancellationException) {
+            throw kotlinx.coroutines.CancellationException()
+        } catch (_: Exception) {
+            // 同步合并检查失败不阻塞用户操作
+        }
     }
 
     private val _uiState = MutableStateFlow(EditorUiState())
@@ -153,6 +219,15 @@ class EditorViewModel(
     // 不再根据字符串差异伪造 revision/source。
     private val _documentUpdates = Channel<com.xiwei.sujian.editor.v2.coordinator.EditorDocumentUpdate>(Channel.BUFFERED)
     val documentUpdates: kotlinx.coroutines.flow.Flow<com.xiwei.sujian.editor.v2.coordinator.EditorDocumentUpdate> = _documentUpdates.receiveAsFlow()
+
+    // #595 二：正文版本号源 — 默认用本地 AtomicLong，由 WritingPane 注入
+    // Coordinator 的 nextContentVersion() 以共享全局递增序列。
+    private val localContentVersionSource = java.util.concurrent.atomic.AtomicLong(0L)
+    @Volatile
+    private var contentVersionSupplier: () -> Long = { localContentVersionSource.incrementAndGet() }
+    fun setContentVersionSupplier(supplier: () -> Long) {
+        contentVersionSupplier = supplier
+    }
 
     private var currentSession: EditorSession? = null
 
@@ -416,6 +491,7 @@ class EditorViewModel(
                     text = content,
                     fileHash = meta.hash,
                     revision = 0L,
+                    contentVersion = contentVersionSupplier(),
                 )
             )
             previousText = content

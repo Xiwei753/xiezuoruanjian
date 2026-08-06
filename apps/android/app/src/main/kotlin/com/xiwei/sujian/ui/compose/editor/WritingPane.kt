@@ -73,7 +73,7 @@ fun WritingPane(
     val viewModel: EditorViewModel = viewModel()
     val deps = LocalSujianAppDependencies.current
     LaunchedEffect(Unit) {
-        viewModel.initialize(deps.workspaceRepository, deps.settingsRepository)
+        viewModel.initialize(deps.workspaceRepository, deps.settingsRepository, deps.syncStatusRepository)
     }
 
     val coordinator = LocalEditorWindowHost.current
@@ -81,6 +81,13 @@ fun WritingPane(
             "WritingPane requires an EditorWindowHost in the CompositionLocal. " +
             "Ensure the host Activity or Fragment provides one via CompositionLocalProvider."
         )
+
+    // #595 二：注入 Coordinator 的全局 contentVersion 源到 ViewModel，
+    // 使 RepositoryLoaded/SyncMerged 事件与 LocalInput/UndoRestored/ProgrammaticReplace
+    // 共享同一递增序列，reducer 的 contentVersion 比较有效。
+    LaunchedEffect(coordinator) {
+        viewModel.setContentVersionSupplier { coordinator.sessionCoordinator.nextContentVersion() }
+    }
 
     val dims = LocalSujianDimensions.current
 
@@ -213,35 +220,49 @@ fun WritingPane(
     // ViewModel 发出，执行外部替换协议；不再根据字符串差异伪造 revision/source。
     val currentUiState by rememberUpdatedState(uiState)
 
-    // 外部内容变更（同步/撤销/程序化替换）：用真实 fileHash 走同一外部替换协议；
-    // 只有内容与 SessionState 不一致且 hash 是新版本时才 reset（幂等）。
+    // #595 二：外部内容变更（RepositoryLoaded/SyncMerged）— 调用方已通过
+    // shouldApplyRepositoryLoad/shouldApplyExternalUpdate 确认版本更新，
+    // 此处只执行 Core reset 和 beginEdit，不再重复构造事件做检查。
     fun applyExternalContent(text: String, fileHash: String) {
-        if (coordinator.sessionCoordinator.shouldApplyRepositoryLoad(
-                com.xiwei.sujian.editor.v2.coordinator.EditorDocumentUpdate.RepositoryLoaded(
-                    targetId = targetId, text = text, fileHash = fileHash, revision = 0L,
-                )
-            )
-        ) {
-            coordinator.resetPersistentSession(
-                targetId,
-                text,
-                text.toByteArray(Charsets.UTF_8).size,
-                SessionResetSource.EXTERNAL
-            )
-            if (coordinator.activeTargetId != targetId) {
-                coordinator.beginEdit(targetId, text.toByteArray(Charsets.UTF_8).size)
-            }
+        coordinator.resetPersistentSession(
+            targetId,
+            text,
+            text.toByteArray(Charsets.UTF_8).size,
+            SessionResetSource.EXTERNAL
+        )
+        if (coordinator.activeTargetId != targetId) {
+            coordinator.beginEdit(targetId, text.toByteArray(Charsets.UTF_8).size)
         }
     }
 
     LaunchedEffect(targetId) {
         viewModel.documentUpdates.collect { update ->
-            if (update is com.xiwei.sujian.editor.v2.coordinator.EditorDocumentUpdate.RepositoryLoaded &&
-                update.targetId == targetId && !currentUiState.loading
-            ) {
-                if (coordinator.sessionCoordinator.shouldApplyRepositoryLoad(update)) {
-                    applyExternalContent(update.text, update.fileHash)
-                    coordinator.sessionCoordinator.applyRepositoryLoaded(update)
+            if (update.targetId != targetId || currentUiState.loading) return@collect
+            // #595 二：WritingPane 只消费类型化 EditorDocumentUpdate 事件，
+            // 不再观察字符串差异。所有外部更新来源（RepositoryLoaded/SyncMerged/
+            // UndoRestored/ProgrammaticReplace）统一经 shouldApplyExternalUpdate
+            // 判断版本新旧，确认属于当前章节且版本更新时才执行一次 Core reset。
+            when (update) {
+                is com.xiwei.sujian.editor.v2.coordinator.EditorDocumentUpdate.RepositoryLoaded -> {
+                    if (coordinator.sessionCoordinator.shouldApplyRepositoryLoad(update)) {
+                        applyExternalContent(update.text, update.fileHash)
+                        coordinator.sessionCoordinator.applyRepositoryLoaded(update)
+                    }
+                }
+                is com.xiwei.sujian.editor.v2.coordinator.EditorDocumentUpdate.SyncMerged -> {
+                    if (coordinator.sessionCoordinator.shouldApplyExternalUpdate(update)) {
+                        applyExternalContent(update.text, update.fileHash)
+                        coordinator.sessionCoordinator.applySyncMerged(update)
+                    }
+                }
+                is com.xiwei.sujian.editor.v2.coordinator.EditorDocumentUpdate.UndoRestored,
+                is com.xiwei.sujian.editor.v2.coordinator.EditorDocumentUpdate.ProgrammaticReplace -> {
+                    // 撤销/恢复和程序化替换通过 onExternalEdit 同步回调已直接更新 SessionState，
+                    // 不走异步 documentUpdates 事件流。此处仅作类型穷尽守卫。
+                }
+                is com.xiwei.sujian.editor.v2.coordinator.EditorDocumentUpdate.LocalInput -> {
+                    // 本地输入通过 onLocalEdit 同步回调已直接更新 SessionState，
+                    // 不走异步 documentUpdates 事件流。此处仅作类型穷尽守卫。
                 }
             }
         }
