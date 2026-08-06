@@ -6,7 +6,10 @@ fn test_list_registered_actions() {
     let temp_dir = tempdir().unwrap();
     let core = WriterCore::new(temp_dir.path());
     let actions = core.list_registered_actions().unwrap();
-    assert!(!actions.is_empty(), "Action registry should contain actions");
+    assert!(
+        !actions.is_empty(),
+        "Action registry should contain actions"
+    );
 }
 
 #[test]
@@ -32,7 +35,9 @@ fn test_get_action_not_found() {
 fn test_execute_action_font_size_get() {
     let temp_dir = tempdir().unwrap();
     let core = WriterCore::new(temp_dir.path());
-    let result = core.execute_action("settings.editor.font_size.get", "", "").unwrap();
+    let result = core
+        .execute_action("settings.editor.font_size.get", "", "")
+        .unwrap();
     assert!(result.success);
     assert!(result.data.is_some());
     let data = result.data.unwrap();
@@ -92,21 +97,43 @@ fn test_execute_action_line_spacing_get_set() {
     let temp_dir = tempdir().unwrap();
     let core = WriterCore::new(temp_dir.path());
 
-    let result = core.execute_action("settings.editor.line_spacing.set", r#"{"multiplier": 0.5}"#, "").unwrap();
+    let result = core
+        .execute_action(
+            "settings.editor.line_spacing.set",
+            r#"{"multiplier": 0.5}"#,
+            "",
+        )
+        .unwrap();
     assert!(!result.success);
 
-    let result = core.execute_action("settings.editor.line_spacing.set", r#"{"multiplier": 4.0}"#, "").unwrap();
+    let result = core
+        .execute_action(
+            "settings.editor.line_spacing.set",
+            r#"{"multiplier": 4.0}"#,
+            "",
+        )
+        .unwrap();
     assert!(!result.success);
 
-    let result = core.execute_action("settings.editor.line_spacing.set", r#"{"multiplier": 2.0}"#, "").unwrap();
+    let result = core
+        .execute_action(
+            "settings.editor.line_spacing.set",
+            r#"{"multiplier": 2.0}"#,
+            "",
+        )
+        .unwrap();
     assert!(result.success);
 
-    let result = core.execute_action("settings.editor.line_spacing.get", "", "").unwrap();
+    let result = core
+        .execute_action("settings.editor.line_spacing.get", "", "")
+        .unwrap();
     assert!(result.success);
     let data = result.data.unwrap();
     assert_eq!(data["multiplier"].as_f64().unwrap(), 2.0);
 
-    let result = core.execute_action("settings.editor.line_spacing.set", r#"{}"#, "").unwrap();
+    let result = core
+        .execute_action("settings.editor.line_spacing.set", r#"{}"#, "")
+        .unwrap();
     assert!(!result.success);
 }
 
@@ -115,15 +142,29 @@ fn test_execute_action_auto_indent_get_set() {
     let temp_dir = tempdir().unwrap();
     let core = WriterCore::new(temp_dir.path());
 
-    let result = core.execute_action("settings.editor.auto_indent.set", r#"{"enabled": true, "widthChars": 4.0}"#, "").unwrap();
+    let result = core
+        .execute_action(
+            "settings.editor.auto_indent.set",
+            r#"{"enabled": true, "widthChars": 4.0}"#,
+            "",
+        )
+        .unwrap();
     assert!(result.success);
 
-    let result = core.execute_action("settings.editor.auto_indent.get", "", "").unwrap();
+    let result = core
+        .execute_action("settings.editor.auto_indent.get", "", "")
+        .unwrap();
     assert!(result.success);
     let data = result.data.unwrap();
     assert!(data["enabled"].as_bool().unwrap());
     assert_eq!(data["widthChars"].as_f64().unwrap(), 4.0);
 
-    let result = core.execute_action("settings.editor.auto_indent.set", r#"{"widthChars": 2.0}"#, "").unwrap();
+    let result = core
+        .execute_action(
+            "settings.editor.auto_indent.set",
+            r#"{"widthChars": 2.0}"#,
+            "",
+        )
+        .unwrap();
     assert!(!result.success);
 }

@@ -1,5 +1,5 @@
-use writer_core::editor::text_edit_session::{TextEditSessionId, TextEditSessionRegistry};
 use std::collections::HashMap;
+use writer_core::editor::text_edit_session::{TextEditSessionId, TextEditSessionRegistry};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) enum TextInputType {
@@ -198,7 +198,8 @@ impl LinuxTextEditorCoordinator {
             self.cancel_active_edit();
         }
         if let Some(session_id_raw) = self.persistent_session_ids.remove(target_id) {
-            self.registry.close_session(TextEditSessionId::new(session_id_raw));
+            self.registry
+                .close_session(TextEditSessionId::new(session_id_raw));
         }
         self.targets.remove(target_id);
     }
@@ -216,38 +217,61 @@ impl LinuxTextEditorCoordinator {
             self.commit_active_edit();
         }
 
-        let text = self.targets.get(target_id).map(|t| t.current_text.clone()).unwrap_or_default();
+        let text = self
+            .targets
+            .get(target_id)
+            .map(|t| t.current_text.clone())
+            .unwrap_or_default();
         let cursor = text.len();
-        let is_persistent = self.targets.get(target_id).map(|t| t.is_persistent).unwrap_or(false);
+        let is_persistent = self
+            .targets
+            .get(target_id)
+            .map(|t| t.is_persistent)
+            .unwrap_or(false);
 
         let session_id_raw = if is_persistent {
             if let Some(&existing_raw) = self.persistent_session_ids.get(target_id) {
-                if self.registry.session_exists(TextEditSessionId::new(existing_raw)) {
+                if self
+                    .registry
+                    .session_exists(TextEditSessionId::new(existing_raw))
+                {
                     existing_raw
                 } else {
                     self.persistent_session_ids.remove(target_id);
-                    self.registry.close_session(TextEditSessionId::new(existing_raw));
-                    match self.registry.create_session(target_id.to_string(), text, cursor, true) {
+                    self.registry
+                        .close_session(TextEditSessionId::new(existing_raw));
+                    match self
+                        .registry
+                        .create_session(target_id.to_string(), text, cursor, true)
+                    {
                         Ok(id) => {
                             let raw = id.as_u64();
-                            self.persistent_session_ids.insert(target_id.to_string(), raw);
+                            self.persistent_session_ids
+                                .insert(target_id.to_string(), raw);
                             raw
                         }
                         Err(_) => return false,
                     }
                 }
             } else {
-                match self.registry.create_session(target_id.to_string(), text, cursor, true) {
+                match self
+                    .registry
+                    .create_session(target_id.to_string(), text, cursor, true)
+                {
                     Ok(id) => {
                         let raw = id.as_u64();
-                        self.persistent_session_ids.insert(target_id.to_string(), raw);
+                        self.persistent_session_ids
+                            .insert(target_id.to_string(), raw);
                         raw
                     }
                     Err(_) => return false,
                 }
             }
         } else {
-            match self.registry.create_session(target_id.to_string(), text, cursor, false) {
+            match self
+                .registry
+                .create_session(target_id.to_string(), text, cursor, false)
+            {
                 Ok(id) => id.as_u64(),
                 Err(_) => return false,
             }
@@ -260,16 +284,27 @@ impl LinuxTextEditorCoordinator {
 
     pub fn take_active_session_kernel(&mut self) -> Option<writer_core::editor::EditorKernel> {
         let session_id_raw = self.active_session_id?;
-        let session = self.registry.get_session_mut(TextEditSessionId::new(session_id_raw))?;
-        Some(std::mem::replace(&mut session.kernel, writer_core::editor::EditorKernel::new()))
+        let session = self
+            .registry
+            .get_session_mut(TextEditSessionId::new(session_id_raw))?;
+        Some(std::mem::replace(
+            &mut session.kernel,
+            writer_core::editor::EditorKernel::new(),
+        ))
     }
 
-    pub fn return_kernel_to_active_session(&mut self, kernel: writer_core::editor::EditorKernel) -> bool {
+    pub fn return_kernel_to_active_session(
+        &mut self,
+        kernel: writer_core::editor::EditorKernel,
+    ) -> bool {
         let session_id_raw = match self.active_session_id {
             Some(id) => id,
             None => return false,
         };
-        let session = match self.registry.get_session_mut(TextEditSessionId::new(session_id_raw)) {
+        let session = match self
+            .registry
+            .get_session_mut(TextEditSessionId::new(session_id_raw))
+        {
             Some(s) => s,
             None => return false,
         };
@@ -287,11 +322,16 @@ impl LinuxTextEditorCoordinator {
             None => return false,
         };
 
-        let is_persistent = self.targets.get(&target_id).map(|t| t.is_persistent).unwrap_or(false);
+        let is_persistent = self
+            .targets
+            .get(&target_id)
+            .map(|t| t.is_persistent)
+            .unwrap_or(false);
 
         if !is_persistent {
             self.persistent_session_ids.remove(&target_id);
-            self.registry.close_session(TextEditSessionId::new(session_id_raw));
+            self.registry
+                .close_session(TextEditSessionId::new(session_id_raw));
             if let Some(target) = self.targets.get_mut(&target_id) {
                 if target.profile.is_secret() {
                     target.current_text.clear();
@@ -312,19 +352,26 @@ impl LinuxTextEditorCoordinator {
             None => return false,
         };
 
-        self.registry.close_session(TextEditSessionId::new(session_id_raw));
+        self.registry
+            .close_session(TextEditSessionId::new(session_id_raw));
         self.persistent_session_ids.remove(&target_id);
         true
     }
 
-    pub fn get_active_session(&self) -> Option<&writer_core::editor::text_edit_session::TextEditSession> {
+    pub fn get_active_session(
+        &self,
+    ) -> Option<&writer_core::editor::text_edit_session::TextEditSession> {
         let session_id_raw = self.active_session_id?;
-        self.registry.get_session(TextEditSessionId::new(session_id_raw))
+        self.registry
+            .get_session(TextEditSessionId::new(session_id_raw))
     }
 
-    pub fn get_active_session_mut(&mut self) -> Option<&mut writer_core::editor::text_edit_session::TextEditSession> {
+    pub fn get_active_session_mut(
+        &mut self,
+    ) -> Option<&mut writer_core::editor::text_edit_session::TextEditSession> {
         let session_id_raw = self.active_session_id?;
-        self.registry.get_session_mut(TextEditSessionId::new(session_id_raw))
+        self.registry
+            .get_session_mut(TextEditSessionId::new(session_id_raw))
     }
 
     pub fn active_target_id(&self) -> Option<&str> {
@@ -342,11 +389,16 @@ impl LinuxTextEditorCoordinator {
     }
 
     pub fn active_profile(&self) -> Option<&TextEditorProfile> {
-        self.active_target_id.as_ref().and_then(|id| self.targets.get(id).map(|t| &t.profile))
+        self.active_target_id
+            .as_ref()
+            .and_then(|id| self.targets.get(id).map(|t| &t.profile))
     }
 
     pub fn is_active_single_line(&self) -> bool {
-        self.active_target_id.as_ref().and_then(|id| self.targets.get(id).map(|t| t.profile.single_line)).unwrap_or(false)
+        self.active_target_id
+            .as_ref()
+            .and_then(|id| self.targets.get(id).map(|t| t.profile.single_line))
+            .unwrap_or(false)
     }
 }
 
@@ -546,7 +598,10 @@ mod tests {
         });
         assert!(coord.begin_edit("persistent-secret"));
         assert!(coord.commit_active_edit());
-        assert_eq!(coord.targets.get("persistent-secret").unwrap().current_text, "my-secret-token");
+        assert_eq!(
+            coord.targets.get("persistent-secret").unwrap().current_text,
+            "my-secret-token"
+        );
     }
 
     #[test]
@@ -728,6 +783,9 @@ mod tests {
         });
         assert!(coord.begin_edit("persistent-secret"));
         assert!(coord.commit_active_edit());
-        assert_eq!(coord.targets.get("persistent-secret").unwrap().current_text, "my-secret");
+        assert_eq!(
+            coord.targets.get("persistent-secret").unwrap().current_text,
+            "my-secret"
+        );
     }
 }

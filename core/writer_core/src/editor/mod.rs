@@ -16,8 +16,10 @@ pub mod text_edit_session;
 pub mod transaction;
 
 pub use kernel::{
-    types::{CoordinatedCursor, DisplayPatch, EditorCommand, EditorOperationKind, EditorVisualIntent},
     result::{EditorEditOutcome, EditorEditResult, EditorInputError},
+    types::{
+        CoordinatedCursor, DisplayPatch, EditorCommand, EditorOperationKind, EditorVisualIntent,
+    },
     EditorKernel,
 };
 
@@ -25,9 +27,7 @@ pub use strong_types::{
     EditorRevision, EditorSessionGeneration, EditorSessionId, Utf8ByteOffset, Utf8ByteRange,
 };
 
-pub use text_edit_session::{
-    TextEditSession, TextEditSessionId, TextEditSessionRegistry,
-};
+pub use text_edit_session::{TextEditSession, TextEditSessionId, TextEditSessionRegistry};
 
 pub use transaction::{
     build_virtual_text, choose_animation_mode, classify_visual_diff, compute_rebase,
@@ -39,9 +39,8 @@ pub use transaction::{
     CursorRect, DecorationSlice, DecorationSliceKind, EditorAnimationKind, EditorChange,
     EditorCursor, EditorEngine, EditorSelection, EditorTransaction, EditorTransactionCause,
     EditorVisualTransaction, GlyphRect, HiddenVisualRange, OffsetMap, OffsetMapEntry,
-    OffsetMapKind, PlatformVisualTransaction, PlatformVisualTransactionState,
-    PreeditTextFormat, PreeditVisualTransaction, Rect, RebaseFrameSnapshot, ReflowGlyphRect,
-    SnapshotOwner, StaticLinePatch, Timeline, TransactionCancelReason, TransactionRebase,
-    UnifiedTransactionKind, VisualClassKind, VisualCoordinateMode, VisualLayoutRevision,
-    VisualRevision,
+    OffsetMapKind, PlatformVisualTransaction, PlatformVisualTransactionState, PreeditTextFormat,
+    PreeditVisualTransaction, RebaseFrameSnapshot, Rect, ReflowGlyphRect, SnapshotOwner,
+    StaticLinePatch, Timeline, TransactionCancelReason, TransactionRebase, UnifiedTransactionKind,
+    VisualClassKind, VisualCoordinateMode, VisualLayoutRevision, VisualRevision,
 };

@@ -9,11 +9,17 @@ pub(crate) struct VisualTransactionKey {
 
 impl VisualTransactionKey {
     pub fn new(transaction_id: u64, generation: u64) -> Self {
-        Self { transaction_id, generation }
+        Self {
+            transaction_id,
+            generation,
+        }
     }
 
     pub fn zero() -> Self {
-        Self { transaction_id: 0, generation: 0 }
+        Self {
+            transaction_id: 0,
+            generation: 0,
+        }
     }
 
     pub fn is_valid(&self) -> bool {

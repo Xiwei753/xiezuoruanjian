@@ -28,9 +28,9 @@ pub fn open_directory(path: &str) -> Result<(), String> {
     }
 
     let dir = std::path::Path::new(path);
-    let canonical = dir.canonicalize().map_err(|e| {
-        format!("路径无法解析（可能不存在或含非法遍历）：{}", e)
-    })?;
+    let canonical = dir
+        .canonicalize()
+        .map_err(|e| format!("路径无法解析（可能不存在或含非法遍历）：{}", e))?;
 
     if !canonical.is_dir() {
         return Err(format!("路径不是有效目录：{}", path));

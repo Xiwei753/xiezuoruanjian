@@ -10,8 +10,7 @@ impl WriterCoreApi {
     }
 
     pub fn save_local_settings(&self, settings: LocalSettingsDto) -> ApiResult<bool> {
-        self.core()
-            .save_local_settings(&settings.clone().into())?;
+        self.core().save_local_settings(&settings.clone().into())?;
         let body = serde_json::to_string(&settings).unwrap_or_default();
         let entry = crate::search::extractor::extract_setting_entry("local", &body);
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
@@ -68,7 +67,11 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
-    pub fn load_palette_record(&self, device_id: &str, fingerprint: &str) -> ApiResult<ThemePaletteRecordDto> {
+    pub fn load_palette_record(
+        &self,
+        device_id: &str,
+        fingerprint: &str,
+    ) -> ApiResult<ThemePaletteRecordDto> {
         crate::settings::load_palette_record(&self.workspace_path, device_id, fingerprint)
             .map(Into::into)
             .map_err(Into::into)
@@ -87,11 +90,14 @@ impl WriterCoreApi {
     }
 
     pub fn migrate_legacy_theme_palette(&self) -> ApiResult<bool> {
-        crate::settings::migrate_legacy_theme_palette(&self.workspace_path)
-            .map_err(Into::into)
+        crate::settings::migrate_legacy_theme_palette(&self.workspace_path).map_err(Into::into)
     }
 
-    pub fn compute_palette_fingerprint(&self, light_scheme: ThemeColorSchemeDto, dark_scheme: ThemeColorSchemeDto) -> String {
+    pub fn compute_palette_fingerprint(
+        &self,
+        light_scheme: ThemeColorSchemeDto,
+        dark_scheme: ThemeColorSchemeDto,
+    ) -> String {
         let light: crate::settings::ThemeColorScheme = light_scheme.into();
         let dark: crate::settings::ThemeColorScheme = dark_scheme.into();
         crate::settings::compute_palette_fingerprint(&light, &dark)

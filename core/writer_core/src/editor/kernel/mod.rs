@@ -1,17 +1,19 @@
 //! Rust EditorKernel — 正文和业务唯一真相。
 
-pub mod types;
-pub mod result;
 mod apply;
-mod selection;
 mod composition;
 mod history;
 mod replace;
+pub mod result;
+mod selection;
 mod session;
 mod tests;
+pub mod types;
 
 use self::result::EditorInputError;
-use crate::editor::strong_types::{EditorRevision, EditorSessionId, EditorSessionGeneration, Utf8ByteOffset};
+use crate::editor::strong_types::{
+    EditorRevision, EditorSessionGeneration, EditorSessionId, Utf8ByteOffset,
+};
 
 #[derive(Debug, Clone)]
 pub struct EditorKernel {

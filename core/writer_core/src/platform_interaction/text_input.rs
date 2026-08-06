@@ -12,9 +12,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum NormalizedTextInputEvent {
     /// 普通文本插入（键盘直接输入、符号）
-    PlainText {
-        text: String,
-    },
+    PlainText { text: String },
     /// 快捷键
     Shortcut {
         key: NormalizedKey,
@@ -27,9 +25,7 @@ pub enum NormalizedTextInputEvent {
         attributes: Vec<NormalizedPreeditAttribute>,
     },
     /// IME commit 上屏
-    ImeCommit {
-        text: String,
-    },
+    ImeCommit { text: String },
     /// IME commit 带替换语义（fcitx5 拼音修正等）
     ///
     /// `replace_start` 和 `replace_length` 均为 UTF-16 code unit offset，
@@ -82,7 +78,6 @@ pub struct NormalizedModifiers {
     pub meta: bool,
 }
 
-
 /// 归一化 preedit 属性
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -100,7 +95,10 @@ pub enum NormalizedPreeditAttribute {
 /// 编辑器只消费 NormalizedTextInputEvent，不关心平台细节。
 pub trait TextInputAdapter {
     /// 将平台原始输入事件转换为归一化事件
-    fn normalize_input_event(&self, raw: &dyn PlatformRawInputEvent) -> Option<NormalizedTextInputEvent>;
+    fn normalize_input_event(
+        &self,
+        raw: &dyn PlatformRawInputEvent,
+    ) -> Option<NormalizedTextInputEvent>;
 
     /// 当前是否正在 IME composing
     fn is_ime_composing(&self) -> bool;

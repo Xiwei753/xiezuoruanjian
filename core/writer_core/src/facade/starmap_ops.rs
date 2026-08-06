@@ -1,6 +1,6 @@
 use crate::error::Result;
-use crate::starmap::store::{StarMapStore, SaveQueueEntry};
 use crate::starmap::graph::validation;
+use crate::starmap::store::{SaveQueueEntry, StarMapStore};
 
 impl super::WriterCore {
     pub fn list_starmaps(&self) -> Result<Vec<crate::starmap::StarMapMeta>> {
@@ -58,9 +58,19 @@ impl super::WriterCore {
         crate::starmap::rename_starmap(&self.workspace_path, starmap_id, new_title)
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
     pub fn delete_starmap(&self, starmap_id: &str) -> Result<()> {
         {
-            let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
+            let mut stores = self
+                .starmap_stores
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             if let Some(store) = stores.get_mut(starmap_id) {
                 if store.is_dirty() || store.has_pending_deletes() {
                     store.flush()?;
@@ -68,7 +78,10 @@ impl super::WriterCore {
             }
         }
         {
-            let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
+            let mut stores = self
+                .starmap_stores
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             stores.remove(starmap_id);
         }
         crate::starmap::delete_starmap(&self.workspace_path, starmap_id)
@@ -97,8 +110,12 @@ impl super::WriterCore {
         &self,
         starmap_id: &str,
     ) -> Result<crate::starmap::types::StarMapGraph> {
-        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
-        let store = stores.entry(starmap_id.to_string())
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = stores
+            .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_loaded()?;
         Ok(store.to_starmap_graph())
@@ -112,8 +129,12 @@ impl super::WriterCore {
     ) -> Result<()> {
         validation::validate_graph(&self.workspace_path, graph)?;
 
-        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
-        let store = stores.entry(starmap_id.to_string())
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = stores
+            .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
 
         store.ensure_fully_loaded()?;
@@ -126,17 +147,32 @@ impl super::WriterCore {
             )));
         }
 
-        let old_node_ids: std::collections::HashSet<String> = store.all_nodes().map(|n| n.id.clone()).collect();
-        let old_edge_ids: std::collections::HashSet<String> = store.all_edges().map(|e| e.id.clone()).collect();
-        let old_embed_ids: std::collections::HashSet<String> = store.all_embeds().map(|e| e.instance_id.clone()).collect();
-        let old_link_ids: std::collections::HashSet<String> = store.all_links().map(|l| l.link_id.clone()).collect();
-        let old_hyperlink_ids: std::collections::HashSet<String> = store.all_hyperlinks().map(|hl| hl.hyperlink_id.clone()).collect();
+        let old_node_ids: std::collections::HashSet<String> =
+            store.all_nodes().map(|n| n.id.clone()).collect();
+        let old_edge_ids: std::collections::HashSet<String> =
+            store.all_edges().map(|e| e.id.clone()).collect();
+        let old_embed_ids: std::collections::HashSet<String> =
+            store.all_embeds().map(|e| e.instance_id.clone()).collect();
+        let old_link_ids: std::collections::HashSet<String> =
+            store.all_links().map(|l| l.link_id.clone()).collect();
+        let old_hyperlink_ids: std::collections::HashSet<String> = store
+            .all_hyperlinks()
+            .map(|hl| hl.hyperlink_id.clone())
+            .collect();
 
-        let new_node_ids: std::collections::HashSet<String> = graph.nodes.iter().map(|n| n.id.clone()).collect();
-        let new_edge_ids: std::collections::HashSet<String> = graph.edges.iter().map(|e| e.id.clone()).collect();
-        let new_embed_ids: std::collections::HashSet<String> = graph.embeds.iter().map(|e| e.instance_id.clone()).collect();
-        let new_link_ids: std::collections::HashSet<String> = graph.links.iter().map(|l| l.link_id.clone()).collect();
-        let new_hyperlink_ids: std::collections::HashSet<String> = graph.hyperlinks.iter().map(|hl| hl.hyperlink_id.clone()).collect();
+        let new_node_ids: std::collections::HashSet<String> =
+            graph.nodes.iter().map(|n| n.id.clone()).collect();
+        let new_edge_ids: std::collections::HashSet<String> =
+            graph.edges.iter().map(|e| e.id.clone()).collect();
+        let new_embed_ids: std::collections::HashSet<String> =
+            graph.embeds.iter().map(|e| e.instance_id.clone()).collect();
+        let new_link_ids: std::collections::HashSet<String> =
+            graph.links.iter().map(|l| l.link_id.clone()).collect();
+        let new_hyperlink_ids: std::collections::HashSet<String> = graph
+            .hyperlinks
+            .iter()
+            .map(|hl| hl.hyperlink_id.clone())
+            .collect();
 
         for node in &graph.nodes {
             store.upsert_node(node.clone());
@@ -197,8 +233,12 @@ impl super::WriterCore {
     }
 
     pub fn get_starmap_store_package_revision(&self, starmap_id: &str) -> u64 {
-        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
-        let store = stores.entry(starmap_id.to_string())
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = stores
+            .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         let _ = store.ensure_loaded();
         store.package_revision()
@@ -211,8 +251,12 @@ impl super::WriterCore {
         default_x: f32,
         default_y: f32,
     ) -> Result<crate::starmap::types::StarMapNode> {
-        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
-        let store = stores.entry(starmap_id.to_string())
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = stores
+            .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_loaded()?;
         let result = store.add_node(node, default_x, default_y);
@@ -228,8 +272,12 @@ impl super::WriterCore {
         node_id: &str,
         patch: crate::starmap::types::StarMapNodePatch,
     ) -> Result<crate::starmap::types::StarMapNode> {
-        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
-        let store = stores.entry(starmap_id.to_string())
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = stores
+            .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_loaded()?;
         store.ensure_object_loaded(node_id)?;
@@ -240,8 +288,12 @@ impl super::WriterCore {
     }
 
     pub fn delete_starmap_node(&self, starmap_id: &str, node_id: &str) -> Result<()> {
-        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
-        let store = stores.entry(starmap_id.to_string())
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = stores
+            .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_loaded()?;
         store.ensure_object_loaded(node_id)?;
@@ -261,8 +313,12 @@ impl super::WriterCore {
         starmap_id: &str,
         edge: crate::starmap::types::StarMapEdge,
     ) -> Result<crate::starmap::types::StarMapEdge> {
-        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
-        let store = stores.entry(starmap_id.to_string())
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = stores
+            .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_loaded()?;
         let result = store.add_edge(edge)?;
@@ -277,8 +333,12 @@ impl super::WriterCore {
         edge_id: &str,
         patch: crate::starmap::types::StarMapEdgePatch,
     ) -> Result<crate::starmap::types::StarMapEdge> {
-        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
-        let store = stores.entry(starmap_id.to_string())
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = stores
+            .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_loaded()?;
         store.ensure_edge_loaded(edge_id)?;
@@ -289,8 +349,12 @@ impl super::WriterCore {
     }
 
     pub fn delete_starmap_edge(&self, starmap_id: &str, edge_id: &str) -> Result<()> {
-        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
-        let store = stores.entry(starmap_id.to_string())
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = stores
+            .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_loaded()?;
         store.ensure_edge_loaded(edge_id)?;
@@ -304,8 +368,12 @@ impl super::WriterCore {
         &self,
         starmap_id: &str,
     ) -> Result<crate::starmap::types::StarMapLayout> {
-        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
-        let store = stores.entry(starmap_id.to_string())
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = stores
+            .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_loaded()?;
         Ok(store.get_layout().cloned().unwrap_or_default())
@@ -318,8 +386,12 @@ impl super::WriterCore {
     ) -> Result<()> {
         validation::validate_layout(layout)?;
 
-        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
-        let store = stores.entry(starmap_id.to_string())
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = stores
+            .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_loaded()?;
         store.set_layout(layout.clone());
@@ -333,8 +405,12 @@ impl super::WriterCore {
         &self,
         starmap_id: &str,
     ) -> Result<crate::starmap::types::StarMapViewport> {
-        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
-        let store = stores.entry(starmap_id.to_string())
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = stores
+            .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_loaded()?;
         Ok(store.get_viewport().cloned().unwrap_or_default())
@@ -347,8 +423,12 @@ impl super::WriterCore {
     ) -> Result<()> {
         validation::validate_viewport(viewport)?;
 
-        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
-        let store = stores.entry(starmap_id.to_string())
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = stores
+            .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_loaded()?;
         store.set_viewport(viewport.clone());
@@ -361,8 +441,12 @@ impl super::WriterCore {
         starmap_id: &str,
         embed: crate::starmap::types::StarMapEmbed,
     ) -> Result<crate::starmap::types::StarMapEmbed> {
-        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
-        let store = stores.entry(starmap_id.to_string())
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = stores
+            .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_loaded()?;
         let result = store.add_embed(embed)?;
@@ -377,8 +461,12 @@ impl super::WriterCore {
         instance_id: &str,
         patch: crate::starmap::types::StarMapEmbedPatch,
     ) -> Result<crate::starmap::types::StarMapEmbed> {
-        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
-        let store = stores.entry(starmap_id.to_string())
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = stores
+            .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_loaded()?;
         store.ensure_embed_loaded(instance_id)?;
@@ -389,8 +477,12 @@ impl super::WriterCore {
     }
 
     pub fn delete_starmap_embed(&self, starmap_id: &str, instance_id: &str) -> Result<()> {
-        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
-        let store = stores.entry(starmap_id.to_string())
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = stores
+            .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_loaded()?;
         store.ensure_embed_loaded(instance_id)?;
@@ -405,8 +497,12 @@ impl super::WriterCore {
         starmap_id: &str,
         link: crate::starmap::types::StarMapLink,
     ) -> Result<crate::starmap::types::StarMapLink> {
-        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
-        let store = stores.entry(starmap_id.to_string())
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = stores
+            .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_loaded()?;
         let result = store.add_link(link)?;
@@ -421,8 +517,12 @@ impl super::WriterCore {
         link_id: &str,
         patch: crate::starmap::types::StarMapLinkPatch,
     ) -> Result<crate::starmap::types::StarMapLink> {
-        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
-        let store = stores.entry(starmap_id.to_string())
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = stores
+            .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_loaded()?;
         store.ensure_link_loaded(link_id)?;
@@ -433,8 +533,12 @@ impl super::WriterCore {
     }
 
     pub fn delete_starmap_link(&self, starmap_id: &str, link_id: &str) -> Result<()> {
-        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
-        let store = stores.entry(starmap_id.to_string())
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = stores
+            .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_loaded()?;
         store.ensure_link_loaded(link_id)?;
@@ -447,9 +551,14 @@ impl super::WriterCore {
     pub fn list_starmap_hyperlinks(
         &self,
         starmap_id: &str,
-    ) -> Result<crate::starmap::store::ListWithDiagnostics<crate::starmap::types::StarMapHyperlink>> {
-        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
-        let store = stores.entry(starmap_id.to_string())
+    ) -> Result<crate::starmap::store::ListWithDiagnostics<crate::starmap::types::StarMapHyperlink>>
+    {
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = stores
+            .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_fully_loaded()?;
         Ok(store.list_hyperlinks_with_diagnostics())
@@ -460,8 +569,12 @@ impl super::WriterCore {
         starmap_id: &str,
         hl: crate::starmap::types::StarMapHyperlink,
     ) -> Result<crate::starmap::types::StarMapHyperlink> {
-        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
-        let store = stores.entry(starmap_id.to_string())
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = stores
+            .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_loaded()?;
         let result = store.add_hyperlink(hl)?;
@@ -477,8 +590,12 @@ impl super::WriterCore {
         label: Option<&str>,
         target_uri: Option<&str>,
     ) -> Result<crate::starmap::types::StarMapHyperlink> {
-        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
-        let store = stores.entry(starmap_id.to_string())
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = stores
+            .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_loaded()?;
         store.ensure_hyperlink_loaded(hyperlink_id)?;
@@ -489,8 +606,12 @@ impl super::WriterCore {
     }
 
     pub fn delete_starmap_hyperlink(&self, starmap_id: &str, hyperlink_id: &str) -> Result<()> {
-        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
-        let store = stores.entry(starmap_id.to_string())
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = stores
+            .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_loaded()?;
         store.ensure_hyperlink_loaded(hyperlink_id)?;
@@ -503,9 +624,14 @@ impl super::WriterCore {
     pub fn list_starmap_links(
         &self,
         starmap_id: &str,
-    ) -> Result<crate::starmap::store::ListWithDiagnostics<crate::starmap::types::StarMapLink>> {
-        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
-        let store = stores.entry(starmap_id.to_string())
+    ) -> Result<crate::starmap::store::ListWithDiagnostics<crate::starmap::types::StarMapLink>>
+    {
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = stores
+            .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.ensure_fully_loaded()?;
         Ok(store.list_links_with_diagnostics())
@@ -516,8 +642,12 @@ impl super::WriterCore {
         starmap_id: &str,
         request: &crate::starmap::store::PhasedSnapshotRequest,
     ) -> Result<crate::starmap::store::StarMapPhasedSnapshot> {
-        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
-        let store = stores.entry(starmap_id.to_string())
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = stores
+            .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
         store.get_phased_snapshot(request)
     }
@@ -534,7 +664,10 @@ impl super::WriterCore {
     }
 
     pub fn close_starmap_store(&self, starmap_id: &str) -> Result<()> {
-        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if let Some(store) = stores.get_mut(starmap_id) {
             if store.is_dirty() || store.has_pending_deletes() || store.save_queue_len() > 0 {
                 store.flush()?;
@@ -545,7 +678,10 @@ impl super::WriterCore {
     }
 
     pub fn flush_starmap_store(&self, starmap_id: &str) -> Result<()> {
-        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if let Some(store) = stores.get_mut(starmap_id) {
             if store.is_dirty() || store.has_pending_deletes() || store.save_queue_len() > 0 {
                 store.flush_save_queue()?;
@@ -555,7 +691,10 @@ impl super::WriterCore {
     }
 
     pub fn flush_all_starmap_stores(&self) -> Result<()> {
-        let mut stores = self.starmap_stores.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         for store in stores.values_mut() {
             if store.is_dirty() || store.has_pending_deletes() || store.save_queue_len() > 0 {
                 store.flush_save_queue()?;

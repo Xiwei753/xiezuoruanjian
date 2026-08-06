@@ -1,17 +1,17 @@
-use super::types::{
-    AnimationMode, EditorAnimationKind, EditorChange, EditorSelection,
-    EditorTransaction, EditorTransactionCause,
-};
-use super::visual::{
-    ClusterRect, ClusterRun, EditorVisualTransaction,
-    HiddenVisualRange, UnifiedTransactionKind, VisualClassKind, VisualCoordinateMode,
-};
-#[cfg(test)]
-use super::visual::EditorAnimationEvent;
 use super::composition::{
     CompositionCommitOrCancelTransaction, CompositionUpdateTransaction, CompositionVisualRevision,
 };
 use super::rebase::{RebaseFrameSnapshot, TransactionRebase};
+use super::types::{
+    AnimationMode, EditorAnimationKind, EditorChange, EditorSelection, EditorTransaction,
+    EditorTransactionCause,
+};
+#[cfg(test)]
+use super::visual::EditorAnimationEvent;
+use super::visual::{
+    ClusterRect, ClusterRun, EditorVisualTransaction, HiddenVisualRange, UnifiedTransactionKind,
+    VisualClassKind, VisualCoordinateMode,
+};
 use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange};
 
 /// 编辑引擎 — 创建 EditorTransaction 和 EditorVisualTransaction 的工厂。
@@ -91,8 +91,8 @@ impl EditorEngine {
     #[cfg(test)]
     #[deprecated(
         since = "0.12.0",
-         note = "Use visual_transaction() instead. This will be removed in a future version."
-     )]
+        note = "Use visual_transaction() instead. This will be removed in a future version."
+    )]
     #[allow(deprecated)]
     pub(crate) fn animation_events(
         &mut self,
@@ -175,12 +175,16 @@ impl EditorEngine {
             EditorChange::Delete { .. } => EditorAnimationKind::Delete,
         };
         let inserted_range = match change {
-            EditorChange::Insert { index, text } => Utf8ByteRange::from_values(index.value(), index.value() + text.len()),
+            EditorChange::Insert { index, text } => {
+                Utf8ByteRange::from_values(index.value(), index.value() + text.len())
+            }
             EditorChange::Delete { .. } => None,
         };
         let deleted_range = match change {
             EditorChange::Insert { .. } => None,
-            EditorChange::Delete { index, text } => Utf8ByteRange::from_values(index.value(), index.value() + text.len()),
+            EditorChange::Delete { index, text } => {
+                Utf8ByteRange::from_values(index.value(), index.value() + text.len())
+            }
         };
 
         let text = change.text();
@@ -320,10 +324,8 @@ impl EditorEngine {
             new_preedit_text.to_string(),
             Utf8ByteRange::from_start_len(0, committed_text.len()),
         );
-        let visual_class_kinds = classify_visual_diff(
-            &old_revision.virtual_text,
-            &new_revision.virtual_text,
-        );
+        let visual_class_kinds =
+            classify_visual_diff(&old_revision.virtual_text, &new_revision.virtual_text);
         CompositionUpdateTransaction {
             id: self.take_animation_id(),
             old_revision,
@@ -352,10 +354,8 @@ impl EditorEngine {
             new_preedit_cursor_offset,
             previous_revision.affected_paragraph_range,
         );
-        let visual_class_kinds = classify_visual_diff(
-            &previous_revision.virtual_text,
-            &new_revision.virtual_text,
-        );
+        let visual_class_kinds =
+            classify_visual_diff(&previous_revision.virtual_text, &new_revision.virtual_text);
         CompositionUpdateTransaction {
             id: self.take_animation_id(),
             old_revision: previous_revision.clone(),
@@ -382,15 +382,9 @@ impl EditorEngine {
         is_commit: bool,
     ) -> CompositionCommitOrCancelTransaction {
         let visual_class_kinds = if is_commit {
-            classify_visual_diff(
-                &composition_revision.virtual_text,
-                committed_text_after,
-            )
+            classify_visual_diff(&composition_revision.virtual_text, committed_text_after)
         } else {
-            classify_visual_diff(
-                &composition_revision.virtual_text,
-                committed_text_before,
-            )
+            classify_visual_diff(&composition_revision.virtual_text, committed_text_before)
         };
         let is_visual_same = composition_revision.virtual_text == committed_text_after;
         CompositionCommitOrCancelTransaction {
@@ -599,7 +593,7 @@ fn should_animate_changes(
 /// 4. 包含复杂 grapheme → ClusterAnimation（整组动画，不跳过）
 /// 5. cluster 数量 1–8 → GlyphAnimation（逐 cluster 动画）
 /// 6. cluster 数量 9–40 → RunAnimation（按 word/run/chunk 分组动画）
-    /// 7. cluster 数量 > 40 → RunAnimation（SnapshotAnimation unavailable，无 snapshot renderer）
+/// 7. cluster 数量 > 40 → RunAnimation（SnapshotAnimation unavailable，无 snapshot renderer）
 #[allow(clippy::too_many_arguments)]
 pub fn choose_animation_mode(
     cluster_count: usize,
@@ -612,7 +606,12 @@ pub fn choose_animation_mode(
     animation_enabled: bool,
 ) -> AnimationMode {
     // 1. 系统抑制条件
-    if !animation_enabled || is_scrolling || is_loading || is_applying_format || is_applying_settings {
+    if !animation_enabled
+        || is_scrolling
+        || is_loading
+        || is_applying_format
+        || is_applying_settings
+    {
         return AnimationMode::SystemSuppressed;
     }
     // 2. 无内容可动画
@@ -647,34 +646,63 @@ pub fn count_grapheme_clusters(text: &str) -> usize {
 /// 检测文本是否包含复杂 grapheme（emoji/ZWJ/组合字符等）
 pub fn text_contains_complex_grapheme(text: &str) -> bool {
     use unicode_segmentation::UnicodeSegmentation;
-    text.graphemes(true).any(|g| g.chars().any(|ch| is_complex_grapheme_code_point(ch as u32)))
+    text.graphemes(true).any(|g| {
+        g.chars()
+            .any(|ch| is_complex_grapheme_code_point(ch as u32))
+    })
 }
 
 /// 检测单个 code point 是否属于复杂 grapheme
 pub fn is_complex_grapheme_code_point(cp: u32) -> bool {
     // Surrogate pairs: code point > 0xFFFF (non-BMP, e.g. emoji)
-    if cp > 0xFFFF { return true; }
+    if cp > 0xFFFF {
+        return true;
+    }
     // Zero Width Joiner
-    if cp == 0x200D { return true; }
+    if cp == 0x200D {
+        return true;
+    }
     // Variation selectors (FE00-FE0F, E0100-E01EF)
-    if (0xFE00..=0xFE0F).contains(&cp) || (0xE0100..=0xE01EF).contains(&cp) { return true; }
+    if (0xFE00..=0xFE0F).contains(&cp) || (0xE0100..=0xE01EF).contains(&cp) {
+        return true;
+    }
     // Combining Diacritical Marks (0300-036F)
-    if (0x0300..=0x036F).contains(&cp) { return true; }
+    if (0x0300..=0x036F).contains(&cp) {
+        return true;
+    }
     // Combining Diacritical Marks Extended (1AB0-1AFF)
-    if (0x1AB0..=0x1AFF).contains(&cp) { return true; }
+    if (0x1AB0..=0x1AFF).contains(&cp) {
+        return true;
+    }
     // Combining Diacritical Marks Supplement (1DC0-1DFF)
-    if (0x1DC0..=0x1DFF).contains(&cp) { return true; }
+    if (0x1DC0..=0x1DFF).contains(&cp) {
+        return true;
+    }
     // Combining Diacritical Marks for Symbols (20D0-20FF)
-    if (0x20D0..=0x20FF).contains(&cp) { return true; }
+    if (0x20D0..=0x20FF).contains(&cp) {
+        return true;
+    }
     // Combining Half Marks (FE20-FE2F)
-    if (0xFE20..=0xFE2F).contains(&cp) { return true; }
+    if (0xFE20..=0xFE2F).contains(&cp) {
+        return true;
+    }
     // Emoji code points (common ranges)
-    if (0x1F600..=0x1F64F).contains(&cp) { return true; }
-    if (0x1F300..=0x1F5FF).contains(&cp) { return true; }
-    if (0x1F680..=0x1F6FF).contains(&cp) { return true; }
-    if (0x1F900..=0x1F9FF).contains(&cp) { return true; }
+    if (0x1F600..=0x1F64F).contains(&cp) {
+        return true;
+    }
+    if (0x1F300..=0x1F5FF).contains(&cp) {
+        return true;
+    }
+    if (0x1F680..=0x1F6FF).contains(&cp) {
+        return true;
+    }
+    if (0x1F900..=0x1F9FF).contains(&cp) {
+        return true;
+    }
     // Regional Indicator (U+1F1E6-U+1F1FF)
-    if (0x1F1E6..=0x1F1FF).contains(&cp) { return true; }
+    if (0x1F1E6..=0x1F1FF).contains(&cp) {
+        return true;
+    }
     false
 }
 
@@ -810,7 +838,9 @@ pub fn split_text_into_clusters(text: &str, base_offset: usize) -> Vec<ClusterRe
     for grapheme in text.graphemes(true) {
         let byte_start = base_offset + (grapheme.as_ptr() as usize - text.as_ptr() as usize);
         let byte_end = byte_start + grapheme.len();
-        let is_complex = grapheme.chars().any(|ch| is_complex_grapheme_code_point(ch as u32));
+        let is_complex = grapheme
+            .chars()
+            .any(|ch| is_complex_grapheme_code_point(ch as u32));
         clusters.push(ClusterRect {
             byte_start: Utf8ByteOffset::unchecked(byte_start),
             byte_end: Utf8ByteOffset::unchecked(byte_end),
@@ -859,4 +889,3 @@ pub(crate) fn common_suffix_byte_len(old_text: &str, new_text: &str, prefix: usi
     }
     suffix
 }
-

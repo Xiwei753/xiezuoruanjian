@@ -1,5 +1,5 @@
-use crate::editor::transaction::EditorChange;
 use crate::editor::strong_types::Utf8ByteOffset;
+use crate::editor::transaction::EditorChange;
 
 /// 可撤销的编辑命令 — forward/inverse 变更对 + 光标位置。
 ///
@@ -20,7 +20,11 @@ pub struct TextEditCommand {
 }
 
 impl TextEditCommand {
-    pub fn new(forward: Vec<EditorChange>, cursor_before: Utf8ByteOffset, cursor_after: Utf8ByteOffset) -> Self {
+    pub fn new(
+        forward: Vec<EditorChange>,
+        cursor_before: Utf8ByteOffset,
+        cursor_after: Utf8ByteOffset,
+    ) -> Self {
         let inverse = compute_inverse(&forward);
         Self {
             forward,
@@ -242,14 +246,26 @@ mod tests {
     #[test]
     fn apply_change_skips_invalid_insert_index() {
         let mut text = "abc".to_string();
-        apply_change(&mut text, &EditorChange::Insert { index: Utf8ByteOffset::unchecked(100), text: "X".into() });
+        apply_change(
+            &mut text,
+            &EditorChange::Insert {
+                index: Utf8ByteOffset::unchecked(100),
+                text: "X".into(),
+            },
+        );
         assert_eq!(text, "abc");
     }
 
     #[test]
     fn apply_change_skips_invalid_delete_range() {
         let mut text = "abc".to_string();
-        apply_change(&mut text, &EditorChange::Delete { index: Utf8ByteOffset::unchecked(100), text: "abc".into() });
+        apply_change(
+            &mut text,
+            &EditorChange::Delete {
+                index: Utf8ByteOffset::unchecked(100),
+                text: "abc".into(),
+            },
+        );
         assert_eq!(text, "abc");
     }
 

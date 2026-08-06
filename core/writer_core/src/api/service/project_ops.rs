@@ -2,13 +2,12 @@ use super::*;
 
 impl WriterCoreApi {
     pub fn create_project(&self, title: &str) -> ApiResult<ProjectDto> {
-        let project: ProjectDto = self.core()
+        let project: ProjectDto = self
+            .core()
             .create_project(title)
             .map(Into::into)
             .map_err(WriterError::from)?;
-        let entry = crate::search::extractor::extract_project_title_entry(
-            &project.id, title,
-        );
+        let entry = crate::search::extractor::extract_project_title_entry(&project.id, title);
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
@@ -21,7 +20,9 @@ impl WriterCoreApi {
         if let Ok(volumes) = volumes_result {
             if let Some(default_vol) = volumes.first() {
                 let vol_entry = crate::search::extractor::extract_volume_title_entry(
-                    &project.id, &default_vol.id, &default_vol.title,
+                    &project.id,
+                    &default_vol.id,
+                    &default_vol.title,
                 );
                 self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
                     action: crate::search::SearchIndexAction::Upsert,
@@ -44,11 +45,8 @@ impl WriterCoreApi {
     }
 
     pub fn rename_project(&self, project_id: &str, new_title: &str) -> ApiResult<bool> {
-        self.core()
-            .rename_project(project_id, new_title)?;
-        let entry = crate::search::extractor::extract_project_title_entry(
-            project_id, new_title,
-        );
+        self.core().rename_project(project_id, new_title)?;
+        let entry = crate::search::extractor::extract_project_title_entry(project_id, new_title);
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
@@ -61,10 +59,11 @@ impl WriterCoreApi {
     }
 
     pub fn delete_project(&self, project_id: &str) -> ApiResult<bool> {
-        let bound_starmaps = self.core().list_starmaps_bound_to_project(project_id)
+        let bound_starmaps = self
+            .core()
+            .list_starmaps_bound_to_project(project_id)
             .unwrap_or_default();
-        self.core()
-            .delete_project(project_id)?;
+        self.core().delete_project(project_id)?;
         for prefix in &[
             format!("project:{}", project_id),
             format!("volume:{}:", project_id),
@@ -95,13 +94,13 @@ impl WriterCoreApi {
     }
 
     pub fn create_volume(&self, project_id: &str, title: &str) -> ApiResult<VolumeDto> {
-        let volume: VolumeDto = self.core()
+        let volume: VolumeDto = self
+            .core()
             .create_volume(project_id, title)
             .map(Into::into)
             .map_err(WriterError::from)?;
-        let entry = crate::search::extractor::extract_volume_title_entry(
-            project_id, &volume.id, title,
-        );
+        let entry =
+            crate::search::extractor::extract_volume_title_entry(project_id, &volume.id, title);
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
@@ -121,9 +120,8 @@ impl WriterCoreApi {
     ) -> ApiResult<bool> {
         self.core()
             .rename_volume(project_id, volume_id, new_title)?;
-        let entry = crate::search::extractor::extract_volume_title_entry(
-            project_id, volume_id, new_title,
-        );
+        let entry =
+            crate::search::extractor::extract_volume_title_entry(project_id, volume_id, new_title);
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),
@@ -136,8 +134,7 @@ impl WriterCoreApi {
     }
 
     pub fn delete_volume(&self, project_id: &str, volume_id: &str) -> ApiResult<bool> {
-        self.core()
-            .delete_volume(project_id, volume_id)?;
+        self.core().delete_volume(project_id, volume_id)?;
         for prefix in &[
             format!("volume:{}:{}", project_id, volume_id),
             format!("chapter_title:{}:{}:", project_id, volume_id),

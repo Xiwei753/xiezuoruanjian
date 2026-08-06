@@ -85,7 +85,11 @@ fn test_recent_edit_dto_serialization_roundtrip() {
     let deserialized: RecentEditDto = serde_json::from_value(json.clone()).unwrap();
     assert_eq!(dto, deserialized);
     let as_object = json.as_object().unwrap();
-    assert_eq!(as_object.len(), 4, "RecentEditDto must have exactly 4 JSON keys");
+    assert_eq!(
+        as_object.len(),
+        4,
+        "RecentEditDto must have exactly 4 JSON keys"
+    );
 }
 
 #[test]

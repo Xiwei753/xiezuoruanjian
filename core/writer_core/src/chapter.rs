@@ -27,8 +27,8 @@
 
 use crate::error::Result;
 use chrono::Utc;
-use serde::{Deserialize, Serialize};
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use uuid::Uuid;
@@ -71,6 +71,13 @@ pub struct ChapterSaveReceipt {
 
 /// 列出项目下所有有效的章节 ID（跨卷扫描）。
 /// 用于同步模块验证远端引用的章节是否存在，不返回章节元数据。
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 pub fn list_valid_chapter_ids(
     workspace_path: &Path,
     project_id: &str,
@@ -111,6 +118,13 @@ pub fn list_valid_chapter_ids(
 /// 列出指定卷下的所有章节，按 `order` 字段升序排列。
 /// 使用 `par_iter` 并行读取各章节的 `chapter.meta.json`，适用于章节数量较多的场景。
 /// 不存在的 meta 文件或解析失败的章节静默跳过（不返回错误）。
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 pub fn list_chapters(
     workspace_path: &Path,
     project_id: &str,
@@ -126,8 +140,7 @@ pub fn list_chapters(
         return Ok(Vec::new());
     }
 
-    let entries: Vec<_> = fs::read_dir(chapters_dir)?
-        .collect::<std::io::Result<Vec<_>>>()?;
+    let entries: Vec<_> = fs::read_dir(chapters_dir)?.collect::<std::io::Result<Vec<_>>>()?;
 
     let mut chapters: Vec<Chapter> = entries
         .into_par_iter()
@@ -792,9 +805,7 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(&meta_path).unwrap()).unwrap();
         assert_eq!(meta_after.title, "New Title");
         assert_eq!(meta_after.id, chapter.id);
-        assert!(
-            meta_after.updated_at >= meta_before.updated_at
-        );
+        assert!(meta_after.updated_at >= meta_before.updated_at);
     }
 
     #[test]
@@ -838,7 +849,8 @@ mod tests {
         assert_eq!(chapter2.title, "第2章");
 
         // 有标题时不应被覆盖
-        let chapter3 = create_chapter(workspace_path, &project.id, &volume.id, "自定义标题").unwrap();
+        let chapter3 =
+            create_chapter(workspace_path, &project.id, &volume.id, "自定义标题").unwrap();
         assert_eq!(chapter3.title, "自定义标题");
 
         // 再创建空标题应生成"第4章"（因为已有3个章节）

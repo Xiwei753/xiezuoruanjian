@@ -82,10 +82,7 @@ pub trait AnimationDriver {
     ///
     /// 如果当前有抑制原因，返回 SystemSuppressed；
     /// 否则返回 Core 决定的 animation_mode。
-    fn effective_animation_mode(
-        &self,
-        core_mode: AnimationMode,
-    ) -> AnimationMode {
+    fn effective_animation_mode(&self, core_mode: AnimationMode) -> AnimationMode {
         if self.should_suppress_animation() {
             AnimationMode::SystemSuppressed
         } else {
@@ -138,7 +135,11 @@ mod tests {
             AnimationSuppressReason::WindowHidden,
         ];
         for reason in reasons {
-            assert!(should_suppress_for_reason(reason), "{:?} should suppress", reason);
+            assert!(
+                should_suppress_for_reason(reason),
+                "{:?} should suppress",
+                reason
+            );
         }
     }
 
@@ -147,7 +148,9 @@ mod tests {
         struct SuppressedDriver;
         impl AnimationDriver for SuppressedDriver {
             fn drive_animation(&mut self, _request: AnimationDriveRequest) {}
-            fn should_suppress_animation(&self) -> bool { true }
+            fn should_suppress_animation(&self) -> bool {
+                true
+            }
             fn current_suppress_reason(&self) -> Option<AnimationSuppressReason> {
                 Some(AnimationSuppressReason::Scrolling)
             }
@@ -168,8 +171,12 @@ mod tests {
         struct ActiveDriver;
         impl AnimationDriver for ActiveDriver {
             fn drive_animation(&mut self, _request: AnimationDriveRequest) {}
-            fn should_suppress_animation(&self) -> bool { false }
-            fn current_suppress_reason(&self) -> Option<AnimationSuppressReason> { None }
+            fn should_suppress_animation(&self) -> bool {
+                false
+            }
+            fn current_suppress_reason(&self) -> Option<AnimationSuppressReason> {
+                None
+            }
             fn notify_animation_suppressed(&mut self, _reason: AnimationSuppressReason) {}
             fn notify_animation_resumed(&mut self) {}
             fn cancel_all_animations(&mut self) {}
@@ -184,11 +191,23 @@ mod tests {
 
     #[test]
     fn cause_should_suppress_load_format_programmatic() {
-        assert!(cause_should_suppress(crate::editor::EditorTransactionCause::Load));
-        assert!(cause_should_suppress(crate::editor::EditorTransactionCause::Format));
-        assert!(cause_should_suppress(crate::editor::EditorTransactionCause::Programmatic));
-        assert!(!cause_should_suppress(crate::editor::EditorTransactionCause::Typing));
-        assert!(!cause_should_suppress(crate::editor::EditorTransactionCause::Delete));
-        assert!(!cause_should_suppress(crate::editor::EditorTransactionCause::Paste));
+        assert!(cause_should_suppress(
+            crate::editor::EditorTransactionCause::Load
+        ));
+        assert!(cause_should_suppress(
+            crate::editor::EditorTransactionCause::Format
+        ));
+        assert!(cause_should_suppress(
+            crate::editor::EditorTransactionCause::Programmatic
+        ));
+        assert!(!cause_should_suppress(
+            crate::editor::EditorTransactionCause::Typing
+        ));
+        assert!(!cause_should_suppress(
+            crate::editor::EditorTransactionCause::Delete
+        ));
+        assert!(!cause_should_suppress(
+            crate::editor::EditorTransactionCause::Paste
+        ));
     }
 }

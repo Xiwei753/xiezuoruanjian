@@ -14,9 +14,8 @@ fn test_starmap_graph_path() {
 
     let path = starmap_graph_path(workspace, starmap_id);
 
-    let expected = std::path::PathBuf::from(
-        "/dummy/workspace/app-meta/starmaps/test_starmap_id/graph.json",
-    );
+    let expected =
+        std::path::PathBuf::from("/dummy/workspace/app-meta/starmaps/test_starmap_id/graph.json");
     assert_eq!(path, expected);
 }
 
@@ -37,9 +36,7 @@ fn test_create_and_list_starmaps() {
 fn test_create_child_starmap() {
     let dir = setup_workspace();
     let parent = create_starmap(dir.path(), "Parent", "", None).unwrap();
-    let child =
-        create_child_starmap(dir.path(), &parent.starmap_id, "Child 1", "", None)
-            .unwrap();
+    let child = create_child_starmap(dir.path(), &parent.starmap_id, "Child 1", "", None).unwrap();
 
     assert_eq!(
         child.parent_starmap_id.as_deref(),
@@ -68,12 +65,8 @@ fn test_bind_and_get_main_starmap() {
 fn test_delete_starmap_no_cascade() {
     let dir = setup_workspace();
     let parent = create_starmap(dir.path(), "Parent", "", None).unwrap();
-    let child1 =
-        create_child_starmap(dir.path(), &parent.starmap_id, "Child 1", "", None)
-            .unwrap();
-    let child2 =
-        create_child_starmap(dir.path(), &parent.starmap_id, "Child 2", "", None)
-            .unwrap();
+    let child1 = create_child_starmap(dir.path(), &parent.starmap_id, "Child 1", "", None).unwrap();
+    let child2 = create_child_starmap(dir.path(), &parent.starmap_id, "Child 2", "", None).unwrap();
 
     delete_starmap(dir.path(), &parent.starmap_id).unwrap();
 
@@ -118,15 +111,24 @@ fn test_delete_starmap_edge_protection() {
         s.load_full().unwrap();
         s.to_starmap_graph()
     };
-    let use_store_save = |ws: &std::path::Path, sid: &str, g: &crate::starmap::types::StarMapGraph| {
-        let mut s = crate::starmap::store::StarMapStore::new(ws, sid);
-        s.load_full().unwrap();
-        for node in &g.nodes { s.upsert_node(node.clone()); }
-        for edge in &g.edges { s.upsert_edge(edge.clone()); }
-        for embed in &g.embeds { s.upsert_embed(embed.clone()); }
-        for link in &g.links { s.upsert_link(link.clone()); }
-        s.flush().unwrap();
-    };
+    let use_store_save =
+        |ws: &std::path::Path, sid: &str, g: &crate::starmap::types::StarMapGraph| {
+            let mut s = crate::starmap::store::StarMapStore::new(ws, sid);
+            s.load_full().unwrap();
+            for node in &g.nodes {
+                s.upsert_node(node.clone());
+            }
+            for edge in &g.edges {
+                s.upsert_edge(edge.clone());
+            }
+            for embed in &g.embeds {
+                s.upsert_embed(embed.clone());
+            }
+            for link in &g.links {
+                s.upsert_link(link.clone());
+            }
+            s.flush().unwrap();
+        };
     let use_store_delete_edge = |ws: &std::path::Path, sid: &str, eid: &str| {
         let mut s = crate::starmap::store::StarMapStore::new(ws, sid);
         s.load_full().unwrap();

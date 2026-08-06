@@ -33,7 +33,10 @@ pub use config_store::{ConfigStore, FileConfigStore};
 pub use network_state::NetworkState;
 pub use platform_capabilities::{PlatformCapabilities, PlatformCapabilitiesExt};
 pub use platform_init::{PlatformInit, PlatformKind, PlatformPaths};
-pub use platform_services::{PlatformServices, PlatformServicesResolver, SyncTransportFactory, register_platform_services_resolver, get_platform_services_resolver};
+pub use platform_services::{
+    get_platform_services_resolver, register_platform_services_resolver, PlatformServices,
+    PlatformServicesResolver, SyncTransportFactory,
+};
 pub use secure_storage::SecureStorage;
 pub use sync_transport::{HttpRequest, HttpResponse, SyncTransport, TransportError};
 
@@ -44,13 +47,34 @@ mod tests {
 
     #[test]
     fn platform_kind_from_str_name() {
-        assert_eq!(PlatformKind::from_str_name("desktop"), Some(PlatformKind::Desktop));
-        assert_eq!(PlatformKind::from_str_name("linux"), Some(PlatformKind::Desktop));
-        assert_eq!(PlatformKind::from_str_name("linux_qt"), Some(PlatformKind::Desktop));
-        assert_eq!(PlatformKind::from_str_name("android"), Some(PlatformKind::Android));
-        assert_eq!(PlatformKind::from_str_name("windows"), Some(PlatformKind::Windows));
-        assert_eq!(PlatformKind::from_str_name("harmony"), Some(PlatformKind::Harmony));
-        assert_eq!(PlatformKind::from_str_name("apple"), Some(PlatformKind::Apple));
+        assert_eq!(
+            PlatformKind::from_str_name("desktop"),
+            Some(PlatformKind::Desktop)
+        );
+        assert_eq!(
+            PlatformKind::from_str_name("linux"),
+            Some(PlatformKind::Desktop)
+        );
+        assert_eq!(
+            PlatformKind::from_str_name("linux_qt"),
+            Some(PlatformKind::Desktop)
+        );
+        assert_eq!(
+            PlatformKind::from_str_name("android"),
+            Some(PlatformKind::Android)
+        );
+        assert_eq!(
+            PlatformKind::from_str_name("windows"),
+            Some(PlatformKind::Windows)
+        );
+        assert_eq!(
+            PlatformKind::from_str_name("harmony"),
+            Some(PlatformKind::Harmony)
+        );
+        assert_eq!(
+            PlatformKind::from_str_name("apple"),
+            Some(PlatformKind::Apple)
+        );
         assert_eq!(PlatformKind::from_str_name("unknown"), None);
     }
 
@@ -222,7 +246,8 @@ mod tests {
             timezone: "Asia/Shanghai".to_string(),
         };
         let dir = tempfile::tempdir().unwrap();
-        let config_store: Box<dyn ConfigStore> = Box::new(FileConfigStore::new(dir.path().to_path_buf()));
+        let config_store: Box<dyn ConfigStore> =
+            Box::new(FileConfigStore::new(dir.path().to_path_buf()));
         let secure_storage: Box<dyn SecureStorage> = Box::new(TestSecureStorage);
         let network_state = NetworkState {
             is_connected: true,
@@ -247,8 +272,14 @@ mod tests {
     struct TestSecureStorage;
 
     impl SecureStorage for TestSecureStorage {
-        fn get_secret(&self, _key: &str) -> Result<Option<Vec<u8>>, String> { Ok(None) }
-        fn set_secret(&self, _key: &str, _value: &[u8]) -> Result<(), String> { Ok(()) }
-        fn delete_secret(&self, _key: &str) -> Result<(), String> { Ok(()) }
+        fn get_secret(&self, _key: &str) -> Result<Option<Vec<u8>>, String> {
+            Ok(None)
+        }
+        fn set_secret(&self, _key: &str, _value: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn delete_secret(&self, _key: &str) -> Result<(), String> {
+            Ok(())
+        }
     }
 }

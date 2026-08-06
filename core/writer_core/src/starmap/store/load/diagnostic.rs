@@ -7,6 +7,13 @@ use super::super::types::*;
 use super::super::StarMapStore;
 
 impl StarMapStore {
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
     pub fn list_hyperlinks_with_diagnostics(&mut self) -> ListWithDiagnostics<StarMapHyperlink> {
         self.reload_graph_meta_if_stale();
         let hl_ids = self.graph_meta_hyperlink_ids();
@@ -42,6 +49,13 @@ impl StarMapStore {
         ListWithDiagnostics { items, diagnostics }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
     pub fn list_links_with_diagnostics(&mut self) -> ListWithDiagnostics<StarMapLink> {
         self.reload_graph_meta_if_stale();
         let link_ids = self.graph_meta_link_ids();
@@ -78,13 +92,15 @@ impl StarMapStore {
     }
 
     pub fn graph_meta_hyperlink_ids(&self) -> Vec<String> {
-        self.graph_meta.as_ref()
+        self.graph_meta
+            .as_ref()
             .map(|m| m.hyperlink_ids.clone())
             .unwrap_or_default()
     }
 
     pub fn graph_meta_link_ids(&self) -> Vec<String> {
-        self.graph_meta.as_ref()
+        self.graph_meta
+            .as_ref()
             .map(|m| m.link_ids.clone())
             .unwrap_or_default()
     }
@@ -97,17 +113,32 @@ impl StarMapStore {
         self.current_load_phase
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
     pub(in crate::starmap::store) fn rebuild_relation_indexes(&mut self) {
-        let edge_ids = self.graph_meta.as_ref()
+        let edge_ids = self
+            .graph_meta
+            .as_ref()
             .map(|m| m.edge_ids.clone())
             .unwrap_or_default();
-        let embed_ids = self.graph_meta.as_ref()
+        let embed_ids = self
+            .graph_meta
+            .as_ref()
             .map(|m| m.embed_instance_ids.clone())
             .unwrap_or_default();
-        let link_ids = self.graph_meta.as_ref()
+        let link_ids = self
+            .graph_meta
+            .as_ref()
             .map(|m| m.link_ids.clone())
             .unwrap_or_default();
-        let hl_ids = self.graph_meta.as_ref()
+        let hl_ids = self
+            .graph_meta
+            .as_ref()
             .map(|m| m.hyperlink_ids.clone())
             .unwrap_or_default();
 
@@ -157,7 +188,9 @@ impl StarMapStore {
             if let Some(link) = self.links.get(link_id) {
                 link_relation_index.push(LinkRelationIndex {
                     link_id: link.link_id.clone(),
-                    source_node_id: endpoint_node_id(&link.source).unwrap_or_default().to_string(),
+                    source_node_id: endpoint_node_id(&link.source)
+                        .unwrap_or_default()
+                        .to_string(),
                 });
             }
         }
@@ -172,14 +205,18 @@ impl StarMapStore {
             if let Some(hl) = self.hyperlinks.get(hl_id) {
                 hyperlink_relation_index.push(HyperlinkRelationIndex {
                     hyperlink_id: hl.hyperlink_id.clone(),
-                    source_node_id: endpoint_path_node_id(&hl.source).unwrap_or_default().to_string(),
+                    source_node_id: endpoint_path_node_id(&hl.source)
+                        .unwrap_or_default()
+                        .to_string(),
                 });
             }
         }
 
         let mut node_kind_counts = HashMap::new();
         for node in self.nodes.values() {
-            *node_kind_counts.entry(format!("{:?}", node.kind)).or_insert(0u32) += 1;
+            *node_kind_counts
+                .entry(format!("{:?}", node.kind))
+                .or_insert(0u32) += 1;
         }
 
         if let Some(ref mut meta) = self.graph_meta {
@@ -191,21 +228,38 @@ impl StarMapStore {
         }
         self.dirty_graph_meta = true;
         self.enqueue_save(SaveQueueEntry::GraphMeta);
-        self.record_migration("rebuild_relation_indexes", "rebuilt relation indexes from object files for no-index legacy package");
+        self.record_migration(
+            "rebuild_relation_indexes",
+            "rebuilt relation indexes from object files for no-index legacy package",
+        );
     }
 
-    pub(in crate::starmap::store) fn prefetch_nearby_objects(&mut self, _diagnostics: &mut Vec<LoadDiagnostic>) {
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
+    pub(in crate::starmap::store) fn prefetch_nearby_objects(
+        &mut self,
+        _diagnostics: &mut Vec<LoadDiagnostic>,
+    ) {
         let loaded_node_ids: HashSet<String> = self.nodes.keys().cloned().collect();
         let mut adjacent_node_ids: HashSet<String> = HashSet::new();
 
-        let has_index = self.graph_meta.as_ref()
+        let has_index = self
+            .graph_meta
+            .as_ref()
             .map(|m| !m.edge_relation_index.is_empty() || m.edge_ids.is_empty())
             .unwrap_or(false);
 
         let mut has_index_after_rebuild = has_index;
         if !has_index {
             self.rebuild_relation_indexes();
-            has_index_after_rebuild = self.graph_meta.as_ref()
+            has_index_after_rebuild = self
+                .graph_meta
+                .as_ref()
                 .map(|m| !m.edge_relation_index.is_empty() || m.edge_ids.is_empty())
                 .unwrap_or(false);
         }
@@ -218,7 +272,10 @@ impl StarMapStore {
                     for node_id in &refs {
                         if loaded_node_ids.contains(*node_id) {
                             for other_id in &refs {
-                                if other_id != node_id && !self.nodes.contains_key(*other_id) && !other_id.is_empty() {
+                                if other_id != node_id
+                                    && !self.nodes.contains_key(*other_id)
+                                    && !other_id.is_empty()
+                                {
                                     adjacent_node_ids.insert(other_id.to_string());
                                 }
                             }
@@ -236,10 +293,14 @@ impl StarMapStore {
             }
         }
 
-        let has_edge_index = self.graph_meta.as_ref()
+        let has_edge_index = self
+            .graph_meta
+            .as_ref()
             .map(|m| !m.edge_relation_index.is_empty() || m.edge_ids.is_empty())
             .unwrap_or(false);
-        let has_embed_index = self.graph_meta.as_ref()
+        let has_embed_index = self
+            .graph_meta
+            .as_ref()
             .map(|m| !m.embed_host_index.is_empty() || m.embed_instance_ids.is_empty())
             .unwrap_or(false);
 
@@ -284,20 +345,40 @@ impl StarMapStore {
         }
     }
 
-    pub(in crate::starmap::store) fn load_remaining_objects(&mut self, _diagnostics: &mut Vec<LoadDiagnostic>) {
-        let all_node_ids = self.graph_meta.as_ref()
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
+    pub(in crate::starmap::store) fn load_remaining_objects(
+        &mut self,
+        _diagnostics: &mut Vec<LoadDiagnostic>,
+    ) {
+        let all_node_ids = self
+            .graph_meta
+            .as_ref()
             .map(|m| m.node_ids.clone())
             .unwrap_or_default();
-        let all_edge_ids = self.graph_meta.as_ref()
+        let all_edge_ids = self
+            .graph_meta
+            .as_ref()
             .map(|m| m.edge_ids.clone())
             .unwrap_or_default();
-        let all_embed_ids = self.graph_meta.as_ref()
+        let all_embed_ids = self
+            .graph_meta
+            .as_ref()
             .map(|m| m.embed_instance_ids.clone())
             .unwrap_or_default();
-        let all_hl_ids = self.graph_meta.as_ref()
+        let all_hl_ids = self
+            .graph_meta
+            .as_ref()
             .map(|m| m.hyperlink_ids.clone())
             .unwrap_or_default();
-        let all_link_ids = self.graph_meta.as_ref()
+        let all_link_ids = self
+            .graph_meta
+            .as_ref()
             .map(|m| m.link_ids.clone())
             .unwrap_or_default();
 
@@ -338,7 +419,10 @@ impl StarMapStore {
         }
     }
 
-    pub(in crate::starmap::store) fn scan_objects_from_disk(&mut self, _diagnostics: &mut Vec<LoadDiagnostic>) {
+    pub(in crate::starmap::store) fn scan_objects_from_disk(
+        &mut self,
+        _diagnostics: &mut Vec<LoadDiagnostic>,
+    ) {
         self.scan_bucketed_dir_insert("nodes", |s, id, diag| {
             if let Some(node) = s.try_load_node(id) {
                 s.nodes.insert(id.to_string(), node);
@@ -371,8 +455,18 @@ impl StarMapStore {
         });
     }
 
-    pub(in crate::starmap::store) fn scan_bucketed_dir_insert<F>(&mut self, subdir: &str, insert_fn: F)
-    where
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
+    pub(in crate::starmap::store) fn scan_bucketed_dir_insert<F>(
+        &mut self,
+        subdir: &str,
+        insert_fn: F,
+    ) where
         F: Fn(&mut Self, &str, &mut Vec<LoadDiagnostic>),
     {
         let base_dir = self.starmap_dir().join(subdir);
@@ -397,7 +491,17 @@ impl StarMapStore {
         }
     }
 
-    pub(in crate::starmap::store) fn detect_dangling_references(&self, diagnostics: &mut Vec<LoadDiagnostic>) {
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
+    pub(in crate::starmap::store) fn detect_dangling_references(
+        &self,
+        diagnostics: &mut Vec<LoadDiagnostic>,
+    ) {
         let node_ids: HashSet<&str> = self.nodes.keys().map(|s| s.as_str()).collect();
         for edge in self.edges.values() {
             if let Some(ref from_id) = edge.from {
@@ -458,27 +562,43 @@ impl StarMapStore {
                         kind: LoadDiagnosticKind::DanglingReference,
                         object_type: "embed".to_string(),
                         object_id: embed.instance_id.clone(),
-                        detail: format!("embed references non-existent source_node_id: {}", source_id),
+                        detail: format!(
+                            "embed references non-existent source_node_id: {}",
+                            source_id
+                        ),
                     });
                 }
             }
         }
     }
 
-    pub(in crate::starmap::store) fn detect_orphan_objects(&self, diagnostics: &mut Vec<LoadDiagnostic>) {
-        let declared_node_ids: HashSet<&str> = self.graph_meta.as_ref()
+    pub(in crate::starmap::store) fn detect_orphan_objects(
+        &self,
+        diagnostics: &mut Vec<LoadDiagnostic>,
+    ) {
+        let declared_node_ids: HashSet<&str> = self
+            .graph_meta
+            .as_ref()
             .map(|m| m.node_ids.iter().map(|s| s.as_str()).collect())
             .unwrap_or_default();
-        let declared_edge_ids: HashSet<&str> = self.graph_meta.as_ref()
+        let declared_edge_ids: HashSet<&str> = self
+            .graph_meta
+            .as_ref()
             .map(|m| m.edge_ids.iter().map(|s| s.as_str()).collect())
             .unwrap_or_default();
-        let declared_embed_ids: HashSet<&str> = self.graph_meta.as_ref()
+        let declared_embed_ids: HashSet<&str> = self
+            .graph_meta
+            .as_ref()
             .map(|m| m.embed_instance_ids.iter().map(|s| s.as_str()).collect())
             .unwrap_or_default();
-        let declared_hl_ids: HashSet<&str> = self.graph_meta.as_ref()
+        let declared_hl_ids: HashSet<&str> = self
+            .graph_meta
+            .as_ref()
             .map(|m| m.hyperlink_ids.iter().map(|s| s.as_str()).collect())
             .unwrap_or_default();
-        let declared_link_ids: HashSet<&str> = self.graph_meta.as_ref()
+        let declared_link_ids: HashSet<&str> = self
+            .graph_meta
+            .as_ref()
             .map(|m| m.link_ids.iter().map(|s| s.as_str()).collect())
             .unwrap_or_default();
 
@@ -489,7 +609,20 @@ impl StarMapStore {
         self.check_orphan_dir("links", &declared_link_ids, "link", diagnostics);
     }
 
-    pub(in crate::starmap::store) fn check_orphan_dir(&self, subdir: &str, declared_ids: &HashSet<&str>, object_type: &str, diagnostics: &mut Vec<LoadDiagnostic>) {
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
+    pub(in crate::starmap::store) fn check_orphan_dir(
+        &self,
+        subdir: &str,
+        declared_ids: &HashSet<&str>,
+        object_type: &str,
+        diagnostics: &mut Vec<LoadDiagnostic>,
+    ) {
         let base_dir = self.starmap_dir().join(subdir);
         if let Ok(bucket_entries) = std::fs::read_dir(&base_dir) {
             for bucket_entry in bucket_entries.flatten() {

@@ -1,5 +1,5 @@
-use super::types::*;
 use super::backend::SearchBackend;
+use super::types::*;
 use super::update_queue::SearchUpdateQueue;
 
 pub struct SearchIndexService {

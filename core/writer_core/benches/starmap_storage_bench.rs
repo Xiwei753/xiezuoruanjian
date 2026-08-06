@@ -2,10 +2,10 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use std::fs;
 use tempfile::tempdir;
-use writer_core::starmap::store::{GraphMeta, StarMapStore};
 use writer_core::starmap::semantic::{
     StarMapDisplayPolicy, StarMapNodeContent, StarMapOpenBehavior, StarMapProvenance,
 };
+use writer_core::starmap::store::{GraphMeta, StarMapStore};
 use writer_core::starmap::types::*;
 
 fn bench_load_starmap(c: &mut Criterion) {

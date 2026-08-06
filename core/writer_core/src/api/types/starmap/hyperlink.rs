@@ -80,11 +80,19 @@ pub struct StarMapHyperlinkListWithDiagnosticsDto {
     pub diagnostics: Vec<LoadDiagnosticDto>,
 }
 
-impl From<crate::starmap::store::ListWithDiagnostics<crate::starmap::types::StarMapHyperlink>> for StarMapHyperlinkListWithDiagnosticsDto {
-    fn from(r: crate::starmap::store::ListWithDiagnostics<crate::starmap::types::StarMapHyperlink>) -> Self {
+impl From<crate::starmap::store::ListWithDiagnostics<crate::starmap::types::StarMapHyperlink>>
+    for StarMapHyperlinkListWithDiagnosticsDto
+{
+    fn from(
+        r: crate::starmap::store::ListWithDiagnostics<crate::starmap::types::StarMapHyperlink>,
+    ) -> Self {
         Self {
             items: r.items.into_iter().map(StarMapHyperlinkDto::from).collect(),
-            diagnostics: r.diagnostics.into_iter().map(LoadDiagnosticDto::from).collect(),
+            diagnostics: r
+                .diagnostics
+                .into_iter()
+                .map(LoadDiagnosticDto::from)
+                .collect(),
         }
     }
 }
@@ -101,10 +109,18 @@ impl From<crate::starmap::store::PhasedSnapshotRequest> for PhasedSnapshotReques
         Self {
             target_phase: match r.target_phase {
                 crate::starmap::store::LoadPhase::GraphMeta => "GraphMeta".to_string(),
-                crate::starmap::store::LoadPhase::ViewportAndLayoutIndex => "ViewportAndLayoutIndex".to_string(),
-                crate::starmap::store::LoadPhase::CurrentViewportObjects => "CurrentViewportObjects".to_string(),
-                crate::starmap::store::LoadPhase::PrefetchNearbyObjects => "PrefetchNearbyObjects".to_string(),
-                crate::starmap::store::LoadPhase::BackgroundFullLoad => "BackgroundFullLoad".to_string(),
+                crate::starmap::store::LoadPhase::ViewportAndLayoutIndex => {
+                    "ViewportAndLayoutIndex".to_string()
+                }
+                crate::starmap::store::LoadPhase::CurrentViewportObjects => {
+                    "CurrentViewportObjects".to_string()
+                }
+                crate::starmap::store::LoadPhase::PrefetchNearbyObjects => {
+                    "PrefetchNearbyObjects".to_string()
+                }
+                crate::starmap::store::LoadPhase::BackgroundFullLoad => {
+                    "BackgroundFullLoad".to_string()
+                }
             },
             since_revision: r.since_revision,
         }
@@ -116,8 +132,12 @@ impl From<PhasedSnapshotRequestDto> for crate::starmap::store::PhasedSnapshotReq
         Self {
             target_phase: match d.target_phase.as_str() {
                 "GraphMeta" => crate::starmap::store::LoadPhase::GraphMeta,
-                "ViewportAndLayoutIndex" => crate::starmap::store::LoadPhase::ViewportAndLayoutIndex,
-                "CurrentViewportObjects" => crate::starmap::store::LoadPhase::CurrentViewportObjects,
+                "ViewportAndLayoutIndex" => {
+                    crate::starmap::store::LoadPhase::ViewportAndLayoutIndex
+                }
+                "CurrentViewportObjects" => {
+                    crate::starmap::store::LoadPhase::CurrentViewportObjects
+                }
                 "BackgroundFullLoad" => crate::starmap::store::LoadPhase::BackgroundFullLoad,
                 _ => crate::starmap::store::LoadPhase::PrefetchNearbyObjects,
             },
@@ -157,10 +177,18 @@ impl From<crate::starmap::store::StarMapPhasedSnapshot> for StarMapPhasedSnapsho
             title: s.title,
             load_phase: match s.load_phase {
                 crate::starmap::store::LoadPhase::GraphMeta => "GraphMeta".to_string(),
-                crate::starmap::store::LoadPhase::ViewportAndLayoutIndex => "ViewportAndLayoutIndex".to_string(),
-                crate::starmap::store::LoadPhase::CurrentViewportObjects => "CurrentViewportObjects".to_string(),
-                crate::starmap::store::LoadPhase::PrefetchNearbyObjects => "PrefetchNearbyObjects".to_string(),
-                crate::starmap::store::LoadPhase::BackgroundFullLoad => "BackgroundFullLoad".to_string(),
+                crate::starmap::store::LoadPhase::ViewportAndLayoutIndex => {
+                    "ViewportAndLayoutIndex".to_string()
+                }
+                crate::starmap::store::LoadPhase::CurrentViewportObjects => {
+                    "CurrentViewportObjects".to_string()
+                }
+                crate::starmap::store::LoadPhase::PrefetchNearbyObjects => {
+                    "PrefetchNearbyObjects".to_string()
+                }
+                crate::starmap::store::LoadPhase::BackgroundFullLoad => {
+                    "BackgroundFullLoad".to_string()
+                }
             },
             package_revision: s.package_revision,
             complete: s.complete,
@@ -177,7 +205,11 @@ impl From<crate::starmap::store::StarMapPhasedSnapshot> for StarMapPhasedSnapsho
             deleted_hyperlink_ids: s.deleted_hyperlink_ids,
             layout: s.layout.map(Into::into),
             viewport: s.viewport.map(Into::into),
-            diagnostics: s.diagnostics.into_iter().map(LoadDiagnosticDto::from).collect(),
+            diagnostics: s
+                .diagnostics
+                .into_iter()
+                .map(LoadDiagnosticDto::from)
+                .collect(),
         }
     }
 }

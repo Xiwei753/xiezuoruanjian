@@ -15,7 +15,10 @@ fn test_get_sync_capability_scenarios() {
     let cap = api.get_sync_capability().unwrap();
     assert!(!cap.can_run);
     assert_eq!(cap.block_reason_code.as_deref(), Some("DISABLED"));
-    assert_eq!(cap.block_message_key.as_deref(), Some("sync.block.disabled"));
+    assert_eq!(
+        cap.block_message_key.as_deref(),
+        Some("sync.block.disabled")
+    );
 
     // 场景 2: 启用但安全存储不可用（WriterCoreApi::new 无 secure_storage）
     let mut config = api.load_sync_config().unwrap();
@@ -25,8 +28,14 @@ fn test_get_sync_capability_scenarios() {
 
     let cap = api.get_sync_capability().unwrap();
     assert!(!cap.can_run);
-    assert_eq!(cap.block_reason_code.as_deref(), Some("SECURE_STORAGE_UNAVAILABLE"));
-    assert_eq!(cap.block_message_key.as_deref(), Some("sync.block.secure_storage_unavailable"));
+    assert_eq!(
+        cap.block_reason_code.as_deref(),
+        Some("SECURE_STORAGE_UNAVAILABLE")
+    );
+    assert_eq!(
+        cap.block_message_key.as_deref(),
+        Some("sync.block.secure_storage_unavailable")
+    );
 
     // 场景 3: 有 URL 但未配置 Token
     let mut config = api.load_sync_config().unwrap();
@@ -40,8 +49,14 @@ fn test_get_sync_capability_scenarios() {
 
     let cap = api.get_sync_capability().unwrap();
     assert!(!cap.can_run);
-    assert_eq!(cap.block_reason_code.as_deref(), Some("SECURE_STORAGE_UNAVAILABLE"));
-    assert_eq!(cap.block_message_key.as_deref(), Some("sync.block.secure_storage_unavailable"));
+    assert_eq!(
+        cap.block_reason_code.as_deref(),
+        Some("SECURE_STORAGE_UNAVAILABLE")
+    );
+    assert_eq!(
+        cap.block_message_key.as_deref(),
+        Some("sync.block.secure_storage_unavailable")
+    );
 
     // 场景 4: 配置齐全，可以运行（需要 secure_storage）
     // WriterCoreApi::new 没有 secure_storage，所以即使配置齐全也会被 SECURE_STORAGE_UNAVAILABLE 阻塞
@@ -61,5 +76,8 @@ fn test_get_sync_capability_remote_url_missing() {
 
     let cap = api.get_sync_capability().unwrap();
     assert!(!cap.can_run);
-    assert_eq!(cap.block_reason_code.as_deref(), Some("SECURE_STORAGE_UNAVAILABLE"));
+    assert_eq!(
+        cap.block_reason_code.as_deref(),
+        Some("SECURE_STORAGE_UNAVAILABLE")
+    );
 }

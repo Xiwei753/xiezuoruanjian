@@ -93,7 +93,11 @@ impl From<crate::starmap::store::LoadDiagnostic> for LoadDiagnosticDto {
             kind: format!("{:?}", d.kind),
             object_type: d.object_type,
             object_id: d.object_id,
-            detail: if d.detail.is_empty() { None } else { Some(d.detail) },
+            detail: if d.detail.is_empty() {
+                None
+            } else {
+                Some(d.detail)
+            },
         }
     }
 }
@@ -105,11 +109,19 @@ pub struct StarMapLinkListWithDiagnosticsDto {
     pub diagnostics: Vec<LoadDiagnosticDto>,
 }
 
-impl From<crate::starmap::store::ListWithDiagnostics<crate::starmap::types::StarMapLink>> for StarMapLinkListWithDiagnosticsDto {
-    fn from(r: crate::starmap::store::ListWithDiagnostics<crate::starmap::types::StarMapLink>) -> Self {
+impl From<crate::starmap::store::ListWithDiagnostics<crate::starmap::types::StarMapLink>>
+    for StarMapLinkListWithDiagnosticsDto
+{
+    fn from(
+        r: crate::starmap::store::ListWithDiagnostics<crate::starmap::types::StarMapLink>,
+    ) -> Self {
         Self {
             items: r.items.into_iter().map(StarMapLinkDto::from).collect(),
-            diagnostics: r.diagnostics.into_iter().map(LoadDiagnosticDto::from).collect(),
+            diagnostics: r
+                .diagnostics
+                .into_iter()
+                .map(LoadDiagnosticDto::from)
+                .collect(),
         }
     }
 }

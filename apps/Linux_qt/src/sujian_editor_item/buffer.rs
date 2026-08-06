@@ -21,8 +21,7 @@ pub struct EditorSnapshot {
 ///
 /// 当前主链：EditorKernel 持有正文真相，CommittedTextMirror 增量同步。
 /// EditorBuffer 的 undo/redo 栈在 Editor V2 模式下不再使用。
-#[derive(Clone, Debug)]
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub struct EditorBuffer {
     pub text: String,
     pub cursor: usize,
@@ -30,7 +29,6 @@ pub struct EditorBuffer {
     pub undo_stack: Vec<EditorSnapshot>,
     pub redo_stack: Vec<EditorSnapshot>,
 }
-
 
 impl EditorBuffer {
     pub fn snapshot(&self) -> EditorSnapshot {

@@ -29,11 +29,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use writer_core::api::WriterCoreApi;
 
-use super::linux_qt_layout_plan_dto::LinuxQtLayoutPlanDto;
 use super::json_utils::{
     bridge_error_object, bridge_success_object, qjson_array_data_from_json, qjson_object_from_json,
     serde_to_qjson_object,
 };
+use super::linux_qt_layout_plan_dto::LinuxQtLayoutPlanDto;
 use crate::{starmap_bridge, sync_bridge, writing_bridge};
 
 cpp! {{
@@ -77,8 +77,10 @@ struct DebugConfig {
 /// 选择 OnceLock 而非 LazyLock/OnceCell：标准库稳定、无需额外依赖。
 static DEBUG_CONFIG: OnceLock<DebugConfig> = OnceLock::new();
 
-static LINUX_SYNC_TRANSPORT_FACTORY: OnceLock<writer_platform_api::SyncTransportFactory> = OnceLock::new();
-static LINUX_SECURE_STORAGE: OnceLock<std::sync::Arc<dyn writer_platform_api::SecureStorage>> = OnceLock::new();
+static LINUX_SYNC_TRANSPORT_FACTORY: OnceLock<writer_platform_api::SyncTransportFactory> =
+    OnceLock::new();
+static LINUX_SECURE_STORAGE: OnceLock<std::sync::Arc<dyn writer_platform_api::SecureStorage>> =
+    OnceLock::new();
 
 pub fn set_linux_sync_transport_factory(factory: writer_platform_api::SyncTransportFactory) {
     LINUX_SYNC_TRANSPORT_FACTORY.set(factory).ok();
@@ -348,11 +350,31 @@ pub struct AppBackend {
 
     // ── Layout Policy ──
     #[allow(dead_code)]
-    resolve_layout: qt_method!(fn(&self, width_dp: f64, height_dp: f64, safe_top_dp: f64, safe_bottom_dp: f64, keyboard_visible: bool, fold_state: QString, fold_orientation: QString, fold_is_separating: bool, fold_occlusion: QString, fold_bounds_left: f64, fold_bounds_top: f64, fold_bounds_right: f64, fold_bounds_bottom: f64, orientation: QString, pointer: QString) -> QJsonObject),
+    resolve_layout: qt_method!(
+        fn(
+            &self,
+            width_dp: f64,
+            height_dp: f64,
+            safe_top_dp: f64,
+            safe_bottom_dp: f64,
+            keyboard_visible: bool,
+            fold_state: QString,
+            fold_orientation: QString,
+            fold_is_separating: bool,
+            fold_occlusion: QString,
+            fold_bounds_left: f64,
+            fold_bounds_top: f64,
+            fold_bounds_right: f64,
+            fold_bounds_bottom: f64,
+            orientation: QString,
+            pointer: QString,
+        ) -> QJsonObject
+    ),
 
     // ── Screen Policy ──
     #[allow(dead_code)]
-    resolve_screen_policy: qt_method!(fn(&self, screen_role: QString, shell_mode: QString) -> QJsonObject),
+    resolve_screen_policy:
+        qt_method!(fn(&self, screen_role: QString, shell_mode: QString) -> QJsonObject),
 }
 
 impl AppBackend {
@@ -420,14 +442,17 @@ impl AppBackend {
         s.setting_typing_animation_enabled = self.current_setting_typing_animation_enabled;
         s.setting_smooth_cursor_duration_ms = self.current_setting_smooth_cursor_duration_ms;
         s.setting_typing_animation_duration_ms = self.current_setting_typing_animation_duration_ms;
-        s.setting_coordinated_text_cursor_animation_enabled = self.current_setting_coordinated_text_cursor_animation_enabled;
+        s.setting_coordinated_text_cursor_animation_enabled =
+            self.current_setting_coordinated_text_cursor_animation_enabled;
         s.has_workspace = self.current_has_workspace;
         s.sync_enabled = self.current_sync_enabled;
         s.sync_auto_sync = self.current_sync_auto_sync;
         s.sync_interval = self.current_sync_interval;
         s.has_sync_token = !self.current_sync_token.is_empty();
         s.sync_in_progress = self.current_sync_in_progress;
-        s.sync_can_run = self.current_has_workspace && self.current_sync_enabled && !self.current_sync_in_progress;
+        s.sync_can_run = self.current_has_workspace
+            && self.current_sync_enabled
+            && !self.current_sync_in_progress;
         s.ai_available = cfg!(feature = "ai");
         s.ai_enabled = self.current_ai_enabled;
         s.setting_desktop_sidebar_width = self.current_setting_desktop_sidebar_width;
@@ -623,8 +648,8 @@ impl AppBackend {
         pointer: QString,
     ) -> QJsonObject {
         use writer_core::layout_policy::{
-            FoldState, FoldOrientation, FoldOcclusion, FoldFeatureInfo,
-            Orientation, PointerKind, WindowMetrics, resolve_layout,
+            resolve_layout, FoldFeatureInfo, FoldOcclusion, FoldOrientation, FoldState,
+            Orientation, PointerKind, WindowMetrics,
         };
 
         let fs = match fold_state.to_string().as_str() {
@@ -683,13 +708,9 @@ impl AppBackend {
     ///
     /// QML 调用：backend.resolve_screen_policy("Writing", "SinglePane")
     /// 返回：{ screenRole: "Writing", actionSlots: [...] }
-    fn resolve_screen_policy(
-        &self,
-        screen_role: QString,
-        shell_mode: QString,
-    ) -> QJsonObject {
-        use writer_core::screen_policy::{ScreenRole, resolve_screen_policy};
+    fn resolve_screen_policy(&self, screen_role: QString, shell_mode: QString) -> QJsonObject {
         use writer_core::layout_policy::ShellMode;
+        use writer_core::screen_policy::{resolve_screen_policy, ScreenRole};
 
         let role = match screen_role.to_string().as_str() {
             "Home" => ScreenRole::Home,
@@ -780,8 +801,7 @@ mod tests {
         backend.current_workspace = ws_path.clone();
         backend.current_has_workspace = true;
 
-        WriterCoreApi::new(&ws_path)
-            .create_workspace_if_needed()?;
+        WriterCoreApi::new(&ws_path).create_workspace_if_needed()?;
 
         // Create 3 projects
         for i in 1..=3 {

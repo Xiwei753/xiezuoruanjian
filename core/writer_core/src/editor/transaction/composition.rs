@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-use super::visual::{CursorRect, DecorationSlice, VisualClassKind, build_virtual_text};
 use super::engine::{common_prefix_byte_len, common_suffix_byte_len};
-use crate::editor::strong_types::{EditorRevision, EditorSessionId, EditorSessionGeneration, Utf8ByteOffset, Utf8ByteRange};
+use super::visual::{build_virtual_text, CursorRect, DecorationSlice, VisualClassKind};
+use crate::editor::strong_types::{
+    EditorRevision, EditorSessionGeneration, EditorSessionId, Utf8ByteOffset, Utf8ByteRange,
+};
 
 /// 预输入视觉修订 — 把预输入改为临时视觉正文版本。
 ///
@@ -32,19 +34,31 @@ pub struct CompositionVisualRevision {
     /// 已提交文本（不含预输入）
     pub committed_text: String,
     /// 预输入替换范围（UTF-8 byte offset，committed 正文坐标）
-    #[serde(default, skip_serializing_if = "Option::is_none", serialize_with = "crate::editor::strong_types::ser_opt_range", deserialize_with = "crate::editor::strong_types::de_opt_range")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::editor::strong_types::ser_opt_range",
+        deserialize_with = "crate::editor::strong_types::de_opt_range"
+    )]
     pub composition_replace_range: Option<Utf8ByteRange>,
     /// 预输入文本
     #[serde(default)]
     pub preedit_text: String,
     /// 预输入光标偏移（preedit 内部 UTF-8 byte offset）
-    #[serde(default, serialize_with = "crate::editor::strong_types::ser_offset", deserialize_with = "crate::editor::strong_types::de_offset")]
+    #[serde(
+        default,
+        serialize_with = "crate::editor::strong_types::ser_offset",
+        deserialize_with = "crate::editor::strong_types::de_offset"
+    )]
     pub preedit_cursor_offset: Utf8ByteOffset,
     /// 虚拟文本 — 仅用于排版和渲染，不写入正文
     #[serde(default)]
     pub virtual_text: String,
     /// 受影响段落范围（UTF-8 byte offset）
-    #[serde(serialize_with = "crate::editor::strong_types::ser_range", deserialize_with = "crate::editor::strong_types::de_range")]
+    #[serde(
+        serialize_with = "crate::editor::strong_types::ser_range",
+        deserialize_with = "crate::editor::strong_types::de_range"
+    )]
     pub affected_paragraph_range: Utf8ByteRange,
     /// 行快照 ID 列表（由平台层填充）
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -56,7 +70,12 @@ pub struct CompositionVisualRevision {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub decoration_ranges: Vec<DecorationSlice>,
     /// IME 光标范围/位置（UTF-8 byte offset）
-    #[serde(default, skip_serializing_if = "Option::is_none", serialize_with = "crate::editor::strong_types::ser_opt_range", deserialize_with = "crate::editor::strong_types::de_opt_range")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::editor::strong_types::ser_opt_range",
+        deserialize_with = "crate::editor::strong_types::de_opt_range"
+    )]
     pub ime_cursor_range: Option<Utf8ByteRange>,
     /// 从上一 CompositionVisualRevision 的偏移映射
     ///
@@ -79,7 +98,8 @@ impl CompositionVisualRevision {
         preedit_text: String,
         affected_paragraph_range: Utf8ByteRange,
     ) -> Self {
-        let composition_replace_range_tuple = composition_replace_range.map(|r| (r.start().value(), r.end().value()));
+        let composition_replace_range_tuple =
+            composition_replace_range.map(|r| (r.start().value(), r.end().value()));
         let virtual_text = build_virtual_text(
             &committed_text,
             composition_replace_range_tuple,
@@ -115,7 +135,9 @@ impl CompositionVisualRevision {
         new_preedit_cursor_offset: usize,
         affected_paragraph_range: Utf8ByteRange,
     ) -> Self {
-        let composition_replace_range_tuple = previous.composition_replace_range.map(|r| (r.start().value(), r.end().value()));
+        let composition_replace_range_tuple = previous
+            .composition_replace_range
+            .map(|r| (r.start().value(), r.end().value()));
         let virtual_text = build_virtual_text(
             &previous.committed_text,
             composition_replace_range_tuple,
@@ -179,10 +201,16 @@ pub struct OffsetMap {
 #[serde(rename_all = "camelCase")]
 pub struct OffsetMapEntry {
     /// old virtualText 中的 UTF-8 byte offset
-    #[serde(serialize_with = "crate::editor::strong_types::ser_offset", deserialize_with = "crate::editor::strong_types::de_offset")]
+    #[serde(
+        serialize_with = "crate::editor::strong_types::ser_offset",
+        deserialize_with = "crate::editor::strong_types::de_offset"
+    )]
     pub old_byte_offset: Utf8ByteOffset,
     /// new virtualText 中的 UTF-8 byte offset
-    #[serde(serialize_with = "crate::editor::strong_types::ser_offset", deserialize_with = "crate::editor::strong_types::de_offset")]
+    #[serde(
+        serialize_with = "crate::editor::strong_types::ser_offset",
+        deserialize_with = "crate::editor::strong_types::de_offset"
+    )]
     pub new_byte_offset: Utf8ByteOffset,
     /// 映射的字符数（UTF-8 bytes）
     pub length: usize,
@@ -206,7 +234,9 @@ impl OffsetMap {
     /// 使用最长公共前缀/后缀算法确定映射区域。
     pub fn build(old_text: &str, new_text: &str) -> Self {
         if old_text.is_empty() || new_text.is_empty() || old_text == new_text {
-            return OffsetMap { entries: Vec::new() };
+            return OffsetMap {
+                entries: Vec::new(),
+            };
         }
 
         let prefix = common_prefix_byte_len(old_text, new_text);
@@ -246,9 +276,7 @@ impl OffsetMap {
     pub fn map_old_to_new(&self, old_byte_offset: usize) -> Option<usize> {
         for entry in &self.entries {
             let entry_old = entry.old_byte_offset.value();
-            if old_byte_offset >= entry_old
-                && old_byte_offset < entry_old + entry.length
-            {
+            if old_byte_offset >= entry_old && old_byte_offset < entry_old + entry.length {
                 let offset_within = old_byte_offset - entry_old;
                 return Some(entry.new_byte_offset.value() + offset_within);
             }
@@ -259,9 +287,7 @@ impl OffsetMap {
     pub fn map_new_to_old(&self, new_byte_offset: usize) -> Option<usize> {
         for entry in &self.entries {
             let entry_new = entry.new_byte_offset.value();
-            if new_byte_offset >= entry_new
-                && new_byte_offset < entry_new + entry.length
-            {
+            if new_byte_offset >= entry_new && new_byte_offset < entry_new + entry.length {
                 let offset_within = new_byte_offset - entry_new;
                 return Some(entry.old_byte_offset.value() + offset_within);
             }
@@ -299,7 +325,11 @@ pub struct CompositionSession {
     #[serde(default)]
     pub preedit_text: String,
     /// 预输入光标偏移（preedit 内部 UTF-8 byte offset）
-    #[serde(default, serialize_with = "crate::editor::strong_types::ser_offset", deserialize_with = "crate::editor::strong_types::de_offset")]
+    #[serde(
+        default,
+        serialize_with = "crate::editor::strong_types::ser_offset",
+        deserialize_with = "crate::editor::strong_types::de_offset"
+    )]
     pub preedit_cursor_offset: Utf8ByteOffset,
     /// 当前视觉修订
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -384,7 +414,10 @@ impl CompositionSession {
                 rev
             }
             None => {
-                let replace_range = Utf8ByteRange::from_values(self.replace_start.value(), self.replace_end_exclusive.value());
+                let replace_range = Utf8ByteRange::from_values(
+                    self.replace_start.value(),
+                    self.replace_end_exclusive.value(),
+                );
                 let mut rev = CompositionVisualRevision::new(
                     self.committed_text_at_start.clone(),
                     replace_range,
@@ -410,8 +443,10 @@ impl CompositionSession {
     /// 会被 clamp 到 committed_text_at_start.len()，并自动交换保证 start <= end。
     /// #517: 只有 setComposingRegion 或平台明确给出替换范围时才能修改 replaceRange。
     pub fn set_composing_region(&mut self, start: usize, end: usize) {
-        self.replace_start = Utf8ByteOffset::unchecked(start.min(self.committed_text_at_start.len()));
-        self.replace_end_exclusive = Utf8ByteOffset::unchecked(end.min(self.committed_text_at_start.len()));
+        self.replace_start =
+            Utf8ByteOffset::unchecked(start.min(self.committed_text_at_start.len()));
+        self.replace_end_exclusive =
+            Utf8ByteOffset::unchecked(end.min(self.committed_text_at_start.len()));
         if self.replace_start.value() > self.replace_end_exclusive.value() {
             std::mem::swap(&mut self.replace_start, &mut self.replace_end_exclusive);
         }
@@ -427,13 +462,18 @@ impl CompositionSession {
         if self.replace_start == self.replace_end_exclusive && self.preedit_text.is_empty() {
             None
         } else {
-            Utf8ByteRange::from_values(self.replace_start.value(), self.replace_end_exclusive.value())
+            Utf8ByteRange::from_values(
+                self.replace_start.value(),
+                self.replace_end_exclusive.value(),
+            )
         }
     }
 
     /// 构造当前虚拟文本。
     pub fn virtual_text(&self) -> String {
-        let range_tuple = self.composition_replace_range().map(|r| (r.start().value(), r.end().value()));
+        let range_tuple = self
+            .composition_replace_range()
+            .map(|r| (r.start().value(), r.end().value()));
         build_virtual_text(
             &self.committed_text_at_start,
             range_tuple,

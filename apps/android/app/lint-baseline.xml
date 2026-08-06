@@ -3,7 +3,9 @@
 
     <!-- 预存问题（#556 UniFFI flavor isolation 起存在，非本轮引入）：uniffi-bindgen
          生成的 writer_core.kt 使用 java.lang.ref.Cleaner（API 33+，minSdk 24）。
-         生成绑定禁止手工修改（AGENTS.md），按 noAi/ai 两个变体的实际生成路径记录。 -->
+         生成绑定禁止手工修改（AGENTS.md），按 noAi 变体的实际生成路径记录。
+         lint 只检查 noAiDebug（见 app/build.gradle.kts lint 块），ai 变体的
+         location 已移除——ai 路径在 noAiDebug 检查中不会出现，保留即失效记录。 -->
     <issue
         id="NewApi"
         message="Call requires API level 33 (current min is 24): `java.lang.ref.Cleaner#create`"
@@ -11,10 +13,6 @@
         errorLine2="                                        ~~~~~~">
         <location
             file="build/generated/writer-uniffi/noAi/kotlin/uniffi/writer_core/writer_core.kt"
-            line="2852"
-            column="41"/>
-        <location
-            file="build/generated/writer-uniffi/ai/kotlin/uniffi/writer_core/writer_core.kt"
             line="2852"
             column="41"/>
     </issue>
@@ -28,10 +26,6 @@
             file="build/generated/writer-uniffi/noAi/kotlin/uniffi/writer_core/writer_core.kt"
             line="2855"
             column="38"/>
-        <location
-            file="build/generated/writer-uniffi/ai/kotlin/uniffi/writer_core/writer_core.kt"
-            line="2855"
-            column="38"/>
     </issue>
 
     <issue
@@ -43,10 +37,160 @@
             file="build/generated/writer-uniffi/noAi/kotlin/uniffi/writer_core/writer_core.kt"
             line="2861"
             column="38"/>
-        <location
-            file="build/generated/writer-uniffi/ai/kotlin/uniffi/writer_core/writer_core.kt"
-            line="2861"
-            column="38"/>
+    </issue>
+
+
+    <!-- 现有代码 lint 技术债（noAiDebug 检查发现，非本轮引入）：
+         LocalContextGetResourceValueCall: Compose 中用 context.getString() 查询资源值，
+         修复需调整为 stringResource() 但该函数仅限 @Composable 上下文，涉及代码结构调整，
+         属独立后续任务。UnusedMaterial3ScaffoldPaddingParameter: Scaffold padding 参数未使用，
+         同属现有 UI 代码技术债。本任务范围是 Gradle 配置与 baseline 清理，不含 lint 修复。 -->
+    <issue
+        id="LocalContextGetResourceValueCall"
+        message="Querying resource values using LocalContext.current"
+        errorLine1="                    editorState = editorState.copy(lastError = context.getString(R.string.starmap_op_failed, label, result.message), operationInProgress = false)"
+        errorLine2="                                                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location file="src/main/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt" line="257" column="64"/>
+    </issue>
+    <issue
+        id="LocalContextGetResourceValueCall"
+        message="Querying resource values using LocalContext.current"
+        errorLine1="                    editorState = editorState.copy(lastError = context.getString(R.string.starmap_op_failed_not_loaded, label), operationInProgress = false)"
+        errorLine2="                                                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location file="src/main/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt" line="261" column="64"/>
+    </issue>
+    <issue
+        id="LocalContextGetResourceValueCall"
+        message="Querying resource values using LocalContext.current"
+        errorLine1="            editorState = editorState.copy(lastError = context.getString(R.string.starmap_op_exception, label, e.message), operationInProgress = false)"
+        errorLine2="                                                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location file="src/main/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt" line="266" column="56"/>
+    </issue>
+    <issue
+        id="LocalContextGetResourceValueCall"
+        message="Querying resource values using LocalContext.current"
+        errorLine1="                            editorState = editorState.copy(layoutSaveError = context.getString(R.string.starmap_layout_save_failed, result.message))"
+        errorLine2="                                                                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location file="src/main/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt" line="316" column="78"/>
+    </issue>
+    <issue
+        id="LocalContextGetResourceValueCall"
+        message="Querying resource values using LocalContext.current"
+        errorLine1="                            editorState = editorState.copy(layoutSaveError = context.getString(R.string.starmap_layout_save_failed_not_loaded))"
+        errorLine2="                                                                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location file="src/main/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt" line="319" column="78"/>
+    </issue>
+    <issue
+        id="LocalContextGetResourceValueCall"
+        message="Querying resource values using LocalContext.current"
+        errorLine1="                    editorState = editorState.copy(layoutSaveError = context.getString(R.string.starmap_layout_save_exception, e.message))"
+        errorLine2="                                                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location file="src/main/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt" line="323" column="70"/>
+    </issue>
+    <issue
+        id="LocalContextGetResourceValueCall"
+        message="Querying resource values using LocalContext.current"
+        errorLine1="                            editorState = editorState.copy(viewportSaveError = context.getString(R.string.starmap_viewport_save_failed, result.message))"
+        errorLine2="                                                                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location file="src/main/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt" line="336" column="80"/>
+    </issue>
+    <issue
+        id="LocalContextGetResourceValueCall"
+        message="Querying resource values using LocalContext.current"
+        errorLine1="                            editorState = editorState.copy(viewportSaveError = context.getString(R.string.starmap_viewport_save_failed_not_loaded))"
+        errorLine2="                                                                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location file="src/main/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt" line="339" column="80"/>
+    </issue>
+    <issue
+        id="LocalContextGetResourceValueCall"
+        message="Querying resource values using LocalContext.current"
+        errorLine1="                    editorState = editorState.copy(viewportSaveError = context.getString(R.string.starmap_viewport_save_exception, e.message))"
+        errorLine2="                                                                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location file="src/main/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt" line="343" column="72"/>
+    </issue>
+    <issue
+        id="LocalContextGetResourceValueCall"
+        message="Querying resource values using LocalContext.current"
+        errorLine1="                                editorState = editorState.copy(layoutSaveError = context.getString(R.string.starmap_layout_save_failed, result.message))"
+        errorLine2="                                                                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location file="src/main/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt" line="388" column="82"/>
+    </issue>
+    <issue
+        id="LocalContextGetResourceValueCall"
+        message="Querying resource values using LocalContext.current"
+        errorLine1="                                editorState = editorState.copy(layoutSaveError = context.getString(R.string.starmap_layout_save_failed_not_loaded))"
+        errorLine2="                                                                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location file="src/main/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt" line="391" column="82"/>
+    </issue>
+    <issue
+        id="LocalContextGetResourceValueCall"
+        message="Querying resource values using LocalContext.current"
+        errorLine1="                        editorState = editorState.copy(layoutSaveError = context.getString(R.string.starmap_layout_save_exception, e.message))"
+        errorLine2="                                                                         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location file="src/main/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt" line="395" column="74"/>
+    </issue>
+    <issue
+        id="LocalContextGetResourceValueCall"
+        message="Querying resource values using LocalContext.current"
+        errorLine1="                                editorState = editorState.copy(viewportSaveError = context.getString(R.string.starmap_viewport_save_failed, result.message))"
+        errorLine2="                                                                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location file="src/main/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt" line="416" column="84"/>
+    </issue>
+    <issue
+        id="LocalContextGetResourceValueCall"
+        message="Querying resource values using LocalContext.current"
+        errorLine1="                                editorState = editorState.copy(viewportSaveError = context.getString(R.string.starmap_viewport_save_failed_not_loaded))"
+        errorLine2="                                                                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location file="src/main/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt" line="419" column="84"/>
+    </issue>
+    <issue
+        id="LocalContextGetResourceValueCall"
+        message="Querying resource values using LocalContext.current"
+        errorLine1="                        editorState = editorState.copy(viewportSaveError = context.getString(R.string.starmap_viewport_save_exception, e.message))"
+        errorLine2="                                                                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location file="src/main/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt" line="423" column="76"/>
+    </issue>
+    <issue
+        id="LocalContextGetResourceValueCall"
+        message="Querying resource values using LocalContext.current"
+        errorLine1="                                val ok = executeOperation(context.getString(R.string.starmap_update_node)) {"
+        errorLine2="                                                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location file="src/main/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt" line="447" column="59"/>
+    </issue>
+    <issue
+        id="LocalContextGetResourceValueCall"
+        message="Querying resource values using LocalContext.current"
+        errorLine1="                        val ok = executeOperation(context.getString(R.string.starmap_update_node)) {"
+        errorLine2="                                                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location file="src/main/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt" line="497" column="51"/>
+    </issue>
+    <issue
+        id="LocalContextGetResourceValueCall"
+        message="Querying resource values using LocalContext.current"
+        errorLine1="                        val ok = executeOperation(context.getString(R.string.starmap_delete_node)) {"
+        errorLine2="                                                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location file="src/main/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt" line="508" column="51"/>
+    </issue>
+    <issue
+        id="LocalContextGetResourceValueCall"
+        message="Querying resource values using LocalContext.current"
+        errorLine1="                    val ok = executeOperation(context.getString(R.string.starmap_add_node)) {"
+        errorLine2="                                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location file="src/main/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt" line="527" column="47"/>
+    </issue>
+    <issue
+        id="LocalContextGetResourceValueCall"
+        message="Querying resource values using LocalContext.current"
+        errorLine1="                    val ok = executeOperation(context.getString(R.string.starmap_add_edge)) {"
+        errorLine2="                                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location file="src/main/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt" line="551" column="47"/>
+    </issue>
+    <issue
+        id="UnusedMaterial3ScaffoldPaddingParameter"
+        message="Content padding parameter _ is not used"
+        errorLine1="        ) { _ -> }"
+        errorLine2="            ~">
+        <location file="src/main/kotlin/com/xiwei/sujian/ui/phone/portrait/PhonePortraitShell.kt" line="70" column="13"/>
     </issue>
 
 </issues>

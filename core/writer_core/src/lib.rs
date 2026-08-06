@@ -3,7 +3,20 @@
 //! 本 crate 是整个应用的**唯一事实来源**（Single Source of Truth）。
 //! 所有文件 I/O、项目管理、同步、格式化、设置规则都在此实现。
 //!
-#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::field_reassign_with_default, deprecated))]
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::field_reassign_with_default,
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity,
+        deprecated
+    )
+)]
 //! ## 架构约束
 //!
 //! - **严格排除 UI 逻辑**：不允许出现动画、窗口管理、输入法、平台特定代码。
@@ -59,10 +72,10 @@ pub mod ffi;
 pub mod layout_policy;
 pub mod project;
 pub mod screen_policy;
+pub mod search;
 pub mod settings;
 pub mod settings_presentation;
 pub mod starmap;
-pub mod search;
 pub mod storage;
 pub mod sync;
 pub mod trash;
@@ -74,30 +87,30 @@ pub use api::*;
 pub use error::{Error, Result};
 
 #[cfg(test)]
+pub mod action_ops_tests;
+#[cfg(test)]
 pub mod chapter_tests;
 #[cfg(test)]
 pub mod dto_contract_tests;
 pub mod facade;
 #[cfg(test)]
-pub mod index_tests;
-#[cfg(test)]
 pub mod fixture_tests;
+#[cfg(test)]
+pub mod index_tests;
 #[cfg(test)]
 pub mod project_tests;
 #[cfg(test)]
 pub mod settings_tests;
 #[cfg(test)]
+pub mod sync_api_tests;
+#[cfg(test)]
 pub mod trash_tests;
 #[cfg(test)]
 pub mod volume_tests;
 #[cfg(test)]
-pub mod sync_api_tests;
-#[cfg(test)]
 pub mod workspace_tests;
 #[cfg(test)]
 pub mod writing_stats_tests;
-#[cfg(test)]
-pub mod action_ops_tests;
 
 use std::path::Path;
 
@@ -153,8 +166,9 @@ pub fn open_workspace_with_init(
         resolver.resolve(&platform_init, &network_state)
     } else {
         let config_dir = platform_init.app_data_dir.join("config");
-        let config_store: Option<Box<dyn writer_platform_api::ConfigStore>> =
-            Some(Box::new(writer_platform_api::FileConfigStore::new(config_dir)));
+        let config_store: Option<Box<dyn writer_platform_api::ConfigStore>> = Some(Box::new(
+            writer_platform_api::FileConfigStore::new(config_dir),
+        ));
 
         writer_platform_api::PlatformServices {
             init: platform_init,
@@ -245,7 +259,11 @@ impl std::error::Error for SecureStorageError {}
 #[uniffi::export(callback_interface)]
 pub trait SecureStorageProvider: Send + Sync {
     fn get_secret(&self, key: String) -> std::result::Result<Option<Vec<u8>>, SecureStorageError>;
-    fn set_secret(&self, key: String, value: Vec<u8>) -> std::result::Result<(), SecureStorageError>;
+    fn set_secret(
+        &self,
+        key: String,
+        value: Vec<u8>,
+    ) -> std::result::Result<(), SecureStorageError>;
     fn delete_secret(&self, key: String) -> std::result::Result<(), SecureStorageError>;
 }
 
@@ -253,15 +271,21 @@ struct CallbackSecureStorage(Box<dyn SecureStorageProvider>);
 
 impl writer_platform_api::SecureStorage for CallbackSecureStorage {
     fn get_secret(&self, key: &str) -> std::result::Result<Option<Vec<u8>>, String> {
-        self.0.get_secret(key.to_string()).map_err(|e| e.to_string())
+        self.0
+            .get_secret(key.to_string())
+            .map_err(|e| e.to_string())
     }
 
     fn set_secret(&self, key: &str, value: &[u8]) -> std::result::Result<(), String> {
-        self.0.set_secret(key.to_string(), value.to_vec()).map_err(|e| e.to_string())
+        self.0
+            .set_secret(key.to_string(), value.to_vec())
+            .map_err(|e| e.to_string())
     }
 
     fn delete_secret(&self, key: &str) -> std::result::Result<(), String> {
-        self.0.delete_secret(key.to_string()).map_err(|e| e.to_string())
+        self.0
+            .delete_secret(key.to_string())
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -279,12 +303,13 @@ pub fn open_workspace_with_secure_storage(
     let platform_init: writer_platform_api::PlatformInit = init.clone().into();
     let network_state: writer_platform_api::NetworkState = init.into();
 
-    let secure_storage_impl: Option<Box<dyn writer_platform_api::SecureStorage>> =
-        secure_storage.map(|p| Box::new(CallbackSecureStorage(p)) as Box<dyn writer_platform_api::SecureStorage>);
+    let secure_storage_impl: Option<Box<dyn writer_platform_api::SecureStorage>> = secure_storage
+        .map(|p| Box::new(CallbackSecureStorage(p)) as Box<dyn writer_platform_api::SecureStorage>);
 
     let config_dir = platform_init.app_data_dir.join("config");
-    let config_store: Option<Box<dyn writer_platform_api::ConfigStore>> =
-        Some(Box::new(writer_platform_api::FileConfigStore::new(config_dir)));
+    let config_store: Option<Box<dyn writer_platform_api::ConfigStore>> = Some(Box::new(
+        writer_platform_api::FileConfigStore::new(config_dir),
+    ));
 
     let services = if let Some(resolver) = writer_platform_api::get_platform_services_resolver() {
         let mut resolved = resolver.resolve(&platform_init, &network_state);

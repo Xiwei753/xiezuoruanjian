@@ -5,6 +5,13 @@ use super::super::relation_index::*;
 use super::super::StarMapStore;
 
 impl StarMapStore {
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
     pub fn upsert_node(&mut self, node: StarMapNode) {
         let node_id = node.id.clone();
         let kind_key = format!("{:?}", node.kind);
@@ -27,6 +34,13 @@ impl StarMapStore {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
     pub fn remove_node(&mut self, node_id: &str) {
         if let Some(node) = self.nodes.get(node_id) {
             let kind_key = format!("{:?}", node.kind);
@@ -44,17 +58,16 @@ impl StarMapStore {
         }
         if let Some(ref mut meta) = self.graph_meta {
             meta.node_ids.retain(|id| id != node_id);
-            meta.deleted_since_last_sync.add_entry("node", node_id, self.package_revision.saturating_add(1));
+            meta.deleted_since_last_sync.add_entry(
+                "node",
+                node_id,
+                self.package_revision.saturating_add(1),
+            );
         }
         self.dirty_graph_meta = true;
     }
 
-    pub fn add_node(
-        &mut self,
-        node: StarMapNode,
-        default_x: f32,
-        default_y: f32,
-    ) -> StarMapNode {
+    pub fn add_node(&mut self, node: StarMapNode, default_x: f32, default_y: f32) -> StarMapNode {
         let result = node.clone();
         self.upsert_node(node);
         if let Some(ref mut layout) = self.layout {
@@ -77,6 +90,13 @@ impl StarMapStore {
         result
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
     pub fn update_node(&mut self, node_id: &str, patch: &StarMapNodePatch) -> Result<StarMapNode> {
         if !self.nodes.contains_key(node_id) {
             self.ensure_object_loaded(node_id)?;
@@ -87,7 +107,9 @@ impl StarMapStore {
                 "Node not found",
             ))
         })?;
-        if let Some(ref t) = patch.title { node.title = t.clone(); }
+        if let Some(ref t) = patch.title {
+            node.title = t.clone();
+        }
         if let Some(ref k) = patch.kind {
             let old_kind_key = format!("{:?}", node.kind);
             let new_kind_key = format!("{:?}", k);
@@ -102,14 +124,30 @@ impl StarMapStore {
             }
             node.kind = k.clone();
         }
-        if let Some(ref p) = patch.payload { node.payload = p.clone(); }
-        if let Some(ref t) = patch.tags { node.tags = t.clone(); }
-        if let Some(ref c) = patch.content { node.content = c.clone(); }
-        if let Some(ref a) = patch.anchors { node.anchors = a.clone(); }
-        if let Some(ref p) = patch.portal { node.portal = p.clone(); }
-        if let Some(ref dp) = patch.display_policy { node.display_policy = dp.clone(); }
-        if let Some(ref ob) = patch.open_behavior { node.open_behavior = ob.clone(); }
-        if let Some(ref p) = patch.provenance { node.provenance = p.clone(); }
+        if let Some(ref p) = patch.payload {
+            node.payload = p.clone();
+        }
+        if let Some(ref t) = patch.tags {
+            node.tags = t.clone();
+        }
+        if let Some(ref c) = patch.content {
+            node.content = c.clone();
+        }
+        if let Some(ref a) = patch.anchors {
+            node.anchors = a.clone();
+        }
+        if let Some(ref p) = patch.portal {
+            node.portal = p.clone();
+        }
+        if let Some(ref dp) = patch.display_policy {
+            node.display_policy = dp.clone();
+        }
+        if let Some(ref ob) = patch.open_behavior {
+            node.open_behavior = ob.clone();
+        }
+        if let Some(ref p) = patch.provenance {
+            node.provenance = p.clone();
+        }
         node.updated_at = crate::starmap::now_epoch();
         let updated = node.clone();
         self.dirty_nodes.insert(node_id.to_string());
@@ -127,32 +165,52 @@ impl StarMapStore {
             )));
         }
 
-        let edge_ids_to_remove: Vec<String> = self.graph_meta.as_ref()
-            .map(|m| m.edge_relation_index.iter()
-                .filter(|eri| extract_eri_node_refs(eri).contains(&node_id))
-                .map(|eri| eri.edge_id.clone())
-                .collect())
+        let edge_ids_to_remove: Vec<String> = self
+            .graph_meta
+            .as_ref()
+            .map(|m| {
+                m.edge_relation_index
+                    .iter()
+                    .filter(|eri| extract_eri_node_refs(eri).contains(&node_id))
+                    .map(|eri| eri.edge_id.clone())
+                    .collect()
+            })
             .unwrap_or_default();
 
-        let embed_ids_to_remove: Vec<String> = self.graph_meta.as_ref()
-            .map(|m| m.embed_host_index.iter()
-                .filter(|ehi| extract_ehi_node_refs(ehi).contains(&node_id))
-                .map(|ehi| ehi.instance_id.clone())
-                .collect())
+        let embed_ids_to_remove: Vec<String> = self
+            .graph_meta
+            .as_ref()
+            .map(|m| {
+                m.embed_host_index
+                    .iter()
+                    .filter(|ehi| extract_ehi_node_refs(ehi).contains(&node_id))
+                    .map(|ehi| ehi.instance_id.clone())
+                    .collect()
+            })
             .unwrap_or_default();
 
-        let link_ids_to_remove: Vec<String> = self.graph_meta.as_ref()
-            .map(|m| m.link_relation_index.iter()
-                .filter(|lri| lri.source_node_id == node_id)
-                .map(|lri| lri.link_id.clone())
-                .collect())
+        let link_ids_to_remove: Vec<String> = self
+            .graph_meta
+            .as_ref()
+            .map(|m| {
+                m.link_relation_index
+                    .iter()
+                    .filter(|lri| lri.source_node_id == node_id)
+                    .map(|lri| lri.link_id.clone())
+                    .collect()
+            })
             .unwrap_or_default();
 
-        let hyperlink_ids_to_remove: Vec<String> = self.graph_meta.as_ref()
-            .map(|m| m.hyperlink_relation_index.iter()
-                .filter(|hri| hri.source_node_id == node_id)
-                .map(|hri| hri.hyperlink_id.clone())
-                .collect())
+        let hyperlink_ids_to_remove: Vec<String> = self
+            .graph_meta
+            .as_ref()
+            .map(|m| {
+                m.hyperlink_relation_index
+                    .iter()
+                    .filter(|hri| hri.source_node_id == node_id)
+                    .map(|hri| hri.hyperlink_id.clone())
+                    .collect()
+            })
             .unwrap_or_default();
 
         self.remove_node(node_id);

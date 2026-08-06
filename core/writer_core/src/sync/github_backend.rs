@@ -58,12 +58,13 @@ impl GitHubApiBackend {
     }
 
     fn ensure_transport(&self) -> crate::Result<&dyn SyncTransport> {
-        self.transport
-            .as_ref()
-            .map(|t| t.as_ref())
-            .ok_or_else(|| crate::Error::SyncNetworkUnavailable {
-                reason: "No SyncTransport configured — platform must inject HTTP transport before sync".to_string(),
-            })
+        self.transport.as_ref().map(|t| t.as_ref()).ok_or_else(|| {
+            crate::Error::SyncNetworkUnavailable {
+                reason:
+                    "No SyncTransport configured — platform must inject HTTP transport before sync"
+                        .to_string(),
+            }
+        })
     }
 
     fn transport_err_to_core(e: TransportError) -> crate::Error {
@@ -83,11 +84,16 @@ impl GitHubApiBackend {
             headers: vec![
                 ("Authorization".to_string(), format!("Bearer {}", token)),
                 ("User-Agent".to_string(), "WriterApp/1.0".to_string()),
-                ("Accept".to_string(), "application/vnd.github+json".to_string()),
+                (
+                    "Accept".to_string(),
+                    "application/vnd.github+json".to_string(),
+                ),
             ],
             body: None,
         };
-        transport.execute(request).map_err(Self::transport_err_to_core)
+        transport
+            .execute(request)
+            .map_err(Self::transport_err_to_core)
     }
 
     /// 从远程 URL 推导 GitHub API base URL。
@@ -115,6 +121,19 @@ impl Default for GitHubApiBackend {
 }
 
 impl SyncBackend for GitHubApiBackend {
+    // TODO(#597): 既有代码可读性技术债，待后续重构拆分
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_possible_wrap,
+        clippy::cast_lossless,
+        deprecated
+    )]
     fn diagnose(
         &self,
         config: &SyncConfig,

@@ -1,6 +1,6 @@
 use crate::api::{
-    LocalSettingsDto, SyncableSettingsDto, SyncConfigDto, SyncSecretsDto, SyncStateDto,
-    SyncCapabilityDto, WriterError,
+    LocalSettingsDto, SyncCapabilityDto, SyncConfigDto, SyncSecretsDto, SyncStateDto,
+    SyncableSettingsDto, WriterError,
 };
 
 impl super::WriterAppService {

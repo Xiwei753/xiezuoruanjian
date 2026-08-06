@@ -7,19 +7,60 @@
 // SAFETY: dead_code/deprecated/unused — Qt/QML FFI 调用方对 Rust 不可见，crate-wide allow 不可避免
 #![allow(dead_code)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-#![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_possible_wrap, clippy::cast_lossless)]
-#![allow(clippy::too_many_arguments, clippy::module_inception, clippy::type_complexity)]
-#![allow(clippy::redundant_closure, clippy::redundant_pattern, clippy::field_reassign_with_default)]
-#![allow(clippy::map_identity, clippy::clone_on_copy, clippy::needless_range_loop)]
-#![allow(clippy::identity_op, clippy::bool_assert_comparison, clippy::eq_op, clippy::double_must_use)]
-#![allow(clippy::items_after_test_module, clippy::same_functions_in_if_condition)]
-#![allow(clippy::option_map_unit_fn, clippy::match_same_arms, clippy::redundant_field_names)]
-#![allow(clippy::get_first, clippy::format_in_format_args, clippy::let_and_return)]
-#![allow(clippy::transmute_ptr_to_ptr, clippy::transmute_ptr_to_ref, clippy::useless_transmute)]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_lossless
+)]
+#![allow(
+    clippy::too_many_arguments,
+    clippy::module_inception,
+    clippy::type_complexity
+)]
+#![allow(
+    clippy::redundant_closure,
+    clippy::redundant_pattern,
+    clippy::field_reassign_with_default
+)]
+#![allow(
+    clippy::map_identity,
+    clippy::clone_on_copy,
+    clippy::needless_range_loop
+)]
+#![allow(
+    clippy::identity_op,
+    clippy::bool_assert_comparison,
+    clippy::eq_op,
+    clippy::double_must_use
+)]
+#![allow(
+    clippy::items_after_test_module,
+    clippy::same_functions_in_if_condition
+)]
+#![allow(
+    clippy::option_map_unit_fn,
+    clippy::match_same_arms,
+    clippy::redundant_field_names
+)]
+#![allow(
+    clippy::get_first,
+    clippy::format_in_format_args,
+    clippy::let_and_return
+)]
+#![allow(
+    clippy::transmute_ptr_to_ptr,
+    clippy::transmute_ptr_to_ref,
+    clippy::useless_transmute
+)]
 #![allow(clippy::len_zero)]
 #![allow(clippy::get_unwrap, clippy::redundant_clone)]
 #![allow(clippy::if_same_then_else)]
-#![allow(clippy::question_mark, clippy::vec_init_then_push, clippy::collapsible_if)]
+#![allow(
+    clippy::question_mark,
+    clippy::vec_init_then_push,
+    clippy::collapsible_if
+)]
 #![allow(clippy::manual_clamp, clippy::unnecessary_cast)]
 #![allow(clippy::wrong_self_convention)]
 // SAFETY: unused/deprecated — Qt/QML FFI 调用方对 Rust 不可见
@@ -59,7 +100,6 @@
 // 编辑器渲染由 EditorController + SujianEditorItem 独立管理，
 // 遵守 Qt QSG 线程边界，不受 LayoutPlan 影响。
 // =============================================================================
-
 #![recursion_limit = "8192"]
 //! Linux_qt 客户端入口：只负责 Qt/QML 启动、资源注册和顶层 Backend 注册。
 
@@ -75,10 +115,10 @@ use std::sync::{Mutex, OnceLock};
 mod backend;
 mod editor;
 mod platform;
+mod platform_utils;
 mod starmap_bridge;
 mod sujian_editor_item;
 mod sync_bridge;
-mod platform_utils;
 mod writing_bridge;
 
 use backend::app_backend::{debug_error_static, debug_log_static, debug_warn_static};
@@ -344,8 +384,13 @@ impl DesktopRuntimeProfile {
     fn collect(qt_version: &str, qml_entry: &str) -> Self {
         let appimage = std::env::var_os("APPIMAGE").is_some();
         let bundled_qt = appimage;
-        let runtime_profile = if appimage { "linux-appimage" } else { "linux-debug" };
-        let qt_plugin_path = std::env::var("QT_PLUGIN_PATH").unwrap_or_else(|_| "<unset>".to_string());
+        let runtime_profile = if appimage {
+            "linux-appimage"
+        } else {
+            "linux-debug"
+        };
+        let qt_plugin_path =
+            std::env::var("QT_PLUGIN_PATH").unwrap_or_else(|_| "<unset>".to_string());
         let qml_import_path = std::env::var("QML2_IMPORT_PATH")
             .or_else(|_| std::env::var("QML_IMPORT_PATH"))
             .unwrap_or_else(|_| "<unset>".to_string());
@@ -418,19 +463,26 @@ fn install_translator() {
     if loaded {
         debug_log_static("app", "i18n", "QTranslator loaded successfully (zh_CN)");
     } else {
-        debug_log_static("app", "i18n", "QTranslator not loaded; running with source strings");
+        debug_log_static(
+            "app",
+            "i18n",
+            "QTranslator not loaded; running with source strings",
+        );
     }
 }
 
 fn main() {
     // ===== 平台适配层初始化：注入配置存储和同步传输 =====
     writer_platform_linux::init_default_config_store();
-    if let Ok(services) = std::panic::catch_unwind(writer_platform_linux::create_platform_services) {
+    if let Ok(services) = std::panic::catch_unwind(writer_platform_linux::create_platform_services)
+    {
         if let Some(factory) = services.sync_transport_factory {
             crate::backend::app_backend::set_linux_sync_transport_factory(factory);
         }
         if let Some(secure_storage) = services.secure_storage {
-            crate::backend::app_backend::set_linux_secure_storage(std::sync::Arc::from(secure_storage));
+            crate::backend::app_backend::set_linux_secure_storage(std::sync::Arc::from(
+                secure_storage,
+            ));
         }
         // 初始网络状态已在 create_platform_services 内缓存
     }
@@ -450,23 +502,27 @@ fn main() {
     diagnostics::install_panic_hook();
 
     debug_log_static("app", "app_startup", "Sujian application starting...");
-    diagnostics::log_to_file("INFO", "app", "app_startup", "Sujian application starting...");
+    diagnostics::log_to_file(
+        "INFO",
+        "app",
+        "app_startup",
+        "Sujian application starting...",
+    );
 
     // 注入 Qt 运行时版本到 diagnostics 模块（避免运行时调用 qmake 命令）
     let qt_ver = qt_runtime_version();
     diagnostics::set_qt_version(&qt_ver);
-    debug_log_static("app", "qt_version", &format!("Qt runtime version: {}", qt_ver));
+    debug_log_static(
+        "app",
+        "qt_version",
+        &format!("Qt runtime version: {}", qt_ver),
+    );
 
     fail_if_not_qt6();
     std::env::set_var("QT_QUICK_CONTROLS_STYLE", "Basic");
     qml_resources();
     probe_hub_header_resource();
-    qmetaobject::qml_register_type::<AppBackend>(
-        c"SujianApp",
-        1,
-        0,
-        c"AppBackend",
-    );
+    qmetaobject::qml_register_type::<AppBackend>(c"SujianApp", 1, 0, c"AppBackend");
     qmetaobject::qml_register_type::<sujian_editor_item::SujianEditorItem>(
         c"Sujian",
         1,
@@ -505,7 +561,6 @@ fn main() {
 
     engine.load_file(qml_path.into());
     install_message_handler(prev_handler);
-
 
     if QML_LOAD_FAILED.load(Ordering::SeqCst) {
         let last_error = last_qml_load_error();

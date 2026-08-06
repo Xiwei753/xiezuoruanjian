@@ -1,5 +1,5 @@
-use writer_core::editor::Utf8ByteOffset;
 use super::*;
+use writer_core::editor::Utf8ByteOffset;
 
 impl SujianEditorItem {
     pub(crate) fn update_preedit_visual_state(&mut self) {
@@ -210,8 +210,7 @@ impl SujianEditorItem {
             new_text.len()
         ));
 
-        if let Some(ref _vt) = self.pipeline.composition().preedit_visual_transaction {
-        }
+        if let Some(ref _vt) = self.pipeline.composition().preedit_visual_transaction {}
     }
 
     pub(crate) fn compute_preedit_cursor_rect(&mut self) {

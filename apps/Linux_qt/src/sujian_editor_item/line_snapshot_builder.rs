@@ -22,10 +22,8 @@ use super::layout_snapshot::{
     ShapingIdentity, SourceRect,
 };
 use super::line_snapshot::LineTextureStore;
-use crate::editor::layout::{
-    CanonicalDocumentVisualSnapshot, CanonicalLineSnapshot, VisualLine,
-};
 use crate::editor::layout;
+use crate::editor::layout::{CanonicalDocumentVisualSnapshot, CanonicalLineSnapshot, VisualLine};
 use crate::editor::paragraph_index_map::ParagraphIndexMap;
 
 pub(crate) struct LineSnapshotBuilder;
@@ -55,7 +53,11 @@ impl LineSnapshotBuilder {
                     continue;
                 }
 
-                let baseline_y = layout::text_baseline_y(line, doc_snapshot.font_size, &doc_snapshot.font_family);
+                let baseline_y = layout::text_baseline_y(
+                    line,
+                    doc_snapshot.font_size,
+                    &doc_snapshot.font_family,
+                );
                 let id = LineSnapshotId::new(revision.0, paragraph_id, visual_line_ordinal);
 
                 line_snapshots.push(PreparedLineSnapshot {
@@ -95,9 +97,10 @@ impl LineSnapshotBuilder {
                 continue;
             }
 
-            let canonical_para = doc_snapshot.paragraphs.iter().find(|p| {
-                p.paragraph_document_byte_start == line.para_start
-            });
+            let canonical_para = doc_snapshot
+                .paragraphs
+                .iter()
+                .find(|p| p.paragraph_document_byte_start == line.para_start);
 
             let (image, clusters) = if let Some(canonical) = canonical_para {
                 let canonical_line = canonical.lines.get(line.qtextline_idx as usize);
@@ -110,7 +113,8 @@ impl LineSnapshotBuilder {
                 (None, Vec::new())
             };
 
-            let baseline_y = layout::text_baseline_y(line, doc_snapshot.font_size, &doc_snapshot.font_family);
+            let baseline_y =
+                layout::text_baseline_y(line, doc_snapshot.font_size, &doc_snapshot.font_family);
             let wrap_w = line.line_wrap_width + line.line_indent_x;
             let id = LineSnapshotId::new(revision.0, paragraph_id, visual_line_ordinal);
 
@@ -155,12 +159,10 @@ impl LineSnapshotBuilder {
         scroll_y: f64,
         viewport_h: f64,
     ) -> (EditorLayoutSnapshot, EditorLayoutSnapshot) {
-        let old_layout = Self::build_from_canonical_document(
-            old_revision, old_doc, scroll_y, viewport_h,
-        );
-        let new_layout = Self::build_from_canonical_document(
-            new_revision, new_doc, scroll_y, viewport_h,
-        );
+        let old_layout =
+            Self::build_from_canonical_document(old_revision, old_doc, scroll_y, viewport_h);
+        let new_layout =
+            Self::build_from_canonical_document(new_revision, new_doc, scroll_y, viewport_h);
         (old_layout, new_layout)
     }
 

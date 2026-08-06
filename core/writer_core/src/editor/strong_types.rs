@@ -24,29 +24,47 @@ pub(crate) fn de_range<'de, D: Deserializer<'de>>(d: D) -> Result<Utf8ByteRange,
     Ok(Utf8ByteRange::from_values(start, end).unwrap_or_else(Utf8ByteRange::zero))
 }
 
-pub(crate) fn ser_opt_range<S: Serializer>(opt: &Option<Utf8ByteRange>, s: S) -> Result<S::Ok, S::Error> {
+pub(crate) fn ser_opt_range<S: Serializer>(
+    opt: &Option<Utf8ByteRange>,
+    s: S,
+) -> Result<S::Ok, S::Error> {
     match opt {
         None => s.serialize_none(),
         Some(range) => ser_range(range, s),
     }
 }
 
-pub(crate) fn de_opt_range<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Utf8ByteRange>, D::Error> {
+pub(crate) fn de_opt_range<'de, D: Deserializer<'de>>(
+    d: D,
+) -> Result<Option<Utf8ByteRange>, D::Error> {
     let opt: Option<(usize, usize)> = Option::deserialize(d)?;
     Ok(opt.and_then(|(s, e)| Utf8ByteRange::from_values(s, e)))
 }
 
-pub(crate) fn ser_range_vec<S: Serializer>(ranges: &[Utf8ByteRange], s: S) -> Result<S::Ok, S::Error> {
-    let tuples: Vec<(usize, usize)> = ranges.iter().map(|r| (r.start().value(), r.end().value())).collect();
+pub(crate) fn ser_range_vec<S: Serializer>(
+    ranges: &[Utf8ByteRange],
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    let tuples: Vec<(usize, usize)> = ranges
+        .iter()
+        .map(|r| (r.start().value(), r.end().value()))
+        .collect();
     tuples.serialize(s)
 }
 
-pub(crate) fn de_range_vec<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Utf8ByteRange>, D::Error> {
+pub(crate) fn de_range_vec<'de, D: Deserializer<'de>>(
+    d: D,
+) -> Result<Vec<Utf8ByteRange>, D::Error> {
     let tuples: Vec<(usize, usize)> = Vec::deserialize(d)?;
-    Ok(tuples.iter().filter_map(|&(s, e)| Utf8ByteRange::from_values(s, e)).collect())
+    Ok(tuples
+        .iter()
+        .filter_map(|&(s, e)| Utf8ByteRange::from_values(s, e))
+        .collect())
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 pub struct Utf8ByteOffset(usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -154,10 +172,9 @@ impl Utf8ByteRange {
         if start > end {
             return Err(InvalidUtf8RangeError::StartAfterEnd { start, end });
         }
-        let s = Utf8ByteOffset::try_new(text, start)
-            .map_err(InvalidUtf8RangeError::InvalidStart)?;
-        let e = Utf8ByteOffset::try_new(text, end)
-            .map_err(InvalidUtf8RangeError::InvalidEnd)?;
+        let s =
+            Utf8ByteOffset::try_new(text, start).map_err(InvalidUtf8RangeError::InvalidStart)?;
+        let e = Utf8ByteOffset::try_new(text, end).map_err(InvalidUtf8RangeError::InvalidEnd)?;
         Ok(Self { start: s, end: e })
     }
 
@@ -196,7 +213,11 @@ impl Utf8ByteRange {
     }
 
     pub(crate) fn from_ordered(start: usize, end: usize) -> Self {
-        let (s, e) = if start <= end { (start, end) } else { (end, start) };
+        let (s, e) = if start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        };
         Self {
             start: Utf8ByteOffset::unchecked(s),
             end: Utf8ByteOffset::unchecked(e),
@@ -239,7 +260,9 @@ impl fmt::Display for InvalidRevisionError {
 
 impl std::error::Error for InvalidRevisionError {}
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 pub struct EditorRevision(u64);
 
 impl EditorRevision {
@@ -285,7 +308,9 @@ impl fmt::Display for InvalidSessionIdError {
 
 impl std::error::Error for InvalidSessionIdError {}
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 pub struct EditorSessionId(u64);
 
 impl EditorSessionId {
@@ -322,7 +347,9 @@ impl fmt::Display for InvalidGenerationError {
 
 impl std::error::Error for InvalidGenerationError {}
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 pub struct EditorSessionGeneration(u64);
 
 impl EditorSessionGeneration {
@@ -525,13 +552,19 @@ mod tests {
     fn editor_revision_try_new_accepts_any() {
         assert!(EditorRevision::try_new(0).is_ok());
         assert!(EditorRevision::try_new(1).is_ok());
-        assert_eq!(EditorRevision::try_new(0).unwrap(), EditorRevision::initial());
+        assert_eq!(
+            EditorRevision::try_new(0).unwrap(),
+            EditorRevision::initial()
+        );
     }
 
     #[test]
     fn editor_session_generation_try_new_accepts_any() {
         assert!(EditorSessionGeneration::try_new(0).is_ok());
         assert!(EditorSessionGeneration::try_new(1).is_ok());
-        assert_eq!(EditorSessionGeneration::try_new(0).unwrap(), EditorSessionGeneration::initial());
+        assert_eq!(
+            EditorSessionGeneration::try_new(0).unwrap(),
+            EditorSessionGeneration::initial()
+        );
     }
 }

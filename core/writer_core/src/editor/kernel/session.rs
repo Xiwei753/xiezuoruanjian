@@ -1,17 +1,16 @@
-use super::types::{CoordinatedCursor, DisplayPatch, EditorOperationKind, EditorVisualIntent};
 use super::result::{EditorEditOutcome, EditorEditResult};
+use super::types::{CoordinatedCursor, DisplayPatch, EditorOperationKind, EditorVisualIntent};
 use super::EditorKernel;
 
 use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset, Utf8ByteRange};
-use crate::editor::transaction::{
-    EditorChange, EditorTransactionCause, AnimationMode,
-};
+use crate::editor::transaction::{AnimationMode, EditorChange, EditorTransactionCause};
 
 impl EditorKernel {
     pub fn load_text(&mut self, text: String, cursor: usize) -> EditorEditOutcome {
         let base_revision = self.revision;
         let old_cursor = self.cursor;
-        let old_selection = Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
+        let old_selection =
+            Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
 
         let needs_clamp = cursor > text.len() || !text.is_char_boundary(cursor);
         let resolved_cursor = if needs_clamp {
@@ -43,8 +42,16 @@ impl EditorKernel {
         let visual_intent = EditorVisualIntent {
             cause: EditorTransactionCause::Load,
             operation_kind: EditorOperationKind::Load,
-            old_affected_byte_ranges: if old_text.is_empty() { vec![] } else { vec![Utf8ByteRange::from_start_len(0, old_text.len())] },
-            new_affected_byte_ranges: if self.text.is_empty() { vec![] } else { vec![Utf8ByteRange::from_start_len(0, self.text.len())] },
+            old_affected_byte_ranges: if old_text.is_empty() {
+                vec![]
+            } else {
+                vec![Utf8ByteRange::from_start_len(0, old_text.len())]
+            },
+            new_affected_byte_ranges: if self.text.is_empty() {
+                vec![]
+            } else {
+                vec![Utf8ByteRange::from_start_len(0, self.text.len())]
+            },
             animation_mode: AnimationMode::SystemSuppressed,
             duration_ms: 0,
             coordinated_cursor: CoordinatedCursor {
@@ -72,7 +79,8 @@ impl EditorKernel {
     }
 
     pub(crate) fn stale_session_result(&mut self) -> EditorEditResult {
-        let current_selection = Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
+        let current_selection =
+            Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
         EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision: self.revision,
@@ -147,6 +155,13 @@ impl EditorKernel {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
     pub(crate) fn compute_single_patch(old_text: &str, new_text: &str) -> (Utf8ByteRange, String) {
         if old_text == new_text {
             return (Utf8ByteRange::zero(), String::new());
@@ -154,7 +169,9 @@ impl EditorKernel {
 
         let mut prefix_len = 0;
         for (ob, nb) in old_text.bytes().zip(new_text.bytes()) {
-            if ob != nb { break; }
+            if ob != nb {
+                break;
+            }
             prefix_len += 1;
         }
         while prefix_len > 0 && !old_text.is_char_boundary(prefix_len) {
@@ -172,7 +189,9 @@ impl EditorKernel {
             let old_rev = old_remaining.bytes().rev();
             let new_rev = new_remaining.bytes().rev();
             for (ob, nb) in old_rev.zip(new_rev) {
-                if ob != nb { break; }
+                if ob != nb {
+                    break;
+                }
                 old_suffix_len += 1;
                 new_suffix_len += 1;
             }
@@ -189,13 +208,15 @@ impl EditorKernel {
         let new_remaining_after_prefix = new_text.len() - prefix_len;
         if old_suffix_len > old_remaining_after_prefix {
             old_suffix_len = old_remaining_after_prefix;
-            while old_suffix_len > 0 && !old_text.is_char_boundary(old_text.len() - old_suffix_len) {
+            while old_suffix_len > 0 && !old_text.is_char_boundary(old_text.len() - old_suffix_len)
+            {
                 old_suffix_len -= 1;
             }
         }
         if new_suffix_len > new_remaining_after_prefix {
             new_suffix_len = new_remaining_after_prefix;
-            while new_suffix_len > 0 && !new_text.is_char_boundary(new_text.len() - new_suffix_len) {
+            while new_suffix_len > 0 && !new_text.is_char_boundary(new_text.len() - new_suffix_len)
+            {
                 new_suffix_len -= 1;
             }
         }
@@ -214,10 +235,15 @@ impl EditorKernel {
             String::new()
         };
 
-        (Utf8ByteRange::from_ordered(replace_start, replace_end), inserted_text)
+        (
+            Utf8ByteRange::from_ordered(replace_start, replace_end),
+            inserted_text,
+        )
     }
 
-    pub(crate) fn affected_ranges_from_changes(changes: &[EditorChange]) -> (Vec<Utf8ByteRange>, Vec<Utf8ByteRange>) {
+    pub(crate) fn affected_ranges_from_changes(
+        changes: &[EditorChange],
+    ) -> (Vec<Utf8ByteRange>, Vec<Utf8ByteRange>) {
         let mut old_ranges = Vec::new();
         let mut new_ranges = Vec::new();
         for c in changes {

@@ -40,14 +40,20 @@ pub struct LinuxThemeController {
 
 impl LinuxThemeController {
     pub fn new(app: AppRef) -> Self {
-        Self { app, ..Default::default() }
+        Self {
+            app,
+            ..Default::default()
+        }
     }
 
     fn with_app<R>(&self, f: impl FnOnce(&AppBackend) -> R) -> Result<R, super::AppBorrowError> {
         self.app.with_app(f)
     }
 
-    fn with_app_mut<R>(&self, f: impl FnOnce(&mut AppBackend) -> R) -> Result<R, super::AppBorrowError> {
+    fn with_app_mut<R>(
+        &self,
+        f: impl FnOnce(&mut AppBackend) -> R,
+    ) -> Result<R, super::AppBorrowError> {
         self.app.with_app_mut(f)
     }
 
@@ -118,7 +124,8 @@ impl LinuxThemeController {
                 }
                 None => "{}".into(),
             }
-        }).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+        })
+        .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
 
     fn is_dark(&self) -> bool {
@@ -127,19 +134,23 @@ impl LinuxThemeController {
     }
 
     fn color_source(&self) -> QString {
-        self.with_app(|app| app.setting_color_source()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+        self.with_app(|app| app.setting_color_source())
+            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
 
     fn selected_builtin_theme_id(&self) -> QString {
-        self.with_app(|app| app.setting_selected_builtin_theme_id()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+        self.with_app(|app| app.setting_selected_builtin_theme_id())
+            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
 
     fn selected_palette_id(&self) -> QString {
-        self.with_app(|app| app.setting_selected_palette_id()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+        self.with_app(|app| app.setting_selected_palette_id())
+            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
 
     fn appearance_mode(&self) -> QString {
-        self.with_app(|app| app.setting_appearance_mode()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+        self.with_app(|app| app.setting_appearance_mode())
+            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
 
     fn system_is_dark(&self) -> bool {
@@ -166,20 +177,32 @@ impl LinuxThemeController {
                 return;
             }
         }
-        if self.with_app_mut(|app| app.set_setting_color_source(val)).is_ok() {
+        if self
+            .with_app_mut(|app| app.set_setting_color_source(val))
+            .is_ok()
+        {
             self.scheme_changed();
         }
     }
 
     fn set_appearance_mode(&mut self, val: QString) {
-        if self.with_app_mut(|app| app.set_setting_appearance_mode(val)).is_ok() {
+        if self
+            .with_app_mut(|app| app.set_setting_appearance_mode(val))
+            .is_ok()
+        {
             self.scheme_changed();
         }
     }
 
     fn set_selected_builtin_theme_id(&mut self, val: QString) {
-        if self.with_app_mut(|app| app.set_setting_selected_builtin_theme_id(val)).is_ok() {
-            if self.with_app_mut(|app| app.set_setting_color_source("built_in".into())).is_err() {
+        if self
+            .with_app_mut(|app| app.set_setting_selected_builtin_theme_id(val))
+            .is_ok()
+        {
+            if self
+                .with_app_mut(|app| app.set_setting_color_source("built_in".into()))
+                .is_err()
+            {
                 crate::backend::app_backend::debug_error_static(
                     "theme_controller",
                     "BORROW_CONFLICT",
@@ -193,14 +216,20 @@ impl LinuxThemeController {
     fn set_selected_palette_id(&mut self, val: QString) {
         let palette_id = val.to_string();
         if !palette_id.is_empty() {
-            if self.with_app_mut(|app| app.set_setting_selected_palette_id(val)).is_err() {
+            if self
+                .with_app_mut(|app| app.set_setting_selected_palette_id(val))
+                .is_err()
+            {
                 crate::backend::app_backend::debug_error_static(
                     "theme_controller",
                     "BORROW_CONFLICT",
                     "set_setting_selected_palette_id skipped due to borrow conflict",
                 );
             }
-            if self.with_app_mut(|app| app.set_setting_color_source("saved_palette".into())).is_err() {
+            if self
+                .with_app_mut(|app| app.set_setting_color_source("saved_palette".into()))
+                .is_err()
+            {
                 crate::backend::app_backend::debug_error_static(
                     "theme_controller",
                     "BORROW_CONFLICT",
@@ -212,9 +241,12 @@ impl LinuxThemeController {
     }
 
     fn set_system_is_dark(&mut self, val: bool) {
-        if self.with_app_mut(|app| {
-            app.current_system_is_dark = val;
-        }).is_ok() {
+        if self
+            .with_app_mut(|app| {
+                app.current_system_is_dark = val;
+            })
+            .is_ok()
+        {
             self.scheme_changed();
         }
     }

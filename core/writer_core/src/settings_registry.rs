@@ -212,7 +212,11 @@ mod tests {
         let registry = SettingsRegistry::default_registry();
         assert!(!registry.items.is_empty());
 
-        let font_size_item = registry.items.iter().find(|i| i.id == "editor.font_size").unwrap();
+        let font_size_item = registry
+            .items
+            .iter()
+            .find(|i| i.id == "editor.font_size")
+            .unwrap();
         assert!(!font_size_item.title_key.is_empty());
         assert!(!font_size_item.description_key.is_empty());
         assert!(font_size_item.title_fallback.is_some());

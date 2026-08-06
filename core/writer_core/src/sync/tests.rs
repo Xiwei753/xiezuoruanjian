@@ -22,13 +22,13 @@ mod tests {
     use crate::sync::types::SyncConflict;
     #[cfg(feature = "github-api")]
     use crate::sync::types::SyncManifest;
+    use crate::sync::types::SyncProtocol;
     #[cfg(feature = "github-api")]
     use crate::sync::types::SyncSecrets;
     #[cfg(feature = "github-api")]
     use crate::sync::types::SyncState;
     #[cfg(feature = "github-api")]
     use crate::sync::types::SyncStatus;
-    use crate::sync::types::SyncProtocol;
     #[cfg(feature = "github-api")]
     use base64::Engine;
     #[cfg(any(feature = "git-https", feature = "github-api"))]
@@ -48,14 +48,23 @@ mod tests {
                 .timeout(std::time::Duration::from_secs(15))
                 .no_proxy()
                 .build()
-                .map_err(|e| writer_platform_api::TransportError::new("init", format!("Failed to build HTTP client: {}", e)))?;
+                .map_err(|e| {
+                    writer_platform_api::TransportError::new(
+                        "init",
+                        format!("Failed to build HTTP client: {}", e),
+                    )
+                })?;
             Ok(Self { client })
         }
     }
 
     #[cfg(feature = "github-api")]
     impl writer_platform_api::SyncTransport for TestHttpTransport {
-        fn execute(&self, request: writer_platform_api::HttpRequest) -> Result<writer_platform_api::HttpResponse, writer_platform_api::TransportError> {
+        fn execute(
+            &self,
+            request: writer_platform_api::HttpRequest,
+        ) -> Result<writer_platform_api::HttpResponse, writer_platform_api::TransportError>
+        {
             use writer_platform_api::{HttpResponse, TransportError};
             let mut req = match request.method.as_str() {
                 "GET" => self.client.get(&request.url),
@@ -96,9 +105,9 @@ mod tests {
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
                 .collect();
-            let body = resp.bytes().map_err(|e| {
-                TransportError::new("response_read", e.to_string())
-            })?;
+            let body = resp
+                .bytes()
+                .map_err(|e| TransportError::new("response_read", e.to_string()))?;
             Ok(HttpResponse {
                 status,
                 headers,
@@ -114,7 +123,8 @@ mod tests {
         secrets: &SyncSecrets,
         force_sync: bool,
     ) -> crate::Result<crate::sync::SyncResult> {
-        let transport = TestHttpTransport::new().map_err(|e| crate::Error::SyncNetworkUnavailable { reason: e.message })?;
+        let transport = TestHttpTransport::new()
+            .map_err(|e| crate::Error::SyncNetworkUnavailable { reason: e.message })?;
         SyncService::perform_lww_sync(workspace_path, config, secrets, force_sync, &transport)
     }
     #[test]
@@ -1327,7 +1337,11 @@ mod tests {
         assert!(res.is_err());
         match res.unwrap_err() {
             crate::Error::SyncSettingsConflict { details_json } => {
-                assert!(details_json.contains("font_size"), "Conflict must include font_size key, got: {}", details_json);
+                assert!(
+                    details_json.contains("font_size"),
+                    "Conflict must include font_size key, got: {}",
+                    details_json
+                );
             }
             other => panic!("Expected SyncSettingsConflict, got: {:?}", other),
         }
@@ -3431,7 +3445,10 @@ mod tests {
 
         let result = SyncService::perform_sync_diagnostics(&config, &secrets).unwrap();
         // Git 后端不再假成功
-        assert!(!result.success, "Git backend diagnostics should not report success");
+        assert!(
+            !result.success,
+            "Git backend diagnostics should not report success"
+        );
         assert!(!result.network_ok, "Git backend network_ok should be false");
         assert!(!result.auth_ok, "Git backend auth_ok should be false");
         assert!(!result.repo_ok, "Git backend repo_ok should be false");
@@ -3513,13 +3530,21 @@ mod tests {
 
         // force_sync=false 应该被 debounce 跳过（返回 Success）
         let res1 = lww_sync(dir.path(), &config, &secrets, false).unwrap();
-        assert_eq!(res1.status, SyncStatus::Success, "auto sync should be debounced");
+        assert_eq!(
+            res1.status,
+            SyncStatus::Success,
+            "auto sync should be debounced"
+        );
 
         // force_sync=true 应该绕过 debounce（尝试执行，虽然网络会失败）
         let res2 = lww_sync(dir.path(), &config, &secrets, true).unwrap();
         // force_sync=true 绕过了 debounce，会尝试网络请求
         // 因为测试环境没有真实 API，预期返回错误状态
-        assert_ne!(res2.status, SyncStatus::Success, "force_sync should bypass debounce and attempt sync");
+        assert_ne!(
+            res2.status,
+            SyncStatus::Success,
+            "force_sync should bypass debounce and attempt sync"
+        );
     }
 
     #[test]
@@ -3550,12 +3575,18 @@ mod tests {
         let mut state = crate::sync::SyncService::load_sync_state(dir.path()).unwrap();
         state.last_sync_time = Some(chrono::Utc::now().timestamp());
         // 添加 pending_take_remote（模拟用户刚解决冲突选择"采用远端"）
-        state.pending_take_remote.insert("test_chapter.md".to_string());
+        state
+            .pending_take_remote
+            .insert("test_chapter.md".to_string());
         crate::sync::SyncService::save_sync_state(dir.path(), &state).unwrap();
 
         // force_sync=false 但有 pending_take_remote，应该绕过 debounce（尝试执行）
         let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
         // 绕过了 debounce，会尝试网络请求，因测试环境没有真实 API，预期返回错误状态
-        assert_ne!(res.status, SyncStatus::Success, "pending_take_remote should bypass debounce");
+        assert_ne!(
+            res.status,
+            SyncStatus::Success,
+            "pending_take_remote should bypass debounce"
+        );
     }
 }

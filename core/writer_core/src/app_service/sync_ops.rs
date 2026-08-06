@@ -1,5 +1,6 @@
 use crate::api::{
-    SyncConfigDto, SyncDiagnosticsResultDto, SyncPlanDto, SyncResultDto, SyncSecretsDto, WriterError,
+    SyncConfigDto, SyncDiagnosticsResultDto, SyncPlanDto, SyncResultDto, SyncSecretsDto,
+    WriterError,
 };
 use crate::sync::{SyncConfig, SyncSecrets};
 
@@ -50,10 +51,7 @@ impl super::WriterAppService {
     }
 
     /** #595 五：删除指定 generation 的安全存储凭据（旧版本清理）。 */
-    pub fn delete_sync_secrets_for_generation(
-        &self,
-        generation: u64,
-    ) -> Result<(), WriterError> {
+    pub fn delete_sync_secrets_for_generation(&self, generation: u64) -> Result<(), WriterError> {
         self.api.delete_sync_secrets_for_generation(generation)
     }
 
@@ -70,7 +68,11 @@ impl super::WriterAppService {
         self.api.perform_sync_dry_run(config)
     }
 
-    pub fn perform_sync(&self, config: SyncConfigDto, force_sync: bool) -> Result<SyncResultDto, WriterError> {
+    pub fn perform_sync(
+        &self,
+        config: SyncConfigDto,
+        force_sync: bool,
+    ) -> Result<SyncResultDto, WriterError> {
         self.refresh_secrets_override();
         self.api.perform_sync(config, force_sync)
     }
@@ -89,15 +91,18 @@ impl super::WriterAppService {
 
     pub fn load_sync_token_from_secure_storage(&self) -> Option<String> {
         self.api.secure_storage.as_ref().and_then(|storage| {
-            storage.get_secret("sync_token").ok().flatten().and_then(|bytes| {
-                String::from_utf8(bytes).ok()
-            })
+            storage
+                .get_secret("sync_token")
+                .ok()
+                .flatten()
+                .and_then(|bytes| String::from_utf8(bytes).ok())
         })
     }
 
     pub fn save_sync_token_to_secure_storage(&self, token: &str) -> Result<(), WriterError> {
         if let Some(storage) = &self.api.secure_storage {
-            storage.set_secret("sync_token", token.as_bytes())
+            storage
+                .set_secret("sync_token", token.as_bytes())
                 .map_err(WriterError::Other)?;
         }
         Ok(())
@@ -105,7 +110,8 @@ impl super::WriterAppService {
 
     pub fn delete_sync_token_from_secure_storage(&self) -> Result<(), WriterError> {
         if let Some(storage) = &self.api.secure_storage {
-            storage.delete_secret("sync_token")
+            storage
+                .delete_secret("sync_token")
                 .map_err(WriterError::Other)?;
         }
         Ok(())
@@ -116,14 +122,26 @@ impl super::WriterAppService {
     }
 
     pub fn load_sync_config_core(&self) -> Result<SyncConfig, WriterError> {
-        self.api.core().load_sync_config().map_err(WriterError::from)
+        self.api
+            .core()
+            .load_sync_config()
+            .map_err(WriterError::from)
     }
 
     pub fn save_sync_config_core(&self, config: &SyncConfig) -> Result<(), WriterError> {
-        self.api.core().save_sync_config(config).map_err(WriterError::from)
+        self.api
+            .core()
+            .save_sync_config(config)
+            .map_err(WriterError::from)
     }
 
-    pub fn save_sync_secrets_via_secure_storage(&self, secrets: &SyncSecrets) -> Result<(), WriterError> {
-        self.api.core().save_sync_secrets(secrets).map_err(WriterError::from)
+    pub fn save_sync_secrets_via_secure_storage(
+        &self,
+        secrets: &SyncSecrets,
+    ) -> Result<(), WriterError> {
+        self.api
+            .core()
+            .save_sync_secrets(secrets)
+            .map_err(WriterError::from)
     }
 }

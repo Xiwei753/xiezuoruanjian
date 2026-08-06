@@ -1,6 +1,6 @@
+use crate::index::{SearchIndex, SearchOptions};
 use std::fs;
 use std::path::Path;
-use crate::index::{SearchIndex, SearchOptions};
 use tempfile::tempdir;
 
 fn setup_test_workspace(dir: &Path) {
@@ -179,7 +179,11 @@ fn test_build_missing_subdirectories() {
 
     // Project with chapters but no chapter.md
     let proj_no_md = projects_dir.join("proj_no_md");
-    let ch_no_md = proj_no_md.join("volumes").join("vol1").join("chapters").join("ch1");
+    let ch_no_md = proj_no_md
+        .join("volumes")
+        .join("vol1")
+        .join("chapters")
+        .join("ch1");
     fs::create_dir_all(&ch_no_md).unwrap();
 
     let index = SearchIndex::build(dir.path()).unwrap();
@@ -190,7 +194,12 @@ fn test_build_missing_subdirectories() {
 fn test_build_invalid_utf8_chapter() {
     let dir = tempdir().unwrap();
     let projects_dir = dir.path().join("projects");
-    let ch_dir = projects_dir.join("proj1").join("volumes").join("vol1").join("chapters").join("ch1");
+    let ch_dir = projects_dir
+        .join("proj1")
+        .join("volumes")
+        .join("vol1")
+        .join("chapters")
+        .join("ch1");
     fs::create_dir_all(&ch_dir).unwrap();
 
     // Write invalid UTF-8 bytes to trigger `.ok()?` failure in read_to_string
@@ -216,7 +225,11 @@ fn test_build_happy_path() {
     // Verify index entries metadata contents
     assert_eq!(index.entries.len(), 2);
 
-    let ch1 = index.entries.iter().find(|e| e.chapter_id == "ch1").unwrap();
+    let ch1 = index
+        .entries
+        .iter()
+        .find(|e| e.chapter_id == "ch1")
+        .unwrap();
     assert_eq!(ch1.project_id, "proj1");
     assert_eq!(ch1.volume_id, "vol1");
     // chapter_title is OnceLock<String>, lazily loaded via get_or_init
@@ -232,5 +245,8 @@ fn test_build_happy_path() {
         ch1.chapter_id.clone()
     });
     assert_eq!(title, "第一章 启程");
-    assert_eq!(ch1.relative_path, "projects/proj1/volumes/vol1/chapters/ch1/chapter.md");
+    assert_eq!(
+        ch1.relative_path,
+        "projects/proj1/volumes/vol1/chapters/ch1/chapter.md"
+    );
 }

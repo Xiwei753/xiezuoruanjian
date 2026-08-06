@@ -138,7 +138,10 @@ mod tests {
         assert!(result.is_ok());
 
         let new_projects = list_projects(workspace_path).unwrap();
-        let new_ids = new_projects.iter().map(|p| p.id.clone()).collect::<Vec<_>>();
+        let new_ids = new_projects
+            .iter()
+            .map(|p| p.id.clone())
+            .collect::<Vec<_>>();
         assert_eq!(new_ids, ordered_ids);
 
         let missing_ids = vec![ordered_ids[0].clone()];

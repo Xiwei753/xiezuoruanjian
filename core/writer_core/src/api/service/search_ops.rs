@@ -28,7 +28,9 @@ impl WriterCoreApi {
     }
 
     pub fn rebuild_search_index_json(&self, project_id: Option<&str>) -> ApiResult<String> {
-        let status = self.search_service_rebuild(project_id).map_err(WriterError::from)?;
+        let status = self
+            .search_service_rebuild(project_id)
+            .map_err(WriterError::from)?;
         Self::json_string(&status)
     }
 
@@ -76,5 +78,4 @@ impl WriterCoreApi {
         });
         Ok(true)
     }
-
 }

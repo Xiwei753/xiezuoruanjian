@@ -1,6 +1,6 @@
-use crate::editor::scene_graph;
 use super::render_plan::RenderPlan;
 use super::texture_cache::TextureCache;
+use crate::editor::scene_graph;
 
 pub(crate) fn render_frame(
     root_raw: *mut std::ffi::c_void,
@@ -34,13 +34,13 @@ fn render_text_animation_layer(
     let mut source_rects: Vec<f64> = Vec::new();
 
     for glyph in &plan.text_animation.glyphs {
-        glyph_data.extend_from_slice(&[
-            glyph.x, glyph.y, glyph.w, glyph.h, glyph.opacity,
-        ]);
+        glyph_data.extend_from_slice(&[glyph.x, glyph.y, glyph.w, glyph.h, glyph.opacity]);
 
         source_rects.extend_from_slice(&[
-            glyph.source_rect.x, glyph.source_rect.y,
-            glyph.source_rect.w, glyph.source_rect.h,
+            glyph.source_rect.x,
+            glyph.source_rect.y,
+            glyph.source_rect.w,
+            glyph.source_rect.h,
         ]);
 
         match texture_cache.get_line(&glyph.snapshot_id) {
@@ -50,7 +50,10 @@ fn render_text_animation_layer(
             }
             None => {
                 glyph_images.push(qmetaobject::QImage::new(
-                    qmetaobject::QSize { width: 1, height: 1 },
+                    qmetaobject::QSize {
+                        width: 1,
+                        height: 1,
+                    },
                     qmetaobject::ImageFormat::ARGB32_Premultiplied,
                 ));
                 glyph_texture_changed.push(false);

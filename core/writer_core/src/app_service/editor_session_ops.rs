@@ -1,4 +1,7 @@
-use crate::api::{EditorEditResultDto, EditorEditOutcomeDto, EditorSessionSnapshotDto, EditorTransactionCauseDto, EditorVisualIntentDto};
+use crate::api::{
+    EditorEditOutcomeDto, EditorEditResultDto, EditorSessionSnapshotDto, EditorTransactionCauseDto,
+    EditorVisualIntentDto,
+};
 
 use super::EditorSession;
 
@@ -7,7 +10,10 @@ impl super::WriterAppService {
     where
         F: FnOnce(&mut EditorSession) -> R,
     {
-        let mut session = self.editor_session.lock().unwrap_or_else(|e| e.into_inner());
+        let mut session = self
+            .editor_session
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         f(&mut session)
     }
 
@@ -18,8 +24,8 @@ impl super::WriterAppService {
         cause: EditorTransactionCauseDto,
         expected_revision: u64,
     ) -> EditorEditResultDto {
+        use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset};
         use crate::editor::EditorCommand;
-            use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset};
         let core_cause: crate::editor::EditorTransactionCause = cause.into();
         self.with_session(|s| {
             let current_text = s.kernel.text();
@@ -44,12 +50,16 @@ impl super::WriterAppService {
         cause: EditorTransactionCauseDto,
         expected_revision: u64,
     ) -> EditorEditResultDto {
+        use crate::editor::strong_types::{EditorRevision, Utf8ByteRange};
         use crate::editor::EditorCommand;
-            use crate::editor::strong_types::{EditorRevision, Utf8ByteRange};
         let core_cause: crate::editor::EditorTransactionCause = cause.into();
         self.with_session(|s| {
             let current_text = s.kernel.text();
-            let byte_range = match Utf8ByteRange::try_new(current_text, byte_start as usize, byte_end_exclusive as usize) {
+            let byte_range = match Utf8ByteRange::try_new(
+                current_text,
+                byte_start as usize,
+                byte_end_exclusive as usize,
+            ) {
                 Ok(r) => r,
                 Err(_) => return EditorEditResultDto::invalid_range_fallback(),
             };
@@ -72,12 +82,16 @@ impl super::WriterAppService {
         cause: EditorTransactionCauseDto,
         expected_revision: u64,
     ) -> EditorEditResultDto {
+        use crate::editor::strong_types::{EditorRevision, Utf8ByteRange};
         use crate::editor::EditorCommand;
-            use crate::editor::strong_types::{EditorRevision, Utf8ByteRange};
         let core_cause: crate::editor::EditorTransactionCause = cause.into();
         self.with_session(|s| {
             let current_text = s.kernel.text();
-            let byte_range = match Utf8ByteRange::try_new(current_text, byte_start as usize, byte_end_exclusive as usize) {
+            let byte_range = match Utf8ByteRange::try_new(
+                current_text,
+                byte_start as usize,
+                byte_end_exclusive as usize,
+            ) {
                 Ok(r) => r,
                 Err(_) => return EditorEditResultDto::invalid_range_fallback(),
             };
@@ -98,8 +112,8 @@ impl super::WriterAppService {
         head_byte_offset: u32,
         expected_revision: u64,
     ) -> EditorEditResultDto {
+        use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset};
         use crate::editor::EditorCommand;
-            use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset};
         self.with_session(|s| {
             let current_text = s.kernel.text();
             let anchor = match Utf8ByteOffset::try_new(current_text, anchor_byte_offset as usize) {
@@ -120,19 +134,23 @@ impl super::WriterAppService {
     }
 
     pub fn editor_kernel_undo(&self, expected_revision: u64) -> EditorEditResultDto {
+        use crate::editor::strong_types::EditorRevision;
         use crate::editor::EditorCommand;
-            use crate::editor::strong_types::EditorRevision;
         self.with_session(|s| {
-            let result = s.kernel.apply(EditorCommand::Undo { expected_revision: EditorRevision::new(expected_revision) });
+            let result = s.kernel.apply(EditorCommand::Undo {
+                expected_revision: EditorRevision::new(expected_revision),
+            });
             result.into_result().into()
         })
     }
 
     pub fn editor_kernel_redo(&self, expected_revision: u64) -> EditorEditResultDto {
+        use crate::editor::strong_types::EditorRevision;
         use crate::editor::EditorCommand;
-            use crate::editor::strong_types::EditorRevision;
         self.with_session(|s| {
-            let result = s.kernel.apply(EditorCommand::Redo { expected_revision: EditorRevision::new(expected_revision) });
+            let result = s.kernel.apply(EditorCommand::Redo {
+                expected_revision: EditorRevision::new(expected_revision),
+            });
             result.into_result().into()
         })
     }
@@ -165,7 +183,11 @@ impl super::WriterAppService {
         self.with_session(|s| {
             let current_text = s.kernel.text();
             let replace_range = if composition_replace_start < composition_replace_end_exclusive {
-                match Utf8ByteRange::try_new(current_text, composition_replace_start as usize, composition_replace_end_exclusive as usize) {
+                match Utf8ByteRange::try_new(
+                    current_text,
+                    composition_replace_start as usize,
+                    composition_replace_end_exclusive as usize,
+                ) {
                     Ok(r) => Some((r.start().value(), r.end().value())),
                     Err(_) => None,
                 }
@@ -195,12 +217,18 @@ impl super::WriterAppService {
         cause: EditorTransactionCauseDto,
         expected_revision: u64,
     ) -> EditorEditResultDto {
+        use crate::editor::strong_types::{
+            EditorRevision, EditorSessionGeneration, EditorSessionId, Utf8ByteOffset, Utf8ByteRange,
+        };
         use crate::editor::EditorCommand;
-            use crate::editor::strong_types::{EditorRevision, EditorSessionId, EditorSessionGeneration, Utf8ByteOffset, Utf8ByteRange};
         let core_cause: crate::editor::EditorTransactionCause = cause.into();
         self.with_session(|s| {
             let current_text = s.kernel.text();
-            let byte_range = match Utf8ByteRange::try_new(current_text, byte_start as usize, byte_end_exclusive as usize) {
+            let byte_range = match Utf8ByteRange::try_new(
+                current_text,
+                byte_start as usize,
+                byte_end_exclusive as usize,
+            ) {
                 Ok(r) => r,
                 Err(_) => return EditorEditResultDto::invalid_range_fallback(),
             };
@@ -238,16 +266,24 @@ impl super::WriterAppService {
         cause: EditorTransactionCauseDto,
         expected_revision: u64,
     ) -> EditorEditResultDto {
+        use crate::editor::strong_types::{EditorRevision, Utf8ByteRange};
         use crate::editor::EditorCommand;
-            use crate::editor::strong_types::{EditorRevision, Utf8ByteRange};
         let core_cause: crate::editor::EditorTransactionCause = cause.into();
         self.with_session(|s| {
             let current_text = s.kernel.text();
-            let before_byte_range = match Utf8ByteRange::try_new(current_text, before_byte_start as usize, before_byte_end_exclusive as usize) {
+            let before_byte_range = match Utf8ByteRange::try_new(
+                current_text,
+                before_byte_start as usize,
+                before_byte_end_exclusive as usize,
+            ) {
                 Ok(r) => r,
                 Err(_) => return EditorEditResultDto::invalid_range_fallback(),
             };
-            let after_byte_range = match Utf8ByteRange::try_new(current_text, after_byte_start as usize, after_byte_end_exclusive as usize) {
+            let after_byte_range = match Utf8ByteRange::try_new(
+                current_text,
+                after_byte_start as usize,
+                after_byte_end_exclusive as usize,
+            ) {
                 Ok(r) => r,
                 Err(_) => return EditorEditResultDto::invalid_range_fallback(),
             };
@@ -261,17 +297,28 @@ impl super::WriterAppService {
         })
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
     pub fn editor_kernel_begin_composition(
         &self,
         replace_start: u32,
         replace_end_exclusive: u32,
         expected_revision: u64,
     ) -> EditorEditResultDto {
+        use crate::editor::strong_types::{EditorRevision, Utf8ByteRange};
         use crate::editor::EditorCommand;
-            use crate::editor::strong_types::{EditorRevision, Utf8ByteRange};
         self.with_session(|s| {
             let current_text = s.kernel.text();
-            let replace_range = match Utf8ByteRange::try_new(current_text, replace_start as usize, replace_end_exclusive as usize) {
+            let replace_range = match Utf8ByteRange::try_new(
+                current_text,
+                replace_start as usize,
+                replace_end_exclusive as usize,
+            ) {
                 Ok(r) => r,
                 Err(_) => return EditorEditResultDto::invalid_range_fallback(),
             };
@@ -283,7 +330,9 @@ impl super::WriterAppService {
             if dto.outcome == EditorEditOutcomeDto::Applied
                 || dto.outcome == EditorEditOutcomeDto::AppliedWithAdjustedSelection
             {
-                if let Some((session_id, base_revision, generation)) = s.kernel.composition_session_info() {
+                if let Some((session_id, base_revision, generation)) =
+                    s.kernel.composition_session_info()
+                {
                     dto.composition_session = Some(crate::api::types::CompositionSessionDto {
                         session_id,
                         base_revision,
@@ -303,8 +352,10 @@ impl super::WriterAppService {
         new_preedit_cursor_offset: u32,
         expected_revision: u64,
     ) -> EditorEditResultDto {
+        use crate::editor::strong_types::{
+            EditorRevision, EditorSessionGeneration, EditorSessionId, Utf8ByteOffset,
+        };
         use crate::editor::EditorCommand;
-            use crate::editor::strong_types::{EditorRevision, EditorSessionId, EditorSessionGeneration, Utf8ByteOffset};
         self.with_session(|s| {
             let preedit_utf16_len: usize = new_preedit_text.chars().map(|c| c.len_utf16()).sum();
             if new_preedit_cursor_offset as usize > preedit_utf16_len {
@@ -317,7 +368,9 @@ impl super::WriterAppService {
                 },
                 composition_generation: EditorSessionGeneration::new(composition_generation),
                 new_preedit_text,
-                new_preedit_cursor_offset: Utf8ByteOffset::unchecked(new_preedit_cursor_offset as usize),
+                new_preedit_cursor_offset: Utf8ByteOffset::unchecked(
+                    new_preedit_cursor_offset as usize,
+                ),
                 expected_revision: EditorRevision::new(expected_revision),
             });
             result.into()
@@ -330,8 +383,10 @@ impl super::WriterAppService {
         composition_generation: u64,
         expected_revision: u64,
     ) -> EditorEditResultDto {
+        use crate::editor::strong_types::{
+            EditorRevision, EditorSessionGeneration, EditorSessionId,
+        };
         use crate::editor::EditorCommand;
-            use crate::editor::strong_types::{EditorRevision, EditorSessionId, EditorSessionGeneration};
         self.with_session(|s| {
             let result = s.kernel.apply(EditorCommand::FinishComposition {
                 composition_session_id: match EditorSessionId::try_new(composition_session_id) {
@@ -351,8 +406,10 @@ impl super::WriterAppService {
         composition_generation: u64,
         expected_revision: u64,
     ) -> EditorEditResultDto {
+        use crate::editor::strong_types::{
+            EditorRevision, EditorSessionGeneration, EditorSessionId,
+        };
         use crate::editor::EditorCommand;
-            use crate::editor::strong_types::{EditorRevision, EditorSessionId, EditorSessionGeneration};
         self.with_session(|s| {
             let result = s.kernel.apply(EditorCommand::CancelComposition {
                 composition_session_id: match EditorSessionId::try_new(composition_session_id) {
@@ -367,66 +424,48 @@ impl super::WriterAppService {
     }
 
     pub fn editor_kernel_composition_session_info(&self) -> Option<(u64, u64, u64)> {
-        self.with_session(|s| {
-            s.kernel.composition_session_info()
-        })
+        self.with_session(|s| s.kernel.composition_session_info())
     }
 
-    pub fn editor_kernel_set_animation_enabled(
-        &self,
-        enabled: u8,
-    ) {
+    pub fn editor_kernel_set_animation_enabled(&self, enabled: u8) {
         self.with_session(|s| {
             s.kernel.set_animation_enabled(enabled != 0);
         })
     }
 
-    pub fn editor_kernel_set_animation_duration_ms(
-        &self,
-        duration_ms: u64,
-    ) {
+    pub fn editor_kernel_set_animation_duration_ms(&self, duration_ms: u64) {
         self.with_session(|s| {
             s.kernel.set_animation_duration_ms(duration_ms);
         })
     }
 
     pub fn editor_kernel_get_text(&self) -> String {
-        self.with_session(|s| {
-            s.kernel.text().to_string()
-        })
+        self.with_session(|s| s.kernel.text().to_string())
     }
 
     pub fn editor_kernel_get_revision(&self) -> u64 {
-        self.with_session(|s| {
-            s.kernel.revision()
-        })
+        self.with_session(|s| s.kernel.revision())
     }
 
     #[allow(clippy::cast_possible_truncation)]
     pub fn editor_kernel_get_cursor(&self) -> u32 {
-        self.with_session(|s| {
-            s.kernel.cursor() as u32
-        })
+        self.with_session(|s| s.kernel.cursor() as u32)
     }
 
     #[allow(clippy::cast_possible_truncation)]
     pub fn editor_kernel_get_selection_anchor(&self) -> u32 {
-        self.with_session(|s| {
-            s.kernel.selection_anchor() as u32
-        })
+        self.with_session(|s| s.kernel.selection_anchor() as u32)
     }
 
     #[allow(clippy::cast_possible_truncation)]
     pub fn editor_kernel_session_snapshot(&self) -> EditorSessionSnapshotDto {
-        self.with_session(|s| {
-            EditorSessionSnapshotDto {
-                text: s.kernel.text().to_string(),
-                revision: s.kernel.revision(),
-                cursor: s.kernel.cursor() as u32,
-                selection_anchor: s.kernel.selection_anchor() as u32,
-                generation: s.generation,
-                chapter_id: s.chapter_id.clone().unwrap_or_default(),
-            }
+        self.with_session(|s| EditorSessionSnapshotDto {
+            text: s.kernel.text().to_string(),
+            revision: s.kernel.revision(),
+            cursor: s.kernel.cursor() as u32,
+            selection_anchor: s.kernel.selection_anchor() as u32,
+            generation: s.generation,
+            chapter_id: s.chapter_id.clone().unwrap_or_default(),
         })
     }
 
@@ -436,8 +475,8 @@ impl super::WriterAppService {
         replacement: String,
         expected_revision: u64,
     ) -> EditorEditResultDto {
+        use crate::editor::strong_types::EditorRevision;
         use crate::editor::EditorCommand;
-            use crate::editor::strong_types::EditorRevision;
         self.with_session(|s| {
             let result = s.kernel.apply(EditorCommand::ReplaceAll {
                 search,
@@ -455,8 +494,8 @@ impl super::WriterAppService {
         cause: EditorTransactionCauseDto,
         expected_revision: u64,
     ) -> EditorEditResultDto {
+        use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset};
         use crate::editor::EditorCommand;
-            use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset};
         let core_cause: crate::editor::EditorTransactionCause = cause.into();
         self.with_session(|s| {
             let current_text = s.kernel.text();

@@ -3,12 +3,19 @@ use std::collections::HashMap;
 use crate::error::Result;
 use crate::starmap::types::*;
 
-use super::super::meta::{GraphMeta, DeletedSinceLastSync};
+use super::super::meta::{DeletedSinceLastSync, GraphMeta};
 use super::super::relation_index::*;
 use super::super::types::*;
 use super::super::StarMapStore;
 
 impl StarMapStore {
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
     pub fn load_full(&mut self) -> Result<StarMapStoreResult> {
         self.recovery_log.clear();
         let mut diagnostics = Vec::new();
@@ -21,7 +28,8 @@ impl StarMapStore {
         if graph_json_path.exists() {
             let content = std::fs::read_to_string(&graph_json_path).unwrap_or_default();
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) {
-                let schema_version_str = value.get("schemaVersion")
+                let schema_version_str = value
+                    .get("schemaVersion")
                     .or_else(|| value.get("schema_version"))
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
@@ -41,7 +49,9 @@ impl StarMapStore {
 
                 if is_new_format {
                     match serde_json::from_str::<GraphMeta>(&content) {
-                        Ok(meta) => { self.graph_meta = Some(meta); }
+                        Ok(meta) => {
+                            self.graph_meta = Some(meta);
+                        }
                         Err(e) => {
                             diagnostics.push(LoadDiagnostic {
                                 kind: LoadDiagnosticKind::Corrupt,
@@ -59,27 +69,45 @@ impl StarMapStore {
                         title: graph.title.clone(),
                         node_ids: graph.nodes.iter().map(|n| n.id.clone()).collect(),
                         edge_ids: graph.edges.iter().map(|e| e.id.clone()).collect(),
-                        embed_instance_ids: graph.embeds.iter().map(|e| e.instance_id.clone()).collect(),
+                        embed_instance_ids: graph
+                            .embeds
+                            .iter()
+                            .map(|e| e.instance_id.clone())
+                            .collect(),
                         link_ids: graph.links.iter().map(|l| l.link_id.clone()).collect(),
                         hyperlink_ids: vec![],
-                        edge_relation_index: graph.edges.iter().map(|e| EdgeRelationIndex {
-                            edge_id: e.id.clone(),
-                            from: e.from.clone().unwrap_or_default(),
-                            to: e.to.clone().unwrap_or_default(),
-                            from_endpoint: e.from_endpoint.clone(),
-                            to_endpoint: e.to_endpoint.clone(),
-                            from_endpoint_path: e.from_endpoint_path.clone(),
-                            to_endpoint_path: e.to_endpoint_path.clone(),
-                        }).collect(),
-                        embed_host_index: graph.embeds.iter().map(|e| EmbedHostIndex {
-                            instance_id: e.instance_id.clone(),
-                            host_node_id: e.source_node_id.clone().unwrap_or_default(),
-                            host_endpoint: e.host_endpoint.clone(),
-                        }).collect(),
-                        link_relation_index: graph.links.iter().map(|l| LinkRelationIndex {
-                            link_id: l.link_id.clone(),
-                            source_node_id: endpoint_node_id(&l.source).unwrap_or_default().to_string(),
-                        }).collect(),
+                        edge_relation_index: graph
+                            .edges
+                            .iter()
+                            .map(|e| EdgeRelationIndex {
+                                edge_id: e.id.clone(),
+                                from: e.from.clone().unwrap_or_default(),
+                                to: e.to.clone().unwrap_or_default(),
+                                from_endpoint: e.from_endpoint.clone(),
+                                to_endpoint: e.to_endpoint.clone(),
+                                from_endpoint_path: e.from_endpoint_path.clone(),
+                                to_endpoint_path: e.to_endpoint_path.clone(),
+                            })
+                            .collect(),
+                        embed_host_index: graph
+                            .embeds
+                            .iter()
+                            .map(|e| EmbedHostIndex {
+                                instance_id: e.instance_id.clone(),
+                                host_node_id: e.source_node_id.clone().unwrap_or_default(),
+                                host_endpoint: e.host_endpoint.clone(),
+                            })
+                            .collect(),
+                        link_relation_index: graph
+                            .links
+                            .iter()
+                            .map(|l| LinkRelationIndex {
+                                link_id: l.link_id.clone(),
+                                source_node_id: endpoint_node_id(&l.source)
+                                    .unwrap_or_default()
+                                    .to_string(),
+                            })
+                            .collect(),
                         hyperlink_relation_index: vec![],
                         node_kind_counts: {
                             let mut counts = HashMap::new();
@@ -114,10 +142,15 @@ impl StarMapStore {
                     self.enqueue_save(SaveQueueEntry::Embed);
                     self.enqueue_save(SaveQueueEntry::Link);
                     self.enqueue_save(SaveQueueEntry::GraphMeta);
-                    self.record_migration("graph_v1_to_v2", "migrated inline v1 graph.json to v2 package format");
+                    self.record_migration(
+                        "graph_v1_to_v2",
+                        "migrated inline v1 graph.json to v2 package format",
+                    );
                 } else {
                     match self.load_graph_meta_from_file(&graph_json_path) {
-                        Ok(meta) => { self.graph_meta = Some(meta); }
+                        Ok(meta) => {
+                            self.graph_meta = Some(meta);
+                        }
                         Err(e) => {
                             diagnostics.push(LoadDiagnostic {
                                 kind: LoadDiagnosticKind::Corrupt,
@@ -142,7 +175,9 @@ impl StarMapStore {
             self.scan_objects_from_disk(&mut diagnostics);
         }
 
-        let node_ids = self.graph_meta.as_ref()
+        let node_ids = self
+            .graph_meta
+            .as_ref()
             .map(|m| m.node_ids.clone())
             .unwrap_or_default();
 
@@ -154,7 +189,9 @@ impl StarMapStore {
             }
         }
 
-        let edge_ids = self.graph_meta.as_ref()
+        let edge_ids = self
+            .graph_meta
+            .as_ref()
             .map(|m| m.edge_ids.clone())
             .unwrap_or_default();
 
@@ -166,7 +203,9 @@ impl StarMapStore {
             }
         }
 
-        let embed_ids = self.graph_meta.as_ref()
+        let embed_ids = self
+            .graph_meta
+            .as_ref()
             .map(|m| m.embed_instance_ids.clone())
             .unwrap_or_default();
 
@@ -178,7 +217,9 @@ impl StarMapStore {
             }
         }
 
-        let hl_ids = self.graph_meta.as_ref()
+        let hl_ids = self
+            .graph_meta
+            .as_ref()
             .map(|m| m.hyperlink_ids.clone())
             .unwrap_or_default();
 
@@ -190,7 +231,9 @@ impl StarMapStore {
             }
         }
 
-        let link_ids = self.graph_meta.as_ref()
+        let link_ids = self
+            .graph_meta
+            .as_ref()
             .map(|m| m.link_ids.clone())
             .unwrap_or_default();
 
@@ -208,7 +251,9 @@ impl StarMapStore {
         self.detect_dangling_references(&mut diagnostics);
         self.detect_orphan_objects(&mut diagnostics);
 
-        self.package_revision = self.graph_meta.as_ref()
+        self.package_revision = self
+            .graph_meta
+            .as_ref()
             .map(|m| m.package_revision)
             .unwrap_or(0);
 

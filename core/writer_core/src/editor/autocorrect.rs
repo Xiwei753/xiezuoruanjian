@@ -120,9 +120,7 @@ mod tests {
 
     #[test]
     fn test_scan_text_no_matches() {
-        let dict = vec![
-            ("teh".to_string(), "the".to_string()),
-        ];
+        let dict = vec![("teh".to_string(), "the".to_string())];
         let engine = AutoCorrectEngine::new(&dict).unwrap();
         let text = "the quick brown fox";
         let corrections = engine.scan_text(text);
@@ -131,9 +129,7 @@ mod tests {
 
     #[test]
     fn test_scan_text_empty_input() {
-        let dict = vec![
-            ("teh".to_string(), "the".to_string()),
-        ];
+        let dict = vec![("teh".to_string(), "the".to_string())];
         let engine = AutoCorrectEngine::new(&dict).unwrap();
         let text = "";
         let corrections = engine.scan_text(text);
@@ -142,9 +138,7 @@ mod tests {
 
     #[test]
     fn test_scan_text_multiple_occurrences() {
-        let dict = vec![
-            ("teh".to_string(), "the".to_string()),
-        ];
+        let dict = vec![("teh".to_string(), "the".to_string())];
         let engine = AutoCorrectEngine::new(&dict).unwrap();
         let text = "teh teh teh";
         let corrections = engine.scan_text(text);
@@ -156,9 +150,7 @@ mod tests {
 
     #[test]
     fn test_scan_text_unicode() {
-        let dict = vec![
-            ("錯字".to_string(), "错字".to_string()),
-        ];
+        let dict = vec![("錯字".to_string(), "错字".to_string())];
         let engine = AutoCorrectEngine::new(&dict).unwrap();
         let text = "这是一个錯字";
         let corrections = engine.scan_text(text);
@@ -167,14 +159,15 @@ mod tests {
         assert_eq!(corrections[0].original_text, "錯字");
         assert_eq!(corrections[0].suggestion, "错字");
         // start_index and end_index are in bytes
-        assert_eq!(&text[corrections[0].start_index.value()..corrections[0].end_index.value()], "錯字");
+        assert_eq!(
+            &text[corrections[0].start_index.value()..corrections[0].end_index.value()],
+            "錯字"
+        );
     }
 
     #[test]
     fn test_scan_text_case_sensitivity() {
-        let dict = vec![
-            ("Teh".to_string(), "The".to_string()),
-        ];
+        let dict = vec![("Teh".to_string(), "The".to_string())];
         let engine = AutoCorrectEngine::new(&dict).unwrap();
 
         let text1 = "Teh";

@@ -72,6 +72,12 @@ pub fn calculate_grid_layout(node_ids: &[String], existing: &StarMapLayout) -> S
 ///
 /// 已有位置的节点保留原位（从 existing 中克隆），仅计算新增节点位置。
 /// 已被前驱层级定位的节点不会被子节点重新定位（`positions.contains_key` 检查）。
+// TODO(#597): 既有代码可读性技术债，待后续重构拆分
+#[allow(
+    clippy::excessive_nesting,
+    clippy::too_many_lines,
+    clippy::cognitive_complexity
+)]
 pub fn calculate_radial_layout(
     node_ids: &[String],
     parent_map: &std::collections::HashMap<String, Option<String>>,
@@ -97,7 +103,8 @@ pub fn calculate_radial_layout(
         children_map.entry(parent).or_default().push(id.as_str());
     }
 
-    let node_ids_set: std::collections::HashSet<&str> = node_ids.iter().map(|s| s.as_str()).collect();
+    let node_ids_set: std::collections::HashSet<&str> =
+        node_ids.iter().map(|s| s.as_str()).collect();
 
     let roots: Vec<&str> = node_ids
         .iter()
@@ -113,7 +120,8 @@ pub fn calculate_radial_layout(
 
     let mut positions: std::collections::HashMap<&str, (f32, f32)> =
         std::collections::HashMap::with_capacity(node_ids.len());
-    let mut depths: std::collections::HashMap<&str, f32> = std::collections::HashMap::with_capacity(node_ids.len());
+    let mut depths: std::collections::HashMap<&str, f32> =
+        std::collections::HashMap::with_capacity(node_ids.len());
 
     for (i, root_id) in roots.iter().enumerate() {
         let angle = (i as f32) * 2.0 * std::f32::consts::PI / (roots.len().max(1) as f32);

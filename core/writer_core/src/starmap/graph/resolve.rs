@@ -49,7 +49,8 @@ pub fn resolve_deep_target(
 
     match &dt.target {
         crate::starmap::semantic::StarMapTargetDetail::Node { node_id } => {
-            let mut store = crate::starmap::store::StarMapStore::new(workspace, &current_starmap_id);
+            let mut store =
+                crate::starmap::store::StarMapStore::new(workspace, &current_starmap_id);
             if store.load_full().is_err() {
                 return MissingNode;
             }
@@ -58,7 +59,8 @@ pub fn resolve_deep_target(
             }
         }
         crate::starmap::semantic::StarMapTargetDetail::Anchor { node_id, anchor_id } => {
-            let mut store = crate::starmap::store::StarMapStore::new(workspace, &current_starmap_id);
+            let mut store =
+                crate::starmap::store::StarMapStore::new(workspace, &current_starmap_id);
             if store.load_full().is_err() {
                 return MissingNode;
             }

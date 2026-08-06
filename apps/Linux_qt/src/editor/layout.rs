@@ -1119,7 +1119,7 @@ impl EditorLayout {
             let content_height = lines
                 .last()
                 .map(|l| (l.y + l.height + f64::from(params.padding)) as f32)
-                .unwrap_or(params.font_size * params.line_spacing + params.padding * 2.0  )
+                .unwrap_or(params.font_size * params.line_spacing + params.padding * 2.0)
                 .max(1.0);
             LayoutSnapshot {
                 text_revision,
@@ -1587,7 +1587,8 @@ pub fn caret_rect(
         } else {
             get_font_descent(&snapshot.font_family, snapshot.font_size)
         };
-        let text_baseline = text_baseline_y(line, f64::from(snapshot.font_size), &snapshot.font_family);
+        let text_baseline =
+            text_baseline_y(line, f64::from(snapshot.font_size), &snapshot.font_family);
         let cursor_top_to_baseline = text_baseline - cursor_y_doc;
         let cursor_bottom_to_baseline = cursor_y_doc + cursor_h - text_baseline;
         eprintln!(
@@ -2082,7 +2083,10 @@ pub fn prepare_paragraph_visual_snapshot(
 
         let image = if image_phys_w > 0 && image_phys_h > 0 {
             let mut img = qmetaobject::QImage::new(
-                qmetaobject::QSize { width: 1, height: 1 },
+                qmetaobject::QSize {
+                    width: 1,
+                    height: 1,
+                },
                 qmetaobject::ImageFormat::ARGB32_Premultiplied,
             );
             let img_ptr = &mut img as *mut qmetaobject::QImage;
@@ -2166,8 +2170,11 @@ pub fn prepare_paragraph_visual_snapshot(
             let c_doc_byte_start = index_map.qchar_to_document_byte(c_qchar_start);
             let c_doc_byte_end = index_map.qchar_to_document_byte(c_qchar_end);
 
-            let (c_byte_start, c_byte_end) = index_map.qchar_range_to_document_byte_range(c_qchar_start, c_qchar_end);
-            let c_cluster_text: String = if c_byte_start <= c_byte_end && c_byte_end <= paragraph_text.len() + paragraph_document_byte_start {
+            let (c_byte_start, c_byte_end) =
+                index_map.qchar_range_to_document_byte_range(c_qchar_start, c_qchar_end);
+            let c_cluster_text: String = if c_byte_start <= c_byte_end
+                && c_byte_end <= paragraph_text.len() + paragraph_document_byte_start
+            {
                 let local_start = c_byte_start.saturating_sub(paragraph_document_byte_start);
                 let local_end = c_byte_end.saturating_sub(paragraph_document_byte_start);
                 if local_start <= local_end && local_end <= paragraph_text.len() {
@@ -2288,7 +2295,8 @@ impl CanonicalDocumentVisualSnapshot {
         scroll_y: f64,
         viewport_h: f64,
     ) -> CaretRect {
-        let line = self.visual_lines
+        let line = self
+            .visual_lines
             .iter()
             .enumerate()
             .find(|(idx, _)| {
@@ -2329,7 +2337,8 @@ impl CanonicalDocumentVisualSnapshot {
         };
 
         let cursor_x = self.cursor_x_from_canonical(line, cursor_byte, affinity);
-        let (cursor_y_doc, cursor_h) = cursor_rect_for_line(line, self.font_size, &self.font_family);
+        let (cursor_y_doc, cursor_h) =
+            cursor_rect_for_line(line, self.font_size, &self.font_family);
         let cursor_y = cursor_y_doc - scroll_y;
         let visible = cursor_y + cursor_h > 0.0 && cursor_y < viewport_h.max(1.0);
 
@@ -2366,21 +2375,31 @@ impl CanonicalDocumentVisualSnapshot {
 
         let cursor_qchar = byte_offset_to_qchar_offset(&para.paragraph_text, cursor_in_para);
 
-        let canonical_line = para.lines.iter().find(|cl| {
-            cl.qchar_start <= cursor_qchar && cursor_qchar <= cl.qchar_end
-        });
+        let canonical_line = para
+            .lines
+            .iter()
+            .find(|cl| cl.qchar_start <= cursor_qchar && cursor_qchar <= cl.qchar_end);
 
         match canonical_line {
             Some(cl) => {
-                let use_trailing = affinity == CaretAffinity::Upstream && cursor_byte == line.byte_end;
+                let use_trailing =
+                    affinity == CaretAffinity::Upstream && cursor_byte == line.byte_end;
                 let entry = cl.cursor_x_map.iter().find(|m| m.qchar_pos == cursor_qchar);
                 let x_in_line = match entry {
                     Some(m) => {
-                        if use_trailing { m.x_trailing } else { m.x_leading }
+                        if use_trailing {
+                            m.x_trailing
+                        } else {
+                            m.x_leading
+                        }
                     }
                     None => {
                         if let Some(last) = cl.cursor_x_map.last() {
-                            if use_trailing { last.x_trailing } else { last.x_leading }
+                            if use_trailing {
+                                last.x_trailing
+                            } else {
+                                last.x_leading
+                            }
                         } else {
                             0.0
                         }
@@ -2483,7 +2502,10 @@ pub fn prepare_document_visual_snapshot(
                 paragraph_text: String::new(),
                 paragraph_document_byte_start: paragraph_start,
                 lines: Vec::new(),
-                index_map: crate::editor::paragraph_index_map::ParagraphIndexMap::build("", paragraph_start),
+                index_map: crate::editor::paragraph_index_map::ParagraphIndexMap::build(
+                    "",
+                    paragraph_start,
+                ),
             });
 
             paragraph_start += paragraph.len();
@@ -2528,7 +2550,11 @@ pub fn prepare_document_visual_snapshot(
                 qtextline_idx: line_idx as i32,
                 para_qchar_start: canonical_line.qchar_start,
                 para_qchar_end: canonical_line.qchar_end,
-                line_wrap_width: if is_first { available - indent } else { available },
+                line_wrap_width: if is_first {
+                    available - indent
+                } else {
+                    available
+                },
                 line_indent_x: if is_first { indent } else { 0.0 },
                 para_indent: indent,
                 x_end_trailing: canonical_line.x_end_trailing,
@@ -2664,7 +2690,8 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                 let prev_lines: Vec<VisualLine> = if let Some(pidx) = prev_para_idx {
                     let prev_p = &prev.paragraphs[pidx];
                     let prev_para_byte_start = prev_p.paragraph_document_byte_start;
-                    prev.visual_lines.iter()
+                    prev.visual_lines
+                        .iter()
                         .filter(|l| l.para_start == prev_para_byte_start)
                         .cloned()
                         .collect()
@@ -2676,7 +2703,9 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                     if let Some(first_prev) = prev_lines.first() {
                         let y_offset = y - first_prev.y;
                         let byte_offset = paragraph_start as i64 - first_prev.para_start as i64;
-                        let qchar_offset = paragraph_qchar_start as i64 - first_prev.qchar_start as i64 + first_prev.para_qchar_start as i64;
+                        let qchar_offset = paragraph_qchar_start as i64
+                            - first_prev.qchar_start as i64
+                            + first_prev.para_qchar_start as i64;
                         for mut vl in prev_lines {
                             vl.id = line_id;
                             vl.y += y_offset;
@@ -2704,16 +2733,25 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
 
                 if let Some(pidx) = prev_para_idx {
                     let mut para = prev.paragraphs[pidx].clone();
-                    let byte_offset = paragraph_start as i64 - para.paragraph_document_byte_start as i64;
+                    let byte_offset =
+                        paragraph_start as i64 - para.paragraph_document_byte_start as i64;
                     if byte_offset != 0 {
                         para.paragraph_document_byte_start = paragraph_start;
-                        para.index_map = crate::editor::paragraph_index_map::ParagraphIndexMap::build(&para.paragraph_text, paragraph_start);
+                        para.index_map =
+                            crate::editor::paragraph_index_map::ParagraphIndexMap::build(
+                                &para.paragraph_text,
+                                paragraph_start,
+                            );
                         for line in &mut para.lines {
-                            line.document_byte_start = (line.document_byte_start as i64 + byte_offset) as usize;
-                            line.document_byte_end = (line.document_byte_end as i64 + byte_offset) as usize;
+                            line.document_byte_start =
+                                (line.document_byte_start as i64 + byte_offset) as usize;
+                            line.document_byte_end =
+                                (line.document_byte_end as i64 + byte_offset) as usize;
                             for cluster in &mut line.clusters {
-                                cluster.document_byte_start = (cluster.document_byte_start as i64 + byte_offset) as usize;
-                                cluster.document_byte_end = (cluster.document_byte_end as i64 + byte_offset) as usize;
+                                cluster.document_byte_start =
+                                    (cluster.document_byte_start as i64 + byte_offset) as usize;
+                                cluster.document_byte_end =
+                                    (cluster.document_byte_end as i64 + byte_offset) as usize;
                             }
                         }
                     }
@@ -2723,7 +2761,10 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                         paragraph_text: paragraph_text.to_string(),
                         paragraph_document_byte_start: paragraph_start,
                         lines: Vec::new(),
-                        index_map: crate::editor::paragraph_index_map::ParagraphIndexMap::build(paragraph_text, paragraph_start),
+                        index_map: crate::editor::paragraph_index_map::ParagraphIndexMap::build(
+                            paragraph_text,
+                            paragraph_start,
+                        ),
                     });
                 }
             }
@@ -2790,7 +2831,11 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                             qtextline_idx: line_idx as i32,
                             para_qchar_start: canonical_line.qchar_start,
                             para_qchar_end: canonical_line.qchar_end,
-                            line_wrap_width: if is_first { available - indent } else { available },
+                            line_wrap_width: if is_first {
+                                available - indent
+                            } else {
+                                available
+                            },
                             line_indent_x: if is_first { indent } else { 0.0 },
                             para_indent: indent,
                             x_end_trailing: canonical_line.x_end_trailing,
@@ -2843,7 +2888,10 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                 paragraph_text: String::new(),
                 paragraph_document_byte_start: paragraph_start,
                 lines: Vec::new(),
-                index_map: crate::editor::paragraph_index_map::ParagraphIndexMap::build("", paragraph_start),
+                index_map: crate::editor::paragraph_index_map::ParagraphIndexMap::build(
+                    "",
+                    paragraph_start,
+                ),
             });
 
             paragraph_start += paragraph.len();
@@ -2889,7 +2937,11 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                 qtextline_idx: line_idx as i32,
                 para_qchar_start: canonical_line.qchar_start,
                 para_qchar_end: canonical_line.qchar_end,
-                line_wrap_width: if is_first { available - indent } else { available },
+                line_wrap_width: if is_first {
+                    available - indent
+                } else {
+                    available
+                },
                 line_indent_x: if is_first { indent } else { 0.0 },
                 para_indent: indent,
                 x_end_trailing: canonical_line.x_end_trailing,

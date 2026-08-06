@@ -7,14 +7,23 @@ mod tests {
     use crate::search::types::*;
     use tempfile::TempDir;
 
-    fn rebuild_index(workspace: &std::path::Path, project_id: Option<&str>) -> crate::error::Result<SearchIndexStatus> {
+    fn rebuild_index(
+        workspace: &std::path::Path,
+        project_id: Option<&str>,
+    ) -> crate::error::Result<SearchIndexStatus> {
         let entries = crate::search::rebuild::rebuild_index(workspace, project_id)?;
         let mut service = SearchIndexService::new();
         service.rebuild_from_entries(entries);
         Ok(service.status())
     }
 
-    fn search_with_service(service: &mut SearchIndexService, query: &str, scope: SearchScope, limit: usize, cursor: Option<&str>) -> Vec<SearchResult> {
+    fn search_with_service(
+        service: &mut SearchIndexService,
+        query: &str,
+        scope: SearchScope,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Vec<SearchResult> {
         service.search(query, scope, limit, cursor)
     }
 
@@ -62,7 +71,8 @@ mod tests {
             }),
         });
 
-        let results = search_with_service(&mut service, "Test", SearchScope::ChapterTitle, 10, None);
+        let results =
+            search_with_service(&mut service, "Test", SearchScope::ChapterTitle, 10, None);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "Test Chapter");
         assert_eq!(results[0].object_id, "test:1");
@@ -87,7 +97,8 @@ mod tests {
             }),
         });
 
-        let results = search_with_service(&mut service, "Delete", SearchScope::ChapterTitle, 10, None);
+        let results =
+            search_with_service(&mut service, "Delete", SearchScope::ChapterTitle, 10, None);
         assert_eq!(results.len(), 1);
 
         service.enqueue_update(SearchIndexUpdate {
@@ -99,7 +110,8 @@ mod tests {
             target: None,
         });
 
-        let results = search_with_service(&mut service, "Delete", SearchScope::ChapterTitle, 10, None);
+        let results =
+            search_with_service(&mut service, "Delete", SearchScope::ChapterTitle, 10, None);
         assert!(results.is_empty());
     }
 
@@ -111,7 +123,9 @@ mod tests {
             object_id: "zh:1".to_string(),
             scope: SearchScope::ChapterBody,
             title: "中文章节".to_string(),
-            body: "这是一段中文正文内容，用于测试搜索功能是否能在多字节字符上正确工作而不发生崩溃。".to_string(),
+            body:
+                "这是一段中文正文内容，用于测试搜索功能是否能在多字节字符上正确工作而不发生崩溃。"
+                    .to_string(),
             target: Some(SearchTarget {
                 project_id: Some("p1".to_string()),
                 volume_id: None,
@@ -152,10 +166,20 @@ mod tests {
         assert_eq!(page1.len(), 2);
 
         let cursor = page1.last().unwrap().object_id.clone();
-        let page2 = search_with_service(&mut service, "Alpha", SearchScope::ChapterTitle, 2, Some(&cursor));
+        let page2 = search_with_service(
+            &mut service,
+            "Alpha",
+            SearchScope::ChapterTitle,
+            2,
+            Some(&cursor),
+        );
         assert_eq!(page2.len(), 2);
 
-        let all_ids: Vec<String> = page1.iter().chain(page2.iter()).map(|r| r.object_id.clone()).collect();
+        let all_ids: Vec<String> = page1
+            .iter()
+            .chain(page2.iter())
+            .map(|r| r.object_id.clone())
+            .collect();
         let unique_ids: std::collections::HashSet<&String> = all_ids.iter().collect();
         assert_eq!(unique_ids.len(), 4);
     }
@@ -181,7 +205,13 @@ mod tests {
             });
         }
 
-        let results = search_with_service(&mut service, "Duplicate", SearchScope::ChapterTitle, 10, None);
+        let results = search_with_service(
+            &mut service,
+            "Duplicate",
+            SearchScope::ChapterTitle,
+            10,
+            None,
+        );
         assert_eq!(results.len(), 1);
     }
 
@@ -204,9 +234,21 @@ mod tests {
             }),
         });
 
-        let title_results = search_with_service(&mut service, "ScopeTest", SearchScope::ChapterTitle, 10, None);
+        let title_results = search_with_service(
+            &mut service,
+            "ScopeTest",
+            SearchScope::ChapterTitle,
+            10,
+            None,
+        );
         assert_eq!(title_results.len(), 1);
-        let body_results = search_with_service(&mut service, "ScopeTest", SearchScope::ChapterBody, 10, None);
+        let body_results = search_with_service(
+            &mut service,
+            "ScopeTest",
+            SearchScope::ChapterBody,
+            10,
+            None,
+        );
         assert!(body_results.is_empty());
 
         service.enqueue_update(SearchIndexUpdate {
@@ -225,9 +267,21 @@ mod tests {
             }),
         });
 
-        let title_results_after = search_with_service(&mut service, "ScopeTest", SearchScope::ChapterTitle, 10, None);
+        let title_results_after = search_with_service(
+            &mut service,
+            "ScopeTest",
+            SearchScope::ChapterTitle,
+            10,
+            None,
+        );
         assert!(title_results_after.is_empty());
-        let body_results_after = search_with_service(&mut service, "ScopeTest", SearchScope::ChapterBody, 10, None);
+        let body_results_after = search_with_service(
+            &mut service,
+            "ScopeTest",
+            SearchScope::ChapterBody,
+            10,
+            None,
+        );
         assert_eq!(body_results_after.len(), 1);
     }
 
@@ -250,7 +304,13 @@ mod tests {
             }),
         });
 
-        let results = search_with_service(&mut service, "ChapterRef", SearchScope::StarmapLink, 10, None);
+        let results = search_with_service(
+            &mut service,
+            "ChapterRef",
+            SearchScope::StarmapLink,
+            10,
+            None,
+        );
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].scope, SearchScope::StarmapLink);
     }
@@ -265,14 +325,17 @@ mod tests {
         std::fs::write(
             starmap_dir.join("graph.json"),
             serde_json::json!({"title": "TestMap", "linkIds": []}).to_string(),
-        ).unwrap();
+        )
+        .unwrap();
         std::fs::write(
             starmaps_root.join("sm1.meta.json"),
             serde_json::json!({"starmapId": "sm1", "projectId": "p1", "title": "TestMap", "createdAt": 0, "updatedAt": 0}).to_string(),
         ).unwrap();
         let link = crate::starmap::types::StarMapLink {
             link_id: "l1".to_string(),
-            source: crate::starmap::types::StarMapEndpoint::Node { node_id: "n1".to_string() },
+            source: crate::starmap::types::StarMapEndpoint::Node {
+                node_id: "n1".to_string(),
+            },
             target: crate::starmap::semantic::StarMapDeepTarget {
                 starmap_id: "sm1".to_string(),
                 path: vec![],
@@ -285,10 +348,14 @@ mod tests {
         std::fs::write(
             starmap_dir.join("links").join("l1.json"),
             serde_json::to_string(&link).unwrap(),
-        ).unwrap();
+        )
+        .unwrap();
 
         let entries = extract_starmap_entries(dir.path(), None).unwrap();
-        let link_entries: Vec<_> = entries.iter().filter(|e| e.scope == SearchScope::StarmapLink).collect();
+        let link_entries: Vec<_> = entries
+            .iter()
+            .filter(|e| e.scope == SearchScope::StarmapLink)
+            .collect();
         assert_eq!(link_entries.len(), 1);
         assert_eq!(link_entries[0].title, "MyLink");
     }
@@ -311,7 +378,13 @@ mod tests {
                 setting_key: None,
             }),
         });
-        let results = search_with_service(&mut service, "Immediate", SearchScope::ChapterTitle, 10, None);
+        let results = search_with_service(
+            &mut service,
+            "Immediate",
+            SearchScope::ChapterTitle,
+            10,
+            None,
+        );
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "Immediate");
     }
@@ -369,10 +442,12 @@ mod tests {
         assert_eq!(results.len(), 2);
 
         service.remove_by_prefix("starmap_node:s1:");
-        let node_results = search_with_service(&mut service, "Node", SearchScope::StarmapNode, 10, None);
+        let node_results =
+            search_with_service(&mut service, "Node", SearchScope::StarmapNode, 10, None);
         assert!(node_results.is_empty());
 
-        let map_results = search_with_service(&mut service, "Map", SearchScope::StarmapTitle, 10, None);
+        let map_results =
+            search_with_service(&mut service, "Map", SearchScope::StarmapTitle, 10, None);
         assert_eq!(map_results.len(), 2);
     }
 
@@ -385,7 +460,14 @@ mod tests {
             scope: SearchScope::StarmapTitle,
             title: "Map1".to_string(),
             body: "Map1".to_string(),
-            target: Some(SearchTarget { project_id: None, volume_id: None, chapter_id: None, starmap_id: Some("s1".to_string()), node_id: None, setting_key: None }),
+            target: Some(SearchTarget {
+                project_id: None,
+                volume_id: None,
+                chapter_id: None,
+                starmap_id: Some("s1".to_string()),
+                node_id: None,
+                setting_key: None,
+            }),
         });
         service.enqueue_update(SearchIndexUpdate {
             action: SearchIndexAction::Upsert,
@@ -393,7 +475,14 @@ mod tests {
             scope: SearchScope::StarmapNode,
             title: "Node1".to_string(),
             body: "Node1".to_string(),
-            target: Some(SearchTarget { project_id: None, volume_id: None, chapter_id: None, starmap_id: Some("s1".to_string()), node_id: Some("n1".to_string()), setting_key: None }),
+            target: Some(SearchTarget {
+                project_id: None,
+                volume_id: None,
+                chapter_id: None,
+                starmap_id: Some("s1".to_string()),
+                node_id: Some("n1".to_string()),
+                setting_key: None,
+            }),
         });
         service.enqueue_update(SearchIndexUpdate {
             action: SearchIndexAction::Upsert,
@@ -401,7 +490,14 @@ mod tests {
             scope: SearchScope::StarmapNode,
             title: "Node2".to_string(),
             body: "Node2".to_string(),
-            target: Some(SearchTarget { project_id: None, volume_id: None, chapter_id: None, starmap_id: Some("s1".to_string()), node_id: Some("n2".to_string()), setting_key: None }),
+            target: Some(SearchTarget {
+                project_id: None,
+                volume_id: None,
+                chapter_id: None,
+                starmap_id: Some("s1".to_string()),
+                node_id: Some("n2".to_string()),
+                setting_key: None,
+            }),
         });
         service.enqueue_update(SearchIndexUpdate {
             action: SearchIndexAction::Upsert,
@@ -409,7 +505,14 @@ mod tests {
             scope: SearchScope::StarmapEdgeLabel,
             title: "Edge1".to_string(),
             body: "Edge1".to_string(),
-            target: Some(SearchTarget { project_id: None, volume_id: None, chapter_id: None, starmap_id: Some("s1".to_string()), node_id: None, setting_key: None }),
+            target: Some(SearchTarget {
+                project_id: None,
+                volume_id: None,
+                chapter_id: None,
+                starmap_id: Some("s1".to_string()),
+                node_id: None,
+                setting_key: None,
+            }),
         });
         service.enqueue_update(SearchIndexUpdate {
             action: SearchIndexAction::Upsert,
@@ -417,7 +520,14 @@ mod tests {
             scope: SearchScope::StarmapLink,
             title: "Link1".to_string(),
             body: "Link1".to_string(),
-            target: Some(SearchTarget { project_id: None, volume_id: None, chapter_id: None, starmap_id: Some("s1".to_string()), node_id: None, setting_key: None }),
+            target: Some(SearchTarget {
+                project_id: None,
+                volume_id: None,
+                chapter_id: None,
+                starmap_id: Some("s1".to_string()),
+                node_id: None,
+                setting_key: None,
+            }),
         });
         service.enqueue_update(SearchIndexUpdate {
             action: SearchIndexAction::Upsert,
@@ -425,7 +535,14 @@ mod tests {
             scope: SearchScope::StarmapHyperlink,
             title: "HL1".to_string(),
             body: "HL1".to_string(),
-            target: Some(SearchTarget { project_id: None, volume_id: None, chapter_id: None, starmap_id: Some("s1".to_string()), node_id: None, setting_key: None }),
+            target: Some(SearchTarget {
+                project_id: None,
+                volume_id: None,
+                chapter_id: None,
+                starmap_id: Some("s1".to_string()),
+                node_id: None,
+                setting_key: None,
+            }),
         });
         service.enqueue_update(SearchIndexUpdate {
             action: SearchIndexAction::Upsert,
@@ -433,7 +550,14 @@ mod tests {
             scope: SearchScope::StarmapEmbed,
             title: "Embed1".to_string(),
             body: "Embed1".to_string(),
-            target: Some(SearchTarget { project_id: None, volume_id: None, chapter_id: None, starmap_id: Some("s1".to_string()), node_id: None, setting_key: None }),
+            target: Some(SearchTarget {
+                project_id: None,
+                volume_id: None,
+                chapter_id: None,
+                starmap_id: Some("s1".to_string()),
+                node_id: None,
+                setting_key: None,
+            }),
         });
 
         assert_eq!(service.status().total_entries, 7);
@@ -497,13 +621,14 @@ mod tests {
         std::fs::write(
             starmap_dir.join("graph.json"),
             serde_json::json!({"title": "TestMap"}).to_string(),
-        ).unwrap();
+        )
+        .unwrap();
         std::fs::write(
             starmaps_root.join("sm1.meta.json"),
             serde_json::json!({"starmapId": "sm1", "projectId": "p1", "title": "TestMap", "createdAt": 0, "updatedAt": 0}).to_string(),
         ).unwrap();
         std::fs::write(
-starmap_dir.join("nodes").join("n1.json"),
+            starmap_dir.join("nodes").join("n1.json"),
             serde_json::json!({
                 "id": "n1",
                 "title": "MyNode",
@@ -512,11 +637,16 @@ starmap_dir.join("nodes").join("n1.json"),
                 "tags": ["标签A", "标签B"],
                 "createdAt": 0,
                 "updatedAt": 0
-            }).to_string(),
-        ).unwrap();
+            })
+            .to_string(),
+        )
+        .unwrap();
 
         let entries = extract_starmap_entries(dir.path(), None).unwrap();
-        let node_entries: Vec<_> = entries.iter().filter(|e| e.scope == SearchScope::StarmapNode).collect();
+        let node_entries: Vec<_> = entries
+            .iter()
+            .filter(|e| e.scope == SearchScope::StarmapNode)
+            .collect();
         assert_eq!(node_entries.len(), 1);
         assert_eq!(node_entries[0].title, "MyNode");
         assert!(node_entries[0].body.contains("节点摘要"));
@@ -534,7 +664,10 @@ starmap_dir.join("nodes").join("n1.json"),
         let results = api.search_service_search("MyProject", SearchScope::ProjectTitle, 10, None);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "MyProject");
-        assert_eq!(results[0].target.project_id.as_deref(), Some(project.id.as_str()));
+        assert_eq!(
+            results[0].target.project_id.as_deref(),
+            Some(project.id.as_str())
+        );
     }
 
     #[test]
@@ -574,7 +707,10 @@ starmap_dir.join("nodes").join("n1.json"),
         let results = api.search_service_search("MyVolume", SearchScope::VolumeTitle, 10, None);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "MyVolume");
-        assert_eq!(results[0].target.volume_id.as_deref(), Some(volume.id.as_str()));
+        assert_eq!(
+            results[0].target.volume_id.as_deref(),
+            Some(volume.id.as_str())
+        );
     }
 
     #[test]
@@ -584,11 +720,16 @@ starmap_dir.join("nodes").join("n1.json"),
         let api = crate::api::service::WriterCoreApi::new(dir.path());
         let project = api.create_project("P1").unwrap();
         let volume = api.create_volume(&project.id, "V1").unwrap();
-        let chapter = api.create_chapter(&project.id, &volume.id, "MyChapter").unwrap();
+        let chapter = api
+            .create_chapter(&project.id, &volume.id, "MyChapter")
+            .unwrap();
         let results = api.search_service_search("MyChapter", SearchScope::ChapterTitle, 10, None);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "MyChapter");
-        assert_eq!(results[0].target.chapter_id.as_deref(), Some(chapter.id.as_str()));
+        assert_eq!(
+            results[0].target.chapter_id.as_deref(),
+            Some(chapter.id.as_str())
+        );
     }
 
     #[test]
@@ -599,7 +740,8 @@ starmap_dir.join("nodes").join("n1.json"),
         let project = api.create_project("P1").unwrap();
         let volume = api.create_volume(&project.id, "V1").unwrap();
         let chapter = api.create_chapter(&project.id, &volume.id, "Ch1").unwrap();
-        api.save_chapter_content(&project.id, &volume.id, &chapter.id, "Hello World").unwrap();
+        api.save_chapter_content(&project.id, &volume.id, &chapter.id, "Hello World")
+            .unwrap();
         let results = api.search_service_search("Hello", SearchScope::ChapterBody, 10, None);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "Ch1");
@@ -613,10 +755,12 @@ starmap_dir.join("nodes").join("n1.json"),
         let project = api.create_project("P1").unwrap();
         let volume = api.create_volume(&project.id, "V1").unwrap();
         let chapter = api.create_chapter(&project.id, &volume.id, "Ch1").unwrap();
-        api.save_chapter_content(&project.id, &volume.id, &chapter.id, "UniqueContent").unwrap();
+        api.save_chapter_content(&project.id, &volume.id, &chapter.id, "UniqueContent")
+            .unwrap();
         let before = api.search_service_search("UniqueContent", SearchScope::ChapterBody, 10, None);
         assert_eq!(before.len(), 1);
-        api.clear_chapter_content(&project.id, &volume.id, &chapter.id).unwrap();
+        api.clear_chapter_content(&project.id, &volume.id, &chapter.id)
+            .unwrap();
         let after = api.search_service_search("UniqueContent", SearchScope::ChapterBody, 10, None);
         assert!(after.is_empty());
     }
@@ -628,11 +772,16 @@ starmap_dir.join("nodes").join("n1.json"),
         let api = crate::api::service::WriterCoreApi::new(dir.path());
         let project = api.create_project("P1").unwrap();
         let volume = api.create_volume(&project.id, "V1").unwrap();
-        let chapter = api.create_chapter(&project.id, &volume.id, "OldTitle").unwrap();
-        api.rename_chapter(&project.id, &volume.id, &chapter.id, "NewTitle").unwrap();
-        let old_results = api.search_service_search("OldTitle", SearchScope::ChapterTitle, 10, None);
+        let chapter = api
+            .create_chapter(&project.id, &volume.id, "OldTitle")
+            .unwrap();
+        api.rename_chapter(&project.id, &volume.id, &chapter.id, "NewTitle")
+            .unwrap();
+        let old_results =
+            api.search_service_search("OldTitle", SearchScope::ChapterTitle, 10, None);
         assert!(old_results.is_empty());
-        let new_results = api.search_service_search("NewTitle", SearchScope::ChapterTitle, 10, None);
+        let new_results =
+            api.search_service_search("NewTitle", SearchScope::ChapterTitle, 10, None);
         assert_eq!(new_results.len(), 1);
     }
 
@@ -645,7 +794,10 @@ starmap_dir.join("nodes").join("n1.json"),
         let results = api.search_service_search("MyStarMap", SearchScope::StarmapTitle, 10, None);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "MyStarMap");
-        assert_eq!(results[0].target.starmap_id.as_deref(), Some(meta.starmap_id.as_str()));
+        assert_eq!(
+            results[0].target.starmap_id.as_deref(),
+            Some(meta.starmap_id.as_str())
+        );
     }
 
     #[test]
@@ -655,19 +807,26 @@ starmap_dir.join("nodes").join("n1.json"),
         let api = crate::api::service::WriterCoreApi::new(dir.path());
         let project = api.create_project("RebuildP").unwrap();
         let volume = api.create_volume(&project.id, "V1").unwrap();
-        let chapter = api.create_chapter(&project.id, &volume.id, "RebuildCh").unwrap();
-        api.save_chapter_content(&project.id, &volume.id, &chapter.id, "RebuildContent").unwrap();
+        let chapter = api
+            .create_chapter(&project.id, &volume.id, "RebuildCh")
+            .unwrap();
+        api.save_chapter_content(&project.id, &volume.id, &chapter.id, "RebuildContent")
+            .unwrap();
 
-        let incremental_title = api.search_service_search("RebuildCh", SearchScope::ChapterTitle, 10, None);
-        let incremental_body = api.search_service_search("RebuildContent", SearchScope::ChapterBody, 10, None);
+        let incremental_title =
+            api.search_service_search("RebuildCh", SearchScope::ChapterTitle, 10, None);
+        let incremental_body =
+            api.search_service_search("RebuildContent", SearchScope::ChapterBody, 10, None);
         assert_eq!(incremental_title.len(), 1);
         assert_eq!(incremental_body.len(), 1);
         assert_eq!(incremental_title[0].title, "RebuildCh");
         assert_eq!(incremental_body[0].title, "RebuildCh");
 
         api.search_service_rebuild(None).unwrap();
-        let rebuild_title = api.search_service_search("RebuildCh", SearchScope::ChapterTitle, 10, None);
-        let rebuild_body = api.search_service_search("RebuildContent", SearchScope::ChapterBody, 10, None);
+        let rebuild_title =
+            api.search_service_search("RebuildCh", SearchScope::ChapterTitle, 10, None);
+        let rebuild_body =
+            api.search_service_search("RebuildContent", SearchScope::ChapterBody, 10, None);
         assert_eq!(rebuild_title.len(), 1);
         assert_eq!(rebuild_body.len(), 1);
         assert_eq!(rebuild_title[0].title, "RebuildCh");
@@ -681,7 +840,8 @@ starmap_dir.join("nodes").join("n1.json"),
         let api = crate::api::service::WriterCoreApi::new(dir.path());
         let project = api.create_project("P1").unwrap();
         let meta = api.create_starmap("BoundMap", "desc", None).unwrap();
-        api.bind_starmap_to_project(&meta.starmap_id, &project.id).unwrap();
+        api.bind_starmap_to_project(&meta.starmap_id, &project.id)
+            .unwrap();
 
         let node = crate::api::types::StarMapNodeDto {
             id: String::new(),
@@ -707,7 +867,10 @@ starmap_dir.join("nodes").join("n1.json"),
 
         let results = api.search_service_search("BoundNode", SearchScope::StarmapNode, 10, None);
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].target.project_id.as_deref(), Some(project.id.as_str()));
+        assert_eq!(
+            results[0].target.project_id.as_deref(),
+            Some(project.id.as_str())
+        );
     }
 
     #[test]
@@ -720,14 +883,18 @@ starmap_dir.join("nodes").join("n1.json"),
         std::fs::write(
             starmap_dir.join("graph.json"),
             serde_json::json!({"title": "CamelMap"}).to_string(),
-        ).unwrap();
+        )
+        .unwrap();
         std::fs::write(
             starmaps_root.join("sm1.meta.json"),
             serde_json::json!({"starmapId": "sm1", "projectId": "p1", "title": "CamelMap", "createdAt": 0, "updatedAt": 0}).to_string(),
         ).unwrap();
 
         let entries = extract_starmap_entries(dir.path(), None).unwrap();
-        let title_entries: Vec<_> = entries.iter().filter(|e| e.scope == SearchScope::StarmapTitle).collect();
+        let title_entries: Vec<_> = entries
+            .iter()
+            .filter(|e| e.scope == SearchScope::StarmapTitle)
+            .collect();
         assert_eq!(title_entries.len(), 1);
         assert_eq!(title_entries[0].target.project_id.as_deref(), Some("p1"));
     }
@@ -739,25 +906,54 @@ starmap_dir.join("nodes").join("n1.json"),
         let api = crate::api::service::WriterCoreApi::new(dir.path());
         let project = api.create_project("CascadeProject").unwrap();
         let volume = api.create_volume(&project.id, "CascadeVol").unwrap();
-        let chapter = api.create_chapter(&project.id, &volume.id, "CascadeCh").unwrap();
-        api.save_chapter_content(&project.id, &volume.id, &chapter.id, "CascadeBody").unwrap();
+        let chapter = api
+            .create_chapter(&project.id, &volume.id, "CascadeCh")
+            .unwrap();
+        api.save_chapter_content(&project.id, &volume.id, &chapter.id, "CascadeBody")
+            .unwrap();
         let meta = api.create_starmap("CascadeMap", "desc", None).unwrap();
-        api.bind_starmap_to_project(&meta.starmap_id, &project.id).unwrap();
+        api.bind_starmap_to_project(&meta.starmap_id, &project.id)
+            .unwrap();
 
-        assert!(!api.search_service_search("CascadeVol", SearchScope::VolumeTitle, 10, None).is_empty());
-        assert!(!api.search_service_search("CascadeCh", SearchScope::ChapterTitle, 10, None).is_empty());
-        assert!(!api.search_service_search("CascadeBody", SearchScope::ChapterBody, 10, None).is_empty());
-        assert!(!api.search_service_search("CascadeMap", SearchScope::StarmapTitle, 10, None).is_empty());
+        assert!(!api
+            .search_service_search("CascadeVol", SearchScope::VolumeTitle, 10, None)
+            .is_empty());
+        assert!(!api
+            .search_service_search("CascadeCh", SearchScope::ChapterTitle, 10, None)
+            .is_empty());
+        assert!(!api
+            .search_service_search("CascadeBody", SearchScope::ChapterBody, 10, None)
+            .is_empty());
+        assert!(!api
+            .search_service_search("CascadeMap", SearchScope::StarmapTitle, 10, None)
+            .is_empty());
 
         api.delete_project(&project.id).unwrap();
 
-        assert!(api.search_service_search("CascadeProject", SearchScope::ProjectTitle, 10, None).is_empty());
-        assert!(api.search_service_search("CascadeVol", SearchScope::VolumeTitle, 10, None).is_empty());
-        assert!(api.search_service_search("CascadeCh", SearchScope::ChapterTitle, 10, None).is_empty());
-        assert!(api.search_service_search("CascadeBody", SearchScope::ChapterBody, 10, None).is_empty());
-        assert!(api.search_service_search("CascadeMap", SearchScope::StarmapTitle, 10, None).len() == 1);
-        assert!(api.search_service_search("CascadeMap", SearchScope::StarmapTitle, 10, None)[0].target.project_id.is_none(),
-            "starmap must become unbound after project deletion");
+        assert!(api
+            .search_service_search("CascadeProject", SearchScope::ProjectTitle, 10, None)
+            .is_empty());
+        assert!(api
+            .search_service_search("CascadeVol", SearchScope::VolumeTitle, 10, None)
+            .is_empty());
+        assert!(api
+            .search_service_search("CascadeCh", SearchScope::ChapterTitle, 10, None)
+            .is_empty());
+        assert!(api
+            .search_service_search("CascadeBody", SearchScope::ChapterBody, 10, None)
+            .is_empty());
+        assert!(
+            api.search_service_search("CascadeMap", SearchScope::StarmapTitle, 10, None)
+                .len()
+                == 1
+        );
+        assert!(
+            api.search_service_search("CascadeMap", SearchScope::StarmapTitle, 10, None)[0]
+                .target
+                .project_id
+                .is_none(),
+            "starmap must become unbound after project deletion"
+        );
     }
 
     #[test]
@@ -767,17 +963,30 @@ starmap_dir.join("nodes").join("n1.json"),
         let api = crate::api::service::WriterCoreApi::new(dir.path());
         let project = api.create_project("P1").unwrap();
         let volume = api.create_volume(&project.id, "VolWithChapters").unwrap();
-        let chapter = api.create_chapter(&project.id, &volume.id, "ChapterInVol").unwrap();
-        api.save_chapter_content(&project.id, &volume.id, &chapter.id, "BodyInVol").unwrap();
+        let chapter = api
+            .create_chapter(&project.id, &volume.id, "ChapterInVol")
+            .unwrap();
+        api.save_chapter_content(&project.id, &volume.id, &chapter.id, "BodyInVol")
+            .unwrap();
 
-        assert!(!api.search_service_search("ChapterInVol", SearchScope::ChapterTitle, 10, None).is_empty());
-        assert!(!api.search_service_search("BodyInVol", SearchScope::ChapterBody, 10, None).is_empty());
+        assert!(!api
+            .search_service_search("ChapterInVol", SearchScope::ChapterTitle, 10, None)
+            .is_empty());
+        assert!(!api
+            .search_service_search("BodyInVol", SearchScope::ChapterBody, 10, None)
+            .is_empty());
 
         api.delete_volume(&project.id, &volume.id).unwrap();
 
-        assert!(api.search_service_search("VolWithChapters", SearchScope::VolumeTitle, 10, None).is_empty());
-        assert!(api.search_service_search("ChapterInVol", SearchScope::ChapterTitle, 10, None).is_empty());
-        assert!(api.search_service_search("BodyInVol", SearchScope::ChapterBody, 10, None).is_empty());
+        assert!(api
+            .search_service_search("VolWithChapters", SearchScope::VolumeTitle, 10, None)
+            .is_empty());
+        assert!(api
+            .search_service_search("ChapterInVol", SearchScope::ChapterTitle, 10, None)
+            .is_empty());
+        assert!(api
+            .search_service_search("BodyInVol", SearchScope::ChapterBody, 10, None)
+            .is_empty());
     }
 
     #[test]
@@ -852,9 +1061,14 @@ starmap_dir.join("nodes").join("n1.json"),
             created_at: 0,
             updated_at: 0,
         };
-        api.import_or_replace_starmap_package(&meta.starmap_id, &old_graph, 0).unwrap();
-        assert!(!api.search_service_search("NodeA", SearchScope::StarmapNode, 10, None).is_empty());
-        assert!(!api.search_service_search("NodeB", SearchScope::StarmapNode, 10, None).is_empty());
+        api.import_or_replace_starmap_package(&meta.starmap_id, &old_graph, 0)
+            .unwrap();
+        assert!(!api
+            .search_service_search("NodeA", SearchScope::StarmapNode, 10, None)
+            .is_empty());
+        assert!(!api
+            .search_service_search("NodeB", SearchScope::StarmapNode, 10, None)
+            .is_empty());
 
         let node_a_only = crate::api::types::StarMapNodeDto {
             id: "node-a".to_string(),
@@ -889,11 +1103,18 @@ starmap_dir.join("nodes").join("n1.json"),
             created_at: 0,
             updated_at: 0,
         };
-        let rev1 = api.core().get_starmap_store_package_revision(&meta.starmap_id);
-        api.import_or_replace_starmap_package(&meta.starmap_id, &new_graph, rev1).unwrap();
+        let rev1 = api
+            .core()
+            .get_starmap_store_package_revision(&meta.starmap_id);
+        api.import_or_replace_starmap_package(&meta.starmap_id, &new_graph, rev1)
+            .unwrap();
 
-        assert!(!api.search_service_search("NodeA", SearchScope::StarmapNode, 10, None).is_empty());
-        assert!(api.search_service_search("NodeB", SearchScope::StarmapNode, 10, None).is_empty());
+        assert!(!api
+            .search_service_search("NodeA", SearchScope::StarmapNode, 10, None)
+            .is_empty());
+        assert!(api
+            .search_service_search("NodeB", SearchScope::StarmapNode, 10, None)
+            .is_empty());
     }
 
     #[test]
@@ -903,19 +1124,27 @@ starmap_dir.join("nodes").join("n1.json"),
         let api = crate::api::service::WriterCoreApi::new(dir.path());
         let project = api.create_project("RebuildP2").unwrap();
         let volume = api.create_volume(&project.id, "V1").unwrap();
-        let chapter = api.create_chapter(&project.id, &volume.id, "RebuildCh2").unwrap();
-        api.save_chapter_content(&project.id, &volume.id, &chapter.id, "RebuildContent2").unwrap();
+        let chapter = api
+            .create_chapter(&project.id, &volume.id, "RebuildCh2")
+            .unwrap();
+        api.save_chapter_content(&project.id, &volume.id, &chapter.id, "RebuildContent2")
+            .unwrap();
 
-        let incremental_title = api.search_service_search("RebuildCh2", SearchScope::ChapterTitle, 10, None);
-        let incremental_body = api.search_service_search("RebuildContent2", SearchScope::ChapterBody, 10, None);
+        let incremental_title =
+            api.search_service_search("RebuildCh2", SearchScope::ChapterTitle, 10, None);
+        let incremental_body =
+            api.search_service_search("RebuildContent2", SearchScope::ChapterBody, 10, None);
         assert_eq!(incremental_title.len(), 1);
         assert_eq!(incremental_body.len(), 1);
 
         api.search_service_rebuild(None).unwrap();
 
-        let rebuild_title = api.search_service_search("RebuildCh2", SearchScope::ChapterTitle, 10, None);
-        let rebuild_body = api.search_service_search("RebuildContent2", SearchScope::ChapterBody, 10, None);
-        let rebuild_project = api.search_service_search("RebuildP2", SearchScope::ProjectTitle, 10, None);
+        let rebuild_title =
+            api.search_service_search("RebuildCh2", SearchScope::ChapterTitle, 10, None);
+        let rebuild_body =
+            api.search_service_search("RebuildContent2", SearchScope::ChapterBody, 10, None);
+        let rebuild_project =
+            api.search_service_search("RebuildP2", SearchScope::ProjectTitle, 10, None);
         let rebuild_volume = api.search_service_search("V1", SearchScope::VolumeTitle, 10, None);
         assert_eq!(rebuild_title.len(), 1);
         assert_eq!(rebuild_body.len(), 1);
@@ -932,7 +1161,8 @@ starmap_dir.join("nodes").join("n1.json"),
         let api = crate::api::service::WriterCoreApi::new(dir.path());
         let project = api.create_project("P1").unwrap();
         let meta = api.create_starmap("RebuildStarMap", "desc", None).unwrap();
-        api.bind_starmap_to_project(&meta.starmap_id, &project.id).unwrap();
+        api.bind_starmap_to_project(&meta.starmap_id, &project.id)
+            .unwrap();
 
         let node = crate::api::types::StarMapNodeDto {
             id: String::new(),
@@ -956,20 +1186,28 @@ starmap_dir.join("nodes").join("n1.json"),
         };
         let _ = api.add_starmap_node(&meta.starmap_id, node, 0.0, 0.0);
 
-        let inc_starmap = api.search_service_search("RebuildStarMap", SearchScope::StarmapTitle, 10, None);
+        let inc_starmap =
+            api.search_service_search("RebuildStarMap", SearchScope::StarmapTitle, 10, None);
         let inc_node = api.search_service_search("RebuildNode", SearchScope::StarmapNode, 10, None);
         assert_eq!(inc_starmap.len(), 1);
         assert_eq!(inc_node.len(), 1);
 
         api.search_service_rebuild(None).unwrap();
 
-        let rb_starmap = api.search_service_search("RebuildStarMap", SearchScope::StarmapTitle, 10, None);
+        let rb_starmap =
+            api.search_service_search("RebuildStarMap", SearchScope::StarmapTitle, 10, None);
         let rb_node = api.search_service_search("RebuildNode", SearchScope::StarmapNode, 10, None);
         assert_eq!(rb_starmap.len(), 1);
         assert_eq!(rb_node.len(), 1);
 
-        assert_eq!(inc_starmap[0].target.project_id, rb_starmap[0].target.project_id, "starmap project_id mismatch after rebuild");
-        assert_eq!(inc_node[0].target.project_id, rb_node[0].target.project_id, "node project_id mismatch after rebuild");
+        assert_eq!(
+            inc_starmap[0].target.project_id, rb_starmap[0].target.project_id,
+            "starmap project_id mismatch after rebuild"
+        );
+        assert_eq!(
+            inc_node[0].target.project_id, rb_node[0].target.project_id,
+            "node project_id mismatch after rebuild"
+        );
     }
 
     #[test]
@@ -979,17 +1217,23 @@ starmap_dir.join("nodes").join("n1.json"),
         let api = crate::api::service::WriterCoreApi::new(dir.path());
         let project = api.create_project("P1").unwrap();
         let volume = api.create_volume(&project.id, "V1").unwrap();
-        let chapter = api.create_chapter(&project.id, &volume.id, "OldTitle").unwrap();
-        api.save_chapter_content(&project.id, &volume.id, &chapter.id, "SomeBody").unwrap();
-        api.update_chapter_note(&project.id, &volume.id, &chapter.id, "SomeNote").unwrap();
+        let chapter = api
+            .create_chapter(&project.id, &volume.id, "OldTitle")
+            .unwrap();
+        api.save_chapter_content(&project.id, &volume.id, &chapter.id, "SomeBody")
+            .unwrap();
+        api.update_chapter_note(&project.id, &volume.id, &chapter.id, "SomeNote")
+            .unwrap();
 
         let body_before = api.search_service_search("SomeBody", SearchScope::ChapterBody, 10, None);
         assert_eq!(body_before.len(), 1);
         assert_eq!(body_before[0].title, "OldTitle");
 
-        api.rename_chapter(&project.id, &volume.id, &chapter.id, "NewTitle").unwrap();
+        api.rename_chapter(&project.id, &volume.id, &chapter.id, "NewTitle")
+            .unwrap();
 
-        let title_after = api.search_service_search("NewTitle", SearchScope::ChapterTitle, 10, None);
+        let title_after =
+            api.search_service_search("NewTitle", SearchScope::ChapterTitle, 10, None);
         assert_eq!(title_after.len(), 1);
         let body_after = api.search_service_search("SomeBody", SearchScope::ChapterBody, 10, None);
         assert_eq!(body_after.len(), 1);
@@ -1033,11 +1277,15 @@ starmap_dir.join("nodes").join("n1.json"),
         assert_eq!(node_before.len(), 1);
         assert!(node_before[0].target.project_id.is_none());
 
-        api.bind_starmap_to_project(&meta.starmap_id, &project.id).unwrap();
+        api.bind_starmap_to_project(&meta.starmap_id, &project.id)
+            .unwrap();
 
         let node_after = api.search_service_search("MapNode", SearchScope::StarmapNode, 10, None);
         assert_eq!(node_after.len(), 1);
-        assert_eq!(node_after[0].target.project_id.as_deref(), Some(project.id.as_str()));
+        assert_eq!(
+            node_after[0].target.project_id.as_deref(),
+            Some(project.id.as_str())
+        );
     }
 
     #[test]
@@ -1047,7 +1295,8 @@ starmap_dir.join("nodes").join("n1.json"),
         let api = crate::api::service::WriterCoreApi::new(dir.path());
         let project = api.create_project("P1").unwrap();
         let meta = api.create_starmap("BoundMap", "desc", None).unwrap();
-        api.bind_starmap_to_project(&meta.starmap_id, &project.id).unwrap();
+        api.bind_starmap_to_project(&meta.starmap_id, &project.id)
+            .unwrap();
 
         let node = crate::api::types::StarMapNodeDto {
             id: String::new(),
@@ -1071,9 +1320,13 @@ starmap_dir.join("nodes").join("n1.json"),
         };
         let _ = api.add_starmap_node(&meta.starmap_id, node, 0.0, 0.0);
 
-        let node_before = api.search_service_search("BoundNode", SearchScope::StarmapNode, 10, None);
+        let node_before =
+            api.search_service_search("BoundNode", SearchScope::StarmapNode, 10, None);
         assert_eq!(node_before.len(), 1);
-        assert_eq!(node_before[0].target.project_id.as_deref(), Some(project.id.as_str()));
+        assert_eq!(
+            node_before[0].target.project_id.as_deref(),
+            Some(project.id.as_str())
+        );
 
         api.unbind_starmap_from_project(&meta.starmap_id).unwrap();
 
@@ -1102,12 +1355,24 @@ starmap_dir.join("nodes").join("n1.json"),
             created_at: 0,
             updated_at: 0,
         };
-        let starmap_dir = dir.path().join("app-meta").join("starmaps").join(&meta.starmap_id).join("hyperlinks");
+        let starmap_dir = dir
+            .path()
+            .join("app-meta")
+            .join("starmaps")
+            .join(&meta.starmap_id)
+            .join("hyperlinks");
         std::fs::create_dir_all(&starmap_dir).unwrap();
-        std::fs::write(starmap_dir.join("hl1.json"), serde_json::to_string(&hl).unwrap()).unwrap();
+        std::fs::write(
+            starmap_dir.join("hl1.json"),
+            serde_json::to_string(&hl).unwrap(),
+        )
+        .unwrap();
 
         let entries = extract_starmap_entries(dir.path(), None).unwrap();
-        let hl_entries: Vec<_> = entries.iter().filter(|e| e.scope == SearchScope::StarmapHyperlink).collect();
+        let hl_entries: Vec<_> = entries
+            .iter()
+            .filter(|e| e.scope == SearchScope::StarmapHyperlink)
+            .collect();
         assert_eq!(hl_entries.len(), 1);
         assert_eq!(hl_entries[0].title, "ExampleDoc");
         assert!(hl_entries[0].body.contains("example.com"));
@@ -1190,8 +1455,11 @@ starmap_dir.join("nodes").join("n1.json"),
             created_at: 0,
             updated_at: 0,
         };
-        api.import_or_replace_starmap_package(&meta.starmap_id, &old_graph, 0).unwrap();
-        assert!(!api.search_service_search("EdgeLabel", SearchScope::StarmapEdgeLabel, 10, None).is_empty());
+        api.import_or_replace_starmap_package(&meta.starmap_id, &old_graph, 0)
+            .unwrap();
+        assert!(!api
+            .search_service_search("EdgeLabel", SearchScope::StarmapEdgeLabel, 10, None)
+            .is_empty());
 
         let node_a_only = crate::api::types::StarMapNodeDto {
             id: "na".to_string(),
@@ -1226,11 +1494,18 @@ starmap_dir.join("nodes").join("n1.json"),
             created_at: 0,
             updated_at: 0,
         };
-        let rev1 = api.core().get_starmap_store_package_revision(&meta.starmap_id);
-        api.import_or_replace_starmap_package(&meta.starmap_id, &new_graph, rev1).unwrap();
+        let rev1 = api
+            .core()
+            .get_starmap_store_package_revision(&meta.starmap_id);
+        api.import_or_replace_starmap_package(&meta.starmap_id, &new_graph, rev1)
+            .unwrap();
 
-        assert!(api.search_service_search("EdgeLabel", SearchScope::StarmapEdgeLabel, 10, None).is_empty());
-        assert!(api.search_service_search("NodeB", SearchScope::StarmapNode, 10, None).is_empty());
+        assert!(api
+            .search_service_search("EdgeLabel", SearchScope::StarmapEdgeLabel, 10, None)
+            .is_empty());
+        assert!(api
+            .search_service_search("NodeB", SearchScope::StarmapNode, 10, None)
+            .is_empty());
     }
 
     #[test]
@@ -1240,7 +1515,11 @@ starmap_dir.join("nodes").join("n1.json"),
         let api = crate::api::service::WriterCoreApi::new(dir.path());
         let _project = api.create_project("VolIndexProject").unwrap();
         let results = api.search_service_search("第一卷", SearchScope::VolumeTitle, 10, None);
-        assert_eq!(results.len(), 1, "create_project should index the auto-created default volume");
+        assert_eq!(
+            results.len(),
+            1,
+            "create_project should index the auto-created default volume"
+        );
     }
 
     #[test]
@@ -1258,7 +1537,11 @@ starmap_dir.join("nodes").join("n1.json"),
         api.delete_project(&_project.id).unwrap();
 
         let after = api.search_service_search("UnboundMap", SearchScope::StarmapTitle, 10, None);
-        assert_eq!(after.len(), 1, "delete_project must not remove unbound starmap indices");
+        assert_eq!(
+            after.len(),
+            1,
+            "delete_project must not remove unbound starmap indices"
+        );
     }
 
     #[test]
@@ -1268,19 +1551,28 @@ starmap_dir.join("nodes").join("n1.json"),
         let api = crate::api::service::WriterCoreApi::new(dir.path());
         let project = api.create_project("OrderP").unwrap();
         let meta = api.create_starmap("BoundMap", "desc", None).unwrap();
-        api.bind_starmap_to_project(&meta.starmap_id, &project.id).unwrap();
+        api.bind_starmap_to_project(&meta.starmap_id, &project.id)
+            .unwrap();
 
         let before = api.search_service_search("BoundMap", SearchScope::StarmapTitle, 10, None);
         assert_eq!(before.len(), 1);
-        assert_eq!(before[0].target.project_id.as_deref(), Some(project.id.as_str()));
+        assert_eq!(
+            before[0].target.project_id.as_deref(),
+            Some(project.id.as_str())
+        );
 
         api.delete_project(&project.id).unwrap();
 
         let after = api.search_service_search("BoundMap", SearchScope::StarmapTitle, 10, None);
-        assert_eq!(after.len(), 1,
-            "bound starmap must remain searchable as unbound after project deletion");
-        assert!(after[0].target.project_id.is_none(),
-            "bound starmap project_id must be cleared after project deletion");
+        assert_eq!(
+            after.len(),
+            1,
+            "bound starmap must remain searchable as unbound after project deletion"
+        );
+        assert!(
+            after[0].target.project_id.is_none(),
+            "bound starmap project_id must be cleared after project deletion"
+        );
     }
 
     #[test]
@@ -1290,7 +1582,8 @@ starmap_dir.join("nodes").join("n1.json"),
         let api = crate::api::service::WriterCoreApi::new(dir.path());
         let project = api.create_project("ProjWithMap").unwrap();
         let meta = api.create_starmap("MapWithNodes", "desc", None).unwrap();
-        api.bind_starmap_to_project(&meta.starmap_id, &project.id).unwrap();
+        api.bind_starmap_to_project(&meta.starmap_id, &project.id)
+            .unwrap();
 
         let node = crate::starmap::types::StarMapNode {
             id: "n1".to_string(),
@@ -1307,27 +1600,40 @@ starmap_dir.join("nodes").join("n1.json"),
             created_at: 0,
             updated_at: 0,
         };
-        api.add_starmap_node(&meta.starmap_id, node.into(), 0.0, 0.0).unwrap();
+        api.add_starmap_node(&meta.starmap_id, node.into(), 0.0, 0.0)
+            .unwrap();
 
-        let before_node = api.search_service_search("NodeTitle", SearchScope::StarmapNode, 10, None);
+        let before_node =
+            api.search_service_search("NodeTitle", SearchScope::StarmapNode, 10, None);
         assert_eq!(before_node.len(), 1);
-        assert_eq!(before_node[0].target.project_id.as_deref(), Some(project.id.as_str()));
+        assert_eq!(
+            before_node[0].target.project_id.as_deref(),
+            Some(project.id.as_str())
+        );
 
         api.delete_project(&project.id).unwrap();
 
-        let after_title = api.search_service_search("MapWithNodes", SearchScope::StarmapTitle, 10, None);
+        let after_title =
+            api.search_service_search("MapWithNodes", SearchScope::StarmapTitle, 10, None);
         assert_eq!(after_title.len(), 1);
         assert!(after_title[0].target.project_id.is_none());
 
         let after_node = api.search_service_search("NodeTitle", SearchScope::StarmapNode, 10, None);
-        assert_eq!(after_node.len(), 1,
-            "node index must remain after project deletion with project_id cleared");
-        assert!(after_node[0].target.project_id.is_none(),
-            "node project_id must be None after project deletion");
+        assert_eq!(
+            after_node.len(),
+            1,
+            "node index must remain after project deletion with project_id cleared"
+        );
+        assert!(
+            after_node[0].target.project_id.is_none(),
+            "node project_id must be None after project deletion"
+        );
 
         let meta_after = api.core().get_starmap(&meta.starmap_id).unwrap();
-        assert!(meta_after.project_id.is_none(),
-            "starmap meta project_id must be cleared on disk after project deletion");
+        assert!(
+            meta_after.project_id.is_none(),
+            "starmap meta project_id must be cleared on disk after project deletion"
+        );
     }
 
     #[test]
@@ -1345,10 +1651,18 @@ starmap_dir.join("nodes").join("n1.json"),
             display_policy: Default::default(),
             open_behavior: Default::default(),
             placement: crate::api::types::StarMapEmbedPlacementDto {
-                x: 0.0, y: 0.0, width: 100.0, height: 100.0, scale: 1.0, z_index: 0, collapsed: false,
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 100.0,
+                scale: 1.0,
+                z_index: 0,
+                collapsed: false,
             },
             target_viewport: crate::api::types::StarMapEmbedViewportDto {
-                scale: 1.0, offset_x: 0.0, offset_y: 0.0,
+                scale: 1.0,
+                offset_x: 0.0,
+                offset_y: 0.0,
             },
             source_node_id: None,
             host_endpoint: None,
@@ -1377,31 +1691,53 @@ starmap_dir.join("nodes").join("n1.json"),
             store.flush().unwrap();
         }
 
-        let embed_before = api.search_service_search("MyEmbed", SearchScope::StarmapEmbed, 10, None);
+        let embed_before =
+            api.search_service_search("MyEmbed", SearchScope::StarmapEmbed, 10, None);
         assert_eq!(embed_before.len(), 1);
         assert!(embed_before[0].target.project_id.is_none());
 
-        api.bind_starmap_to_project(&meta.starmap_id, &project.id).unwrap();
+        api.bind_starmap_to_project(&meta.starmap_id, &project.id)
+            .unwrap();
 
-        let embed_after_bind = api.search_service_search("MyEmbed", SearchScope::StarmapEmbed, 10, None);
+        let embed_after_bind =
+            api.search_service_search("MyEmbed", SearchScope::StarmapEmbed, 10, None);
         assert_eq!(embed_after_bind.len(), 1);
-        assert_eq!(embed_after_bind[0].target.project_id.as_deref(), Some(project.id.as_str()));
+        assert_eq!(
+            embed_after_bind[0].target.project_id.as_deref(),
+            Some(project.id.as_str())
+        );
 
-        let hl_after_bind = api.search_service_search("MyHL", SearchScope::StarmapHyperlink, 10, None);
-        assert_eq!(hl_after_bind.len(), 1, "hyperlink index should exist after bind");
-        assert_eq!(hl_after_bind[0].target.project_id.as_deref(), Some(project.id.as_str()),
-            "hyperlink project_id must match bound project after bind");
+        let hl_after_bind =
+            api.search_service_search("MyHL", SearchScope::StarmapHyperlink, 10, None);
+        assert_eq!(
+            hl_after_bind.len(),
+            1,
+            "hyperlink index should exist after bind"
+        );
+        assert_eq!(
+            hl_after_bind[0].target.project_id.as_deref(),
+            Some(project.id.as_str()),
+            "hyperlink project_id must match bound project after bind"
+        );
 
         api.unbind_starmap_from_project(&meta.starmap_id).unwrap();
 
-        let embed_after_unbind = api.search_service_search("MyEmbed", SearchScope::StarmapEmbed, 10, None);
+        let embed_after_unbind =
+            api.search_service_search("MyEmbed", SearchScope::StarmapEmbed, 10, None);
         assert_eq!(embed_after_unbind.len(), 1);
         assert!(embed_after_unbind[0].target.project_id.is_none());
 
-        let hl_after_unbind = api.search_service_search("MyHL", SearchScope::StarmapHyperlink, 10, None);
-        assert_eq!(hl_after_unbind.len(), 1, "hyperlink index should exist after unbind");
-        assert!(hl_after_unbind[0].target.project_id.is_none(),
-            "hyperlink project_id must be None after unbind");
+        let hl_after_unbind =
+            api.search_service_search("MyHL", SearchScope::StarmapHyperlink, 10, None);
+        assert_eq!(
+            hl_after_unbind.len(),
+            1,
+            "hyperlink index should exist after unbind"
+        );
+        assert!(
+            hl_after_unbind[0].target.project_id.is_none(),
+            "hyperlink project_id must be None after unbind"
+        );
     }
 
     #[test]
@@ -1424,8 +1760,16 @@ starmap_dir.join("nodes").join("n1.json"),
 
         let after_a = api.search_service_search("VolA", SearchScope::VolumeTitle, 10, None);
         let after_b = api.search_service_search("VolB", SearchScope::VolumeTitle, 10, None);
-        assert_eq!(after_a.len(), 1, "project A indices should remain after project A rebuild");
-        assert_eq!(after_b.len(), 1, "project B indices must not be cleared by project A rebuild");
+        assert_eq!(
+            after_a.len(),
+            1,
+            "project A indices should remain after project A rebuild"
+        );
+        assert_eq!(
+            after_b.len(),
+            1,
+            "project B indices must not be cleared by project A rebuild"
+        );
     }
 
     #[test]
@@ -1435,7 +1779,8 @@ starmap_dir.join("nodes").join("n1.json"),
         let api = crate::api::service::WriterCoreApi::new(dir.path());
         let project = api.create_project("CascadeP").unwrap();
         let meta = api.create_starmap("CascadeMap", "desc", None).unwrap();
-        api.bind_starmap_to_project(&meta.starmap_id, &project.id).unwrap();
+        api.bind_starmap_to_project(&meta.starmap_id, &project.id)
+            .unwrap();
 
         let embed = crate::api::types::StarMapEmbedDto {
             instance_id: String::new(),
@@ -1444,10 +1789,18 @@ starmap_dir.join("nodes").join("n1.json"),
             display_policy: Default::default(),
             open_behavior: Default::default(),
             placement: crate::api::types::StarMapEmbedPlacementDto {
-                x: 0.0, y: 0.0, width: 100.0, height: 100.0, scale: 1.0, z_index: 0, collapsed: false,
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 100.0,
+                scale: 1.0,
+                z_index: 0,
+                collapsed: false,
             },
             target_viewport: crate::api::types::StarMapEmbedViewportDto {
-                scale: 1.0, offset_x: 0.0, offset_y: 0.0,
+                scale: 1.0,
+                offset_x: 0.0,
+                offset_y: 0.0,
             },
             source_node_id: None,
             host_endpoint: None,
@@ -1478,19 +1831,45 @@ starmap_dir.join("nodes").join("n1.json"),
 
         api.search_service_rebuild(None).unwrap();
 
-        let embed_before = api.search_service_search("CascadeEmbed", SearchScope::StarmapEmbed, 10, None);
-        assert_eq!(embed_before.len(), 1, "embed index should exist before delete");
-        let hl_before = api.search_service_search("CascadeHL", SearchScope::StarmapHyperlink, 10, None);
-        assert_eq!(hl_before.len(), 1, "hyperlink index should exist before delete");
+        let embed_before =
+            api.search_service_search("CascadeEmbed", SearchScope::StarmapEmbed, 10, None);
+        assert_eq!(
+            embed_before.len(),
+            1,
+            "embed index should exist before delete"
+        );
+        let hl_before =
+            api.search_service_search("CascadeHL", SearchScope::StarmapHyperlink, 10, None);
+        assert_eq!(
+            hl_before.len(),
+            1,
+            "hyperlink index should exist before delete"
+        );
 
         api.delete_project(&project.id).unwrap();
 
-        let embed_after = api.search_service_search("CascadeEmbed", SearchScope::StarmapEmbed, 10, None);
-        assert_eq!(embed_after.len(), 1, "embed index must remain as unbound after project deletion");
-        assert!(embed_after[0].target.project_id.is_none(), "embed project_id must be cleared after project deletion");
-        let hl_after = api.search_service_search("CascadeHL", SearchScope::StarmapHyperlink, 10, None);
-        assert_eq!(hl_after.len(), 1, "hyperlink index must remain as unbound after project deletion");
-        assert!(hl_after[0].target.project_id.is_none(), "hyperlink project_id must be cleared after project deletion");
+        let embed_after =
+            api.search_service_search("CascadeEmbed", SearchScope::StarmapEmbed, 10, None);
+        assert_eq!(
+            embed_after.len(),
+            1,
+            "embed index must remain as unbound after project deletion"
+        );
+        assert!(
+            embed_after[0].target.project_id.is_none(),
+            "embed project_id must be cleared after project deletion"
+        );
+        let hl_after =
+            api.search_service_search("CascadeHL", SearchScope::StarmapHyperlink, 10, None);
+        assert_eq!(
+            hl_after.len(),
+            1,
+            "hyperlink index must remain as unbound after project deletion"
+        );
+        assert!(
+            hl_after[0].target.project_id.is_none(),
+            "hyperlink project_id must be cleared after project deletion"
+        );
     }
 
     #[test]
@@ -1503,7 +1882,8 @@ starmap_dir.join("nodes").join("n1.json"),
         std::fs::write(
             starmap_dir.join("graph.json"),
             serde_json::json!({"title": "EmbedMap"}).to_string(),
-        ).unwrap();
+        )
+        .unwrap();
         std::fs::write(
             starmaps_root.join("sm1.meta.json"),
             serde_json::json!({"starmapId": "sm1", "projectId": "p1", "title": "EmbedMap", "createdAt": 0, "updatedAt": 0}).to_string(),
@@ -1525,11 +1905,19 @@ starmap_dir.join("nodes").join("n1.json"),
         std::fs::write(
             starmap_dir.join("child_starmaps").join("em1.json"),
             serde_json::to_string(&embed).unwrap(),
-        ).unwrap();
+        )
+        .unwrap();
 
         let entries = extract_starmap_entries(dir.path(), None).unwrap();
-        let embed_entries: Vec<_> = entries.iter().filter(|e| e.scope == SearchScope::StarmapEmbed).collect();
-        assert_eq!(embed_entries.len(), 1, "rebuild should extract starmap embeds");
+        let embed_entries: Vec<_> = entries
+            .iter()
+            .filter(|e| e.scope == SearchScope::StarmapEmbed)
+            .collect();
+        assert_eq!(
+            embed_entries.len(),
+            1,
+            "rebuild should extract starmap embeds"
+        );
         assert_eq!(embed_entries[0].title, "EmbedLabel");
         assert_eq!(embed_entries[0].target.project_id.as_deref(), Some("p1"));
     }
@@ -1601,19 +1989,29 @@ starmap_dir.join("nodes").join("n1.json"),
         let project_a = api.create_project("ProjectA").unwrap();
 
         let meta = api.create_starmap("StaleMap", "", None).unwrap();
-        api.bind_starmap_to_project(&meta.starmap_id, &project_a.id).unwrap();
+        api.bind_starmap_to_project(&meta.starmap_id, &project_a.id)
+            .unwrap();
 
-        let node_before = api.search_service_search("StaleMap", SearchScope::StarmapTitle, 10, None);
+        let node_before =
+            api.search_service_search("StaleMap", SearchScope::StarmapTitle, 10, None);
         assert_eq!(node_before.len(), 1);
-        assert_eq!(node_before[0].target.project_id.as_deref(), Some(project_a.id.as_str()));
+        assert_eq!(
+            node_before[0].target.project_id.as_deref(),
+            Some(project_a.id.as_str())
+        );
 
-        api.core().unbind_starmap_from_project(&meta.starmap_id).unwrap();
+        api.core()
+            .unbind_starmap_from_project(&meta.starmap_id)
+            .unwrap();
 
         api.search_service_rebuild(Some(&project_a.id)).unwrap();
 
-        let stale_after = api.search_service_search("StaleMap", SearchScope::StarmapTitle, 10, None);
-        assert!(stale_after.is_empty(),
-            "stale starmap index with old project_id must be removed by per-project rebuild");
+        let stale_after =
+            api.search_service_search("StaleMap", SearchScope::StarmapTitle, 10, None);
+        assert!(
+            stale_after.is_empty(),
+            "stale starmap index with old project_id must be removed by per-project rebuild"
+        );
     }
 
     #[test]
@@ -1670,8 +2068,14 @@ starmap_dir.join("nodes").join("n1.json"),
         assert_eq!(queue.len(), 2, "only p1 entry should be removed");
         let remaining: Vec<_> = queue.drain();
         let ids: Vec<_> = remaining.iter().map(|u| u.object_id.as_str()).collect();
-        assert!(ids.contains(&"chapter_body:p2:c2"), "p2 entry should remain");
-        assert!(ids.contains(&"starmap:s1"), "unbound starmap entry should remain");
+        assert!(
+            ids.contains(&"chapter_body:p2:c2"),
+            "p2 entry should remain"
+        );
+        assert!(
+            ids.contains(&"starmap:s1"),
+            "unbound starmap entry should remain"
+        );
     }
 
     #[test]
@@ -1705,7 +2109,10 @@ starmap_dir.join("nodes").join("n1.json"),
         };
 
         let result = api.import_or_replace_starmap_package(&meta.starmap_id, &graph, 99);
-        assert!(result.is_err(), "must reject when base_package_revision does not match current");
+        assert!(
+            result.is_err(),
+            "must reject when base_package_revision does not match current"
+        );
     }
 
     #[test]
@@ -1718,8 +2125,14 @@ starmap_dir.join("nodes").join("n1.json"),
 
         let status_json = svc.get_search_index_status().unwrap();
         let status: serde_json::Value = serde_json::from_str(&status_json).unwrap();
-        assert_eq!(status["isRebuilding"], false, "rebuild must complete before open_workspace returns");
-        assert!(status["lastRebuildAt"].as_u64().unwrap() > 0, "last_rebuild_at must be non-zero after open_workspace");
+        assert_eq!(
+            status["isRebuilding"], false,
+            "rebuild must complete before open_workspace returns"
+        );
+        assert!(
+            status["lastRebuildAt"].as_u64().unwrap() > 0,
+            "last_rebuild_at must be non-zero after open_workspace"
+        );
     }
 
     #[test]
@@ -1770,9 +2183,18 @@ starmap_dir.join("nodes").join("n1.json"),
             created_at: 0,
             updated_at: 0,
         };
-        api.import_or_replace_starmap_package(&meta.starmap_id, &old_graph, 0).unwrap();
-        assert_eq!(api.search_service_search("Page1Link", SearchScope::StarmapHyperlink, 10, None).len(), 1);
-        assert_eq!(api.search_service_search("Page2Link", SearchScope::StarmapHyperlink, 10, None).len(), 1);
+        api.import_or_replace_starmap_package(&meta.starmap_id, &old_graph, 0)
+            .unwrap();
+        assert_eq!(
+            api.search_service_search("Page1Link", SearchScope::StarmapHyperlink, 10, None)
+                .len(),
+            1
+        );
+        assert_eq!(
+            api.search_service_search("Page2Link", SearchScope::StarmapHyperlink, 10, None)
+                .len(),
+            1
+        );
 
         let hl3 = crate::api::types::StarMapHyperlinkDto {
             hyperlink_id: "hl3".to_string(),
@@ -1813,16 +2235,33 @@ starmap_dir.join("nodes").join("n1.json"),
             created_at: 0,
             updated_at: 0,
         };
-        let rev1 = api.core().get_starmap_store_package_revision(&meta.starmap_id);
-        api.import_or_replace_starmap_package(&meta.starmap_id, &new_graph, rev1).unwrap();
+        let rev1 = api
+            .core()
+            .get_starmap_store_package_revision(&meta.starmap_id);
+        api.import_or_replace_starmap_package(&meta.starmap_id, &new_graph, rev1)
+            .unwrap();
 
-        assert_eq!(api.search_service_search("UpdatedLink", SearchScope::StarmapHyperlink, 10, None).len(), 1,
-            "updated hyperlink must be indexed");
-        assert_eq!(api.search_service_search("Page3Link", SearchScope::StarmapHyperlink, 10, None).len(), 1,
-            "new hyperlink must be indexed");
-        assert!(api.search_service_search("Page2Link", SearchScope::StarmapHyperlink, 10, None).is_empty(),
-            "deleted hyperlink hl2 must be removed from index");
-        assert!(api.search_service_search("Page1Link", SearchScope::StarmapHyperlink, 10, None).is_empty(),
-            "old label of updated hyperlink must be removed from index");
+        assert_eq!(
+            api.search_service_search("UpdatedLink", SearchScope::StarmapHyperlink, 10, None)
+                .len(),
+            1,
+            "updated hyperlink must be indexed"
+        );
+        assert_eq!(
+            api.search_service_search("Page3Link", SearchScope::StarmapHyperlink, 10, None)
+                .len(),
+            1,
+            "new hyperlink must be indexed"
+        );
+        assert!(
+            api.search_service_search("Page2Link", SearchScope::StarmapHyperlink, 10, None)
+                .is_empty(),
+            "deleted hyperlink hl2 must be removed from index"
+        );
+        assert!(
+            api.search_service_search("Page1Link", SearchScope::StarmapHyperlink, 10, None)
+                .is_empty(),
+            "old label of updated hyperlink must be removed from index"
+        );
     }
 }

@@ -96,7 +96,8 @@ impl WriterError {
             WriterError::DirtyRepository(_) => "DIRTY_REPOSITORY",
             WriterError::Protocol(_) => "PROTOCOL",
             WriterError::Fatal(_) => "FATAL",
-            WriterError::Other(_) => "OTHER",        }
+            WriterError::Other(_) => "OTHER",
+        }
     }
 
     /// 返回稳定的 i18n message key，供 UI 层做本地化映射。
@@ -123,7 +124,8 @@ impl WriterError {
             WriterError::DirtyRepository(_) => "error.sync_dirty_repository",
             WriterError::Protocol(_) => "error.sync_protocol_error",
             WriterError::Fatal(_) => "error.sync_fatal",
-            WriterError::Other(_) => "error.other",        }
+            WriterError::Other(_) => "error.other",
+        }
     }
 
     /// 结构化错误参数，供 UI 层做本地化模板插值。
@@ -190,6 +192,13 @@ impl WriterError {
 
 #[allow(clippy::cast_possible_truncation)]
 impl From<crate::error::Error> for WriterError {
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
     fn from(e: crate::error::Error) -> Self {
         match e {
             Error::Io(e) => WriterError::Io(e.to_string()),
@@ -214,9 +223,10 @@ impl From<crate::error::Error> for WriterError {
             Error::InvalidDeleteTarget(s) => WriterError::InvalidDeleteTarget(s),
             Error::SyncAuthFailed { reason } => WriterError::Authentication(reason),
             Error::SyncNetworkUnavailable { reason } => WriterError::RetryableNetwork(reason),
-            Error::SyncRateLimited { retry_after_secs } => {
-                WriterError::RetryableNetwork(format!("rate_limited: retry_after={}", retry_after_secs))
-            }
+            Error::SyncRateLimited { retry_after_secs } => WriterError::RetryableNetwork(format!(
+                "rate_limited: retry_after={}",
+                retry_after_secs
+            )),
             Error::SyncDocumentConflict {
                 path,
                 local_hash,
@@ -266,16 +276,22 @@ impl From<crate::error::Error> for WriterError {
                     | crate::sync::types::SyncErrorCategory::TokenPermissionDenied
                     | crate::sync::types::SyncErrorCategory::AuthError
                     | crate::sync::types::SyncErrorCategory::GithubUnauthorized
-                    | crate::sync::types::SyncErrorCategory::GithubForbidden => WriterError::Authentication(
-                        format!("github_api_error: category={} context={} status={}", category, context, status),
-                    ),
+                    | crate::sync::types::SyncErrorCategory::GithubForbidden => {
+                        WriterError::Authentication(format!(
+                            "github_api_error: category={} context={} status={}",
+                            category, context, status
+                        ))
+                    }
                     crate::sync::types::SyncErrorCategory::GithubNetworkFailed
                     | crate::sync::types::SyncErrorCategory::DnsFailed
                     | crate::sync::types::SyncErrorCategory::TlsFailed
                     | crate::sync::types::SyncErrorCategory::NetworkProbeFailed
-                    | crate::sync::types::SyncErrorCategory::ApiRateLimited => WriterError::RetryableNetwork(
-                        format!("github_api_error: category={} context={} status={}", category, context, status),
-                    ),
+                    | crate::sync::types::SyncErrorCategory::ApiRateLimited => {
+                        WriterError::RetryableNetwork(format!(
+                            "github_api_error: category={} context={} status={}",
+                            category, context, status
+                        ))
+                    }
                     _ => WriterError::Fatal(format!(
                         "github_api_error: category={} context={} status={} body={}",
                         category, context, status, body_preview
@@ -293,7 +309,10 @@ impl From<crate::error::Error> for WriterError {
                 "storage_transaction_incomplete: tx_id={}",
                 transaction_id
             )),
-            Error::SaveQueueFlushIncomplete { failed_types, remaining_queue_len } => WriterError::Other(format!(
+            Error::SaveQueueFlushIncomplete {
+                failed_types,
+                remaining_queue_len,
+            } => WriterError::Other(format!(
                 "save_queue_flush_incomplete: failed_types={:?} remaining={}",
                 failed_types, remaining_queue_len
             )),
@@ -356,11 +375,20 @@ mod tests {
     #[test]
     fn test_typed_sync_failure_codes() {
         // #592 七：类型化失败的错误码是跨端契约，不得落入 "OTHER"。
-        assert_eq!(WriterError::RetryableNetwork("n".into()).code(), "RETRYABLE_NETWORK");
+        assert_eq!(
+            WriterError::RetryableNetwork("n".into()).code(),
+            "RETRYABLE_NETWORK"
+        );
         assert_eq!(WriterError::RetryableIo("n".into()).code(), "RETRYABLE_IO");
-        assert_eq!(WriterError::Authentication("n".into()).code(), "AUTHENTICATION");
+        assert_eq!(
+            WriterError::Authentication("n".into()).code(),
+            "AUTHENTICATION"
+        );
         assert_eq!(WriterError::Conflict("n".into()).code(), "CONFLICT");
-        assert_eq!(WriterError::DirtyRepository("n".into()).code(), "DIRTY_REPOSITORY");
+        assert_eq!(
+            WriterError::DirtyRepository("n".into()).code(),
+            "DIRTY_REPOSITORY"
+        );
         assert_eq!(WriterError::Protocol("n".into()).code(), "PROTOCOL");
         assert_eq!(WriterError::Fatal("n".into()).code(), "FATAL");
     }
@@ -369,9 +397,13 @@ mod tests {
     fn test_from_error_maps_to_typed_kinds() {
         // #592 七：Core 内部错误映射到类型化失败，不再折叠为笼统 SyncFailed。
         use crate::error::Error;
-        let auth = WriterError::from(Error::SyncAuthFailed { reason: "bad token".into() });
+        let auth = WriterError::from(Error::SyncAuthFailed {
+            reason: "bad token".into(),
+        });
         assert!(matches!(auth, WriterError::Authentication(_)));
-        let net = WriterError::from(Error::SyncNetworkUnavailable { reason: "dns".into() });
+        let net = WriterError::from(Error::SyncNetworkUnavailable {
+            reason: "dns".into(),
+        });
         assert!(matches!(net, WriterError::RetryableNetwork(_)));
         let conflict = WriterError::from(Error::SyncDocumentConflict {
             path: "a".into(),

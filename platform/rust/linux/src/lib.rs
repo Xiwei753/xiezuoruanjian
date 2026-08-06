@@ -21,7 +21,10 @@ use writer_uniffi::WriterAppService;
 
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
-use writer_platform_api::{FileConfigStore, HttpRequest, HttpResponse, NetworkState, PlatformInit, PlatformKind, PlatformServices, SecureStorage, SyncTransport, TransportError};
+use writer_platform_api::{
+    FileConfigStore, HttpRequest, HttpResponse, NetworkState, PlatformInit, PlatformKind,
+    PlatformServices, SecureStorage, SyncTransport, TransportError,
+};
 
 const APP_NAMESPACE: &str = "sujian";
 
@@ -106,7 +109,10 @@ fn create_secure_storage() -> Option<Box<dyn SecureStorage>> {
         match KeyringSecureStorage::new() {
             Ok(storage) => return Some(Box::new(storage)),
             Err(e) => {
-                eprintln!("Warning: Secret Service unavailable, secure storage disabled: {}", e);
+                eprintln!(
+                    "Warning: Secret Service unavailable, secure storage disabled: {}",
+                    e
+                );
             }
         }
     }
@@ -202,7 +208,8 @@ fn detect_network_state() -> NetworkState {
             .or_else(|_| std::env::var("HTTPS_PROXY"))
             .ok()
             .and_then(|url| {
-                let url = url.strip_prefix("http://")
+                let url = url
+                    .strip_prefix("http://")
                     .or_else(|| url.strip_prefix("https://"))
                     .unwrap_or(&url);
                 let without_auth = url.split('@').next_back().unwrap_or(url);
@@ -220,11 +227,13 @@ fn detect_network_state() -> NetworkState {
             .or_else(|_| std::env::var("HTTPS_PROXY"))
             .ok()
             .and_then(|url| {
-                let url = url.strip_prefix("http://")
+                let url = url
+                    .strip_prefix("http://")
                     .or_else(|| url.strip_prefix("https://"))
                     .unwrap_or(&url);
                 let without_auth = url.split('@').next_back().unwrap_or(url);
-                without_auth.split(':')
+                without_auth
+                    .split(':')
                     .nth(1)
                     .and_then(|s| s.trim().parse::<u16>().ok())
             }),
@@ -238,7 +247,9 @@ fn detect_connectivity_and_metered() -> (bool, bool) {
     {
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            let is_connected = stdout.lines().any(|line| line.trim() == "connected" || line.starts_with("connected"));
+            let is_connected = stdout
+                .lines()
+                .any(|line| line.trim() == "connected" || line.starts_with("connected"));
             let is_metered = check_nmcli_metered();
             return (is_connected, is_metered);
         }
@@ -323,7 +334,8 @@ impl SecureStorage for KeyringSecureStorage {
 
     fn set_secret(&self, key: &str, value: &[u8]) -> Result<(), String> {
         let entry = self.entry_for_key(key)?;
-        entry.set_secret(value)
+        entry
+            .set_secret(value)
             .map_err(|e| format!("Failed to set secret: {}", e))
     }
 
@@ -340,13 +352,16 @@ impl SecureStorage for KeyringSecureStorage {
 #[cfg(feature = "secret-service")]
 impl KeyringSecureStorage {
     fn migrate_from_plaintext(&self, key: &str) -> Result<Option<Vec<u8>>, String> {
-        let legacy_path = xdg_config_dir().join("secrets").join(format!("{}.bin", key));
+        let legacy_path = xdg_config_dir()
+            .join("secrets")
+            .join(format!("{}.bin", key));
         if !legacy_path.exists() {
             return Ok(None);
         }
         let plaintext = std::fs::read(&legacy_path).map_err(|e| e.to_string())?;
         let entry = self.entry_for_key(key)?;
-        entry.set_secret(&plaintext)
+        entry
+            .set_secret(&plaintext)
             .map_err(|e| format!("Migration failed: {}", e))?;
         let _ = std::fs::remove_file(&legacy_path);
         Ok(Some(plaintext))
@@ -365,7 +380,9 @@ impl ReqwestSyncTransport {
             .user_agent("WriterApp/1.0")
             .timeout(std::time::Duration::from_secs(15))
             .build()
-            .map_err(|e| TransportError::new("init", format!("Failed to build HTTP client: {}", e)))?;
+            .map_err(|e| {
+                TransportError::new("init", format!("Failed to build HTTP client: {}", e))
+            })?;
         Ok(Self { client })
     }
 }
@@ -412,9 +429,9 @@ impl SyncTransport for ReqwestSyncTransport {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
             .collect();
-        let body = resp.bytes().map_err(|e| {
-            TransportError::new("response_read", e.to_string())
-        })?;
+        let body = resp
+            .bytes()
+            .map_err(|e| TransportError::new("response_read", e.to_string()))?;
         Ok(HttpResponse {
             status,
             headers,

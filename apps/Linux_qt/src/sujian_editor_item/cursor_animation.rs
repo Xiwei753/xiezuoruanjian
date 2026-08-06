@@ -1,15 +1,13 @@
 use writer_core::editor::CursorRect;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) enum CursorBlinkMode {
     #[default]
     Normal,
     Suppressed,
 }
 
-#[derive(Clone, Debug)]
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) enum CursorTransition {
     #[default]
     Snap,
@@ -20,7 +18,6 @@ pub(crate) enum CursorTransition {
     },
 }
 
-
 #[derive(Clone, Debug, Default)]
 pub(crate) struct CursorAnimationPlan {
     pub should_be_visible: bool,
@@ -30,4 +27,3 @@ pub(crate) struct CursorAnimationPlan {
     pub cursor_y: f64,
     pub cursor_h: f64,
 }
-

@@ -1,5 +1,5 @@
-use super::line_snapshot::LineTextureStore;
 pub(crate) use super::layout_snapshot::LineSnapshotId;
+use super::line_snapshot::LineTextureStore;
 
 pub(crate) struct TextureCache {
     line_store: LineTextureStore,

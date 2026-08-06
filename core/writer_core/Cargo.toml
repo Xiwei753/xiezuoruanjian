@@ -57,3 +57,8 @@ harness = false
 [[bench]]
 name = "starmap_storage_bench"
 harness = false
+
+[[test]]
+name = "ai_feature"
+path = "tests/ai_feature.rs"
+required-features = ["ai"]

@@ -73,6 +73,13 @@ pub struct SettingsPresentation {
 }
 
 /// 生成默认的设置页展示契约
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 pub fn default_settings_presentation() -> SettingsPresentation {
     use PlatformVisibility::*;
 
@@ -527,7 +534,10 @@ mod tests {
     #[test]
     fn test_default_settings_presentation_not_empty() {
         let presentation = default_settings_presentation();
-        assert!(!presentation.sections.is_empty(), "presentation must have sections");
+        assert!(
+            !presentation.sections.is_empty(),
+            "presentation must have sections"
+        );
         for section in &presentation.sections {
             assert!(!section.id.is_empty(), "section id must not be empty");
         }

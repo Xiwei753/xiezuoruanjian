@@ -19,9 +19,11 @@
 // sujian_editor_item - Linux_qt self-rendered editor item
 // =============================================================================
 
+pub(crate) mod animated_slice;
 pub(crate) mod animation_coordinator;
 pub(crate) mod animation_mode;
 pub(crate) mod buffer;
+pub(crate) mod coordinator_item;
 pub(crate) mod cursor_animation;
 pub(crate) mod cursor_controller;
 pub(crate) mod decoration_slice;
@@ -29,16 +31,12 @@ pub(crate) mod editing;
 pub(crate) mod ime_visual;
 pub(crate) mod input_host;
 pub(crate) mod layout_ops;
-pub(crate) mod layout_snapshot;
 pub(crate) mod layout_revision;
+pub(crate) mod layout_snapshot;
 pub(crate) mod line_snapshot;
 pub(crate) mod line_snapshot_builder;
-pub(crate) mod animated_slice;
 pub(crate) mod linux_coordinator;
-pub(crate) mod coordinator_item;
 pub(crate) mod pipeline;
-pub(crate) mod static_line_patch;
-pub(crate) mod text_visual_transaction;
 #[allow(clippy::misnamed_getters)]
 pub(crate) mod properties;
 pub(crate) mod qquickitem_impl;
@@ -46,12 +44,14 @@ pub(crate) mod render_plan;
 pub(crate) mod rendering;
 pub(crate) mod scene_graph_renderer;
 pub(crate) mod snapshot_id;
-pub(crate) mod texture_cache;
-pub(crate) mod transaction;
-pub(crate) mod transaction_key;
+pub(crate) mod static_line_patch;
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests;
+pub(crate) mod text_visual_transaction;
+pub(crate) mod texture_cache;
+pub(crate) mod transaction;
+pub(crate) mod transaction_key;
 
 use crate::editor::input::{self, EditorInputHost};
 use crate::editor::layout::{
@@ -74,8 +74,8 @@ use transaction_key::VisualTransactionKey;
 
 use writer_core::editor::{
     AnimationMode as CoreAnimationMode, CompositionSession, CursorRect, EditorAnimationKind,
-    EditorCursor, EditorSelection, EditorTransactionCause, EditorVisualTransaction,
-    GlyphRect, PreeditVisualTransaction,
+    EditorCursor, EditorSelection, EditorTransactionCause, EditorVisualTransaction, GlyphRect,
+    PreeditVisualTransaction,
 };
 
 use animation_coordinator::AnimationMode;
@@ -120,9 +120,10 @@ pub(crate) fn editor_debug_log(msg: &str) {
 }
 
 pub(crate) fn editor_animation_debug_log(msg: &str) {
-    if std::env::var("SUJIAN_EDITOR_ANIMATION_DEBUG").is_ok() 
-        || std::env::var("SUJIAN_EDITOR_DEBUG").is_ok() 
-        || std::env::var("WRITER_DEBUG").is_ok() {
+    if std::env::var("SUJIAN_EDITOR_ANIMATION_DEBUG").is_ok()
+        || std::env::var("SUJIAN_EDITOR_DEBUG").is_ok()
+        || std::env::var("WRITER_DEBUG").is_ok()
+    {
         eprintln!("{}", msg);
     }
 }
@@ -336,11 +337,14 @@ pub struct SujianEditorItem {
     #[allow(dead_code)]
     verify_animation_signal_meta_object: qt_method!(fn(&self) -> bool),
     #[allow(dead_code)]
-    register_text_target_qml: qt_method!(fn(&mut self, target_id: QString, is_persistent: bool, initial_text: QString)),
+    register_text_target_qml:
+        qt_method!(fn(&mut self, target_id: QString, is_persistent: bool, initial_text: QString)),
     #[allow(dead_code)]
-    register_secret_target_qml: qt_method!(fn(&mut self, target_id: QString, is_persistent: bool, initial_text: QString)),
+    register_secret_target_qml:
+        qt_method!(fn(&mut self, target_id: QString, is_persistent: bool, initial_text: QString)),
     #[allow(dead_code)]
-    register_search_target_qml: qt_method!(fn(&mut self, target_id: QString, initial_text: QString)),
+    register_search_target_qml:
+        qt_method!(fn(&mut self, target_id: QString, initial_text: QString)),
     #[allow(dead_code)]
     register_url_target_qml: qt_method!(fn(&mut self, target_id: QString, initial_text: QString)),
     #[allow(dead_code)]
@@ -528,7 +532,12 @@ impl Default for SujianEditorItem {
 }
 
 impl SujianEditorItem {
-    pub fn register_text_target(&mut self, target_id: String, is_persistent: bool, initial_text: String) {
+    pub fn register_text_target(
+        &mut self,
+        target_id: String,
+        is_persistent: bool,
+        initial_text: String,
+    ) {
         let target = linux_coordinator::EditableTextTarget {
             target_id: target_id.clone(),
             is_persistent,
@@ -602,11 +611,25 @@ impl SujianEditorItem {
         self.coordinator.active_target_id().map(|s| s.to_string())
     }
 
-    pub fn register_text_target_qml(&mut self, target_id: QString, is_persistent: bool, initial_text: QString) {
-        self.register_text_target(target_id.to_string(), is_persistent, initial_text.to_string());
+    pub fn register_text_target_qml(
+        &mut self,
+        target_id: QString,
+        is_persistent: bool,
+        initial_text: QString,
+    ) {
+        self.register_text_target(
+            target_id.to_string(),
+            is_persistent,
+            initial_text.to_string(),
+        );
     }
 
-    pub fn register_secret_target_qml(&mut self, target_id: QString, is_persistent: bool, initial_text: QString) {
+    pub fn register_secret_target_qml(
+        &mut self,
+        target_id: QString,
+        is_persistent: bool,
+        initial_text: QString,
+    ) {
         self.register_text_target_with_profile(
             target_id.to_string(),
             is_persistent,
@@ -728,9 +751,13 @@ impl SujianEditorItem {
                     "on_insert_animation_{}: tid={}, cleared, has_active_insert={}",
                     if skipped { "skipped" } else { "finished" },
                     tid,
-                    self.pipeline.animation_coordinator_mut().has_active_insert()
+                    self.pipeline
+                        .animation_coordinator_mut()
+                        .has_active_insert()
                 ));
-                self.pipeline.texture_cache_mut().remove_for_transaction(&ids);
+                self.pipeline
+                    .texture_cache_mut()
+                    .remove_for_transaction(&ids);
                 self.request_static_repaint();
                 self.cursor_rect_changed();
             }
@@ -774,8 +801,10 @@ impl SujianEditorItem {
         self.buffer.selected_text()
     }
 
-    pub(crate) fn build_selection_preedit_plan(&mut self) -> animation_coordinator::SelectionPreeditPlan {
-        use animation_coordinator::{SelectionRange, PreeditRange};
+    pub(crate) fn build_selection_preedit_plan(
+        &mut self,
+    ) -> animation_coordinator::SelectionPreeditPlan {
+        use animation_coordinator::{PreeditRange, SelectionRange};
 
         let mut plan = animation_coordinator::SelectionPreeditPlan::default();
 
@@ -794,21 +823,35 @@ impl SujianEditorItem {
             let head = self.buffer.selection_anchor.max(self.buffer.cursor);
 
             for line in &snapshot.lines {
-                if line.para_text.is_empty() { continue; }
-                if line.byte_end <= anchor || line.byte_start >= head { continue; }
+                if line.para_text.is_empty() {
+                    continue;
+                }
+                if line.byte_end <= anchor || line.byte_start >= head {
+                    continue;
+                }
                 let line_top = line.y - scroll_y;
                 let line_bottom = line_top + line.height;
-                if line_bottom < 0.0 || line_top > viewport_h { continue; }
+                if line_bottom < 0.0 || line_top > viewport_h {
+                    continue;
+                }
 
                 let seg_start = anchor.max(line.byte_start);
                 let seg_end = head.min(line.byte_end);
-                if seg_start >= seg_end { continue; }
+                if seg_start >= seg_end {
+                    continue;
+                }
 
                 let start_x = self.editor_layout.cursor_x_for_line(
-                    &snapshot, line, seg_start, crate::editor::layout::CaretAffinity::Downstream,
+                    &snapshot,
+                    line,
+                    seg_start,
+                    crate::editor::layout::CaretAffinity::Downstream,
                 );
                 let end_x = self.editor_layout.cursor_x_for_line(
-                    &snapshot, line, seg_end, crate::editor::layout::CaretAffinity::Downstream,
+                    &snapshot,
+                    line,
+                    seg_end,
+                    crate::editor::layout::CaretAffinity::Downstream,
                 );
                 let left_x = start_x.min(end_x);
                 let sel_w = (end_x - start_x).abs();
@@ -842,20 +885,32 @@ impl SujianEditorItem {
                 let snapshot = self.layout_snapshot(width);
                 let cursor_byte = self.buffer.cursor;
 
-                if let Some(line) = snapshot.lines.iter().find(|l| l.byte_end >= cursor_byte && l.byte_start <= cursor_byte) {
+                if let Some(line) = snapshot
+                    .lines
+                    .iter()
+                    .find(|l| l.byte_end >= cursor_byte && l.byte_start <= cursor_byte)
+                {
                     let start_x = self.editor_layout.cursor_x_for_line(
-                        &snapshot, line, cursor_byte, crate::editor::layout::CaretAffinity::Downstream,
+                        &snapshot,
+                        line,
+                        cursor_byte,
+                        crate::editor::layout::CaretAffinity::Downstream,
                     );
-                    let preedit_w = self.editor_layout.text_width(&self.pipeline.composition().preedit_text, font_size, font_family);
+                    let preedit_w = self.editor_layout.text_width(
+                        &self.pipeline.composition().preedit_text,
+                        font_size,
+                        font_family,
+                    );
 
-                    let preedit_color = if selection_color.starts_with('#') && selection_color.len() >= 7 {
-                        let r = u8::from_str_radix(&selection_color[1..3], 16).unwrap_or(0);
-                        let g = u8::from_str_radix(&selection_color[3..5], 16).unwrap_or(0);
-                        let b = u8::from_str_radix(&selection_color[5..7], 16).unwrap_or(0);
-                        format!("#{:02X}{:02X}{:02X}{:02X}", r, g, b, 0x1A)
-                    } else {
-                        "#1A81D1D1".to_string()
-                    };
+                    let preedit_color =
+                        if selection_color.starts_with('#') && selection_color.len() >= 7 {
+                            let r = u8::from_str_radix(&selection_color[1..3], 16).unwrap_or(0);
+                            let g = u8::from_str_radix(&selection_color[3..5], 16).unwrap_or(0);
+                            let b = u8::from_str_radix(&selection_color[5..7], 16).unwrap_or(0);
+                            format!("#{:02X}{:02X}{:02X}{:02X}", r, g, b, 0x1A)
+                        } else {
+                            "#1A81D1D1".to_string()
+                        };
 
                     plan.preedit_ranges.push(PreeditRange {
                         x: start_x,

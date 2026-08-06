@@ -11,10 +11,12 @@
 //! 而是通过 sujian_get_ime_query_data / sujian_ime_query_text_* FFI 函数
 //! 从 SujianEditorItem 内部状态读取，等价于 CursorAnchorAdapter 数据源。
 
-use crate::sujian_editor_item::SujianEditorItem;
 use super::controller::*;
 use super::events::decode_utf16_ptr;
-use crate::editor::paragraph_index_map::{utf16_code_unit_to_utf8_byte, utf16_code_unit_range_to_utf8_byte_range};
+use crate::editor::paragraph_index_map::{
+    utf16_code_unit_range_to_utf8_byte_range, utf16_code_unit_to_utf8_byte,
+};
+use crate::sujian_editor_item::SujianEditorItem;
 use std::ffi::c_void;
 
 /// IME 查询数据 — 传递给 Qt InputMethodQuery 的光标和选区几何信息。
@@ -148,13 +150,15 @@ extern "C" fn sujian_ime_preedit_attrs(
     let text = decode_utf16_ptr(text, text_len);
 
     let mut attributes = Vec::new();
-    if !attr_types.is_null() && !attr_starts.is_null() && !attr_lengths.is_null() && attr_count > 0 {
+    if !attr_types.is_null() && !attr_starts.is_null() && !attr_lengths.is_null() && attr_count > 0
+    {
         // SAFETY: attr_types is null-checked above; attr_count is checked > 0 above; C++ caller guarantees valid pointers.
         let types_slice = unsafe { std::slice::from_raw_parts(attr_types, attr_count as usize) };
         // SAFETY: attr_starts is null-checked above; attr_count is checked > 0 above.
         let starts_slice = unsafe { std::slice::from_raw_parts(attr_starts, attr_count as usize) };
         // SAFETY: attr_lengths is null-checked above; attr_count is checked > 0 above.
-        let lengths_slice = unsafe { std::slice::from_raw_parts(attr_lengths, attr_count as usize) };
+        let lengths_slice =
+            unsafe { std::slice::from_raw_parts(attr_lengths, attr_count as usize) };
         let formats_slice = if !attr_formats.is_null() {
             // SAFETY: attr_formats is null-checked above; attr_count is checked > 0 above.
             unsafe { std::slice::from_raw_parts(attr_formats, attr_count as usize) }
@@ -185,7 +189,8 @@ extern "C" fn sujian_ime_preedit_attrs(
                 continue;
             };
 
-            let (byte_start, byte_end) = utf16_code_unit_range_to_utf8_byte_range(&text, qchar_start, qchar_length);
+            let (byte_start, byte_end) =
+                utf16_code_unit_range_to_utf8_byte_range(&text, qchar_start, qchar_length);
             let byte_length = byte_end.saturating_sub(byte_start);
 
             attributes.push(crate::sujian_editor_item::PreeditAttribute {

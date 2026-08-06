@@ -526,7 +526,11 @@ pub struct PaneWidthConstraintDto {
 
 impl Default for PaneWidthConstraintDto {
     fn default() -> Self {
-        Self { min_dp: 0.0, preferred_dp: 0.0, max_dp: 0.0 }
+        Self {
+            min_dp: 0.0,
+            preferred_dp: 0.0,
+            max_dp: 0.0,
+        }
     }
 }
 
@@ -590,7 +594,13 @@ pub struct AvoidRegionDto {
 
 impl Default for AvoidRegionDto {
     fn default() -> Self {
-        Self { left_dp: 0.0, top_dp: 0.0, right_dp: 0.0, bottom_dp: 0.0, kind: AvoidRegionKindDto::WindowInset }
+        Self {
+            left_dp: 0.0,
+            top_dp: 0.0,
+            right_dp: 0.0,
+            bottom_dp: 0.0,
+            kind: AvoidRegionKindDto::WindowInset,
+        }
     }
 }
 
@@ -710,5 +720,3 @@ impl From<crate::layout_policy::LayoutPlan> for LayoutPlanDto {
         }
     }
 }
-
-

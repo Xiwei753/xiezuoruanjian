@@ -125,6 +125,13 @@ impl GitBackend for Git2Backend {
         Ok(())
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
     fn pull(
         &self,
         local_repo_path: &Path,
@@ -255,7 +262,9 @@ impl GitBackend for Git2Backend {
                                 ],
                             };
                             let payload = serde_json::to_string(&summary).unwrap_or_default();
-                            return Err(crate::Error::SyncCheckoutConflict { summary_json: payload });
+                            return Err(crate::Error::SyncCheckoutConflict {
+                                summary_json: payload,
+                            });
                         }
                     }
                     // Check for untracked files that would be overwritten
@@ -282,7 +291,9 @@ impl GitBackend for Git2Backend {
                     ],
                 };
                 let payload = serde_json::to_string(&summary).unwrap_or_default();
-                return Err(crate::Error::SyncCheckoutConflict { summary_json: payload });
+                return Err(crate::Error::SyncCheckoutConflict {
+                    summary_json: payload,
+                });
             }
         }
 
@@ -316,7 +327,8 @@ impl GitBackend for Git2Backend {
             };
             if let Err(e) = repo.checkout_tree(fetch_tree.as_object(), Some(&mut dry_run_builder)) {
                 rollback(&repo);
-                if e.class() == git2::ErrorClass::Checkout || e.code() == git2::ErrorCode::Conflict {
+                if e.class() == git2::ErrorClass::Checkout || e.code() == git2::ErrorCode::Conflict
+                {
                     let paths = conflicted_paths.borrow().clone();
                     let summary = crate::sync::SyncConflictSummary {
                         status: "conflict".to_string(),
@@ -332,7 +344,9 @@ impl GitBackend for Git2Backend {
                         ],
                     };
                     let payload = serde_json::to_string(&summary).unwrap_or_default();
-                    return Err(crate::Error::SyncCheckoutConflict { summary_json: payload });
+                    return Err(crate::Error::SyncCheckoutConflict {
+                        summary_json: payload,
+                    });
                 }
                 return Err(crate::Error::Io(std::io::Error::other(format!(
                     "checkout dry-run failed: {}",
@@ -376,8 +390,7 @@ impl GitBackend for Git2Backend {
             let mut merge_opts = git2::MergeOptions::new();
             if let Err(e) = repo.merge(&[&fetch_commit], Some(&mut merge_opts), None) {
                 rollback(&repo);
-                if e.code() == git2::ErrorCode::Conflict
-                    || e.class() == git2::ErrorClass::Checkout
+                if e.code() == git2::ErrorCode::Conflict || e.class() == git2::ErrorClass::Checkout
                 {
                     let summary = build_conflict_summary(
                         &repo,
@@ -385,7 +398,9 @@ impl GitBackend for Git2Backend {
                         "本地未提交的改动或冲突阻止了合并操作。",
                     );
                     let payload = serde_json::to_string(&summary).unwrap_or_default();
-                    return Err(crate::Error::SyncCheckoutConflict { summary_json: payload });
+                    return Err(crate::Error::SyncCheckoutConflict {
+                        summary_json: payload,
+                    });
                 }
                 return Err(crate::Error::Io(std::io::Error::other(e.to_string())));
             }
@@ -511,7 +526,9 @@ impl GitBackend for Git2Backend {
             if let Some(details) = settings_conflict_details {
                 rollback(&repo);
                 let payload = serde_json::to_string(&details).unwrap_or_default();
-                return Err(crate::Error::SyncSettingsConflict { details_json: payload });
+                return Err(crate::Error::SyncSettingsConflict {
+                    details_json: payload,
+                });
             }
 
             if index.has_conflicts() {
@@ -732,6 +749,13 @@ impl GitBackend for Git2Backend {
         Ok(None)
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
     fn status(&self, local_repo_path: &Path) -> crate::Result<Vec<String>> {
         let repo = git2::Repository::open(local_repo_path)
             .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;

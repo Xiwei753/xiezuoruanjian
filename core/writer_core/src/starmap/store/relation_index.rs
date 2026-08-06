@@ -47,7 +47,9 @@ pub(super) fn endpoint_node_id(endpoint: &crate::starmap::types::StarMapEndpoint
     }
 }
 
-pub(super) fn endpoint_path_node_id(path: &crate::starmap::types::StarMapEndpointPath) -> Option<&str> {
+pub(super) fn endpoint_path_node_id(
+    path: &crate::starmap::types::StarMapEndpointPath,
+) -> Option<&str> {
     match &path.endpoint {
         crate::starmap::types::StarMapEdgeEndpoint::Node { node_id } => Some(node_id),
         crate::starmap::types::StarMapEdgeEndpoint::Anchor { node_id, .. } => Some(node_id),
@@ -56,7 +58,9 @@ pub(super) fn endpoint_path_node_id(path: &crate::starmap::types::StarMapEndpoin
     }
 }
 
-pub(super) fn edge_endpoint_node_id(ep: &crate::starmap::types::StarMapEdgeEndpoint) -> Option<&str> {
+pub(super) fn edge_endpoint_node_id(
+    ep: &crate::starmap::types::StarMapEdgeEndpoint,
+) -> Option<&str> {
     match ep {
         crate::starmap::types::StarMapEdgeEndpoint::Node { node_id } => Some(node_id),
         crate::starmap::types::StarMapEdgeEndpoint::Anchor { node_id, .. } => Some(node_id),
@@ -67,28 +71,44 @@ pub(super) fn edge_endpoint_node_id(ep: &crate::starmap::types::StarMapEdgeEndpo
 
 pub(super) fn extract_eri_node_refs(eri: &EdgeRelationIndex) -> Vec<&str> {
     let mut refs = Vec::new();
-    if !eri.from.is_empty() { refs.push(eri.from.as_str()); }
-    if !eri.to.is_empty() { refs.push(eri.to.as_str()); }
+    if !eri.from.is_empty() {
+        refs.push(eri.from.as_str());
+    }
+    if !eri.to.is_empty() {
+        refs.push(eri.to.as_str());
+    }
     if let Some(ref ep) = eri.from_endpoint {
-        if let Some(id) = edge_endpoint_node_id(ep) { refs.push(id); }
+        if let Some(id) = edge_endpoint_node_id(ep) {
+            refs.push(id);
+        }
     }
     if let Some(ref ep) = eri.to_endpoint {
-        if let Some(id) = edge_endpoint_node_id(ep) { refs.push(id); }
+        if let Some(id) = edge_endpoint_node_id(ep) {
+            refs.push(id);
+        }
     }
     if let Some(ref path) = eri.from_endpoint_path {
-        if let Some(id) = endpoint_path_node_id(path) { refs.push(id); }
+        if let Some(id) = endpoint_path_node_id(path) {
+            refs.push(id);
+        }
     }
     if let Some(ref path) = eri.to_endpoint_path {
-        if let Some(id) = endpoint_path_node_id(path) { refs.push(id); }
+        if let Some(id) = endpoint_path_node_id(path) {
+            refs.push(id);
+        }
     }
     refs
 }
 
 pub(super) fn extract_ehi_node_refs(ehi: &EmbedHostIndex) -> Vec<&str> {
     let mut refs = Vec::new();
-    if !ehi.host_node_id.is_empty() { refs.push(ehi.host_node_id.as_str()); }
+    if !ehi.host_node_id.is_empty() {
+        refs.push(ehi.host_node_id.as_str());
+    }
     if let Some(ref ep) = ehi.host_endpoint {
-        if let Some(id) = endpoint_node_id(ep) { refs.push(id); }
+        if let Some(id) = endpoint_node_id(ep) {
+            refs.push(id);
+        }
     }
     refs
 }

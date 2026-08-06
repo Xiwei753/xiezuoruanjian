@@ -4,7 +4,9 @@
 //! 并确保输出为 camelCase，QML 无需 snake_case fallback。
 
 use serde::Serialize;
-use writer_core::layout_policy::{LayoutPlan, ShellMode, WorkspacePaneMode, NavigationPresentation};
+use writer_core::layout_policy::{
+    LayoutPlan, NavigationPresentation, ShellMode, WorkspacePaneMode,
+};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

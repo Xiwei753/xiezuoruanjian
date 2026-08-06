@@ -97,7 +97,10 @@ impl WriterCoreApi {
         core.global_search(query, scope, limit, cursor)
     }
 
-    pub fn search_service_rebuild(&self, project_id: Option<&str>) -> crate::error::Result<crate::search::SearchIndexStatus> {
+    pub fn search_service_rebuild(
+        &self,
+        project_id: Option<&str>,
+    ) -> crate::error::Result<crate::search::SearchIndexStatus> {
         let core = self.core_instance.lock().unwrap_or_else(|e| e.into_inner());
         core.flush_all_starmap_stores()?;
         core.rebuild_search_index(project_id)
@@ -674,8 +677,11 @@ mod tests {
                 (json, "ChapterRenamed", Some(chapter.id.clone()))
             },
             {
-                let result =
-                    api.reorder_chapters(&project.id, &volume.id, std::slice::from_ref(&chapter.id));
+                let result = api.reorder_chapters(
+                    &project.id,
+                    &volume.id,
+                    std::slice::from_ref(&chapter.id),
+                );
                 let json = match result {
                     Ok(data) => ResultEnvelope::success_with_changes(
                         data,

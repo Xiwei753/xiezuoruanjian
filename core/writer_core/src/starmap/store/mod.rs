@@ -47,11 +47,13 @@ pub mod save;
 pub mod snapshot;
 pub mod types;
 
-pub use types::*;
-pub use meta::GraphMeta;
 pub use meta::DeletedSinceLastSync;
-pub use relation_index::{EdgeRelationIndex, EmbedHostIndex, LinkRelationIndex, HyperlinkRelationIndex};
-pub use snapshot::{StarMapPhasedSnapshot, PhasedSnapshotRequest};
+pub use meta::GraphMeta;
+pub use relation_index::{
+    EdgeRelationIndex, EmbedHostIndex, HyperlinkRelationIndex, LinkRelationIndex,
+};
+pub use snapshot::{PhasedSnapshotRequest, StarMapPhasedSnapshot};
+pub use types::*;
 
 pub struct StarMapStore {
     pub(super) workspace: PathBuf,

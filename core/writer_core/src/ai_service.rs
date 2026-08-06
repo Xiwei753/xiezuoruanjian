@@ -40,7 +40,7 @@ pub struct AiActionResponse {
     pub actions: Vec<AiAction>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AiActionType {
     Navigate,
@@ -66,7 +66,7 @@ pub struct AiProviderConfig {
     pub model_name: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AiContextScope {
     None,
@@ -313,6 +313,13 @@ impl StreamFlusher {
     }
 
     /// 检查是否应该 flush
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
     pub fn should_flush(&self) -> bool {
         if self.buffer.len() >= self.config.char_threshold {
             return true;

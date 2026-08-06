@@ -5,11 +5,11 @@ use writer_core::editor::CursorRect;
 use super::animated_slice::AnimatedSlice;
 use super::animation_mode::AnimationMode;
 use super::cursor_animation::CursorTransition;
+use super::decoration_slice::DecorationSlice;
 use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId};
 use super::static_line_patch::StaticLinePatch;
 use super::transaction_key::VisualTransactionKey;
-use super::decoration_slice::DecorationSlice;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TextVisualTransactionState {
@@ -92,7 +92,8 @@ impl TransactionTimeline {
 
     pub fn resume(&mut self, now: Instant) {
         if let Some(pause_start) = self.pause_start.take() {
-            self.accumulated_paused_duration_ms += now.duration_since(pause_start).as_millis() as u64;
+            self.accumulated_paused_duration_ms +=
+                now.duration_since(pause_start).as_millis() as u64;
         }
     }
 
@@ -156,7 +157,11 @@ impl PreparedTextVisualTransaction {
     }
 
     pub fn is_composition(&self) -> bool {
-        matches!(self.operation_kind, TextVisualOperationKind::CompositionUpdate | TextVisualOperationKind::CompositionCommitOrCancel)
+        matches!(
+            self.operation_kind,
+            TextVisualOperationKind::CompositionUpdate
+                | TextVisualOperationKind::CompositionCommitOrCancel
+        )
     }
 
     pub fn is_expired(&self, now: Instant) -> bool {
@@ -164,7 +169,8 @@ impl PreparedTextVisualTransaction {
             return false;
         };
         let elapsed = now.duration_since(effective_start).as_millis() as u64;
-        let effective_duration = self.timeline.duration_ms + self.timeline.accumulated_paused_duration_ms;
+        let effective_duration =
+            self.timeline.duration_ms + self.timeline.accumulated_paused_duration_ms;
         let timeout = effective_duration * 3 + 500;
         elapsed > timeout
     }
@@ -332,7 +338,10 @@ impl PreparedTransactionQueue {
     ) -> Option<VisualTransactionKey> {
         self.transactions
             .iter()
-            .filter(|t| t.state != TextVisualTransactionState::Cancelled && t.state != TextVisualTransactionState::Completed)
+            .filter(|t| {
+                t.state != TextVisualTransactionState::Cancelled
+                    && t.state != TextVisualTransactionState::Completed
+            })
             .find(|t| {
                 t.overlaps_byte_range(byte_start, byte_end)
                     || (t.is_cursor() && byte_start == byte_end)
@@ -354,9 +363,10 @@ impl PreparedTransactionQueue {
     }
 
     pub fn has_active_insert(&self) -> bool {
-        self.transactions
-            .iter()
-            .any(|t| t.state != TextVisualTransactionState::Cancelled && t.state != TextVisualTransactionState::Completed)
+        self.transactions.iter().any(|t| {
+            t.state != TextVisualTransactionState::Cancelled
+                && t.state != TextVisualTransactionState::Completed
+        })
     }
 
     pub fn is_empty(&self) -> bool {
@@ -366,7 +376,10 @@ impl PreparedTransactionQueue {
     pub fn insert_byte_ranges(&self) -> Vec<(usize, usize)> {
         self.transactions
             .iter()
-            .filter(|t| t.state != TextVisualTransactionState::Cancelled && t.state != TextVisualTransactionState::Completed)
+            .filter(|t| {
+                t.state != TextVisualTransactionState::Cancelled
+                    && t.state != TextVisualTransactionState::Completed
+            })
             .flat_map(|t| t.inserted_byte_ranges())
             .collect()
     }
@@ -374,7 +387,11 @@ impl PreparedTransactionQueue {
     pub fn all_hidden_ranges(&self) -> Vec<(usize, usize)> {
         self.transactions
             .iter()
-            .filter(|t| t.state != TextVisualTransactionState::Cancelled && t.state != TextVisualTransactionState::Completed && t.texture_prepared)
+            .filter(|t| {
+                t.state != TextVisualTransactionState::Cancelled
+                    && t.state != TextVisualTransactionState::Completed
+                    && t.texture_prepared
+            })
             .flat_map(|t| t.all_hidden_byte_ranges())
             .collect()
     }

@@ -1,7 +1,7 @@
 use super::linux_coordinator::{
-    EditableTextTarget, LinuxTextEditorCoordinator, TextEditorProfile,
-    TextInputType, SecretPolicy, AutocorrectPolicy, CapitalizationPolicy,
-    CopyPolicy, PastePolicy, SelectionPolicy,
+    AutocorrectPolicy, CapitalizationPolicy, CopyPolicy, EditableTextTarget,
+    LinuxTextEditorCoordinator, PastePolicy, SecretPolicy, SelectionPolicy, TextEditorProfile,
+    TextInputType,
 };
 use qmetaobject::prelude::*;
 use qmetaobject::QString;
@@ -12,9 +12,11 @@ pub struct TextEditorCoordinatorItem {
     base: qt_base_class!(trait QObject),
 
     #[allow(dead_code)]
-    register_target: qt_method!(fn(&mut self, target_id: QString, is_persistent: bool, initial_text: QString)),
+    register_target:
+        qt_method!(fn(&mut self, target_id: QString, is_persistent: bool, initial_text: QString)),
     #[allow(dead_code)]
-    register_secret_target: qt_method!(fn(&mut self, target_id: QString, is_persistent: bool, initial_text: QString)),
+    register_secret_target:
+        qt_method!(fn(&mut self, target_id: QString, is_persistent: bool, initial_text: QString)),
     #[allow(dead_code)]
     register_search_target: qt_method!(fn(&mut self, target_id: QString, initial_text: QString)),
     #[allow(dead_code)]
@@ -55,7 +57,12 @@ impl Default for TextEditorCoordinatorItem {
 }
 
 impl TextEditorCoordinatorItem {
-    pub fn register_target(&mut self, target_id: QString, is_persistent: bool, initial_text: QString) {
+    pub fn register_target(
+        &mut self,
+        target_id: QString,
+        is_persistent: bool,
+        initial_text: QString,
+    ) {
         let target = EditableTextTarget {
             target_id: target_id.to_string(),
             is_persistent,
@@ -65,7 +72,12 @@ impl TextEditorCoordinatorItem {
         self.coordinator.register_target(target);
     }
 
-    pub fn register_secret_target(&mut self, target_id: QString, is_persistent: bool, initial_text: QString) {
+    pub fn register_secret_target(
+        &mut self,
+        target_id: QString,
+        is_persistent: bool,
+        initial_text: QString,
+    ) {
         let target = EditableTextTarget {
             target_id: target_id.to_string(),
             is_persistent,
@@ -112,7 +124,8 @@ impl TextEditorCoordinatorItem {
     }
 
     pub fn update_text(&mut self, target_id: QString, text: QString) {
-        self.coordinator.update_target_text(&target_id.to_string(), text.to_string());
+        self.coordinator
+            .update_target_text(&target_id.to_string(), text.to_string());
     }
 
     pub fn get_active_target_id(&self) -> QString {

@@ -19,8 +19,8 @@ use qmetaobject::QString;
 use std::cell::Cell;
 use std::rc::Rc;
 use writer_core::platform_interaction::clipboard_focus::{
-    ClipboardAndFocusAdapter, ClipboardRequest, ClipboardResult,
-    ContextMenuRequest, FocusRequest, FocusState,
+    ClipboardAndFocusAdapter, ClipboardRequest, ClipboardResult, ContextMenuRequest, FocusRequest,
+    FocusState,
 };
 
 cpp! {{

@@ -1,6 +1,6 @@
-use super::*;
-use super::layout_snapshot::EditorLayoutSnapshot;
 use super::layout_revision::LayoutRevision;
+use super::layout_snapshot::EditorLayoutSnapshot;
+use super::*;
 
 impl SujianEditorItem {
     pub(crate) fn recalculate_content_height_and_emit(&mut self) {
@@ -92,19 +92,24 @@ impl SujianEditorItem {
             viewport_h,
         );
 
-        let mut snapshot = super::line_snapshot_builder::LineSnapshotBuilder::build_from_canonical_document(
-            revision,
-            &doc_snapshot,
-            scroll_y,
-            viewport_h,
-        );
+        let mut snapshot =
+            super::line_snapshot_builder::LineSnapshotBuilder::build_from_canonical_document(
+                revision,
+                &doc_snapshot,
+                scroll_y,
+                viewport_h,
+            );
         snapshot.caret_rect = Some(caret);
         snapshot.caret_affinity = self.cursor_ctrl.affinity;
         snapshot.virtual_text = self.buffer.text.clone();
         snapshot
     }
 
-    pub(crate) fn build_virtual_layout_snapshot(&mut self, virtual_text: &str, width: f64) -> EditorLayoutSnapshot {
+    pub(crate) fn build_virtual_layout_snapshot(
+        &mut self,
+        virtual_text: &str,
+        width: f64,
+    ) -> EditorLayoutSnapshot {
         let scroll_y = f64::from(self.current_scroll_y);
         let viewport_h = f64::from(self.current_viewport_height.max(1.0));
         let font_size = f64::from(self.current_font_pixel_size);
@@ -136,7 +141,8 @@ impl SujianEditorItem {
             text_color,
         );
 
-        let cursor_byte = if let Some(ref session) = self.pipeline.composition().composition_session {
+        let cursor_byte = if let Some(ref session) = self.pipeline.composition().composition_session
+        {
             session.replace_start.value() + session.preedit_cursor_offset.value()
         } else {
             self.buffer.cursor + virtual_text.len().saturating_sub(self.buffer.text.len())
@@ -148,12 +154,13 @@ impl SujianEditorItem {
             viewport_h,
         );
 
-        let mut snapshot = super::line_snapshot_builder::LineSnapshotBuilder::build_from_canonical_document(
-            revision,
-            &doc_snapshot,
-            scroll_y,
-            viewport_h,
-        );
+        let mut snapshot =
+            super::line_snapshot_builder::LineSnapshotBuilder::build_from_canonical_document(
+                revision,
+                &doc_snapshot,
+                scroll_y,
+                viewport_h,
+            );
         snapshot.caret_rect = Some(caret);
         snapshot.caret_affinity = self.cursor_ctrl.affinity;
         snapshot.virtual_text = virtual_text.to_string();
@@ -165,7 +172,8 @@ impl SujianEditorItem {
         let new_snapshot = self.build_editor_layout_snapshot(width);
         let prev = self.pipeline.current_layout_snapshot().clone();
         self.pipeline.set_previous_layout_snapshot(prev);
-        self.pipeline.set_current_layout_snapshot(Some(new_snapshot));
+        self.pipeline
+            .set_current_layout_snapshot(Some(new_snapshot));
         self.pipeline.bump_layout_revision();
     }
 

@@ -26,8 +26,18 @@ impl super::WriterCore {
         settings::save_device_info(&self.workspace_path, info)
     }
 
-    pub fn ensure_device_info(&self, platform: &str, device_class: &str, preferred_device_id: Option<&str>) -> Result<DeviceInfo> {
-        settings::ensure_device_info(&self.workspace_path, platform, device_class, preferred_device_id)
+    pub fn ensure_device_info(
+        &self,
+        platform: &str,
+        device_class: &str,
+        preferred_device_id: Option<&str>,
+    ) -> Result<DeviceInfo> {
+        settings::ensure_device_info(
+            &self.workspace_path,
+            platform,
+            device_class,
+            preferred_device_id,
+        )
     }
 
     pub fn list_registered_settings(&self) -> crate::settings_registry::SettingsRegistry {
@@ -42,5 +52,25 @@ impl super::WriterCore {
     pub fn get_settings_presentation_json(&self) -> String {
         let presentation = crate::settings_presentation::default_settings_presentation();
         serde_json::to_string(&presentation).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    pub fn list_palette_records(&self) -> Result<Vec<crate::settings::ThemePaletteRecord>> {
+        crate::settings::list_palette_records(&self.workspace_path)
+    }
+
+    pub fn load_palette_record(
+        &self,
+        device_id: &str,
+        fingerprint: &str,
+    ) -> Result<crate::settings::ThemePaletteRecord> {
+        crate::settings::load_palette_record(&self.workspace_path, device_id, fingerprint)
+    }
+
+    pub fn delete_palette_record(&self, device_id: &str, fingerprint: &str) -> Result<()> {
+        crate::settings::delete_palette_record(&self.workspace_path, device_id, fingerprint)
+    }
+
+    pub fn list_builtin_themes(&self) -> Vec<crate::settings::BuiltinTheme> {
+        crate::settings::list_builtin_themes()
     }
 }

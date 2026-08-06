@@ -53,22 +53,24 @@ pub struct NavigationState {
 static DEFAULT_CONFIG_STORE: Mutex<Option<Box<dyn ConfigStore>>> = Mutex::new(None);
 
 pub fn set_default_config_store(store: Box<dyn ConfigStore>) {
-    let mut guard = DEFAULT_CONFIG_STORE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut guard = DEFAULT_CONFIG_STORE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     *guard = Some(store);
 }
 
 fn with_default_store<R, F: FnOnce(&dyn ConfigStore) -> R>(f: F) -> Option<R> {
-    let guard = DEFAULT_CONFIG_STORE.lock().unwrap_or_else(|e| e.into_inner());
+    let guard = DEFAULT_CONFIG_STORE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     guard.as_ref().map(|s| f(s.as_ref()))
 }
 
 pub fn load_app_config() -> AppConfig {
-    if let Some(result) = with_default_store(|store| {
-        match store.load() {
-            Ok(Some(bytes)) => serde_json::from_slice::<AppConfig>(&bytes).unwrap_or_default(),
-            Ok(None) => AppConfig::default(),
-            Err(_) => AppConfig::default(),
-        }
+    if let Some(result) = with_default_store(|store| match store.load() {
+        Ok(Some(bytes)) => serde_json::from_slice::<AppConfig>(&bytes).unwrap_or_default(),
+        Ok(None) => AppConfig::default(),
+        Err(_) => AppConfig::default(),
     }) {
         return result;
     }
@@ -109,7 +111,11 @@ pub fn save_last_navigation_state(
     starmap_id: Option<&str>,
 ) -> Result<(), String> {
     let mut config = load_app_config();
-    config.last_route = if route.is_empty() { None } else { Some(route.to_string()) };
+    config.last_route = if route.is_empty() {
+        None
+    } else {
+        Some(route.to_string())
+    };
     config.last_project_id = project_id.map(|s| s.to_string());
     config.last_volume_id = volume_id.map(|s| s.to_string());
     config.last_chapter_id = chapter_id.map(|s| s.to_string());
@@ -165,7 +171,10 @@ mod tests {
 
         let loaded_bytes = store.load().unwrap().unwrap();
         let loaded: AppConfig = serde_json::from_slice(&loaded_bytes).unwrap();
-        assert_eq!(loaded.last_workspace_path, Some("/tmp/test_workspace".to_string()));
+        assert_eq!(
+            loaded.last_workspace_path,
+            Some("/tmp/test_workspace".to_string())
+        );
     }
 
     #[test]

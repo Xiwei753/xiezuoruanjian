@@ -204,6 +204,13 @@ impl crate::sync::SyncService {
     ///
     /// 当 `preferred_device_id` 为 `Some` 且 state 中 device_id 为空时，
     /// 使用平台注入值而非随机生成。这保证同一设备在不同工作区使用相同的 device_id。
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
     pub fn load_sync_state_with_preferred_device_id(
         workspace_path: &Path,
         preferred_device_id: Option<&str>,
@@ -234,7 +241,10 @@ impl crate::sync::SyncService {
                 }
             }
 
-            let default_state = SyncState { device_id: resolve_device_id(""), ..Default::default() };
+            let default_state = SyncState {
+                device_id: resolve_device_id(""),
+                ..Default::default()
+            };
             return Ok(default_state);
         }
 

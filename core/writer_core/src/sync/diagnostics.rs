@@ -10,8 +10,8 @@ use crate::sync::backends::SyncBackend;
 use crate::sync::types::BackendType;
 use crate::sync::types::SyncConfig;
 use crate::sync::types::SyncDiagnosticsResult;
-use crate::sync::types::SyncSecrets;
 use crate::sync::types::SyncProtocol;
+use crate::sync::types::SyncSecrets;
 use crate::sync::url::detect_transport;
 use crate::sync::url::sanitize_remote_url;
 
@@ -27,8 +27,7 @@ impl crate::sync::SyncService {
         };
 
         result.has_network_permission = config.has_network_permission;
-        result.has_network_state_permission =
-            config.has_network_state_permission;
+        result.has_network_state_permission = config.has_network_state_permission;
 
         if !config.has_network_permission {
             result.network_status = "failed_no_internet_permission".to_string();

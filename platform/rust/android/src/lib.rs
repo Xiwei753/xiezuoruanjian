@@ -23,16 +23,20 @@ use writer_uniffi::WriterAppService;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use writer_platform_api::{
-    FileConfigStore, HttpRequest, HttpResponse, NetworkState, PlatformInit, PlatformKind,
-    PlatformServices, PlatformServicesResolver, SyncTransport, TransportError,
-    register_platform_services_resolver,
+    register_platform_services_resolver, FileConfigStore, HttpRequest, HttpResponse, NetworkState,
+    PlatformInit, PlatformKind, PlatformServices, PlatformServicesResolver, SyncTransport,
+    TransportError,
 };
 
 struct AndroidPlatformServicesResolver;
 
 impl PlatformServicesResolver for AndroidPlatformServicesResolver {
     fn resolve(&self, init: &PlatformInit, network_state: &NetworkState) -> PlatformServices {
-        create_platform_services(init.clone(), network_state.is_connected, network_state.is_metered)
+        create_platform_services(
+            init.clone(),
+            network_state.is_connected,
+            network_state.is_metered,
+        )
     }
 }
 
@@ -124,7 +128,9 @@ impl ReqwestSyncTransport {
             .user_agent("WriterApp/1.0")
             .timeout(std::time::Duration::from_secs(15))
             .build()
-            .map_err(|e| TransportError::new("init", format!("Failed to build HTTP client: {}", e)))?;
+            .map_err(|e| {
+                TransportError::new("init", format!("Failed to build HTTP client: {}", e))
+            })?;
         Ok(Self { client })
     }
 }
@@ -171,9 +177,9 @@ impl SyncTransport for ReqwestSyncTransport {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
             .collect();
-        let body = resp.bytes().map_err(|e| {
-            TransportError::new("response_read", e.to_string())
-        })?;
+        let body = resp
+            .bytes()
+            .map_err(|e| TransportError::new("response_read", e.to_string()))?;
         Ok(HttpResponse {
             status,
             headers,
@@ -187,4 +193,3 @@ pub fn create_sync_transport() -> Result<Box<dyn SyncTransport>, TransportError>
     let transport = ReqwestSyncTransport::new()?;
     Ok(Box::new(transport))
 }
-

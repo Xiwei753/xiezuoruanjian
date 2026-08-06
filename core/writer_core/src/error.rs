@@ -285,9 +285,15 @@ impl Error {
             Error::StorageTransactionIncomplete { transaction_id } => {
                 m.insert("transaction_id".into(), transaction_id.clone());
             }
-            Error::SaveQueueFlushIncomplete { failed_types, remaining_queue_len } => {
+            Error::SaveQueueFlushIncomplete {
+                failed_types,
+                remaining_queue_len,
+            } => {
                 m.insert("failed_types".into(), failed_types.join(","));
-                m.insert("remaining_queue_len".into(), remaining_queue_len.to_string());
+                m.insert(
+                    "remaining_queue_len".into(),
+                    remaining_queue_len.to_string(),
+                );
             }
             Error::InvalidDeleteTarget(detail) => {
                 m.insert("detail".into(), detail.clone());

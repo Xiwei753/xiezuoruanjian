@@ -412,11 +412,16 @@ mod tests {
 
         let mut tombstone_found = false;
         for tombstone in &state.tombstones {
-            if tombstone.original_path == rel_chapter_dir || tombstone.original_path.contains(&chapter.id) {
+            if tombstone.original_path == rel_chapter_dir
+                || tombstone.original_path.contains(&chapter.id)
+            {
                 tombstone_found = true;
                 break;
             }
         }
-        assert!(tombstone_found, "Tombstone for chapter not found in sync state");
+        assert!(
+            tombstone_found,
+            "Tombstone for chapter not found in sync state"
+        );
     }
 }

@@ -95,9 +95,7 @@ impl PlatformCapabilities {
     }
 
     pub fn has_any_ime_support(&self) -> bool {
-        self.supports_ime_preedit
-            || self.supports_cursor_anchor
-            || self.supports_replacement_commit
+        self.supports_ime_preedit || self.supports_cursor_anchor || self.supports_replacement_commit
     }
 }
 

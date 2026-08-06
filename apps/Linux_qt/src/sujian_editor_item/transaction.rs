@@ -50,7 +50,9 @@ impl SujianEditorItem {
         let mut vt = self.pipeline.engine_mut().visual_transaction(&transaction);
 
         if self.current_typing_animation_enabled && vt.is_some() && !self.current_is_scrolling {
-            vt = self.pipeline.record_visual_transaction(&ctx, &old, &new, cause);
+            vt = self
+                .pipeline
+                .record_visual_transaction(&ctx, &old, &new, cause);
         } else {
             if let Some(ref mut vt) = vt {
                 self.fill_visual_transaction_coords_legacy(vt, &new.text, &old.text);
@@ -183,7 +185,9 @@ fn make_cursor_rect_from_caret(
 ) -> CursorRect {
     let line = snapshot.lines.iter().find(|l| l.id == caret.visual_line_id);
     let baseline_y = match line {
-        Some(l) => layout::text_baseline_y(l, f64::from(snapshot.font_size), font_family) - scroll_y,
+        Some(l) => {
+            layout::text_baseline_y(l, f64::from(snapshot.font_size), font_family) - scroll_y
+        }
         None => caret.y + caret.h * 0.8,
     };
     CursorRect {

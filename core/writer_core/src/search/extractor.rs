@@ -1,9 +1,20 @@
 use std::path::Path;
 
-use crate::error::Result;
 use super::types::*;
+use crate::error::Result;
 
-pub fn extract_chapter_entries(workspace: &Path, project_id: Option<&str>) -> Result<Vec<IndexEntry>> {
+// TODO(#597): 既有代码可读性技术债，待后续重构拆分
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
+pub fn extract_chapter_entries(
+    workspace: &Path,
+    project_id: Option<&str>,
+) -> Result<Vec<IndexEntry>> {
     let mut entries = Vec::new();
     let projects_dir = workspace.join("projects");
 
@@ -19,9 +30,10 @@ pub fn extract_chapter_entries(workspace: &Path, project_id: Option<&str>) -> Re
             }
         }
 
-        let proj: Option<crate::project::Project> = std::fs::read_to_string(project_path.join("project.json"))
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok());
+        let proj: Option<crate::project::Project> =
+            std::fs::read_to_string(project_path.join("project.json"))
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok());
         let proj_title = proj.as_ref().map(|p| p.title.as_str()).unwrap_or("");
         entries.push(extract_project_title_entry(&pid, proj_title));
 
@@ -31,9 +43,10 @@ pub fn extract_chapter_entries(workspace: &Path, project_id: Option<&str>) -> Re
         }
         let volumes = scan_dirs(&volumes_dir)?;
         for (vid, volume_path) in volumes {
-            let vol: Option<crate::volume::Volume> = std::fs::read_to_string(volume_path.join("volume.json"))
-                .ok()
-                .and_then(|s| serde_json::from_str(&s).ok());
+            let vol: Option<crate::volume::Volume> =
+                std::fs::read_to_string(volume_path.join("volume.json"))
+                    .ok()
+                    .and_then(|s| serde_json::from_str(&s).ok());
             let vol_title = vol.as_ref().map(|v| v.title.as_str()).unwrap_or("");
             entries.push(extract_volume_title_entry(&pid, &vid, vol_title));
 
@@ -49,7 +62,9 @@ pub fn extract_chapter_entries(workspace: &Path, project_id: Option<&str>) -> Re
                 let md_path = chapter_path.join("chapter.md");
                 if md_path.exists() {
                     if let Ok(body) = std::fs::read_to_string(&md_path) {
-                        entries.push(extract_chapter_body_entry(&pid, &vid, &cid, &ch_title, &body));
+                        entries.push(extract_chapter_body_entry(
+                            &pid, &vid, &cid, &ch_title, &body,
+                        ));
                     }
                 }
 
@@ -57,7 +72,9 @@ pub fn extract_chapter_entries(workspace: &Path, project_id: Option<&str>) -> Re
                 if note_path.exists() {
                     if let Ok(note) = std::fs::read_to_string(&note_path) {
                         if !note.is_empty() {
-                            entries.push(extract_chapter_note_entry(&pid, &vid, &cid, &ch_title, &note));
+                            entries.push(extract_chapter_note_entry(
+                                &pid, &vid, &cid, &ch_title, &note,
+                            ));
                         }
                     }
                 }
@@ -68,7 +85,17 @@ pub fn extract_chapter_entries(workspace: &Path, project_id: Option<&str>) -> Re
     Ok(entries)
 }
 
-pub fn extract_starmap_entries(workspace: &Path, project_id: Option<&str>) -> Result<Vec<IndexEntry>> {
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
+pub fn extract_starmap_entries(
+    workspace: &Path,
+    project_id: Option<&str>,
+) -> Result<Vec<IndexEntry>> {
     let mut entries = Vec::new();
     let starmaps_dir = workspace.join("app-meta").join("starmaps");
 
@@ -98,14 +125,19 @@ pub fn extract_starmap_entries(workspace: &Path, project_id: Option<&str>) -> Re
         if nodes_dir.exists() {
             if let Ok(node_files) = scan_json_files(&nodes_dir) {
                 for (nid, node_file) in node_files {
-                    let node: Option<crate::starmap::types::StarMapNode> = std::fs::read_to_string(&node_file)
-                        .ok()
-                        .and_then(|s| serde_json::from_str(&s).ok());
+                    let node: Option<crate::starmap::types::StarMapNode> =
+                        std::fs::read_to_string(&node_file)
+                            .ok()
+                            .and_then(|s| serde_json::from_str(&s).ok());
                     if let Some(n) = node {
                         let content = extract_node_search_text(&n.content, &n.tags);
                         if !n.title.is_empty() || !content.is_empty() {
                             entries.push(extract_starmap_node_entry(
-                                &sid, &nid, bound_project, &n.title, &content,
+                                &sid,
+                                &nid,
+                                bound_project,
+                                &n.title,
+                                &content,
                             ));
                         }
                     }
@@ -117,13 +149,19 @@ pub fn extract_starmap_entries(workspace: &Path, project_id: Option<&str>) -> Re
         if edges_dir.exists() {
             if let Ok(edge_files) = scan_json_files(&edges_dir) {
                 for (eid, edge_file) in edge_files {
-                    let edge: Option<crate::starmap::types::StarMapEdge> = std::fs::read_to_string(&edge_file)
-                        .ok()
-                        .and_then(|s| serde_json::from_str(&s).ok());
+                    let edge: Option<crate::starmap::types::StarMapEdge> =
+                        std::fs::read_to_string(&edge_file)
+                            .ok()
+                            .and_then(|s| serde_json::from_str(&s).ok());
                     if let Some(e) = edge {
                         let label = e.label.as_deref().unwrap_or("");
                         if !label.is_empty() {
-                            entries.push(extract_starmap_edge_entry(&sid, &eid, bound_project, label));
+                            entries.push(extract_starmap_edge_entry(
+                                &sid,
+                                &eid,
+                                bound_project,
+                                label,
+                            ));
                         }
                     }
                 }
@@ -134,14 +172,19 @@ pub fn extract_starmap_entries(workspace: &Path, project_id: Option<&str>) -> Re
         if hyperlinks_dir.exists() {
             if let Ok(hl_files) = scan_json_files(&hyperlinks_dir) {
                 for (hid, hl_file) in hl_files {
-                    let hl: Option<crate::starmap::types::StarMapHyperlink> = std::fs::read_to_string(&hl_file)
-                        .ok()
-                        .and_then(|s| serde_json::from_str(&s).ok());
+                    let hl: Option<crate::starmap::types::StarMapHyperlink> =
+                        std::fs::read_to_string(&hl_file)
+                            .ok()
+                            .and_then(|s| serde_json::from_str(&s).ok());
                     if let Some(h) = hl {
                         let hl_title = h.label.as_deref().unwrap_or("");
                         if !hl_title.is_empty() || !h.target_uri.is_empty() {
                             entries.push(extract_starmap_hyperlink_entry(
-                                &sid, &hid, bound_project, hl_title, &h.target_uri,
+                                &sid,
+                                &hid,
+                                bound_project,
+                                hl_title,
+                                &h.target_uri,
                             ));
                         }
                     }
@@ -153,13 +196,19 @@ pub fn extract_starmap_entries(workspace: &Path, project_id: Option<&str>) -> Re
         if links_dir.exists() {
             if let Ok(link_files) = scan_json_files(&links_dir) {
                 for (lid, link_file) in link_files {
-                    let link: Option<crate::starmap::types::StarMapLink> = std::fs::read_to_string(&link_file)
-                        .ok()
-                        .and_then(|s| serde_json::from_str(&s).ok());
+                    let link: Option<crate::starmap::types::StarMapLink> =
+                        std::fs::read_to_string(&link_file)
+                            .ok()
+                            .and_then(|s| serde_json::from_str(&s).ok());
                     if let Some(l) = link {
                         let label = l.label.as_deref().unwrap_or("");
                         if !label.is_empty() {
-                            entries.push(extract_starmap_link_entry(&sid, &lid, bound_project, label));
+                            entries.push(extract_starmap_link_entry(
+                                &sid,
+                                &lid,
+                                bound_project,
+                                label,
+                            ));
                         }
                     }
                 }
@@ -170,12 +219,18 @@ pub fn extract_starmap_entries(workspace: &Path, project_id: Option<&str>) -> Re
         if embeds_dir.exists() {
             if let Ok(embed_files) = scan_json_files(&embeds_dir) {
                 for (eid, embed_file) in embed_files {
-                    let embed: Option<crate::starmap::types::StarMapEmbed> = std::fs::read_to_string(&embed_file)
-                        .ok()
-                        .and_then(|s| serde_json::from_str(&s).ok());
+                    let embed: Option<crate::starmap::types::StarMapEmbed> =
+                        std::fs::read_to_string(&embed_file)
+                            .ok()
+                            .and_then(|s| serde_json::from_str(&s).ok());
                     if let Some(e) = embed {
                         let label = e.label.as_deref().unwrap_or("");
-                        entries.push(extract_starmap_embed_entry(&sid, &eid, bound_project, label));
+                        entries.push(extract_starmap_embed_entry(
+                            &sid,
+                            &eid,
+                            bound_project,
+                            label,
+                        ));
                     }
                 }
             }
@@ -224,7 +279,11 @@ pub fn extract_starmap_node_entry(
     title: &str,
     content: &str,
 ) -> IndexEntry {
-    let body = if content.is_empty() { title.to_string() } else { content.to_string() };
+    let body = if content.is_empty() {
+        title.to_string()
+    } else {
+        content.to_string()
+    };
     IndexEntry {
         object_id: format!("starmap_node:{}:{}", starmap_id, node_id),
         scope: SearchScope::StarmapNode,
@@ -292,7 +351,11 @@ pub fn extract_starmap_hyperlink_entry(
     title: &str,
     url: &str,
 ) -> IndexEntry {
-    let body = if url.is_empty() { title.to_string() } else { format!("{} {}", title, url) };
+    let body = if url.is_empty() {
+        title.to_string()
+    } else {
+        format!("{} {}", title, url)
+    };
     IndexEntry {
         object_id: format!("starmap_hyperlink:{}:{}", starmap_id, hyperlink_id),
         scope: SearchScope::StarmapHyperlink,
@@ -352,10 +415,7 @@ pub fn extract_starmap_title_entry(
     }
 }
 
-pub fn extract_project_title_entry(
-    project_id: &str,
-    title: &str,
-) -> IndexEntry {
+pub fn extract_project_title_entry(project_id: &str, title: &str) -> IndexEntry {
     IndexEntry {
         object_id: format!("project:{}", project_id),
         scope: SearchScope::ProjectTitle,
@@ -372,11 +432,7 @@ pub fn extract_project_title_entry(
     }
 }
 
-pub fn extract_volume_title_entry(
-    project_id: &str,
-    volume_id: &str,
-    title: &str,
-) -> IndexEntry {
+pub fn extract_volume_title_entry(project_id: &str, volume_id: &str, title: &str) -> IndexEntry {
     IndexEntry {
         object_id: format!("volume:{}:{}", project_id, volume_id),
         scope: SearchScope::VolumeTitle,
@@ -485,6 +541,13 @@ pub fn now_epoch() -> u64 {
         .as_secs()
 }
 
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 fn scan_dirs(dir: &Path) -> Result<Vec<(String, std::path::PathBuf)>> {
     let mut result = Vec::new();
     if let Ok(entries) = std::fs::read_dir(dir) {
@@ -500,6 +563,13 @@ fn scan_dirs(dir: &Path) -> Result<Vec<(String, std::path::PathBuf)>> {
     Ok(result)
 }
 
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 fn scan_json_files(dir: &Path) -> Result<Vec<(String, std::path::PathBuf)>> {
     let mut result = Vec::new();
     if let Ok(entries) = std::fs::read_dir(dir) {
@@ -536,16 +606,27 @@ fn load_chapter_title(chapter_path: &Path) -> String {
     std::fs::read_to_string(chapter_path.join("chapter.meta.json"))
         .ok()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .and_then(|v| v.get("title").and_then(|f| f.as_str()).map(|s| s.to_string()))
+        .and_then(|v| {
+            v.get("title")
+                .and_then(|f| f.as_str())
+                .map(|s| s.to_string())
+        })
         .unwrap_or_default()
 }
 
-fn extract_node_search_text(content: &crate::starmap::semantic::StarMapNodeContent, tags: &[String]) -> String {
+fn extract_node_search_text(
+    content: &crate::starmap::semantic::StarMapNodeContent,
+    tags: &[String],
+) -> String {
     let mut parts = Vec::new();
     let text = content.search_text();
-    if !text.is_empty() { parts.push(text); }
+    if !text.is_empty() {
+        parts.push(text);
+    }
     for tag in tags {
-        if !tag.is_empty() { parts.push(tag.clone()); }
+        if !tag.is_empty() {
+            parts.push(tag.clone());
+        }
     }
     parts.join(" ")
 }

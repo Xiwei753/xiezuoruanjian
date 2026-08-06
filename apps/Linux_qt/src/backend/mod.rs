@@ -4,10 +4,10 @@
 
 #[allow(clippy::misnamed_getters)]
 pub mod app_backend;
-pub mod linux_qt_layout_plan_dto;
-pub mod linux_theme_controller;
 pub mod diagnostics;
 pub mod json_utils;
+pub mod linux_qt_layout_plan_dto;
+pub mod linux_theme_controller;
 pub(crate) mod message_key_mapper;
 
 use qmetaobject::prelude::*;
@@ -154,7 +154,10 @@ impl std::error::Error for AppBorrowError {}
 impl AppRef {
     pub fn new(app: std::rc::Rc<std::cell::RefCell<AppBackend>>) -> Self {
         let snapshot = std::rc::Rc::new(std::cell::RefCell::new(DomainSnapshot::default()));
-        Self { inner: app, snapshot }
+        Self {
+            inner: app,
+            snapshot,
+        }
     }
 
     pub fn rc(&self) -> &std::rc::Rc<std::cell::RefCell<AppBackend>> {
@@ -179,7 +182,10 @@ impl AppRef {
         }
     }
 
-    pub fn with_app_mut<R>(&self, f: impl FnOnce(&mut AppBackend) -> R) -> Result<R, AppBorrowError> {
+    pub fn with_app_mut<R>(
+        &self,
+        f: impl FnOnce(&mut AppBackend) -> R,
+    ) -> Result<R, AppBorrowError> {
         match self.inner.try_borrow_mut() {
             Ok(mut guard) => {
                 let result = f(&mut guard);

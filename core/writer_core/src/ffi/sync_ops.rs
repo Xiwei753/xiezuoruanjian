@@ -117,7 +117,9 @@ pub unsafe extern "C" fn writer_core_sync_diagnostics() -> *mut c_char {
 pub unsafe extern "C" fn writer_core_perform_sync() -> *mut c_char {
     match with_core(|core| {
         let config = core.load_sync_config().map_err(|e| format!("{}", e))?;
-        let result = core.perform_sync(&config).map_err(|e| format!("{}", e))?;
+        let result = core
+            .perform_sync(&config, false)
+            .map_err(|e| format!("{}", e))?;
         Ok(serde_json::to_value(&result).unwrap_or_default())
     }) {
         Ok(data) => ok_json(data),
@@ -170,8 +172,7 @@ pub unsafe extern "C" fn writer_core_save_device_info(
         if let Some(v) = val.get("platform").and_then(|v| v.as_str()) {
             info.platform = v.to_string();
         }
-        core.save_device_info(&info)
-            .map_err(|e| format!("{}", e))?;
+        core.save_device_info(&info).map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
         Ok(data) => ok_json(data),
@@ -241,8 +242,24 @@ pub unsafe extern "C" fn writer_core_ensure_device_info(
 ///
 /// 仅允许 ASCII 字母数字、下划线和连字符，最长 64 字符。
 /// 此限制确保标识符可安全嵌入文件路径和 Git 分支名，无需额外转义。
+// TODO(#597): 既有代码可读性技术债，待后续重构拆分
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_lossless,
+    deprecated
+)]
+#[allow(dead_code)]
 fn validate_platform_identifier(s: &str) -> bool {
-    s.len() <= 64 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    s.len() <= 64
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 #[cfg(test)]

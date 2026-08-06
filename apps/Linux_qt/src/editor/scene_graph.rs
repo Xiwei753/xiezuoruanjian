@@ -412,10 +412,7 @@ pub fn update_animation_layer(
 }
 
 /// Clear the animation layer (child[1]) — remove all animated glyph nodes.
-pub fn clear_animation_layer(
-    root_raw: *mut std::ffi::c_void,
-    item_ptr: *mut std::ffi::c_void,
-) {
+pub fn clear_animation_layer(root_raw: *mut std::ffi::c_void, item_ptr: *mut std::ffi::c_void) {
     // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [
         root_raw as "QSGNode*",

@@ -175,12 +175,16 @@ impl CursorController {
                     let prev_vy = self.visual_y;
                     if (prev_vx - target_x).abs() > 0.01 || (prev_vy - target_y).abs() > 0.01 {
                         self.animation = Some(CursorAnimationState {
-                            start_x: if (start_x - prev_vx).abs() < 0.01 && (start_y - prev_vy).abs() < 0.01 {
+                            start_x: if (start_x - prev_vx).abs() < 0.01
+                                && (start_y - prev_vy).abs() < 0.01
+                            {
                                 prev_vx
                             } else {
                                 start_x
                             },
-                            start_y: if (start_x - prev_vx).abs() < 0.01 && (start_y - prev_vy).abs() < 0.01 {
+                            start_y: if (start_x - prev_vx).abs() < 0.01
+                                && (start_y - prev_vy).abs() < 0.01
+                            {
                                 prev_vy
                             } else {
                                 start_y

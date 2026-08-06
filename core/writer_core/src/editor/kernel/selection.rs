@@ -1,5 +1,5 @@
-use super::types::{CoordinatedCursor, EditorOperationKind, EditorVisualIntent};
 use super::result::{EditorEditOutcome, EditorEditResult};
+use super::types::{CoordinatedCursor, EditorOperationKind, EditorVisualIntent};
 use super::EditorKernel;
 
 use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset, Utf8ByteRange};
@@ -17,10 +17,18 @@ impl EditorKernel {
         let anchor = anchor_byte_offset;
         let head = head_byte_offset;
         if anchor > self.text.len() || head > self.text.len() {
-            return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
+            return EditorEditOutcome::InvalidOffset(self.noop_result(
+                base_revision,
+                old_cursor,
+                old_selection,
+            ));
         }
         if !self.text.is_char_boundary(anchor) || !self.text.is_char_boundary(head) {
-            return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
+            return EditorEditOutcome::InvalidOffset(self.noop_result(
+                base_revision,
+                old_cursor,
+                old_selection,
+            ));
         }
         self.selection_anchor = Utf8ByteOffset::unchecked(anchor);
         self.cursor = Utf8ByteOffset::unchecked(head);

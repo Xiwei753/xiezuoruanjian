@@ -1,7 +1,10 @@
-use crate::{ConfigStore, NetworkState, PlatformInit, SecureStorage, SyncTransport, TransportError};
+use crate::{
+    ConfigStore, NetworkState, PlatformInit, SecureStorage, SyncTransport, TransportError,
+};
 use std::sync::{Arc, OnceLock};
 
-pub type SyncTransportFactory = Arc<dyn Fn() -> Result<Box<dyn SyncTransport>, TransportError> + Send + Sync>;
+pub type SyncTransportFactory =
+    Arc<dyn Fn() -> Result<Box<dyn SyncTransport>, TransportError> + Send + Sync>;
 
 pub struct PlatformServices {
     pub init: PlatformInit,

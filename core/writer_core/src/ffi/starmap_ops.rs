@@ -357,6 +357,19 @@ pub unsafe extern "C" fn writer_core_save_starmap_viewport(
 /// `graph_json` must be a valid null-terminated UTF-8 C string containing StarMapGraphDto JSON.
 /// Returns a caller-owned C string containing JSON array of StarMapEdgeRenderDto. Free with `writer_core_free_string`.
 #[no_mangle]
+// TODO(#597): 既有代码可读性技术债，待后续重构拆分
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_lossless,
+    deprecated
+)]
 pub unsafe extern "C" fn writer_core_compute_starmap_edge_renders(
     graph_json: *const c_char,
 ) -> *mut c_char {
@@ -415,7 +428,7 @@ pub unsafe extern "C" fn writer_core_compute_starmap_edge_renders(
         let json_arr: Vec<serde_json::Value> = renders
             .into_iter()
             .map(|r| {
-                serde_json::to_value(&crate::api::types::StarMapEdgeRenderDto::from(r))
+                serde_json::to_value(crate::api::types::StarMapEdgeRenderDto::from(r))
                     .unwrap_or_default()
             })
             .collect();
@@ -440,7 +453,8 @@ pub unsafe extern "C" fn writer_core_flush_starmap_store(
         }
     };
     match with_core(|core| {
-        core.flush_starmap_store(&starmap_id).map_err(|e| format!("{}", e))?;
+        core.flush_starmap_store(&starmap_id)
+            .map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
         Ok(data) => ok_json(data),
@@ -462,7 +476,8 @@ pub unsafe extern "C" fn writer_core_close_starmap_store(
         }
     };
     match with_core(|core| {
-        core.close_starmap_store(&starmap_id).map_err(|e| format!("{}", e))?;
+        core.close_starmap_store(&starmap_id)
+            .map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
         Ok(data) => ok_json(data),
@@ -473,7 +488,8 @@ pub unsafe extern "C" fn writer_core_close_starmap_store(
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_flush_all_starmap_stores() -> *mut c_char {
     match with_core(|core| {
-        core.flush_all_starmap_stores().map_err(|e| format!("{}", e))?;
+        core.flush_all_starmap_stores()
+            .map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
         Ok(data) => ok_json(data),

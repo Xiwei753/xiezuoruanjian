@@ -44,7 +44,12 @@ fn sync_download_pool(task_count: usize) -> crate::Result<rayon::ThreadPool> {
     rayon::ThreadPoolBuilder::new()
         .num_threads(task_count.clamp(1, MAX_PARALLEL_DOWNLOADS))
         .build()
-        .map_err(|e| crate::Error::Io(std::io::Error::other(format!("sync_parallel_pool_error: {}", e))))
+        .map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "sync_parallel_pool_error: {}",
+                e
+            )))
+        })
 }
 
 /// 将远端冲突内容保存为本地备份文件。
@@ -318,6 +323,13 @@ enum ThreeWayResult {
 /// - `ApiRateLimited` → RecoverableError（可恢复，下次同步自动重试）
 /// - `GithubNetworkFailed/DnsFailed/TlsFailed/NetworkProbeFailed` → RecoverableError
 /// - 其他 → RecoverableError（保守处理，避免误报不可恢复）
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 pub(crate) fn perform_lww_sync(
     workspace_path: &Path,
     config: &SyncConfig,
@@ -383,7 +395,8 @@ pub(crate) fn perform_lww_sync(
                 } else {
                     log::debug!(
                         "[sync] debounce: last_sync={}s ago, min_interval={}s, skipping",
-                        elapsed, min_interval
+                        elapsed,
+                        min_interval
                     );
                     result.status = SyncStatus::Success;
                     return Ok(result);
@@ -411,10 +424,8 @@ pub(crate) fn perform_lww_sync(
                 attempt += 1;
                 if attempt >= max_retries {
                     let err = e.to_string();
-                    let category = crate::sync::types::SyncErrorCategory::from_code(
-                        e.sync_category(),
-                        &err,
-                    );
+                    let category =
+                        crate::sync::types::SyncErrorCategory::from_code(e.sync_category(), &err);
                     result.status = match category {
                         crate::sync::types::SyncErrorCategory::LocalIoError => {
                             SyncStatus::Error("local_io_error".to_string())
@@ -460,6 +471,13 @@ pub(crate) fn perform_lww_sync(
 ///
 /// 调用方 `perform_lww_sync` 负责重试（最多 2 次）和错误分类。
 #[allow(clippy::cast_possible_truncation)]
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 fn execute_lww_sync_attempt(
     workspace_path: &Path,
     config: &SyncConfig,
@@ -477,20 +495,26 @@ fn execute_lww_sync_attempt(
         headers: vec![
             ("Authorization".to_string(), format!("Bearer {}", token)),
             ("User-Agent".to_string(), "WriterApp/1.0".to_string()),
-            ("Accept".to_string(), "application/vnd.github+json".to_string()),
+            (
+                "Accept".to_string(),
+                "application/vnd.github+json".to_string(),
+            ),
         ],
         body: None,
     };
-    let tree_resp = transport.execute(tree_request).map_err(|e| crate::Error::SyncNetworkUnavailable {
-        reason: format!("{}: {}", e.category, e.message),
-    })?;
+    let tree_resp =
+        transport
+            .execute(tree_request)
+            .map_err(|e| crate::Error::SyncNetworkUnavailable {
+                reason: format!("{}: {}", e.category, e.message),
+            })?;
 
     let mut remote_tree_files = std::collections::HashMap::new();
     let tree_status = tree_resp.status;
     let tree_body = String::from_utf8(tree_resp.body).unwrap_or_default();
     if tree_status == 200 {
-        let json: serde_json::Value = serde_json::from_str(&tree_body)
-            .map_err(|e| crate::Error::SyncGithubApiError {
+        let json: serde_json::Value =
+            serde_json::from_str(&tree_body).map_err(|e| crate::Error::SyncGithubApiError {
                 category: "api_error".to_string(),
                 context: format!("invalid tree json: {}", e),
                 status: 0,
@@ -521,13 +545,19 @@ fn execute_lww_sync_attempt(
             headers: vec![
                 ("Authorization".to_string(), format!("Bearer {}", token)),
                 ("User-Agent".to_string(), "WriterApp/1.0".to_string()),
-                ("Accept".to_string(), "application/vnd.github+json".to_string()),
+                (
+                    "Accept".to_string(),
+                    "application/vnd.github+json".to_string(),
+                ),
             ],
             body: None,
         };
-        let ref_resp = transport.execute(ref_request).map_err(|e| crate::Error::SyncNetworkUnavailable {
-            reason: format!("{}: {}", e.category, e.message),
-        })?;
+        let ref_resp =
+            transport
+                .execute(ref_request)
+                .map_err(|e| crate::Error::SyncNetworkUnavailable {
+                    reason: format!("{}: {}", e.category, e.message),
+                })?;
         let ref_status = ref_resp.status;
         if ref_status == 200 {
             // 仓库和分支都存在，tree 404 说明是空仓库，remote_tree_files 保持为空
@@ -542,12 +572,17 @@ fn execute_lww_sync_attempt(
                 headers: vec![
                     ("Authorization".to_string(), format!("Bearer {}", token)),
                     ("User-Agent".to_string(), "WriterApp/1.0".to_string()),
-                    ("Accept".to_string(), "application/vnd.github+json".to_string()),
+                    (
+                        "Accept".to_string(),
+                        "application/vnd.github+json".to_string(),
+                    ),
                 ],
                 body: None,
             };
-            let repo_resp = transport.execute(repo_request).map_err(|e| crate::Error::SyncNetworkUnavailable {
-                reason: format!("{}: {}", e.category, e.message),
+            let repo_resp = transport.execute(repo_request).map_err(|e| {
+                crate::Error::SyncNetworkUnavailable {
+                    reason: format!("{}: {}", e.category, e.message),
+                }
             })?;
             let repo_status = repo_resp.status;
             if repo_status == 200 {
@@ -595,9 +630,13 @@ fn execute_lww_sync_attempt(
 
     let mut remote_manifest = SyncManifest::default();
     if remote_tree_files.contains_key(SYNC_MANIFEST_PATH) {
-        if let Some((content_bytes, _)) =
-            github_get_content(transport, api_base, token, &config.branch, SYNC_MANIFEST_PATH)?
-        {
+        if let Some((content_bytes, _)) = github_get_content(
+            transport,
+            api_base,
+            token,
+            &config.branch,
+            SYNC_MANIFEST_PATH,
+        )? {
             remote_manifest =
                 serde_json::from_slice::<SyncManifest>(&content_bytes).map_err(|e| {
                     crate::Error::SyncGithubApiError {
@@ -1122,8 +1161,7 @@ fn execute_lww_sync_attempt(
                         crate::Error::Io(std::io::Error::other(format!("{}: {}", path, e)))
                     })?;
                 }
-                let tmp_path =
-                    full_path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
+                let tmp_path = full_path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
                 std::fs::write(&tmp_path, content).map_err(|e| {
                     crate::Error::Io(std::io::Error::other(format!("{}: {}", path, e)))
                 })?;
@@ -1165,8 +1203,9 @@ fn execute_lww_sync_attempt(
         if !full_path.exists() {
             continue;
         }
-        let content = std::fs::read(&full_path)
-            .map_err(|e| crate::Error::Io(std::io::Error::other(format!("read {}: {}", path, e))))?;
+        let content = std::fs::read(&full_path).map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!("read {}: {}", path, e)))
+        })?;
         github_put_content_serial(
             transport,
             api_base,
@@ -1228,12 +1267,7 @@ fn execute_lww_sync_attempt(
     let conflicted_known_files_updated_at: std::collections::HashMap<String, i64> = state
         .conflicted_files
         .iter()
-        .filter_map(|p| {
-            state
-                .known_files_updated_at
-                .get(p)
-                .map(|v| (p.clone(), *v))
-        })
+        .filter_map(|p| state.known_files_updated_at.get(p).map(|v| (p.clone(), *v)))
         .collect();
 
     state.known_files.clear();

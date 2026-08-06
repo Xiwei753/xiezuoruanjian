@@ -4,7 +4,12 @@ use crate::writing_stats::{DateRange, EventSource, WritingInputEvent};
 use serde_json::Value;
 
 impl super::WriterCore {
-    #[allow(clippy::too_many_arguments, clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_possible_wrap)]
+    #[allow(
+        clippy::too_many_arguments,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_possible_wrap
+    )]
     pub fn process_writing_event(
         &self,
         device_id: &str,

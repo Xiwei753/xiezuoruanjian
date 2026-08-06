@@ -42,8 +42,7 @@ impl From<crate::sync::SyncConfig> for SyncConfigDto {
             sync_interval_seconds: c.sync_interval_seconds,
             username: c.username,
             has_network_permission: c.has_network_permission,
-            has_network_state_permission: c
-                .has_network_state_permission,
+            has_network_state_permission: c.has_network_state_permission,
         }
     }
 }
@@ -67,8 +66,7 @@ impl From<SyncConfigDto> for crate::sync::SyncConfig {
             auto_sync: c.auto_sync,
             sync_interval_seconds: c.sync_interval_seconds,
             username: c.username,
-            has_network_state_permission: c
-                .has_network_state_permission,
+            has_network_state_permission: c.has_network_state_permission,
             has_network_permission: c.has_network_permission,
         }
     }
@@ -173,8 +171,7 @@ impl From<crate::sync::SyncDiagnosticsResult> for SyncDiagnosticsResultDto {
             success: d.success,
             backend_type: d.backend_type,
             has_network_permission: d.has_network_permission,
-            has_network_state_permission: d
-                .has_network_state_permission,
+            has_network_state_permission: d.has_network_state_permission,
             network_state: d.network_state,
             network_ok: d.network_ok,
             auth_ok: d.auth_ok,

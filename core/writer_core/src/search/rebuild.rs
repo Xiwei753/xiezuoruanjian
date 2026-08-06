@@ -1,8 +1,8 @@
 use std::path::Path;
 
-use crate::error::Result;
-use super::types::*;
 use super::extractor;
+use super::types::*;
+use crate::error::Result;
 
 pub fn rebuild_index(workspace: &Path, project_id: Option<&str>) -> Result<Vec<IndexEntry>> {
     let mut entries = Vec::new();

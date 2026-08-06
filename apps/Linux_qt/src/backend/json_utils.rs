@@ -22,7 +22,6 @@ pub(crate) fn envelope_ok_json<T: serde::Serialize>(data: T) -> String {
     writer_core::api::ResultEnvelope::success(data).to_json_string()
 }
 
-
 /// serde_json::Value → QJsonValue 递归转换。
 ///
 /// Null → QJsonValue::default()，Number 统一转为 f64（Qt JSON 无整数类型）。
@@ -101,7 +100,11 @@ pub(crate) fn bridge_success_object(data: serde_json::Value) -> QJsonObject {
 pub(crate) fn qjson_object_from_json(raw: &str) -> QJsonObject {
     match serde_json::from_str::<serde_json::Value>(raw) {
         Ok(value) => serde_to_qjson_object(value),
-        Err(e) => bridge_error_object("error.json_parse", "JSON_ERROR", &format!("无效 Bridge 返回: {}", e)),
+        Err(e) => bridge_error_object(
+            "error.json_parse",
+            "JSON_ERROR",
+            &format!("无效 Bridge 返回: {}", e),
+        ),
     }
 }
 

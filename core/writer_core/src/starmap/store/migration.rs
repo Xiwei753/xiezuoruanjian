@@ -3,7 +3,7 @@ use std::path::Path;
 
 use crate::error::Result;
 
-use super::meta::{GraphMeta, LegacyGraphMeta, DeletedSinceLastSync};
+use super::meta::{DeletedSinceLastSync, GraphMeta, LegacyGraphMeta};
 use super::relation_index::*;
 use super::types::*;
 use super::StarMapStore;
@@ -65,7 +65,10 @@ impl StarMapStore {
             });
         }
         let file_name = flat_path.file_name().unwrap_or_default().to_string_lossy();
-        self.record_migration("flat_to_bucket", &format!("migrated {} from flat to bucket", file_name));
+        self.record_migration(
+            "flat_to_bucket",
+            &format!("migrated {} from flat to bucket", file_name),
+        );
     }
 
     pub(super) fn record_migration(&self, kind: &str, detail: &str) {
@@ -95,11 +98,21 @@ impl StarMapStore {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
     pub(super) fn load_graph_meta_from_file(&self, path: &Path) -> Result<GraphMeta> {
         let content = std::fs::read_to_string(path)?;
         let value: serde_json::Value = serde_json::from_str(&content)?;
 
-        if let Some(schema_version) = value.get("schemaVersion").or_else(|| value.get("schema_version")) {
+        if let Some(schema_version) = value
+            .get("schemaVersion")
+            .or_else(|| value.get("schema_version"))
+        {
             if let Some(sv_str) = schema_version.as_str() {
                 if sv_str == "2" {
                     let meta: GraphMeta = serde_json::from_str(&content)?;
@@ -108,46 +121,67 @@ impl StarMapStore {
             }
             if let Some(sv_num) = schema_version.as_u64() {
                 if sv_num == 1 {
-                    if value.get("nodes").is_some() && value.get("nodes").and_then(|v| v.as_array()).is_some() {
-                        let graph: crate::starmap::types::StarMapGraph = serde_json::from_str(&content)?;
+                    if value.get("nodes").is_some()
+                        && value.get("nodes").and_then(|v| v.as_array()).is_some()
+                    {
+                        let graph: crate::starmap::types::StarMapGraph =
+                            serde_json::from_str(&content)?;
                         return Ok(GraphMeta {
                             schema_version: "2".to_string(),
                             starmap_id: graph.starmap_id.clone(),
                             title: graph.title.clone(),
                             node_ids: graph.nodes.iter().map(|n| n.id.clone()).collect(),
                             edge_ids: graph.edges.iter().map(|e| e.id.clone()).collect(),
-                            embed_instance_ids: graph.embeds.iter().map(|e| e.instance_id.clone()).collect(),
+                            embed_instance_ids: graph
+                                .embeds
+                                .iter()
+                                .map(|e| e.instance_id.clone())
+                                .collect(),
                             link_ids: graph.links.iter().map(|l| l.link_id.clone()).collect(),
-                        hyperlink_ids: vec![],
-                        edge_relation_index: graph.edges.iter().map(|e| EdgeRelationIndex {
-                            edge_id: e.id.clone(),
-                            from: e.from.clone().unwrap_or_default(),
-                            to: e.to.clone().unwrap_or_default(),
-                            from_endpoint: e.from_endpoint.clone(),
-                            to_endpoint: e.to_endpoint.clone(),
-                            from_endpoint_path: e.from_endpoint_path.clone(),
-                            to_endpoint_path: e.to_endpoint_path.clone(),
-                        }).collect(),
-                        embed_host_index: graph.embeds.iter().map(|e| EmbedHostIndex {
-                            instance_id: e.instance_id.clone(),
-                            host_node_id: e.source_node_id.clone().unwrap_or_default(),
-                            host_endpoint: e.host_endpoint.clone(),
-                        }).collect(),
-                        link_relation_index: graph.links.iter().map(|l| LinkRelationIndex {
-                            link_id: l.link_id.clone(),
-                            source_node_id: endpoint_node_id(&l.source).unwrap_or_default().to_string(),
-                        }).collect(),
-                        hyperlink_relation_index: vec![],
-                        node_kind_counts: {
-                            let mut counts = HashMap::new();
-                            for node in &graph.nodes {
-                                *counts.entry(format!("{:?}", node.kind)).or_insert(0u32) += 1;
-                            }
-                            counts
-                        },
-                        package_revision: 0,
-                        updated_at: graph.updated_at,
-                        deleted_since_last_sync: DeletedSinceLastSync::default(),
+                            hyperlink_ids: vec![],
+                            edge_relation_index: graph
+                                .edges
+                                .iter()
+                                .map(|e| EdgeRelationIndex {
+                                    edge_id: e.id.clone(),
+                                    from: e.from.clone().unwrap_or_default(),
+                                    to: e.to.clone().unwrap_or_default(),
+                                    from_endpoint: e.from_endpoint.clone(),
+                                    to_endpoint: e.to_endpoint.clone(),
+                                    from_endpoint_path: e.from_endpoint_path.clone(),
+                                    to_endpoint_path: e.to_endpoint_path.clone(),
+                                })
+                                .collect(),
+                            embed_host_index: graph
+                                .embeds
+                                .iter()
+                                .map(|e| EmbedHostIndex {
+                                    instance_id: e.instance_id.clone(),
+                                    host_node_id: e.source_node_id.clone().unwrap_or_default(),
+                                    host_endpoint: e.host_endpoint.clone(),
+                                })
+                                .collect(),
+                            link_relation_index: graph
+                                .links
+                                .iter()
+                                .map(|l| LinkRelationIndex {
+                                    link_id: l.link_id.clone(),
+                                    source_node_id: endpoint_node_id(&l.source)
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                })
+                                .collect(),
+                            hyperlink_relation_index: vec![],
+                            node_kind_counts: {
+                                let mut counts = HashMap::new();
+                                for node in &graph.nodes {
+                                    *counts.entry(format!("{:?}", node.kind)).or_insert(0u32) += 1;
+                                }
+                                counts
+                            },
+                            package_revision: 0,
+                            updated_at: graph.updated_at,
+                            deleted_since_last_sync: DeletedSinceLastSync::default(),
                         });
                     }
                     let meta: LegacyGraphMeta = serde_json::from_str(&content)?;

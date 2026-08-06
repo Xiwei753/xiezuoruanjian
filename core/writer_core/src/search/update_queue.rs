@@ -15,9 +15,20 @@ impl SearchUpdateQueue {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
     pub fn enqueue(&mut self, update: SearchIndexUpdate) {
         if self.pending_object_ids.contains(&update.object_id) {
-            if let Some(existing) = self.queue.iter_mut().find(|u| u.object_id == update.object_id) {
+            if let Some(existing) = self
+                .queue
+                .iter_mut()
+                .find(|u| u.object_id == update.object_id)
+            {
                 let should_remove = matches!(update.action, SearchIndexAction::Delete)
                     && matches!(existing.action, SearchIndexAction::Upsert);
                 *existing = update;
@@ -32,7 +43,10 @@ impl SearchUpdateQueue {
         self.queue.push_back(update);
         if is_delete {
             self.pending_object_ids.remove(
-                self.queue.back().map(|u| &u.object_id).unwrap_or(&String::new()),
+                self.queue
+                    .back()
+                    .map(|u| &u.object_id)
+                    .unwrap_or(&String::new()),
             );
         }
     }
@@ -48,13 +62,10 @@ impl SearchUpdateQueue {
     }
 
     pub fn clear_by_project_id(&mut self, project_id: &str) {
-        let keep: Vec<SearchIndexUpdate> = self.queue
+        let keep: Vec<SearchIndexUpdate> = self
+            .queue
             .drain(..)
-            .filter(|u| {
-                u.target
-                    .as_ref()
-                    .and_then(|t| t.project_id.as_deref()) != Some(project_id)
-            })
+            .filter(|u| u.target.as_ref().and_then(|t| t.project_id.as_deref()) != Some(project_id))
             .collect();
         self.queue = keep.into_iter().collect();
         self.pending_object_ids = self.queue.iter().map(|u| u.object_id.clone()).collect();

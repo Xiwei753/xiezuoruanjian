@@ -6,6 +6,7 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     id("kotlin-parcelize")
+    alias(libs.plugins.detekt)
 }
 
 fun queryGitCommitCount(): Int {
@@ -127,6 +128,14 @@ android {
         getByName("ai") {
             jniLibs.srcDirs(layout.buildDirectory.dir("generated/writer-native/aiDebug"))
             kotlin.srcDirs(layout.buildDirectory.dir("generated/writer-uniffi/ai/kotlin"))
+        }
+        // AI flavor 专属测试源集：只放 ai 变体才需要的单元/设备测试。
+        // noAi 变体不依赖这些测试，避免 noAi 误触 AI 路径（AGENTS.md 跨平台边界）。
+        getByName("testAi") {
+            java.srcDirs("src/testAi/kotlin")
+        }
+        getByName("androidTestAi") {
+            java.srcDirs("src/androidTestAi/kotlin")
         }
     }
 
@@ -337,4 +346,29 @@ android {
         disable.addAll(listOf("MissingTranslation"))
         baseline = file("lint-baseline.xml")
     }
+}
+
+// testAiDebugUnitTest 测试过滤：只运行 com.xiwei.sujian.ai.* 包下的测试。
+// isFailOnNoMatchingTests = true 防止过滤被静默掏空（如 ai 源集被误删时构建仍绿）。
+// 用 tasks.matching + configureEach 而非 tasks.named，因为 AGP 的 test task 按
+// 变体惰性创建，matching 能在任务实际创建时再应用过滤，避免配置期任务不存在错误。
+tasks.matching { it.name == "testAiDebugUnitTest" }.configureEach {
+    (this as org.gradle.api.tasks.testing.Test).filter {
+        includeTestsMatching("com.xiwei.sujian.ai.*")
+        isFailOnNoMatchingTests = true
+    }
+}
+
+detekt {
+    config.setFrom(rootProject.files("config/detekt.yml"))
+    buildUponDefaultConfig = true
+    parallel = true
+    ignoreFailures = false
+}
+
+// 排除构建产物与 UniFFI 生成绑定：生成代码不可手改（AGENTS.md），
+// noAi/ai flavor 把 generated/writer-uniffi 加入了 kotlin.srcDirs，必须显式排除。
+// Detekt task 继承自 SourceTask，exclude(vararg) 是标准 Gradle API。
+tasks.withType<io.gitlab.arturbosch.detekt.Detekt>().configureEach {
+    exclude("**/build/**", "**/generated/**")
 }

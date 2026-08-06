@@ -1,4 +1,4 @@
-use super::layout_snapshot::{LineSnapshotId, SourceRect, ShapingIdentity};
+use super::layout_snapshot::{LineSnapshotId, ShapingIdentity, SourceRect};
 use super::transaction_key::VisualTransactionKey;
 
 // ── 动画切片模块 ──
@@ -245,8 +245,10 @@ impl AnimatedSlice {
         match self.kind {
             AnimatedSliceKind::InsertFadeIn => {
                 let eased = 1.0 - (1.0 - progress).powi(2);
-                let x = self.from_document_rect.x + (self.to_document_rect.x - self.from_document_rect.x) * eased;
-                let y = self.from_document_rect.y + (self.to_document_rect.y - self.from_document_rect.y) * eased;
+                let x = self.from_document_rect.x
+                    + (self.to_document_rect.x - self.from_document_rect.x) * eased;
+                let y = self.from_document_rect.y
+                    + (self.to_document_rect.y - self.from_document_rect.y) * eased;
                 AnimatedSliceFrame {
                     x,
                     y,
@@ -259,8 +261,10 @@ impl AnimatedSlice {
             }
             AnimatedSliceKind::DeleteFadeOut => {
                 let eased = 1.0 - (1.0 - progress).powi(2);
-                let x = self.from_document_rect.x + (self.to_document_rect.x - self.from_document_rect.x) * eased;
-                let y = self.from_document_rect.y + (self.to_document_rect.y - self.from_document_rect.y) * eased;
+                let x = self.from_document_rect.x
+                    + (self.to_document_rect.x - self.from_document_rect.x) * eased;
+                let y = self.from_document_rect.y
+                    + (self.to_document_rect.y - self.from_document_rect.y) * eased;
                 let scale = self.scale_from + (self.scale_to - self.scale_from) * eased;
                 let opacity = self.opacity_from + (self.opacity_to - self.opacity_from) * eased;
                 AnimatedSliceFrame {
@@ -275,8 +279,10 @@ impl AnimatedSlice {
             }
             AnimatedSliceKind::ReflowMove => {
                 let eased = 1.0 - (1.0 - progress).powi(2);
-                let x = self.from_document_rect.x + (self.to_document_rect.x - self.from_document_rect.x) * eased;
-                let y = self.from_document_rect.y + (self.to_document_rect.y - self.from_document_rect.y) * eased;
+                let x = self.from_document_rect.x
+                    + (self.to_document_rect.x - self.from_document_rect.x) * eased;
+                let y = self.from_document_rect.y
+                    + (self.to_document_rect.y - self.from_document_rect.y) * eased;
                 AnimatedSliceFrame {
                     x,
                     y,
@@ -289,10 +295,14 @@ impl AnimatedSlice {
             }
             AnimatedSliceKind::ReflowCrossFade => {
                 let eased = 1.0 - (1.0 - progress).powi(2);
-                let x = self.from_document_rect.x + (self.to_document_rect.x - self.from_document_rect.x) * eased;
-                let y = self.from_document_rect.y + (self.to_document_rect.y - self.from_document_rect.y) * eased;
-                let w = self.from_document_rect.w + (self.to_document_rect.w - self.from_document_rect.w) * eased;
-                let h = self.from_document_rect.h + (self.to_document_rect.h - self.from_document_rect.h) * eased;
+                let x = self.from_document_rect.x
+                    + (self.to_document_rect.x - self.from_document_rect.x) * eased;
+                let y = self.from_document_rect.y
+                    + (self.to_document_rect.y - self.from_document_rect.y) * eased;
+                let w = self.from_document_rect.w
+                    + (self.to_document_rect.w - self.from_document_rect.w) * eased;
+                let h = self.from_document_rect.h
+                    + (self.to_document_rect.h - self.from_document_rect.h) * eased;
                 let opacity = self.opacity_from + (self.opacity_to - self.opacity_from) * eased;
                 AnimatedSliceFrame {
                     x,

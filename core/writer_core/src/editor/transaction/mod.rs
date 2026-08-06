@@ -1,11 +1,11 @@
-mod types;
-mod visual;
 mod composition;
-mod rebase;
 mod engine;
 mod platform;
+mod rebase;
 #[cfg(test)]
 mod tests;
+mod types;
+mod visual;
 
 pub use types::{
     AnimationMode, EditorAnimationKind, EditorChange, EditorCursor, EditorSelection,
@@ -15,12 +15,11 @@ pub use types::{
 pub(crate) use types::clamp_to_char_boundary;
 
 pub use visual::{
-    build_virtual_text, AnimatedSliceRole, CaretAffinity, ClusterRect, ClusterRun,
-    CursorPath, CursorRect, DecorationSlice, DecorationSliceKind, EditorVisualTransaction,
-    GlyphRect, HiddenVisualRange, PlatformVisualTransactionState, PreeditTextFormat,
-    PreeditVisualTransaction, Rect, ReflowGlyphRect, StaticLinePatch, Timeline,
-    UnifiedTransactionKind, VisualClassKind, VisualCoordinateMode, VisualLayoutRevision,
-    VisualRevision,
+    build_virtual_text, AnimatedSliceRole, CaretAffinity, ClusterRect, ClusterRun, CursorPath,
+    CursorRect, DecorationSlice, DecorationSliceKind, EditorVisualTransaction, GlyphRect,
+    HiddenVisualRange, PlatformVisualTransactionState, PreeditTextFormat, PreeditVisualTransaction,
+    Rect, ReflowGlyphRect, StaticLinePatch, Timeline, UnifiedTransactionKind, VisualClassKind,
+    VisualCoordinateMode, VisualLayoutRevision, VisualRevision,
 };
 
 pub use composition::{

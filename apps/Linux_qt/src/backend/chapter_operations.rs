@@ -2,7 +2,6 @@
 // chapter_operations.rs — 章节读写操作（从 editor_backend.rs 拆分）
 // =============================================================================
 
-
 use super::*;
 
 impl AppBackend {
@@ -68,15 +67,15 @@ impl AppBackend {
                         "chapterId": c,
                         "meta": content.meta,
                     });
-                    writer_core::api::ResultEnvelope::success(data).to_json_string().into()
+                    writer_core::api::ResultEnvelope::success(data)
+                        .to_json_string()
+                        .into()
                 }
-                Err(e) => {
-                    writer_core::api::ResultEnvelope::<()>::error(
-                        writer_core::api::WriterError::Io(e.to_string()),
-                    )
-                    .to_json_string()
-                    .into()
-                }
+                Err(e) => writer_core::api::ResultEnvelope::<()>::error(
+                    writer_core::api::WriterError::Io(e.to_string()),
+                )
+                .to_json_string()
+                .into(),
             };
         }
         writer_core::api::ResultEnvelope::<()>::error(
@@ -116,12 +115,20 @@ impl AppBackend {
                 }
                 Err(e) => {
                     self.debug_error("chapter", "open_chapter_failed", &e.to_string());
-                    return bridge_error_object("error.io", "CORE_ERROR", &format!("读取章节失败: {}", e));
+                    return bridge_error_object(
+                        "error.io",
+                        "CORE_ERROR",
+                        &format!("读取章节失败: {}", e),
+                    );
                 }
             }
         }
 
-        bridge_error_object("error.invalid_workspace", "INVALID_WORKSPACE", "Core not initialized")
+        bridge_error_object(
+            "error.invalid_workspace",
+            "INVALID_WORKSPACE",
+            "Core not initialized",
+        )
     }
 
     pub(crate) fn save_chapter(
@@ -162,11 +169,7 @@ impl AppBackend {
                 allow_empty_overwrite,
             ) {
                 Ok(receipt) => {
-                    self.debug_log(
-                        "chapter",
-                        "save_chapter_success",
-                        &format!("len={}", len),
-                    );
+                    self.debug_log("chapter", "save_chapter_success", &format!("len={}", len));
                     self.current_save_status = "已保存".to_string();
                     // 正文保存不触发 workspace_state_changed，避免 reload_tree 刷新整棵树。
                     // 保存只改变章节内容，不改变工作区结构（项目/卷/章节增删改）。
@@ -180,11 +183,7 @@ impl AppBackend {
                     }))
                 }
                 Err(e) => {
-                    self.debug_error(
-                        "chapter",
-                        "save_chapter_failed",
-                        &format!("error={}", e),
-                    );
+                    self.debug_error("chapter", "save_chapter_failed", &format!("error={}", e));
                     if is_empty_overwrite_blocked(&e) {
                         self.debug_error(
                             "chapter",
@@ -218,7 +217,11 @@ impl AppBackend {
         } else {
             self.debug_error("chapter", "save_chapter_failed", "core_not_initialized");
             self.current_save_status = "保存失败".to_string();
-        bridge_error_object("error.invalid_workspace", "INVALID_WORKSPACE", "Core not initialized")
+            bridge_error_object(
+                "error.invalid_workspace",
+                "INVALID_WORKSPACE",
+                "Core not initialized",
+            )
         };
 
         self.save_status_changed();
@@ -246,9 +249,14 @@ impl AppBackend {
                 Ok(data) => writer_core::api::ResultEnvelope::success_with_changes(
                     data,
                     Vec::new(),
-                    vec![writer_core::api::ChangedEntityDto { entity_type: "ChapterCleared".to_string(), entity_id: Some(c.clone()) }],
+                    vec![writer_core::api::ChangedEntityDto {
+                        entity_type: "ChapterCleared".to_string(),
+                        entity_id: Some(c.clone()),
+                    }],
                 ),
-                Err(error) => writer_core::api::ResultEnvelope::<writer_core::api::types::ChapterSaveReceiptDto>::error(error),
+                Err(error) => writer_core::api::ResultEnvelope::<
+                    writer_core::api::types::ChapterSaveReceiptDto,
+                >::error(error),
             };
             if envelope.success {
                 self.debug_log(
@@ -258,7 +266,10 @@ impl AppBackend {
                 );
                 self.current_save_status = "已清空".to_string();
             } else {
-                let message_key = envelope.message_key.as_deref().unwrap_or("error.core_error");
+                let message_key = envelope
+                    .message_key
+                    .as_deref()
+                    .unwrap_or("error.core_error");
                 let raw_err = envelope.raw_error.as_deref().unwrap_or("未知错误");
                 self.debug_error("chapter", "clear_chapter_content_failed", raw_err);
                 self.current_save_status = "清空失败".to_string();
@@ -266,8 +277,9 @@ impl AppBackend {
             }
             self.save_status_changed();
             self.workspace_content_changed();
-            let value = serde_json::to_value(envelope.into_value_envelope())
-                .unwrap_or_else(|_| serde_json::json!({"success": false, "errorCode": "JSON_ERROR"}));
+            let value = serde_json::to_value(envelope.into_value_envelope()).unwrap_or_else(
+                |_| serde_json::json!({"success": false, "errorCode": "JSON_ERROR"}),
+            );
             serde_to_qjson_object(value)
         } else {
             self.debug_error(
@@ -278,7 +290,11 @@ impl AppBackend {
             self.current_save_status = "清空失败".to_string();
             self.save_status_changed();
             self.set_error("error.invalid_workspace");
-            bridge_error_object("error.invalid_workspace", "INVALID_WORKSPACE", "Core not initialized")
+            bridge_error_object(
+                "error.invalid_workspace",
+                "INVALID_WORKSPACE",
+                "Core not initialized",
+            )
         }
     }
 }

@@ -1,10 +1,7 @@
 use crate::api::{BuiltinThemeDto, ThemeColorSchemeDto, ThemePaletteRecordDto, WriterError};
 
 impl super::WriterAppService {
-    pub fn save_palette_record(
-        &self,
-        record: ThemePaletteRecordDto,
-    ) -> Result<bool, WriterError> {
+    pub fn save_palette_record(&self, record: ThemePaletteRecordDto) -> Result<bool, WriterError> {
         self.api.save_palette_record(record)
     }
 
@@ -37,7 +34,8 @@ impl super::WriterAppService {
         light_scheme: ThemeColorSchemeDto,
         dark_scheme: ThemeColorSchemeDto,
     ) -> String {
-        self.api.compute_palette_fingerprint(light_scheme, dark_scheme)
+        self.api
+            .compute_palette_fingerprint(light_scheme, dark_scheme)
     }
 
     pub fn list_builtin_themes(&self) -> Vec<BuiltinThemeDto> {

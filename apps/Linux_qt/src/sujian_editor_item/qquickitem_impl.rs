@@ -1,7 +1,7 @@
 use super::input_host::is_left_button_pressed;
 use super::*;
 
-use super::render_plan::{FrameContext, CursorStyle};
+use super::render_plan::{CursorStyle, FrameContext};
 use std::time::Instant;
 
 impl QQuickItem for SujianEditorItem {
@@ -161,17 +161,29 @@ impl QQuickItem for SujianEditorItem {
         }
 
         if !final_root.is_null() && !item_ptr.is_null() {
-            let has_active_txs = !self.pipeline.animation_coordinator_mut().prepared_queue.is_empty();
+            let has_active_txs = !self
+                .pipeline
+                .animation_coordinator_mut()
+                .prepared_queue
+                .is_empty();
 
             if !has_active_txs {
                 self.pipeline.texture_cache_mut().clear();
                 scene_graph::clear_animation_layer(final_root, item_ptr);
             }
 
-            let old_cursor_rect = self.pipeline.animation_coordinator_mut().prepared_queue.active_transactions()
+            let old_cursor_rect = self
+                .pipeline
+                .animation_coordinator_mut()
+                .prepared_queue
+                .active_transactions()
                 .first()
                 .and_then(|tx| tx.old_cursor_rect.clone());
-            let new_cursor_rect = self.pipeline.animation_coordinator_mut().prepared_queue.active_transactions()
+            let new_cursor_rect = self
+                .pipeline
+                .animation_coordinator_mut()
+                .prepared_queue
+                .active_transactions()
                 .first()
                 .and_then(|tx| tx.new_cursor_rect.clone());
 
@@ -199,10 +211,10 @@ impl QQuickItem for SujianEditorItem {
                 self.cursor_ctrl.force_snap_next,
                 self.cursor_ctrl.animation.as_ref(),
             );
-            let ime_plan = self.pipeline.animation_coordinator_mut().build_ime_plan(
-                has_active_txs,
-                false,
-            );
+            let ime_plan = self
+                .pipeline
+                .animation_coordinator_mut()
+                .build_ime_plan(has_active_txs, false);
             let selection_preedit = self.build_selection_preedit_plan();
 
             let frame_context = FrameContext {
@@ -218,10 +230,16 @@ impl QQuickItem for SujianEditorItem {
                 width: 2.0,
             };
 
-            let render_plan = self.pipeline.animation_coordinator_mut().build_render_plan_full(
-                cursor_plan, ime_plan, selection_preedit,
-                frame_context, cursor_style,
-            );
+            let render_plan = self
+                .pipeline
+                .animation_coordinator_mut()
+                .build_render_plan_full(
+                    cursor_plan,
+                    ime_plan,
+                    selection_preedit,
+                    frame_context,
+                    cursor_style,
+                );
 
             scene_graph_renderer::render_frame(
                 final_root,
@@ -231,8 +249,14 @@ impl QQuickItem for SujianEditorItem {
             );
 
             for key in &render_plan.frame_context.keys_to_complete {
-                if let Some(ids) = self.pipeline.animation_coordinator_mut().finish_by_key(*key) {
-                    self.pipeline.texture_cache_mut().remove_for_transaction(&ids);
+                if let Some(ids) = self
+                    .pipeline
+                    .animation_coordinator_mut()
+                    .finish_by_key(*key)
+                {
+                    self.pipeline
+                        .texture_cache_mut()
+                        .remove_for_transaction(&ids);
                 }
                 editor_animation_debug_log(&format!(
                     "update_paint_node: tid={}, gen={} completed (progress >= 1.0)",
@@ -241,14 +265,19 @@ impl QQuickItem for SujianEditorItem {
             }
 
             for key in &render_plan.frame_context.keys_to_cancel {
-                self.pipeline.animation_coordinator_mut().cancel_by_key(*key, "texture_failed");
+                self.pipeline
+                    .animation_coordinator_mut()
+                    .cancel_by_key(*key, "texture_failed");
             }
 
             if !render_plan.frame_context.keys_to_complete.is_empty() {
                 self.render_dirty = true;
             }
 
-            if self.pipeline.animation_coordinator_mut().has_prepared_or_rendering()
+            if self
+                .pipeline
+                .animation_coordinator_mut()
+                .has_prepared_or_rendering()
                 || !render_plan.frame_context.keys_to_complete.is_empty()
             {
                 self.request_frame_update();

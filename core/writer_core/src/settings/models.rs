@@ -94,7 +94,12 @@ mod tests {
         assert_eq!(json["type"], "toggle");
         assert_eq!(json["value"], true);
 
-        let slider = SettingValue::Slider { value: 1.0, min: 0.0, max: 10.0, step: 0.1 };
+        let slider = SettingValue::Slider {
+            value: 1.0,
+            min: 0.0,
+            max: 10.0,
+            step: 0.1,
+        };
         let json = serde_json::to_value(&slider).unwrap();
         assert_eq!(json["type"], "slider");
         assert_eq!(json["value"], 1.0);
@@ -102,13 +107,19 @@ mod tests {
         assert_eq!(json["max"], 10.0);
         assert!((json["step"].as_f64().unwrap() - 0.1).abs() < 1e-6);
 
-        let text_input = SettingValue::TextInput { value: "test".to_string(), placeholder: "ph".to_string() };
+        let text_input = SettingValue::TextInput {
+            value: "test".to_string(),
+            placeholder: "ph".to_string(),
+        };
         let json = serde_json::to_value(&text_input).unwrap();
         assert_eq!(json["type"], "textInput");
         assert_eq!(json["value"], "test");
         assert_eq!(json["placeholder"], "ph");
 
-        let dropdown = SettingValue::Dropdown { value: "A".to_string(), options: vec!["A".to_string(), "B".to_string()] };
+        let dropdown = SettingValue::Dropdown {
+            value: "A".to_string(),
+            options: vec!["A".to_string(), "B".to_string()],
+        };
         let json = serde_json::to_value(&dropdown).unwrap();
         assert_eq!(json["type"], "dropdown");
         assert_eq!(json["value"], "A");

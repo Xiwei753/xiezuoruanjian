@@ -55,7 +55,8 @@ impl From<crate::settings::LocalSettings> for LocalSettingsDto {
             stats_device_id: s.stats_device_id,
             desktop_sidebar_width: s.desktop_sidebar_width,
             desktop_editor_width: s.desktop_editor_width,
-            editor_coordinated_text_cursor_animation_enabled: s.editor_coordinated_text_cursor_animation_enabled,
+            editor_coordinated_text_cursor_animation_enabled: s
+                .editor_coordinated_text_cursor_animation_enabled,
             diagnostics_enabled: s.diagnostics_enabled,
             diagnostics_verbose: s.diagnostics_verbose,
         }
@@ -88,7 +89,8 @@ impl From<LocalSettingsDto> for crate::settings::LocalSettings {
             stats_device_id: s.stats_device_id,
             desktop_sidebar_width: s.desktop_sidebar_width,
             desktop_editor_width: s.desktop_editor_width,
-            editor_coordinated_text_cursor_animation_enabled: s.editor_coordinated_text_cursor_animation_enabled,
+            editor_coordinated_text_cursor_animation_enabled: s
+                .editor_coordinated_text_cursor_animation_enabled,
             diagnostics_enabled: s.diagnostics_enabled,
             diagnostics_verbose: s.diagnostics_verbose,
         }
@@ -303,8 +305,8 @@ impl From<crate::settings::SyncableSettings> for SyncableSettingsDto {
 #[allow(deprecated)]
 impl From<SyncableSettingsDto> for crate::settings::SyncableSettings {
     fn from(s: SyncableSettingsDto) -> Self {
-        let palette: ThemePaletteDto = serde_json::from_str(&s.theme_palette_json)
-            .unwrap_or_default();
+        let palette: ThemePaletteDto =
+            serde_json::from_str(&s.theme_palette_json).unwrap_or_default();
         crate::settings::SyncableSettings {
             font_size: s.font_size,
             theme_mode: s.theme_mode,

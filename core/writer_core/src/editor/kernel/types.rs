@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use crate::editor::strong_types::{EditorRevision, EditorSessionId, EditorSessionGeneration, Utf8ByteOffset, Utf8ByteRange};
+use crate::editor::strong_types::{
+    EditorRevision, EditorSessionGeneration, EditorSessionId, Utf8ByteOffset, Utf8ByteRange,
+};
 use crate::editor::transaction::{AnimationMode, EditorTransactionCause};
 
 pub enum EditorCommand {
@@ -28,8 +30,12 @@ pub enum EditorCommand {
         head: Utf8ByteOffset,
         expected_revision: EditorRevision,
     },
-    Undo { expected_revision: EditorRevision },
-    Redo { expected_revision: EditorRevision },
+    Undo {
+        expected_revision: EditorRevision,
+    },
+    Redo {
+        expected_revision: EditorRevision,
+    },
     ReplaceAll {
         search: String,
         replacement: String,

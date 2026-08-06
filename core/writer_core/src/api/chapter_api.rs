@@ -2,7 +2,12 @@ use super::service::{ApiResult, WriterCoreApi};
 use super::types::*;
 use crate::api::error::WriterError;
 
-fn get_chapter_title(api: &WriterCoreApi, project_id: &str, volume_id: &str, chapter_id: &str) -> String {
+fn get_chapter_title(
+    api: &WriterCoreApi,
+    project_id: &str,
+    volume_id: &str,
+    chapter_id: &str,
+) -> String {
     api.core()
         .list_chapters(project_id, volume_id)
         .ok()
@@ -36,12 +41,16 @@ impl WriterCoreApi {
         volume_id: &str,
         title: &str,
     ) -> ApiResult<ChapterMetaDto> {
-        let chapter: ChapterMetaDto = self.core()
+        let chapter: ChapterMetaDto = self
+            .core()
             .create_chapter(project_id, volume_id, title)
             .map(Into::into)
             .map_err(WriterError::from)?;
         let title_entry = crate::search::extractor::extract_chapter_title_entry(
-            project_id, volume_id, &chapter.id, title,
+            project_id,
+            volume_id,
+            &chapter.id,
+            title,
         );
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
@@ -95,7 +104,11 @@ impl WriterCoreApi {
         if let Ok(content) = chapter_result {
             if !content.content.is_empty() {
                 let body_entry = crate::search::extractor::extract_chapter_body_entry(
-                    project_id, volume_id, chapter_id, new_title, &content.content,
+                    project_id,
+                    volume_id,
+                    chapter_id,
+                    new_title,
+                    &content.content,
                 );
                 self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
                     action: crate::search::SearchIndexAction::Upsert,
@@ -107,7 +120,8 @@ impl WriterCoreApi {
                 });
             }
         }
-        let ch_note = self.core()
+        let ch_note = self
+            .core()
             .list_chapters(project_id, volume_id)
             .ok()
             .and_then(|chapters| chapters.into_iter().find(|c| c.id == chapter_id))
@@ -190,7 +204,8 @@ impl WriterCoreApi {
         chapter_id: &str,
         content: &str,
     ) -> ApiResult<ChapterSaveReceiptDto> {
-        let receipt: ChapterSaveReceiptDto = self.core()
+        let receipt: ChapterSaveReceiptDto = self
+            .core()
             .write_chapter_verified(project_id, volume_id, chapter_id, content)
             .map(Into::into)?;
         let ch_title = get_chapter_title(self, project_id, volume_id, chapter_id);
@@ -217,7 +232,8 @@ impl WriterCoreApi {
         content: &str,
         allow_empty_overwrite: bool,
     ) -> ApiResult<ChapterSaveReceiptDto> {
-        let receipt: ChapterSaveReceiptDto = self.core()
+        let receipt: ChapterSaveReceiptDto = self
+            .core()
             .write_chapter_verified_with_allow_empty_overwrite(
                 project_id,
                 volume_id,
@@ -248,7 +264,8 @@ impl WriterCoreApi {
         volume_id: &str,
         chapter_id: &str,
     ) -> ApiResult<ChapterSaveReceiptDto> {
-        let receipt: ChapterSaveReceiptDto = self.core()
+        let receipt: ChapterSaveReceiptDto = self
+            .core()
             .clear_chapter_content_verified(project_id, volume_id, chapter_id)
             .map(Into::into)?;
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
@@ -286,5 +303,4 @@ impl WriterCoreApi {
         });
         Ok(true)
     }
-
 }

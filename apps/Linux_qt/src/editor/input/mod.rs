@@ -15,20 +15,22 @@
 //! │   - Linux IME 语义只存在 Layer 2，正文编辑和动画不关心具体输入法    │
 //! └──────────────────────────────────────────────────────────────────────┘
 
-pub mod events;
 pub mod controller;
-pub mod platform_ime;
+pub mod events;
 pub mod platform;
+pub mod platform_ime;
 pub mod qt_surface;
 
-pub(crate) use controller::{EditorInputHost, handle_key, insert_preedit_text, commit_preedit_text, cancel_preedit};
-pub(crate) use qt_surface::{install_event_filter, focus_item};
+pub(crate) use controller::{
+    cancel_preedit, commit_preedit_text, handle_key, insert_preedit_text, EditorInputHost,
+};
+pub(crate) use qt_surface::{focus_item, install_event_filter};
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use super::events::*;
     use super::controller::*;
+    use super::events::*;
+    use super::*;
     use crate::sujian_editor_item::PreeditAttribute;
 
     #[derive(Default)]
@@ -103,8 +105,14 @@ mod tests {
             self.inserted.push(text);
         }
 
-        fn input_replace_and_insert(&mut self, replace_start: i32, replace_length: i32, text: String) {
-            self.replace_and_insert_calls.push((replace_start, replace_length, text.clone()));
+        fn input_replace_and_insert(
+            &mut self,
+            replace_start: i32,
+            replace_length: i32,
+            text: String,
+        ) {
+            self.replace_and_insert_calls
+                .push((replace_start, replace_length, text.clone()));
             if !self.preedit_text.is_empty() {
                 self.preedit_text.clear();
                 self.preedit_cursor = 0;
@@ -143,7 +151,12 @@ mod tests {
             self.preedit_cursor = cursor;
         }
 
-        fn input_set_preedit_with_attrs(&mut self, text: String, cursor: usize, _attributes: Vec<PreeditAttribute>) {
+        fn input_set_preedit_with_attrs(
+            &mut self,
+            text: String,
+            cursor: usize,
+            _attributes: Vec<PreeditAttribute>,
+        ) {
             self.preedit_text = text;
             self.preedit_cursor = cursor;
         }
@@ -245,7 +258,12 @@ mod tests {
     #[test]
     fn plus_inserts_as_plain_text() {
         let mut host = FakeHost::enabled();
-        assert!(handle_key_and_text(&mut host, 0, SHIFT_MODIFIER, "+".to_string()));
+        assert!(handle_key_and_text(
+            &mut host,
+            0,
+            SHIFT_MODIFIER,
+            "+".to_string()
+        ));
         assert_eq!(host.inserted, vec!["+"]);
     }
 
@@ -262,37 +280,72 @@ mod tests {
     #[test]
     fn ctrl_a_triggers_select_all() {
         let mut host = FakeHost::enabled();
-        assert!(handle_key_and_text(&mut host, KEY_A, CTRL_MODIFIER, String::new()));
+        assert!(handle_key_and_text(
+            &mut host,
+            KEY_A,
+            CTRL_MODIFIER,
+            String::new()
+        ));
         assert_eq!(host.operations, vec!["select_all"]);
     }
 
     #[test]
     fn ctrl_c_v_x_z_y_shortcuts() {
         let mut host = FakeHost::enabled();
-        assert!(handle_key_and_text(&mut host, KEY_C, CTRL_MODIFIER, String::new()));
+        assert!(handle_key_and_text(
+            &mut host,
+            KEY_C,
+            CTRL_MODIFIER,
+            String::new()
+        ));
         assert_eq!(host.operations, vec!["copy"]);
 
         let mut host = FakeHost::enabled();
-        assert!(handle_key_and_text(&mut host, KEY_V, CTRL_MODIFIER, String::new()));
+        assert!(handle_key_and_text(
+            &mut host,
+            KEY_V,
+            CTRL_MODIFIER,
+            String::new()
+        ));
         assert_eq!(host.operations, vec!["paste"]);
 
         let mut host = FakeHost::enabled();
-        assert!(handle_key_and_text(&mut host, KEY_X, CTRL_MODIFIER, String::new()));
+        assert!(handle_key_and_text(
+            &mut host,
+            KEY_X,
+            CTRL_MODIFIER,
+            String::new()
+        ));
         assert_eq!(host.operations, vec!["copy", "delete_selection"]);
 
         let mut host = FakeHost::enabled();
-        assert!(handle_key_and_text(&mut host, KEY_Z, CTRL_MODIFIER, String::new()));
+        assert!(handle_key_and_text(
+            &mut host,
+            KEY_Z,
+            CTRL_MODIFIER,
+            String::new()
+        ));
         assert_eq!(host.operations, vec!["undo"]);
 
         let mut host = FakeHost::enabled();
-        assert!(handle_key_and_text(&mut host, KEY_Y, CTRL_MODIFIER, String::new()));
+        assert!(handle_key_and_text(
+            &mut host,
+            KEY_Y,
+            CTRL_MODIFIER,
+            String::new()
+        ));
         assert_eq!(host.operations, vec!["redo"]);
     }
 
     #[test]
     fn shift_plus_symbol_not_swallowed_as_shortcut() {
         let mut host = FakeHost::enabled();
-        assert!(handle_key_and_text(&mut host, 0, SHIFT_MODIFIER, "+".to_string()));
+        assert!(handle_key_and_text(
+            &mut host,
+            0,
+            SHIFT_MODIFIER,
+            "+".to_string()
+        ));
         assert!(host.inserted.contains(&"+".to_string()));
         assert!(!host.operations.contains(&"copy"));
     }
@@ -302,7 +355,10 @@ mod tests {
         let mut host = FakeHost::enabled();
         ime_preedit(&mut host, "拼".to_string(), 0);
         assert_eq!(host.preedit_text, "拼");
-        assert!(host.inserted.is_empty(), "preedit should NOT insert into buffer");
+        assert!(
+            host.inserted.is_empty(),
+            "preedit should NOT insert into buffer"
+        );
     }
 
     #[test]
@@ -319,8 +375,12 @@ mod tests {
 
         let kind_0 = if 0 == 0 {
             match 0 {
-                1 => PreeditAttributeKind::TextColor { color: String::new() },
-                2 => PreeditAttributeKind::BackgroundColor { color: String::new() },
+                1 => PreeditAttributeKind::TextColor {
+                    color: String::new(),
+                },
+                2 => PreeditAttributeKind::BackgroundColor {
+                    color: String::new(),
+                },
                 3 => PreeditAttributeKind::FontUnderline,
                 _ => PreeditAttributeKind::Underline,
             }
@@ -332,24 +392,39 @@ mod tests {
         assert_eq!(kind_0, PreeditAttributeKind::Underline);
 
         let kind_tc = match 1 {
-            1 => PreeditAttributeKind::TextColor { color: String::new() },
-            2 => PreeditAttributeKind::BackgroundColor { color: String::new() },
+            1 => PreeditAttributeKind::TextColor {
+                color: String::new(),
+            },
+            2 => PreeditAttributeKind::BackgroundColor {
+                color: String::new(),
+            },
             3 => PreeditAttributeKind::FontUnderline,
             _ => PreeditAttributeKind::Underline,
         };
         assert!(matches!(kind_tc, PreeditAttributeKind::TextColor { .. }));
 
         let kind_bc = match 2 {
-            1 => PreeditAttributeKind::TextColor { color: String::new() },
-            2 => PreeditAttributeKind::BackgroundColor { color: String::new() },
+            1 => PreeditAttributeKind::TextColor {
+                color: String::new(),
+            },
+            2 => PreeditAttributeKind::BackgroundColor {
+                color: String::new(),
+            },
             3 => PreeditAttributeKind::FontUnderline,
             _ => PreeditAttributeKind::Underline,
         };
-        assert!(matches!(kind_bc, PreeditAttributeKind::BackgroundColor { .. }));
+        assert!(matches!(
+            kind_bc,
+            PreeditAttributeKind::BackgroundColor { .. }
+        ));
 
         let kind_fu = match 3 {
-            1 => PreeditAttributeKind::TextColor { color: String::new() },
-            2 => PreeditAttributeKind::BackgroundColor { color: String::new() },
+            1 => PreeditAttributeKind::TextColor {
+                color: String::new(),
+            },
+            2 => PreeditAttributeKind::BackgroundColor {
+                color: String::new(),
+            },
             3 => PreeditAttributeKind::FontUnderline,
             _ => PreeditAttributeKind::Underline,
         };
@@ -366,7 +441,11 @@ mod tests {
 
         for &attr_type in &[2, 3, 4] {
             let is_handled = attr_type == 0 || attr_type == 1;
-            assert!(!is_handled, "attr_type {} should not be mapped to Underline or Cursor", attr_type);
+            assert!(
+                !is_handled,
+                "attr_type {} should not be mapped to Underline or Cursor",
+                attr_type
+            );
         }
     }
 
@@ -431,7 +510,12 @@ mod tests {
     #[test]
     fn linux_plus_inserts_immediately() {
         let mut host = FakeHost::enabled();
-        assert!(handle_key_and_text(&mut host, 0, SHIFT_MODIFIER, "+".to_string()));
+        assert!(handle_key_and_text(
+            &mut host,
+            0,
+            SHIFT_MODIFIER,
+            "+".to_string()
+        ));
         assert_eq!(host.inserted, vec!["+"]);
     }
 
@@ -445,7 +529,12 @@ mod tests {
     #[test]
     fn linux_underscore_inserts_immediately() {
         let mut host = FakeHost::enabled();
-        assert!(handle_key_and_text(&mut host, 0, SHIFT_MODIFIER, "_".to_string()));
+        assert!(handle_key_and_text(
+            &mut host,
+            0,
+            SHIFT_MODIFIER,
+            "_".to_string()
+        ));
         assert_eq!(host.inserted, vec!["_"]);
     }
 
@@ -474,7 +563,10 @@ mod tests {
         let mut host = FakeHost::enabled();
         ime_preedit(&mut host, "拼音".to_string(), 3);
         assert_eq!(host.preedit_text, "拼音");
-        assert!(host.inserted.is_empty(), "preedit must NOT insert into buffer");
+        assert!(
+            host.inserted.is_empty(),
+            "preedit must NOT insert into buffer"
+        );
     }
 
     #[test]
@@ -499,7 +591,10 @@ mod tests {
             }],
         );
         assert_eq!(host.preedit_text, "拼");
-        assert!(host.inserted.is_empty(), "preedit with attrs must NOT insert into buffer");
+        assert!(
+            host.inserted.is_empty(),
+            "preedit with attrs must NOT insert into buffer"
+        );
     }
 
     #[test]
@@ -555,21 +650,37 @@ mod tests {
     #[test]
     fn dispatch_plain_text_inserts() {
         let mut host = FakeHost::enabled();
-        EditorInputController::dispatch(&mut host, EditorInputEvent::PlainText { text: "你好".to_string() });
+        EditorInputController::dispatch(
+            &mut host,
+            EditorInputEvent::PlainText {
+                text: "你好".to_string(),
+            },
+        );
         assert_eq!(host.inserted, vec!["你好"]);
     }
 
     #[test]
     fn dispatch_shortcut_select_all() {
         let mut host = FakeHost::enabled();
-        EditorInputController::dispatch(&mut host, EditorInputEvent::Shortcut { key: KEY_A, modifiers: CTRL_MODIFIER });
+        EditorInputController::dispatch(
+            &mut host,
+            EditorInputEvent::Shortcut {
+                key: KEY_A,
+                modifiers: CTRL_MODIFIER,
+            },
+        );
         assert_eq!(host.operations, vec!["select_all"]);
     }
 
     #[test]
     fn dispatch_ime_commit() {
         let mut host = FakeHost::enabled();
-        EditorInputController::dispatch(&mut host, EditorInputEvent::ImeCommit { text: "你好".to_string() });
+        EditorInputController::dispatch(
+            &mut host,
+            EditorInputEvent::ImeCommit {
+                text: "你好".to_string(),
+            },
+        );
         assert_eq!(host.inserted, vec!["你好"]);
         assert_eq!(host.preedit_text, "");
     }
@@ -577,9 +688,14 @@ mod tests {
     #[test]
     fn dispatch_ime_replacement_commit() {
         let mut host = FakeHost::enabled();
-        EditorInputController::dispatch(&mut host, EditorInputEvent::ImeReplacementCommit {
-            text: "修正".to_string(), replace_start: -2, replace_length: 2,
-        });
+        EditorInputController::dispatch(
+            &mut host,
+            EditorInputEvent::ImeReplacementCommit {
+                text: "修正".to_string(),
+                replace_start: -2,
+                replace_length: 2,
+            },
+        );
         assert_eq!(host.replace_and_insert_calls.len(), 1);
         let (start, len, text) = &host.replace_and_insert_calls[0];
         assert_eq!(*start, -2);
@@ -590,11 +706,19 @@ mod tests {
     #[test]
     fn dispatch_preedit_changed() {
         let mut host = FakeHost::enabled();
-        EditorInputController::dispatch(&mut host, EditorInputEvent::PreeditChanged {
-            text: "拼音".to_string(), cursor: 3, attributes: vec![],
-        });
+        EditorInputController::dispatch(
+            &mut host,
+            EditorInputEvent::PreeditChanged {
+                text: "拼音".to_string(),
+                cursor: 3,
+                attributes: vec![],
+            },
+        );
         assert_eq!(host.preedit_text, "拼音");
-        assert!(host.inserted.is_empty(), "preedit must NOT insert into buffer");
+        assert!(
+            host.inserted.is_empty(),
+            "preedit must NOT insert into buffer"
+        );
     }
 
     #[test]
@@ -608,13 +732,28 @@ mod tests {
     #[test]
     fn dispatch_disabled_host_ignores_all() {
         let mut host = FakeHost::default();
-        EditorInputController::dispatch(&mut host, EditorInputEvent::PlainText { text: "x".to_string() });
+        EditorInputController::dispatch(
+            &mut host,
+            EditorInputEvent::PlainText {
+                text: "x".to_string(),
+            },
+        );
         assert!(host.inserted.is_empty());
-        EditorInputController::dispatch(&mut host, EditorInputEvent::ImeCommit { text: "你好".to_string() });
+        EditorInputController::dispatch(
+            &mut host,
+            EditorInputEvent::ImeCommit {
+                text: "你好".to_string(),
+            },
+        );
         assert!(host.inserted.is_empty());
-        EditorInputController::dispatch(&mut host, EditorInputEvent::PreeditChanged {
-            text: "拼".to_string(), cursor: 0, attributes: vec![],
-        });
+        EditorInputController::dispatch(
+            &mut host,
+            EditorInputEvent::PreeditChanged {
+                text: "拼".to_string(),
+                cursor: 0,
+                attributes: vec![],
+            },
+        );
         assert!(host.preedit_text.is_empty());
     }
 
@@ -716,9 +855,14 @@ mod tests {
     #[test]
     fn dispatch_ime_replacement_commit_zero_length() {
         let mut host = FakeHost::enabled();
-        EditorInputController::dispatch(&mut host, EditorInputEvent::ImeReplacementCommit {
-            text: "你好".to_string(), replace_start: 5, replace_length: 0,
-        });
+        EditorInputController::dispatch(
+            &mut host,
+            EditorInputEvent::ImeReplacementCommit {
+                text: "你好".to_string(),
+                replace_start: 5,
+                replace_length: 0,
+            },
+        );
         assert_eq!(host.replace_and_insert_calls.len(), 1);
         let (start, len, text) = &host.replace_and_insert_calls[0];
         assert_eq!(*start, 5);

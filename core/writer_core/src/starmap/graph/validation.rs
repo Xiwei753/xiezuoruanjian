@@ -25,6 +25,13 @@ pub(crate) fn validate_graph(workspace: &std::path::Path, graph: &StarMapGraph) 
 
 /// 验证节点：ID 唯一性、内容范围合法性、锚点 ID 唯一性、portal 可达性、display_policy。
 /// 返回节点 ID 集合，供后续边/嵌入/链接验证使用。
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 fn validate_nodes(
     workspace: &std::path::Path,
     graph: &StarMapGraph,
@@ -124,6 +131,13 @@ fn validate_nodes(
 /// 3. `legacy_id`（最旧格式节点 ID）→ 检查节点存在性
 ///
 /// `Starmap` 端点和 `DeepTarget` 端点中的 Starmap 变体无需本地节点引用。
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 fn validate_edges(
     workspace: &std::path::Path,
     graph: &StarMapGraph,
@@ -214,6 +228,12 @@ fn validate_edges(
 
 /// 验证嵌入：instance_id 唯一、禁止自嵌入、目标星图存在、
 /// placement/viewport 数值合法性、source_node_id/host_endpoint 引用完整性。
+// TODO(#597): 既有代码可读性技术债，待后续重构拆分
+#[allow(
+    clippy::excessive_nesting,
+    clippy::too_many_lines,
+    clippy::cognitive_complexity
+)]
 fn validate_embeds(
     workspace: &std::path::Path,
     graph: &StarMapGraph,
@@ -309,6 +329,13 @@ fn validate_embeds(
 }
 
 /// 验证链接：link_id 唯一、source 端点引用完整、target deep_target 可达。
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 fn validate_links(
     workspace: &std::path::Path,
     graph: &StarMapGraph,

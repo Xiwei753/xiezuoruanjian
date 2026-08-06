@@ -2,7 +2,6 @@
 // project_operations.rs — AppBackend 项目/分卷/章节 CRUD 操作
 // =============================================================================
 
-
 use super::*;
 use qmetaobject::{QJsonArray, QJsonObject, QJsonValue, QString};
 use writer_core::api::{ChangedEntityDto, ChapterMetaDto, ResultEnvelope, VolumeDto, WriterError};
@@ -74,10 +73,7 @@ impl AppBackend {
             if let Ok(projects) = core.list_projects() {
                 for p in projects {
                     let mut p_map = QJsonObject::default();
-                    p_map.insert(
-                        "title",
-                        QJsonValue::from(QString::from(p.title.clone())),
-                    );
+                    p_map.insert("title", QJsonValue::from(QString::from(p.title.clone())));
                     p_map.insert("id", QJsonValue::from(QString::from(p.id.clone())));
                     p_map.insert("type", QJsonValue::from(QString::from("project")));
                     list.push(QJsonValue::from(p_map));
@@ -85,16 +81,10 @@ impl AppBackend {
                     if let Ok(volumes) = core.list_volumes(&p.id) {
                         for v in volumes {
                             let mut v_map = QJsonObject::default();
-                            v_map.insert(
-                                "title",
-                                QJsonValue::from(QString::from(v.title.clone())),
-                            );
+                            v_map.insert("title", QJsonValue::from(QString::from(v.title.clone())));
+                            v_map.insert("id", QJsonValue::from(QString::from(v.id.clone())));
                             v_map
-                                .insert("id", QJsonValue::from(QString::from(v.id.clone())));
-                            v_map.insert(
-                                "projectId",
-                                QJsonValue::from(QString::from(p.id.clone())),
-                            );
+                                .insert("projectId", QJsonValue::from(QString::from(p.id.clone())));
                             v_map.insert("type", QJsonValue::from(QString::from("volume")));
                             list.push(QJsonValue::from(v_map));
 
@@ -117,10 +107,8 @@ impl AppBackend {
                                         "volumeId",
                                         QJsonValue::from(QString::from(v.id.clone())),
                                     );
-                                    c_map.insert(
-                                        "type",
-                                        QJsonValue::from(QString::from("chapter")),
-                                    );
+                                    c_map
+                                        .insert("type", QJsonValue::from(QString::from("chapter")));
                                     list.push(QJsonValue::from(c_map));
                                 }
                             }
@@ -294,11 +282,17 @@ impl AppBackend {
         let title_str = title.to_string();
 
         if title_str.trim().is_empty() {
-            return self.mutation_error_json("error.empty_title".to_string(), "作品名不能为空".to_string());
+            return self.mutation_error_json(
+                "error.empty_title".to_string(),
+                "作品名不能为空".to_string(),
+            );
         }
 
         if !self.current_has_workspace || self.current_workspace.is_empty() {
-            return self.mutation_error_json("error.invalid_workspace".to_string(), "未打开工作区，无法创建作品。请先新建或打开一个工作区。".to_string());
+            return self.mutation_error_json(
+                "error.invalid_workspace".to_string(),
+                "未打开工作区，无法创建作品。请先新建或打开一个工作区。".to_string(),
+            );
         }
 
         if let Some(api) = self.core_api() {
@@ -309,7 +303,10 @@ impl AppBackend {
                     ResultEnvelope::success_with_changes(
                         project,
                         Vec::new(),
-                        vec![ChangedEntityDto { entity_type: "ProjectCreated".to_string(), entity_id: Some(project_id) }],
+                        vec![ChangedEntityDto {
+                            entity_type: "ProjectCreated".to_string(),
+                            entity_id: Some(project_id),
+                        }],
                     )
                 }
                 Err(error) => ResultEnvelope::<writer_core::api::types::ProjectDto>::error(error),
@@ -336,7 +333,10 @@ impl AppBackend {
                 app.trigger_projects_reloaded();
             })
         } else {
-            self.mutation_error_json("error.invalid_workspace".to_string(), "核心模块未初始化".to_string())
+            self.mutation_error_json(
+                "error.invalid_workspace".to_string(),
+                "核心模块未初始化".to_string(),
+            )
         }
     }
 
@@ -352,9 +352,7 @@ impl AppBackend {
             "create_volume_start",
             &format!(
                 "[actionId={}] project_id={}, title={}",
-                action_id_str,
-                project_id,
-                title
+                action_id_str, project_id, title
             ),
         );
         if let Some(api) = self.core_api() {
@@ -365,7 +363,10 @@ impl AppBackend {
                     ResultEnvelope::success_with_changes(
                         volume,
                         Vec::new(),
-                        vec![ChangedEntityDto { entity_type: "VolumeCreated".to_string(), entity_id: Some(volume_id) }],
+                        vec![ChangedEntityDto {
+                            entity_type: "VolumeCreated".to_string(),
+                            entity_id: Some(volume_id),
+                        }],
                     )
                 }
                 Err(error) => ResultEnvelope::<writer_core::api::types::VolumeDto>::error(error),
@@ -384,7 +385,10 @@ impl AppBackend {
                 );
             })
         } else {
-            self.mutation_error_json("error.invalid_workspace".to_string(), "核心模块未初始化".to_string())
+            self.mutation_error_json(
+                "error.invalid_workspace".to_string(),
+                "核心模块未初始化".to_string(),
+            )
         }
     }
 
@@ -401,21 +405,25 @@ impl AppBackend {
             "create_chapter_start",
             &format!(
                 "[actionId={}] project_id={}, volume_id={}, title={}",
-                action_id_str,
-                project_id,
-                volume_id,
-                title
+                action_id_str, project_id, volume_id, title
             ),
         );
         if let Some(api) = self.core_api() {
-            let result = api.create_chapter(&project_id.to_string(), &volume_id.to_string(), &title.to_string());
+            let result = api.create_chapter(
+                &project_id.to_string(),
+                &volume_id.to_string(),
+                &title.to_string(),
+            );
             let envelope = match result {
                 Ok(chapter) => {
                     let chapter_id = chapter.id.clone();
                     ResultEnvelope::success_with_changes(
                         chapter,
                         Vec::new(),
-                        vec![ChangedEntityDto { entity_type: "ChapterCreated".to_string(), entity_id: Some(chapter_id) }],
+                        vec![ChangedEntityDto {
+                            entity_type: "ChapterCreated".to_string(),
+                            entity_id: Some(chapter_id),
+                        }],
                     )
                 }
                 Err(error) => ResultEnvelope::<writer_core::api::ChapterMetaDto>::error(error),
@@ -434,7 +442,10 @@ impl AppBackend {
                 );
             })
         } else {
-            self.mutation_error_json("error.invalid_workspace".to_string(), "核心模块未初始化".to_string())
+            self.mutation_error_json(
+                "error.invalid_workspace".to_string(),
+                "核心模块未初始化".to_string(),
+            )
         }
     }
 
@@ -456,7 +467,10 @@ impl AppBackend {
                 Ok(_) => ResultEnvelope::success_with_changes(
                     true,
                     Vec::new(),
-                    vec![ChangedEntityDto { entity_type: "ProjectDeleted".to_string(), entity_id: Some(project_id_str.clone()) }],
+                    vec![ChangedEntityDto {
+                        entity_type: "ProjectDeleted".to_string(),
+                        entity_id: Some(project_id_str.clone()),
+                    }],
                 ),
                 Err(error) => ResultEnvelope::<bool>::error(error),
             };
@@ -475,7 +489,10 @@ impl AppBackend {
                 );
             })
         } else {
-            self.mutation_error_json("error.invalid_workspace".to_string(), "核心模块未初始化".to_string())
+            self.mutation_error_json(
+                "error.invalid_workspace".to_string(),
+                "核心模块未初始化".to_string(),
+            )
         }
     }
 
@@ -502,7 +519,10 @@ impl AppBackend {
                 Ok(_) => ResultEnvelope::success_with_changes(
                     true,
                     Vec::new(),
-                    vec![ChangedEntityDto { entity_type: "VolumeDeleted".to_string(), entity_id: Some(volume_id_str.clone()) }],
+                    vec![ChangedEntityDto {
+                        entity_type: "VolumeDeleted".to_string(),
+                        entity_id: Some(volume_id_str.clone()),
+                    }],
                 ),
                 Err(error) => ResultEnvelope::<bool>::error(error),
             };
@@ -520,7 +540,10 @@ impl AppBackend {
                 );
             })
         } else {
-            self.mutation_error_json("error.invalid_workspace".to_string(), "核心模块未初始化".to_string())
+            self.mutation_error_json(
+                "error.invalid_workspace".to_string(),
+                "核心模块未初始化".to_string(),
+            )
         }
     }
 
@@ -549,7 +572,10 @@ impl AppBackend {
                 Ok(_) => ResultEnvelope::success_with_changes(
                     true,
                     Vec::new(),
-                    vec![ChangedEntityDto { entity_type: "ChapterDeleted".to_string(), entity_id: Some(chapter_id_str.clone()) }],
+                    vec![ChangedEntityDto {
+                        entity_type: "ChapterDeleted".to_string(),
+                        entity_id: Some(chapter_id_str.clone()),
+                    }],
                 ),
                 Err(error) => ResultEnvelope::<bool>::error(error),
             };
@@ -566,7 +592,10 @@ impl AppBackend {
                 );
             })
         } else {
-            self.mutation_error_json("error.invalid_workspace".to_string(), "核心模块未初始化".to_string())
+            self.mutation_error_json(
+                "error.invalid_workspace".to_string(),
+                "核心模块未初始化".to_string(),
+            )
         }
     }
 
@@ -589,7 +618,9 @@ impl AppBackend {
                 }
             }
         }
-        serde_json::to_string(&summaries).unwrap_or_else(|_| "[]".to_string()).into()
+        serde_json::to_string(&summaries)
+            .unwrap_or_else(|_| "[]".to_string())
+            .into()
     }
 
     pub(crate) fn create_new_volume(
@@ -643,7 +674,10 @@ impl AppBackend {
                 Ok(data) => ResultEnvelope::success_with_changes(
                     data,
                     Vec::new(),
-                    vec![ChangedEntityDto { entity_type: "ProjectRenamed".to_string(), entity_id: Some(project_id.to_string()) }],
+                    vec![ChangedEntityDto {
+                        entity_type: "ProjectRenamed".to_string(),
+                        entity_id: Some(project_id.to_string()),
+                    }],
                 ),
                 Err(error) => ResultEnvelope::<bool>::error(error),
             };
@@ -699,12 +733,19 @@ impl AppBackend {
         new_title: QString,
     ) -> QString {
         if let Some(api) = self.core_api() {
-            let result = api.rename_volume(&project_id.to_string(), &volume_id.to_string(), &new_title.to_string());
+            let result = api.rename_volume(
+                &project_id.to_string(),
+                &volume_id.to_string(),
+                &new_title.to_string(),
+            );
             let envelope = match result {
                 Ok(data) => ResultEnvelope::success_with_changes(
                     data,
                     Vec::new(),
-                    vec![ChangedEntityDto { entity_type: "VolumeRenamed".to_string(), entity_id: Some(volume_id.to_string()) }],
+                    vec![ChangedEntityDto {
+                        entity_type: "VolumeRenamed".to_string(),
+                        entity_id: Some(volume_id.to_string()),
+                    }],
                 ),
                 Err(error) => ResultEnvelope::<bool>::error(error),
             };
@@ -765,12 +806,20 @@ impl AppBackend {
         new_title: QString,
     ) -> QString {
         if let Some(api) = self.core_api() {
-            let result = api.rename_chapter(&project_id.to_string(), &volume_id.to_string(), &chapter_id.to_string(), &new_title.to_string());
+            let result = api.rename_chapter(
+                &project_id.to_string(),
+                &volume_id.to_string(),
+                &chapter_id.to_string(),
+                &new_title.to_string(),
+            );
             let envelope = match result {
                 Ok(data) => ResultEnvelope::success_with_changes(
                     data,
                     Vec::new(),
-                    vec![ChangedEntityDto { entity_type: "ChapterRenamed".to_string(), entity_id: Some(chapter_id.to_string()) }],
+                    vec![ChangedEntityDto {
+                        entity_type: "ChapterRenamed".to_string(),
+                        entity_id: Some(chapter_id.to_string()),
+                    }],
                 ),
                 Err(error) => ResultEnvelope::<bool>::error(error),
             };

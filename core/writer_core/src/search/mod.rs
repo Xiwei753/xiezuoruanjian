@@ -11,13 +11,13 @@
 //!
 //! 索引属于可删除、可重建的本地缓存。
 
-pub mod types;
-pub mod backend;
-pub mod service;
-pub mod extractor;
-pub mod update_queue;
-pub mod rebuild;
 pub mod api;
+pub mod backend;
+pub mod extractor;
+pub mod rebuild;
+pub mod service;
+pub mod types;
+pub mod update_queue;
 
-pub use types::*;
 pub use service::SearchIndexService;
+pub use types::*;

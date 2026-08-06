@@ -13,11 +13,19 @@ pub(crate) enum EditorInputEvent {
     /// 快捷键（Ctrl+A/C/V/X/Z/Y 等）
     Shortcut { key: i32, modifiers: i32 },
     /// Preedit 文本变化（IME 组合输入）
-    PreeditChanged { text: String, cursor: usize, attributes: Vec<PreeditAttribute> },
+    PreeditChanged {
+        text: String,
+        cursor: usize,
+        attributes: Vec<PreeditAttribute>,
+    },
     /// IME commit 上屏
     ImeCommit { text: String },
     /// IME commit 带替换语义（fcitx5 拼音修正等）
-    ImeReplacementCommit { text: String, replace_start: i32, replace_length: i32 },
+    ImeReplacementCommit {
+        text: String,
+        replace_start: i32,
+        replace_length: i32,
+    },
     /// IME 取消
     ImeCancel,
 }

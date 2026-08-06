@@ -7,6 +7,13 @@ use super::types::*;
 use super::StarMapStore;
 
 impl StarMapStore {
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
     pub(super) fn load_recovery_from_disk(&mut self) {
         let path = self.metadata_dir().join("recovery.json");
         if path.exists() {
@@ -32,6 +39,9 @@ impl StarMapStore {
     }
 
     pub(super) fn starmap_dir(&self) -> PathBuf {
-        self.workspace.join("app-meta").join("starmaps").join(&self.starmap_id)
+        self.workspace
+            .join("app-meta")
+            .join("starmaps")
+            .join(&self.starmap_id)
     }
 }

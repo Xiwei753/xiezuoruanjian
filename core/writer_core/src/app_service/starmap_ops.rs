@@ -1,10 +1,9 @@
 use crate::api::{
     StarMapEdgeDto, StarMapEdgePatchInputDto, StarMapEdgeRenderDto, StarMapEmbedDto,
-    StarMapEmbedPatchInputDto, StarMapGraphDto, StarMapHyperlinkDto,
-    StarMapHyperlinkPatchInputDto, StarMapLayoutDto, StarMapLinkDto,
-    StarMapLinkPatchInputDto, StarMapMetaDto, StarMapMotionPolicyDto, StarMapNodeDto,
-    StarMapNodePatchInputDto, StarMapPhasedSnapshotDto, StarMapReferenceDto,
-    StarMapViewportDto, WriterError,
+    StarMapEmbedPatchInputDto, StarMapGraphDto, StarMapHyperlinkDto, StarMapHyperlinkPatchInputDto,
+    StarMapLayoutDto, StarMapLinkDto, StarMapLinkPatchInputDto, StarMapMetaDto,
+    StarMapMotionPolicyDto, StarMapNodeDto, StarMapNodePatchInputDto, StarMapPhasedSnapshotDto,
+    StarMapReferenceDto, StarMapViewportDto, WriterError,
 };
 
 impl super::WriterAppService {
@@ -20,10 +19,7 @@ impl super::WriterAppService {
         self.api.create_starmap(&title, &desc, None)
     }
 
-    pub fn get_starmap_graph(
-        &self,
-        starmap_id: String,
-    ) -> Result<StarMapGraphDto, WriterError> {
+    pub fn get_starmap_graph(&self, starmap_id: String) -> Result<StarMapGraphDto, WriterError> {
         self.api.get_starmap_graph(&starmap_id)
     }
 
@@ -43,7 +39,8 @@ impl super::WriterAppService {
         node_id: String,
         patch: StarMapNodePatchInputDto,
     ) -> Result<StarMapNodeDto, WriterError> {
-        self.api.update_starmap_node(&starmap_id, &node_id, patch.into())
+        self.api
+            .update_starmap_node(&starmap_id, &node_id, patch.into())
     }
 
     pub fn delete_starmap_node(
@@ -68,7 +65,8 @@ impl super::WriterAppService {
         edge_id: String,
         patch: StarMapEdgePatchInputDto,
     ) -> Result<StarMapEdgeDto, WriterError> {
-        self.api.update_starmap_edge(&starmap_id, &edge_id, patch.into())
+        self.api
+            .update_starmap_edge(&starmap_id, &edge_id, patch.into())
     }
 
     pub fn delete_starmap_edge(
@@ -85,7 +83,8 @@ impl super::WriterAppService {
         graph: StarMapGraphDto,
         base_package_revision: u64,
     ) -> Result<bool, WriterError> {
-        self.api.import_or_replace_starmap_package(&starmap_id, &graph, base_package_revision)
+        self.api
+            .import_or_replace_starmap_package(&starmap_id, &graph, base_package_revision)
     }
 
     pub fn save_starmap_layout(
@@ -187,23 +186,15 @@ impl super::WriterAppService {
         self.api.find_starmap_references(&target_starmap_id)
     }
 
-    pub fn get_starmap_motion_policy(
-        &self,
-    ) -> Result<StarMapMotionPolicyDto, WriterError> {
+    pub fn get_starmap_motion_policy(&self) -> Result<StarMapMotionPolicyDto, WriterError> {
         self.api.get_starmap_motion_policy()
     }
 
-    pub fn flush_starmap_store(
-        &self,
-        starmap_id: String,
-    ) -> Result<bool, WriterError> {
+    pub fn flush_starmap_store(&self, starmap_id: String) -> Result<bool, WriterError> {
         self.api.flush_starmap_store(&starmap_id)
     }
 
-    pub fn close_starmap_store(
-        &self,
-        starmap_id: String,
-    ) -> Result<bool, WriterError> {
+    pub fn close_starmap_store(&self, starmap_id: String) -> Result<bool, WriterError> {
         self.api.close_starmap_store(&starmap_id)
     }
 
@@ -232,7 +223,8 @@ impl super::WriterAppService {
         hyperlink_id: String,
         patch: StarMapHyperlinkPatchInputDto,
     ) -> Result<StarMapHyperlinkDto, WriterError> {
-        self.api.update_starmap_hyperlink(&starmap_id, &hyperlink_id, patch.into())
+        self.api
+            .update_starmap_hyperlink(&starmap_id, &hyperlink_id, patch.into())
     }
 
     pub fn delete_starmap_hyperlink(
@@ -240,7 +232,8 @@ impl super::WriterAppService {
         starmap_id: String,
         hyperlink_id: String,
     ) -> Result<bool, WriterError> {
-        self.api.delete_starmap_hyperlink(&starmap_id, &hyperlink_id)
+        self.api
+            .delete_starmap_hyperlink(&starmap_id, &hyperlink_id)
     }
 
     pub fn list_starmap_hyperlinks(

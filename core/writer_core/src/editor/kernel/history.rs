@@ -1,12 +1,9 @@
-use super::types::{CoordinatedCursor, DisplayPatch, EditorOperationKind, EditorVisualIntent};
 use super::result::{EditorEditOutcome, EditorEditResult};
+use super::types::{CoordinatedCursor, DisplayPatch, EditorOperationKind, EditorVisualIntent};
 use super::EditorKernel;
 
 use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset, Utf8ByteRange};
-use crate::editor::transaction::{
-    diff_plain_text,
-    AnimationMode, EditorTransactionCause,
-};
+use crate::editor::transaction::{diff_plain_text, AnimationMode, EditorTransactionCause};
 
 impl EditorKernel {
     pub(crate) fn apply_undo(
@@ -17,7 +14,13 @@ impl EditorKernel {
     ) -> EditorEditOutcome {
         let entry = match self.undo_stack.pop() {
             Some(e) => e,
-            None => return EditorEditOutcome::NoChange(self.noop_result(base_revision, old_cursor, old_selection)),
+            None => {
+                return EditorEditOutcome::NoChange(self.noop_result(
+                    base_revision,
+                    old_cursor,
+                    old_selection,
+                ))
+            }
         };
 
         let old_text = self.text.clone();
@@ -35,7 +38,9 @@ impl EditorKernel {
 
         let (replace_range, inserted_text) = Self::compute_single_patch(&old_text, &self.text);
 
-        let display_patches = if replace_range.start().value() < replace_range.end().value() || !inserted_text.is_empty() {
+        let display_patches = if replace_range.start().value() < replace_range.end().value()
+            || !inserted_text.is_empty()
+        {
             vec![DisplayPatch {
                 base_revision,
                 new_revision,
@@ -89,7 +94,13 @@ impl EditorKernel {
     ) -> EditorEditOutcome {
         let entry = match self.redo_stack.pop() {
             Some(e) => e,
-            None => return EditorEditOutcome::NoChange(self.noop_result(base_revision, old_cursor, old_selection)),
+            None => {
+                return EditorEditOutcome::NoChange(self.noop_result(
+                    base_revision,
+                    old_cursor,
+                    old_selection,
+                ))
+            }
         };
 
         let old_text = self.text.clone();
@@ -107,7 +118,9 @@ impl EditorKernel {
 
         let (replace_range, inserted_text) = Self::compute_single_patch(&old_text, &self.text);
 
-        let display_patches = if replace_range.start().value() < replace_range.end().value() || !inserted_text.is_empty() {
+        let display_patches = if replace_range.start().value() < replace_range.end().value()
+            || !inserted_text.is_empty()
+        {
             vec![DisplayPatch {
                 base_revision,
                 new_revision,

@@ -26,14 +26,20 @@ impl SujianEditorItem {
     pub(crate) fn tick_cursor_animation(&mut self) {
         use animation_coordinator::CursorBlinkMode;
         let blink_mode = if self.current_coordinated_text_cursor_animation_enabled
-            && self.pipeline.animation_coordinator_mut().has_active_insert()
+            && self
+                .pipeline
+                .animation_coordinator_mut()
+                .has_active_insert()
         {
             CursorBlinkMode::Suppressed
         } else {
             CursorBlinkMode::Normal
         };
 
-        let active_progress = self.pipeline.animation_coordinator_mut().active_cursor_progress();
+        let active_progress = self
+            .pipeline
+            .animation_coordinator_mut()
+            .active_cursor_progress();
         let still_animating = if self.cursor_ctrl.animation.is_some() {
             if let Some(progress) = active_progress {
                 self.cursor_ctrl.update_animation_progress(progress)
@@ -61,7 +67,11 @@ impl SujianEditorItem {
         self.insert_text_with_cause(text, None);
     }
 
-    pub(crate) fn insert_text_with_cause(&mut self, text: QString, explicit_cause: Option<EditorTransactionCause>) {
+    pub(crate) fn insert_text_with_cause(
+        &mut self,
+        text: QString,
+        explicit_cause: Option<EditorTransactionCause>,
+    ) {
         if !self.current_editor_enabled {
             return;
         }
@@ -71,20 +81,39 @@ impl SujianEditorItem {
         }
 
         let (preedit_byte_start, preedit_byte_end) = self.preedit_byte_range_in_virtual_text();
-        let commit = self.pipeline.prepare_composition_commit(&inserted, self.buffer.cursor, preedit_byte_start, preedit_byte_end);
+        let commit = self.pipeline.prepare_composition_commit(
+            &inserted,
+            self.buffer.cursor,
+            preedit_byte_start,
+            preedit_byte_end,
+        );
 
         let old = self.buffer.snapshot();
 
         if commit.was_composing && commit.session_replace_start != commit.session_replace_end {
-            let _ = self.pipeline.replace_range(commit.session_replace_start, commit.session_replace_end, &inserted, EditorTransactionCause::TypingCommit);
+            let _ = self.pipeline.replace_range(
+                commit.session_replace_start,
+                commit.session_replace_end,
+                &inserted,
+                EditorTransactionCause::TypingCommit,
+            );
             self.sync_buffer_from_pipeline();
         } else {
             let (sel_start, sel_end) = self.buffer.selection_range();
             if sel_start != sel_end {
-                let _ = self.pipeline.replace_range(sel_start, sel_end, &inserted, EditorTransactionCause::Typing);
+                let _ = self.pipeline.replace_range(
+                    sel_start,
+                    sel_end,
+                    &inserted,
+                    EditorTransactionCause::Typing,
+                );
                 self.sync_buffer_from_pipeline();
             } else {
-                let _ = self.pipeline.insert_text(self.buffer.cursor, &inserted, EditorTransactionCause::Typing);
+                let _ = self.pipeline.insert_text(
+                    self.buffer.cursor,
+                    &inserted,
+                    EditorTransactionCause::Typing,
+                );
                 self.sync_buffer_from_pipeline();
             }
         }
@@ -100,19 +129,31 @@ impl SujianEditorItem {
 
         if commit.was_composing && self.current_typing_animation_enabled {
             let width = self.bounding_width();
-            let old_cursor_rect = commit.pending_preedit_cursor_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.top, bottom: c.bottom, baseline_y: c.baseline_y });
+            let old_cursor_rect = commit
+                .pending_preedit_cursor_rect
+                .as_ref()
+                .map(|c| CursorRect {
+                    x: c.x,
+                    top: c.top,
+                    bottom: c.bottom,
+                    baseline_y: c.baseline_y,
+                });
 
-            let old_snapshot = self.pipeline.animation_coordinator()
+            let old_snapshot = self
+                .pipeline
+                .animation_coordinator()
                 .active_composition_new_snapshot()
                 .cloned()
                 .unwrap_or_else(|| {
-                    self.pipeline.current_layout_snapshot().clone().unwrap_or_else(|| {
-                        self.build_editor_layout_snapshot(width)
-                    })
+                    self.pipeline
+                        .current_layout_snapshot()
+                        .clone()
+                        .unwrap_or_else(|| self.build_editor_layout_snapshot(width))
                 });
 
             let transaction = self.pipeline.engine().create_transaction(
-                &old.text, &new.text,
+                &old.text,
+                &new.text,
                 EditorSelection {
                     anchor: EditorCursor::new(&old.text, old.selection_anchor),
                     head: EditorCursor::new(&old.text, old.cursor),
@@ -123,41 +164,55 @@ impl SujianEditorItem {
                 },
                 cause,
             );
-            self.pipeline.animation_coordinator_mut().cancel_active_composition("commit_insert");
+            self.pipeline
+                .animation_coordinator_mut()
+                .cancel_active_composition("commit_insert");
 
             let new_snapshot = self.build_editor_layout_snapshot(width);
-            let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
+            let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect {
+                x: c.x,
+                top: c.y,
+                bottom: c.y + c.h,
+                baseline_y: c.y + c.h * 0.8,
+            });
 
-            let visual_text_unchanged = !commit.saved_virtual_text.is_empty() && commit.saved_virtual_text == new.text;
+            let visual_text_unchanged =
+                !commit.saved_virtual_text.is_empty() && commit.saved_virtual_text == new.text;
 
-            let key = self.pipeline.animation_coordinator_mut().handle_composition_commit_or_cancel(
-                u64::from(self.current_typing_animation_duration_ms),
-                &old_snapshot,
-                &new_snapshot,
-                commit.preedit_byte_start,
-                commit.preedit_byte_end,
-                true,
-                visual_text_unchanged,
-                commit.candidate_byte_start,
-                commit.candidate_byte_end,
-                commit.committed_replace_start,
-                commit.committed_replace_end,
-                old_cursor_rect,
-                new_cursor_rect,
-            );
+            let key = self
+                .pipeline
+                .animation_coordinator_mut()
+                .handle_composition_commit_or_cancel(
+                    u64::from(self.current_typing_animation_duration_ms),
+                    &old_snapshot,
+                    &new_snapshot,
+                    commit.preedit_byte_start,
+                    commit.preedit_byte_end,
+                    true,
+                    visual_text_unchanged,
+                    commit.candidate_byte_start,
+                    commit.candidate_byte_end,
+                    commit.committed_replace_start,
+                    commit.committed_replace_end,
+                    old_cursor_rect,
+                    new_cursor_rect,
+                );
 
             if let Some(key) = key {
                 self.prepare_transaction_textures(key);
             }
-            self.pipeline.set_previous_layout_snapshot(Some(old_snapshot));
-            self.pipeline.set_current_layout_snapshot(Some(new_snapshot));
+            self.pipeline
+                .set_previous_layout_snapshot(Some(old_snapshot));
+            self.pipeline
+                .set_current_layout_snapshot(Some(new_snapshot));
 
             self.last_event_count = 1;
             self.last_summary = format!(
                 "cause={:?};changes={};vt=composition_commit;animate=true",
                 transaction.cause,
                 transaction.changes.len(),
-            ).into();
+            )
+            .into();
             editor_animation_debug_log(&format!(
                 "insert_text_with_cause: composition commit, cause={:?}, changes={}",
                 transaction.cause,
@@ -177,13 +232,20 @@ impl SujianEditorItem {
             self.cursor_ctrl.force_snap_next = false;
             editor_animation_debug_log(&format!("[commit] pending_preedit_cursor_rect present cursor_start_source=preedit pcr_x={:.1} pcr_y={:.1}", pcr.x, pcr.top));
         } else {
-            editor_animation_debug_log("[commit] pending_preedit_cursor_rect absent cursor_start_source=normal");
+            editor_animation_debug_log(
+                "[commit] pending_preedit_cursor_rect absent cursor_start_source=normal",
+            );
         }
 
         self.emit_content_changed();
     }
 
-    pub(crate) fn ime_replace_and_insert(&mut self, replace_start: i32, replace_length: i32, text: String) {
+    pub(crate) fn ime_replace_and_insert(
+        &mut self,
+        replace_start: i32,
+        replace_length: i32,
+        text: String,
+    ) {
         if !self.current_editor_enabled {
             return;
         }
@@ -193,7 +255,12 @@ impl SujianEditorItem {
         }
 
         let (preedit_byte_start, preedit_byte_end) = self.preedit_byte_range_in_virtual_text();
-        let commit = self.pipeline.prepare_composition_commit(&inserted, self.buffer.cursor, preedit_byte_start, preedit_byte_end);
+        let commit = self.pipeline.prepare_composition_commit(
+            &inserted,
+            self.buffer.cursor,
+            preedit_byte_start,
+            preedit_byte_end,
+        );
 
         let committed_text = self.buffer.text.clone();
 
@@ -204,11 +271,15 @@ impl SujianEditorItem {
         );
 
         fn utf16_forward(text: &str, byte_start: usize, utf16_count: i32) -> usize {
-            if utf16_count <= 0 { return byte_start; }
+            if utf16_count <= 0 {
+                return byte_start;
+            }
             let mut remaining = utf16_count;
             let mut pos = byte_start;
             for ch in text[byte_start..].chars() {
-                if remaining <= 0 { break; }
+                if remaining <= 0 {
+                    break;
+                }
                 remaining -= ch.len_utf16() as i32;
                 pos += ch.len_utf8();
             }
@@ -216,11 +287,15 @@ impl SujianEditorItem {
         }
 
         fn utf16_backward(text: &str, byte_start: usize, utf16_count: i32) -> usize {
-            if utf16_count <= 0 { return byte_start; }
+            if utf16_count <= 0 {
+                return byte_start;
+            }
             let mut remaining = utf16_count;
             let mut pos = byte_start;
             for ch in text[..byte_start].chars().rev() {
-                if remaining <= 0 { break; }
+                if remaining <= 0 {
+                    break;
+                }
                 remaining -= ch.len_utf16() as i32;
                 pos -= ch.len_utf8();
             }
@@ -284,7 +359,9 @@ impl SujianEditorItem {
             EditorTransactionCause::TypingCommit
         };
         if del_start != del_end {
-            let _ = self.pipeline.replace_range(del_start, del_end, &inserted, cause);
+            let _ = self
+                .pipeline
+                .replace_range(del_start, del_end, &inserted, cause);
         } else {
             let _ = self.pipeline.insert_text(del_start, &inserted, cause);
         }
@@ -295,19 +372,31 @@ impl SujianEditorItem {
 
         if commit.was_composing && self.current_typing_animation_enabled {
             let width = self.bounding_width();
-            let old_cursor_rect = commit.pending_preedit_cursor_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.top, bottom: c.bottom, baseline_y: c.baseline_y });
+            let old_cursor_rect = commit
+                .pending_preedit_cursor_rect
+                .as_ref()
+                .map(|c| CursorRect {
+                    x: c.x,
+                    top: c.top,
+                    bottom: c.bottom,
+                    baseline_y: c.baseline_y,
+                });
 
-            let old_snapshot = self.pipeline.animation_coordinator()
+            let old_snapshot = self
+                .pipeline
+                .animation_coordinator()
                 .active_composition_new_snapshot()
                 .cloned()
                 .unwrap_or_else(|| {
-                    self.pipeline.current_layout_snapshot().clone().unwrap_or_else(|| {
-                        self.build_editor_layout_snapshot(width)
-                    })
+                    self.pipeline
+                        .current_layout_snapshot()
+                        .clone()
+                        .unwrap_or_else(|| self.build_editor_layout_snapshot(width))
                 });
 
             let transaction = self.pipeline.engine().create_transaction(
-                &old.text, &new.text,
+                &old.text,
+                &new.text,
                 EditorSelection {
                     anchor: EditorCursor::new(&old.text, old.selection_anchor),
                     head: EditorCursor::new(&old.text, old.cursor),
@@ -318,39 +407,52 @@ impl SujianEditorItem {
                 },
                 cause,
             );
-            self.pipeline.animation_coordinator_mut().cancel_active_composition("commit_replace");
+            self.pipeline
+                .animation_coordinator_mut()
+                .cancel_active_composition("commit_replace");
 
             let new_snapshot = self.build_editor_layout_snapshot(width);
-            let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
+            let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect {
+                x: c.x,
+                top: c.y,
+                bottom: c.y + c.h,
+                baseline_y: c.y + c.h * 0.8,
+            });
 
-            let key = self.pipeline.animation_coordinator_mut().handle_composition_commit_or_cancel(
-                u64::from(self.current_typing_animation_duration_ms),
-                &old_snapshot,
-                &new_snapshot,
-                commit.preedit_byte_start,
-                commit.preedit_byte_end,
-                true,
-                !commit.saved_virtual_text.is_empty() && commit.saved_virtual_text == new.text,
-                candidate_byte_start,
-                candidate_byte_end,
-                committed_replace_start,
-                committed_replace_end,
-                old_cursor_rect,
-                new_cursor_rect,
-            );
+            let key = self
+                .pipeline
+                .animation_coordinator_mut()
+                .handle_composition_commit_or_cancel(
+                    u64::from(self.current_typing_animation_duration_ms),
+                    &old_snapshot,
+                    &new_snapshot,
+                    commit.preedit_byte_start,
+                    commit.preedit_byte_end,
+                    true,
+                    !commit.saved_virtual_text.is_empty() && commit.saved_virtual_text == new.text,
+                    candidate_byte_start,
+                    candidate_byte_end,
+                    committed_replace_start,
+                    committed_replace_end,
+                    old_cursor_rect,
+                    new_cursor_rect,
+                );
 
             if let Some(key) = key {
                 self.prepare_transaction_textures(key);
             }
-            self.pipeline.set_previous_layout_snapshot(Some(old_snapshot));
-            self.pipeline.set_current_layout_snapshot(Some(new_snapshot));
+            self.pipeline
+                .set_previous_layout_snapshot(Some(old_snapshot));
+            self.pipeline
+                .set_current_layout_snapshot(Some(new_snapshot));
 
             self.last_event_count = 1;
             self.last_summary = format!(
                 "cause={:?};changes={};vt=composition_commit_replace;animate=true",
                 transaction.cause,
                 transaction.changes.len(),
-            ).into();
+            )
+            .into();
 
             self.transaction_created();
         } else {
@@ -376,7 +478,11 @@ impl SujianEditorItem {
         if self.buffer.has_selection() {
             let (start, end) = self.buffer.selection_range();
             let old = self.buffer.snapshot();
-            if self.pipeline.delete_range(start, end, EditorTransactionCause::Delete).is_some() {
+            if self
+                .pipeline
+                .delete_range(start, end, EditorTransactionCause::Delete)
+                .is_some()
+            {
                 self.sync_buffer_from_pipeline();
                 self.adjust_affinity_at_wrap_boundary();
                 let new = self.buffer.snapshot();
@@ -389,7 +495,11 @@ impl SujianEditorItem {
             return;
         };
         let old = self.buffer.snapshot();
-        if self.pipeline.delete_range(prev, cursor, EditorTransactionCause::Delete).is_some() {
+        if self
+            .pipeline
+            .delete_range(prev, cursor, EditorTransactionCause::Delete)
+            .is_some()
+        {
             self.sync_buffer_from_pipeline();
             self.adjust_affinity_at_wrap_boundary();
             let new = self.buffer.snapshot();
@@ -406,7 +516,11 @@ impl SujianEditorItem {
         if self.buffer.has_selection() {
             let (start, end) = self.buffer.selection_range();
             let old = self.buffer.snapshot();
-            if self.pipeline.delete_range(start, end, EditorTransactionCause::Delete).is_some() {
+            if self
+                .pipeline
+                .delete_range(start, end, EditorTransactionCause::Delete)
+                .is_some()
+            {
                 self.sync_buffer_from_pipeline();
                 self.adjust_affinity_at_wrap_boundary();
                 let new = self.buffer.snapshot();
@@ -419,7 +533,11 @@ impl SujianEditorItem {
             return;
         };
         let old = self.buffer.snapshot();
-        if self.pipeline.delete_range(cursor, next, EditorTransactionCause::Delete).is_some() {
+        if self
+            .pipeline
+            .delete_range(cursor, next, EditorTransactionCause::Delete)
+            .is_some()
+        {
             self.sync_buffer_from_pipeline();
             self.adjust_affinity_at_wrap_boundary();
             let new = self.buffer.snapshot();
@@ -434,7 +552,11 @@ impl SujianEditorItem {
         }
         let (start, end) = self.buffer.selection_range();
         let old = self.buffer.snapshot();
-        if self.pipeline.delete_range(start, end, EditorTransactionCause::Delete).is_some() {
+        if self
+            .pipeline
+            .delete_range(start, end, EditorTransactionCause::Delete)
+            .is_some()
+        {
             self.sync_buffer_from_pipeline();
             self.adjust_affinity_at_wrap_boundary();
             let new = self.buffer.snapshot();
@@ -492,7 +614,14 @@ impl SujianEditorItem {
             "click_at: mouse_x={:.1}, mouse_y={:.1}, current_scroll_y={:.1}, hit_index={}, affinity={:?}, extend={}",
             x, y, self.current_scroll_y, index, affinity, extend
         ));
-        let _ = self.pipeline.set_selection(if extend { self.buffer.selection_anchor } else { index }, index);
+        let _ = self.pipeline.set_selection(
+            if extend {
+                self.buffer.selection_anchor
+            } else {
+                index
+            },
+            index,
+        );
         self.sync_buffer_from_pipeline();
         self.bump_visual_revision();
         self.pipeline.composition_mut().clear();
@@ -507,7 +636,9 @@ impl SujianEditorItem {
         let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
         self.cursor_ctrl.affinity = affinity;
         self.cursor_ctrl.force_snap_next = true;
-        let _ = self.pipeline.set_selection(self.buffer.selection_anchor, index);
+        let _ = self
+            .pipeline
+            .set_selection(self.buffer.selection_anchor, index);
         self.sync_buffer_from_pipeline();
         self.bump_visual_revision();
         self.cursor_position_changed();
@@ -601,8 +732,13 @@ impl SujianEditorItem {
         if text.is_empty() {
             return false;
         }
-        use writer_core::platform_interaction::clipboard_focus::{ClipboardAndFocusAdapter, ClipboardRequest, ClipboardResult};
-        let result = ClipboardAndFocusAdapter::execute_clipboard(self.pipeline.clipboard_adapter_mut(), ClipboardRequest::Copy { text });
+        use writer_core::platform_interaction::clipboard_focus::{
+            ClipboardAndFocusAdapter, ClipboardRequest, ClipboardResult,
+        };
+        let result = ClipboardAndFocusAdapter::execute_clipboard(
+            self.pipeline.clipboard_adapter_mut(),
+            ClipboardRequest::Copy { text },
+        );
         matches!(result, ClipboardResult::Copied)
     }
 
@@ -610,8 +746,13 @@ impl SujianEditorItem {
         if !self.current_editor_enabled {
             return;
         }
-        use writer_core::platform_interaction::clipboard_focus::{ClipboardAndFocusAdapter, ClipboardRequest, ClipboardResult};
-        let result = ClipboardAndFocusAdapter::execute_clipboard(self.pipeline.clipboard_adapter_mut(), ClipboardRequest::Paste);
+        use writer_core::platform_interaction::clipboard_focus::{
+            ClipboardAndFocusAdapter, ClipboardRequest, ClipboardResult,
+        };
+        let result = ClipboardAndFocusAdapter::execute_clipboard(
+            self.pipeline.clipboard_adapter_mut(),
+            ClipboardRequest::Paste,
+        );
         if let ClipboardResult::Pasted { text } = result {
             let normalized = normalize_plain_text(&text);
             self.insert_text_with_cause(normalized.into(), Some(EditorTransactionCause::Paste));
@@ -660,11 +801,13 @@ impl SujianEditorItem {
         let _ = self.update_cursor_visual_position();
         let new_cursor_rect = self.current_cursor_rect_for_transaction();
         if self.current_smooth_cursor_enabled && !extend {
-            self.pipeline.animation_coordinator_mut().handle_cursor_only(
-                u64::from(self.current_cursor_animation_duration_ms),
-                old_cursor_rect,
-                new_cursor_rect,
-            );
+            self.pipeline
+                .animation_coordinator_mut()
+                .handle_cursor_only(
+                    u64::from(self.current_cursor_animation_duration_ms),
+                    old_cursor_rect,
+                    new_cursor_rect,
+                );
         }
         self.request_static_repaint();
     }
@@ -701,11 +844,13 @@ impl SujianEditorItem {
         let _ = self.update_cursor_visual_position();
         let new_cursor_rect = self.current_cursor_rect_for_transaction();
         if self.current_smooth_cursor_enabled && !extend {
-            self.pipeline.animation_coordinator_mut().handle_cursor_only(
-                u64::from(self.current_cursor_animation_duration_ms),
-                old_cursor_rect,
-                new_cursor_rect,
-            );
+            self.pipeline
+                .animation_coordinator_mut()
+                .handle_cursor_only(
+                    u64::from(self.current_cursor_animation_duration_ms),
+                    old_cursor_rect,
+                    new_cursor_rect,
+                );
         }
         self.request_static_repaint();
     }
@@ -736,11 +881,13 @@ impl SujianEditorItem {
         let _ = self.update_cursor_visual_position();
         let new_cursor_rect = self.current_cursor_rect_for_transaction();
         if self.current_smooth_cursor_enabled && !extend {
-            self.pipeline.animation_coordinator_mut().handle_cursor_only(
-                u64::from(self.current_cursor_animation_duration_ms),
-                old_cursor_rect,
-                new_cursor_rect,
-            );
+            self.pipeline
+                .animation_coordinator_mut()
+                .handle_cursor_only(
+                    u64::from(self.current_cursor_animation_duration_ms),
+                    old_cursor_rect,
+                    new_cursor_rect,
+                );
         }
         self.request_static_repaint();
     }

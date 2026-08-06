@@ -440,6 +440,14 @@ impl StatsStore {
     }
 
     #[allow(clippy::cast_sign_loss)]
+    // TODO(#597): 既有代码可读性技术债，待后续重构拆分
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
     pub fn aggregate_events(&self, events: &[WritingInputEvent]) -> Result<Vec<DailyStats>> {
         if events.is_empty() {
             return Ok(Vec::new());
@@ -527,6 +535,13 @@ impl StatsStore {
         Ok(daily_stats_list)
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
     fn compute_speed_buckets(
         &self,
         events: &[&WritingInputEvent],
@@ -686,7 +701,7 @@ mod tests {
             0,
             0,
             5,
-            "session_1"
+            "session_1",
         )
     }
 
@@ -1134,5 +1149,4 @@ mod tests {
             assert!(buffer.is_empty());
         }
     }
-
 }

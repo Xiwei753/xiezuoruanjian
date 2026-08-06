@@ -8,13 +8,11 @@ impl super::WriterAppService {
         limit: u32,
         cursor: Option<String>,
     ) -> Result<String, WriterError> {
-        self.api.global_search_json(&query, &scope, limit, cursor.as_deref())
+        self.api
+            .global_search_json(&query, &scope, limit, cursor.as_deref())
     }
 
-    pub fn rebuild_search_index(
-        &self,
-        project_id: Option<String>,
-    ) -> Result<String, WriterError> {
+    pub fn rebuild_search_index(&self, project_id: Option<String>) -> Result<String, WriterError> {
         self.api.rebuild_search_index_json(project_id.as_deref())
     }
 
@@ -30,7 +28,7 @@ impl super::WriterAppService {
         title: String,
         body: String,
     ) -> Result<bool, WriterError> {
-        self.api.enqueue_search_index_update_public(&action, &object_id, &scope, &title, &body, None)
+        self.api
+            .enqueue_search_index_update_public(&action, &object_id, &scope, &title, &body, None)
     }
-
 }

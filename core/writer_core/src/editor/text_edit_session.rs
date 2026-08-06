@@ -8,8 +8,8 @@
 //! - 持久内容会话：章节正文等持续编辑内容，拥有独立长期会话。
 //! - 临时草稿会话：项目名、搜索词等短文本，编辑时创建，确认/取消后关闭。
 
-use super::EditorKernel;
 use super::kernel::result::EditorInputError;
+use super::EditorKernel;
 
 /// 文字编辑会话 ID — 全局唯一，标识一次独立的文字事务环境。
 /// 内部类型 u64 对应平台端 Kotlin ULong，通过 FFI 边界传递时保持无符号语义。
@@ -122,7 +122,10 @@ impl TextEditSessionRegistry {
     }
 
     /// 获取会话的可变引用。不存在时返回 None。
-    pub fn get_session_mut(&mut self, session_id: TextEditSessionId) -> Option<&mut TextEditSession> {
+    pub fn get_session_mut(
+        &mut self,
+        session_id: TextEditSessionId,
+    ) -> Option<&mut TextEditSession> {
         self.sessions.get_mut(&session_id.as_u64())
     }
 
@@ -189,7 +192,9 @@ mod tests {
         assert!(registry.session_exists(TextEditSessionId::new(id.as_u64())));
         assert_eq!(registry.active_session_count(), 1);
 
-        let session = registry.get_session(TextEditSessionId::new(id.as_u64())).unwrap();
+        let session = registry
+            .get_session(TextEditSessionId::new(id.as_u64()))
+            .unwrap();
         assert_eq!(session.kernel.text(), "Hello");
         assert_eq!(session.target_id, "project-title:1");
         assert!(!session.is_persistent);
@@ -203,9 +208,16 @@ mod tests {
     fn create_persistent_session() {
         let mut registry = TextEditSessionRegistry::new();
         let id = registry
-            .create_session("chapter-body:1:1:1".to_string(), "正文".to_string(), 6, true)
+            .create_session(
+                "chapter-body:1:1:1".to_string(),
+                "正文".to_string(),
+                6,
+                true,
+            )
             .unwrap();
-        let session = registry.get_session(TextEditSessionId::new(id.as_u64())).unwrap();
+        let session = registry
+            .get_session(TextEditSessionId::new(id.as_u64()))
+            .unwrap();
         assert!(session.is_persistent);
     }
 
@@ -215,7 +227,9 @@ mod tests {
         let id = registry
             .create_session("search:1".to_string(), "".to_string(), 0, false)
             .unwrap();
-        let session = registry.get_session(TextEditSessionId::new(id.as_u64())).unwrap();
+        let session = registry
+            .get_session(TextEditSessionId::new(id.as_u64()))
+            .unwrap();
         assert_eq!(session.kernel.text(), "");
     }
 
@@ -228,7 +242,9 @@ mod tests {
         registry
             .reset_session(TextEditSessionId::new(id.as_u64()), "New".to_string(), 3)
             .unwrap();
-        let session = registry.get_session(TextEditSessionId::new(id.as_u64())).unwrap();
+        let session = registry
+            .get_session(TextEditSessionId::new(id.as_u64()))
+            .unwrap();
         assert_eq!(session.kernel.text(), "New");
         assert_eq!(session.generation, 1);
     }
@@ -250,8 +266,12 @@ mod tests {
             .unwrap();
         assert_ne!(id1.as_u64(), id2.as_u64());
 
-        let s1 = registry.get_session(TextEditSessionId::new(id1.as_u64())).unwrap();
-        let s2 = registry.get_session(TextEditSessionId::new(id2.as_u64())).unwrap();
+        let s1 = registry
+            .get_session(TextEditSessionId::new(id1.as_u64()))
+            .unwrap();
+        let s2 = registry
+            .get_session(TextEditSessionId::new(id2.as_u64()))
+            .unwrap();
         assert_eq!(s1.kernel.text(), "Alpha");
         assert_eq!(s2.kernel.text(), "Beta");
     }

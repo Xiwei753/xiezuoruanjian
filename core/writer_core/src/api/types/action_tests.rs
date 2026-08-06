@@ -1,5 +1,5 @@
 use super::action::*;
-use crate::action_registry::{ActionKind, ActionRiskLevel, ActionDescriptor, ActionResult};
+use crate::action_registry::{ActionDescriptor, ActionKind, ActionResult, ActionRiskLevel};
 use serde_json::json;
 
 #[test]
@@ -85,7 +85,11 @@ fn test_action_descriptor_dto_json_key_contract() {
     assert!(json["inputSchema"].is_null());
     assert!(json["uiSchema"].is_null());
     let as_object = json.as_object().unwrap();
-    assert_eq!(as_object.len(), 11, "ActionDescriptorDto must have exactly 11 JSON keys");
+    assert_eq!(
+        as_object.len(),
+        11,
+        "ActionDescriptorDto must have exactly 11 JSON keys"
+    );
 }
 
 #[test]

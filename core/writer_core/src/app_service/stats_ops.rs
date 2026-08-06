@@ -1,6 +1,6 @@
 use crate::api::{
-    DeviceInfoDto, WriterError, WritingStatsSummaryDto, ProjectStatsSummaryDto,
-    ChapterStatsSummaryDto, DeviceStatsSummaryDto, SpeedCurveSummaryDto,
+    ChapterStatsSummaryDto, DeviceInfoDto, DeviceStatsSummaryDto, ProjectStatsSummaryDto,
+    SpeedCurveSummaryDto, WriterError, WritingStatsSummaryDto,
 };
 
 impl super::WriterAppService {

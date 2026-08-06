@@ -260,6 +260,13 @@ const HEIGHT_MEDIUM_MAX: f32 = 900.0;
 ///    其他半开→保留宽度决定的 workspace_pane_mode）
 /// 3. 虚拟键盘可见时隐藏底部导航栏
 /// 4. 折叠屏铰链/遮挡区域生成 avoid_regions
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 pub fn resolve_layout(metrics: &WindowMetrics) -> LayoutPlan {
     let width_class = resolve_width_class(metrics.width_dp);
     let height_class = resolve_height_class(metrics.height_dp);
@@ -288,10 +295,26 @@ pub fn resolve_layout(metrics: &WindowMetrics) -> LayoutPlan {
             EditorMode::FullWidth,
             NavigationPresentation::BottomBar,
             WorkspacePaneMode::SinglePane,
-            VisiblePaneRoles { show_project_list: true, show_chapter_tree: true, show_editor: true, show_supporting: false },
-            0.0, 16.0, 2, true,
-            PaneWidthConstraint { min_dp: 0.0, preferred_dp: 0.0, max_dp: 0.0 },
-            0.0, 0.0, 0.0, 0.0, None,
+            VisiblePaneRoles {
+                show_project_list: true,
+                show_chapter_tree: true,
+                show_editor: true,
+                show_supporting: false,
+            },
+            0.0,
+            16.0,
+            2,
+            true,
+            PaneWidthConstraint {
+                min_dp: 0.0,
+                preferred_dp: 0.0,
+                max_dp: 0.0,
+            },
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            None,
         ),
         WidthClass::Medium => (
             ShellMode::SupportingPane,
@@ -299,10 +322,26 @@ pub fn resolve_layout(metrics: &WindowMetrics) -> LayoutPlan {
             EditorMode::CenteredPaper,
             NavigationPresentation::NavigationRail,
             WorkspacePaneMode::SinglePane,
-            VisiblePaneRoles { show_project_list: true, show_chapter_tree: true, show_editor: true, show_supporting: false },
-            720.0, 24.0, 3, true,
-            PaneWidthConstraint { min_dp: 0.0, preferred_dp: 0.0, max_dp: 0.0 },
-            0.0, 0.0, 0.0, 0.0, None,
+            VisiblePaneRoles {
+                show_project_list: true,
+                show_chapter_tree: true,
+                show_editor: true,
+                show_supporting: false,
+            },
+            720.0,
+            24.0,
+            3,
+            true,
+            PaneWidthConstraint {
+                min_dp: 0.0,
+                preferred_dp: 0.0,
+                max_dp: 0.0,
+            },
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            None,
         ),
         WidthClass::Expanded => (
             ShellMode::TwoPane,
@@ -310,10 +349,26 @@ pub fn resolve_layout(metrics: &WindowMetrics) -> LayoutPlan {
             EditorMode::CenteredPaper,
             NavigationPresentation::NavigationRail,
             WorkspacePaneMode::ListDetail,
-            VisiblePaneRoles { show_project_list: false, show_chapter_tree: true, show_editor: true, show_supporting: false },
-            840.0, 32.0, 4, false,
-            PaneWidthConstraint { min_dp: 240.0, preferred_dp: 320.0, max_dp: 400.0 },
-            840.0, 240.0, 320.0, 400.0, None,
+            VisiblePaneRoles {
+                show_project_list: false,
+                show_chapter_tree: true,
+                show_editor: true,
+                show_supporting: false,
+            },
+            840.0,
+            32.0,
+            4,
+            false,
+            PaneWidthConstraint {
+                min_dp: 240.0,
+                preferred_dp: 320.0,
+                max_dp: 400.0,
+            },
+            840.0,
+            240.0,
+            320.0,
+            400.0,
+            None,
         ),
         WidthClass::Large => (
             ShellMode::ThreePane,
@@ -321,10 +376,26 @@ pub fn resolve_layout(metrics: &WindowMetrics) -> LayoutPlan {
             EditorMode::CenteredPaper,
             NavigationPresentation::NavigationRail,
             WorkspacePaneMode::ThreePane,
-            VisiblePaneRoles { show_project_list: true, show_chapter_tree: true, show_editor: true, show_supporting: false },
-            840.0, 32.0, 4, false,
-            PaneWidthConstraint { min_dp: 280.0, preferred_dp: 360.0, max_dp: 420.0 },
-            840.0, 280.0, 360.0, 420.0, Some(WorkspacePaneMode::ThreePane),
+            VisiblePaneRoles {
+                show_project_list: true,
+                show_chapter_tree: true,
+                show_editor: true,
+                show_supporting: false,
+            },
+            840.0,
+            32.0,
+            4,
+            false,
+            PaneWidthConstraint {
+                min_dp: 280.0,
+                preferred_dp: 360.0,
+                max_dp: 420.0,
+            },
+            840.0,
+            280.0,
+            360.0,
+            420.0,
+            Some(WorkspacePaneMode::ThreePane),
         ),
         WidthClass::ExtraLarge => (
             ShellMode::ThreePane,
@@ -332,10 +403,26 @@ pub fn resolve_layout(metrics: &WindowMetrics) -> LayoutPlan {
             EditorMode::CenteredPaper,
             NavigationPresentation::PermanentDrawer,
             WorkspacePaneMode::ThreePane,
-            VisiblePaneRoles { show_project_list: true, show_chapter_tree: true, show_editor: true, show_supporting: true },
-            840.0, 40.0, 5, false,
-            PaneWidthConstraint { min_dp: 320.0, preferred_dp: 400.0, max_dp: 480.0 },
-            840.0, 320.0, 400.0, 480.0, Some(WorkspacePaneMode::ThreePane),
+            VisiblePaneRoles {
+                show_project_list: true,
+                show_chapter_tree: true,
+                show_editor: true,
+                show_supporting: true,
+            },
+            840.0,
+            40.0,
+            5,
+            false,
+            PaneWidthConstraint {
+                min_dp: 320.0,
+                preferred_dp: 400.0,
+                max_dp: 480.0,
+            },
+            840.0,
+            320.0,
+            400.0,
+            480.0,
+            Some(WorkspacePaneMode::ThreePane),
         ),
     };
 
@@ -350,7 +437,11 @@ pub fn resolve_layout(metrics: &WindowMetrics) -> LayoutPlan {
         (shell_mode, workspace_pane_mode)
     };
 
-    let show_bottom_bar = if metrics.keyboard_visible { false } else { show_bottom_bar };
+    let show_bottom_bar = if metrics.keyboard_visible {
+        false
+    } else {
+        show_bottom_bar
+    };
 
     let mut avoid_regions = Vec::new();
     if metrics.fold_feature.is_separating {
@@ -376,58 +467,92 @@ pub fn resolve_layout(metrics: &WindowMetrics) -> LayoutPlan {
     }
 
     LayoutPlan {
-        width_class, height_class, shell_mode, editor_mode, navigation_mode,
-        navigation_presentation, workspace_pane_mode, visible_pane_roles,
-        content_max_width_dp, page_padding_dp, grid_columns, show_bottom_bar,
-        list_pane_width, editor_content_max_width_dp,
-        primary_pane_min_dp, primary_pane_preferred_dp, primary_pane_max_dp,
-        supporting_pane_mode, avoid_regions,
+        width_class,
+        height_class,
+        shell_mode,
+        editor_mode,
+        navigation_mode,
+        navigation_presentation,
+        workspace_pane_mode,
+        visible_pane_roles,
+        content_max_width_dp,
+        page_padding_dp,
+        grid_columns,
+        show_bottom_bar,
+        list_pane_width,
+        editor_content_max_width_dp,
+        primary_pane_min_dp,
+        primary_pane_preferred_dp,
+        primary_pane_max_dp,
+        supporting_pane_mode,
+        avoid_regions,
     }
 }
 
 /// 宽度断点分类。左闭右开区间：`[0, 600)` → Compact, `[600, 840)` → Medium, 以此类推。
 pub fn resolve_width_class(width_dp: f32) -> WidthClass {
-    if width_dp < WIDTH_COMPACT_MAX { WidthClass::Compact }
-    else if width_dp < WIDTH_MEDIUM_MAX { WidthClass::Medium }
-    else if width_dp < WIDTH_EXPANDED_MAX { WidthClass::Expanded }
-    else if width_dp < WIDTH_LARGE_MAX { WidthClass::Large }
-    else { WidthClass::ExtraLarge }
+    if width_dp < WIDTH_COMPACT_MAX {
+        WidthClass::Compact
+    } else if width_dp < WIDTH_MEDIUM_MAX {
+        WidthClass::Medium
+    } else if width_dp < WIDTH_EXPANDED_MAX {
+        WidthClass::Expanded
+    } else if width_dp < WIDTH_LARGE_MAX {
+        WidthClass::Large
+    } else {
+        WidthClass::ExtraLarge
+    }
 }
 
 /// 高度断点分类。左闭右开区间：`[0, 480)` → Compact, `[480, 900)` → Medium, `[900, ∞)` → Expanded。
 pub fn resolve_height_class(height_dp: f32) -> HeightClass {
-    if height_dp < HEIGHT_COMPACT_MAX { HeightClass::Compact }
-    else if height_dp < HEIGHT_MEDIUM_MAX { HeightClass::Medium }
-    else { HeightClass::Expanded }
+    if height_dp < HEIGHT_COMPACT_MAX {
+        HeightClass::Compact
+    } else if height_dp < HEIGHT_MEDIUM_MAX {
+        HeightClass::Medium
+    } else {
+        HeightClass::Expanded
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn default_metrics() -> WindowMetrics { WindowMetrics::default() }
+    fn default_metrics() -> WindowMetrics {
+        WindowMetrics::default()
+    }
 
     #[test]
     fn test_compact_width() {
-        let mut m = default_metrics(); m.width_dp = 360.0;
+        let mut m = default_metrics();
+        m.width_dp = 360.0;
         let plan = resolve_layout(&m);
         assert_eq!(plan.width_class, WidthClass::Compact);
         assert_eq!(plan.shell_mode, ShellMode::SinglePane);
-        assert_eq!(plan.navigation_presentation, NavigationPresentation::BottomBar);
+        assert_eq!(
+            plan.navigation_presentation,
+            NavigationPresentation::BottomBar
+        );
     }
 
     #[test]
     fn test_medium_width() {
-        let mut m = default_metrics(); m.width_dp = 700.0;
+        let mut m = default_metrics();
+        m.width_dp = 700.0;
         let plan = resolve_layout(&m);
         assert_eq!(plan.width_class, WidthClass::Medium);
         assert_eq!(plan.shell_mode, ShellMode::SupportingPane);
-        assert_eq!(plan.navigation_presentation, NavigationPresentation::NavigationRail);
+        assert_eq!(
+            plan.navigation_presentation,
+            NavigationPresentation::NavigationRail
+        );
     }
 
     #[test]
     fn test_expanded_width() {
-        let mut m = default_metrics(); m.width_dp = 1000.0;
+        let mut m = default_metrics();
+        m.width_dp = 1000.0;
         let plan = resolve_layout(&m);
         assert_eq!(plan.width_class, WidthClass::Expanded);
         assert_eq!(plan.shell_mode, ShellMode::TwoPane);
@@ -436,7 +561,8 @@ mod tests {
 
     #[test]
     fn test_large_width() {
-        let mut m = default_metrics(); m.width_dp = 1400.0;
+        let mut m = default_metrics();
+        m.width_dp = 1400.0;
         let plan = resolve_layout(&m);
         assert_eq!(plan.width_class, WidthClass::Large);
         assert_eq!(plan.shell_mode, ShellMode::ThreePane);
@@ -445,20 +571,30 @@ mod tests {
 
     #[test]
     fn test_extra_large_width() {
-        let mut m = default_metrics(); m.width_dp = 1800.0;
+        let mut m = default_metrics();
+        m.width_dp = 1800.0;
         let plan = resolve_layout(&m);
         assert_eq!(plan.width_class, WidthClass::ExtraLarge);
-        assert_eq!(plan.navigation_presentation, NavigationPresentation::PermanentDrawer);
+        assert_eq!(
+            plan.navigation_presentation,
+            NavigationPresentation::PermanentDrawer
+        );
         assert!(plan.visible_pane_roles.show_supporting);
     }
 
     #[test]
     fn test_fold_half_opened() {
-        let mut m = default_metrics(); m.width_dp = 1200.0;
+        let mut m = default_metrics();
+        m.width_dp = 1200.0;
         m.fold_feature = FoldFeatureInfo {
-            state: FoldState::HalfOpened, orientation: FoldOrientation::Horizontal,
-            is_separating: true, occlusion: FoldOcclusion::None,
-            bounds_left_vp: 0.0, bounds_top_vp: 500.0, bounds_right_vp: 1000.0, bounds_bottom_vp: 520.0,
+            state: FoldState::HalfOpened,
+            orientation: FoldOrientation::Horizontal,
+            is_separating: true,
+            occlusion: FoldOcclusion::None,
+            bounds_left_vp: 0.0,
+            bounds_top_vp: 500.0,
+            bounds_right_vp: 1000.0,
+            bounds_bottom_vp: 520.0,
         };
         let plan = resolve_layout(&m);
         assert_eq!(plan.shell_mode, ShellMode::SupportingPane);
@@ -466,7 +602,8 @@ mod tests {
 
     #[test]
     fn test_keyboard_hides_bottom_bar() {
-        let mut m = default_metrics(); m.keyboard_visible = true;
+        let mut m = default_metrics();
+        m.keyboard_visible = true;
         assert!(!resolve_layout(&m).show_bottom_bar);
     }
 
@@ -484,11 +621,17 @@ mod tests {
 
     #[test]
     fn test_fold_occlusion_avoid_region() {
-        let mut m = default_metrics(); m.width_dp = 1200.0;
+        let mut m = default_metrics();
+        m.width_dp = 1200.0;
         m.fold_feature = FoldFeatureInfo {
-            state: FoldState::Flat, orientation: FoldOrientation::Vertical,
-            is_separating: true, occlusion: FoldOcclusion::Full,
-            bounds_left_vp: 500.0, bounds_top_vp: 0.0, bounds_right_vp: 520.0, bounds_bottom_vp: 800.0,
+            state: FoldState::Flat,
+            orientation: FoldOrientation::Vertical,
+            is_separating: true,
+            occlusion: FoldOcclusion::Full,
+            bounds_left_vp: 500.0,
+            bounds_top_vp: 0.0,
+            bounds_right_vp: 520.0,
+            bounds_bottom_vp: 800.0,
         };
         let plan = resolve_layout(&m);
         assert_eq!(plan.avoid_regions.len(), 1);
@@ -497,11 +640,17 @@ mod tests {
 
     #[test]
     fn test_fold_separating_vertical_hinge() {
-        let mut m = default_metrics(); m.width_dp = 1200.0;
+        let mut m = default_metrics();
+        m.width_dp = 1200.0;
         m.fold_feature = FoldFeatureInfo {
-            state: FoldState::Flat, orientation: FoldOrientation::Vertical,
-            is_separating: true, occlusion: FoldOcclusion::None,
-            bounds_left_vp: 500.0, bounds_top_vp: 0.0, bounds_right_vp: 520.0, bounds_bottom_vp: 800.0,
+            state: FoldState::Flat,
+            orientation: FoldOrientation::Vertical,
+            is_separating: true,
+            occlusion: FoldOcclusion::None,
+            bounds_left_vp: 500.0,
+            bounds_top_vp: 0.0,
+            bounds_right_vp: 520.0,
+            bounds_bottom_vp: 800.0,
         };
         let plan = resolve_layout(&m);
         assert_eq!(plan.avoid_regions.len(), 1);
@@ -510,11 +659,17 @@ mod tests {
 
     #[test]
     fn test_fold_separating_horizontal_hinge() {
-        let mut m = default_metrics(); m.width_dp = 1200.0;
+        let mut m = default_metrics();
+        m.width_dp = 1200.0;
         m.fold_feature = FoldFeatureInfo {
-            state: FoldState::Flat, orientation: FoldOrientation::Horizontal,
-            is_separating: true, occlusion: FoldOcclusion::None,
-            bounds_left_vp: 0.0, bounds_top_vp: 500.0, bounds_right_vp: 1000.0, bounds_bottom_vp: 520.0,
+            state: FoldState::Flat,
+            orientation: FoldOrientation::Horizontal,
+            is_separating: true,
+            occlusion: FoldOcclusion::None,
+            bounds_left_vp: 0.0,
+            bounds_top_vp: 500.0,
+            bounds_right_vp: 1000.0,
+            bounds_bottom_vp: 520.0,
         };
         let plan = resolve_layout(&m);
         assert_eq!(plan.avoid_regions.len(), 1);
@@ -523,11 +678,17 @@ mod tests {
 
     #[test]
     fn test_fold_non_separating_full_occlusion() {
-        let mut m = default_metrics(); m.width_dp = 1200.0;
+        let mut m = default_metrics();
+        m.width_dp = 1200.0;
         m.fold_feature = FoldFeatureInfo {
-            state: FoldState::Flat, orientation: FoldOrientation::Vertical,
-            is_separating: false, occlusion: FoldOcclusion::Full,
-            bounds_left_vp: 500.0, bounds_top_vp: 0.0, bounds_right_vp: 520.0, bounds_bottom_vp: 800.0,
+            state: FoldState::Flat,
+            orientation: FoldOrientation::Vertical,
+            is_separating: false,
+            occlusion: FoldOcclusion::Full,
+            bounds_left_vp: 500.0,
+            bounds_top_vp: 0.0,
+            bounds_right_vp: 520.0,
+            bounds_bottom_vp: 800.0,
         };
         let plan = resolve_layout(&m);
         assert_eq!(plan.avoid_regions.len(), 1);
@@ -536,11 +697,17 @@ mod tests {
 
     #[test]
     fn test_fold_half_opened_horizontal_single_pane() {
-        let mut m = default_metrics(); m.width_dp = 1200.0;
+        let mut m = default_metrics();
+        m.width_dp = 1200.0;
         m.fold_feature = FoldFeatureInfo {
-            state: FoldState::HalfOpened, orientation: FoldOrientation::Horizontal,
-            is_separating: true, occlusion: FoldOcclusion::None,
-            bounds_left_vp: 0.0, bounds_top_vp: 500.0, bounds_right_vp: 1000.0, bounds_bottom_vp: 520.0,
+            state: FoldState::HalfOpened,
+            orientation: FoldOrientation::Horizontal,
+            is_separating: true,
+            occlusion: FoldOcclusion::None,
+            bounds_left_vp: 0.0,
+            bounds_top_vp: 500.0,
+            bounds_right_vp: 1000.0,
+            bounds_bottom_vp: 520.0,
         };
         let plan = resolve_layout(&m);
         assert_eq!(plan.shell_mode, ShellMode::SupportingPane);
@@ -553,5 +720,4 @@ mod tests {
         assert_eq!(m.width_dp, 360.0);
         assert_eq!(m.fold_feature.state, FoldState::None);
     }
-
 }

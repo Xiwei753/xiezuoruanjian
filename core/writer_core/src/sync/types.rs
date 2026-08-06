@@ -40,7 +40,6 @@ pub enum SyncErrorCategory {
     Other,
 }
 
-
 impl SyncErrorCategory {
     /// 映射为 UI 状态字符串——供平台端决定同步状态图标和提示文案。
     /// 返回值是 API 契约，不可随意更改。
@@ -231,7 +230,10 @@ pub struct SyncConfig {
     pub has_network_permission: bool,
     /// Whether the platform grants network state query permission.
     /// Android sets this based on ACCESS_NETWORK_STATE permission; desktop platforms always true.
-    #[serde(default = "default_true", alias = "android_has_access_network_state_permission")]
+    #[serde(
+        default = "default_true",
+        alias = "android_has_access_network_state_permission"
+    )]
     pub has_network_state_permission: bool,
 }
 
@@ -464,8 +466,15 @@ impl SyncResult {
     }
 
     /// 创建错误结果——status 应为 Error/Conflict 等终端状态，error_category 可选。
-    pub fn error(status: SyncStatus, first_sync_mode: FirstSyncMode, error: String, error_category: Option<String>) -> Self {
-        let message_key = error_category.as_deref().map(sync_error_category_to_message_key);
+    pub fn error(
+        status: SyncStatus,
+        first_sync_mode: FirstSyncMode,
+        error: String,
+        error_category: Option<String>,
+    ) -> Self {
+        let message_key = error_category
+            .as_deref()
+            .map(sync_error_category_to_message_key);
         Self {
             status,
             uploaded_files: Vec::new(),
@@ -487,7 +496,11 @@ impl SyncResult {
     }
 
     /// 创建冲突结果——包含具体冲突列表和错误描述。
-    pub fn conflict(conflicts: Vec<SyncConflict>, error: String, error_category: Option<String>) -> Self {
+    pub fn conflict(
+        conflicts: Vec<SyncConflict>,
+        error: String,
+        error_category: Option<String>,
+    ) -> Self {
         Self {
             status: SyncStatus::Conflict,
             uploaded_files: Vec::new(),
@@ -497,7 +510,9 @@ impl SyncResult {
             commit_hash: None,
             error: Some(error),
             error_category: error_category.clone(),
-            message_key: error_category.as_deref().map(sync_error_category_to_message_key),
+            message_key: error_category
+                .as_deref()
+                .map(sync_error_category_to_message_key),
             conflict_summary: None,
             first_sync_mode: FirstSyncMode::NotAttempted,
             settings_conflicts: None,

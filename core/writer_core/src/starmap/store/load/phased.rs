@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::error::Result;
 use crate::starmap::types::*;
 
-use super::super::meta::{GraphMeta, DeletedSinceLastSync};
+use super::super::meta::{DeletedSinceLastSync, GraphMeta};
 use super::super::relation_index::*;
 use super::super::types::*;
 use super::super::StarMapStore;
@@ -20,10 +20,18 @@ impl StarMapStore {
         let Ok(disk_meta) = serde_json::from_str::<GraphMeta>(&content) else {
             return;
         };
-        let mem_rev = self.graph_meta.as_ref().map(|m| m.package_revision).unwrap_or(0);
+        let mem_rev = self
+            .graph_meta
+            .as_ref()
+            .map(|m| m.package_revision)
+            .unwrap_or(0);
         if disk_meta.package_revision > mem_rev {
             self.graph_meta = Some(disk_meta);
-            self.package_revision = self.graph_meta.as_ref().map(|m| m.package_revision).unwrap_or(0);
+            self.package_revision = self
+                .graph_meta
+                .as_ref()
+                .map(|m| m.package_revision)
+                .unwrap_or(0);
         }
     }
 
@@ -99,7 +107,9 @@ impl StarMapStore {
             }
         }
 
-        self.package_revision = self.graph_meta.as_ref()
+        self.package_revision = self
+            .graph_meta
+            .as_ref()
             .map(|m| m.package_revision)
             .unwrap_or(0);
 
@@ -116,14 +126,25 @@ impl StarMapStore {
         })
     }
 
-    pub(in crate::starmap::store) fn load_graph_meta_phase(&mut self, diagnostics: &mut Vec<LoadDiagnostic>) {
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
+    pub(in crate::starmap::store) fn load_graph_meta_phase(
+        &mut self,
+        diagnostics: &mut Vec<LoadDiagnostic>,
+    ) {
         let graph_dir = self.starmap_dir();
         let graph_json_path = graph_dir.join("graph.json");
 
         if graph_json_path.exists() {
             let content = std::fs::read_to_string(&graph_json_path).unwrap_or_default();
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) {
-                let schema_version_str = value.get("schemaVersion")
+                let schema_version_str = value
+                    .get("schemaVersion")
                     .or_else(|| value.get("schema_version"))
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
@@ -143,7 +164,9 @@ impl StarMapStore {
 
                 if is_new_format {
                     match serde_json::from_str::<GraphMeta>(&content) {
-                        Ok(meta) => { self.graph_meta = Some(meta); }
+                        Ok(meta) => {
+                            self.graph_meta = Some(meta);
+                        }
                         Err(e) => {
                             diagnostics.push(LoadDiagnostic {
                                 kind: LoadDiagnosticKind::Corrupt,
@@ -160,27 +183,45 @@ impl StarMapStore {
                         title: graph.title.clone(),
                         node_ids: graph.nodes.iter().map(|n| n.id.clone()).collect(),
                         edge_ids: graph.edges.iter().map(|e| e.id.clone()).collect(),
-                        embed_instance_ids: graph.embeds.iter().map(|e| e.instance_id.clone()).collect(),
+                        embed_instance_ids: graph
+                            .embeds
+                            .iter()
+                            .map(|e| e.instance_id.clone())
+                            .collect(),
                         link_ids: graph.links.iter().map(|l| l.link_id.clone()).collect(),
                         hyperlink_ids: vec![],
-                        edge_relation_index: graph.edges.iter().map(|e| EdgeRelationIndex {
-                            edge_id: e.id.clone(),
-                            from: e.from.clone().unwrap_or_default(),
-                            to: e.to.clone().unwrap_or_default(),
-                            from_endpoint: e.from_endpoint.clone(),
-                            to_endpoint: e.to_endpoint.clone(),
-                            from_endpoint_path: e.from_endpoint_path.clone(),
-                            to_endpoint_path: e.to_endpoint_path.clone(),
-                        }).collect(),
-                        embed_host_index: graph.embeds.iter().map(|e| EmbedHostIndex {
-                            instance_id: e.instance_id.clone(),
-                            host_node_id: e.source_node_id.clone().unwrap_or_default(),
-                            host_endpoint: e.host_endpoint.clone(),
-                        }).collect(),
-                        link_relation_index: graph.links.iter().map(|l| LinkRelationIndex {
-                            link_id: l.link_id.clone(),
-                            source_node_id: endpoint_node_id(&l.source).unwrap_or_default().to_string(),
-                        }).collect(),
+                        edge_relation_index: graph
+                            .edges
+                            .iter()
+                            .map(|e| EdgeRelationIndex {
+                                edge_id: e.id.clone(),
+                                from: e.from.clone().unwrap_or_default(),
+                                to: e.to.clone().unwrap_or_default(),
+                                from_endpoint: e.from_endpoint.clone(),
+                                to_endpoint: e.to_endpoint.clone(),
+                                from_endpoint_path: e.from_endpoint_path.clone(),
+                                to_endpoint_path: e.to_endpoint_path.clone(),
+                            })
+                            .collect(),
+                        embed_host_index: graph
+                            .embeds
+                            .iter()
+                            .map(|e| EmbedHostIndex {
+                                instance_id: e.instance_id.clone(),
+                                host_node_id: e.source_node_id.clone().unwrap_or_default(),
+                                host_endpoint: e.host_endpoint.clone(),
+                            })
+                            .collect(),
+                        link_relation_index: graph
+                            .links
+                            .iter()
+                            .map(|l| LinkRelationIndex {
+                                link_id: l.link_id.clone(),
+                                source_node_id: endpoint_node_id(&l.source)
+                                    .unwrap_or_default()
+                                    .to_string(),
+                            })
+                            .collect(),
                         hyperlink_relation_index: vec![],
                         node_kind_counts: {
                             let mut counts = HashMap::new();
@@ -215,10 +256,15 @@ impl StarMapStore {
                     self.enqueue_save(SaveQueueEntry::Embed);
                     self.enqueue_save(SaveQueueEntry::Link);
                     self.enqueue_save(SaveQueueEntry::GraphMeta);
-                    self.record_migration("graph_v1_to_v2", "migrated inline v1 graph.json to v2 package format");
+                    self.record_migration(
+                        "graph_v1_to_v2",
+                        "migrated inline v1 graph.json to v2 package format",
+                    );
                 } else {
                     match self.load_graph_meta_from_file(&graph_json_path) {
-                        Ok(meta) => { self.graph_meta = Some(meta); }
+                        Ok(meta) => {
+                            self.graph_meta = Some(meta);
+                        }
                         Err(e) => {
                             diagnostics.push(LoadDiagnostic {
                                 kind: LoadDiagnosticKind::Corrupt,
@@ -240,34 +286,51 @@ impl StarMapStore {
         }
     }
 
-    pub(in crate::starmap::store) fn load_viewport_objects(&mut self, diagnostics: &mut Vec<LoadDiagnostic>) {
+    pub(in crate::starmap::store) fn load_viewport_objects(
+        &mut self,
+        diagnostics: &mut Vec<LoadDiagnostic>,
+    ) {
         self.load_viewport_objects_impl(diagnostics, false);
     }
 
-    fn load_viewport_objects_impl(&mut self, diagnostics: &mut Vec<LoadDiagnostic>, index_already_rebuilt: bool) {
-        let viewport_node_ids: std::collections::HashSet<String> = match (&self.layout, &self.viewport) {
-            (Some(l), Some(vp)) => {
-                let vp_left = vp.offset_x;
-                let vp_top = vp.offset_y;
-                let vp_right = vp.offset_x + vp.width / vp.scale;
-                let vp_bottom = vp.offset_y + vp.height / vp.scale;
-                l.nodes.iter()
-                    .filter(|n| {
-                        let node_left = n.x;
-                        let node_top = n.y;
-                        let node_right = n.x + n.width;
-                        let node_bottom = n.y + n.height;
-                        node_right > vp_left && node_left < vp_right
-                            && node_bottom > vp_top && node_top < vp_bottom
-                    })
-                    .map(|n| n.node_id.clone())
-                    .collect()
-            }
-            (Some(l), None) => {
-                l.nodes.iter().map(|n| n.node_id.clone()).collect()
-            }
-            _ => std::collections::HashSet::new(),
-        };
+    // TODO(#597): 既有代码可读性技术债，待后续重构拆分
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
+    fn load_viewport_objects_impl(
+        &mut self,
+        diagnostics: &mut Vec<LoadDiagnostic>,
+        index_already_rebuilt: bool,
+    ) {
+        let viewport_node_ids: std::collections::HashSet<String> =
+            match (&self.layout, &self.viewport) {
+                (Some(l), Some(vp)) => {
+                    let vp_left = vp.offset_x;
+                    let vp_top = vp.offset_y;
+                    let vp_right = vp.offset_x + vp.width / vp.scale;
+                    let vp_bottom = vp.offset_y + vp.height / vp.scale;
+                    l.nodes
+                        .iter()
+                        .filter(|n| {
+                            let node_left = n.x;
+                            let node_top = n.y;
+                            let node_right = n.x + n.width;
+                            let node_bottom = n.y + n.height;
+                            node_right > vp_left
+                                && node_left < vp_right
+                                && node_bottom > vp_top
+                                && node_top < vp_bottom
+                        })
+                        .map(|n| n.node_id.clone())
+                        .collect()
+                }
+                (Some(l), None) => l.nodes.iter().map(|n| n.node_id.clone()).collect(),
+                _ => std::collections::HashSet::new(),
+            };
 
         if viewport_node_ids.is_empty() {
             let _ = diagnostics;
@@ -282,7 +345,9 @@ impl StarMapStore {
             }
         }
 
-        let has_index = self.graph_meta.as_ref()
+        let has_index = self
+            .graph_meta
+            .as_ref()
             .map(|m| !m.edge_relation_index.is_empty() || m.edge_ids.is_empty())
             .unwrap_or(false);
 

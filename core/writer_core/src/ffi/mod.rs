@@ -20,6 +20,32 @@ mod sync_ops;
 mod workspace_ops;
 mod writing_stats_ops;
 
+use std::ffi::{CStr, CString};
+use std::os::raw::c_char;
+use std::sync::{Mutex, OnceLock};
+
+use crate::facade::WriterCore;
+
+/// 全局 `WriterCore` 单例，由 `writer_core_init` 初始化。
+///
+/// ## 线程安全
+///
+/// `OnceLock` 保证只初始化一次；`Mutex` 保证同一时刻只有一个线程访问。
+/// 非递归锁：不得在 `with_core` 闭包中再次调用 `with_core`。
+static CORE: OnceLock<Mutex<Option<WriterCore>>> = OnceLock::new();
+
+/// 全局最近一次错误信息，供 `writer_core_get_last_error` 读取。
+static LAST_ERROR: OnceLock<Mutex<String>> = OnceLock::new();
+
+/// 记录最近一次错误信息到全局 `LAST_ERROR`。
+fn set_last_error(msg: &str) {
+    if let Some(m) = LAST_ERROR.get() {
+        if let Ok(mut guard) = m.lock() {
+            *guard = msg.to_string();
+        }
+    }
+}
+
 /// 获取全局 `WriterCore` 单例的互斥锁并执行闭包。
 ///
 /// ## 线程安全
@@ -162,15 +188,25 @@ pub unsafe extern "C" fn writer_core_get_load_status() -> *mut c_char {
 /// already holding the Mutex (non-recursive lock, will deadlock).
 /// Returns word count on success, -2 on invalid UTF-8, -3 on mutex error.
 #[no_mangle]
+// TODO(#597): 既有代码可读性技术债，待后续重构拆分
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_lossless,
+    deprecated
+)]
 pub unsafe extern "C" fn writer_core_calculate_word_count(text: *const c_char) -> i32 {
     let text_str = match c_str_to_rust(text) {
         Ok(s) => s,
         Err(e) => return e,
     };
-    match with_core(|core| Ok(core.calculate_word_count(&text_str) as i32)) {
-        Ok(count) => count,
-        Err(_) => -3,
-    }
+    with_core(|core| Ok(core.calculate_word_count(&text_str) as i32)).unwrap_or(-3)
 }
 
 /// # Safety
@@ -188,9 +224,19 @@ pub unsafe extern "C" fn writer_core_free_string(ptr: *mut c_char) {
 /// already holding the Mutex (non-recursive lock, will deadlock).
 /// Returns 1 if AI is available, 0 if unavailable or on error.
 #[no_mangle]
+// TODO(#597): 既有代码可读性技术债，待后续重构拆分
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_lossless,
+    deprecated
+)]
 pub unsafe extern "C" fn writer_core_is_ai_available() -> i32 {
-    match with_core(|core| Ok(core.ai_available() as i32)) {
-        Ok(v) => v,
-        Err(_) => 0,
-    }
+    with_core(|core| Ok(core.ai_available() as i32)).unwrap_or_default()
 }

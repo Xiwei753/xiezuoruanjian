@@ -5,10 +5,19 @@ use super::super::relation_index::*;
 use super::super::StarMapStore;
 
 impl StarMapStore {
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
     pub fn upsert_hyperlink(&mut self, hl: StarMapHyperlink) {
         let hl_id = hl.hyperlink_id.clone();
         let is_new = !self.hyperlinks.contains_key(&hl_id);
-        let source_node_id = endpoint_path_node_id(&hl.source).unwrap_or_default().to_string();
+        let source_node_id = endpoint_path_node_id(&hl.source)
+            .unwrap_or_default()
+            .to_string();
         self.hyperlinks.insert(hl_id.clone(), hl);
         self.dirty_hyperlinks.insert(hl_id.clone());
         self.deleted_hyperlink_ids.remove(&hl_id);
@@ -16,7 +25,8 @@ impl StarMapStore {
             self.ensure_graph_meta_initialized();
         }
         if let Some(ref mut meta) = self.graph_meta {
-            meta.deleted_since_last_sync.remove_entry("hyperlink", &hl_id);
+            meta.deleted_since_last_sync
+                .remove_entry("hyperlink", &hl_id);
             if is_new {
                 if !meta.hyperlink_ids.contains(&hl_id) {
                     meta.hyperlink_ids.push(hl_id.clone());
@@ -26,7 +36,11 @@ impl StarMapStore {
                     source_node_id,
                 });
             } else {
-                if let Some(hri) = meta.hyperlink_relation_index.iter_mut().find(|hri| hri.hyperlink_id == hl_id) {
+                if let Some(hri) = meta
+                    .hyperlink_relation_index
+                    .iter_mut()
+                    .find(|hri| hri.hyperlink_id == hl_id)
+                {
                     hri.source_node_id = source_node_id;
                 }
             }
@@ -43,8 +57,13 @@ impl StarMapStore {
         }
         if let Some(ref mut meta) = self.graph_meta {
             meta.hyperlink_ids.retain(|id| id != hyperlink_id);
-            meta.hyperlink_relation_index.retain(|hri| hri.hyperlink_id != hyperlink_id);
-            meta.deleted_since_last_sync.add_entry("hyperlink", hyperlink_id, self.package_revision.saturating_add(1));
+            meta.hyperlink_relation_index
+                .retain(|hri| hri.hyperlink_id != hyperlink_id);
+            meta.deleted_since_last_sync.add_entry(
+                "hyperlink",
+                hyperlink_id,
+                self.package_revision.saturating_add(1),
+            );
         }
         self.dirty_graph_meta = true;
     }
@@ -61,7 +80,12 @@ impl StarMapStore {
         Ok(result)
     }
 
-    pub fn update_hyperlink(&mut self, hyperlink_id: &str, label: Option<&str>, target_uri: Option<&str>) -> Result<StarMapHyperlink> {
+    pub fn update_hyperlink(
+        &mut self,
+        hyperlink_id: &str,
+        label: Option<&str>,
+        target_uri: Option<&str>,
+    ) -> Result<StarMapHyperlink> {
         if !self.hyperlinks.contains_key(hyperlink_id) {
             self.ensure_hyperlink_loaded(hyperlink_id)?;
         }
@@ -71,8 +95,12 @@ impl StarMapStore {
                 "Hyperlink not found",
             ))
         })?;
-        if let Some(l) = label { hl.label = Some(l.to_string()); }
-        if let Some(u) = target_uri { hl.target_uri = u.to_string(); }
+        if let Some(l) = label {
+            hl.label = Some(l.to_string());
+        }
+        if let Some(u) = target_uri {
+            hl.target_uri = u.to_string();
+        }
         hl.updated_at = crate::starmap::now_epoch();
         let updated = hl.clone();
         self.dirty_hyperlinks.insert(hyperlink_id.to_string());

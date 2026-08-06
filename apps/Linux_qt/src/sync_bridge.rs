@@ -35,10 +35,7 @@ pub fn mask_sync_error(msg: &str) -> String {
 
 /// 将 core 返回的强类型错误分类映射为 UI 状态码。
 pub fn sync_error_category_from_code(category: Option<&str>, fallback_msg: &str) -> String {
-    let cat = writer_core::sync::SyncErrorCategory::from_code(
-        category.unwrap_or(""),
-        fallback_msg,
-    );
+    let cat = writer_core::sync::SyncErrorCategory::from_code(category.unwrap_or(""), fallback_msg);
     cat.to_ui_status().to_string()
 }
 
@@ -189,10 +186,16 @@ mod tests {
         assert_eq!(determine_diagnostics_status(&result), "token_invalid");
 
         result.error_category = "token_permission_denied".to_string();
-        assert_eq!(determine_diagnostics_status(&result), "token_permission_denied");
+        assert_eq!(
+            determine_diagnostics_status(&result),
+            "token_permission_denied"
+        );
 
         result.error_category = "repo_not_found_or_no_permission".to_string();
-        assert_eq!(determine_diagnostics_status(&result), "repo_not_found_or_no_permission");
+        assert_eq!(
+            determine_diagnostics_status(&result),
+            "repo_not_found_or_no_permission"
+        );
     }
 
     #[test]
@@ -253,7 +256,10 @@ pub fn save_sync_configs(
     };
     if !config_envelope.success {
         let error_code = config_envelope.error_code.as_deref().unwrap_or("UNKNOWN");
-        let raw_error = config_envelope.raw_error.as_deref().unwrap_or("error.save_sync_config_failed");
+        let raw_error = config_envelope
+            .raw_error
+            .as_deref()
+            .unwrap_or("error.save_sync_config_failed");
         return Err(format!("{} ({})", raw_error, error_code));
     }
 
@@ -271,7 +277,10 @@ pub fn save_sync_configs(
     };
     if !secrets_envelope.success {
         let error_code = secrets_envelope.error_code.as_deref().unwrap_or("UNKNOWN");
-        let raw_error = secrets_envelope.raw_error.as_deref().unwrap_or("error.save_sync_secrets_failed");
+        let raw_error = secrets_envelope
+            .raw_error
+            .as_deref()
+            .unwrap_or("error.save_sync_secrets_failed");
         return Err(format!("{} ({})", raw_error, error_code));
     }
 

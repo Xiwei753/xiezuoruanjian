@@ -45,14 +45,23 @@ impl SujianEditorItem {
 
     /// 准备 composition 更新数据。`cursor` 为 preedit 内部 UTF-8 byte offset，
     /// 指向 preedit 文本中的光标位置（非 committed 正文坐标）。
-    fn prepare_composition_update(&mut self, text: String, cursor: usize) -> Option<CompositionUpdateData> {
+    fn prepare_composition_update(
+        &mut self,
+        text: String,
+        cursor: usize,
+    ) -> Option<CompositionUpdateData> {
         self.ensure_composition_session();
 
-        let session = self.pipeline.composition_mut().composition_session.as_mut()?;
+        let session = self
+            .pipeline
+            .composition_mut()
+            .composition_session
+            .as_mut()?;
         let old_preedit = session.preedit_text.clone();
         session.update_preedit(text, cursor);
         let generation = session.last_submitted_generation.value();
-        let (composition_byte_start, composition_byte_end) = session.preedit_byte_range_in_virtual_text();
+        let (composition_byte_start, composition_byte_end) =
+            session.preedit_byte_range_in_virtual_text();
         let virtual_text = session.virtual_text();
 
         Some(CompositionUpdateData {
@@ -147,41 +156,72 @@ impl EditorInputHost for SujianEditorItem {
     /// 2. 若动画开启，构建新旧快照并触发 commit/cancel 动画过渡
     /// 3. 动画完成后由协调器自动清除 preedit 状态
     fn input_clear_preedit(&mut self) {
-        if !self.pipeline.composition().preedit_text.is_empty() || self.pipeline.composition().composition_session.is_some() {
-            self.pipeline.composition_mut().pending_preedit_cursor_rect = self.pipeline.composition().preedit_cursor_rect.clone();
+        if !self.pipeline.composition().preedit_text.is_empty()
+            || self.pipeline.composition().composition_session.is_some()
+        {
+            self.pipeline.composition_mut().pending_preedit_cursor_rect =
+                self.pipeline.composition().preedit_cursor_rect.clone();
 
             if self.typing_animation_enabled {
-                let (composition_byte_start, composition_byte_end) = self.preedit_byte_range_in_virtual_text();
+                let (composition_byte_start, composition_byte_end) =
+                    self.preedit_byte_range_in_virtual_text();
                 let width = self.bounding_width();
-                let old_cursor_rect = self.pipeline.composition().preedit_cursor_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.top, bottom: c.bottom, baseline_y: c.baseline_y });
-                let new_cursor_rect = self.pipeline.current_layout_snapshot().as_ref().and_then(|s| s.caret_rect.as_ref()).map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
+                let old_cursor_rect = self
+                    .pipeline
+                    .composition()
+                    .preedit_cursor_rect
+                    .as_ref()
+                    .map(|c| CursorRect {
+                        x: c.x,
+                        top: c.top,
+                        bottom: c.bottom,
+                        baseline_y: c.baseline_y,
+                    });
+                let new_cursor_rect = self
+                    .pipeline
+                    .current_layout_snapshot()
+                    .as_ref()
+                    .and_then(|s| s.caret_rect.as_ref())
+                    .map(|c| CursorRect {
+                        x: c.x,
+                        top: c.y,
+                        bottom: c.y + c.h,
+                        baseline_y: c.y + c.h * 0.8,
+                    });
 
-                let old_snapshot = self.pipeline.animation_coordinator()
+                let old_snapshot = self
+                    .pipeline
+                    .animation_coordinator()
                     .active_composition_new_snapshot()
                     .cloned()
                     .unwrap_or_else(|| {
-                        self.pipeline.current_layout_snapshot().clone().unwrap_or_else(|| {
-                            self.build_editor_layout_snapshot(width)
-                        })
+                        self.pipeline
+                            .current_layout_snapshot()
+                            .clone()
+                            .unwrap_or_else(|| self.build_editor_layout_snapshot(width))
                     });
                 let new_snapshot = self.build_editor_layout_snapshot(width);
 
-                self.pipeline.animation_coordinator_mut().cancel_active_composition("clear_preedit");
-                self.pipeline.animation_coordinator_mut().handle_composition_commit_or_cancel(
-                    u64::from(self.current_typing_animation_duration_ms),
-                    &old_snapshot,
-                    &new_snapshot,
-                    composition_byte_start,
-                    composition_byte_end,
-                    false,
-                    false,
-                    composition_byte_start,
-                    composition_byte_start,
-                    composition_byte_start,
-                    composition_byte_start,
-                    old_cursor_rect,
-                    new_cursor_rect,
-                );
+                self.pipeline
+                    .animation_coordinator_mut()
+                    .cancel_active_composition("clear_preedit");
+                self.pipeline
+                    .animation_coordinator_mut()
+                    .handle_composition_commit_or_cancel(
+                        u64::from(self.current_typing_animation_duration_ms),
+                        &old_snapshot,
+                        &new_snapshot,
+                        composition_byte_start,
+                        composition_byte_end,
+                        false,
+                        false,
+                        composition_byte_start,
+                        composition_byte_start,
+                        composition_byte_start,
+                        composition_byte_start,
+                        old_cursor_rect,
+                        new_cursor_rect,
+                    );
             }
         }
         self.pipeline.composition_mut().clear();
@@ -191,44 +231,65 @@ impl EditorInputHost for SujianEditorItem {
     /// 设置预输入文本。`cursor` 为 preedit 内部 UTF-8 byte offset，
     /// 指向 preedit 文本中的光标位置。动画开启时构建新旧快照并触发 composition update 动画。
     fn input_set_preedit(&mut self, text: String, cursor: usize) {
-        self.pipeline.composition_mut().preedit_old_text = self.pipeline.composition().preedit_text.clone();
+        self.pipeline.composition_mut().preedit_old_text =
+            self.pipeline.composition().preedit_text.clone();
         self.pipeline.composition_mut().preedit_text = text.clone();
         self.pipeline.composition_mut().preedit_cursor = cursor;
         self.pipeline.composition_mut().preedit_attributes.clear();
 
         if self.typing_animation_enabled && !text.is_empty() {
             if let Some(data) = self.prepare_composition_update(text, cursor) {
-            let width = self.bounding_width();
+                let width = self.bounding_width();
 
-            let old_snapshot = if data.generation <= 1 || data.old_preedit.is_empty() {
-                self.pipeline.current_layout_snapshot().clone().unwrap_or_else(|| {
-                    self.build_editor_layout_snapshot(width)
-                })
-            } else {
-                self.pipeline.animation_coordinator()
-                    .active_composition_new_snapshot()
-                    .cloned()
-                    .unwrap_or_else(|| {
-                        self.pipeline.current_layout_snapshot().clone().unwrap_or_else(|| {
-                            self.build_editor_layout_snapshot(width)
+                let old_snapshot = if data.generation <= 1 || data.old_preedit.is_empty() {
+                    self.pipeline
+                        .current_layout_snapshot()
+                        .clone()
+                        .unwrap_or_else(|| self.build_editor_layout_snapshot(width))
+                } else {
+                    self.pipeline
+                        .animation_coordinator()
+                        .active_composition_new_snapshot()
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            self.pipeline
+                                .current_layout_snapshot()
+                                .clone()
+                                .unwrap_or_else(|| self.build_editor_layout_snapshot(width))
                         })
-                    })
-            };
+                };
 
-            let new_snapshot = self.build_virtual_layout_snapshot(&data.virtual_text, width);
+                let new_snapshot = self.build_virtual_layout_snapshot(&data.virtual_text, width);
 
-            let old_cursor_rect = self.pipeline.current_layout_snapshot().as_ref().and_then(|s| s.caret_rect.as_ref()).map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
-            let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
+                let old_cursor_rect = self
+                    .pipeline
+                    .current_layout_snapshot()
+                    .as_ref()
+                    .and_then(|s| s.caret_rect.as_ref())
+                    .map(|c| CursorRect {
+                        x: c.x,
+                        top: c.y,
+                        bottom: c.y + c.h,
+                        baseline_y: c.y + c.h * 0.8,
+                    });
+                let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect {
+                    x: c.x,
+                    top: c.y,
+                    bottom: c.y + c.h,
+                    baseline_y: c.y + c.h * 0.8,
+                });
 
-            self.pipeline.animation_coordinator_mut().handle_composition_update(
-                u64::from(self.current_typing_animation_duration_ms),
-                &old_snapshot,
-                &new_snapshot,
-                data.composition_byte_start,
-                data.composition_byte_end,
-                old_cursor_rect,
-                new_cursor_rect,
-            );
+                self.pipeline
+                    .animation_coordinator_mut()
+                    .handle_composition_update(
+                        u64::from(self.current_typing_animation_duration_ms),
+                        &old_snapshot,
+                        &new_snapshot,
+                        data.composition_byte_start,
+                        data.composition_byte_end,
+                        old_cursor_rect,
+                        new_cursor_rect,
+                    );
             } else {
                 self.update_preedit_visual_state();
             }
@@ -248,44 +309,65 @@ impl EditorInputHost for SujianEditorItem {
         cursor: usize,
         attributes: Vec<PreeditAttribute>,
     ) {
-        self.pipeline.composition_mut().preedit_old_text = self.pipeline.composition().preedit_text.clone();
+        self.pipeline.composition_mut().preedit_old_text =
+            self.pipeline.composition().preedit_text.clone();
         self.pipeline.composition_mut().preedit_text = text.clone();
         self.pipeline.composition_mut().preedit_cursor = cursor;
         self.pipeline.composition_mut().preedit_attributes = attributes;
 
         if self.typing_animation_enabled && !text.is_empty() {
             if let Some(data) = self.prepare_composition_update(text, cursor) {
-            let width = self.bounding_width();
+                let width = self.bounding_width();
 
-            let old_snapshot = if data.generation <= 1 || data.old_preedit.is_empty() {
-                self.pipeline.current_layout_snapshot().clone().unwrap_or_else(|| {
-                    self.build_editor_layout_snapshot(width)
-                })
-            } else {
-                self.pipeline.animation_coordinator()
-                    .active_composition_new_snapshot()
-                    .cloned()
-                    .unwrap_or_else(|| {
-                        self.pipeline.current_layout_snapshot().clone().unwrap_or_else(|| {
-                            self.build_editor_layout_snapshot(width)
+                let old_snapshot = if data.generation <= 1 || data.old_preedit.is_empty() {
+                    self.pipeline
+                        .current_layout_snapshot()
+                        .clone()
+                        .unwrap_or_else(|| self.build_editor_layout_snapshot(width))
+                } else {
+                    self.pipeline
+                        .animation_coordinator()
+                        .active_composition_new_snapshot()
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            self.pipeline
+                                .current_layout_snapshot()
+                                .clone()
+                                .unwrap_or_else(|| self.build_editor_layout_snapshot(width))
                         })
-                    })
-            };
+                };
 
-            let new_snapshot = self.build_virtual_layout_snapshot(&data.virtual_text, width);
+                let new_snapshot = self.build_virtual_layout_snapshot(&data.virtual_text, width);
 
-            let old_cursor_rect = self.pipeline.current_layout_snapshot().as_ref().and_then(|s| s.caret_rect.as_ref()).map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
-            let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
+                let old_cursor_rect = self
+                    .pipeline
+                    .current_layout_snapshot()
+                    .as_ref()
+                    .and_then(|s| s.caret_rect.as_ref())
+                    .map(|c| CursorRect {
+                        x: c.x,
+                        top: c.y,
+                        bottom: c.y + c.h,
+                        baseline_y: c.y + c.h * 0.8,
+                    });
+                let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect {
+                    x: c.x,
+                    top: c.y,
+                    bottom: c.y + c.h,
+                    baseline_y: c.y + c.h * 0.8,
+                });
 
-            self.pipeline.animation_coordinator_mut().handle_composition_update(
-                u64::from(self.current_typing_animation_duration_ms),
-                &old_snapshot,
-                &new_snapshot,
-                data.composition_byte_start,
-                data.composition_byte_end,
-                old_cursor_rect,
-                new_cursor_rect,
-            );
+                self.pipeline
+                    .animation_coordinator_mut()
+                    .handle_composition_update(
+                        u64::from(self.current_typing_animation_duration_ms),
+                        &old_snapshot,
+                        &new_snapshot,
+                        data.composition_byte_start,
+                        data.composition_byte_end,
+                        old_cursor_rect,
+                        new_cursor_rect,
+                    );
             } else {
                 self.update_preedit_visual_state();
             }

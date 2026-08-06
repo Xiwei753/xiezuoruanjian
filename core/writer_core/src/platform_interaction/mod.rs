@@ -13,14 +13,14 @@
 //! 4. `PlatformCapabilities` — 平台能力报告
 //! 5. `ClipboardAndFocusAdapter` — 剪贴板/焦点/菜单
 
-pub mod text_input;
-pub mod cursor_anchor;
 pub mod animation_driver;
 pub mod capabilities;
 pub mod clipboard_focus;
+pub mod cursor_anchor;
+pub mod text_input;
 
-pub use text_input::*;
-pub use cursor_anchor::*;
 pub use animation_driver::*;
 pub use capabilities::*;
 pub use clipboard_focus::*;
+pub use cursor_anchor::*;
+pub use text_input::*;

@@ -217,7 +217,8 @@ impl Default for LocalSettings {
             editor_smooth_cursor_enabled: default_editor_smooth_cursor_enabled(),
             editor_typing_animation_duration_ms: default_editor_typing_animation_duration_ms(),
             editor_smooth_cursor_duration_ms: default_editor_smooth_cursor_duration_ms(),
-            editor_coordinated_text_cursor_animation_enabled: default_editor_coordinated_text_cursor_animation_enabled(),
+            editor_coordinated_text_cursor_animation_enabled:
+                default_editor_coordinated_text_cursor_animation_enabled(),
             ai_enabled: false,
             stats_device_id: None,
             desktop_sidebar_width: default_desktop_sidebar_width(),
@@ -641,8 +642,14 @@ pub fn compute_palette_fingerprint(light: &ThemeColorScheme, dark: &ThemeColorSc
     use sha2::Digest;
     use std::fmt::Write;
     let mut hasher = sha2::Sha256::new();
-    sha2::Digest::update(&mut hasher, serde_json::to_string(light).unwrap_or_default().as_bytes());
-    sha2::Digest::update(&mut hasher, serde_json::to_string(dark).unwrap_or_default().as_bytes());
+    sha2::Digest::update(
+        &mut hasher,
+        serde_json::to_string(light).unwrap_or_default().as_bytes(),
+    );
+    sha2::Digest::update(
+        &mut hasher,
+        serde_json::to_string(dark).unwrap_or_default().as_bytes(),
+    );
     let hash = sha2::Digest::finalize(hasher);
     let mut hex = String::with_capacity(16);
     for byte in &hash[..8] {
@@ -656,8 +663,7 @@ pub fn compute_palette_fingerprint(light: &ThemeColorScheme, dark: &ThemeColorSc
 /// Path: `app-meta/themes/palettes/<device_id>/<fingerprint>.json`
 /// If the file already exists, it is not overwritten (immutable).
 pub fn save_palette_record(workspace_path: &Path, record: &ThemePaletteRecord) -> Result<()> {
-    let dir = palettes_base_dir(workspace_path)
-        .join(&record.source_device_id);
+    let dir = palettes_base_dir(workspace_path).join(&record.source_device_id);
     fs::create_dir_all(&dir)?;
     let path = dir.join(format!("{}.json", record.palette_fingerprint));
     if path.exists() {
@@ -682,6 +688,13 @@ pub fn load_palette_record(
 
 /// List all palette records in the catalog.
 /// Scans `app-meta/themes/palettes/<device_id>/<fingerprint>.json` recursively.
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 pub fn list_palette_records(workspace_path: &Path) -> Result<Vec<ThemePaletteRecord>> {
     let base = palettes_base_dir(workspace_path);
     if !base.exists() {
@@ -729,6 +742,13 @@ pub fn delete_palette_record(
 /// Legacy ThemePalette has flat light_/dark_ prefixed fields;
 /// this converts them into the new ThemeColorScheme structure.
 #[allow(deprecated)]
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 pub fn legacy_palette_to_record(palette: &ThemePalette) -> ThemePaletteRecord {
     let light = ThemeColorScheme {
         primary: palette.light_primary.clone(),
@@ -874,7 +894,9 @@ pub fn migrate_legacy_theme_palette(workspace_path: &Path) -> Result<bool> {
         local.selected_palette_id = record.palette_id.clone();
         local.color_source = "saved_palette".to_string();
     }
-    let need_appearance_update = local.appearance_mode == "system" && syncable.theme_mode != "system" && !syncable.theme_mode.is_empty();
+    let need_appearance_update = local.appearance_mode == "system"
+        && syncable.theme_mode != "system"
+        && !syncable.theme_mode.is_empty();
     if need_appearance_update {
         local.appearance_mode = syncable.theme_mode.clone();
     }
@@ -884,6 +906,8 @@ pub fn migrate_legacy_theme_palette(workspace_path: &Path) -> Result<bool> {
     Ok(true)
 }
 
+#[derive(Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct BuiltinTheme {
     pub theme_id: &'static str,
     pub name: &'static str,
@@ -891,6 +915,13 @@ pub struct BuiltinTheme {
     pub dark_scheme: ThemeColorScheme,
 }
 
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 pub fn list_builtin_themes() -> Vec<BuiltinTheme> {
     vec![BuiltinTheme {
         theme_id: "sujian_default",
@@ -1023,14 +1054,20 @@ mod tests {
         save_local_settings(temp_dir.path(), &settings).unwrap();
 
         let loaded = load_local_settings(temp_dir.path()).unwrap();
-        assert!(loaded.auto_indent_enabled, "auto_indent_enabled should persist as true");
+        assert!(
+            loaded.auto_indent_enabled,
+            "auto_indent_enabled should persist as true"
+        );
 
         let mut settings2 = loaded;
         settings2.auto_indent_enabled = false;
         save_local_settings(temp_dir.path(), &settings2).unwrap();
 
         let loaded2 = load_local_settings(temp_dir.path()).unwrap();
-        assert!(!loaded2.auto_indent_enabled, "auto_indent_enabled should persist as false after change");
+        assert!(
+            !loaded2.auto_indent_enabled,
+            "auto_indent_enabled should persist as false after change"
+        );
     }
 
     #[test]
@@ -1155,13 +1192,19 @@ mod tests {
     #[test]
     fn diagnostics_enabled_default_true() {
         let settings = LocalSettings::default();
-        assert!(settings.diagnostics_enabled, "diagnostics_enabled should default to true (alpha)");
+        assert!(
+            settings.diagnostics_enabled,
+            "diagnostics_enabled should default to true (alpha)"
+        );
     }
 
     #[test]
     fn diagnostics_verbose_default_true() {
         let settings = LocalSettings::default();
-        assert!(settings.diagnostics_verbose, "diagnostics_verbose should default to true (alpha)");
+        assert!(
+            settings.diagnostics_verbose,
+            "diagnostics_verbose should default to true (alpha)"
+        );
     }
 
     #[test]
@@ -1173,8 +1216,14 @@ mod tests {
         save_local_settings(temp_dir.path(), &settings).unwrap();
 
         let loaded = load_local_settings(temp_dir.path()).unwrap();
-        assert!(loaded.diagnostics_enabled, "diagnostics_enabled should persist as true");
-        assert!(loaded.diagnostics_verbose, "diagnostics_verbose should persist as true");
+        assert!(
+            loaded.diagnostics_enabled,
+            "diagnostics_enabled should persist as true"
+        );
+        assert!(
+            loaded.diagnostics_verbose,
+            "diagnostics_verbose should persist as true"
+        );
 
         // Test round-trip with false
         settings.diagnostics_enabled = false;
@@ -1196,7 +1245,10 @@ mod tests {
         save_local_settings(temp_dir.path(), &settings).unwrap();
 
         let loaded = load_local_settings(temp_dir.path()).unwrap();
-        assert!(!loaded.diagnostics_enabled, "diagnostics_enabled=false should persist correctly");
+        assert!(
+            !loaded.diagnostics_enabled,
+            "diagnostics_enabled=false should persist correctly"
+        );
     }
 
     #[test]
@@ -1207,7 +1259,10 @@ mod tests {
         save_local_settings(temp_dir.path(), &settings).unwrap();
 
         let loaded = load_local_settings(temp_dir.path()).unwrap();
-        assert!(!loaded.diagnostics_verbose, "diagnostics_verbose=false should persist correctly");
+        assert!(
+            !loaded.diagnostics_verbose,
+            "diagnostics_verbose=false should persist correctly"
+        );
     }
 
     #[test]
@@ -1216,12 +1271,18 @@ mod tests {
 
         // Default is true, toggle to false
         let mut settings = LocalSettings::default();
-        assert!(settings.editor_typing_animation_enabled, "default should be true");
+        assert!(
+            settings.editor_typing_animation_enabled,
+            "default should be true"
+        );
         settings.editor_typing_animation_enabled = false;
         save_local_settings(temp_dir.path(), &settings).unwrap();
 
         let loaded = load_local_settings(temp_dir.path()).unwrap();
-        assert!(!loaded.editor_typing_animation_enabled, "typing animation should persist as false after toggle");
+        assert!(
+            !loaded.editor_typing_animation_enabled,
+            "typing animation should persist as false after toggle"
+        );
 
         // Toggle back to true
         let mut settings2 = loaded;
@@ -1229,7 +1290,10 @@ mod tests {
         save_local_settings(temp_dir.path(), &settings2).unwrap();
 
         let loaded2 = load_local_settings(temp_dir.path()).unwrap();
-        assert!(loaded2.editor_typing_animation_enabled, "typing animation should persist as true after toggle back");
+        assert!(
+            loaded2.editor_typing_animation_enabled,
+            "typing animation should persist as true after toggle back"
+        );
     }
 
     #[test]
@@ -1238,12 +1302,18 @@ mod tests {
 
         // Default is true, toggle to false
         let mut settings = LocalSettings::default();
-        assert!(settings.editor_smooth_cursor_enabled, "default should be true");
+        assert!(
+            settings.editor_smooth_cursor_enabled,
+            "default should be true"
+        );
         settings.editor_smooth_cursor_enabled = false;
         save_local_settings(temp_dir.path(), &settings).unwrap();
 
         let loaded = load_local_settings(temp_dir.path()).unwrap();
-        assert!(!loaded.editor_smooth_cursor_enabled, "smooth cursor should persist as false after toggle");
+        assert!(
+            !loaded.editor_smooth_cursor_enabled,
+            "smooth cursor should persist as false after toggle"
+        );
 
         // Toggle back to true
         let mut settings2 = loaded;
@@ -1251,7 +1321,10 @@ mod tests {
         save_local_settings(temp_dir.path(), &settings2).unwrap();
 
         let loaded2 = load_local_settings(temp_dir.path()).unwrap();
-        assert!(loaded2.editor_smooth_cursor_enabled, "smooth cursor should persist as true after toggle back");
+        assert!(
+            loaded2.editor_smooth_cursor_enabled,
+            "smooth cursor should persist as true after toggle back"
+        );
     }
 
     #[test]
@@ -1263,7 +1336,10 @@ mod tests {
         save_local_settings(temp_dir.path(), &settings).unwrap();
 
         let loaded = load_local_settings(temp_dir.path()).unwrap();
-        assert_eq!(loaded.editor_font_size, 24.0, "font size should persist as 24.0");
+        assert_eq!(
+            loaded.editor_font_size, 24.0,
+            "font size should persist as 24.0"
+        );
 
         // Change again
         let mut settings2 = loaded;
@@ -1271,7 +1347,10 @@ mod tests {
         save_local_settings(temp_dir.path(), &settings2).unwrap();
 
         let loaded2 = load_local_settings(temp_dir.path()).unwrap();
-        assert_eq!(loaded2.editor_font_size, 18.0, "font size should persist as 18.0 after change");
+        assert_eq!(
+            loaded2.editor_font_size, 18.0,
+            "font size should persist as 18.0 after change"
+        );
     }
 
     #[test]
@@ -1283,7 +1362,10 @@ mod tests {
         save_local_settings(temp_dir.path(), &settings).unwrap();
 
         let loaded = load_local_settings(temp_dir.path()).unwrap();
-        assert_eq!(loaded.editor_line_spacing_multiplier, 2.0, "line spacing should persist as 2.0");
+        assert_eq!(
+            loaded.editor_line_spacing_multiplier, 2.0,
+            "line spacing should persist as 2.0"
+        );
 
         // Change again
         let mut settings2 = loaded;
@@ -1291,7 +1373,10 @@ mod tests {
         save_local_settings(temp_dir.path(), &settings2).unwrap();
 
         let loaded2 = load_local_settings(temp_dir.path()).unwrap();
-        assert_eq!(loaded2.editor_line_spacing_multiplier, 1.2, "line spacing should persist as 1.2 after change");
+        assert_eq!(
+            loaded2.editor_line_spacing_multiplier, 1.2,
+            "line spacing should persist as 1.2 after change"
+        );
     }
 
     #[test]
@@ -1303,7 +1388,10 @@ mod tests {
         save_local_settings(temp_dir.path(), &settings).unwrap();
 
         let loaded = load_local_settings(temp_dir.path()).unwrap();
-        assert_eq!(loaded.auto_indent_width, 4.0, "indent width should persist as 4.0");
+        assert_eq!(
+            loaded.auto_indent_width, 4.0,
+            "indent width should persist as 4.0"
+        );
 
         // Change again
         let mut settings2 = loaded;
@@ -1311,7 +1399,10 @@ mod tests {
         save_local_settings(temp_dir.path(), &settings2).unwrap();
 
         let loaded2 = load_local_settings(temp_dir.path()).unwrap();
-        assert_eq!(loaded2.auto_indent_width, 0.0, "indent width should persist as 0.0 after change");
+        assert_eq!(
+            loaded2.auto_indent_width, 0.0,
+            "indent width should persist as 0.0 after change"
+        );
     }
 
     #[test]
@@ -1347,15 +1438,27 @@ mod tests {
         assert_eq!(info.device_class, "desktop");
 
         let info2 = ensure_device_info(temp_dir.path(), "android", "phone", None).unwrap();
-        assert_eq!(info2.device_id, info.device_id, "device_id should not change");
+        assert_eq!(
+            info2.device_id, info.device_id,
+            "device_id should not change"
+        );
         assert_eq!(info2.platform, "desktop", "platform should not change");
-        assert_eq!(info2.device_class, "desktop", "device_class should not change");
+        assert_eq!(
+            info2.device_class, "desktop",
+            "device_class should not change"
+        );
     }
 
     #[test]
     fn test_ensure_device_info_uses_preferred_id() {
         let temp_dir = tempdir().unwrap();
-        let info = ensure_device_info(temp_dir.path(), "desktop", "desktop", Some("platform-device-123")).unwrap();
+        let info = ensure_device_info(
+            temp_dir.path(),
+            "desktop",
+            "desktop",
+            Some("platform-device-123"),
+        )
+        .unwrap();
         assert_eq!(info.device_id, "platform-device-123");
     }
 
@@ -1408,7 +1511,10 @@ mod tests {
         let dark = ThemeColorScheme::default();
         let fp1 = compute_palette_fingerprint(&light1, &dark);
         let fp2 = compute_palette_fingerprint(&light2, &dark);
-        assert_ne!(fp1, fp2, "different schemes should have different fingerprints");
+        assert_ne!(
+            fp1, fp2,
+            "different schemes should have different fingerprints"
+        );
     }
 
     #[test]
@@ -1434,7 +1540,8 @@ mod tests {
             },
         };
         save_palette_record(temp_dir.path(), &record).unwrap();
-        let loaded = load_palette_record(temp_dir.path(), "test-device", "abcdef1234567890").unwrap();
+        let loaded =
+            load_palette_record(temp_dir.path(), "test-device", "abcdef1234567890").unwrap();
         assert_eq!(loaded.palette_id, record.palette_id);
         assert_eq!(loaded.light_scheme.primary, "#006493");
         assert_eq!(loaded.dark_scheme.primary, "#87CEFF");
@@ -1478,7 +1585,10 @@ mod tests {
         save_palette_record(temp_dir.path(), &r2).unwrap();
         let records = list_palette_records(temp_dir.path()).unwrap();
         assert_eq!(records.len(), 2);
-        assert_eq!(records[0].palette_id, "dev1:fp1", "should be sorted by captured_at_ms desc");
+        assert_eq!(
+            records[0].palette_id, "dev1:fp1",
+            "should be sorted by captured_at_ms desc"
+        );
         assert_eq!(records[1].palette_id, "dev2:fp2");
     }
 
@@ -1509,8 +1619,14 @@ mod tests {
             ..ThemePalette::default()
         };
         let record = legacy_palette_to_record(&palette);
-        assert_eq!(record.source_device_id, "legacy", "empty device_id should become 'legacy'");
-        assert_eq!(record.variant, "system_selected", "tonal_spot from android_dynamic_color should become system_selected");
+        assert_eq!(
+            record.source_device_id, "legacy",
+            "empty device_id should become 'legacy'"
+        );
+        assert_eq!(
+            record.variant, "system_selected",
+            "tonal_spot from android_dynamic_color should become system_selected"
+        );
     }
 
     #[test]
@@ -1524,28 +1640,61 @@ mod tests {
         };
         let record = legacy_palette_to_record(&palette);
         assert_eq!(record.source_device_id, "real-device-uuid");
-        assert_eq!(record.variant, "custom", "non-tonal_spot variant should be preserved");
+        assert_eq!(
+            record.variant, "custom",
+            "non-tonal_spot variant should be preserved"
+        );
     }
 
     #[test]
     fn test_list_builtin_themes_has_default() {
         let themes = list_builtin_themes();
-        assert!(!themes.is_empty(), "should have at least one built-in theme");
+        assert!(
+            !themes.is_empty(),
+            "should have at least one built-in theme"
+        );
         assert_eq!(themes[0].theme_id, "sujian_default");
-        assert!(!themes[0].light_scheme.primary.is_empty(), "light primary should not be empty");
-        assert!(!themes[0].dark_scheme.primary.is_empty(), "dark primary should not be empty");
+        assert!(
+            !themes[0].light_scheme.primary.is_empty(),
+            "light primary should not be empty"
+        );
+        assert!(
+            !themes[0].dark_scheme.primary.is_empty(),
+            "dark primary should not be empty"
+        );
     }
 
     #[test]
     fn test_builtin_theme_complete_color_roles() {
         let themes = list_builtin_themes();
         let theme = &themes[0];
-        assert!(!theme.light_scheme.error.is_empty(), "light error should be defined");
-        assert!(!theme.light_scheme.on_error.is_empty(), "light on_error should be defined");
-        assert!(!theme.light_scheme.inverse_surface.is_empty(), "light inverse_surface should be defined");
-        assert!(!theme.light_scheme.surface_tint.is_empty(), "light surface_tint should be defined");
-        assert!(!theme.light_scheme.scrim.is_empty(), "light scrim should be defined");
-        assert!(!theme.dark_scheme.error.is_empty(), "dark error should be defined");
-        assert!(!theme.dark_scheme.on_error.is_empty(), "dark on_error should be defined");
+        assert!(
+            !theme.light_scheme.error.is_empty(),
+            "light error should be defined"
+        );
+        assert!(
+            !theme.light_scheme.on_error.is_empty(),
+            "light on_error should be defined"
+        );
+        assert!(
+            !theme.light_scheme.inverse_surface.is_empty(),
+            "light inverse_surface should be defined"
+        );
+        assert!(
+            !theme.light_scheme.surface_tint.is_empty(),
+            "light surface_tint should be defined"
+        );
+        assert!(
+            !theme.light_scheme.scrim.is_empty(),
+            "light scrim should be defined"
+        );
+        assert!(
+            !theme.dark_scheme.error.is_empty(),
+            "dark error should be defined"
+        );
+        assert!(
+            !theme.dark_scheme.on_error.is_empty(),
+            "dark on_error should be defined"
+        );
     }
 }

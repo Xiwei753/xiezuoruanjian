@@ -37,29 +37,53 @@ pub enum StarMapNodeContent {
 }
 
 impl StarMapNodeContent {
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
     pub fn search_text(&self) -> String {
         let mut parts = Vec::new();
         match self {
             StarMapNodeContent::Inline { summary, body } => {
                 if let Some(ref s) = summary {
-                    if !s.is_empty() { parts.push(s.clone()); }
+                    if !s.is_empty() {
+                        parts.push(s.clone());
+                    }
                 }
                 if let Some(ref b) = body {
-                    if !b.is_empty() { parts.push(b.clone()); }
+                    if !b.is_empty() {
+                        parts.push(b.clone());
+                    }
                 }
             }
             StarMapNodeContent::ChapterRef { chapter_id, .. } => {
-                if !chapter_id.is_empty() { parts.push(chapter_id.clone()); }
+                if !chapter_id.is_empty() {
+                    parts.push(chapter_id.clone());
+                }
             }
-            StarMapNodeContent::EntityRef { entity_type, entity_id } => {
-                if !entity_type.is_empty() { parts.push(entity_type.clone()); }
-                if !entity_id.is_empty() { parts.push(entity_id.clone()); }
+            StarMapNodeContent::EntityRef {
+                entity_type,
+                entity_id,
+            } => {
+                if !entity_type.is_empty() {
+                    parts.push(entity_type.clone());
+                }
+                if !entity_id.is_empty() {
+                    parts.push(entity_id.clone());
+                }
             }
             StarMapNodeContent::ExternalRef { uri, label } => {
                 if let Some(ref l) = label {
-                    if !l.is_empty() { parts.push(l.clone()); }
+                    if !l.is_empty() {
+                        parts.push(l.clone());
+                    }
                 }
-                if !uri.is_empty() { parts.push(uri.clone()); }
+                if !uri.is_empty() {
+                    parts.push(uri.clone());
+                }
             }
             StarMapNodeContent::Empty => {}
         }

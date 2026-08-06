@@ -14,6 +14,13 @@ impl super::WriterCore {
     }
 
     #[allow(clippy::cast_possible_truncation)]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
     pub fn execute_action(
         &self,
         action_id: &str,

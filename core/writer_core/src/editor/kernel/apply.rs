@@ -1,34 +1,64 @@
-use super::types::{CoordinatedCursor, DisplayPatch, EditorOperationKind, EditorVisualIntent};
 use super::result::{EditorEditOutcome, EditorEditResult};
 use super::types::EditorCommand;
+use super::types::{CoordinatedCursor, DisplayPatch, EditorOperationKind, EditorVisualIntent};
 use super::{EditorKernel, UndoEntry};
 
 use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset, Utf8ByteRange};
 use crate::editor::transaction::{
-    choose_animation_mode, count_grapheme_clusters,
-    text_contains_complex_grapheme,
-    AnimationMode, EditorTransactionCause,
+    choose_animation_mode, count_grapheme_clusters, text_contains_complex_grapheme, AnimationMode,
+    EditorTransactionCause,
 };
 
 impl EditorKernel {
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
     pub fn apply(&mut self, command: EditorCommand) -> EditorEditOutcome {
         let base_revision = self.revision;
 
         match &command {
-            EditorCommand::Insert { expected_revision, .. }
-            | EditorCommand::Delete { expected_revision, .. }
-            | EditorCommand::Replace { expected_revision, .. }
-            | EditorCommand::SetSelection { expected_revision, .. }
-            | EditorCommand::ReplaceAll { expected_revision, .. }
-            | EditorCommand::InsertLineBreak { expected_revision, .. }
+            EditorCommand::Insert {
+                expected_revision, ..
+            }
+            | EditorCommand::Delete {
+                expected_revision, ..
+            }
+            | EditorCommand::Replace {
+                expected_revision, ..
+            }
+            | EditorCommand::SetSelection {
+                expected_revision, ..
+            }
+            | EditorCommand::ReplaceAll {
+                expected_revision, ..
+            }
+            | EditorCommand::InsertLineBreak {
+                expected_revision, ..
+            }
             | EditorCommand::Undo { expected_revision }
             | EditorCommand::Redo { expected_revision }
-            | EditorCommand::CommitText { expected_revision, .. }
-            | EditorCommand::DeleteSurrounding { expected_revision, .. }
-            | EditorCommand::BeginComposition { expected_revision, .. }
-            | EditorCommand::UpdateComposition { expected_revision, .. }
-            | EditorCommand::FinishComposition { expected_revision, .. }
-            | EditorCommand::CancelComposition { expected_revision, .. } => {
+            | EditorCommand::CommitText {
+                expected_revision, ..
+            }
+            | EditorCommand::DeleteSurrounding {
+                expected_revision, ..
+            }
+            | EditorCommand::BeginComposition {
+                expected_revision, ..
+            }
+            | EditorCommand::UpdateComposition {
+                expected_revision, ..
+            }
+            | EditorCommand::FinishComposition {
+                expected_revision, ..
+            }
+            | EditorCommand::CancelComposition {
+                expected_revision, ..
+            } => {
                 if *expected_revision != base_revision {
                     return EditorEditOutcome::StaleRevision(self.stale_session_result());
                 }
@@ -36,33 +66,84 @@ impl EditorKernel {
         }
 
         let old_cursor = self.cursor;
-        let old_selection = Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
+        let old_selection =
+            Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
 
         match command {
-            EditorCommand::Insert { byte_offset, text, cause, .. } => {
-                self.apply_insert(byte_offset.value(), &text, cause, base_revision, old_cursor, old_selection)
-            }
-            EditorCommand::Delete { byte_range, deleted_text: _, cause, .. } => {
-                self.apply_delete(byte_range.start().value(), byte_range.end().value(), cause, base_revision, old_cursor, old_selection)
-            }
-            EditorCommand::Replace { byte_range, replacement_text, original_text: _, cause, .. } => {
-                self.apply_replace(byte_range.start().value(), byte_range.end().value(), &replacement_text, cause, base_revision, old_cursor, old_selection)
-            }
-            EditorCommand::SetSelection { anchor, head, .. } => {
-                self.apply_set_selection(anchor.value(), head.value(), base_revision, old_cursor, old_selection)
-            }
-            EditorCommand::Undo { .. } => {
-                self.apply_undo(base_revision, old_cursor, old_selection)
-            }
-            EditorCommand::Redo { .. } => {
-                self.apply_redo(base_revision, old_cursor, old_selection)
-            }
-            EditorCommand::ReplaceAll { search, replacement, .. } => {
-                self.apply_replace_all(&search, &replacement, base_revision, old_cursor, old_selection)
-            }
-            EditorCommand::InsertLineBreak { byte_offset, auto_indent_prefix, cause, .. } => {
-                self.apply_insert_line_break(byte_offset.value(), auto_indent_prefix, cause, base_revision, old_cursor, old_selection)
-            }
+            EditorCommand::Insert {
+                byte_offset,
+                text,
+                cause,
+                ..
+            } => self.apply_insert(
+                byte_offset.value(),
+                &text,
+                cause,
+                base_revision,
+                old_cursor,
+                old_selection,
+            ),
+            EditorCommand::Delete {
+                byte_range,
+                deleted_text: _,
+                cause,
+                ..
+            } => self.apply_delete(
+                byte_range.start().value(),
+                byte_range.end().value(),
+                cause,
+                base_revision,
+                old_cursor,
+                old_selection,
+            ),
+            EditorCommand::Replace {
+                byte_range,
+                replacement_text,
+                original_text: _,
+                cause,
+                ..
+            } => self.apply_replace(
+                byte_range.start().value(),
+                byte_range.end().value(),
+                &replacement_text,
+                cause,
+                base_revision,
+                old_cursor,
+                old_selection,
+            ),
+            EditorCommand::SetSelection { anchor, head, .. } => self.apply_set_selection(
+                anchor.value(),
+                head.value(),
+                base_revision,
+                old_cursor,
+                old_selection,
+            ),
+            EditorCommand::Undo { .. } => self.apply_undo(base_revision, old_cursor, old_selection),
+            EditorCommand::Redo { .. } => self.apply_redo(base_revision, old_cursor, old_selection),
+            EditorCommand::ReplaceAll {
+                search,
+                replacement,
+                ..
+            } => self.apply_replace_all(
+                &search,
+                &replacement,
+                base_revision,
+                old_cursor,
+                old_selection,
+            ),
+            EditorCommand::InsertLineBreak {
+                byte_offset,
+                auto_indent_prefix,
+                cause,
+                ..
+            } => self.apply_insert_line_break(
+                byte_offset.value(),
+                auto_indent_prefix,
+                cause,
+                base_revision,
+                old_cursor,
+                old_selection,
+            ),
             EditorCommand::CommitText {
                 byte_range,
                 replacement_text,
@@ -73,76 +154,79 @@ impl EditorKernel {
                 composition_generation,
                 cause,
                 ..
-            } => {
-                self.apply_commit_text(
-                    byte_range.start().value(),
-                    byte_range.end().value(),
-                    &replacement_text,
-                    resulting_selection_anchor.value(),
-                    resulting_selection_head.value(),
-                    composition_session_id.value(),
-                    composition_base_revision.value(),
-                    composition_generation.value(),
-                    cause,
-                    base_revision,
-                    old_cursor,
-                    old_selection,
-                )
-            }
+            } => self.apply_commit_text(
+                byte_range.start().value(),
+                byte_range.end().value(),
+                &replacement_text,
+                resulting_selection_anchor.value(),
+                resulting_selection_head.value(),
+                composition_session_id.value(),
+                composition_base_revision.value(),
+                composition_generation.value(),
+                cause,
+                base_revision,
+                old_cursor,
+                old_selection,
+            ),
             EditorCommand::DeleteSurrounding {
                 before_byte_range,
                 after_byte_range,
                 cause,
                 ..
-            } => {
-                self.apply_delete_surrounding(
-                    before_byte_range.start().value(),
-                    before_byte_range.end().value(),
-                    after_byte_range.start().value(),
-                    after_byte_range.end().value(),
-                    cause,
-                    base_revision,
-                    old_cursor,
-                    old_selection,
-                )
-            }
-            EditorCommand::BeginComposition {
-                replace_range,
-                ..
-            } => {
-                self.apply_begin_composition(replace_range.start().value(), replace_range.end().value(), base_revision, old_cursor, old_selection)
-            }
+            } => self.apply_delete_surrounding(
+                before_byte_range.start().value(),
+                before_byte_range.end().value(),
+                after_byte_range.start().value(),
+                after_byte_range.end().value(),
+                cause,
+                base_revision,
+                old_cursor,
+                old_selection,
+            ),
+            EditorCommand::BeginComposition { replace_range, .. } => self.apply_begin_composition(
+                replace_range.start().value(),
+                replace_range.end().value(),
+                base_revision,
+                old_cursor,
+                old_selection,
+            ),
             EditorCommand::UpdateComposition {
                 composition_session_id,
                 composition_generation,
                 new_preedit_text,
                 new_preedit_cursor_offset,
                 ..
-            } => {
-                self.apply_update_composition(
-                    composition_session_id.value(),
-                    composition_generation.value(),
-                    &new_preedit_text,
-                    new_preedit_cursor_offset.value(),
-                    base_revision,
-                    old_cursor,
-                    old_selection,
-                )
-            }
+            } => self.apply_update_composition(
+                composition_session_id.value(),
+                composition_generation.value(),
+                &new_preedit_text,
+                new_preedit_cursor_offset.value(),
+                base_revision,
+                old_cursor,
+                old_selection,
+            ),
             EditorCommand::FinishComposition {
                 composition_session_id,
                 composition_generation,
                 ..
-            } => {
-                self.apply_finish_composition(composition_session_id.value(), composition_generation.value(), base_revision, old_cursor, old_selection)
-            }
+            } => self.apply_finish_composition(
+                composition_session_id.value(),
+                composition_generation.value(),
+                base_revision,
+                old_cursor,
+                old_selection,
+            ),
             EditorCommand::CancelComposition {
                 composition_session_id,
                 composition_generation,
                 ..
-            } => {
-                self.apply_cancel_composition(composition_session_id.value(), composition_generation.value(), base_revision, old_cursor, old_selection)
-            }
+            } => self.apply_cancel_composition(
+                composition_session_id.value(),
+                composition_generation.value(),
+                base_revision,
+                old_cursor,
+                old_selection,
+            ),
         }
     }
 
@@ -156,10 +240,18 @@ impl EditorKernel {
         old_selection: Utf8ByteRange,
     ) -> EditorEditOutcome {
         if byte_offset > self.text.len() {
-            return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
+            return EditorEditOutcome::InvalidOffset(self.noop_result(
+                base_revision,
+                old_cursor,
+                old_selection,
+            ));
         }
         if !self.text.is_char_boundary(byte_offset) {
-            return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
+            return EditorEditOutcome::InvalidOffset(self.noop_result(
+                base_revision,
+                old_cursor,
+                old_selection,
+            ));
         }
 
         self.composition_session = None;
@@ -221,7 +313,10 @@ impl EditorKernel {
             coordinated_cursor: CoordinatedCursor {
                 old_offset: old_cursor,
                 new_offset: Utf8ByteOffset::unchecked(new_cursor_val),
-                should_animate: self.animation_enabled && old_cursor.value() != new_cursor_val && !is_loading && !is_format,
+                should_animate: self.animation_enabled
+                    && old_cursor.value() != new_cursor_val
+                    && !is_loading
+                    && !is_format,
             },
         };
 
@@ -245,15 +340,30 @@ impl EditorKernel {
         old_cursor: Utf8ByteOffset,
         old_selection: Utf8ByteRange,
     ) -> EditorEditOutcome {
-        let (byte_start, byte_end_exclusive) = Self::normalize_range(byte_start, byte_end_exclusive);
+        let (byte_start, byte_end_exclusive) =
+            Self::normalize_range(byte_start, byte_end_exclusive);
         if byte_start > self.text.len() || byte_end_exclusive > self.text.len() {
-            return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
+            return EditorEditOutcome::InvalidOffset(self.noop_result(
+                base_revision,
+                old_cursor,
+                old_selection,
+            ));
         }
-        if !self.text.is_char_boundary(byte_start) || !self.text.is_char_boundary(byte_end_exclusive) {
-            return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
+        if !self.text.is_char_boundary(byte_start)
+            || !self.text.is_char_boundary(byte_end_exclusive)
+        {
+            return EditorEditOutcome::InvalidOffset(self.noop_result(
+                base_revision,
+                old_cursor,
+                old_selection,
+            ));
         }
         if byte_start >= byte_end_exclusive {
-            return EditorEditOutcome::InvalidRange(self.noop_result(base_revision, old_cursor, old_selection));
+            return EditorEditOutcome::InvalidRange(self.noop_result(
+                base_revision,
+                old_cursor,
+                old_selection,
+            ));
         }
 
         let old_text = self.text.clone();
@@ -317,7 +427,10 @@ impl EditorKernel {
             coordinated_cursor: CoordinatedCursor {
                 old_offset: old_cursor,
                 new_offset: Utf8ByteOffset::unchecked(byte_start),
-                should_animate: self.animation_enabled && old_cursor.value() != byte_start && !is_loading && !is_format,
+                should_animate: self.animation_enabled
+                    && old_cursor.value() != byte_start
+                    && !is_loading
+                    && !is_format,
             },
         };
 
@@ -333,6 +446,12 @@ impl EditorKernel {
     }
 
     #[allow(clippy::too_many_arguments)]
+    // TODO(#597): 既有代码可读性技术债，待后续重构拆分
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting
+    )]
     fn apply_replace(
         &mut self,
         byte_start: usize,
@@ -343,19 +462,31 @@ impl EditorKernel {
         old_cursor: Utf8ByteOffset,
         old_selection: Utf8ByteRange,
     ) -> EditorEditOutcome {
-        let (byte_start, byte_end_exclusive) = Self::normalize_range(byte_start, byte_end_exclusive);
+        let (byte_start, byte_end_exclusive) =
+            Self::normalize_range(byte_start, byte_end_exclusive);
         if byte_start > self.text.len() || byte_end_exclusive > self.text.len() {
-            return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
+            return EditorEditOutcome::InvalidOffset(self.noop_result(
+                base_revision,
+                old_cursor,
+                old_selection,
+            ));
         }
-        if !self.text.is_char_boundary(byte_start) || !self.text.is_char_boundary(byte_end_exclusive) {
-            return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
+        if !self.text.is_char_boundary(byte_start)
+            || !self.text.is_char_boundary(byte_end_exclusive)
+        {
+            return EditorEditOutcome::InvalidOffset(self.noop_result(
+                base_revision,
+                old_cursor,
+                old_selection,
+            ));
         }
 
         let old_text = self.text.clone();
 
         self.composition_session = None;
 
-        self.text.replace_range(byte_start..byte_end_exclusive, replacement_text);
+        self.text
+            .replace_range(byte_start..byte_end_exclusive, replacement_text);
         self.revision = self.revision.next();
         let new_cursor_val = byte_start + replacement_text.len();
         self.cursor = Utf8ByteOffset::unchecked(new_cursor_val);
@@ -372,7 +503,10 @@ impl EditorKernel {
         let new_revision = self.revision;
         let new_selection = Utf8ByteRange::point(new_cursor_val);
         let old_affected = vec![Utf8ByteRange::from_ordered(byte_start, byte_end_exclusive)];
-        let new_affected = vec![Utf8ByteRange::from_start_len(byte_start, replacement_text.len())];
+        let new_affected = vec![Utf8ByteRange::from_start_len(
+            byte_start,
+            replacement_text.len(),
+        )];
 
         let display_patches = vec![DisplayPatch {
             base_revision,
@@ -426,7 +560,10 @@ impl EditorKernel {
             coordinated_cursor: CoordinatedCursor {
                 old_offset: old_cursor,
                 new_offset: Utf8ByteOffset::unchecked(new_cursor_val),
-                should_animate: self.animation_enabled && old_cursor.value() != new_cursor_val && !is_loading && !is_format,
+                should_animate: self.animation_enabled
+                    && old_cursor.value() != new_cursor_val
+                    && !is_loading
+                    && !is_format,
             },
         };
 
@@ -451,10 +588,18 @@ impl EditorKernel {
         old_selection: Utf8ByteRange,
     ) -> EditorEditOutcome {
         if byte_offset > self.text.len() {
-            return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
+            return EditorEditOutcome::InvalidOffset(self.noop_result(
+                base_revision,
+                old_cursor,
+                old_selection,
+            ));
         }
         if !self.text.is_char_boundary(byte_offset) {
-            return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
+            return EditorEditOutcome::InvalidOffset(self.noop_result(
+                base_revision,
+                old_cursor,
+                old_selection,
+            ));
         }
         let text = format!("\n{}", auto_indent_prefix);
 
@@ -530,6 +675,13 @@ impl EditorKernel {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
     fn apply_commit_text(
         &mut self,
         byte_start: usize,
@@ -556,32 +708,58 @@ impl EditorKernel {
             return EditorEditOutcome::StaleRevision(self.stale_session_result());
         }
 
-        let (byte_start, byte_end_exclusive) = Self::normalize_range(byte_start, byte_end_exclusive);
+        let (byte_start, byte_end_exclusive) =
+            Self::normalize_range(byte_start, byte_end_exclusive);
 
         if let Some(ref session) = self.composition_session {
-            if byte_start != session.replace_start.value() || byte_end_exclusive != session.replace_end_exclusive.value() {
-                return EditorEditOutcome::InvalidRange(self.noop_result(base_revision, old_cursor, old_selection));
+            if byte_start != session.replace_start.value()
+                || byte_end_exclusive != session.replace_end_exclusive.value()
+            {
+                return EditorEditOutcome::InvalidRange(self.noop_result(
+                    base_revision,
+                    old_cursor,
+                    old_selection,
+                ));
             }
         }
 
-        if byte_start == byte_end_exclusive && replacement_text.is_empty() && self.composition_session.is_none() {
-            return EditorEditOutcome::NoChange(self.noop_result(base_revision, old_cursor, old_selection));
+        if byte_start == byte_end_exclusive
+            && replacement_text.is_empty()
+            && self.composition_session.is_none()
+        {
+            return EditorEditOutcome::NoChange(self.noop_result(
+                base_revision,
+                old_cursor,
+                old_selection,
+            ));
         }
         if byte_start > self.text.len() || byte_end_exclusive > self.text.len() {
-            return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
+            return EditorEditOutcome::InvalidOffset(self.noop_result(
+                base_revision,
+                old_cursor,
+                old_selection,
+            ));
         }
-        if !self.text.is_char_boundary(byte_start) || !self.text.is_char_boundary(byte_end_exclusive) {
-            return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
+        if !self.text.is_char_boundary(byte_start)
+            || !self.text.is_char_boundary(byte_end_exclusive)
+        {
+            return EditorEditOutcome::InvalidOffset(self.noop_result(
+                base_revision,
+                old_cursor,
+                old_selection,
+            ));
         }
 
         let old_text = self.text.clone();
 
-        self.text.replace_range(byte_start..byte_end_exclusive, replacement_text);
+        self.text
+            .replace_range(byte_start..byte_end_exclusive, replacement_text);
         self.revision = self.revision.next();
 
         let sel_anchor = Self::clamp_to_char_boundary(&self.text, resulting_selection_anchor);
         let sel_head = Self::clamp_to_char_boundary(&self.text, resulting_selection_head);
-        let selection_was_adjusted = sel_anchor != resulting_selection_anchor || sel_head != resulting_selection_head;
+        let selection_was_adjusted =
+            sel_anchor != resulting_selection_anchor || sel_head != resulting_selection_head;
         self.selection_anchor = Utf8ByteOffset::unchecked(sel_anchor);
         self.cursor = Utf8ByteOffset::unchecked(sel_head);
 
@@ -592,7 +770,11 @@ impl EditorKernel {
             new_cursor: Utf8ByteOffset::unchecked(byte_start),
         });
         self.redo_stack.clear();
-        let preedit_byte_len = self.composition_session.as_ref().map(|s| s.preedit_text.len()).unwrap_or(0);
+        let preedit_byte_len = self
+            .composition_session
+            .as_ref()
+            .map(|s| s.preedit_text.len())
+            .unwrap_or(0);
         let is_composition_commit = self.composition_session.is_some();
         self.composition_session = None;
 
@@ -603,7 +785,10 @@ impl EditorKernel {
         } else {
             vec![Utf8ByteRange::from_ordered(byte_start, byte_end_exclusive)]
         };
-        let new_affected = vec![Utf8ByteRange::from_start_len(byte_start, replacement_text.len())];
+        let new_affected = vec![Utf8ByteRange::from_start_len(
+            byte_start,
+            replacement_text.len(),
+        )];
 
         let display_patches = vec![DisplayPatch {
             base_revision,
@@ -623,7 +808,10 @@ impl EditorKernel {
                 cluster_count,
                 contains_newline,
                 contains_complex,
-                false, false, false, false,
+                false,
+                false,
+                false,
+                false,
                 self.animation_enabled,
             )
         };
@@ -668,6 +856,13 @@ impl EditorKernel {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
     fn apply_delete_surrounding(
         &mut self,
         before_byte_start: usize,
@@ -681,7 +876,11 @@ impl EditorKernel {
     ) -> EditorEditOutcome {
         let sel_anchor = self.selection_anchor.value();
         let sel_head = self.cursor.value();
-        let (sel_min, sel_max) = if sel_anchor <= sel_head { (sel_anchor, sel_head) } else { (sel_head, sel_anchor) };
+        let (sel_min, sel_max) = if sel_anchor <= sel_head {
+            (sel_anchor, sel_head)
+        } else {
+            (sel_head, sel_anchor)
+        };
 
         let mut patches = Vec::new();
         let mut text = self.text.clone();
@@ -698,29 +897,57 @@ impl EditorKernel {
         };
 
         if let Some((as_, ae)) = after_range {
-            if as_ > text.len() || ae > text.len() || !text.is_char_boundary(as_) || !text.is_char_boundary(ae) {
-                return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
+            if as_ > text.len()
+                || ae > text.len()
+                || !text.is_char_boundary(as_)
+                || !text.is_char_boundary(ae)
+            {
+                return EditorEditOutcome::InvalidOffset(self.noop_result(
+                    base_revision,
+                    old_cursor,
+                    old_selection,
+                ));
             }
             if as_ >= ae || as_ < sel_max {
-                return EditorEditOutcome::InvalidRange(self.noop_result(base_revision, old_cursor, old_selection));
+                return EditorEditOutcome::InvalidRange(self.noop_result(
+                    base_revision,
+                    old_cursor,
+                    old_selection,
+                ));
             }
             text.replace_range(as_..ae, "");
             patches.push((as_, ae, String::new()));
         }
 
         if let Some((bs, be)) = before_range {
-            if bs > text.len() || be > text.len() || !text.is_char_boundary(bs) || !text.is_char_boundary(be) {
-                return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
+            if bs > text.len()
+                || be > text.len()
+                || !text.is_char_boundary(bs)
+                || !text.is_char_boundary(be)
+            {
+                return EditorEditOutcome::InvalidOffset(self.noop_result(
+                    base_revision,
+                    old_cursor,
+                    old_selection,
+                ));
             }
             if bs >= be || be > sel_min {
-                return EditorEditOutcome::InvalidRange(self.noop_result(base_revision, old_cursor, old_selection));
+                return EditorEditOutcome::InvalidRange(self.noop_result(
+                    base_revision,
+                    old_cursor,
+                    old_selection,
+                ));
             }
             text.replace_range(bs..be, "");
             patches.push((bs, be, String::new()));
         }
 
         if patches.is_empty() {
-            return EditorEditOutcome::NoChange(self.noop_result(base_revision, old_cursor, old_selection));
+            return EditorEditOutcome::NoChange(self.noop_result(
+                base_revision,
+                old_cursor,
+                old_selection,
+            ));
         }
 
         let old_text = self.text.clone();
@@ -759,7 +986,9 @@ impl EditorKernel {
         let new_selection = Utf8ByteRange::from_ordered(new_sel_anchor, new_sel_head);
 
         let (replace_range, inserted_text) = Self::compute_single_patch(&old_text, &self.text);
-        let display_patches = if replace_range.start().value() < replace_range.end().value() || !inserted_text.is_empty() {
+        let display_patches = if replace_range.start().value() < replace_range.end().value()
+            || !inserted_text.is_empty()
+        {
             vec![DisplayPatch {
                 base_revision,
                 new_revision,
@@ -774,7 +1003,10 @@ impl EditorKernel {
         let visual_intent = EditorVisualIntent {
             cause,
             operation_kind: EditorOperationKind::Delete,
-            old_affected_byte_ranges: patches.iter().map(|(s, e, _)| Utf8ByteRange::from_ordered(*s, *e)).collect(),
+            old_affected_byte_ranges: patches
+                .iter()
+                .map(|(s, e, _)| Utf8ByteRange::from_ordered(*s, *e))
+                .collect(),
             new_affected_byte_ranges: vec![],
             animation_mode: AnimationMode::SystemSuppressed,
             duration_ms: 0,

@@ -134,32 +134,39 @@ impl StarMapBackend {
             ..Default::default()
         }
     }
-    fn with_app<R>(&self, f: impl FnOnce(&AppBackend) -> R) -> Result<R, crate::backend::AppBorrowError> {
+    fn with_app<R>(
+        &self,
+        f: impl FnOnce(&AppBackend) -> R,
+    ) -> Result<R, crate::backend::AppBorrowError> {
         self.app.with_app(f)
     }
-    fn with_app_mut<R>(&self, f: impl FnOnce(&mut AppBackend) -> R) -> Result<R, crate::backend::AppBorrowError> {
+    fn with_app_mut<R>(
+        &self,
+        f: impl FnOnce(&mut AppBackend) -> R,
+    ) -> Result<R, crate::backend::AppBorrowError> {
         self.app.with_app_mut(f)
     }
 
     fn list_starmaps_json(&self) -> QString {
-        self.with_app(|app| app.list_starmaps_json()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+        self.with_app(|app| app.list_starmaps_json())
+            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn list_starmaps(&self) -> QJsonArray {
         match self.with_app(|app| app.list_starmaps()) {
             Ok(arr) => arr,
             Err(_) => crate::backend::json_utils::serde_to_qjson_array(
                 serde_json::from_str(&crate::backend::json_utils::borrow_conflict_error_json())
-                    .unwrap_or(serde_json::json!([]))
+                    .unwrap_or(serde_json::json!([])),
             ),
         }
     }
     fn list_starmaps_for_project_json(&self, project_id: QString) -> QString {
-        self.with_app(|app| {
-            app.list_starmaps_for_project_json(project_id)
-        }).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+        self.with_app(|app| app.list_starmaps_for_project_json(project_id))
+            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn get_starmap_json(&self, starmap_id: QString) -> QString {
-        self.with_app(|app| app.get_starmap_json(starmap_id)).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+        self.with_app(|app| app.get_starmap_json(starmap_id))
+            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn create_starmap_json(
         &mut self,
@@ -167,9 +174,10 @@ impl StarMapBackend {
         description: QString,
         accent_color: QString,
     ) -> QString {
-        self.with_app_mut(|app| {
-            app.create_starmap_json(title, description, accent_color)
-        }).unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
+        self.with_app_mut(|app| app.create_starmap_json(title, description, accent_color))
+            .unwrap_or_else(|_| {
+                QString::from(crate::backend::json_utils::borrow_conflict_error_json())
+            })
     }
     fn create_starmap(
         &mut self,
@@ -177,9 +185,12 @@ impl StarMapBackend {
         description: QString,
         accent_color: QString,
     ) -> QJsonObject {
-        self.with_app_mut(|app| {
-            app.create_starmap(title, description, accent_color)
-        }).unwrap_or_else(|_| crate::backend::json_utils::qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json()))
+        self.with_app_mut(|app| app.create_starmap(title, description, accent_color))
+            .unwrap_or_else(|_| {
+                crate::backend::json_utils::qjson_object_from_json(
+                    &crate::backend::json_utils::borrow_conflict_error_json(),
+                )
+            })
     }
     fn create_child_starmap_json(
         &mut self,
@@ -190,36 +201,47 @@ impl StarMapBackend {
     ) -> QString {
         self.with_app_mut(|app| {
             app.create_child_starmap_json(parent_id, title, description, accent_color)
-        }).unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
+        })
+        .unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
     }
 
     fn rename_starmap_json(&mut self, starmap_id: QString, new_title: QString) -> QString {
-        self.with_app_mut(|app| {
-            app.rename_starmap_json(starmap_id, new_title)
-        }).unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
+        self.with_app_mut(|app| app.rename_starmap_json(starmap_id, new_title))
+            .unwrap_or_else(|_| {
+                QString::from(crate::backend::json_utils::borrow_conflict_error_json())
+            })
     }
     fn delete_starmap_json(&mut self, starmap_id: QString) -> QString {
-        self.with_app_mut(|app| app.delete_starmap_json(starmap_id)).unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
+        self.with_app_mut(|app| app.delete_starmap_json(starmap_id))
+            .unwrap_or_else(|_| {
+                QString::from(crate::backend::json_utils::borrow_conflict_error_json())
+            })
     }
     fn bind_starmap_to_project_json(
         &mut self,
         starmap_id: QString,
         project_id: QString,
     ) -> QString {
-        self.with_app_mut(|app| {
-            app.bind_starmap_to_project_json(starmap_id, project_id)
-        }).unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
+        self.with_app_mut(|app| app.bind_starmap_to_project_json(starmap_id, project_id))
+            .unwrap_or_else(|_| {
+                QString::from(crate::backend::json_utils::borrow_conflict_error_json())
+            })
     }
     fn set_main_starmap_json(&mut self, starmap_id: QString, project_id: QString) -> QString {
-        self.with_app_mut(|app| {
-            app.set_main_starmap_json(starmap_id, project_id)
-        }).unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
+        self.with_app_mut(|app| app.set_main_starmap_json(starmap_id, project_id))
+            .unwrap_or_else(|_| {
+                QString::from(crate::backend::json_utils::borrow_conflict_error_json())
+            })
     }
     fn get_main_starmap_json(&self, project_id: QString) -> QString {
-        self.with_app(|app| app.get_main_starmap_json(project_id)).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+        self.with_app(|app| app.get_main_starmap_json(project_id))
+            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn unbind_starmap_json(&mut self, starmap_id: QString) -> QString {
-        self.with_app_mut(|app| app.unbind_starmap_json(starmap_id)).unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
+        self.with_app_mut(|app| app.unbind_starmap_json(starmap_id))
+            .unwrap_or_else(|_| {
+                QString::from(crate::backend::json_utils::borrow_conflict_error_json())
+            })
     }
     fn compute_edge_renders_json(&self, edges_json: QString, nodes_json: QString) -> QString {
         let ej = edges_json.to_string();
@@ -244,12 +266,16 @@ impl StarMapBackend {
         crate::starmap_bridge::calculate_grid_layout_json(&ni, &el).into()
     }
     fn get_starmap_graph_json(&self, starmap_id: QString) -> QString {
-        self.with_app(|app| app.get_starmap_graph_json(starmap_id)).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+        self.with_app(|app| app.get_starmap_graph_json(starmap_id))
+            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn get_starmap_graph(&self, starmap_id: QString) -> QJsonObject {
-        self.with_app(|app| {
-            app.get_starmap_graph(starmap_id)
-        }).unwrap_or_else(|_| crate::backend::json_utils::qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json()))
+        self.with_app(|app| app.get_starmap_graph(starmap_id))
+            .unwrap_or_else(|_| {
+                crate::backend::json_utils::qjson_object_from_json(
+                    &crate::backend::json_utils::borrow_conflict_error_json(),
+                )
+            })
     }
     fn create_starmap_node_json(
         &mut self,
@@ -259,9 +285,10 @@ impl StarMapBackend {
         x: f64,
         y: f64,
     ) -> QString {
-        self.with_app_mut(|app| {
-            app.create_starmap_node_json(starmap_id, title, kind, x, y)
-        }).unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
+        self.with_app_mut(|app| app.create_starmap_node_json(starmap_id, title, kind, x, y))
+            .unwrap_or_else(|_| {
+                QString::from(crate::backend::json_utils::borrow_conflict_error_json())
+            })
     }
     fn create_starmap_node(
         &mut self,
@@ -271,9 +298,12 @@ impl StarMapBackend {
         x: f64,
         y: f64,
     ) -> QJsonObject {
-        self.with_app_mut(|app| {
-            app.create_starmap_node(starmap_id, title, kind, x, y)
-        }).unwrap_or_else(|_| crate::backend::json_utils::qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json()))
+        self.with_app_mut(|app| app.create_starmap_node(starmap_id, title, kind, x, y))
+            .unwrap_or_else(|_| {
+                crate::backend::json_utils::qjson_object_from_json(
+                    &crate::backend::json_utils::borrow_conflict_error_json(),
+                )
+            })
     }
     fn update_starmap_node_json(
         &mut self,
@@ -281,9 +311,10 @@ impl StarMapBackend {
         node_id: QString,
         patch_json: QString,
     ) -> QString {
-        self.with_app_mut(|app| {
-            app.update_starmap_node_json(starmap_id, node_id, patch_json)
-        }).unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
+        self.with_app_mut(|app| app.update_starmap_node_json(starmap_id, node_id, patch_json))
+            .unwrap_or_else(|_| {
+                QString::from(crate::backend::json_utils::borrow_conflict_error_json())
+            })
     }
     fn update_starmap_node(
         &mut self,
@@ -291,19 +322,26 @@ impl StarMapBackend {
         node_id: QString,
         patch_json: QString,
     ) -> QJsonObject {
-        self.with_app_mut(|app| {
-            app.update_starmap_node(starmap_id, node_id, patch_json)
-        }).unwrap_or_else(|_| crate::backend::json_utils::qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json()))
+        self.with_app_mut(|app| app.update_starmap_node(starmap_id, node_id, patch_json))
+            .unwrap_or_else(|_| {
+                crate::backend::json_utils::qjson_object_from_json(
+                    &crate::backend::json_utils::borrow_conflict_error_json(),
+                )
+            })
     }
     fn delete_starmap_node_json(&mut self, starmap_id: QString, node_id: QString) -> QString {
-        self.with_app_mut(|app| {
-            app.delete_starmap_node_json(starmap_id, node_id)
-        }).unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
+        self.with_app_mut(|app| app.delete_starmap_node_json(starmap_id, node_id))
+            .unwrap_or_else(|_| {
+                QString::from(crate::backend::json_utils::borrow_conflict_error_json())
+            })
     }
     fn delete_starmap_node(&mut self, starmap_id: QString, node_id: QString) -> QJsonObject {
-        self.with_app_mut(|app| {
-            app.delete_starmap_node(starmap_id, node_id)
-        }).unwrap_or_else(|_| crate::backend::json_utils::qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json()))
+        self.with_app_mut(|app| app.delete_starmap_node(starmap_id, node_id))
+            .unwrap_or_else(|_| {
+                crate::backend::json_utils::qjson_object_from_json(
+                    &crate::backend::json_utils::borrow_conflict_error_json(),
+                )
+            })
     }
     fn create_starmap_edge_json(
         &mut self,
@@ -315,7 +353,8 @@ impl StarMapBackend {
     ) -> QString {
         self.with_app_mut(|app| {
             app.create_starmap_edge_json(starmap_id, from_node_id, to_node_id, kind, label)
-        }).unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
+        })
+        .unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
     }
     fn create_starmap_edge(
         &mut self,
@@ -327,7 +366,12 @@ impl StarMapBackend {
     ) -> QJsonObject {
         self.with_app_mut(|app| {
             app.create_starmap_edge(starmap_id, from_node_id, to_node_id, kind, label)
-        }).unwrap_or_else(|_| crate::backend::json_utils::qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json()))
+        })
+        .unwrap_or_else(|_| {
+            crate::backend::json_utils::qjson_object_from_json(
+                &crate::backend::json_utils::borrow_conflict_error_json(),
+            )
+        })
     }
     fn update_starmap_edge_json(
         &mut self,
@@ -335,9 +379,10 @@ impl StarMapBackend {
         edge_id: QString,
         patch_json: QString,
     ) -> QString {
-        self.with_app_mut(|app| {
-            app.update_starmap_edge_json(starmap_id, edge_id, patch_json)
-        }).unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
+        self.with_app_mut(|app| app.update_starmap_edge_json(starmap_id, edge_id, patch_json))
+            .unwrap_or_else(|_| {
+                QString::from(crate::backend::json_utils::borrow_conflict_error_json())
+            })
     }
     fn update_starmap_edge(
         &mut self,
@@ -345,29 +390,40 @@ impl StarMapBackend {
         edge_id: QString,
         patch_json: QString,
     ) -> QJsonObject {
-        self.with_app_mut(|app| {
-            app.update_starmap_edge(starmap_id, edge_id, patch_json)
-        }).unwrap_or_else(|_| crate::backend::json_utils::qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json()))
+        self.with_app_mut(|app| app.update_starmap_edge(starmap_id, edge_id, patch_json))
+            .unwrap_or_else(|_| {
+                crate::backend::json_utils::qjson_object_from_json(
+                    &crate::backend::json_utils::borrow_conflict_error_json(),
+                )
+            })
     }
     fn delete_starmap_edge_json(&mut self, starmap_id: QString, edge_id: QString) -> QString {
-        self.with_app_mut(|app| {
-            app.delete_starmap_edge_json(starmap_id, edge_id)
-        }).unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
+        self.with_app_mut(|app| app.delete_starmap_edge_json(starmap_id, edge_id))
+            .unwrap_or_else(|_| {
+                QString::from(crate::backend::json_utils::borrow_conflict_error_json())
+            })
     }
     fn delete_starmap_edge(&mut self, starmap_id: QString, edge_id: QString) -> QJsonObject {
-        self.with_app_mut(|app| {
-            app.delete_starmap_edge(starmap_id, edge_id)
-        }).unwrap_or_else(|_| crate::backend::json_utils::qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json()))
+        self.with_app_mut(|app| app.delete_starmap_edge(starmap_id, edge_id))
+            .unwrap_or_else(|_| {
+                crate::backend::json_utils::qjson_object_from_json(
+                    &crate::backend::json_utils::borrow_conflict_error_json(),
+                )
+            })
     }
     fn save_starmap_layout_json(&mut self, starmap_id: QString, layout_json: QString) -> QString {
-        self.with_app_mut(|app| {
-            app.save_starmap_layout_json(starmap_id, layout_json)
-        }).unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
+        self.with_app_mut(|app| app.save_starmap_layout_json(starmap_id, layout_json))
+            .unwrap_or_else(|_| {
+                QString::from(crate::backend::json_utils::borrow_conflict_error_json())
+            })
     }
     fn save_starmap_layout(&mut self, starmap_id: QString, layout_json: QString) -> QJsonObject {
-        self.with_app_mut(|app| {
-            app.save_starmap_layout(starmap_id, layout_json)
-        }).unwrap_or_else(|_| crate::backend::json_utils::qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json()))
+        self.with_app_mut(|app| app.save_starmap_layout(starmap_id, layout_json))
+            .unwrap_or_else(|_| {
+                crate::backend::json_utils::qjson_object_from_json(
+                    &crate::backend::json_utils::borrow_conflict_error_json(),
+                )
+            })
     }
 }
 

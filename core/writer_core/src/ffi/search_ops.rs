@@ -23,6 +23,19 @@ fn parse_scope(s: &str) -> crate::search::SearchScope {
 /// `query` and `scope` must be valid null-terminated UTF-8 C strings.
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
+// TODO(#597): 既有代码可读性技术债，待后续重构拆分
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_lossless,
+    deprecated
+)]
 pub unsafe extern "C" fn writer_core_global_search(
     query: *const c_char,
     scope: *const c_char,
@@ -40,10 +53,7 @@ pub unsafe extern "C" fn writer_core_global_search(
     let cursor_opt = if cursor.is_null() {
         None
     } else {
-        match c_str_to_rust(cursor) {
-            Ok(s) => Some(s),
-            Err(_) => None,
-        }
+        c_str_to_rust(cursor).ok()
     };
     match with_core(|core| {
         let scope = parse_scope(&scope_str);
@@ -67,11 +77,18 @@ pub unsafe extern "C" fn writer_core_rebuild_search_index(
     } else {
         match c_str_to_rust(project_id) {
             Ok(s) => Some(s),
-            Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid project_id: error {}", e)),
+            Err(e) => {
+                return err_json(
+                    "INVALID_ARGUMENT",
+                    &format!("Invalid project_id: error {}", e),
+                )
+            }
         }
     };
     match with_core(|core| {
-        let status = core.rebuild_search_index(pid.as_deref()).map_err(|e| format!("{}", e))?;
+        let status = core
+            .rebuild_search_index(pid.as_deref())
+            .map_err(|e| format!("{}", e))?;
         Ok(status)
     }) {
         Ok(data) => ok_json(data),
@@ -143,4 +160,3 @@ pub unsafe extern "C" fn writer_core_enqueue_search_update(
         Err(_) => 0,
     }
 }
-

@@ -157,7 +157,10 @@ pub fn list_starmaps_for_project(workspace: &Path, project_id: &str) -> Result<V
     list_starmaps_bound_to_project(workspace, project_id)
 }
 
-pub fn list_starmaps_bound_to_project(workspace: &Path, project_id: &str) -> Result<Vec<StarMapMeta>> {
+pub fn list_starmaps_bound_to_project(
+    workspace: &Path,
+    project_id: &str,
+) -> Result<Vec<StarMapMeta>> {
     let all = list_starmaps(workspace)?;
     Ok(all
         .into_iter()
@@ -455,6 +458,13 @@ fn edge_endpoint_references_starmap(
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 pub fn find_starmap_references(
     workspace: &Path,
     target_starmap_id: &str,

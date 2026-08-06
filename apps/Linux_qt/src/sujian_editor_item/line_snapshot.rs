@@ -1,5 +1,5 @@
-pub(crate) use super::layout_snapshot::LineSnapshotId;
 pub(crate) use super::layout_revision::LayoutRevision;
+pub(crate) use super::layout_snapshot::LineSnapshotId;
 
 use qmetaobject::QImage;
 use std::collections::HashMap;
@@ -28,7 +28,8 @@ impl LineTextureStore {
     }
 
     pub fn remove_revision(&mut self, revision: LayoutRevision) {
-        self.textures.retain(|id, _| id.layout_revision != revision.0);
+        self.textures
+            .retain(|id, _| id.layout_revision != revision.0);
     }
 
     pub fn remove(&mut self, id: &LineSnapshotId) {

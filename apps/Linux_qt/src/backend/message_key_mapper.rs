@@ -69,21 +69,29 @@ pub fn resolve_message_key(message_key: &str) -> &'static str {
         "sync.block.invalid_directory" => "sync.block.invalid_directory",
         "sync.phase.github_init" => "sync.phase.github_init",
         "sync.result.clone_success_init_failed" => "sync.result.clone_success_init_failed",
-        "sync.result.push_failed_save_config_failed" => "sync.result.push_failed_save_config_failed",
+        "sync.result.push_failed_save_config_failed" => {
+            "sync.result.push_failed_save_config_failed"
+        }
         "sync.result.push_failed" => "sync.result.push_failed",
         "sync.result.clone_init_success" => "sync.result.clone_init_success",
         "sync.result.save_config_failed" => "sync.result.save_config_failed",
         "sync.result.clone_failed" => "sync.result.clone_failed",
-        "sync.result.remote_configured_sync_success" => "sync.result.remote_configured_sync_success",
+        "sync.result.remote_configured_sync_success" => {
+            "sync.result.remote_configured_sync_success"
+        }
         "sync.result.no_conflict_files" => "sync.result.no_conflict_files",
         "sync.result.more_files_count" => "sync.result.more_files_count",
         "sync.result.git_repo_not_workspace" => "sync.result.git_repo_not_workspace",
-        "sync.result.directory_not_empty_not_workspace" => "sync.result.directory_not_empty_not_workspace",
+        "sync.result.directory_not_empty_not_workspace" => {
+            "sync.result.directory_not_empty_not_workspace"
+        }
         "sync.result.configured_not_tested" => "sync.result.configured_not_tested",
         "sync.result.token_missing" => "sync.result.token_missing",
         "sync.result.token_invalid" => "sync.result.token_invalid",
         "sync.result.token_permission_denied" => "sync.result.token_permission_denied",
-        "sync.result.repo_not_found_or_no_permission" => "sync.result.repo_not_found_or_no_permission",
+        "sync.result.repo_not_found_or_no_permission" => {
+            "sync.result.repo_not_found_or_no_permission"
+        }
         "sync.result.auth_failed" => "sync.result.auth_failed",
         "sync.result.network_failed" => "sync.result.network_failed",
         "sync.result.non_fast_forward" => "sync.result.non_fast_forward",

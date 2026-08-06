@@ -36,6 +36,13 @@ pub struct Project {
     pub order: i32,
 }
 
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 pub fn list_projects(workspace_path: &Path) -> Result<Vec<Project>> {
     let projects_dir = workspace_path.join("projects");
     if !projects_dir.exists() {
@@ -82,6 +89,13 @@ struct ChapterWordCount {
     word_count: u32,
 }
 
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 pub fn get_project_stats(workspace_path: &Path, project_id: &str) -> Result<ProjectStats> {
     let mut stats = ProjectStats {
         total_word_count: 0,

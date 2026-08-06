@@ -62,9 +62,21 @@ mod tests {
     #[test]
     fn platform_kind_default_capabilities() {
         use super::PlatformCapabilitiesExt;
-        assert!(writer_platform_api::PlatformKind::Desktop.default_capabilities().supports_cursor_anchor);
-        assert!(writer_platform_api::PlatformKind::Android.default_capabilities().supports_replacement_commit);
-        assert!(!writer_platform_api::PlatformKind::Harmony.default_capabilities().supports_text_animation);
+        assert!(
+            writer_platform_api::PlatformKind::Desktop
+                .default_capabilities()
+                .supports_cursor_anchor
+        );
+        assert!(
+            writer_platform_api::PlatformKind::Android
+                .default_capabilities()
+                .supports_replacement_commit
+        );
+        assert!(
+            !writer_platform_api::PlatformKind::Harmony
+                .default_capabilities()
+                .supports_text_animation
+        );
     }
 
     #[test]

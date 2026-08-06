@@ -78,6 +78,13 @@ pub(crate) fn scan_workspace_for_sync(workspace_path: &Path) -> crate::Result<Ve
 /// - 首次同步：所有白名单文件上传
 /// - 增量同步：hash 变化或新增的文件上传；本地已删除的远端文件标记删除
 /// - 墓碑清理：`purge_after <= now` 的 trash 文件标记本地删除
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 pub(crate) fn build_sync_plan_from_workspace(workspace_path: &Path) -> crate::Result<SyncPlan> {
     let mut plan = SyncPlan::new();
 

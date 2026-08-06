@@ -26,14 +26,7 @@ fn command_stdout(cmd: &str, args: &[&str]) -> Option<String> {
 fn read_kde_config_value(cmd: &str, group: &str, key: &str) -> Option<String> {
     command_stdout(
         cmd,
-        &[
-            "--file",
-            "kdeglobals",
-            "--group",
-            group,
-            "--key",
-            key,
-        ],
+        &["--file", "kdeglobals", "--group", group, "--key", key],
     )
 }
 
@@ -146,7 +139,8 @@ fn detect_gsettings_color_scheme() -> Option<String> {
     .to_lowercase();
     if value.contains("prefer-dark") || value.contains("dark") {
         Some("dark".to_string())
-    } else if value.contains("prefer-light") || value.contains("light") || value.contains("default") {
+    } else if value.contains("prefer-light") || value.contains("light") || value.contains("default")
+    {
         Some("light".to_string())
     } else {
         None
@@ -189,7 +183,9 @@ fn get_or_create_arboard() -> Option<std::sync::MutexGuard<'static, Option<arboa
     let mut guard = ARBOARD_CLIPBOARD.lock().ok()?;
     if guard.is_none() {
         match arboard::Clipboard::new() {
-            Ok(clip) => { *guard = Some(clip); }
+            Ok(clip) => {
+                *guard = Some(clip);
+            }
             Err(_) => return None,
         }
     }
@@ -252,7 +248,11 @@ pub(crate) fn copy_text_to_clipboard_impl(text_str: &str) -> ClipboardCopyResult
             let _ = stdin.write_all(text_str.as_bytes());
         }
         match child.wait() {
-            Ok(status) if status.success() => return ClipboardCopyResult::Success { backend: ClipboardBackend::WlCopy },
+            Ok(status) if status.success() => {
+                return ClipboardCopyResult::Success {
+                    backend: ClipboardBackend::WlCopy,
+                }
+            }
             _ => {}
         }
     }
@@ -267,7 +267,11 @@ pub(crate) fn copy_text_to_clipboard_impl(text_str: &str) -> ClipboardCopyResult
             let _ = stdin.write_all(text_str.as_bytes());
         }
         match child.wait() {
-            Ok(status) if status.success() => return ClipboardCopyResult::Success { backend: ClipboardBackend::Xclip },
+            Ok(status) if status.success() => {
+                return ClipboardCopyResult::Success {
+                    backend: ClipboardBackend::Xclip,
+                }
+            }
             _ => {}
         }
     }
@@ -282,7 +286,11 @@ pub(crate) fn copy_text_to_clipboard_impl(text_str: &str) -> ClipboardCopyResult
             let _ = stdin.write_all(text_str.as_bytes());
         }
         match child.wait() {
-            Ok(status) if status.success() => return ClipboardCopyResult::Success { backend: ClipboardBackend::Xsel },
+            Ok(status) if status.success() => {
+                return ClipboardCopyResult::Success {
+                    backend: ClipboardBackend::Xsel,
+                }
+            }
             _ => {}
         }
     }
@@ -291,7 +299,9 @@ pub(crate) fn copy_text_to_clipboard_impl(text_str: &str) -> ClipboardCopyResult
     if let Some(mut guard) = get_or_create_arboard() {
         if let Some(ref mut clip) = *guard {
             if clip.set_text(text_str.to_string()).is_ok() {
-                return ClipboardCopyResult::Success { backend: ClipboardBackend::Arboard };
+                return ClipboardCopyResult::Success {
+                    backend: ClipboardBackend::Arboard,
+                };
             }
         }
     }

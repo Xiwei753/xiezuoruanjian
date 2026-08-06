@@ -21,8 +21,8 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 
 /// 日志文件最大大小（1 MiB），超过则轮转
 const MAX_FILE_SIZE: u64 = 1024 * 1024;
@@ -111,7 +111,11 @@ pub fn log_to_file(level: &str, module: &str, event: &str, message: &str) {
     let redacted = redact(&formatted);
 
     let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
-    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(&current_file) {
+    if let Ok(mut file) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&current_file)
+    {
         let _ = writeln!(file, "{}", redacted);
     }
 }
@@ -156,7 +160,11 @@ pub fn install_panic_hook() {
         let formatted = format!("[{}] [ERROR] [panic::hook] {}", timestamp, panic_msg);
         let redacted_msg = redact(&formatted);
         let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
-        if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(&current_file) {
+        if let Ok(mut file) = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&current_file)
+        {
             let _ = writeln!(file, "{}", redacted_msg);
         }
         // 仍然调用默认 hook（打印到 stderr）
@@ -170,10 +178,9 @@ fn redact(message: &str) -> String {
     let mut result = message.to_string();
 
     // SSH private key blocks
-    let re_ssh_key = regex::Regex::new(
-        r"(?i)ssh_private_key\s*[:=]\s*[\s\S]*?-----END[^\n]*PRIVATE KEY-----",
-    )
-    .unwrap_or_else(|_| regex::Regex::new(r"$^").unwrap());
+    let re_ssh_key =
+        regex::Regex::new(r"(?i)ssh_private_key\s*[:=]\s*[\s\S]*?-----END[^\n]*PRIVATE KEY-----")
+            .unwrap_or_else(|_| regex::Regex::new(r"$^").unwrap());
     result = re_ssh_key
         .replace_all(&result, "ssh_private_key=[REDACTED]")
         .to_string();
@@ -183,9 +190,7 @@ fn redact(message: &str) -> String {
         r"-----BEGIN[^\n]*PRIVATE KEY-----[\s\S]*?-----END[^\n]*PRIVATE KEY-----",
     )
     .unwrap_or_else(|_| regex::Regex::new(r"$^").unwrap());
-    result = re_pem
-        .replace_all(&result, "[REDACTED_PEM]")
-        .to_string();
+    result = re_pem.replace_all(&result, "[REDACTED_PEM]").to_string();
 
     // Bearer token in header-style (Authorization: Bearer xxx)
     let re_bearer_header = regex::Regex::new(r"(?i)\b(authorization)\s*[:=]\s*Bearer\s+\S+")
@@ -213,21 +218,23 @@ fn redact(message: &str) -> String {
         .to_string();
 
     // Bearer tokens standalone
-    let re_bearer_standalone =
-        regex::Regex::new(r"(?i)Bearer\s+[A-Za-z0-9\-._~+/]+=*").unwrap_or_else(|_| regex::Regex::new(r"$^").unwrap());
+    let re_bearer_standalone = regex::Regex::new(r"(?i)Bearer\s+[A-Za-z0-9\-._~+/]+=*")
+        .unwrap_or_else(|_| regex::Regex::new(r"$^").unwrap());
     result = re_bearer_standalone
         .replace_all(&result, "Bearer [REDACTED]")
         .to_string();
 
     // GitHub PAT patterns
-    let re_ghp = regex::Regex::new(r"ghp_[A-Za-z0-9]{36}").unwrap_or_else(|_| regex::Regex::new(r"$^").unwrap());
+    let re_ghp = regex::Regex::new(r"ghp_[A-Za-z0-9]{36}")
+        .unwrap_or_else(|_| regex::Regex::new(r"$^").unwrap());
     result = re_ghp.replace_all(&result, "[REDACTED]").to_string();
 
-    let re_gho = regex::Regex::new(r"gho_[A-Za-z0-9]{36}").unwrap_or_else(|_| regex::Regex::new(r"$^").unwrap());
+    let re_gho = regex::Regex::new(r"gho_[A-Za-z0-9]{36}")
+        .unwrap_or_else(|_| regex::Regex::new(r"$^").unwrap());
     result = re_gho.replace_all(&result, "[REDACTED]").to_string();
 
-    let re_github_pat =
-        regex::Regex::new(r"github_pat_[A-Za-z0-9_]{82}").unwrap_or_else(|_| regex::Regex::new(r"$^").unwrap());
+    let re_github_pat = regex::Regex::new(r"github_pat_[A-Za-z0-9_]{82}")
+        .unwrap_or_else(|_| regex::Regex::new(r"$^").unwrap());
     result = re_github_pat.replace_all(&result, "[REDACTED]").to_string();
 
     result
@@ -272,7 +279,8 @@ fn rotate_if_needed(log_dir: &Path) -> Result<(), String> {
     if !current_file.exists() {
         return Ok(());
     }
-    let metadata = fs::metadata(&current_file).map_err(|e| format!("读取日志文件元数据失败: {}", e))?;
+    let metadata =
+        fs::metadata(&current_file).map_err(|e| format!("读取日志文件元数据失败: {}", e))?;
     if metadata.len() < MAX_FILE_SIZE {
         return Ok(());
     }
@@ -291,9 +299,7 @@ fn prune_old_logs(log_dir: &Path) {
         Ok(entries) => entries
             .filter_map(|e| e.ok())
             .filter(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .starts_with(LOG_PREFIX)
+                e.file_name().to_string_lossy().starts_with(LOG_PREFIX)
                     && e.file_name().to_string_lossy().ends_with(".log")
             })
             .collect(),
@@ -346,7 +352,10 @@ pub fn device_info_json() -> String {
     let arch = std::env::consts::ARCH;
     let os_name = "linux";
 
-    let qt_version = QT_VERSION.get().cloned().unwrap_or_else(|| "unknown".to_string());
+    let qt_version = QT_VERSION
+        .get()
+        .cloned()
+        .unwrap_or_else(|| "unknown".to_string());
     let app_version = env!("CARGO_PKG_VERSION");
 
     let info = serde_json::json!({
@@ -369,10 +378,7 @@ pub fn device_info_json() -> String {
 /// - 没 workspace 或路径不可写：导出到平台标准 AppData 目录
 ///   - Linux: ~/.local/share/sujian/diagnostics
 ///   - Fallback: /tmp/sujian/diagnostics
-pub fn export_diagnostics_pack(
-    workspace_path: &Path,
-    log_dir: &Path,
-) -> Result<PathBuf, String> {
+pub fn export_diagnostics_pack(workspace_path: &Path, log_dir: &Path) -> Result<PathBuf, String> {
     let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
 
     // 确定导出目录：优先 workspace，不可写则用平台标准目录
@@ -536,7 +542,8 @@ mod tests {
 
     fn append_log_line(log_dir: &Path, line: &str, verbose: bool) {
         let upper = line.to_uppercase();
-        let is_error_or_warn = upper.contains("ERROR") || upper.contains("CRASH") || upper.contains("WARN");
+        let is_error_or_warn =
+            upper.contains("ERROR") || upper.contains("CRASH") || upper.contains("WARN");
 
         if !is_error_or_warn {
             if !is_diagnostics_enabled() || (!verbose && !is_verbose_enabled()) {
@@ -547,7 +554,11 @@ mod tests {
         let _ = rotate_if_needed(log_dir);
 
         let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
-        if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(&current_file) {
+        if let Ok(mut file) = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&current_file)
+        {
             let redacted = redact(line);
             let _ = writeln!(file, "{}", redacted);
         }
@@ -607,9 +618,7 @@ mod tests {
             .unwrap()
             .filter_map(|e| e.ok())
             .filter(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .starts_with(LOG_PREFIX)
+                e.file_name().to_string_lossy().starts_with(LOG_PREFIX)
                     && e.file_name().to_string_lossy() != format!("{}.log", LOG_PREFIX)
             })
             .collect();
@@ -648,10 +657,18 @@ mod tests {
         fs::write(log_dir.path().join("sujian-current.log"), "safe log line\n").unwrap();
 
         let zip_path = export_diagnostics_pack(workspace.path(), log_dir.path()).unwrap();
-        assert!(zip_path.exists(), "zip should exist: {}", zip_path.display());
+        assert!(
+            zip_path.exists(),
+            "zip should exist: {}",
+            zip_path.display()
+        );
         assert_eq!(zip_path.extension().and_then(|e| e.to_str()), Some("zip"));
         let export_dir = zip_path.parent().expect("zip has parent export dir");
-        assert!(export_dir.ends_with("app-meta/diagnostics"), "unexpected export dir: {}", export_dir.display());
+        assert!(
+            export_dir.ends_with("app-meta/diagnostics"),
+            "unexpected export dir: {}",
+            export_dir.display()
+        );
     }
 
     #[test]
@@ -771,7 +788,10 @@ mod tests {
         let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
         if current_file.exists() {
             let content = fs::read_to_string(&current_file).unwrap();
-            assert!(!content.contains("some info message"), "INFO should be filtered when verbose is disabled");
+            assert!(
+                !content.contains("some info message"),
+                "INFO should be filtered when verbose is disabled"
+            );
         }
 
         // verbose=false 时，WARN/ERROR 仍应写入
@@ -780,8 +800,14 @@ mod tests {
 
         let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
         let content = fs::read_to_string(&current_file).unwrap();
-        assert!(content.contains("some warning"), "WARN should always be written");
-        assert!(content.contains("some error"), "ERROR should always be written");
+        assert!(
+            content.contains("some warning"),
+            "WARN should always be written"
+        );
+        assert!(
+            content.contains("some error"),
+            "ERROR should always be written"
+        );
 
         // 恢复原始状态
         DIAGNOSTICS_ENABLED.store(prev_enabled, Ordering::Relaxed);
@@ -804,7 +830,10 @@ mod tests {
         let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
         assert!(current_file.exists());
         let content = fs::read_to_string(&current_file).unwrap();
-        assert!(content.contains("some info message"), "INFO should be written when verbose is enabled");
+        assert!(
+            content.contains("some info message"),
+            "INFO should be written when verbose is enabled"
+        );
 
         DIAGNOSTICS_ENABLED.store(prev_enabled, Ordering::Relaxed);
         VERBOSE_ENABLED.store(prev_verbose, Ordering::Relaxed);
@@ -840,7 +869,10 @@ mod tests {
 
         let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
         let content = fs::read_to_string(&current_file).unwrap();
-        assert!(content.contains("error message when disabled"), "ERROR should always be written even when diagnostics disabled");
+        assert!(
+            content.contains("error message when disabled"),
+            "ERROR should always be written even when diagnostics disabled"
+        );
 
         DIAGNOSTICS_ENABLED.store(prev_enabled, Ordering::Relaxed);
         VERBOSE_ENABLED.store(prev_verbose, Ordering::Relaxed);
@@ -861,7 +893,10 @@ mod tests {
 
         let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
         let content = fs::read_to_string(&current_file).unwrap();
-        assert!(content.contains("warn message when disabled"), "WARN should always be written even when diagnostics disabled");
+        assert!(
+            content.contains("warn message when disabled"),
+            "WARN should always be written even when diagnostics disabled"
+        );
 
         DIAGNOSTICS_ENABLED.store(prev_enabled, Ordering::Relaxed);
         VERBOSE_ENABLED.store(prev_verbose, Ordering::Relaxed);
@@ -882,7 +917,10 @@ mod tests {
 
         let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
         let content = fs::read_to_string(&current_file).unwrap();
-        assert!(content.contains("info message with both enabled"), "INFO should be written when both enabled and verbose");
+        assert!(
+            content.contains("info message with both enabled"),
+            "INFO should be written when both enabled and verbose"
+        );
 
         DIAGNOSTICS_ENABLED.store(prev_enabled, Ordering::Relaxed);
         VERBOSE_ENABLED.store(prev_verbose, Ordering::Relaxed);
@@ -904,7 +942,10 @@ mod tests {
         let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
         if current_file.exists() {
             let content = fs::read_to_string(&current_file).unwrap();
-            assert!(!content.contains("info message when disabled"), "INFO should NOT be written when diagnostics_enabled=false");
+            assert!(
+                !content.contains("info message when disabled"),
+                "INFO should NOT be written when diagnostics_enabled=false"
+            );
         }
 
         DIAGNOSTICS_ENABLED.store(prev_enabled, Ordering::Relaxed);
@@ -927,7 +968,10 @@ mod tests {
         let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
         if current_file.exists() {
             let content = fs::read_to_string(&current_file).unwrap();
-            assert!(!content.contains("info message when not verbose"), "INFO should NOT be written when diagnostics_verbose=false");
+            assert!(
+                !content.contains("info message when not verbose"),
+                "INFO should NOT be written when diagnostics_verbose=false"
+            );
         }
 
         DIAGNOSTICS_ENABLED.store(prev_enabled, Ordering::Relaxed);

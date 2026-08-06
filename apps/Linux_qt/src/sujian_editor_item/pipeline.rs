@@ -1,19 +1,19 @@
-use writer_core::editor::{
-    EditorCommand, EditorEditOutcome, EditorEditResult, EditorKernel, EditorTransactionCause, CursorRect, PreeditVisualTransaction,
-    EditorVisualTransaction, EditorSelection, EditorCursor, EditorAnimationKind,
-    Utf8ByteOffset, Utf8ByteRange, EditorRevision,
-};
-use super::buffer::{clamp_to_char_boundary, normalize_plain_text, EditorSnapshot};
 use super::animation_coordinator::LinuxEditorAnimationCoordinator;
-use super::texture_cache::TextureCache;
-use super::layout_snapshot::EditorLayoutSnapshot;
+use super::buffer::{clamp_to_char_boundary, normalize_plain_text, EditorSnapshot};
 use super::layout_revision::LayoutRevision;
+use super::layout_snapshot::EditorLayoutSnapshot;
 use super::line_snapshot_builder::LineSnapshotBuilder;
+use super::texture_cache::TextureCache;
 use super::transaction_key::VisualTransactionKey;
 use super::PreeditAttribute;
-use writer_core::editor::CompositionSession;
 use crate::editor::layout;
 use crate::platform::linux_qt::LinuxQtClipboardFocusAdapter;
+use writer_core::editor::CompositionSession;
+use writer_core::editor::{
+    CursorRect, EditorAnimationKind, EditorCommand, EditorCursor, EditorEditOutcome,
+    EditorEditResult, EditorKernel, EditorRevision, EditorSelection, EditorTransactionCause,
+    EditorVisualTransaction, PreeditVisualTransaction, Utf8ByteOffset, Utf8ByteRange,
+};
 
 /// Qt 侧已确认正文镜像 — 持有与 Rust EditorKernel revision 对应的纯文本快照。
 ///
@@ -80,7 +80,13 @@ impl CommittedTextMirror {
         self.text[start..end].to_string()
     }
 
-    pub fn load_from_snapshot(&mut self, text: String, cursor: usize, revision: u64, anchor: usize) {
+    pub fn load_from_snapshot(
+        &mut self,
+        text: String,
+        cursor: usize,
+        revision: u64,
+        anchor: usize,
+    ) {
         self.text = text;
         self.cursor = clamp_to_char_boundary(&self.text, cursor);
         self.selection_anchor = clamp_to_char_boundary(&self.text, anchor);
@@ -377,7 +383,8 @@ impl LinuxEditorPipeline {
         let cursor = self.kernel.cursor();
         let revision = self.kernel.revision();
         let anchor = self.kernel.selection_anchor();
-        self.mirror.load_from_snapshot(text, cursor, revision, anchor);
+        self.mirror
+            .load_from_snapshot(text, cursor, revision, anchor);
         self.text_revision = self.text_revision.wrapping_add(1);
         self.visual_revision = self.visual_revision.wrapping_add(1);
         old
@@ -515,14 +522,20 @@ impl LinuxEditorPipeline {
                     self.kernel.selection_anchor(),
                 );
                 self.composition.clear();
-                self.animation_coordinator.cancel_active_composition("load_text");
+                self.animation_coordinator
+                    .cancel_active_composition("load_text");
                 true
             }
             Err(_) => false,
         }
     }
 
-    pub fn insert_text(&mut self, byte_offset: usize, text: &str, cause: EditorTransactionCause) -> Option<EditorEditResult> {
+    pub fn insert_text(
+        &mut self,
+        byte_offset: usize,
+        text: &str,
+        cause: EditorTransactionCause,
+    ) -> Option<EditorEditResult> {
         let command = EditorCommand::Insert {
             byte_offset: Utf8ByteOffset::clamp(self.kernel.text(), byte_offset),
             text: text.to_string(),
@@ -553,12 +566,18 @@ impl LinuxEditorPipeline {
                 );
                 Some(result)
             }
-            EditorEditOutcome::InvalidOffset(result)
-            | EditorEditOutcome::InvalidRange(result) => Some(result),
+            EditorEditOutcome::InvalidOffset(result) | EditorEditOutcome::InvalidRange(result) => {
+                Some(result)
+            }
         }
     }
 
-    pub fn delete_range(&mut self, byte_start: usize, byte_end_exclusive: usize, cause: EditorTransactionCause) -> Option<EditorEditResult> {
+    pub fn delete_range(
+        &mut self,
+        byte_start: usize,
+        byte_end_exclusive: usize,
+        cause: EditorTransactionCause,
+    ) -> Option<EditorEditResult> {
         let command = EditorCommand::Delete {
             byte_range: Utf8ByteRange::clamp(self.kernel.text(), byte_start, byte_end_exclusive),
             deleted_text: String::new(),
@@ -589,12 +608,19 @@ impl LinuxEditorPipeline {
                 );
                 Some(result)
             }
-            EditorEditOutcome::InvalidOffset(result)
-            | EditorEditOutcome::InvalidRange(result) => Some(result),
+            EditorEditOutcome::InvalidOffset(result) | EditorEditOutcome::InvalidRange(result) => {
+                Some(result)
+            }
         }
     }
 
-    pub fn replace_range(&mut self, byte_start: usize, byte_end_exclusive: usize, replacement: &str, cause: EditorTransactionCause) -> Option<EditorEditResult> {
+    pub fn replace_range(
+        &mut self,
+        byte_start: usize,
+        byte_end_exclusive: usize,
+        replacement: &str,
+        cause: EditorTransactionCause,
+    ) -> Option<EditorEditResult> {
         let command = EditorCommand::Replace {
             byte_range: Utf8ByteRange::clamp(self.kernel.text(), byte_start, byte_end_exclusive),
             replacement_text: replacement.to_string(),
@@ -604,7 +630,8 @@ impl LinuxEditorPipeline {
         };
         let outcome = self.kernel.apply(command);
         match outcome {
-            EditorEditOutcome::Applied(result) | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
+            EditorEditOutcome::Applied(result)
+            | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
                 if self.mirror.apply_edit_result(&result).is_err() {
                     self.mirror.load_from_snapshot(
                         self.kernel.text().to_string(),
@@ -625,8 +652,9 @@ impl LinuxEditorPipeline {
                 );
                 Some(result)
             }
-            EditorEditOutcome::InvalidOffset(result)
-            | EditorEditOutcome::InvalidRange(result) => Some(result),
+            EditorEditOutcome::InvalidOffset(result) | EditorEditOutcome::InvalidRange(result) => {
+                Some(result)
+            }
         }
     }
 
@@ -639,7 +667,8 @@ impl LinuxEditorPipeline {
         };
         let outcome = self.kernel.apply(command);
         match outcome {
-            EditorEditOutcome::Applied(result) | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
+            EditorEditOutcome::Applied(result)
+            | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
                 if self.mirror.apply_edit_result(&result).is_err() {
                     self.mirror.load_from_snapshot(
                         self.kernel.text().to_string(),
@@ -660,8 +689,9 @@ impl LinuxEditorPipeline {
                 );
                 Some(result)
             }
-            EditorEditOutcome::InvalidOffset(result)
-            | EditorEditOutcome::InvalidRange(result) => Some(result),
+            EditorEditOutcome::InvalidOffset(result) | EditorEditOutcome::InvalidRange(result) => {
+                Some(result)
+            }
         }
     }
 
@@ -671,7 +701,8 @@ impl LinuxEditorPipeline {
         };
         let outcome = self.kernel.apply(command);
         match outcome {
-            EditorEditOutcome::Applied(result) | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
+            EditorEditOutcome::Applied(result)
+            | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
                 if self.mirror.apply_edit_result(&result).is_err() {
                     self.mirror.load_from_snapshot(
                         self.kernel.text().to_string(),
@@ -692,8 +723,7 @@ impl LinuxEditorPipeline {
                 );
                 Some(result)
             }
-            EditorEditOutcome::InvalidOffset(_)
-            | EditorEditOutcome::InvalidRange(_) => None,
+            EditorEditOutcome::InvalidOffset(_) | EditorEditOutcome::InvalidRange(_) => None,
         }
     }
 
@@ -703,7 +733,8 @@ impl LinuxEditorPipeline {
         };
         let outcome = self.kernel.apply(command);
         match outcome {
-            EditorEditOutcome::Applied(result) | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
+            EditorEditOutcome::Applied(result)
+            | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
                 if self.mirror.apply_edit_result(&result).is_err() {
                     self.mirror.load_from_snapshot(
                         self.kernel.text().to_string(),
@@ -724,8 +755,7 @@ impl LinuxEditorPipeline {
                 );
                 Some(result)
             }
-            EditorEditOutcome::InvalidOffset(_)
-            | EditorEditOutcome::InvalidRange(_) => None,
+            EditorEditOutcome::InvalidOffset(_) | EditorEditOutcome::InvalidRange(_) => None,
         }
     }
 
@@ -737,7 +767,8 @@ impl LinuxEditorPipeline {
             self.kernel.selection_anchor(),
         );
         self.composition.clear();
-        self.animation_coordinator.cancel_active_composition("reload_from_kernel");
+        self.animation_coordinator
+            .cancel_active_composition("reload_from_kernel");
         true
     }
 
@@ -773,7 +804,8 @@ impl LinuxEditorPipeline {
         let pending_pcr = self.composition.take_pending_preedit_cursor_rect();
         let was_composing = self.composition.is_composing();
         let saved_virtual_text = self.composition.virtual_text();
-        let (session_replace_start, session_replace_end) = self.composition.session_replace_range(fallback_cursor);
+        let (session_replace_start, session_replace_end) =
+            self.composition.session_replace_range(fallback_cursor);
         let candidate_byte_start = session_replace_start;
         let candidate_byte_end = session_replace_start + inserted_text.len();
         let committed_replace_start = session_replace_start;
@@ -816,11 +848,16 @@ impl LinuxEditorPipeline {
         self.previous_layout_snapshot = snapshot;
     }
 
-    pub fn previous_canonical_snapshot(&self) -> &Option<crate::editor::layout::CanonicalDocumentVisualSnapshot> {
+    pub fn previous_canonical_snapshot(
+        &self,
+    ) -> &Option<crate::editor::layout::CanonicalDocumentVisualSnapshot> {
         &self.previous_canonical_snapshot
     }
 
-    pub fn set_previous_canonical_snapshot(&mut self, snapshot: Option<crate::editor::layout::CanonicalDocumentVisualSnapshot>) {
+    pub fn set_previous_canonical_snapshot(
+        &mut self,
+        snapshot: Option<crate::editor::layout::CanonicalDocumentVisualSnapshot>,
+    ) {
         self.previous_canonical_snapshot = snapshot;
     }
 
@@ -838,7 +875,10 @@ impl LinuxEditorPipeline {
     }
 
     pub fn prepare_transaction_textures(&mut self, key: VisualTransactionKey) {
-        let tx = self.animation_coordinator.prepared_queue.active_transactions()
+        let tx = self
+            .animation_coordinator
+            .prepared_queue
+            .active_transactions()
             .iter()
             .find(|t| t.key == key)
             .cloned();
@@ -846,7 +886,9 @@ impl LinuxEditorPipeline {
         if let Some(t) = tx {
             let snapshot_ids = t.snapshot_ids();
             if snapshot_ids.is_empty() {
-                self.animation_coordinator.prepared_queue.mark_texture_prepared(key);
+                self.animation_coordinator
+                    .prepared_queue
+                    .mark_texture_prepared(key);
                 return;
             }
 
@@ -859,7 +901,9 @@ impl LinuxEditorPipeline {
             }
 
             if all_found {
-                self.animation_coordinator.prepared_queue.mark_texture_prepared(key);
+                self.animation_coordinator
+                    .prepared_queue
+                    .mark_texture_prepared(key);
                 return;
             }
 
@@ -891,9 +935,12 @@ impl LinuxEditorPipeline {
                     "prepare_transaction_textures: some line textures missing for tid={}, cancelling",
                     key.transaction_id
                 ));
-                self.animation_coordinator.cancel_by_key(key, "texture_failed");
+                self.animation_coordinator
+                    .cancel_by_key(key, "texture_failed");
             } else {
-                self.animation_coordinator.prepared_queue.mark_texture_prepared(key);
+                self.animation_coordinator
+                    .prepared_queue
+                    .mark_texture_prepared(key);
             }
         }
     }
@@ -922,11 +969,13 @@ impl LinuxEditorPipeline {
 
         if ctx.typing_animation_enabled && vt.is_some() && !ctx.is_scrolling {
             if let Some(ref mut vt) = vt {
-                let (affected_byte_start, affected_byte_end) = vt.inserted_range
+                let (affected_byte_start, affected_byte_end) = vt
+                    .inserted_range
                     .or(vt.deleted_range)
                     .map(|r| (r.start().value(), r.end().value()))
                     .unwrap_or_else(|| {
-                        let changes = writer_core::editor::diff_plain_text(&vt.old_text, &vt.new_text);
+                        let changes =
+                            writer_core::editor::diff_plain_text(&vt.old_text, &vt.new_text);
                         let mut min_b = usize::MAX;
                         let mut max_b = 0usize;
                         for change in &changes {
@@ -991,8 +1040,18 @@ impl LinuxEditorPipeline {
                     ctx.viewport_height,
                 );
 
-                vt.old_cursor_rect = Some(make_cursor_rect_from_caret_doc(&old_caret, &old_doc_snapshot, &ctx.font_family, ctx.scroll_y));
-                vt.new_cursor_rect = Some(make_cursor_rect_from_caret_doc(&new_caret, &new_doc_snapshot, &ctx.font_family, ctx.scroll_y));
+                vt.old_cursor_rect = Some(make_cursor_rect_from_caret_doc(
+                    &old_caret,
+                    &old_doc_snapshot,
+                    &ctx.font_family,
+                    ctx.scroll_y,
+                ));
+                vt.new_cursor_rect = Some(make_cursor_rect_from_caret_doc(
+                    &new_caret,
+                    &new_doc_snapshot,
+                    &ctx.font_family,
+                    ctx.scroll_y,
+                ));
 
                 match vt.kind {
                     EditorAnimationKind::Insert => {
@@ -1034,9 +1093,15 @@ impl LinuxEditorPipeline {
                     self.layout_revision = new_revision;
                 }
 
-                self.previous_layout_snapshot = Some(self.current_layout_snapshot.clone().unwrap_or_else(|| {
-                    EditorLayoutSnapshot::new(old_doc_snapshot.to_layout_snapshot(), Vec::new(), None, layout::CaretAffinity::Downstream)
-                }));
+                self.previous_layout_snapshot =
+                    Some(self.current_layout_snapshot.clone().unwrap_or_else(|| {
+                        EditorLayoutSnapshot::new(
+                            old_doc_snapshot.to_layout_snapshot(),
+                            Vec::new(),
+                            None,
+                            layout::CaretAffinity::Downstream,
+                        )
+                    }));
                 self.current_layout_snapshot = Some(new_snap);
                 self.previous_canonical_snapshot = Some(new_doc_snapshot);
 
@@ -1058,7 +1123,10 @@ fn make_cursor_rect_from_caret_doc(
     font_family: &str,
     scroll_y: f64,
 ) -> CursorRect {
-    let line = doc_snapshot.visual_lines.iter().find(|l| l.id == caret.visual_line_id);
+    let line = doc_snapshot
+        .visual_lines
+        .iter()
+        .find(|l| l.id == caret.visual_line_id);
     let baseline_y = match line {
         Some(l) => layout::text_baseline_y(l, doc_snapshot.font_size, font_family) - scroll_y,
         None => caret.y + caret.h * 0.8,

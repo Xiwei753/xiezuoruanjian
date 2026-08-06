@@ -601,13 +601,27 @@ impl From<crate::editor::EditorVisualIntent> for EditorVisualIntentDto {
                 crate::editor::EditorTransactionCause::Redo => EditorTransactionCauseDto::Redo,
                 crate::editor::EditorTransactionCause::Load => EditorTransactionCauseDto::Load,
                 crate::editor::EditorTransactionCause::Format => EditorTransactionCauseDto::Format,
-                crate::editor::EditorTransactionCause::ImeComposition => EditorTransactionCauseDto::ImeComposition,
-                crate::editor::EditorTransactionCause::TypingCommit => EditorTransactionCauseDto::TypingCommit,
-                crate::editor::EditorTransactionCause::Programmatic => EditorTransactionCauseDto::Programmatic,
+                crate::editor::EditorTransactionCause::ImeComposition => {
+                    EditorTransactionCauseDto::ImeComposition
+                }
+                crate::editor::EditorTransactionCause::TypingCommit => {
+                    EditorTransactionCauseDto::TypingCommit
+                }
+                crate::editor::EditorTransactionCause::Programmatic => {
+                    EditorTransactionCauseDto::Programmatic
+                }
             },
             operation_kind: vi.operation_kind.into(),
-            old_affected_byte_ranges: vi.old_affected_byte_ranges.into_iter().map(Into::into).collect(),
-            new_affected_byte_ranges: vi.new_affected_byte_ranges.into_iter().map(Into::into).collect(),
+            old_affected_byte_ranges: vi
+                .old_affected_byte_ranges
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            new_affected_byte_ranges: vi
+                .new_affected_byte_ranges
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             animation_mode: vi.animation_mode.into(),
             duration_ms: vi.duration_ms,
             coordinated_cursor: vi.coordinated_cursor.into(),
@@ -673,7 +687,7 @@ pub struct CompositionSessionDto {
 /// 必须通过 TextIndexMap 转换，不得直接用于 SpannableStringBuilder。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
- pub struct EditorEditResultDto {
+pub struct EditorEditResultDto {
     pub outcome: EditorEditOutcomeDto,
     pub transaction_id: u64,
     pub base_revision: u64,
@@ -763,11 +777,19 @@ impl From<crate::editor::EditorEditOutcome> for EditorEditResultDto {
     fn from(outcome: crate::editor::EditorEditOutcome) -> Self {
         let (outcome_dto, r) = match outcome {
             crate::editor::EditorEditOutcome::Applied(r) => (EditorEditOutcomeDto::Applied, r),
-            crate::editor::EditorEditOutcome::AppliedWithAdjustedSelection(r) => (EditorEditOutcomeDto::AppliedWithAdjustedSelection, r),
+            crate::editor::EditorEditOutcome::AppliedWithAdjustedSelection(r) => {
+                (EditorEditOutcomeDto::AppliedWithAdjustedSelection, r)
+            }
             crate::editor::EditorEditOutcome::NoChange(r) => (EditorEditOutcomeDto::NoChange, r),
-            crate::editor::EditorEditOutcome::StaleRevision(r) => (EditorEditOutcomeDto::StaleRevision, r),
-            crate::editor::EditorEditOutcome::InvalidOffset(r) => (EditorEditOutcomeDto::InvalidOffset, r),
-            crate::editor::EditorEditOutcome::InvalidRange(r) => (EditorEditOutcomeDto::InvalidRange, r),
+            crate::editor::EditorEditOutcome::StaleRevision(r) => {
+                (EditorEditOutcomeDto::StaleRevision, r)
+            }
+            crate::editor::EditorEditOutcome::InvalidOffset(r) => {
+                (EditorEditOutcomeDto::InvalidOffset, r)
+            }
+            crate::editor::EditorEditOutcome::InvalidRange(r) => {
+                (EditorEditOutcomeDto::InvalidRange, r)
+            }
         };
         Self {
             outcome: outcome_dto,
@@ -890,8 +912,12 @@ impl From<crate::editor::TransactionCancelReason> for TransactionCancelReasonDto
             crate::editor::TransactionCancelReason::RevisionChanged => Self::RevisionChanged,
             crate::editor::TransactionCancelReason::SystemSuppressed => Self::SystemSuppressed,
             crate::editor::TransactionCancelReason::UserCancelled => Self::UserCancelled,
-            crate::editor::TransactionCancelReason::CompositionCommitted => Self::CompositionCommitted,
-            crate::editor::TransactionCancelReason::CompositionCancelled => Self::CompositionCancelled,
+            crate::editor::TransactionCancelReason::CompositionCommitted => {
+                Self::CompositionCommitted
+            }
+            crate::editor::TransactionCancelReason::CompositionCancelled => {
+                Self::CompositionCancelled
+            }
         }
     }
 }
@@ -911,7 +937,9 @@ pub struct CompositionCommitOrCancelTransactionDto {
     pub visual_class_kinds: Vec<VisualClassKindDto>,
 }
 
-impl From<crate::editor::CompositionCommitOrCancelTransaction> for CompositionCommitOrCancelTransactionDto {
+impl From<crate::editor::CompositionCommitOrCancelTransaction>
+    for CompositionCommitOrCancelTransactionDto
+{
     fn from(t: crate::editor::CompositionCommitOrCancelTransaction) -> Self {
         Self {
             id: t.id,
@@ -1031,7 +1059,10 @@ mod tests {
         );
         let vt = engine.visual_transaction(&tx).unwrap();
         // Core layer: Insert has inserted_range = Some((2, 3))
-        assert_eq!(vt.inserted_range, crate::editor::strong_types::Utf8ByteRange::from_values(2, 3));
+        assert_eq!(
+            vt.inserted_range,
+            crate::editor::strong_types::Utf8ByteRange::from_values(2, 3)
+        );
         let dto: EditorVisualTransactionDto = vt.into();
         assert_eq!(dto.inserted_range_start, 2);
         assert_eq!(dto.inserted_range_end, 3);
@@ -1051,7 +1082,10 @@ mod tests {
         );
         let vt = engine.visual_transaction(&tx).unwrap();
         // Core layer: Delete has deleted_range = Some((2, 3))
-        assert_eq!(vt.deleted_range, crate::editor::strong_types::Utf8ByteRange::from_values(2, 3));
+        assert_eq!(
+            vt.deleted_range,
+            crate::editor::strong_types::Utf8ByteRange::from_values(2, 3)
+        );
         let dto: EditorVisualTransactionDto = vt.into();
         assert_eq!(dto.deleted_range_start, 2);
         assert_eq!(dto.deleted_range_end, 3);
@@ -1193,11 +1227,15 @@ mod tests {
             UnifiedTransactionKindDto::BodyEdit
         );
         assert_eq!(
-            UnifiedTransactionKindDto::from(crate::editor::UnifiedTransactionKind::CompositionUpdate),
+            UnifiedTransactionKindDto::from(
+                crate::editor::UnifiedTransactionKind::CompositionUpdate
+            ),
             UnifiedTransactionKindDto::CompositionUpdate
         );
         assert_eq!(
-            UnifiedTransactionKindDto::from(crate::editor::UnifiedTransactionKind::CompositionCommitOrCancel),
+            UnifiedTransactionKindDto::from(
+                crate::editor::UnifiedTransactionKind::CompositionCommitOrCancel
+            ),
             UnifiedTransactionKindDto::CompositionCommitOrCancel
         );
         assert_eq!(
@@ -1216,11 +1254,26 @@ mod tests {
 
     #[test]
     fn visual_class_kind_dto_from_core() {
-        assert_eq!(VisualClassKindDto::from(crate::editor::VisualClassKind::Static), VisualClassKindDto::Static);
-        assert_eq!(VisualClassKindDto::from(crate::editor::VisualClassKind::Insert), VisualClassKindDto::Insert);
-        assert_eq!(VisualClassKindDto::from(crate::editor::VisualClassKind::Delete), VisualClassKindDto::Delete);
-        assert_eq!(VisualClassKindDto::from(crate::editor::VisualClassKind::Move), VisualClassKindDto::Move);
-        assert_eq!(VisualClassKindDto::from(crate::editor::VisualClassKind::Crossfade), VisualClassKindDto::Crossfade);
+        assert_eq!(
+            VisualClassKindDto::from(crate::editor::VisualClassKind::Static),
+            VisualClassKindDto::Static
+        );
+        assert_eq!(
+            VisualClassKindDto::from(crate::editor::VisualClassKind::Insert),
+            VisualClassKindDto::Insert
+        );
+        assert_eq!(
+            VisualClassKindDto::from(crate::editor::VisualClassKind::Delete),
+            VisualClassKindDto::Delete
+        );
+        assert_eq!(
+            VisualClassKindDto::from(crate::editor::VisualClassKind::Move),
+            VisualClassKindDto::Move
+        );
+        assert_eq!(
+            VisualClassKindDto::from(crate::editor::VisualClassKind::Crossfade),
+            VisualClassKindDto::Crossfade
+        );
     }
 
     // --- #515: PlatformVisualTransactionDto tests ---
@@ -1234,19 +1287,27 @@ mod tests {
             generation: crate::editor::strong_types::EditorSessionGeneration::new(1),
             state: crate::editor::PlatformVisualTransactionState::Rendering,
             old_revision: crate::editor::VisualLayoutRevision {
-                document_revision: crate::editor::strong_types::EditorRevision::new(1), layout_revision: 1,
-                viewport_width: 800.0, font_fingerprint: "f1".into(),
+                document_revision: crate::editor::strong_types::EditorRevision::new(1),
+                layout_revision: 1,
+                viewport_width: 800.0,
+                font_fingerprint: "f1".into(),
                 paragraph_style_fingerprint: "p1".into(),
-                text_color_fingerprint: "t1".into(), density_or_dpr: 2.0,
+                text_color_fingerprint: "t1".into(),
+                density_or_dpr: 2.0,
             },
             new_revision: crate::editor::VisualLayoutRevision {
-                document_revision: crate::editor::strong_types::EditorRevision::new(2), layout_revision: 2,
-                viewport_width: 800.0, font_fingerprint: "f1".into(),
+                document_revision: crate::editor::strong_types::EditorRevision::new(2),
+                layout_revision: 2,
+                viewport_width: 800.0,
+                font_fingerprint: "f1".into(),
                 paragraph_style_fingerprint: "p1".into(),
-                text_color_fingerprint: "t1".into(), density_or_dpr: 2.0,
+                text_color_fingerprint: "t1".into(),
+                density_or_dpr: 2.0,
             },
             slice_roles: vec![crate::editor::AnimatedSliceRole::Insert],
-            slice_document_byte_ranges: vec![crate::editor::strong_types::Utf8ByteRange::from_ordered(2, 3)],
+            slice_document_byte_ranges: vec![
+                crate::editor::strong_types::Utf8ByteRange::from_ordered(2, 3),
+            ],
             static_line_patches: Vec::new(),
             cursor_transition_byte_start: crate::editor::strong_types::Utf8ByteOffset::unchecked(2),
             cursor_transition_byte_end: crate::editor::strong_types::Utf8ByteOffset::unchecked(3),
@@ -1294,15 +1355,42 @@ mod tests {
 
     #[test]
     fn editor_operation_kind_dto_from_core() {
-        assert_eq!(EditorOperationKindDto::from(crate::editor::EditorOperationKind::Insert), EditorOperationKindDto::Insert);
-        assert_eq!(EditorOperationKindDto::from(crate::editor::EditorOperationKind::Delete), EditorOperationKindDto::Delete);
-        assert_eq!(EditorOperationKindDto::from(crate::editor::EditorOperationKind::Replace), EditorOperationKindDto::Replace);
-        assert_eq!(EditorOperationKindDto::from(crate::editor::EditorOperationKind::CursorOnly), EditorOperationKindDto::CursorOnly);
-        assert_eq!(EditorOperationKindDto::from(crate::editor::EditorOperationKind::CompositionUpdate), EditorOperationKindDto::CompositionUpdate);
-        assert_eq!(EditorOperationKindDto::from(crate::editor::EditorOperationKind::CompositionCommit), EditorOperationKindDto::CompositionCommit);
-        assert_eq!(EditorOperationKindDto::from(crate::editor::EditorOperationKind::CompositionCancel), EditorOperationKindDto::CompositionCancel);
-        assert_eq!(EditorOperationKindDto::from(crate::editor::EditorOperationKind::Load), EditorOperationKindDto::Load);
-        assert_eq!(EditorOperationKindDto::from(crate::editor::EditorOperationKind::Format), EditorOperationKindDto::Format);
+        assert_eq!(
+            EditorOperationKindDto::from(crate::editor::EditorOperationKind::Insert),
+            EditorOperationKindDto::Insert
+        );
+        assert_eq!(
+            EditorOperationKindDto::from(crate::editor::EditorOperationKind::Delete),
+            EditorOperationKindDto::Delete
+        );
+        assert_eq!(
+            EditorOperationKindDto::from(crate::editor::EditorOperationKind::Replace),
+            EditorOperationKindDto::Replace
+        );
+        assert_eq!(
+            EditorOperationKindDto::from(crate::editor::EditorOperationKind::CursorOnly),
+            EditorOperationKindDto::CursorOnly
+        );
+        assert_eq!(
+            EditorOperationKindDto::from(crate::editor::EditorOperationKind::CompositionUpdate),
+            EditorOperationKindDto::CompositionUpdate
+        );
+        assert_eq!(
+            EditorOperationKindDto::from(crate::editor::EditorOperationKind::CompositionCommit),
+            EditorOperationKindDto::CompositionCommit
+        );
+        assert_eq!(
+            EditorOperationKindDto::from(crate::editor::EditorOperationKind::CompositionCancel),
+            EditorOperationKindDto::CompositionCancel
+        );
+        assert_eq!(
+            EditorOperationKindDto::from(crate::editor::EditorOperationKind::Load),
+            EditorOperationKindDto::Load
+        );
+        assert_eq!(
+            EditorOperationKindDto::from(crate::editor::EditorOperationKind::Format),
+            EditorOperationKindDto::Format
+        );
     }
 
     #[test]
@@ -1319,7 +1407,10 @@ mod tests {
         assert_eq!(dto.base_revision, 0);
         assert_eq!(dto.new_revision, 1);
         assert!(!dto.display_patches.is_empty());
-        assert_eq!(dto.visual_intent.operation_kind, EditorOperationKindDto::Insert);
+        assert_eq!(
+            dto.visual_intent.operation_kind,
+            EditorOperationKindDto::Insert
+        );
     }
 
     #[test]
@@ -1327,9 +1418,13 @@ mod tests {
         let patch = crate::editor::DisplayPatch {
             base_revision: crate::editor::strong_types::EditorRevision::new(0),
             new_revision: crate::editor::strong_types::EditorRevision::new(1),
-            replace_byte_range: crate::editor::strong_types::Utf8ByteRange::try_new("abc", 2, 2).unwrap(),
+            replace_byte_range: crate::editor::strong_types::Utf8ByteRange::try_new("abc", 2, 2)
+                .unwrap(),
             inserted_text: "c".to_string(),
-            resulting_selection_byte_range: crate::editor::strong_types::Utf8ByteRange::try_new("abc", 3, 3).unwrap(),
+            resulting_selection_byte_range: crate::editor::strong_types::Utf8ByteRange::try_new(
+                "abc", 3, 3,
+            )
+            .unwrap(),
         };
         let dto: DisplayPatchDto = patch.into();
         assert_eq!(dto.base_revision, 0);
@@ -1345,12 +1440,16 @@ mod tests {
             cause: crate::editor::EditorTransactionCause::Typing,
             operation_kind: crate::editor::EditorOperationKind::Insert,
             old_affected_byte_ranges: vec![],
-            new_affected_byte_ranges: vec![crate::editor::strong_types::Utf8ByteRange::try_new("abcde", 2, 5).unwrap()],
+            new_affected_byte_ranges: vec![crate::editor::strong_types::Utf8ByteRange::try_new(
+                "abcde", 2, 5,
+            )
+            .unwrap()],
             animation_mode: crate::editor::AnimationMode::GlyphAnimation,
             duration_ms: 160,
             coordinated_cursor: crate::editor::CoordinatedCursor {
                 old_offset: crate::editor::strong_types::Utf8ByteOffset::try_new("ab", 2).unwrap(),
-                new_offset: crate::editor::strong_types::Utf8ByteOffset::try_new("abcdef", 5).unwrap(),
+                new_offset: crate::editor::strong_types::Utf8ByteOffset::try_new("abcdef", 5)
+                    .unwrap(),
                 should_animate: true,
             },
         };
@@ -1373,28 +1472,120 @@ mod tests {
         let dto: EditorEditResultDto = result.into();
         let json = serde_json::to_string(&dto).unwrap();
 
-        assert!(json.contains("\"transactionId\":"), "DTO JSON should use camelCase for transactionId, got: {}", json);
-        assert!(json.contains("\"baseRevision\":"), "DTO JSON should use camelCase for baseRevision, got: {}", json);
-        assert!(json.contains("\"newRevision\":"), "DTO JSON should use camelCase for newRevision, got: {}", json);
-        assert!(json.contains("\"displayPatches\":"), "DTO JSON should use camelCase for displayPatches, got: {}", json);
-        assert!(json.contains("\"oldSelectionStart\":"), "DTO JSON should use camelCase for oldSelectionStart, got: {}", json);
-        assert!(json.contains("\"oldSelectionEnd\":"), "DTO JSON should use camelCase for oldSelectionEnd, got: {}", json);
-        assert!(json.contains("\"newSelectionStart\":"), "DTO JSON should use camelCase for newSelectionStart, got: {}", json);
-        assert!(json.contains("\"newSelectionEnd\":"), "DTO JSON should use camelCase for newSelectionEnd, got: {}", json);
-        assert!(json.contains("\"visualIntent\":"), "DTO JSON should use camelCase for visualIntent, got: {}", json);
-        assert!(json.contains("\"replaceByteStart\":"), "DTO JSON should use camelCase for replaceByteStart, got: {}", json);
-        assert!(json.contains("\"replaceByteEndExclusive\":"), "DTO JSON should use camelCase for replaceByteEndExclusive, got: {}", json);
-        assert!(json.contains("\"insertedText\":"), "DTO JSON should use camelCase for insertedText, got: {}", json);
-        assert!(json.contains("\"resultingSelectionStart\":"), "DTO JSON should use camelCase for resultingSelectionStart, got: {}", json);
-        assert!(json.contains("\"resultingSelectionEnd\":"), "DTO JSON should use camelCase for resultingSelectionEnd, got: {}", json);
-        assert!(json.contains("\"operationKind\":"), "DTO JSON should use camelCase for operationKind, got: {}", json);
-        assert!(json.contains("\"animationMode\":"), "DTO JSON should use camelCase for animationMode, got: {}", json);
-        assert!(json.contains("\"durationMs\":"), "DTO JSON should use camelCase for durationMs, got: {}", json);
-        assert!(json.contains("\"coordinatedCursor\":"), "DTO JSON should use camelCase for coordinatedCursor, got: {}", json);
-        assert!(json.contains("\"oldByteOffset\":"), "DTO JSON should use camelCase for oldByteOffset, got: {}", json);
-        assert!(json.contains("\"newByteOffset\":"), "DTO JSON should use camelCase for newByteOffset, got: {}", json);
-        assert!(json.contains("\"shouldAnimate\":"), "DTO JSON should use camelCase for shouldAnimate, got: {}", json);
-        assert!(json.contains("\"oldAffectedByteRanges\":"), "DTO JSON should use camelCase for oldAffectedByteRanges, got: {}", json);
-        assert!(json.contains("\"newAffectedByteRanges\":"), "DTO JSON should use camelCase for newAffectedByteRanges, got: {}", json);
+        assert!(
+            json.contains("\"transactionId\":"),
+            "DTO JSON should use camelCase for transactionId, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"baseRevision\":"),
+            "DTO JSON should use camelCase for baseRevision, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"newRevision\":"),
+            "DTO JSON should use camelCase for newRevision, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"displayPatches\":"),
+            "DTO JSON should use camelCase for displayPatches, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"oldSelectionStart\":"),
+            "DTO JSON should use camelCase for oldSelectionStart, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"oldSelectionEnd\":"),
+            "DTO JSON should use camelCase for oldSelectionEnd, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"newSelectionStart\":"),
+            "DTO JSON should use camelCase for newSelectionStart, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"newSelectionEnd\":"),
+            "DTO JSON should use camelCase for newSelectionEnd, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"visualIntent\":"),
+            "DTO JSON should use camelCase for visualIntent, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"replaceByteStart\":"),
+            "DTO JSON should use camelCase for replaceByteStart, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"replaceByteEndExclusive\":"),
+            "DTO JSON should use camelCase for replaceByteEndExclusive, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"insertedText\":"),
+            "DTO JSON should use camelCase for insertedText, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"resultingSelectionStart\":"),
+            "DTO JSON should use camelCase for resultingSelectionStart, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"resultingSelectionEnd\":"),
+            "DTO JSON should use camelCase for resultingSelectionEnd, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"operationKind\":"),
+            "DTO JSON should use camelCase for operationKind, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"animationMode\":"),
+            "DTO JSON should use camelCase for animationMode, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"durationMs\":"),
+            "DTO JSON should use camelCase for durationMs, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"coordinatedCursor\":"),
+            "DTO JSON should use camelCase for coordinatedCursor, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"oldByteOffset\":"),
+            "DTO JSON should use camelCase for oldByteOffset, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"newByteOffset\":"),
+            "DTO JSON should use camelCase for newByteOffset, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"shouldAnimate\":"),
+            "DTO JSON should use camelCase for shouldAnimate, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"oldAffectedByteRanges\":"),
+            "DTO JSON should use camelCase for oldAffectedByteRanges, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"newAffectedByteRanges\":"),
+            "DTO JSON should use camelCase for newAffectedByteRanges, got: {}",
+            json
+        );
     }
 }

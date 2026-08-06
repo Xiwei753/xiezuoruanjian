@@ -1,14 +1,12 @@
 use serde::{Deserialize, Serialize};
 
-use super::visual::{
-    AnimatedSliceRole, CursorPath, DecorationSlice, StaticLinePatch, Timeline,
-    UnifiedTransactionKind, VisualClassKind, VisualLayoutRevision,
-    PlatformVisualTransactionState,
-};
 use super::composition::CompositionVisualRevision;
 use super::rebase::{TransactionCancelReason, TransactionRebase};
-use crate::editor::strong_types::{EditorSessionGeneration, Utf8ByteRange, Utf8ByteOffset};
-
+use super::visual::{
+    AnimatedSliceRole, CursorPath, DecorationSlice, PlatformVisualTransactionState,
+    StaticLinePatch, Timeline, UnifiedTransactionKind, VisualClassKind, VisualLayoutRevision,
+};
+use crate::editor::strong_types::{EditorSessionGeneration, Utf8ByteOffset, Utf8ByteRange};
 
 /// 跨平台视觉事务语义边界。
 ///
@@ -40,15 +38,24 @@ pub struct PlatformVisualTransaction {
     /// 切片角色列表（与 slice_document_byte_ranges / visual_class_kinds 对应）
     pub slice_roles: Vec<AnimatedSliceRole>,
     /// 切片文档字节范围列表（半开区间 `[start, end)`，UTF-8 byte offset）
-    #[serde(serialize_with = "crate::editor::strong_types::ser_range_vec", deserialize_with = "crate::editor::strong_types::de_range_vec")]
+    #[serde(
+        serialize_with = "crate::editor::strong_types::ser_range_vec",
+        deserialize_with = "crate::editor::strong_types::de_range_vec"
+    )]
     pub slice_document_byte_ranges: Vec<Utf8ByteRange>,
     /// 静态行补丁列表（不需要动画的行）
     pub static_line_patches: Vec<StaticLinePatch>,
     /// 光标过渡范围起始（UTF-8 byte offset）
-    #[serde(serialize_with = "crate::editor::strong_types::ser_offset", deserialize_with = "crate::editor::strong_types::de_offset")]
+    #[serde(
+        serialize_with = "crate::editor::strong_types::ser_offset",
+        deserialize_with = "crate::editor::strong_types::de_offset"
+    )]
     pub cursor_transition_byte_start: Utf8ByteOffset,
     /// 光标过渡范围结束（UTF-8 byte offset）
-    #[serde(serialize_with = "crate::editor::strong_types::ser_offset", deserialize_with = "crate::editor::strong_types::de_offset")]
+    #[serde(
+        serialize_with = "crate::editor::strong_types::ser_offset",
+        deserialize_with = "crate::editor::strong_types::de_offset"
+    )]
     pub cursor_transition_byte_end: Utf8ByteOffset,
     pub duration_ms: u64,
     pub rendering_started_at_ms: Option<u64>,

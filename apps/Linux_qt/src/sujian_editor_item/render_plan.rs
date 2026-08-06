@@ -1,8 +1,8 @@
-use super::transaction_key::VisualTransactionKey;
-use super::cursor_animation::CursorAnimationPlan;
 use super::animation_mode::AnimationMode;
-use super::layout_snapshot::{LineSnapshotId, SourceRect};
+use super::cursor_animation::CursorAnimationPlan;
 use super::decoration_slice::DecorationSlice;
+use super::layout_snapshot::{LineSnapshotId, SourceRect};
+use super::transaction_key::VisualTransactionKey;
 
 #[derive(Clone, Debug)]
 pub(crate) struct HiddenClipRect {
@@ -109,14 +109,12 @@ pub(crate) struct PreeditRange {
     pub underline: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) enum ImeUpdateKind {
     #[default]
     None,
     QueryInput,
 }
-
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ImeUpdatePlan {

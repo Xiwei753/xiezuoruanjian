@@ -12,7 +12,11 @@ impl StarMapStore {
     }
 
     pub fn enqueue_save(&mut self, entry: SaveQueueEntry) {
-        if !self.save_queue.iter().any(|e| std::mem::discriminant(e) == std::mem::discriminant(&entry)) {
+        if !self
+            .save_queue
+            .iter()
+            .any(|e| std::mem::discriminant(e) == std::mem::discriminant(&entry))
+        {
             self.save_queue.push_back(entry);
         }
     }
@@ -21,6 +25,13 @@ impl StarMapStore {
         self.save_queue.drain(..).collect()
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
     pub fn flush_save_queue(&mut self) -> Result<()> {
         let mut remaining: VecDeque<SaveQueueEntry> = VecDeque::new();
         let mut any_processed = false;
@@ -33,7 +44,9 @@ impl StarMapStore {
                     let ids: Vec<String> = self.dirty_nodes.iter().cloned().collect();
                     for node_id in &ids {
                         if let Some(node) = self.nodes.get(node_id) {
-                            if package_storage::save_node(&self.workspace, &self.starmap_id, node).is_err() {
+                            if package_storage::save_node(&self.workspace, &self.starmap_id, node)
+                                .is_err()
+                            {
                                 succeeded = false;
                                 break;
                             }
@@ -45,7 +58,9 @@ impl StarMapStore {
                     let ids: Vec<String> = self.dirty_edges.iter().cloned().collect();
                     for edge_id in &ids {
                         if let Some(edge) = self.edges.get(edge_id) {
-                            if package_storage::save_edge(&self.workspace, &self.starmap_id, edge).is_err() {
+                            if package_storage::save_edge(&self.workspace, &self.starmap_id, edge)
+                                .is_err()
+                            {
                                 succeeded = false;
                                 break;
                             }
@@ -57,7 +72,9 @@ impl StarMapStore {
                     let ids: Vec<String> = self.dirty_embeds.iter().cloned().collect();
                     for instance_id in &ids {
                         if let Some(embed) = self.embeds.get(instance_id) {
-                            if package_storage::save_embed(&self.workspace, &self.starmap_id, embed).is_err() {
+                            if package_storage::save_embed(&self.workspace, &self.starmap_id, embed)
+                                .is_err()
+                            {
                                 succeeded = false;
                                 break;
                             }
@@ -69,7 +86,9 @@ impl StarMapStore {
                     let ids: Vec<String> = self.dirty_links.iter().cloned().collect();
                     for link_id in &ids {
                         if let Some(link) = self.links.get(link_id) {
-                            if package_storage::save_link(&self.workspace, &self.starmap_id, link).is_err() {
+                            if package_storage::save_link(&self.workspace, &self.starmap_id, link)
+                                .is_err()
+                            {
                                 succeeded = false;
                                 break;
                             }
@@ -81,7 +100,13 @@ impl StarMapStore {
                     let ids: Vec<String> = self.dirty_hyperlinks.iter().cloned().collect();
                     for hl_id in &ids {
                         if let Some(hl) = self.hyperlinks.get(hl_id) {
-                            if package_storage::save_hyperlink(&self.workspace, &self.starmap_id, hl).is_err() {
+                            if package_storage::save_hyperlink(
+                                &self.workspace,
+                                &self.starmap_id,
+                                hl,
+                            )
+                            .is_err()
+                            {
                                 succeeded = false;
                                 break;
                             }
@@ -92,7 +117,13 @@ impl StarMapStore {
                 SaveQueueEntry::Layout => {
                     if self.dirty_layout {
                         if let Some(ref layout) = self.layout {
-                            if package_storage::save_layout(&self.workspace, &self.starmap_id, layout).is_err() {
+                            if package_storage::save_layout(
+                                &self.workspace,
+                                &self.starmap_id,
+                                layout,
+                            )
+                            .is_err()
+                            {
                                 succeeded = false;
                             }
                         }
@@ -118,8 +149,14 @@ impl StarMapStore {
                 SaveQueueEntry::DeleteNode => {
                     let ids: Vec<String> = self.deleted_node_ids.iter().cloned().collect();
                     for node_id in &ids {
-                        match package_storage::delete_node_file(&self.workspace, &self.starmap_id, node_id) {
-                            Ok(()) => { self.deleted_node_ids.remove(node_id); }
+                        match package_storage::delete_node_file(
+                            &self.workspace,
+                            &self.starmap_id,
+                            node_id,
+                        ) {
+                            Ok(()) => {
+                                self.deleted_node_ids.remove(node_id);
+                            }
                             Err(e) => {
                                 self.record_delete_failure("node", node_id, &e);
                                 succeeded = false;
@@ -131,8 +168,14 @@ impl StarMapStore {
                 SaveQueueEntry::DeleteEdge => {
                     let ids: Vec<String> = self.deleted_edge_ids.iter().cloned().collect();
                     for edge_id in &ids {
-                        match package_storage::delete_edge_file(&self.workspace, &self.starmap_id, edge_id) {
-                            Ok(()) => { self.deleted_edge_ids.remove(edge_id); }
+                        match package_storage::delete_edge_file(
+                            &self.workspace,
+                            &self.starmap_id,
+                            edge_id,
+                        ) {
+                            Ok(()) => {
+                                self.deleted_edge_ids.remove(edge_id);
+                            }
                             Err(e) => {
                                 self.record_delete_failure("edge", edge_id, &e);
                                 succeeded = false;
@@ -144,8 +187,14 @@ impl StarMapStore {
                 SaveQueueEntry::DeleteEmbed => {
                     let ids: Vec<String> = self.deleted_embed_ids.iter().cloned().collect();
                     for instance_id in &ids {
-                        match package_storage::delete_embed_file(&self.workspace, &self.starmap_id, instance_id) {
-                            Ok(()) => { self.deleted_embed_ids.remove(instance_id); }
+                        match package_storage::delete_embed_file(
+                            &self.workspace,
+                            &self.starmap_id,
+                            instance_id,
+                        ) {
+                            Ok(()) => {
+                                self.deleted_embed_ids.remove(instance_id);
+                            }
                             Err(e) => {
                                 self.record_delete_failure("embed", instance_id, &e);
                                 succeeded = false;
@@ -157,8 +206,14 @@ impl StarMapStore {
                 SaveQueueEntry::DeleteLink => {
                     let ids: Vec<String> = self.deleted_link_ids.iter().cloned().collect();
                     for link_id in &ids {
-                        match package_storage::delete_link_file(&self.workspace, &self.starmap_id, link_id) {
-                            Ok(()) => { self.deleted_link_ids.remove(link_id); }
+                        match package_storage::delete_link_file(
+                            &self.workspace,
+                            &self.starmap_id,
+                            link_id,
+                        ) {
+                            Ok(()) => {
+                                self.deleted_link_ids.remove(link_id);
+                            }
                             Err(e) => {
                                 self.record_delete_failure("link", link_id, &e);
                                 succeeded = false;
@@ -170,8 +225,14 @@ impl StarMapStore {
                 SaveQueueEntry::DeleteHyperlink => {
                     let ids: Vec<String> = self.deleted_hyperlink_ids.iter().cloned().collect();
                     for hl_id in &ids {
-                        match package_storage::delete_hyperlink_file(&self.workspace, &self.starmap_id, hl_id) {
-                            Ok(()) => { self.deleted_hyperlink_ids.remove(hl_id); }
+                        match package_storage::delete_hyperlink_file(
+                            &self.workspace,
+                            &self.starmap_id,
+                            hl_id,
+                        ) {
+                            Ok(()) => {
+                                self.deleted_hyperlink_ids.remove(hl_id);
+                            }
                             Err(e) => {
                                 self.record_delete_failure("hyperlink", hl_id, &e);
                                 succeeded = false;
@@ -195,13 +256,19 @@ impl StarMapStore {
         }
 
         if any_processed && all_flushed {
-            let node_count: u32 = self.graph_meta.as_ref()
+            let node_count: u32 = self
+                .graph_meta
+                .as_ref()
                 .map(|m| m.node_ids.len().try_into().unwrap_or(u32::MAX))
                 .unwrap_or_else(|| self.nodes.len().try_into().unwrap_or(u32::MAX));
-            let edge_count: u32 = self.graph_meta.as_ref()
+            let edge_count: u32 = self
+                .graph_meta
+                .as_ref()
                 .map(|m| m.edge_ids.len().try_into().unwrap_or(u32::MAX))
                 .unwrap_or_else(|| self.edges.len().try_into().unwrap_or(u32::MAX));
-            let linked_chapters = self.graph_meta.as_ref()
+            let linked_chapters = self
+                .graph_meta
+                .as_ref()
                 .map(|m| *m.node_kind_counts.get("Chapter").unwrap_or(&0))
                 .unwrap_or(0u32);
             crate::starmap::update_starmap_stats(
@@ -223,7 +290,12 @@ impl StarMapStore {
         Ok(())
     }
 
-    pub(in crate::starmap::store) fn record_delete_failure(&mut self, object_type: &str, object_id: &str, error: &crate::error::Error) {
+    pub(in crate::starmap::store) fn record_delete_failure(
+        &mut self,
+        object_type: &str,
+        object_id: &str,
+        error: &crate::error::Error,
+    ) {
         self.recovery_log.push(LoadDiagnostic {
             kind: LoadDiagnosticKind::Corrupt,
             object_type: object_type.to_string(),
@@ -244,6 +316,13 @@ impl StarMapStore {
         self.is_dirty() || self.dirty_graph_meta
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
     pub fn flush(&mut self) -> Result<()> {
         for node_id in &self.dirty_nodes {
             if let Some(node) = self.nodes.get(node_id) {
@@ -284,7 +363,9 @@ impl StarMapStore {
         let node_ids_to_delete: Vec<String> = self.deleted_node_ids.iter().cloned().collect();
         for node_id in &node_ids_to_delete {
             match package_storage::delete_node_file(&self.workspace, &self.starmap_id, node_id) {
-                Ok(()) => { self.deleted_node_ids.remove(node_id); }
+                Ok(()) => {
+                    self.deleted_node_ids.remove(node_id);
+                }
                 Err(e) => {
                     self.record_delete_failure("node", node_id, &e);
                     self.flush_recovery_to_disk()?;
@@ -296,7 +377,9 @@ impl StarMapStore {
         let edge_ids_to_delete: Vec<String> = self.deleted_edge_ids.iter().cloned().collect();
         for edge_id in &edge_ids_to_delete {
             match package_storage::delete_edge_file(&self.workspace, &self.starmap_id, edge_id) {
-                Ok(()) => { self.deleted_edge_ids.remove(edge_id); }
+                Ok(()) => {
+                    self.deleted_edge_ids.remove(edge_id);
+                }
                 Err(e) => {
                     self.record_delete_failure("edge", edge_id, &e);
                     self.flush_recovery_to_disk()?;
@@ -307,8 +390,11 @@ impl StarMapStore {
 
         let embed_ids_to_delete: Vec<String> = self.deleted_embed_ids.iter().cloned().collect();
         for instance_id in &embed_ids_to_delete {
-            match package_storage::delete_embed_file(&self.workspace, &self.starmap_id, instance_id) {
-                Ok(()) => { self.deleted_embed_ids.remove(instance_id); }
+            match package_storage::delete_embed_file(&self.workspace, &self.starmap_id, instance_id)
+            {
+                Ok(()) => {
+                    self.deleted_embed_ids.remove(instance_id);
+                }
                 Err(e) => {
                     self.record_delete_failure("embed", instance_id, &e);
                     self.flush_recovery_to_disk()?;
@@ -320,7 +406,9 @@ impl StarMapStore {
         let link_ids_to_delete: Vec<String> = self.deleted_link_ids.iter().cloned().collect();
         for link_id in &link_ids_to_delete {
             match package_storage::delete_link_file(&self.workspace, &self.starmap_id, link_id) {
-                Ok(()) => { self.deleted_link_ids.remove(link_id); }
+                Ok(()) => {
+                    self.deleted_link_ids.remove(link_id);
+                }
                 Err(e) => {
                     self.record_delete_failure("link", link_id, &e);
                     self.flush_recovery_to_disk()?;
@@ -332,7 +420,9 @@ impl StarMapStore {
         let hl_ids_to_delete: Vec<String> = self.deleted_hyperlink_ids.iter().cloned().collect();
         for hl_id in &hl_ids_to_delete {
             match package_storage::delete_hyperlink_file(&self.workspace, &self.starmap_id, hl_id) {
-                Ok(()) => { self.deleted_hyperlink_ids.remove(hl_id); }
+                Ok(()) => {
+                    self.deleted_hyperlink_ids.remove(hl_id);
+                }
                 Err(e) => {
                     self.record_delete_failure("hyperlink", hl_id, &e);
                     self.flush_recovery_to_disk()?;
@@ -344,13 +434,19 @@ impl StarMapStore {
         let written_revision = self.update_graph_meta_file()?;
         self.package_revision = written_revision;
 
-        let node_count: u32 = self.graph_meta.as_ref()
+        let node_count: u32 = self
+            .graph_meta
+            .as_ref()
             .map(|m| m.node_ids.len().try_into().unwrap_or(u32::MAX))
             .unwrap_or_else(|| self.nodes.len().try_into().unwrap_or(u32::MAX));
-        let edge_count: u32 = self.graph_meta.as_ref()
+        let edge_count: u32 = self
+            .graph_meta
+            .as_ref()
             .map(|m| m.edge_ids.len().try_into().unwrap_or(u32::MAX))
             .unwrap_or_else(|| self.edges.len().try_into().unwrap_or(u32::MAX));
-        let linked_chapters = self.graph_meta.as_ref()
+        let linked_chapters = self
+            .graph_meta
+            .as_ref()
             .map(|m| *m.node_kind_counts.get("Chapter").unwrap_or(&0))
             .unwrap_or(0u32);
         crate::starmap::update_starmap_stats(

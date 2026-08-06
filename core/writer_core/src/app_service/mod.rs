@@ -1,13 +1,13 @@
-mod project_ops;
-mod volume_chapter_ops;
-mod settings_ops;
-mod sync_ops;
-mod stats_ops;
-mod theme_ops;
-mod starmap_ops;
 mod editor_session_ops;
-mod text_edit_session_ops;
+mod project_ops;
 mod search_ops;
+mod settings_ops;
+mod starmap_ops;
+mod stats_ops;
+mod sync_ops;
+mod text_edit_session_ops;
+mod theme_ops;
+mod volume_chapter_ops;
 
 use crate::api::{WriterCoreApi, WriterError};
 
@@ -68,7 +68,10 @@ impl WriterAppService {
         }
     }
 
-    pub fn with_platform_init(workspace_path: String, init: writer_platform_api::PlatformInit) -> Self {
+    pub fn with_platform_init(
+        workspace_path: String,
+        init: writer_platform_api::PlatformInit,
+    ) -> Self {
         Self {
             api: WriterCoreApi::new(workspace_path),
             editor_session: Mutex::new(EditorSession {
@@ -111,7 +114,13 @@ impl WriterAppService {
         }
     }
 
-    pub fn update_network_state(&self, is_connected: bool, is_metered: bool, proxy_host: Option<String>, proxy_port: Option<u16>) {
+    pub fn update_network_state(
+        &self,
+        is_connected: bool,
+        is_metered: bool,
+        proxy_host: Option<String>,
+        proxy_port: Option<u16>,
+    ) {
         if let Ok(mut state) = self.network_state.lock() {
             *state = Some(writer_platform_api::NetworkState {
                 is_connected,
@@ -132,7 +141,10 @@ impl WriterAppService {
         self.platform_init = Some(init);
     }
 
-    pub fn set_sync_transport_factory(&mut self, factory: writer_platform_api::SyncTransportFactory) {
+    pub fn set_sync_transport_factory(
+        &mut self,
+        factory: writer_platform_api::SyncTransportFactory,
+    ) {
         let workspace_path = self.api.workspace_path.clone();
         self.api = WriterCoreApi::with_sync_transport(workspace_path, factory);
     }
@@ -154,7 +166,9 @@ impl WriterAppService {
     }
 
     pub fn device_id(&self) -> Option<&str> {
-        self.platform_init.as_ref().map(|init| init.device_id.as_str())
+        self.platform_init
+            .as_ref()
+            .map(|init| init.device_id.as_str())
     }
 
     pub fn secure_storage_available(&self) -> bool {
@@ -165,7 +179,9 @@ impl WriterAppService {
         if let Some(storage) = &self.api.secure_storage {
             storage.get_secret(&key).map_err(WriterError::Other)
         } else {
-            Err(WriterError::Other("Secure storage not available".to_string()))
+            Err(WriterError::Other(
+                "Secure storage not available".to_string(),
+            ))
         }
     }
 
@@ -173,7 +189,9 @@ impl WriterAppService {
         if let Some(storage) = &self.api.secure_storage {
             storage.set_secret(&key, &value).map_err(WriterError::Other)
         } else {
-            Err(WriterError::Other("Secure storage not available".to_string()))
+            Err(WriterError::Other(
+                "Secure storage not available".to_string(),
+            ))
         }
     }
 
@@ -181,7 +199,9 @@ impl WriterAppService {
         if let Some(storage) = &self.api.secure_storage {
             storage.delete_secret(&key).map_err(WriterError::Other)
         } else {
-            Err(WriterError::Other("Secure storage not available".to_string()))
+            Err(WriterError::Other(
+                "Secure storage not available".to_string(),
+            ))
         }
     }
 
@@ -233,7 +253,6 @@ impl WriterAppService {
             action_slots: action_slots.into_iter().map(Into::into).collect(),
         }
     }
-
 }
 
 #[cfg(test)]
@@ -245,7 +264,10 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let svc = WriterAppService::new(dir.path().to_string_lossy().to_string());
         let result = svc.editor_kernel_load_text("你好".to_string(), 4);
-        assert_eq!(result.outcome, crate::api::EditorEditOutcomeDto::InvalidOffset);
+        assert_eq!(
+            result.outcome,
+            crate::api::EditorEditOutcomeDto::InvalidOffset
+        );
     }
 
     #[test]
@@ -260,26 +282,23 @@ mod tests {
     fn text_edit_session_load_text_rejects_invalid_offset() {
         let dir = tempfile::TempDir::new().unwrap();
         let svc = WriterAppService::new(dir.path().to_string_lossy().to_string());
-        let session_id = svc.text_edit_session_create(
-            "test".to_string(),
-            String::new(),
-            0,
-            0,
-        ).unwrap();
+        let session_id = svc
+            .text_edit_session_create("test".to_string(), String::new(), 0, 0)
+            .unwrap();
         let result = svc.text_edit_session_load_text(session_id, "你好".to_string(), 4);
-        assert_eq!(result.outcome, crate::api::EditorEditOutcomeDto::InvalidOffset);
+        assert_eq!(
+            result.outcome,
+            crate::api::EditorEditOutcomeDto::InvalidOffset
+        );
     }
 
     #[test]
     fn text_edit_session_reset_rejects_invalid_offset() {
         let dir = tempfile::TempDir::new().unwrap();
         let svc = WriterAppService::new(dir.path().to_string_lossy().to_string());
-        let session_id = svc.text_edit_session_create(
-            "test".to_string(),
-            String::new(),
-            0,
-            0,
-        ).unwrap();
+        let session_id = svc
+            .text_edit_session_create("test".to_string(), String::new(), 0, 0)
+            .unwrap();
         let result = svc.text_edit_session_reset(session_id, "你好".to_string(), 4);
         assert_eq!(result, 0);
     }
@@ -317,7 +336,10 @@ mod tests {
             3,
             load.new_revision,
         );
-        assert_eq!(result.outcome, crate::api::EditorEditOutcomeDto::InvalidOffset);
+        assert_eq!(
+            result.outcome,
+            crate::api::EditorEditOutcomeDto::InvalidOffset
+        );
     }
 
     #[test]
@@ -329,7 +351,8 @@ mod tests {
         let secrets = crate::api::SyncSecretsDto {
             token: Some("token-a".to_string()),
         };
-        svc.set_sync_secrets_override(secrets).expect("set override");
+        svc.set_sync_secrets_override(secrets)
+            .expect("set override");
         assert!(svc.api.core().has_secrets_override());
         svc.clear_sync_secrets_override().expect("clear override");
         assert!(!svc.api.core().has_secrets_override());

@@ -72,7 +72,11 @@ impl ParagraphIndexMap {
     /// 文档级 UTF-8 byte offset → QChar index。
     ///
     /// 越界回退：byte offset 超出段落范围时返回段落的 QChar 长度（末尾位置）。
-    pub fn document_byte_to_qchar(&self, document_byte: usize, paragraph_document_byte_start: usize) -> usize {
+    pub fn document_byte_to_qchar(
+        &self,
+        document_byte: usize,
+        paragraph_document_byte_start: usize,
+    ) -> usize {
         let local_byte = document_byte.saturating_sub(paragraph_document_byte_start);
         self.document_byte_to_qchar
             .get(local_byte)
@@ -262,9 +266,18 @@ mod tests {
 
     #[test]
     fn test_utf16_range_to_utf8_range() {
-        assert_eq!(utf16_code_unit_range_to_utf8_byte_range("a😀b", 1, 2), (1, 5));
-        assert_eq!(utf16_code_unit_range_to_utf8_byte_range("你好", 0, 2), (0, 6));
-        assert_eq!(utf16_code_unit_range_to_utf8_byte_range("abc", 0, 3), (0, 3));
+        assert_eq!(
+            utf16_code_unit_range_to_utf8_byte_range("a😀b", 1, 2),
+            (1, 5)
+        );
+        assert_eq!(
+            utf16_code_unit_range_to_utf8_byte_range("你好", 0, 2),
+            (0, 6)
+        );
+        assert_eq!(
+            utf16_code_unit_range_to_utf8_byte_range("abc", 0, 3),
+            (0, 3)
+        );
     }
 
     #[test]

@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::relation_index::{EdgeRelationIndex, EmbedHostIndex, LinkRelationIndex, HyperlinkRelationIndex};
+use super::relation_index::{
+    EdgeRelationIndex, EmbedHostIndex, HyperlinkRelationIndex, LinkRelationIndex,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,15 +58,19 @@ impl DeletedSinceLastSync {
     }
 
     pub fn remove_entry(&mut self, object_type: &str, object_id: &str) {
-        self.entries.retain(|e| !(e.object_type == object_type && e.object_id == object_id));
+        self.entries
+            .retain(|e| !(e.object_type == object_type && e.object_id == object_id));
     }
 
     pub fn entries_since(&self, since_revision: u64) -> impl Iterator<Item = &DeletionEntry> {
-        self.entries.iter().filter(move |e| e.deleted_at_revision > since_revision)
+        self.entries
+            .iter()
+            .filter(move |e| e.deleted_at_revision > since_revision)
     }
 
     pub fn compact(&mut self, keep_since_revision: u64) {
-        self.entries.retain(|e| e.deleted_at_revision >= keep_since_revision);
+        self.entries
+            .retain(|e| e.deleted_at_revision >= keep_since_revision);
     }
 }
 

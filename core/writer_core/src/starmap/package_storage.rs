@@ -42,7 +42,9 @@ pub(crate) fn bucket_for_id(id: &str) -> &str {
 }
 
 fn node_path(dir: &Path, node_id: &str) -> PathBuf {
-    dir.join("nodes").join(bucket_for_id(node_id)).join(format!("{}.json", node_id))
+    dir.join("nodes")
+        .join(bucket_for_id(node_id))
+        .join(format!("{}.json", node_id))
 }
 
 fn flat_node_path(dir: &Path, node_id: &str) -> PathBuf {
@@ -50,7 +52,9 @@ fn flat_node_path(dir: &Path, node_id: &str) -> PathBuf {
 }
 
 fn edge_path(dir: &Path, edge_id: &str) -> PathBuf {
-    dir.join("edges").join(bucket_for_id(edge_id)).join(format!("{}.json", edge_id))
+    dir.join("edges")
+        .join(bucket_for_id(edge_id))
+        .join(format!("{}.json", edge_id))
 }
 
 fn flat_edge_path(dir: &Path, edge_id: &str) -> PathBuf {
@@ -58,15 +62,20 @@ fn flat_edge_path(dir: &Path, edge_id: &str) -> PathBuf {
 }
 
 fn child_starmap_path(dir: &Path, instance_id: &str) -> PathBuf {
-    dir.join("child_starmaps").join(bucket_for_id(instance_id)).join(format!("{}.json", instance_id))
+    dir.join("child_starmaps")
+        .join(bucket_for_id(instance_id))
+        .join(format!("{}.json", instance_id))
 }
 
 fn flat_child_starmap_path(dir: &Path, instance_id: &str) -> PathBuf {
-    dir.join("child_starmaps").join(format!("{}.json", instance_id))
+    dir.join("child_starmaps")
+        .join(format!("{}.json", instance_id))
 }
 
 fn link_path(dir: &Path, link_id: &str) -> PathBuf {
-    dir.join("links").join(bucket_for_id(link_id)).join(format!("{}.json", link_id))
+    dir.join("links")
+        .join(bucket_for_id(link_id))
+        .join(format!("{}.json", link_id))
 }
 
 fn flat_link_path(dir: &Path, link_id: &str) -> PathBuf {
@@ -74,11 +83,14 @@ fn flat_link_path(dir: &Path, link_id: &str) -> PathBuf {
 }
 
 fn hyperlink_path(dir: &Path, hyperlink_id: &str) -> PathBuf {
-    dir.join("hyperlinks").join(bucket_for_id(hyperlink_id)).join(format!("{}.json", hyperlink_id))
+    dir.join("hyperlinks")
+        .join(bucket_for_id(hyperlink_id))
+        .join(format!("{}.json", hyperlink_id))
 }
 
 fn flat_hyperlink_path(dir: &Path, hyperlink_id: &str) -> PathBuf {
-    dir.join("hyperlinks").join(format!("{}.json", hyperlink_id))
+    dir.join("hyperlinks")
+        .join(format!("{}.json", hyperlink_id))
 }
 
 fn layout_dir(dir: &Path) -> PathBuf {
@@ -94,7 +106,9 @@ fn layout_kind_path(dir: &Path) -> PathBuf {
 }
 
 fn layout_nodes_shard_path(dir: &Path, bucket: &str) -> PathBuf {
-    layout_dir(dir).join("nodes").join(format!("{}.json", bucket))
+    layout_dir(dir)
+        .join("nodes")
+        .join(format!("{}.json", bucket))
 }
 
 fn session_dir(workspace: &Path, starmap_id: &str) -> PathBuf {
@@ -149,7 +163,10 @@ pub fn delete_edge_file(workspace: &Path, starmap_id: &str, edge_id: &str) -> Re
 
 pub fn save_embed(workspace: &Path, starmap_id: &str, embed: &StarMapEmbed) -> Result<()> {
     let dir = starmap_pkg_dir(workspace, starmap_id);
-    fs::create_dir_all(dir.join("child_starmaps").join(bucket_for_id(&embed.instance_id)))?;
+    fs::create_dir_all(
+        dir.join("child_starmaps")
+            .join(bucket_for_id(&embed.instance_id)),
+    )?;
     let json = serde_json::to_string_pretty(embed)?;
     atomic_write_string(&child_starmap_path(&dir, &embed.instance_id), &json)?;
     Ok(())
@@ -233,8 +250,8 @@ pub(crate) fn save_layout_sharded(dir: &Path, layout: &StarMapLayout) -> Result<
     }
 
     let all_buckets = [
-        "00","01","02","03","04","05","06","07",
-        "08","09","0a","0b","0c","0d","0e","0f",
+        "00", "01", "02", "03", "04", "05", "06", "07", "08", "09", "0a", "0b", "0c", "0d", "0e",
+        "0f",
     ];
     for b in &all_buckets {
         if !buckets.contains_key(b) {
@@ -248,6 +265,13 @@ pub(crate) fn save_layout_sharded(dir: &Path, layout: &StarMapLayout) -> Result<
     Ok(())
 }
 
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 pub(crate) fn load_layout_sharded(dir: &Path) -> Option<StarMapLayout> {
     let kind_path = layout_kind_path(dir);
     if !kind_path.exists() {
@@ -404,15 +428,31 @@ mod tests {
             nodes: vec![
                 StarMapLayoutNode {
                     node_id: "n1".to_string(),
-                    x: 10.0, y: 20.0, width: 150.0, height: 60.0,
-                    radius: 30.0, collapsed: false, z_index: 0,
-                    scale: 1.0, depth: 0.0, focus_weight: 0.0, orbit_group: None,
+                    x: 10.0,
+                    y: 20.0,
+                    width: 150.0,
+                    height: 60.0,
+                    radius: 30.0,
+                    collapsed: false,
+                    z_index: 0,
+                    scale: 1.0,
+                    depth: 0.0,
+                    focus_weight: 0.0,
+                    orbit_group: None,
                 },
                 StarMapLayoutNode {
                     node_id: "n2".to_string(),
-                    x: 200.0, y: 100.0, width: 150.0, height: 60.0,
-                    radius: 30.0, collapsed: false, z_index: 1,
-                    scale: 1.0, depth: 0.0, focus_weight: 0.0, orbit_group: None,
+                    x: 200.0,
+                    y: 100.0,
+                    width: 150.0,
+                    height: 60.0,
+                    radius: 30.0,
+                    collapsed: false,
+                    z_index: 1,
+                    scale: 1.0,
+                    depth: 0.0,
+                    focus_weight: 0.0,
+                    orbit_group: None,
                 },
             ],
         };
@@ -439,15 +479,31 @@ mod tests {
             nodes: vec![
                 StarMapLayoutNode {
                     node_id: "anode".to_string(),
-                    x: 0.0, y: 0.0, width: 150.0, height: 60.0,
-                    radius: 30.0, collapsed: false, z_index: 0,
-                    scale: 1.0, depth: 0.0, focus_weight: 0.0, orbit_group: None,
+                    x: 0.0,
+                    y: 0.0,
+                    width: 150.0,
+                    height: 60.0,
+                    radius: 30.0,
+                    collapsed: false,
+                    z_index: 0,
+                    scale: 1.0,
+                    depth: 0.0,
+                    focus_weight: 0.0,
+                    orbit_group: None,
                 },
                 StarMapLayoutNode {
                     node_id: "Anode".to_string(),
-                    x: 0.0, y: 0.0, width: 150.0, height: 60.0,
-                    radius: 30.0, collapsed: false, z_index: 0,
-                    scale: 1.0, depth: 0.0, focus_weight: 0.0, orbit_group: None,
+                    x: 0.0,
+                    y: 0.0,
+                    width: 150.0,
+                    height: 60.0,
+                    radius: 30.0,
+                    collapsed: false,
+                    z_index: 0,
+                    scale: 1.0,
+                    depth: 0.0,
+                    focus_weight: 0.0,
+                    orbit_group: None,
                 },
             ],
         };
@@ -456,7 +512,10 @@ mod tests {
         let pkg_dir = starmap_pkg_dir(dir.path(), &meta.starmap_id);
         let a_bucket = bucket_for_id("anode");
         let upper_a_bucket = bucket_for_id("Anode");
-        assert_ne!(a_bucket, upper_a_bucket, "lowercase a and uppercase A should be in different buckets");
+        assert_ne!(
+            a_bucket, upper_a_bucket,
+            "lowercase a and uppercase A should be in different buckets"
+        );
         assert!(layout_nodes_shard_path(&pkg_dir, a_bucket).exists());
         assert!(layout_nodes_shard_path(&pkg_dir, upper_a_bucket).exists());
     }
@@ -469,14 +528,20 @@ mod tests {
 
         let legacy_layout = StarMapLayout {
             kind: StarMapLayoutKind::Freeform,
-            nodes: vec![
-                StarMapLayoutNode {
-                    node_id: "legacy_n1".to_string(),
-                    x: 50.0, y: 50.0, width: 150.0, height: 60.0,
-                    radius: 30.0, collapsed: false, z_index: 0,
-                    scale: 1.0, depth: 0.0, focus_weight: 0.0, orbit_group: None,
-                },
-            ],
+            nodes: vec![StarMapLayoutNode {
+                node_id: "legacy_n1".to_string(),
+                x: 50.0,
+                y: 50.0,
+                width: 150.0,
+                height: 60.0,
+                radius: 30.0,
+                collapsed: false,
+                z_index: 0,
+                scale: 1.0,
+                depth: 0.0,
+                focus_weight: 0.0,
+                orbit_group: None,
+            }],
         };
         fs::create_dir_all(pkg_dir.join("layouts")).unwrap();
         let json = serde_json::to_string_pretty(&legacy_layout).unwrap();
@@ -504,15 +569,31 @@ mod tests {
             nodes: vec![
                 StarMapLayoutNode {
                     node_id: "anode".to_string(),
-                    x: 0.0, y: 0.0, width: 150.0, height: 60.0,
-                    radius: 30.0, collapsed: false, z_index: 0,
-                    scale: 1.0, depth: 0.0, focus_weight: 0.0, orbit_group: None,
+                    x: 0.0,
+                    y: 0.0,
+                    width: 150.0,
+                    height: 60.0,
+                    radius: 30.0,
+                    collapsed: false,
+                    z_index: 0,
+                    scale: 1.0,
+                    depth: 0.0,
+                    focus_weight: 0.0,
+                    orbit_group: None,
                 },
                 StarMapLayoutNode {
                     node_id: "Anode".to_string(),
-                    x: 0.0, y: 0.0, width: 150.0, height: 60.0,
-                    radius: 30.0, collapsed: false, z_index: 0,
-                    scale: 1.0, depth: 0.0, focus_weight: 0.0, orbit_group: None,
+                    x: 0.0,
+                    y: 0.0,
+                    width: 150.0,
+                    height: 60.0,
+                    radius: 30.0,
+                    collapsed: false,
+                    z_index: 0,
+                    scale: 1.0,
+                    depth: 0.0,
+                    focus_weight: 0.0,
+                    orbit_group: None,
                 },
             ],
         };
@@ -522,14 +603,20 @@ mod tests {
 
         let layout_reduced = StarMapLayout {
             kind: StarMapLayoutKind::Freeform,
-            nodes: vec![
-                StarMapLayoutNode {
-                    node_id: "anode".to_string(),
-                    x: 0.0, y: 0.0, width: 150.0, height: 60.0,
-                    radius: 30.0, collapsed: false, z_index: 0,
-                    scale: 1.0, depth: 0.0, focus_weight: 0.0, orbit_group: None,
-                },
-            ],
+            nodes: vec![StarMapLayoutNode {
+                node_id: "anode".to_string(),
+                x: 0.0,
+                y: 0.0,
+                width: 150.0,
+                height: 60.0,
+                radius: 30.0,
+                collapsed: false,
+                z_index: 0,
+                scale: 1.0,
+                depth: 0.0,
+                focus_weight: 0.0,
+                orbit_group: None,
+            }],
         };
         save_layout(dir.path(), &meta.starmap_id, &layout_reduced).unwrap();
         assert!(layout_nodes_shard_path(&pkg_dir, a_bucket).exists());

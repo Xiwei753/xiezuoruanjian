@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-use crate::editor::strong_types::{EditorRevision, Utf8ByteRange};
 use super::types::{DisplayPatch, EditorVisualIntent};
+use crate::editor::strong_types::{EditorRevision, Utf8ByteRange};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -66,7 +66,11 @@ impl std::fmt::Display for EditorInputError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidCursorOffset { offset, text_len } => {
-                write!(f, "cursor offset {} is not a valid UTF-8 char boundary (text len {})", offset, text_len)
+                write!(
+                    f,
+                    "cursor offset {} is not a valid UTF-8 char boundary (text len {})",
+                    offset, text_len
+                )
             }
         }
     }

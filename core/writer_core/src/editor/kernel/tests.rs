@@ -1,88 +1,116 @@
 #[cfg(test)]
 #[allow(clippy::module_inception)]
 mod tests {
-    use super::super::*;
-    use super::super::types::{EditorCommand, DisplayPatch, EditorOperationKind};
     use super::super::result::{EditorEditOutcome, EditorInputError};
+    use super::super::types::{DisplayPatch, EditorCommand, EditorOperationKind};
+    use super::super::*;
+    use crate::editor::strong_types::{
+        EditorRevision, EditorSessionGeneration, EditorSessionId, Utf8ByteOffset, Utf8ByteRange,
+    };
     use crate::editor::transaction::{AnimationMode, EditorTransactionCause};
-    use crate::editor::strong_types::{EditorRevision, EditorSessionId, EditorSessionGeneration, Utf8ByteOffset, Utf8ByteRange};
 
     #[test]
     fn insert_command_produces_display_patch() {
         let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
-        let result = kernel.apply(EditorCommand::Insert {
-            byte_offset: Utf8ByteOffset::unchecked(6),
-            text: "世界".to_string(),
-            cause: EditorTransactionCause::Typing,
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        let result = kernel
+            .apply(EditorCommand::Insert {
+                byte_offset: Utf8ByteOffset::unchecked(6),
+                text: "世界".to_string(),
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
 
         assert_eq!(kernel.text(), "你好世界");
         assert_eq!(kernel.cursor(), 12);
         assert_eq!(result.base_revision.value(), 0);
         assert_eq!(result.new_revision.value(), 1);
         assert!(!result.display_patches.is_empty());
-        assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::Insert);
+        assert_eq!(
+            result.visual_intent.operation_kind,
+            EditorOperationKind::Insert
+        );
         assert_eq!(result.visual_intent.cause, EditorTransactionCause::Typing);
     }
 
     #[test]
     fn delete_command_produces_display_patch() {
         let mut kernel = EditorKernel::with_text("你好世界".to_string(), 12).unwrap();
-        let result = kernel.apply(EditorCommand::Delete {
-            byte_range: Utf8ByteRange::from_ordered(6, 12),
-            deleted_text: "世界".to_string(),
-            cause: EditorTransactionCause::Delete,
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        let result = kernel
+            .apply(EditorCommand::Delete {
+                byte_range: Utf8ByteRange::from_ordered(6, 12),
+                deleted_text: "世界".to_string(),
+                cause: EditorTransactionCause::Delete,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
 
         assert_eq!(kernel.text(), "你好");
         assert_eq!(kernel.cursor(), 6);
-        assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::Delete);
+        assert_eq!(
+            result.visual_intent.operation_kind,
+            EditorOperationKind::Delete
+        );
     }
 
     #[test]
     fn replace_command_produces_display_patch() {
         let mut kernel = EditorKernel::with_text("你好世界".to_string(), 12).unwrap();
-        let result = kernel.apply(EditorCommand::Replace {
-            byte_range: Utf8ByteRange::from_ordered(6, 12),
-            replacement_text: "朋友".to_string(),
-            original_text: "世界".to_string(),
-            cause: EditorTransactionCause::Typing,
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        let result = kernel
+            .apply(EditorCommand::Replace {
+                byte_range: Utf8ByteRange::from_ordered(6, 12),
+                replacement_text: "朋友".to_string(),
+                original_text: "世界".to_string(),
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
 
         assert_eq!(kernel.text(), "你好朋友");
         assert_eq!(kernel.cursor(), 12);
-        assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::Replace);
+        assert_eq!(
+            result.visual_intent.operation_kind,
+            EditorOperationKind::Replace
+        );
     }
 
     #[test]
     fn set_selection_does_not_modify_text() {
         let mut kernel = EditorKernel::with_text("hello".to_string(), 5).unwrap();
-        let result = kernel.apply(EditorCommand::SetSelection {
-            anchor: Utf8ByteOffset::unchecked(0),
-            head: Utf8ByteOffset::unchecked(3),
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        let result = kernel
+            .apply(EditorCommand::SetSelection {
+                anchor: Utf8ByteOffset::unchecked(0),
+                head: Utf8ByteOffset::unchecked(3),
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
         assert_eq!(kernel.text(), "hello");
         assert_eq!(kernel.cursor(), 3);
         assert_eq!(result.display_patches.len(), 0);
-        assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::CursorOnly);
+        assert_eq!(
+            result.visual_intent.operation_kind,
+            EditorOperationKind::CursorOnly
+        );
     }
 
     #[test]
     fn undo_restores_previous_state() {
         let mut kernel = EditorKernel::with_text("ab".to_string(), 2).unwrap();
-        let r1 = kernel.apply(EditorCommand::Insert {
-            byte_offset: Utf8ByteOffset::unchecked(2),
-            text: "c".to_string(),
-            cause: EditorTransactionCause::Typing,
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        let r1 = kernel
+            .apply(EditorCommand::Insert {
+                byte_offset: Utf8ByteOffset::unchecked(2),
+                text: "c".to_string(),
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
         assert_eq!(kernel.text(), "abc");
 
-        let result = kernel.apply(EditorCommand::Undo { expected_revision: r1.new_revision }).into_result();
+        let result = kernel
+            .apply(EditorCommand::Undo {
+                expected_revision: r1.new_revision,
+            })
+            .into_result();
         assert_eq!(kernel.text(), "ab");
         assert_eq!(kernel.cursor(), 2);
         assert_eq!(result.visual_intent.cause, EditorTransactionCause::Undo);
@@ -91,16 +119,26 @@ mod tests {
     #[test]
     fn redo_restores_undone_state() {
         let mut kernel = EditorKernel::with_text("ab".to_string(), 2).unwrap();
-        let r1 = kernel.apply(EditorCommand::Insert {
-            byte_offset: Utf8ByteOffset::unchecked(2),
-            text: "c".to_string(),
-            cause: EditorTransactionCause::Typing,
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
-        let r2 = kernel.apply(EditorCommand::Undo { expected_revision: r1.new_revision }).into_result();
+        let r1 = kernel
+            .apply(EditorCommand::Insert {
+                byte_offset: Utf8ByteOffset::unchecked(2),
+                text: "c".to_string(),
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        let r2 = kernel
+            .apply(EditorCommand::Undo {
+                expected_revision: r1.new_revision,
+            })
+            .into_result();
         assert_eq!(kernel.text(), "ab");
 
-        let result = kernel.apply(EditorCommand::Redo { expected_revision: r2.new_revision }).into_result();
+        let result = kernel
+            .apply(EditorCommand::Redo {
+                expected_revision: r2.new_revision,
+            })
+            .into_result();
         assert_eq!(kernel.text(), "abc");
         assert_eq!(result.visual_intent.cause, EditorTransactionCause::Redo);
     }
@@ -108,18 +146,26 @@ mod tests {
     #[test]
     fn load_text_resets_state() {
         let mut kernel = EditorKernel::with_text("old".to_string(), 3).unwrap();
-        kernel.apply(EditorCommand::Insert {
-            byte_offset: Utf8ByteOffset::unchecked(3),
-            text: " text".to_string(),
-            cause: EditorTransactionCause::Typing,
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        kernel
+            .apply(EditorCommand::Insert {
+                byte_offset: Utf8ByteOffset::unchecked(3),
+                text: " text".to_string(),
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
 
         let result = kernel.load_text("new content".to_string(), 0).into_result();
         assert_eq!(kernel.text(), "new content");
         assert_eq!(kernel.cursor(), 0);
-        assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::Load);
-        assert_eq!(result.visual_intent.animation_mode, AnimationMode::SystemSuppressed);
+        assert_eq!(
+            result.visual_intent.operation_kind,
+            EditorOperationKind::Load
+        );
+        assert_eq!(
+            result.visual_intent.animation_mode,
+            AnimationMode::SystemSuppressed
+        );
     }
 
     #[test]
@@ -127,49 +173,66 @@ mod tests {
         let mut kernel = EditorKernel::new();
         assert_eq!(kernel.revision(), 0);
 
-        let r1 = kernel.apply(EditorCommand::Insert {
-            byte_offset: Utf8ByteOffset::unchecked(0),
-            text: "a".to_string(),
-            cause: EditorTransactionCause::Typing,
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        let r1 = kernel
+            .apply(EditorCommand::Insert {
+                byte_offset: Utf8ByteOffset::unchecked(0),
+                text: "a".to_string(),
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
         assert_eq!(kernel.revision(), 1);
 
-        kernel.apply(EditorCommand::Insert {
-            byte_offset: Utf8ByteOffset::unchecked(1),
-            text: "b".to_string(),
-            cause: EditorTransactionCause::Typing,
-            expected_revision: r1.new_revision,
-        }).into_result();
+        kernel
+            .apply(EditorCommand::Insert {
+                byte_offset: Utf8ByteOffset::unchecked(1),
+                text: "b".to_string(),
+                cause: EditorTransactionCause::Typing,
+                expected_revision: r1.new_revision,
+            })
+            .into_result();
         assert_eq!(kernel.revision(), 2);
     }
 
     #[test]
     fn display_patch_contains_correct_ranges() {
         let mut kernel = EditorKernel::with_text("hello world".to_string(), 11).unwrap();
-        let result = kernel.apply(EditorCommand::Replace {
-            byte_range: Utf8ByteRange::from_ordered(6, 11),
-            replacement_text: "rust".to_string(),
-            original_text: "world".to_string(),
-            cause: EditorTransactionCause::Typing,
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        let result = kernel
+            .apply(EditorCommand::Replace {
+                byte_range: Utf8ByteRange::from_ordered(6, 11),
+                replacement_text: "rust".to_string(),
+                original_text: "world".to_string(),
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
 
         assert_eq!(result.display_patches.len(), 1);
-        assert_eq!(result.display_patches[0].replace_byte_range, Utf8ByteRange::from_ordered(6, 11));
+        assert_eq!(
+            result.display_patches[0].replace_byte_range,
+            Utf8ByteRange::from_ordered(6, 11)
+        );
         assert_eq!(result.display_patches[0].inserted_text, "rust");
     }
 
     #[test]
     fn coordinated_cursor_tracks_movement() {
         let mut kernel = EditorKernel::with_text("abc".to_string(), 3).unwrap();
-        let result = kernel.apply(EditorCommand::SetSelection {
-            anchor: Utf8ByteOffset::unchecked(0),
-            head: Utf8ByteOffset::unchecked(0),
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
-        assert_eq!(result.visual_intent.coordinated_cursor.old_offset.value(), 3);
-        assert_eq!(result.visual_intent.coordinated_cursor.new_offset.value(), 0);
+        let result = kernel
+            .apply(EditorCommand::SetSelection {
+                anchor: Utf8ByteOffset::unchecked(0),
+                head: Utf8ByteOffset::unchecked(0),
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        assert_eq!(
+            result.visual_intent.coordinated_cursor.old_offset.value(),
+            3
+        );
+        assert_eq!(
+            result.visual_intent.coordinated_cursor.new_offset.value(),
+            0
+        );
         assert!(result.visual_intent.coordinated_cursor.should_animate);
     }
 
@@ -178,67 +241,149 @@ mod tests {
         let mut kernel = EditorKernel::with_text("ab".to_string(), 2).unwrap();
         kernel.set_animation_enabled(false);
 
-        let result = kernel.apply(EditorCommand::Insert {
-            byte_offset: Utf8ByteOffset::unchecked(2),
-            text: "c".to_string(),
-            cause: EditorTransactionCause::Typing,
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        let result = kernel
+            .apply(EditorCommand::Insert {
+                byte_offset: Utf8ByteOffset::unchecked(2),
+                text: "c".to_string(),
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
 
-        assert_eq!(result.visual_intent.animation_mode, AnimationMode::SystemSuppressed);
+        assert_eq!(
+            result.visual_intent.animation_mode,
+            AnimationMode::SystemSuppressed
+        );
         assert!(!result.visual_intent.coordinated_cursor.should_animate);
     }
 
     #[test]
     fn undo_then_new_edit_clears_redo() {
         let mut kernel = EditorKernel::with_text("ab".to_string(), 2).unwrap();
-        let r1 = kernel.apply(EditorCommand::Insert {
-            byte_offset: Utf8ByteOffset::unchecked(2),
-            text: "c".to_string(),
-            cause: EditorTransactionCause::Typing,
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
-        let r2 = kernel.apply(EditorCommand::Undo { expected_revision: r1.new_revision }).into_result();
+        let r1 = kernel
+            .apply(EditorCommand::Insert {
+                byte_offset: Utf8ByteOffset::unchecked(2),
+                text: "c".to_string(),
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        let r2 = kernel
+            .apply(EditorCommand::Undo {
+                expected_revision: r1.new_revision,
+            })
+            .into_result();
         assert_eq!(kernel.text(), "ab");
 
-        let r3 = kernel.apply(EditorCommand::Insert {
-            byte_offset: Utf8ByteOffset::unchecked(2),
-            text: "d".to_string(),
-            cause: EditorTransactionCause::Typing,
-            expected_revision: r2.new_revision,
-        }).into_result();
+        let r3 = kernel
+            .apply(EditorCommand::Insert {
+                byte_offset: Utf8ByteOffset::unchecked(2),
+                text: "d".to_string(),
+                cause: EditorTransactionCause::Typing,
+                expected_revision: r2.new_revision,
+            })
+            .into_result();
 
-        let result = kernel.apply(EditorCommand::Redo { expected_revision: r3.new_revision }).into_result();
+        let result = kernel
+            .apply(EditorCommand::Redo {
+                expected_revision: r3.new_revision,
+            })
+            .into_result();
         assert_eq!(kernel.text(), "abd");
-        assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::CursorOnly);
+        assert_eq!(
+            result.visual_intent.operation_kind,
+            EditorOperationKind::CursorOnly
+        );
     }
 
     #[test]
     fn edit_result_serializes_camel_case() {
         let mut kernel = EditorKernel::with_text("ab".to_string(), 2).unwrap();
-        let result = kernel.apply(EditorCommand::Insert {
-            byte_offset: Utf8ByteOffset::unchecked(2),
-            text: "c".to_string(),
-            cause: EditorTransactionCause::Typing,
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        let result = kernel
+            .apply(EditorCommand::Insert {
+                byte_offset: Utf8ByteOffset::unchecked(2),
+                text: "c".to_string(),
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
 
         let json = serde_json::to_string(&result).unwrap();
-        assert!(json.contains("\"transactionId\":"), "JSON should use camelCase for transactionId, got: {}", json);
-        assert!(json.contains("\"baseRevision\":"), "JSON should use camelCase for baseRevision, got: {}", json);
-        assert!(json.contains("\"newRevision\":"), "JSON should use camelCase for newRevision, got: {}", json);
-        assert!(json.contains("\"displayPatches\":"), "JSON should use camelCase for displayPatches, got: {}", json);
-        assert!(json.contains("\"visualIntent\":"), "JSON should use camelCase for visualIntent, got: {}", json);
-        assert!(json.contains("\"operationKind\":"), "JSON should use camelCase for operationKind, got: {}", json);
-        assert!(json.contains("\"animationMode\":"), "JSON should use camelCase for animationMode, got: {}", json);
-        assert!(json.contains("\"durationMs\":"), "JSON should use camelCase for durationMs, got: {}", json);
-        assert!(json.contains("\"coordinatedCursor\":"), "JSON should use camelCase for coordinatedCursor, got: {}", json);
-        assert!(json.contains("\"oldOffset\":"), "JSON should use camelCase for oldOffset, got: {}", json);
-        assert!(json.contains("\"newOffset\":"), "JSON should use camelCase for newOffset, got: {}", json);
-        assert!(json.contains("\"shouldAnimate\":"), "JSON should use camelCase for shouldAnimate, got: {}", json);
-        assert!(json.contains("\"replaceByteRange\":"), "JSON should use camelCase for replaceByteRange, got: {}", json);
-        assert!(json.contains("\"insertedText\":"), "JSON should use camelCase for insertedText, got: {}", json);
-        assert!(json.contains("\"resultingSelectionByteRange\":"), "JSON should use camelCase for resultingSelectionByteRange, got: {}", json);
+        assert!(
+            json.contains("\"transactionId\":"),
+            "JSON should use camelCase for transactionId, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"baseRevision\":"),
+            "JSON should use camelCase for baseRevision, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"newRevision\":"),
+            "JSON should use camelCase for newRevision, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"displayPatches\":"),
+            "JSON should use camelCase for displayPatches, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"visualIntent\":"),
+            "JSON should use camelCase for visualIntent, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"operationKind\":"),
+            "JSON should use camelCase for operationKind, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"animationMode\":"),
+            "JSON should use camelCase for animationMode, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"durationMs\":"),
+            "JSON should use camelCase for durationMs, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"coordinatedCursor\":"),
+            "JSON should use camelCase for coordinatedCursor, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"oldOffset\":"),
+            "JSON should use camelCase for oldOffset, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"newOffset\":"),
+            "JSON should use camelCase for newOffset, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"shouldAnimate\":"),
+            "JSON should use camelCase for shouldAnimate, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"replaceByteRange\":"),
+            "JSON should use camelCase for replaceByteRange, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"insertedText\":"),
+            "JSON should use camelCase for insertedText, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"resultingSelectionByteRange\":"),
+            "JSON should use camelCase for resultingSelectionByteRange, got: {}",
+            json
+        );
     }
 
     #[test]
@@ -251,19 +396,27 @@ mod tests {
             resulting_selection_byte_range: Utf8ByteRange::point(3),
         };
         let json = serde_json::to_string(&patch).unwrap();
-        assert!(json.contains("\"replaceByteRange\":"), "DisplayPatch JSON should use camelCase, got: {}", json);
-        assert!(json.contains("\"insertedText\":"), "DisplayPatch JSON should use camelCase, got: {}", json);
-        assert!(json.contains("\"resultingSelectionByteRange\":"), "DisplayPatch JSON should use camelCase, got: {}", json);
+        assert!(
+            json.contains("\"replaceByteRange\":"),
+            "DisplayPatch JSON should use camelCase, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"insertedText\":"),
+            "DisplayPatch JSON should use camelCase, got: {}",
+            json
+        );
+        assert!(
+            json.contains("\"resultingSelectionByteRange\":"),
+            "DisplayPatch JSON should use camelCase, got: {}",
+            json
+        );
     }
 
     #[test]
     fn composition_update_does_not_modify_text() {
         let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
-        let tx = kernel.composition_update(
-            None,
-            "",
-            "nihao",
-        );
+        let tx = kernel.composition_update(None, "", "nihao");
         assert_eq!(kernel.text(), "你好");
         assert_eq!(kernel.cursor(), 6);
         assert_eq!(tx.new_revision.preedit_text, "nihao");
@@ -272,16 +425,24 @@ mod tests {
     #[test]
     fn composition_commit_modifies_text_via_replace() {
         let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
-        let result = kernel.apply(EditorCommand::Replace {
-            byte_range: Utf8ByteRange::point(6),
-            replacement_text: "你好".to_string(),
-            original_text: String::new(),
-            cause: EditorTransactionCause::TypingCommit,
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        let result = kernel
+            .apply(EditorCommand::Replace {
+                byte_range: Utf8ByteRange::point(6),
+                replacement_text: "你好".to_string(),
+                original_text: String::new(),
+                cause: EditorTransactionCause::TypingCommit,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
         assert_eq!(kernel.text(), "你好你好");
-        assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::Insert);
-        assert_eq!(result.visual_intent.cause, EditorTransactionCause::TypingCommit);
+        assert_eq!(
+            result.visual_intent.operation_kind,
+            EditorOperationKind::Insert
+        );
+        assert_eq!(
+            result.visual_intent.cause,
+            EditorTransactionCause::TypingCommit
+        );
     }
 
     #[test]
@@ -313,13 +474,15 @@ mod tests {
     #[test]
     fn replace_same_text_produces_patch() {
         let mut kernel = EditorKernel::with_text("abc".to_string(), 3).unwrap();
-        let result = kernel.apply(EditorCommand::Replace {
-            byte_range: Utf8ByteRange::from_ordered(1, 2),
-            replacement_text: "X".to_string(),
-            original_text: "b".to_string(),
-            cause: EditorTransactionCause::Typing,
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        let result = kernel
+            .apply(EditorCommand::Replace {
+                byte_range: Utf8ByteRange::from_ordered(1, 2),
+                replacement_text: "X".to_string(),
+                original_text: "b".to_string(),
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
         assert_eq!(kernel.text(), "aXc");
         assert!(!result.display_patches.is_empty());
     }
@@ -327,81 +490,112 @@ mod tests {
     #[test]
     fn undo_after_multiple_edits_restores_correctly() {
         let mut kernel = EditorKernel::new();
-        let r1 = kernel.apply(EditorCommand::Insert {
-            byte_offset: Utf8ByteOffset::unchecked(0),
-            text: "a".to_string(),
-            cause: EditorTransactionCause::Typing,
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
-        let r2 = kernel.apply(EditorCommand::Insert {
-            byte_offset: Utf8ByteOffset::unchecked(1),
-            text: "b".to_string(),
-            cause: EditorTransactionCause::Typing,
-            expected_revision: r1.new_revision,
-        }).into_result();
-        let r3 = kernel.apply(EditorCommand::Insert {
-            byte_offset: Utf8ByteOffset::unchecked(2),
-            text: "c".to_string(),
-            cause: EditorTransactionCause::Typing,
-            expected_revision: r2.new_revision,
-        }).into_result();
+        let r1 = kernel
+            .apply(EditorCommand::Insert {
+                byte_offset: Utf8ByteOffset::unchecked(0),
+                text: "a".to_string(),
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        let r2 = kernel
+            .apply(EditorCommand::Insert {
+                byte_offset: Utf8ByteOffset::unchecked(1),
+                text: "b".to_string(),
+                cause: EditorTransactionCause::Typing,
+                expected_revision: r1.new_revision,
+            })
+            .into_result();
+        let r3 = kernel
+            .apply(EditorCommand::Insert {
+                byte_offset: Utf8ByteOffset::unchecked(2),
+                text: "c".to_string(),
+                cause: EditorTransactionCause::Typing,
+                expected_revision: r2.new_revision,
+            })
+            .into_result();
         assert_eq!(kernel.text(), "abc");
 
-        let r4 = kernel.apply(EditorCommand::Undo { expected_revision: r3.new_revision }).into_result();
+        let r4 = kernel
+            .apply(EditorCommand::Undo {
+                expected_revision: r3.new_revision,
+            })
+            .into_result();
         assert_eq!(kernel.text(), "ab");
 
-        let r5 = kernel.apply(EditorCommand::Undo { expected_revision: r4.new_revision }).into_result();
+        let r5 = kernel
+            .apply(EditorCommand::Undo {
+                expected_revision: r4.new_revision,
+            })
+            .into_result();
         assert_eq!(kernel.text(), "a");
 
-        kernel.apply(EditorCommand::Undo { expected_revision: r5.new_revision }).into_result();
+        kernel
+            .apply(EditorCommand::Undo {
+                expected_revision: r5.new_revision,
+            })
+            .into_result();
         assert_eq!(kernel.text(), "");
     }
 
     #[test]
     fn cjk_insert_and_delete() {
         let mut kernel = EditorKernel::new();
-        let result = kernel.apply(EditorCommand::Insert {
-            byte_offset: Utf8ByteOffset::unchecked(0),
-            text: "你好世界".to_string(),
-            cause: EditorTransactionCause::Typing,
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        let result = kernel
+            .apply(EditorCommand::Insert {
+                byte_offset: Utf8ByteOffset::unchecked(0),
+                text: "你好世界".to_string(),
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
         assert_eq!(kernel.text(), "你好世界");
         assert_eq!(kernel.cursor(), 12);
 
-        let result = kernel.apply(EditorCommand::Delete {
-            byte_range: Utf8ByteRange::from_ordered(6, 12),
-            deleted_text: "世界".to_string(),
-            cause: EditorTransactionCause::Delete,
-            expected_revision: result.new_revision,
-        }).into_result();
+        let result = kernel
+            .apply(EditorCommand::Delete {
+                byte_range: Utf8ByteRange::from_ordered(6, 12),
+                deleted_text: "世界".to_string(),
+                cause: EditorTransactionCause::Delete,
+                expected_revision: result.new_revision,
+            })
+            .into_result();
         assert_eq!(kernel.text(), "你好");
         assert_eq!(kernel.cursor(), 6);
-        assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::Delete);
+        assert_eq!(
+            result.visual_intent.operation_kind,
+            EditorOperationKind::Delete
+        );
     }
 
     #[test]
     fn set_selection_with_same_position_no_cursor_animation() {
         let mut kernel = EditorKernel::with_text("abc".to_string(), 1).unwrap();
-        let result = kernel.apply(EditorCommand::SetSelection {
-            anchor: Utf8ByteOffset::unchecked(1),
-            head: Utf8ByteOffset::unchecked(1),
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        let result = kernel
+            .apply(EditorCommand::SetSelection {
+                anchor: Utf8ByteOffset::unchecked(1),
+                head: Utf8ByteOffset::unchecked(1),
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
         assert!(!result.visual_intent.coordinated_cursor.should_animate);
     }
 
     #[test]
     fn load_text_clears_undo_stack() {
         let mut kernel = EditorKernel::with_text("old".to_string(), 3).unwrap();
-        kernel.apply(EditorCommand::Insert {
-            byte_offset: Utf8ByteOffset::unchecked(3),
-            text: " text".to_string(),
-            cause: EditorTransactionCause::Typing,
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        kernel
+            .apply(EditorCommand::Insert {
+                byte_offset: Utf8ByteOffset::unchecked(3),
+                text: " text".to_string(),
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
         kernel.load_text("new".to_string(), 3).into_result();
-        let result = kernel.apply(EditorCommand::Undo { expected_revision: EditorRevision::new(0) });
+        let result = kernel.apply(EditorCommand::Undo {
+            expected_revision: EditorRevision::new(0),
+        });
         assert!(matches!(result, EditorEditOutcome::StaleRevision(_)));
         assert_eq!(kernel.text(), "new");
     }
@@ -410,7 +604,10 @@ mod tests {
     fn with_text_rejects_invalid_cursor_offset() {
         let result = EditorKernel::with_text("你好".to_string(), 4);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), EditorInputError::InvalidCursorOffset { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            EditorInputError::InvalidCursorOffset { .. }
+        ));
     }
 
     #[test]
@@ -440,13 +637,15 @@ mod tests {
     #[test]
     fn atomic_display_patch_for_replace() {
         let mut kernel = EditorKernel::with_text("hello world".to_string(), 11).unwrap();
-        let result = kernel.apply(EditorCommand::Replace {
-            byte_range: Utf8ByteRange::from_ordered(6, 11),
-            replacement_text: "rust".to_string(),
-            original_text: "world".to_string(),
-            cause: EditorTransactionCause::Typing,
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        let result = kernel
+            .apply(EditorCommand::Replace {
+                byte_range: Utf8ByteRange::from_ordered(6, 11),
+                replacement_text: "rust".to_string(),
+                original_text: "world".to_string(),
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
         assert_eq!(result.display_patches.len(), 1);
         let patch = &result.display_patches[0];
         assert_eq!(patch.replace_byte_range, Utf8ByteRange::from_ordered(6, 11));
@@ -456,13 +655,12 @@ mod tests {
     #[test]
     fn composition_update_visual_intent_returns_correct_intent() {
         let kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
-        let intent = kernel.composition_update_visual_intent(
-            None,
-            "",
-            "nihao",
-        );
+        let intent = kernel.composition_update_visual_intent(None, "", "nihao");
         assert_eq!(intent.cause, EditorTransactionCause::ImeComposition);
-        assert_eq!(intent.operation_kind, EditorOperationKind::CompositionUpdate);
+        assert_eq!(
+            intent.operation_kind,
+            EditorOperationKind::CompositionUpdate
+        );
         assert_eq!(intent.animation_mode, AnimationMode::GlyphAnimation);
         assert_eq!(intent.duration_ms, 80);
         assert!(intent.coordinated_cursor.should_animate);
@@ -472,14 +670,19 @@ mod tests {
     #[test]
     fn composition_update_visual_intent_with_replace_range() {
         let kernel = EditorKernel::with_text("你好世界".to_string(), 12).unwrap();
-        let intent = kernel.composition_update_visual_intent(
-            Some((6, 12)),
-            "世界",
-            "朋友",
+        let intent = kernel.composition_update_visual_intent(Some((6, 12)), "世界", "朋友");
+        assert_eq!(
+            intent.operation_kind,
+            EditorOperationKind::CompositionUpdate
         );
-        assert_eq!(intent.operation_kind, EditorOperationKind::CompositionUpdate);
-        assert_eq!(intent.old_affected_byte_ranges, vec![Utf8ByteRange::from_ordered(6, 12)]);
-        assert_eq!(intent.new_affected_byte_ranges, vec![Utf8ByteRange::from_ordered(6, 12)]);
+        assert_eq!(
+            intent.old_affected_byte_ranges,
+            vec![Utf8ByteRange::from_ordered(6, 12)]
+        );
+        assert_eq!(
+            intent.new_affected_byte_ranges,
+            vec![Utf8ByteRange::from_ordered(6, 12)]
+        );
     }
 
     #[test]
@@ -541,11 +744,13 @@ mod tests {
     #[test]
     fn delete_surrounding_both_sides_preserves_selection() {
         let mut kernel = EditorKernel::with_text("ABCDEFGHIJ".to_string(), 3).unwrap();
-        kernel.apply(EditorCommand::SetSelection {
-            anchor: Utf8ByteOffset::unchecked(3),
-            head: Utf8ByteOffset::unchecked(6),
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        kernel
+            .apply(EditorCommand::SetSelection {
+                anchor: Utf8ByteOffset::unchecked(3),
+                head: Utf8ByteOffset::unchecked(6),
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
 
         let outcome = kernel.apply(EditorCommand::DeleteSurrounding {
             before_byte_range: Utf8ByteRange::from_ordered(0, 2),
@@ -562,11 +767,13 @@ mod tests {
     #[test]
     fn delete_surrounding_before_only_shifts_selection() {
         let mut kernel = EditorKernel::with_text("ABCDE".to_string(), 3).unwrap();
-        kernel.apply(EditorCommand::SetSelection {
-            anchor: Utf8ByteOffset::unchecked(3),
-            head: Utf8ByteOffset::unchecked(5),
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        kernel
+            .apply(EditorCommand::SetSelection {
+                anchor: Utf8ByteOffset::unchecked(3),
+                head: Utf8ByteOffset::unchecked(5),
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
 
         let outcome = kernel.apply(EditorCommand::DeleteSurrounding {
             before_byte_range: Utf8ByteRange::from_ordered(0, 2),
@@ -583,11 +790,13 @@ mod tests {
     #[test]
     fn delete_surrounding_after_only_preserves_selection() {
         let mut kernel = EditorKernel::with_text("ABCDE".to_string(), 3).unwrap();
-        kernel.apply(EditorCommand::SetSelection {
-            anchor: Utf8ByteOffset::unchecked(0),
-            head: Utf8ByteOffset::unchecked(3),
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        kernel
+            .apply(EditorCommand::SetSelection {
+                anchor: Utf8ByteOffset::unchecked(0),
+                head: Utf8ByteOffset::unchecked(3),
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
 
         let outcome = kernel.apply(EditorCommand::DeleteSurrounding {
             before_byte_range: Utf8ByteRange::zero(),
@@ -604,10 +813,12 @@ mod tests {
     #[test]
     fn commit_text_with_session_validation() {
         let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
-        let begin = kernel.apply(EditorCommand::BeginComposition {
-            replace_range: Utf8ByteRange::point(6),
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        let begin = kernel
+            .apply(EditorCommand::BeginComposition {
+                replace_range: Utf8ByteRange::point(6),
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
 
         let (session_id, base_rev, gen) = kernel.composition_session_info().unwrap();
 
@@ -631,10 +842,12 @@ mod tests {
     #[test]
     fn commit_text_wrong_session_returns_stale() {
         let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
-        kernel.apply(EditorCommand::BeginComposition {
-            replace_range: Utf8ByteRange::point(6),
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        kernel
+            .apply(EditorCommand::BeginComposition {
+                replace_range: Utf8ByteRange::point(6),
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
 
         let outcome = kernel.apply(EditorCommand::CommitText {
             byte_range: Utf8ByteRange::point(6),
@@ -654,10 +867,12 @@ mod tests {
     #[test]
     fn commit_text_empty_string_deletes_range() {
         let mut kernel = EditorKernel::with_text("你好世界".to_string(), 12).unwrap();
-        let begin = kernel.apply(EditorCommand::BeginComposition {
-            replace_range: Utf8ByteRange::from_ordered(6, 12),
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        let begin = kernel
+            .apply(EditorCommand::BeginComposition {
+                replace_range: Utf8ByteRange::from_ordered(6, 12),
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
 
         let (session_id, base_rev, gen) = kernel.composition_session_info().unwrap();
 
@@ -680,20 +895,24 @@ mod tests {
     #[test]
     fn finish_composition_materializes_preedit() {
         let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
-        let begin = kernel.apply(EditorCommand::BeginComposition {
-            replace_range: Utf8ByteRange::point(6),
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        let begin = kernel
+            .apply(EditorCommand::BeginComposition {
+                replace_range: Utf8ByteRange::point(6),
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
 
         let (session_id, _base_rev, gen) = kernel.composition_session_info().unwrap();
 
-        kernel.apply(EditorCommand::UpdateComposition {
-            composition_session_id: EditorSessionId::new(session_id),
-            composition_generation: EditorSessionGeneration::new(gen),
-            new_preedit_text: "世界".to_string(),
-            new_preedit_cursor_offset: Utf8ByteOffset::unchecked(2),
-            expected_revision: begin.new_revision,
-        }).into_result();
+        kernel
+            .apply(EditorCommand::UpdateComposition {
+                composition_session_id: EditorSessionId::new(session_id),
+                composition_generation: EditorSessionGeneration::new(gen),
+                new_preedit_text: "世界".to_string(),
+                new_preedit_cursor_offset: Utf8ByteOffset::unchecked(2),
+                expected_revision: begin.new_revision,
+            })
+            .into_result();
 
         let (_, _, new_gen) = kernel.composition_session_info().unwrap();
 
@@ -711,10 +930,12 @@ mod tests {
     #[test]
     fn finish_composition_empty_preedit_no_text_change() {
         let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
-        let begin = kernel.apply(EditorCommand::BeginComposition {
-            replace_range: Utf8ByteRange::point(6),
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        let begin = kernel
+            .apply(EditorCommand::BeginComposition {
+                replace_range: Utf8ByteRange::point(6),
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
 
         let (session_id, _base_rev, gen) = kernel.composition_session_info().unwrap();
 
@@ -732,20 +953,24 @@ mod tests {
     #[test]
     fn cancel_composition_preserves_text() {
         let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
-        let begin = kernel.apply(EditorCommand::BeginComposition {
-            replace_range: Utf8ByteRange::from_ordered(3, 6),
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        let begin = kernel
+            .apply(EditorCommand::BeginComposition {
+                replace_range: Utf8ByteRange::from_ordered(3, 6),
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
 
         let (session_id, _base_rev, gen) = kernel.composition_session_info().unwrap();
 
-        kernel.apply(EditorCommand::UpdateComposition {
-            composition_session_id: EditorSessionId::new(session_id),
-            composition_generation: EditorSessionGeneration::new(gen),
-            new_preedit_text: "坏".to_string(),
-            new_preedit_cursor_offset: Utf8ByteOffset::unchecked(3),
-            expected_revision: begin.new_revision,
-        }).into_result();
+        kernel
+            .apply(EditorCommand::UpdateComposition {
+                composition_session_id: EditorSessionId::new(session_id),
+                composition_generation: EditorSessionGeneration::new(gen),
+                new_preedit_text: "坏".to_string(),
+                new_preedit_cursor_offset: Utf8ByteOffset::unchecked(3),
+                expected_revision: begin.new_revision,
+            })
+            .into_result();
 
         let (_, _, new_gen) = kernel.composition_session_info().unwrap();
 
@@ -762,12 +987,14 @@ mod tests {
     #[test]
     fn stale_revision_returns_current_revision() {
         let mut kernel = EditorKernel::with_text("abc".to_string(), 3).unwrap();
-        let r1 = kernel.apply(EditorCommand::Insert {
-            byte_offset: Utf8ByteOffset::unchecked(3),
-            text: "d".to_string(),
-            cause: EditorTransactionCause::Typing,
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        let r1 = kernel
+            .apply(EditorCommand::Insert {
+                byte_offset: Utf8ByteOffset::unchecked(3),
+                text: "d".to_string(),
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
         assert_eq!(r1.new_revision.value(), 1);
 
         let outcome = kernel.apply(EditorCommand::Insert {
@@ -789,7 +1016,10 @@ mod tests {
     fn load_text_with_invalid_cursor_returns_adjusted() {
         let mut kernel = EditorKernel::with_text("old".to_string(), 3).unwrap();
         let outcome = kernel.load_text("new".to_string(), 100);
-        assert!(matches!(outcome, EditorEditOutcome::AppliedWithAdjustedSelection(_)));
+        assert!(matches!(
+            outcome,
+            EditorEditOutcome::AppliedWithAdjustedSelection(_)
+        ));
         assert_eq!(kernel.text(), "new");
         assert_eq!(kernel.cursor(), 3);
     }
@@ -806,10 +1036,12 @@ mod tests {
     #[test]
     fn commit_text_session_range_mismatch_returns_invalid_range() {
         let mut kernel = EditorKernel::with_text("你好世界".to_string(), 12).unwrap();
-        let begin = kernel.apply(EditorCommand::BeginComposition {
-            replace_range: Utf8ByteRange::from_ordered(3, 6),
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        let begin = kernel
+            .apply(EditorCommand::BeginComposition {
+                replace_range: Utf8ByteRange::from_ordered(3, 6),
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
 
         let (session_id, base_rev, gen) = kernel.composition_session_info().unwrap();
 
@@ -851,20 +1083,24 @@ mod tests {
     #[test]
     fn finish_composition_cursor_at_committed_text_end() {
         let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
-        let begin = kernel.apply(EditorCommand::BeginComposition {
-            replace_range: Utf8ByteRange::point(6),
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        let begin = kernel
+            .apply(EditorCommand::BeginComposition {
+                replace_range: Utf8ByteRange::point(6),
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
 
         let (session_id, _base_rev, gen) = kernel.composition_session_info().unwrap();
 
-        kernel.apply(EditorCommand::UpdateComposition {
-            composition_session_id: EditorSessionId::new(session_id),
-            composition_generation: EditorSessionGeneration::new(gen),
-            new_preedit_text: "世界".to_string(),
-            new_preedit_cursor_offset: Utf8ByteOffset::unchecked(2),
-            expected_revision: begin.new_revision,
-        }).into_result();
+        kernel
+            .apply(EditorCommand::UpdateComposition {
+                composition_session_id: EditorSessionId::new(session_id),
+                composition_generation: EditorSessionGeneration::new(gen),
+                new_preedit_text: "世界".to_string(),
+                new_preedit_cursor_offset: Utf8ByteOffset::unchecked(2),
+                expected_revision: begin.new_revision,
+            })
+            .into_result();
 
         let (_, _, new_gen) = kernel.composition_session_info().unwrap();
 
@@ -882,20 +1118,24 @@ mod tests {
     #[test]
     fn finish_composition_cursor_exceeds_preedit_length_returns_adjusted() {
         let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
-        let begin = kernel.apply(EditorCommand::BeginComposition {
-            replace_range: Utf8ByteRange::point(6),
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        let begin = kernel
+            .apply(EditorCommand::BeginComposition {
+                replace_range: Utf8ByteRange::point(6),
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
 
         let (session_id, _base_rev, gen) = kernel.composition_session_info().unwrap();
 
-        kernel.apply(EditorCommand::UpdateComposition {
-            composition_session_id: EditorSessionId::new(session_id),
-            composition_generation: EditorSessionGeneration::new(gen),
-            new_preedit_text: "世界".to_string(),
-            new_preedit_cursor_offset: Utf8ByteOffset::unchecked(99),
-            expected_revision: begin.new_revision,
-        }).into_result();
+        kernel
+            .apply(EditorCommand::UpdateComposition {
+                composition_session_id: EditorSessionId::new(session_id),
+                composition_generation: EditorSessionGeneration::new(gen),
+                new_preedit_text: "世界".to_string(),
+                new_preedit_cursor_offset: Utf8ByteOffset::unchecked(99),
+                expected_revision: begin.new_revision,
+            })
+            .into_result();
 
         let (_, _, new_gen) = kernel.composition_session_info().unwrap();
 
@@ -904,7 +1144,10 @@ mod tests {
             composition_generation: EditorSessionGeneration::new(new_gen),
             expected_revision: begin.new_revision,
         });
-        assert!(matches!(outcome, EditorEditOutcome::AppliedWithAdjustedSelection(_)));
+        assert!(matches!(
+            outcome,
+            EditorEditOutcome::AppliedWithAdjustedSelection(_)
+        ));
         assert_eq!(kernel.text(), "你好世界");
         assert_eq!(kernel.cursor(), 12);
         assert!(kernel.composition_session_info().is_none());
@@ -913,11 +1156,13 @@ mod tests {
     #[test]
     fn delete_surrounding_large_before_does_not_underflow() {
         let mut kernel = EditorKernel::with_text("ABCDE".to_string(), 3).unwrap();
-        kernel.apply(EditorCommand::SetSelection {
-            anchor: Utf8ByteOffset::unchecked(3),
-            head: Utf8ByteOffset::unchecked(5),
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        kernel
+            .apply(EditorCommand::SetSelection {
+                anchor: Utf8ByteOffset::unchecked(3),
+                head: Utf8ByteOffset::unchecked(5),
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
 
         let outcome = kernel.apply(EditorCommand::DeleteSurrounding {
             before_byte_range: Utf8ByteRange::from_ordered(0, 2),
@@ -946,7 +1191,10 @@ mod tests {
             expected_revision: EditorRevision::new(0),
         });
         let result = outcome.into_result();
-        assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::Insert);
+        assert_eq!(
+            result.visual_intent.operation_kind,
+            EditorOperationKind::Insert
+        );
         assert_eq!(kernel.text(), "Hello");
     }
 
@@ -965,17 +1213,22 @@ mod tests {
             expected_revision: EditorRevision::new(0),
         });
         let result = outcome.into_result();
-        assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::Delete);
+        assert_eq!(
+            result.visual_intent.operation_kind,
+            EditorOperationKind::Delete
+        );
         assert_eq!(kernel.text(), "AE");
     }
 
     #[test]
     fn commit_text_with_composition_session_has_composition_commit_operation_kind() {
         let mut kernel = EditorKernel::with_text("".to_string(), 0).unwrap();
-        let begin = kernel.apply(EditorCommand::BeginComposition {
-            replace_range: Utf8ByteRange::point(0),
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
+        let begin = kernel
+            .apply(EditorCommand::BeginComposition {
+                replace_range: Utf8ByteRange::point(0),
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
         let (session_id, base_rev, gen) = kernel.composition_session_info().unwrap();
         let outcome = kernel.apply(EditorCommand::CommitText {
             byte_range: Utf8ByteRange::point(0),
@@ -989,7 +1242,10 @@ mod tests {
             expected_revision: begin.new_revision,
         });
         let result = outcome.into_result();
-        assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::CompositionCommit);
+        assert_eq!(
+            result.visual_intent.operation_kind,
+            EditorOperationKind::CompositionCommit
+        );
         assert_eq!(kernel.text(), "你好");
     }
 
@@ -1006,7 +1262,8 @@ mod tests {
         });
         assert!(first_begin.is_applied());
         let first_begin_result = first_begin.into_result();
-        let (first_session_id, first_base_rev, first_gen) = kernel.composition_session_info().unwrap();
+        let (first_session_id, first_base_rev, first_gen) =
+            kernel.composition_session_info().unwrap();
 
         // A second begin (e.g. a fresh IME interaction after the platform lost the
         // session) must succeed and replace the stale session with a new one.
@@ -1047,7 +1304,10 @@ mod tests {
             expected_revision: second_begin_result.new_revision,
         });
         let result = commit.into_result();
-        assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::CompositionCommit);
+        assert_eq!(
+            result.visual_intent.operation_kind,
+            EditorOperationKind::CompositionCommit
+        );
         assert_eq!(kernel.text(), "abyc");
         // The session is consumed by the commit; the next begin starts clean again.
         assert!(kernel.composition_session_info().is_none());
@@ -1056,42 +1316,57 @@ mod tests {
     #[test]
     fn replace_empty_range_has_insert_operation_kind() {
         let mut kernel = EditorKernel::with_text("ABCDE".to_string(), 3).unwrap();
-        let result = kernel.apply(EditorCommand::Replace {
-            byte_range: Utf8ByteRange::point(3),
-            replacement_text: "X".to_string(),
-            original_text: String::new(),
-            cause: EditorTransactionCause::Typing,
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
-        assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::Insert);
+        let result = kernel
+            .apply(EditorCommand::Replace {
+                byte_range: Utf8ByteRange::point(3),
+                replacement_text: "X".to_string(),
+                original_text: String::new(),
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        assert_eq!(
+            result.visual_intent.operation_kind,
+            EditorOperationKind::Insert
+        );
         assert_eq!(kernel.text(), "ABCXDE");
     }
 
     #[test]
     fn replace_with_empty_replacement_has_delete_operation_kind() {
         let mut kernel = EditorKernel::with_text("ABCDE".to_string(), 3).unwrap();
-        let result = kernel.apply(EditorCommand::Replace {
-            byte_range: Utf8ByteRange::from_ordered(1, 4),
-            replacement_text: "".to_string(),
-            original_text: "BCD".to_string(),
-            cause: EditorTransactionCause::Delete,
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
-        assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::Delete);
+        let result = kernel
+            .apply(EditorCommand::Replace {
+                byte_range: Utf8ByteRange::from_ordered(1, 4),
+                replacement_text: "".to_string(),
+                original_text: "BCD".to_string(),
+                cause: EditorTransactionCause::Delete,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        assert_eq!(
+            result.visual_intent.operation_kind,
+            EditorOperationKind::Delete
+        );
         assert_eq!(kernel.text(), "AE");
     }
 
     #[test]
     fn replace_non_empty_range_has_replace_operation_kind() {
         let mut kernel = EditorKernel::with_text("ABCDE".to_string(), 3).unwrap();
-        let result = kernel.apply(EditorCommand::Replace {
-            byte_range: Utf8ByteRange::from_ordered(1, 4),
-            replacement_text: "XY".to_string(),
-            original_text: "BCD".to_string(),
-            cause: EditorTransactionCause::Typing,
-            expected_revision: EditorRevision::new(0),
-        }).into_result();
-        assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::Replace);
+        let result = kernel
+            .apply(EditorCommand::Replace {
+                byte_range: Utf8ByteRange::from_ordered(1, 4),
+                replacement_text: "XY".to_string(),
+                original_text: "BCD".to_string(),
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        assert_eq!(
+            result.visual_intent.operation_kind,
+            EditorOperationKind::Replace
+        );
         assert_eq!(kernel.text(), "AXYE");
     }
 }

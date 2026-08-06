@@ -108,9 +108,7 @@ impl WritingInputEvent {
         duration_seconds: u32,
         session_id: &str,
     ) -> Self {
-        let net = inserted_chars as i32
-            + pasted_chars as i32
-            + ai_inserted_chars as i32
+        let net = inserted_chars as i32 + pasted_chars as i32 + ai_inserted_chars as i32
             - deleted_chars as i32;
         Self {
             event_id: Uuid::new_v4().to_string(),
@@ -286,6 +284,9 @@ mod tests {
         }"#;
         let event: WritingInputEvent = serde_json::from_str(json).unwrap();
         assert_eq!(event.device_id, "dev-1");
-        assert_eq!(event.device_class, "", "device_class should default to empty string for old data");
+        assert_eq!(
+            event.device_class, "",
+            "device_class should default to empty string for old data"
+        );
     }
 }

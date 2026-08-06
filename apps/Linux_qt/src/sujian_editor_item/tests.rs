@@ -1,10 +1,10 @@
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sujian_editor_item::is_complex_grapheme;
-    use crate::sujian_editor_item::SujianEditorItem;
-    use crate::sujian_editor_item::PreeditAttributeKind;
     use crate::sujian_editor_item::animation_coordinator::{AnimationMode, VisualTransactionKey};
+    use crate::sujian_editor_item::is_complex_grapheme;
+    use crate::sujian_editor_item::PreeditAttributeKind;
+    use crate::sujian_editor_item::SujianEditorItem;
     use qmetaobject::prelude::*;
     use writer_core::editor::CursorRect;
 
@@ -48,13 +48,19 @@ mod tests {
 
     #[test]
     fn visual_transaction_inserted_range_creates_prepared_transaction() {
-        use crate::sujian_editor_item::text_visual_transaction::{PreparedTransactionQueue, PreparedTextVisualTransaction, TextVisualTransactionState, TextVisualOperationKind, TransactionTimeline};
         use crate::sujian_editor_item::animation_mode::AnimationMode;
         use crate::sujian_editor_item::cursor_animation::CursorTransition;
         use crate::sujian_editor_item::layout_revision::LayoutRevision;
+        use crate::sujian_editor_item::text_visual_transaction::{
+            PreparedTextVisualTransaction, PreparedTransactionQueue, TextVisualOperationKind,
+            TextVisualTransactionState, TransactionTimeline,
+        };
 
         let mut queue = PreparedTransactionQueue::new();
-        let key = VisualTransactionKey { transaction_id: 1, generation: 1 };
+        let key = VisualTransactionKey {
+            transaction_id: 1,
+            generation: 1,
+        };
         let tx = PreparedTextVisualTransaction {
             key,
             state: TextVisualTransactionState::Pending,
@@ -64,13 +70,15 @@ mod tests {
             old_revision: LayoutRevision::initial(),
             new_revision: LayoutRevision::next(),
             slices: Vec::new(),
-            static_patches: vec![crate::sujian_editor_item::static_line_patch::StaticLinePatch::insert_patch(
-                key,
-                crate::sujian_editor_item::layout_snapshot::LineSnapshotId::new(0, 0, 0),
-                Vec::new(),
-                5,
-                10,
-            )],
+            static_patches: vec![
+                crate::sujian_editor_item::static_line_patch::StaticLinePatch::insert_patch(
+                    key,
+                    crate::sujian_editor_item::layout_snapshot::LineSnapshotId::new(0, 0, 0),
+                    Vec::new(),
+                    5,
+                    10,
+                ),
+            ],
             decoration_slices: Vec::new(),
             cursor_transition: CursorTransition::Snap,
             old_cursor_rect: None,
@@ -104,13 +112,19 @@ mod tests {
 
     #[test]
     fn delete_creates_prepared_transaction() {
-        use crate::sujian_editor_item::text_visual_transaction::{PreparedTransactionQueue, PreparedTextVisualTransaction, TextVisualTransactionState, TextVisualOperationKind, TransactionTimeline};
         use crate::sujian_editor_item::animation_mode::AnimationMode;
         use crate::sujian_editor_item::cursor_animation::CursorTransition;
         use crate::sujian_editor_item::layout_revision::LayoutRevision;
+        use crate::sujian_editor_item::text_visual_transaction::{
+            PreparedTextVisualTransaction, PreparedTransactionQueue, TextVisualOperationKind,
+            TextVisualTransactionState, TransactionTimeline,
+        };
 
         let mut queue = PreparedTransactionQueue::new();
-        let key = VisualTransactionKey { transaction_id: 2, generation: 2 };
+        let key = VisualTransactionKey {
+            transaction_id: 2,
+            generation: 2,
+        };
         let tx = PreparedTextVisualTransaction {
             key,
             state: TextVisualTransactionState::Pending,
@@ -223,7 +237,13 @@ mod tests {
         assert_eq!(vt.kind, EditorAnimationKind::Insert);
         assert_eq!(
             vt.inserted_range,
-            Some(writer_core::editor::Utf8ByteRange::from_values(old_text.len(), old_text.len() + idiom.len()).unwrap())
+            Some(
+                writer_core::editor::Utf8ByteRange::from_values(
+                    old_text.len(),
+                    old_text.len() + idiom.len()
+                )
+                .unwrap()
+            )
         );
 
         let mode = SujianEditorItem::animation_mode_from_core(vt.animation_mode);
@@ -265,7 +285,9 @@ mod tests {
             "9-char candidate should animate at core level (RunAnimation)"
         );
 
-        let vt = engine.visual_transaction(&tx).expect("RunAnimation visual transaction");
+        let vt = engine
+            .visual_transaction(&tx)
+            .expect("RunAnimation visual transaction");
         let mode = SujianEditorItem::animation_mode_from_core(vt.animation_mode);
         assert_eq!(
             mode,
@@ -318,7 +340,8 @@ mod tests {
         );
 
         assert_eq!(
-            tx_commit.old_selection.head.index.value(), 0,
+            tx_commit.old_selection.head.index.value(),
+            0,
             "Old cursor should be at start (preedit was cleared)"
         );
         assert_eq!(
@@ -404,7 +427,9 @@ mod tests {
             "Newline commit should animate at core level (LineReflowAnimation)"
         );
 
-        let vt = engine.visual_transaction(&tx).expect("LineReflowAnimation visual transaction");
+        let vt = engine
+            .visual_transaction(&tx)
+            .expect("LineReflowAnimation visual transaction");
         let mode = SujianEditorItem::animation_mode_from_core(vt.animation_mode);
         assert_eq!(
             mode,
@@ -526,13 +551,19 @@ mod tests {
 
     #[test]
     fn prepared_queue_finish_clears_transaction() {
-        use crate::sujian_editor_item::text_visual_transaction::{PreparedTransactionQueue, PreparedTextVisualTransaction, TextVisualTransactionState, TextVisualOperationKind, TransactionTimeline};
         use crate::sujian_editor_item::animation_mode::AnimationMode;
         use crate::sujian_editor_item::cursor_animation::CursorTransition;
         use crate::sujian_editor_item::layout_revision::LayoutRevision;
+        use crate::sujian_editor_item::text_visual_transaction::{
+            PreparedTextVisualTransaction, PreparedTransactionQueue, TextVisualOperationKind,
+            TextVisualTransactionState, TransactionTimeline,
+        };
 
         let mut queue = PreparedTransactionQueue::new();
-        let key = VisualTransactionKey { transaction_id: 1, generation: 1 };
+        let key = VisualTransactionKey {
+            transaction_id: 1,
+            generation: 1,
+        };
         let tx = PreparedTextVisualTransaction {
             key,
             state: TextVisualTransactionState::Pending,
@@ -542,13 +573,15 @@ mod tests {
             old_revision: LayoutRevision::initial(),
             new_revision: LayoutRevision::next(),
             slices: Vec::new(),
-            static_patches: vec![crate::sujian_editor_item::static_line_patch::StaticLinePatch::insert_patch(
-                key,
-                crate::sujian_editor_item::layout_snapshot::LineSnapshotId::new(0, 0, 0),
-                Vec::new(),
-                10,
-                22,
-            )],
+            static_patches: vec![
+                crate::sujian_editor_item::static_line_patch::StaticLinePatch::insert_patch(
+                    key,
+                    crate::sujian_editor_item::layout_snapshot::LineSnapshotId::new(0, 0, 0),
+                    Vec::new(),
+                    10,
+                    22,
+                ),
+            ],
             decoration_slices: Vec::new(),
             cursor_transition: CursorTransition::Snap,
             old_cursor_rect: None,
@@ -568,7 +601,10 @@ mod tests {
         assert!(queue.insert_byte_ranges().is_empty());
 
         queue.enqueue(PreparedTextVisualTransaction {
-            key: VisualTransactionKey { transaction_id: 2, generation: 2 },
+            key: VisualTransactionKey {
+                transaction_id: 2,
+                generation: 2,
+            },
             state: TextVisualTransactionState::Pending,
             operation_kind: TextVisualOperationKind::Insert,
             animation_mode: AnimationMode::GlyphAnimation,
@@ -576,13 +612,18 @@ mod tests {
             old_revision: LayoutRevision::initial(),
             new_revision: LayoutRevision::next(),
             slices: Vec::new(),
-            static_patches: vec![crate::sujian_editor_item::static_line_patch::StaticLinePatch::insert_patch(
-                VisualTransactionKey { transaction_id: 2, generation: 2 },
-                crate::sujian_editor_item::layout_snapshot::LineSnapshotId::new(0, 0, 0),
-                Vec::new(),
-                30,
-                42,
-            )],
+            static_patches: vec![
+                crate::sujian_editor_item::static_line_patch::StaticLinePatch::insert_patch(
+                    VisualTransactionKey {
+                        transaction_id: 2,
+                        generation: 2,
+                    },
+                    crate::sujian_editor_item::layout_snapshot::LineSnapshotId::new(0, 0, 0),
+                    Vec::new(),
+                    30,
+                    42,
+                ),
+            ],
             decoration_slices: Vec::new(),
             cursor_transition: CursorTransition::Snap,
             old_cursor_rect: None,
@@ -592,7 +633,10 @@ mod tests {
             old_snapshot: None,
             new_snapshot: None,
         });
-        let removed_wrong = queue.complete(VisualTransactionKey { transaction_id: 999, generation: 1 });
+        let removed_wrong = queue.complete(VisualTransactionKey {
+            transaction_id: 999,
+            generation: 1,
+        });
         assert!(removed_wrong.is_none());
         assert!(queue.has_active_insert());
         assert_eq!(queue.insert_byte_ranges(), vec![(30, 42)]);
@@ -602,11 +646,15 @@ mod tests {
     }
 
     fn utf16_forward(text: &str, byte_start: usize, utf16_count: i32) -> usize {
-        if utf16_count <= 0 { return byte_start; }
+        if utf16_count <= 0 {
+            return byte_start;
+        }
         let mut remaining = utf16_count;
         let mut pos = byte_start;
         for ch in text[byte_start..].chars() {
-            if remaining <= 0 { break; }
+            if remaining <= 0 {
+                break;
+            }
             remaining -= ch.len_utf16() as i32;
             pos += ch.len_utf8();
         }
@@ -614,11 +662,15 @@ mod tests {
     }
 
     fn utf16_backward(text: &str, byte_start: usize, utf16_count: i32) -> usize {
-        if utf16_count <= 0 { return byte_start; }
+        if utf16_count <= 0 {
+            return byte_start;
+        }
         let mut remaining = utf16_count;
         let mut pos = byte_start;
         for ch in text[..byte_start].chars().rev() {
-            if remaining <= 0 { break; }
+            if remaining <= 0 {
+                break;
+            }
             remaining -= ch.len_utf16() as i32;
             pos -= ch.len_utf8();
         }

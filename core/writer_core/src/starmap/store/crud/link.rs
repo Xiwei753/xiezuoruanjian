@@ -5,10 +5,19 @@ use super::super::relation_index::*;
 use super::super::StarMapStore;
 
 impl StarMapStore {
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
     pub fn upsert_link(&mut self, link: StarMapLink) {
         let link_id = link.link_id.clone();
         let is_new = !self.links.contains_key(&link_id);
-        let source_node_id = endpoint_node_id(&link.source).unwrap_or_default().to_string();
+        let source_node_id = endpoint_node_id(&link.source)
+            .unwrap_or_default()
+            .to_string();
         self.links.insert(link_id.clone(), link);
         self.dirty_links.insert(link_id.clone());
         self.deleted_link_ids.remove(&link_id);
@@ -26,7 +35,11 @@ impl StarMapStore {
                     source_node_id,
                 });
             } else {
-                if let Some(lri) = meta.link_relation_index.iter_mut().find(|lri| lri.link_id == link_id) {
+                if let Some(lri) = meta
+                    .link_relation_index
+                    .iter_mut()
+                    .find(|lri| lri.link_id == link_id)
+                {
                     lri.source_node_id = source_node_id;
                 }
             }
@@ -43,8 +56,13 @@ impl StarMapStore {
         }
         if let Some(ref mut meta) = self.graph_meta {
             meta.link_ids.retain(|id| id != link_id);
-            meta.link_relation_index.retain(|lri| lri.link_id != link_id);
-            meta.deleted_since_last_sync.add_entry("link", link_id, self.package_revision.saturating_add(1));
+            meta.link_relation_index
+                .retain(|lri| lri.link_id != link_id);
+            meta.deleted_since_last_sync.add_entry(
+                "link",
+                link_id,
+                self.package_revision.saturating_add(1),
+            );
         }
         self.dirty_graph_meta = true;
     }
@@ -71,9 +89,15 @@ impl StarMapStore {
                 "Link not found",
             ))
         })?;
-        if let Some(ref s) = patch.source { link.source = s.clone(); }
-        if let Some(ref t) = patch.target { link.target = t.clone(); }
-        if let Some(ref l) = patch.label { link.label = l.clone(); }
+        if let Some(ref s) = patch.source {
+            link.source = s.clone();
+        }
+        if let Some(ref t) = patch.target {
+            link.target = t.clone();
+        }
+        if let Some(ref l) = patch.label {
+            link.label = l.clone();
+        }
         link.updated_at = crate::starmap::now_epoch();
         let updated = link.clone();
         self.dirty_links.insert(link_id.to_string());

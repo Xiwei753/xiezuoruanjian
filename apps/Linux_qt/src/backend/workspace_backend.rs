@@ -61,21 +61,38 @@ pub struct WorkspaceBackend {
     ),
     get_workspace_diagnostics: qt_method!(fn(&self) -> QString),
     open_workspace_dir: qt_method!(fn(&mut self)),
-    save_last_navigation_state: qt_method!(fn(&mut self, route: QString, project_id: QString, volume_id: QString, chapter_id: QString, starmap_id: QString)),
+    save_last_navigation_state: qt_method!(
+        fn(
+            &mut self,
+            route: QString,
+            project_id: QString,
+            volume_id: QString,
+            chapter_id: QString,
+            starmap_id: QString,
+        )
+    ),
     get_last_navigation_state: qt_method!(fn(&self) -> QJsonObject),
     clear_last_navigation_state: qt_method!(fn(&mut self)),
     app: AppRef,
 }
 
-
 impl WorkspaceBackend {
     pub fn new(app: AppRef) -> Self {
-        Self { app, ..Default::default() }
+        Self {
+            app,
+            ..Default::default()
+        }
     }
-    fn with_app<R>(&self, f: impl FnOnce(&AppBackend) -> R) -> Result<R, crate::backend::AppBorrowError> {
+    fn with_app<R>(
+        &self,
+        f: impl FnOnce(&AppBackend) -> R,
+    ) -> Result<R, crate::backend::AppBorrowError> {
         self.app.with_app(f)
     }
-    fn with_app_mut<R>(&self, f: impl FnOnce(&mut AppBackend) -> R) -> Result<R, crate::backend::AppBorrowError> {
+    fn with_app_mut<R>(
+        &self,
+        f: impl FnOnce(&mut AppBackend) -> R,
+    ) -> Result<R, crate::backend::AppBorrowError> {
         self.app.with_app_mut(f)
     }
     fn snap(&self) -> std::cell::Ref<'_, DomainSnapshot> {
@@ -87,16 +104,21 @@ impl WorkspaceBackend {
         self.workspace_state_changed();
     }
     fn workspace_path(&self) -> QString {
-        self.with_app(|app| app.workspace_path()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+        self.with_app(|app| app.workspace_path())
+            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn has_workspace(&self) -> bool {
         self.snap().has_workspace
     }
     fn pending_github_init_path(&self) -> QString {
-        self.with_app(|app| app.pending_github_init_path()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+        self.with_app(|app| app.pending_github_init_path())
+            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn try_restore_last_workspace(&mut self) {
-        if self.with_app_mut(|app| app.try_restore_last_workspace()).is_ok() {
+        if self
+            .with_app_mut(|app| app.try_restore_last_workspace())
+            .is_ok()
+        {
             self.emit_workspace_changed();
         }
     }
@@ -109,9 +131,7 @@ impl WorkspaceBackend {
         qjson_object_from_json(&res.to_string())
     }
     fn open_existing_workspace(&mut self) -> QJsonObject {
-        let result = self.with_app_mut(|app| {
-            app.open_existing_workspace()
-        });
+        let result = self.with_app_mut(|app| app.open_existing_workspace());
         if result.is_ok() {
             self.emit_workspace_changed();
         }
@@ -130,9 +150,7 @@ impl WorkspaceBackend {
             "workspace_backend_create_workspace_called",
             &format!("path={}", path_str),
         );
-        let result = self.with_app_mut(|app| {
-            app.internal_open_workspace(&path_str, true)
-        });
+        let result = self.with_app_mut(|app| app.internal_open_workspace(&path_str, true));
         if result.is_ok() {
             self.emit_workspace_changed();
         }
@@ -151,9 +169,7 @@ impl WorkspaceBackend {
             "workspace_backend_open_workspace_called",
             &format!("path={}", path_str),
         );
-        let result = self.with_app_mut(|app| {
-            app.internal_open_workspace(&path_str, false)
-        });
+        let result = self.with_app_mut(|app| app.internal_open_workspace(&path_str, false));
         if result.is_ok() {
             self.emit_workspace_changed();
         }
@@ -176,7 +192,10 @@ impl WorkspaceBackend {
         }
     }
     fn init_workspace_from_github(&mut self) {
-        if self.with_app_mut(|app| app.init_workspace_from_github()).is_ok() {
+        if self
+            .with_app_mut(|app| app.init_workspace_from_github())
+            .is_ok()
+        {
             self.pending_github_init_path_changed();
         }
     }
@@ -197,17 +216,17 @@ impl WorkspaceBackend {
             "workspace_backend_import_workspace_called",
             &format!("path={}", path),
         );
-        if self.with_app_mut(|app| {
-            app.execute_github_init(path, remote_url, branch, token)
-        }).is_ok() {
+        if self
+            .with_app_mut(|app| app.execute_github_init(path, remote_url, branch, token))
+            .is_ok()
+        {
             self.emit_workspace_changed();
             self.pending_github_init_path_changed();
         }
     }
     fn get_workspace_diagnostics(&self) -> QString {
-        self.with_app(|app| {
-            app.get_workspace_diagnostics()
-        }).unwrap_or_else(|_| backend_link_broken_json())
+        self.with_app(|app| app.get_workspace_diagnostics())
+            .unwrap_or_else(|_| backend_link_broken_json())
     }
     fn open_workspace_dir(&mut self) {
         if self.with_app_mut(|app| app.open_workspace_dir()).is_err() {
@@ -311,13 +330,17 @@ impl AppBackend {
                     self.debug_log("workspace", "ensure_device_info_failed", &format!("{}", e));
                 }
                 self.ai_available_changed();
-        self.workspace_opened();
-        self.workspace_content_changed();
-        self.workspace_state_changed();
+                self.workspace_opened();
+                self.workspace_content_changed();
+                self.workspace_state_changed();
 
-        if let Err(e) = api.search_service_rebuild(None) {
-            self.debug_log("workspace", "search_index_rebuild_failed", &format!("{}", e));
-        }
+                if let Err(e) = api.search_service_rebuild(None) {
+                    self.debug_log(
+                        "workspace",
+                        "search_index_rebuild_failed",
+                        &format!("{}", e),
+                    );
+                }
                 self.debug_log(
                     "workspace",
                     "try_restore_last_workspace_success",

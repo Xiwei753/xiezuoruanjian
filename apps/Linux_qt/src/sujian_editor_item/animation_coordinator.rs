@@ -27,27 +27,26 @@
 use std::time::Instant;
 
 use writer_core::editor::{
-    CursorRect, EditorAnimationKind, EditorVisualTransaction, OffsetMap,
-    Utf8ByteOffset, Utf8ByteRange,
+    CursorRect, EditorAnimationKind, EditorVisualTransaction, OffsetMap, Utf8ByteOffset,
+    Utf8ByteRange,
 };
 
-pub(crate) use super::transaction_key::VisualTransactionKey;
+use super::animated_slice::AnimatedSlice;
 pub(crate) use super::animation_mode::AnimationMode;
 pub(crate) use super::cursor_animation::{CursorAnimationPlan, CursorBlinkMode, CursorTransition};
-pub(crate) use super::render_plan::{
-    HiddenClipRect, StaticTextPlan, TextAnimationPlan, TextAnimationGlyphInfo,
-    SelectionPreeditPlan, SelectionRange, PreeditRange,
-    ImeUpdateKind, ImeUpdatePlan, RenderPlan,
-};
-use super::animated_slice::AnimatedSlice;
-use super::text_visual_transaction::{
-    PreparedTextVisualTransaction, PreparedTransactionQueue,
-    TextVisualTransactionState, TextVisualOperationKind, TransactionTimeline,
-};
 use super::decoration_slice::DecorationSlice;
-use super::static_line_patch::StaticLinePatch;
 use super::layout_revision::LayoutRevision;
-use super::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId, SourceRect, ShapingIdentity};
+use super::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId, ShapingIdentity, SourceRect};
+pub(crate) use super::render_plan::{
+    HiddenClipRect, ImeUpdateKind, ImeUpdatePlan, PreeditRange, RenderPlan, SelectionPreeditPlan,
+    SelectionRange, StaticTextPlan, TextAnimationGlyphInfo, TextAnimationPlan,
+};
+use super::static_line_patch::StaticLinePatch;
+use super::text_visual_transaction::{
+    PreparedTextVisualTransaction, PreparedTransactionQueue, TextVisualOperationKind,
+    TextVisualTransactionState, TransactionTimeline,
+};
+pub(crate) use super::transaction_key::VisualTransactionKey;
 
 /// 将旧事务的视觉帧 rebase 到新事务的 slice 上。
 ///
@@ -68,7 +67,9 @@ fn match_rebase_frames(
 ) {
     let mut consumed_indices: Vec<usize> = Vec::new();
     for (bs, be, fx, fy, fo, ref shaping) in rebase_frames {
-        let tier1 = slices.iter_mut().enumerate()
+        let tier1 = slices
+            .iter_mut()
+            .enumerate()
             .filter(|(idx, _)| !consumed_indices.contains(idx))
             .find(|(_, ns)| ns.byte_start == *bs && ns.byte_end == *be);
         if let Some((idx, new_slice)) = tier1 {
@@ -76,8 +77,13 @@ fn match_rebase_frames(
             consumed_indices.push(idx);
             continue;
         }
-        if let (Some(mbs), Some(mbe)) = (offset_map.map_old_to_new(*bs), offset_map.map_old_to_new(*be)) {
-            let tier2 = slices.iter_mut().enumerate()
+        if let (Some(mbs), Some(mbe)) = (
+            offset_map.map_old_to_new(*bs),
+            offset_map.map_old_to_new(*be),
+        ) {
+            let tier2 = slices
+                .iter_mut()
+                .enumerate()
                 .filter(|(idx, _)| !consumed_indices.contains(idx))
                 .find(|(_, ns)| ns.byte_start == mbs && ns.byte_end == mbe);
             if let Some((idx, new_slice)) = tier2 {
@@ -87,7 +93,9 @@ fn match_rebase_frames(
             }
             if let Some(ref sid) = shaping {
                 let mapped_center = (mbs + mbe) as i64 / 2;
-                let best = slices.iter_mut().enumerate()
+                let best = slices
+                    .iter_mut()
+                    .enumerate()
                     .filter(|(idx, _)| !consumed_indices.contains(idx))
                     .filter(|(_, ns)| ns.shaping_identity.as_ref() == Some(sid))
                     .filter(|(_, ns)| ns.byte_start >= mbs && ns.byte_end <= mbe.max(mbs + 1))
@@ -146,7 +154,12 @@ impl LinuxEditorAnimationCoordinator {
         old_snapshot: &EditorLayoutSnapshot,
         new_snapshot: &EditorLayoutSnapshot,
     ) -> Option<VisualTransactionKey> {
-        if !typing_animation_enabled || is_scrolling || is_loading || is_applying_format || is_applying_settings {
+        if !typing_animation_enabled
+            || is_scrolling
+            || is_loading
+            || is_applying_format
+            || is_applying_settings
+        {
             return None;
         }
 
@@ -162,23 +175,38 @@ impl LinuxEditorAnimationCoordinator {
                 if let Some(range) = vt.inserted_range {
                     let range_start = range.start().value();
                     let range_end = range.end().value();
-                    let conflicting = self.prepared_queue.find_conflicting_transaction(range_start, range_end);
-                    let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = if let Some(old_key) = conflicting {
-                        let mut frames = Vec::new();
-                        if let Some(old_tx) = self.prepared_queue.active_transactions().iter().find(|t| t.key == old_key) {
-                            let old_progress = old_tx.progress(Instant::now());
-                            if old_progress > 0.0 && old_progress < 1.0 {
-                                for old_slice in &old_tx.slices {
-                                    let frame = old_slice.compute_frame(old_progress);
-                                    frames.push((old_slice.byte_start, old_slice.byte_end, frame.x, frame.y, frame.opacity, old_slice.shaping_identity.clone()));
+                    let conflicting = self
+                        .prepared_queue
+                        .find_conflicting_transaction(range_start, range_end);
+                    let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> =
+                        if let Some(old_key) = conflicting {
+                            let mut frames = Vec::new();
+                            if let Some(old_tx) = self
+                                .prepared_queue
+                                .active_transactions()
+                                .iter()
+                                .find(|t| t.key == old_key)
+                            {
+                                let old_progress = old_tx.progress(Instant::now());
+                                if old_progress > 0.0 && old_progress < 1.0 {
+                                    for old_slice in &old_tx.slices {
+                                        let frame = old_slice.compute_frame(old_progress);
+                                        frames.push((
+                                            old_slice.byte_start,
+                                            old_slice.byte_end,
+                                            frame.x,
+                                            frame.y,
+                                            frame.opacity,
+                                            old_slice.shaping_identity.clone(),
+                                        ));
+                                    }
                                 }
                             }
-                        }
-                        self.prepared_queue.cancel(old_key, "rebased");
-                        frames
-                    } else {
-                        Vec::new()
-                    };
+                            self.prepared_queue.cancel(old_key, "rebased");
+                            frames
+                        } else {
+                            Vec::new()
+                        };
 
                     let key = self.alloc_key();
                     let mut slices = Vec::new();
@@ -188,7 +216,9 @@ impl LinuxEditorAnimationCoordinator {
                     let old_cy = old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
 
                     for new_line in new_snapshot.lines_in_byte_range(range_start, range_end) {
-                        if let Some(source_rect) = new_line.source_rect_for_byte_range(range_start, range_end) {
+                        if let Some(source_rect) =
+                            new_line.source_rect_for_byte_range(range_start, range_end)
+                        {
                             let to_doc = new_line.source_rect_to_document_rect(&source_rect);
                             slices.push(AnimatedSlice::insert_fade_in(
                                 key,
@@ -199,7 +229,10 @@ impl LinuxEditorAnimationCoordinator {
                                 old_cy,
                                 range_start,
                                 range_end,
-                                new_line.clusters.first().map(|c| c.shaping_identity.clone()),
+                                new_line
+                                    .clusters
+                                    .first()
+                                    .map(|c| c.shaping_identity.clone()),
                             ));
 
                             static_patches.push(StaticLinePatch::insert_patch(
@@ -223,9 +256,13 @@ impl LinuxEditorAnimationCoordinator {
                         }
 
                         let old_line = {
-                            let mapped_old_byte_start = insert_reflow_offset_map.map_new_to_old(new_line.byte_start);
-                            let mapped_old_byte_end = insert_reflow_offset_map.map_new_to_old(new_line.byte_end);
-                            if let (Some(mobs), Some(mobe)) = (mapped_old_byte_start, mapped_old_byte_end) {
+                            let mapped_old_byte_start =
+                                insert_reflow_offset_map.map_new_to_old(new_line.byte_start);
+                            let mapped_old_byte_end =
+                                insert_reflow_offset_map.map_new_to_old(new_line.byte_end);
+                            if let (Some(mobs), Some(mobe)) =
+                                (mapped_old_byte_start, mapped_old_byte_end)
+                            {
                                 old_snapshot.line_for_byte_range(mobs, mobe).cloned()
                             } else if let Some(mobs) = mapped_old_byte_start {
                                 old_snapshot.line_for_byte(mobs).cloned()
@@ -235,13 +272,17 @@ impl LinuxEditorAnimationCoordinator {
                         };
                         if let Some(ol) = old_line {
                             let old_sr = ol.source_rect_for_byte_range(ol.byte_start, ol.byte_end);
-                            let new_sr = new_line.source_rect_for_byte_range(new_line.byte_start, new_line.byte_end);
+                            let new_sr = new_line
+                                .source_rect_for_byte_range(new_line.byte_start, new_line.byte_end);
 
                             if let (Some(old_src), Some(new_src)) = (old_sr, new_sr) {
                                 let same_shaping = ol.clusters.len() == new_line.clusters.len()
-                                    && ol.clusters.iter()
-                                        .zip(new_line.clusters.iter())
-                                        .all(|(oc, nc)| oc.shaping_identity.is_same_shaping(&nc.shaping_identity));
+                                    && ol.clusters.iter().zip(new_line.clusters.iter()).all(
+                                        |(oc, nc)| {
+                                            oc.shaping_identity
+                                                .is_same_shaping(&nc.shaping_identity)
+                                        },
+                                    );
 
                                 let old_doc = ol.source_rect_to_document_rect(&old_src);
                                 let new_doc = new_line.source_rect_to_document_rect(&new_src);
@@ -291,15 +332,16 @@ impl LinuxEditorAnimationCoordinator {
                         }
                     }
 
-                    let cursor_transition = if old_cursor_rect.is_some() && new_cursor_rect.is_some() {
-                        CursorTransition::Tween {
-                            old_rect: old_cursor_rect.clone().unwrap(),
-                            new_rect: new_cursor_rect.clone().unwrap(),
-                            duration_ms: vt.duration_ms,
-                        }
-                    } else {
-                        CursorTransition::Snap
-                    };
+                    let cursor_transition =
+                        if old_cursor_rect.is_some() && new_cursor_rect.is_some() {
+                            CursorTransition::Tween {
+                                old_rect: old_cursor_rect.clone().unwrap(),
+                                new_rect: new_cursor_rect.clone().unwrap(),
+                                duration_ms: vt.duration_ms,
+                            }
+                        } else {
+                            CursorTransition::Snap
+                        };
 
                     let insert_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
                     match_rebase_frames(&rebase_frames, &mut slices, &insert_offset_map);
@@ -348,23 +390,38 @@ impl LinuxEditorAnimationCoordinator {
 
                 let rebase_byte_start = deleted_ranges.first().map(|(s, _)| *s).unwrap_or(0);
                 let rebase_byte_end = deleted_ranges.last().map(|(_, e)| *e).unwrap_or(0);
-                let conflicting = self.prepared_queue.find_conflicting_transaction(rebase_byte_start, rebase_byte_end);
-                let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = if let Some(old_key) = conflicting {
-                    let mut frames = Vec::new();
-                    if let Some(old_tx) = self.prepared_queue.active_transactions().iter().find(|t| t.key == old_key) {
-                        let old_progress = old_tx.progress(Instant::now());
-                        if old_progress > 0.0 && old_progress < 1.0 {
-                            for old_slice in &old_tx.slices {
-                                let frame = old_slice.compute_frame(old_progress);
-                                frames.push((old_slice.byte_start, old_slice.byte_end, frame.x, frame.y, frame.opacity, old_slice.shaping_identity.clone()));
+                let conflicting = self
+                    .prepared_queue
+                    .find_conflicting_transaction(rebase_byte_start, rebase_byte_end);
+                let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> =
+                    if let Some(old_key) = conflicting {
+                        let mut frames = Vec::new();
+                        if let Some(old_tx) = self
+                            .prepared_queue
+                            .active_transactions()
+                            .iter()
+                            .find(|t| t.key == old_key)
+                        {
+                            let old_progress = old_tx.progress(Instant::now());
+                            if old_progress > 0.0 && old_progress < 1.0 {
+                                for old_slice in &old_tx.slices {
+                                    let frame = old_slice.compute_frame(old_progress);
+                                    frames.push((
+                                        old_slice.byte_start,
+                                        old_slice.byte_end,
+                                        frame.x,
+                                        frame.y,
+                                        frame.opacity,
+                                        old_slice.shaping_identity.clone(),
+                                    ));
+                                }
                             }
                         }
-                    }
-                    self.prepared_queue.cancel(old_key, "rebased");
-                    frames
-                } else {
-                    Vec::new()
-                };
+                        self.prepared_queue.cancel(old_key, "rebased");
+                        frames
+                    } else {
+                        Vec::new()
+                    };
 
                 let key = self.alloc_key();
                 let new_revision = LayoutRevision::next();
@@ -376,7 +433,9 @@ impl LinuxEditorAnimationCoordinator {
 
                 for (del_start, del_end) in &deleted_ranges {
                     for old_line in old_snapshot.lines_in_byte_range(*del_start, *del_end) {
-                        if let Some(source_rect) = old_line.source_rect_for_byte_range(*del_start, *del_end) {
+                        if let Some(source_rect) =
+                            old_line.source_rect_for_byte_range(*del_start, *del_end)
+                        {
                             let from_doc = old_line.source_rect_to_document_rect(&source_rect);
                             slices.push(AnimatedSlice::delete_fade_out(
                                 key,
@@ -387,7 +446,10 @@ impl LinuxEditorAnimationCoordinator {
                                 new_cy,
                                 *del_start,
                                 *del_end,
-                                old_line.clusters.first().map(|c| c.shaping_identity.clone()),
+                                old_line
+                                    .clusters
+                                    .first()
+                                    .map(|c| c.shaping_identity.clone()),
                             ));
                         }
                     }
@@ -396,9 +458,13 @@ impl LinuxEditorAnimationCoordinator {
                 let delete_reflow_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
                 for new_line in &new_snapshot.line_snapshots {
                     let old_line = {
-                        let mapped_old_byte_start = delete_reflow_offset_map.map_new_to_old(new_line.byte_start);
-                        let mapped_old_byte_end = delete_reflow_offset_map.map_new_to_old(new_line.byte_end);
-                        if let (Some(mobs), Some(mobe)) = (mapped_old_byte_start, mapped_old_byte_end) {
+                        let mapped_old_byte_start =
+                            delete_reflow_offset_map.map_new_to_old(new_line.byte_start);
+                        let mapped_old_byte_end =
+                            delete_reflow_offset_map.map_new_to_old(new_line.byte_end);
+                        if let (Some(mobs), Some(mobe)) =
+                            (mapped_old_byte_start, mapped_old_byte_end)
+                        {
                             old_snapshot.line_for_byte_range(mobs, mobe).cloned()
                         } else if let Some(mobs) = mapped_old_byte_start {
                             old_snapshot.line_for_byte(mobs).cloned()
@@ -408,13 +474,16 @@ impl LinuxEditorAnimationCoordinator {
                     };
                     if let Some(ol) = old_line {
                         let old_sr = ol.source_rect_for_byte_range(ol.byte_start, ol.byte_end);
-                        let new_sr = new_line.source_rect_for_byte_range(new_line.byte_start, new_line.byte_end);
+                        let new_sr = new_line
+                            .source_rect_for_byte_range(new_line.byte_start, new_line.byte_end);
 
                         if let (Some(old_src), Some(new_src)) = (old_sr, new_sr) {
                             let same_shaping = ol.clusters.len() == new_line.clusters.len()
-                                && ol.clusters.iter()
-                                    .zip(new_line.clusters.iter())
-                                    .all(|(oc, nc)| oc.shaping_identity.is_same_shaping(&nc.shaping_identity));
+                                && ol.clusters.iter().zip(new_line.clusters.iter()).all(
+                                    |(oc, nc)| {
+                                        oc.shaping_identity.is_same_shaping(&nc.shaping_identity)
+                                    },
+                                );
 
                             let old_doc = ol.source_rect_to_document_rect(&old_src);
                             let new_doc = new_line.source_rect_to_document_rect(&new_src);
@@ -553,23 +622,38 @@ impl LinuxEditorAnimationCoordinator {
         old_cursor_rect: Option<CursorRect>,
         new_cursor_rect: Option<CursorRect>,
     ) -> Option<VisualTransactionKey> {
-        let conflicting = self.prepared_queue.find_conflicting_transaction(composition_byte_start, composition_byte_end);
-        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = if let Some(old_key) = conflicting {
-            let mut frames = Vec::new();
-            if let Some(old_tx) = self.prepared_queue.active_transactions().iter().find(|t| t.key == old_key) {
-                let old_progress = old_tx.progress(Instant::now());
-                if old_progress > 0.0 && old_progress < 1.0 {
-                    for old_slice in &old_tx.slices {
-                        let frame = old_slice.compute_frame(old_progress);
-                        frames.push((old_slice.byte_start, old_slice.byte_end, frame.x, frame.y, frame.opacity, old_slice.shaping_identity.clone()));
+        let conflicting = self
+            .prepared_queue
+            .find_conflicting_transaction(composition_byte_start, composition_byte_end);
+        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> =
+            if let Some(old_key) = conflicting {
+                let mut frames = Vec::new();
+                if let Some(old_tx) = self
+                    .prepared_queue
+                    .active_transactions()
+                    .iter()
+                    .find(|t| t.key == old_key)
+                {
+                    let old_progress = old_tx.progress(Instant::now());
+                    if old_progress > 0.0 && old_progress < 1.0 {
+                        for old_slice in &old_tx.slices {
+                            let frame = old_slice.compute_frame(old_progress);
+                            frames.push((
+                                old_slice.byte_start,
+                                old_slice.byte_end,
+                                frame.x,
+                                frame.y,
+                                frame.opacity,
+                                old_slice.shaping_identity.clone(),
+                            ));
+                        }
                     }
                 }
-            }
-            self.prepared_queue.cancel(old_key, "rebased");
-            frames
-        } else {
-            Vec::new()
-        };
+                self.prepared_queue.cancel(old_key, "rebased");
+                frames
+            } else {
+                Vec::new()
+            };
 
         let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
 
@@ -592,8 +676,12 @@ impl LinuxEditorAnimationCoordinator {
         let old_cx = old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
         let old_cy = old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
 
-        for new_line in new_snapshot.lines_in_byte_range(composition_byte_start, composition_byte_end) {
-            if let Some(source_rect) = new_line.source_rect_for_byte_range(composition_byte_start, composition_byte_end) {
+        for new_line in
+            new_snapshot.lines_in_byte_range(composition_byte_start, composition_byte_end)
+        {
+            if let Some(source_rect) =
+                new_line.source_rect_for_byte_range(composition_byte_start, composition_byte_end)
+            {
                 let to_doc = new_line.source_rect_to_document_rect(&source_rect);
                 slices.push(AnimatedSlice::insert_fade_in(
                     key,
@@ -604,7 +692,10 @@ impl LinuxEditorAnimationCoordinator {
                     old_cy,
                     composition_byte_start,
                     composition_byte_end,
-                    new_line.clusters.first().map(|c| c.shaping_identity.clone()),
+                    new_line
+                        .clusters
+                        .first()
+                        .map(|c| c.shaping_identity.clone()),
                 ));
 
                 static_patches.push(StaticLinePatch::insert_patch(
@@ -640,7 +731,9 @@ impl LinuxEditorAnimationCoordinator {
             let old_line = {
                 let mapped_old_byte_start = offset_map.map_new_to_old(new_line.byte_start);
                 let mapped_old_byte_end = offset_map.map_new_to_old(new_line.byte_end);
-                let offset_matched = if let (Some(mobs), Some(mobe)) = (mapped_old_byte_start, mapped_old_byte_end) {
+                let offset_matched = if let (Some(mobs), Some(mobe)) =
+                    (mapped_old_byte_start, mapped_old_byte_end)
+                {
                     old_snapshot.line_for_byte_range(mobs, mobe).cloned()
                 } else if let Some(mobs) = mapped_old_byte_start {
                     old_snapshot.line_for_byte(mobs).cloned()
@@ -651,13 +744,18 @@ impl LinuxEditorAnimationCoordinator {
             };
             if let Some(ol) = old_line {
                 let old_sr = ol.source_rect_for_byte_range(ol.byte_start, ol.byte_end);
-                let new_sr = new_line.source_rect_for_byte_range(new_line.byte_start, new_line.byte_end);
+                let new_sr =
+                    new_line.source_rect_for_byte_range(new_line.byte_start, new_line.byte_end);
 
                 if let (Some(old_src), Some(new_src)) = (old_sr, new_sr) {
                     let same_shaping = ol.clusters.len() == new_line.clusters.len()
-                        && ol.clusters.iter()
+                        && ol
+                            .clusters
+                            .iter()
                             .zip(new_line.clusters.iter())
-                            .all(|(oc, nc)| oc.shaping_identity.is_same_shaping(&nc.shaping_identity));
+                            .all(|(oc, nc)| {
+                                oc.shaping_identity.is_same_shaping(&nc.shaping_identity)
+                            });
 
                     let old_doc = ol.source_rect_to_document_rect(&old_src);
                     let new_doc = new_line.source_rect_to_document_rect(&new_src);
@@ -752,23 +850,38 @@ impl LinuxEditorAnimationCoordinator {
     ) -> Option<VisualTransactionKey> {
         let conflict_start = committed_replace_start.min(preedit_byte_start);
         let conflict_end = committed_replace_end.max(preedit_byte_end);
-        let conflicting = self.prepared_queue.find_conflicting_transaction(conflict_start, conflict_end);
-        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = if let Some(old_key) = conflicting {
-            let mut frames = Vec::new();
-            if let Some(old_tx) = self.prepared_queue.active_transactions().iter().find(|t| t.key == old_key) {
-                let old_progress = old_tx.progress(Instant::now());
-                if old_progress > 0.0 && old_progress < 1.0 {
-                    for old_slice in &old_tx.slices {
-                        let frame = old_slice.compute_frame(old_progress);
-                        frames.push((old_slice.byte_start, old_slice.byte_end, frame.x, frame.y, frame.opacity, old_slice.shaping_identity.clone()));
+        let conflicting = self
+            .prepared_queue
+            .find_conflicting_transaction(conflict_start, conflict_end);
+        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> =
+            if let Some(old_key) = conflicting {
+                let mut frames = Vec::new();
+                if let Some(old_tx) = self
+                    .prepared_queue
+                    .active_transactions()
+                    .iter()
+                    .find(|t| t.key == old_key)
+                {
+                    let old_progress = old_tx.progress(Instant::now());
+                    if old_progress > 0.0 && old_progress < 1.0 {
+                        for old_slice in &old_tx.slices {
+                            let frame = old_slice.compute_frame(old_progress);
+                            frames.push((
+                                old_slice.byte_start,
+                                old_slice.byte_end,
+                                frame.x,
+                                frame.y,
+                                frame.opacity,
+                                old_slice.shaping_identity.clone(),
+                            ));
+                        }
                     }
                 }
-            }
-            self.prepared_queue.cancel(old_key, "rebased");
-            frames
-        } else {
-            Vec::new()
-        };
+                self.prepared_queue.cancel(old_key, "rebased");
+                frames
+            } else {
+                Vec::new()
+            };
 
         let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
 
@@ -792,7 +905,9 @@ impl LinuxEditorAnimationCoordinator {
             let shrink_y = new_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
 
             for old_line in old_snapshot.lines_in_byte_range(preedit_byte_start, preedit_byte_end) {
-                if let Some(source_rect) = old_line.source_rect_for_byte_range(preedit_byte_start, preedit_byte_end) {
+                if let Some(source_rect) =
+                    old_line.source_rect_for_byte_range(preedit_byte_start, preedit_byte_end)
+                {
                     let from_doc = old_line.source_rect_to_document_rect(&source_rect);
                     slices.push(AnimatedSlice::delete_fade_out(
                         key,
@@ -803,7 +918,10 @@ impl LinuxEditorAnimationCoordinator {
                         shrink_y,
                         preedit_byte_start,
                         preedit_byte_end,
-                        old_line.clusters.first().map(|c| c.shaping_identity.clone()),
+                        old_line
+                            .clusters
+                            .first()
+                            .map(|c| c.shaping_identity.clone()),
                     ));
                 }
             }
@@ -815,19 +933,29 @@ impl LinuxEditorAnimationCoordinator {
                 let shrink_x = new_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
                 let shrink_y = new_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
 
-                for old_line in old_snapshot.lines_in_byte_range(preedit_byte_start, preedit_byte_end) {
-                    for old_cluster in old_line.clusters_in_byte_range(preedit_byte_start, preedit_byte_end) {
+                for old_line in
+                    old_snapshot.lines_in_byte_range(preedit_byte_start, preedit_byte_end)
+                {
+                    for old_cluster in
+                        old_line.clusters_in_byte_range(preedit_byte_start, preedit_byte_end)
+                    {
                         let mapped_new_bs = offset_map.map_old_to_new(old_cluster.byte_start);
                         let mapped_new_be = offset_map.map_old_to_new(old_cluster.byte_end);
-                        let matched_in_new = if let (Some(mbs), Some(mbe)) = (mapped_new_bs, mapped_new_be) {
-                            new_snapshot.line_snapshots.iter().any(|nl| {
-                                nl.clusters.iter().any(|nc| nc.byte_start == mbs && nc.byte_end == mbe)
-                            })
-                        } else {
-                            false
-                        };
+                        let matched_in_new =
+                            if let (Some(mbs), Some(mbe)) = (mapped_new_bs, mapped_new_be) {
+                                new_snapshot.line_snapshots.iter().any(|nl| {
+                                    nl.clusters
+                                        .iter()
+                                        .any(|nc| nc.byte_start == mbs && nc.byte_end == mbe)
+                                })
+                            } else {
+                                false
+                            };
                         if !matched_in_new {
-                            if let Some(old_sr) = old_line.source_rect_for_byte_range(old_cluster.byte_start, old_cluster.byte_end) {
+                            if let Some(old_sr) = old_line.source_rect_for_byte_range(
+                                old_cluster.byte_start,
+                                old_cluster.byte_end,
+                            ) {
                                 let from_doc = old_line.source_rect_to_document_rect(&old_sr);
                                 slices.push(AnimatedSlice::delete_fade_out(
                                     key,
@@ -842,17 +970,33 @@ impl LinuxEditorAnimationCoordinator {
                                 ));
                             }
                         } else if let (Some(mbs), Some(mbe)) = (mapped_new_bs, mapped_new_be) {
-                            if let Some((new_line, new_cluster)) = new_snapshot.line_snapshots.iter()
-                                .filter_map(|nl| nl.clusters.iter()
-                                    .find(|nc| nc.byte_start == mbs && nc.byte_end == mbe)
-                                    .map(|nc| (nl, nc)))
+                            if let Some((new_line, new_cluster)) = new_snapshot
+                                .line_snapshots
+                                .iter()
+                                .filter_map(|nl| {
+                                    nl.clusters
+                                        .iter()
+                                        .find(|nc| nc.byte_start == mbs && nc.byte_end == mbe)
+                                        .map(|nc| (nl, nc))
+                                })
                                 .next()
                             {
-                                if !old_cluster.shaping_identity.is_same_shaping(&new_cluster.shaping_identity) {
-                                    if let Some(old_sr) = old_line.source_rect_for_byte_range(old_cluster.byte_start, old_cluster.byte_end) {
-                                        let old_doc = old_line.source_rect_to_document_rect(&old_sr);
-                                        if let Some(new_sr) = new_line.source_rect_for_byte_range(new_cluster.byte_start, new_cluster.byte_end) {
-                                            let new_doc = new_line.source_rect_to_document_rect(&new_sr);
+                                if !old_cluster
+                                    .shaping_identity
+                                    .is_same_shaping(&new_cluster.shaping_identity)
+                                {
+                                    if let Some(old_sr) = old_line.source_rect_for_byte_range(
+                                        old_cluster.byte_start,
+                                        old_cluster.byte_end,
+                                    ) {
+                                        let old_doc =
+                                            old_line.source_rect_to_document_rect(&old_sr);
+                                        if let Some(new_sr) = new_line.source_rect_for_byte_range(
+                                            new_cluster.byte_start,
+                                            new_cluster.byte_end,
+                                        ) {
+                                            let new_doc =
+                                                new_line.source_rect_to_document_rect(&new_sr);
                                             slices.push(AnimatedSlice::reflow_crossfade_old(
                                                 key,
                                                 old_line.id,
@@ -870,19 +1014,29 @@ impl LinuxEditorAnimationCoordinator {
                     }
                 }
 
-                for new_line in new_snapshot.lines_in_byte_range(candidate_byte_start, candidate_byte_end) {
-                    for new_cluster in new_line.clusters_in_byte_range(candidate_byte_start, candidate_byte_end) {
+                for new_line in
+                    new_snapshot.lines_in_byte_range(candidate_byte_start, candidate_byte_end)
+                {
+                    for new_cluster in
+                        new_line.clusters_in_byte_range(candidate_byte_start, candidate_byte_end)
+                    {
                         let mapped_old_bs = offset_map.map_new_to_old(new_cluster.byte_start);
                         let mapped_old_be = offset_map.map_new_to_old(new_cluster.byte_end);
-                        let found_in_old = if let (Some(mbs), Some(mbe)) = (mapped_old_bs, mapped_old_be) {
-                            old_snapshot.line_snapshots.iter().any(|ol| {
-                                ol.clusters.iter().any(|oc| oc.byte_start == mbs && oc.byte_end == mbe)
-                            })
-                        } else {
-                            false
-                        };
+                        let found_in_old =
+                            if let (Some(mbs), Some(mbe)) = (mapped_old_bs, mapped_old_be) {
+                                old_snapshot.line_snapshots.iter().any(|ol| {
+                                    ol.clusters
+                                        .iter()
+                                        .any(|oc| oc.byte_start == mbs && oc.byte_end == mbe)
+                                })
+                            } else {
+                                false
+                            };
                         if !found_in_old {
-                            if let Some(new_sr) = new_line.source_rect_for_byte_range(new_cluster.byte_start, new_cluster.byte_end) {
+                            if let Some(new_sr) = new_line.source_rect_for_byte_range(
+                                new_cluster.byte_start,
+                                new_cluster.byte_end,
+                            ) {
                                 let to_doc = new_line.source_rect_to_document_rect(&new_sr);
                                 slices.push(AnimatedSlice::insert_fade_in(
                                     key,
@@ -904,19 +1058,35 @@ impl LinuxEditorAnimationCoordinator {
                                 ));
                             }
                         } else if let (Some(mbs), Some(mbe)) = (mapped_old_bs, mapped_old_be) {
-                            if let Some((old_line, old_cluster)) = old_snapshot.line_snapshots.iter()
-                                .filter_map(|ol| ol.clusters.iter()
-                                    .find(|oc| oc.byte_start == mbs && oc.byte_end == mbe)
-                                    .map(|oc| (ol, oc)))
+                            if let Some((old_line, old_cluster)) = old_snapshot
+                                .line_snapshots
+                                .iter()
+                                .filter_map(|ol| {
+                                    ol.clusters
+                                        .iter()
+                                        .find(|oc| oc.byte_start == mbs && oc.byte_end == mbe)
+                                        .map(|oc| (ol, oc))
+                                })
                                 .next()
                             {
-                                let same_shaping = old_cluster.shaping_identity.is_same_shaping(&new_cluster.shaping_identity);
+                                let same_shaping = old_cluster
+                                    .shaping_identity
+                                    .is_same_shaping(&new_cluster.shaping_identity);
                                 if !same_shaping {
-                                    if let Some(new_sr) = new_line.source_rect_for_byte_range(new_cluster.byte_start, new_cluster.byte_end) {
+                                    if let Some(new_sr) = new_line.source_rect_for_byte_range(
+                                        new_cluster.byte_start,
+                                        new_cluster.byte_end,
+                                    ) {
                                         let old_doc = old_line.source_rect_to_document_rect(
-                                            &old_line.source_rect_for_byte_range(old_cluster.byte_start, old_cluster.byte_end).unwrap_or(SourceRect::zero())
+                                            &old_line
+                                                .source_rect_for_byte_range(
+                                                    old_cluster.byte_start,
+                                                    old_cluster.byte_end,
+                                                )
+                                                .unwrap_or(SourceRect::zero()),
                                         );
-                                        let new_doc = new_line.source_rect_to_document_rect(&new_sr);
+                                        let new_doc =
+                                            new_line.source_rect_to_document_rect(&new_sr);
                                         slices.push(AnimatedSlice::reflow_crossfade_new(
                                             key,
                                             new_line.id,
@@ -936,11 +1106,19 @@ impl LinuxEditorAnimationCoordinator {
                                     }
                                 } else {
                                     if let (Some(old_sr), Some(new_sr)) = (
-                                        old_line.source_rect_for_byte_range(old_cluster.byte_start, old_cluster.byte_end),
-                                        new_line.source_rect_for_byte_range(new_cluster.byte_start, new_cluster.byte_end),
+                                        old_line.source_rect_for_byte_range(
+                                            old_cluster.byte_start,
+                                            old_cluster.byte_end,
+                                        ),
+                                        new_line.source_rect_for_byte_range(
+                                            new_cluster.byte_start,
+                                            new_cluster.byte_end,
+                                        ),
                                     ) {
-                                        let old_doc = old_line.source_rect_to_document_rect(&old_sr);
-                                        let new_doc = new_line.source_rect_to_document_rect(&new_sr);
+                                        let old_doc =
+                                            old_line.source_rect_to_document_rect(&old_sr);
+                                        let new_doc =
+                                            new_line.source_rect_to_document_rect(&new_sr);
                                         let geometry_same = (old_doc.x - new_doc.x).abs() < 0.5
                                             && (old_doc.y - new_doc.y).abs() < 0.5
                                             && (old_doc.w - new_doc.w).abs() < 0.5
@@ -985,7 +1163,9 @@ impl LinuxEditorAnimationCoordinator {
                     let old_line = {
                         let mapped_old_byte_start = offset_map.map_new_to_old(new_line.byte_start);
                         let mapped_old_byte_end = offset_map.map_new_to_old(new_line.byte_end);
-                        let offset_matched = if let (Some(mobs), Some(mobe)) = (mapped_old_byte_start, mapped_old_byte_end) {
+                        let offset_matched = if let (Some(mobs), Some(mobe)) =
+                            (mapped_old_byte_start, mapped_old_byte_end)
+                        {
                             old_snapshot.line_for_byte_range(mobs, mobe).cloned()
                         } else if let Some(mobs) = mapped_old_byte_start {
                             old_snapshot.line_for_byte(mobs).cloned()
@@ -996,13 +1176,16 @@ impl LinuxEditorAnimationCoordinator {
                     };
                     if let Some(ol) = old_line {
                         let old_sr = ol.source_rect_for_byte_range(ol.byte_start, ol.byte_end);
-                        let new_sr = new_line.source_rect_for_byte_range(new_line.byte_start, new_line.byte_end);
+                        let new_sr = new_line
+                            .source_rect_for_byte_range(new_line.byte_start, new_line.byte_end);
 
                         if let (Some(old_src), Some(new_src)) = (old_sr, new_sr) {
                             let same_shaping = ol.clusters.len() == new_line.clusters.len()
-                                && ol.clusters.iter()
-                                    .zip(new_line.clusters.iter())
-                                    .all(|(oc, nc)| oc.shaping_identity.is_same_shaping(&nc.shaping_identity));
+                                && ol.clusters.iter().zip(new_line.clusters.iter()).all(
+                                    |(oc, nc)| {
+                                        oc.shaping_identity.is_same_shaping(&nc.shaping_identity)
+                                    },
+                                );
 
                             let old_doc = ol.source_rect_to_document_rect(&old_src);
                             let new_doc = new_line.source_rect_to_document_rect(&new_src);
@@ -1056,11 +1239,16 @@ impl LinuxEditorAnimationCoordinator {
 
         if !is_commit {
             for new_line in &new_snapshot.line_snapshots {
-                let animated_byte_ranges: Vec<(usize, usize)> = slices.iter().map(|s| (s.byte_start, s.byte_end)).collect();
+                let animated_byte_ranges: Vec<(usize, usize)> =
+                    slices.iter().map(|s| (s.byte_start, s.byte_end)).collect();
                 let hidden_source_rects: Vec<SourceRect> = new_line
                     .clusters
                     .iter()
-                    .filter(|c| animated_byte_ranges.iter().any(|(s, e)| !(c.byte_end <= *s || c.byte_start >= *e)))
+                    .filter(|c| {
+                        animated_byte_ranges
+                            .iter()
+                            .any(|(s, e)| !(c.byte_end <= *s || c.byte_start >= *e))
+                    })
                     .map(|c| c.source_rect.clone())
                     .collect();
 
@@ -1104,29 +1292,36 @@ impl LinuxEditorAnimationCoordinator {
     }
 
     pub fn has_active_composition(&self) -> bool {
-        self.prepared_queue.active_transactions()
-            .iter()
-            .any(|t| t.is_composition()
+        self.prepared_queue.active_transactions().iter().any(|t| {
+            t.is_composition()
                 && t.state != TextVisualTransactionState::Cancelled
-                && t.state != TextVisualTransactionState::Completed)
+                && t.state != TextVisualTransactionState::Completed
+        })
     }
 
     pub fn active_composition_new_snapshot(&self) -> Option<&EditorLayoutSnapshot> {
-        self.prepared_queue.active_transactions()
+        self.prepared_queue
+            .active_transactions()
             .iter()
-            .filter(|t| t.operation_kind == TextVisualOperationKind::CompositionUpdate
-                && t.state != TextVisualTransactionState::Cancelled
-                && t.state != TextVisualTransactionState::Completed)
+            .filter(|t| {
+                t.operation_kind == TextVisualOperationKind::CompositionUpdate
+                    && t.state != TextVisualTransactionState::Cancelled
+                    && t.state != TextVisualTransactionState::Completed
+            })
             .filter_map(|t| t.new_snapshot.as_ref())
             .next_back()
     }
 
     pub fn cancel_active_composition(&mut self, reason: &str) {
-        let keys: Vec<VisualTransactionKey> = self.prepared_queue.active_transactions()
+        let keys: Vec<VisualTransactionKey> = self
+            .prepared_queue
+            .active_transactions()
             .iter()
-            .filter(|t| t.operation_kind == TextVisualOperationKind::CompositionUpdate
-                && t.state != TextVisualTransactionState::Cancelled
-                && t.state != TextVisualTransactionState::Completed)
+            .filter(|t| {
+                t.operation_kind == TextVisualOperationKind::CompositionUpdate
+                    && t.state != TextVisualTransactionState::Cancelled
+                    && t.state != TextVisualTransactionState::Completed
+            })
             .map(|t| t.key)
             .collect();
         for key in keys {
@@ -1204,14 +1399,21 @@ impl LinuxEditorAnimationCoordinator {
 
     pub fn active_cursor_progress(&self) -> Option<f64> {
         let now = Instant::now();
-        self.prepared_queue.active_transactions()
+        self.prepared_queue
+            .active_transactions()
             .iter()
-            .filter(|t| t.state != TextVisualTransactionState::Cancelled
-                && t.state != TextVisualTransactionState::Completed
-                && t.state != TextVisualTransactionState::Pending)
+            .filter(|t| {
+                t.state != TextVisualTransactionState::Cancelled
+                    && t.state != TextVisualTransactionState::Completed
+                    && t.state != TextVisualTransactionState::Pending
+            })
             .filter_map(|t| {
                 let p = t.progress(now);
-                if p > 0.0 && p < 1.0 { Some(p) } else { None }
+                if p > 0.0 && p < 1.0 {
+                    Some(p)
+                } else {
+                    None
+                }
             })
             .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
     }
@@ -1221,17 +1423,22 @@ impl LinuxEditorAnimationCoordinator {
     }
 
     fn collect_decoration_slices(&self) -> Vec<DecorationSlice> {
-        self.prepared_queue.active_transactions()
+        self.prepared_queue
+            .active_transactions()
             .iter()
-            .filter(|t| t.state != TextVisualTransactionState::Cancelled && t.state != TextVisualTransactionState::Completed)
+            .filter(|t| {
+                t.state != TextVisualTransactionState::Cancelled
+                    && t.state != TextVisualTransactionState::Completed
+            })
             .flat_map(|t| t.decoration_slices.clone())
             .collect()
     }
 
     pub fn has_prepared_or_rendering(&self) -> bool {
-        self.prepared_queue.active_transactions()
-            .iter()
-            .any(|t| t.state == TextVisualTransactionState::Prepared || t.state == TextVisualTransactionState::Rendering)
+        self.prepared_queue.active_transactions().iter().any(|t| {
+            t.state == TextVisualTransactionState::Prepared
+                || t.state == TextVisualTransactionState::Rendering
+        })
     }
 
     pub fn current_static_render_plan(&self) -> StaticTextPlan {
@@ -1243,9 +1450,13 @@ impl LinuxEditorAnimationCoordinator {
     }
 
     pub fn reflow_byte_ranges(&self) -> Vec<(usize, usize)> {
-        self.prepared_queue.active_transactions()
+        self.prepared_queue
+            .active_transactions()
             .iter()
-            .filter(|t| t.state != TextVisualTransactionState::Cancelled && t.state != TextVisualTransactionState::Completed)
+            .filter(|t| {
+                t.state != TextVisualTransactionState::Cancelled
+                    && t.state != TextVisualTransactionState::Completed
+            })
             .flat_map(|t| t.reflow_byte_ranges())
             .collect()
     }
@@ -1254,7 +1465,9 @@ impl LinuxEditorAnimationCoordinator {
         let mut hidden_clip_rects = Vec::new();
 
         for tx in self.prepared_queue.active_transactions() {
-            if tx.state == TextVisualTransactionState::Cancelled || tx.state == TextVisualTransactionState::Completed {
+            if tx.state == TextVisualTransactionState::Cancelled
+                || tx.state == TextVisualTransactionState::Completed
+            {
                 continue;
             }
             if !tx.texture_prepared {
@@ -1262,7 +1475,9 @@ impl LinuxEditorAnimationCoordinator {
             }
             for patch in &tx.static_patches {
                 let snapshot = if let Some(ref snap) = tx.new_snapshot {
-                    snap.line_snapshots.iter().find(|l| l.id == patch.snapshot_id)
+                    snap.line_snapshots
+                        .iter()
+                        .find(|l| l.id == patch.snapshot_id)
                 } else {
                     None
                 };
@@ -1361,9 +1576,7 @@ impl LinuxEditorAnimationCoordinator {
                 CursorTransition::Snap
             }
         } else if let Some(anim) = cursor_animation {
-            if (anim.target_x - cursor_x).abs() > 0.01
-                || (anim.target_y - cursor_y).abs() > 0.01
-            {
+            if (anim.target_x - cursor_x).abs() > 0.01 || (anim.target_y - cursor_y).abs() > 0.01 {
                 if coordinated_enabled
                     && has_active
                     && old_cursor_rect.is_some()
@@ -1394,9 +1607,7 @@ impl LinuxEditorAnimationCoordinator {
             } else {
                 CursorTransition::Snap
             }
-        } else if (old_visual_x - cursor_x).abs() > 0.01
-            || (old_visual_y - cursor_y).abs() > 0.01
-        {
+        } else if (old_visual_x - cursor_x).abs() > 0.01 || (old_visual_y - cursor_y).abs() > 0.01 {
             if coordinated_enabled
                 && has_active
                 && old_cursor_rect.is_some()
@@ -1457,9 +1668,13 @@ impl LinuxEditorAnimationCoordinator {
     }
 
     fn active_transaction_duration_ms(&self) -> Option<u64> {
-        self.prepared_queue.active_transactions()
+        self.prepared_queue
+            .active_transactions()
             .iter()
-            .filter(|t| t.state != TextVisualTransactionState::Cancelled && t.state != TextVisualTransactionState::Completed)
+            .filter(|t| {
+                t.state != TextVisualTransactionState::Cancelled
+                    && t.state != TextVisualTransactionState::Completed
+            })
             .map(|t| t.duration_ms())
             .min()
     }
@@ -1488,8 +1703,12 @@ impl LinuxEditorAnimationCoordinator {
         let (text_animation, keys_to_complete) = self.build_text_animation_plan();
         let decorations = self.collect_decoration_slices();
         frame_context.keys_to_complete = keys_to_complete;
-        let active_keys: Vec<VisualTransactionKey> = self.prepared_queue.active_transactions()
-            .iter().map(|t| t.key).collect();
+        let active_keys: Vec<VisualTransactionKey> = self
+            .prepared_queue
+            .active_transactions()
+            .iter()
+            .map(|t| t.key)
+            .collect();
         frame_context.active_transaction_keys = active_keys;
         RenderPlan {
             static_text,
@@ -1509,7 +1728,9 @@ impl LinuxEditorAnimationCoordinator {
         let now = Instant::now();
 
         for tx in self.prepared_queue.active_transactions_mut() {
-            if tx.state == TextVisualTransactionState::Cancelled || tx.state == TextVisualTransactionState::Completed {
+            if tx.state == TextVisualTransactionState::Cancelled
+                || tx.state == TextVisualTransactionState::Completed
+            {
                 continue;
             }
 
@@ -1599,8 +1820,22 @@ mod tests {
     #[test]
     fn test_rebase_uses_offset_map_and_shaping_identity() {
         use writer_core::editor::{OffsetMapEntry, OffsetMapKind};
-        let sid_a = ShapingIdentity { text_content_hash: 1, raw_font_fingerprint: "font_a".to_string(), glyph_indexes_hash: 10, cluster_glyph_count: 3, direction_rtl: false, format_fingerprint: 100 };
-        let sid_b = ShapingIdentity { text_content_hash: 2, raw_font_fingerprint: "font_b".to_string(), glyph_indexes_hash: 20, cluster_glyph_count: 2, direction_rtl: false, format_fingerprint: 200 };
+        let sid_a = ShapingIdentity {
+            text_content_hash: 1,
+            raw_font_fingerprint: "font_a".to_string(),
+            glyph_indexes_hash: 10,
+            cluster_glyph_count: 3,
+            direction_rtl: false,
+            format_fingerprint: 100,
+        };
+        let sid_b = ShapingIdentity {
+            text_content_hash: 2,
+            raw_font_fingerprint: "font_b".to_string(),
+            glyph_indexes_hash: 20,
+            cluster_glyph_count: 2,
+            direction_rtl: false,
+            format_fingerprint: 200,
+        };
 
         let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = vec![
             (10, 20, 100.0, 200.0, 0.5, Some(sid_a.clone())),
@@ -1611,17 +1846,43 @@ mod tests {
             AnimatedSlice::insert_fade_in(
                 VisualTransactionKey::new(1, 1),
                 LineSnapshotId::new(1, 0, 0),
-                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
-                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
-                0.0, 0.0, 50, 60,
+                SourceRect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+                SourceRect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+                0.0,
+                0.0,
+                50,
+                60,
                 Some(sid_a.clone()),
             ),
             AnimatedSlice::insert_fade_in(
                 VisualTransactionKey::new(1, 2),
                 LineSnapshotId::new(1, 0, 1),
-                SourceRect { x: 0.0, y: 20.0, w: 100.0, h: 20.0 },
-                SourceRect { x: 0.0, y: 20.0, w: 100.0, h: 20.0 },
-                0.0, 0.0, 70, 80,
+                SourceRect {
+                    x: 0.0,
+                    y: 20.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+                SourceRect {
+                    x: 0.0,
+                    y: 20.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+                0.0,
+                0.0,
+                70,
+                80,
                 Some(sid_b.clone()),
             ),
         ];
@@ -1643,27 +1904,59 @@ mod tests {
     #[test]
     fn test_rebase_tier3_closest_position_match_with_duplicate_shaping() {
         use writer_core::editor::{OffsetMapEntry, OffsetMapKind};
-        let sid_dup = ShapingIdentity { text_content_hash: 99, raw_font_fingerprint: "font_x".to_string(), glyph_indexes_hash: 50, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 500 };
+        let sid_dup = ShapingIdentity {
+            text_content_hash: 99,
+            raw_font_fingerprint: "font_x".to_string(),
+            glyph_indexes_hash: 50,
+            cluster_glyph_count: 1,
+            direction_rtl: false,
+            format_fingerprint: 500,
+        };
 
-        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = vec![
-            (10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone())),
-        ];
+        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> =
+            vec![(10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone()))];
 
         let mut slices = vec![
             AnimatedSlice::insert_fade_in(
                 VisualTransactionKey::new(1, 1),
                 LineSnapshotId::new(1, 0, 0),
-                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
-                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
-                0.0, 0.0, 11, 15,
+                SourceRect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+                SourceRect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+                0.0,
+                0.0,
+                11,
+                15,
                 Some(sid_dup.clone()),
             ),
             AnimatedSlice::insert_fade_in(
                 VisualTransactionKey::new(1, 2),
                 LineSnapshotId::new(1, 0, 1),
-                SourceRect { x: 0.0, y: 20.0, w: 100.0, h: 20.0 },
-                SourceRect { x: 0.0, y: 20.0, w: 100.0, h: 20.0 },
-                0.0, 0.0, 18, 22,
+                SourceRect {
+                    x: 0.0,
+                    y: 20.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+                SourceRect {
+                    x: 0.0,
+                    y: 20.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+                0.0,
+                0.0,
+                18,
+                22,
                 Some(sid_dup.clone()),
             ),
         ];
@@ -1683,37 +1976,84 @@ mod tests {
         let center_1 = (18 + 22) as i64 / 2;
         let dist_0 = (center_0 - mapped_center).abs();
         let dist_1 = (center_1 - mapped_center).abs();
-        assert!(dist_1 < dist_0, "test setup: slice 1 (dist={}) should be closer than slice 0 (dist={})", dist_1, dist_0);
-        assert!((slices[1].from_document_rect.x - 10.0).abs() < 0.01,
-            "slice 1 (center={}, abs dist={}) should match rebase frame, got x={}", center_1, dist_1, slices[1].from_document_rect.x);
-        assert!((slices[0].from_document_rect.x - 0.0).abs() < 0.01,
-            "slice 0 (center={}, abs dist={}) should NOT be matched, got x={}", center_0, dist_0, slices[0].from_document_rect.x);
+        assert!(
+            dist_1 < dist_0,
+            "test setup: slice 1 (dist={}) should be closer than slice 0 (dist={})",
+            dist_1,
+            dist_0
+        );
+        assert!(
+            (slices[1].from_document_rect.x - 10.0).abs() < 0.01,
+            "slice 1 (center={}, abs dist={}) should match rebase frame, got x={}",
+            center_1,
+            dist_1,
+            slices[1].from_document_rect.x
+        );
+        assert!(
+            (slices[0].from_document_rect.x - 0.0).abs() < 0.01,
+            "slice 0 (center={}, abs dist={}) should NOT be matched, got x={}",
+            center_0,
+            dist_0,
+            slices[0].from_document_rect.x
+        );
     }
 
     #[test]
     fn test_rebase_tier3_absolute_distance_not_signed() {
         use writer_core::editor::{OffsetMapEntry, OffsetMapKind};
-        let sid_dup = ShapingIdentity { text_content_hash: 99, raw_font_fingerprint: "font_x".to_string(), glyph_indexes_hash: 50, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 500 };
+        let sid_dup = ShapingIdentity {
+            text_content_hash: 99,
+            raw_font_fingerprint: "font_x".to_string(),
+            glyph_indexes_hash: 50,
+            cluster_glyph_count: 1,
+            direction_rtl: false,
+            format_fingerprint: 500,
+        };
 
-        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = vec![
-            (10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone())),
-        ];
+        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> =
+            vec![(10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone()))];
 
         let mut slices = vec![
             AnimatedSlice::insert_fade_in(
                 VisualTransactionKey::new(1, 1),
                 LineSnapshotId::new(1, 0, 0),
-                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
-                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
-                0.0, 0.0, 11, 15,
+                SourceRect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+                SourceRect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+                0.0,
+                0.0,
+                11,
+                15,
                 Some(sid_dup.clone()),
             ),
             AnimatedSlice::insert_fade_in(
                 VisualTransactionKey::new(1, 2),
                 LineSnapshotId::new(1, 0, 1),
-                SourceRect { x: 0.0, y: 20.0, w: 100.0, h: 20.0 },
-                SourceRect { x: 0.0, y: 20.0, w: 100.0, h: 20.0 },
-                0.0, 0.0, 22, 26,
+                SourceRect {
+                    x: 0.0,
+                    y: 20.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+                SourceRect {
+                    x: 0.0,
+                    y: 20.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+                0.0,
+                0.0,
+                22,
+                26,
                 Some(sid_dup.clone()),
             ),
         ];
@@ -1735,8 +2075,18 @@ mod tests {
         let signed_1 = center_1 - mapped_center;
         let abs_0 = (center_0 - mapped_center).abs();
         let abs_1 = (center_1 - mapped_center).abs();
-        assert!(signed_0 < signed_1, "test setup: slice 0 signed diff ({}) should be more negative than slice 1 ({})", signed_0, signed_1);
-        assert!(abs_1 < abs_0, "test setup: slice 1 abs dist ({}) should be less than slice 0 ({})", abs_1, abs_0);
+        assert!(
+            signed_0 < signed_1,
+            "test setup: slice 0 signed diff ({}) should be more negative than slice 1 ({})",
+            signed_0,
+            signed_1
+        );
+        assert!(
+            abs_1 < abs_0,
+            "test setup: slice 1 abs dist ({}) should be less than slice 0 ({})",
+            abs_1,
+            abs_0
+        );
         assert!((slices[1].from_document_rect.x - 10.0).abs() < 0.01,
             "slice 1 (abs dist={}) should be chosen over slice 0 (abs dist={}, signed={}), got x={}",
             abs_1, abs_0, signed_0, slices[1].from_document_rect.x);
@@ -1744,35 +2094,65 @@ mod tests {
 
     #[test]
     fn test_rebase_tier1_consumed_prevents_reuse() {
-        let sid_a = ShapingIdentity { text_content_hash: 1, raw_font_fingerprint: "font_a".to_string(), glyph_indexes_hash: 10, cluster_glyph_count: 3, direction_rtl: false, format_fingerprint: 100 };
+        let sid_a = ShapingIdentity {
+            text_content_hash: 1,
+            raw_font_fingerprint: "font_a".to_string(),
+            glyph_indexes_hash: 10,
+            cluster_glyph_count: 3,
+            direction_rtl: false,
+            format_fingerprint: 100,
+        };
 
         let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = vec![
             (50, 60, 10.0, 100.0, 0.3, Some(sid_a.clone())),
             (50, 60, 20.0, 200.0, 0.5, Some(sid_a.clone())),
         ];
 
-        let mut slices = vec![
-            AnimatedSlice::insert_fade_in(
-                VisualTransactionKey::new(1, 1),
-                LineSnapshotId::new(1, 0, 0),
-                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
-                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
-                0.0, 0.0, 50, 60,
-                Some(sid_a.clone()),
-            ),
-        ];
+        let mut slices = vec![AnimatedSlice::insert_fade_in(
+            VisualTransactionKey::new(1, 1),
+            LineSnapshotId::new(1, 0, 0),
+            SourceRect {
+                x: 0.0,
+                y: 0.0,
+                w: 100.0,
+                h: 20.0,
+            },
+            SourceRect {
+                x: 0.0,
+                y: 0.0,
+                w: 100.0,
+                h: 20.0,
+            },
+            0.0,
+            0.0,
+            50,
+            60,
+            Some(sid_a.clone()),
+        )];
 
-        let offset_map = OffsetMap { entries: Vec::new() };
+        let offset_map = OffsetMap {
+            entries: Vec::new(),
+        };
         match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
 
-        assert!((slices[0].from_document_rect.x - 10.0).abs() < 0.01,
-            "slice 0 should get first rebase frame 10.0 (not second 20.0), got {}", slices[0].from_document_rect.x);
+        assert!(
+            (slices[0].from_document_rect.x - 10.0).abs() < 0.01,
+            "slice 0 should get first rebase frame 10.0 (not second 20.0), got {}",
+            slices[0].from_document_rect.x
+        );
     }
 
     #[test]
     fn test_rebase_tier3_consumed_prevents_reuse() {
         use writer_core::editor::{OffsetMapEntry, OffsetMapKind};
-        let sid_dup = ShapingIdentity { text_content_hash: 99, raw_font_fingerprint: "font_x".to_string(), glyph_indexes_hash: 50, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 500 };
+        let sid_dup = ShapingIdentity {
+            text_content_hash: 99,
+            raw_font_fingerprint: "font_x".to_string(),
+            glyph_indexes_hash: 50,
+            cluster_glyph_count: 1,
+            direction_rtl: false,
+            format_fingerprint: 500,
+        };
 
         let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = vec![
             (10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone())),
@@ -1783,17 +2163,43 @@ mod tests {
             AnimatedSlice::insert_fade_in(
                 VisualTransactionKey::new(1, 1),
                 LineSnapshotId::new(1, 0, 0),
-                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
-                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
-                0.0, 0.0, 11, 15,
+                SourceRect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+                SourceRect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+                0.0,
+                0.0,
+                11,
+                15,
                 Some(sid_dup.clone()),
             ),
             AnimatedSlice::insert_fade_in(
                 VisualTransactionKey::new(1, 2),
                 LineSnapshotId::new(1, 0, 1),
-                SourceRect { x: 0.0, y: 20.0, w: 100.0, h: 20.0 },
-                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
-                0.0, 0.0, 18, 22,
+                SourceRect {
+                    x: 0.0,
+                    y: 20.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+                SourceRect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+                0.0,
+                0.0,
+                18,
+                22,
                 Some(sid_dup.clone()),
             ),
         ];
@@ -1814,32 +2220,56 @@ mod tests {
         let dist_0 = (center_0 - mapped_center).abs();
         let dist_1 = (center_1 - mapped_center).abs();
         assert!(dist_1 < dist_0, "test setup: slice 1 should be closer");
-        assert!((slices[1].from_document_rect.x - 10.0).abs() < 0.01,
-            "slice 1 should get first rebase frame (x=10.0), got x={}", slices[1].from_document_rect.x);
-        assert!((slices[0].from_document_rect.x - 20.0).abs() < 0.01,
-            "slice 0 should get second rebase frame (x=20.0), not reuse slice 1's frame, got x={}", slices[0].from_document_rect.x);
+        assert!(
+            (slices[1].from_document_rect.x - 10.0).abs() < 0.01,
+            "slice 1 should get first rebase frame (x=10.0), got x={}",
+            slices[1].from_document_rect.x
+        );
+        assert!(
+            (slices[0].from_document_rect.x - 20.0).abs() < 0.01,
+            "slice 0 should get second rebase frame (x=20.0), not reuse slice 1's frame, got x={}",
+            slices[0].from_document_rect.x
+        );
     }
 
     #[test]
     fn test_rebase_tier2_consumed_prevents_reuse() {
         use writer_core::editor::{OffsetMapEntry, OffsetMapKind};
-        let sid_a = ShapingIdentity { text_content_hash: 1, raw_font_fingerprint: "font_a".to_string(), glyph_indexes_hash: 10, cluster_glyph_count: 3, direction_rtl: false, format_fingerprint: 100 };
+        let sid_a = ShapingIdentity {
+            text_content_hash: 1,
+            raw_font_fingerprint: "font_a".to_string(),
+            glyph_indexes_hash: 10,
+            cluster_glyph_count: 3,
+            direction_rtl: false,
+            format_fingerprint: 100,
+        };
 
         let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = vec![
             (50, 70, 10.0, 100.0, 0.3, Some(sid_a.clone())),
             (50, 70, 20.0, 200.0, 0.5, Some(sid_a.clone())),
         ];
 
-        let mut slices = vec![
-            AnimatedSlice::insert_fade_in(
-                VisualTransactionKey::new(1, 1),
-                LineSnapshotId::new(1, 0, 0),
-                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
-                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
-                0.0, 0.0, 150, 170,
-                Some(sid_a.clone()),
-            ),
-        ];
+        let mut slices = vec![AnimatedSlice::insert_fade_in(
+            VisualTransactionKey::new(1, 1),
+            LineSnapshotId::new(1, 0, 0),
+            SourceRect {
+                x: 0.0,
+                y: 0.0,
+                w: 100.0,
+                h: 20.0,
+            },
+            SourceRect {
+                x: 0.0,
+                y: 0.0,
+                w: 100.0,
+                h: 20.0,
+            },
+            0.0,
+            0.0,
+            150,
+            170,
+            Some(sid_a.clone()),
+        )];
 
         let offset_map = OffsetMap {
             entries: vec![OffsetMapEntry {
@@ -1851,30 +2281,51 @@ mod tests {
         };
         match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
 
-        assert!((slices[0].from_document_rect.x - 10.0).abs() < 0.01,
-            "slice 0 should get first rebase frame via tier2 (x=10.0), got x={}", slices[0].from_document_rect.x);
+        assert!(
+            (slices[0].from_document_rect.x - 10.0).abs() < 0.01,
+            "slice 0 should get first rebase frame via tier2 (x=10.0), got x={}",
+            slices[0].from_document_rect.x
+        );
     }
 
     #[test]
     fn test_rebase_tier1_consumed_prevents_tier3_reuse() {
         use writer_core::editor::{OffsetMapEntry, OffsetMapKind};
-        let sid_dup = ShapingIdentity { text_content_hash: 99, raw_font_fingerprint: "font_x".to_string(), glyph_indexes_hash: 50, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 500 };
+        let sid_dup = ShapingIdentity {
+            text_content_hash: 99,
+            raw_font_fingerprint: "font_x".to_string(),
+            glyph_indexes_hash: 50,
+            cluster_glyph_count: 1,
+            direction_rtl: false,
+            format_fingerprint: 500,
+        };
 
         let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = vec![
             (50, 60, 10.0, 100.0, 0.3, Some(sid_dup.clone())),
             (40, 80, 20.0, 200.0, 0.5, Some(sid_dup.clone())),
         ];
 
-        let mut slices = vec![
-            AnimatedSlice::insert_fade_in(
-                VisualTransactionKey::new(1, 1),
-                LineSnapshotId::new(1, 0, 0),
-                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
-                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
-                0.0, 0.0, 50, 60,
-                Some(sid_dup.clone()),
-            ),
-        ];
+        let mut slices = vec![AnimatedSlice::insert_fade_in(
+            VisualTransactionKey::new(1, 1),
+            LineSnapshotId::new(1, 0, 0),
+            SourceRect {
+                x: 0.0,
+                y: 0.0,
+                w: 100.0,
+                h: 20.0,
+            },
+            SourceRect {
+                x: 0.0,
+                y: 0.0,
+                w: 100.0,
+                h: 20.0,
+            },
+            0.0,
+            0.0,
+            50,
+            60,
+            Some(sid_dup.clone()),
+        )];
 
         let offset_map = OffsetMap {
             entries: vec![OffsetMapEntry {
@@ -1886,34 +2337,69 @@ mod tests {
         };
         match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
 
-        assert!((slices[0].from_document_rect.x - 10.0).abs() < 0.01,
-            "slice 0 should get first rebase frame 10.0 (not second 20.0), got {}", slices[0].from_document_rect.x);
+        assert!(
+            (slices[0].from_document_rect.x - 10.0).abs() < 0.01,
+            "slice 0 should get first rebase frame 10.0 (not second 20.0), got {}",
+            slices[0].from_document_rect.x
+        );
     }
 
     #[test]
     fn test_rebase_tier3_tiebreak_by_byte_start_then_index() {
         use writer_core::editor::{OffsetMapEntry, OffsetMapKind};
-        let sid_dup = ShapingIdentity { text_content_hash: 99, raw_font_fingerprint: "font_x".to_string(), glyph_indexes_hash: 50, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 500 };
+        let sid_dup = ShapingIdentity {
+            text_content_hash: 99,
+            raw_font_fingerprint: "font_x".to_string(),
+            glyph_indexes_hash: 50,
+            cluster_glyph_count: 1,
+            direction_rtl: false,
+            format_fingerprint: 500,
+        };
 
-        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = vec![
-            (10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone())),
-        ];
+        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> =
+            vec![(10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone()))];
 
         let mut slices = vec![
             AnimatedSlice::insert_fade_in(
                 VisualTransactionKey::new(1, 1),
                 LineSnapshotId::new(1, 0, 0),
-                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
-                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
-                0.0, 0.0, 11, 15,
+                SourceRect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+                SourceRect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+                0.0,
+                0.0,
+                11,
+                15,
                 Some(sid_dup.clone()),
             ),
             AnimatedSlice::insert_fade_in(
                 VisualTransactionKey::new(1, 2),
                 LineSnapshotId::new(1, 0, 1),
-                SourceRect { x: 0.0, y: 20.0, w: 100.0, h: 20.0 },
-                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
-                0.0, 0.0, 25, 29,
+                SourceRect {
+                    x: 0.0,
+                    y: 20.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+                SourceRect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 20.0,
+                },
+                0.0,
+                0.0,
+                25,
+                29,
                 Some(sid_dup.clone()),
             ),
         ];
@@ -1933,25 +2419,46 @@ mod tests {
         let center_1 = (25 + 29) as i64 / 2;
         let dist_0 = (center_0 - mapped_center).abs();
         let dist_1 = (center_1 - mapped_center).abs();
-        assert_eq!(dist_0, dist_1, "test setup: both slices should have equal distance");
-        assert!((slices[0].from_document_rect.x - 10.0).abs() < 0.01,
-            "slice 0 (lower byte_start) should win tiebreak, got x={}", slices[0].from_document_rect.x);
-        assert!((slices[1].from_document_rect.x - 0.0).abs() < 0.01,
-            "slice 1 should not be matched, got x={}", slices[1].from_document_rect.x);
+        assert_eq!(
+            dist_0, dist_1,
+            "test setup: both slices should have equal distance"
+        );
+        assert!(
+            (slices[0].from_document_rect.x - 10.0).abs() < 0.01,
+            "slice 0 (lower byte_start) should win tiebreak, got x={}",
+            slices[0].from_document_rect.x
+        );
+        assert!(
+            (slices[1].from_document_rect.x - 0.0).abs() < 0.01,
+            "slice 1 should not be matched, got x={}",
+            slices[1].from_document_rect.x
+        );
     }
 
-    fn make_test_snapshot(virtual_text: &str, line_clusters: Vec<(usize, usize, f64, f64, ShapingIdentity)>) -> EditorLayoutSnapshot {
-        use crate::sujian_editor_item::layout_snapshot::{PreparedLineSnapshot, LineClusterSnapshot};
-        use crate::editor::layout::{LayoutSnapshot, VisualLine, CaretAffinity};
-        let clusters: Vec<LineClusterSnapshot> = line_clusters.iter().enumerate().map(|(i, (bs, be, x, _y, sid))| {
-            LineClusterSnapshot {
+    fn make_test_snapshot(
+        virtual_text: &str,
+        line_clusters: Vec<(usize, usize, f64, f64, ShapingIdentity)>,
+    ) -> EditorLayoutSnapshot {
+        use crate::editor::layout::{CaretAffinity, LayoutSnapshot, VisualLine};
+        use crate::sujian_editor_item::layout_snapshot::{
+            LineClusterSnapshot, PreparedLineSnapshot,
+        };
+        let clusters: Vec<LineClusterSnapshot> = line_clusters
+            .iter()
+            .enumerate()
+            .map(|(i, (bs, be, x, _y, sid))| LineClusterSnapshot {
                 byte_start: *bs,
                 byte_end: *be,
-                source_rect: SourceRect { x: *x, y: 0.0, w: (*be - *bs) as f64 * 10.0, h: 20.0 },
+                source_rect: SourceRect {
+                    x: *x,
+                    y: 0.0,
+                    w: (*be - *bs) as f64 * 10.0,
+                    h: 20.0,
+                },
                 shaping_identity: sid.clone(),
                 visual_line_id: 0,
-            }
-        }).collect();
+            })
+            .collect();
         let line = PreparedLineSnapshot {
             id: LineSnapshotId::new(1, 0, 0),
             image: None,
@@ -2012,189 +2519,416 @@ mod tests {
 
     #[test]
     fn test_commit_same_shaping_different_geometry_creates_move() {
-        let sid_common = ShapingIdentity { text_content_hash: 42, raw_font_fingerprint: "font".into(), glyph_indexes_hash: 100, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
-        let sid_old_preedit = ShapingIdentity { text_content_hash: 10, raw_font_fingerprint: "font".into(), glyph_indexes_hash: 200, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
-        let sid_new_commit = ShapingIdentity { text_content_hash: 20, raw_font_fingerprint: "font".into(), glyph_indexes_hash: 300, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
-        let old_snapshot = make_test_snapshot("世界好abc", vec![
-            (0, 3, 10.0, 0.0, sid_common.clone()),
-            (3, 6, 40.0, 0.0, sid_common.clone()),
-            (6, 9, 70.0, 0.0, sid_common.clone()),
-            (9, 12, 100.0, 0.0, sid_old_preedit.clone()),
-        ]);
-        let new_snapshot = make_test_snapshot("世界好xyz", vec![
-            (0, 3, 50.0, 0.0, sid_common.clone()),
-            (3, 6, 80.0, 0.0, sid_common.clone()),
-            (6, 9, 110.0, 0.0, sid_common.clone()),
-            (9, 12, 140.0, 0.0, sid_new_commit.clone()),
-        ]);
+        let sid_common = ShapingIdentity {
+            text_content_hash: 42,
+            raw_font_fingerprint: "font".into(),
+            glyph_indexes_hash: 100,
+            cluster_glyph_count: 1,
+            direction_rtl: false,
+            format_fingerprint: 0,
+        };
+        let sid_old_preedit = ShapingIdentity {
+            text_content_hash: 10,
+            raw_font_fingerprint: "font".into(),
+            glyph_indexes_hash: 200,
+            cluster_glyph_count: 1,
+            direction_rtl: false,
+            format_fingerprint: 0,
+        };
+        let sid_new_commit = ShapingIdentity {
+            text_content_hash: 20,
+            raw_font_fingerprint: "font".into(),
+            glyph_indexes_hash: 300,
+            cluster_glyph_count: 1,
+            direction_rtl: false,
+            format_fingerprint: 0,
+        };
+        let old_snapshot = make_test_snapshot(
+            "世界好abc",
+            vec![
+                (0, 3, 10.0, 0.0, sid_common.clone()),
+                (3, 6, 40.0, 0.0, sid_common.clone()),
+                (6, 9, 70.0, 0.0, sid_common.clone()),
+                (9, 12, 100.0, 0.0, sid_old_preedit.clone()),
+            ],
+        );
+        let new_snapshot = make_test_snapshot(
+            "世界好xyz",
+            vec![
+                (0, 3, 50.0, 0.0, sid_common.clone()),
+                (3, 6, 80.0, 0.0, sid_common.clone()),
+                (6, 9, 110.0, 0.0, sid_common.clone()),
+                (9, 12, 140.0, 0.0, sid_new_commit.clone()),
+            ],
+        );
         let mut coord = LinuxEditorAnimationCoordinator::new();
         let key = coord.handle_composition_commit_or_cancel(
             300,
             &old_snapshot,
             &new_snapshot,
-            0, 12,
+            0,
+            12,
             true,
             false,
-            0, 12,
-            0, 12,
+            0,
+            12,
+            0,
+            12,
             None,
             None,
         );
         assert!(key.is_some());
-        let tx = coord.prepared_queue.active_transactions().iter().find(|t| t.key == key.unwrap()).unwrap();
-        let has_move = tx.slices.iter().any(|s| s.kind == AnimatedSliceKind::ReflowMove);
-        assert!(has_move, "commit with same shaping but different geometry should create ReflowMove slice");
-        let move_patches: Vec<&StaticLinePatch> = tx.static_patches.iter().filter(|p| p.is_insert).collect();
-        assert!(!move_patches.is_empty(), "Move slices should have corresponding StaticLinePatch::insert_patch");
+        let tx = coord
+            .prepared_queue
+            .active_transactions()
+            .iter()
+            .find(|t| t.key == key.unwrap())
+            .unwrap();
+        let has_move = tx
+            .slices
+            .iter()
+            .any(|s| s.kind == AnimatedSliceKind::ReflowMove);
+        assert!(
+            has_move,
+            "commit with same shaping but different geometry should create ReflowMove slice"
+        );
+        let move_patches: Vec<&StaticLinePatch> =
+            tx.static_patches.iter().filter(|p| p.is_insert).collect();
+        assert!(
+            !move_patches.is_empty(),
+            "Move slices should have corresponding StaticLinePatch::insert_patch"
+        );
     }
 
     #[test]
     fn test_commit_different_shaping_creates_crossfade_with_static_patch() {
-        let sid_common = ShapingIdentity { text_content_hash: 42, raw_font_fingerprint: "font".into(), glyph_indexes_hash: 100, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
-        let sid_common_diff = ShapingIdentity { text_content_hash: 42, raw_font_fingerprint: "font_other".into(), glyph_indexes_hash: 999, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
-        let sid_old_preedit = ShapingIdentity { text_content_hash: 10, raw_font_fingerprint: "font".into(), glyph_indexes_hash: 200, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
-        let sid_new_commit = ShapingIdentity { text_content_hash: 20, raw_font_fingerprint: "font".into(), glyph_indexes_hash: 300, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
-        let old_snapshot = make_test_snapshot("世界好abc", vec![
-            (0, 3, 10.0, 0.0, sid_common.clone()),
-            (3, 6, 40.0, 0.0, sid_common.clone()),
-            (6, 9, 70.0, 0.0, sid_common.clone()),
-            (9, 12, 100.0, 0.0, sid_old_preedit.clone()),
-        ]);
-        let new_snapshot = make_test_snapshot("世界好xyz", vec![
-            (0, 3, 10.0, 0.0, sid_common.clone()),
-            (3, 6, 40.0, 0.0, sid_common_diff.clone()),
-            (6, 9, 70.0, 0.0, sid_common.clone()),
-            (9, 12, 140.0, 0.0, sid_new_commit.clone()),
-        ]);
+        let sid_common = ShapingIdentity {
+            text_content_hash: 42,
+            raw_font_fingerprint: "font".into(),
+            glyph_indexes_hash: 100,
+            cluster_glyph_count: 1,
+            direction_rtl: false,
+            format_fingerprint: 0,
+        };
+        let sid_common_diff = ShapingIdentity {
+            text_content_hash: 42,
+            raw_font_fingerprint: "font_other".into(),
+            glyph_indexes_hash: 999,
+            cluster_glyph_count: 1,
+            direction_rtl: false,
+            format_fingerprint: 0,
+        };
+        let sid_old_preedit = ShapingIdentity {
+            text_content_hash: 10,
+            raw_font_fingerprint: "font".into(),
+            glyph_indexes_hash: 200,
+            cluster_glyph_count: 1,
+            direction_rtl: false,
+            format_fingerprint: 0,
+        };
+        let sid_new_commit = ShapingIdentity {
+            text_content_hash: 20,
+            raw_font_fingerprint: "font".into(),
+            glyph_indexes_hash: 300,
+            cluster_glyph_count: 1,
+            direction_rtl: false,
+            format_fingerprint: 0,
+        };
+        let old_snapshot = make_test_snapshot(
+            "世界好abc",
+            vec![
+                (0, 3, 10.0, 0.0, sid_common.clone()),
+                (3, 6, 40.0, 0.0, sid_common.clone()),
+                (6, 9, 70.0, 0.0, sid_common.clone()),
+                (9, 12, 100.0, 0.0, sid_old_preedit.clone()),
+            ],
+        );
+        let new_snapshot = make_test_snapshot(
+            "世界好xyz",
+            vec![
+                (0, 3, 10.0, 0.0, sid_common.clone()),
+                (3, 6, 40.0, 0.0, sid_common_diff.clone()),
+                (6, 9, 70.0, 0.0, sid_common.clone()),
+                (9, 12, 140.0, 0.0, sid_new_commit.clone()),
+            ],
+        );
         let mut coord = LinuxEditorAnimationCoordinator::new();
         let key = coord.handle_composition_commit_or_cancel(
             300,
             &old_snapshot,
             &new_snapshot,
-            0, 12,
+            0,
+            12,
             true,
             false,
-            0, 12,
-            0, 12,
+            0,
+            12,
+            0,
+            12,
             None,
             None,
         );
         assert!(key.is_some());
-        let tx = coord.prepared_queue.active_transactions().iter().find(|t| t.key == key.unwrap()).unwrap();
-        let crossfade_count = tx.slices.iter().filter(|s| s.kind == AnimatedSliceKind::ReflowCrossFade).count();
-        assert!(crossfade_count >= 2, "commit with different shaping should create paired Crossfade slices (old+new), got {}", crossfade_count);
-        let insert_patches: Vec<&StaticLinePatch> = tx.static_patches.iter().filter(|p| p.is_insert).collect();
-        assert!(!insert_patches.is_empty(), "Crossfade new should have StaticLinePatch::insert_patch to prevent double-draw");
+        let tx = coord
+            .prepared_queue
+            .active_transactions()
+            .iter()
+            .find(|t| t.key == key.unwrap())
+            .unwrap();
+        let crossfade_count = tx
+            .slices
+            .iter()
+            .filter(|s| s.kind == AnimatedSliceKind::ReflowCrossFade)
+            .count();
+        assert!(
+            crossfade_count >= 2,
+            "commit with different shaping should create paired Crossfade slices (old+new), got {}",
+            crossfade_count
+        );
+        let insert_patches: Vec<&StaticLinePatch> =
+            tx.static_patches.iter().filter(|p| p.is_insert).collect();
+        assert!(
+            !insert_patches.is_empty(),
+            "Crossfade new should have StaticLinePatch::insert_patch to prevent double-draw"
+        );
     }
 
     #[test]
     fn test_commit_same_shaping_same_geometry_is_static() {
-        let sid_common = ShapingIdentity { text_content_hash: 42, raw_font_fingerprint: "font".into(), glyph_indexes_hash: 100, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
-        let sid_old_preedit = ShapingIdentity { text_content_hash: 10, raw_font_fingerprint: "font".into(), glyph_indexes_hash: 200, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
-        let sid_new_commit = ShapingIdentity { text_content_hash: 20, raw_font_fingerprint: "font".into(), glyph_indexes_hash: 300, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
-        let old_snapshot = make_test_snapshot("世界好abc", vec![
-            (0, 3, 10.0, 0.0, sid_common.clone()),
-            (3, 6, 40.0, 0.0, sid_common.clone()),
-            (6, 9, 70.0, 0.0, sid_common.clone()),
-            (9, 12, 100.0, 0.0, sid_old_preedit.clone()),
-        ]);
-        let new_snapshot = make_test_snapshot("世界好xyz", vec![
-            (0, 3, 10.0, 0.0, sid_common.clone()),
-            (3, 6, 40.0, 0.0, sid_common.clone()),
-            (6, 9, 70.0, 0.0, sid_common.clone()),
-            (9, 12, 100.0, 0.0, sid_new_commit.clone()),
-        ]);
+        let sid_common = ShapingIdentity {
+            text_content_hash: 42,
+            raw_font_fingerprint: "font".into(),
+            glyph_indexes_hash: 100,
+            cluster_glyph_count: 1,
+            direction_rtl: false,
+            format_fingerprint: 0,
+        };
+        let sid_old_preedit = ShapingIdentity {
+            text_content_hash: 10,
+            raw_font_fingerprint: "font".into(),
+            glyph_indexes_hash: 200,
+            cluster_glyph_count: 1,
+            direction_rtl: false,
+            format_fingerprint: 0,
+        };
+        let sid_new_commit = ShapingIdentity {
+            text_content_hash: 20,
+            raw_font_fingerprint: "font".into(),
+            glyph_indexes_hash: 300,
+            cluster_glyph_count: 1,
+            direction_rtl: false,
+            format_fingerprint: 0,
+        };
+        let old_snapshot = make_test_snapshot(
+            "世界好abc",
+            vec![
+                (0, 3, 10.0, 0.0, sid_common.clone()),
+                (3, 6, 40.0, 0.0, sid_common.clone()),
+                (6, 9, 70.0, 0.0, sid_common.clone()),
+                (9, 12, 100.0, 0.0, sid_old_preedit.clone()),
+            ],
+        );
+        let new_snapshot = make_test_snapshot(
+            "世界好xyz",
+            vec![
+                (0, 3, 10.0, 0.0, sid_common.clone()),
+                (3, 6, 40.0, 0.0, sid_common.clone()),
+                (6, 9, 70.0, 0.0, sid_common.clone()),
+                (9, 12, 100.0, 0.0, sid_new_commit.clone()),
+            ],
+        );
         let mut coord = LinuxEditorAnimationCoordinator::new();
         let key = coord.handle_composition_commit_or_cancel(
             300,
             &old_snapshot,
             &new_snapshot,
-            0, 12,
+            0,
+            12,
             true,
             false,
-            0, 12,
-            0, 12,
+            0,
+            12,
+            0,
+            12,
             None,
             None,
         );
         assert!(key.is_some());
-        let tx = coord.prepared_queue.active_transactions().iter().find(|t| t.key == key.unwrap()).unwrap();
-        let first_cluster_slices: Vec<&AnimatedSlice> = tx.slices.iter().filter(|s| s.byte_start == 0 && s.byte_end == 3).collect();
-        assert!(first_cluster_slices.is_empty(), "same shaping + same geometry should be Static (no slice), got {} slices", first_cluster_slices.len());
+        let tx = coord
+            .prepared_queue
+            .active_transactions()
+            .iter()
+            .find(|t| t.key == key.unwrap())
+            .unwrap();
+        let first_cluster_slices: Vec<&AnimatedSlice> = tx
+            .slices
+            .iter()
+            .filter(|s| s.byte_start == 0 && s.byte_end == 3)
+            .collect();
+        assert!(
+            first_cluster_slices.is_empty(),
+            "same shaping + same geometry should be Static (no slice), got {} slices",
+            first_cluster_slices.len()
+        );
     }
 
     #[test]
     fn test_commit_separate_preedit_and_committed_replace_ranges() {
-        let sid_a = ShapingIdentity { text_content_hash: 1, raw_font_fingerprint: "font".into(), glyph_indexes_hash: 10, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
-        let sid_b = ShapingIdentity { text_content_hash: 2, raw_font_fingerprint: "font".into(), glyph_indexes_hash: 20, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
-        let sid_c = ShapingIdentity { text_content_hash: 3, raw_font_fingerprint: "font".into(), glyph_indexes_hash: 30, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
-        let sid_preedit = ShapingIdentity { text_content_hash: 99, raw_font_fingerprint: "font".into(), glyph_indexes_hash: 99, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
-        let old_snapshot = make_test_snapshot("abc_preedit_xyz", vec![
-            (0, 3, 10.0, 0.0, sid_a.clone()),
-            (3, 10, 50.0, 0.0, sid_preedit.clone()),
-            (10, 13, 120.0, 0.0, sid_c.clone()),
-        ]);
-        let new_snapshot = make_test_snapshot("abc_QQ_xyz", vec![
-            (0, 3, 10.0, 0.0, sid_a.clone()),
-            (3, 5, 50.0, 0.0, sid_b.clone()),
-            (5, 8, 120.0, 0.0, sid_c.clone()),
-        ]);
+        let sid_a = ShapingIdentity {
+            text_content_hash: 1,
+            raw_font_fingerprint: "font".into(),
+            glyph_indexes_hash: 10,
+            cluster_glyph_count: 1,
+            direction_rtl: false,
+            format_fingerprint: 0,
+        };
+        let sid_b = ShapingIdentity {
+            text_content_hash: 2,
+            raw_font_fingerprint: "font".into(),
+            glyph_indexes_hash: 20,
+            cluster_glyph_count: 1,
+            direction_rtl: false,
+            format_fingerprint: 0,
+        };
+        let sid_c = ShapingIdentity {
+            text_content_hash: 3,
+            raw_font_fingerprint: "font".into(),
+            glyph_indexes_hash: 30,
+            cluster_glyph_count: 1,
+            direction_rtl: false,
+            format_fingerprint: 0,
+        };
+        let sid_preedit = ShapingIdentity {
+            text_content_hash: 99,
+            raw_font_fingerprint: "font".into(),
+            glyph_indexes_hash: 99,
+            cluster_glyph_count: 1,
+            direction_rtl: false,
+            format_fingerprint: 0,
+        };
+        let old_snapshot = make_test_snapshot(
+            "abc_preedit_xyz",
+            vec![
+                (0, 3, 10.0, 0.0, sid_a.clone()),
+                (3, 10, 50.0, 0.0, sid_preedit.clone()),
+                (10, 13, 120.0, 0.0, sid_c.clone()),
+            ],
+        );
+        let new_snapshot = make_test_snapshot(
+            "abc_QQ_xyz",
+            vec![
+                (0, 3, 10.0, 0.0, sid_a.clone()),
+                (3, 5, 50.0, 0.0, sid_b.clone()),
+                (5, 8, 120.0, 0.0, sid_c.clone()),
+            ],
+        );
         let mut coord = LinuxEditorAnimationCoordinator::new();
         let key = coord.handle_composition_commit_or_cancel(
             300,
             &old_snapshot,
             &new_snapshot,
-            3, 10,
+            3,
+            10,
             true,
             false,
-            3, 5,
-            3, 10,
+            3,
+            5,
+            3,
+            10,
             None,
             None,
         );
         assert!(key.is_some());
-        let tx = coord.prepared_queue.active_transactions().iter().find(|t| t.key == key.unwrap()).unwrap();
-        let old_preedit_slices: Vec<&AnimatedSlice> = tx.slices.iter()
+        let tx = coord
+            .prepared_queue
+            .active_transactions()
+            .iter()
+            .find(|t| t.key == key.unwrap())
+            .unwrap();
+        let old_preedit_slices: Vec<&AnimatedSlice> = tx
+            .slices
+            .iter()
             .filter(|s| s.byte_start >= 3 && s.byte_end <= 10)
             .collect();
-        assert!(!old_preedit_slices.is_empty(), "preedit range should have animated slices");
-        let new_candidate_slices: Vec<&AnimatedSlice> = tx.slices.iter()
+        assert!(
+            !old_preedit_slices.is_empty(),
+            "preedit range should have animated slices"
+        );
+        let new_candidate_slices: Vec<&AnimatedSlice> = tx
+            .slices
+            .iter()
             .filter(|s| s.byte_start >= 3 && s.byte_end <= 5)
             .collect();
-        assert!(!new_candidate_slices.is_empty(), "candidate range should have animated slices");
+        assert!(
+            !new_candidate_slices.is_empty(),
+            "candidate range should have animated slices"
+        );
     }
 
     #[test]
     fn test_commit_cancel_uses_preedit_range_for_old_clusters() {
-        let sid_preedit = ShapingIdentity { text_content_hash: 99, raw_font_fingerprint: "font".into(), glyph_indexes_hash: 99, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
-        let sid_after = ShapingIdentity { text_content_hash: 42, raw_font_fingerprint: "font".into(), glyph_indexes_hash: 100, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
-        let old_snapshot = make_test_snapshot("abc_preedit_after", vec![
-            (0, 3, 10.0, 0.0, sid_after.clone()),
-            (3, 10, 50.0, 0.0, sid_preedit.clone()),
-            (10, 15, 120.0, 0.0, sid_after.clone()),
-        ]);
-        let new_snapshot = make_test_snapshot("abc_after", vec![
-            (0, 3, 10.0, 0.0, sid_after.clone()),
-            (3, 8, 120.0, 0.0, sid_after.clone()),
-        ]);
+        let sid_preedit = ShapingIdentity {
+            text_content_hash: 99,
+            raw_font_fingerprint: "font".into(),
+            glyph_indexes_hash: 99,
+            cluster_glyph_count: 1,
+            direction_rtl: false,
+            format_fingerprint: 0,
+        };
+        let sid_after = ShapingIdentity {
+            text_content_hash: 42,
+            raw_font_fingerprint: "font".into(),
+            glyph_indexes_hash: 100,
+            cluster_glyph_count: 1,
+            direction_rtl: false,
+            format_fingerprint: 0,
+        };
+        let old_snapshot = make_test_snapshot(
+            "abc_preedit_after",
+            vec![
+                (0, 3, 10.0, 0.0, sid_after.clone()),
+                (3, 10, 50.0, 0.0, sid_preedit.clone()),
+                (10, 15, 120.0, 0.0, sid_after.clone()),
+            ],
+        );
+        let new_snapshot = make_test_snapshot(
+            "abc_after",
+            vec![
+                (0, 3, 10.0, 0.0, sid_after.clone()),
+                (3, 8, 120.0, 0.0, sid_after.clone()),
+            ],
+        );
         let mut coord = LinuxEditorAnimationCoordinator::new();
         let key = coord.handle_composition_commit_or_cancel(
             300,
             &old_snapshot,
             &new_snapshot,
-            3, 10,
+            3,
+            10,
             false,
             false,
-            3, 3,
-            3, 3,
+            3,
+            3,
+            3,
+            3,
             None,
             None,
         );
         assert!(key.is_some());
-        let tx = coord.prepared_queue.active_transactions().iter().find(|t| t.key == key.unwrap()).unwrap();
-        let delete_slices: Vec<&AnimatedSlice> = tx.slices.iter()
+        let tx = coord
+            .prepared_queue
+            .active_transactions()
+            .iter()
+            .find(|t| t.key == key.unwrap())
+            .unwrap();
+        let delete_slices: Vec<&AnimatedSlice> = tx
+            .slices
+            .iter()
             .filter(|s| s.kind == AnimatedSliceKind::DeleteFadeOut)
             .collect();
-        assert!(!delete_slices.is_empty(), "cancel should create DeleteFadeOut for preedit range");
+        assert!(
+            !delete_slices.is_empty(),
+            "cancel should create DeleteFadeOut for preedit range"
+        );
     }
 }

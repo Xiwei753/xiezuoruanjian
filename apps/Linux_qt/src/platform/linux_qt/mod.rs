@@ -16,5 +16,4 @@
 pub mod clipboard_focus_adapter;
 pub mod utf16_converter;
 
-
 pub use clipboard_focus_adapter::LinuxQtClipboardFocusAdapter;

@@ -35,14 +35,48 @@ jobs:
           echo "PYTHONUTF8=1" >> "$GITHUB_ENV"
           echo "PYTHONIOENCODING=utf-8" >> "$GITHUB_ENV"
 
-      - name: Clippy on writer_core
-        run: cargo clippy --package writer_core --all-targets -- -D warnings
+      # === Rust 质量检查 ===
+      - name: Rust fmt 检查（格式或命名）
+        run: cargo fmt --all --check
 
-      - name: Clippy on sujian-linux-qt
+      - name: Rust all-features Clippy（代码复杂度 / Rust 安全与类型问题）
+        run: cargo clippy --package writer_core --all-targets --all-features -- -D warnings
+
+      - name: Clippy on sujian-linux-qt（Rust 安全与类型问题）
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq qt6-base-dev qt6-declarative-dev qt6-tools-dev libgl-dev
           cargo clippy --package sujian-linux-qt --all-targets -- -D warnings
 
+      # === Android 质量检查 ===
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Make gradlew executable
+        run: chmod +x apps/android/gradlew
+
+      - name: Detekt 代码质量检查（代码复杂度 / 文件类过大 / 跨层依赖）
+        working-directory: apps/android
+        run: ./gradlew detekt
+
+      - name: Android Lint noAiDebug（Android 平台错误）
+        working-directory: apps/android
+        run: ./gradlew lintNoAiDebug
+
+      - name: 架构约束测试（跨层依赖）
+        working-directory: apps/android
+        run: ./gradlew testNoAiDebugUnitTest --tests "com.xiwei.sujian.arch.*"
+
+      # === 源码结构检查 ===
+      - name: 源码结构门禁（文件/类过大 / 代码复杂度）
+        run: python3 tools/check_source_structure.py
+
+      # === 安全 / i18n / docs / token 检查（保留） ===
       - name: Check no binary artifacts in tracked files
         run: bash tools/check_no_binary_artifacts.sh
 

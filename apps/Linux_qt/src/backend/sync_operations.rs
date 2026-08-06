@@ -18,9 +18,7 @@
 // =============================================================================
 
 use super::*;
-use crate::sync_bridge::{
-    mask_sync_error, sync_error_category_from_code, SyncTaskOutcome,
-};
+use crate::sync_bridge::{mask_sync_error, sync_error_category_from_code, SyncTaskOutcome};
 
 use writer_core::api::WriterCoreApi;
 
@@ -138,8 +136,7 @@ impl AppBackend {
                 counts: writer_core::api::SyncOperationCountsDto::default(),
                 raw_error: None,
             };
-            self.current_sync_operation_state =
-                serde_json::to_string(&state).unwrap_or_default();
+            self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
             self.sync_action_completed();
             return op_id.into();
         }
@@ -156,8 +153,7 @@ impl AppBackend {
                 counts: writer_core::api::SyncOperationCountsDto::default(),
                 raw_error: None,
             };
-            self.current_sync_operation_state =
-                serde_json::to_string(&state).unwrap_or_default();
+            self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
             self.sync_status_changed();
             self.sync_action_completed();
             return op_id.into();
@@ -175,8 +171,7 @@ impl AppBackend {
                 counts: writer_core::api::SyncOperationCountsDto::default(),
                 raw_error: None,
             };
-            self.current_sync_operation_state =
-                serde_json::to_string(&state).unwrap_or_default();
+            self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
             self.sync_status_changed();
             self.sync_action_completed();
             return op_id.into();
@@ -309,9 +304,7 @@ impl AppBackend {
                         status_code: "fatal_error".to_string(),
                         phase_key: None,
                         summary_key: Some("error.sync_dry_run_panic".to_string()),
-                        summary_args: [("panic_msg".to_string(), panic_msg)]
-                            .into_iter()
-                            .collect(),
+                        summary_args: [("panic_msg".to_string(), panic_msg)].into_iter().collect(),
                         counts: writer_core::api::SyncOperationCountsDto::default(),
                         raw_error: None,
                     };
@@ -411,8 +404,7 @@ impl AppBackend {
                 counts: writer_core::api::SyncOperationCountsDto::default(),
                 raw_error: None,
             };
-            self.current_sync_operation_state =
-                serde_json::to_string(&state).unwrap_or_default();
+            self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
             self.sync_action_completed();
             self.debug_error("sync", "perform_sync_failed", "workspace_empty");
             return op_id.into();
@@ -430,8 +422,7 @@ impl AppBackend {
                 counts: writer_core::api::SyncOperationCountsDto::default(),
                 raw_error: None,
             };
-            self.current_sync_operation_state =
-                serde_json::to_string(&state).unwrap_or_default();
+            self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
             self.sync_status_changed();
             self.sync_action_completed();
             self.debug_error("sync", "perform_sync_failed", "remote_url_empty");
@@ -450,8 +441,7 @@ impl AppBackend {
                 counts: writer_core::api::SyncOperationCountsDto::default(),
                 raw_error: None,
             };
-            self.current_sync_operation_state =
-                serde_json::to_string(&state).unwrap_or_default();
+            self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
             self.sync_status_changed();
             self.sync_action_completed();
             self.debug_error("sync", "perform_sync_failed", "token_empty");
@@ -539,22 +529,45 @@ impl AppBackend {
                         let status_code = result.status.clone();
                         let summary_key = match status_code.as_str() {
                             "success" => Some("sync.result.success_summary".to_string()),
-                            "latest_wins_applied" => Some("sync.result.latest_wins_summary".to_string()),
+                            "latest_wins_applied" => {
+                                Some("sync.result.latest_wins_summary".to_string())
+                            }
                             "no_changes" => Some("sync.result.no_changes_summary".to_string()),
-                            "configured_not_tested" => Some("sync.result.configured_not_tested".to_string()),
+                            "configured_not_tested" => {
+                                Some("sync.result.configured_not_tested".to_string())
+                            }
                             "conflict" => Some("sync.result.conflict_summary".to_string()),
-                            "partial_conflict" => Some("sync.result.partial_conflict_summary".to_string()),
-                            "dirty_repo_blocked" => Some("sync.result.dirty_repo_blocked".to_string()),
-                            "branch_missing_recovered" => Some("sync.result.branch_recovered_summary".to_string()),
+                            "partial_conflict" => {
+                                Some("sync.result.partial_conflict_summary".to_string())
+                            }
+                            "dirty_repo_blocked" => {
+                                Some("sync.result.dirty_repo_blocked".to_string())
+                            }
+                            "branch_missing_recovered" => {
+                                Some("sync.result.branch_recovered_summary".to_string())
+                            }
                             "token_missing" => Some("sync.result.token_missing".to_string()),
                             "token_invalid" => Some("sync.result.token_invalid".to_string()),
-                            "token_permission_denied" => Some("sync.result.token_permission_denied".to_string()),
-                            "repo_not_found_or_no_permission" => Some("sync.result.repo_not_found_or_no_permission".to_string()),
-                            "branch_missing" | "remote_branch_missing" => Some("sync.result.branch_missing".to_string()),
-                            "network_failed" | "dns_failed" | "tls_failed" | "github_network_failed" => Some("sync.result.network_failed".to_string()),
+                            "token_permission_denied" => {
+                                Some("sync.result.token_permission_denied".to_string())
+                            }
+                            "repo_not_found_or_no_permission" => {
+                                Some("sync.result.repo_not_found_or_no_permission".to_string())
+                            }
+                            "branch_missing" | "remote_branch_missing" => {
+                                Some("sync.result.branch_missing".to_string())
+                            }
+                            "network_failed"
+                            | "dns_failed"
+                            | "tls_failed"
+                            | "github_network_failed" => {
+                                Some("sync.result.network_failed".to_string())
+                            }
                             "auth_failed" => Some("sync.result.auth_failed".to_string()),
                             "non_fast_forward" => Some("sync.result.non_fast_forward".to_string()),
-                            "unrelated_histories" => Some("sync.result.unrelated_histories".to_string()),
+                            "unrelated_histories" => {
+                                Some("sync.result.unrelated_histories".to_string())
+                            }
                             _ => Some("sync.result.generic_error".to_string()),
                         };
 
@@ -577,7 +590,10 @@ impl AppBackend {
                                 .collect::<Vec<_>>();
                             files.sort();
                             files.dedup();
-                            summary_args.insert("conflict_files".to_string(), format_conflict_files(&files));
+                            summary_args.insert(
+                                "conflict_files".to_string(),
+                                format_conflict_files(&files),
+                            );
                         }
 
                         let state = writer_core::api::SyncOperationStateDto {
@@ -605,7 +621,9 @@ impl AppBackend {
                             "token_missing" => "sync.result.token_missing",
                             "token_invalid" => "sync.result.token_invalid",
                             "token_permission_denied" => "sync.result.token_permission_denied",
-                            "repo_not_found_or_no_permission" => "sync.result.repo_not_found_or_no_permission",
+                            "repo_not_found_or_no_permission" => {
+                                "sync.result.repo_not_found_or_no_permission"
+                            }
                             "branch_missing" => "sync.result.branch_missing",
                             "network_failed" => "sync.result.network_failed",
                             "auth_failed" => "sync.result.auth_failed",
@@ -650,9 +668,7 @@ impl AppBackend {
                         status_code: "fatal_error".to_string(),
                         phase_key: None,
                         summary_key: Some("error.sync_panic".to_string()),
-                        summary_args: [("panic_msg".to_string(), panic_msg)]
-                            .into_iter()
-                            .collect(),
+                        summary_args: [("panic_msg".to_string(), panic_msg)].into_iter().collect(),
                         counts: writer_core::api::SyncOperationCountsDto::default(),
                         raw_error: None,
                     };

@@ -22,7 +22,16 @@ pub(crate) struct DecorationSlice {
 }
 
 impl DecorationSlice {
-    pub fn underline(key: VisualTransactionKey, byte_start: usize, byte_end: usize, x: f64, y: f64, w: f64, h: f64, color: String) -> Self {
+    pub fn underline(
+        key: VisualTransactionKey,
+        byte_start: usize,
+        byte_end: usize,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        color: String,
+    ) -> Self {
         Self {
             key,
             byte_start,
@@ -36,7 +45,16 @@ impl DecorationSlice {
         }
     }
 
-    pub fn thick_underline(key: VisualTransactionKey, byte_start: usize, byte_end: usize, x: f64, y: f64, w: f64, h: f64, color: String) -> Self {
+    pub fn thick_underline(
+        key: VisualTransactionKey,
+        byte_start: usize,
+        byte_end: usize,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        color: String,
+    ) -> Self {
         Self {
             key,
             byte_start,
@@ -50,7 +68,16 @@ impl DecorationSlice {
         }
     }
 
-    pub fn background_highlight(key: VisualTransactionKey, byte_start: usize, byte_end: usize, x: f64, y: f64, w: f64, h: f64, color: String) -> Self {
+    pub fn background_highlight(
+        key: VisualTransactionKey,
+        byte_start: usize,
+        byte_end: usize,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        color: String,
+    ) -> Self {
         Self {
             key,
             byte_start,
@@ -64,7 +91,15 @@ impl DecorationSlice {
         }
     }
 
-    pub fn ime_cursor(key: VisualTransactionKey, byte_start: usize, x: f64, y: f64, w: f64, h: f64, color: String) -> Self {
+    pub fn ime_cursor(
+        key: VisualTransactionKey,
+        byte_start: usize,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        color: String,
+    ) -> Self {
         Self {
             key,
             byte_start,

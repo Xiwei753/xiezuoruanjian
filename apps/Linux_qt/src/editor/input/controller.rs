@@ -22,7 +22,11 @@ impl EditorInputController {
             EditorInputEvent::Shortcut { key, modifiers } => {
                 handle_key(host, key, modifiers);
             }
-            EditorInputEvent::PreeditChanged { text, cursor, attributes } => {
+            EditorInputEvent::PreeditChanged {
+                text,
+                cursor,
+                attributes,
+            } => {
                 if !host.input_enabled() {
                     return;
                 }
@@ -34,7 +38,11 @@ impl EditorInputController {
             EditorInputEvent::ImeCommit { text } => {
                 ime_commit(host, text);
             }
-            EditorInputEvent::ImeReplacementCommit { text, replace_start, replace_length } => {
+            EditorInputEvent::ImeReplacementCommit {
+                text,
+                replace_start,
+                replace_length,
+            } => {
                 ime_replace_and_commit(host, text, replace_start, replace_length);
             }
             EditorInputEvent::ImeCancel => {
@@ -71,14 +79,25 @@ pub(crate) trait EditorInputHost {
     fn input_move_to_line_edge(&mut self, end: bool, extend: bool);
     fn input_clear_preedit(&mut self);
     fn input_set_preedit(&mut self, text: String, cursor: usize);
-    fn input_set_preedit_with_attrs(&mut self, text: String, cursor: usize, attributes: Vec<PreeditAttribute>);
+    fn input_set_preedit_with_attrs(
+        &mut self,
+        text: String,
+        cursor: usize,
+        attributes: Vec<PreeditAttribute>,
+    );
     fn input_set_suppress_next_ime_commit(&mut self, value: bool);
     fn input_take_suppress_next_ime_commit(&mut self) -> bool;
     fn input_request_repaint(&mut self);
 
-    fn input_preedit_text(&self) -> String { String::new() }
-    fn input_preedit_cursor(&self) -> usize { 0 }
-    fn input_preedit_attributes(&self) -> Vec<PreeditAttribute> { Vec::new() }
+    fn input_preedit_text(&self) -> String {
+        String::new()
+    }
+    fn input_preedit_cursor(&self) -> usize {
+        0
+    }
+    fn input_preedit_attributes(&self) -> Vec<PreeditAttribute> {
+        Vec::new()
+    }
 }
 
 pub(crate) fn handle_key<H: EditorInputHost + ?Sized>(

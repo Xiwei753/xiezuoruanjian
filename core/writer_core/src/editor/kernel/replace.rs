@@ -1,12 +1,9 @@
-use super::types::{CoordinatedCursor, DisplayPatch, EditorOperationKind, EditorVisualIntent};
 use super::result::{EditorEditOutcome, EditorEditResult};
+use super::types::{CoordinatedCursor, DisplayPatch, EditorOperationKind, EditorVisualIntent};
 use super::{EditorKernel, UndoEntry};
 
 use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset, Utf8ByteRange};
-use crate::editor::transaction::{
-    diff_plain_text,
-    AnimationMode, EditorTransactionCause,
-};
+use crate::editor::transaction::{diff_plain_text, AnimationMode, EditorTransactionCause};
 
 impl EditorKernel {
     pub(crate) fn apply_replace_all(
@@ -21,7 +18,11 @@ impl EditorKernel {
         let new_text = old_text.replace(search, replacement);
 
         if new_text == old_text {
-            return EditorEditOutcome::NoChange(self.noop_result(base_revision, old_cursor, old_selection));
+            return EditorEditOutcome::NoChange(self.noop_result(
+                base_revision,
+                old_cursor,
+                old_selection,
+            ));
         }
 
         self.text = new_text;

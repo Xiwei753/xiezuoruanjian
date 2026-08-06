@@ -3,10 +3,10 @@
 //! 本模块把一次 Qt 排版结果固化为不可变行视觉资源和 cluster 几何信息。
 //! 动画阶段只能裁剪、移动和混合这些资源，不得再次调用文字排版生成第二套视觉结果。
 
-use qmetaobject::QImage;
-use crate::editor::layout::{CaretAffinity, CaretRect, LayoutSnapshot, VisualLine};
 pub(crate) use super::layout_revision::LayoutRevision;
 pub(crate) use super::snapshot_id::LineSnapshotId;
+use crate::editor::layout::{CaretAffinity, CaretRect, LayoutSnapshot, VisualLine};
+use qmetaobject::QImage;
 
 /// 一次平台排版后的不可变 glyph cluster 视觉快照。
 ///
@@ -36,7 +36,12 @@ pub(crate) struct SourceRect {
 
 impl SourceRect {
     pub fn zero() -> Self {
-        Self { x: 0.0, y: 0.0, w: 0.0, h: 0.0 }
+        Self {
+            x: 0.0,
+            y: 0.0,
+            w: 0.0,
+            h: 0.0,
+        }
     }
 
     pub fn intersects(&self, other: &SourceRect) -> bool {
@@ -102,7 +107,11 @@ pub(crate) struct PreparedLineSnapshot {
 impl PreparedLineSnapshot {
     /// 聚合与 `byte_start..byte_end` 相交的所有 cluster 的 `source_rect`。
     /// 相交语义：cluster 的 byte range 与查询 range 有重叠即纳入。
-    pub fn source_rect_for_byte_range(&self, byte_start: usize, byte_end: usize) -> Option<SourceRect> {
+    pub fn source_rect_for_byte_range(
+        &self,
+        byte_start: usize,
+        byte_end: usize,
+    ) -> Option<SourceRect> {
         let mut min_x = f64::MAX;
         let mut min_y = f64::MAX;
         let mut max_right = f64::MIN;
@@ -131,7 +140,11 @@ impl PreparedLineSnapshot {
         }
     }
 
-    pub fn clusters_in_byte_range(&self, byte_start: usize, byte_end: usize) -> Vec<&LineClusterSnapshot> {
+    pub fn clusters_in_byte_range(
+        &self,
+        byte_start: usize,
+        byte_end: usize,
+    ) -> Vec<&LineClusterSnapshot> {
         self.clusters
             .iter()
             .filter(|c| c.byte_end > byte_start && c.byte_start < byte_end)
@@ -211,21 +224,33 @@ impl EditorLayoutSnapshot {
             .find(|l| l.byte_end >= byte_offset && l.byte_start <= byte_offset)
     }
 
-    pub fn line_for_byte_range(&self, byte_start: usize, byte_end: usize) -> Option<&PreparedLineSnapshot> {
+    pub fn line_for_byte_range(
+        &self,
+        byte_start: usize,
+        byte_end: usize,
+    ) -> Option<&PreparedLineSnapshot> {
         self.line_snapshots
             .iter()
             .find(|l| l.byte_start <= byte_start && l.byte_end >= byte_end)
             .or_else(|| self.line_for_byte(byte_start))
     }
 
-    pub fn lines_in_byte_range(&self, byte_start: usize, byte_end: usize) -> Vec<&PreparedLineSnapshot> {
+    pub fn lines_in_byte_range(
+        &self,
+        byte_start: usize,
+        byte_end: usize,
+    ) -> Vec<&PreparedLineSnapshot> {
         self.line_snapshots
             .iter()
             .filter(|l| l.byte_end > byte_start && l.byte_start < byte_end)
             .collect()
     }
 
-    pub fn clusters_in_byte_range(&self, byte_start: usize, byte_end: usize) -> Vec<&LineClusterSnapshot> {
+    pub fn clusters_in_byte_range(
+        &self,
+        byte_start: usize,
+        byte_end: usize,
+    ) -> Vec<&LineClusterSnapshot> {
         self.line_snapshots
             .iter()
             .flat_map(|l| l.clusters_in_byte_range(byte_start, byte_end))

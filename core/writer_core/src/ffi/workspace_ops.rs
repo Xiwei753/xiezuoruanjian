@@ -191,6 +191,13 @@ pub unsafe extern "C" fn writer_core_get_workspace_state() -> *mut c_char {
 /// `chapter_id` must be a valid null-terminated UTF-8 C string.
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 pub unsafe extern "C" fn writer_core_resolve_chapter_location(
     chapter_id: *const c_char,
 ) -> *mut c_char {

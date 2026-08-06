@@ -110,7 +110,11 @@ impl WriterCoreApi {
     }
 
     /// 执行同步。`force_sync=true` 跳过部分安全检查（如脏仓库保护）。
-    pub fn perform_sync(&self, config: SyncConfigDto, force_sync: bool) -> ApiResult<SyncResultDto> {
+    pub fn perform_sync(
+        &self,
+        config: SyncConfigDto,
+        force_sync: bool,
+    ) -> ApiResult<SyncResultDto> {
         self.core()
             .perform_sync(&config.into(), force_sync)
             .map(Into::into)

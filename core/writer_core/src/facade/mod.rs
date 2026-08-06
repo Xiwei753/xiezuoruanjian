@@ -41,9 +41,9 @@ use std::sync::{Arc, OnceLock};
 use serde::{Deserialize, Serialize};
 
 use crate::chapter::Chapter;
-use crate::writing_stats::api::StatsApi;
 use crate::search::service::SearchIndexService;
 use crate::starmap::store::StarMapStore;
+use crate::writing_stats::api::StatsApi;
 
 /// Core 内部统一入口——薄 Facade，只做参数转发和类型转换。
 ///
@@ -274,10 +274,7 @@ mod tests {
             .load_sync_secrets_for_generation(7)
             .unwrap()
             .expect("generation 7 secrets must exist after save");
-        assert_eq!(
-            loaded.token.as_ref().unwrap(),
-            "generation_token_7"
-        );
+        assert_eq!(loaded.token.as_ref().unwrap(), "generation_token_7");
 
         // 未保存的 generation 读取为 None。
         assert!(core.load_sync_secrets_for_generation(99).unwrap().is_none());
@@ -290,10 +287,7 @@ mod tests {
         // 删除不影响其他 generation。
         core.save_sync_secrets_for_generation(8, &secrets).unwrap();
         core.delete_sync_secrets_for_generation(7).unwrap();
-        assert!(core
-            .load_sync_secrets_for_generation(8)
-            .unwrap()
-            .is_some());
+        assert!(core.load_sync_secrets_for_generation(8).unwrap().is_some());
     }
 
     #[test]

@@ -143,7 +143,10 @@ impl ActionRegistry {
             risk_level: ActionRiskLevel::SafeRead,
             confirm_required: false,
             undoable: false,
-            platforms: vec![PlatformKind::Desktop.to_string(), PlatformKind::Android.to_string()],
+            platforms: vec![
+                PlatformKind::Desktop.to_string(),
+                PlatformKind::Android.to_string(),
+            ],
             input_schema: None,
             ui_schema: None,
         });
@@ -156,7 +159,10 @@ impl ActionRegistry {
             risk_level: ActionRiskLevel::SafeWrite,
             confirm_required: true,
             undoable: true,
-            platforms: vec![PlatformKind::Desktop.to_string(), PlatformKind::Android.to_string()],
+            platforms: vec![
+                PlatformKind::Desktop.to_string(),
+                PlatformKind::Android.to_string(),
+            ],
             input_schema: Some(serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -183,7 +189,10 @@ impl ActionRegistry {
             risk_level: ActionRiskLevel::SafeRead,
             confirm_required: false,
             undoable: false,
-            platforms: vec![PlatformKind::Desktop.to_string(), PlatformKind::Android.to_string()],
+            platforms: vec![
+                PlatformKind::Desktop.to_string(),
+                PlatformKind::Android.to_string(),
+            ],
             input_schema: None,
             ui_schema: None,
         });
@@ -196,7 +205,10 @@ impl ActionRegistry {
             risk_level: ActionRiskLevel::SafeWrite,
             confirm_required: true,
             undoable: true,
-            platforms: vec![PlatformKind::Desktop.to_string(), PlatformKind::Android.to_string()],
+            platforms: vec![
+                PlatformKind::Desktop.to_string(),
+                PlatformKind::Android.to_string(),
+            ],
             input_schema: Some(serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -217,7 +229,10 @@ impl ActionRegistry {
             risk_level: ActionRiskLevel::SafeWrite,
             confirm_required: true,
             undoable: true,
-            platforms: vec![PlatformKind::Desktop.to_string(), PlatformKind::Android.to_string()],
+            platforms: vec![
+                PlatformKind::Desktop.to_string(),
+                PlatformKind::Android.to_string(),
+            ],
             input_schema: Some(serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -244,7 +259,10 @@ impl ActionRegistry {
             risk_level: ActionRiskLevel::SafeRead,
             confirm_required: false,
             undoable: false,
-            platforms: vec![PlatformKind::Desktop.to_string(), PlatformKind::Android.to_string()],
+            platforms: vec![
+                PlatformKind::Desktop.to_string(),
+                PlatformKind::Android.to_string(),
+            ],
             input_schema: None,
             ui_schema: None,
         });
@@ -257,7 +275,10 @@ impl ActionRegistry {
             risk_level: ActionRiskLevel::SafeWrite,
             confirm_required: true,
             undoable: true,
-            platforms: vec![PlatformKind::Desktop.to_string(), PlatformKind::Android.to_string()],
+            platforms: vec![
+                PlatformKind::Desktop.to_string(),
+                PlatformKind::Android.to_string(),
+            ],
             input_schema: Some(serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -285,7 +306,10 @@ impl ActionRegistry {
             risk_level: ActionRiskLevel::SafeRead,
             confirm_required: false,
             undoable: false,
-            platforms: vec![PlatformKind::Desktop.to_string(), PlatformKind::Android.to_string()],
+            platforms: vec![
+                PlatformKind::Desktop.to_string(),
+                PlatformKind::Android.to_string(),
+            ],
             input_schema: None,
             ui_schema: None,
         });
@@ -298,7 +322,10 @@ impl ActionRegistry {
             risk_level: ActionRiskLevel::SafeWrite,
             confirm_required: true,
             undoable: true,
-            platforms: vec![PlatformKind::Desktop.to_string(), PlatformKind::Android.to_string()],
+            platforms: vec![
+                PlatformKind::Desktop.to_string(),
+                PlatformKind::Android.to_string(),
+            ],
             input_schema: Some(serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -323,7 +350,10 @@ impl ActionRegistry {
             risk_level: ActionRiskLevel::SafeRead,
             confirm_required: false,
             undoable: false,
-            platforms: vec![PlatformKind::Desktop.to_string(), PlatformKind::Android.to_string()],
+            platforms: vec![
+                PlatformKind::Desktop.to_string(),
+                PlatformKind::Android.to_string(),
+            ],
             input_schema: None,
             ui_schema: None,
         });
@@ -336,7 +366,10 @@ impl ActionRegistry {
             risk_level: ActionRiskLevel::SafeWrite,
             confirm_required: true,
             undoable: true,
-            platforms: vec![PlatformKind::Desktop.to_string(), PlatformKind::Android.to_string()],
+            platforms: vec![
+                PlatformKind::Desktop.to_string(),
+                PlatformKind::Android.to_string(),
+            ],
             input_schema: Some(serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -361,7 +394,10 @@ impl ActionRegistry {
             risk_level: ActionRiskLevel::SafeRead,
             confirm_required: false,
             undoable: false,
-            platforms: vec![PlatformKind::Desktop.to_string(), PlatformKind::Android.to_string()],
+            platforms: vec![
+                PlatformKind::Desktop.to_string(),
+                PlatformKind::Android.to_string(),
+            ],
             input_schema: None,
             ui_schema: None,
         });
@@ -374,7 +410,10 @@ impl ActionRegistry {
             risk_level: ActionRiskLevel::SafeWrite,
             confirm_required: true,
             undoable: true,
-            platforms: vec![PlatformKind::Desktop.to_string(), PlatformKind::Android.to_string()],
+            platforms: vec![
+                PlatformKind::Desktop.to_string(),
+                PlatformKind::Android.to_string(),
+            ],
             input_schema: Some(serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -389,6 +428,12 @@ impl ActionRegistry {
         });
     }
 
+    // TODO(#597): 既有代码可读性技术债，待后续重构拆分
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        clippy::excessive_nesting
+    )]
     fn register_sync_actions(&mut self) {
         self.actions.push(ActionDescriptor {
             id: "settings.sync.config.get".to_string(),
@@ -399,7 +444,10 @@ impl ActionRegistry {
             risk_level: ActionRiskLevel::SafeRead,
             confirm_required: false,
             undoable: false,
-            platforms: vec![PlatformKind::Desktop.to_string(), PlatformKind::Android.to_string()],
+            platforms: vec![
+                PlatformKind::Desktop.to_string(),
+                PlatformKind::Android.to_string(),
+            ],
             input_schema: None,
             ui_schema: None,
         });
@@ -412,7 +460,10 @@ impl ActionRegistry {
             risk_level: ActionRiskLevel::SafeRead,
             confirm_required: false,
             undoable: false,
-            platforms: vec![PlatformKind::Desktop.to_string(), PlatformKind::Android.to_string()],
+            platforms: vec![
+                PlatformKind::Desktop.to_string(),
+                PlatformKind::Android.to_string(),
+            ],
             input_schema: None,
             ui_schema: None,
         });
@@ -425,7 +476,10 @@ impl ActionRegistry {
             risk_level: ActionRiskLevel::SafeRead,
             confirm_required: false,
             undoable: false,
-            platforms: vec![PlatformKind::Desktop.to_string(), PlatformKind::Android.to_string()],
+            platforms: vec![
+                PlatformKind::Desktop.to_string(),
+                PlatformKind::Android.to_string(),
+            ],
             input_schema: None,
             ui_schema: None,
         });
@@ -438,7 +492,10 @@ impl ActionRegistry {
             risk_level: ActionRiskLevel::ContentWrite,
             confirm_required: true,
             undoable: false,
-            platforms: vec![PlatformKind::Desktop.to_string(), PlatformKind::Android.to_string()],
+            platforms: vec![
+                PlatformKind::Desktop.to_string(),
+                PlatformKind::Android.to_string(),
+            ],
             input_schema: Some(serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -457,7 +514,10 @@ impl ActionRegistry {
             risk_level: ActionRiskLevel::ContentWrite,
             confirm_required: true,
             undoable: false,
-            platforms: vec![PlatformKind::Desktop.to_string(), PlatformKind::Android.to_string()],
+            platforms: vec![
+                PlatformKind::Desktop.to_string(),
+                PlatformKind::Android.to_string(),
+            ],
             input_schema: Some(serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -476,7 +536,10 @@ impl ActionRegistry {
             risk_level: ActionRiskLevel::ContentWrite,
             confirm_required: true,
             undoable: false,
-            platforms: vec![PlatformKind::Desktop.to_string(), PlatformKind::Android.to_string()],
+            platforms: vec![
+                PlatformKind::Desktop.to_string(),
+                PlatformKind::Android.to_string(),
+            ],
             input_schema: Some(serde_json::json!({
                 "type": "object",
                 "properties": {
