@@ -65,11 +65,24 @@ class AndroidTextAnimationRenderer {
         cursorPaint: Paint
     ) {
         val ct = transaction.cursorTransition ?: return
-        if (!ct.shouldAnimate) return
+        drawAnimatedCursor(canvas, ct, progress, cursorPaint)
+    }
 
-        val currentX = ct.fromX + (ct.toX - ct.fromX) * progress
-        val currentY = ct.fromY + (ct.toY - ct.fromY) * progress
-        val currentHeight = ct.fromHeight + (ct.toHeight - ct.fromHeight) * progress
+    /**
+     * #595 五：按独立光标过渡几何绘制动画光标 — 供静态文字路径（文字轨结束或
+     * CursorOnly 抑制）在光标轨未结束时继续绘制平滑光标。
+     */
+    fun drawAnimatedCursor(
+        canvas: Canvas,
+        transition: PreparedVisualTransaction.CursorTransition,
+        progress: Float,
+        cursorPaint: Paint
+    ) {
+        if (!transition.shouldAnimate) return
+
+        val currentX = transition.fromX + (transition.toX - transition.fromX) * progress
+        val currentY = transition.fromY + (transition.toY - transition.fromY) * progress
+        val currentHeight = transition.fromHeight + (transition.toHeight - transition.fromHeight) * progress
 
         canvas.drawRect(currentX, currentY, currentX + 2f, currentY + currentHeight, cursorPaint)
     }

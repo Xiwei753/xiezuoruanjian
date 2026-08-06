@@ -18,6 +18,8 @@ import com.xiwei.sujian.editor.v2.pipeline.PipelineOutput
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
 import com.xiwei.sujian.editor.v2.coordinator.NewlinePolicy
 import com.xiwei.sujian.editor.v2.coordinator.WindowDisplayFrameClock
+import com.xiwei.sujian.editor.v2.coordinator.EditorOperationKind
+import com.xiwei.sujian.editor.v2.coordinator.toEditorOperationKind
 import com.xiwei.sujian.R
 import uniffi.writer_core.EditorTransactionCauseDto
 
@@ -152,7 +154,15 @@ class SujianEditorView @JvmOverloads constructor(
                     // 再通知 ViewModel 保存。确保 WritingPane 的 LaunchedEffect(uiState.content)
                     // 触发时 sessionStateFlow 已是最新，不会误判为外部更新而 reset session。
                     if (output.result.isApplied()) {
-                        onLocalEdit?.invoke(editText, output.result.newRevision, output.result.transactionId)
+                        // #595 解决二：本地输入回调携带 text/revision/transactionId/operationKind
+                        // 四元组 — operationKind 来自 Rust EditResult 的 VisualIntent，
+                        // 会话层 LocalInput 据此记录本次编辑类型（插入/删除/替换/选区/合成）。
+                        onLocalEdit?.invoke(
+                            editText,
+                            output.result.newRevision,
+                            output.result.transactionId,
+                            output.result.visualIntent.operationKind.toEditorOperationKind()
+                        )
                     }
                     onContentChanged?.invoke(editText)
                 }
@@ -178,7 +188,7 @@ class SujianEditorView @JvmOverloads constructor(
             )
             updateLayoutConfig()
             val reloadText = pipeline.getText()
-            onLocalEdit?.invoke(reloadText, pipeline.getRevision(), 0L)
+            onLocalEdit?.invoke(reloadText, pipeline.getRevision(), 0L, EditorOperationKind.REPLACE)
             onContentChanged?.invoke(reloadText)
         } else {
             android.util.Log.w("SujianEditorInput", "reloadFromKernel FAILED (no session snapshot)")
@@ -564,13 +574,16 @@ class SujianEditorView @JvmOverloads constructor(
     var onContentChanged: ((String) -> Unit)? = null
 
     /**
-     * #595 一：类型化本地编辑回调 — 传递 text/revision/transactionId。
+     * #595 一：类型化本地编辑回调 — 传递 text/revision/transactionId/operationKind。
      *
      * 由 [EditorWindowHost.installContentCallback] 设置，回调中先调用
      * [EditorSessionCoordinator.applyLocalEdit] 更新唯一 SessionState，
      * 再通知 ViewModel 保存。替代仅传字符串的 [onContentChanged]。
+     *
+     * #595 解决二：operationKind 由 Rust EditResult 的 VisualIntent 映射而来，
+     * 随 [EditorDocumentUpdate.LocalInput] 记录本次编辑语义。
      */
-    var onLocalEdit: ((text: String, revision: Long, transactionId: Long) -> Unit)? = null
+    var onLocalEdit: ((text: String, revision: Long, transactionId: Long, operationKind: EditorOperationKind) -> Unit)? = null
 
     fun setText(text: String) {
         loadText(text, 0)

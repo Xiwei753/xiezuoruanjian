@@ -160,6 +160,12 @@ class EditorViewModel(
 
         inputFrozen = true
 
+        // #595 一/转场：切换章节时同步置 loading — 在旧章节保存完成前就隐藏编辑器。
+        // 防止 WritingPane 在保存窗口期（loading 仍为 false）用旧章节正文对目标章节
+        // 执行 beginEdit/resetPersistentSession，造成新章节 session 被旧内容短暂占用
+        // 后再被外部替换协议重写（多余 Core reset、revision 跳动）。
+        _uiState.value = _uiState.value.copy(loading = true)
+
         if (oldSession != null) {
             autoSaveJob?.cancel()
             saveActorJob?.cancel()
@@ -213,6 +219,7 @@ class EditorViewModel(
             }
 
             if (!saveOk) {
+                _uiState.value = _uiState.value.copy(loading = false)
                 saveCommandChannel = Channel<SaveCommand>(Channel.UNLIMITED)
                 startSaveActor()
                 inputFrozen = false

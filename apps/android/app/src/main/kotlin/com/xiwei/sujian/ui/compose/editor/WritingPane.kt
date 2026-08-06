@@ -165,12 +165,9 @@ fun WritingPane(
             if (lastTargetId.isNotEmpty()) {
                 coordinator.closeTarget(lastTargetId, com.xiwei.sujian.editor.v2.coordinator.SessionCloseReason.CHAPTER_SWITCH)
             }
-            coordinator.resetPersistentSession(
-                targetId,
-                uiState.content,
-                uiState.content.toByteArray(Charsets.UTF_8).size,
-                SessionResetSource.CHAPTER_SWITCH
-            )
+            // #595 一：不再用旧章节的 uiState.content 对新章节 resetPersistentSession —
+            // switchChapter 已同步置 loading（保存窗口期编辑器隐藏），新章节 session
+            // 由 beginEdit 在内容加载完成后用真实正文创建；外部替换协议兜底一致。
         }
         lastChapterId = chapterId
         lastTargetId = targetId

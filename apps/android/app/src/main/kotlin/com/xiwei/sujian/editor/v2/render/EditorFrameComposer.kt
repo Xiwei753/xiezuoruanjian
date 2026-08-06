@@ -29,6 +29,7 @@ class EditorFrameComposer {
     fun compose(
         layout: android.text.Layout?,
         transaction: PreparedVisualTransaction?,
+        cursorTransition: PreparedVisualTransaction.CursorTransition?,
         progress: Float,
         cursorProgress: Float?,
         cursorUtf16: Int,
@@ -48,6 +49,7 @@ class EditorFrameComposer {
         return ComposedFrame(
             layout = layout,
             transaction = transaction,
+            cursorTransition = cursorTransition,
             progress = progress,
             cursorProgress = cursorProgress,
             cursorUtf16 = cursorUtf16,
@@ -75,6 +77,8 @@ class EditorFrameComposer {
 data class ComposedFrame(
     val layout: android.text.Layout?,
     val transaction: PreparedVisualTransaction?,
+    /** #595 五：静态文字路径的光标过渡几何 — 文字轨结束/抑制但光标轨未结束时非 null。 */
+    val cursorTransition: PreparedVisualTransaction.CursorTransition? = null,
     val progress: Float,
     val cursorProgress: Float?,
     val cursorUtf16: Int,

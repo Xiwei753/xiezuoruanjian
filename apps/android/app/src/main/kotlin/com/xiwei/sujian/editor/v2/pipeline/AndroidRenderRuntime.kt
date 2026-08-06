@@ -25,6 +25,7 @@ class AndroidRenderRuntime(
         val composedFrame = frameComposer.compose(
             layout = input.layout,
             transaction = input.transaction,
+            cursorTransition = input.cursorTransition,
             progress = input.timelineProgress,
             cursorProgress = input.cursorProgress,
             cursorUtf16 = if (input.cursorVisible) (input.layoutRevision?.cursorUtf16 ?: input.cursorUtf16) else -1,
@@ -72,8 +73,33 @@ class AndroidRenderRuntime(
             textRenderer.drawSelectionHighlight(canvas, layout, frame.selectionStartUtf16, frame.selectionEndUtf16)
             textRenderer.drawStaticText(canvas, layout)
             textRenderer.drawPreeditUnderline(canvas, layout, frame.compositionStartUtf16, frame.compositionEndUtf16)
-            textRenderer.drawCursor(canvas, frame.cursorUtf16, frame.cursorX, frame.cursorY, frame.cursorHeight)
+            // #595 五：文字轨结束/抑制（CursorOnly）但光标轨未结束时，静态文字
+            // 路径仍绘制平滑光标；光标轨结束（progress=null 或 1f）回落到静态光标。
+            val ct = frame.cursorTransition
+            if (ct != null && shouldDrawAnimatedCursorOnStaticPath(ct, frame.cursorProgress)) {
+                animationRenderer.drawAnimatedCursor(
+                    canvas, ct, frame.cursorProgress ?: frame.progress, textRenderer.getCursorPaint()
+                )
+            } else {
+                textRenderer.drawCursor(canvas, frame.cursorUtf16, frame.cursorX, frame.cursorY, frame.cursorHeight)
+            }
         }
+    }
+
+    companion object {
+        /**
+         * #595 五：静态文字路径下是否仍应动画绘制光标。
+         *
+         * 光标过渡存在且 shouldAnimate 且光标轨未完成（progress ∈ [0, 1)）时成立；
+         * 光标轨已结束（progress=1f）或已取消（null）时回落静态光标。纯函数，JVM 可测。
+         */
+        fun shouldDrawAnimatedCursorOnStaticPath(
+            cursorTransition: com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction.CursorTransition?,
+            cursorProgress: Float?,
+        ): Boolean = cursorTransition != null &&
+            cursorTransition.shouldAnimate &&
+            cursorProgress != null &&
+            cursorProgress < 1f
     }
 
     fun setThemeColors(textColor: Int, cursorColor: Int, selectionColor: Int, preeditColor: Int, bgColor: Int, searchHighlightColor: Int = 0) {

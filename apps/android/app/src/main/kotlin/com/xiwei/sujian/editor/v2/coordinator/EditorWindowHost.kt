@@ -558,13 +558,14 @@ class EditorWindowHost(
         // #595 一：类型化本地编辑回调 — 先更新会话层唯一 SessionState（revision/transactionId），
         // 再通知 ViewModel 保存。ViewModel 不再靠字符串比较猜测来源，
         // WritingPane 收集 sessionStateFlow 发现 revision 已应用，不触发 reset。
-        view.onLocalEdit = { text, revision, transactionId ->
+        view.onLocalEdit = { text, revision, transactionId, operationKind ->
             sessionCoordinator.applyLocalEdit(
                 EditorDocumentUpdate.LocalInput(
                     targetId = target.targetId,
                     text = text,
                     revision = revision,
                     transactionId = transactionId,
+                    operationKind = operationKind,
                 )
             )
         }

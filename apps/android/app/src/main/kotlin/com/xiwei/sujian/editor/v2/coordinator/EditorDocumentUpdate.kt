@@ -56,3 +56,22 @@ enum class EditorOperationKind {
     LINE_BREAK,
     COMPOSITION,
 }
+
+/**
+ * #595 解决二：把 Core 的 [uniffi.writer_core.EditorOperationKindDto] 映射为
+ * 平台 [EditorOperationKind]，随 [EditorDocumentUpdate.LocalInput] 透传给会话层。
+ *
+ * CURSOR_ONLY 对应选区移动（SELECTION）；COMPOSITION_* 统一归为 COMPOSITION；
+ * LOAD/FORMAT 属于内容替换语义（REPLACE）。
+ */
+fun uniffi.writer_core.EditorOperationKindDto.toEditorOperationKind(): EditorOperationKind = when (this) {
+    uniffi.writer_core.EditorOperationKindDto.INSERT -> EditorOperationKind.INSERT
+    uniffi.writer_core.EditorOperationKindDto.DELETE -> EditorOperationKind.DELETE
+    uniffi.writer_core.EditorOperationKindDto.REPLACE -> EditorOperationKind.REPLACE
+    uniffi.writer_core.EditorOperationKindDto.CURSOR_ONLY -> EditorOperationKind.SELECTION
+    uniffi.writer_core.EditorOperationKindDto.COMPOSITION_UPDATE,
+    uniffi.writer_core.EditorOperationKindDto.COMPOSITION_COMMIT,
+    uniffi.writer_core.EditorOperationKindDto.COMPOSITION_CANCEL -> EditorOperationKind.COMPOSITION
+    uniffi.writer_core.EditorOperationKindDto.LOAD -> EditorOperationKind.REPLACE
+    uniffi.writer_core.EditorOperationKindDto.FORMAT -> EditorOperationKind.REPLACE
+}
