@@ -225,11 +225,11 @@ pub struct SyncConfig {
     #[serde(default)]
     pub username: String,
     /// Whether the platform grants network access permission.
-    /// Android sets this based on INTERNET permission; desktop platforms always true.
+    /// Android sets this based on INTERNET permission; Linux Qt and Windows platforms always true.
     #[serde(default = "default_true", alias = "android_has_internet_permission")]
     pub has_network_permission: bool,
     /// Whether the platform grants network state query permission.
-    /// Android sets this based on ACCESS_NETWORK_STATE permission; desktop platforms always true.
+    /// Android sets this based on ACCESS_NETWORK_STATE permission; Linux Qt and Windows platforms always true.
     #[serde(
         default = "default_true",
         alias = "android_has_access_network_state_permission"
