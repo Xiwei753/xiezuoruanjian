@@ -1167,7 +1167,6 @@ class EditorSessionCoordinator(
                 Log.e(TAG, "resetPersistentSession($targetId): failed to create session for empty/missing persistent session")
                 return ExternalResetResult.Failed
             }
-            store.update(targetId) { it.copy(sessionId = newSessionId) }
             return commitResetSnapshot(targetId, newSessionId)
         }
 
@@ -1178,28 +1177,39 @@ class EditorSessionCoordinator(
             return resetPersistentSession(targetId, text, cursorUtf8, source)
         }
 
-        return when (val result = appServiceBridge.textEditSessionReset(sessionId, text, cursorUtf8.toUInt())) {
-            is BridgeResult.Success -> commitResetSnapshot(targetId, sessionId)
-            else -> {
-                Log.e(TAG, "resetPersistentSession($targetId): Core textEditSessionReset failed — 保持旧正文与旧版本")
-                ExternalResetResult.Failed
-            }
+        // #595 一：候选 session 原子交换 — 不原地 reset 旧 session。原地 reset 成功后
+        // snapshot 读取失败时旧 Undo/Redo/composition/正文已被 load_text 破坏，无法回滚。
+        // 创建 candidate session 装入新正文，读取真实 snapshot：失败则关闭 candidate、
+        // 旧 session/store/view 完全不动；成功则原子提交 candidate record 并关闭旧 session。
+        val candidateSessionId = createSession(targetId, text, cursorUtf8, true)
+        if (candidateSessionId == null || candidateSessionId == 0UL) {
+            Log.e(TAG, "resetPersistentSession($targetId): failed to create candidate session — old session preserved")
+            return ExternalResetResult.Failed
         }
+        return commitResetSnapshot(targetId, candidateSessionId, oldSessionIdToClose = sessionId)
     }
 
     /**
-     * #595 一：原子提交 reset 后的真实 snapshot — 一次性更新 store 记录与活动
+     * #595 一：原子提交候选 session 的真实 snapshot — 一次性更新 store 记录与活动
      * SessionState 的 text/revision/selection，消除 Rust session（新正文）/
      * SessionStore（旧正文）/ViewModel（新正文+hash）三份状态分裂。
      *
-     * snapshot 读取失败时返回 [ExternalResetResult.Failed] — 禁止构造 revision=0
-     * 的兜底 snapshot（旧实现用输入参数补出来的快照不是 Rust 返回的真实 snapshot，
-     * 调用方仍当成功，随后 requestSave 从 sessionState.text 取旧正文保存回磁盘）。
+     * 候选 session 原子交换语义：
+     * - [sessionId] 是已创建并装入新正文的候选 session（不是被原地 reset 的旧 session）；
+     * - [oldSessionIdToClose] 是提交成功后要关闭的旧 session（null 表示无旧 session）；
+     * - snapshot 读取失败时关闭候选 session、不关闭旧 session、不推进 store/state，
+     *   返回 [ExternalResetResult.Failed] — 旧 session 的 Undo/Redo/composition/正文
+     *   完整保留（旧实现原地 reset 旧 session 后 snapshot 失败，旧 session 已被破坏）。
      */
-    private fun commitResetSnapshot(targetId: String, sessionId: ULong): ExternalResetResult {
+    private fun commitResetSnapshot(
+        targetId: String,
+        sessionId: ULong,
+        oldSessionIdToClose: ULong? = null,
+    ): ExternalResetResult {
         val snapshot = querySnapshotForSession(sessionId)
         if (snapshot == null) {
-            Log.e(TAG, "commitResetSnapshot($targetId): snapshot read failed after reset — returning Failed, no fallback snapshot")
+            Log.e(TAG, "commitResetSnapshot($targetId): snapshot read failed — closing candidate $sessionId, old session preserved")
+            closeSession(sessionId)
             return ExternalResetResult.Failed
         }
         updateSessionState { previous ->
@@ -1224,6 +1234,9 @@ class EditorSessionCoordinator(
                 selectionHeadUtf8 = snapshot.selectionHeadUtf8,
                 origin = EditorSessionOrigin.EXTERNAL_REPLACE,
             )
+        }
+        if (oldSessionIdToClose != null && oldSessionIdToClose != 0UL && oldSessionIdToClose != sessionId) {
+            closeSession(oldSessionIdToClose)
         }
         val state = windowBindingState
         if (state is WindowBindingState.Detached && state.targetId == targetId) {

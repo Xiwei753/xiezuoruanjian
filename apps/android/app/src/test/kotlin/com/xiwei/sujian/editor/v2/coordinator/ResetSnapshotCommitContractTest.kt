@@ -136,4 +136,52 @@ class ResetSnapshotCommitContractTest {
             body.contains("deferred.complete(false)"),
         )
     }
+
+    @Test
+    fun resetPersistentSession_usesCandidateSessionNotInPlaceReset() {
+        val source = coordinatorSource()
+        val resetMethodStart = source.indexOf("fun resetPersistentSession(")
+        assertTrue("resetPersistentSession method must exist", resetMethodStart >= 0)
+        val resetMethodEnd = source.indexOf("private fun commitResetSnapshot", resetMethodStart)
+        assertTrue("commitResetSnapshot must follow resetPersistentSession", resetMethodEnd > resetMethodStart)
+        val resetBody = source.substring(resetMethodStart, resetMethodEnd)
+        assertFalse(
+            "resetPersistentSession must not call textEditSessionReset — candidate session atomic swap, not in-place reset (#595 一)",
+            resetBody.contains("textEditSessionReset("),
+        )
+    }
+
+    @Test
+    fun resetPersistentSession_createsCandidateSessionForAtomicSwap() {
+        val source = coordinatorSource()
+        val resetMethodStart = source.indexOf("fun resetPersistentSession(")
+        val resetMethodEnd = source.indexOf("private fun commitResetSnapshot", resetMethodStart)
+        val resetBody = source.substring(resetMethodStart, resetMethodEnd)
+        assertTrue(
+            "resetPersistentSession must create candidate session for atomic swap — old session preserved on failure (#595 一)",
+            resetBody.contains("candidateSessionId"),
+        )
+    }
+
+    @Test
+    fun commitResetSnapshot_acceptsOldSessionIdToClose() {
+        val source = coordinatorSource()
+        assertTrue(
+            "commitResetSnapshot must accept oldSessionIdToClose parameter — close old session after successful candidate commit (#595 一)",
+            source.contains("oldSessionIdToClose: ULong?"),
+        )
+    }
+
+    @Test
+    fun commitResetSnapshot_closesCandidateOnSnapshotFailure() {
+        val source = coordinatorSource()
+        val methodStart = source.indexOf("private fun commitResetSnapshot(")
+        assertTrue("commitResetSnapshot method must exist", methodStart >= 0)
+        val snapshotCheckEnd = source.indexOf("return ExternalResetResult.Failed", methodStart)
+        val guardBody = source.substring(methodStart, snapshotCheckEnd)
+        assertTrue(
+            "commitResetSnapshot must close candidate session when snapshot read fails — no session leak (#595 一)",
+            guardBody.contains("closeSession(sessionId)"),
+        )
+    }
 }
