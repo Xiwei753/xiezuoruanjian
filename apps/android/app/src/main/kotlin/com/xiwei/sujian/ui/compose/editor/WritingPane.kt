@@ -184,25 +184,38 @@ fun WritingPane(
         val sameChapter = lastChapterId.isNotEmpty() &&
             lastProjectId == projectId && lastVolumeId == volumeId && lastChapterId == chapterId
         if (!sameChapter) {
-            when (val result = viewModel.switchChapter(projectId, volumeId, chapterId, chapterTitle)) {
-                is com.xiwei.sujian.ui.ChapterSwitchResult.Success -> {
-                    // #595 一：只有保存+加载都成功，旧章节才是业务级关闭（CHAPTER_SWITCH）。
-                    if (lastTargetId.isNotEmpty() && lastTargetId != targetId) {
-                        coordinator.closeTarget(lastTargetId, com.xiwei.sujian.editor.v2.coordinator.SessionCloseReason.CHAPTER_SWITCH)
-                    }
-                    failedSwitchTarget = null
+            if (currentViewModel.isCurrentChapter(projectId, volumeId, chapterId)) {
+                // #595 一：宿主已用 requestOpenChapter 预提交该章节（事务成功后才导航）—
+                // 直接收口旧 target 并进入编辑，不再重复执行保存/加载事务；
+                // 也防止过期 pane 的请求在更新请求之后运行造成串写（旧正文写新章节）。
+                if (lastTargetId.isNotEmpty() && lastTargetId != targetId) {
+                    coordinator.closeTarget(lastTargetId, com.xiwei.sujian.editor.v2.coordinator.SessionCloseReason.CHAPTER_SWITCH)
                 }
-                is com.xiwei.sujian.ui.ChapterSwitchResult.SaveFailed,
-                is com.xiwei.sujian.ui.ChapterSwitchResult.LoadFailed -> {
-                    // #595 一：保存/加载失败 → 回滚工作区选择到旧章节（activeChapterKey）。
-                    // 在回滚完成前禁止 beginEdit/外部替换协议使用旧正文创建新章节 session。
-                    failedSwitchTarget = targetId
-                    onChapterSwitchFailed?.invoke(
-                        lastProjectId.takeIf { it.isNotEmpty() } ?: projectId,
-                        lastVolumeId.takeIf { it.isNotEmpty() },
-                        lastChapterId.takeIf { it.isNotEmpty() },
-                        lastChapterTitle,
-                    )
+                failedSwitchTarget = null
+            } else {
+                when (val result = viewModel.switchChapter(projectId, volumeId, chapterId, chapterTitle)) {
+                    is com.xiwei.sujian.ui.ChapterSwitchResult.Success -> {
+                        // #595 一：只有保存+加载都成功，旧章节才是业务级关闭（CHAPTER_SWITCH）。
+                        if (lastTargetId.isNotEmpty() && lastTargetId != targetId) {
+                            coordinator.closeTarget(lastTargetId, com.xiwei.sujian.editor.v2.coordinator.SessionCloseReason.CHAPTER_SWITCH)
+                        }
+                        failedSwitchTarget = null
+                    }
+                    is com.xiwei.sujian.ui.ChapterSwitchResult.SaveFailed,
+                    is com.xiwei.sujian.ui.ChapterSwitchResult.LoadFailed -> {
+                        // #595 一：保存/加载失败 → 回滚工作区选择到旧章节（activeChapterKey）。
+                        // 在回滚完成前禁止 beginEdit/外部替换协议使用旧正文创建新章节 session。
+                        failedSwitchTarget = targetId
+                        onChapterSwitchFailed?.invoke(
+                            lastProjectId.takeIf { it.isNotEmpty() } ?: projectId,
+                            lastVolumeId.takeIf { it.isNotEmpty() },
+                            lastChapterId.takeIf { it.isNotEmpty() },
+                            lastChapterTitle,
+                        )
+                    }
+                    com.xiwei.sujian.ui.ChapterSwitchResult.Stale -> {
+                        // #595 一：请求已过期 — 更新的请求正在完成切换，本请求不再动作。
+                    }
                 }
             }
             lastProjectId = projectId
@@ -236,8 +249,10 @@ fun WritingPane(
     }
 
     LaunchedEffect(targetId) {
-        viewModel.documentUpdates.collect { update ->
-            if (update.targetId != targetId || currentUiState.loading) return@collect
+        // #595 二：按 target 分区的最新事件流（带 replay）— 新 collector 立即
+        // 拿到当前最新事件，不再经过单消费者 Channel 被错误页面取走。
+        currentViewModel.documentUpdates(targetId).collect { update ->
+            if (currentUiState.loading) return@collect
             // #595 二：WritingPane 只消费类型化 EditorDocumentUpdate 事件，
             // 不再观察字符串差异。所有外部更新来源（RepositoryLoaded/SyncMerged/
             // UndoRestored/ProgrammaticReplace）统一经 shouldApplyExternalUpdate
@@ -287,6 +302,10 @@ fun WritingPane(
     LaunchedEffect(targetId, uiState.loading) {
         // #595 一：切换失败的目标禁止 beginEdit — 否则会用旧章节正文创建新章节 session。
         if (failedSwitchTarget == targetId) return@LaunchedEffect
+        // #595 一：只有 ViewModel 当前已提交章节才允许 beginEdit —
+        // 切换事务提交后、业务选择/导航落地前的一帧内，旧 pane 不得用
+        // 新章节正文对旧 target 创建/重置 session。
+        if (!currentViewModel.isCurrentChapter(projectId, volumeId, chapterId)) return@LaunchedEffect
         if (coordinator.activeTargetId != targetId && !uiState.loading) {
             coordinator.updateTargetText(targetId, uiState.content)
             coordinator.beginEdit(targetId, uiState.content.toByteArray(Charsets.UTF_8).size)

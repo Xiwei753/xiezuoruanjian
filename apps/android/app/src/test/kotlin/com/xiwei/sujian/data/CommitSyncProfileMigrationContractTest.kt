@@ -114,12 +114,15 @@ class CommitSyncProfileMigrationContractTest {
         // 结构契约：提交序列中 live 槽写入（saveSyncConfig/saveSyncSecrets 的
         // Core 文件写入）必须在 commitGeneration 之后 — 通过方法顺序无法直接
         // 反射断言，这里验证 SettingsRepository 同时具备严格读取与版本化入口，
-        // 且 legacy 读取入口仍是严格版（失败不返回默认值）。
+        // 且 legacy 凭据读取已是类型化入口（读取失败不再伪装成"未配置"）。
         val strictConfig = SettingsRepository::class.java.methods.firstOrNull { it.name == "loadSyncConfigStrict" }
-        val strictSecrets = SettingsRepository::class.java.methods.firstOrNull { it.name == "loadSyncSecretsStrict" }
+        val typedLegacySecrets = SettingsRepository::class.java.methods.firstOrNull { it.name == "loadLegacySyncSecretsTyped" }
         val commit = SettingsRepository::class.java.methods.firstOrNull { it.name == "commitSyncProfile" }
         assertNotNull(strictConfig)
-        assertNotNull(strictSecrets)
+        assertNotNull(
+            "loadSyncSecretsStrict 已被类型化入口 loadLegacySyncSecretsTyped 替代（#595 四）",
+            typedLegacySecrets,
+        )
         assertNotNull(commit)
     }
 

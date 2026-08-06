@@ -50,6 +50,18 @@ fun SyncSettings(
         modifier = modifier.padding(dims.space16),
         verticalArrangement = Arrangement.spacedBy(dims.space16),
     ) {
+        // #595 四：同步 profile 读取失败（安全存储/原生库/配置损坏）→ 显示真实错误，
+        // 字段保留上一次已确认值，不再静默退化为默认空 token。
+        if (state.syncProfileLoadState is SyncProfileLoadState.Failed) {
+            val failed = state.syncProfileLoadState
+            SujianSection(title = stringResource(id = R.string.pref_category_sync)) {
+                Text(
+                    text = resolveSyncFailureMessage(failed.kind.messageKey()),
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+        }
         if (!syncCapability.canRun && syncCapability.blockReasonCode != null) {
             val blockMessage = resolveBlockMessage(syncCapability.blockReasonCode, syncCapability.blockMessageKey)
             SujianSection(title = stringResource(id = R.string.pref_category_sync)) {
@@ -191,6 +203,18 @@ fun SyncSettings(
             }
         }
     }
+}
+
+@Composable
+private fun resolveSyncFailureMessage(messageKey: String): String = when (messageKey) {
+    "sync_retryable_network" -> stringResource(id = R.string.sync_retryable_network)
+    "sync_retryable_io" -> stringResource(id = R.string.sync_retryable_io)
+    "sync_auth_failed" -> stringResource(id = R.string.sync_auth_failed)
+    "sync_conflict" -> stringResource(id = R.string.sync_conflict)
+    "sync_dirty_repository" -> stringResource(id = R.string.sync_dirty_repository)
+    "sync_protocol_error" -> stringResource(id = R.string.sync_protocol_error)
+    "sync_native_unavailable" -> stringResource(id = R.string.sync_native_unavailable)
+    else -> stringResource(id = R.string.sync_fatal)
 }
 
 @Composable

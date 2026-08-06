@@ -23,10 +23,13 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.R
 import com.xiwei.sujian.data.WorkspaceRepository
+import com.xiwei.sujian.ui.ChapterSwitchResult
+import com.xiwei.sujian.ui.EditorViewModel
 import com.xiwei.sujian.ui.compose.SujianSessionAppState
 import com.xiwei.sujian.ui.compose.editor.SujianEditorHost
 import com.xiwei.sujian.ui.compose.workspace.ChapterTreeContent
 import com.xiwei.sujian.ui.compose.workspace.ProjectListContent
+import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
@@ -40,6 +43,9 @@ fun PhoneWorkspaceHost(
 ) {
     val coroutineScope = rememberCoroutineScope()
     val sessionAppState = remember { SujianSessionAppState(sessionViewModel) }
+    // #595 一：章节切换事务入口 — 与 WritingPane 内的 EditorViewModel 共享同一
+    // Activity 级实例（viewModel() 解析到同一 ViewModelStoreOwner）。
+    val editorViewModel: EditorViewModel = viewModel()
 
     // #592 三：workspace 导航离开正文时业务级关闭章节 session。
     // 配置变化不会改变 workspace route（navigator 历史由 rememberSaveable 保留），
@@ -111,9 +117,26 @@ fun PhoneWorkspaceHost(
                         projectId = currentProjectId,
                         workspaceRepository = workspaceRepository,
                         onSelectChapter = { volumeId, chapterId, chapterTitle ->
-                            sessionViewModel.selectChapter(volumeId, chapterId, chapterTitle)
+                            // #595 一：事务成功后才提交业务选择和 Navigator —
+                            // 保存/加载失败时 Navigator 完全不变化，不再“先导航再回滚”。
                             coroutineScope.launch {
-                                workspaceNavState.navigateToEditor(currentProjectId, volumeId, chapterId)
+                                val result = editorViewModel.requestOpenChapter(
+                                    currentProjectId, volumeId, chapterId, chapterTitle,
+                                )
+                                when (result) {
+                                    is ChapterSwitchResult.Success -> {
+                                        sessionViewModel.selectChapter(volumeId, chapterId, chapterTitle)
+                                        workspaceNavState.navigateToEditor(currentProjectId, volumeId, chapterId)
+                                    }
+                                    is ChapterSwitchResult.SaveFailed,
+                                    is ChapterSwitchResult.LoadFailed -> {
+                                        // 数据失败：停在章节树，旧章节 session/状态保留；
+                                        // 错误提示已由 ViewModel 事件（toast）发出。
+                                    }
+                                    ChapterSwitchResult.Stale -> {
+                                        // 更新的请求正在完成切换，本请求不再动作。
+                                    }
+                                }
                             }
                         },
                         onBackToProjects = {

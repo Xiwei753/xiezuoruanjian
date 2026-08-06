@@ -184,15 +184,31 @@ class SettingsRepository(
         }
     }
 
-    /** #592 五：严格读取同步凭据 — Bridge 失败时返回 null。 */
-    fun loadSyncSecretsStrict(): SyncSecrets? {
+    /**
+     * #595 四：legacy 槽凭据读取的类型化结果 — 不再把"读取失败"伪装成"未配置"。
+     *
+     * - [GenerationSecretsReadResult.Found]：legacy 槽存在有效凭据。
+     * - [GenerationSecretsReadResult.NotConfigured]：读取成功但 token 为空/缺失。
+     * - [GenerationSecretsReadResult.Failed]：原生库未加载、安全存储/解密失败。
+     */
+    fun loadLegacySyncSecretsTyped(): GenerationSecretsReadResult {
         return when (val result = syncBridge.loadSyncSecrets()) {
-            is BridgeResult.Success -> result.data
-            is BridgeResult.Error -> {
-                warn("Strict load sync secrets failed: ${result.fullEnvelope}")
-                null
+            is BridgeResult.Success -> {
+                val secrets = result.data
+                if (secrets != null && secrets.token?.isNotEmpty() == true) {
+                    GenerationSecretsReadResult.Found(secrets)
+                } else {
+                    GenerationSecretsReadResult.NotConfigured
+                }
             }
-            BridgeResult.NotLoaded -> null
+            is BridgeResult.Error -> {
+                val kind = result.syncFailureKind ?: SyncFailureKind.Fatal
+                warn("Legacy sync secrets read failed: ${result.fullEnvelope}")
+                GenerationSecretsReadResult.Failed(kind, result.fullEnvelope)
+            }
+            BridgeResult.NotLoaded -> GenerationSecretsReadResult.Failed(
+                SyncFailureKind.NativeUnavailable, "Native library not loaded"
+            )
         }
     }
 
@@ -230,7 +246,15 @@ class SettingsRepository(
                 if (state.hasCommittedProfile) {
                     SyncSecrets()
                 } else {
-                    loadSyncSecretsStrict() ?: SyncSecrets()
+                    // #595 四：legacy 槽读取失败不得伪装成"未配置" —
+                    // 原生库未加载/安全存储失败必须返回 Failed，设置页据此显示错误。
+                    when (val legacy = loadLegacySyncSecretsTyped()) {
+                        is GenerationSecretsReadResult.Found -> legacy.secrets
+                        is GenerationSecretsReadResult.NotConfigured -> SyncSecrets()
+                        is GenerationSecretsReadResult.Failed -> {
+                            return SyncProfileReadResult.Failed(legacy.kind, legacy.message)
+                        }
+                    }
                 }
             }
             is GenerationSecretsReadResult.Failed -> {
@@ -403,13 +427,20 @@ class SettingsRepository(
                     warn("commitSyncProfile: strict read of legacy config failed — aborting migration before any write")
                     return@commitExclusive SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_CONFIG, 0L)))
                 }
-                val legacySecrets = loadSyncSecretsStrict()
-                if (legacySecrets == null) {
-                    warn("commitSyncProfile: strict read of legacy secrets failed — aborting migration before any write")
+                val legacySecrets = loadLegacySyncSecretsTyped()
+                if (legacySecrets is GenerationSecretsReadResult.Failed) {
+                    warn("commitSyncProfile: legacy secrets read failed — aborting migration before any write")
                     return@commitExclusive SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_SECRETS, 0L)))
                 }
+                val migrationSecrets = if (legacySecrets is GenerationSecretsReadResult.Found) {
+                    legacySecrets.secrets
+                } else {
+                    // #595 四：legacy 明确未配置（读取成功但无 token）→ 迁移空凭据；
+                    // 读取失败已在上面返回，不会把失败伪装成"未配置"。
+                    SyncSecrets()
+                }
                 val migrationGeneration = profileStore.nextGeneration()
-                val migrationResult = saveSyncSecretsForGeneration(migrationGeneration, legacySecrets)
+                val migrationResult = saveSyncSecretsForGeneration(migrationGeneration, migrationSecrets)
                 if (migrationResult is SettingsSaveResult.Failed) {
                     warn("commitSyncProfile: legacy secrets migration to generation $migrationGeneration failed — aborting")
                     return@commitExclusive migrationResult

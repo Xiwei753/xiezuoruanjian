@@ -104,4 +104,23 @@ class SyncFailureKindTest {
         assertEquals(SyncFailureKind.Fatal,
             SyncFailureKind.fromSyncStatus(com.xiwei.sujian.model.SyncStatus.FatalError))
     }
+
+    @Test
+    fun isTransientReadFailure_onlyNetworkIoNativeAreRetryable() {
+        // #595 四：快照读取失败对 WorkManager 的映射 — 只有临时网络/IO/原生库
+        // 故障交给退避重试；Fatal/协议/凭据/冲突类按确定性失败处理。
+        assertTrue(SyncFailureKind.RetryableNetwork.isTransientReadFailure())
+        assertTrue(SyncFailureKind.RetryableIo.isTransientReadFailure())
+        assertTrue(SyncFailureKind.NativeUnavailable.isTransientReadFailure())
+        for (kind in listOf(
+            SyncFailureKind.Authentication,
+            SyncFailureKind.Conflict,
+            SyncFailureKind.DirtyRepository,
+            SyncFailureKind.Protocol,
+            SyncFailureKind.Fatal,
+        )) {
+            assertTrue("$kind 不是临时读取故障，不得交给 WorkManager 重试",
+                !kind.isTransientReadFailure())
+        }
+    }
 }

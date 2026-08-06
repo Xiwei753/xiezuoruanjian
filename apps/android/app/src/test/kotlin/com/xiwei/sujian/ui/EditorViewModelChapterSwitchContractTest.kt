@@ -5,10 +5,13 @@ import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.data.WriterAppServiceHolder
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.Assert.assertEquals
@@ -169,5 +172,122 @@ class EditorViewModelChapterSwitchContractTest {
         )
         assertEquals("相同章节切换不改变 loading", before, vm.uiState.value.loading)
         assertEquals("A", vm.uiState.value.chapterTitle)
+    }
+
+    @Test
+    fun cancelledSwitch_restoresFullOldStateAndRethrowsCancellation() = runTest {
+        val vm = createVm()
+        vm.initChapter("p", "v", "a", "A")
+        // 等 initChapter 的加载落定，保证事务起点是稳定状态。
+        var attempts = 0
+        while (vm.uiState.value.loading && attempts < 200) {
+            Thread.sleep(5)
+            attempts++
+        }
+
+        var cancellationSeen = false
+        val job = launch {
+            try {
+                vm.requestOpenChapter("p", "v", "b", "B")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // #595 一：取消必须向上重抛，不得被当作普通加载失败（LoadFailed）。
+                cancellationSeen = true
+                throw e
+            }
+        }
+        // 事务进入挂起点（loadChapter 的 withContext(IO)）后取消。
+        runCurrent()
+        job.cancelAndJoin()
+
+        assertTrue(
+            "取消必须重新抛出 CancellationException — 不得吞掉并当加载失败处理",
+            cancellationSeen,
+        )
+        // 取消后旧状态完整恢复：标题、正文、loading、saveStatus 全部回到切换前。
+        assertEquals("取消后标题必须恢复旧章节", "A", vm.uiState.value.chapterTitle)
+        assertEquals("取消后正文必须保留旧章节内容", "", vm.uiState.value.content)
+        assertFalse("取消后 loading 必须恢复 false", vm.uiState.value.loading)
+        // 取消后 inputFrozen 必须释放：后续输入能正常进入状态（否则输入被冻结）。
+        vm.onContentChanged("取消后的新输入")
+        assertEquals(
+            "取消后输入必须解冻（inputFrozen 由 finally 复位）",
+            "取消后的新输入",
+            vm.uiState.value.content,
+        )
+    }
+
+    @Test
+    fun loadFailure_restoresCompleteOldUiStateSnapshot() = runTest {
+        val vm = createVm()
+        vm.initChapter("p", "v", "a", "A")
+        // 等 initChapter 的加载落定（无 native 时必失败 → loading=false）。
+        var attempts = 0
+        while (vm.uiState.value.loading && attempts < 200) {
+            Thread.sleep(5)
+            attempts++
+        }
+        assertFalse("前置状态必须是已落定（loading=false）", vm.uiState.value.loading)
+        val before = vm.uiState.value
+
+        val result = vm.requestOpenChapter("p", "v", "b", "B")
+
+        assertTrue(
+            "加载失败必须返回 LoadFailed",
+            result is ChapterSwitchResult.LoadFailed,
+        )
+        assertEquals(
+            "#595 一：加载失败必须完整恢复旧 EditorUiState（content/hash/note/" +
+            "editorEnabled/saveStatus/loading/title 全部一致），不能只恢复标题",
+            before,
+            vm.uiState.value,
+        )
+    }
+
+    @Test
+    fun concurrentSwitchRequests_serializeWithoutDeadlock() = runTest {
+        val vm = createVm()
+        vm.initChapter("p", "v", "a", "A")
+
+        // #595 一：并发点击多个章节 — 请求经 ChapterSwitchGate 串行执行，
+        // 不得死锁；失败环境下最终状态必须回到旧章节。
+        val first = async { vm.requestOpenChapter("p", "v", "b", "B") }
+        val second = async { vm.requestOpenChapter("p", "v", "c", "C") }
+        val results = listOf(first.await(), second.await())
+
+        for (r in results) {
+            assertTrue(
+                "并发切换必须正常完成（Success/SaveFailed/LoadFailed/Stale 之一），不得挂起：$r",
+                r is ChapterSwitchResult.Success ||
+                    r is ChapterSwitchResult.SaveFailed ||
+                    r is ChapterSwitchResult.LoadFailed ||
+                    r is ChapterSwitchResult.Stale,
+            )
+        }
+        assertFalse("并发切换后 loading 必须恢复 false", vm.uiState.value.loading)
+        assertEquals("并发切换后标题回到旧章节", "A", vm.uiState.value.chapterTitle)
+    }
+
+    @Test
+    fun requestOpenChapter_successPathIsRequiredByCallers() = runTest {
+        val vm = createVm()
+        vm.initChapter("p", "v", "a", "A")
+
+        // 同一章节（已提交）→ Success；调用方据此导航，不触发回滚。
+        val same = vm.requestOpenChapter("p", "v", "a", "A")
+        assertTrue("已提交章节的请求必须 Success", same is ChapterSwitchResult.Success)
+    }
+
+    @Test
+    fun isCurrentChapter_reflectsCommittedSession() {
+        val vm = createVm()
+        vm.initChapter("p", "v", "a", "A")
+        assertTrue(
+            "initChapter 后当前章节必须匹配",
+            vm.isCurrentChapter("p", "v", "a"),
+        )
+        assertFalse(
+            "未提交的章节必须不匹配 — 防止旧 pane 用新正文 beginEdit 旧 target",
+            vm.isCurrentChapter("p", "v", "b"),
+        )
     }
 }

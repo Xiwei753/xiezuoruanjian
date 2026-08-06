@@ -4,14 +4,10 @@ import android.util.Log
 import com.xiwei.sujian.data.AppServiceBridge
 import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.editor.v2.host.TextEditSessionBridge
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import com.xiwei.sujian.editor.v2.motion.EditorMotionPolicy
 
 /**
@@ -94,27 +90,31 @@ class EditorSessionCoordinator(
     private val targetDecorations = mutableMapOf<String, TargetDecorations>()
     private val projectionSnapshots = mutableMapOf<String, ProjectionSnapshot>()
 
-    private var activeSessionId: ULong? = null
-
     // #595 三：_sessionStateFlow 是会话层唯一可写 MutableStateFlow — 所有状态变化
-    // 通过 [updateSessionState] 统一推进。activeTargetIdFlow / editingStateFlow /
-    // windowBindingStateFlow 从 _sessionStateFlow 派生，不再独立可写。
+    // 通过 [updateSessionState]（原子 [MutableStateFlow.update]）统一推进。
+    // 三个独立 stateIn 派生流（activeTargetIdFlow / editingStateFlow /
+    // windowBindingStateFlow）已删除：窗口层和 Compose 只收集 [sessionStateFlow]，
+    // 从同一个 EditorSessionState 快照读取 activeTargetId / editingState /
+    // bindingState / sessionId，保证同一帧内一致；非 Compose 调用方读 value getter。
     private val _sessionStateFlow = MutableStateFlow(EditorSessionState())
     val sessionStateFlow: StateFlow<EditorSessionState> = _sessionStateFlow.asStateFlow()
     val sessionState: EditorSessionState get() = _sessionStateFlow.value
 
-    private val reduceScope = CoroutineScope(SupervisorJob())
-    val activeTargetIdFlow: StateFlow<String?> =
-        _sessionStateFlow.map { it.activeTargetId }.stateIn(reduceScope, SharingStarted.Eagerly, null)
     val activeTargetId: String? get() = _sessionStateFlow.value.activeTargetId
 
-    val editingStateFlow: StateFlow<EditingState> =
-        _sessionStateFlow.map { it.editingState }.stateIn(reduceScope, SharingStarted.Eagerly, EditingState.IDLE)
     val editingState: EditingState get() = _sessionStateFlow.value.editingState
 
-    val windowBindingStateFlow: StateFlow<WindowBindingState> =
-        _sessionStateFlow.map { it.bindingState }.stateIn(reduceScope, SharingStarted.Eagerly, WindowBindingState.Idle)
     val windowBindingState: WindowBindingState get() = _sessionStateFlow.value.bindingState
+
+    /**
+     * #595 三：活动 session — 从唯一 SessionState 快照派生（sessionId + 活动 target），
+     * 不再并行维护第二份 session ID。Detached 时 activeTargetId 为 null，
+     * 本 getter 同样返回 null（会话已保留在 persistentSessionIds，由 closeTarget 收口）。
+     */
+    private val activeSessionId: ULong?
+        get() = _sessionStateFlow.value.sessionId?.takeIf {
+            _sessionStateFlow.value.activeTargetId != null
+        }
 
     private val _targetDecorationsVersionFlow = MutableStateFlow(0L)
     val targetDecorationsVersionFlow: StateFlow<Long> = _targetDecorationsVersionFlow.asStateFlow()
@@ -135,11 +135,14 @@ class EditorSessionCoordinator(
     fun nextContentVersion(): Long = contentVersionSource.incrementAndGet()
 
     /**
-     * #595 三：唯一状态更新入口（reducer）— 所有会话状态变化通过此方法原子推进
-     * [_sessionStateFlow]。不得在其他位置直接赋值 [_sessionStateFlow] 或派生 Flow。
+     * #595 三：唯一状态更新入口（reducer）— 所有会话状态变化通过
+     * [MutableStateFlow.update] 原子推进 [_sessionStateFlow]（CAS 重试，
+     * 不存在读后写竞态窗口）。窗口解绑、本地输入、外部正文和业务关闭
+     * 从不同协程接近同时发生时，后写入者基于最新快照重放 transform。
+     * 不得在其他位置直接赋值 [_sessionStateFlow] 或创建第二套可写 Flow。
      */
     private fun updateSessionState(transform: (EditorSessionState) -> EditorSessionState) {
-        _sessionStateFlow.value = transform(_sessionStateFlow.value)
+        _sessionStateFlow.update(transform)
     }
 
     /**
@@ -389,9 +392,6 @@ class EditorSessionCoordinator(
             return
         }
         val snapshot = if (validateSession(sessionId)) queryTargetSnapshot(targetId) else null
-        if (activeTargetId == targetId) {
-            activeSessionId = null
-        }
         val detached = WindowBindingState.Detached(targetId, sessionId, snapshot)
         // #595 三/四：通过唯一 reducer 原子推进 bindingState/editingState/activeTargetId。
         updateSessionState { it.copy(
@@ -457,9 +457,6 @@ class EditorSessionCoordinator(
         targetProfiles.remove(targetId)
         targetPersistentFlags.remove(targetId)
         projectionSnapshots.remove(targetId)
-        if (activeTargetId == targetId) {
-            activeSessionId = null
-        }
         // #595 三/四：业务关闭后 SessionState 必须回到 Idle —
         // 不允许残留旧 target/旧 binding/旧 revision。
         updateSessionState { it.copy(
@@ -477,9 +474,6 @@ class EditorSessionCoordinator(
         targetProfiles.remove(targetId)
         targetPersistentFlags.remove(targetId)
         projectionSnapshots.remove(targetId)
-        if (activeTargetId == targetId) {
-            activeSessionId = null
-        }
         updateSessionState { it.copy(
             editingState = EditingState.IDLE,
             bindingState = WindowBindingState.Idle,
@@ -553,7 +547,8 @@ class EditorSessionCoordinator(
             return null
         }
 
-        activeSessionId = sessionId
+        // activeSessionId 由 SessionState 快照派生（下方 updateSessionState 设置
+        // sessionId + activeTargetId=targetId），不再单独赋值。
         val attaching = WindowBindingState.Attaching(windowId, targetId, sessionId)
 
         // #595 一/二/三：通过唯一 reducer 更新 SessionState — 无论新建还是复用、
@@ -621,7 +616,6 @@ class EditorSessionCoordinator(
             closeSession(sessionId)
             persistentSessionIds.remove(targetId)
         }
-        activeSessionId = null
         // #595 三/四：提交清除后 SessionState 必须回到 Idle — 不允许残留旧 target/旧 binding。
         updateSessionState { EditorSessionState() }
         _lastCommittedTextFlow.value = if (targetProfiles[targetId]?.secretPolicy == SecretPolicy.MASK_AND_CLEAR_ON_COMMIT) null else finalText
@@ -643,7 +637,6 @@ class EditorSessionCoordinator(
         ) }
         closeSession(sessionId)
         persistentSessionIds.remove(targetId)
-        activeSessionId = null
         // #595 三/四：取消清除后 SessionState 必须回到 Idle。
         updateSessionState { EditorSessionState() }
         return true
@@ -662,7 +655,8 @@ class EditorSessionCoordinator(
             }
             persistentSessionIds[targetId] = newSessionId
             if (targetId == activeTargetId) {
-                activeSessionId = newSessionId
+                // #595 三：活动 session 只存在于 SessionState 快照中 — 重建后同步快照。
+                updateSessionState { it.copy(sessionId = newSessionId) }
             }
             refreshDetachedSnapshot(targetId)
             return
@@ -832,7 +826,7 @@ class EditorSessionCoordinator(
         targetProfiles.clear()
         targetPersistentFlags.clear()
         projectionSnapshots.clear()
-        activeSessionId = null
+        // #595 三：派生 stateIn 流与 reduceScope 已删除，无需结束额外协程作用域。
         updateSessionState { EditorSessionState(editingState = EditingState.RELEASED) }
     }
 

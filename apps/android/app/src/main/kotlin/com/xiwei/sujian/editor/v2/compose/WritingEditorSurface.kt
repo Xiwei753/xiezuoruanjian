@@ -34,10 +34,11 @@ fun WritingEditorSurface(
     targetId: String,
     modifier: Modifier = Modifier,
 ) {
-    // #595 八：直接消费规范 WindowBindingState 决定渲染策略。
-    // Attaching/Attached/Committing/Cancelling 且 targetId 匹配 → 编辑器；
-    // Idle/Detached/Detaching → 预览。
-    val bindingState by coordinator.windowBindingStateFlow.collectAsStateWithLifecycle()
+    // #595 三：只收集会话层唯一 [sessionStateFlow]，从同一个快照读取 bindingState。
+    // 三个独立 stateIn 派生流已删除 — 同一帧内 activeTargetId / editingState /
+    // bindingState / sessionId 永远来自同一个不可变快照，不会读到跨帧组合。
+    val sessionState by coordinator.sessionStateFlow.collectAsStateWithLifecycle()
+    val bindingState = sessionState.bindingState
     val showEditor = shouldShowEditor(bindingState, targetId)
 
     val themeColors = EditorThemeAdapter.extractColors()

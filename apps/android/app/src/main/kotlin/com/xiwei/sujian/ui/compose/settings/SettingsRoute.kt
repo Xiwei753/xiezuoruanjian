@@ -71,6 +71,56 @@ import com.xiwei.sujian.model.SyncTrigger
 
 enum class SyncCommandState { IDLE, RUNNING, SUCCESS, FAILURE }
 
+/**
+ * #595 四：设置页同步 profile 加载状态。
+ *
+ * - [Loading]：初始加载中。
+ * - [Ready]：config + secrets 均读取成功且凭据非空。
+ * - [Unconfigured]：config 读取成功但未配置 token — 显示空 token 是正常状态。
+ * - [Failed]：安全存储读取失败/原生库未加载/配置损坏 — 保留上一次已确认的字段值，
+ *   同时显示真实错误，不再通过 toConfigSecretsOrNull() 静默退化为默认值。
+ */
+sealed interface SyncProfileLoadState {
+    data object Loading : SyncProfileLoadState
+    data class Ready(
+        val config: com.xiwei.sujian.model.SyncConfig,
+        val secrets: com.xiwei.sujian.model.SyncSecrets,
+    ) : SyncProfileLoadState
+    data class Unconfigured(
+        val config: com.xiwei.sujian.model.SyncConfig,
+        val secrets: com.xiwei.sujian.model.SyncSecrets,
+    ) : SyncProfileLoadState
+    data class Failed(val kind: SyncFailureKind, val message: String?) : SyncProfileLoadState
+}
+
+/** 已确认（非失败）状态下可用的 config — Failed/Loading 返回 null，保留当前 UI 值。 */
+private val SyncProfileLoadState.confirmedConfig: com.xiwei.sujian.model.SyncConfig?
+    get() = when (this) {
+        is SyncProfileLoadState.Ready -> config
+        is SyncProfileLoadState.Unconfigured -> config
+        is SyncProfileLoadState.Failed -> null
+        SyncProfileLoadState.Loading -> null
+    }
+
+/** 已确认（非失败）状态下可用的 secrets — Failed/Loading 返回 null，保留当前 UI 值。 */
+private val SyncProfileLoadState.confirmedSecrets: com.xiwei.sujian.model.SyncSecrets?
+    get() = when (this) {
+        is SyncProfileLoadState.Ready -> secrets
+        is SyncProfileLoadState.Unconfigured -> secrets
+        is SyncProfileLoadState.Failed -> null
+        SyncProfileLoadState.Loading -> null
+    }
+
+/** #595 四：SyncProfileReadResult → 设置页加载状态 — Failed 不再被静默转成 null。 */
+private fun com.xiwei.sujian.data.SyncProfileReadResult.toSyncProfileLoadState(): SyncProfileLoadState = when (this) {
+    is com.xiwei.sujian.data.SyncProfileReadResult.Found ->
+        SyncProfileLoadState.Ready(snapshot.config, snapshot.secrets)
+    is com.xiwei.sujian.data.SyncProfileReadResult.NotConfigured ->
+        SyncProfileLoadState.Unconfigured(snapshot.config, snapshot.secrets)
+    is com.xiwei.sujian.data.SyncProfileReadResult.Failed ->
+        SyncProfileLoadState.Failed(kind, message)
+}
+
 data class SettingsUiState(
     val settings: LocalSettings = LocalSettings(),
     val fontSize: Float = 16f,
@@ -89,6 +139,8 @@ data class SettingsUiState(
     val performSyncState: SyncCommandState = SyncCommandState.IDLE,
     val structuredSyncResult: StructuredSyncResult? = null,
     val lastCommandType: SyncCommandType? = null,
+    /** #595 四：同步 profile 加载状态 — Failed 时保留字段值并显示真实错误。 */
+    val syncProfileLoadState: SyncProfileLoadState = SyncProfileLoadState.Loading,
 )
 
 sealed interface SettingsIntent {
@@ -259,6 +311,8 @@ class SettingsViewModel(
             val fontSize = withContext(Dispatchers.IO) { repo.getEffectiveFontSize() }
             // #595 八：UI 初始化读取活动 generation 的完整 snapshot，不再读 live legacy 槽。
             val committedProfile = withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile() }
+            // #595 四：类型化加载状态 — Failed 时保留当前字段值，页面显示真实错误。
+            val syncProfileLoadState = committedProfile.toSyncProfileLoadState()
             val syncCapability = withContext(Dispatchers.IO) { repo.getSyncCapability() }
             val secureStorageWarning = withContext(Dispatchers.IO) { repo.getSecureStorageWarning() }
             val builtinThemes = withContext(Dispatchers.IO) { repo.listBuiltinThemes() }
@@ -270,14 +324,15 @@ class SettingsViewModel(
                 SettingsUiState(
                     settings = if (localRevision == snapshotLocalRev) settings else current.settings,
                     fontSize = if (fontSizeRevision == snapshotFontSizeRev) fontSize else current.fontSize,
-                    syncConfig = if (syncConfigRevision == snapshotSyncConfigRev) committedProfile.toConfigSecretsOrNull()?.first ?: current.syncConfig else current.syncConfig,
-                    syncSecrets = if (syncSecretsRevision == snapshotSyncSecretsRev) committedProfile.toConfigSecretsOrNull()?.second ?: current.syncSecrets else current.syncSecrets,
+                    syncConfig = if (syncConfigRevision == snapshotSyncConfigRev) syncProfileLoadState.confirmedConfig ?: current.syncConfig else current.syncConfig,
+                    syncSecrets = if (syncSecretsRevision == snapshotSyncSecretsRev) syncProfileLoadState.confirmedSecrets ?: current.syncSecrets else current.syncSecrets,
                     syncCapability = syncCapability,
                     secureStorageWarning = secureStorageWarning,
                     builtinThemes = builtinThemes,
                     paletteRecords = paletteRecords,
                     aiAvailable = aiAvailable,
                     workspacePath = workspacePath,
+                    syncProfileLoadState = syncProfileLoadState,
                 )
             }
         }
@@ -752,6 +807,8 @@ class SettingsViewModel(
             val fontSize = withContext(Dispatchers.IO) { repo.getEffectiveFontSize() }
             // #595 八：刷新读取活动 generation 的完整 snapshot，不再读 live legacy 槽。
             val committedProfile = withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile() }
+            // #595 四：类型化加载状态 — Failed 时保留字段值，页面显示真实错误。
+            val syncProfileLoadState = committedProfile.toSyncProfileLoadState()
             val syncCapability = withContext(Dispatchers.IO) { repo.getSyncCapability() }
             val secureStorageWarning = withContext(Dispatchers.IO) { repo.getSecureStorageWarning() }
             val builtinThemes = withContext(Dispatchers.IO) { repo.listBuiltinThemes() }
@@ -762,8 +819,8 @@ class SettingsViewModel(
                 SettingsUiState(
                     settings = if (!hasUnsavedLocal()) settings else current.settings,
                     fontSize = if (!hasUnsavedFontSize()) fontSize else current.fontSize,
-                    syncConfig = if (!hasUnsavedSyncConfig()) committedProfile.toConfigSecretsOrNull()?.first ?: current.syncConfig else current.syncConfig,
-                    syncSecrets = if (!hasUnsavedSyncSecrets()) committedProfile.toConfigSecretsOrNull()?.second ?: current.syncSecrets else current.syncSecrets,
+                    syncConfig = if (!hasUnsavedSyncConfig()) syncProfileLoadState.confirmedConfig ?: current.syncConfig else current.syncConfig,
+                    syncSecrets = if (!hasUnsavedSyncSecrets()) syncProfileLoadState.confirmedSecrets ?: current.syncSecrets else current.syncSecrets,
                     syncCapability = syncCapability,
                     secureStorageWarning = secureStorageWarning,
                     builtinThemes = builtinThemes,
@@ -775,6 +832,7 @@ class SettingsViewModel(
                     performSyncState = current.performSyncState,
                     structuredSyncResult = current.structuredSyncResult,
                     lastCommandType = current.lastCommandType,
+                    syncProfileLoadState = syncProfileLoadState,
                 )
             }
         }

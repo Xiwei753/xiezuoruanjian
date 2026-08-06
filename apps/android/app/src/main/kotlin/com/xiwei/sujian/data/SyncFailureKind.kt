@@ -36,6 +36,16 @@ enum class SyncFailureKind {
         Fatal -> SyncOutcome.TerminalFailure(com.xiwei.sujian.model.SyncStatus.FatalError, Fatal)
     }
 
+    /**
+     * #595 四：同步配置快照读取失败对后台任务的映射 — 只有明确可重试的
+     * 临时故障（网络/IO/原生库未加载）返回 true；Fatal/协议/凭据/冲突类
+     * 失败重试没有意义，Worker 直接按确定性失败结束。
+     */
+    fun isTransientReadFailure(): Boolean = when (this) {
+        RetryableNetwork, RetryableIo, NativeUnavailable -> true
+        Authentication, Conflict, DirtyRepository, Protocol, Fatal -> false
+    }
+
     companion object {
         /**
          * #592 三：Core 返回的 SyncResult.status 到失败类型的映射。

@@ -66,15 +66,13 @@ class EditorWindowHost(
     // 在正文 Box 内直接持有 AndroidView，使用局部坐标，不再需要窗口级几何缓存。
 
     // ── Delegated session-level state ──
-    // #595 二：会话层用 StateFlow 暴露，窗口层转发给 Compose 消费者用 collectAsState()。
-    // 值 getter 供非 Compose 调用方读取当前值。
+    // #595 三：窗口层只转发唯一 [sessionStateFlow]；activeTargetId / editingState /
+    // windowBindingState 三个独立 stateIn 派生流已删除，Compose 消费者从同一个
+    // EditorSessionState 快照读取，值 getter 供非 Compose 调用方读取当前值。
 
-    val activeTargetIdFlow: StateFlow<String?> get() = sessionCoordinator.activeTargetIdFlow
-    val editingStateFlow: StateFlow<EditingState> get() = sessionCoordinator.editingStateFlow
-    val windowBindingStateFlow: StateFlow<WindowBindingState> get() = sessionCoordinator.windowBindingStateFlow
+    val sessionStateFlow: StateFlow<EditorSessionState> get() = sessionCoordinator.sessionStateFlow
     val targetDecorationsVersionFlow: StateFlow<Long> get() = sessionCoordinator.targetDecorationsVersionFlow
     val lastCommittedTextFlow: StateFlow<String?> get() = sessionCoordinator.lastCommittedTextFlow
-    val sessionStateFlow: StateFlow<EditorSessionState> get() = sessionCoordinator.sessionStateFlow
 
     val activeTargetId: String? get() = sessionCoordinator.activeTargetId
     val editingState: EditingState get() = sessionCoordinator.editingState

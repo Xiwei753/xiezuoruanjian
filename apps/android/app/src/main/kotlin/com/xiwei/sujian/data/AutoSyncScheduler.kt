@@ -55,7 +55,9 @@ class AutoSyncScheduler(context: Context, private val settingsRepository: Settin
                 is SyncProfileReadResult.NotConfigured -> snapshotResult.snapshot
                 is SyncProfileReadResult.Failed -> {
                     DiagnosticsLogger.w(TAG, "Sync profile snapshot failed: ${snapshotResult.message}")
-                    cancel(appContext)
+                    // #595 四：读取失败（临时 IO/原生库/安全存储）不取消现有周期任务 —
+                    // 保留任务交给 Worker 的失败类型映射和退避策略处理；
+                    // 只有明确 NotConfigured/关闭自动同步/配置禁用才取消。
                     return
                 }
             }

@@ -100,6 +100,10 @@ private fun WorkbenchWorkspaceContent(
     val configuration = LocalConfiguration.current
     val dims = LocalSujianDimensions.current
     val workbenchVm: WorkbenchViewModel = viewModel()
+    // #595 一：章节切换事务入口 — 与 WritingPane 内的 EditorViewModel 共享同一
+    // Activity 级实例（viewModel() 解析到同一 ViewModelStoreOwner）。
+    val editorViewModel: com.xiwei.sujian.ui.EditorViewModel = viewModel()
+    val coroutineScope = rememberCoroutineScope()
 
     val widthDp = configuration.screenWidthDp
     val heightDp = configuration.screenHeightDp
@@ -209,7 +213,18 @@ private fun WorkbenchWorkspaceContent(
                     projectId = currentProjectId,
                     workspaceRepository = workspaceRepository,
                     onSelectChapter = { volumeId, chapterId, chapterTitle ->
-                        appState.selectChapter(volumeId, chapterId, chapterTitle)
+                        // #595 一：事务成功后才提交业务选择 — 失败时选择保持旧章节，
+                        // 不再由 WritingPane 事后回滚（旧路径会留下“先导航再回滚”历史）。
+                        coroutineScope.launch {
+                            val result = editorViewModel.requestOpenChapter(
+                                currentProjectId, volumeId, chapterId, chapterTitle,
+                            )
+                            if (result is com.xiwei.sujian.ui.ChapterSwitchResult.Success) {
+                                appState.selectChapter(volumeId, chapterId, chapterTitle)
+                            }
+                            // SaveFailed/LoadFailed：选择不变、错误 toast 已由 ViewModel 发出；
+                            // Stale：更新的请求正在完成切换。
+                        }
                     },
                     onBackToProjects = {
                         appState.clearProjectSelection()

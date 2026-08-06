@@ -3,6 +3,7 @@ package com.xiwei.sujian.ui.compose.settings
 import com.xiwei.sujian.model.LocalSettings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -113,6 +114,28 @@ class SettingsViewModelTest {
             message = "PerformSync must end in terminal FAILURE state via SaveAndRunSync transaction",
         )
         assertEquals(SyncCommandState.FAILURE, vm.uiState.value.performSyncState)
+    }
+
+    @Test
+    fun `sync profile load failure surfaces Failed state instead of silent defaults`() {
+        val vm = createVm()
+        // 测试环境无 native 库：config/凭据读取全部失败。
+        // #595 四：设置页必须显示 Failed（真实错误），不得通过 toConfigSecretsOrNull()
+        // 把失败静默转成默认空 token（那会伪装成“尚未配置”）。
+        awaitUntil(
+            predicate = { vm.uiState.value.syncProfileLoadState !is SyncProfileLoadState.Loading },
+            message = "initial sync profile load must settle",
+        )
+        assertTrue(
+            "读取失败必须显示为 SyncProfileLoadState.Failed，实际: ${vm.uiState.value.syncProfileLoadState}",
+            vm.uiState.value.syncProfileLoadState is SyncProfileLoadState.Failed,
+        )
+        assertTrue(
+            "Failed 不是 Unconfigured",
+            vm.uiState.value.syncProfileLoadState !is SyncProfileLoadState.Unconfigured,
+        )
+        // 失败时字段保留已确认值（初始默认），不因失败清空。
+        assertEquals(16f, vm.uiState.value.fontSize, 0.01f)
     }
 
     private fun awaitUntil(

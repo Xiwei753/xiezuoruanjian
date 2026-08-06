@@ -28,7 +28,13 @@ class AutoSyncWorker(
             is SyncProfileReadResult.NotConfigured -> snapshotResult.snapshot
             is SyncProfileReadResult.Failed -> {
                 DiagnosticsLogger.w(TAG, "Sync profile snapshot failed: ${snapshotResult.message}")
-                return Result.success()
+                // #595 四：按失败类型映射 — 临时网络/IO/原生库故障交给 WorkManager
+                // 退避重试；Fatal/协议/配置损坏是确定性失败，重试没有意义。
+                return if (snapshotResult.kind.isTransientReadFailure()) {
+                    Result.retry()
+                } else {
+                    Result.failure()
+                }
             }
         }
         if (!AutoSyncScheduler.shouldSync(snapshot.config, snapshot.secrets)) return Result.success()
