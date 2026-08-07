@@ -1,6 +1,6 @@
 import { IWriterCoreBridge } from './IWriterCoreBridge'
 import {
-  WorkspaceSummary,
+  AppSummary,
   Project,
   Volume,
   ChapterMeta,
@@ -32,7 +32,7 @@ import {
   EditorTransactionCause
 } from '../model/CoreDtos'
 import { NativeCoreModule } from './NativeCoreModule'
-import { NativeWorkspaceBridge } from './NativeWorkspaceBridge'
+import { NativeAppStateBridge } from './NativeAppStateBridge'
 import { NativeProjectBridge } from './NativeProjectBridge'
 import { NativeChapterBridge } from './NativeChapterBridge'
 import { NativeSettingsBridge } from './NativeSettingsBridge'
@@ -49,7 +49,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   // ── 公共模块 & 分域 Bridge ──
   private core = new NativeCoreModule()
-  private workspaceBridge = new NativeWorkspaceBridge(this.core)
+  private appStateBridge = new NativeAppStateBridge(this.core)
   private projectBridge = new NativeProjectBridge(this.core)
   private chapterBridge = new NativeChapterBridge(this.core)
   private settingsBridge = new NativeSettingsBridge(this.core)
@@ -103,12 +103,12 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   // ── Workspace ──
 
-  async listWorkspaces(): Promise<ResultEnvelope<WorkspaceSummary[]>> {
-    return this.workspaceBridge.listWorkspaces()
+  async listAppSummaries(): Promise<ResultEnvelope<AppSummary[]>> {
+    return this.appStateBridge.listAppSummaries()
   }
 
-  async getWorkspaceState(): Promise<ResultEnvelope<WorkspaceSummary>> {
-    return this.workspaceBridge.getWorkspaceState()
+  async getAppState(): Promise<ResultEnvelope<AppSummary>> {
+    return this.appStateBridge.getAppState()
   }
 
   // ── Project ──

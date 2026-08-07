@@ -53,7 +53,7 @@ static napi_value ReturnJsonString(napi_env env, char* json) {
 // ── Include domain implementations ──
 // Each included file defines static NAPI handler functions and a get*Descriptors() function.
 
-#include "napi_workspace.cpp"
+#include "napi_app_state.cpp"
 #include "napi_project.cpp"
 #include "napi_chapter.cpp"
 #include "napi_settings.cpp"
@@ -223,10 +223,10 @@ static napi_value NativeIsAiAvailable(napi_env env, napi_callback_info info) {
 //   and must remain valid for the lifetime of the module.
 static napi_value Init(napi_env env, napi_value exports) {
     // Collect descriptors from all domains
-    size_t ws_count = 0, proj_count = 0, chap_count = 0, set_count = 0;
+    size_t app_state_count = 0, proj_count = 0, chap_count = 0, set_count = 0;
     size_t sync_count = 0, stats_count = 0, sm_count = 0;
 
-    napi_property_descriptor* ws_desc = getWorkspaceDescriptors(&ws_count);
+    napi_property_descriptor* app_state_desc = getAppStateDescriptors(&app_state_count);
     napi_property_descriptor* proj_desc = getProjectDescriptors(&proj_count);
     napi_property_descriptor* chap_desc = getChapterDescriptors(&chap_count);
     napi_property_descriptor* set_desc = getSettingsDescriptors(&set_count);
@@ -247,12 +247,12 @@ static napi_value Init(napi_env env, napi_value exports) {
     size_t core_count = sizeof(core_desc) / sizeof(core_desc[0]);
 
     // Merge all descriptors
-    size_t total = core_count + ws_count + proj_count + chap_count + set_count + sync_count + stats_count + sm_count;
+    size_t total = core_count + app_state_count + proj_count + chap_count + set_count + sync_count + stats_count + sm_count;
     napi_property_descriptor* all_desc = new napi_property_descriptor[total];
     size_t offset = 0;
 
     memcpy(all_desc + offset, core_desc, core_count * sizeof(napi_property_descriptor)); offset += core_count;
-    memcpy(all_desc + offset, ws_desc, ws_count * sizeof(napi_property_descriptor)); offset += ws_count;
+    memcpy(all_desc + offset, app_state_desc, app_state_count * sizeof(napi_property_descriptor)); offset += app_state_count;
     memcpy(all_desc + offset, proj_desc, proj_count * sizeof(napi_property_descriptor)); offset += proj_count;
     memcpy(all_desc + offset, chap_desc, chap_count * sizeof(napi_property_descriptor)); offset += chap_count;
     memcpy(all_desc + offset, set_desc, set_count * sizeof(napi_property_descriptor)); offset += set_count;

@@ -1,6 +1,6 @@
 import router from '@ohos.router'
 import { IWriterCoreBridge } from '../bridge/IWriterCoreBridge'
-import { Project, RecentEdit, WritingStats, WorkspaceSummary, ThemePaletteRecordDto, BuiltinThemeDto } from '../model/CoreDtos'
+import { Project, RecentEdit, WritingStats, AppSummary, ThemePaletteRecordDto, BuiltinThemeDto } from '../model/CoreDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl, ThemeMode } from '../system/HarmonyThemeAdapter'
 import { DesignTokens } from '../system/DesignTokens'
 import { getBridge, getWorkspacePath, getAppContext } from '../common/AppContext'
@@ -93,15 +93,15 @@ struct Index {
 
     try {
       // 新 Core API 边界：平台自己提供数据根目录，Core 不再 openWorkspace。
-      // workspacePath 由平台管理，projects/recentEdits 通过 getWorkspaceState 查询。
+      // appDataRoot 由平台管理，projects/recentEdits 通过 getAppState 查询。
       const workspacePath = getWorkspacePath()
       this.workspacePath = workspacePath
-      const workspaceResult = await this.bridge.getWorkspaceState()
+      const appStateResult = await this.bridge.getAppState()
       const statsResult = await this.bridge.getWritingStats()
 
-      if (workspaceResult.success && workspaceResult.data) {
-        this.projects = workspaceResult.data.projects
-        this.recentEdits = workspaceResult.data.recentEdits
+      if (appStateResult.success && appStateResult.data) {
+        this.projects = appStateResult.data.projects
+        this.recentEdits = appStateResult.data.recentEdits
       } else {
         this.errorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_workspace').id)
       }

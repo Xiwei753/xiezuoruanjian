@@ -3,7 +3,7 @@
 // Core enum 变体使用 PascalCase（如 "Back"、"TopLeading"、"SinglePane"），与 Rust 枚举名一致。
 // 如需新增字段，必须先在 Core api/types/ 中定义，不得自行发明。
 
-// ─── Workspace DTOs ───
+// ─── App State DTOs ───
 
 export interface RecentEdit {
   projectId: string
@@ -12,7 +12,7 @@ export interface RecentEdit {
   timestamp: string
 }
 
-export interface WorkspaceSummary {
+export interface AppSummary {
   projects: Project[]
   recentEdits: RecentEdit[]
 }

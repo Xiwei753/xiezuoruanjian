@@ -1,5 +1,5 @@
 import {
-  WorkspaceSummary,
+  AppSummary,
   Project,
   Volume,
   ChapterMeta,
@@ -32,8 +32,8 @@ import {
 
 export interface IWriterCoreBridge {
   // Workspace 查询
-  listWorkspaces(): Promise<ResultEnvelope<WorkspaceSummary[]>>
-  getWorkspaceState(): Promise<ResultEnvelope<WorkspaceSummary>>
+  listAppSummaries(): Promise<ResultEnvelope<AppSummary[]>>
+  getAppState(): Promise<ResultEnvelope<AppSummary>>
 
   // Project
   listProjects(): Promise<ResultEnvelope<Project[]>>

@@ -18,10 +18,6 @@ package com.xiwei.sujian.model
 
 import com.google.gson.JsonElement
 
-data class WorkspaceManifest(
-    val version: Int,
-)
-
 data class DeviceInfo(
     val deviceId: String = "",
     val deviceClass: String = "",

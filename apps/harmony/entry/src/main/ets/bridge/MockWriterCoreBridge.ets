@@ -1,6 +1,6 @@
 import { IWriterCoreBridge } from './IWriterCoreBridge'
 import {
-  WorkspaceSummary,
+  AppSummary,
   Project,
   Volume,
   ChapterMeta,
@@ -149,19 +149,19 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
   }
 
   // Workspace 查询方法
-  async listWorkspaces(): Promise<ResultEnvelope<WorkspaceSummary[]>> {
+  async listAppSummaries(): Promise<ResultEnvelope<AppSummary[]>> {
     await this.delay(100)
     return this.success([
       {
         projects: this.mockProjects,
         recentEdits: [] as RecentEdit[]
-      } as WorkspaceSummary
-    ] as WorkspaceSummary[])
+      } as AppSummary
+    ] as AppSummary[])
   }
 
-  async getWorkspaceState(): Promise<ResultEnvelope<WorkspaceSummary>> {
+  async getAppState(): Promise<ResultEnvelope<AppSummary>> {
     await this.delay(200)
-    const summary: WorkspaceSummary = {
+    const summary: AppSummary = {
       projects: this.mockProjects,
       recentEdits: [] as RecentEdit[]
     }

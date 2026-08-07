@@ -201,10 +201,10 @@ struct MainWorkspace {
     this.initErrorMessage = ''
 
     try {
-      const workspaceResult = await this.bridge.getWorkspaceState()
-      if (workspaceResult.success && workspaceResult.data) {
-        this.projects = workspaceResult.data.projects
-        this.recentEdits = workspaceResult.data.recentEdits
+      const appStateResult = await this.bridge.getAppState()
+      if (appStateResult.success && appStateResult.data) {
+        this.projects = appStateResult.data.projects
+        this.recentEdits = appStateResult.data.recentEdits
       } else {
         this.initErrorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_workspace').id)
       }

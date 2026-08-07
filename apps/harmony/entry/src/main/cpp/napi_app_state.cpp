@@ -1,17 +1,17 @@
-// ── Workspace & Location NAPI handlers ──
+// ── App State & Location NAPI handlers ──
 // Included by napi_init.cpp — expects ReturnJsonString and writer_core_bridge.h to be available.
 //
 // 新 Core API 边界：平台自己提供 app_data_root 与 projects_root，
 // 通过 nativeInit 注入；Core 不再创建/验证/打开 workspace。
 // 此文件仅保留查询类入口（list/get state/resolve location）。
 
-// ── Workspace 查询 ──
+// ── App State 查询 ──
 
-static napi_value NativeListWorkspaces(napi_env env, napi_callback_info info) {
+static napi_value NativeListAppSummaries(napi_env env, napi_callback_info info) {
     return ReturnJsonString(env, writer_core_list_app_summaries());
 }
 
-static napi_value NativeGetWorkspaceState(napi_env env, napi_callback_info info) {
+static napi_value NativeGetAppState(napi_env env, napi_callback_info info) {
     return ReturnJsonString(env, writer_core_get_app_state());
 }
 
@@ -41,12 +41,12 @@ static napi_value NativeResolveVolumeLocation(napi_env env, napi_callback_info i
     return ReturnJsonString(env, writer_core_resolve_volume_location(volume_id));
 }
 
-// ── Workspace property descriptors ──
+// ── App State property descriptors ──
 
-napi_property_descriptor* getWorkspaceDescriptors(size_t* count) {
+napi_property_descriptor* getAppStateDescriptors(size_t* count) {
     static napi_property_descriptor desc[] = {
-        {"nativeListWorkspaces", nullptr, NativeListWorkspaces, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeGetWorkspaceState", nullptr, NativeGetWorkspaceState, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeListAppSummaries", nullptr, NativeListAppSummaries, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeGetAppState", nullptr, NativeGetAppState, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeResolveChapterLocation", nullptr, NativeResolveChapterLocation, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeResolveVolumeLocation", nullptr, NativeResolveVolumeLocation, nullptr, nullptr, nullptr, napi_default, nullptr},
     };

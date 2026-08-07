@@ -17,7 +17,7 @@ mod search_ops;
 mod settings_ops;
 mod starmap_ops;
 mod sync_ops;
-mod workspace_ops;
+mod app_state_ops;
 mod writing_stats_ops;
 
 use std::ffi::{CStr, CString};
