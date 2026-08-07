@@ -135,11 +135,6 @@ android {
             jniLibs.srcDirs(layout.buildDirectory.dir("generated/writer-native/aiDebug"))
             kotlin.srcDirs(layout.buildDirectory.dir("generated/writer-uniffi/ai/kotlin"))
         }
-        // #597：架构测试独立源集 — 与普通单元测试分离，避免每次都跑静态检查。
-        // 运行方式：./gradlew testArchNoAiDebug
-        getByName("testNoAi") {
-            kotlin.srcDirs("src/testArch/kotlin")
-        }
         // AI flavor 专属测试源集：只放 ai 变体才需要的单元/设备测试。
         // noAi 变体不依赖这些测试，避免 noAi 误触 AI 路径（AGENTS.md 跨平台边界）。
         getByName("testAi") {
@@ -423,53 +418,15 @@ tasks.withType<io.gitlab.arturbosch.detekt.Detekt>().configureEach {
     exclude("**/build/**", "**/generated/**")
 }
 
-// #597：架构测试与普通单元测试分离。
-// 架构测试已移入 src/testArch/kotlin（testNoAi 源集），不再混在 src/test 中。
-// 普通单元测试（默认排除架构测试）：./gradlew testNoAiDebugUnitTest
-// 架构约束测试：./gradlew testArchNoAiDebug
-// 每类测试只运行一次 — testNoAiDebugUnitTest 不跑 arch 包，testArchNoAiDebug 只跑 arch 包。
-
-// #597：注册独立的架构测试任务，方便直接运行 ./gradlew testArchNoAiDebug
-tasks.register("testArchNoAiDebug") {
-    group = "verification"
-    description = "Runs architecture constraint tests (src/testArch)"
-    dependsOn("testNoAiDebugUnitTest")
-}
-
-// 根据请求的任务决定 testNoAiDebugUnitTest 的过滤策略：
-// - testArchNoAiDebug → 只运行 com.xiwei.sujian.arch.*
-// - 其他（默认）→ 排除 com.xiwei.sujian.arch.*（架构检查不混入普通测试）
-val isArchTestRequested = gradle.startParameter.taskNames.any { it.contains("testArchNoAiDebug") }
-tasks.matching { it.name == "testNoAiDebugUnitTest" }.configureEach {
-    (this as org.gradle.api.tasks.testing.Test).filter {
-        if (isArchTestRequested) {
-            includeTestsMatching("com.xiwei.sujian.arch.*")
-            isFailOnNoMatchingTests = true
-        } else {
-            excludeTestsMatching("com.xiwei.sujian.arch.*")
-        }
-    }
-}
+// #597：架构约束不再通过 JUnit/Gradle 单元测试任务运行（正文六）。
+// 分层规则已迁移为普通源码扫描：tools/check_android_architecture.py，
+// 由 .github/workflows/static_analysis.yml 直接运行，不编译 Android App。
+// 因此这里不再注册 testArchNoAiDebug 任务，也不再对 testNoAiDebugUnitTest
+// 施加 arch 包 include/exclude 过滤。
 
 // 生成绑定排除补充：flavor（noAi/ai）源集任务的 FileTree 以生成目录为根，
 // 相对路径是 uniffi/writer_core/...，扩展 filter 的 **/build/** 模式匹配不到。
 // 生成代码不可手改（AGENTS.md），按生成包路径精确排除。
 tasks.withType<org.jlleitschuh.gradle.ktlint.tasks.BaseKtLintCheckTask>().configureEach {
     exclude("uniffi/**")
-}
-
-// 星图测试文件（#564/#580 既有实现，星图不在 #597 范围 — Issue #597 明确星图
-// 不纳入本议题完成条件）：保持既有格式，待星图正式实现时统一整改。
-// 只排除测试源集任务；生产源码（src/main）与其余测试文件仍被 ktlint 全覆盖。
-listOf(
-    "runKtlintCheckOverTestSourceSet",
-    "runKtlintCheckOverTestNoAiSourceSet",
-    "runKtlintCheckOverTestAiSourceSet",
-    "runKtlintCheckOverAndroidTestSourceSet",
-    "runKtlintCheckOverAndroidTestNoAiSourceSet",
-    "runKtlintCheckOverAndroidTestAiSourceSet",
-).forEach { taskName ->
-    tasks.matching { it.name == taskName }.configureEach {
-        (this as org.jlleitschuh.gradle.ktlint.tasks.BaseKtLintCheckTask).exclude("**/data/starmap/**")
-    }
 }

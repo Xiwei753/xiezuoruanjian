@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost
@@ -63,7 +64,11 @@ fun WritingEditorSurface(
                     coordinator.detachView(coordinator.windowId, targetId, view)
                     view.release()
                 },
-                modifier = Modifier.fillMaxSize(),
+                modifier =
+                    Modifier
+                        .fillMaxSize()
+                        // #597 九：正文出现的稳定语义 ID（页面测试不靠文本找正文）。
+                        .testTag(com.xiwei.sujian.designsystem.testing.SujianSemanticIds.EditorContent),
             )
         } else {
             // #595 九：预览用纯静态 ChapterPreviewState，不经 TargetDisplayRuntime。

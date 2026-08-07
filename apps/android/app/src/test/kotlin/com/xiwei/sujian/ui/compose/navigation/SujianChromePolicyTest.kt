@@ -7,112 +7,109 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * #597 评论问题一/三的 UI 结构策略测试：
- * - 一级底栏只保留 作品/星图/统计；设置从顶栏进入；
- * - 作品页顶栏右侧依次提供 设置、搜索、同步状态；
- * - 进入设置后顶栏只保留左上返回；
- * - 进入正文后隐藏底栏；写作区顶栏透明、不显示标题、只保留需要的图标层；
- * - 统计/星图根页无返回动作时不显示返回箭头（图标与动作同源）；
- * - 宽窗口只展开同一套结构，不重新引入另一套。
+ * #597 正文一/三的 UI 结构策略测试：
+ * - 一级导航只保留 作品/星图/统计；设置从顶栏进入，不是一级入口；
+ * - 作品页顶栏右侧产品顺序（从右往左）为 设置/搜索/同步状态，
+ *   代码顺序为 同步 → 搜索 → 设置；
+ * - 进入设置后顶栏只保留左上返回，一级导航（底栏/侧栏）消失；
+ * - 进入正文后一级导航消失；写作区顶栏透明、不显示标题、只保留需要的图标层；
+ * - 宽窗口与手机同一套规则：只在 Root 时把底栏换成侧栏，Editor 同样
+ *   隐藏侧栏并透明化顶栏，不重新引入另一套结构；
+ * - 星图根页没有返回动作（占位页无编辑态顶栏状态，正文四）。
  */
 class SujianChromePolicyTest {
     private fun resolve(
         route: SujianRoute,
         location: WorkspaceLocation = WorkspaceLocation.ProjectList,
         canBack: Boolean = false,
-        starMapHasBack: Boolean = false,
-        isCompact: Boolean = true,
     ): SujianChromeSpec =
         SujianChromePolicy.resolve(
             route = route,
             workspaceLocation = location,
             canWorkspaceNavigateBack = canBack,
-            starMapHasBack = starMapHasBack,
-            isCompact = isCompact,
         )
 
-    // ---- 一级底栏：作品 / 星图 / 统计，设置不再是底栏入口 ----
+    // ---- 一级导航：作品 / 星图 / 统计，设置不是一级入口 ----
 
     @Test
-    fun `works root keeps bottom bar with settings search sync in order`() {
+    fun `works root keeps primary navigation with sync search settings in order`() {
         val spec = resolve(SujianRoute.Works)
-        assertTrue(spec.showBottomBar)
+        assertTrue(spec.showPrimaryNavigation)
         assertFalse(spec.appBarTransparent)
         assertTrue(spec.showTitle)
         assertFalse(spec.showBack)
-        // 评论问题一：作品页顶栏右侧依次提供 设置、搜索、同步状态。
+        // 正文三：产品顺序从右往左为 设置/搜索/同步状态，代码顺序为 同步 → 搜索 → 设置。
         assertEquals(
-            listOf(SujianChromeAction.Settings, SujianChromeAction.Search, SujianChromeAction.Sync),
+            listOf(SujianChromeAction.Sync, SujianChromeAction.Search, SujianChromeAction.Settings),
             spec.actions,
         )
     }
 
     @Test
-    fun `starmap root keeps bottom bar and has no actions`() {
+    fun `starmap root keeps primary navigation and has no actions or back`() {
         val spec = resolve(SujianRoute.StarMap)
-        assertTrue(spec.showBottomBar)
+        assertTrue(spec.showPrimaryNavigation)
         assertTrue(spec.actions.isEmpty())
-        assertFalse(spec.showBack)
+        assertFalse("星图占位根页没有返回动作（正文四）", spec.showBack)
         assertTrue(spec.showTitle)
     }
 
     @Test
-    fun `stats root keeps bottom bar and never shows back arrow`() {
+    fun `stats root keeps primary navigation and never shows back arrow`() {
         val spec = resolve(SujianRoute.Stats)
-        assertTrue(spec.showBottomBar)
+        assertTrue(spec.showPrimaryNavigation)
         assertFalse(spec.showBack)
         assertTrue(spec.actions.isEmpty())
     }
 
-    // ---- 设置：顶栏只保留左上返回，无底栏 ----
+    // ---- 设置：顶栏只保留左上返回，无一级导航 ----
 
     @Test
-    fun `settings shows only back and hides bottom bar`() {
+    fun `settings shows only back and hides primary navigation`() {
         val spec = resolve(SujianRoute.Settings)
         assertTrue(spec.showBack)
-        assertFalse(spec.showBottomBar)
+        assertFalse(spec.showPrimaryNavigation)
         assertTrue(spec.actions.isEmpty())
         assertFalse(spec.appBarTransparent)
         assertTrue(spec.showTitle)
     }
 
-    // ---- 正文：隐藏底栏、透明顶栏、无标题、只保留需要的图标层 ----
+    // ---- 正文：隐藏一级导航、透明顶栏、无标题、只保留需要的图标层 ----
 
     @Test
-    fun `editor hides bottom bar and shows transparent titleless top bar`() {
+    fun `editor hides primary navigation and shows transparent titleless top bar`() {
         val spec =
             resolve(
                 SujianRoute.Works,
                 location = WorkspaceLocation.Editor("p1", "v1", "c1"),
                 canBack = true,
             )
-        assertFalse("进入正文后隐藏底栏", spec.showBottomBar)
+        assertFalse("进入正文后隐藏一级导航（底栏/侧栏）", spec.showPrimaryNavigation)
         assertTrue("写作区顶栏透明背景", spec.appBarTransparent)
         assertFalse("写作区顶栏不显示标题", spec.showTitle)
         assertTrue(spec.showBack)
-        // 写作区只保留需要的图标层：设置、同步；搜索（未实现）不进入写作区。
+        // 写作区只保留需要的图标层：同步、设置（设置视觉最右）；搜索（未实现）不进入写作区。
         assertEquals(
-            listOf(SujianChromeAction.Settings, SujianChromeAction.Sync),
+            listOf(SujianChromeAction.Sync, SujianChromeAction.Settings),
             spec.actions,
         )
     }
 
     @Test
-    fun `editor wide window does not switch to another chrome structure`() {
+    fun `editor wide window follows the same chrome rules`() {
         val spec =
             resolve(
                 SujianRoute.Works,
                 location = WorkspaceLocation.Editor("p1", "v1", "c1"),
                 canBack = true,
-                isCompact = false,
             )
-        // 宽窗口只展开同一套手机 UI：没有底栏（改侧边导航），顶栏保持页面级
-        // 标题与完整操作（设置、搜索、同步），不重新引入另一套结构。
-        assertFalse(spec.showBottomBar)
-        assertFalse(spec.appBarTransparent)
-        assertTrue(spec.showTitle)
+        // 正文一：宽窗口同一套规则 — Editor 不创建 NavigationRail，顶栏透明。
+        // 宽屏只是在 Root 时把底栏换成侧栏，不重新引入另一套页面结构。
+        assertFalse("宽窗口正文同样隐藏一级导航", spec.showPrimaryNavigation)
+        assertTrue("宽窗口正文顶栏同样透明", spec.appBarTransparent)
+        assertFalse(spec.showTitle)
         assertEquals(
-            listOf(SujianChromeAction.Settings, SujianChromeAction.Search, SujianChromeAction.Sync),
+            listOf(SujianChromeAction.Sync, SujianChromeAction.Settings),
             spec.actions,
         )
         assertTrue(spec.showBack)
@@ -129,14 +126,8 @@ class SujianChromePolicyTest {
                 canBack = true,
             )
         assertTrue(spec.showBack)
-        assertTrue(spec.showBottomBar)
+        assertTrue(spec.showPrimaryNavigation)
         assertFalse(spec.appBarTransparent)
-    }
-
-    @Test
-    fun `starmap back arrow only when a real back action exists`() {
-        assertFalse(resolve(SujianRoute.StarMap, starMapHasBack = false).showBack)
-        assertTrue(resolve(SujianRoute.StarMap, starMapHasBack = true).showBack)
     }
 
     @Test

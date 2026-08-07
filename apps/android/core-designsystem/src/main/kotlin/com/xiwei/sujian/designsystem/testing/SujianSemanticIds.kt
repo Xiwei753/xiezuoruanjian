@@ -1,10 +1,26 @@
 package com.xiwei.sujian.designsystem.testing
 
+/**
+ * 当前真实 UI 的稳定语义 ID（#597 八）。
+ *
+ * 页面测试一律通过这些 ID 定位控件，不靠中文文本找按钮。
+ * 只保留当前已实现界面的 ID；已删除页面（旧 Workbench）与未实现功能
+ * （星图完整页面）的 ID 不得保留。
+ */
 object SujianSemanticIds {
+    // ---- 一级导航（底栏/侧栏）----
     const val NavigationWorks = "navigation.works"
     const val NavigationStarMap = "navigation.starmap"
-    const val NavigationSettings = "navigation.settings"
+    const val NavigationStats = "navigation.stats"
+    const val NavigationBar = "navigation.bar"
+    const val NavigationRail = "navigation.rail"
 
+    // ---- 顶栏操作 ----
+    const val NavigationSettings = "navigation.settings"
+    const val NavigationSearch = "navigation.search"
+    const val NavigationSync = "navigation.sync"
+
+    // ---- 设置页 ----
     const val SettingsScreen = "settings.screen"
     const val SettingsNavAppearance = "settings.nav.appearance"
     const val SettingsNavEditor = "settings.nav.editor"
@@ -18,6 +34,7 @@ object SujianSemanticIds {
     const val SettingsFontSize = "settings.editor.font_size"
     const val SettingsTypingAnimation = "settings.editor.typing_animation"
 
+    // ---- 作品工作区 ----
     const val WorkspaceVolumeList = "workspace.volume.list"
     const val WorkspaceCreateVolume = "workspace.volume.create"
     const val WorkspaceCreateChapter = "workspace.chapter.create"
@@ -26,29 +43,15 @@ object SujianSemanticIds {
     const val DialogConfirm = "dialog.confirm"
     const val DialogCancel = "dialog.cancel"
 
+    // ---- 编辑器 ----
     const val EditorContent = "editor.content"
     const val EditorSaveStatus = "editor.save_status"
 
+    // ---- 星图占位页（功能未实现，仅保留页面级 ID）----
     const val StarMapScreen = "starmap.screen"
-    const val StarMapList = "starmap.list"
-    const val StarMapCreate = "starmap.create"
-    const val StarMapEditor = "starmap.editor"
-    const val StarMapCanvas = "starmap.canvas"
-    const val StarMapLoadError = "starmap.load_error"
 
     fun project(projectId: String) = "workspace.project.$projectId"
     fun volume(id: String) = "workspace.volume.$id"
     fun chapter(volumeId: String, chapterId: String) =
         "workspace.chapter.$volumeId.$chapterId"
-
-    const val Workbench = "workbench"
-    fun dockResizeHandle(zone: String) = "workbench.dock_resize.$zone"
-    fun dockSplitHandle(beforeGroup: String) = "workbench.dock_split.$beforeGroup"
-    fun dockTabStrip(groupId: String) = "workbench.tab_strip.$groupId"
-    fun dockTab(groupId: String, panelId: String) = "workbench.tab.$groupId.$panelId"
-    fun floatingPanel(panelId: String) = "workbench.floating.$panelId"
-    fun floatingTitleBar(panelId: String) = "workbench.floating_title_bar.$panelId"
-    fun floatingResizeHandle(panelId: String) = "workbench.floating_resize.$panelId"
-    fun panelLauncherButton(panelId: String) = "workbench.launcher.$panelId"
-    fun panelFrame(panelId: String) = "workbench.panel.$panelId"
 }

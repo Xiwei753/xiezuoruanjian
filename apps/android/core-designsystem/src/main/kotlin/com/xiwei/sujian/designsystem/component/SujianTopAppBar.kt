@@ -26,8 +26,8 @@ fun SujianTopAppBar(
     navigationIcon: ImageVector? = null,
     onNavigationClick: (() -> Unit)? = null,
     actions: @Composable () -> Unit = {},
-    /** 透明背景顶栏（#597：写作区只保留图标层，背景透出正文层）。 */
-    transparent: Boolean = false,
+    /** 顶栏容器背景色。写作区（#597）传 [Color.Transparent]，背景透出正文层。 */
+    containerColor: Color = MaterialTheme.colorScheme.surface,
 ) {
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     TopAppBar(
@@ -47,7 +47,8 @@ fun SujianTopAppBar(
         },
         actions = { actions() },
         colors = TopAppBarDefaults.topAppBarColors(
-            containerColor = if (transparent) Color.Transparent else MaterialTheme.colorScheme.surface,
+            containerColor = containerColor,
+            scrolledContainerColor = containerColor,
             titleContentColor = MaterialTheme.colorScheme.onSurface,
         ),
     )

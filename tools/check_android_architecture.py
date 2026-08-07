@@ -1,0 +1,750 @@
+#!/usr/bin/env python3
+"""Android 分层架构源码扫描器（#597 六）。
+
+直接扫描 `apps/android/app/src/main/kotlin` 与 `core-designsystem` 源码，
+不编译 Android App（不再通过 JUnit/Gradle 单元测试任务运行架构检查）。
+
+保留的规则（对应原 `src/testArch` 静态规则，issue 正文第六节）：
+
+1.  UI 层（ui/）不能直接依赖具体 Bridge 类、UniFFI 绑定或 JNA；
+2.  UI 层不能直接依赖 editor/v2/input 基础设施；
+3.  data 层（Bridge/Repository）不能依赖 Compose/Activity/View/UI 与
+    editor 显示/动画状态；
+4.  editor/v2/input 只产生输入操作：不依赖 Repository/data、Compose UI、
+    Activity；UniFFI 只允许 EditorTransactionCauseDto 契约类型；
+5.  editor/v2/visual 与 motion 只处理显示和动画状态：不写正文持久状态
+    （data/workspace）、不依赖 Activity/View/input、不依赖 Compose UI 框架、
+    UniFFI 只允许 DTO 契约类型；
+6.  editor session 层（EditorSessionCoordinator*）不能依赖 Compose 可变状态、
+    View/Activity；派生 stateIn flow 与 reduceScope 已删除；唯一状态出口是
+    sessionStateFlow + value getter；
+7.  FrameClock 只能由窗口/显示层持有：EditorWindowHost 拥有唯一
+    windowFrameClock 字段，session 层不得引用 WindowDisplayFrameClock；
+8.  updateSessionState transform 是纯函数：transform 体内不得调用
+    store.put/store.update/store.remove，store 写入只能在 transform 外
+    通过 pendingRecord?.let { store.put(it) } 执行；
+9.  core-designsystem 不能反向依赖 app 模块（源码与 build.gradle.kts 均不得）；
+10. 已删除类型/入口不得复活：EditorAnimationSettings、派生 flow getter、
+    SettingsRepository 旧的 1 参 setSyncSecretsOverride；
+11. 结构契约：session/窗口层状态出口、FrameClock 生命周期、motion policy、
+    同步事务提交、凭据类型化读取、预览状态纯净字段等存在性约束
+    （原反射测试改为源码级检查）。
+
+用法:
+    python3 tools/check_android_architecture.py [--app-src DIR] [--designsystem-src DIR]
+
+返回码:
+    0 = 全部规则通过
+    1 = 存在违规（报告按规则分类列出）
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# 默认扫描根（真实仓库路径）；configure() 只改同名运行时全局，
+# 不覆盖这些 DEFAULT_* 常量，测试可随时回到真实仓库。
+DEFAULT_APP_SRC = (
+    PROJECT_ROOT / "apps" / "android" / "app" / "src" / "main" / "kotlin" / "com" / "xiwei" / "sujian"
+)
+DEFAULT_DS_SRC = (
+    PROJECT_ROOT
+    / "apps"
+    / "android"
+    / "core-designsystem"
+    / "src"
+    / "main"
+    / "kotlin"
+    / "com"
+    / "xiwei"
+    / "sujian"
+    / "designsystem"
+)
+DEFAULT_DS_MODULE = PROJECT_ROOT / "apps" / "android" / "core-designsystem"
+APP_MODULE = PROJECT_ROOT / "apps" / "android" / "app"
+
+APP_SRC = DEFAULT_APP_SRC
+DS_SRC = DEFAULT_DS_SRC
+DS_MODULE = DEFAULT_DS_MODULE
+
+
+@dataclass(frozen=True)
+class Finding:
+    path: str
+    line: int
+    message: str
+
+
+def strip_line_comment(line: str) -> str:
+    """去掉 // 单行注释（与旧 Kotlin 检测器一致，避免注释误报）。"""
+    idx = line.find("//")
+    return line if idx < 0 else line[:idx]
+
+
+def effective_lines(content: str) -> list[str]:
+    """去掉块注释（/* ... */）与单行注释后的逐行内容。
+
+    文档注释里合法地提及被禁止类型（如 session 层注释说明自己不持有
+    WindowDisplayFrameClock），不得被当成真实引用。
+    """
+    without_block = re.sub(r"/\*.*?\*/", "", content, flags=re.S)
+    return [strip_line_comment(line) for line in without_block.splitlines()]
+
+
+def references(line: str, forbidden: list[str]) -> list[str]:
+    """返回该行命中的禁止引用（忽略行内注释 — 由调用方先过 [effective_lines]）。"""
+    return [ref for ref in forbidden if ref in line]
+
+
+def collect_kt_files(root: Path, path_filter: str | None = None) -> list[Path]:
+    if not root.exists():
+        return []
+    return sorted(
+        p
+        for p in root.rglob("*.kt")
+        if p.is_file()
+        and "/build/" not in str(p)
+        and "/generated/" not in str(p)
+        and (path_filter is None or path_filter in str(p))
+    )
+
+
+def scan_forbidden(
+    root: Path,
+    path_filter: str | None,
+    forbidden: list[str],
+) -> list[Finding]:
+    findings: list[Finding] = []
+    for path in collect_kt_files(root, path_filter):
+        for lineno, raw in enumerate(
+            effective_lines(path.read_text(encoding="utf-8")), 1
+        ):
+            for hit in references(raw, forbidden):
+                findings.append(
+                    Finding(
+                        path=str(path.relative_to(root)),
+                        line=lineno,
+                        message=f"禁止引用 {hit}",
+                    )
+                )
+    return findings
+
+
+def scan_prefix_with_allowed(
+    root: Path,
+    path_filter: str,
+    prefix: str,
+    allowed_fqns: list[str],
+) -> list[Finding]:
+    """逐行检查：包含 prefix 但未包含任何 allowed FQN 的行构成违规。"""
+    findings: list[Finding] = []
+    for path in collect_kt_files(root, path_filter):
+        for lineno, raw in enumerate(
+            effective_lines(path.read_text(encoding="utf-8")), 1
+        ):
+            if prefix in raw and not any(allowed in raw for allowed in allowed_fqns):
+                findings.append(
+                    Finding(
+                        path=str(path.relative_to(root)),
+                        line=lineno,
+                        message=f"包含 {prefix} 但不在允许白名单 {allowed_fqns} 内",
+                    )
+                )
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# 规则实现（每个规则返回违规列表）
+# ---------------------------------------------------------------------------
+
+CONCRETE_BRIDGES = [
+    "com.xiwei.sujian.data.BridgeProvider",
+    "com.xiwei.sujian.data.BridgeMappers",
+    "com.xiwei.sujian.data.WorkspaceBridge",
+    "com.xiwei.sujian.data.ChapterBridge",
+    "com.xiwei.sujian.data.ProjectBridge",
+    "com.xiwei.sujian.data.SettingsBridge",
+    "com.xiwei.sujian.data.StatsBridge",
+    "com.xiwei.sujian.data.SyncBridge",
+    "com.xiwei.sujian.data.WritingBridge",
+    "com.xiwei.sujian.data.ActionBridge",
+    "com.xiwei.sujian.data.AppServiceBridge",
+    "com.xiwei.sujian.data.StarMapBridge",
+    "com.xiwei.sujian.data.LayoutPolicyBridge",
+    "com.xiwei.sujian.data.ScreenPolicyBridge",
+]
+
+COMPOSE_UI_FRAMEWORK = [
+    "androidx.compose.ui",
+    "androidx.compose.material3",
+    "androidx.compose.foundation",
+    "androidx.compose.animation",
+]
+
+SESSION_LAYER_FILES = {
+    "EditorSessionCoordinator.kt",
+    "EditorSessionCoordinatorTypes.kt",
+    "EditorSessionEditOps.kt",
+    "EditorSessionExternalOps.kt",
+    "EditorSessionLifecycleOps.kt",
+    "EditorSessionStore.kt",
+    "EditorSessionState.kt",
+    "SessionCommandPort.kt",
+    "SessionResetSource.kt",
+    "DocumentVersion.kt",
+    "EditorDocumentUpdate.kt",
+    "EditorSessionViewModel.kt",
+    "TextEditorProfile.kt",
+}
+
+# 窗口/显示层专属文件：允许持有 Compose 状态、View 与 FrameClock。
+WINDOW_LAYER_FILES = {"EditorWindowHost.kt", "EditableTextTarget.kt", "WindowDisplayFrameClock.kt"}
+
+DERIVED_FLOW_GETTERS = [
+    "getActiveTargetIdFlow",
+    "getEditingStateFlow",
+    "getWindowBindingStateFlow",
+]
+
+SESSION_STATE_CONTRACT = {
+    "sessionStateFlow": "唯一状态出口 sessionStateFlow",
+    "activeTargetId": "value getter activeTargetId",
+    "editingState": "value getter editingState",
+    "windowBindingState": "value getter windowBindingState",
+}
+
+
+def rule_ui_no_uniffi_jna_bridge() -> list[Finding]:
+    findings = scan_forbidden(APP_SRC, "/ui/", ["uniffi.writer_core", "com.sun.jna"])
+    findings += scan_forbidden(APP_SRC, "/ui/", CONCRETE_BRIDGES)
+    return findings
+
+
+def rule_ui_no_editor_input() -> list[Finding]:
+    return scan_forbidden(APP_SRC, "/ui/", ["com.xiwei.sujian.editor.v2.input"])
+
+
+def rule_data_no_ui_framework() -> list[Finding]:
+    return scan_forbidden(
+        APP_SRC,
+        "/data/",
+        ["androidx.compose", "androidx.activity", "android.view", "com.xiwei.sujian.ui"],
+    )
+
+
+def rule_data_no_editor_display() -> list[Finding]:
+    return scan_forbidden(
+        APP_SRC,
+        "/data/",
+        [
+            "com.xiwei.sujian.editor.v2.visual",
+            "com.xiwei.sujian.editor.v2.motion",
+            "com.xiwei.sujian.editor.v2.compose",
+            "com.xiwei.sujian.editor.v2.render",
+        ],
+    )
+
+
+def rule_input_layer_pure() -> list[Finding]:
+    findings = scan_forbidden(
+        APP_SRC,
+        "/editor/v2/input/",
+        ["com.xiwei.sujian.data", "com.xiwei.sujian.workspace"],
+    )
+    findings += scan_forbidden(
+        APP_SRC,
+        "/editor/v2/input/",
+        ["androidx.compose.ui", "androidx.compose.material3", "androidx.compose.foundation", "androidx.activity"],
+    )
+    findings += scan_prefix_with_allowed(
+        APP_SRC,
+        "/editor/v2/input/",
+        "uniffi.writer_core",
+        ["uniffi.writer_core.EditorTransactionCauseDto"],
+    )
+    return findings
+
+
+def rule_visual_motion_pure() -> list[Finding]:
+    findings: list[Finding] = []
+    for sub in ("/editor/v2/visual/", "/editor/v2/motion/"):
+        findings += scan_forbidden(
+            APP_SRC,
+            sub,
+            ["com.xiwei.sujian.data", "com.xiwei.sujian.workspace"],
+        )
+        findings += scan_forbidden(
+            APP_SRC,
+            sub,
+            ["androidx.activity", "android.view", "com.xiwei.sujian.editor.v2.input"],
+        )
+        findings += scan_forbidden(APP_SRC, sub, COMPOSE_UI_FRAMEWORK)
+        if sub == "/editor/v2/motion/":
+            findings += scan_forbidden(APP_SRC, sub, ["uniffi.writer_core"])
+        else:
+            findings += scan_prefix_with_allowed(
+                APP_SRC,
+                sub,
+                "uniffi.writer_core",
+                [
+                    "uniffi.writer_core.EditorOperationKindDto",
+                    "uniffi.writer_core.AnimationModeDto",
+                ],
+            )
+    return findings
+
+
+def _session_layer_files() -> list[Path]:
+    coordinator = APP_SRC / "editor" / "v2" / "coordinator"
+    if not coordinator.exists():
+        return []
+    return [
+        p
+        for p in sorted(coordinator.glob("*.kt"))
+        if p.name in SESSION_LAYER_FILES
+    ]
+
+
+def rule_session_layer_no_platform_state() -> list[Finding]:
+    findings: list[Finding] = []
+    for path in _session_layer_files():
+        for lineno, raw in enumerate(
+            effective_lines(path.read_text(encoding="utf-8")), 1
+        ):
+            for hit in references(
+                raw,
+                ["mutableStateOf", "androidx.compose.runtime.MutableState", "android.view", "androidx.activity"],
+            ):
+                findings.append(
+                    Finding(
+                        path=str(path.relative_to(APP_SRC)),
+                        line=lineno,
+                        message=f"session 层禁止依赖 Compose 可变状态/View/Activity: {hit}",
+                    )
+                )
+    coordinator = APP_SRC / "editor" / "v2" / "coordinator"
+    if coordinator.exists():
+        for name in ("EditorSessionCoordinator.kt", "EditorWindowHost.kt"):
+            path = coordinator / name
+            if not path.exists():
+                continue
+            content = path.read_text(encoding="utf-8")
+            effective = "\n".join(effective_lines(content))
+            for getter in DERIVED_FLOW_GETTERS:
+                if getter in effective:
+                    findings.append(
+                        Finding(
+                            path=f"editor/v2/coordinator/{name}",
+                            line=0,
+                            message=f"派生 stateIn flow {getter} 必须保持删除（#595 三）",
+                        )
+                    )
+            if "reduceScope" in effective:
+                findings.append(
+                    Finding(
+                        path=f"editor/v2/coordinator/{name}",
+                        line=0,
+                        message="reduceScope 必须保持删除（#595 三）",
+                    )
+                )
+        coordinator_source_path = coordinator / "EditorSessionCoordinator.kt"
+        if coordinator_source_path.exists():
+            effective = "\n".join(
+                effective_lines(coordinator_source_path.read_text(encoding="utf-8"))
+            )
+            for symbol, desc in SESSION_STATE_CONTRACT.items():
+                if symbol not in effective:
+                    findings.append(
+                        Finding(
+                            path="editor/v2/coordinator/EditorSessionCoordinator.kt",
+                            line=0,
+                            message=f"缺少 {desc}: {symbol}",
+                        )
+                    )
+    return findings
+
+
+def rule_frame_clock_window_owned() -> list[Finding]:
+    findings: list[Finding] = []
+    coordinator = APP_SRC / "editor" / "v2" / "coordinator"
+    if not coordinator.exists():
+        return findings
+    for path in _session_layer_files():
+        for lineno, raw in enumerate(
+            effective_lines(path.read_text(encoding="utf-8")), 1
+        ):
+            if references(raw, ["WindowDisplayFrameClock"]):
+                findings.append(
+                    Finding(
+                        path=str(path.relative_to(APP_SRC)),
+                        line=lineno,
+                        message="FrameClock 只能由窗口/显示层持有，session 层不得引用 WindowDisplayFrameClock",
+                    )
+                )
+    window_host = coordinator / "EditorWindowHost.kt"
+    if window_host.exists():
+        effective = "\n".join(
+            effective_lines(window_host.read_text(encoding="utf-8"))
+        )
+        if "val windowFrameClock: WindowDisplayFrameClock" not in effective:
+            findings.append(
+                Finding(
+                    path="editor/v2/coordinator/EditorWindowHost.kt",
+                    line=0,
+                    message="窗口层必须持有唯一 windowFrameClock: WindowDisplayFrameClock 字段",
+                )
+            )
+    return findings
+
+
+def rule_transform_purity() -> list[Finding]:
+    """updateSessionState { ... } transform 体内不得调用 store.put/update/remove。"""
+    findings: list[Finding] = []
+    coordinator = APP_SRC / "editor" / "v2" / "coordinator"
+    if not coordinator.exists():
+        return findings
+    sources = "\n".join(
+        p.read_text(encoding="utf-8")
+        for p in sorted(coordinator.glob("*.kt"))
+    )
+    pattern = re.compile(r"updateSessionState\s*\{")
+    bodies: list[str] = []
+    for match in pattern.finditer(sources):
+        start = match.end()
+        depth = 1
+        i = start
+        while i < len(sources) and depth > 0:
+            if sources[i] == "{":
+                depth += 1
+            elif sources[i] == "}":
+                depth -= 1
+            i += 1
+        bodies.append(sources[start : i - 1])
+    if not bodies:
+        findings.append(
+            Finding(
+                path="editor/v2/coordinator",
+                line=0,
+                message="必须存在 updateSessionState transform（找不到任何调用）",
+            )
+        )
+    for idx, body in enumerate(bodies, 1):
+        for store_call in ("store.put(", "store.update(", "store.remove("):
+            if store_call in body:
+                findings.append(
+                    Finding(
+                        path="editor/v2/coordinator",
+                        line=0,
+                        message=(
+                            f"第 {idx} 个 updateSessionState transform 体内调用 {store_call} — "
+                            "transform 是纯函数，store 写入只能在 transform 外通过 "
+                            "pendingRecord?.let { store.put(it) } 执行（#595 五）"
+                        ),
+                    )
+                )
+    if "pendingRecord?.let { store.put(it) }" not in sources:
+        findings.append(
+            Finding(
+                path="editor/v2/coordinator",
+                line=0,
+                message="store 写入必须使用 pendingRecord?.let { store.put(it) } 模式（transform 外）",
+            )
+        )
+    return findings
+
+
+def rule_designsystem_independent() -> list[Finding]:
+    forbidden_app_packages = [
+        "com.xiwei.sujian.ui",
+        "com.xiwei.sujian.data",
+        "com.xiwei.sujian.editor",
+        "com.xiwei.sujian.workspace",
+        "com.xiwei.sujian.runtime",
+        "com.xiwei.sujian.platform",
+        "com.xiwei.sujian.model",
+        "com.xiwei.sujian.labs",
+        "com.xiwei.sujian.diagnostics",
+        "com.xiwei.sujian.settings",
+        "com.xiwei.sujian.support",
+    ]
+    findings = scan_forbidden(DS_SRC, None, forbidden_app_packages)
+    findings += scan_forbidden(DS_SRC, None, ["uniffi.writer_core", "com.sun.jna", "com.xiwei.sujian.data.Bridge"])
+    build_script = DS_MODULE / "build.gradle.kts"
+    if build_script.exists():
+        effective = "\n".join(
+            strip_line_comment(line)
+            for line in build_script.read_text(encoding="utf-8").splitlines()
+        )
+        if ":app" in effective or 'project("app")' in effective:
+            findings.append(
+                Finding(
+                    path="core-designsystem/build.gradle.kts",
+                    line=0,
+                    message="core-designsystem 的 build.gradle.kts 不得声明对 :app 项目的依赖",
+                )
+            )
+    return findings
+
+
+def rule_deleted_types_stay_deleted() -> list[Finding]:
+    findings: list[Finding] = []
+    for path in collect_kt_files(APP_SRC, "/editor/v2/"):
+        for lineno, raw in enumerate(
+            effective_lines(path.read_text(encoding="utf-8")), 1
+        ):
+            if re.search(r"\b(class|interface|data class)\s+EditorAnimationSettings\b", raw):
+                findings.append(
+                    Finding(
+                        path=str(path.relative_to(APP_SRC)),
+                        line=lineno,
+                        message="EditorAnimationSettings 必须保持删除（#595 十：EditorMotionPolicy 是唯一可写动画状态源）",
+                    )
+                )
+    settings_repo = APP_SRC / "data" / "SettingsRepository.kt"
+    if settings_repo.exists():
+        effective = "\n".join(effective_lines(settings_repo.read_text(encoding="utf-8")))
+        if re.search(r"fun\s+setSyncSecretsOverride\s*\(", effective):
+            findings.append(
+                Finding(
+                    path="data/SettingsRepository.kt",
+                    line=0,
+                    message="旧 swallow-failure setSyncSecretsOverride 必须保持删除（#595 十）",
+                )
+            )
+    return findings
+
+
+def rule_source_contracts() -> list[Finding]:
+    """存在性契约（原反射结构测试改为源码级检查）。"""
+    findings: list[Finding] = []
+
+    def require(
+        path: Path,
+        pattern: str,
+        desc: str,
+    ) -> None:
+        if not path.exists():
+            findings.append(Finding(str(path.relative_to(APP_SRC)), 0, f"文件缺失: {desc}"))
+            return
+        effective = "\n".join(effective_lines(path.read_text(encoding="utf-8")))
+        if not re.search(pattern, effective):
+            findings.append(
+                Finding(str(path.relative_to(APP_SRC)), 0, f"缺少 {desc}（模式 {pattern}）")
+            )
+
+    def forbid(
+        path: Path,
+        pattern: str,
+        desc: str,
+    ) -> None:
+        if not path.exists():
+            return
+        effective = "\n".join(effective_lines(path.read_text(encoding="utf-8")))
+        if re.search(pattern, effective):
+            findings.append(
+                Finding(str(path.relative_to(APP_SRC)), 0, f"禁止出现 {desc}（模式 {pattern}）")
+            )
+
+    coordinator = APP_SRC / "editor" / "v2" / "coordinator"
+    host = coordinator / "EditorWindowHost.kt"
+    require(host, r"fun\s+beginEdit\s*\(", "EditorWindowHost.beginEdit（活动编辑生命周期入口）")
+    require(host, r"fun\s+releaseWindow\s*\(", "EditorWindowHost.releaseWindow（释放 FrameClock 连接）")
+    require(host, r"fun\s+getChapterPreviewState\s*\(", "EditorWindowHost.getChapterPreviewState(String)")
+    require(host, r"fun\s+applyMotionPolicy\s*\(", "EditorWindowHost.applyMotionPolicy(EditorMotionPolicy)")
+    require(host, r"\bmotionPolicyFlow\b", "EditorWindowHost.motionPolicyFlow 委托")
+
+    motion = APP_SRC / "editor" / "v2" / "motion" / "EditorMotionPolicy.kt"
+    require(motion, r"val\s+reduceMotion\b", "EditorMotionPolicy.reduceMotion 字段")
+
+    repo = APP_SRC / "data" / "SettingsRepository.kt"
+    require(repo, r"fun\s+commitSyncProfile\s*\(", "SettingsRepository.commitSyncProfile(SyncConfig, SyncSecrets)")
+    require(repo, r"fun\s+loadCommittedSyncProfile\s*\(", "SettingsRepository.loadCommittedSyncProfile")
+    require(repo, r"fun\s+loadSyncSecretsForGeneration\s*\(", "SettingsRepository.loadSyncSecretsForGeneration")
+    require(repo, r"fun\s+snapshotSyncProfile\s*\(", "SettingsRepository.snapshotSyncProfile")
+    require(repo, r"fun\s+loadSyncConfigStrict\s*\(", "SettingsRepository.loadSyncConfigStrict")
+    require(repo, r"fun\s+loadLegacySyncSecretsTyped\s*\(", "SettingsRepository.loadLegacySyncSecretsTyped")
+    require(repo, r"fun\s+deleteSyncSecretsForGeneration\s*\(", "SettingsRepository.deleteSyncSecretsForGeneration")
+    require(repo, r"fun\s+setSyncSecretsOverrideStrict\s*\(", "SettingsRepository.setSyncSecretsOverrideStrict")
+    require(repo, r"fun\s+clearSyncSecretsOverride\s*\(", "SettingsRepository.clearSyncSecretsOverride")
+
+    gate = APP_SRC / "data" / "SyncProfileGate.kt"
+    require(gate, r"\bcommitExclusive\s*\(", "SyncProfileGate.commitExclusive")
+    require(gate, r"\bsnapshotExclusive\s*\(", "SyncProfileGate.snapshotExclusive")
+
+    sync_bridge = APP_SRC / "data" / "SyncBridge.kt"
+    require(sync_bridge, r"fun\s+clearSyncSecretsOverride\s*\(", "SyncBridge.clearSyncSecretsOverride")
+
+    engine = APP_SRC / "editor" / "v2" / "visual" / "AndroidTextAnimationEngine.kt"
+    require(engine, r"fun\s+submitCursorOnlyTransaction\s*\(", "AndroidTextAnimationEngine.submitCursorOnlyTransaction")
+
+    view = APP_SRC / "editor" / "v2" / "host" / "SujianEditorView.kt"
+    require(view, r"fun\s+setKernelAnimationEnabled\s*\(", "SujianEditorView.setKernelAnimationEnabled(Boolean)")
+
+    frame_input = APP_SRC / "editor" / "v2" / "pipeline" / "FrameRenderInput.kt"
+    require(frame_input, r"cursorTransition\b", "FrameRenderInput.cursorTransition 字段（与文字事务解耦）")
+
+    preview = APP_SRC / "editor" / "v2" / "projection" / "ChapterPreviewState.kt"
+    if preview.exists():
+        for lineno, raw in enumerate(effective_lines(preview.read_text(encoding="utf-8")), 1):
+            lowered = raw.lower()
+            if any(
+                token in lowered
+                for token in ("animation", "visualruntime", "bitmap")
+            ) and re.search(r"\bval\s+\w+", effective):
+                findings.append(
+                    Finding(
+                        str(preview.relative_to(APP_SRC)),
+                        lineno,
+                        "ChapterPreviewState 不得持有动画引擎/Bitmap/VisualRuntime 相关字段",
+                    )
+                )
+    return findings
+
+
+RULES: list[tuple[str, str, object]] = [
+    (
+        "ui-no-uniffi-jna-bridge",
+        "UI 层不能直接依赖具体 Bridge / UniFFI / JNA",
+        rule_ui_no_uniffi_jna_bridge,
+    ),
+    (
+        "ui-no-editor-input",
+        "UI 层不能直接依赖 editor/v2/input 基础设施",
+        rule_ui_no_editor_input,
+    ),
+    (
+        "data-no-ui-framework",
+        "data 层（Bridge/Repository）不能依赖 Compose/Activity/View/UI",
+        rule_data_no_ui_framework,
+    ),
+    (
+        "data-no-editor-display",
+        "data 层不能依赖 editor 显示/动画状态",
+        rule_data_no_editor_display,
+    ),
+    (
+        "input-layer-pure",
+        "editor/v2/input 只产生输入操作，不依赖 Repository/UI/UniFFI（DTO 契约除外）",
+        rule_input_layer_pure,
+    ),
+    (
+        "visual-motion-pure",
+        "visual/motion 只处理显示和动画状态，不写正文持久状态",
+        rule_visual_motion_pure,
+    ),
+    (
+        "session-layer-no-platform-state",
+        "editor session 层不能依赖 Compose 可变状态/View/Activity",
+        rule_session_layer_no_platform_state,
+    ),
+    (
+        "frame-clock-window-owned",
+        "FrameClock 只能由窗口/显示层持有",
+        rule_frame_clock_window_owned,
+    ),
+    (
+        "update-session-state-transform-purity",
+        "updateSessionState transform 是纯函数（transform 内不写 store）",
+        rule_transform_purity,
+    ),
+    (
+        "designsystem-independence",
+        "core-designsystem 不能反向依赖 app 模块",
+        rule_designsystem_independent,
+    ),
+    (
+        "deleted-types-stay-deleted",
+        "已删除类型/入口不得复活",
+        rule_deleted_types_stay_deleted,
+    ),
+    (
+        "source-contracts",
+        "关键结构契约（session 状态出口/FrameClock/motion policy/同步事务/凭据/预览纯净）",
+        rule_source_contracts,
+    ),
+]
+
+
+def configure(
+    app_src: Path,
+    designsystem_src: Path,
+    designsystem_module: Path | None = None,
+) -> None:
+    """设置扫描根目录（默认指向真实仓库，测试可指向临时夹具树）。"""
+    global APP_SRC, DS_SRC, DS_MODULE
+    APP_SRC = app_src
+    DS_SRC = designsystem_src
+    if designsystem_module is not None:
+        DS_MODULE = designsystem_module
+
+
+def run_checks() -> tuple[list[Finding], dict[str, list[Finding]]]:
+    """运行全部规则，返回 (全部违规, 按规则分类的违规)。"""
+    all_findings: list[Finding] = []
+    by_rule: dict[str, list[Finding]] = {}
+    for rule_id, title, checker in RULES:
+        findings = sorted(
+            checker(),  # type: ignore[operator]
+            key=lambda f: (f.path, f.line),
+        )
+        by_rule[rule_id] = findings
+        all_findings.extend(findings)
+        print(f"[{rule_id}] {title}: {'通过' if not findings else f'{len(findings)} 处违规'}")
+    return all_findings, by_rule
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Android 分层架构源码扫描器（#597 六）")
+    parser.add_argument(
+        "--app-src",
+        type=Path,
+        default=DEFAULT_APP_SRC,
+        help="app 模块主源码根目录（默认 %(default)s）",
+    )
+    parser.add_argument(
+        "--designsystem-src",
+        type=Path,
+        default=DEFAULT_DS_SRC,
+        help="core-designsystem 主源码根目录（默认 %(default)s）",
+    )
+    parser.add_argument(
+        "--designsystem-module",
+        type=Path,
+        default=DEFAULT_DS_MODULE,
+        help="core-designsystem 模块根目录（默认 %(default)s）",
+    )
+    args = parser.parse_args()
+
+    if not args.app_src.exists():
+        print(f"错误: app 主源码根目录不存在: {args.app_src}", file=sys.stderr)
+        return 1
+    if not args.designsystem_src.exists():
+        print(f"错误: core-designsystem 主源码根目录不存在: {args.designsystem_src}", file=sys.stderr)
+        return 1
+
+    configure(args.app_src, args.designsystem_src, args.designsystem_module)
+    all_findings, by_rule = run_checks()
+    if not all_findings:
+        print("\n全部架构规则通过。")
+        return 0
+
+    print("\n===== 违规报告 =====")
+    for rule_id, findings in by_rule.items():
+        if not findings:
+            continue
+        print(f"\n--- {rule_id} ---")
+        for f in findings:
+            location = f"{f.path}:{f.line}" if f.line else f.path
+            print(f"  {location}: {f.message}")
+    print(f"\n共 {len(all_findings)} 处违规。", file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

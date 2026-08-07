@@ -7,7 +7,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -17,17 +16,11 @@ import com.xiwei.sujian.designsystem.icon.SujianIcons
 /**
  * 星图目的地占位入口：星图功能尚未实现，仅显示占位提示。
  *
- * 保留 [StarMapScreen] 签名以兼容
- * [com.xiwei.sujian.ui.compose.navigation.SujianNavigationSuite] 的调用；
- * 占位体内清理星图顶栏状态，避免残留编辑态标题/返回/操作。
+ * 占位页无状态（#597 四）：不接收任何编辑页顶栏状态，导航层也不为它
+ * 维护返回动作/标题/操作。
  */
 @Composable
-fun StarMapScreen(
-    topBarState: com.xiwei.sujian.ui.compose.navigation.StarMapTopBarState,
-    modifier: Modifier = Modifier,
-) {
-    SideEffect { topBarState.clear() }
-
+fun StarMapPlaceholderScreen(modifier: Modifier = Modifier) {
     Column(
         modifier = modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally,
