@@ -379,3 +379,13 @@ jobs:
               AI_FILTER=""
             fi
             cd apps/android && ANDROID_NDK_HOME=$ANDROID_NDK_ROOT ./gradlew connected${FLAVOR_CAP}DebugAndroidTest -x :app:install${FLAVOR_CAP}Debug -x :app:install${FLAVOR_CAP}DebugAndroidTest -x build${FLAVOR_CAP}DebugWriterNative -Psujian.android.abis=x86_64 $AI_FILTER || ( echo '===== FAILED TEST XMLS ====='; find app/build/outputs/androidTest-results -name '*.xml' -exec grep -l -e '<failure' -e '<error' {} \; -exec cat {} \; 2>/dev/null; echo '===== APP LOGCAT (file) ====='; grep -E 'SujianEditorInput|SujianTestIme|SujianApp|AnimatedTextEditorCoordinator|TestRunner' "$RUNNER_TEMP/sujian-editor-logcat.log" 2>/dev/null | tail -n 600; exit 1 )
+            # #597 fail-on-no-matching：AI 腿经官方包过滤后必须真实执行到 AI 专项
+            # 仪器测试；若 androidTestAi 源集被误删或过滤失效，connected 任务会
+            # 静默通过 0 个测试，这里对结果 XML 做硬核验，找不到即失败。
+            if [ "${{ matrix.flavor }}" = "ai" ]; then
+              if ! find app/build/outputs/androidTest-results -name '*.xml' -exec grep -l 'AiFlavorInstrumentationSmokeTest' {} + 2>/dev/null | grep -q .; then
+                echo "::error::AI instrumented tests did not match: no AiFlavorInstrumentationSmokeTest result in androidTest-results. androidTestAi source set may be empty or the package filter is broken."
+                exit 1
+              fi
+              echo "AI instrumented test executed on emulator (AiFlavorInstrumentationSmokeTest)."
+            fi

@@ -435,6 +435,30 @@ def test_artifact_verify_paths_consistent_with_contract(wf, _text):
             )
 
 
+def test_ai_emulator_leg_fails_when_no_tests_match(wf, _text):
+    # #597：AI 腿用官方包过滤只跑 AI 专项仪器测试，且必须 fail-on-no-matching。
+    # 若 androidTestAi 源集被误删或过滤失效，connected 任务会静默通过 0 个测试，
+    # 工作流必须在结果 XML 里硬核验 AiFlavorInstrumentationSmokeTest 真实执行。
+    emulator_job = wf["jobs"]["emulator-test"]
+    steps = emulator_job.get("steps", [])
+    script = ""
+    for s in steps:
+        script = s.get("with", {}).get("script", "")
+        if script:
+            break
+    assert script, "emulator-test job must have an android-emulator-runner script"
+    assert "android.testInstrumentationRunnerArguments.package=com.xiwei.sujian.ai" in script, (
+        "AI emulator leg must filter to the com.xiwei.sujian.ai package"
+    )
+    assert "AiFlavorInstrumentationSmokeTest" in script, (
+        "AI emulator leg must verify AiFlavorInstrumentationSmokeTest results"
+    )
+    tail = script.split("AiFlavorInstrumentationSmokeTest", 1)[1]
+    assert "exit 1" in tail, (
+        "AI emulator leg must fail hard when no AI instrumented test matched"
+    )
+
+
 def main():
     wf, text = load_workflow()
     tests = [
@@ -460,6 +484,7 @@ def main():
         test_rust_test_has_abi_guard,
         test_jvm_unit_test_has_abi_guard,
         test_rust_and_jvm_test_execute_once_per_flavor,
+        test_ai_emulator_leg_fails_when_no_tests_match,
     ]
     failed = 0
     for t in tests:
