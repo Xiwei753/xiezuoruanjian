@@ -137,9 +137,268 @@ fun EditorViewModel.confirmEditorAttached(targetId: String) {
     }
 }
 
-// #597 章节切换事务需原子执行（保存旧→加载新→预准备session→提交），含3个可见提交边界检查；
-// 拆分会破坏事务回滚一致性 — 待后续重构
-@Suppress("LongMethod", "CyclomaticComplexMethod", "CognitiveComplexMethod")
+// #597：章节切换事务收敛 — 旧章节保存/清空收敛到独立函数，事务本体只保留
+// 串行流程（保存→加载→预准备→提交）与 3 个可见提交边界检查；回滚路径统一
+// 走 restoreAfterSwitch / rollbackAfterLoadFailure。
+private suspend fun EditorViewModel.saveChapterContentForSwitch(
+    session: EditorSession,
+    content: String,
+    revision: Long,
+): Boolean =
+    saveMutex.withLock {
+        try {
+            when (
+                val result =
+                    workspaceRepository.saveChapterContent(
+                        session.projectId,
+                        session.volumeId,
+                        session.chapterId,
+                        content,
+                    )
+            ) {
+                is com.xiwei.sujian.data.BridgeResult.Success -> {
+                    result.data?.contentHash?.let { hash ->
+                        saveReceipts.record(
+                            buildSaveToken(
+                                chapterTargetId(session.projectId, session.volumeId, session.chapterId),
+                                revision,
+                                hash,
+                            ),
+                        )
+                    }
+                    true
+                }
+                is com.xiwei.sujian.data.BridgeResult.Error -> {
+                    _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+                    emitErrorEvent(
+                        getApplication<Application>().getString(R.string.error_save_failed, result.message),
+                    )
+                    false
+                }
+                com.xiwei.sujian.data.BridgeResult.NotLoaded -> {
+                    _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+                    emitErrorEvent(
+                        getApplication<Application>().getString(R.string.error_save_native_not_loaded),
+                    )
+                    false
+                }
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+            emitErrorEvent(
+                getApplication<Application>().getString(R.string.error_save_exception, e.message ?: ""),
+            )
+            false
+        }
+    }
+
+private suspend fun EditorViewModel.clearChapterContentForSwitch(
+    session: EditorSession,
+    revision: Long,
+): Boolean =
+    saveMutex.withLock {
+        try {
+            when (
+                val result =
+                    workspaceRepository.clearChapterContent(
+                        session.projectId,
+                        session.volumeId,
+                        session.chapterId,
+                    )
+            ) {
+                is com.xiwei.sujian.data.BridgeResult.Success -> {
+                    result.data?.contentHash?.let { hash ->
+                        saveReceipts.record(
+                            buildSaveToken(
+                                chapterTargetId(session.projectId, session.volumeId, session.chapterId),
+                                revision,
+                                hash,
+                            ),
+                        )
+                    }
+                    true
+                }
+                is com.xiwei.sujian.data.BridgeResult.Error -> {
+                    _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+                    emitErrorEvent(
+                        getApplication<Application>().getString(R.string.error_save_failed, result.message),
+                    )
+                    false
+                }
+                com.xiwei.sujian.data.BridgeResult.NotLoaded -> {
+                    _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+                    false
+                }
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+            false
+        }
+    }
+
+/** #595 一：加载/session 预准备失败回滚 — 恢复旧 EditorUiState 与输入冻结。 */
+private fun EditorViewModel.rollbackAfterLoadFailure(
+    oldSession: EditorSession?,
+    oldUiState: EditorUiState,
+    oldContentExplicitlyCleared: Boolean,
+) {
+    currentSession = oldSession
+    _uiState.value = oldUiState.copy(loading = false)
+    contentExplicitlyCleared = oldContentExplicitlyCleared
+    inputFrozen = false
+}
+
+/** #595 一：章节切换事务上下文（旧状态用于失败回滚，isLatest 为可见提交边界检查）。 */
+private class SwitchContext(
+    val isLatest: () -> Boolean,
+    val projectId: String,
+    val volumeId: String,
+    val chapterId: String,
+    val chapterTitle: String,
+    val oldSession: EditorSession?,
+    val oldUiState: EditorUiState,
+    val oldContentExplicitlyCleared: Boolean,
+)
+
+/** #595 一：阶段 1 — 保存旧章节（含保存回执与失败/过期回滚）。null 表示继续。 */
+private suspend fun EditorViewModel.switchSaveOldChapter(
+    ctx: SwitchContext,
+    oldSession: EditorSession,
+): ChapterSwitchResult? {
+    autoSaveJob?.cancel()
+    saveActorJob?.cancel()
+    saveCommandChannel.close()
+
+    val content = _uiState.value.content
+    // #595 七：保存旧章节也记录保存回执（revision 在保存时从会话层读取）。
+    val oldRevision = _sessionCoordinator?.sessionState?.revision ?: 0L
+    val saveOk =
+        if (content.trim().isNotEmpty()) {
+            saveChapterContentForSwitch(oldSession, content, oldRevision)
+        } else if (contentExplicitlyCleared) {
+            clearChapterContentForSwitch(oldSession, oldRevision)
+        } else {
+            true
+        }
+
+    if (!saveOk) {
+        // #595 一：保存失败返回明确失败结果，且完整恢复旧 EditorUiState。
+        _uiState.value = ctx.oldUiState.copy(loading = false, saveStatus = SaveStatus.SaveFailed)
+        contentExplicitlyCleared = ctx.oldContentExplicitlyCleared
+        saveCommandChannel = Channel<SaveCommand>(Channel.UNLIMITED)
+        startSaveActor()
+        inputFrozen = false
+        return ChapterSwitchResult.SaveFailed(oldSession)
+    }
+    // #595 一：可见提交边界 1 — 保存完成后若已有更新请求，回滚并退出。
+    if (!ctx.isLatest()) {
+        restoreAfterSwitch(ctx.oldSession, ctx.oldUiState, ctx.oldContentExplicitlyCleared)
+        return ChapterSwitchResult.Stale
+    }
+    return null
+}
+
+private sealed interface SwitchPrepareOutcome {
+    data class Ready(
+        val session: EditorSession,
+        val handle: com.xiwei.sujian.editor.v2.coordinator.PreparedSessionHandle,
+    ) : SwitchPrepareOutcome
+
+    data class Aborted(val result: ChapterSwitchResult) : SwitchPrepareOutcome
+}
+
+/**
+ * #595 一：阶段 2 — 加载新章节 + 无副作用预准备 Rust session。
+ * 失败/过期已在此回滚旧状态，调用方直接消费 [SwitchPrepareOutcome]。
+ */
+private suspend fun EditorViewModel.switchLoadAndPrepare(ctx: SwitchContext): SwitchPrepareOutcome {
+    val newSession =
+        EditorSession(
+            sessionId = java.util.UUID.randomUUID().toString(),
+            projectId = ctx.projectId,
+            volumeId = ctx.volumeId,
+            chapterId = ctx.chapterId,
+        )
+    currentSession = newSession
+    // #595 二：章节提交后重置同步合并发射去重。
+    syncMergeEmitDedup.reset()
+
+    _uiState.value =
+        _uiState.value.copy(
+            loading = true,
+            chapterTitle = ctx.chapterTitle,
+            saveStatus = SaveStatus.Idle,
+        )
+    contentExplicitlyCleared = false
+    startSaveActor()
+    reloadSettings()
+    // #595 一：加载在事务内完成 — 只有内容就绪后才提交 Success。
+    val loaded = loadChapter(newSession)
+    if (!loaded) {
+        rollbackAfterLoadFailure(ctx.oldSession, ctx.oldUiState, ctx.oldContentExplicitlyCleared)
+        return SwitchPrepareOutcome.Aborted(
+            ChapterSwitchResult.LoadFailed(ChapterKey(ctx.projectId, ctx.volumeId, ctx.chapterId)),
+        )
+    }
+    // #595 一：可见提交边界 2 — 加载完成后若已有更新请求，回滚并退出。
+    if (!ctx.isLatest()) {
+        restoreAfterSwitch(ctx.oldSession, ctx.oldUiState, ctx.oldContentExplicitlyCleared)
+        return SwitchPrepareOutcome.Aborted(ChapterSwitchResult.Stale)
+    }
+
+    // #595 一：为 B 无副作用预准备 Rust session + 有效 snapshot/bind plan —
+    // 在提交前完成，导航后编辑器立即可用；失败时 A 完全不变。
+    val content = _uiState.value.content
+    val handle = prepareTargetSession(chapterTargetId(ctx.projectId, ctx.volumeId, ctx.chapterId), content)
+    if (handle == null) {
+        rollbackAfterLoadFailure(ctx.oldSession, ctx.oldUiState, ctx.oldContentExplicitlyCleared)
+        return SwitchPrepareOutcome.Aborted(
+            ChapterSwitchResult.LoadFailed(ChapterKey(ctx.projectId, ctx.volumeId, ctx.chapterId)),
+        )
+    }
+    // #595 一：可见提交边界 3 — session 预准备后再次校验 requestId。
+    if (!ctx.isLatest()) {
+        rollbackPreparedSession(handle)
+        restoreAfterSwitch(ctx.oldSession, ctx.oldUiState, ctx.oldContentExplicitlyCleared)
+        return SwitchPrepareOutcome.Aborted(ChapterSwitchResult.Stale)
+    }
+    return SwitchPrepareOutcome.Ready(newSession, handle)
+}
+
+/** #595 一：最终提交 — 一次性执行 A→B 切换；失败回滚到旧章节。 */
+private suspend fun EditorViewModel.switchCommit(
+    ctx: SwitchContext,
+    newSession: EditorSession,
+    handle: com.xiwei.sujian.editor.v2.coordinator.PreparedSessionHandle,
+): ChapterSwitchResult {
+    val coordinator = _sessionCoordinator
+    if (coordinator == null || !coordinator.commitPreparedSession(handle)) {
+        rollbackPreparedSession(handle)
+        rollbackAfterLoadFailure(ctx.oldSession, ctx.oldUiState, ctx.oldContentExplicitlyCleared)
+        return ChapterSwitchResult.LoadFailed(ChapterKey(ctx.projectId, ctx.volumeId, ctx.chapterId))
+    }
+
+    // #595 一：提交完成后的独立操作 — recordRecentEdit/统计失败只记录
+    // 自身错误，不得回滚已成功打开的正文。
+    editorScope.launch {
+        try {
+            withContext(Dispatchers.IO) {
+                workspaceRepository.recordRecentEdit(ctx.projectId, ctx.volumeId, ctx.chapterId)
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // 最近编辑记录失败不影响章节打开
+        }
+    }
+    // Success：inputFrozen 保持 true，由新 pane 附着编辑器后解除。
+    return ChapterSwitchResult.Success(newSession, _uiState.value.content)
+}
+
 suspend fun EditorViewModel.switchChapterLocked(
     isLatest: () -> Boolean,
     projectId: String,
@@ -147,11 +406,20 @@ suspend fun EditorViewModel.switchChapterLocked(
     chapterId: String,
     chapterTitle: String,
 ): ChapterSwitchResult {
-    val oldSession = currentSession
-    // #595 一：事务回滚需要完整的旧 EditorUiState — 保存/加载失败时整体恢复。
-    val oldUiState = _uiState.value
-    val oldContentExplicitlyCleared = contentExplicitlyCleared
+    val ctx =
+        SwitchContext(
+            isLatest = isLatest,
+            projectId = projectId,
+            volumeId = volumeId,
+            chapterId = chapterId,
+            chapterTitle = chapterTitle,
+            oldSession = currentSession,
+            // #595 一：事务回滚需要完整的旧 EditorUiState — 保存/加载失败时整体恢复。
+            oldUiState = _uiState.value,
+            oldContentExplicitlyCleared = contentExplicitlyCleared,
+        )
 
+    val oldSession = ctx.oldSession
     if (oldSession != null && oldSession.matchesChapter(projectId, volumeId, chapterId)) {
         return ChapterSwitchResult.Success(oldSession, _uiState.value.content)
     }
@@ -162,216 +430,31 @@ suspend fun EditorViewModel.switchChapterLocked(
         // #595 一/转场：切换章节时同步置 loading — 在旧章节保存完成前就隐藏编辑器。
         _uiState.value = _uiState.value.copy(loading = true)
 
-        if (oldSession != null) {
-            autoSaveJob?.cancel()
-            saveActorJob?.cancel()
-            saveCommandChannel.close()
-
-            val content = _uiState.value.content
-            val oldTargetId = chapterTargetId(oldSession.projectId, oldSession.volumeId, oldSession.chapterId)
-            // #595 七：保存旧章节也记录保存回执（revision 在保存时从会话层读取）。
-            val oldRevision = _sessionCoordinator?.sessionState?.revision ?: 0L
-            val saveOk =
-                if (content.trim().isNotEmpty()) {
-                    saveMutex.withLock {
-                        try {
-                            when (
-                                val result =
-                                    workspaceRepository.saveChapterContent(
-                                        oldSession.projectId,
-                                        oldSession.volumeId,
-                                        oldSession.chapterId,
-                                        content,
-                                    )
-                            ) {
-                                is com.xiwei.sujian.data.BridgeResult.Success -> {
-                                    result.data?.contentHash?.let { hash ->
-                                        saveReceipts.record(buildSaveToken(oldTargetId, oldRevision, hash))
-                                    }
-                                    true
-                                }
-                                is com.xiwei.sujian.data.BridgeResult.Error -> {
-                                    _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
-                                    emitErrorEvent(
-                                        getApplication<Application>().getString(
-                                            R.string.error_save_failed,
-                                            result.message,
-                                        ),
-                                    )
-                                    false
-                                }
-                                com.xiwei.sujian.data.BridgeResult.NotLoaded -> {
-                                    _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
-                                    emitErrorEvent(
-                                        getApplication<Application>().getString(R.string.error_save_native_not_loaded),
-                                    )
-                                    false
-                                }
-                            }
-                        } catch (e: kotlinx.coroutines.CancellationException) {
-                            throw e
-                        } catch (e: Exception) {
-                            _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
-                            emitErrorEvent(
-                                getApplication<Application>().getString(R.string.error_save_exception, e.message ?: ""),
-                            )
-                            false
-                        }
-                    }
-                } else if (contentExplicitlyCleared) {
-                    saveMutex.withLock {
-                        try {
-                            when (
-                                val result =
-                                    workspaceRepository.clearChapterContent(
-                                        oldSession.projectId,
-                                        oldSession.volumeId,
-                                        oldSession.chapterId,
-                                    )
-                            ) {
-                                is com.xiwei.sujian.data.BridgeResult.Success -> {
-                                    result.data?.contentHash?.let { hash ->
-                                        saveReceipts.record(buildSaveToken(oldTargetId, oldRevision, hash))
-                                    }
-                                    true
-                                }
-                                is com.xiwei.sujian.data.BridgeResult.Error -> {
-                                    _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
-                                    emitErrorEvent(
-                                        getApplication<Application>().getString(
-                                            R.string.error_save_failed,
-                                            result.message,
-                                        ),
-                                    )
-                                    false
-                                }
-                                com.xiwei.sujian.data.BridgeResult.NotLoaded -> {
-                                    _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
-                                    false
-                                }
-                            }
-                        } catch (e: kotlinx.coroutines.CancellationException) {
-                            throw e
-                        } catch (e: Exception) {
-                            _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
-                            false
-                        }
-                    }
-                } else {
-                    true
-                }
-
-            if (!saveOk) {
-                // #595 一：保存失败返回明确失败结果，且完整恢复旧 EditorUiState。
-                _uiState.value = oldUiState.copy(loading = false, saveStatus = SaveStatus.SaveFailed)
-                contentExplicitlyCleared = oldContentExplicitlyCleared
-                saveCommandChannel = Channel<SaveCommand>(Channel.UNLIMITED)
-                startSaveActor()
-                inputFrozen = false
-                return ChapterSwitchResult.SaveFailed(oldSession)
+        val saveAbort =
+            if (oldSession != null) {
+                switchSaveOldChapter(ctx, oldSession)
+            } else {
+                saveActorJob?.cancel()
+                saveCommandChannel.close()
+                null
             }
-            // #595 一：可见提交边界 1 — 保存完成后若已有更新请求，回滚并退出。
-            if (!isLatest()) {
-                restoreAfterSwitch(oldSession, oldUiState, oldContentExplicitlyCleared)
-                return ChapterSwitchResult.Stale
-            }
-        } else {
-            saveActorJob?.cancel()
-            saveCommandChannel.close()
-        }
+        if (saveAbort != null) return saveAbort
 
         saveCommandChannel = Channel<SaveCommand>(Channel.UNLIMITED)
-
-        val newSession =
-            EditorSession(
-                sessionId = java.util.UUID.randomUUID().toString(),
-                projectId = projectId,
-                volumeId = volumeId,
-                chapterId = chapterId,
-            )
-        currentSession = newSession
-        // #595 二：章节提交后重置同步合并发射去重。
-        syncMergeEmitDedup.reset()
-
-        _uiState.value =
-            _uiState.value.copy(
-                loading = true,
-                chapterTitle = chapterTitle,
-                saveStatus = SaveStatus.Idle,
-            )
-        contentExplicitlyCleared = false
-        startSaveActor()
-        reloadSettings()
-        // #595 一：加载在事务内完成 — 只有内容就绪后才提交 Success。
-        val loaded = loadChapter(newSession)
-        if (!loaded) {
-            currentSession = oldSession
-            _uiState.value = oldUiState.copy(loading = false)
-            contentExplicitlyCleared = oldContentExplicitlyCleared
-            inputFrozen = false
-            return ChapterSwitchResult.LoadFailed(ChapterKey(projectId, volumeId, chapterId))
-        }
-        // #595 一：可见提交边界 2 — 加载完成后若已有更新请求，回滚并退出。
-        if (!isLatest()) {
-            restoreAfterSwitch(oldSession, oldUiState, oldContentExplicitlyCleared)
-            return ChapterSwitchResult.Stale
-        }
-
-        // #595 一：为 B 无副作用预准备 Rust session + 有效 snapshot/bind plan —
-        // 在提交前完成，导航后编辑器立即可用；失败时 A 完全不变。
-        val content = _uiState.value.content
-        preparedHandle = prepareTargetSession(chapterTargetId(projectId, volumeId, chapterId), content)
-        if (preparedHandle == null) {
-            currentSession = oldSession
-            _uiState.value = oldUiState.copy(loading = false)
-            contentExplicitlyCleared = oldContentExplicitlyCleared
-            inputFrozen = false
-            return ChapterSwitchResult.LoadFailed(ChapterKey(projectId, volumeId, chapterId))
-        }
-        // #595 一：可见提交边界 3 — session 预准备后再次校验 requestId。
-        if (!isLatest()) {
-            rollbackPreparedSession(preparedHandle)
-            preparedHandle = null
-            restoreAfterSwitch(oldSession, oldUiState, oldContentExplicitlyCleared)
-            return ChapterSwitchResult.Stale
-        }
-
-        // #595 一：最终提交 — 一次性执行 A→B 切换（冻结 A 输入 lease、
-        // 提交 A、激活 B）。失败必须回滚到旧章节。
-        val coordinator = _sessionCoordinator
-        if (coordinator == null || !coordinator.commitPreparedSession(preparedHandle)) {
-            rollbackPreparedSession(preparedHandle)
-            preparedHandle = null
-            currentSession = oldSession
-            _uiState.value = oldUiState.copy(loading = false)
-            contentExplicitlyCleared = oldContentExplicitlyCleared
-            inputFrozen = false
-            return ChapterSwitchResult.LoadFailed(ChapterKey(projectId, volumeId, chapterId))
-        }
-        preparedHandle = null
-
-        // #595 一：提交完成后的独立操作 — recordRecentEdit/统计失败只记录
-        // 自身错误，不得回滚已成功打开的正文。
-        editorScope.launch {
-            try {
-                withContext(Dispatchers.IO) {
-                    workspaceRepository.recordRecentEdit(projectId, volumeId, chapterId)
-                }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                // 最近编辑记录失败不影响章节打开
+        when (val outcome = switchLoadAndPrepare(ctx)) {
+            is SwitchPrepareOutcome.Aborted -> return outcome.result
+            is SwitchPrepareOutcome.Ready -> {
+                preparedHandle = outcome.handle
+                return switchCommit(ctx, outcome.session, outcome.handle)
             }
         }
-        // Success：inputFrozen 保持 true，由新 pane 附着编辑器后解除。
-        return ChapterSwitchResult.Success(newSession, _uiState.value.content)
     } catch (e: kotlinx.coroutines.CancellationException) {
         // #595 一：取消不是失败 — 恢复旧状态后向上重抛，让更新的请求
         // （若有）从一致状态开始；不允许把取消当普通加载失败回滚导航。
         if (preparedHandle != null) {
             rollbackPreparedSession(preparedHandle)
         }
-        restoreAfterSwitch(oldSession, oldUiState, oldContentExplicitlyCleared)
+        restoreAfterSwitch(ctx.oldSession, ctx.oldUiState, ctx.oldContentExplicitlyCleared)
         throw e
     } finally {
         // 注意：Success 路径不在此解除冻结 — 由 confirmEditorAttached 解除。

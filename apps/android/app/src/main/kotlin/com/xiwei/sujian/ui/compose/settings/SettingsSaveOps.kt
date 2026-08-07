@@ -7,6 +7,7 @@ import com.xiwei.sujian.data.SaveFailure
 import com.xiwei.sujian.data.SaveField
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.data.SettingsSaveResult
+import com.xiwei.sujian.model.LocalSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -244,51 +245,71 @@ suspend fun SettingsViewModel.rollbackFailures(
 }
 
 // #597 回滚按字段分支检查 revision 后原子恢复，4 分支结构对称；拆分为4个单行方法反而降低可读性 — 待后续重构
-@Suppress("CyclomaticComplexMethod", "CognitiveComplexMethod")
+// #597：回滚按字段分支校验 revision 后原子恢复 — 各字段结构对称，
+// 分支体收敛到独立私有函数，分发器只保留字段→函数的映射。
 suspend fun SettingsViewModel.rollbackIfRevisionMatches(
     repo: SettingsRepository,
     failure: SaveFailure,
 ) {
     when (failure.field) {
-        SaveField.LOCAL_SETTINGS -> {
-            if (localRevision != failure.revision) return
-            val settings = withContext(Dispatchers.IO) { repo.getLocalSettings() }
-            if (localRevision != failure.revision) return
-            localRevision = localPersistedRevision
-            _uiState.update { it.copy(settings = settings) }
-        }
-        SaveField.FONT_SIZE -> {
-            if (fontSizeRevision != failure.revision) return
-            val fontSize = withContext(Dispatchers.IO) { repo.getEffectiveFontSize() }
-            if (fontSizeRevision != failure.revision) return
-            fontSizeRevision = fontSizePersistedRevision
-            _uiState.update { it.copy(fontSize = fontSize) }
-        }
-        SaveField.SYNC_CONFIG -> {
-            if (syncConfigRevision != failure.revision) return
-            // #595 八/五：回滚读取活动 generation 的完整 snapshot，不再读 live 槽；
-            // 类型化处理 — Failed 保留当前 UI 值（不静默退化为默认值/null）。
-            val profile = withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile() }
-            if (syncConfigRevision != failure.revision) return
-            syncConfigRevision = syncConfigPersistedRevision
-            _uiState.update { it.copy(syncConfig = profile.toSyncProfileLoadState().confirmedConfig ?: it.syncConfig) }
-        }
-        SaveField.SYNC_SECRETS -> {
-            if (syncSecretsRevision != failure.revision) return
-            val profile = withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile() }
-            if (syncSecretsRevision != failure.revision) return
-            syncSecretsRevision = syncSecretsPersistedRevision
-            _uiState.update {
-                it.copy(
-                    syncSecrets = profile.toSyncProfileLoadState().confirmedSecrets ?: it.syncSecrets,
-                )
-            }
-        }
+        SaveField.LOCAL_SETTINGS -> rollbackLocalSettings(repo, failure.revision)
+        SaveField.FONT_SIZE -> rollbackFontSize(repo, failure.revision)
+        SaveField.SYNC_CONFIG -> rollbackSyncConfig(repo, failure.revision)
+        SaveField.SYNC_SECRETS -> rollbackSyncSecrets(repo, failure.revision)
     }
 }
 
-// #597 刷新合并需一次性读取全部字段并按未保存状态合并，与 loadInitial 结构对称 — 待后续重构提取共享加载
-@Suppress("CognitiveComplexMethod")
+private suspend fun SettingsViewModel.rollbackLocalSettings(
+    repo: SettingsRepository,
+    expectedRevision: Long,
+) {
+    if (localRevision != expectedRevision) return
+    val settings = withContext(Dispatchers.IO) { repo.getLocalSettings() }
+    if (localRevision != expectedRevision) return
+    localRevision = localPersistedRevision
+    _uiState.update { it.copy(settings = settings) }
+}
+
+private suspend fun SettingsViewModel.rollbackFontSize(
+    repo: SettingsRepository,
+    expectedRevision: Long,
+) {
+    if (fontSizeRevision != expectedRevision) return
+    val fontSize = withContext(Dispatchers.IO) { repo.getEffectiveFontSize() }
+    if (fontSizeRevision != expectedRevision) return
+    fontSizeRevision = fontSizePersistedRevision
+    _uiState.update { it.copy(fontSize = fontSize) }
+}
+
+private suspend fun SettingsViewModel.rollbackSyncConfig(
+    repo: SettingsRepository,
+    expectedRevision: Long,
+) {
+    if (syncConfigRevision != expectedRevision) return
+    // #595 八/五：回滚读取活动 generation 的完整 snapshot，不再读 live 槽；
+    // 类型化处理 — Failed 保留当前 UI 值（不静默退化为默认值/null）。
+    val profile = withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile() }
+    if (syncConfigRevision != expectedRevision) return
+    syncConfigRevision = syncConfigPersistedRevision
+    _uiState.update { it.copy(syncConfig = profile.toSyncProfileLoadState().confirmedConfig ?: it.syncConfig) }
+}
+
+private suspend fun SettingsViewModel.rollbackSyncSecrets(
+    repo: SettingsRepository,
+    expectedRevision: Long,
+) {
+    if (syncSecretsRevision != expectedRevision) return
+    val profile = withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile() }
+    if (syncSecretsRevision != expectedRevision) return
+    syncSecretsRevision = syncSecretsPersistedRevision
+    _uiState.update {
+        it.copy(
+            syncSecrets = profile.toSyncProfileLoadState().confirmedSecrets ?: it.syncSecrets,
+        )
+    }
+}
+
+// #597 刷新合并需一次性读取全部字段并按未保存状态合并，与 loadInitial 结构对称。
 fun SettingsViewModel.mergeRefresh() {
     val repo = settingsRepo
     editorScope.launch {
@@ -307,20 +328,10 @@ fun SettingsViewModel.mergeRefresh() {
         val workspacePath = withContext(Dispatchers.IO) { repo.workspaceDir() }
         _uiState.update {
             SettingsUiState(
-                settings = if (!hasUnsavedLocal()) settings else current.settings,
-                fontSize = if (!hasUnsavedFontSize()) fontSize else current.fontSize,
-                syncConfig =
-                    if (!hasUnsavedSyncConfig()) {
-                        syncProfileLoadState.confirmedConfig ?: current.syncConfig
-                    } else {
-                        current.syncConfig
-                    },
-                syncSecrets =
-                    if (!hasUnsavedSyncSecrets()) {
-                        syncProfileLoadState.confirmedSecrets ?: current.syncSecrets
-                    } else {
-                        current.syncSecrets
-                    },
+                settings = mergeLoadedLocal(current.settings, settings),
+                fontSize = mergeLoadedFontSize(current.fontSize, fontSize),
+                syncConfig = mergeLoadedSyncConfig(current.syncConfig, syncProfileLoadState),
+                syncSecrets = mergeLoadedSyncSecrets(current.syncSecrets, syncProfileLoadState),
                 syncCapability = syncCapability,
                 secureStorageWarning = secureStorageWarning,
                 builtinThemes = builtinThemes,
@@ -337,3 +348,24 @@ fun SettingsViewModel.mergeRefresh() {
         }
     }
 }
+
+// #597：未保存字段合并 — 刷新加载值只在用户没有未保存编辑时覆盖当前值。
+private fun SettingsViewModel.mergeLoadedLocal(
+    current: LocalSettings,
+    loaded: LocalSettings,
+): LocalSettings = if (!hasUnsavedLocal()) loaded else current
+
+private fun SettingsViewModel.mergeLoadedFontSize(
+    current: Float,
+    loaded: Float,
+): Float = if (!hasUnsavedFontSize()) loaded else current
+
+private fun SettingsViewModel.mergeLoadedSyncConfig(
+    current: com.xiwei.sujian.model.SyncConfig,
+    loadState: SyncProfileLoadState,
+): com.xiwei.sujian.model.SyncConfig = if (!hasUnsavedSyncConfig()) loadState.confirmedConfig ?: current else current
+
+private fun SettingsViewModel.mergeLoadedSyncSecrets(
+    current: com.xiwei.sujian.model.SyncSecrets,
+    loadState: SyncProfileLoadState,
+): com.xiwei.sujian.model.SyncSecrets = if (!hasUnsavedSyncSecrets()) loadState.confirmedSecrets ?: current else current

@@ -332,31 +332,95 @@ private data class SettingsSelection(val section: SettingsSection) : Parcelable
 @OptIn(androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi::class)
 // context.getString 在 LaunchedEffect 协程中显示 snackbar，无法用 stringResource（非 Composable 上下文）。
 @SuppressLint("LocalContextGetResourceValueCall")
-// #597 顶层 Composable 聚合多面板状态与回调，复杂度略超标（15）— 待后续重构拆分子 Composable
-@Suppress("CognitiveComplexMethod")
 @Composable
 fun SettingsRoute(
     detailSection: SettingsSection? = null,
     onDetailSectionChange: ((SettingsSection?) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
-    val context = LocalContext.current
     val deps = LocalSujianAppDependencies.current
     val vm: SettingsViewModel =
         viewModel(factory = SettingsViewModel.Factory(deps.settingsRepository, deps.syncCoordinator))
     val uiState by vm.uiState.collectAsState()
-    val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
+    val snackbarHostState = rememberSettingsSnackbarHost(vm)
+    // 列表—详情窗格与返回/可预见返回必须共享同一个 navigator 实例：
+    // 窗格由 navigator.currentDestination 驱动，返回层级（详情→列表→离开设置）
+    // 与根壳状态同步都依赖同一份导航历史。
+    val navigator = rememberSettingsNavigator(detailSection, onDetailSectionChange)
 
+    Box(modifier = modifier.fillMaxSize()) {
+        SujianListDetailScaffoldWithNavigator(
+            navigator = navigator,
+            modifier = Modifier.fillMaxSize(),
+            listPane = {
+                SettingsListPane(
+                    onNavigateToDetail = { section ->
+                        onDetailSectionChange?.invoke(section)
+                    },
+                    selectedSection = navigator.currentDestination?.contentKey?.section ?: detailSection,
+                    state = uiState,
+                )
+            },
+            detailPane = {
+                val selection = navigator.currentDestination?.contentKey
+                if (selection != null) {
+                    SettingsDetailPane(
+                        section = selection.section,
+                        state = uiState,
+                        onIntent = vm::handleIntent,
+                    )
+                }
+            },
+        )
+        androidx.compose.material3.SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier.align(Alignment.BottomCenter),
+        )
+    }
+}
+
+/**
+ * 设置列表：按“外观 / 写作 / 数据与同步 / 高级 / 关于”分组，每一项显示标题、
+ * 说明或当前值，尾部带进入详情的箭头；与详情共享根设置壳与 TopAppBar。
+ *
+ * 收集设置保存失败事件并在底部 snackbar 展示（协程上下文用
+ * context.getString，非 Composable 上下文无法用 stringResource）。
+ */
+@Composable
+private fun rememberSettingsSnackbarHost(vm: SettingsViewModel): androidx.compose.material3.SnackbarHostState {
+    val context = LocalContext.current
+    val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
     LaunchedEffect(Unit) {
         vm.saveFailureEvents.collect { errorResId ->
             snackbarHostState.showSnackbar(context.getString(errorResId))
         }
     }
+    return snackbarHostState
+}
 
-    // 列表—详情窗格与返回/可预见返回必须共享同一个 navigator 实例：
-    // 窗格由 navigator.currentDestination 驱动，返回层级（详情→列表→离开设置）
-    // 与根壳状态同步都依赖同一份导航历史。
+/**
+ * 列表—详情 navigator + 根壳状态双向同步：navigator 内部变化（预测性返回）
+ * 回写根壳；根壳状态变化（分类点击/顶栏返回）驱动窗格；详情→列表返回由
+ * 本 navigator 处理，列表→离开设置交给全局 NavDisplay。
+ */
+@OptIn(androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi::class)
+@Composable
+private fun rememberSettingsNavigator(
+    detailSection: SettingsSection?,
+    onDetailSectionChange: ((SettingsSection?) -> Unit)?,
+) = run {
     val navigator = rememberListDetailPaneScaffoldNavigator<SettingsSelection>()
+    SettingsNavigatorEffects(navigator, detailSection, onDetailSectionChange)
+    navigator
+}
+
+@OptIn(androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi::class)
+@Composable
+private fun SettingsNavigatorEffects(
+    navigator: androidx.compose.material3.adaptive.navigation.ThreePaneScaffoldNavigator<SettingsSelection>,
+    detailSection: SettingsSection?,
+    onDetailSectionChange: ((SettingsSection?) -> Unit)?,
+) {
     ThreePaneScaffoldPredictiveBackHandler(
         navigator = navigator,
         backBehavior = BackNavigationBehavior.PopUntilScaffoldValueChange,
@@ -398,42 +462,8 @@ fun SettingsRoute(
             navigator.navigateBack(BackNavigationBehavior.PopUntilScaffoldValueChange)
         }
     }
-
-    Box(modifier = modifier.fillMaxSize()) {
-        SujianListDetailScaffoldWithNavigator(
-            navigator = navigator,
-            modifier = Modifier.fillMaxSize(),
-            listPane = {
-                SettingsListPane(
-                    onNavigateToDetail = { section ->
-                        onDetailSectionChange?.invoke(section)
-                    },
-                    selectedSection = navigator.currentDestination?.contentKey?.section ?: detailSection,
-                    state = uiState,
-                )
-            },
-            detailPane = {
-                val selection = navigator.currentDestination?.contentKey
-                if (selection != null) {
-                    SettingsDetailPane(
-                        section = selection.section,
-                        state = uiState,
-                        onIntent = vm::handleIntent,
-                    )
-                }
-            },
-        )
-        androidx.compose.material3.SnackbarHost(
-            hostState = snackbarHostState,
-            modifier = Modifier.align(Alignment.BottomCenter),
-        )
-    }
 }
 
-/**
- * 设置列表：按“外观 / 写作 / 数据与同步 / 高级 / 关于”分组，每一项显示标题、
- * 说明或当前值，尾部带进入详情的箭头；与详情共享根设置壳与 TopAppBar。
- */
 @Composable
 fun SettingsListPane(
     onNavigateToDetail: (SettingsSection) -> Unit,
@@ -511,46 +541,42 @@ internal fun settingsCategorySummary(category: SettingsCategory): String? =
  * 设置列表项的真实当前值：全部来自真实 [SettingsUiState]，保存后随状态即时更新；
  * 无当前值可展示的分类（实验室/关于）返回 null，只保留功能说明。
  */
-@Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod") // #597 技术债：待重构拆分
 @Composable
-internal fun settingsCategoryValue(category: SettingsCategory, state: SettingsUiState): String? =
+internal fun settingsCategoryValue(
+    category: SettingsCategory,
+    state: SettingsUiState,
+): String? =
     when (category.section) {
-        SettingsSection.Appearance ->
-            when (state.settings.appearanceMode) {
-                "light" -> stringResource(id = R.string.theme_light)
-                "dark" -> stringResource(id = R.string.theme_dark)
-                else -> stringResource(id = R.string.theme_system)
-            }
-        SettingsSection.Editor ->
-            stringResource(
-                id = R.string.pref_value_font_size,
-                if (state.fontSize % 1f == 0f) state.fontSize.toInt().toString() else state.fontSize.toString(),
-            )
-        SettingsSection.Save ->
-            if (state.settings.autoSaveEnabled) {
-                stringResource(id = R.string.pref_state_on)
-            } else {
-                stringResource(id = R.string.pref_state_off)
-            }
-        SettingsSection.Sync ->
-            if (state.syncConfig.enabled == true) {
-                stringResource(id = R.string.pref_state_on)
-            } else {
-                stringResource(id = R.string.pref_state_off)
-            }
-        SettingsSection.Ai ->
-            if (state.settings.aiEnabled) {
-                stringResource(id = R.string.pref_state_on)
-            } else {
-                stringResource(id = R.string.pref_state_off)
-            }
-        SettingsSection.Diagnostics ->
-            if (state.settings.diagnosticsEnabled) {
-                stringResource(id = R.string.pref_state_on)
-            } else {
-                stringResource(id = R.string.pref_state_off)
-            }
+        SettingsSection.Appearance -> appearanceModeValue(state.settings.appearanceMode)
+        SettingsSection.Editor -> fontSizeValue(state.fontSize)
+        SettingsSection.Save -> toggleValue(state.settings.autoSaveEnabled)
+        SettingsSection.Sync -> toggleValue(state.syncConfig.enabled == true)
+        SettingsSection.Ai -> toggleValue(state.settings.aiEnabled)
+        SettingsSection.Diagnostics -> toggleValue(state.settings.diagnosticsEnabled)
         SettingsSection.Laboratory,
         SettingsSection.About,
         -> null
+    }
+
+@Composable
+private fun appearanceModeValue(mode: String): String =
+    when (mode) {
+        "light" -> stringResource(id = R.string.theme_light)
+        "dark" -> stringResource(id = R.string.theme_dark)
+        else -> stringResource(id = R.string.theme_system)
+    }
+
+@Composable
+private fun fontSizeValue(fontSize: Float): String =
+    stringResource(
+        id = R.string.pref_value_font_size,
+        if (fontSize % 1f == 0f) fontSize.toInt().toString() else fontSize.toString(),
+    )
+
+@Composable
+private fun toggleValue(enabled: Boolean): String =
+    if (enabled) {
+        stringResource(id = R.string.pref_state_on)
+    } else {
+        stringResource(id = R.string.pref_state_off)
     }

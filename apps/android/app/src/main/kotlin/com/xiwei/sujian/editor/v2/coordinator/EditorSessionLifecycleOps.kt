@@ -269,8 +269,6 @@ fun EditorSessionCoordinator.clearWindowAttach(targetId: String) {
     }
 }
 
-// #597 session 预准备需校验记录/会话/绑定多态后原子推进，拆分会破坏 session 状态机 — 待后续重构
-@Suppress("LongMethod", "CyclomaticComplexMethod", "CognitiveComplexMethod")
 fun EditorSessionCoordinator.prepareSessionForEdit(
     targetId: String,
     initialText: String,
@@ -281,33 +279,14 @@ fun EditorSessionCoordinator.prepareSessionForEdit(
     val isPersistent = record.persistent
     val profile = record.profile
 
-    if (activeTargetId == targetId && (editingState == EditingState.EDITING || editingState == EditingState.BINDING)) {
-        val sid = store.record(targetId)?.sessionId ?: return null
-        if (sid == 0UL) return null
-        return SessionBindInfo(sid, profile, isPersistent, snapshot = querySnapshotForSession(sid))
-    }
-
-    if (activeTargetId != null && activeTargetId != targetId) {
-        updateSessionState { it.copy(editingState = EditingState.REBINDING) }
-        if (!commitActiveSession(null)) {
-            cancelActiveSession()
-        }
-    }
+    prepareActiveSessionIfCurrent(targetId)?.let { return it }
+    rebindFromOtherActiveIfNeeded(targetId)
 
     updateSessionState { it.copy(editingState = EditingState.BINDING) }
 
     val textForSession = initialText
     val sel = initialSelection ?: textForSession.toByteArray(Charsets.UTF_8).size
-    val existingId = store.record(targetId)?.sessionId
-    val sessionId =
-        if (existingId != null && existingId != 0UL && validateSession(existingId)) {
-            existingId
-        } else {
-            if (existingId != null && existingId != 0UL) {
-                closeSession(existingId)
-            }
-            createSession(targetId, textForSession, sel, isPersistent)
-        }
+    val sessionId = resolveSessionForPrepare(targetId, textForSession, sel, isPersistent)
 
     if (sessionId == null || sessionId == 0UL) {
         Log.e(
@@ -330,6 +309,19 @@ fun EditorSessionCoordinator.prepareSessionForEdit(
     // 持久还是草稿，都用真实 snapshot（createSession 已把初始正文装入 kernel，
     // 是唯一一次 Core 命令；草稿 session 同样记录 sessionId）。
     val snapshot = querySnapshotForSession(sessionId)
+    commitPreparedBindingState(targetId, sessionId, textForSession, sel, snapshot, attaching)
+    return SessionBindInfo(sessionId, profile, isPersistent, snapshot = snapshot)
+}
+
+/** 把预准备结果一次性写入 store 记录与唯一 SessionState（真实 snapshot 优先）。 */
+private fun EditorSessionCoordinator.commitPreparedBindingState(
+    targetId: String,
+    sessionId: ULong,
+    textForSession: String,
+    sel: Int,
+    snapshot: TargetSnapshot?,
+    attaching: WindowBindingState.Attaching,
+) {
     store.update(targetId) { r ->
         r.copy(
             sessionId = sessionId,
@@ -371,7 +363,48 @@ fun EditorSessionCoordinator.prepareSessionForEdit(
             localDirty = doc?.localDirty ?: false,
         )
     }
-    return SessionBindInfo(sessionId, profile, isPersistent, snapshot = snapshot)
+}
+
+/** 目标已是当前活动会话且处于编辑/绑定中 — 直接复用并返回现有绑定信息。 */
+private fun EditorSessionCoordinator.prepareActiveSessionIfCurrent(targetId: String): SessionBindInfo? {
+    if (activeTargetId != targetId || (editingState != EditingState.EDITING && editingState != EditingState.BINDING)) {
+        return null
+    }
+    val sid = store.record(targetId)?.sessionId ?: return null
+    if (sid == 0UL) return null
+    val profile = store.record(targetId)?.profile ?: return null
+    return SessionBindInfo(
+        sid,
+        profile,
+        store.record(targetId)?.persistent ?: false,
+        snapshot = querySnapshotForSession(sid),
+    )
+}
+
+/** 其他 target 正在活动 — 先提交/取消旧会话，把编辑权交还本 target。 */
+private fun EditorSessionCoordinator.rebindFromOtherActiveIfNeeded(targetId: String) {
+    if (activeTargetId == null || activeTargetId == targetId) return
+    updateSessionState { it.copy(editingState = EditingState.REBINDING) }
+    if (!commitActiveSession(null)) {
+        cancelActiveSession()
+    }
+}
+
+/** 解析可复用的 sessionId：有效现有会话直接复用，失效/缺失则创建新会话。 */
+private fun EditorSessionCoordinator.resolveSessionForPrepare(
+    targetId: String,
+    textForSession: String,
+    sel: Int,
+    isPersistent: Boolean,
+): ULong? {
+    val existingId = store.record(targetId)?.sessionId
+    if (existingId != null && existingId != 0UL && validateSession(existingId)) {
+        return existingId
+    }
+    if (existingId != null && existingId != 0UL) {
+        closeSession(existingId)
+    }
+    return createSession(targetId, textForSession, sel, isPersistent)
 }
 
 fun EditorSessionCoordinator.commitActiveSession(finalText: String?): Boolean {

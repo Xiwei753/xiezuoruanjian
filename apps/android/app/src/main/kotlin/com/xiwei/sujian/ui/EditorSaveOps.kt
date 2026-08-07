@@ -54,7 +54,6 @@ fun EditorViewModel.scheduleAutoSave(content: String) {
 }
 
 // #597 保存请求需校验 lease/session/revision 多重前置条件后签发，拆分会破坏 lease 语义 — 待后续重构
-@Suppress("CognitiveComplexMethod")
 fun EditorViewModel.requestSave(): kotlinx.coroutines.Deferred<Boolean> {
     val session = currentSession
     val deferred = kotlinx.coroutines.CompletableDeferred<Boolean>()
@@ -63,58 +62,68 @@ fun EditorViewModel.requestSave(): kotlinx.coroutines.Deferred<Boolean> {
     val lease = _sessionCoordinator?.issueDocumentOperationLease()
     val content = lease?.text ?: _uiState.value.content
     val requiredRevision = lease?.rustRevision ?: 0L
-    // #595 二：lease 校验 — currentSession 的 target 必须与 lease 的 target 一致，
-    // 且 lease 的 session/epoch 仍有效。任一不匹配返回失败，不拼接字段。
-    // 旧实现组合 currentSession（ViewModel 字段）与全局 sessionState（Coordinator
-    // StateFlow）两个独立状态源，交错时形成 A 正文 → B 章节的错误保存。
-    if (session != null && lease != null) {
-        val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
-        if (lease.targetId != targetId ||
-            !_sessionCoordinator!!.isDocumentOperationLeaseCurrent(lease)
-        ) {
-            deferred.complete(false)
-            return deferred
-        }
+    if (!validateSaveLease(session, lease, deferred)) {
+        return deferred
     }
     editorScope.launch {
-        if (session == null) {
-            // 无活动章节：没有本地输入需要保护。
-            deferred.complete(true)
-            return@launch
-        }
-        val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
-        if (content.trim().isEmpty()) {
-            if (contentExplicitlyCleared) {
-                val sendResult = saveCommandChannel.trySend(SaveCommand.Clear(session, requiredRevision))
-                if (sendResult.isFailure) {
-                    deferred.complete(false)
-                    return@launch
-                }
-            } else if (contentDirty) {
-                // 编辑过但未确认清空 — 磁盘与屏幕不一致，不得报告假成功。
-                deferred.complete(false)
-                return@launch
-            }
-        } else {
-            val sendResult = saveCommandChannel.trySend(SaveCommand.Save(content, session, requiredRevision))
-            if (sendResult.isFailure) {
-                deferred.complete(false)
-                return@launch
-            }
-        }
-        val flushReply = CompletableDeferred<Boolean>()
-        val flushResult =
-            saveCommandChannel.trySend(
-                SaveCommand.Flush(targetId, session.sessionId, requiredRevision, flushReply),
-            )
-        if (flushResult.isFailure) {
-            deferred.complete(false)
-            return@launch
-        }
-        val result = flushReply.await()
-        deferred.complete(result)
+        deferred.complete(dispatchSaveCommand(session, content, requiredRevision))
     }
     return deferred
+}
+
+/**
+ * #595 二：lease 校验 — currentSession 的 target 必须与 lease 的 target 一致，
+ * 且 lease 的 session/epoch 仍有效。任一不匹配返回失败，不拼接字段。
+ * 旧实现组合 currentSession（ViewModel 字段）与全局 sessionState（Coordinator
+ * StateFlow）两个独立状态源，交错时形成 A 正文 → B 章节的错误保存。
+ */
+private fun EditorViewModel.validateSaveLease(
+    session: EditorSession?,
+    lease: com.xiwei.sujian.editor.v2.coordinator.DocumentOperationLease?,
+    deferred: kotlinx.coroutines.CompletableDeferred<Boolean>,
+): Boolean {
+    if (session == null || lease == null) return true
+    val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
+    if (lease.targetId != targetId || !_sessionCoordinator!!.isDocumentOperationLeaseCurrent(lease)) {
+        deferred.complete(false)
+        return false
+    }
+    return true
+}
+
+/** 派发保存命令（Save/Clear/Flush）并等待 flush 屏障返回最终结果。 */
+private suspend fun EditorViewModel.dispatchSaveCommand(
+    session: EditorSession?,
+    content: String,
+    requiredRevision: Long,
+): Boolean {
+    if (session == null) {
+        // 无活动章节：没有本地输入需要保护。
+        return true
+    }
+    val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
+    if (content.trim().isEmpty()) {
+        if (contentExplicitlyCleared) {
+            if (saveCommandChannel.trySend(SaveCommand.Clear(session, requiredRevision)).isFailure) {
+                return false
+            }
+        } else if (contentDirty) {
+            // 编辑过但未确认清空 — 磁盘与屏幕不一致，不得报告假成功。
+            return false
+        }
+    } else {
+        if (saveCommandChannel.trySend(SaveCommand.Save(content, session, requiredRevision)).isFailure) {
+            return false
+        }
+    }
+    val flushReply = CompletableDeferred<Boolean>()
+    if (saveCommandChannel.trySend(
+            SaveCommand.Flush(targetId, session.sessionId, requiredRevision, flushReply),
+        ).isFailure
+    ) {
+        return false
+    }
+    return flushReply.await()
 }
 
 fun EditorViewModel.clearChapterContent() {
@@ -232,9 +241,165 @@ suspend fun EditorViewModel.clearChapterContentInternal(
     }
 }
 
-// #597 保存事务需原子执行（lease 校验→内容保存→回执记录→状态更新），含多种 BridgeResult 分支；
-// 拆分会破坏保存回滚一致性 — 待后续重构
-@Suppress("LongMethod", "CyclomaticComplexMethod", "CognitiveComplexMethod")
+// #597：保存循环与单次落盘分离 — 单次尝试（lease 校验→内容保存→回执记录→
+// 状态更新）收敛到 saveChapterAttempt，performSave 只负责 pending 重试循环；
+// 保存期间继续输入（pending）时按新 revision 重试，晚到回执不覆盖新输入。
+private sealed interface SaveAttemptResult {
+    data class Finished(val success: Boolean) : SaveAttemptResult
+
+    data class RetryPending(val content: String) : SaveAttemptResult
+}
+
+private suspend fun EditorViewModel.saveChapterAttempt(
+    contentToSave: String,
+    session: EditorSession,
+    isAutoSave: Boolean,
+    currentRevision: Long,
+    saveStartedAt: Long,
+): SaveAttemptResult {
+    val currentState = _uiState.value
+    if (currentState.saveStatus == SaveStatus.Saving) {
+        pendingSaveContent = contentToSave
+        return SaveAttemptResult.Finished(false)
+    }
+    _uiState.value = currentState.copy(saveStatus = SaveStatus.Saving)
+    return try {
+        val result =
+            workspaceRepository.saveChapterContent(
+                session.projectId,
+                session.volumeId,
+                session.chapterId,
+                contentToSave,
+            )
+        when (result) {
+            is com.xiwei.sujian.data.BridgeResult.Success ->
+                handleSaveSuccess(result, contentToSave, session, currentRevision, saveStartedAt)
+            is com.xiwei.sujian.data.BridgeResult.Error ->
+                handleSaveError(result, contentToSave, session, isAutoSave, saveStartedAt)
+            com.xiwei.sujian.data.BridgeResult.NotLoaded ->
+                handleSaveNotLoaded(contentToSave, session, isAutoSave, saveStartedAt)
+        }
+    } catch (e: Throwable) {
+        _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+        _events.send(
+            EditorEvent.ShowSaveFailedDialog(
+                getApplication<Application>().getString(R.string.error_save_exception, e.message ?: ""),
+            ),
+        )
+        SaveAttemptResult.Finished(false)
+    }
+}
+
+private suspend fun EditorViewModel.handleSaveSuccess(
+    result: com.xiwei.sujian.data.BridgeResult.Success<com.xiwei.sujian.model.ChapterSaveReceipt>,
+    contentToSave: String,
+    session: EditorSession,
+    currentRevision: Long,
+    saveStartedAt: Long,
+): SaveAttemptResult {
+    val savedHash = result.data?.contentHash ?: ""
+    com.xiwei.sujian.diagnostics.DiagnosticsEvents.chapterSave(
+        session.projectId,
+        session.chapterId,
+        contentToSave.toByteArray(Charsets.UTF_8).size,
+        "ok",
+        System.currentTimeMillis() - saveStartedAt,
+    )
+    val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
+    // #595 七：保存落盘后记录回执（revision 精确锚定）。
+    saveReceipts.record(buildSaveToken(targetId, currentRevision, savedHash))
+    // #595 三：保存回执按 revision 条件提交 — 只有当前活动 revision 仍等于
+    // 保存时的 revision 才标记 Saved、清 dirty、markSaved。用户在保存 IO 期间
+    // 继续输入（revision 前进）时，只记录回执，不覆盖新输入产生的 UI 状态/
+    // dirty/chapterHash（旧实现无条件设 Saved，页面错误显示"已保存"，B 未落盘）。
+    val activeRevision = _sessionCoordinator?.sessionState?.revision ?: currentRevision
+    if (activeRevision == currentRevision) {
+        _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.Saved, chapterHash = savedHash)
+        _sessionCoordinator?.markSaved(targetId, DocumentVersion(contentHash = savedHash))
+        contentDirty = false
+    } else {
+        _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.Unsaved)
+    }
+    val pending = pendingSaveContent
+    pendingSaveContent = null
+    return if (pending != null && pending != contentToSave) {
+        SaveAttemptResult.RetryPending(pending)
+    } else {
+        SaveAttemptResult.Finished(true)
+    }
+}
+
+private suspend fun EditorViewModel.handleSaveError(
+    result: com.xiwei.sujian.data.BridgeResult.Error,
+    contentToSave: String,
+    session: EditorSession,
+    isAutoSave: Boolean,
+    saveStartedAt: Long,
+): SaveAttemptResult {
+    _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+    com.xiwei.sujian.diagnostics.DiagnosticsEvents.chapterSave(
+        session.projectId,
+        session.chapterId,
+        contentToSave.toByteArray(Charsets.UTF_8).size,
+        "error",
+        System.currentTimeMillis() - saveStartedAt,
+    )
+    val blocked = result.code == "EMPTY_OVERWRITE_BLOCKED"
+    val dialogMessage =
+        when {
+            blocked && !isAutoSave ->
+                getApplication<Application>().getString(R.string.error_empty_overwrite_dialog)
+            !blocked && !isAutoSave ->
+                getApplication<Application>().getString(R.string.error_save_failed, result.message)
+            else -> null
+        }
+    val toastMessage =
+        when {
+            blocked && isAutoSave ->
+                getApplication<Application>().getString(R.string.error_empty_overwrite_save_blocked)
+            !blocked && isAutoSave ->
+                getApplication<Application>().getString(R.string.error_auto_save_failed, result.message)
+            else -> null
+        }
+    reportSaveFailure(dialogMessage, toastMessage)
+    return SaveAttemptResult.Finished(false)
+}
+
+private suspend fun EditorViewModel.handleSaveNotLoaded(
+    contentToSave: String,
+    session: EditorSession,
+    isAutoSave: Boolean,
+    saveStartedAt: Long,
+): SaveAttemptResult {
+    _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+    com.xiwei.sujian.diagnostics.DiagnosticsEvents.chapterSave(
+        session.projectId,
+        session.chapterId,
+        contentToSave.toByteArray(Charsets.UTF_8).size,
+        "not_loaded",
+        System.currentTimeMillis() - saveStartedAt,
+    )
+    if (!isAutoSave) {
+        _events.send(
+            EditorEvent.ShowSaveFailedDialog(
+                getApplication<Application>().getString(R.string.error_save_native_not_loaded),
+            ),
+        )
+    }
+    return SaveAttemptResult.Finished(false)
+}
+
+private suspend fun EditorViewModel.reportSaveFailure(
+    dialogMessage: String?,
+    toastMessage: String?,
+) {
+    if (dialogMessage != null) {
+        _events.send(EditorEvent.ShowSaveFailedDialog(dialogMessage))
+    } else if (toastMessage != null) {
+        emitErrorEvent(toastMessage)
+    }
+}
+
 suspend fun EditorViewModel.performSave(
     content: String,
     session: EditorSession,
@@ -247,166 +412,23 @@ suspend fun EditorViewModel.performSave(
         }
         return false
     }
-
     var currentContent = content
     var currentIsAutoSave = isAutoSave
-    var lastSaveSuccess = false
     var currentRevision = revisionAtEnqueue
     val saveStartedAt = System.currentTimeMillis()
-
     while (true) {
         val contentToSave = currentContent
-        saveMutex.withLock {
-            val currentState = _uiState.value
-            if (currentState.saveStatus == SaveStatus.Saving) {
-                pendingSaveContent = contentToSave
-                return false
+        val attempt =
+            saveMutex.withLock {
+                saveChapterAttempt(contentToSave, session, currentIsAutoSave, currentRevision, saveStartedAt)
             }
-
-            _uiState.value = currentState.copy(saveStatus = SaveStatus.Saving)
-
-            try {
-                val result =
-                    workspaceRepository.saveChapterContent(
-                        session.projectId,
-                        session.volumeId,
-                        session.chapterId,
-                        contentToSave,
-                    )
-                when (result) {
-                    is com.xiwei.sujian.data.BridgeResult.Success -> {
-                        val savedHash = result.data?.contentHash ?: ""
-                        com.xiwei.sujian.diagnostics.DiagnosticsEvents.chapterSave(
-                            session.projectId,
-                            session.chapterId,
-                            contentToSave.toByteArray(Charsets.UTF_8).size,
-                            "ok",
-                            System.currentTimeMillis() - saveStartedAt,
-                        )
-                        val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
-                        // #595 七：保存落盘后记录回执（revision 精确锚定）。
-                        saveReceipts.record(buildSaveToken(targetId, currentRevision, savedHash))
-                        // #595 三：保存回执按 revision 条件提交 — 只有当前活动
-                        // revision 仍等于保存时的 revision 才标记 Saved、清 dirty、
-                        // markSaved。用户在保存 IO 期间继续输入（revision 前进）时，
-                        // 只记录回执，不覆盖新输入产生的 UI 状态/dirty/chapterHash
-                        // （旧实现无条件设 Saved，页面错误显示"已保存"，B 未落盘）。
-                        val activeRevision = _sessionCoordinator?.sessionState?.revision ?: currentRevision
-                        if (activeRevision == currentRevision) {
-                            _uiState.value =
-                                _uiState.value.copy(
-                                    saveStatus = SaveStatus.Saved,
-                                    chapterHash = savedHash,
-                                )
-                            _sessionCoordinator?.markSaved(
-                                targetId,
-                                DocumentVersion(contentHash = savedHash),
-                            )
-                            contentDirty = false
-                        } else {
-                            _uiState.value =
-                                _uiState.value.copy(
-                                    saveStatus = SaveStatus.Unsaved,
-                                )
-                        }
-                        val pending = pendingSaveContent
-                        pendingSaveContent = null
-                        if (pending != null && pending != contentToSave) {
-                            currentContent = pending
-                            currentIsAutoSave = true
-                            lastSaveSuccess = true
-                            currentRevision = _sessionCoordinator?.sessionState?.revision ?: currentRevision
-                        } else {
-                            lastSaveSuccess = true
-                            return true
-                        }
-                    }
-                    is com.xiwei.sujian.data.BridgeResult.Error -> {
-                        _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
-                        com.xiwei.sujian.diagnostics.DiagnosticsEvents.chapterSave(
-                            session.projectId,
-                            session.chapterId,
-                            contentToSave.toByteArray(Charsets.UTF_8).size,
-                            "error",
-                            System.currentTimeMillis() - saveStartedAt,
-                        )
-                        if (result.code == "EMPTY_OVERWRITE_BLOCKED") {
-                            if (!currentIsAutoSave) {
-                                _events.send(
-                                    EditorEvent.ShowSaveFailedDialog(
-                                        getApplication<Application>().getString(R.string.error_empty_overwrite_dialog),
-                                    ),
-                                )
-                            } else {
-                                emitErrorEvent(
-                                    getApplication<Application>().getString(
-                                        R.string.error_empty_overwrite_save_blocked,
-                                    ),
-                                )
-                            }
-                        } else {
-                            if (!currentIsAutoSave) {
-                                _events.send(
-                                    EditorEvent.ShowSaveFailedDialog(
-                                        getApplication<Application>().getString(
-                                            R.string.error_save_failed,
-                                            result.message,
-                                        ),
-                                    ),
-                                )
-                            } else {
-                                emitErrorEvent(
-                                    getApplication<Application>().getString(
-                                        R.string.error_auto_save_failed,
-                                        result.message,
-                                    ),
-                                )
-                            }
-                        }
-                        return false
-                    }
-                    com.xiwei.sujian.data.BridgeResult.NotLoaded -> {
-                        _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
-                        com.xiwei.sujian.diagnostics.DiagnosticsEvents.chapterSave(
-                            session.projectId,
-                            session.chapterId,
-                            contentToSave.toByteArray(Charsets.UTF_8).size,
-                            "not_loaded",
-                            System.currentTimeMillis() - saveStartedAt,
-                        )
-                        if (!currentIsAutoSave) {
-                            _events.send(
-                                EditorEvent.ShowSaveFailedDialog(
-                                    getApplication<Application>().getString(R.string.error_save_native_not_loaded),
-                                ),
-                            )
-                        }
-                        return false
-                    }
-                }
-            } catch (e: Throwable) {
-                _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
-                com.xiwei.sujian.diagnostics.DiagnosticsEvents.chapterSave(
-                    session.projectId,
-                    session.chapterId,
-                    contentToSave.toByteArray(Charsets.UTF_8).size,
-                    "exception",
-                    System.currentTimeMillis() - saveStartedAt,
-                )
-                if (!currentIsAutoSave) {
-                    _events.send(
-                        EditorEvent.ShowSaveFailedDialog(
-                            getApplication<Application>().getString(R.string.error_save_exception, e.message ?: ""),
-                        ),
-                    )
-                } else {
-                    emitErrorEvent(
-                        getApplication<Application>().getString(R.string.error_auto_save_exception, e.message ?: ""),
-                    )
-                }
-                return false
+        when (attempt) {
+            is SaveAttemptResult.Finished -> return attempt.success
+            is SaveAttemptResult.RetryPending -> {
+                currentContent = attempt.content
+                currentIsAutoSave = true
+                currentRevision = _sessionCoordinator?.sessionState?.revision ?: currentRevision
             }
         }
-        if (!lastSaveSuccess) return false
     }
 }

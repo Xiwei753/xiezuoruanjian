@@ -45,37 +45,29 @@ val LocalAndroidCapabilities =
         AndroidCapabilities()
     }
 
-@Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod", "LongMethod") // #597 技术债：待重构拆分
-
-// LocalConfiguration.smallestScreenWidthDp 无 Compose API 替代，需用 Configuration 检测设备类型。
-@SuppressLint("ConfigurationScreenWidthHeight")
+// #592 一：Compose UI 必须从同一个 Application 进程级容器取得依赖实例，
+// 不能再次 DefaultAppServiceContainer(context) 创建第二份容器。
+// 后台 Worker 也从同一容器取依赖，保证 SyncStatusRepository StateFlow
+// 和 SyncCoordinator 全进程唯一。
 @Composable
-fun SujianApp(
-    initialDestination: String? = null,
-) {
-    val context = LocalContext.current
-    val vm: SujianAppViewModel = viewModel()
-    val appState = remember { SujianAppState(vm) }
+private fun rememberSujianAppDependencies(context: android.content.Context): SujianAppDependencies {
     val app = context.applicationContext as? com.xiwei.sujian.SujianApp
-    // #592 一：Compose UI 必须从同一个 Application 进程级容器取得依赖实例，
-    // 不能再次 DefaultAppServiceContainer(context) 创建第二份容器。
-    // 后台 Worker 也从同一容器取依赖，保证 SyncStatusRepository StateFlow
-    // 和 SyncCoordinator 全进程唯一。
-    val deps =
-        remember {
-            val testProvider = SujianAppDependencies.getTestProvider()
-            testProvider?.invoke(context) ?: requireNotNull(app).dependencies
-        }
-    val activityRef = androidx.activity.compose.LocalActivity.current as? androidx.activity.ComponentActivity
-    val sessionVm: com.xiwei.sujian.editor.v2.coordinator.EditorSessionViewModel = viewModel()
-    val sessionCoordinator =
-        sessionVm.getOrCreateSessionCoordinator(
-            deps.appServiceBridge,
-        )
-    // #592 一：EditorWindowHost 是窗口级宿主，每个窗口创建一份。
-    // #592 二：配置变化时只释放窗口宿主（View、FrameClock），Rust 会话由
-    // EditorSessionViewModel 持有并跨配置变化存活；Activity 永久结束时
-    // ViewModel.onCleared() 调用 releaseHost() 关闭全部会话。
+    return remember {
+        val testProvider = SujianAppDependencies.getTestProvider()
+        testProvider?.invoke(context) ?: requireNotNull(app).dependencies
+    }
+}
+
+// #592 一：EditorWindowHost 是窗口级宿主，每个窗口创建一份。
+// #592 二：配置变化时只释放窗口宿主（View、FrameClock），Rust 会话由
+// EditorSessionViewModel 持有并跨配置变化存活；Activity 永久结束时
+// ViewModel.onCleared() 调用 releaseHost() 关闭全部会话。
+@Composable
+private fun rememberSujianWindowHost(
+    context: android.content.Context,
+    deps: SujianAppDependencies,
+    sessionCoordinator: com.xiwei.sujian.editor.v2.coordinator.EditorSessionCoordinator,
+): EditorWindowHost {
     val windowCoordinator =
         remember(sessionCoordinator) {
             EditorWindowHost(
@@ -91,27 +83,28 @@ fun SujianApp(
             windowCoordinator.releaseWindow()
         }
     }
-    val themeController = rememberThemeController(context, deps.settingsRepository)
-    val vendorRegistry = remember { VendorAdapterRegistry().also { VendorAdapterSetup.ensureInitialized(it) } }
+    return windowCoordinator
+}
 
-    val capabilityProvider = remember { AospCapabilityProvider(context.applicationContext) }
-    val capabilities by capabilityProvider.capabilities.collectAsState()
-
+@Composable
+private fun rememberCapabilityProviderEffects(capabilityProvider: AospCapabilityProvider) {
     DisposableEffect(capabilityProvider) {
         capabilityProvider.registerInputDeviceListener()
         onDispose {
             capabilityProvider.unregisterInputDeviceListener()
         }
     }
-    DisposableEffect(deps, activityRef) {
+}
+
+@Composable
+private fun rememberActivityLifecycleEvents(activityRef: androidx.activity.ComponentActivity?) {
+    DisposableEffect(activityRef) {
         val act = activityRef ?: return@DisposableEffect onDispose { }
         val observer =
             androidx.lifecycle.LifecycleEventObserver { _, event ->
                 when (event) {
                     androidx.lifecycle.Lifecycle.Event.ON_PAUSE ->
-                        com.xiwei.sujian.diagnostics.DiagnosticsEvents.activityLifecycle(
-                            "pause",
-                        )
+                        com.xiwei.sujian.diagnostics.DiagnosticsEvents.activityLifecycle("pause")
                     androidx.lifecycle.Lifecycle.Event.ON_DESTROY -> {
                         com.xiwei.sujian.diagnostics.DiagnosticsEvents.activityLifecycle("destroy")
                     }
@@ -123,26 +116,33 @@ fun SujianApp(
             act.lifecycle.removeObserver(observer)
         }
     }
+}
 
+@Composable
+private fun rememberSujianAppInitialization(
+    deps: SujianAppDependencies,
+    vm: SujianAppViewModel,
+    context: android.content.Context,
+) {
     LaunchedEffect(Unit) {
         val workspaceUC = WorkspaceUseCase(deps.workspaceRepository)
         vm.initialize(deps.workspaceRepository, workspaceUC, deps.settingsRepository, context)
     }
-
-    val activity = activityRef
-    var foldingFeatures by remember { mutableStateOf<List<androidx.window.layout.FoldingFeature>>(emptyList()) }
-
-    if (activity != null) {
-        val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-        LaunchedEffect(lifecycleOwner) {
-            lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-                deps.syncStatusRepository.refreshState()
-                vm.refreshProjects()
-                vm.refreshRecentEdits()
-            }
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            deps.syncStatusRepository.refreshState()
+            vm.refreshProjects()
+            vm.refreshRecentEdits()
         }
     }
+}
 
+@Composable
+private fun rememberFoldFeatureCollection(
+    activity: androidx.activity.ComponentActivity?,
+): List<androidx.window.layout.FoldingFeature> {
+    var foldingFeatures by remember { mutableStateOf<List<androidx.window.layout.FoldingFeature>>(emptyList()) }
     if (activity != null) {
         val foldCollector = remember { WindowFoldFeatureCollector(activity) }
         DisposableEffect(foldCollector) {
@@ -154,28 +154,39 @@ fun SujianApp(
             }
         }
     }
+    return foldingFeatures
+}
 
+@Composable
+private fun rememberAdaptiveWindowSync(
+    capabilityProvider: AospCapabilityProvider,
+    foldingFeatures: List<androidx.window.layout.FoldingFeature>,
+    vm: SujianAppViewModel,
+    deps: SujianAppDependencies,
+) {
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current.density
-
     LaunchedEffect(foldingFeatures, configuration.screenWidthDp, configuration.screenHeightDp) {
         capabilityProvider.updateFromFoldFeatures(foldingFeatures)
         capabilityProvider.updateFromConfiguration(configuration)
-
         vm.updateFoldFeaturesFromAdaptive(foldingFeatures, density)
-
-        val settingsRepo = deps.settingsRepository
         val hasFoldFeature = foldingFeatures.isNotEmpty()
         val deviceClass =
-            settingsRepo.detectDeviceClassFromFoldFeature(
+            deps.settingsRepository.detectDeviceClassFromFoldFeature(
                 hasFoldFeature,
                 configuration.smallestScreenWidthDp,
             )
         ThemeStore.setFoldDeviceClass(deviceClass)
     }
+}
 
+@Composable
+private fun rememberLayoutResolution(
+    capabilities: AndroidCapabilities,
+    vm: SujianAppViewModel,
+) {
+    val configuration = LocalConfiguration.current
     LaunchedEffect(capabilities) {
-        val pointerKind = capabilities.activePointerKind
         val metrics =
             WindowMetrics(
                 widthDp = configuration.screenWidthDp.toFloat(),
@@ -188,7 +199,7 @@ fun SujianApp(
                         Orientation.Portrait
                     },
                 pointer =
-                    when (pointerKind) {
+                    when (capabilities.activePointerKind) {
                         PointerKind.Mouse -> com.xiwei.sujian.model.PointerKind.Mouse
                         PointerKind.Trackpad -> com.xiwei.sujian.model.PointerKind.Trackpad
                         PointerKind.Stylus -> com.xiwei.sujian.model.PointerKind.Stylus
@@ -197,6 +208,36 @@ fun SujianApp(
             )
         vm.resolveLayout(metrics)
     }
+}
+
+// LocalConfiguration.smallestScreenWidthDp 无 Compose API 替代，需用 Configuration 检测设备类型。
+@SuppressLint("ConfigurationScreenWidthHeight")
+@Composable
+fun SujianApp(initialDestination: String? = null) {
+    val context = LocalContext.current
+    val vm: SujianAppViewModel = viewModel()
+    val appState = remember { SujianAppState(vm) }
+    val deps = rememberSujianAppDependencies(context)
+    val activityRef = androidx.activity.compose.LocalActivity.current as? androidx.activity.ComponentActivity
+    val sessionVm: com.xiwei.sujian.editor.v2.coordinator.EditorSessionViewModel = viewModel()
+    val sessionCoordinator =
+        sessionVm.getOrCreateSessionCoordinator(
+            deps.appServiceBridge,
+        )
+    val windowCoordinator = rememberSujianWindowHost(context, deps, sessionCoordinator)
+    val themeController = rememberThemeController(context, deps.settingsRepository)
+    remember { VendorAdapterRegistry().also { VendorAdapterSetup.ensureInitialized(it) } }
+
+    val capabilityProvider = remember { AospCapabilityProvider(context.applicationContext) }
+    val capabilities by capabilityProvider.capabilities.collectAsState()
+    rememberCapabilityProviderEffects(capabilityProvider)
+
+    rememberActivityLifecycleEvents(activityRef)
+    rememberSujianAppInitialization(deps, vm, context)
+
+    val foldingFeatures = rememberFoldFeatureCollection(activityRef)
+    rememberAdaptiveWindowSync(capabilityProvider, foldingFeatures, vm, deps)
+    rememberLayoutResolution(capabilities, vm)
 
     val uiState by themeController.uiState.collectAsState()
 
@@ -206,36 +247,53 @@ fun SujianApp(
             LocalEditorWindowHost provides windowCoordinator,
             LocalSujianAppDependencies provides deps,
         ) {
-            Box(
-                modifier =
-                    Modifier
-                        .fillMaxSize()
-                        .pointerInput(capabilityProvider) {
-                            awaitPointerEventScope {
-                                while (true) {
-                                    val event = awaitPointerEvent(PointerEventPass.Initial)
-                                    val changes = event.changes
-                                    if (changes.isNotEmpty()) {
-                                        val type = changes.first().type
-                                        val kind =
-                                            when (type) {
-                                                PointerType.Mouse -> PointerKind.Mouse
-                                                PointerType.Stylus -> PointerKind.Stylus
-                                                PointerType.Eraser -> PointerKind.Stylus
-                                                else -> PointerKind.Touch
-                                            }
-                                        capabilityProvider.updateActivePointerKind(kind)
-                                    }
-                                }
-                            }
-                        },
-            ) {
-                SujianNavigationSuite(
-                    appState = appState,
-                    initialDestination = initialDestination,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
+            SujianAppContent(
+                capabilityProvider = capabilityProvider,
+                appState = appState,
+                initialDestination = initialDestination,
+            )
         }
+    }
+}
+
+/**
+ * 应用内容根 — 负责追踪活动指针类型（鼠标/触控笔/触摸）并驱动导航套件。
+ */
+@Composable
+private fun SujianAppContent(
+    capabilityProvider: AospCapabilityProvider,
+    appState: SujianAppState,
+    initialDestination: String?,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier =
+            modifier
+                .fillMaxSize()
+                .pointerInput(capabilityProvider) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            val changes = event.changes
+                            if (changes.isNotEmpty()) {
+                                val type = changes.first().type
+                                val kind =
+                                    when (type) {
+                                        PointerType.Mouse -> PointerKind.Mouse
+                                        PointerType.Stylus -> PointerKind.Stylus
+                                        PointerType.Eraser -> PointerKind.Stylus
+                                        else -> PointerKind.Touch
+                                    }
+                                capabilityProvider.updateActivePointerKind(kind)
+                            }
+                        }
+                    }
+                },
+    ) {
+        SujianNavigationSuite(
+            appState = appState,
+            initialDestination = initialDestination,
+            modifier = Modifier.fillMaxSize(),
+        )
     }
 }
