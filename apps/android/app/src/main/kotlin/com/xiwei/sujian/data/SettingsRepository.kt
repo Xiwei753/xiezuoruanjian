@@ -1,6 +1,7 @@
 package com.xiwei.sujian.data
 
 import android.content.Context
+import androidx.core.content.edit
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.model.BuiltinTheme
 import com.xiwei.sujian.model.DeviceInfo
@@ -96,12 +97,12 @@ class SettingsRepository(
             is BridgeResult.Success -> {
                 com.xiwei.sujian.diagnostics.DiagnosticsEvents.settingsSaved("local_settings", "ok")
                 val effectiveVerbose = if (settings.diagnosticsEnabled) settings.diagnosticsVerbose else false
-                diagPrefs.edit()
-                    .putBoolean("diagnostics_enabled", settings.diagnosticsEnabled)
-                    .putBoolean("diagnostics_verbose", effectiveVerbose)
-                    .putBoolean("use_self_render_editor_on_android", settings.useSelfRenderEditorOnAndroid)
-                    .putBoolean("experimental_fullscreen_mode", settings.experimentalFullscreenMode)
-                    .apply()
+                diagPrefs.edit {
+                    putBoolean("diagnostics_enabled", settings.diagnosticsEnabled)
+                    putBoolean("diagnostics_verbose", effectiveVerbose)
+                    putBoolean("use_self_render_editor_on_android", settings.useSelfRenderEditorOnAndroid)
+                    putBoolean("experimental_fullscreen_mode", settings.experimentalFullscreenMode)
+                }
                 CoreSettingsEvents.record(result.envelope)
                 SettingsSaveResult.Success
             }

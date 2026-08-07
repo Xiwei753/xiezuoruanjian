@@ -52,6 +52,7 @@ package com.xiwei.sujian.ui
 // ! 计数器；新旧判断由会话层 reducer 按版本锚点 + localDirty 完成。
 
 import android.app.Application
+import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -218,7 +219,7 @@ class EditorViewModel(
         var id = prefs.getString("device_id", null)
         if (id == null) {
             id = "android-${java.util.UUID.randomUUID()}"
-            prefs.edit().putString("device_id", id).apply()
+            prefs.edit { putString("device_id", id) }
         }
         id
     }

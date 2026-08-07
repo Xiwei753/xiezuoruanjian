@@ -6,6 +6,9 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.os.Build
+import androidx.core.graphics.withClip
+import androidx.core.graphics.withSave
+import androidx.core.graphics.withTranslation
 
 private fun Canvas.clipOutRectCompat(
     left: Float,
@@ -93,12 +96,12 @@ class AndroidTextRenderer(
             }
         }
         drawSearchHighlightsUnshifted(canvas, layout, unshiftedHighlights)
-        canvas.save()
-        for (shift in blockShifts) {
-            canvas.clipOutRectCompat(shift.left, shift.top, shift.right, shift.bottom)
+        canvas.withSave {
+            for (shift in blockShifts) {
+                canvas.clipOutRectCompat(shift.left, shift.top, shift.right, shift.bottom)
+            }
+            drawSearchHighlightsUnshifted(canvas, layout, shiftedHighlights)
         }
-        drawSearchHighlightsUnshifted(canvas, layout, shiftedHighlights)
-        canvas.restore()
         val groupedByDeltaY = blockShifts.groupBy { it.deltaY }
         for ((deltaY, group) in groupedByDeltaY) {
             val currentDeltaY = deltaY * (progress - 1f)
@@ -113,15 +116,14 @@ class AndroidTextRenderer(
                     val endLine = layout.getLineForOffset((endUtf16 - 1).coerceAtLeast(startUtf16))
                     (startLine..endLine).any { it in groupLineRange }
                 }
-            canvas.save()
-            canvas.translate(0f, currentDeltaY)
-            val clipPath = Path()
-            for (shift in group) {
-                clipPath.addRect(shift.left, shift.top, shift.right, shift.bottom, Path.Direction.CW)
+            canvas.withTranslation(0f, currentDeltaY) {
+                val clipPath = Path()
+                for (shift in group) {
+                    clipPath.addRect(shift.left, shift.top, shift.right, shift.bottom, Path.Direction.CW)
+                }
+                canvas.clipPath(clipPath)
+                drawSearchHighlightsUnshifted(canvas, layout, groupShiftedHighlights)
             }
-            canvas.clipPath(clipPath)
-            drawSearchHighlightsUnshifted(canvas, layout, groupShiftedHighlights)
-            canvas.restore()
         }
     }
 
@@ -163,12 +165,12 @@ class AndroidTextRenderer(
             drawSelectionHighlightUnshifted(canvas, layout, selStart, selEnd)
             return
         }
-        canvas.save()
-        for (shift in blockShifts) {
-            canvas.clipOutRectCompat(shift.left, shift.top, shift.right, shift.bottom)
+        canvas.withSave {
+            for (shift in blockShifts) {
+                canvas.clipOutRectCompat(shift.left, shift.top, shift.right, shift.bottom)
+            }
+            drawSelectionHighlightUnshifted(canvas, layout, selStart, selEnd)
         }
-        drawSelectionHighlightUnshifted(canvas, layout, selStart, selEnd)
-        canvas.restore()
         val groupedByDeltaY = blockShifts.groupBy { it.deltaY }
         for ((deltaY, group) in groupedByDeltaY) {
             val currentDeltaY = deltaY * (progress - 1f)
@@ -181,15 +183,14 @@ class AndroidTextRenderer(
             val selEndLine = layout.getLineForOffset((selEnd - 1).coerceAtLeast(selStart))
             val overlapsGroup = (selStartLine..selEndLine).any { it in groupLineRange }
             if (!overlapsGroup) continue
-            canvas.save()
-            canvas.translate(0f, currentDeltaY)
-            val clipPath = Path()
-            for (shift in group) {
-                clipPath.addRect(shift.left, shift.top, shift.right, shift.bottom, Path.Direction.CW)
+            canvas.withTranslation(0f, currentDeltaY) {
+                val clipPath = Path()
+                for (shift in group) {
+                    clipPath.addRect(shift.left, shift.top, shift.right, shift.bottom, Path.Direction.CW)
+                }
+                canvas.clipPath(clipPath)
+                drawSelectionHighlightUnshifted(canvas, layout, selStart, selEnd)
             }
-            canvas.clipPath(clipPath)
-            drawSelectionHighlightUnshifted(canvas, layout, selStart, selEnd)
-            canvas.restore()
         }
     }
 
@@ -255,20 +256,20 @@ class AndroidTextRenderer(
             layout.draw(canvas)
             return
         }
-        canvas.save()
-        for (region in holes) {
-            canvas.clipOutRectCompat(region.left, region.top, region.right, region.bottom)
+        canvas.withSave {
+            for (region in holes) {
+                canvas.clipOutRectCompat(region.left, region.top, region.right, region.bottom)
+            }
+            for (shift in blockShifts) {
+                canvas.clipOutRectCompat(
+                    shift.left,
+                    shift.top,
+                    shift.right,
+                    shift.bottom,
+                )
+            }
+            layout.draw(canvas)
         }
-        for (shift in blockShifts) {
-            canvas.clipOutRectCompat(
-                shift.left,
-                shift.top,
-                shift.right,
-                shift.bottom,
-            )
-        }
-        layout.draw(canvas)
-        canvas.restore()
         // Group by deltaY so that all paragraphs shifting by the same amount share one
         // canvas.save/translate/clip/draw/restore cycle. After mergeAdjacentBlockShifts,
         // most edits produce a single group (all suffix paragraphs shift by the same deltaY),
@@ -279,15 +280,14 @@ class AndroidTextRenderer(
         val groupedByDeltaY = blockShifts.groupBy { it.deltaY }
         for ((deltaY, group) in groupedByDeltaY) {
             val currentDeltaY = deltaY * (progress - 1f)
-            canvas.save()
-            canvas.translate(0f, currentDeltaY)
-            val clipPath = Path()
-            for (shift in group) {
-                clipPath.addRect(shift.left, shift.top, shift.right, shift.bottom, Path.Direction.CW)
+            canvas.withTranslation(0f, currentDeltaY) {
+                val clipPath = Path()
+                for (shift in group) {
+                    clipPath.addRect(shift.left, shift.top, shift.right, shift.bottom, Path.Direction.CW)
+                }
+                canvas.clipPath(clipPath)
+                layout.draw(canvas)
             }
-            canvas.clipPath(clipPath)
-            layout.draw(canvas)
-            canvas.restore()
         }
     }
 
@@ -316,12 +316,12 @@ class AndroidTextRenderer(
             drawPreeditUnderlineUnshifted(canvas, layout, compStart, compEnd)
             return
         }
-        canvas.save()
-        for (shift in blockShifts) {
-            canvas.clipOutRectCompat(shift.left, shift.top, shift.right, shift.bottom)
+        canvas.withSave {
+            for (shift in blockShifts) {
+                canvas.clipOutRectCompat(shift.left, shift.top, shift.right, shift.bottom)
+            }
+            drawPreeditUnderlineUnshifted(canvas, layout, compStart, compEnd)
         }
-        drawPreeditUnderlineUnshifted(canvas, layout, compStart, compEnd)
-        canvas.restore()
         val groupedByDeltaY = blockShifts.groupBy { it.deltaY }
         for ((deltaY, group) in groupedByDeltaY) {
             val currentDeltaY = deltaY * (progress - 1f)
@@ -334,15 +334,14 @@ class AndroidTextRenderer(
             val compEndLine = layout.getLineForOffset((compEnd - 1).coerceAtLeast(compStart))
             val overlapsGroup = (compStartLine..compEndLine).any { it in groupLineRange }
             if (!overlapsGroup) continue
-            canvas.save()
-            canvas.translate(0f, currentDeltaY)
-            val clipPath = Path()
-            for (shift in group) {
-                clipPath.addRect(shift.left, shift.top, shift.right, shift.bottom, Path.Direction.CW)
+            canvas.withTranslation(0f, currentDeltaY) {
+                val clipPath = Path()
+                for (shift in group) {
+                    clipPath.addRect(shift.left, shift.top, shift.right, shift.bottom, Path.Direction.CW)
+                }
+                canvas.clipPath(clipPath)
+                drawPreeditUnderlineUnshifted(canvas, layout, compStart, compEnd)
             }
-            canvas.clipPath(clipPath)
-            drawPreeditUnderlineUnshifted(canvas, layout, compStart, compEnd)
-            canvas.restore()
         }
     }
 
@@ -362,10 +361,9 @@ class AndroidTextRenderer(
             layout.getSelectionPath(lineStart, lineEnd, path)
             if (path.isEmpty) continue
             val bottom = layout.getLineBottom(line).toFloat()
-            canvas.save()
-            canvas.clipPath(path)
-            canvas.drawLine(0f, bottom, layout.width.toFloat(), bottom, preeditUnderlinePaint)
-            canvas.restore()
+            canvas.withClip(path) {
+                canvas.drawLine(0f, bottom, layout.width.toFloat(), bottom, preeditUnderlinePaint)
+            }
         }
     }
 

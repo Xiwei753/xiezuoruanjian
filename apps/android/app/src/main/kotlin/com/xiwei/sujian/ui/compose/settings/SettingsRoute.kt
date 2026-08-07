@@ -334,9 +334,9 @@ private data class SettingsSelection(val section: SettingsSection) : Parcelable
 @SuppressLint("LocalContextGetResourceValueCall")
 @Composable
 fun SettingsRoute(
+    modifier: Modifier = Modifier,
     detailSection: SettingsSection? = null,
     onDetailSectionChange: ((SettingsSection?) -> Unit)? = null,
-    modifier: Modifier = Modifier,
 ) {
     val deps = LocalSujianAppDependencies.current
     val vm: SettingsViewModel =

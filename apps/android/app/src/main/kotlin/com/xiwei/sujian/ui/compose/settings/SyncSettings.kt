@@ -15,6 +15,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import com.xiwei.sujian.R
 import com.xiwei.sujian.designsystem.component.SujianOutlinedButton
@@ -238,8 +239,9 @@ private fun resolveBlockMessage(
 private fun resolveStructuredResult(result: StructuredSyncResult): String {
     return when (result.messageKey) {
         "sync_dry_run_result" ->
-            stringResource(
-                id = R.string.sync_dry_run_result,
+            pluralStringResource(
+                id = R.plurals.sync_dry_run_result,
+                count = result.counts.deletedLocal,
                 result.counts.uploaded,
                 result.counts.downloaded,
                 result.counts.deletedRemote,
@@ -260,8 +262,9 @@ private fun resolveStructuredResult(result: StructuredSyncResult): String {
             )
         }
         "sync_perform_result" ->
-            stringResource(
-                id = R.string.sync_perform_result,
+            pluralStringResource(
+                id = R.plurals.sync_perform_result,
+                count = result.counts.conflicts,
                 result.counts.uploaded,
                 result.counts.downloaded,
                 result.counts.deletedRemote,

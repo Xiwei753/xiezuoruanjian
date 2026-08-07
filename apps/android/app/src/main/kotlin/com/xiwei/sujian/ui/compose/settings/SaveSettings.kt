@@ -11,6 +11,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import com.xiwei.sujian.R
 import com.xiwei.sujian.designsystem.component.SujianSection
@@ -52,7 +53,12 @@ fun SaveSettings(
                 },
                 valueRange = 1f..10f,
                 steps = 8,
-                valueLabel = stringResource(id = R.string.auto_save_delay_seconds, autoSaveDelay.toInt()),
+                valueLabel =
+                    pluralStringResource(
+                        id = R.plurals.auto_save_delay_seconds,
+                        autoSaveDelay.toInt(),
+                        autoSaveDelay.toInt(),
+                    ),
                 modifier = Modifier.fillMaxWidth(),
             )
         }

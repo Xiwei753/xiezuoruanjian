@@ -40,8 +40,8 @@ import com.xiwei.sujian.ui.compose.WorkspaceAppState
 fun ProjectListContent(
     appState: WorkspaceAppState,
     onSelectProject: (projectId: String, projectTitle: String) -> Unit,
-    showFab: Boolean = true,
     modifier: Modifier = Modifier,
+    showFab: Boolean = true,
 ) {
     var showCreateDialog by remember { mutableStateOf(false) }
     var showMenuForProject by remember { mutableStateOf<Project?>(null) }

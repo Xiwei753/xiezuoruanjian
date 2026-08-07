@@ -11,6 +11,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
+import androidx.core.graphics.withTranslation
 import com.xiwei.sujian.R
 import com.xiwei.sujian.editor.v2.coordinator.EditorOperationKind
 import com.xiwei.sujian.editor.v2.coordinator.NewlinePolicy
@@ -422,21 +423,25 @@ class SujianEditorView
         @SuppressLint("DrawAllocation")
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
-            canvas.save()
-            canvas.translate(paddingLeft - scrollX, paddingTop - scrollY)
-            searchHighlightsUtf16Buffer.clear()
-            for ((startUtf8, endUtf8) in searchHighlights) {
-                searchHighlightsUtf16Buffer.add(Pair(pipeline.utf8ToUtf16(startUtf8), pipeline.utf8ToUtf16(endUtf8)))
+            canvas.withTranslation(
+                (paddingLeft - scrollX).toFloat(),
+                (paddingTop - scrollY).toFloat(),
+            ) {
+                searchHighlightsUtf16Buffer.clear()
+                for ((startUtf8, endUtf8) in searchHighlights) {
+                    searchHighlightsUtf16Buffer.add(
+                        Pair(pipeline.utf8ToUtf16(startUtf8), pipeline.utf8ToUtf16(endUtf8)),
+                    )
+                }
+                val searchHighlightsUtf16 = searchHighlightsUtf16Buffer
+                val frameTimeNanos = pendingFrameTimeNanos
+                if (frameTimeNanos != Long.MIN_VALUE) {
+                    pendingFrameTimeNanos = Long.MIN_VALUE
+                    pipeline.drawFrame(canvas, searchHighlightsUtf16, width, height, scrollX, scrollY, frameTimeNanos)
+                } else {
+                    pipeline.drawFrame(canvas, searchHighlightsUtf16, width, height, scrollX, scrollY)
+                }
             }
-            val searchHighlightsUtf16 = searchHighlightsUtf16Buffer
-            val frameTimeNanos = pendingFrameTimeNanos
-            if (frameTimeNanos != Long.MIN_VALUE) {
-                pendingFrameTimeNanos = Long.MIN_VALUE
-                pipeline.drawFrame(canvas, searchHighlightsUtf16, width, height, scrollX, scrollY, frameTimeNanos)
-            } else {
-                pipeline.drawFrame(canvas, searchHighlightsUtf16, width, height, scrollX, scrollY)
-            }
-            canvas.restore()
         }
 
         // #595 六：暂停时不持续请求 VSync — hasActiveAnimation && !isAnimationPaused。

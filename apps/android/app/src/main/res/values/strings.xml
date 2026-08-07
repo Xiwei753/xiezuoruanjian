@@ -80,7 +80,10 @@
     <string name="btn_test_connection">测试 GitHub 连接</string>
     <string name="btn_perform_sync">立即同步</string>
 
-    <!-- Sync Prompts & Errors -->    <string name="sync_dry_run_result">将上传 %1$d 个，将下载 %2$d 个，远端将删除 %3$d 个，本地移入回收站 %4$d 个，忽略 %5$d 个。</string>
+    <!-- Sync Prompts & Errors -->    <plurals name="sync_dry_run_result">
+        <item quantity="one">将上传 %1$d 个，将下载 %2$d 个，远端将删除 %3$d 个，本地移入回收站 %4$d 个，忽略 %5$d 个。</item>
+        <item quantity="other">将上传 %1$d 个，将下载 %2$d 个，远端将删除 %3$d 个，本地移入回收站 %4$d 个，忽略 %5$d 个。</item>
+    </plurals>
 
     <string name="action_ok">确定</string>
 
@@ -147,7 +150,10 @@
     <!-- ChapterListActivity -->
     <!-- DetailChapterAdapter -->
     <!-- Settings -->
-    <string name="auto_save_delay_seconds">%1$d秒</string>
+    <plurals name="auto_save_delay_seconds">
+        <item quantity="one">%1$d秒</item>
+        <item quantity="other">%1$d秒</item>
+    </plurals>
     <string name="auto_indent_width_chars">%1$s字符</string>
 
     <!-- MainActivity -->
@@ -274,7 +280,10 @@
     <string name="save_sync_config_failed">保存同步配置失败</string>
     <string name="save_sync_secrets_failed">保存同步密钥失败</string>
     <string name="sync_test_connection_result">网络: %1$s 认证: %2$s 仓库: %3$s 分支: %4$s</string>
-    <string name="sync_perform_result">上传: %1$d 下载: %2$d 远端删除: %3$d 本地移入回收站: %4$d 冲突: %5$d</string>
+    <plurals name="sync_perform_result">
+        <item quantity="one">上传: %1$d 下载: %2$d 远端删除: %3$d 本地移入回收站: %4$d 冲突: %5$d</item>
+        <item quantity="other">上传: %1$d 下载: %2$d 远端删除: %3$d 本地移入回收站: %4$d 冲突: %5$d</item>
+    </plurals>
     <string name="unexpected_error">未知错误</string>
     <string name="sync_diag_ok">正常</string>
     <string name="sync_diag_fail">异常</string>

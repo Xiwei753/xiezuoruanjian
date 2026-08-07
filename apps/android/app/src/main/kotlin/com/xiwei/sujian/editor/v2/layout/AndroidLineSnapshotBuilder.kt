@@ -1,9 +1,9 @@
 package com.xiwei.sujian.editor.v2.layout
 
-import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.icu.text.BreakIterator
 import android.text.Layout
+import androidx.core.graphics.createBitmap
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.projection.DisplayTextProjection
 
@@ -66,7 +66,7 @@ class AndroidLineSnapshotBuilder {
         // convention ensures that (a) the Bitmap is never smaller than any sourceRect,
         // (b) sourceRect pixel coordinates never exceed Bitmap dimensions, and
         // (c) the rendering canvas maps sourceRect pixels to destinationRect layout coords.
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val bitmap = createBitmap(width, height)
         val canvas = Canvas(bitmap)
         // Translate so that document coordinate (left, top) maps to Bitmap pixel (0, 0).
         // layout.draw() uses document coordinates, so this shift ensures the line's content

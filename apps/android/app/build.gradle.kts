@@ -365,15 +365,9 @@ android {
         // GradleDependency/AndroidGradlePluginVersion 是版本提示，非代码质量问题；
         // 依赖升级应是有意决策，不由 lint 驱动。
         disable.addAll(listOf("MissingTranslation", "GradleDependency", "AndroidGradlePluginVersion"))
-        // baseline 保留 3 条 NewApi（来自 UniFFI 生成代码 writer_core.kt 的
-        // java.lang.ref.Cleaner，API 33+，minSdk 24）。详见 lint-baseline.xml
-        // 头部注释的完整保留理由。简述：AGENTS.md 禁止手工改生成绑定；
-        // AGP lint task 非 SourceTask 无法 exclude generated；checkGeneratedSources
-        // 不适用手动 srcDirs；Variant API addGeneratedSourceDirectory 需关联
-        // Gradle task 但 kotlin 绑定由外部脚本 tools/build_android.sh 生成；
-        // disable NewApi 会全局隐藏真实问题。baseline 精确冻结这 3 条，新增
-        // NewApi 仍报。根因修在上游 UniFFI bindgen 契约。
-        baseline = file("lint-baseline.xml")
+        // lint 无 baseline：UniFFI 生成的 NewApi 已通过 uniffi.toml
+        // android_cleaner = true 从上游契约修复（生成代码改用 @RequiresApi(34)
+        // 的 SystemCleaner + SDK_INT 运行时分支），不再需要冻结任何预存问题。
     }
 }
 

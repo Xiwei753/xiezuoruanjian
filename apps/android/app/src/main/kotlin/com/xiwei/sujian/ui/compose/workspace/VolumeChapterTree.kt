@@ -63,9 +63,9 @@ fun ChapterTreeContent(
     projectId: String,
     workspaceRepository: com.xiwei.sujian.data.WorkspaceRepository,
     onSelectChapter: (volumeId: String, chapterId: String, chapterTitle: String) -> Unit,
+    modifier: Modifier = Modifier,
     showHeader: Boolean = true,
     onBackToProjects: () -> Unit = {},
-    modifier: Modifier = Modifier,
 ) {
     val viewModel: WorkspaceViewModel = viewModel()
     viewModel.initialize(projectId, workspaceRepository)
@@ -303,8 +303,8 @@ fun VolumeChapterTree(
     projectId: String,
     workspaceRepository: com.xiwei.sujian.data.WorkspaceRepository,
     onSelectChapter: (volumeId: String, chapterId: String, chapterTitle: String) -> Unit,
-    onBackToProjects: () -> Unit = {},
     modifier: Modifier = Modifier,
+    onBackToProjects: () -> Unit = {},
 ) {
     ChapterTreeContent(
         projectId = projectId,
@@ -550,8 +550,8 @@ fun ChapterRow(
     isSelected: Boolean,
     onSelect: () -> Unit,
     onMoreActions: () -> Unit,
-    volumeId: String = "",
     modifier: Modifier = Modifier,
+    volumeId: String = "",
 ) {
     SujianListItem(
         headline = chapter.title,

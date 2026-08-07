@@ -1,0 +1,7 @@
+[bindings.kotlin]
+android = true
+# #597 Lint 根因修复：让 UniFFI 生成 Android 专用 cleaner（Build.VERSION.SDK_INT
+# 运行时分支 + @RequiresApi(34) 注解），不再生成 java.lang.ref.Cleaner 直接调用
+# （API 33+，minSdk 24 触发 NewApi）。这属于上游绑定契约配置，生成代码仍由
+# tools/build_android.sh 官方管线产出，不手工修改绑定。
+android_cleaner = true

@@ -2,6 +2,7 @@ package com.xiwei.sujian.labs
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.core.content.edit
 
 /**
  * 实验室功能设置仓库 — 使用独立 SharedPreferences: sujian_experiments
@@ -21,7 +22,7 @@ class ExperimentalSettingsRepository(context: Context) {
         featureId: String,
         enabled: Boolean,
     ) {
-        prefs.edit().putBoolean(featureId, enabled).apply()
+        prefs.edit { putBoolean(featureId, enabled) }
     }
 
     /**
@@ -31,13 +32,13 @@ class ExperimentalSettingsRepository(context: Context) {
     fun migrateFromLegacy(legacyFullscreenMode: Boolean) {
         if (!prefs.contains("migrated_from_legacy")) {
             // 只在未迁移时执行
-            if (!prefs.contains("fullscreen_immersive")) {
-                prefs.edit()
-                    .putBoolean("fullscreen_immersive", legacyFullscreenMode)
-                    .putBoolean("migrated_from_legacy", true)
-                    .apply()
-            } else {
-                prefs.edit().putBoolean("migrated_from_legacy", true).apply()
+            prefs.edit {
+                if (!prefs.contains("fullscreen_immersive")) {
+                    putBoolean("fullscreen_immersive", legacyFullscreenMode)
+                    putBoolean("migrated_from_legacy", true)
+                } else {
+                    putBoolean("migrated_from_legacy", true)
+                }
             }
         }
     }

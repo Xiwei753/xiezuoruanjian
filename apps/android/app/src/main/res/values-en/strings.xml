@@ -58,7 +58,10 @@
     <string name="btn_test_connection">Test GitHub Connection</string>
     <string name="btn_perform_sync">Sync Now</string>
 
-    <!-- Sync Prompts & Errors -->    <string name="sync_dry_run_result">Will upload %1$d, download %2$d, delete %3$d remote files, move %4$d local files to trash, and ignore %5$d.</string>
+    <!-- Sync Prompts & Errors -->    <plurals name="sync_dry_run_result">
+        <item quantity="one">Will upload %1$d, download %2$d, delete %3$d remote files, move %4$d local file to trash, and ignore %5$d.</item>
+        <item quantity="other">Will upload %1$d, download %2$d, delete %3$d remote files, move %4$d local files to trash, and ignore %5$d.</item>
+    </plurals>
 
     <string name="action_ok">OK</string>
 
@@ -102,7 +105,10 @@
     <!-- ChapterListActivity -->
     <!-- DetailChapterAdapter -->
     <!-- Settings -->
-    <string name="auto_save_delay_seconds">%1$d sec</string>
+    <plurals name="auto_save_delay_seconds">
+        <item quantity="one">%1$d second</item>
+        <item quantity="other">%1$d seconds</item>
+    </plurals>
     <string name="auto_indent_width_chars">%1$s characters</string>
 
     <!-- MainActivity -->
@@ -170,7 +176,10 @@
     <string name="save_sync_secrets_failed">Failed to save sync credentials</string>
     <string name="sync_block_not_ready">Sync not ready</string>
     <string name="sync_test_connection_result">Network: %1$s Auth: %2$s Repo: %3$s Branch: %4$s</string>
-    <string name="sync_perform_result">Uploaded: %1$d Downloaded: %2$d Remote deleted: %3$d Local moved to trash: %4$d Conflicts: %5$d</string>
+    <plurals name="sync_perform_result">
+        <item quantity="one">Uploaded: %1$d Downloaded: %2$d Remote deleted: %3$d Local moved to trash: %4$d Conflict: %5$d</item>
+        <item quantity="other">Uploaded: %1$d Downloaded: %2$d Remote deleted: %3$d Local moved to trash: %4$d Conflicts: %5$d</item>
+    </plurals>
     <string name="unexpected_error">Unexpected error</string>
     <string name="sync_terminal_failure">Sync encountered an unrecoverable error</string>
     <string name="sync_retryable_failure">Sync encountered a temporary error, retryable</string>
