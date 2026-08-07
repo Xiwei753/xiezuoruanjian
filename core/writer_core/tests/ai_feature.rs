@@ -36,7 +36,7 @@ use writer_core::facade::WriterCore;
 #[test]
 fn ai_available_returns_true_when_feature_enabled() {
     let temp_dir = tempfile::tempdir().expect("temp dir creation must succeed");
-    let core = WriterCore::new(temp_dir.path());
+    let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
     assert!(
         core.ai_available(),
         "ai_available() must return true when the 'ai' feature is enabled"
@@ -251,7 +251,7 @@ fn build_ai_context_succeeds_for_all_scopes() {
 #[test]
 fn facade_build_ai_context_matches_service() {
     let temp_dir = tempfile::tempdir().expect("temp dir creation must succeed");
-    let core = WriterCore::new(temp_dir.path());
+    let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
     let reference = AiContextReference {
         scope: AiContextScope::CurrentChapter,
         reference_ids: vec!["ch-1".to_string()],
@@ -491,7 +491,7 @@ fn stream_flusher_byte_conservation_invariant() {
 #[test]
 fn facade_get_ai_request_payload_matches_service() {
     let temp_dir = tempfile::tempdir().expect("temp dir creation must succeed");
-    let core = WriterCore::new(temp_dir.path());
+    let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
     let mut conversation = AiConversation::new();
     conversation.add_user_message("facade test");
 
