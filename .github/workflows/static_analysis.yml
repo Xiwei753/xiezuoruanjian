@@ -120,6 +120,9 @@ jobs:
       - name: Check HarmonyOS native bridge consistency
         run: python3 tools/check_harmony_native_bridge.py
 
+      - name: Android workflow contract tests
+        run: python3 tools/test_android_workflow_contracts.py
+
   # === Architecture constraint test (separated from unit tests) ===
   arch-constraint-test:
     name: 架构约束测试
