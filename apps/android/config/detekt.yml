@@ -27,8 +27,6 @@ complexity:
     active: true
     threshold: 15
     excludes:
-      # --- 星图 UI（#592 既有实现，星图不在 #597 范围；待星图正式实现时重构）---
-      - "**/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt"
       # --- 数据层：同步/设置逻辑，条件分支密集，待拆分状态机 ---
       - "**/kotlin/com/xiwei/sujian/data/AutoSyncWorker.kt"              # 同步Worker，多分支错误处理
       - "**/kotlin/com/xiwei/sujian/data/SettingsRepository.kt"          # 设置仓储，多条件映射
@@ -71,8 +69,6 @@ complexity:
     active: true
     threshold: 15
     excludes:
-      # --- 星图 UI（#592 既有实现，星图不在 #597 范围；待星图正式实现时重构）---
-      - "**/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt"
       # --- 数据层：桥接映射/同步逻辑，多分支错误处理 ---
       - "**/kotlin/com/xiwei/sujian/data/AutoSyncWorker.kt"
       - "**/kotlin/com/xiwei/sujian/data/BridgeMappers.kt"               # 桥接映射多分支
@@ -109,8 +105,6 @@ complexity:
     active: true
     threshold: 80
     excludes:
-      # --- 星图 UI（#592 既有实现，星图不在 #597 范围；待星图正式实现时重构）---
-      - "**/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt"
       # --- 数据层：同步逻辑长方法 ---
       - "**/kotlin/com/xiwei/sujian/data/SyncCoordinator.kt"
       # --- 编辑器测试替身：模拟完整 IME 协议（既有实现）---
@@ -165,8 +159,6 @@ complexity:
     constructorThreshold: 10
     ignoreDefaultParameters: false
     excludes:
-      # --- 星图 UI（#592 既有实现，星图不在 #597 范围；待星图正式实现时重构）---
-      - "**/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt"
       # --- 设计系统组件：Compose多参数API设计 ---
       - "**/kotlin/com/xiwei/sujian/designsystem/theme/SujianTheme.kt"
       - "**/kotlin/com/xiwei/sujian/designsystem/component/SujianSwitchRow.kt"
@@ -264,8 +256,6 @@ complexity:
     active: true
     threshold: 3
     excludes:
-      # --- 星图 UI（#592 既有实现，星图不在 #597 范围；待星图正式实现时重构）---
-      - "**/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt"
       # --- 数据层：桥接/同步/仓储，协议字符串天然重复 ---
       - "**/kotlin/com/xiwei/sujian/SujianApp.kt"
       - "**/kotlin/com/xiwei/sujian/data/AutoSyncScheduler.kt"
