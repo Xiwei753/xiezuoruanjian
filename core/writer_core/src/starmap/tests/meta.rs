@@ -9,10 +9,10 @@ fn setup_workspace() -> tempfile::TempDir {
 
 #[test]
 fn test_starmap_graph_path() {
-    let workspace = std::path::Path::new("/dummy/workspace");
+    let app_data_root = std::path::Path::new("/dummy/workspace");
     let starmap_id = "test_starmap_id";
 
-    let path = starmap_graph_path(workspace, starmap_id);
+    let path = starmap_graph_path(app_data_root, starmap_id);
 
     let expected =
         std::path::PathBuf::from("/dummy/workspace/starmaps/test_starmap_id/graph.json");

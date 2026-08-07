@@ -10,7 +10,7 @@ export type Environment = 'mock' | 'native'
 
 export interface AppContextConfig {
   environment: Environment  // 'mock' | 'native'，必须显式指定
-  workspacePath: string
+  appDataRoot: string
   enableAutoSave: boolean
   autoSaveIntervalMs: number
   enableSync: boolean
@@ -23,7 +23,7 @@ export interface AppContextConfig {
   nativeSmokeTest: boolean
 }
 
-const DEFAULT_WORKSPACE_DIR_NAME = 'writer-workspace'
+const DEFAULT_APP_DATA_DIR_NAME = 'sujian-data'
 
 export class AppContext {
   private static instance: AppContext
@@ -51,7 +51,7 @@ export class AppContext {
   setAbilityContext(context: common.UIAbilityContext): void {
     this.abilityContext = context
     const filesDir = context.filesDir
-    this.config.workspacePath = `${filesDir}/${DEFAULT_WORKSPACE_DIR_NAME}`
+    this.config.appDataRoot = `${filesDir}/${DEFAULT_APP_DATA_DIR_NAME}`
   }
 
   static getInstance(config?: AppContextConfig): AppContext {
@@ -59,7 +59,7 @@ export class AppContext {
       if (!config) {
         config = {
           environment: 'native',  // 默认 native，不自动降级
-          workspacePath: DEFAULT_WORKSPACE_DIR_NAME,
+          appDataRoot: DEFAULT_APP_DATA_DIR_NAME,
           enableAutoSave: true,
           autoSaveIntervalMs: 30000,
           enableSync: false,
@@ -82,7 +82,7 @@ export class AppContext {
   getConfig(): AppContextConfig {
     const c: AppContextConfig = {
       environment: this.config.environment,
-      workspacePath: this.config.workspacePath,
+      appDataRoot: this.config.appDataRoot,
       enableAutoSave: this.config.enableAutoSave,
       autoSaveIntervalMs: this.config.autoSaveIntervalMs,
       enableSync: this.config.enableSync,
@@ -92,8 +92,8 @@ export class AppContext {
     return c
   }
 
-  getWorkspacePath(): string {
-    return this.config.workspacePath
+  getAppDataRoot(): string {
+    return this.config.appDataRoot
   }
 
   getBridge(): IWriterCoreBridge {
@@ -136,7 +136,7 @@ export class AppContext {
     return this.isInitialized
   }
 
-  async switchToNative(workspacePath?: string): Promise<void> {
+  async switchToNative(appDataRoot?: string): Promise<void> {
     if (this.config.environment === 'native') {
       return
     }
@@ -144,8 +144,8 @@ export class AppContext {
     // 在 nativeSmokeTest 模式下禁止从 mock 切换到 native
     // 必须在初始化时就指定 native 环境
     this.config.environment = 'native'
-    if (workspacePath) {
-      this.config.workspacePath = workspacePath
+    if (appDataRoot) {
+      this.config.appDataRoot = appDataRoot
     }
     this.bridge = NativeWriterCoreBridge.getInstance()
   }
@@ -163,8 +163,8 @@ export function getBridge(): IWriterCoreBridge {
   return getAppContext().getBridge()
 }
 
-export function getWorkspacePath(): string {
-  return getAppContext().getWorkspacePath()
+export function getAppDataRoot(): string {
+  return getAppContext().getAppDataRoot()
 }
 
 

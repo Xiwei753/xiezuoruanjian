@@ -595,7 +595,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let data_root = temp_dir.path();
 
-        // Create workspace structure
+        // Create project structure
         std::fs::create_dir_all(data_root.join("projects")).unwrap();
 
         // Create project and volume

@@ -202,7 +202,7 @@ pub(crate) enum ContentClass {
     GeneratedCache,
 }
 
-/// Classify a workspace-relative path into a content category.
+/// Classify a sync-root-relative path into a content category.
 ///
 /// Uses suffix-based rules so it works for any project/volume/chapter ID.
 /// The path is normalized to forward slashes before matching to ensure
@@ -222,7 +222,7 @@ pub(crate) fn classify_content_path(raw_path: &str) -> ContentClass {
 
     // User text documents: any .md file under /chapters/, plus
     // note.md, outline.md, scene.md, character_notes.md, timeline_notes.md
-    // anywhere in the workspace
+    // anywhere in the sync root
     if path.ends_with(".md") {
         if path.contains("/chapters/") {
             return ContentClass::UserTextDocument;
@@ -338,7 +338,7 @@ pub(crate) fn perform_lww_sync(
     transport: &dyn SyncTransport,
 ) -> crate::Result<SyncResult> {
     log::debug!(
-        "[sync] backend_type=github_api sync_mode=lww_manifest entry=perform_lww_sync workspace={}",
+        "[sync] backend_type=github_api sync_mode=lww_manifest entry=perform_lww_sync sync_root={}",
         sync_root.display()
     );
     let mut result = SyncResult::success();

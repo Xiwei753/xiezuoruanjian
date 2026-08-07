@@ -63,11 +63,11 @@ static napi_value ReturnJsonString(napi_env env, char* json) {
 
 // ── Core lifecycle ──
 
-// NativeInit: Initialize core with workspace path. Returns int32 status code:
+// NativeInit: Initialize core with app data root path. Returns int32 status code:
 //   0 = success
 //   -1 = null/empty path
 //   -2 = directory creation failed
-//   -3 = manifest file initialization failed (sync state, settings, etc.)
+//   -3 = core state initialization failed (sync state, settings, etc.)
 static napi_value NativeInit(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value args[1];

@@ -8,8 +8,8 @@ extern "C" {
 #endif
 
 // ── Core lifecycle ──
-// writer_core_init: Initialize core with workspace path. Returns 0 on success,
-//   -1 if path is null/empty, -2 if workspace dir creation failed, -3 if manifest write failed.
+// writer_core_init: Initialize core with app data root path. Returns 0 on success,
+//   -1 if path is null/empty, -2 if projects dir creation failed, -3 if core state init failed.
 // All char* return values are heap-allocated by core and MUST be freed via writer_core_free_string.
 int32_t writer_core_init(const char* path);
 char*  writer_core_get_load_status(void);
@@ -27,7 +27,7 @@ char*  writer_core_resolve_layout(const char* metrics_json);
 // writer_core_resolve_screen_policy: Input/output are JSON strings (ResultEnvelope<ScreenPolicyDto>).
 char*  writer_core_resolve_screen_policy(const char* screen_role_json, const char* shell_mode_json);
 
-// ── Workspace 查询 ──
+// ── App State 查询 ──
 // 新 Core API 边界：平台通过 writer_core_init 注入 app_data_root 与 projects_root，
 // Core 不再创建/验证/打开 workspace。此处仅保留查询类 C ABI。
 // All return ResultEnvelope JSON. Path arguments are UTF-8 strings.

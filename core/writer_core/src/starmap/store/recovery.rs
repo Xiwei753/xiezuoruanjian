@@ -39,7 +39,7 @@ impl StarMapStore {
     }
 
     pub(super) fn starmap_dir(&self) -> PathBuf {
-        self.workspace
+        self.app_data_root
             .join("starmaps")
             .join(&self.starmap_id)
     }

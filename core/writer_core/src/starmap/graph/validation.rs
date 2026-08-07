@@ -15,11 +15,11 @@ use crate::starmap::types::*;
 /// - Portal deep_target 可达（无循环、无缺失）
 /// - DisplayPolicy scale 层级有序
 /// - 数值字段无 NaN/非法值
-pub(crate) fn validate_graph(workspace: &std::path::Path, graph: &StarMapGraph) -> Result<()> {
-    let node_ids = validate_nodes(workspace, graph)?;
-    validate_edges(workspace, graph, &node_ids)?;
-    validate_embeds(workspace, graph, &node_ids)?;
-    validate_links(workspace, graph, &node_ids)?;
+pub(crate) fn validate_graph(app_data_root: &std::path::Path, graph: &StarMapGraph) -> Result<()> {
+    let node_ids = validate_nodes(app_data_root, graph)?;
+    validate_edges(app_data_root, graph, &node_ids)?;
+    validate_embeds(app_data_root, graph, &node_ids)?;
+    validate_links(app_data_root, graph, &node_ids)?;
     Ok(())
 }
 
@@ -33,7 +33,7 @@ pub(crate) fn validate_graph(workspace: &std::path::Path, graph: &StarMapGraph) 
     clippy::type_complexity
 )]
 fn validate_nodes(
-    workspace: &std::path::Path,
+    app_data_root: &std::path::Path,
     graph: &StarMapGraph,
 ) -> Result<std::collections::HashSet<String>> {
     let mut node_ids = std::collections::HashSet::new();
@@ -94,7 +94,7 @@ fn validate_nodes(
                     .map(|t| t.starmap_id.clone())
                     .unwrap_or_else(|| portal.target_starmap_id.clone());
 
-                if crate::starmap::load_starmap_meta(workspace, &target_id).is_err() {
+                if crate::starmap::load_starmap_meta(app_data_root, &target_id).is_err() {
                     return Err(Error::Io(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         "Portal target starmap does not exist",
@@ -102,7 +102,7 @@ fn validate_nodes(
                 }
 
                 if let Some(dt) = &portal.deep_target {
-                    let status = super::resolve::resolve_deep_target(workspace, dt);
+                    let status = super::resolve::resolve_deep_target(app_data_root, dt);
                     use crate::starmap::semantic::StarMapTargetResolveStatus::*;
                     match status {
                         CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor
@@ -139,7 +139,7 @@ fn validate_nodes(
     clippy::type_complexity
 )]
 fn validate_edges(
-    workspace: &std::path::Path,
+    app_data_root: &std::path::Path,
     graph: &StarMapGraph,
     node_ids: &std::collections::HashSet<String>,
 ) -> Result<()> {
@@ -182,7 +182,7 @@ fn validate_edges(
                         }
                         StarMapEdgeEndpoint::Starmap => {}
                         StarMapEdgeEndpoint::DeepTarget { target } => {
-                            let status = super::resolve::resolve_deep_target(workspace, target);
+                            let status = super::resolve::resolve_deep_target(app_data_root, target);
                             use crate::starmap::semantic::StarMapTargetResolveStatus::*;
                             match status {
                                 CycleDetected | TooDeep | MissingStarmap | MissingNode
@@ -197,7 +197,7 @@ fn validate_edges(
                         }
                     }
                 } else if let Some(target) = legacy_target {
-                    let status = super::resolve::resolve_deep_target(workspace, target);
+                    let status = super::resolve::resolve_deep_target(app_data_root, target);
                     use crate::starmap::semantic::StarMapTargetResolveStatus::*;
                     match status {
                         CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor
@@ -235,7 +235,7 @@ fn validate_edges(
     clippy::cognitive_complexity
 )]
 fn validate_embeds(
-    workspace: &std::path::Path,
+    app_data_root: &std::path::Path,
     graph: &StarMapGraph,
     node_ids: &std::collections::HashSet<String>,
 ) -> Result<()> {
@@ -254,7 +254,7 @@ fn validate_embeds(
             )));
         }
 
-        if crate::starmap::load_starmap_meta(workspace, &embed.target_starmap_id).is_err() {
+        if crate::starmap::load_starmap_meta(app_data_root, &embed.target_starmap_id).is_err() {
             return Err(Error::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "Embed target starmap does not exist",
@@ -337,7 +337,7 @@ fn validate_embeds(
     clippy::type_complexity
 )]
 fn validate_links(
-    workspace: &std::path::Path,
+    app_data_root: &std::path::Path,
     graph: &StarMapGraph,
     node_ids: &std::collections::HashSet<String>,
 ) -> Result<()> {
@@ -376,7 +376,7 @@ fn validate_links(
             StarMapEndpoint::Starmap => {}
         }
 
-        let status = super::resolve::resolve_deep_target(workspace, &link.target);
+        let status = super::resolve::resolve_deep_target(app_data_root, &link.target);
         use crate::starmap::semantic::StarMapTargetResolveStatus::*;
         match status {
             CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor

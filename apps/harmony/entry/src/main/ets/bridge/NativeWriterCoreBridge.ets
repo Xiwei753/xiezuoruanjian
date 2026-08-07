@@ -44,7 +44,7 @@ import { NativeLayoutBridge } from './NativeLayoutBridge'
 export class NativeWriterCoreBridge implements IWriterCoreBridge {
   private static instance: NativeWriterCoreBridge
   private isInitialized: boolean = false
-  private workspacePath: string = ''
+  private appDataRoot: string = ''
   private lastInitErrorCode: number = 0
 
   // ── 公共模块 & 分域 Bridge ──
@@ -65,20 +65,20 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     return NativeWriterCoreBridge.instance
   }
 
-  async initialize(workspacePath: string): Promise<boolean> {
+  async initialize(appDataRoot: string): Promise<boolean> {
     if (this.isInitialized) {
       return true
     }
     try {
-      const result: number = this.core.getNativeModule().nativeInit(workspacePath) as number
+      const result: number = this.core.getNativeModule().nativeInit(appDataRoot) as number
       if (result === 0) {
         this.isInitialized = true
-        this.workspacePath = workspacePath
+        this.appDataRoot = appDataRoot
         this.statsBridge.setInitialized(true)
         return true
       }
       this.lastInitErrorCode = result
-      console.error(`nativeInit failed with code: ${result}, path: ${workspacePath}`)
+      console.error(`nativeInit failed with code: ${result}, path: ${appDataRoot}`)
       return false
     } catch (e) {
       this.lastInitErrorCode = -999
@@ -101,7 +101,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     }
   }
 
-  // ── Workspace ──
+  // ── App State ──
 
   async listAppSummaries(): Promise<ResultEnvelope<AppSummary[]>> {
     return this.appStateBridge.listAppSummaries()

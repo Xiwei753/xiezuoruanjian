@@ -44,7 +44,7 @@ impl StarMapStore {
                     let ids: Vec<String> = self.dirty_nodes.iter().cloned().collect();
                     for node_id in &ids {
                         if let Some(node) = self.nodes.get(node_id) {
-                            if package_storage::save_node(&self.workspace, &self.starmap_id, node)
+                            if package_storage::save_node(&self.app_data_root, &self.starmap_id, node)
                                 .is_err()
                             {
                                 succeeded = false;
@@ -58,7 +58,7 @@ impl StarMapStore {
                     let ids: Vec<String> = self.dirty_edges.iter().cloned().collect();
                     for edge_id in &ids {
                         if let Some(edge) = self.edges.get(edge_id) {
-                            if package_storage::save_edge(&self.workspace, &self.starmap_id, edge)
+                            if package_storage::save_edge(&self.app_data_root, &self.starmap_id, edge)
                                 .is_err()
                             {
                                 succeeded = false;
@@ -72,7 +72,7 @@ impl StarMapStore {
                     let ids: Vec<String> = self.dirty_embeds.iter().cloned().collect();
                     for instance_id in &ids {
                         if let Some(embed) = self.embeds.get(instance_id) {
-                            if package_storage::save_embed(&self.workspace, &self.starmap_id, embed)
+                            if package_storage::save_embed(&self.app_data_root, &self.starmap_id, embed)
                                 .is_err()
                             {
                                 succeeded = false;
@@ -86,7 +86,7 @@ impl StarMapStore {
                     let ids: Vec<String> = self.dirty_links.iter().cloned().collect();
                     for link_id in &ids {
                         if let Some(link) = self.links.get(link_id) {
-                            if package_storage::save_link(&self.workspace, &self.starmap_id, link)
+                            if package_storage::save_link(&self.app_data_root, &self.starmap_id, link)
                                 .is_err()
                             {
                                 succeeded = false;
@@ -101,7 +101,7 @@ impl StarMapStore {
                     for hl_id in &ids {
                         if let Some(hl) = self.hyperlinks.get(hl_id) {
                             if package_storage::save_hyperlink(
-                                &self.workspace,
+                                &self.app_data_root,
                                 &self.starmap_id,
                                 hl,
                             )
@@ -118,7 +118,7 @@ impl StarMapStore {
                     if self.dirty_layout {
                         if let Some(ref layout) = self.layout {
                             if package_storage::save_layout(
-                                &self.workspace,
+                                &self.app_data_root,
                                 &self.starmap_id,
                                 layout,
                             )
@@ -150,7 +150,7 @@ impl StarMapStore {
                     let ids: Vec<String> = self.deleted_node_ids.iter().cloned().collect();
                     for node_id in &ids {
                         match package_storage::delete_node_file(
-                            &self.workspace,
+                            &self.app_data_root,
                             &self.starmap_id,
                             node_id,
                         ) {
@@ -169,7 +169,7 @@ impl StarMapStore {
                     let ids: Vec<String> = self.deleted_edge_ids.iter().cloned().collect();
                     for edge_id in &ids {
                         match package_storage::delete_edge_file(
-                            &self.workspace,
+                            &self.app_data_root,
                             &self.starmap_id,
                             edge_id,
                         ) {
@@ -188,7 +188,7 @@ impl StarMapStore {
                     let ids: Vec<String> = self.deleted_embed_ids.iter().cloned().collect();
                     for instance_id in &ids {
                         match package_storage::delete_embed_file(
-                            &self.workspace,
+                            &self.app_data_root,
                             &self.starmap_id,
                             instance_id,
                         ) {
@@ -207,7 +207,7 @@ impl StarMapStore {
                     let ids: Vec<String> = self.deleted_link_ids.iter().cloned().collect();
                     for link_id in &ids {
                         match package_storage::delete_link_file(
-                            &self.workspace,
+                            &self.app_data_root,
                             &self.starmap_id,
                             link_id,
                         ) {
@@ -226,7 +226,7 @@ impl StarMapStore {
                     let ids: Vec<String> = self.deleted_hyperlink_ids.iter().cloned().collect();
                     for hl_id in &ids {
                         match package_storage::delete_hyperlink_file(
-                            &self.workspace,
+                            &self.app_data_root,
                             &self.starmap_id,
                             hl_id,
                         ) {
@@ -272,7 +272,7 @@ impl StarMapStore {
                 .map(|m| *m.node_kind_counts.get("Chapter").unwrap_or(&0))
                 .unwrap_or(0u32);
             crate::starmap::update_starmap_stats(
-                &self.workspace,
+                &self.app_data_root,
                 &self.starmap_id,
                 node_count,
                 edge_count,
@@ -326,43 +326,43 @@ impl StarMapStore {
     pub fn flush(&mut self) -> Result<()> {
         for node_id in &self.dirty_nodes {
             if let Some(node) = self.nodes.get(node_id) {
-                package_storage::save_node(&self.workspace, &self.starmap_id, node)?;
+                package_storage::save_node(&self.app_data_root, &self.starmap_id, node)?;
             }
         }
 
         for edge_id in &self.dirty_edges {
             if let Some(edge) = self.edges.get(edge_id) {
-                package_storage::save_edge(&self.workspace, &self.starmap_id, edge)?;
+                package_storage::save_edge(&self.app_data_root, &self.starmap_id, edge)?;
             }
         }
 
         for instance_id in &self.dirty_embeds {
             if let Some(embed) = self.embeds.get(instance_id) {
-                package_storage::save_embed(&self.workspace, &self.starmap_id, embed)?;
+                package_storage::save_embed(&self.app_data_root, &self.starmap_id, embed)?;
             }
         }
 
         for link_id in &self.dirty_links {
             if let Some(link) = self.links.get(link_id) {
-                package_storage::save_link(&self.workspace, &self.starmap_id, link)?;
+                package_storage::save_link(&self.app_data_root, &self.starmap_id, link)?;
             }
         }
 
         for hl_id in &self.dirty_hyperlinks {
             if let Some(hl) = self.hyperlinks.get(hl_id) {
-                package_storage::save_hyperlink(&self.workspace, &self.starmap_id, hl)?;
+                package_storage::save_hyperlink(&self.app_data_root, &self.starmap_id, hl)?;
             }
         }
 
         if self.dirty_layout {
             if let Some(ref layout) = self.layout {
-                package_storage::save_layout(&self.workspace, &self.starmap_id, layout)?;
+                package_storage::save_layout(&self.app_data_root, &self.starmap_id, layout)?;
             }
         }
 
         let node_ids_to_delete: Vec<String> = self.deleted_node_ids.iter().cloned().collect();
         for node_id in &node_ids_to_delete {
-            match package_storage::delete_node_file(&self.workspace, &self.starmap_id, node_id) {
+            match package_storage::delete_node_file(&self.app_data_root, &self.starmap_id, node_id) {
                 Ok(()) => {
                     self.deleted_node_ids.remove(node_id);
                 }
@@ -376,7 +376,7 @@ impl StarMapStore {
 
         let edge_ids_to_delete: Vec<String> = self.deleted_edge_ids.iter().cloned().collect();
         for edge_id in &edge_ids_to_delete {
-            match package_storage::delete_edge_file(&self.workspace, &self.starmap_id, edge_id) {
+            match package_storage::delete_edge_file(&self.app_data_root, &self.starmap_id, edge_id) {
                 Ok(()) => {
                     self.deleted_edge_ids.remove(edge_id);
                 }
@@ -390,7 +390,7 @@ impl StarMapStore {
 
         let embed_ids_to_delete: Vec<String> = self.deleted_embed_ids.iter().cloned().collect();
         for instance_id in &embed_ids_to_delete {
-            match package_storage::delete_embed_file(&self.workspace, &self.starmap_id, instance_id)
+            match package_storage::delete_embed_file(&self.app_data_root, &self.starmap_id, instance_id)
             {
                 Ok(()) => {
                     self.deleted_embed_ids.remove(instance_id);
@@ -405,7 +405,7 @@ impl StarMapStore {
 
         let link_ids_to_delete: Vec<String> = self.deleted_link_ids.iter().cloned().collect();
         for link_id in &link_ids_to_delete {
-            match package_storage::delete_link_file(&self.workspace, &self.starmap_id, link_id) {
+            match package_storage::delete_link_file(&self.app_data_root, &self.starmap_id, link_id) {
                 Ok(()) => {
                     self.deleted_link_ids.remove(link_id);
                 }
@@ -419,7 +419,7 @@ impl StarMapStore {
 
         let hl_ids_to_delete: Vec<String> = self.deleted_hyperlink_ids.iter().cloned().collect();
         for hl_id in &hl_ids_to_delete {
-            match package_storage::delete_hyperlink_file(&self.workspace, &self.starmap_id, hl_id) {
+            match package_storage::delete_hyperlink_file(&self.app_data_root, &self.starmap_id, hl_id) {
                 Ok(()) => {
                     self.deleted_hyperlink_ids.remove(hl_id);
                 }
@@ -450,7 +450,7 @@ impl StarMapStore {
             .map(|m| *m.node_kind_counts.get("Chapter").unwrap_or(&0))
             .unwrap_or(0u32);
         crate::starmap::update_starmap_stats(
-            &self.workspace,
+            &self.app_data_root,
             &self.starmap_id,
             node_count,
             edge_count,
@@ -472,7 +472,7 @@ impl StarMapStore {
 
     pub fn flush_viewport(&self) -> Result<()> {
         if let Some(ref viewport) = self.viewport {
-            package_storage::save_viewport(&self.workspace, &self.starmap_id, viewport)?;
+            package_storage::save_viewport(&self.app_data_root, &self.starmap_id, viewport)?;
         }
         Ok(())
     }

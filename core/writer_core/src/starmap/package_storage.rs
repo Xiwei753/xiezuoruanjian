@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub(crate) fn starmap_pkg_dir(workspace: &Path, starmap_id: &str) -> PathBuf {
-    workspace.join("starmaps").join(starmap_id)
+pub(crate) fn starmap_pkg_dir(app_data_root: &Path, starmap_id: &str) -> PathBuf {
+    app_data_root.join("starmaps").join(starmap_id)
 }
 
 pub(crate) fn bucket_for_id(id: &str) -> &str {
@@ -111,24 +111,24 @@ fn layout_nodes_shard_path(dir: &Path, bucket: &str) -> PathBuf {
         .join(format!("{}.json", bucket))
 }
 
-fn session_dir(workspace: &Path, starmap_id: &str) -> PathBuf {
-    workspace.join("session").join("starmaps").join(starmap_id)
+fn session_dir(app_data_root: &Path, starmap_id: &str) -> PathBuf {
+    app_data_root.join("session").join("starmaps").join(starmap_id)
 }
 
-fn viewport_path(workspace: &Path, starmap_id: &str) -> PathBuf {
-    session_dir(workspace, starmap_id).join("viewport.json")
+fn viewport_path(app_data_root: &Path, starmap_id: &str) -> PathBuf {
+    session_dir(app_data_root, starmap_id).join("viewport.json")
 }
 
-pub fn save_node(workspace: &Path, starmap_id: &str, node: &StarMapNode) -> Result<()> {
-    let dir = starmap_pkg_dir(workspace, starmap_id);
+pub fn save_node(app_data_root: &Path, starmap_id: &str, node: &StarMapNode) -> Result<()> {
+    let dir = starmap_pkg_dir(app_data_root, starmap_id);
     fs::create_dir_all(dir.join("nodes").join(bucket_for_id(&node.id)))?;
     let json = serde_json::to_string_pretty(node)?;
     atomic_write_string(&node_path(&dir, &node.id), &json)?;
     Ok(())
 }
 
-pub fn delete_node_file(workspace: &Path, starmap_id: &str, node_id: &str) -> Result<()> {
-    let dir = starmap_pkg_dir(workspace, starmap_id);
+pub fn delete_node_file(app_data_root: &Path, starmap_id: &str, node_id: &str) -> Result<()> {
+    let dir = starmap_pkg_dir(app_data_root, starmap_id);
     let path = node_path(&dir, node_id);
     if path.exists() {
         fs::remove_file(&path)?;
@@ -140,16 +140,16 @@ pub fn delete_node_file(workspace: &Path, starmap_id: &str, node_id: &str) -> Re
     Ok(())
 }
 
-pub fn save_edge(workspace: &Path, starmap_id: &str, edge: &StarMapEdge) -> Result<()> {
-    let dir = starmap_pkg_dir(workspace, starmap_id);
+pub fn save_edge(app_data_root: &Path, starmap_id: &str, edge: &StarMapEdge) -> Result<()> {
+    let dir = starmap_pkg_dir(app_data_root, starmap_id);
     fs::create_dir_all(dir.join("edges").join(bucket_for_id(&edge.id)))?;
     let json = serde_json::to_string_pretty(edge)?;
     atomic_write_string(&edge_path(&dir, &edge.id), &json)?;
     Ok(())
 }
 
-pub fn delete_edge_file(workspace: &Path, starmap_id: &str, edge_id: &str) -> Result<()> {
-    let dir = starmap_pkg_dir(workspace, starmap_id);
+pub fn delete_edge_file(app_data_root: &Path, starmap_id: &str, edge_id: &str) -> Result<()> {
+    let dir = starmap_pkg_dir(app_data_root, starmap_id);
     let path = edge_path(&dir, edge_id);
     if path.exists() {
         fs::remove_file(&path)?;
@@ -161,8 +161,8 @@ pub fn delete_edge_file(workspace: &Path, starmap_id: &str, edge_id: &str) -> Re
     Ok(())
 }
 
-pub fn save_embed(workspace: &Path, starmap_id: &str, embed: &StarMapEmbed) -> Result<()> {
-    let dir = starmap_pkg_dir(workspace, starmap_id);
+pub fn save_embed(app_data_root: &Path, starmap_id: &str, embed: &StarMapEmbed) -> Result<()> {
+    let dir = starmap_pkg_dir(app_data_root, starmap_id);
     fs::create_dir_all(
         dir.join("child_starmaps")
             .join(bucket_for_id(&embed.instance_id)),
@@ -172,8 +172,8 @@ pub fn save_embed(workspace: &Path, starmap_id: &str, embed: &StarMapEmbed) -> R
     Ok(())
 }
 
-pub fn delete_embed_file(workspace: &Path, starmap_id: &str, instance_id: &str) -> Result<()> {
-    let dir = starmap_pkg_dir(workspace, starmap_id);
+pub fn delete_embed_file(app_data_root: &Path, starmap_id: &str, instance_id: &str) -> Result<()> {
+    let dir = starmap_pkg_dir(app_data_root, starmap_id);
     let path = child_starmap_path(&dir, instance_id);
     if path.exists() {
         fs::remove_file(&path)?;
@@ -185,16 +185,16 @@ pub fn delete_embed_file(workspace: &Path, starmap_id: &str, instance_id: &str) 
     Ok(())
 }
 
-pub fn save_link(workspace: &Path, starmap_id: &str, link: &StarMapLink) -> Result<()> {
-    let dir = starmap_pkg_dir(workspace, starmap_id);
+pub fn save_link(app_data_root: &Path, starmap_id: &str, link: &StarMapLink) -> Result<()> {
+    let dir = starmap_pkg_dir(app_data_root, starmap_id);
     fs::create_dir_all(dir.join("links").join(bucket_for_id(&link.link_id)))?;
     let json = serde_json::to_string_pretty(link)?;
     atomic_write_string(&link_path(&dir, &link.link_id), &json)?;
     Ok(())
 }
 
-pub fn delete_link_file(workspace: &Path, starmap_id: &str, link_id: &str) -> Result<()> {
-    let dir = starmap_pkg_dir(workspace, starmap_id);
+pub fn delete_link_file(app_data_root: &Path, starmap_id: &str, link_id: &str) -> Result<()> {
+    let dir = starmap_pkg_dir(app_data_root, starmap_id);
     let path = link_path(&dir, link_id);
     if path.exists() {
         fs::remove_file(&path)?;
@@ -206,16 +206,16 @@ pub fn delete_link_file(workspace: &Path, starmap_id: &str, link_id: &str) -> Re
     Ok(())
 }
 
-pub fn save_hyperlink(workspace: &Path, starmap_id: &str, hl: &StarMapHyperlink) -> Result<()> {
-    let dir = starmap_pkg_dir(workspace, starmap_id);
+pub fn save_hyperlink(app_data_root: &Path, starmap_id: &str, hl: &StarMapHyperlink) -> Result<()> {
+    let dir = starmap_pkg_dir(app_data_root, starmap_id);
     fs::create_dir_all(dir.join("hyperlinks").join(bucket_for_id(&hl.hyperlink_id)))?;
     let json = serde_json::to_string_pretty(hl)?;
     atomic_write_string(&hyperlink_path(&dir, &hl.hyperlink_id), &json)?;
     Ok(())
 }
 
-pub fn delete_hyperlink_file(workspace: &Path, starmap_id: &str, hyperlink_id: &str) -> Result<()> {
-    let dir = starmap_pkg_dir(workspace, starmap_id);
+pub fn delete_hyperlink_file(app_data_root: &Path, starmap_id: &str, hyperlink_id: &str) -> Result<()> {
+    let dir = starmap_pkg_dir(app_data_root, starmap_id);
     let path = hyperlink_path(&dir, hyperlink_id);
     if path.exists() {
         fs::remove_file(&path)?;
@@ -227,8 +227,8 @@ pub fn delete_hyperlink_file(workspace: &Path, starmap_id: &str, hyperlink_id: &
     Ok(())
 }
 
-pub fn save_layout(workspace: &Path, starmap_id: &str, layout: &StarMapLayout) -> Result<()> {
-    let dir = starmap_pkg_dir(workspace, starmap_id);
+pub fn save_layout(app_data_root: &Path, starmap_id: &str, layout: &StarMapLayout) -> Result<()> {
+    let dir = starmap_pkg_dir(app_data_root, starmap_id);
     save_layout_sharded(&dir, layout)
 }
 
@@ -310,16 +310,16 @@ pub(crate) fn load_legacy_layout(dir: &Path) -> Option<StarMapLayout> {
     serde_json::from_str(&content).ok()
 }
 
-pub fn save_viewport(workspace: &Path, starmap_id: &str, viewport: &StarMapViewport) -> Result<()> {
-    let dir = session_dir(workspace, starmap_id);
+pub fn save_viewport(app_data_root: &Path, starmap_id: &str, viewport: &StarMapViewport) -> Result<()> {
+    let dir = session_dir(app_data_root, starmap_id);
     fs::create_dir_all(&dir)?;
     let json = serde_json::to_string_pretty(viewport)?;
-    atomic_write_string(&viewport_path(workspace, starmap_id), &json)?;
+    atomic_write_string(&viewport_path(app_data_root, starmap_id), &json)?;
     Ok(())
 }
 
-pub fn load_viewport(workspace: &Path, starmap_id: &str) -> Option<StarMapViewport> {
-    let path = viewport_path(workspace, starmap_id);
+pub fn load_viewport(app_data_root: &Path, starmap_id: &str) -> Option<StarMapViewport> {
+    let path = viewport_path(app_data_root, starmap_id);
     if !path.exists() {
         return None;
     }

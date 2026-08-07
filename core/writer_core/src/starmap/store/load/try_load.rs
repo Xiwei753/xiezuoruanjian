@@ -275,6 +275,6 @@ impl StarMapStore {
     }
 
     pub(in crate::starmap::store) fn try_load_viewport(&self) -> Option<StarMapViewport> {
-        package_storage::load_viewport(&self.workspace, &self.starmap_id)
+        package_storage::load_viewport(&self.app_data_root, &self.starmap_id)
     }
 }

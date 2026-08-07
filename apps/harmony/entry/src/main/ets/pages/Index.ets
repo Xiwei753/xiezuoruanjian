@@ -3,7 +3,7 @@ import { IWriterCoreBridge } from '../bridge/IWriterCoreBridge'
 import { Project, RecentEdit, WritingStats, AppSummary, ThemePaletteRecordDto, BuiltinThemeDto } from '../model/CoreDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl, ThemeMode } from '../system/HarmonyThemeAdapter'
 import { DesignTokens } from '../system/DesignTokens'
-import { getBridge, getWorkspacePath, getAppContext } from '../common/AppContext'
+import { getBridge, getAppDataRoot, getAppContext } from '../common/AppContext'
 import { NativeWriterCoreBridge } from '../bridge/NativeWriterCoreBridge'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../common/AdaptiveContext'
 import { WidthClass, ShellMode } from '../model/CoreDtos'
@@ -11,7 +11,7 @@ import { WidthClass, ShellMode } from '../model/CoreDtos'
 @Entry
 @Component
 struct Index {
-  @State workspacePath: string = ''
+  @State appDataRoot: string = ''
   @State projects: Project[] = []
   @State recentEdits: RecentEdit[] = []
   @State writingStats: WritingStats | null = null
@@ -58,8 +58,8 @@ struct Index {
       const ctx = getAppContext()
       if (ctx.isNativeEnvironment()) {
         const nativeBridge = NativeWriterCoreBridge.getInstance()
-        const workspacePath = getWorkspacePath()
-        const initOk = await nativeBridge.initialize(workspacePath)
+        const appDataRoot = getAppDataRoot()
+        const initOk = await nativeBridge.initialize(appDataRoot)
         if (!initOk) {
           ctx.markNativeInitFailed()
           // Fail-fast：native 初始化失败直接报错，不降级到 mock
@@ -71,7 +71,7 @@ struct Index {
           else if (errCode === -3) { errDesc = 'Internal state error' }
           else if (errCode === -4) { errDesc = 'Workspace dir creation failed' }
           else if (errCode === -999) { errDesc = 'NAPI exception (SO load failed?)' }
-          this.errorMessage = `Native core init failed: ${errDesc}\nPath: ${workspacePath}\nDetail: ${rustError}`
+          this.errorMessage = `Native core init failed: ${errDesc}\nPath: ${appDataRoot}\nDetail: ${rustError}`
           this.isLoading = false
           return
         }
@@ -94,8 +94,8 @@ struct Index {
     try {
       // 新 Core API 边界：平台自己提供数据根目录，Core 不再 openWorkspace。
       // appDataRoot 由平台管理，projects/recentEdits 通过 getAppState 查询。
-      const workspacePath = getWorkspacePath()
-      this.workspacePath = workspacePath
+      const appDataRoot = getAppDataRoot()
+      this.appDataRoot = appDataRoot
       const appStateResult = await this.bridge.getAppState()
       const statsResult = await this.bridge.getWritingStats()
 
@@ -157,7 +157,7 @@ struct Index {
         Blank()
 
         Column() {
-           Text(this.workspacePath ? this.extractWorkspaceName(this.workspacePath) : $r('app.string.my_writing_space'))
+           Text(this.appDataRoot ? this.extractWorkspaceName(this.appDataRoot) : $r('app.string.my_writing_space'))
              .fontSize(15)
              .fontColor(this.themeConfig.colors.textSecondary)
 

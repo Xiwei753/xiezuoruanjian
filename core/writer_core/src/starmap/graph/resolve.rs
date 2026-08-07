@@ -16,7 +16,7 @@
 /// 涉及磁盘 I/O（`load_starmap_meta`、`read_to_string`）。
 /// 对于大量 deep_target 的图，验证可能较慢。
 pub fn resolve_deep_target(
-    workspace: &std::path::Path,
+    app_data_root: &std::path::Path,
     dt: &crate::starmap::semantic::StarMapDeepTarget,
 ) -> crate::starmap::semantic::StarMapTargetResolveStatus {
     use crate::starmap::semantic::StarMapTargetResolveStatus::*;
@@ -25,7 +25,7 @@ pub fn resolve_deep_target(
         return TooDeep;
     }
 
-    if crate::starmap::load_starmap_meta(workspace, &dt.starmap_id).is_err() {
+    if crate::starmap::load_starmap_meta(app_data_root, &dt.starmap_id).is_err() {
         return MissingStarmap;
     }
 
@@ -40,7 +40,7 @@ pub fn resolve_deep_target(
                 if !visited.insert(current_starmap_id.clone()) {
                     return CycleDetected;
                 }
-                if crate::starmap::load_starmap_meta(workspace, &current_starmap_id).is_err() {
+                if crate::starmap::load_starmap_meta(app_data_root, &current_starmap_id).is_err() {
                     return MissingStarmap;
                 }
             }
@@ -50,7 +50,7 @@ pub fn resolve_deep_target(
     match &dt.target {
         crate::starmap::semantic::StarMapTargetDetail::Node { node_id } => {
             let mut store =
-                crate::starmap::store::StarMapStore::new(workspace, &current_starmap_id);
+                crate::starmap::store::StarMapStore::new(app_data_root, &current_starmap_id);
             if store.load_full().is_err() {
                 return MissingNode;
             }
@@ -60,7 +60,7 @@ pub fn resolve_deep_target(
         }
         crate::starmap::semantic::StarMapTargetDetail::Anchor { node_id, anchor_id } => {
             let mut store =
-                crate::starmap::store::StarMapStore::new(workspace, &current_starmap_id);
+                crate::starmap::store::StarMapStore::new(app_data_root, &current_starmap_id);
             if store.load_full().is_err() {
                 return MissingNode;
             }

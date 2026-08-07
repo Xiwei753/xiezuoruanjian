@@ -83,20 +83,20 @@ pub(crate) fn now_epoch() -> u64 {
         .as_millis() as u64
 }
 
-fn starmaps_dir(workspace: &Path) -> std::path::PathBuf {
-    workspace.join("starmaps")
+fn starmaps_dir(app_data_root: &Path) -> std::path::PathBuf {
+    app_data_root.join("starmaps")
 }
 
-fn index_path(workspace: &Path) -> std::path::PathBuf {
-    starmaps_dir(workspace).join("index.json")
+fn index_path(app_data_root: &Path) -> std::path::PathBuf {
+    starmaps_dir(app_data_root).join("index.json")
 }
 
-fn starmap_meta_path(workspace: &Path, starmap_id: &str) -> std::path::PathBuf {
-    starmaps_dir(workspace).join(format!("{}.meta.json", starmap_id))
+fn starmap_meta_path(app_data_root: &Path, starmap_id: &str) -> std::path::PathBuf {
+    starmaps_dir(app_data_root).join(format!("{}.meta.json", starmap_id))
 }
 
-fn load_index(workspace: &Path) -> Result<StarMapIndex> {
-    let path = index_path(workspace);
+fn load_index(app_data_root: &Path) -> Result<StarMapIndex> {
+    let path = index_path(app_data_root);
     if !path.exists() {
         return Ok(StarMapIndex {
             schema_version: 1,
@@ -109,22 +109,22 @@ fn load_index(workspace: &Path) -> Result<StarMapIndex> {
     Ok(idx)
 }
 
-fn save_index(workspace: &Path, idx: &StarMapIndex) -> Result<()> {
-    let dir = starmaps_dir(workspace);
+fn save_index(app_data_root: &Path, idx: &StarMapIndex) -> Result<()> {
+    let dir = starmaps_dir(app_data_root);
     fs::create_dir_all(&dir)?;
     let content = serde_json::to_string_pretty(idx)?;
-    crate::storage::atomic_write_string(&index_path(workspace), &content)
+    crate::storage::atomic_write_string(&index_path(app_data_root), &content)
 }
 
-fn save_starmap_meta(workspace: &Path, meta: &StarMapMeta) -> Result<()> {
-    let dir = starmaps_dir(workspace);
+fn save_starmap_meta(app_data_root: &Path, meta: &StarMapMeta) -> Result<()> {
+    let dir = starmaps_dir(app_data_root);
     fs::create_dir_all(&dir)?;
     let content = serde_json::to_string_pretty(meta)?;
-    crate::storage::atomic_write_string(&starmap_meta_path(workspace, &meta.starmap_id), &content)
+    crate::storage::atomic_write_string(&starmap_meta_path(app_data_root, &meta.starmap_id), &content)
 }
 
-fn load_starmap_meta(workspace: &Path, starmap_id: &str) -> Result<StarMapMeta> {
-    let path = starmap_meta_path(workspace, starmap_id);
+fn load_starmap_meta(app_data_root: &Path, starmap_id: &str) -> Result<StarMapMeta> {
+    let path = starmap_meta_path(app_data_root, starmap_id);
     if !path.exists() {
         return Err(crate::error::Error::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
@@ -136,44 +136,44 @@ fn load_starmap_meta(workspace: &Path, starmap_id: &str) -> Result<StarMapMeta> 
     Ok(meta)
 }
 
-fn delete_starmap_meta(workspace: &Path, starmap_id: &str) -> Result<()> {
-    let path = starmap_meta_path(workspace, starmap_id);
+fn delete_starmap_meta(app_data_root: &Path, starmap_id: &str) -> Result<()> {
+    let path = starmap_meta_path(app_data_root, starmap_id);
     if path.exists() {
         fs::remove_file(&path)?;
     }
     Ok(())
 }
 
-pub fn starmap_graph_path(workspace: &Path, starmap_id: &str) -> std::path::PathBuf {
-    starmaps_dir(workspace).join(starmap_id).join("graph.json")
+pub fn starmap_graph_path(app_data_root: &Path, starmap_id: &str) -> std::path::PathBuf {
+    starmaps_dir(app_data_root).join(starmap_id).join("graph.json")
 }
 
-pub fn list_starmaps(workspace: &Path) -> Result<Vec<StarMapMeta>> {
-    let idx = load_index(workspace)?;
+pub fn list_starmaps(app_data_root: &Path) -> Result<Vec<StarMapMeta>> {
+    let idx = load_index(app_data_root)?;
     Ok(idx.starmaps)
 }
 
-pub fn list_starmaps_for_project(workspace: &Path, project_id: &str) -> Result<Vec<StarMapMeta>> {
-    list_starmaps_bound_to_project(workspace, project_id)
+pub fn list_starmaps_for_project(app_data_root: &Path, project_id: &str) -> Result<Vec<StarMapMeta>> {
+    list_starmaps_bound_to_project(app_data_root, project_id)
 }
 
 pub fn list_starmaps_bound_to_project(
-    workspace: &Path,
+    app_data_root: &Path,
     project_id: &str,
 ) -> Result<Vec<StarMapMeta>> {
-    let all = list_starmaps(workspace)?;
+    let all = list_starmaps(app_data_root)?;
     Ok(all
         .into_iter()
         .filter(|m| m.project_id.as_deref() == Some(project_id))
         .collect())
 }
 
-pub fn get_starmap(workspace: &Path, starmap_id: &str) -> Result<StarMapMeta> {
-    load_starmap_meta(workspace, starmap_id)
+pub fn get_starmap(app_data_root: &Path, starmap_id: &str) -> Result<StarMapMeta> {
+    load_starmap_meta(app_data_root, starmap_id)
 }
 
 pub fn create_starmap(
-    workspace: &Path,
+    app_data_root: &Path,
     title: &str,
     description: &str,
     accent_color: Option<&str>,
@@ -194,22 +194,22 @@ pub fn create_starmap(
         linked_chapter_count: 0,
         child_starmap_count: 0,
     };
-    save_starmap_meta(workspace, &meta)?;
-    let mut idx = load_index(workspace)?;
+    save_starmap_meta(app_data_root, &meta)?;
+    let mut idx = load_index(app_data_root)?;
     idx.starmaps.push(meta.clone());
     idx.updated_at = now;
-    save_index(workspace, &idx)?;
+    save_index(app_data_root, &idx)?;
     Ok(meta)
 }
 
 pub fn create_child_starmap(
-    workspace: &Path,
+    app_data_root: &Path,
     parent_id: &str,
     title: &str,
     description: &str,
     accent_color: Option<&str>,
 ) -> Result<StarMapMeta> {
-    let parent = load_starmap_meta(workspace, parent_id)?;
+    let parent = load_starmap_meta(app_data_root, parent_id)?;
     let now = now_epoch();
     let meta = StarMapMeta {
         starmap_id: format!("sm_{}", uuid::Uuid::new_v4()),
@@ -226,35 +226,35 @@ pub fn create_child_starmap(
         linked_chapter_count: 0,
         child_starmap_count: 0,
     };
-    save_starmap_meta(workspace, &meta)?;
+    save_starmap_meta(app_data_root, &meta)?;
 
-    let mut idx = load_index(workspace)?;
+    let mut idx = load_index(app_data_root)?;
     idx.starmaps.push(meta.clone());
     idx.updated_at = now;
-    save_index(workspace, &idx)?;
+    save_index(app_data_root, &idx)?;
 
     // Update parent child count
     let mut updated_parent = parent;
     updated_parent.child_starmap_count += 1;
     updated_parent.updated_at = now;
-    save_starmap_meta(workspace, &updated_parent)?;
+    save_starmap_meta(app_data_root, &updated_parent)?;
 
     Ok(meta)
 }
 
-pub fn rename_starmap(workspace: &Path, starmap_id: &str, new_title: &str) -> Result<StarMapMeta> {
-    let mut meta = load_starmap_meta(workspace, starmap_id)?;
+pub fn rename_starmap(app_data_root: &Path, starmap_id: &str, new_title: &str) -> Result<StarMapMeta> {
+    let mut meta = load_starmap_meta(app_data_root, starmap_id)?;
     meta.title = new_title.to_string();
     meta.updated_at = now_epoch();
-    save_starmap_meta(workspace, &meta)?;
+    save_starmap_meta(app_data_root, &meta)?;
 
-    let mut idx = load_index(workspace)?;
+    let mut idx = load_index(app_data_root)?;
     if let Some(entry) = idx.starmaps.iter_mut().find(|m| m.starmap_id == starmap_id) {
         entry.title = new_title.to_string();
         entry.updated_at = meta.updated_at;
     }
     idx.updated_at = meta.updated_at;
-    save_index(workspace, &idx)?;
+    save_index(app_data_root, &idx)?;
     Ok(meta)
 }
 
@@ -263,9 +263,9 @@ pub fn rename_starmap(workspace: &Path, starmap_id: &str, new_title: &str) -> Re
 /// 先检查是否有外部引用（embed/link/edge 指向此星图），有则拒绝删除。
 /// 自引用（星图内部的边/嵌入指向自身）不阻止删除。
 /// 删除后同步更新父星图的 `child_starmap_count` 和全局索引。
-pub fn delete_starmap(workspace: &Path, starmap_id: &str) -> Result<()> {
+pub fn delete_starmap(app_data_root: &Path, starmap_id: &str) -> Result<()> {
     // Before deleting, check if it's referenced by any EXTERNAL StarMap.
-    let refs = find_starmap_references(workspace, starmap_id)?;
+    let refs = find_starmap_references(app_data_root, starmap_id)?;
     let external_refs: Vec<_> = refs
         .into_iter()
         .filter(|r| r.host_starmap_id != starmap_id)
@@ -277,27 +277,27 @@ pub fn delete_starmap(workspace: &Path, starmap_id: &str) -> Result<()> {
         ))));
     }
 
-    let meta = load_starmap_meta(workspace, starmap_id)?;
+    let meta = load_starmap_meta(app_data_root, starmap_id)?;
 
     // Remove from parent's child count (if parent exists)
     if let Some(ref parent_id) = meta.parent_starmap_id {
-        if let Ok(mut parent_meta) = load_starmap_meta(workspace, parent_id) {
+        if let Ok(mut parent_meta) = load_starmap_meta(app_data_root, parent_id) {
             if parent_meta.child_starmap_count > 0 {
                 parent_meta.child_starmap_count -= 1;
                 parent_meta.updated_at = now_epoch();
-                let _ = save_starmap_meta(workspace, &parent_meta);
+                let _ = save_starmap_meta(app_data_root, &parent_meta);
             }
         }
     }
 
-    delete_starmap_meta(workspace, starmap_id)?;
+    delete_starmap_meta(app_data_root, starmap_id)?;
 
-    let mut idx = load_index(workspace)?;
+    let mut idx = load_index(app_data_root)?;
     idx.starmaps.retain(|m| m.starmap_id != starmap_id);
     idx.updated_at = now_epoch();
-    save_index(workspace, &idx)?;
+    save_index(app_data_root, &idx)?;
 
-    let graph_dir = starmaps_dir(workspace).join(starmap_id);
+    let graph_dir = starmaps_dir(app_data_root).join(starmap_id);
     if graph_dir.exists() {
         let _ = fs::remove_dir_all(&graph_dir);
     }
@@ -305,19 +305,19 @@ pub fn delete_starmap(workspace: &Path, starmap_id: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn bind_starmap_to_project(workspace: &Path, starmap_id: &str, project_id: &str) -> Result<()> {
-    let mut meta = load_starmap_meta(workspace, starmap_id)?;
+pub fn bind_starmap_to_project(app_data_root: &Path, starmap_id: &str, project_id: &str) -> Result<()> {
+    let mut meta = load_starmap_meta(app_data_root, starmap_id)?;
     meta.project_id = Some(project_id.to_string());
     meta.updated_at = now_epoch();
-    save_starmap_meta(workspace, &meta)?;
+    save_starmap_meta(app_data_root, &meta)?;
 
-    let mut idx = load_index(workspace)?;
+    let mut idx = load_index(app_data_root)?;
     if let Some(entry) = idx.starmaps.iter_mut().find(|m| m.starmap_id == starmap_id) {
         entry.project_id = Some(project_id.to_string());
         entry.updated_at = meta.updated_at;
     }
     idx.updated_at = meta.updated_at;
-    save_index(workspace, &idx)?;
+    save_index(app_data_root, &idx)?;
     Ok(())
 }
 
@@ -326,17 +326,17 @@ pub fn bind_starmap_to_project(workspace: &Path, starmap_id: &str, project_id: &
 /// 先清除该项目下所有星图的 `is_main_for_project` 标记，再设置目标星图。
 /// 清除和设置之间不是原子的，崩溃可能导致无主星图状态，但不会导致多主星图。
 pub fn set_main_starmap_for_project(
-    workspace: &Path,
+    app_data_root: &Path,
     starmap_id: &str,
     project_id: &str,
 ) -> Result<()> {
     // Clear previous main
-    let mut idx = load_index(workspace)?;
+    let mut idx = load_index(app_data_root)?;
     for entry in &mut idx.starmaps {
         if entry.project_id.as_deref() == Some(project_id) && entry.is_main_for_project {
             entry.is_main_for_project = false;
             entry.updated_at = now_epoch();
-            let _ = save_starmap_meta(workspace, entry);
+            let _ = save_starmap_meta(app_data_root, entry);
         }
     }
 
@@ -345,73 +345,73 @@ pub fn set_main_starmap_for_project(
         entry.is_main_for_project = true;
         entry.project_id = Some(project_id.to_string());
         entry.updated_at = now_epoch();
-        let _ = save_starmap_meta(workspace, entry);
+        let _ = save_starmap_meta(app_data_root, entry);
     }
     idx.updated_at = now_epoch();
-    save_index(workspace, &idx)?;
+    save_index(app_data_root, &idx)?;
 
     // Also update the meta file
-    let mut meta = load_starmap_meta(workspace, starmap_id)?;
+    let mut meta = load_starmap_meta(app_data_root, starmap_id)?;
     meta.is_main_for_project = true;
     meta.project_id = Some(project_id.to_string());
     meta.updated_at = now_epoch();
-    save_starmap_meta(workspace, &meta)?;
+    save_starmap_meta(app_data_root, &meta)?;
 
     Ok(())
 }
 
 pub fn get_main_starmap_for_project(
-    workspace: &Path,
+    app_data_root: &Path,
     project_id: &str,
 ) -> Result<Option<StarMapMeta>> {
-    let idx = load_index(workspace)?;
+    let idx = load_index(app_data_root)?;
     for entry in &idx.starmaps {
         if entry.project_id.as_deref() == Some(project_id) && entry.is_main_for_project {
-            return Ok(Some(load_starmap_meta(workspace, &entry.starmap_id)?));
+            return Ok(Some(load_starmap_meta(app_data_root, &entry.starmap_id)?));
         }
     }
     Ok(None)
 }
 
-pub fn unbind_starmap_from_project(workspace: &Path, starmap_id: &str) -> Result<()> {
-    let mut meta = load_starmap_meta(workspace, starmap_id)?;
+pub fn unbind_starmap_from_project(app_data_root: &Path, starmap_id: &str) -> Result<()> {
+    let mut meta = load_starmap_meta(app_data_root, starmap_id)?;
     meta.project_id = None;
     meta.is_main_for_project = false;
     meta.updated_at = now_epoch();
-    save_starmap_meta(workspace, &meta)?;
+    save_starmap_meta(app_data_root, &meta)?;
 
-    let mut idx = load_index(workspace)?;
+    let mut idx = load_index(app_data_root)?;
     if let Some(entry) = idx.starmaps.iter_mut().find(|m| m.starmap_id == starmap_id) {
         entry.project_id = None;
         entry.is_main_for_project = false;
         entry.updated_at = meta.updated_at;
     }
     idx.updated_at = meta.updated_at;
-    save_index(workspace, &idx)?;
+    save_index(app_data_root, &idx)?;
     Ok(())
 }
 
 pub fn get_motion_policy(
-    _workspace: &Path,
+    _app_data_root: &Path,
 ) -> Result<crate::starmap::types::StarMapMotionPolicyDto> {
     Ok(crate::starmap::types::StarMapMotionPolicyDto::default())
 }
 
 pub fn update_starmap_stats(
-    workspace: &Path,
+    app_data_root: &Path,
     starmap_id: &str,
     node_count: u32,
     edge_count: u32,
     linked_chapter_count: u32,
 ) -> Result<()> {
-    let mut meta = load_starmap_meta(workspace, starmap_id)?;
+    let mut meta = load_starmap_meta(app_data_root, starmap_id)?;
     meta.node_count = node_count;
     meta.edge_count = edge_count;
     meta.linked_chapter_count = linked_chapter_count;
     meta.updated_at = now_epoch();
-    save_starmap_meta(workspace, &meta)?;
+    save_starmap_meta(app_data_root, &meta)?;
 
-    let mut idx = load_index(workspace)?;
+    let mut idx = load_index(app_data_root)?;
     if let Some(entry) = idx.starmaps.iter_mut().find(|m| m.starmap_id == starmap_id) {
         entry.node_count = node_count;
         entry.edge_count = edge_count;
@@ -419,7 +419,7 @@ pub fn update_starmap_stats(
         entry.updated_at = meta.updated_at;
     }
     idx.updated_at = meta.updated_at;
-    save_index(workspace, &idx)?;
+    save_index(app_data_root, &idx)?;
     Ok(())
 }
 
@@ -466,14 +466,14 @@ fn edge_endpoint_references_starmap(
     clippy::type_complexity
 )]
 pub fn find_starmap_references(
-    workspace: &Path,
+    app_data_root: &Path,
     target_starmap_id: &str,
 ) -> Result<Vec<StarMapReference>> {
     let mut refs = Vec::new();
-    let idx = load_index(workspace)?;
+    let idx = load_index(app_data_root)?;
 
     for m in &idx.starmaps {
-        let mut store = crate::starmap::store::StarMapStore::new(workspace, &m.starmap_id);
+        let mut store = crate::starmap::store::StarMapStore::new(app_data_root, &m.starmap_id);
         if store.load_full().is_ok() {
             let graph = store.to_starmap_graph();
             // 1. Check embeds

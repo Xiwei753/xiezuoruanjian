@@ -56,7 +56,7 @@ pub use snapshot::{PhasedSnapshotRequest, StarMapPhasedSnapshot};
 pub use types::*;
 
 pub struct StarMapStore {
-    pub(super) workspace: PathBuf,
+    pub(super) app_data_root: PathBuf,
     pub(super) starmap_id: String,
     pub(super) nodes: HashMap<String, StarMapNode>,
     pub(super) edges: HashMap<String, StarMapEdge>,
@@ -85,9 +85,9 @@ pub struct StarMapStore {
 }
 
 impl StarMapStore {
-    pub fn new(workspace: &Path, starmap_id: &str) -> Self {
+    pub fn new(app_data_root: &Path, starmap_id: &str) -> Self {
         Self {
-            workspace: workspace.to_path_buf(),
+            app_data_root: app_data_root.to_path_buf(),
             starmap_id: starmap_id.to_string(),
             nodes: HashMap::new(),
             edges: HashMap::new(),
