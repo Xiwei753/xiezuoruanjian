@@ -1,11 +1,10 @@
 package com.xiwei.sujian.editor.v2.visual.planner
 
-import com.xiwei.sujian.editor.v2.mirror.VisualIntent
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutRevision
+import com.xiwei.sujian.editor.v2.mirror.VisualIntent
 import com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction
 
 class AffectedLayoutPlanner {
-
     private companion object {
         const val STABLE_SUFFIX_GEOMETRY_TOLERANCE = 1.0f
         const val BLOCK_SHIFT_DELTA_Y_EPSILON = 0.5f
@@ -15,25 +14,26 @@ class AffectedLayoutPlanner {
         val lineIndices: Set<Int>,
         val oldLineIndices: Set<Int>,
         val newLineIndices: Set<Int>,
-        val blockShifts: List<PreparedVisualTransaction.BlockShift>
+        val blockShifts: List<PreparedVisualTransaction.BlockShift>,
     )
 
     internal data class ParagraphRange(
         val paragraphId: Int,
         val startUtf8: Int,
         val endUtf8Exclusive: Int,
-        val top: Float
+        val top: Float,
     )
 
     fun computeAffectedLineIndices(
         visualIntent: VisualIntent,
         revision: AndroidLayoutRevision?,
-        useNewRanges: Boolean = false
+        useNewRanges: Boolean = false,
     ): Set<Int> {
         if (revision == null) return emptySet()
         val affectedLines = mutableSetOf<Int>()
         val primaryRanges = if (useNewRanges) visualIntent.newAffectedByteRanges else visualIntent.oldAffectedByteRanges
-        val fallbackRanges = if (useNewRanges) visualIntent.oldAffectedByteRanges else visualIntent.newAffectedByteRanges
+        val fallbackRanges =
+            if (useNewRanges) visualIntent.oldAffectedByteRanges else visualIntent.newAffectedByteRanges
         for ((start, end) in primaryRanges) {
             for (i in revision.lineRanges.indices) {
                 val lineRange = revision.lineRanges[i]
@@ -42,8 +42,9 @@ class AffectedLayoutPlanner {
                 }
             }
         }
-        val editByteStart = primaryRanges.firstOrNull()?.first
-            ?: fallbackRanges.firstOrNull()?.first
+        val editByteStart =
+            primaryRanges.firstOrNull()?.first
+                ?: fallbackRanges.firstOrNull()?.first
         if (editByteStart != null) {
             val editLine = findLineForUtf8(revision, editByteStart)
             val editParagraphId = revision.lineRanges.getOrNull(editLine)?.paragraphId ?: 0
@@ -55,9 +56,10 @@ class AffectedLayoutPlanner {
                 if (revision.lineRanges.getOrNull(i)?.paragraphId != editParagraphId) break
                 affectedLines.add(i)
             }
-            val isDeleteOrReplace = visualIntent.isDelete() || visualIntent.isReplace()
-                || visualIntent.isCompositionCancel() || visualIntent.isCompositionCommit()
-                || visualIntent.isCompositionUpdate()
+            val isDeleteOrReplace =
+                visualIntent.isDelete() || visualIntent.isReplace() ||
+                    visualIntent.isCompositionCancel() || visualIntent.isCompositionCommit() ||
+                    visualIntent.isCompositionUpdate()
             if (isDeleteOrReplace) {
                 val lastEditLine = affectedLines.maxOrNull() ?: editLine
                 val nextParaStartLine = findNextParagraphStartLine(revision, lastEditLine)
@@ -73,7 +75,10 @@ class AffectedLayoutPlanner {
         return affectedLines
     }
 
-    internal fun findNextParagraphStartLine(revision: AndroidLayoutRevision, afterLine: Int): Int? {
+    internal fun findNextParagraphStartLine(
+        revision: AndroidLayoutRevision,
+        afterLine: Int,
+    ): Int? {
         val currentParaId = revision.lineRanges.getOrNull(afterLine)?.paragraphId ?: return null
         for (i in (afterLine + 1) until revision.lineRanges.size) {
             if (revision.lineRanges[i].paragraphId != currentParaId) return i
@@ -84,10 +89,12 @@ class AffectedLayoutPlanner {
     fun computeAffectedLineIndicesFromBothRevisions(
         visualIntent: VisualIntent,
         oldRevision: AndroidLayoutRevision?,
-        newRevision: AndroidLayoutRevision?
+        newRevision: AndroidLayoutRevision?,
     ): AffectedLinesResult {
         if (oldRevision == null || newRevision == null) {
-            val revision = newRevision ?: oldRevision ?: return AffectedLinesResult(emptySet(), emptySet(), emptySet(), emptyList())
+            val revision =
+                newRevision ?: oldRevision
+                    ?: return AffectedLinesResult(emptySet(), emptySet(), emptySet(), emptyList())
             val useNewRanges = newRevision != null
             val indices = computeAffectedLineIndices(visualIntent, revision, useNewRanges = useNewRanges)
             if (newRevision == null) {
@@ -97,14 +104,14 @@ class AffectedLayoutPlanner {
                     lineIndices = emptySet(),
                     oldLineIndices = combined,
                     newLineIndices = emptySet(),
-                    blockShifts = emptyList()
+                    blockShifts = emptyList(),
                 )
             }
             return AffectedLinesResult(
                 lineIndices = emptySet(),
                 oldLineIndices = emptySet(),
                 newLineIndices = indices,
-                blockShifts = emptyList()
+                blockShifts = emptyList(),
             )
         }
         return computeAffectedLines(visualIntent, oldRevision, newRevision)
@@ -112,7 +119,7 @@ class AffectedLayoutPlanner {
 
     fun computeStructurallyAffectedOldLineIndices(
         visualIntent: VisualIntent,
-        oldRevision: AndroidLayoutRevision
+        oldRevision: AndroidLayoutRevision,
     ): Set<Int> {
         val affectedLines = mutableSetOf<Int>()
         val affectedParaIds = mutableSetOf<Int>()
@@ -126,17 +133,20 @@ class AffectedLayoutPlanner {
             }
         }
 
-        val isDeleteOrReplace = visualIntent.isDelete() || visualIntent.isReplace()
-            || visualIntent.isCompositionCancel() || visualIntent.isCompositionCommit()
-            || visualIntent.isCompositionUpdate()
+        val isDeleteOrReplace =
+            visualIntent.isDelete() || visualIntent.isReplace() ||
+                visualIntent.isCompositionCancel() || visualIntent.isCompositionCommit() ||
+                visualIntent.isCompositionUpdate()
         if (isDeleteOrReplace) {
             val extraParaIds = mutableSetOf<Int>()
             for (pid in affectedParaIds) {
-                val firstLineOfPara = oldRevision.lineRanges.withIndex()
-                    .firstOrNull { it.value.paragraphId == pid }?.index ?: continue
-                val lastLineOfPara = oldRevision.lineRanges.withIndex()
-                    .filter { it.value.paragraphId == pid }
-                    .lastOrNull()?.index ?: continue
+                val firstLineOfPara =
+                    oldRevision.lineRanges.withIndex()
+                        .firstOrNull { it.value.paragraphId == pid }?.index ?: continue
+                val lastLineOfPara =
+                    oldRevision.lineRanges.withIndex()
+                        .filter { it.value.paragraphId == pid }
+                        .lastOrNull()?.index ?: continue
                 if (firstLineOfPara > 0) {
                     val prevParaId = oldRevision.lineRanges[firstLineOfPara - 1].paragraphId
                     if (prevParaId != pid) {
@@ -203,7 +213,7 @@ class AffectedLayoutPlanner {
     fun computeAffectedLines(
         visualIntent: VisualIntent,
         oldRev: AndroidLayoutRevision,
-        newRev: AndroidLayoutRevision
+        newRev: AndroidLayoutRevision,
     ): AffectedLinesResult {
         val affectedOldLines = mutableSetOf<Int>()
         val affectedNewLines = mutableSetOf<Int>()
@@ -227,8 +237,9 @@ class AffectedLayoutPlanner {
             }
         }
 
-        val editByteStart = visualIntent.oldAffectedByteRanges.firstOrNull()?.first
-            ?: visualIntent.newAffectedByteRanges.firstOrNull()?.first
+        val editByteStart =
+            visualIntent.oldAffectedByteRanges.firstOrNull()?.first
+                ?: visualIntent.newAffectedByteRanges.firstOrNull()?.first
         if (editByteStart != null) {
             val oldEditLine = findLineForUtf8(oldRev, editByteStart)
             val newEditLine = findLineForUtf8(newRev, editByteStart)
@@ -272,12 +283,17 @@ class AffectedLayoutPlanner {
                     structurallyAffectedNewParaIds.add(newPara.paragraphId)
                     for (oldPara in oldParagraphs) {
                         val ms = offsetMapper(oldPara.startUtf8)
-                        if (ms != null && ms < newPara.endUtf8Exclusive && newPara.startUtf8 < oldPara.endUtf8Exclusive + (newPara.endUtf8Exclusive - newPara.startUtf8)) {
+                        if (ms != null && ms < newPara.endUtf8Exclusive &&
+                            newPara.startUtf8 < oldPara.endUtf8Exclusive +
+                            (newPara.endUtf8Exclusive - newPara.startUtf8)
+                        ) {
                             structurallyAffectedOldParaIds.add(oldPara.paragraphId)
                         }
                     }
                 } else if (editOldPara != null) {
-                    if (reverseMappedStart >= editOldPara.startUtf8 && reverseMappedStart < editOldPara.endUtf8Exclusive) {
+                    if (reverseMappedStart >= editOldPara.startUtf8 &&
+                        reverseMappedStart < editOldPara.endUtf8Exclusive
+                    ) {
                         structurallyAffectedNewParaIds.add(newPara.paragraphId)
                     }
                 }
@@ -286,7 +302,9 @@ class AffectedLayoutPlanner {
                 for (oldPara in oldParagraphs) {
                     if (oldPara.paragraphId in structurallyAffectedOldParaIds) continue
                     val mappedStart = offsetMapper(oldPara.startUtf8)
-                    if (mappedStart != null && mappedStart >= editNewPara.startUtf8 && mappedStart < editNewPara.endUtf8Exclusive) {
+                    if (mappedStart != null && mappedStart >= editNewPara.startUtf8 &&
+                        mappedStart < editNewPara.endUtf8Exclusive
+                    ) {
                         structurallyAffectedOldParaIds.add(oldPara.paragraphId)
                     }
                 }
@@ -349,22 +367,25 @@ class AffectedLayoutPlanner {
                 val newTop = newPara.top
                 val deltaY = newTop - oldTop
                 if (kotlin.math.abs(deltaY) > STABLE_SUFFIX_GEOMETRY_TOLERANCE) {
-                    val newParaLines = newRev.lineRanges.withIndex()
-                        .filter { it.value.paragraphId == newPara.paragraphId }
+                    val newParaLines =
+                        newRev.lineRanges.withIndex()
+                            .filter { it.value.paragraphId == newPara.paragraphId }
                     if (newParaLines.isNotEmpty()) {
                         val firstLine = newParaLines.first()
                         val lastLine = newParaLines.last()
-                        rawBlockShifts.add(PreparedVisualTransaction.BlockShift(
-                            startLineIndex = firstLine.index,
-                            endLineIndexExclusive = lastLine.index + 1,
-                            top = firstLine.value.top,
-                            bottom = lastLine.value.bottom,
-                            left = newParaLines.map { it.value.left }.minOrNull() ?: 0f,
-                            right = newParaLines.map { it.value.right }.maxOrNull() ?: 0f,
-                            deltaY = deltaY,
-                            startUtf8 = newPara.startUtf8,
-                            endUtf8Exclusive = newPara.endUtf8Exclusive
-                        ))
+                        rawBlockShifts.add(
+                            PreparedVisualTransaction.BlockShift(
+                                startLineIndex = firstLine.index,
+                                endLineIndexExclusive = lastLine.index + 1,
+                                top = firstLine.value.top,
+                                bottom = lastLine.value.bottom,
+                                left = newParaLines.map { it.value.left }.minOrNull() ?: 0f,
+                                right = newParaLines.map { it.value.right }.maxOrNull() ?: 0f,
+                                deltaY = deltaY,
+                                startUtf8 = newPara.startUtf8,
+                                endUtf8Exclusive = newPara.endUtf8Exclusive,
+                            ),
+                        )
                     }
                 }
             }
@@ -376,14 +397,14 @@ class AffectedLayoutPlanner {
             lineIndices = emptySet(),
             oldLineIndices = affectedOldLines,
             newLineIndices = affectedNewLines,
-            blockShifts = blockShifts
+            blockShifts = blockShifts,
         )
     }
 
     internal fun buildOffsetMapper(
         visualIntent: VisualIntent,
         oldRev: AndroidLayoutRevision,
-        newRev: AndroidLayoutRevision
+        newRev: AndroidLayoutRevision,
     ): (Int) -> Int? {
         val oldRanges = visualIntent.oldAffectedByteRanges
         val newRanges = visualIntent.newAffectedByteRanges
@@ -430,7 +451,11 @@ class AffectedLayoutPlanner {
         }
     }
 
-    internal fun mapThroughRanges(offset: Int, oldRanges: List<Pair<Int, Int>>, newRanges: List<Pair<Int, Int>>): Int {
+    internal fun mapThroughRanges(
+        offset: Int,
+        oldRanges: List<Pair<Int, Int>>,
+        newRanges: List<Pair<Int, Int>>,
+    ): Int {
         for (i in oldRanges.indices) {
             val (oldStart, oldEnd) = oldRanges[i]
             if (offset >= oldStart && offset < oldEnd) {
@@ -446,7 +471,7 @@ class AffectedLayoutPlanner {
         newOffset: Int,
         visualIntent: VisualIntent,
         oldRev: AndroidLayoutRevision,
-        newRev: AndroidLayoutRevision
+        newRev: AndroidLayoutRevision,
     ): Int? {
         val oldRanges = visualIntent.oldAffectedByteRanges
         val newRanges = visualIntent.newAffectedByteRanges
@@ -454,15 +479,22 @@ class AffectedLayoutPlanner {
         if (oldRanges.isEmpty()) {
             val insertStart = newRanges.first().first
             val insertLen = newRanges.sumOf { (s, e) -> e - s }
-            return if (newOffset < insertStart) newOffset
-            else if (newOffset < insertStart + insertLen) null
-            else newOffset - insertLen
+            return if (newOffset < insertStart) {
+                newOffset
+            } else if (newOffset < insertStart + insertLen) {
+                null
+            } else {
+                newOffset - insertLen
+            }
         }
         if (newRanges.isEmpty()) {
             val deleteStart = oldRanges.first().first
             val deleteLen = oldRanges.sumOf { (s, e) -> e - s }
-            return if (newOffset < deleteStart) newOffset
-            else newOffset + deleteLen
+            return if (newOffset < deleteStart) {
+                newOffset
+            } else {
+                newOffset + deleteLen
+            }
         }
         val newAffectedStart = newRanges.first().first
         val newAffectedEnd = newRanges.last().second
@@ -477,14 +509,12 @@ class AffectedLayoutPlanner {
     internal fun buildReverseOffsetMapper(
         visualIntent: VisualIntent,
         oldRev: AndroidLayoutRevision,
-        newRev: AndroidLayoutRevision
+        newRev: AndroidLayoutRevision,
     ): (Int) -> Int? {
         return { newOffset: Int -> reverseMapOffset(newOffset, visualIntent, oldRev, newRev) }
     }
 
-    internal fun buildStandaloneReverseOffsetMapper(
-        visualIntent: VisualIntent
-    ): (Int) -> Int? {
+    internal fun buildStandaloneReverseOffsetMapper(visualIntent: VisualIntent): (Int) -> Int? {
         val oldRanges = visualIntent.oldAffectedByteRanges
         val newRanges = visualIntent.newAffectedByteRanges
         if (oldRanges.isEmpty() && newRanges.isEmpty()) return { newOffset -> newOffset }
@@ -492,33 +522,42 @@ class AffectedLayoutPlanner {
             val insertStart = newRanges.first().first
             val insertLen = newRanges.sumOf { (s, e) -> e - s }
             return { newOffset ->
-                if (newOffset < insertStart) newOffset
-                else if (newOffset < insertStart + insertLen) null
-                else newOffset - insertLen
+                if (newOffset < insertStart) {
+                    newOffset
+                } else if (newOffset < insertStart + insertLen) {
+                    null
+                } else {
+                    newOffset - insertLen
+                }
             }
         }
         if (newRanges.isEmpty()) {
             val deleteStart = oldRanges.first().first
             val deleteLen = oldRanges.sumOf { (s, e) -> e - s }
             return { newOffset ->
-                if (newOffset < deleteStart) newOffset
-                else newOffset + deleteLen
+                if (newOffset < deleteStart) {
+                    newOffset
+                } else {
+                    newOffset + deleteLen
+                }
             }
         }
         val newAffectedStart = newRanges.first().first
         val newAffectedEnd = newRanges.last().second
         return { newOffset ->
-            if (newOffset < newAffectedStart) newOffset
-            else if (newOffset >= newAffectedEnd) {
+            if (newOffset < newAffectedStart) {
+                newOffset
+            } else if (newOffset >= newAffectedEnd) {
                 val shift = newRanges.sumOf { (s, e) -> e - s } - oldRanges.sumOf { (s, e) -> e - s }
                 newOffset - shift
+            } else {
+                null
             }
-            else null
         }
     }
 
     fun mergeAdjacentBlockShifts(
-        shifts: List<PreparedVisualTransaction.BlockShift>
+        shifts: List<PreparedVisualTransaction.BlockShift>,
     ): List<PreparedVisualTransaction.BlockShift> {
         if (shifts.size <= 1) return shifts
         val sorted = shifts.sortedBy { it.startLineIndex }
@@ -528,14 +567,16 @@ class AffectedLayoutPlanner {
             val next = sorted[i]
             val deltaYClose = kotlin.math.abs(next.deltaY - current.deltaY) < BLOCK_SHIFT_DELTA_Y_EPSILON
             if (next.startLineIndex == current.endLineIndexExclusive && deltaYClose) {
-                current = current.copy(
-                    endLineIndexExclusive = next.endLineIndexExclusive,
-                    bottom = next.bottom,
-                    left = minOf(current.left, next.left),
-                    right = maxOf(current.right, next.right),
-                    startUtf8 = if (current.startUtf8 >= 0) current.startUtf8 else next.startUtf8,
-                    endUtf8Exclusive = if (next.endUtf8Exclusive >= 0) next.endUtf8Exclusive else current.endUtf8Exclusive
-                )
+                current =
+                    current.copy(
+                        endLineIndexExclusive = next.endLineIndexExclusive,
+                        bottom = next.bottom,
+                        left = minOf(current.left, next.left),
+                        right = maxOf(current.right, next.right),
+                        startUtf8 = if (current.startUtf8 >= 0) current.startUtf8 else next.startUtf8,
+                        endUtf8Exclusive =
+                            if (next.endUtf8Exclusive >= 0) next.endUtf8Exclusive else current.endUtf8Exclusive,
+                    )
             } else {
                 merged.add(current)
                 current = next
@@ -557,7 +598,10 @@ class AffectedLayoutPlanner {
         return paragraphs
     }
 
-    internal fun findLineForUtf8(rev: AndroidLayoutRevision, byteOffset: Int): Int {
+    internal fun findLineForUtf8(
+        rev: AndroidLayoutRevision,
+        byteOffset: Int,
+    ): Int {
         for (i in rev.lineRanges.indices) {
             val range = rev.lineRanges[i]
             if (byteOffset <= range.endUtf8) return i

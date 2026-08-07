@@ -1,7 +1,5 @@
 package com.xiwei.sujian.ui.compose.workspace
 
-import androidx.compose.animation.animateContentSize
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,19 +10,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import com.xiwei.sujian.designsystem.icon.SujianIcons
-import com.xiwei.sujian.designsystem.component.SujianListItem
-import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import androidx.compose.material3.MaterialTheme
-import com.xiwei.sujian.editor.v2.compose.AnimatedTextField
 import androidx.compose.material3.Text
-import com.xiwei.sujian.designsystem.component.SujianCard
-import com.xiwei.sujian.designsystem.component.SujianDialog
-import com.xiwei.sujian.designsystem.component.SujianFab
-import com.xiwei.sujian.designsystem.component.SujianIconButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -35,9 +24,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import com.xiwei.sujian.R
+import com.xiwei.sujian.designsystem.component.SujianCard
+import com.xiwei.sujian.designsystem.component.SujianDialog
+import com.xiwei.sujian.designsystem.component.SujianFab
+import com.xiwei.sujian.designsystem.component.SujianIconButton
+import com.xiwei.sujian.designsystem.component.SujianListItem
+import com.xiwei.sujian.designsystem.icon.SujianIcons
 import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
+import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
+import com.xiwei.sujian.editor.v2.compose.AnimatedTextField
 import com.xiwei.sujian.model.Project
-import com.xiwei.sujian.model.RecentEdit
 import com.xiwei.sujian.ui.compose.WorkspaceAppState
 
 @Composable
@@ -45,7 +41,7 @@ fun ProjectListContent(
     appState: WorkspaceAppState,
     onSelectProject: (projectId: String, projectTitle: String) -> Unit,
     showFab: Boolean = true,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     var showCreateDialog by remember { mutableStateOf(false) }
     var showMenuForProject by remember { mutableStateOf<Project?>(null) }
@@ -56,7 +52,7 @@ fun ProjectListContent(
             Column(
                 modifier = Modifier.fillMaxSize().padding(dims.space32),
                 verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(stringResource(id = R.string.project_list_empty), style = MaterialTheme.typography.titleMedium)
                 Spacer(modifier = Modifier.height(dims.space8))
@@ -65,11 +61,15 @@ fun ProjectListContent(
         } else {
             LazyColumn(
                 contentPadding = PaddingValues(horizontal = dims.space16, vertical = dims.space8),
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.fillMaxSize(),
             ) {
                 if (appState.recentEdits.isNotEmpty()) {
                     item {
-                        Text(stringResource(id = R.string.recent_edits), style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(bottom = dims.space8))
+                        Text(
+                            stringResource(id = R.string.recent_edits),
+                            style = MaterialTheme.typography.titleSmall,
+                            modifier = Modifier.padding(bottom = dims.space8),
+                        )
                     }
                     items(appState.recentEdits) { edit ->
                         val project = appState.projects.find { it.id == edit.projectId }
@@ -78,14 +78,24 @@ fun ProjectListContent(
                             modifier = Modifier.fillMaxWidth().padding(bottom = dims.space8),
                         ) {
                             Column(modifier = Modifier.padding(dims.space16)) {
-                                Text(project?.title ?: stringResource(id = R.string.unknown_project), style = MaterialTheme.typography.titleMedium)
-                                Text(stringResource(id = R.string.continue_writing_action), style = MaterialTheme.typography.bodySmall)
+                                Text(
+                                    project?.title ?: stringResource(id = R.string.unknown_project),
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                                Text(
+                                    stringResource(id = R.string.continue_writing_action),
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
                             }
                         }
                     }
                     item {
                         Spacer(modifier = Modifier.height(dims.space16))
-                        Text(stringResource(id = R.string.all_projects), style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(bottom = dims.space8))
+                        Text(
+                            stringResource(id = R.string.all_projects),
+                            style = MaterialTheme.typography.titleSmall,
+                            modifier = Modifier.padding(bottom = dims.space8),
+                        )
                     }
                 }
                 items(appState.projects) { project ->
@@ -104,7 +114,7 @@ fun ProjectListContent(
                 onClick = { showCreateDialog = true },
                 icon = SujianIcons.Add,
                 contentDescription = stringResource(id = R.string.action_new_project),
-                modifier = Modifier.align(Alignment.BottomEnd).padding(dims.space16)
+                modifier = Modifier.align(Alignment.BottomEnd).padding(dims.space16),
             )
         }
     }
@@ -130,9 +140,9 @@ fun ProjectListContent(
                     onValueChange = { title = it },
                     onCommit = { },
                     label = { Text(stringResource(id = R.string.hint_project_title_new)) },
-                    singleLine = true
+                    singleLine = true,
                 )
-            }
+            },
         )
     }
 
@@ -147,7 +157,7 @@ fun ProjectListContent(
                 appState.deleteProject(project.id)
                 showMenuForProject = null
             },
-            onDismiss = { showMenuForProject = null }
+            onDismiss = { showMenuForProject = null },
         )
     }
 }
@@ -156,7 +166,7 @@ fun ProjectListContent(
 fun ProjectListScreen(
     appState: WorkspaceAppState,
     onSelectProject: (projectId: String, projectTitle: String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     ProjectListContent(
         appState = appState,
@@ -171,7 +181,7 @@ private fun ProjectCard(
     project: Project,
     onSelect: () -> Unit,
     onMoreActions: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     val dims = LocalSujianDimensions.current
     SujianCard(
@@ -181,7 +191,7 @@ private fun ProjectCard(
         Row(
             modifier = Modifier.padding(dims.space16).fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(project.title, style = MaterialTheme.typography.titleMedium)
@@ -201,7 +211,7 @@ private fun ProjectMenuDialog(
     project: Project,
     onRename: (String) -> Unit,
     onDelete: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
 ) {
     var showRename by remember { mutableStateOf(false) }
 
@@ -226,9 +236,9 @@ private fun ProjectMenuDialog(
                     onValueChange = { newTitle = it },
                     onCommit = { },
                     label = { Text(stringResource(id = R.string.hint_new_title)) },
-                    singleLine = true
+                    singleLine = true,
                 )
-            }
+            },
         )
     } else {
         SujianDialog(
@@ -247,7 +257,7 @@ private fun ProjectMenuDialog(
                         onClick = onDelete,
                     )
                 }
-            }
+            },
         )
     }
 }

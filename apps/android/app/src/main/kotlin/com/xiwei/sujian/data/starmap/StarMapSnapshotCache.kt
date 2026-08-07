@@ -35,47 +35,51 @@ internal data class StarMapRawCache(
     val deletedEdgeIds: MutableSet<String> = mutableSetOf(),
     val deletedEmbedIds: MutableSet<String> = mutableSetOf(),
     val deletedLinkIds: MutableSet<String> = mutableSetOf(),
-    val deletedHyperlinkIds: MutableSet<String> = mutableSetOf()
+    val deletedHyperlinkIds: MutableSet<String> = mutableSetOf(),
 )
 
 internal fun StarMapRawCache.toSnapshotResult(): StarMapPhasedSnapshotResult {
-    val layoutData = if (layoutNodes.isNotEmpty()) {
-        StarMapLayoutData(
-            kind = when (layoutKind) {
-                StarMapLayoutKindDto.FREEFORM -> StarMapLayoutKind.Freeform
-                StarMapLayoutKindDto.AUTO_RADIAL -> StarMapLayoutKind.AutoRadial
-                StarMapLayoutKindDto.CUSTOM -> StarMapLayoutKind.Custom
-            },
-            nodes = layoutNodes.values.map { it.toModel() }
-        )
-    } else {
-        StarMapLayoutData(kind = StarMapLayoutKind.Freeform, nodes = emptyList())
-    }
+    val layoutData =
+        if (layoutNodes.isNotEmpty()) {
+            StarMapLayoutData(
+                kind =
+                    when (layoutKind) {
+                        StarMapLayoutKindDto.FREEFORM -> StarMapLayoutKind.Freeform
+                        StarMapLayoutKindDto.AUTO_RADIAL -> StarMapLayoutKind.AutoRadial
+                        StarMapLayoutKindDto.CUSTOM -> StarMapLayoutKind.Custom
+                    },
+                nodes = layoutNodes.values.map { it.toModel() },
+            )
+        } else {
+            StarMapLayoutData(kind = StarMapLayoutKind.Freeform, nodes = emptyList())
+        }
     val graphMeta = graph
-    val data = StarMapData(
-        graph = StarMapGraphData(
-            schemaVersion = graphMeta?.schemaVersion?.toInt() ?: 0,
-            id = graphMeta?.id ?: "",
-            starmapId = graphMeta?.starmapId ?: "",
-            title = graphMeta?.title ?: "",
-            nodes = nodes.values.map { it.toGraphNode() },
-            edges = edges.values.map { it.toGraphEdge() },
-            createdAt = graphMeta?.createdAt?.toLong() ?: 0L,
-            updatedAt = graphMeta?.updatedAt?.toLong() ?: 0L
-        ),
-        layout = layoutData,
-        viewport = viewport?.toModel() ?: StarMapViewportData(),
-        embeds = embeds.values.map { it.toModel() },
-        links = links.values.map { it.toModel() },
-        hyperlinks = hyperlinks.values.map { it.toModel() },
-        loadPhase = loadPhase,
-        packageRevision = packageRevision,
-        sinceRevision = sinceRevision,
-        complete = complete
-    )
+    val data =
+        StarMapData(
+            graph =
+                StarMapGraphData(
+                    schemaVersion = graphMeta?.schemaVersion?.toInt() ?: 0,
+                    id = graphMeta?.id ?: "",
+                    starmapId = graphMeta?.starmapId ?: "",
+                    title = graphMeta?.title ?: "",
+                    nodes = nodes.values.map { it.toGraphNode() },
+                    edges = edges.values.map { it.toGraphEdge() },
+                    createdAt = graphMeta?.createdAt?.toLong() ?: 0L,
+                    updatedAt = graphMeta?.updatedAt?.toLong() ?: 0L,
+                ),
+            layout = layoutData,
+            viewport = viewport?.toModel() ?: StarMapViewportData(),
+            embeds = embeds.values.map { it.toModel() },
+            links = links.values.map { it.toModel() },
+            hyperlinks = hyperlinks.values.map { it.toModel() },
+            loadPhase = loadPhase,
+            packageRevision = packageRevision,
+            sinceRevision = sinceRevision,
+            complete = complete,
+        )
     return StarMapPhasedSnapshotResult(
         data = data,
-        diagnostics = diagnostics
+        diagnostics = diagnostics,
     )
 }
 
@@ -86,9 +90,17 @@ internal class StarMapSnapshotCache {
 
     fun getOrPut(starmapId: String): StarMapRawCache = rawCacheByStarmapId.getOrPut(starmapId) { StarMapRawCache() }
 
-    fun put(starmapId: String, cache: StarMapRawCache) { rawCacheByStarmapId[starmapId] = cache }
+    fun put(
+        starmapId: String,
+        cache: StarMapRawCache,
+    ) {
+        rawCacheByStarmapId[starmapId] = cache
+    }
 
-    fun mergeIncremental(starmapId: String, incoming: StarMapRawCache) {
+    fun mergeIncremental(
+        starmapId: String,
+        incoming: StarMapRawCache,
+    ) {
         val existing = rawCacheByStarmapId[starmapId]
         if (existing == null) {
             rawCacheByStarmapId[starmapId] = incoming
@@ -127,7 +139,9 @@ internal class StarMapSnapshotCache {
         for ((nodeId, layoutNode) in incoming.layoutNodes) {
             existing.layoutNodes[nodeId] = layoutNode
         }
-        if (incoming.layoutKind != StarMapLayoutKindDto.FREEFORM || existing.layoutKind == StarMapLayoutKindDto.FREEFORM) {
+        if (incoming.layoutKind != StarMapLayoutKindDto.FREEFORM ||
+            existing.layoutKind == StarMapLayoutKindDto.FREEFORM
+        ) {
             existing.layoutKind = incoming.layoutKind
         }
         if (incoming.loadPhase != "CurrentViewportObjects" || existing.loadPhase == "CurrentViewportObjects") {
@@ -171,42 +185,101 @@ internal class StarMapSnapshotCache {
 
     private fun rebuildGraph(cache: StarMapRawCache) {
         val meta = cache.graph ?: return
-        cache.graph = StarMapGraphDto(
-            schemaVersion = meta.schemaVersion,
-            id = meta.id,
-            starmapId = meta.starmapId,
-            title = meta.title,
-            nodes = cache.nodes.values.toList(),
-            edges = cache.edges.values.toList(),
-            embeds = cache.embeds.values.toList(),
-            links = cache.links.values.toList(),
-            hyperlinks = cache.hyperlinks.values.toList(),
-            createdAt = meta.createdAt,
-            updatedAt = meta.updatedAt
-        )
+        cache.graph =
+            StarMapGraphDto(
+                schemaVersion = meta.schemaVersion,
+                id = meta.id,
+                starmapId = meta.starmapId,
+                title = meta.title,
+                nodes = cache.nodes.values.toList(),
+                edges = cache.edges.values.toList(),
+                embeds = cache.embeds.values.toList(),
+                links = cache.links.values.toList(),
+                hyperlinks = cache.hyperlinks.values.toList(),
+                createdAt = meta.createdAt,
+                updatedAt = meta.updatedAt,
+            )
     }
 
-    fun removeNode(starmapId: String, nodeId: String) { rawCacheByStarmapId[starmapId]?.nodes?.remove(nodeId) }
+    fun removeNode(
+        starmapId: String,
+        nodeId: String,
+    ) {
+        rawCacheByStarmapId[starmapId]?.nodes?.remove(nodeId)
+    }
 
-    fun removeEdge(starmapId: String, edgeId: String) { rawCacheByStarmapId[starmapId]?.edges?.remove(edgeId) }
+    fun removeEdge(
+        starmapId: String,
+        edgeId: String,
+    ) {
+        rawCacheByStarmapId[starmapId]?.edges?.remove(edgeId)
+    }
 
-    fun removeEmbed(starmapId: String, instanceId: String) { rawCacheByStarmapId[starmapId]?.embeds?.remove(instanceId) }
+    fun removeEmbed(
+        starmapId: String,
+        instanceId: String,
+    ) {
+        rawCacheByStarmapId[starmapId]?.embeds?.remove(instanceId)
+    }
 
-    fun removeLink(starmapId: String, linkId: String) { rawCacheByStarmapId[starmapId]?.links?.remove(linkId) }
+    fun removeLink(
+        starmapId: String,
+        linkId: String,
+    ) {
+        rawCacheByStarmapId[starmapId]?.links?.remove(linkId)
+    }
 
-    fun removeHyperlink(starmapId: String, hyperlinkId: String) { rawCacheByStarmapId[starmapId]?.hyperlinks?.remove(hyperlinkId) }
+    fun removeHyperlink(
+        starmapId: String,
+        hyperlinkId: String,
+    ) {
+        rawCacheByStarmapId[starmapId]?.hyperlinks?.remove(hyperlinkId)
+    }
 
-    fun putNode(starmapId: String, nodeId: String, dto: StarMapNodeDto) { rawCacheByStarmapId.getOrPut(starmapId) { StarMapRawCache() }.nodes[nodeId] = dto }
+    fun putNode(
+        starmapId: String,
+        nodeId: String,
+        dto: StarMapNodeDto,
+    ) {
+        rawCacheByStarmapId.getOrPut(starmapId) { StarMapRawCache() }.nodes[nodeId] = dto
+    }
 
-    fun putEdge(starmapId: String, edgeId: String, dto: StarMapEdgeDto) { rawCacheByStarmapId.getOrPut(starmapId) { StarMapRawCache() }.edges[edgeId] = dto }
+    fun putEdge(
+        starmapId: String,
+        edgeId: String,
+        dto: StarMapEdgeDto,
+    ) {
+        rawCacheByStarmapId.getOrPut(starmapId) { StarMapRawCache() }.edges[edgeId] = dto
+    }
 
-    fun putEmbed(starmapId: String, instanceId: String, dto: StarMapEmbedDto) { rawCacheByStarmapId.getOrPut(starmapId) { StarMapRawCache() }.embeds[instanceId] = dto }
+    fun putEmbed(
+        starmapId: String,
+        instanceId: String,
+        dto: StarMapEmbedDto,
+    ) {
+        rawCacheByStarmapId.getOrPut(starmapId) { StarMapRawCache() }.embeds[instanceId] = dto
+    }
 
-    fun putLink(starmapId: String, linkId: String, dto: StarMapLinkDto) { rawCacheByStarmapId.getOrPut(starmapId) { StarMapRawCache() }.links[linkId] = dto }
+    fun putLink(
+        starmapId: String,
+        linkId: String,
+        dto: StarMapLinkDto,
+    ) {
+        rawCacheByStarmapId.getOrPut(starmapId) { StarMapRawCache() }.links[linkId] = dto
+    }
 
-    fun putHyperlink(starmapId: String, hyperlinkId: String, dto: StarMapHyperlinkDto) { rawCacheByStarmapId.getOrPut(starmapId) { StarMapRawCache() }.hyperlinks[hyperlinkId] = dto }
+    fun putHyperlink(
+        starmapId: String,
+        hyperlinkId: String,
+        dto: StarMapHyperlinkDto,
+    ) {
+        rawCacheByStarmapId.getOrPut(starmapId) { StarMapRawCache() }.hyperlinks[hyperlinkId] = dto
+    }
 
-    fun updateLayoutNodes(starmapId: String, nodes: List<StarMapLayoutNodeDto>) {
+    fun updateLayoutNodes(
+        starmapId: String,
+        nodes: List<StarMapLayoutNodeDto>,
+    ) {
         val cache = rawCacheByStarmapId[starmapId] ?: return
         cache.layoutNodes.clear()
         cache.layoutNodes.putAll(nodes.associateBy { it.nodeId })

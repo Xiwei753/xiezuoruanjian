@@ -3,25 +3,21 @@ package com.xiwei.sujian.editor.v2.input
 import android.view.View
 import com.xiwei.sujian.editor.v2.coordinator.AutocorrectPolicy
 import com.xiwei.sujian.editor.v2.coordinator.CapitalizationPolicy
-import com.xiwei.sujian.editor.v2.coordinator.CopyPolicy
 import com.xiwei.sujian.editor.v2.coordinator.ImeAction
 import com.xiwei.sujian.editor.v2.coordinator.NewlinePolicy
-import com.xiwei.sujian.editor.v2.coordinator.PastePolicy
-import com.xiwei.sujian.editor.v2.coordinator.SecretPolicy
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
 import com.xiwei.sujian.editor.v2.coordinator.TextInputType
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
+import com.xiwei.sujian.editor.v2.mirror.EditResult
 import com.xiwei.sujian.editor.v2.pipeline.InputCommandPort
 import com.xiwei.sujian.editor.v2.pipeline.PipelineOutput
-import com.xiwei.sujian.editor.v2.mirror.EditResult
 import uniffi.writer_core.EditorTransactionCauseDto
 
 class AndroidInputAdapter(
     private val mirror: DisplayTextMirror,
     private val commandPort: InputCommandPort,
-    private val projectionProvider: (() -> com.xiwei.sujian.editor.v2.projection.DisplayTextProjection)? = null
+    private val projectionProvider: (() -> com.xiwei.sujian.editor.v2.projection.DisplayTextProjection)? = null,
 ) {
-
     var onPipelineOutput: ((PipelineOutput) -> Unit)? = null
     var onCompositionVisualUpdate: (() -> Unit)? = null
     var onPerformEditorAction: ((Int) -> Unit)? = null
@@ -32,6 +28,7 @@ class AndroidInputAdapter(
     fun setHostView(view: View) {
         hostView = view
     }
+
     fun getHostView(): View? = hostView
 
     fun applyProfile(profile: TextEditorProfile) {
@@ -61,7 +58,9 @@ class AndroidInputAdapter(
     private var isComposing: Boolean = false
     private var compositionCursorUtf16: Int = 0
 
-    fun onCreateInputConnection(outAttrs: android.view.inputmethod.EditorInfo?): android.view.inputmethod.InputConnection? {
+    fun onCreateInputConnection(
+        outAttrs: android.view.inputmethod.EditorInfo?,
+    ): android.view.inputmethod.InputConnection? {
         val host = hostView ?: return null
         // NOTE (Issue #589): composition validity is deliberately NOT tied to
         // InputConnection creation. onCreateInputConnection is invoked by the system on
@@ -71,13 +70,20 @@ class AndroidInputAdapter(
         // kernel session/revision validation plus the adapter's stale-session retry paths
         // (see handleCompositionCommitWithText / handleCompositionUpdate).
         if (outAttrs != null) {
-            val inputType = when (currentProfile.inputType) {
-                TextInputType.NUMBER -> android.text.InputType.TYPE_CLASS_NUMBER
-                TextInputType.EMAIL -> android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
-                TextInputType.MULTI_LINE -> android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
-                TextInputType.TEXT -> android.text.InputType.TYPE_CLASS_TEXT
-                TextInputType.PASSWORD -> android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
-            }
+            val inputType =
+                when (currentProfile.inputType) {
+                    TextInputType.NUMBER -> android.text.InputType.TYPE_CLASS_NUMBER
+                    TextInputType.EMAIL ->
+                        android.text.InputType.TYPE_CLASS_TEXT or
+                            android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+                    TextInputType.MULTI_LINE ->
+                        android.text.InputType.TYPE_CLASS_TEXT or
+                            android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                    TextInputType.TEXT -> android.text.InputType.TYPE_CLASS_TEXT
+                    TextInputType.PASSWORD ->
+                        android.text.InputType.TYPE_CLASS_TEXT or
+                            android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+                }
             if (currentProfile.singleLine) {
                 outAttrs.inputType = inputType and android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE.inv()
             } else {
@@ -89,57 +95,102 @@ class AndroidInputAdapter(
             }
 
             when (currentProfile.capitalizationPolicy) {
-                CapitalizationPolicy.CHARACTERS -> outAttrs.inputType = outAttrs.inputType or android.text.InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
-                CapitalizationPolicy.WORDS -> outAttrs.inputType = outAttrs.inputType or android.text.InputType.TYPE_TEXT_FLAG_CAP_WORDS
-                CapitalizationPolicy.SENTENCES -> outAttrs.inputType = outAttrs.inputType or android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+                CapitalizationPolicy.CHARACTERS ->
+                    outAttrs.inputType = outAttrs.inputType or android.text.InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+                CapitalizationPolicy.WORDS ->
+                    outAttrs.inputType = outAttrs.inputType or android.text.InputType.TYPE_TEXT_FLAG_CAP_WORDS
+                CapitalizationPolicy.SENTENCES ->
+                    outAttrs.inputType = outAttrs.inputType or android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
                 CapitalizationPolicy.NONE -> { }
             }
 
-            val imeAction = when (currentProfile.imeAction) {
-                ImeAction.DONE -> android.view.inputmethod.EditorInfo.IME_ACTION_DONE
-                ImeAction.SEARCH -> android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
-                ImeAction.NEXT -> android.view.inputmethod.EditorInfo.IME_ACTION_NEXT
-                ImeAction.GO -> android.view.inputmethod.EditorInfo.IME_ACTION_GO
-                ImeAction.NONE -> android.view.inputmethod.EditorInfo.IME_ACTION_NONE
-            }
+            val imeAction =
+                when (currentProfile.imeAction) {
+                    ImeAction.DONE -> android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+                    ImeAction.SEARCH -> android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+                    ImeAction.NEXT -> android.view.inputmethod.EditorInfo.IME_ACTION_NEXT
+                    ImeAction.GO -> android.view.inputmethod.EditorInfo.IME_ACTION_GO
+                    ImeAction.NONE -> android.view.inputmethod.EditorInfo.IME_ACTION_NONE
+                }
             outAttrs.imeOptions = imeAction
             if (currentProfile.singleLine && !currentProfile.commitOnImeAction) {
-                outAttrs.imeOptions = outAttrs.imeOptions or android.view.inputmethod.EditorInfo.IME_FLAG_NO_ENTER_ACTION
+                outAttrs.imeOptions =
+                    outAttrs.imeOptions or android.view.inputmethod.EditorInfo.IME_FLAG_NO_ENTER_ACTION
             }
             return AndroidInputConnection(this, mirror, commandPort, host, projectionProvider)
         }
         return null
     }
 
-    fun sendInsertToKernel(byteOffset: Int, text: String, cause: EditorTransactionCauseDto) {
+    fun sendInsertToKernel(
+        byteOffset: Int,
+        text: String,
+        cause: EditorTransactionCauseDto,
+    ) {
         val output = commandPort.insertText(byteOffset, text, cause)
         onPipelineOutput?.invoke(output)
     }
 
-    fun sendDeleteToKernel(byteStart: Int, byteEndExclusive: Int, cause: EditorTransactionCauseDto) {
+    fun sendDeleteToKernel(
+        byteStart: Int,
+        byteEndExclusive: Int,
+        cause: EditorTransactionCauseDto,
+    ) {
         val output = commandPort.deleteRange(byteStart, byteEndExclusive, cause)
         onPipelineOutput?.invoke(output)
     }
 
-    fun sendReplaceToKernel(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto) {
-        val output = commandPort.replaceRangeTyped(byteStart, byteEndExclusive, replacementText, originalText, cause, null, com.xiwei.sujian.editor.v2.host.EditorEditSource.NORMAL)
+    fun sendReplaceToKernel(
+        byteStart: Int,
+        byteEndExclusive: Int,
+        replacementText: String,
+        originalText: String,
+        cause: EditorTransactionCauseDto,
+    ) {
+        val output =
+            commandPort.replaceRangeTyped(
+                byteStart,
+                byteEndExclusive,
+                replacementText,
+                originalText,
+                cause,
+                null,
+                com.xiwei.sujian.editor.v2.host.EditorEditSource.NORMAL,
+            )
         onPipelineOutput?.invoke(output)
     }
 
-    fun sendSetSelectionToKernel(anchorByteOffset: Int, headByteOffset: Int) {
-        val output = commandPort.setSelectionTyped(anchorByteOffset, headByteOffset, com.xiwei.sujian.editor.v2.host.EditorEditSource.NORMAL)
+    fun sendSetSelectionToKernel(
+        anchorByteOffset: Int,
+        headByteOffset: Int,
+    ) {
+        val output =
+            commandPort.setSelectionTyped(
+                anchorByteOffset,
+                headByteOffset,
+                com.xiwei.sujian.editor.v2.host.EditorEditSource.NORMAL,
+            )
         onPipelineOutput?.invoke(output)
     }
 
-    fun sendCommitTextToKernel(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, resultingSelectionAnchor: Int, resultingSelectionHead: Int, cause: EditorTransactionCauseDto) {
+    fun sendCommitTextToKernel(
+        byteStart: Int,
+        byteEndExclusive: Int,
+        replacementText: String,
+        originalText: String,
+        resultingSelectionAnchor: Int,
+        resultingSelectionHead: Int,
+        cause: EditorTransactionCauseDto,
+    ) {
         val (sessionId, baseRev, generation) = compositionSessionInfo()
         val preeditAtCommit = currentCompositionText
-        val dto = commandPort.commitComposition(
-            byteStart, byteEndExclusive, replacementText,
-            resultingSelectionAnchor, resultingSelectionHead,
-            sessionId, baseRev, generation,
-            cause
-        )
+        val dto =
+            commandPort.commitComposition(
+                byteStart, byteEndExclusive, replacementText,
+                resultingSelectionAnchor, resultingSelectionHead,
+                sessionId, baseRev, generation,
+                cause,
+            )
         val result = dto?.let { EditResult.fromDto(it) }
         if (result != null && result.isApplied()) {
             clearCompositionState()
@@ -149,25 +200,35 @@ class AndroidInputAdapter(
         }
         android.util.Log.w(
             "SujianEditorInput",
-            "commitText NOT applied (outcome=${result?.outcome}, dto=${dto != null}); reloading from kernel"
+            "commitText NOT applied (outcome=${result?.outcome}, dto=${dto != null}); reloading from kernel",
         )
         clearCompositionState()
         commandPort.reloadFromKernel()
     }
 
-    fun sendDeleteSurroundingToKernel(beforeByteStart: Int, beforeByteEndExclusive: Int, afterByteStart: Int, afterByteEndExclusive: Int, cause: EditorTransactionCauseDto) {
+    fun sendDeleteSurroundingToKernel(
+        beforeByteStart: Int,
+        beforeByteEndExclusive: Int,
+        afterByteStart: Int,
+        afterByteEndExclusive: Int,
+        cause: EditorTransactionCauseDto,
+    ) {
         invalidateCompositionSession()
-        val dto = commandPort.deleteSurrounding(
-            beforeByteStart, beforeByteEndExclusive,
-            afterByteStart, afterByteEndExclusive,
-            cause
-        ) ?: return
+        val dto =
+            commandPort.deleteSurrounding(
+                beforeByteStart, beforeByteEndExclusive,
+                afterByteStart, afterByteEndExclusive,
+                cause,
+            ) ?: return
         val result = EditResult.fromDto(dto)
         val output = commandPort.applyEditResult(result, null, com.xiwei.sujian.editor.v2.host.EditorEditSource.NORMAL)
         onPipelineOutput?.invoke(output)
     }
 
-    fun sendBeginCompositionToKernel(replaceStart: Int, replaceEndExclusive: Int): Boolean {
+    fun sendBeginCompositionToKernel(
+        replaceStart: Int,
+        replaceEndExclusive: Int,
+    ): Boolean {
         com.xiwei.sujian.diagnostics.DiagnosticsEvents.compositionBegin(replaceStart, replaceEndExclusive)
         val dto = commandPort.beginComposition(replaceStart, replaceEndExclusive) ?: return false
         val result = EditResult.fromDto(dto)
@@ -183,16 +244,21 @@ class AndroidInputAdapter(
         return false
     }
 
-    fun sendUpdateCompositionToKernel(newPreeditText: String, newPreeditCursorOffset: Int): Boolean {
+    fun sendUpdateCompositionToKernel(
+        newPreeditText: String,
+        newPreeditCursorOffset: Int,
+    ): Boolean {
         val (sessionId, _baseRev, generation) = compositionSessionInfo()
         if (sessionId == 0L) return false
         com.xiwei.sujian.diagnostics.DiagnosticsEvents.compositionUpdate(
-            newPreeditText.toByteArray(Charsets.UTF_8).size, newPreeditCursorOffset
+            newPreeditText.toByteArray(Charsets.UTF_8).size,
+            newPreeditCursorOffset,
         )
-        val dto = commandPort.updateComposition(
-            sessionId, generation,
-            newPreeditText, newPreeditCursorOffset
-        ) ?: return false
+        val dto =
+            commandPort.updateComposition(
+                sessionId, generation,
+                newPreeditText, newPreeditCursorOffset,
+            ) ?: return false
         val result = EditResult.fromDto(dto)
         if (result.isApplied()) {
             compositionGeneration++
@@ -208,7 +274,7 @@ class AndroidInputAdapter(
         com.xiwei.sujian.diagnostics.DiagnosticsEvents.compositionCommit(
             compositionReplaceStartUtf8,
             compositionReplaceStartUtf8 + preeditAtFinish.toByteArray(Charsets.UTF_8).size,
-            preeditAtFinish.toByteArray(Charsets.UTF_8).size
+            preeditAtFinish.toByteArray(Charsets.UTF_8).size,
         )
         val dto = commandPort.finishComposition(sessionId, generation)
         if (dto != null) {
@@ -230,7 +296,7 @@ class AndroidInputAdapter(
         com.xiwei.sujian.diagnostics.DiagnosticsEvents.compositionCancel(
             compositionReplaceStartUtf8,
             compositionReplaceStartUtf8 + currentCompositionText.toByteArray(Charsets.UTF_8).size,
-            currentCompositionText.toByteArray(Charsets.UTF_8).size
+            currentCompositionText.toByteArray(Charsets.UTF_8).size,
         )
         val dto = commandPort.cancelComposition(sessionId, generation)
         if (dto == null) {
@@ -280,7 +346,10 @@ class AndroidInputAdapter(
         return Triple(compositionSessionId, compositionBaseRevision, compositionGeneration.toLong())
     }
 
-    fun handleCompositionUpdate(preeditText: String, newCursorPosition: Int) {
+    fun handleCompositionUpdate(
+        preeditText: String,
+        newCursorPosition: Int,
+    ) {
         if (currentProfile.newlinePolicy == NewlinePolicy.FORBID && preeditText.contains('\n')) {
             return
         }
@@ -312,11 +381,12 @@ class AndroidInputAdapter(
         previousCompositionText = currentCompositionText
         currentCompositionText = preeditText
         val preeditUtf16Len = AndroidTextIndexMap.countUtf16CodeUnits(preeditText)
-        compositionCursorUtf16 = if (newCursorPosition > 0) {
-            (preeditUtf16Len + newCursorPosition - 1).coerceIn(0, preeditUtf16Len)
-        } else {
-            (0 + newCursorPosition).coerceIn(0, preeditUtf16Len)
-        }
+        compositionCursorUtf16 =
+            if (newCursorPosition > 0) {
+                (preeditUtf16Len + newCursorPosition - 1).coerceIn(0, preeditUtf16Len)
+            } else {
+                (0 + newCursorPosition).coerceIn(0, preeditUtf16Len)
+            }
 
         val updateOk = sendUpdateCompositionToKernel(preeditText, compositionCursorUtf16)
         if (!updateOk) {
@@ -328,31 +398,42 @@ class AndroidInputAdapter(
         }
 
         commandPort.applyCompositionUpdateAnimated(
-            compositionReplaceStartUtf8, compositionReplaceEndUtf8,
-            preeditText, previousCompositionText
+            compositionReplaceStartUtf8,
+            compositionReplaceEndUtf8,
+            preeditText,
+            previousCompositionText,
         ) {
             mirror.updateComposition(compositionReplaceStartUtf8, compositionReplaceEndUtf8, preeditText)
         }
         onCompositionVisualUpdate?.invoke()
     }
 
-    fun handleCompositionCommitWithText(finalText: String, newCursorPosition: Int) {
+    fun handleCompositionCommitWithText(
+        finalText: String,
+        newCursorPosition: Int,
+    ) {
         if (!isComposing) return
         val replaceStart = compositionReplaceStartUtf8
         val replaceEnd = compositionReplaceEndUtf8
 
-        val (resultingAnchor, resultingHead) = AndroidTextIndexMap.computeResultingSelectionUtf8(
-            mirror.getCommittedText(), newCursorPosition, replaceStart, replaceEnd, finalText
-        )
+        val (resultingAnchor, resultingHead) =
+            AndroidTextIndexMap.computeResultingSelectionUtf8(
+                mirror.getCommittedText(),
+                newCursorPosition,
+                replaceStart,
+                replaceEnd,
+                finalText,
+            )
 
         val (sessionId, baseRev, generation) = compositionSessionInfo()
         val preeditAtCommit = currentCompositionText
-        val dto = commandPort.commitComposition(
-            replaceStart, replaceEnd, finalText,
-            resultingAnchor, resultingHead,
-            sessionId, baseRev, generation,
-            EditorTransactionCauseDto.TYPING_COMMIT
-        )
+        val dto =
+            commandPort.commitComposition(
+                replaceStart, replaceEnd, finalText,
+                resultingAnchor, resultingHead,
+                sessionId, baseRev, generation,
+                EditorTransactionCauseDto.TYPING_COMMIT,
+            )
         if (dto != null) {
             val result = EditResult.fromDto(dto)
             if (result.isApplied()) {
@@ -386,13 +467,20 @@ class AndroidInputAdapter(
         clearCompositionState()
         val originalText = extractCommittedTextAt(replaceStart, replaceEnd)
         sendCommitTextToKernel(
-            replaceStart, replaceEnd, finalText, originalText,
-            resultingAnchor, resultingHead,
-            EditorTransactionCauseDto.TYPING
+            replaceStart,
+            replaceEnd,
+            finalText,
+            originalText,
+            resultingAnchor,
+            resultingHead,
+            EditorTransactionCauseDto.TYPING,
         )
     }
 
-    private fun extractCommittedTextAt(byteStart: Int, byteEndExclusive: Int): String {
+    private fun extractCommittedTextAt(
+        byteStart: Int,
+        byteEndExclusive: Int,
+    ): String {
         val bytes = mirror.getCommittedText().toByteArray(Charsets.UTF_8)
         if (byteStart < 0 || byteEndExclusive > bytes.size || byteStart > byteEndExclusive) return ""
         return String(bytes.copyOfRange(byteStart, byteEndExclusive), Charsets.UTF_8)
@@ -425,7 +513,11 @@ class AndroidInputAdapter(
         onCompositionVisualUpdate?.invoke()
     }
 
-    fun startComposingRegion(byteStart: Int, byteEnd: Int, selectedText: String) {
+    fun startComposingRegion(
+        byteStart: Int,
+        byteEnd: Int,
+        selectedText: String,
+    ) {
         compositionReplaceStartUtf8 = byteStart
         compositionReplaceEndUtf8 = byteEnd
         currentCompositionText = selectedText
@@ -435,6 +527,7 @@ class AndroidInputAdapter(
     }
 
     fun isComposing(): Boolean = isComposing
+
     fun getCompositionText(): String = currentCompositionText
 
     fun getCompositionCursorOffset(): Int? {

@@ -4,7 +4,9 @@ import com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot
 
 sealed class SnapshotOwner {
     data class OwnedBySession(val sessionId: String) : SnapshotOwner()
+
     data class OwnedByTransaction(val transactionKey: Long) : SnapshotOwner()
+
     object Released : SnapshotOwner()
 }
 
@@ -32,10 +34,13 @@ class VisualResourceStore {
 
     private data class OwnedSnapshot(
         val snapshot: AndroidLineSnapshot,
-        var owner: SnapshotOwner
+        var owner: SnapshotOwner,
     )
 
-    fun put(snapshot: AndroidLineSnapshot, owner: SnapshotOwner = SnapshotOwner.OwnedBySession("default")) {
+    fun put(
+        snapshot: AndroidLineSnapshot,
+        owner: SnapshotOwner = SnapshotOwner.OwnedBySession("default"),
+    ) {
         snapshots[snapshot.snapshotId] = OwnedSnapshot(snapshot, owner)
     }
 
@@ -55,7 +60,10 @@ class VisualResourceStore {
      * the rest. Without exact-match, the old transaction's release would also free
      * transferred snapshots, causing use-after-recycle in the new transaction.
      */
-    fun release(snapshotId: Long, releaser: SnapshotOwner) {
+    fun release(
+        snapshotId: Long,
+        releaser: SnapshotOwner,
+    ) {
         val entry = snapshots[snapshotId] ?: return
         if (!isOwner(entry.owner, releaser)) {
             return
@@ -88,7 +96,10 @@ class VisualResourceStore {
      * (Engine.submit) is responsible for ensuring the transfer is valid (the snapshot is
      * currently owned by the old transaction and the new transaction needs it).
      */
-    fun transferOwnership(fromSnapshotId: Long, toOwner: SnapshotOwner): Boolean {
+    fun transferOwnership(
+        fromSnapshotId: Long,
+        toOwner: SnapshotOwner,
+    ): Boolean {
         val entry = snapshots[fromSnapshotId] ?: return false
         entry.owner = toOwner
         return true
@@ -96,11 +107,16 @@ class VisualResourceStore {
 
     fun getOwner(snapshotId: Long): SnapshotOwner? = snapshots[snapshotId]?.owner
 
-    private fun isOwner(current: SnapshotOwner, requester: SnapshotOwner): Boolean {
+    private fun isOwner(
+        current: SnapshotOwner,
+        requester: SnapshotOwner,
+    ): Boolean {
         return when {
             current is SnapshotOwner.Released -> false
-            current is SnapshotOwner.OwnedBySession && requester is SnapshotOwner.OwnedBySession -> current.sessionId == requester.sessionId
-            current is SnapshotOwner.OwnedByTransaction && requester is SnapshotOwner.OwnedByTransaction -> current.transactionKey == requester.transactionKey
+            current is SnapshotOwner.OwnedBySession && requester is SnapshotOwner.OwnedBySession ->
+                current.sessionId == requester.sessionId
+            current is SnapshotOwner.OwnedByTransaction && requester is SnapshotOwner.OwnedByTransaction ->
+                current.transactionKey == requester.transactionKey
             else -> false
         }
     }

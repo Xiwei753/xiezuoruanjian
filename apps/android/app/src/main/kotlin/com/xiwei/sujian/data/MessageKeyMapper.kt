@@ -10,8 +10,12 @@ import com.xiwei.sujian.R
  * 所有错误展示都应通过此 mapper 获取用户可见文案。
  */
 object MessageKeyMapper {
-
-    fun resolveMessage(context: Context, messageKey: String?, messageArgs: Map<String, String>?, errorCode: String?): String {
+    fun resolveMessage(
+        context: Context,
+        messageKey: String?,
+        messageArgs: Map<String, String>?,
+        errorCode: String?,
+    ): String {
         if (messageKey.isNullOrBlank()) {
             return fallbackMessage(context, errorCode)
         }
@@ -59,7 +63,10 @@ object MessageKeyMapper {
         }
     }
 
-    private fun fallbackMessage(context: Context, errorCode: String?): String {
+    private fun fallbackMessage(
+        context: Context,
+        errorCode: String?,
+    ): String {
         return if (!errorCode.isNullOrBlank()) {
             context.getString(R.string.error_internal)
         } else {

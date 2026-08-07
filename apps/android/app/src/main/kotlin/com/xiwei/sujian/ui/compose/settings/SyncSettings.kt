@@ -161,9 +161,10 @@ fun SyncSettings(
         }
 
         if (syncConfig.enabled == true) {
-            val anySyncRunning = state.dryRunState == SyncCommandState.RUNNING ||
-                state.testConnectionState == SyncCommandState.RUNNING ||
-                state.performSyncState == SyncCommandState.RUNNING
+            val anySyncRunning =
+                state.dryRunState == SyncCommandState.RUNNING ||
+                    state.testConnectionState == SyncCommandState.RUNNING ||
+                    state.performSyncState == SyncCommandState.RUNNING
             SujianSection(title = stringResource(id = R.string.pref_category_sync)) {
                 SujianOutlinedButton(
                     text = stringResource(id = R.string.btn_dry_run),
@@ -206,19 +207,23 @@ fun SyncSettings(
 }
 
 @Composable
-private fun resolveSyncFailureMessage(messageKey: String): String = when (messageKey) {
-    "sync_retryable_network" -> stringResource(id = R.string.sync_retryable_network)
-    "sync_retryable_io" -> stringResource(id = R.string.sync_retryable_io)
-    "sync_auth_failed" -> stringResource(id = R.string.sync_auth_failed)
-    "sync_conflict" -> stringResource(id = R.string.sync_conflict)
-    "sync_dirty_repository" -> stringResource(id = R.string.sync_dirty_repository)
-    "sync_protocol_error" -> stringResource(id = R.string.sync_protocol_error)
-    "sync_native_unavailable" -> stringResource(id = R.string.sync_native_unavailable)
-    else -> stringResource(id = R.string.sync_fatal)
-}
+private fun resolveSyncFailureMessage(messageKey: String): String =
+    when (messageKey) {
+        "sync_retryable_network" -> stringResource(id = R.string.sync_retryable_network)
+        "sync_retryable_io" -> stringResource(id = R.string.sync_retryable_io)
+        "sync_auth_failed" -> stringResource(id = R.string.sync_auth_failed)
+        "sync_conflict" -> stringResource(id = R.string.sync_conflict)
+        "sync_dirty_repository" -> stringResource(id = R.string.sync_dirty_repository)
+        "sync_protocol_error" -> stringResource(id = R.string.sync_protocol_error)
+        "sync_native_unavailable" -> stringResource(id = R.string.sync_native_unavailable)
+        else -> stringResource(id = R.string.sync_fatal)
+    }
 
 @Composable
-private fun resolveBlockMessage(blockReasonCode: String, blockMessageKey: String?): String {
+private fun resolveBlockMessage(
+    blockReasonCode: String,
+    blockMessageKey: String?,
+): String {
     return when (blockReasonCode) {
         "DISABLED" -> stringResource(id = R.string.sync_block_disabled)
         "SECURE_STORAGE_UNAVAILABLE" -> stringResource(id = R.string.sync_block_secure_storage_unavailable)
@@ -232,14 +237,15 @@ private fun resolveBlockMessage(blockReasonCode: String, blockMessageKey: String
 @Composable
 private fun resolveStructuredResult(result: StructuredSyncResult): String {
     return when (result.messageKey) {
-        "sync_dry_run_result" -> stringResource(
-            id = R.string.sync_dry_run_result,
-            result.counts.uploaded,
-            result.counts.downloaded,
-            result.counts.deletedRemote,
-            result.counts.deletedLocal,
-            result.counts.conflicts
-        )
+        "sync_dry_run_result" ->
+            stringResource(
+                id = R.string.sync_dry_run_result,
+                result.counts.uploaded,
+                result.counts.downloaded,
+                result.counts.deletedRemote,
+                result.counts.deletedLocal,
+                result.counts.conflicts,
+            )
         "sync_test_connection_result" -> {
             val net = result.messageArgs["network"] ?: ""
             val auth = result.messageArgs["auth"] ?: ""
@@ -250,17 +256,18 @@ private fun resolveStructuredResult(result: StructuredSyncResult): String {
                 translateStatusComponent(net),
                 translateStatusComponent(auth),
                 translateStatusComponent(repo),
-                translateStatusComponent(branch)
+                translateStatusComponent(branch),
             )
         }
-        "sync_perform_result" -> stringResource(
-            id = R.string.sync_perform_result,
-            result.counts.uploaded,
-            result.counts.downloaded,
-            result.counts.deletedRemote,
-            result.counts.deletedLocal,
-            result.counts.conflicts
-        )
+        "sync_perform_result" ->
+            stringResource(
+                id = R.string.sync_perform_result,
+                result.counts.uploaded,
+                result.counts.downloaded,
+                result.counts.deletedRemote,
+                result.counts.deletedLocal,
+                result.counts.conflicts,
+            )
         "sync_terminal_failure" -> stringResource(id = R.string.sync_terminal_failure)
         "sync_retryable_failure" -> stringResource(id = R.string.sync_retryable_failure)
         "sync_retryable_network" -> stringResource(id = R.string.sync_retryable_network)

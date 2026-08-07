@@ -2,6 +2,7 @@ package com.xiwei.sujian.data
 
 sealed interface SettingsSaveResult {
     data object Success : SettingsSaveResult
+
     data class Failed(val failures: List<SaveFailure>) : SettingsSaveResult
 }
 

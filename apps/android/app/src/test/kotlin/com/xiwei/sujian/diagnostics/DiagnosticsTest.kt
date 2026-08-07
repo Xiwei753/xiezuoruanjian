@@ -1,11 +1,13 @@
 package com.xiwei.sujian.diagnostics
 
 import com.xiwei.sujian.model.LocalSettings
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DiagnosticsRedactionTest {
-
     @Test
     fun redactTokenEquals() {
         val input = "token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.abc.def"
@@ -103,7 +105,10 @@ class DiagnosticsRedactionTest {
 
     @Test
     fun redactSshPrivateKeyWithPemBlock() {
-        val input = "ssh_private_key=-----BEGIN OPENSSH PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCAmEwggJdAgEAAoGBANz\n-----END OPENSSH PRIVATE KEY-----"
+        val input =
+            "ssh_private_key=-----BEGIN OPENSSH PRIVATE KEY-----\n" +
+                "MIIEvgIBADANBgkqhkiG9w0BAQEFAASCAmEwggJdAgEAAoGBANz\n" +
+                "-----END OPENSSH PRIVATE KEY-----"
         val result = DiagnosticsLogger.redact(input)
         assertFalse(result.contains("MIIEvgIBADANBgkq"))
         assertFalse(result.contains("-----BEGIN"))
@@ -113,7 +118,10 @@ class DiagnosticsRedactionTest {
 
     @Test
     fun redactPemPrivateKeyBlock() {
-        val input = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA0Z3VS5JJcds3xfn/ygWyF8PbnGy0AHB7\n-----END RSA PRIVATE KEY-----"
+        val input =
+            "-----BEGIN RSA PRIVATE KEY-----\n" +
+                "MIIEpAIBAAKCAQEA0Z3VS5JJcds3xfn/ygWyF8PbnGy0AHB7\n" +
+                "-----END RSA PRIVATE KEY-----"
         val result = DiagnosticsLogger.redact(input)
         assertTrue(result.contains("[REDACTED_PEM]"))
         assertFalse(result.contains("MIIEpAIBAAKCAQEA"))
@@ -259,7 +267,9 @@ class DiagnosticsRedactionTest {
 
     @Test
     fun redactThrowableMessage() {
-        val input = "java.lang.RuntimeException: Failed to save content=The user wrote a long novel here\n\tat com.example.SaveService.save(SaveService.kt:42)"
+        val input =
+            "java.lang.RuntimeException: Failed to save content=The user wrote a long novel here\n" +
+                "\tat com.example.SaveService.save(SaveService.kt:42)"
         val result = DiagnosticsLogger.redact(input)
         assertTrue(result.contains("java.lang.RuntimeException"))
         assertTrue(result.contains("SaveService.kt:42"))
@@ -318,7 +328,6 @@ class DiagnosticsRedactionTest {
 }
 
 class LocalSettingsDiagnosticsDefaultTest {
-
     @Test
     fun diagnosticsDefaultsToEnabled() {
         val settings = LocalSettings()
@@ -343,7 +352,6 @@ class LocalSettingsDiagnosticsDefaultTest {
 }
 
 class EditorEventRingBufferTest {
-
     @Test
     fun ringBufferDoesNotRecordWhenDisabled() {
         EditorEventRingBuffer.setEnabled(false)
@@ -367,24 +375,26 @@ class EditorEventRingBufferTest {
     fun ringBufferStripsSensitiveKeys() {
         EditorEventRingBuffer.setEnabled(true)
         EditorEventRingBuffer.clear()
-        EditorEventRingBuffer.record(mapOf(
-            "event" to "text_change",
-            "text" to "sensitive user content",
-            "content" to "more content",
-            "body" to "body text",
-            "chapter" to "chapter text",
-            "chapter_content" to "chapter content",
-            "chapterContent" to "chapter content camelCase",
-            "password" to "pass123",
-            "token" to "tok123",
-            "access_token" to "at123",
-            "refresh_token" to "rt123",
-            "authorization" to "auth123",
-            "secret" to "sec123",
-            "private_key" to "pk123",
-            "ssh_private_key" to "sshpvk123",
-            "count" to 5
-        ))
+        EditorEventRingBuffer.record(
+            mapOf(
+                "event" to "text_change",
+                "text" to "sensitive user content",
+                "content" to "more content",
+                "body" to "body text",
+                "chapter" to "chapter text",
+                "chapter_content" to "chapter content",
+                "chapterContent" to "chapter content camelCase",
+                "password" to "pass123",
+                "token" to "tok123",
+                "access_token" to "at123",
+                "refresh_token" to "rt123",
+                "authorization" to "auth123",
+                "secret" to "sec123",
+                "private_key" to "pk123",
+                "ssh_private_key" to "sshpvk123",
+                "count" to 5,
+            ),
+        )
         val snapshot = EditorEventRingBuffer.getSnapshot()
         assertEquals(1, snapshot.size)
         assertNull(snapshot[0]["text"])

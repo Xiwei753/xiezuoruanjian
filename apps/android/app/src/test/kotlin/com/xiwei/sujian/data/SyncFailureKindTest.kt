@@ -1,7 +1,6 @@
 package com.xiwei.sujian.data
 
 import org.junit.Assert.assertEquals
-import com.xiwei.sujian.data.SyncOutcome
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -10,15 +9,17 @@ import org.junit.Test
  * #592 四：SyncFailureKind 契约测试 — 验证统一用户提示映射和异常边界分类。
  */
 class SyncFailureKindTest {
-
     @Test
     fun messageKey_allKindsReturnUniqueNonEmptyStrings() {
         val keys = SyncFailureKind.entries.map { it.messageKey() }
         keys.forEach { key ->
             assertTrue("messageKey should be non-empty: $key", key.isNotEmpty())
         }
-        assertEquals("All kinds should have unique messageKeys (incl. #595 三 document failures)",
-            SyncFailureKind.entries.size, keys.distinct().size)
+        assertEquals(
+            "All kinds should have unique messageKeys (incl. #595 三 document failures)",
+            SyncFailureKind.entries.size,
+            keys.distinct().size,
+        )
     }
 
     @Test
@@ -57,18 +58,21 @@ class SyncFailureKindTest {
 
     @Test
     fun allTerminalFailures_areNotRetryable() {
-        val terminalKinds = listOf(
-            SyncFailureKind.Authentication,
-            SyncFailureKind.Conflict,
-            SyncFailureKind.DirtyRepository,
-            SyncFailureKind.Protocol,
-            SyncFailureKind.NativeUnavailable,
-            SyncFailureKind.Fatal,
-        )
+        val terminalKinds =
+            listOf(
+                SyncFailureKind.Authentication,
+                SyncFailureKind.Conflict,
+                SyncFailureKind.DirtyRepository,
+                SyncFailureKind.Protocol,
+                SyncFailureKind.NativeUnavailable,
+                SyncFailureKind.Fatal,
+            )
         terminalKinds.forEach { kind ->
             val outcome = kind.toOutcome()
-            assertTrue("$kind should be TerminalFailure, got $outcome",
-                outcome is SyncOutcome.TerminalFailure)
+            assertTrue(
+                "$kind should be TerminalFailure, got $outcome",
+                outcome is SyncOutcome.TerminalFailure,
+            )
         }
     }
 
@@ -80,29 +84,42 @@ class SyncFailureKindTest {
     fun toOutcome_preservesKindForAllKinds() {
         SyncFailureKind.entries.forEach { kind ->
             val outcome = kind.toOutcome()
-            val recoveredKind = when (outcome) {
-                is SyncOutcome.RetryableFailure -> outcome.kind
-                is SyncOutcome.TerminalFailure -> outcome.kind
-                else -> null
-            }
+            val recoveredKind =
+                when (outcome) {
+                    is SyncOutcome.RetryableFailure -> outcome.kind
+                    is SyncOutcome.TerminalFailure -> outcome.kind
+                    else -> null
+                }
             assertEquals("toOutcome must preserve kind for $kind", kind, recoveredKind)
         }
     }
 
     @Test
     fun fromSyncStatus_mapsCoreStatusesToCorrectKinds() {
-        assertEquals(SyncFailureKind.RetryableNetwork,
-            SyncFailureKind.fromSyncStatus(com.xiwei.sujian.model.SyncStatus.RecoverableError))
-        assertEquals(SyncFailureKind.Fatal,
-            SyncFailureKind.fromSyncStatus(com.xiwei.sujian.model.SyncStatus.Error))
-        assertEquals(SyncFailureKind.Conflict,
-            SyncFailureKind.fromSyncStatus(com.xiwei.sujian.model.SyncStatus.Conflict))
-        assertEquals(SyncFailureKind.Conflict,
-            SyncFailureKind.fromSyncStatus(com.xiwei.sujian.model.SyncStatus.PartialConflict))
-        assertEquals(SyncFailureKind.DirtyRepository,
-            SyncFailureKind.fromSyncStatus(com.xiwei.sujian.model.SyncStatus.DirtyRepoBlocked))
-        assertEquals(SyncFailureKind.Fatal,
-            SyncFailureKind.fromSyncStatus(com.xiwei.sujian.model.SyncStatus.FatalError))
+        assertEquals(
+            SyncFailureKind.RetryableNetwork,
+            SyncFailureKind.fromSyncStatus(com.xiwei.sujian.model.SyncStatus.RecoverableError),
+        )
+        assertEquals(
+            SyncFailureKind.Fatal,
+            SyncFailureKind.fromSyncStatus(com.xiwei.sujian.model.SyncStatus.Error),
+        )
+        assertEquals(
+            SyncFailureKind.Conflict,
+            SyncFailureKind.fromSyncStatus(com.xiwei.sujian.model.SyncStatus.Conflict),
+        )
+        assertEquals(
+            SyncFailureKind.Conflict,
+            SyncFailureKind.fromSyncStatus(com.xiwei.sujian.model.SyncStatus.PartialConflict),
+        )
+        assertEquals(
+            SyncFailureKind.DirtyRepository,
+            SyncFailureKind.fromSyncStatus(com.xiwei.sujian.model.SyncStatus.DirtyRepoBlocked),
+        )
+        assertEquals(
+            SyncFailureKind.Fatal,
+            SyncFailureKind.fromSyncStatus(com.xiwei.sujian.model.SyncStatus.FatalError),
+        )
     }
 
     @Test
@@ -119,8 +136,10 @@ class SyncFailureKindTest {
             SyncFailureKind.Protocol,
             SyncFailureKind.Fatal,
         )) {
-            assertTrue("$kind 不是临时读取故障，不得交给 WorkManager 重试",
-                !kind.isTransientReadFailure())
+            assertTrue(
+                "$kind 不是临时读取故障，不得交给 WorkManager 重试",
+                !kind.isTransientReadFailure(),
+            )
         }
     }
 }

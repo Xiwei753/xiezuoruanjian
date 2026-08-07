@@ -16,25 +16,29 @@ object EditorReplaceRangeAction {
         byteEndExclusive: Int,
         replacementText: String,
         originalText: String,
-        cause: EditorTransactionCauseDto = EditorTransactionCauseDto.TYPING
+        cause: EditorTransactionCauseDto = EditorTransactionCauseDto.TYPING,
     ): ViewAction {
         return object : ViewAction {
             override fun getConstraints(): Matcher<View> {
                 return ViewMatchers.withId(R.id.editor_content)
             }
 
-            override fun getDescription(): String =
-                "Replace range in SujianEditorView via replaceRangeTyped"
+            override fun getDescription(): String = "Replace range in SujianEditorView via replaceRangeTyped"
 
-            override fun perform(uiController: UiController, view: View) {
-                val editorView = view as? SujianEditorView
-                    ?: throw AssertionError(
-                        "EditorReplaceRangeAction: View is not a SujianEditorView, got ${view.javaClass.simpleName}"
-                    )
+            override fun perform(
+                uiController: UiController,
+                view: View,
+            ) {
+                val editorView =
+                    view as? SujianEditorView
+                        ?: throw AssertionError(
+                            "EditorReplaceRangeAction: View is not a SujianEditorView, " +
+                                "got ${view.javaClass.simpleName}",
+                        )
 
                 Assert.assertTrue(
                     "EditorReplaceRangeAction: SujianEditorView is not session bound",
-                    editorView.isSessionBound
+                    editorView.isSessionBound,
                 )
 
                 editorView.replaceRangeTyped(byteStart, byteEndExclusive, replacementText, originalText, cause)

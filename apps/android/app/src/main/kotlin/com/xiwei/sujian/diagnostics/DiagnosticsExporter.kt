@@ -3,7 +3,6 @@ package com.xiwei.sujian.diagnostics
 import android.content.Context
 import android.content.Intent
 import android.os.Build
-import android.util.DisplayMetrics
 import androidx.core.content.FileProvider
 import com.google.gson.GsonBuilder
 import com.xiwei.sujian.R
@@ -18,7 +17,6 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 object DiagnosticsExporter {
-
     private const val DIAGNOSTICS_DIR = "diagnostics"
 
     fun export(context: Context): File? {
@@ -50,19 +48,26 @@ object DiagnosticsExporter {
         }
     }
 
-    fun shareZip(context: Context, zipFile: File) {
+    fun shareZip(
+        context: Context,
+        zipFile: File,
+    ) {
         try {
-            val uri = FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                zipFile
+            val uri =
+                FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    zipFile,
+                )
+            val shareIntent =
+                Intent(Intent.ACTION_SEND).apply {
+                    type = "application/zip"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+            context.startActivity(
+                Intent.createChooser(shareIntent, context.getString(R.string.share_diagnostics_title)),
             )
-            val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                type = "application/zip"
-                putExtra(Intent.EXTRA_STREAM, uri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            context.startActivity(Intent.createChooser(shareIntent, context.getString(R.string.share_diagnostics_title)))
         } catch (e: Exception) {
             DiagnosticsLogger.e("DiagnosticsExporter", "Share failed", e)
         }
@@ -74,7 +79,10 @@ object DiagnosticsExporter {
         return DiagnosticsLogger.redact(gson.toJson(info))
     }
 
-    private fun writeLogs(context: Context, destDir: File) {
+    private fun writeLogs(
+        context: Context,
+        destDir: File,
+    ) {
         val logsDir = File(destDir, "logs")
         logsDir.mkdirs()
         DiagnosticsLogger.flush()
@@ -83,46 +91,58 @@ object DiagnosticsExporter {
                 val content = logFile.readText()
                 val redacted = DiagnosticsLogger.redact(content)
                 File(logsDir, logFile.name).writeText(redacted)
-            } catch (_: Exception) {}
+            } catch (_: Exception) {
+            }
         }
     }
 
-    private fun writeCrashFile(context: Context, destDir: File) {
+    private fun writeCrashFile(
+        context: Context,
+        destDir: File,
+    ) {
         val crashFile = DiagnosticsLogger.getCrashFile() ?: return
         try {
             val content = crashFile.readText()
             val redacted = DiagnosticsLogger.redact(content)
             File(destDir, "last_crash.txt").writeText(redacted)
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+        }
     }
 
-    private fun writeDeviceInfo(context: Context, destDir: File) {
+    private fun writeDeviceInfo(
+        context: Context,
+        destDir: File,
+    ) {
         val info = collectDeviceInfo(context)
         val gson = GsonBuilder().setPrettyPrinting().create()
         val json = DiagnosticsLogger.redact(gson.toJson(info))
         File(destDir, "current_device.json").writeText(json)
     }
 
-    private fun writeAppSettingsSanitized(context: Context, destDir: File) {
+    private fun writeAppSettingsSanitized(
+        context: Context,
+        destDir: File,
+    ) {
         try {
             val repo = SettingsRepository(context)
             val settings = repo.getLocalSettings()
-            val sanitized = mapOf(
-                "themeMode" to settings.themeMode,
-                "editorFontSize" to settings.editorFontSize,
-                "editorLineSpacingMultiplier" to settings.editorLineSpacingMultiplier,
-                "autoSaveEnabled" to settings.autoSaveEnabled,
-                "autoSaveDelayMs" to settings.autoSaveDelayMs,
-                "autoIndentEnabled" to settings.autoIndentEnabled,
-                "autoIndentWidth" to settings.autoIndentWidth,
-                "editorTypingAnimationEnabled" to settings.editorTypingAnimationEnabled,
-                "editorSmoothCursorEnabled" to settings.editorSmoothCursorEnabled,
-                "editorTypingAnimationDurationMs" to settings.editorTypingAnimationDurationMs,
-                "editorSmoothCursorDurationMs" to settings.editorSmoothCursorDurationMs,
-                "aiEnabled" to settings.aiEnabled,
-                "diagnosticsEnabled" to settings.diagnosticsEnabled,
-                "diagnosticsVerbose" to settings.diagnosticsVerbose
-            )
+            val sanitized =
+                mapOf(
+                    "themeMode" to settings.themeMode,
+                    "editorFontSize" to settings.editorFontSize,
+                    "editorLineSpacingMultiplier" to settings.editorLineSpacingMultiplier,
+                    "autoSaveEnabled" to settings.autoSaveEnabled,
+                    "autoSaveDelayMs" to settings.autoSaveDelayMs,
+                    "autoIndentEnabled" to settings.autoIndentEnabled,
+                    "autoIndentWidth" to settings.autoIndentWidth,
+                    "editorTypingAnimationEnabled" to settings.editorTypingAnimationEnabled,
+                    "editorSmoothCursorEnabled" to settings.editorSmoothCursorEnabled,
+                    "editorTypingAnimationDurationMs" to settings.editorTypingAnimationDurationMs,
+                    "editorSmoothCursorDurationMs" to settings.editorSmoothCursorDurationMs,
+                    "aiEnabled" to settings.aiEnabled,
+                    "diagnosticsEnabled" to settings.diagnosticsEnabled,
+                    "diagnosticsVerbose" to settings.diagnosticsVerbose,
+                )
             val gson = GsonBuilder().setPrettyPrinting().create()
             val json = DiagnosticsLogger.redact(gson.toJson(sanitized))
             File(destDir, "app_settings_sanitized.json").writeText(json)
@@ -133,18 +153,22 @@ object DiagnosticsExporter {
         }
     }
 
-    private fun writeSyncStateSanitized(context: Context, destDir: File) {
+    private fun writeSyncStateSanitized(
+        context: Context,
+        destDir: File,
+    ) {
         try {
             val repo = SettingsRepository(context)
             val syncState = repo.loadSyncState()
-            val sanitized = mapOf(
-                "status" to syncState.status.name,
-                "backendType" to syncState.backendType,
-                "transport" to syncState.transport,
-                "lastSyncTime" to syncState.lastSyncTime,
-                "lastError" to syncState.lastError?.let { DiagnosticsLogger.redact(it) },
-                "conflictCount" to (syncState.conflicts?.size ?: 0)
-            )
+            val sanitized =
+                mapOf(
+                    "status" to syncState.status.name,
+                    "backendType" to syncState.backendType,
+                    "transport" to syncState.transport,
+                    "lastSyncTime" to syncState.lastSyncTime,
+                    "lastError" to syncState.lastError?.let { DiagnosticsLogger.redact(it) },
+                    "conflictCount" to (syncState.conflicts?.size ?: 0),
+                )
             val gson = GsonBuilder().setPrettyPrinting().create()
             val json = DiagnosticsLogger.redact(gson.toJson(sanitized))
             File(destDir, "sync_state_sanitized.json").writeText(json)
@@ -183,11 +207,14 @@ object DiagnosticsExporter {
             "screenHeightPx" to displayMetrics.heightPixels,
             "densityDpi" to displayMetrics.densityDpi,
             "density" to displayMetrics.density,
-            "scaledDensity" to displayMetrics.scaledDensity
+            "scaledDensity" to displayMetrics.scaledDensity,
         )
     }
 
-    private fun zipDirectory(sourceDir: File, zipFile: File) {
+    private fun zipDirectory(
+        sourceDir: File,
+        zipFile: File,
+    ) {
         ZipOutputStream(FileOutputStream(zipFile)).use { zos ->
             sourceDir.walkTopDown().forEach { file ->
                 if (file.isDirectory) return@forEach

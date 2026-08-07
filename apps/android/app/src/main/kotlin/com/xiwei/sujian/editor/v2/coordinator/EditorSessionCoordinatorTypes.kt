@@ -1,29 +1,35 @@
 package com.xiwei.sujian.editor.v2.coordinator
 
-//! # 编辑器会话协调器类型声明（从 EditorSessionCoordinator �?分）
+// ! # 编辑器会话协调器类型声明（从 EditorSessionCoordinator �?分）
 
 import androidx.compose.runtime.Immutable
 
 sealed interface WindowBindingState {
-data object Idle : WindowBindingState
-data class Attaching(
-    val windowId: String,
-    val targetId: String,
-    val sessionId: ULong,
-) : WindowBindingState
-data class Attached(
-    val windowId: String,
-    val targetId: String,
-    val sessionId: ULong,
-) : WindowBindingState
-data class Detaching(val snapshot: TargetSnapshot?) : WindowBindingState
-data class Detached(
-    val targetId: String,
-    val sessionId: ULong,
-    val snapshot: TargetSnapshot?,
-) : WindowBindingState
-data class Committing(val targetId: String, val sessionId: ULong) : WindowBindingState
-data class Cancelling(val targetId: String, val sessionId: ULong) : WindowBindingState
+    data object Idle : WindowBindingState
+
+    data class Attaching(
+        val windowId: String,
+        val targetId: String,
+        val sessionId: ULong,
+    ) : WindowBindingState
+
+    data class Attached(
+        val windowId: String,
+        val targetId: String,
+        val sessionId: ULong,
+    ) : WindowBindingState
+
+    data class Detaching(val snapshot: TargetSnapshot?) : WindowBindingState
+
+    data class Detached(
+        val targetId: String,
+        val sessionId: ULong,
+        val snapshot: TargetSnapshot?,
+    ) : WindowBindingState
+
+    data class Committing(val targetId: String, val sessionId: ULong) : WindowBindingState
+
+    data class Cancelling(val targetId: String, val sessionId: ULong) : WindowBindingState
 }
 
 /**
@@ -32,11 +38,13 @@ data class Cancelling(val targetId: String, val sessionId: ULong) : WindowBindin
  */
 enum class SessionCloseReason {
 /** 用户从正文返回章节列表/作品列表（workspace 导航离开 Editor 目的地）。 */
-WORKSPACE_NAVIGATION,
+    WORKSPACE_NAVIGATION,
+
 /** 章节切换（旧章节 session 关闭，新章节新建 session）。 */
-CHAPTER_SWITCH,
+    CHAPTER_SWITCH,
+
 /** 章节/作品被删除。 */
-DELETE,
+    DELETE,
 }
 
 /**
@@ -46,8 +54,8 @@ DELETE,
  * 字体/主题/视口等视觉配置由 Compose 主题和 profile 权威提供，不再保存。
  */
 data class ProjectionSnapshot(
-val scrollX: Float = 0f,
-val scrollY: Float = 0f,
+    val scrollX: Float = 0f,
+    val scrollY: Float = 0f,
 )
 
 /**
@@ -63,9 +71,9 @@ val scrollY: Float = 0f,
  */
 @Immutable
 data class EditorInputLease(
-val targetId: String,
-val sessionId: ULong,
-val epoch: Long,
+    val targetId: String,
+    val sessionId: ULong,
+    val epoch: Long,
 )
 
 /**
@@ -80,13 +88,13 @@ val epoch: Long,
  */
 @Immutable
 data class DocumentOperationLease(
-val operationId: Long,
-val targetId: String,
-val coreSessionId: ULong,
-val inputEpoch: Long,
-val rustRevision: Long,
-val text: String,
-val committedVersion: DocumentVersion,
+    val operationId: Long,
+    val targetId: String,
+    val coreSessionId: ULong,
+    val inputEpoch: Long,
+    val rustRevision: Long,
+    val text: String,
+    val committedVersion: DocumentVersion,
 )
 
 /**
@@ -105,11 +113,11 @@ val committedVersion: DocumentVersion,
  */
 @Immutable
 data class PreparedSessionHandle(
-val targetId: String,
-val sessionId: ULong,
-val snapshot: TargetSnapshot,
-val newlyCreated: Boolean,
-val previousRecord: EditorSessionRecord?,
+    val targetId: String,
+    val sessionId: ULong,
+    val snapshot: TargetSnapshot,
+    val newlyCreated: Boolean,
+    val previousRecord: EditorSessionRecord?,
 )
 
 /**
@@ -127,13 +135,19 @@ val previousRecord: EditorSessionRecord?,
  *   必须进入重新读取/三方合并/冲突路径。
  */
 sealed interface ExternalContentDecision {
-data object Apply : ExternalContentDecision
-data object IgnoreReplay : ExternalContentDecision
-data object IgnoreOlder : ExternalContentDecision
-data object IgnoreDirtyConflict : ExternalContentDecision
-data object IgnoreSameContent : ExternalContentDecision
-data object IgnoreEmptyVersion : ExternalContentDecision
-data object IgnoreUncomparableConflict : ExternalContentDecision
+    data object Apply : ExternalContentDecision
+
+    data object IgnoreReplay : ExternalContentDecision
+
+    data object IgnoreOlder : ExternalContentDecision
+
+    data object IgnoreDirtyConflict : ExternalContentDecision
+
+    data object IgnoreSameContent : ExternalContentDecision
+
+    data object IgnoreEmptyVersion : ExternalContentDecision
+
+    data object IgnoreUncomparableConflict : ExternalContentDecision
 }
 
 /**
@@ -148,6 +162,7 @@ data object IgnoreUncomparableConflict : ExternalContentDecision
  * - [Failed]：reset 未执行或 Core 失败 — 调用方必须保持旧正文与旧版本，不得推进任何状态。
  */
 sealed interface ExternalResetResult {
-data class Success(val snapshot: TargetSnapshot) : ExternalResetResult
-data object Failed : ExternalResetResult
+    data class Success(val snapshot: TargetSnapshot) : ExternalResetResult
+
+    data object Failed : ExternalResetResult
 }

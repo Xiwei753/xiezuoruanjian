@@ -6,26 +6,26 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import androidx.window.layout.FoldingFeature
 import com.xiwei.sujian.data.LayoutPolicyRepositoryProvider
-import com.xiwei.sujian.data.WorkspaceUseCase
 import com.xiwei.sujian.data.SettingsRepository
+import com.xiwei.sujian.data.WorkspaceUseCase
 import com.xiwei.sujian.model.FoldFeatureInfo
-import com.xiwei.sujian.model.FoldState
-import com.xiwei.sujian.model.FoldOrientation
 import com.xiwei.sujian.model.FoldOcclusion
+import com.xiwei.sujian.model.FoldOrientation
+import com.xiwei.sujian.model.FoldState
 import com.xiwei.sujian.model.LayoutPlan
 import com.xiwei.sujian.model.Project
 import com.xiwei.sujian.model.RecentEdit
 import com.xiwei.sujian.model.WindowMetrics
 import com.xiwei.sujian.platform.api.FoldPosture
-import com.xiwei.sujian.platform.api.FoldOrientation as PlatformFoldOrientation
 import com.xiwei.sujian.platform.api.OcclusionType
 import com.xiwei.sujian.platform.window.WindowFoldFeatureCollector
-import androidx.window.layout.FoldingFeature
-import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.xiwei.sujian.platform.api.FoldOrientation as PlatformFoldOrientation
 
 interface WorkspaceAppState {
     val projects: List<com.xiwei.sujian.model.Project>
@@ -35,23 +35,46 @@ interface WorkspaceAppState {
     val currentVolumeId: String?
     val currentChapterId: String?
     val currentChapterTitle: String
-    fun selectProject(projectId: String, projectTitle: String)
+
+    fun selectProject(
+        projectId: String,
+        projectTitle: String,
+    )
+
     fun selectProject(projectId: String)
-    fun selectChapter(volumeId: String, chapterId: String, chapterTitle: String)
-    fun selectChapter(volumeId: String, chapterId: String)
+
+    fun selectChapter(
+        volumeId: String,
+        chapterId: String,
+        chapterTitle: String,
+    )
+
+    fun selectChapter(
+        volumeId: String,
+        chapterId: String,
+    )
+
     fun clearChapterSelection()
+
     fun clearProjectSelection()
+
     fun refreshProjects()
+
     fun refreshRecentEdits()
+
     fun createProject(title: String)
+
     fun deleteProject(projectId: String)
-    fun renameProject(projectId: String, newTitle: String)
+
+    fun renameProject(
+        projectId: String,
+        newTitle: String,
+    )
 }
 
 class SujianAppViewModel(
-    private val savedStateHandle: SavedStateHandle
+    private val savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
-
     var projects by androidx.compose.runtime.mutableStateOf<List<Project>>(emptyList())
         private set
 
@@ -90,7 +113,7 @@ class SujianAppViewModel(
         workspaceRepo: com.xiwei.sujian.data.WorkspaceRepository,
         workspaceUC: WorkspaceUseCase,
         settingsRepo: SettingsRepository,
-        context: android.content.Context
+        context: android.content.Context,
     ) {
         workspaceUseCase = workspaceUC
         settingsRepository = settingsRepo
@@ -99,7 +122,10 @@ class SujianAppViewModel(
         refreshRecentEdits()
     }
 
-    fun selectProject(projectId: String, projectTitle: String) {
+    fun selectProject(
+        projectId: String,
+        projectTitle: String,
+    ) {
         currentProjectId = projectId
         currentProjectTitle = projectTitle
         savedStateHandle["currentProjectId"] = projectId
@@ -117,20 +143,25 @@ class SujianAppViewModel(
             savedStateHandle["currentProjectTitle"] = cachedProject.title
         } else {
             viewModelScope.launch {
-                val title = withContext(Dispatchers.IO) {
-                    try {
-                        workspaceUseCase?.getProjectTitle(projectId) ?: ""
-                    } catch (_: Exception) {
-                        ""
+                val title =
+                    withContext(Dispatchers.IO) {
+                        try {
+                            workspaceUseCase?.getProjectTitle(projectId) ?: ""
+                        } catch (_: Exception) {
+                            ""
+                        }
                     }
-                }
                 currentProjectTitle = title
                 savedStateHandle["currentProjectTitle"] = title
             }
         }
     }
 
-    fun selectChapter(volumeId: String, chapterId: String, chapterTitle: String) {
+    fun selectChapter(
+        volumeId: String,
+        chapterId: String,
+        chapterTitle: String,
+    ) {
         currentVolumeId = volumeId
         currentChapterId = chapterId
         currentChapterTitle = chapterTitle
@@ -140,20 +171,24 @@ class SujianAppViewModel(
         com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceSelection("chapter", chapterId)
     }
 
-    fun selectChapter(volumeId: String, chapterId: String) {
+    fun selectChapter(
+        volumeId: String,
+        chapterId: String,
+    ) {
         currentVolumeId = volumeId
         currentChapterId = chapterId
         savedStateHandle["currentVolumeId"] = volumeId
         savedStateHandle["currentChapterId"] = chapterId
         com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceSelection("chapter", chapterId)
         viewModelScope.launch {
-            val title = withContext(Dispatchers.IO) {
-                try {
-                    workspaceUseCase?.getChapterTitle(chapterId) ?: ""
-                } catch (_: Exception) {
-                    ""
+            val title =
+                withContext(Dispatchers.IO) {
+                    try {
+                        workspaceUseCase?.getChapterTitle(chapterId) ?: ""
+                    } catch (_: Exception) {
+                        ""
+                    }
                 }
-            }
             currentChapterTitle = title
             savedStateHandle["currentChapterTitle"] = title
         }
@@ -187,30 +222,41 @@ class SujianAppViewModel(
         foldFeatureInfo = info
     }
 
-    fun updateFoldFeaturesFromAdaptive(features: List<FoldingFeature>, density: Float = 1f) {
-        val coreFoldInfo = if (features.isNotEmpty()) {
-            val feature = features.first()
-            val info = WindowFoldFeatureCollector.toFoldFeatureInfo(feature)
-            FoldFeatureInfo(
-                state = when (info.state) {
-                    FoldPosture.Flat -> FoldState.Flat
-                    FoldPosture.HalfOpened -> FoldState.HalfOpened
-                    else -> FoldState.None
-                },
-                orientation = if (info.orientation == PlatformFoldOrientation.Horizontal) FoldOrientation.Horizontal else FoldOrientation.Vertical,
-                isSeparating = info.isSeparating,
-                occlusion = when (info.occlusionType) {
-                    OcclusionType.Full -> FoldOcclusion.Full
-                    else -> FoldOcclusion.None
-                },
-                boundsLeftVp = info.boundsLeft.toFloat() / density,
-                boundsTopVp = info.boundsTop.toFloat() / density,
-                boundsRightVp = info.boundsRight.toFloat() / density,
-                boundsBottomVp = info.boundsBottom.toFloat() / density
-            )
-        } else {
-            FoldFeatureInfo()
-        }
+    fun updateFoldFeaturesFromAdaptive(
+        features: List<FoldingFeature>,
+        density: Float = 1f,
+    ) {
+        val coreFoldInfo =
+            if (features.isNotEmpty()) {
+                val feature = features.first()
+                val info = WindowFoldFeatureCollector.toFoldFeatureInfo(feature)
+                FoldFeatureInfo(
+                    state =
+                        when (info.state) {
+                            FoldPosture.Flat -> FoldState.Flat
+                            FoldPosture.HalfOpened -> FoldState.HalfOpened
+                            else -> FoldState.None
+                        },
+                    orientation =
+                        if (info.orientation == PlatformFoldOrientation.Horizontal) {
+                            FoldOrientation.Horizontal
+                        } else {
+                            FoldOrientation.Vertical
+                        },
+                    isSeparating = info.isSeparating,
+                    occlusion =
+                        when (info.occlusionType) {
+                            OcclusionType.Full -> FoldOcclusion.Full
+                            else -> FoldOcclusion.None
+                        },
+                    boundsLeftVp = info.boundsLeft.toFloat() / density,
+                    boundsTopVp = info.boundsTop.toFloat() / density,
+                    boundsRightVp = info.boundsRight.toFloat() / density,
+                    boundsBottomVp = info.boundsBottom.toFloat() / density,
+                )
+            } else {
+                FoldFeatureInfo()
+            }
         foldFeatureInfo = coreFoldInfo
     }
 
@@ -224,25 +270,27 @@ class SujianAppViewModel(
 
     fun refreshProjects() {
         viewModelScope.launch {
-            projects = withContext(Dispatchers.IO) {
-                try {
-                    workspaceUseCase?.getProjects() ?: emptyList()
-                } catch (_: Exception) {
-                    emptyList()
+            projects =
+                withContext(Dispatchers.IO) {
+                    try {
+                        workspaceUseCase?.getProjects() ?: emptyList()
+                    } catch (_: Exception) {
+                        emptyList()
+                    }
                 }
-            }
         }
     }
 
     fun refreshRecentEdits() {
         viewModelScope.launch {
-            recentEdits = withContext(Dispatchers.IO) {
-                try {
-                    workspaceUseCase?.getRecentEdits(5) ?: emptyList()
-                } catch (_: Exception) {
-                    emptyList()
+            recentEdits =
+                withContext(Dispatchers.IO) {
+                    try {
+                        workspaceUseCase?.getRecentEdits(5) ?: emptyList()
+                    } catch (_: Exception) {
+                        emptyList()
+                    }
                 }
-            }
         }
     }
 
@@ -251,7 +299,8 @@ class SujianAppViewModel(
             withContext(Dispatchers.IO) {
                 try {
                     workspaceUseCase?.createProject(title)
-                } catch (_: Exception) { }
+                } catch (_: Exception) {
+                }
             }
             refreshProjects()
         }
@@ -262,18 +311,23 @@ class SujianAppViewModel(
             withContext(Dispatchers.IO) {
                 try {
                     workspaceUseCase?.deleteProject(projectId)
-                } catch (_: Exception) { }
+                } catch (_: Exception) {
+                }
             }
             refreshProjects()
         }
     }
 
-    fun renameProject(projectId: String, newTitle: String) {
+    fun renameProject(
+        projectId: String,
+        newTitle: String,
+    ) {
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 try {
                     workspaceUseCase?.renameProject(projectId, newTitle)
-                } catch (_: Exception) { }
+                } catch (_: Exception) {
+                }
             }
             refreshProjects()
         }
@@ -282,7 +336,7 @@ class SujianAppViewModel(
 
 @Stable
 class SujianAppState(
-    val viewModel: SujianAppViewModel
+    val viewModel: SujianAppViewModel,
 ) : WorkspaceAppState {
     override val projects: List<Project> get() = viewModel.projects
     override val recentEdits: List<RecentEdit> get() = viewModel.recentEdits
@@ -295,17 +349,55 @@ class SujianAppState(
     val foldFeatureInfo: FoldFeatureInfo get() = viewModel.foldFeatureInfo
     val isLoading: Boolean get() = viewModel.isLoading
 
-    override fun selectProject(projectId: String, projectTitle: String) = viewModel.selectProject(projectId, projectTitle)
+    override fun selectProject(
+        projectId: String,
+        projectTitle: String,
+    ) = viewModel.selectProject(
+        projectId,
+        projectTitle,
+    )
+
     override fun selectProject(projectId: String) = viewModel.selectProject(projectId)
-    override fun selectChapter(volumeId: String, chapterId: String, chapterTitle: String) = viewModel.selectChapter(volumeId, chapterId, chapterTitle)
-    override fun selectChapter(volumeId: String, chapterId: String) = viewModel.selectChapter(volumeId, chapterId)
+
+    override fun selectChapter(
+        volumeId: String,
+        chapterId: String,
+        chapterTitle: String,
+    ) = viewModel.selectChapter(
+        volumeId,
+        chapterId,
+        chapterTitle,
+    )
+
+    override fun selectChapter(
+        volumeId: String,
+        chapterId: String,
+    ) = viewModel.selectChapter(volumeId, chapterId)
+
     override fun clearChapterSelection() = viewModel.clearChapterSelection()
+
     override fun clearProjectSelection() = viewModel.clearProjectSelection()
-    fun updateFoldFeaturesFromAdaptive(features: List<FoldingFeature>, density: Float = 1f) = viewModel.updateFoldFeaturesFromAdaptive(features, density)
+
+    fun updateFoldFeaturesFromAdaptive(
+        features: List<FoldingFeature>,
+        density: Float = 1f,
+    ) = viewModel.updateFoldFeaturesFromAdaptive(
+        features,
+        density,
+    )
+
     fun resolveLayout(metrics: WindowMetrics): LayoutPlan? = viewModel.resolveLayout(metrics)
+
     override fun refreshProjects() = viewModel.refreshProjects()
+
     override fun refreshRecentEdits() = viewModel.refreshRecentEdits()
+
     override fun createProject(title: String) = viewModel.createProject(title)
+
     override fun deleteProject(projectId: String) = viewModel.deleteProject(projectId)
-    override fun renameProject(projectId: String, newTitle: String) = viewModel.renameProject(projectId, newTitle)
+
+    override fun renameProject(
+        projectId: String,
+        newTitle: String,
+    ) = viewModel.renameProject(projectId, newTitle)
 }

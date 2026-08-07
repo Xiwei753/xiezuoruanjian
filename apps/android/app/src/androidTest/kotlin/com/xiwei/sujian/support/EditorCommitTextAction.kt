@@ -19,31 +19,36 @@ object EditorCommitTextAction {
 
             override fun getDescription(): String = "Commit text to SujianEditorView"
 
-            override fun perform(uiController: UiController, view: View) {
-                val editorView = view as? SujianEditorView
-                    ?: throw AssertionError(
-                        "EditorCommitTextAction: View with id editor_content is not a SujianEditorView, got ${view.javaClass.simpleName}"
-                    )
+            override fun perform(
+                uiController: UiController,
+                view: View,
+            ) {
+                val editorView =
+                    view as? SujianEditorView
+                        ?: throw AssertionError(
+                            "EditorCommitTextAction: View with id editor_content is not a SujianEditorView, " +
+                                "got ${view.javaClass.simpleName}",
+                        )
 
                 Assert.assertTrue(
                     "EditorCommitTextAction: SujianEditorView is not VISIBLE (visibility=${editorView.visibility})",
-                    editorView.visibility == View.VISIBLE
+                    editorView.visibility == View.VISIBLE,
                 )
 
                 Assert.assertTrue(
                     "EditorCommitTextAction: SujianEditorView is not enabled",
-                    editorView.isEnabled
+                    editorView.isEnabled,
                 )
 
                 Assert.assertTrue(
                     "EditorCommitTextAction: SujianEditorView does not have an editing session bound",
-                    editorView.isSessionBound
+                    editorView.isSessionBound,
                 )
 
                 val focusOk = editorView.requestFocus()
                 Assert.assertTrue(
                     "EditorCommitTextAction: requestFocus() returned false",
-                    focusOk
+                    focusOk,
                 )
 
                 uiController.loopMainThreadUntilIdle()
@@ -52,13 +57,13 @@ object EditorCommitTextAction {
                 val ic = editorView.onCreateInputConnection(outAttrs)
                 Assert.assertNotNull(
                     "EditorCommitTextAction: onCreateInputConnection returned null",
-                    ic
+                    ic,
                 )
 
                 val commitOk = ic!!.commitText(text, 1)
                 Assert.assertTrue(
                     "EditorCommitTextAction: commitText returned false",
-                    commitOk
+                    commitOk,
                 )
 
                 uiController.loopMainThreadUntilIdle()

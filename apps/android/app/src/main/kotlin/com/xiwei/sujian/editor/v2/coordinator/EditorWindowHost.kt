@@ -4,13 +4,12 @@ import android.content.Context
 import android.graphics.Rect
 import android.util.Log
 import com.xiwei.sujian.data.AppServiceBridge
-import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import com.xiwei.sujian.editor.v2.host.TextEditSessionBridge
-import com.xiwei.sujian.editor.v2.projection.ChapterPreviewState
-import com.xiwei.sujian.editor.v2.projection.TextRange
 import com.xiwei.sujian.editor.v2.motion.EditorMotionPolicy
 import com.xiwei.sujian.editor.v2.motion.TargetMotionConstraint
+import com.xiwei.sujian.editor.v2.projection.ChapterPreviewState
+import com.xiwei.sujian.editor.v2.projection.TextRange
 import com.xiwei.sujian.ui.compose.theme.EditorThemeAdapter
 import kotlinx.coroutines.flow.StateFlow
 
@@ -38,7 +37,6 @@ class EditorWindowHost(
     private val transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource,
     frameClock: WindowDisplayFrameClock? = null,
 ) : SessionCommandPort {
-
     /** #592 二：窗口标识 — 同一窗口内的 Compose onDispose 用它调用 detachWindowBinding。 */
     val windowId: String = "window:${System.identityHashCode(this)}"
 
@@ -107,7 +105,10 @@ class EditorWindowHost(
         sessionCoordinator.updateTargetSpec(targetId, profile = profile)
     }
 
-    fun detachWindowBinding(windowId: String, targetId: String) {
+    fun detachWindowBinding(
+        windowId: String,
+        targetId: String,
+    ) {
         val isPersistent = sessionCoordinator.isTargetPersistent(targetId)
         if (isPersistent) {
             saveActiveTargetProjection(targetId)
@@ -124,7 +125,10 @@ class EditorWindowHost(
      * 删除章节）。与窗口解绑分开：关闭销毁 Rust session，解绑只解除窗口引用。
      * 若当前 View 仍绑定该会话，先解除绑定避免 IME 输入命中已关闭的 session。
      */
-    fun closeTarget(targetId: String, reason: SessionCloseReason) {
+    fun closeTarget(
+        targetId: String,
+        reason: SessionCloseReason,
+    ) {
         if (activeTargetId == targetId) {
             sharedEditorView?.let { view ->
                 view.unbindSession("target_close")
@@ -136,15 +140,24 @@ class EditorWindowHost(
         sessionCoordinator.closeTarget(targetId, reason)
     }
 
-    fun updateTargetGeometry(targetId: String, geometry: Rect) {
+    fun updateTargetGeometry(
+        targetId: String,
+        geometry: Rect,
+    ) {
         targets[targetId]?.updateGeometry(geometry)
     }
 
-    fun updateTargetTransform(targetId: String, transform: Transform2D) {
+    fun updateTargetTransform(
+        targetId: String,
+        transform: Transform2D,
+    ) {
         targets[targetId]?.updateTransform(transform)
     }
 
-    fun updateTargetText(targetId: String, text: String) {
+    fun updateTargetText(
+        targetId: String,
+        text: String,
+    ) {
         // #595 四：窗口层只更新 target 对象（Compose 侧正文来源）；
         // 会话层正文唯一事实源是 sessionStateFlow（applyLocalEdit 已更新），
         // 不再存在 targetTexts 第二份正文缓存。
@@ -162,14 +175,18 @@ class EditorWindowHost(
     fun getChapterPreviewState(targetId: String): ChapterPreviewState? {
         val snapshot = sessionCoordinator.queryTargetSnapshot(targetId) ?: return null
         val decorations = sessionCoordinator.getTargetDecorations(targetId)
-        val searchHighlights = decorations?.searchHighlightsUtf8?.map {
-            TextRange(it.first, it.second)
-        } ?: emptyList()
-        val selection = if (decorations != null &&
-            decorations.selectionStartUtf8 >= 0 && decorations.selectionEndUtf8 >= 0
-        ) {
-            TextRange(decorations.selectionStartUtf8, decorations.selectionEndUtf8)
-        } else null
+        val searchHighlights =
+            decorations?.searchHighlightsUtf8?.map {
+                TextRange(it.first, it.second)
+            } ?: emptyList()
+        val selection =
+            if (decorations != null &&
+                decorations.selectionStartUtf8 >= 0 && decorations.selectionEndUtf8 >= 0
+            ) {
+                TextRange(decorations.selectionStartUtf8, decorations.selectionEndUtf8)
+            } else {
+                null
+            }
         return ChapterPreviewState(
             text = snapshot.text,
             revision = snapshot.revision,
@@ -206,7 +223,10 @@ class EditorWindowHost(
         return constraintFor(profile)
     }
 
-    private fun applyPolicyToView(view: SujianEditorView, targetId: String?) {
+    private fun applyPolicyToView(
+        view: SujianEditorView,
+        targetId: String?,
+    ) {
         val effective = effectivePolicyFor(targetId)
         view.setTypingAnimationEnabled(effective.textEnabled, effective.textDurationMillis)
         view.setSmoothCursorEnabled(effective.cursorEnabled, effective.cursorDurationMillis)
@@ -224,7 +244,10 @@ class EditorWindowHost(
 
     // ── Edit operations (orchestrates session + window) ──
 
-    fun beginEdit(targetId: String, initialSelection: Int? = null): Boolean {
+    fun beginEdit(
+        targetId: String,
+        initialSelection: Int? = null,
+    ): Boolean {
         // #592 三：业务已关闭（closeTarget）或未注册的 target 拒绝重新绑定 —
         // 防止导航离开正文的过渡期间 beginEdit 重新触发并复活已关闭的 session。
         if (targets[targetId] == null) return false
@@ -242,20 +265,22 @@ class EditorWindowHost(
         val target = targets[targetId] ?: return false
         // #595 四：新建 session 的初始正文来自窗口层 target（Compose 唯一正文来源），
         // 会话层不再维护 targetTexts 第二份正文缓存。
-        val bindInfo = sessionCoordinator.prepareSessionForEdit(
-            targetId, target.currentText, initialSelection, windowId,
-        ) ?: return false
+        val bindInfo =
+            sessionCoordinator.prepareSessionForEdit(
+                targetId, target.currentText, initialSelection, windowId,
+            ) ?: return false
 
         target.onEditingStateChanged?.invoke(EditingState.BINDING)
 
         val bridge = TextEditSessionBridge(appServiceBridge, bindInfo.sessionId)
-        val pending = PendingViewBind(
-            targetId = targetId,
-            sessionId = bindInfo.sessionId,
-            bridge = bridge,
-            profile = bindInfo.profile,
-            snapshot = bindInfo.snapshot,
-        )
+        val pending =
+            PendingViewBind(
+                targetId = targetId,
+                sessionId = bindInfo.sessionId,
+                bridge = bridge,
+                profile = bindInfo.profile,
+                snapshot = bindInfo.snapshot,
+            )
 
         // #595 三：如果 AndroidView.factory 已创建 View（重新绑定场景），直接在现有
         // View 上执行 session 绑定并进入 Attached；否则只存 pendingViewBind，
@@ -269,7 +294,10 @@ class EditorWindowHost(
                 target.onEditingStateChanged?.invoke(EditingState.EDITING)
                 view.post {
                     view.requestFocus()
-                    val imm = context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+                    val imm =
+                        context.getSystemService(
+                            android.content.Context.INPUT_METHOD_SERVICE,
+                        ) as? android.view.inputmethod.InputMethodManager
                     imm?.showSoftInput(view, 0)
                 }
             } else {
@@ -304,7 +332,7 @@ class EditorWindowHost(
 
     // #595 三：在 View 上执行 session 绑定 — 由 beginEdit（View 已存在）或
     // attachView（AndroidView.factory 刚创建 View）调用。返回 false 表示绑定失败
-    //（无真实 snapshot），调用方必须回到 Detached/Idle，
+    // （无真实 snapshot），调用方必须回到 Detached/Idle，
     // 不得进入没有真实 View 绑定的 Attached。
     // #592 一：复用既有持久 session 时执行 attachSnapshot（不调用
     // textEditSessionLoadText，Rust revision/Undo/Redo/composition 保持）；
@@ -317,11 +345,16 @@ class EditorWindowHost(
         pending: PendingViewBind,
         target: EditableTextTarget,
     ): Boolean {
-        val snapshot = pending.snapshot
-            ?: run {
-                Log.w(TAG, "performViewBind(${pending.targetId}): no real kernel snapshot — refusing bind to avoid a second Core loadText on the same session")
-                return false
-            }
+        val snapshot =
+            pending.snapshot
+                ?: run {
+                    Log.w(
+                        TAG,
+                        "performViewBind(${pending.targetId}): no real kernel snapshot — refusing bind " +
+                            "to avoid a second Core loadText on the same session",
+                    )
+                    return false
+                }
         // #595 二：窗口绑定成功时签发输入 lease — 之后每次 onLocalEdit/
         // onExternalEdit/onContentChanged 提交都携带；章节切换提交/业务关闭/
         // 窗口解绑会使 epoch 失效，旧 View 晚到一帧的输入被会话层拒绝。
@@ -357,7 +390,10 @@ class EditorWindowHost(
      * #592 三：重新附着窗口后恢复投影保存的滚动位置（配置变化/返回重进时）。
      * 会话层保存的是纯数据 scrollX/scrollY，这里应用到当前窗口的 View。
      */
-    private fun restoreProjectionScroll(view: SujianEditorView, targetId: String) {
+    private fun restoreProjectionScroll(
+        view: SujianEditorView,
+        targetId: String,
+    ) {
         val snapshot = sessionCoordinator.getProjectionSnapshot(targetId) ?: return
         view.setScrollPosition(snapshot.scrollX, snapshot.scrollY)
     }
@@ -398,7 +434,12 @@ class EditorWindowHost(
         }
     }
 
-    fun resetPersistentSession(targetId: String, text: String, cursorUtf8: Int, source: SessionResetSource = SessionResetSource.EXTERNAL): ExternalResetResult {
+    fun resetPersistentSession(
+        targetId: String,
+        text: String,
+        cursorUtf8: Int,
+        source: SessionResetSource = SessionResetSource.EXTERNAL,
+    ): ExternalResetResult {
         // #595 二/五：Core 侧只允许一次 reset 命令（textEditSessionReset / createSession）。
         // 完成后 View 不得再次 loadText（那是第二次 Core 命令，会 revision+1、
         // 重复清空 Undo/Redo/composition）— 只从真实 snapshot attach 到本地镜像。
@@ -420,7 +461,10 @@ class EditorWindowHost(
      * 使用 attachSnapshotSameSession：同一 session 不解除绑定，
      * 不清回调、不隐藏 IME、不丢焦点（外部替换可能发生在输入过程中）。
      */
-    private fun attachSnapshotToView(targetId: String, view: SujianEditorView) {
+    private fun attachSnapshotToView(
+        targetId: String,
+        view: SujianEditorView,
+    ) {
         val snapshot = sessionCoordinator.queryTargetSnapshot(targetId) ?: return
         val sessionId = sessionCoordinator.getPersistentSessionId(targetId) ?: return
         val profile = targets[targetId]?.profile ?: TextEditorProfile()
@@ -439,25 +483,35 @@ class EditorWindowHost(
 
     // ── SessionCommandPort (view pipeline when active, projection for inactive) ──
 
-    override fun queryTargetSnapshot(targetId: String): TargetSnapshot? = sessionCoordinator.queryTargetSnapshot(targetId)
+    override fun queryTargetSnapshot(targetId: String): TargetSnapshot? =
+        sessionCoordinator.queryTargetSnapshot(
+            targetId,
+        )
 
-    override fun applyTargetCommand(targetId: String, command: TargetCommand): TargetCommandResult {
+    override fun applyTargetCommand(
+        targetId: String,
+        command: TargetCommand,
+    ): TargetCommandResult {
         if (targetId == activeTargetId) {
             val view = sharedEditorView
             if (view != null) {
-                val snapshotBefore = sessionCoordinator.queryTargetSnapshot(targetId)
-                    ?: return TargetCommandResult.Failed(TargetCommandError.SNAPSHOT_UNAVAILABLE)
+                val snapshotBefore =
+                    sessionCoordinator.queryTargetSnapshot(targetId)
+                        ?: return TargetCommandResult.Failed(TargetCommandError.SNAPSHOT_UNAVAILABLE)
                 val commandPort = view.getPipeline()
                 when (command) {
                     is TargetCommand.Replace -> {
                         // #595 四：程序化替换命令显式携带 PROGRAMMATIC 来源 —
                         // 输出天然携带来源，不再依赖 View 侧可变标记。
-                        val pipelineOutput = commandPort.replaceRangeTyped(
-                            command.byteStart, command.byteEndExclusive,
-                            command.replacementText, command.originalText,
-                            uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
-                            source = com.xiwei.sujian.editor.v2.host.EditorEditSource.PROGRAMMATIC,
-                        )
+                        val pipelineOutput =
+                            commandPort.replaceRangeTyped(
+                                command.byteStart,
+                                command.byteEndExclusive,
+                                command.replacementText,
+                                command.originalText,
+                                uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
+                                source = com.xiwei.sujian.editor.v2.host.EditorEditSource.PROGRAMMATIC,
+                            )
                         view.handlePipelineOutput(pipelineOutput)
                     }
                     is TargetCommand.ReplaceAll -> {
@@ -468,8 +522,9 @@ class EditorWindowHost(
                         view.handlePipelineOutput(pipelineOutput)
                     }
                 }
-                val snapshotAfter = sessionCoordinator.queryTargetSnapshot(targetId)
-                    ?: return TargetCommandResult.Failed(TargetCommandError.SNAPSHOT_UNAVAILABLE)
+                val snapshotAfter =
+                    sessionCoordinator.queryTargetSnapshot(targetId)
+                        ?: return TargetCommandResult.Failed(TargetCommandError.SNAPSHOT_UNAVAILABLE)
                 targets[targetId]?.updateText(snapshotAfter.text)
                 return TargetCommandResult.Success(snapshotAfter)
             }
@@ -482,7 +537,10 @@ class EditorWindowHost(
         return result
     }
 
-    override fun setTargetDecorations(targetId: String, decorations: TargetDecorations) {
+    override fun setTargetDecorations(
+        targetId: String,
+        decorations: TargetDecorations,
+    ) {
         sessionCoordinator.setTargetDecorations(targetId, decorations)
         if (targetId == activeTargetId) {
             val view = sharedEditorView
@@ -500,12 +558,18 @@ class EditorWindowHost(
     }
 
     // ── View management ──
+
     /**
      * #595 三：在 AndroidView.factory 中用传入的 Context 创建 View —
      * 不返回宿主提前创建、长期缓存的 View。Compose 官方模型要求 factory 创建 View。
      */
     fun createWindowView(context: Context): SujianEditorView {
-        return SujianEditorView(context, animationTimeSource = animationTimeSource, transactionIdSource = transactionIdSource).also { view ->
+        return SujianEditorView(
+            context,
+            animationTimeSource = animationTimeSource,
+            transactionIdSource = transactionIdSource,
+        ).also {
+                view ->
             view.setFrameClock(windowFrameClock)
             // #595 四：创建时按活动 target（若有）应用全局策略 + profile 约束；
             // 绑定完成后 performViewBind 会用 pending.targetId 的约束再次应用。
@@ -521,7 +585,11 @@ class EditorWindowHost(
      * 只有 performViewBind 成功后（真实 View 已绑定 session）才 completeWindowAttach：
      * Attached 必须表示屏幕上的 View 已绑定；绑定失败回到 Detached/Idle。
      */
-    fun attachView(windowId: String, targetId: String, view: SujianEditorView) {
+    fun attachView(
+        windowId: String,
+        targetId: String,
+        view: SujianEditorView,
+    ) {
         sharedEditorView = view
         // #595 三：AndroidView.factory 创建 View 后，检查 beginEdit 留下的 pending
         // session 绑定。在 Compose 提供的 Context 创建的 View 上执行绑定，
@@ -536,7 +604,10 @@ class EditorWindowHost(
                     target.onEditingStateChanged?.invoke(EditingState.EDITING)
                     view.post {
                         view.requestFocus()
-                        val imm = context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+                        val imm =
+                            context.getSystemService(
+                                android.content.Context.INPUT_METHOD_SERVICE,
+                            ) as? android.view.inputmethod.InputMethodManager
                         imm?.showSoftInput(view, 0)
                     }
                 } else {
@@ -555,7 +626,11 @@ class EditorWindowHost(
      * #595 三：AndroidView.onRelease — View 已离开 Composition 且不会再被 Compose 使用。
      * 解除双向引用、InputConnection、FrameClock 和 callback，不能只设置 GONE。
      */
-    fun detachView(windowId: String, targetId: String, view: SujianEditorView) {
+    fun detachView(
+        windowId: String,
+        targetId: String,
+        view: SujianEditorView,
+    ) {
         clearActiveCallbacks()
         view.unbindSession("compose_release")
         view.setFrameClock(null)
@@ -567,7 +642,10 @@ class EditorWindowHost(
     /**
      * #595 三：AndroidView.update — 应用主题和几何更新到 View。
      */
-    fun updateView(view: SujianEditorView, themeColors: com.xiwei.sujian.ui.compose.theme.EditorThemeColors) {
+    fun updateView(
+        view: SujianEditorView,
+        themeColors: com.xiwei.sujian.ui.compose.theme.EditorThemeColors,
+    ) {
         EditorThemeAdapter.applyToView(view, themeColors)
         view.visibility = android.view.View.VISIBLE
         if (view.width > 0 && view.height > 0) {
@@ -575,7 +653,10 @@ class EditorWindowHost(
         }
     }
 
-    fun updateHostGeometry(width: Float, height: Float) {
+    fun updateHostGeometry(
+        width: Float,
+        height: Float,
+    ) {
         sharedEditorView?.updateHostGeometry(width, height)
     }
 
@@ -623,7 +704,11 @@ class EditorWindowHost(
 
     // ── Private helpers ──
 
-    private fun installContentCallback(view: SujianEditorView, target: EditableTextTarget, lease: EditorInputLease) {
+    private fun installContentCallback(
+        view: SujianEditorView,
+        target: EditableTextTarget,
+        lease: EditorInputLease,
+    ) {
         view.onContentChanged = { newText ->
             // #595 二：onContentChanged 同样携带输入 lease — 章节切换提交后
             // 旧 View 晚到的正文回显不能进入新章节的 ViewModel。
@@ -645,7 +730,7 @@ class EditorWindowHost(
                     selectionAnchorUtf8 = selectionAnchorUtf8,
                     selectionHeadUtf8 = selectionHeadUtf8,
                     lease = lease,
-                )
+                ),
             )
         }
         // #595 二/四：类型化外部编辑回调 — 撤销/恢复/程序化替换走类型化事件，
@@ -653,7 +738,8 @@ class EditorWindowHost(
         view.onExternalEdit = { source, text, revision, transactionId, selectionAnchorUtf8, selectionHeadUtf8 ->
             when (source) {
                 com.xiwei.sujian.editor.v2.host.EditorEditSource.UNDO,
-                com.xiwei.sujian.editor.v2.host.EditorEditSource.REDO -> {
+                com.xiwei.sujian.editor.v2.host.EditorEditSource.REDO,
+                -> {
                     sessionCoordinator.applyUndoRestored(
                         EditorDocumentUpdate.UndoRestored(
                             targetId = target.targetId,
@@ -664,7 +750,7 @@ class EditorWindowHost(
                             selectionAnchorUtf8 = selectionAnchorUtf8,
                             selectionHeadUtf8 = selectionHeadUtf8,
                             lease = lease,
-                        )
+                        ),
                     )
                 }
                 com.xiwei.sujian.editor.v2.host.EditorEditSource.PROGRAMMATIC -> {
@@ -678,7 +764,7 @@ class EditorWindowHost(
                             selectionAnchorUtf8 = selectionAnchorUtf8,
                             selectionHeadUtf8 = selectionHeadUtf8,
                             lease = lease,
-                        )
+                        ),
                     )
                 }
                 com.xiwei.sujian.editor.v2.host.EditorEditSource.NORMAL -> {
@@ -693,7 +779,7 @@ class EditorWindowHost(
                             selectionAnchorUtf8 = selectionAnchorUtf8,
                             selectionHeadUtf8 = selectionHeadUtf8,
                             lease = lease,
-                        )
+                        ),
                     )
                 }
             }
@@ -741,5 +827,4 @@ class EditorWindowHost(
             ),
         )
     }
-
 }

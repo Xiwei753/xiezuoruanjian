@@ -10,22 +10,26 @@ import com.xiwei.sujian.R
  */
 data class ExperimentalFeature(
     val id: String,
-    val titleRes: Int,       // R.string.xxx
-    val summaryRes: Int?,    // R.string.xxx or null
+    // R.string.xxx
+    val titleRes: Int,
+    // R.string.xxx or null
+    val summaryRes: Int?,
     val defaultEnabled: Boolean,
-    val scope: String        // "system_bars", "editor", "sync" etc.
+    // "system_bars", "editor", "sync" etc.
+    val scope: String,
 )
 
 object ExperimentalFeatureRegistry {
-    val features = listOf(
-        ExperimentalFeature(
-            id = "fullscreen_immersive",
-            titleRes = R.string.lab_fullscreen_immersive,
-            summaryRes = R.string.lab_fullscreen_immersive_summary,
-            defaultEnabled = false,
-            scope = "system_bars"
+    val features =
+        listOf(
+            ExperimentalFeature(
+                id = "fullscreen_immersive",
+                titleRes = R.string.lab_fullscreen_immersive,
+                summaryRes = R.string.lab_fullscreen_immersive_summary,
+                defaultEnabled = false,
+                scope = "system_bars",
+            ),
         )
-    )
 
     fun findById(id: String): ExperimentalFeature? = features.find { it.id == id }
 }

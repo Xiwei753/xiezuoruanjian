@@ -19,7 +19,6 @@ import org.robolectric.shadows.ShadowInputMethodManager
  */
 @Implements(InputMethodManager::class)
 class RecordingInputMethodManagerShadow : ShadowInputMethodManager() {
-
     companion object {
         @JvmStatic
         var updateSelectionCount: Int = 0
@@ -38,7 +37,7 @@ class RecordingInputMethodManagerShadow : ShadowInputMethodManager() {
         selStart: Int,
         selEnd: Int,
         candidatesStart: Int,
-        candidatesEnd: Int
+        candidatesEnd: Int,
     ) {
         updateSelectionCount++
     }

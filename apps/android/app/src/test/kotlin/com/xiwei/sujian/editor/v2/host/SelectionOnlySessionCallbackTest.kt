@@ -3,8 +3,6 @@ package com.xiwei.sujian.editor.v2.host
 import com.xiwei.sujian.editor.v2.coordinator.EditorOperationKind
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -36,8 +34,7 @@ import uniffi.writer_core.EditorVisualIntentDto
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class SelectionOnlySessionCallbackTest {
-
-    /** 记录 setSelection 调用并返回 APPLIED + CURSOR_ONLY + 空 displayPatches 的假 bridge。 */
+    // 记录 setSelection 调用并返回 APPLIED + CURSOR_ONLY + 空 displayPatches 的假 bridge。
     // #597 测试 fake bridge，函数由 EditorKernelBridge 接口契约决定 — 无法裁减
     @Suppress("TooManyFunctions")
     private class CursorOnlyBridge : EditorKernelBridge {
@@ -46,56 +43,153 @@ class SelectionOnlySessionCallbackTest {
         var lastHead = -1
         var txId = 1UL
 
-        private fun cursorOnlyResult(anchor: Int, head: Int): EditorEditResultDto = EditorEditResultDto(
-            outcome = EditorEditOutcomeDto.APPLIED,
-            transactionId = txId++,
-            baseRevision = 1UL,
-            newRevision = 1UL,
-            displayPatches = emptyList(),
-            oldSelectionStart = anchor.toUInt(),
-            oldSelectionEnd = head.toUInt(),
-            newSelectionStart = anchor.toUInt(),
-            newSelectionEnd = head.toUInt(),
-            visualIntent = EditorVisualIntentDto(
-                cause = EditorTransactionCauseDto.TYPING,
-                operationKind = EditorOperationKindDto.CURSOR_ONLY,
-                oldAffectedByteRanges = emptyList(),
-                newAffectedByteRanges = emptyList(),
-                animationMode = AnimationModeDto.SYSTEM_SUPPRESSED,
-                durationMs = 0uL,
-                coordinatedCursor = CoordinatedCursorDto(
-                    oldByteOffset = 0u,
-                    newByteOffset = head.toUInt(),
-                    shouldAnimate = false,
-                ),
-            ),
-            compositionSession = null,
-        )
+        private fun cursorOnlyResult(
+            anchor: Int,
+            head: Int,
+        ): EditorEditResultDto =
+            EditorEditResultDto(
+                outcome = EditorEditOutcomeDto.APPLIED,
+                transactionId = txId++,
+                baseRevision = 1UL,
+                newRevision = 1UL,
+                displayPatches = emptyList(),
+                oldSelectionStart = anchor.toUInt(),
+                oldSelectionEnd = head.toUInt(),
+                newSelectionStart = anchor.toUInt(),
+                newSelectionEnd = head.toUInt(),
+                visualIntent =
+                    EditorVisualIntentDto(
+                        cause = EditorTransactionCauseDto.TYPING,
+                        operationKind = EditorOperationKindDto.CURSOR_ONLY,
+                        oldAffectedByteRanges = emptyList(),
+                        newAffectedByteRanges = emptyList(),
+                        animationMode = AnimationModeDto.SYSTEM_SUPPRESSED,
+                        durationMs = 0uL,
+                        coordinatedCursor =
+                            CoordinatedCursorDto(
+                                oldByteOffset = 0u,
+                                newByteOffset = head.toUInt(),
+                                shouldAnimate = false,
+                            ),
+                    ),
+                compositionSession = null,
+            )
 
-        override fun setSelection(anchorByteOffset: Int, headByteOffset: Int, expectedRevision: Long): EditorEditResultDto? {
+        override fun setSelection(
+            anchorByteOffset: Int,
+            headByteOffset: Int,
+            expectedRevision: Long,
+        ): EditorEditResultDto? {
             setSelectionCalls++
             lastAnchor = anchorByteOffset
             lastHead = headByteOffset
             return cursorOnlyResult(anchorByteOffset, headByteOffset)
         }
 
-        override fun insert(byteOffset: Int, text: String, cause: EditorTransactionCauseDto, expectedRevision: Long): EditorEditResultDto? = null
-        override fun delete(byteStart: Int, byteEndExclusive: Int, cause: EditorTransactionCauseDto, expectedRevision: Long): EditorEditResultDto? = null
-        override fun replace(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto, expectedRevision: Long): EditorEditResultDto? = null
+        override fun insert(
+            byteOffset: Int,
+            text: String,
+            cause: EditorTransactionCauseDto,
+            expectedRevision: Long,
+        ): EditorEditResultDto? = null
+
+        override fun delete(
+            byteStart: Int,
+            byteEndExclusive: Int,
+            cause: EditorTransactionCauseDto,
+            expectedRevision: Long,
+        ): EditorEditResultDto? = null
+
+        override fun replace(
+            byteStart: Int,
+            byteEndExclusive: Int,
+            replacementText: String,
+            originalText: String,
+            cause: EditorTransactionCauseDto,
+            expectedRevision: Long,
+        ): EditorEditResultDto? = null
+
         override fun undo(expectedRevision: Long): EditorEditResultDto? = null
+
         override fun redo(expectedRevision: Long): EditorEditResultDto? = null
-        override fun loadText(text: String, cursorUtf8: Int): EditorEditResultDto? = null
-        override fun commitText(byteStart: Int, byteEndExclusive: Int, replacementText: String, resultingSelectionAnchor: Int, resultingSelectionHead: Int, compositionSessionId: Long, compositionBaseRevision: Long, compositionGeneration: Long, cause: EditorTransactionCauseDto, expectedRevision: Long): EditorEditResultDto? = null
-        override fun deleteSurrounding(beforeByteStart: Int, beforeByteEndExclusive: Int, afterByteStart: Int, afterByteEndExclusive: Int, cause: EditorTransactionCauseDto, expectedRevision: Long): EditorEditResultDto? = null
-        override fun beginComposition(replaceStart: Int, replaceEndExclusive: Int, expectedRevision: Long): EditorEditResultDto? = null
-        override fun updateComposition(compositionSessionId: Long, compositionGeneration: Long, newPreeditText: String, newPreeditCursorOffset: Int, expectedRevision: Long): EditorEditResultDto? = null
-        override fun finishComposition(compositionSessionId: Long, compositionGeneration: Long, expectedRevision: Long): EditorEditResultDto? = null
-        override fun cancelComposition(compositionSessionId: Long, compositionGeneration: Long, expectedRevision: Long): EditorEditResultDto? = null
-        override fun compositionUpdateVisualIntent(compositionReplaceStart: UInt, compositionReplaceEndExclusive: UInt, oldPreeditText: String, newPreeditText: String): EditorVisualIntentDto? = null
+
+        override fun loadText(
+            text: String,
+            cursorUtf8: Int,
+        ): EditorEditResultDto? = null
+
+        override fun commitText(
+            byteStart: Int,
+            byteEndExclusive: Int,
+            replacementText: String,
+            resultingSelectionAnchor: Int,
+            resultingSelectionHead: Int,
+            compositionSessionId: Long,
+            compositionBaseRevision: Long,
+            compositionGeneration: Long,
+            cause: EditorTransactionCauseDto,
+            expectedRevision: Long,
+        ): EditorEditResultDto? = null
+
+        override fun deleteSurrounding(
+            beforeByteStart: Int,
+            beforeByteEndExclusive: Int,
+            afterByteStart: Int,
+            afterByteEndExclusive: Int,
+            cause: EditorTransactionCauseDto,
+            expectedRevision: Long,
+        ): EditorEditResultDto? = null
+
+        override fun beginComposition(
+            replaceStart: Int,
+            replaceEndExclusive: Int,
+            expectedRevision: Long,
+        ): EditorEditResultDto? = null
+
+        override fun updateComposition(
+            compositionSessionId: Long,
+            compositionGeneration: Long,
+            newPreeditText: String,
+            newPreeditCursorOffset: Int,
+            expectedRevision: Long,
+        ): EditorEditResultDto? = null
+
+        override fun finishComposition(
+            compositionSessionId: Long,
+            compositionGeneration: Long,
+            expectedRevision: Long,
+        ): EditorEditResultDto? = null
+
+        override fun cancelComposition(
+            compositionSessionId: Long,
+            compositionGeneration: Long,
+            expectedRevision: Long,
+        ): EditorEditResultDto? = null
+
+        override fun compositionUpdateVisualIntent(
+            compositionReplaceStart: UInt,
+            compositionReplaceEndExclusive: UInt,
+            oldPreeditText: String,
+            newPreeditText: String,
+        ): EditorVisualIntentDto? = null
+
         override fun setAnimationEnabled(enabled: Boolean) { }
+
         override fun setAnimationDurationMs(durationMs: Long) { }
-        override fun replaceAll(search: String, replacement: String, expectedRevision: Long): EditorEditResultDto? = null
-        override fun insertLineBreak(byteOffset: Int, autoIndentPrefix: String, cause: EditorTransactionCauseDto, expectedRevision: Long): EditorEditResultDto? = null
+
+        override fun replaceAll(
+            search: String,
+            replacement: String,
+            expectedRevision: Long,
+        ): EditorEditResultDto? = null
+
+        override fun insertLineBreak(
+            byteOffset: Int,
+            autoIndentPrefix: String,
+            cause: EditorTransactionCauseDto,
+            expectedRevision: Long,
+        ): EditorEditResultDto? = null
+
         override fun sessionSnapshot(): uniffi.writer_core.EditorSessionSnapshotDto? = null
     }
 
@@ -105,15 +199,16 @@ class SelectionOnlySessionCallbackTest {
         val view = SujianEditorView(context)
         val bridge = CursorOnlyBridge()
         // 附着快照：正文 "hello"（UTF-8 5 字节）、revision 1、光标/选区在末尾。
-        val attached = view.attachSession(
-            sessionBridge = bridge,
-            profile = TextEditorProfile.DocumentBody,
-            text = "hello",
-            revision = 1L,
-            cursorUtf8 = 5,
-            selStartUtf8 = 5,
-            selEndUtf8 = 5,
-        )
+        val attached =
+            view.attachSession(
+                sessionBridge = bridge,
+                profile = TextEditorProfile.DocumentBody,
+                text = "hello",
+                revision = 1L,
+                cursorUtf8 = 5,
+                selStartUtf8 = 5,
+                selEndUtf8 = 5,
+            )
         assertTrue("attachSession must succeed", attached)
 
         var localEditCalls = 0
@@ -138,7 +233,7 @@ class SelectionOnlySessionCallbackTest {
         assertEquals("setSelection 必须到达 kernel bridge", 1, bridge.setSelectionCalls)
         assertEquals(
             "#595 五：selection-only（空 displayPatches）也必须调用 onLocalEdit — " +
-            "会话层 selection 不得停留在旧值",
+                "会话层 selection 不得停留在旧值",
             1,
             localEditCalls,
         )

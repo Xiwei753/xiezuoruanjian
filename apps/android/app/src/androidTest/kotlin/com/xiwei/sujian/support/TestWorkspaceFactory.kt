@@ -7,7 +7,6 @@ import java.io.File
 import java.util.UUID
 
 object TestWorkspaceFactory {
-
     data class TestWorkspacePaths(
         val testRootDir: File,
         val workspaceDir: File,
@@ -53,9 +52,10 @@ object TestWorkspaceFactory {
         noBackupDir: File,
     ) {
         workspaceDir.mkdirs()
-        val initHolder = WriterAppServiceHolder(
-            workspacePath = workspaceDir.absolutePath,
-        )
+        val initHolder =
+            WriterAppServiceHolder(
+                workspacePath = workspaceDir.absolutePath,
+            )
         try {
             val result = initHolder.wrapResult { initHolder.service.createWorkspaceIfNeeded() }
             when (result) {
@@ -63,10 +63,10 @@ object TestWorkspaceFactory {
                 is BridgeResult.Error -> throw AssertionError(
                     "TestWorkspaceFactory: createWorkspaceIfNeeded failed: " +
                         "errorCode=${result.code}, message=${result.message}, " +
-                        "rawError=${result.envelope.rawError}"
+                        "rawError=${result.envelope.rawError}",
                 )
                 BridgeResult.NotLoaded -> throw AssertionError(
-                    "TestWorkspaceFactory: native library not loaded during workspace initialization"
+                    "TestWorkspaceFactory: native library not loaded during workspace initialization",
                 )
             }
         } finally {
@@ -79,7 +79,7 @@ object TestWorkspaceFactory {
         if (!deleted && paths.testRootDir.exists()) {
             throw AssertionError(
                 "TestWorkspaceFactory: Failed to delete test root directory " +
-                    paths.testRootDir.absolutePath
+                    paths.testRootDir.absolutePath,
             )
         }
     }

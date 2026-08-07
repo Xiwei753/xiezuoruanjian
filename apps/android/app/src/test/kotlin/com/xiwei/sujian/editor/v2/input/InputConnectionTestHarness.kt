@@ -16,7 +16,7 @@ import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
  */
 class InputConnectionTestHarness(
     text: String = "ABXY",
-    cursorUtf8: Int = 4
+    cursorUtf8: Int = 4,
 ) {
     val imm = RecordingInputMethodManagerShadow
     val context: Context = ApplicationProvider.getApplicationContext()

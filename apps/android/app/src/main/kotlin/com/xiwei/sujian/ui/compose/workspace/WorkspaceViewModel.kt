@@ -5,9 +5,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import com.xiwei.sujian.data.WorkspaceRepository
-import com.xiwei.sujian.model.ChapterMeta
-import com.xiwei.sujian.model.ProjectStats
-import com.xiwei.sujian.model.Volume
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,28 +17,34 @@ data class VolumeChapterUiState(
     val expandedVolumeIds: Set<String> = emptySet(),
     val selectedChapterId: String? = null,
     val projectStats: ProjectStatsUiModel? = null,
-    val isLoading: Boolean = false
+    val isLoading: Boolean = false,
 )
 
 class WorkspaceViewModel(
     application: Application,
-    private val savedStateHandle: SavedStateHandle
+    private val savedStateHandle: SavedStateHandle,
 ) : AndroidViewModel(application) {
-
-    private val _uiState = MutableStateFlow(VolumeChapterUiState(
-        expandedVolumeIds = savedStateHandle.get<Set<String>>("expandedVolumeIds") ?: emptySet()
-    ))
+    private val _uiState =
+        MutableStateFlow(
+            VolumeChapterUiState(
+                expandedVolumeIds = savedStateHandle.get<Set<String>>("expandedVolumeIds") ?: emptySet(),
+            ),
+        )
     val uiState: StateFlow<VolumeChapterUiState> = _uiState.asStateFlow()
 
     private var currentProjectId: String? = savedStateHandle["currentProjectId"]
     private var workspaceRepository: WorkspaceRepository? = null
     private var isInitialized: Boolean = false
 
-    fun initialize(projectId: String, workspaceRepo: WorkspaceRepository) {
+    fun initialize(
+        projectId: String,
+        workspaceRepo: WorkspaceRepository,
+    ) {
         val projectChanged = currentProjectId != projectId
         val repoChanged = workspaceRepository !== workspaceRepo
-        val needsReload = !isInitialized || projectChanged || repoChanged
-            || _uiState.value.volumes.isEmpty()
+        val needsReload =
+            !isInitialized || projectChanged || repoChanged ||
+                _uiState.value.volumes.isEmpty()
 
         currentProjectId = projectId
         savedStateHandle["currentProjectId"] = projectId
@@ -59,52 +62,59 @@ class WorkspaceViewModel(
         val repo = workspaceRepository ?: return
         _uiState.value = _uiState.value.copy(isLoading = true)
         viewModelScope.launch {
-            val volumes = withContext(Dispatchers.IO) {
-                try {
-                    repo.getVolumes(pid)
-                } catch (_: Exception) {
-                    emptyList()
-                }
-            }
-            val uiModels = volumes.map { vol ->
-                val chapters = withContext(Dispatchers.IO) {
+            val volumes =
+                withContext(Dispatchers.IO) {
                     try {
-                        repo.getChapters(pid, vol.id)
+                        repo.getVolumes(pid)
                     } catch (_: Exception) {
                         emptyList()
                     }
                 }
-                VolumeUiModel(
-                    id = vol.id,
-                    title = vol.title,
-                    chapters = chapters.map { ch ->
-                        ChapterUiModel(
-                            id = ch.id,
-                            title = ch.title,
-                            wordCount = ch.wordCount
-                        )
-                    },
-                    isExpanded = _uiState.value.expandedVolumeIds.contains(vol.id)
-                )
-            }
+            val uiModels =
+                volumes.map { vol ->
+                    val chapters =
+                        withContext(Dispatchers.IO) {
+                            try {
+                                repo.getChapters(pid, vol.id)
+                            } catch (_: Exception) {
+                                emptyList()
+                            }
+                        }
+                    VolumeUiModel(
+                        id = vol.id,
+                        title = vol.title,
+                        chapters =
+                            chapters.map { ch ->
+                                ChapterUiModel(
+                                    id = ch.id,
+                                    title = ch.title,
+                                    wordCount = ch.wordCount,
+                                )
+                            },
+                        isExpanded = _uiState.value.expandedVolumeIds.contains(vol.id),
+                    )
+                }
             _uiState.value = _uiState.value.copy(volumes = uiModels, isLoading = false)
         }
     }
 
     fun toggleVolumeExpand(volumeId: String) {
         val current = _uiState.value.expandedVolumeIds
-        val newExpanded = if (current.contains(volumeId)) {
-            current - volumeId
-        } else {
-            current + volumeId
-        }
-        savedStateHandle["expandedVolumeIds"] = newExpanded
-        _uiState.value = _uiState.value.copy(
-            expandedVolumeIds = newExpanded,
-            volumes = _uiState.value.volumes.map { v ->
-                v.copy(isExpanded = newExpanded.contains(v.id))
+        val newExpanded =
+            if (current.contains(volumeId)) {
+                current - volumeId
+            } else {
+                current + volumeId
             }
-        )
+        savedStateHandle["expandedVolumeIds"] = newExpanded
+        _uiState.value =
+            _uiState.value.copy(
+                expandedVolumeIds = newExpanded,
+                volumes =
+                    _uiState.value.volumes.map { v ->
+                        v.copy(isExpanded = newExpanded.contains(v.id))
+                    },
+            )
     }
 
     fun selectChapter(chapterId: String) {
@@ -116,18 +126,27 @@ class WorkspaceViewModel(
         val repo = workspaceRepository ?: return
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
-                try { repo.createVolume(pid, title) } catch (_: Exception) { }
+                try {
+                    repo.createVolume(pid, title)
+                } catch (_: Exception) {
+                }
             }
             loadVolumes()
         }
     }
 
-    fun createChapter(volumeId: String, title: String) {
+    fun createChapter(
+        volumeId: String,
+        title: String,
+    ) {
         val pid = currentProjectId ?: return
         val repo = workspaceRepository ?: return
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
-                try { repo.createChapter(pid, volumeId, title) } catch (_: Exception) { }
+                try {
+                    repo.createChapter(pid, volumeId, title)
+                } catch (_: Exception) {
+                }
             }
             val expanded = _uiState.value.expandedVolumeIds + volumeId
             savedStateHandle["expandedVolumeIds"] = expanded
@@ -136,12 +155,18 @@ class WorkspaceViewModel(
         }
     }
 
-    fun renameVolume(volumeId: String, newTitle: String) {
+    fun renameVolume(
+        volumeId: String,
+        newTitle: String,
+    ) {
         val pid = currentProjectId ?: return
         val repo = workspaceRepository ?: return
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
-                try { repo.renameVolume(pid, volumeId, newTitle) } catch (_: Exception) { }
+                try {
+                    repo.renameVolume(pid, volumeId, newTitle)
+                } catch (_: Exception) {
+                }
             }
             loadVolumes()
         }
@@ -152,29 +177,45 @@ class WorkspaceViewModel(
         val repo = workspaceRepository ?: return
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
-                try { repo.deleteVolume(pid, volumeId) } catch (_: Exception) { }
+                try {
+                    repo.deleteVolume(pid, volumeId)
+                } catch (_: Exception) {
+                }
             }
             loadVolumes()
         }
     }
 
-    fun renameChapter(volumeId: String, chapterId: String, newTitle: String) {
+    fun renameChapter(
+        volumeId: String,
+        chapterId: String,
+        newTitle: String,
+    ) {
         val pid = currentProjectId ?: return
         val repo = workspaceRepository ?: return
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
-                try { repo.renameChapter(pid, volumeId, chapterId, newTitle) } catch (_: Exception) { }
+                try {
+                    repo.renameChapter(pid, volumeId, chapterId, newTitle)
+                } catch (_: Exception) {
+                }
             }
             loadVolumes()
         }
     }
 
-    fun deleteChapter(volumeId: String, chapterId: String) {
+    fun deleteChapter(
+        volumeId: String,
+        chapterId: String,
+    ) {
         val pid = currentProjectId ?: return
         val repo = workspaceRepository ?: return
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
-                try { repo.deleteChapter(pid, volumeId, chapterId) } catch (_: Exception) { }
+                try {
+                    repo.deleteChapter(pid, volumeId, chapterId)
+                } catch (_: Exception) {
+                }
             }
             loadVolumes()
         }
@@ -191,7 +232,10 @@ class WorkspaceViewModel(
         val orderedIds = reordered.map { it.id }
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
-                try { repo.reorderVolumes(pid, orderedIds) } catch (_: Exception) { }
+                try {
+                    repo.reorderVolumes(pid, orderedIds)
+                } catch (_: Exception) {
+                }
             }
             loadVolumes()
         }
@@ -208,13 +252,19 @@ class WorkspaceViewModel(
         val orderedIds = reordered.map { it.id }
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
-                try { repo.reorderVolumes(pid, orderedIds) } catch (_: Exception) { }
+                try {
+                    repo.reorderVolumes(pid, orderedIds)
+                } catch (_: Exception) {
+                }
             }
             loadVolumes()
         }
     }
 
-    fun moveChapterUp(volumeId: String, chapterId: String) {
+    fun moveChapterUp(
+        volumeId: String,
+        chapterId: String,
+    ) {
         val pid = currentProjectId ?: return
         val repo = workspaceRepository ?: return
         val volume = _uiState.value.volumes.find { it.id == volumeId } ?: return
@@ -225,13 +275,19 @@ class WorkspaceViewModel(
         val orderedIds = reordered.map { it.id }
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
-                try { repo.reorderChapters(pid, volumeId, orderedIds) } catch (_: Exception) { }
+                try {
+                    repo.reorderChapters(pid, volumeId, orderedIds)
+                } catch (_: Exception) {
+                }
             }
             loadVolumes()
         }
     }
 
-    fun moveChapterDown(volumeId: String, chapterId: String) {
+    fun moveChapterDown(
+        volumeId: String,
+        chapterId: String,
+    ) {
         val pid = currentProjectId ?: return
         val repo = workspaceRepository ?: return
         val volume = _uiState.value.volumes.find { it.id == volumeId } ?: return
@@ -242,7 +298,10 @@ class WorkspaceViewModel(
         val orderedIds = reordered.map { it.id }
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
-                try { repo.reorderChapters(pid, volumeId, orderedIds) } catch (_: Exception) { }
+                try {
+                    repo.reorderChapters(pid, volumeId, orderedIds)
+                } catch (_: Exception) {
+                }
             }
             loadVolumes()
         }
@@ -251,21 +310,24 @@ class WorkspaceViewModel(
     private fun loadProjectStats(projectId: String) {
         val repo = workspaceRepository ?: return
         viewModelScope.launch {
-            val stats = withContext(Dispatchers.IO) {
-                try {
-                    repo.getProjectStats(projectId)
-                } catch (_: Exception) {
-                    null
+            val stats =
+                withContext(Dispatchers.IO) {
+                    try {
+                        repo.getProjectStats(projectId)
+                    } catch (_: Exception) {
+                        null
+                    }
                 }
-            }
             stats?.let {
-                _uiState.value = _uiState.value.copy(
-                    projectStats = ProjectStatsUiModel(
-                        totalWordCount = it.totalWordCount,
-                        volumeCount = it.volumeCount,
-                        chapterCount = it.chapterCount
+                _uiState.value =
+                    _uiState.value.copy(
+                        projectStats =
+                            ProjectStatsUiModel(
+                                totalWordCount = it.totalWordCount,
+                                volumeCount = it.volumeCount,
+                                chapterCount = it.chapterCount,
+                            ),
                     )
-                )
             }
         }
     }

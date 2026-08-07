@@ -1,8 +1,8 @@
 package com.xiwei.sujian.arch
 
+import com.xiwei.sujian.data.AutoSyncScheduler
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.data.SyncProfileGate
-import com.xiwei.sujian.data.AutoSyncScheduler
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.lang.reflect.Method
@@ -18,15 +18,15 @@ import java.lang.reflect.Method
  * - loadSyncConfigStrict 存在（提交前捕获旧值）。
  */
 class CommitSyncProfileRollbackArchitectureTest {
-
     @Test
     fun commitSyncProfile_existsWithTwoParams() {
-        val method: Method? = SettingsRepository::class.java.methods.firstOrNull {
-            it.name == "commitSyncProfile" &&
-            it.parameterTypes.size >= 2 &&
-            it.parameterTypes[0] == com.xiwei.sujian.model.SyncConfig::class.java &&
-            it.parameterTypes[1] == com.xiwei.sujian.model.SyncSecrets::class.java
-        }
+        val method: Method? =
+            SettingsRepository::class.java.methods.firstOrNull {
+                it.name == "commitSyncProfile" &&
+                    it.parameterTypes.size >= 2 &&
+                    it.parameterTypes[0] == com.xiwei.sujian.model.SyncConfig::class.java &&
+                    it.parameterTypes[1] == com.xiwei.sujian.model.SyncSecrets::class.java
+            }
         assertTrue("commitSyncProfile(SyncConfig, SyncSecrets) must exist", method != null)
     }
 
@@ -40,32 +40,35 @@ class CommitSyncProfileRollbackArchitectureTest {
 
     @Test
     fun snapshotSyncProfile_existsOnSettingsRepository() {
-        val method: Method? = SettingsRepository::class.java.methods.firstOrNull {
-            it.name == "snapshotSyncProfile"
-        }
+        val method: Method? =
+            SettingsRepository::class.java.methods.firstOrNull {
+                it.name == "snapshotSyncProfile"
+            }
         assertTrue("SettingsRepository must provide snapshotSyncProfile() for #592 六", method != null)
     }
 
     @Test
     fun scheduleFromSettings_acceptsContainerRepository() {
-        val method: Method? = AutoSyncScheduler.Companion::class.java.methods.firstOrNull {
-            it.name == "scheduleFromSettings" &&
-            it.parameterTypes.size >= 2 &&
-            it.parameterTypes[0] == android.content.Context::class.java &&
-            it.parameterTypes[1] == SettingsRepository::class.java
-        }
+        val method: Method? =
+            AutoSyncScheduler.Companion::class.java.methods.firstOrNull {
+                it.name == "scheduleFromSettings" &&
+                    it.parameterTypes.size >= 2 &&
+                    it.parameterTypes[0] == android.content.Context::class.java &&
+                    it.parameterTypes[1] == SettingsRepository::class.java
+            }
         assertTrue(
             "AutoSyncScheduler.scheduleFromSettings must accept the app container SettingsRepository " +
-            "(no second repository created mid-commit)",
-            method != null
+                "(no second repository created mid-commit)",
+            method != null,
         )
     }
 
     @Test
     fun legacyRollbackReading_existsForDiagnosticsOnly() {
-        val strictMethod: Method? = SettingsRepository::class.java.methods.firstOrNull {
-            it.name == "loadSyncConfigStrict"
-        }
+        val strictMethod: Method? =
+            SettingsRepository::class.java.methods.firstOrNull {
+                it.name == "loadSyncConfigStrict"
+            }
         assertTrue("SettingsRepository.loadSyncConfigStrict must exist for pre-write capture", strictMethod != null)
     }
 }

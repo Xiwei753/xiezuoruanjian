@@ -22,42 +22,50 @@ object AccessibilitySetTextAction {
             override fun getDescription(): String =
                 "Set text on SujianEditorView via ACTION_SET_TEXT accessibility action"
 
-            override fun perform(uiController: UiController, view: View) {
+            override fun perform(
+                uiController: UiController,
+                view: View,
+            ) {
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
                     throw AssertionError("ACTION_SET_TEXT requires API 21+")
                 }
 
-                val editorView = view as? SujianEditorView
-                    ?: throw AssertionError(
-                        "AccessibilitySetTextAction: View with id editor_content is not a SujianEditorView, got ${view.javaClass.simpleName}"
-                    )
+                val editorView =
+                    view as? SujianEditorView
+                        ?: throw AssertionError(
+                            "AccessibilitySetTextAction: View with id editor_content is not a SujianEditorView, " +
+                                "got ${view.javaClass.simpleName}",
+                        )
 
                 Assert.assertTrue(
                     "AccessibilitySetTextAction: SujianEditorView is not VISIBLE (visibility=${editorView.visibility})",
-                    editorView.visibility == View.VISIBLE
+                    editorView.visibility == View.VISIBLE,
                 )
 
                 Assert.assertTrue(
                     "AccessibilitySetTextAction: SujianEditorView is not enabled",
-                    editorView.isEnabled
+                    editorView.isEnabled,
                 )
 
                 Assert.assertTrue(
                     "AccessibilitySetTextAction: SujianEditorView does not have an editing session bound",
-                    editorView.isSessionBound
+                    editorView.isSessionBound,
                 )
 
                 val args = Bundle()
                 args.putCharSequence(
                     AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                    text
+                    text,
                 )
-                val result = editorView.performAccessibilityAction(
-                    AccessibilityNodeInfo.ACTION_SET_TEXT, args
-                )
+                val result =
+                    editorView.performAccessibilityAction(
+                        AccessibilityNodeInfo.ACTION_SET_TEXT,
+                        args,
+                    )
                 Assert.assertTrue(
-                    "AccessibilitySetTextAction: performAccessibilityAction(ACTION_SET_TEXT) returned false for text='$text'",
-                    result
+                    "AccessibilitySetTextAction: performAccessibilityAction(ACTION_SET_TEXT) " +
+                        "returned false for text='$text'",
+                    result,
                 )
 
                 uiController.loopMainThreadUntilIdle()

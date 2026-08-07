@@ -33,116 +33,127 @@ data class TextEditorProfile(
     val pastePolicy: PastePolicy = PastePolicy.ALLOW,
     val secretPolicy: SecretPolicy = SecretPolicy.NONE,
     val fontSizePx: Float = 48f,
-    val lineSpacingMultiplier: Float = 1.0f
+    val lineSpacingMultiplier: Float = 1.0f,
 ) {
     companion object {
-        val DocumentBody = TextEditorProfile(
-            singleLine = false,
-            verticalScroll = true,
-            inputType = TextInputType.MULTI_LINE,
-            imeAction = ImeAction.NONE,
-            newlinePolicy = NewlinePolicy.ALLOW,
-            autoIndentPolicy = AutoIndentPolicy.INDENT_ON_ENTER,
-            animationPolicy = AnimationPolicy.INHERIT_GLOBAL,
-            commitOnFocusLoss = false
-        )
-        val ShortTitle = TextEditorProfile(
-            singleLine = true,
-            inputType = TextInputType.TEXT,
-            imeAction = ImeAction.DONE,
-            newlinePolicy = NewlinePolicy.FORBID,
-            maxLength = 200,
-            animationPolicy = AnimationPolicy.INHERIT_GLOBAL
-        )
-        val ShortDescription = TextEditorProfile(
-            singleLine = false,
-            minLines = 1,
-            maxLines = 4,
-            inputType = TextInputType.MULTI_LINE,
-            imeAction = ImeAction.DONE,
-            newlinePolicy = NewlinePolicy.ALLOW,
-            maxLength = 2000,
-            animationPolicy = AnimationPolicy.INHERIT_GLOBAL
-        )
-        val InlineLabel = TextEditorProfile(
-            singleLine = true,
-            inputType = TextInputType.TEXT,
-            imeAction = ImeAction.DONE,
-            newlinePolicy = NewlinePolicy.FORBID,
-            maxLength = 100,
-            animationPolicy = AnimationPolicy.INHERIT_GLOBAL
-        )
-        val CanvasLabel = TextEditorProfile(
-            singleLine = true,
-            inputType = TextInputType.TEXT,
-            imeAction = ImeAction.DONE,
-            newlinePolicy = NewlinePolicy.FORBID,
-            maxLength = 200,
-            animationPolicy = AnimationPolicy.INHERIT_GLOBAL
-        )
-        val SearchQuery = TextEditorProfile(
-            singleLine = true,
-            inputType = TextInputType.TEXT,
-            imeAction = ImeAction.SEARCH,
-            newlinePolicy = NewlinePolicy.FORBID,
-            maxLength = 500,
-            animationPolicy = AnimationPolicy.SYSTEM_SUPPRESSED,
-            commitOnFocusLoss = true
-        )
-        val LongNote = TextEditorProfile(
-            singleLine = false,
-            minLines = 3,
-            maxLines = 20,
-            inputType = TextInputType.MULTI_LINE,
-            imeAction = ImeAction.NONE,
-            newlinePolicy = NewlinePolicy.ALLOW,
-            animationPolicy = AnimationPolicy.INHERIT_GLOBAL,
-            commitOnFocusLoss = false
-        )
-        val SecretToken = TextEditorProfile(
-            singleLine = true,
-            inputType = TextInputType.PASSWORD,
-            imeAction = ImeAction.DONE,
-            newlinePolicy = NewlinePolicy.FORBID,
-            animationPolicy = AnimationPolicy.SYSTEM_SUPPRESSED,
-            selectionPolicy = SelectionPolicy.CURSOR_ONLY,
-            copyPolicy = CopyPolicy.BLOCK,
-            pastePolicy = PastePolicy.ALLOW,
-            secretPolicy = SecretPolicy.MASK_AND_CLEAR_ON_COMMIT,
-            commitOnFocusLoss = true
-        )
-        val RepositoryUrl = TextEditorProfile(
-            singleLine = true,
-            inputType = TextInputType.TEXT,
-            imeAction = ImeAction.DONE,
-            newlinePolicy = NewlinePolicy.FORBID,
-            maxLength = 500,
-            animationPolicy = AnimationPolicy.SYSTEM_SUPPRESSED,
-            autocorrectPolicy = AutocorrectPolicy.DISABLED,
-            capitalizationPolicy = CapitalizationPolicy.NONE,
-            commitOnFocusLoss = true
-        )
-        val BranchName = TextEditorProfile(
-            singleLine = true,
-            inputType = TextInputType.TEXT,
-            imeAction = ImeAction.DONE,
-            newlinePolicy = NewlinePolicy.FORBID,
-            maxLength = 200,
-            animationPolicy = AnimationPolicy.SYSTEM_SUPPRESSED,
-            autocorrectPolicy = AutocorrectPolicy.DISABLED,
-            capitalizationPolicy = CapitalizationPolicy.NONE,
-            commitOnFocusLoss = true
-        )
-        val ReplaceQuery = TextEditorProfile(
-            singleLine = true,
-            inputType = TextInputType.TEXT,
-            imeAction = ImeAction.DONE,
-            newlinePolicy = NewlinePolicy.FORBID,
-            maxLength = 500,
-            animationPolicy = AnimationPolicy.SYSTEM_SUPPRESSED,
-            autocorrectPolicy = AutocorrectPolicy.DISABLED,
-            commitOnFocusLoss = true
-        )
+        val DocumentBody =
+            TextEditorProfile(
+                singleLine = false,
+                verticalScroll = true,
+                inputType = TextInputType.MULTI_LINE,
+                imeAction = ImeAction.NONE,
+                newlinePolicy = NewlinePolicy.ALLOW,
+                autoIndentPolicy = AutoIndentPolicy.INDENT_ON_ENTER,
+                animationPolicy = AnimationPolicy.INHERIT_GLOBAL,
+                commitOnFocusLoss = false,
+            )
+        val ShortTitle =
+            TextEditorProfile(
+                singleLine = true,
+                inputType = TextInputType.TEXT,
+                imeAction = ImeAction.DONE,
+                newlinePolicy = NewlinePolicy.FORBID,
+                maxLength = 200,
+                animationPolicy = AnimationPolicy.INHERIT_GLOBAL,
+            )
+        val ShortDescription =
+            TextEditorProfile(
+                singleLine = false,
+                minLines = 1,
+                maxLines = 4,
+                inputType = TextInputType.MULTI_LINE,
+                imeAction = ImeAction.DONE,
+                newlinePolicy = NewlinePolicy.ALLOW,
+                maxLength = 2000,
+                animationPolicy = AnimationPolicy.INHERIT_GLOBAL,
+            )
+        val InlineLabel =
+            TextEditorProfile(
+                singleLine = true,
+                inputType = TextInputType.TEXT,
+                imeAction = ImeAction.DONE,
+                newlinePolicy = NewlinePolicy.FORBID,
+                maxLength = 100,
+                animationPolicy = AnimationPolicy.INHERIT_GLOBAL,
+            )
+        val CanvasLabel =
+            TextEditorProfile(
+                singleLine = true,
+                inputType = TextInputType.TEXT,
+                imeAction = ImeAction.DONE,
+                newlinePolicy = NewlinePolicy.FORBID,
+                maxLength = 200,
+                animationPolicy = AnimationPolicy.INHERIT_GLOBAL,
+            )
+        val SearchQuery =
+            TextEditorProfile(
+                singleLine = true,
+                inputType = TextInputType.TEXT,
+                imeAction = ImeAction.SEARCH,
+                newlinePolicy = NewlinePolicy.FORBID,
+                maxLength = 500,
+                animationPolicy = AnimationPolicy.SYSTEM_SUPPRESSED,
+                commitOnFocusLoss = true,
+            )
+        val LongNote =
+            TextEditorProfile(
+                singleLine = false,
+                minLines = 3,
+                maxLines = 20,
+                inputType = TextInputType.MULTI_LINE,
+                imeAction = ImeAction.NONE,
+                newlinePolicy = NewlinePolicy.ALLOW,
+                animationPolicy = AnimationPolicy.INHERIT_GLOBAL,
+                commitOnFocusLoss = false,
+            )
+        val SecretToken =
+            TextEditorProfile(
+                singleLine = true,
+                inputType = TextInputType.PASSWORD,
+                imeAction = ImeAction.DONE,
+                newlinePolicy = NewlinePolicy.FORBID,
+                animationPolicy = AnimationPolicy.SYSTEM_SUPPRESSED,
+                selectionPolicy = SelectionPolicy.CURSOR_ONLY,
+                copyPolicy = CopyPolicy.BLOCK,
+                pastePolicy = PastePolicy.ALLOW,
+                secretPolicy = SecretPolicy.MASK_AND_CLEAR_ON_COMMIT,
+                commitOnFocusLoss = true,
+            )
+        val RepositoryUrl =
+            TextEditorProfile(
+                singleLine = true,
+                inputType = TextInputType.TEXT,
+                imeAction = ImeAction.DONE,
+                newlinePolicy = NewlinePolicy.FORBID,
+                maxLength = 500,
+                animationPolicy = AnimationPolicy.SYSTEM_SUPPRESSED,
+                autocorrectPolicy = AutocorrectPolicy.DISABLED,
+                capitalizationPolicy = CapitalizationPolicy.NONE,
+                commitOnFocusLoss = true,
+            )
+        val BranchName =
+            TextEditorProfile(
+                singleLine = true,
+                inputType = TextInputType.TEXT,
+                imeAction = ImeAction.DONE,
+                newlinePolicy = NewlinePolicy.FORBID,
+                maxLength = 200,
+                animationPolicy = AnimationPolicy.SYSTEM_SUPPRESSED,
+                autocorrectPolicy = AutocorrectPolicy.DISABLED,
+                capitalizationPolicy = CapitalizationPolicy.NONE,
+                commitOnFocusLoss = true,
+            )
+        val ReplaceQuery =
+            TextEditorProfile(
+                singleLine = true,
+                inputType = TextInputType.TEXT,
+                imeAction = ImeAction.DONE,
+                newlinePolicy = NewlinePolicy.FORBID,
+                maxLength = 500,
+                animationPolicy = AnimationPolicy.SYSTEM_SUPPRESSED,
+                autocorrectPolicy = AutocorrectPolicy.DISABLED,
+                commitOnFocusLoss = true,
+            )
     }
 }
 
@@ -151,7 +162,7 @@ enum class TextInputType {
     MULTI_LINE,
     NUMBER,
     EMAIL,
-    PASSWORD
+    PASSWORD,
 }
 
 enum class ImeAction {
@@ -159,33 +170,33 @@ enum class ImeAction {
     DONE,
     SEARCH,
     NEXT,
-    GO
+    GO,
 }
 
 enum class NewlinePolicy {
     ALLOW,
-    FORBID
+    FORBID,
 }
 
 enum class AutoIndentPolicy {
     NONE,
-    INDENT_ON_ENTER
+    INDENT_ON_ENTER,
 }
 
 enum class AnimationPolicy {
     INHERIT_GLOBAL,
     ENABLED,
-    SYSTEM_SUPPRESSED
+    SYSTEM_SUPPRESSED,
 }
 
 enum class CursorPolicy {
     VISIBLE_WHEN_FOCUSED,
-    HIDDEN
+    HIDDEN,
 }
 
 enum class SelectionPolicy {
     ALLOW,
-    CURSOR_ONLY
+    CURSOR_ONLY,
 }
 
 /**
@@ -200,32 +211,32 @@ enum class SelectionPolicy {
  */
 enum class CommitPolicy {
     COMMIT_ON_CONFIRM,
-    COMMIT_ON_EVERY_CHANGE
+    COMMIT_ON_EVERY_CHANGE,
 }
 
 enum class AutocorrectPolicy {
     DEFAULT,
-    DISABLED
+    DISABLED,
 }
 
 enum class CapitalizationPolicy {
     NONE,
     CHARACTERS,
     WORDS,
-    SENTENCES
+    SENTENCES,
 }
 
 enum class CopyPolicy {
     ALLOW,
-    BLOCK
+    BLOCK,
 }
 
 enum class PastePolicy {
     ALLOW,
-    BLOCK
+    BLOCK,
 }
 
 enum class SecretPolicy {
     NONE,
-    MASK_AND_CLEAR_ON_COMMIT
+    MASK_AND_CLEAR_ON_COMMIT,
 }

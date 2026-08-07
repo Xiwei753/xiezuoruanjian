@@ -27,11 +27,12 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class DocumentOperationLeaseTest {
-
     private fun createCoordinator(): EditorSessionCoordinator {
-        return EditorSessionCoordinator(com.xiwei.sujian.data.AppServiceBridge(
-            com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595_doc_lease")
-        ))
+        return EditorSessionCoordinator(
+            com.xiwei.sujian.data.AppServiceBridge(
+                com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595_doc_lease"),
+            ),
+        )
     }
 
     /**
@@ -47,13 +48,14 @@ class DocumentOperationLeaseTest {
     ): Boolean {
         coordinator.registerTargetMeta(targetId, TextEditorProfile.DocumentBody, persistent = true)
         val cursor = text.toByteArray(Charsets.UTF_8).size
-        val handle = PreparedSessionHandle(
-            targetId = targetId,
-            sessionId = sessionId,
-            snapshot = TargetSnapshot(text, cursor, revision, 0, cursor),
-            newlyCreated = true,
-            previousRecord = null,
-        )
+        val handle =
+            PreparedSessionHandle(
+                targetId = targetId,
+                sessionId = sessionId,
+                snapshot = TargetSnapshot(text, cursor, revision, 0, cursor),
+                newlyCreated = true,
+                previousRecord = null,
+            )
         return coordinator.commitPreparedSession(handle)
     }
 
@@ -161,7 +163,7 @@ class DocumentOperationLeaseTest {
                 revision = 2L,
                 transactionId = 11L,
                 lease = inputLease,
-            )
+            ),
         )
         assertEquals(2L, coordinator.sessionState.revision)
 

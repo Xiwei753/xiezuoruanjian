@@ -6,19 +6,19 @@ import org.junit.Test
 import uniffi.writer_core.StarMapMotionPolicyDto
 
 class StarMapMotionPolicyMapperTest {
-
     @Test
     fun dto_toModel_preservesAllFields() {
-        val dto = StarMapMotionPolicyDto(
-            enabled = true,
-            idleWobbleEnabled = false,
-            idleAmplitudeVp = 3.5f,
-            idlePeriodMs = 5000u,
-            dragLiftScale = 1.1f,
-            dragShadowBoost = 10.0f,
-            settleDurationMs = 300u,
-            reduceMotion = true
-        )
+        val dto =
+            StarMapMotionPolicyDto(
+                enabled = true,
+                idleWobbleEnabled = false,
+                idleAmplitudeVp = 3.5f,
+                idlePeriodMs = 5000u,
+                dragLiftScale = 1.1f,
+                dragShadowBoost = 10.0f,
+                settleDurationMs = 300u,
+                reduceMotion = true,
+            )
         val model = dto.toModel()
         assertEquals(StarMapMotionPolicyData::class, model::class)
         assertTrue(model.enabled)
@@ -33,16 +33,17 @@ class StarMapMotionPolicyMapperTest {
 
     @Test
     fun dto_toModel_defaultValues() {
-        val dto = StarMapMotionPolicyDto(
-            enabled = true,
-            idleWobbleEnabled = true,
-            idleAmplitudeVp = 2.0f,
-            idlePeriodMs = 4200u,
-            dragLiftScale = 1.04f,
-            dragShadowBoost = 8.0f,
-            settleDurationMs = 220u,
-            reduceMotion = false
-        )
+        val dto =
+            StarMapMotionPolicyDto(
+                enabled = true,
+                idleWobbleEnabled = true,
+                idleAmplitudeVp = 2.0f,
+                idlePeriodMs = 4200u,
+                dragLiftScale = 1.04f,
+                dragShadowBoost = 8.0f,
+                settleDurationMs = 220u,
+                reduceMotion = false,
+            )
         val model = dto.toModel()
         val expected = StarMapMotionPolicyData()
         assertEquals(expected.enabled, model.enabled)

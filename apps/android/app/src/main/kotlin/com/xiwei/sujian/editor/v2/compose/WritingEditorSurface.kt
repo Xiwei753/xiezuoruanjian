@@ -4,12 +4,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost
 import com.xiwei.sujian.editor.v2.coordinator.WindowBindingState
-import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import com.xiwei.sujian.ui.compose.theme.EditorThemeAdapter
 
 /**
@@ -83,12 +82,16 @@ fun WritingEditorSurface(
  * - [WindowBindingState.Committing]/[Cancelling]：编辑事务收尾中，编辑器保持显示。
  * - [WindowBindingState.Idle]/[Detaching]/[Detached]：未绑定/已解绑 → 预览。
  */
-fun shouldShowEditor(bindingState: WindowBindingState, targetId: String): Boolean = when (bindingState) {
-    is WindowBindingState.Attaching -> bindingState.targetId == targetId
-    is WindowBindingState.Attached -> bindingState.targetId == targetId
-    is WindowBindingState.Committing -> bindingState.targetId == targetId
-    is WindowBindingState.Cancelling -> bindingState.targetId == targetId
-    WindowBindingState.Idle -> false
-    is WindowBindingState.Detaching -> false
-    is WindowBindingState.Detached -> false
-}
+fun shouldShowEditor(
+    bindingState: WindowBindingState,
+    targetId: String,
+): Boolean =
+    when (bindingState) {
+        is WindowBindingState.Attaching -> bindingState.targetId == targetId
+        is WindowBindingState.Attached -> bindingState.targetId == targetId
+        is WindowBindingState.Committing -> bindingState.targetId == targetId
+        is WindowBindingState.Cancelling -> bindingState.targetId == targetId
+        WindowBindingState.Idle -> false
+        is WindowBindingState.Detaching -> false
+        is WindowBindingState.Detached -> false
+    }

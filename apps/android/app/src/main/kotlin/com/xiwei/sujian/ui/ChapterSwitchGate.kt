@@ -29,6 +29,7 @@ class ChapterSwitchGate {
 
     sealed interface Result<out T> {
         data class Completed<T>(val value: T) : Result<T>
+
         data object Stale : Result<Nothing>
     }
 

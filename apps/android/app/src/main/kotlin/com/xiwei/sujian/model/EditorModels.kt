@@ -5,9 +5,8 @@ package com.xiwei.sujian.model
  *
  * 这些类型是 `uniffi.writer_core.*Dto` 的 app 层镜像，editor 子模块不得直接引用 UniFFI 绑定。
  * 映射在 [com.xiwei.sujian.data.EditorDtoMapper] 中完成，pipeline 层负责转换。
- */
-
-/**
+ *
+ *
  * 编辑事务原因 — 标识编辑操作的来源。
  *
  * 对应 UniFFI: `uniffi.writer_core.EditorTransactionCauseDto`

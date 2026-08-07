@@ -21,7 +21,6 @@ import org.junit.Test
  * - current=N：删除 1..N-2，保留 N-1 与 N。
  */
 class GenerationCleanupRetentionTest {
-
     @Test
     fun currentOne_keepsOnlyVersion_deletesNothing() {
         assertNull("current=1 时没有任何可删除 generation", generationCleanupRange(1L))
@@ -60,11 +59,12 @@ class GenerationCleanupRetentionTest {
     fun cleanupFailureIsTypedAndDoesNotRollBackCommit() {
         // #595 五：清理失败只返回类型化失败记录，不得回滚已成功的提交 —
         // 契约：commitSyncProfile 在 cleanup 失败时仍返回 SettingsSaveResult.Success
-        //（见 SettingsRepository.commitSyncProfile 步骤 5：失败仅 warn 不改变 activeGeneration）。
+        // （见 SettingsRepository.commitSyncProfile 步骤 5：失败仅 warn 不改变 activeGeneration）。
         // 本断言固定该语义的存在性（生产路径行为由 CommitSyncProfileContractTest 覆盖）。
-        val cleanupResult = SettingsSaveResult.Failed(
-            listOf(SaveFailure(SaveField.SYNC_SECRETS, 1L))
-        )
+        val cleanupResult =
+            SettingsSaveResult.Failed(
+                listOf(SaveFailure(SaveField.SYNC_SECRETS, 1L)),
+            )
         assertEquals(SaveField.SYNC_SECRETS, cleanupResult.failures.single().field)
         assertEquals(1L, cleanupResult.failures.single().revision)
     }

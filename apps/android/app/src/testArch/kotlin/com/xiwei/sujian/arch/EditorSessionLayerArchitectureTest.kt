@@ -24,18 +24,19 @@ import org.junit.Test
  * - 会话层不持有 Compose mutableStateOf 字段。
  */
 class EditorSessionLayerArchitectureTest {
+    private val valueGetters =
+        listOf(
+            "getActiveTargetId",
+            "getEditingState",
+            "getWindowBindingState",
+        )
 
-    private val valueGetters = listOf(
-        "getActiveTargetId",
-        "getEditingState",
-        "getWindowBindingState",
-    )
-
-    private val removedDerivedFlowGetters = listOf(
-        "getActiveTargetIdFlow",
-        "getEditingStateFlow",
-        "getWindowBindingStateFlow",
-    )
+    private val removedDerivedFlowGetters =
+        listOf(
+            "getActiveTargetIdFlow",
+            "getEditingStateFlow",
+            "getWindowBindingStateFlow",
+        )
 
     @Test
     fun sessionCoordinator_exposesSingleSessionStateFlow() {
@@ -44,11 +45,11 @@ class EditorSessionLayerArchitectureTest {
         val sessionStateFlowMethod = methods.firstOrNull { it.name == "getSessionStateFlow" }
         assertNotNull(
             "EditorSessionCoordinator must expose sessionStateFlow as the single state StateFlow",
-            sessionStateFlowMethod
+            sessionStateFlowMethod,
         )
         assertTrue(
             "sessionStateFlow must return StateFlow, got ${sessionStateFlowMethod!!.returnType.name}",
-            StateFlow::class.java.isAssignableFrom(sessionStateFlowMethod.returnType)
+            StateFlow::class.java.isAssignableFrom(sessionStateFlowMethod.returnType),
         )
     }
 
@@ -58,7 +59,8 @@ class EditorSessionLayerArchitectureTest {
 
         for (name in removedDerivedFlowGetters) {
             assertNull(
-                "Derived stateIn flow $name must be removed — Compose reads the single sessionStateFlow snapshot (#595 三)",
+                "Derived stateIn flow $name must be removed — " +
+                    "Compose reads the single sessionStateFlow snapshot (#595 三)",
                 methods.firstOrNull { it == name },
             )
         }
@@ -78,9 +80,10 @@ class EditorSessionLayerArchitectureTest {
 
     @Test
     fun sessionCoordinator_hasNoReduceScopeCoroutineScope() {
-        val field = EditorSessionCoordinator::class.java.declaredFields.firstOrNull {
-            it.name == "reduceScope"
-        }
+        val field =
+            EditorSessionCoordinator::class.java.declaredFields.firstOrNull {
+                it.name == "reduceScope"
+            }
         assertNull(
             "reduceScope (derived stateIn collector scope) must be removed with the derived flows (#595 三)",
             field,
@@ -89,22 +92,24 @@ class EditorSessionLayerArchitectureTest {
 
     @Test
     fun sessionCoordinator_doesNotUseComposeMutableStateFields() {
-        val composeMutableStateTypes = setOf(
-            "androidx.compose.runtime.MutableState",
-            "androidx.compose.runtime.MutableIntState",
-            "androidx.compose.runtime.MutableLongState",
-            "androidx.compose.runtime.MutableFloatState",
-            "androidx.compose.runtime.MutableDoubleState",
-        )
+        val composeMutableStateTypes =
+            setOf(
+                "androidx.compose.runtime.MutableState",
+                "androidx.compose.runtime.MutableIntState",
+                "androidx.compose.runtime.MutableLongState",
+                "androidx.compose.runtime.MutableFloatState",
+                "androidx.compose.runtime.MutableDoubleState",
+            )
 
-        val offendingFields = EditorSessionCoordinator::class.java.declaredFields.filter { field ->
-            composeMutableStateTypes.any { it == field.type.name }
-        }
+        val offendingFields =
+            EditorSessionCoordinator::class.java.declaredFields.filter { field ->
+                composeMutableStateTypes.any { it == field.type.name }
+            }
 
         assertTrue(
             "EditorSessionCoordinator must not hold Compose mutableState fields after #595 二. " +
-            "Found: ${offendingFields.map { it.name + ": " + it.type.name }}",
-            offendingFields.isEmpty()
+                "Found: ${offendingFields.map { it.name + ": " + it.type.name }}",
+            offendingFields.isEmpty(),
         )
     }
 
@@ -115,11 +120,11 @@ class EditorSessionLayerArchitectureTest {
         val sessionStateFlowMethod = methods.firstOrNull { it.name == "getSessionStateFlow" }
         assertNotNull(
             "EditorWindowHost must delegate sessionStateFlow from session layer",
-            sessionStateFlowMethod
+            sessionStateFlowMethod,
         )
         assertTrue(
             "EditorWindowHost.sessionStateFlow must return StateFlow, got ${sessionStateFlowMethod!!.returnType.name}",
-            StateFlow::class.java.isAssignableFrom(sessionStateFlowMethod.returnType)
+            StateFlow::class.java.isAssignableFrom(sessionStateFlowMethod.returnType),
         )
 
         val methodNames = methods.map { it.name }.toSet()

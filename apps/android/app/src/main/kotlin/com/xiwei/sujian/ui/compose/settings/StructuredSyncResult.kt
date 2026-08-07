@@ -5,7 +5,7 @@ data class StructuredSyncResult(
     val messageKey: String,
     val messageArgs: Map<String, String> = emptyMap(),
     val counts: SyncCounts = SyncCounts(),
-    val sanitizedDiagnostic: String? = null
+    val sanitizedDiagnostic: String? = null,
 )
 
 data class SyncCounts(
@@ -15,5 +15,5 @@ data class SyncCounts(
     val deletedLocal: Int = 0,
     val conflicts: Int = 0,
     val overwritten: Int = 0,
-    val ignored: Int = 0
+    val ignored: Int = 0,
 )

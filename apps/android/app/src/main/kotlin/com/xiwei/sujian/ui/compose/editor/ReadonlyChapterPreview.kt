@@ -5,8 +5,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.sp
 import com.xiwei.sujian.editor.v2.projection.ChapterPreviewState
@@ -20,15 +18,16 @@ import com.xiwei.sujian.editor.v2.projection.ChapterPreviewState
 @Composable
 fun ReadonlyChapterPreview(
     previewState: ChapterPreviewState,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     Box(modifier = modifier.fillMaxSize()) {
         BasicText(
             text = previewState.text,
-            style = TextStyle(
-                fontSize = previewState.style.fontSizeSp.sp,
-                lineHeight = (previewState.style.fontSizeSp * previewState.style.lineSpacingMultiplier).sp,
-            ),
+            style =
+                TextStyle(
+                    fontSize = previewState.style.fontSizeSp.sp,
+                    lineHeight = (previewState.style.fontSizeSp * previewState.style.lineSpacingMultiplier).sp,
+                ),
         )
     }
 }

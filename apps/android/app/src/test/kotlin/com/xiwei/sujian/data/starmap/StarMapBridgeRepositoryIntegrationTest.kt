@@ -8,27 +8,42 @@ import org.junit.Test
 import uniffi.writer_core.*
 
 class StarMapBridgeRepositoryIntegrationTest {
-
     private var getStarMapGraphCallCount = 0
 
-    private fun makeNodeDto(id: String, title: String, kind: StarMapNodeKindDto = StarMapNodeKindDto.CHARACTER) = StarMapNodeDto(
+    private fun makeNodeDto(
+        id: String,
+        title: String,
+        kind: StarMapNodeKindDto = StarMapNodeKindDto.CHARACTER,
+    ) = StarMapNodeDto(
         id = id, title = title, kind = kind,
         payload = null, tags = emptyList(),
         content = StarMapNodeContentDto("empty", null, null, null, null, null, null, null, null, null, null, null),
         anchors = emptyList(), portal = null,
         displayPolicy = defaultStarMapDisplayPolicy(),
         openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
-        provenance = StarMapProvenanceDto(StarMapSourceKindDto.HUMAN, null, null, null, StarMapReviewStatusDto.ACCEPTED, null),
-        createdAt = 0u, updatedAt = 0u
+        provenance =
+            StarMapProvenanceDto(
+                StarMapSourceKindDto.HUMAN,
+                null,
+                null,
+                null,
+                StarMapReviewStatusDto.ACCEPTED,
+                null,
+            ),
+        createdAt = 0u, updatedAt = 0u,
     )
 
-    private fun makeEdgeDto(id: String, from: String, to: String) = StarMapEdgeDto(
+    private fun makeEdgeDto(
+        id: String,
+        from: String,
+        to: String,
+    ) = StarMapEdgeDto(
         id = id, from = from, to = to, kind = StarMapEdgeKindDto.RELATED_TO,
         label = null, payload = null,
         fromTarget = null, toTarget = null,
         fromEndpoint = null, toEndpoint = null,
         fromEndpointPath = null, toEndpointPath = null,
-        createdAt = 0u, updatedAt = 0u
+        createdAt = 0u, updatedAt = 0u,
     )
 
     private fun makePhasedSnapshotDto(
@@ -46,7 +61,7 @@ class StarMapBridgeRepositoryIntegrationTest {
         packageRevision = packageRevision, complete = complete, sinceRevision = sinceRevision,
         nodes = nodes, edges = edges, embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
         layout = layout, viewport = viewport, diagnostics = emptyList(),
-        deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
+        deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
     )
 
     private fun createFakeBridge(
@@ -55,71 +70,211 @@ class StarMapBridgeRepositoryIntegrationTest {
         updateNodeResult: (() -> BridgeResult<StarMapNodeDto>)? = null,
         deleteNodeResult: (() -> BridgeResult<Boolean>)? = null,
         addEdgeResult: (() -> BridgeResult<StarMapEdgeDto>)? = null,
-    ): StarMapBridgeOps = object : StarMapBridgeOps {
-        override fun listStarMaps(): BridgeResult<List<StarMapMetaDto>> = BridgeResult.Success(emptyList())
-        override fun getStarMapGraph(starmapId: String): BridgeResult<StarMapGraphDto> {
-            getStarMapGraphCallCount++
-            return BridgeResult.Error(ResultEnvelope.errorOf("DEPRECATED", "getStarMapGraph should not be called"))
+    ): StarMapBridgeOps =
+        object : StarMapBridgeOps {
+            override fun listStarMaps(): BridgeResult<List<StarMapMetaDto>> = BridgeResult.Success(emptyList())
+
+            override fun getStarMapGraph(starmapId: String): BridgeResult<StarMapGraphDto> {
+                getStarMapGraphCallCount++
+                return BridgeResult.Error(ResultEnvelope.errorOf("DEPRECATED", "getStarMapGraph should not be called"))
+            }
+
+            override fun createStarMap(
+                title: String,
+                desc: String,
+            ): BridgeResult<StarMapMetaDto> =
+                BridgeResult.Success(StarMapMetaDto("sm1", title, desc, "", null, false, "", 0u, 0u, 0u, 0u, 0u, 0u))
+
+            override fun addStarMapNode(
+                starmapId: String,
+                node: StarMapNodeDto,
+                x: Float,
+                y: Float,
+            ): BridgeResult<StarMapNodeDto> = addNodeResult?.invoke() ?: BridgeResult.Success(node)
+
+            override fun saveStarMapLayout(
+                starmapId: String,
+                layout: StarMapLayoutDto,
+            ): BridgeResult<Boolean> =
+                BridgeResult.Success(
+                    true,
+                )
+
+            override fun getStarMapViewport(starmapId: String): BridgeResult<StarMapViewportDto> =
+                BridgeResult.Success(StarMapViewportDto(1f, 0f, 0f, 800f, 600f))
+
+            override fun saveStarMapViewport(
+                starmapId: String,
+                viewport: StarMapViewportDto,
+            ): BridgeResult<Boolean> =
+                BridgeResult.Success(
+                    true,
+                )
+
+            override fun computeStarMapEdgeRenders(
+                graph: StarMapGraphDto,
+                layout: StarMapLayoutDto,
+            ): BridgeResult<List<StarMapEdgeRenderDto>> = BridgeResult.Success(emptyList())
+
+            override fun hitTestStarMapNode(
+                layout: StarMapLayoutDto,
+                x: Float,
+                y: Float,
+            ): BridgeResult<String?> =
+                BridgeResult.Success(
+                    null,
+                )
+
+            override fun addStarmapEmbed(
+                starmapId: String,
+                embed: StarMapEmbedDto,
+            ): BridgeResult<StarMapEmbedDto> =
+                BridgeResult.Success(
+                    embed,
+                )
+
+            override fun updateStarmapEmbed(
+                starmapId: String,
+                instanceId: String,
+                patch: StarMapEmbedPatchInputDto,
+            ): BridgeResult<StarMapEmbedDto> =
+                BridgeResult.Error(ResultEnvelope.errorOf("NOT_IMPLEMENTED", "not implemented"))
+
+            override fun deleteStarmapEmbed(
+                starmapId: String,
+                instanceId: String,
+            ): BridgeResult<Boolean> =
+                BridgeResult.Success(
+                    true,
+                )
+
+            override fun addStarmapLink(
+                starmapId: String,
+                link: StarMapLinkDto,
+            ): BridgeResult<StarMapLinkDto> =
+                BridgeResult.Success(
+                    link,
+                )
+
+            override fun updateStarmapLink(
+                starmapId: String,
+                linkId: String,
+                patch: StarMapLinkPatchInputDto,
+            ): BridgeResult<StarMapLinkDto> =
+                BridgeResult.Error(ResultEnvelope.errorOf("NOT_IMPLEMENTED", "not implemented"))
+
+            override fun deleteStarmapLink(
+                starmapId: String,
+                linkId: String,
+            ): BridgeResult<Boolean> =
+                BridgeResult.Success(
+                    true,
+                )
+
+            override fun addStarmapHyperlink(
+                starmapId: String,
+                hl: StarMapHyperlinkDto,
+            ): BridgeResult<StarMapHyperlinkDto> =
+                BridgeResult.Success(
+                    hl,
+                )
+
+            override fun updateStarmapHyperlink(
+                starmapId: String,
+                hyperlinkId: String,
+                patch: StarMapHyperlinkPatchInputDto,
+            ): BridgeResult<StarMapHyperlinkDto> =
+                BridgeResult.Error(ResultEnvelope.errorOf("NOT_IMPLEMENTED", "not implemented"))
+
+            override fun deleteStarmapHyperlink(
+                starmapId: String,
+                hyperlinkId: String,
+            ): BridgeResult<Boolean> =
+                BridgeResult.Success(
+                    true,
+                )
+
+            override fun listStarmapHyperlinks(
+                starmapId: String,
+            ): BridgeResult<StarMapHyperlinkListWithDiagnosticsDto> =
+                BridgeResult.Success(StarMapHyperlinkListWithDiagnosticsDto(emptyList(), emptyList()))
+
+            override fun getStarmapPhasedSnapshot(
+                starmapId: String,
+                request: PhasedSnapshotRequestDto,
+            ): BridgeResult<StarMapPhasedSnapshotDto> {
+                val dto =
+                    phasedSnapshotResults[starmapId]
+                        ?: return BridgeResult.Error(ResultEnvelope.errorOf("NOT_FOUND", "starmap not found"))
+                return BridgeResult.Success(dto)
+            }
+
+            override fun findStarmapReferences(targetStarmapId: String): BridgeResult<List<StarMapReferenceDto>> =
+                BridgeResult.Success(
+                    emptyList(),
+                )
+
+            override fun getStarMapMotionPolicy(): BridgeResult<StarMapMotionPolicyDto> =
+                BridgeResult.Success(StarMapMotionPolicyDto(false, false, 1f, 3000u, 1f, 5f, 100u, false))
+
+            override fun updateStarMapNode(
+                starmapId: String,
+                nodeId: String,
+                patch: StarMapNodePatchInputDto,
+            ): BridgeResult<StarMapNodeDto> =
+                updateNodeResult?.invoke() ?: BridgeResult.Error(ResultEnvelope.errorOf("NOT_IMPLEMENTED", "not implemented"))
+
+            override fun deleteStarMapNode(
+                starmapId: String,
+                nodeId: String,
+            ): BridgeResult<Boolean> = deleteNodeResult?.invoke() ?: BridgeResult.Success(true)
+
+            override fun addStarMapEdge(
+                starmapId: String,
+                edge: StarMapEdgeDto,
+            ): BridgeResult<StarMapEdgeDto> = addEdgeResult?.invoke() ?: BridgeResult.Success(edge)
+
+            override fun deleteStarMapEdge(
+                starmapId: String,
+                edgeId: String,
+            ): BridgeResult<Boolean> =
+                BridgeResult.Success(
+                    true,
+                )
+
+            override fun updateStarMapEdge(
+                starmapId: String,
+                edgeId: String,
+                patch: StarMapEdgePatchInputDto,
+            ): BridgeResult<StarMapEdgeDto> =
+                BridgeResult.Error(ResultEnvelope.errorOf("NOT_IMPLEMENTED", "not implemented"))
+
+            override fun flushStarmapStore(starmapId: String): BridgeResult<Boolean> = BridgeResult.Success(true)
+
+            override fun closeStarmapStore(starmapId: String): BridgeResult<Boolean> = BridgeResult.Success(true)
+
+            override fun flushAllStarmapStores(): BridgeResult<Boolean> = BridgeResult.Success(true)
         }
-        override fun createStarMap(title: String, desc: String): BridgeResult<StarMapMetaDto> =
-            BridgeResult.Success(StarMapMetaDto("sm1", title, desc, "", null, false, "", 0u, 0u, 0u, 0u, 0u, 0u))
-        override fun addStarMapNode(starmapId: String, node: StarMapNodeDto, x: Float, y: Float): BridgeResult<StarMapNodeDto> =
-            addNodeResult?.invoke() ?: BridgeResult.Success(node)
-        override fun saveStarMapLayout(starmapId: String, layout: StarMapLayoutDto): BridgeResult<Boolean> = BridgeResult.Success(true)
-        override fun getStarMapViewport(starmapId: String): BridgeResult<StarMapViewportDto> =
-            BridgeResult.Success(StarMapViewportDto(1f, 0f, 0f, 800f, 600f))
-        override fun saveStarMapViewport(starmapId: String, viewport: StarMapViewportDto): BridgeResult<Boolean> = BridgeResult.Success(true)
-        override fun computeStarMapEdgeRenders(graph: StarMapGraphDto, layout: StarMapLayoutDto): BridgeResult<List<StarMapEdgeRenderDto>> =
-            BridgeResult.Success(emptyList())
-        override fun hitTestStarMapNode(layout: StarMapLayoutDto, x: Float, y: Float): BridgeResult<String?> = BridgeResult.Success(null)
-        override fun addStarmapEmbed(starmapId: String, embed: StarMapEmbedDto): BridgeResult<StarMapEmbedDto> = BridgeResult.Success(embed)
-        override fun updateStarmapEmbed(starmapId: String, instanceId: String, patch: StarMapEmbedPatchInputDto): BridgeResult<StarMapEmbedDto> =
-            BridgeResult.Error(ResultEnvelope.errorOf("NOT_IMPLEMENTED", "not implemented"))
-        override fun deleteStarmapEmbed(starmapId: String, instanceId: String): BridgeResult<Boolean> = BridgeResult.Success(true)
-        override fun addStarmapLink(starmapId: String, link: StarMapLinkDto): BridgeResult<StarMapLinkDto> = BridgeResult.Success(link)
-        override fun updateStarmapLink(starmapId: String, linkId: String, patch: StarMapLinkPatchInputDto): BridgeResult<StarMapLinkDto> =
-            BridgeResult.Error(ResultEnvelope.errorOf("NOT_IMPLEMENTED", "not implemented"))
-        override fun deleteStarmapLink(starmapId: String, linkId: String): BridgeResult<Boolean> = BridgeResult.Success(true)
-        override fun addStarmapHyperlink(starmapId: String, hl: StarMapHyperlinkDto): BridgeResult<StarMapHyperlinkDto> = BridgeResult.Success(hl)
-        override fun updateStarmapHyperlink(starmapId: String, hyperlinkId: String, patch: StarMapHyperlinkPatchInputDto): BridgeResult<StarMapHyperlinkDto> =
-            BridgeResult.Error(ResultEnvelope.errorOf("NOT_IMPLEMENTED", "not implemented"))
-        override fun deleteStarmapHyperlink(starmapId: String, hyperlinkId: String): BridgeResult<Boolean> = BridgeResult.Success(true)
-        override fun listStarmapHyperlinks(starmapId: String): BridgeResult<StarMapHyperlinkListWithDiagnosticsDto> =
-            BridgeResult.Success(StarMapHyperlinkListWithDiagnosticsDto(emptyList(), emptyList()))
-        override fun getStarmapPhasedSnapshot(starmapId: String, request: PhasedSnapshotRequestDto): BridgeResult<StarMapPhasedSnapshotDto> {
-            val dto = phasedSnapshotResults[starmapId]
-                ?: return BridgeResult.Error(ResultEnvelope.errorOf("NOT_FOUND", "starmap not found"))
-            return BridgeResult.Success(dto)
-        }
-        override fun findStarmapReferences(targetStarmapId: String): BridgeResult<List<StarMapReferenceDto>> = BridgeResult.Success(emptyList())
-        override fun getStarMapMotionPolicy(): BridgeResult<StarMapMotionPolicyDto> =
-            BridgeResult.Success(StarMapMotionPolicyDto(false, false, 1f, 3000u, 1f, 5f, 100u, false))
-        override fun updateStarMapNode(starmapId: String, nodeId: String, patch: StarMapNodePatchInputDto): BridgeResult<StarMapNodeDto> =
-            updateNodeResult?.invoke() ?: BridgeResult.Error(ResultEnvelope.errorOf("NOT_IMPLEMENTED", "not implemented"))
-        override fun deleteStarMapNode(starmapId: String, nodeId: String): BridgeResult<Boolean> =
-            deleteNodeResult?.invoke() ?: BridgeResult.Success(true)
-        override fun addStarMapEdge(starmapId: String, edge: StarMapEdgeDto): BridgeResult<StarMapEdgeDto> =
-            addEdgeResult?.invoke() ?: BridgeResult.Success(edge)
-        override fun deleteStarMapEdge(starmapId: String, edgeId: String): BridgeResult<Boolean> = BridgeResult.Success(true)
-        override fun updateStarMapEdge(starmapId: String, edgeId: String, patch: StarMapEdgePatchInputDto): BridgeResult<StarMapEdgeDto> =
-            BridgeResult.Error(ResultEnvelope.errorOf("NOT_IMPLEMENTED", "not implemented"))
-        override fun flushStarmapStore(starmapId: String): BridgeResult<Boolean> = BridgeResult.Success(true)
-        override fun closeStarmapStore(starmapId: String): BridgeResult<Boolean> = BridgeResult.Success(true)
-        override fun flushAllStarmapStores(): BridgeResult<Boolean> = BridgeResult.Success(true)
-    }
 
     @Test
     fun progressiveLoading_neverCallsGetStarMapGraph() {
         getStarMapGraphCallCount = 0
-        val dto1 = makePhasedSnapshotDto(
-            loadPhase = "CurrentViewportObjects",
-            nodes = listOf(makeNodeDto("n1", "InView")),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
-            )),
-            viewport = StarMapViewportDto(1f, 0f, 0f, 800f, 600f)
-        )
+        val dto1 =
+            makePhasedSnapshotDto(
+                loadPhase = "CurrentViewportObjects",
+                nodes = listOf(makeNodeDto("n1", "InView")),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                        ),
+                    ),
+                viewport = StarMapViewportDto(1f, 0f, 0f, 800f, 600f),
+            )
         val bridge = createFakeBridge(phasedSnapshotResults = mutableMapOf("sm1" to dto1))
         val cache = StarMapSnapshotCache()
         val repo = StarMapRepository(bridge, cache)
@@ -137,25 +292,43 @@ class StarMapBridgeRepositoryIntegrationTest {
     @Test
     fun advanceLoadPhase_usesCacheAndNeverCallsGetStarMapGraph() {
         getStarMapGraphCallCount = 0
-        val dto1 = makePhasedSnapshotDto(
-            loadPhase = "CurrentViewportObjects", packageRevision = 1u,
-            nodes = listOf(makeNodeDto("n1", "InView")),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
-            ))
-        )
-        val dto2 = makePhasedSnapshotDto(
-            loadPhase = "PrefetchNearbyObjects", packageRevision = 2u,
-            nodes = listOf(makeNodeDto("n1", "InView"), makeNodeDto("n2", "Nearby")),
-            edges = listOf(makeEdgeDto("e1", "n1", "n2")),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null),
-                StarMapLayoutNodeDto(nodeId = "n2", x = 200f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
-            ))
-        )
+        val dto1 =
+            makePhasedSnapshotDto(
+                loadPhase = "CurrentViewportObjects",
+                packageRevision = 1u,
+                nodes = listOf(makeNodeDto("n1", "InView")),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                        ),
+                    ),
+            )
+        val dto2 =
+            makePhasedSnapshotDto(
+                loadPhase = "PrefetchNearbyObjects",
+                packageRevision = 2u,
+                nodes = listOf(makeNodeDto("n1", "InView"), makeNodeDto("n2", "Nearby")),
+                edges = listOf(makeEdgeDto("e1", "n1", "n2")),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                            StarMapLayoutNodeDto(
+                                nodeId = "n2", x = 200f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                        ),
+                    ),
+            )
         val bridge = createFakeBridge(phasedSnapshotResults = mutableMapOf("sm1" to dto2))
         val cache = StarMapSnapshotCache()
         val repo = StarMapRepository(bridge, cache)
@@ -174,17 +347,27 @@ class StarMapBridgeRepositoryIntegrationTest {
     @Test
     fun computeEdgeRenders_usesCacheNotFullLoad() {
         getStarMapGraphCallCount = 0
-        val dto = makePhasedSnapshotDto(
-            loadPhase = "BackgroundFullLoad", complete = true,
-            nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B")),
-            edges = listOf(makeEdgeDto("e1", "n1", "n2")),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 0f, y = 0f, width = 100f, height = 50f,
-                    radius = 25f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null),
-                StarMapLayoutNodeDto(nodeId = "n2", x = 200f, y = 0f, width = 100f, height = 50f,
-                    radius = 25f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
-            ))
-        )
+        val dto =
+            makePhasedSnapshotDto(
+                loadPhase = "BackgroundFullLoad",
+                complete = true,
+                nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B")),
+                edges = listOf(makeEdgeDto("e1", "n1", "n2")),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 0f, y = 0f, width = 100f, height = 50f,
+                                radius = 25f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                            StarMapLayoutNodeDto(
+                                nodeId = "n2", x = 200f, y = 0f, width = 100f, height = 50f,
+                                radius = 25f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                        ),
+                    ),
+            )
         val bridge = createFakeBridge(phasedSnapshotResults = mutableMapOf("sm1" to dto))
         val cache = StarMapSnapshotCache()
         val repo = StarMapRepository(bridge, cache)
@@ -205,11 +388,21 @@ class StarMapBridgeRepositoryIntegrationTest {
         val cache = StarMapSnapshotCache()
         val repo = StarMapRepository(bridge, cache)
 
-        val data = StarMapData(
-            graph = StarMapGraphData(schemaVersion = 1, id = "sm1", starmapId = "sm1", title = "T",
-                nodes = emptyList(), edges = emptyList(), createdAt = 0, updatedAt = 0),
-            layout = StarMapLayoutData(kind = StarMapLayoutKind.Freeform, nodes = emptyList())
-        )
+        val data =
+            StarMapData(
+                graph =
+                    StarMapGraphData(
+                        schemaVersion = 1,
+                        id = "sm1",
+                        starmapId = "sm1",
+                        title = "T",
+                        nodes = emptyList(),
+                        edges = emptyList(),
+                        createdAt = 0,
+                        updatedAt = 0,
+                    ),
+                layout = StarMapLayoutData(kind = StarMapLayoutKind.Freeform, nodes = emptyList()),
+            )
         val result = repo.computeEdgeRenders(data)
         assertTrue("computeEdgeRenders must return error without cache", result is BridgeResult.Error)
         assertEquals("getStarMapGraph must not be called even when cache missing", 0, getStarMapGraphCallCount)
@@ -218,25 +411,44 @@ class StarMapBridgeRepositoryIntegrationTest {
     @Test
     fun incrementalMerge_throughRepository_preservesExistingAndAddsNew() {
         getStarMapGraphCallCount = 0
-        val dto1 = makePhasedSnapshotDto(
-            loadPhase = "CurrentViewportObjects", packageRevision = 1u,
-            nodes = listOf(makeNodeDto("n1", "InView")),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
-            ))
-        )
-        val dto2 = makePhasedSnapshotDto(
-            loadPhase = "PrefetchNearbyObjects", packageRevision = 2u, sinceRevision = 1u,
-            nodes = listOf(makeNodeDto("n1", "InView"), makeNodeDto("n2", "Nearby")),
-            edges = listOf(makeEdgeDto("e1", "n1", "n2")),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null),
-                StarMapLayoutNodeDto(nodeId = "n2", x = 200f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
-            ))
-        )
+        val dto1 =
+            makePhasedSnapshotDto(
+                loadPhase = "CurrentViewportObjects",
+                packageRevision = 1u,
+                nodes = listOf(makeNodeDto("n1", "InView")),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                        ),
+                    ),
+            )
+        val dto2 =
+            makePhasedSnapshotDto(
+                loadPhase = "PrefetchNearbyObjects",
+                packageRevision = 2u,
+                sinceRevision = 1u,
+                nodes = listOf(makeNodeDto("n1", "InView"), makeNodeDto("n2", "Nearby")),
+                edges = listOf(makeEdgeDto("e1", "n1", "n2")),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                            StarMapLayoutNodeDto(
+                                nodeId = "n2", x = 200f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                        ),
+                    ),
+            )
         val results = mutableMapOf("sm1" to dto1)
         val bridge = createFakeBridge(phasedSnapshotResults = results)
         val cache = StarMapSnapshotCache()
@@ -258,14 +470,22 @@ class StarMapBridgeRepositoryIntegrationTest {
     @Test
     fun crudAddNode_success_updatesCache() {
         getStarMapGraphCallCount = 0
-        val dto = makePhasedSnapshotDto(
-            loadPhase = "BackgroundFullLoad", complete = true,
-            nodes = listOf(makeNodeDto("n1", "A")),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
-            ))
-        )
+        val dto =
+            makePhasedSnapshotDto(
+                loadPhase = "BackgroundFullLoad",
+                complete = true,
+                nodes = listOf(makeNodeDto("n1", "A")),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                        ),
+                    ),
+            )
         val bridge = createFakeBridge(phasedSnapshotResults = mutableMapOf("sm1" to dto))
         val cache = StarMapSnapshotCache()
         val repo = StarMapRepository(bridge, cache)
@@ -284,14 +504,17 @@ class StarMapBridgeRepositoryIntegrationTest {
     @Test
     fun crudAddNode_failure_doesNotCorruptCache() {
         getStarMapGraphCallCount = 0
-        val dto = makePhasedSnapshotDto(
-            loadPhase = "BackgroundFullLoad", complete = true,
-            nodes = listOf(makeNodeDto("n1", "A"))
-        )
-        val bridge = createFakeBridge(
-            phasedSnapshotResults = mutableMapOf("sm1" to dto),
-            addNodeResult = { BridgeResult.Error(ResultEnvelope.errorOf("NATIVE_ERROR", "add failed")) }
-        )
+        val dto =
+            makePhasedSnapshotDto(
+                loadPhase = "BackgroundFullLoad",
+                complete = true,
+                nodes = listOf(makeNodeDto("n1", "A")),
+            )
+        val bridge =
+            createFakeBridge(
+                phasedSnapshotResults = mutableMapOf("sm1" to dto),
+                addNodeResult = { BridgeResult.Error(ResultEnvelope.errorOf("NATIVE_ERROR", "add failed")) },
+            )
         val cache = StarMapSnapshotCache()
         val repo = StarMapRepository(bridge, cache)
 
@@ -308,10 +531,12 @@ class StarMapBridgeRepositoryIntegrationTest {
     @Test
     fun crudDeleteNode_success_updatesCache() {
         getStarMapGraphCallCount = 0
-        val dto = makePhasedSnapshotDto(
-            loadPhase = "BackgroundFullLoad", complete = true,
-            nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B"))
-        )
+        val dto =
+            makePhasedSnapshotDto(
+                loadPhase = "BackgroundFullLoad",
+                complete = true,
+                nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B")),
+            )
         val bridge = createFakeBridge(phasedSnapshotResults = mutableMapOf("sm1" to dto))
         val cache = StarMapSnapshotCache()
         val repo = StarMapRepository(bridge, cache)
@@ -329,14 +554,17 @@ class StarMapBridgeRepositoryIntegrationTest {
     @Test
     fun crudDeleteNode_failure_doesNotCorruptCache() {
         getStarMapGraphCallCount = 0
-        val dto = makePhasedSnapshotDto(
-            loadPhase = "BackgroundFullLoad", complete = true,
-            nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B"))
-        )
-        val bridge = createFakeBridge(
-            phasedSnapshotResults = mutableMapOf("sm1" to dto),
-            deleteNodeResult = { BridgeResult.Error(ResultEnvelope.errorOf("NATIVE_ERROR", "delete failed")) }
-        )
+        val dto =
+            makePhasedSnapshotDto(
+                loadPhase = "BackgroundFullLoad",
+                complete = true,
+                nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B")),
+            )
+        val bridge =
+            createFakeBridge(
+                phasedSnapshotResults = mutableMapOf("sm1" to dto),
+                deleteNodeResult = { BridgeResult.Error(ResultEnvelope.errorOf("NATIVE_ERROR", "delete failed")) },
+            )
         val cache = StarMapSnapshotCache()
         val repo = StarMapRepository(bridge, cache)
 
@@ -352,15 +580,18 @@ class StarMapBridgeRepositoryIntegrationTest {
     @Test
     fun crudUpdateNode_success_updatesCache() {
         getStarMapGraphCallCount = 0
-        val dto = makePhasedSnapshotDto(
-            loadPhase = "BackgroundFullLoad", complete = true,
-            nodes = listOf(makeNodeDto("n1", "Original"))
-        )
+        val dto =
+            makePhasedSnapshotDto(
+                loadPhase = "BackgroundFullLoad",
+                complete = true,
+                nodes = listOf(makeNodeDto("n1", "Original")),
+            )
         val updatedDto = makeNodeDto("n1", "Updated")
-        val bridge = createFakeBridge(
-            phasedSnapshotResults = mutableMapOf("sm1" to dto),
-            updateNodeResult = { BridgeResult.Success(updatedDto) }
-        )
+        val bridge =
+            createFakeBridge(
+                phasedSnapshotResults = mutableMapOf("sm1" to dto),
+                updateNodeResult = { BridgeResult.Success(updatedDto) },
+            )
         val cache = StarMapSnapshotCache()
         val repo = StarMapRepository(bridge, cache)
 
@@ -376,18 +607,28 @@ class StarMapBridgeRepositoryIntegrationTest {
     @Test
     fun layoutCoordinates_preservedThroughRepositoryChain() {
         getStarMapGraphCallCount = 0
-        val dto = makePhasedSnapshotDto(
-            loadPhase = "BackgroundFullLoad", complete = true,
-            nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B")),
-            edges = listOf(makeEdgeDto("e1", "n1", "n2")),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 100f, y = 200f, width = 150f, height = 80f,
-                    radius = 40f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null),
-                StarMapLayoutNodeDto(nodeId = "n2", x = 300f, y = 400f, width = 120f, height = 60f,
-                    radius = 30f, collapsed = true, zIndex = 1, scale = 0.8f, depth = 1f, focusWeight = 0.5f, orbitGroup = "g1")
-            )),
-            viewport = StarMapViewportDto(1.5f, 10f, 20f, 800f, 600f)
-        )
+        val dto =
+            makePhasedSnapshotDto(
+                loadPhase = "BackgroundFullLoad",
+                complete = true,
+                nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B")),
+                edges = listOf(makeEdgeDto("e1", "n1", "n2")),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 100f, y = 200f, width = 150f, height = 80f,
+                                radius = 40f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                            StarMapLayoutNodeDto(
+                                nodeId = "n2", x = 300f, y = 400f, width = 120f, height = 60f,
+                                radius = 30f, collapsed = true, zIndex = 1, scale = 0.8f, depth = 1f, focusWeight = 0.5f, orbitGroup = "g1",
+                            ),
+                        ),
+                    ),
+                viewport = StarMapViewportDto(1.5f, 10f, 20f, 800f, 600f),
+            )
         val bridge = createFakeBridge(phasedSnapshotResults = mutableMapOf("sm1" to dto))
         val cache = StarMapSnapshotCache()
         val repo = StarMapRepository(bridge, cache)
@@ -410,10 +651,14 @@ class StarMapBridgeRepositoryIntegrationTest {
     @Test
     fun revisionAndPhase_preservedThroughRepositoryChain() {
         getStarMapGraphCallCount = 0
-        val dto = makePhasedSnapshotDto(
-            loadPhase = "PrefetchNearbyObjects", packageRevision = 5u, complete = false, sinceRevision = 3u,
-            nodes = listOf(makeNodeDto("n1", "A"))
-        )
+        val dto =
+            makePhasedSnapshotDto(
+                loadPhase = "PrefetchNearbyObjects",
+                packageRevision = 5u,
+                complete = false,
+                sinceRevision = 3u,
+                nodes = listOf(makeNodeDto("n1", "A")),
+            )
         val bridge = createFakeBridge(phasedSnapshotResults = mutableMapOf("sm1" to dto))
         val cache = StarMapSnapshotCache()
         val repo = StarMapRepository(bridge, cache)
@@ -432,39 +677,70 @@ class StarMapBridgeRepositoryIntegrationTest {
     @Test
     fun fullProgressiveLoadingSequence_neverCallsGetStarMapGraph() {
         getStarMapGraphCallCount = 0
-        val dto1 = makePhasedSnapshotDto(
-            loadPhase = "CurrentViewportObjects", packageRevision = 1u,
-            nodes = listOf(makeNodeDto("n1", "InView")),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
-            )),
-            viewport = StarMapViewportDto(1f, 0f, 0f, 800f, 600f)
-        )
-        val dto2 = makePhasedSnapshotDto(
-            loadPhase = "PrefetchNearbyObjects", packageRevision = 2u,
-            nodes = listOf(makeNodeDto("n1", "InView"), makeNodeDto("n2", "Nearby")),
-            edges = listOf(makeEdgeDto("e1", "n1", "n2")),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null),
-                StarMapLayoutNodeDto(nodeId = "n2", x = 200f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
-            ))
-        )
-        val dto3 = makePhasedSnapshotDto(
-            loadPhase = "BackgroundFullLoad", packageRevision = 3u, complete = true,
-            nodes = listOf(makeNodeDto("n1", "InView"), makeNodeDto("n2", "Nearby"), makeNodeDto("n3", "Far")),
-            edges = listOf(makeEdgeDto("e1", "n1", "n2")),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null),
-                StarMapLayoutNodeDto(nodeId = "n2", x = 200f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null),
-                StarMapLayoutNodeDto(nodeId = "n3", x = 350f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
-            ))
-        )
+        val dto1 =
+            makePhasedSnapshotDto(
+                loadPhase = "CurrentViewportObjects",
+                packageRevision = 1u,
+                nodes = listOf(makeNodeDto("n1", "InView")),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                        ),
+                    ),
+                viewport = StarMapViewportDto(1f, 0f, 0f, 800f, 600f),
+            )
+        val dto2 =
+            makePhasedSnapshotDto(
+                loadPhase = "PrefetchNearbyObjects",
+                packageRevision = 2u,
+                nodes = listOf(makeNodeDto("n1", "InView"), makeNodeDto("n2", "Nearby")),
+                edges = listOf(makeEdgeDto("e1", "n1", "n2")),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                            StarMapLayoutNodeDto(
+                                nodeId = "n2", x = 200f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                        ),
+                    ),
+            )
+        val dto3 =
+            makePhasedSnapshotDto(
+                loadPhase = "BackgroundFullLoad",
+                packageRevision = 3u,
+                complete = true,
+                nodes = listOf(makeNodeDto("n1", "InView"), makeNodeDto("n2", "Nearby"), makeNodeDto("n3", "Far")),
+                edges = listOf(makeEdgeDto("e1", "n1", "n2")),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                            StarMapLayoutNodeDto(
+                                nodeId = "n2", x = 200f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                            StarMapLayoutNodeDto(
+                                nodeId = "n3", x = 350f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                        ),
+                    ),
+            )
 
         val bridge = createFakeBridge(phasedSnapshotResults = mutableMapOf("sm1" to dto1))
         val cache = StarMapSnapshotCache()

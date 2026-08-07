@@ -20,7 +20,6 @@ import java.util.concurrent.ConcurrentHashMap
  * 事件不再可能被错误页面取走。
  */
 class TargetDocumentUpdateBus {
-
     private val flows = ConcurrentHashMap<String, MutableStateFlow<TargetDocumentFact?>>()
 
     /** 发布文档事实 — 只更新对应 target 的当前事实，任何 collector 都不会消费掉。 */

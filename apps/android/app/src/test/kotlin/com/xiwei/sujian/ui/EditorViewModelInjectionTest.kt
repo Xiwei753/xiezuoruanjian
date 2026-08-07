@@ -9,7 +9,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.TestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
-import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -21,8 +20,8 @@ import org.junit.rules.TestWatcher
 import org.junit.runner.Description
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
-import org.robolectric.annotation.Config
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.annotation.Config
 
 /**
  * #595 一：EditorViewModel 依赖注入与输入窗口防护契约测试。
@@ -35,7 +34,6 @@ import org.robolectric.RuntimeEnvironment
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class EditorViewModelInjectionTest {
-
     class MainDispatcherRule(
         val dispatcher: TestDispatcher = UnconfinedTestDispatcher(),
     ) : TestWatcher() {
@@ -59,15 +57,16 @@ class EditorViewModelInjectionTest {
     fun factory_injectsContainerRepositories() {
         val app = RuntimeEnvironment.getApplication()
         val bridge = createBridge()
-        val deps = object : com.xiwei.sujian.runtime.SujianAppDependencies {
-            override val appServiceBridge: AppServiceBridge = bridge
-            override val workspaceRepository: WorkspaceRepository = WorkspaceRepository(app, bridge)
-            override val settingsRepository: SettingsRepository = SettingsRepository(app, bridge)
-            override val syncStatusRepository: com.xiwei.sujian.data.SyncStatusRepository =
-                com.xiwei.sujian.data.SyncStatusRepository(settingsRepository)
-            override val syncCoordinator: com.xiwei.sujian.data.SyncCoordinator =
-                com.xiwei.sujian.data.SyncCoordinator(settingsRepository, syncStatusRepository)
-        }
+        val deps =
+            object : com.xiwei.sujian.runtime.SujianAppDependencies {
+                override val appServiceBridge: AppServiceBridge = bridge
+                override val workspaceRepository: WorkspaceRepository = WorkspaceRepository(app, bridge)
+                override val settingsRepository: SettingsRepository = SettingsRepository(app, bridge)
+                override val syncStatusRepository: com.xiwei.sujian.data.SyncStatusRepository =
+                    com.xiwei.sujian.data.SyncStatusRepository(settingsRepository)
+                override val syncCoordinator: com.xiwei.sujian.data.SyncCoordinator =
+                    com.xiwei.sujian.data.SyncCoordinator(settingsRepository, syncStatusRepository)
+            }
         val coordinator = EditorSessionCoordinator(bridge)
 
         val vm = EditorViewModel.Factory(app, deps, coordinator).create(EditorViewModel::class.java)
@@ -85,16 +84,18 @@ class EditorViewModelInjectionTest {
         // 未 initialize 时访问 Repository getter 必须抛错
         // （不允许 fallback 创建第二份容器）。
         // internal getter 在 JVM 字节码中会被 Kotlin 名称修饰（getWorkspaceRepository$module）。
-        val getter = EditorViewModel::class.java.declaredMethods.firstOrNull {
-            it.name.startsWith("getWorkspaceRepository")
-        } ?: throw NoSuchMethodException("getWorkspaceRepository not found")
+        val getter =
+            EditorViewModel::class.java.declaredMethods.firstOrNull {
+                it.name.startsWith("getWorkspaceRepository")
+            } ?: throw NoSuchMethodException("getWorkspaceRepository not found")
         getter.isAccessible = true
-        val threw = try {
-            getter.invoke(vm)
-            false
-        } catch (e: java.lang.reflect.InvocationTargetException) {
-            e.cause is IllegalStateException
-        }
+        val threw =
+            try {
+                getter.invoke(vm)
+                false
+            } catch (e: java.lang.reflect.InvocationTargetException) {
+                e.cause is IllegalStateException
+            }
         assertTrue(
             "#595 一：未注入容器的 EditorViewModel 必须快速失败，不得静默创建第二份 Repository",
             threw,

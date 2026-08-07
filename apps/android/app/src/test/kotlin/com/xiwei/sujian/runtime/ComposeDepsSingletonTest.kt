@@ -18,7 +18,6 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class ComposeDepsSingletonTest {
-
     private fun app(): SujianApp = RuntimeEnvironment.getApplication() as SujianApp
 
     @Test

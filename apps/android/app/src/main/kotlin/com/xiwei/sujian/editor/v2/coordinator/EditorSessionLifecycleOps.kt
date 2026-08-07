@@ -1,6 +1,6 @@
 package com.xiwei.sujian.editor.v2.coordinator
 
-//! # 编辑器会话生命周期操作（从 EditorSessionCoordinator 拆分）
+// ! # 编辑器会话生命周期操作（从 EditorSessionCoordinator 拆分）
 
 import android.util.Log
 
@@ -13,17 +13,18 @@ fun EditorSessionCoordinator.prepareTargetSessionForCommit(
     val isPersistent = record.persistent
     val existingId = record.sessionId
     var newlyCreated = false
-    val sessionId: ULong? = if (existingId != null && existingId != 0UL && validateSession(existingId)) {
-        existingId
-    } else {
-        // 记录中的 ID 无效/缺失：清理失效 ID（Core 侧已不存在）并新建临时 session。
-        if (existingId != null && existingId != 0UL) {
-            closeSession(existingId)
+    val sessionId: ULong? =
+        if (existingId != null && existingId != 0UL && validateSession(existingId)) {
+            existingId
+        } else {
+            // 记录中的 ID 无效/缺失：清理失效 ID（Core 侧已不存在）并新建临时 session。
+            if (existingId != null && existingId != 0UL) {
+                closeSession(existingId)
+            }
+            newlyCreated = true
+            val sel = initialSelection ?: initialText.toByteArray(Charsets.UTF_8).size
+            createSession(targetId, initialText, sel, isPersistent)
         }
-        newlyCreated = true
-        val sel = initialSelection ?: initialText.toByteArray(Charsets.UTF_8).size
-        createSession(targetId, initialText, sel, isPersistent)
-    }
     if (sessionId == null || sessionId == 0UL) return null
     val snapshot = querySnapshotForSession(sessionId)
     if (snapshot == null) {
@@ -40,17 +41,21 @@ fun EditorSessionCoordinator.prepareTargetSessionForCommit(
     )
 }
 
-fun EditorSessionCoordinator.commitPreparedSession(handle: PreparedSessionHandle, windowId: String = "prepared"): Boolean {
+fun EditorSessionCoordinator.commitPreparedSession(
+    handle: PreparedSessionHandle,
+    windowId: String = "prepared",
+): Boolean {
     val record = store.record(handle.targetId) ?: return false
     // #595 一：句柄仍有效 — 新建事务要求记录 sessionId 仍是 prepare 前的值
     // （prepare 不修改 store；previousRecord.sessionId 是事务前值，默认 0UL）；
     // 复用事务要求记录仍指向同一 session。不能要求"记录已存在 handle.sessionId"，
     // 否则新建 session（prepare 不写 store）永远无法提交。
-    val expectedSessionId = if (handle.newlyCreated) {
-        handle.previousRecord?.sessionId ?: 0UL
-    } else {
-        handle.sessionId
-    }
+    val expectedSessionId =
+        if (handle.newlyCreated) {
+            handle.previousRecord?.sessionId ?: 0UL
+        } else {
+            handle.sessionId
+        }
     if (record.sessionId != expectedSessionId) return false
     // 1. 冻结并撤销 A 的输入 lease。
     invalidateInputLease()
@@ -69,18 +74,21 @@ fun EditorSessionCoordinator.commitPreparedSession(handle: PreparedSessionHandle
         // prepare 不修改 store，commit 是唯一写入点，保证 store 与 SessionState 一致。
         val rec = store.record(handle.targetId)
         val doc = rec?.documentState ?: DocumentState()
-        pendingRecord = (rec ?: EditorSessionRecord(
-            targetId = handle.targetId,
-            persistent = handle.previousRecord?.persistent ?: false,
-        )).copy(sessionId = handle.sessionId)
-            .withDocumentState {
-                it.copy(
-                    text = snapshot.text,
-                    revision = snapshot.revision,
-                    selectionAnchorUtf8 = snapshot.selectionAnchorUtf8,
-                    selectionHeadUtf8 = snapshot.selectionHeadUtf8,
+        pendingRecord =
+            (
+                rec ?: EditorSessionRecord(
+                    targetId = handle.targetId,
+                    persistent = handle.previousRecord?.persistent ?: false,
                 )
-            }
+            ).copy(sessionId = handle.sessionId)
+                .withDocumentState {
+                    it.copy(
+                        text = snapshot.text,
+                        revision = snapshot.revision,
+                        selectionAnchorUtf8 = snapshot.selectionAnchorUtf8,
+                        selectionHeadUtf8 = snapshot.selectionHeadUtf8,
+                    )
+                }
         EditorSessionState(
             targetId = handle.targetId,
             sessionId = handle.sessionId,
@@ -100,7 +108,8 @@ fun EditorSessionCoordinator.commitPreparedSession(handle: PreparedSessionHandle
     }
     pendingRecord?.let { store.put(it) }
     com.xiwei.sujian.diagnostics.DiagnosticsEvents.sessionLifecycle(
-        handle.sessionId.toString(), "commit_prepared"
+        handle.sessionId.toString(),
+        "commit_prepared",
     )
     return true
 }
@@ -111,7 +120,8 @@ fun EditorSessionCoordinator.releasePreparedTarget(handle: PreparedSessionHandle
         closeSession(handle.sessionId)
         if (handle.sessionId != 0UL) {
             com.xiwei.sujian.diagnostics.DiagnosticsEvents.sessionLifecycle(
-                handle.sessionId.toString(), "release_prepared_new"
+                handle.sessionId.toString(),
+                "release_prepared_new",
             )
         }
         // 只移除仍指向该 session 的记录 — 若事务期间记录已被其他路径替换，
@@ -127,13 +137,17 @@ fun EditorSessionCoordinator.releasePreparedTarget(handle: PreparedSessionHandle
         }
         if (handle.sessionId != 0UL) {
             com.xiwei.sujian.diagnostics.DiagnosticsEvents.sessionLifecycle(
-                handle.sessionId.toString(), "release_prepared_borrowed"
+                handle.sessionId.toString(),
+                "release_prepared_borrowed",
             )
         }
     }
 }
 
-fun EditorSessionCoordinator.detachWindowBinding(windowId: String, targetId: String) {
+fun EditorSessionCoordinator.detachWindowBinding(
+    windowId: String,
+    targetId: String,
+) {
     val record = store.record(targetId)
     val isPersistent = record?.persistent ?: false
     val sessionId = record?.sessionId
@@ -167,11 +181,16 @@ fun EditorSessionCoordinator.detachWindowBinding(windowId: String, targetId: Str
         }
     }
     com.xiwei.sujian.diagnostics.DiagnosticsEvents.sessionLifecycle(
-        sessionId.toString(), "window_detached"
+        sessionId.toString(),
+        "window_detached",
     )
 }
 
-fun EditorSessionCoordinator.completeWindowAttach(windowId: String, targetId: String, sessionId: ULong) {
+fun EditorSessionCoordinator.completeWindowAttach(
+    windowId: String,
+    targetId: String,
+    sessionId: ULong,
+) {
     val current = _sessionStateFlow.value.bindingState
     // 幂等重入：已经是同一 target/session 的 Attached（如 beginEdit 重复调用）保持现状。
     if (current is WindowBindingState.Attached &&
@@ -180,17 +199,26 @@ fun EditorSessionCoordinator.completeWindowAttach(windowId: String, targetId: St
         return
     }
     if (current !is WindowBindingState.Attaching || current.targetId != targetId) {
-        Log.w(EditorSessionCoordinator.TAG, "completeWindowAttach($targetId): current state $current is not Attaching for target — ignoring (Attached requires a bound View)")
+        Log.w(
+            EditorSessionCoordinator.TAG,
+            "completeWindowAttach($targetId): current state $current is not Attaching for target — " +
+                "ignoring (Attached requires a bound View)",
+        )
         return
     }
     val attached = WindowBindingState.Attached(windowId, targetId, sessionId)
-    updateSessionState { it.copy(
-        bindingState = attached,
-        editingState = EditingState.EDITING,
-    ) }
+    updateSessionState {
+        it.copy(
+            bindingState = attached,
+            editingState = EditingState.EDITING,
+        )
+    }
 }
 
-fun EditorSessionCoordinator.closeTarget(targetId: String, reason: SessionCloseReason) {
+fun EditorSessionCoordinator.closeTarget(
+    targetId: String,
+    reason: SessionCloseReason,
+) {
     val wasActive = activeTargetId == targetId
     if (wasActive) {
         commitActiveSession(null)
@@ -200,7 +228,8 @@ fun EditorSessionCoordinator.closeTarget(targetId: String, reason: SessionCloseR
     if (sessionId != null && sessionId != 0UL) {
         closeSession(sessionId)
         com.xiwei.sujian.diagnostics.DiagnosticsEvents.sessionLifecycle(
-            sessionId.toString(), "close_target:${reason.name.lowercase()}"
+            sessionId.toString(),
+            "close_target:${reason.name.lowercase()}",
         )
     }
     store.remove(targetId)
@@ -270,22 +299,28 @@ fun EditorSessionCoordinator.prepareSessionForEdit(
     val textForSession = initialText
     val sel = initialSelection ?: textForSession.toByteArray(Charsets.UTF_8).size
     val existingId = store.record(targetId)?.sessionId
-    val sessionId = if (existingId != null && existingId != 0UL && validateSession(existingId)) {
-        existingId
-    } else {
-        if (existingId != null && existingId != 0UL) {
-            closeSession(existingId)
+    val sessionId =
+        if (existingId != null && existingId != 0UL && validateSession(existingId)) {
+            existingId
+        } else {
+            if (existingId != null && existingId != 0UL) {
+                closeSession(existingId)
+            }
+            createSession(targetId, textForSession, sel, isPersistent)
         }
-        createSession(targetId, textForSession, sel, isPersistent)
-    }
 
     if (sessionId == null || sessionId == 0UL) {
-        Log.e(EditorSessionCoordinator.TAG, "prepareSessionForEdit($targetId): session creation returned invalid id=$sessionId, aborting")
+        Log.e(
+            EditorSessionCoordinator.TAG,
+            "prepareSessionForEdit($targetId): session creation returned invalid id=$sessionId, aborting",
+        )
         store.remove(targetId)
-        updateSessionState { it.copy(
-            editingState = EditingState.IDLE,
-            bindingState = WindowBindingState.Idle,
-        ) }
+        updateSessionState {
+            it.copy(
+                editingState = EditingState.IDLE,
+                bindingState = WindowBindingState.Idle,
+            )
+        }
         return null
     }
 
@@ -298,21 +333,22 @@ fun EditorSessionCoordinator.prepareSessionForEdit(
     store.update(targetId) { r ->
         r.copy(
             sessionId = sessionId,
-            documentState = if (snapshot != null) {
-                r.documentState.copy(
-                    text = snapshot.text,
-                    revision = snapshot.revision,
-                    selectionAnchorUtf8 = snapshot.selectionAnchorUtf8,
-                    selectionHeadUtf8 = snapshot.selectionHeadUtf8,
-                )
-            } else {
-                r.documentState.copy(
-                    text = textForSession,
-                    revision = 0L,
-                    selectionAnchorUtf8 = sel,
-                    selectionHeadUtf8 = sel,
-                )
-            },
+            documentState =
+                if (snapshot != null) {
+                    r.documentState.copy(
+                        text = snapshot.text,
+                        revision = snapshot.revision,
+                        selectionAnchorUtf8 = snapshot.selectionAnchorUtf8,
+                        selectionHeadUtf8 = snapshot.selectionHeadUtf8,
+                    )
+                } else {
+                    r.documentState.copy(
+                        text = textForSession,
+                        revision = 0L,
+                        selectionAnchorUtf8 = sel,
+                        selectionHeadUtf8 = sel,
+                    )
+                },
         )
     }
     updateSessionState { _ ->
@@ -344,13 +380,16 @@ fun EditorSessionCoordinator.commitActiveSession(finalText: String?): Boolean {
     val sessionId = record.sessionId
     if (sessionId == 0UL) return false
     val isPersistent = record.persistent
-    val windowBound = windowBindingState is WindowBindingState.Attached ||
-        windowBindingState is WindowBindingState.Attaching
+    val windowBound =
+        windowBindingState is WindowBindingState.Attached ||
+            windowBindingState is WindowBindingState.Attaching
 
-    updateSessionState { it.copy(
-        editingState = EditingState.COMMITTING,
-        bindingState = if (windowBound) WindowBindingState.Committing(targetId, sessionId) else it.bindingState,
-    ) }
+    updateSessionState {
+        it.copy(
+            editingState = EditingState.COMMITTING,
+            bindingState = if (windowBound) WindowBindingState.Committing(targetId, sessionId) else it.bindingState,
+        )
+    }
     // #595 四：正文在 store 记录/SessionState 中（applyLocalEdit 已更新），
     // 不再维护第二份正文缓存。
     if (!isPersistent || !windowBound) {
@@ -359,7 +398,8 @@ fun EditorSessionCoordinator.commitActiveSession(finalText: String?): Boolean {
     }
     // #595 三/四：提交清除后 SessionState 必须回到 Idle。
     updateSessionState { EditorSessionState() }
-    _lastCommittedTextFlow.value = if (record.profile.secretPolicy == SecretPolicy.MASK_AND_CLEAR_ON_COMMIT) null else finalText
+    _lastCommittedTextFlow.value =
+        if (record.profile.secretPolicy == SecretPolicy.MASK_AND_CLEAR_ON_COMMIT) null else finalText
     return true
 }
 
@@ -368,13 +408,16 @@ fun EditorSessionCoordinator.cancelActiveSession(): Boolean {
     val record = store.record(targetId) ?: return false
     val sessionId = record.sessionId
     if (sessionId == 0UL) return false
-    val windowBound = windowBindingState is WindowBindingState.Attached ||
-        windowBindingState is WindowBindingState.Attaching
+    val windowBound =
+        windowBindingState is WindowBindingState.Attached ||
+            windowBindingState is WindowBindingState.Attaching
 
-    updateSessionState { it.copy(
-        editingState = EditingState.CANCELLING,
-        bindingState = if (windowBound) WindowBindingState.Cancelling(targetId, sessionId) else it.bindingState,
-    ) }
+    updateSessionState {
+        it.copy(
+            editingState = EditingState.CANCELLING,
+            bindingState = if (windowBound) WindowBindingState.Cancelling(targetId, sessionId) else it.bindingState,
+        )
+    }
     closeSession(sessionId)
     store.remove(targetId)
     // #595 三/四：取消清除后 SessionState 必须回到 Idle。
@@ -382,7 +425,12 @@ fun EditorSessionCoordinator.cancelActiveSession(): Boolean {
     return true
 }
 
-fun EditorSessionCoordinator.resetPersistentSession(targetId: String, text: String, cursorUtf8: Int, source: SessionResetSource = SessionResetSource.EXTERNAL): ExternalResetResult {
+fun EditorSessionCoordinator.resetPersistentSession(
+    targetId: String,
+    text: String,
+    cursorUtf8: Int,
+    source: SessionResetSource = SessionResetSource.EXTERNAL,
+): ExternalResetResult {
     // #595 一/五：返回可提交事务结果 — reset 未执行或 Core 失败时返回 Failed，
     // 调用方不得推进 SessionStore/ViewModel 状态（旧实现返回 Unit，WritingPane
     // 无条件推进导致三份状态分裂）。
@@ -398,14 +446,20 @@ fun EditorSessionCoordinator.resetPersistentSession(targetId: String, text: Stri
     if (sessionId == 0UL) {
         val newSessionId = createSession(targetId, text, cursorUtf8, true)
         if (newSessionId == null || newSessionId == 0UL) {
-            Log.e(EditorSessionCoordinator.TAG, "resetPersistentSession($targetId): failed to create session for empty/missing persistent session")
+            Log.e(
+                EditorSessionCoordinator.TAG,
+                "resetPersistentSession($targetId): failed to create session for empty/missing persistent session",
+            )
             return ExternalResetResult.Failed
         }
         return commitResetSnapshot(targetId, newSessionId)
     }
 
     if (!validateSession(sessionId)) {
-        Log.w(EditorSessionCoordinator.TAG, "resetPersistentSession($targetId): session $sessionId no longer valid, deleting and recreating")
+        Log.w(
+            EditorSessionCoordinator.TAG,
+            "resetPersistentSession($targetId): session $sessionId no longer valid, deleting and recreating",
+        )
         store.update(targetId) { it.copy(sessionId = 0UL) }
         closeSession(sessionId)
         return resetPersistentSession(targetId, text, cursorUtf8, source)
@@ -417,7 +471,10 @@ fun EditorSessionCoordinator.resetPersistentSession(targetId: String, text: Stri
     // 旧 session/store/view 完全不动；成功则原子提交 candidate record 并关闭旧 session。
     val candidateSessionId = createSession(targetId, text, cursorUtf8, true)
     if (candidateSessionId == null || candidateSessionId == 0UL) {
-        Log.e(EditorSessionCoordinator.TAG, "resetPersistentSession($targetId): failed to create candidate session — old session preserved")
+        Log.e(
+            EditorSessionCoordinator.TAG,
+            "resetPersistentSession($targetId): failed to create candidate session — old session preserved",
+        )
         return ExternalResetResult.Failed
     }
     return commitResetSnapshot(targetId, candidateSessionId, oldSessionIdToClose = sessionId)
@@ -430,22 +487,28 @@ fun EditorSessionCoordinator.commitResetSnapshot(
 ): ExternalResetResult {
     val snapshot = querySnapshotForSession(sessionId)
     if (snapshot == null) {
-        Log.e(EditorSessionCoordinator.TAG, "commitResetSnapshot($targetId): snapshot read failed — closing candidate $sessionId, old session preserved")
+        Log.e(
+            EditorSessionCoordinator.TAG,
+            "commitResetSnapshot($targetId): snapshot read failed — closing candidate $sessionId, " +
+                "old session preserved",
+        )
         closeSession(sessionId)
         return ExternalResetResult.Failed
     }
     var pendingRecord: EditorSessionRecord? = null
     updateSessionState { previous ->
         val rec = store.record(targetId)
-        pendingRecord = (rec ?: EditorSessionRecord(targetId = targetId, persistent = true)).copy(
-            sessionId = sessionId,
-            documentState = (rec?.documentState ?: DocumentState()).copy(
-                text = snapshot.text,
-                revision = snapshot.revision,
-                selectionAnchorUtf8 = snapshot.selectionAnchorUtf8,
-                selectionHeadUtf8 = snapshot.selectionHeadUtf8,
-            ),
-        )
+        pendingRecord =
+            (rec ?: EditorSessionRecord(targetId = targetId, persistent = true)).copy(
+                sessionId = sessionId,
+                documentState =
+                    (rec?.documentState ?: DocumentState()).copy(
+                        text = snapshot.text,
+                        revision = snapshot.revision,
+                        selectionAnchorUtf8 = snapshot.selectionAnchorUtf8,
+                        selectionHeadUtf8 = snapshot.selectionHeadUtf8,
+                    ),
+            )
         if (previous.targetId != targetId) return@updateSessionState previous
         previous.copy(
             sessionId = sessionId,
@@ -489,4 +552,3 @@ fun EditorSessionCoordinator.releaseHost() {
     store.clear()
     updateSessionState { EditorSessionState(editingState = EditingState.RELEASED) }
 }
-

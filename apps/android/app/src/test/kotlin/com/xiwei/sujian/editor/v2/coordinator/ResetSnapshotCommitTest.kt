@@ -2,8 +2,6 @@ package com.xiwei.sujian.editor.v2.coordinator
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -34,11 +32,12 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class ResetSnapshotCommitTest {
-
     private fun createCoordinator(): EditorSessionCoordinator {
-        return EditorSessionCoordinator(com.xiwei.sujian.data.AppServiceBridge(
-            com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595_reset_commit")
-        ))
+        return EditorSessionCoordinator(
+            com.xiwei.sujian.data.AppServiceBridge(
+                com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595_reset_commit"),
+            ),
+        )
     }
 
     private fun lease(targetId: String): EditorInputLease = EditorInputLease(targetId, 0UL, 0L)
@@ -60,7 +59,7 @@ class ResetSnapshotCommitTest {
                 snapshot = TargetSnapshot(text, cursor, revision, 0, cursor),
                 newlyCreated = true,
                 previousRecord = null,
-            )
+            ),
         )
     }
 
@@ -141,7 +140,7 @@ class ResetSnapshotCommitTest {
                 revision = 2L,
                 transactionId = 11L,
                 lease = inputLease,
-            )
+            ),
         )
         assertEquals(2L, coordinator.sessionState.revision)
 
@@ -273,18 +272,20 @@ class ResetSnapshotCommitTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = lease("a"))
+            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = lease("a")),
         )
         val staleLease = lease("a")
 
         coordinator.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
-        assertTrue(coordinator.commitPreparedSession(
-            PreparedSessionHandle("b", 2UL, TargetSnapshot("textB", 5, 2L, 0, 5), true, null)
-        ))
+        assertTrue(
+            coordinator.commitPreparedSession(
+                PreparedSessionHandle("b", 2UL, TargetSnapshot("textB", 5, 2L, 0, 5), true, null),
+            ),
+        )
 
         assertFalse(coordinator.isInputLeaseCurrent(staleLease, "a"))
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "late input", 9L, 9L, lease = staleLease)
+            EditorDocumentUpdate.LocalInput("a", "late input", 9L, 9L, lease = staleLease),
         )
         assertEquals("textB", coordinator.sessionState.text)
         assertEquals("b", coordinator.sessionState.targetId)

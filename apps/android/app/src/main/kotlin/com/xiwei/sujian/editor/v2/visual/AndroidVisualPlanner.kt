@@ -1,14 +1,13 @@
 package com.xiwei.sujian.editor.v2.visual
 
-import com.xiwei.sujian.editor.v2.mirror.VisualIntent
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutRevision
-import com.xiwei.sujian.editor.v2.layout.LineClusterSnapshot
 import com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot
+import com.xiwei.sujian.editor.v2.mirror.VisualIntent
 import com.xiwei.sujian.editor.v2.visual.planner.AffectedLayoutPlanner
+import com.xiwei.sujian.editor.v2.visual.planner.BlockShiftPlanner
 import com.xiwei.sujian.editor.v2.visual.planner.InsertDeletePlanner
 import com.xiwei.sujian.editor.v2.visual.planner.MoveCrossfadePlanner
 import com.xiwei.sujian.editor.v2.visual.planner.RebasePlanner
-import com.xiwei.sujian.editor.v2.visual.planner.BlockShiftPlanner
 import com.xiwei.sujian.editor.v2.visual.planner.SnapshotPlanner
 import uniffi.writer_core.AnimationModeDto
 
@@ -31,24 +30,28 @@ class AndroidVisualPlanner(
     internal val moveCrossfadePlanner: MoveCrossfadePlanner = MoveCrossfadePlanner(),
     internal val rebasePlanner: RebasePlanner = RebasePlanner(),
     internal val blockShiftPlanner: BlockShiftPlanner = BlockShiftPlanner(),
-    internal val snapshotPlanner: SnapshotPlanner = SnapshotPlanner()
+    internal val snapshotPlanner: SnapshotPlanner = SnapshotPlanner(),
 ) {
-
     fun computeAffectedLineIndices(
         visualIntent: VisualIntent,
         revision: AndroidLayoutRevision?,
-        useNewRanges: Boolean = false
+        useNewRanges: Boolean = false,
     ): Set<Int> = affectedLayoutPlanner.computeAffectedLineIndices(visualIntent, revision, useNewRanges)
 
     fun computeAffectedLineIndicesFromBothRevisions(
         visualIntent: VisualIntent,
         oldRevision: AndroidLayoutRevision?,
-        newRevision: AndroidLayoutRevision?
-    ): AffectedLinesResult = affectedLayoutPlanner.computeAffectedLineIndicesFromBothRevisions(visualIntent, oldRevision, newRevision)
+        newRevision: AndroidLayoutRevision?,
+    ): AffectedLinesResult =
+        affectedLayoutPlanner.computeAffectedLineIndicesFromBothRevisions(
+            visualIntent,
+            oldRevision,
+            newRevision,
+        )
 
     fun computeStructurallyAffectedOldLineIndices(
         visualIntent: VisualIntent,
-        oldRevision: AndroidLayoutRevision
+        oldRevision: AndroidLayoutRevision,
     ): Set<Int> = affectedLayoutPlanner.computeStructurallyAffectedOldLineIndices(visualIntent, oldRevision)
 
     /**
@@ -79,7 +82,7 @@ class AndroidVisualPlanner(
         rebaseSnapshot: VisualFrameSnapshot? = null,
         transactionKey: Long,
         ownedSnapshotIds: Set<Long>,
-        snapshotLookup: Map<Long, AndroidLineSnapshot> = emptyMap()
+        snapshotLookup: Map<Long, AndroidLineSnapshot> = emptyMap(),
     ): PreparedVisualTransaction {
         val durationMs = visualIntent.durationMs
 
@@ -102,9 +105,22 @@ class AndroidVisualPlanner(
                 AnimationMode.GlyphAnimation, AnimationMode.ClusterAnimation -> {
                     insertDeletePlanner.planClusterLevelAnimation(
                         visualIntent, oldRev, newRev,
-                        affectedOldLineIndices, affectedNewLineIndices, animatedSlices, staticPatches, preCapturedOldSnapshots, preCapturedNewSnapshots,
-                        { rev, lineIdx, isNew -> snapshotPlanner.createSnapshotFromRevision(rev, lineIdx, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = isNew) },
-                        affectedLayoutPlanner.buildOffsetMapper(visualIntent, oldRev, newRev)
+                        affectedOldLineIndices, affectedNewLineIndices, animatedSlices, staticPatches,
+                        preCapturedOldSnapshots, preCapturedNewSnapshots,
+                        {
+                                rev,
+                                lineIdx,
+                                isNew,
+                            ->
+                            snapshotPlanner.createSnapshotFromRevision(
+                                rev,
+                                lineIdx,
+                                preCapturedOldSnapshots,
+                                preCapturedNewSnapshots,
+                                isNewRevision = isNew,
+                            )
+                        },
+                        affectedLayoutPlanner.buildOffsetMapper(visualIntent, oldRev, newRev),
                     )
                     moveCrossfadePlanner.addMoveSlicesForShiftedClustersCrossLine(
                         preCapturedOldSnapshots, preCapturedNewSnapshots,
@@ -112,15 +128,28 @@ class AndroidVisualPlanner(
                         snapshotPlanner.collectExcludedNewByteRanges(animatedSlices),
                         snapshotPlanner.collectExcludedOldByteRanges(animatedSlices),
                         animatedSlices,
-                        affectedLayoutPlanner.buildOffsetMapper(visualIntent, oldRev, newRev)
+                        affectedLayoutPlanner.buildOffsetMapper(visualIntent, oldRev, newRev),
                     )
                 }
                 AnimationMode.RunAnimation -> {
                     insertDeletePlanner.planRunAnimation(
                         visualIntent, oldRev, newRev,
-                        affectedOldLineIndices, affectedNewLineIndices, animatedSlices, staticPatches, preCapturedOldSnapshots, preCapturedNewSnapshots,
-                        { rev, lineIdx, isNew -> snapshotPlanner.createSnapshotFromRevision(rev, lineIdx, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = isNew) },
-                        affectedLayoutPlanner.buildOffsetMapper(visualIntent, oldRev, newRev)
+                        affectedOldLineIndices, affectedNewLineIndices, animatedSlices, staticPatches,
+                        preCapturedOldSnapshots, preCapturedNewSnapshots,
+                        {
+                                rev,
+                                lineIdx,
+                                isNew,
+                            ->
+                            snapshotPlanner.createSnapshotFromRevision(
+                                rev,
+                                lineIdx,
+                                preCapturedOldSnapshots,
+                                preCapturedNewSnapshots,
+                                isNewRevision = isNew,
+                            )
+                        },
+                        affectedLayoutPlanner.buildOffsetMapper(visualIntent, oldRev, newRev),
                     )
                     moveCrossfadePlanner.addMoveSlicesForShiftedClustersCrossLine(
                         preCapturedOldSnapshots, preCapturedNewSnapshots,
@@ -128,23 +157,49 @@ class AndroidVisualPlanner(
                         snapshotPlanner.collectExcludedNewByteRanges(animatedSlices),
                         snapshotPlanner.collectExcludedOldByteRanges(animatedSlices),
                         animatedSlices,
-                        affectedLayoutPlanner.buildOffsetMapper(visualIntent, oldRev, newRev)
+                        affectedLayoutPlanner.buildOffsetMapper(visualIntent, oldRev, newRev),
                     )
                 }
                 AnimationMode.LineReflowAnimation -> {
                     moveCrossfadePlanner.planLineReflowAnimation(
                         visualIntent, oldRev, newRev,
-                        affectedOldLineIndices, affectedNewLineIndices, animatedSlices, staticPatches, preCapturedOldSnapshots, preCapturedNewSnapshots,
-                        { rev, lineIdx, isNew -> snapshotPlanner.createSnapshotFromRevision(rev, lineIdx, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = isNew) },
-                        affectedLayoutPlanner.buildOffsetMapper(visualIntent, oldRev, newRev)
+                        affectedOldLineIndices, affectedNewLineIndices, animatedSlices, staticPatches,
+                        preCapturedOldSnapshots, preCapturedNewSnapshots,
+                        {
+                                rev,
+                                lineIdx,
+                                isNew,
+                            ->
+                            snapshotPlanner.createSnapshotFromRevision(
+                                rev,
+                                lineIdx,
+                                preCapturedOldSnapshots,
+                                preCapturedNewSnapshots,
+                                isNewRevision = isNew,
+                            )
+                        },
+                        affectedLayoutPlanner.buildOffsetMapper(visualIntent, oldRev, newRev),
                     )
                 }
                 AnimationMode.SnapshotAnimation -> {
                     moveCrossfadePlanner.planCrossfadeAnimation(
                         visualIntent, oldRev, newRev,
-                        affectedOldLineIndices, affectedNewLineIndices, animatedSlices, staticPatches, preCapturedOldSnapshots, preCapturedNewSnapshots,
-                        { rev, lineIdx, isNew -> snapshotPlanner.createSnapshotFromRevision(rev, lineIdx, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = isNew) },
-                        affectedLayoutPlanner.buildOffsetMapper(visualIntent, oldRev, newRev)
+                        affectedOldLineIndices, affectedNewLineIndices, animatedSlices, staticPatches,
+                        preCapturedOldSnapshots, preCapturedNewSnapshots,
+                        {
+                                rev,
+                                lineIdx,
+                                isNew,
+                            ->
+                            snapshotPlanner.createSnapshotFromRevision(
+                                rev,
+                                lineIdx,
+                                preCapturedOldSnapshots,
+                                preCapturedNewSnapshots,
+                                isNewRevision = isNew,
+                            )
+                        },
+                        affectedLayoutPlanner.buildOffsetMapper(visualIntent, oldRev, newRev),
                     )
                 }
                 AnimationMode.SystemSuppressed -> {
@@ -172,46 +227,61 @@ class AndroidVisualPlanner(
                 fromHeight = newRev.cursorHeight
             }
 
-            cursorTransition = PreparedVisualTransaction.CursorTransition(
-                fromX = fromX,
-                fromY = fromY,
-                fromHeight = fromHeight,
-                toX = newRev.cursorX,
-                toY = newRev.cursorY,
-                toHeight = newRev.cursorHeight,
-                shouldAnimate = true
-            )
+            cursorTransition =
+                PreparedVisualTransaction.CursorTransition(
+                    fromX = fromX,
+                    fromY = fromY,
+                    fromHeight = fromHeight,
+                    toX = newRev.cursorX,
+                    toY = newRev.cursorY,
+                    toHeight = newRev.cursorHeight,
+                    shouldAnimate = true,
+                )
         } else if (newRev != null) {
-            cursorTransition = PreparedVisualTransaction.CursorTransition(
-                fromX = newRev.cursorX,
-                fromY = newRev.cursorY,
-                fromHeight = newRev.cursorHeight,
-                toX = newRev.cursorX,
-                toY = newRev.cursorY,
-                toHeight = newRev.cursorHeight,
-                shouldAnimate = false
-            )
+            cursorTransition =
+                PreparedVisualTransaction.CursorTransition(
+                    fromX = newRev.cursorX,
+                    fromY = newRev.cursorY,
+                    fromHeight = newRev.cursorHeight,
+                    toX = newRev.cursorX,
+                    toY = newRev.cursorY,
+                    toHeight = newRev.cursorHeight,
+                    shouldAnimate = false,
+                )
         }
 
-        val finalSlices = if (rebaseSnapshot != null && rebaseSnapshot.sliceVisualStates.isNotEmpty()) {
-            rebasePlanner.applyRebaseToSlices(animatedSlices, rebaseSnapshot, snapshotLookup)
-        } else {
-            animatedSlices
-        }
+        val finalSlices =
+            if (rebaseSnapshot != null && rebaseSnapshot.sliceVisualStates.isNotEmpty()) {
+                rebasePlanner.applyRebaseToSlices(animatedSlices, rebaseSnapshot, snapshotLookup)
+            } else {
+                animatedSlices
+            }
 
-        val offsetMapperForRebase = if (oldRev != null && newRev != null) {
-            affectedLayoutPlanner.buildOffsetMapper(visualIntent, oldRev, newRev)
-        } else null
+        val offsetMapperForRebase =
+            if (oldRev != null && newRev != null) {
+                affectedLayoutPlanner.buildOffsetMapper(visualIntent, oldRev, newRev)
+            } else {
+                null
+            }
 
-        val reverseMapperForRebase = if (oldRev != null && newRev != null) {
-            affectedLayoutPlanner.buildReverseOffsetMapper(visualIntent, oldRev, newRev)
-        } else null
+        val reverseMapperForRebase =
+            if (oldRev != null && newRev != null) {
+                affectedLayoutPlanner.buildReverseOffsetMapper(visualIntent, oldRev, newRev)
+            } else {
+                null
+            }
 
-        val finalBlockShifts = if (rebaseSnapshot != null && rebaseSnapshot.blockShiftStates.isNotEmpty()) {
-            blockShiftPlanner.applyRebaseToBlockShifts(blockShifts, rebaseSnapshot, offsetMapperForRebase, reverseMapperForRebase)
-        } else {
-            blockShifts
-        }
+        val finalBlockShifts =
+            if (rebaseSnapshot != null && rebaseSnapshot.blockShiftStates.isNotEmpty()) {
+                blockShiftPlanner.applyRebaseToBlockShifts(
+                    blockShifts,
+                    rebaseSnapshot,
+                    offsetMapperForRebase,
+                    reverseMapperForRebase,
+                )
+            } else {
+                blockShifts
+            }
 
         val referencedSnapshotIds = mutableSetOf<Long>()
         for (slice in finalSlices) {
@@ -224,23 +294,22 @@ class AndroidVisualPlanner(
             referencedSnapshotIds.add(patch.newSnapshotId)
         }
 
-         return PreparedVisualTransaction(
-             transactionId = transactionKey,
-             oldRevision = oldRev,
-             newRevision = newRev,
-             staticPatches = staticPatches,
-             animatedSlices = finalSlices,
-             ownedSnapshotIds = ownedSnapshotIds,
-             referencedSnapshotIds = referencedSnapshotIds,
-              selectionDecoration = newRev?.let { snapshotPlanner.buildSelectionDecoration(it) },
-              preeditDecoration = newRev?.let { snapshotPlanner.buildPreeditDecoration(it) },
-             cursorTransition = cursorTransition,
-             durationMs = durationMs,
-             blockShifts = finalBlockShifts,
-             operationKind = visualIntent.operationKind
-         )
+        return PreparedVisualTransaction(
+            transactionId = transactionKey,
+            oldRevision = oldRev,
+            newRevision = newRev,
+            staticPatches = staticPatches,
+            animatedSlices = finalSlices,
+            ownedSnapshotIds = ownedSnapshotIds,
+            referencedSnapshotIds = referencedSnapshotIds,
+            selectionDecoration = newRev?.let { snapshotPlanner.buildSelectionDecoration(it) },
+            preeditDecoration = newRev?.let { snapshotPlanner.buildPreeditDecoration(it) },
+            cursorTransition = cursorTransition,
+            durationMs = durationMs,
+            blockShifts = finalBlockShifts,
+            operationKind = visualIntent.operationKind,
+        )
     }
-
 
     private fun parseAnimationMode(mode: AnimationModeDto): AnimationMode {
         return when (mode) {
@@ -255,6 +324,11 @@ class AndroidVisualPlanner(
     }
 
     private enum class AnimationMode {
-        GlyphAnimation, ClusterAnimation, RunAnimation, LineReflowAnimation, SnapshotAnimation, SystemSuppressed
+        GlyphAnimation,
+        ClusterAnimation,
+        RunAnimation,
+        LineReflowAnimation,
+        SnapshotAnimation,
+        SystemSuppressed,
     }
 }

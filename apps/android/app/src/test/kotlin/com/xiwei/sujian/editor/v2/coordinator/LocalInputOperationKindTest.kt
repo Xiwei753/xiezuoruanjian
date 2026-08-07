@@ -15,8 +15,7 @@ import uniffi.writer_core.EditorOperationKindDto
  * - 会话层收到 LocalInput 后，WritingPane 的本地/外部判断（origin + text）不受
  *   operationKind 影响（operationKind 只记录语义，不参与 reset 判定）。
  */
-class LocalInputOperationKindContractTest {
-
+class LocalInputOperationKindTest {
     @Test
     fun dtoMappingCoversEveryDtoKind() {
         val dtoKinds = EditorOperationKindDto.entries.toList()
@@ -75,13 +74,14 @@ class LocalInputOperationKindContractTest {
 
     @Test
     fun localInputCarriesOperationKind() {
-        val update = EditorDocumentUpdate.LocalInput(
-            targetId = "t1",
-            text = "typed",
-            revision = 7L,
-            transactionId = 42L,
-            operationKind = EditorOperationKind.INSERT,
-        )
+        val update =
+            EditorDocumentUpdate.LocalInput(
+                targetId = "t1",
+                text = "typed",
+                revision = 7L,
+                transactionId = 42L,
+                operationKind = EditorOperationKind.INSERT,
+            )
         assertEquals("typed", update.text)
         assertEquals(7L, update.revision)
         assertEquals(42L, update.transactionId)
@@ -95,15 +95,17 @@ class LocalInputOperationKindContractTest {
     fun operationKindDoesNotAffectLocalResetJudgement() {
         // WritingPane 的本地/外部判断只用 origin + text；operationKind 是语义记录，
         // 不能改变 reset 判定结果。
-        val sessionState = EditorSessionState(
-            targetId = "t1",
-            text = "本地输入结果",
-            revision = 9L,
-            origin = EditorSessionOrigin.LOCAL_INPUT,
-        )
+        val sessionState =
+            EditorSessionState(
+                targetId = "t1",
+                text = "本地输入结果",
+                revision = 9L,
+                origin = EditorSessionOrigin.LOCAL_INPUT,
+            )
         val uiContent = "本地输入结果"
-        val isLocal = sessionState.origin == EditorSessionOrigin.LOCAL_INPUT &&
-            sessionState.text == uiContent
+        val isLocal =
+            sessionState.origin == EditorSessionOrigin.LOCAL_INPUT &&
+                sessionState.text == uiContent
         assertTrue("operationKind 不得参与 reset 判定，本地回显必须仍判为本地", isLocal)
     }
 }

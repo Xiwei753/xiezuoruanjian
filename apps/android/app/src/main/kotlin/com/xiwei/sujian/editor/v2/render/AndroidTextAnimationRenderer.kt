@@ -6,14 +6,15 @@ import com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction
 import com.xiwei.sujian.editor.v2.visual.SliceRole
 
 class AndroidTextAnimationRenderer {
-    private val slicePaint = Paint().apply {
-        isAntiAlias = true
-    }
+    private val slicePaint =
+        Paint().apply {
+            isAntiAlias = true
+        }
 
     fun drawAnimatedSlices(
         canvas: Canvas,
         transaction: PreparedVisualTransaction,
-        progress: Float
+        progress: Float,
     ) {
         for (slice in transaction.animatedSlices) {
             val snapshot = slice.snapshot ?: continue
@@ -62,7 +63,7 @@ class AndroidTextAnimationRenderer {
         canvas: Canvas,
         transaction: PreparedVisualTransaction,
         progress: Float,
-        cursorPaint: Paint
+        cursorPaint: Paint,
     ) {
         val ct = transaction.cursorTransition ?: return
         drawAnimatedCursor(canvas, ct, progress, cursorPaint)
@@ -76,7 +77,7 @@ class AndroidTextAnimationRenderer {
         canvas: Canvas,
         transition: PreparedVisualTransaction.CursorTransition,
         progress: Float,
-        cursorPaint: Paint
+        cursorPaint: Paint,
     ) {
         if (!transition.shouldAnimate) return
 

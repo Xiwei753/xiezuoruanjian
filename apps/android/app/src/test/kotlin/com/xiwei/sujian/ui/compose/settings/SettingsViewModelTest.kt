@@ -12,7 +12,6 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class SettingsViewModelTest {
-
     private fun createVm(): SettingsViewModel {
         val context = org.robolectric.RuntimeEnvironment.getApplication()
         val repo = com.xiwei.sujian.data.SettingsRepository(context)
@@ -100,11 +99,12 @@ class SettingsViewModelTest {
     @Test
     fun `handleIntent PerformSync ends in terminal failure via serial transaction`() {
         val vm = createVm()
-        val config = com.xiwei.sujian.model.SyncConfig(
-            enabled = false,
-            autoSync = false,
-            remoteUrl = "https://unit.example/repo.git",
-        )
+        val config =
+            com.xiwei.sujian.model.SyncConfig(
+                enabled = false,
+                autoSync = false,
+                remoteUrl = "https://unit.example/repo.git",
+            )
         vm.handleIntent(SettingsIntent.UpdateSyncConfig(config))
         // 保存并同步必须走 SaveAndRunSync 串行事务（保存队列屏障），并结束在明确终态：
         // 未配置 → 失败；不允许绕过保存队列或停留在 RUNNING/IDLE（#592）。

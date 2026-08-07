@@ -1,31 +1,31 @@
 package com.xiwei.sujian.model
 
-//! # 核心数据模型（Android UI 层 - Model 层）
-//!
-//! 定义所有 Kotlin 侧的数据类，与 Rust Core 的数据结构一一对应。
-//!
-//! ## 架构定位
-//!
-//! 这些模型是 Rust Core UniFFI DTO 的 Kotlin 映射，**不是业务实体**。
-//! 业务实体的定义和操作都在 Rust Core 中。
-//! 所有数据通过 UniFFI typed bridge 传输，不经过 Gson JSON 反序列化。
-//!
-//! ## 设计原则
-//!
-//! - 字段名使用 Kotlin camelCase 命名，与 Core serde rename_all = "camelCase" 契约一致
-//! - 这些类只做数据承载，不包含业务逻辑
-//! - 修改 Rust Core 数据结构时，必须同步更新这里的模型
+// ! # 核心数据模型（Android UI 层 - Model 层）
+// !
+// ! 定义所有 Kotlin 侧的数据类，与 Rust Core 的数据结构一一对应。
+// !
+// ! ## 架构定位
+// !
+// ! 这些模型是 Rust Core UniFFI DTO 的 Kotlin 映射，**不是业务实体**。
+// ! 业务实体的定义和操作都在 Rust Core 中。
+// ! 所有数据通过 UniFFI typed bridge 传输，不经过 Gson JSON 反序列化。
+// !
+// ! ## 设计原则
+// !
+// ! - 字段名使用 Kotlin camelCase 命名，与 Core serde rename_all = "camelCase" 契约一致
+// ! - 这些类只做数据承载，不包含业务逻辑
+// ! - 修改 Rust Core 数据结构时，必须同步更新这里的模型
 
 import com.google.gson.JsonElement
 
 data class WorkspaceManifest(
-    val version: Int
+    val version: Int,
 )
 
 data class DeviceInfo(
     val deviceId: String = "",
     val deviceClass: String = "",
-    val platform: String = ""
+    val platform: String = "",
 )
 
 data class LocalSettings(
@@ -56,27 +56,27 @@ data class LocalSettings(
     val diagnosticsEnabled: Boolean = true,
     val diagnosticsVerbose: Boolean = true,
     val useSelfRenderEditorOnAndroid: Boolean = true,
-    val experimentalFullscreenMode: Boolean = false
+    val experimentalFullscreenMode: Boolean = false,
 )
 
 data class SyncableSettings(
     val fontSize: Double = 0.0,
     val themeMode: String = "",
     @Deprecated("Use themePaletteJson instead") val monetColor: String = "",
-    val themePaletteJson: String = ""
+    val themePaletteJson: String = "",
 )
 
 data class Project(
     val id: String,
     val title: String,
     val createdAt: String,
-    val updatedAt: String
+    val updatedAt: String,
 )
 
 data class ProjectStats(
     val totalWordCount: Int,
     val volumeCount: Int,
-    val chapterCount: Int
+    val chapterCount: Int,
 )
 
 data class Volume(
@@ -84,7 +84,7 @@ data class Volume(
     val title: String,
     val createdAt: String,
     val updatedAt: String,
-    val order: Int = 0
+    val order: Int = 0,
 )
 
 data class ChapterMeta(
@@ -95,12 +95,12 @@ data class ChapterMeta(
     val order: Int = 0,
     val wordCount: Int,
     val hash: String,
-    val note: String? = null
+    val note: String? = null,
 )
 
 data class ChapterOpenResult(
     val meta: ChapterMeta,
-    val content: String
+    val content: String,
 )
 
 typealias ChapterContent = ChapterOpenResult
@@ -111,26 +111,26 @@ data class ChapterSaveReceipt(
     val contentHash: String,
     val metaHash: String,
     val updatedAt: String,
-    val wordCount: Int
+    val wordCount: Int,
 )
 
 data class RecentEdit(
     val projectId: String,
     val volumeId: String,
     val chapterId: String,
-    val timestamp: String
+    val timestamp: String,
 )
 
 // Sync Models
 
 enum class SyncTransport {
     HttpsToken,
-    SshKey
+    SshKey,
 }
 
 enum class BackendType {
     Git,
-    GithubApi
+    GithubApi,
 }
 
 data class SyncConfig(
@@ -143,7 +143,7 @@ data class SyncConfig(
     val syncIntervalSeconds: Int? = 300,
     val username: String? = "",
     val hasNetworkPermission: Boolean? = null,
-    val hasNetworkStatePermission: Boolean? = null
+    val hasNetworkStatePermission: Boolean? = null,
 ) {
     fun normalize(): SyncConfig {
         return copy(
@@ -153,17 +153,18 @@ data class SyncConfig(
             transport = transport ?: SyncTransport.HttpsToken,
             branch = if (branch.isNullOrEmpty()) "main" else branch,
             autoSync = autoSync ?: false,
-            syncIntervalSeconds = if (syncIntervalSeconds == null || syncIntervalSeconds <= 0) 300 else syncIntervalSeconds,
+            syncIntervalSeconds =
+                if (syncIntervalSeconds == null || syncIntervalSeconds <= 0) 300 else syncIntervalSeconds,
             username = username ?: "",
             hasNetworkPermission = hasNetworkPermission ?: true,
-            hasNetworkStatePermission = hasNetworkStatePermission ?: true
+            hasNetworkStatePermission = hasNetworkStatePermission ?: true,
         )
     }
 }
 
 data class SyncSecrets(
     val token: String? = null,
-    val sshPrivateKey: String? = null
+    val sshPrivateKey: String? = null,
 )
 
 data class Tombstone(
@@ -173,7 +174,7 @@ data class Tombstone(
     val purgeAfter: Long,
     val deletedBy: String,
     val originalHash: String,
-    val kind: String
+    val kind: String,
 )
 
 data class SyncState(
@@ -187,14 +188,14 @@ data class SyncState(
     val knownFiles: Map<String, String>? = emptyMap(),
     val conflicts: List<SyncConflict>? = emptyList(),
     val tombstones: List<Tombstone>? = emptyList(),
-    val deletedFiles: Set<String>? = emptySet()
+    val deletedFiles: Set<String>? = emptySet(),
 )
 
 data class SyncCapabilityData(
     val canRun: Boolean = false,
     val blockReasonCode: String? = null,
     val blockMessageKey: String? = null,
-    val messageArgs: Map<String, String> = emptyMap()
+    val messageArgs: Map<String, String> = emptyMap(),
 )
 
 enum class SyncStatus {
@@ -210,7 +211,7 @@ enum class SyncStatus {
     BranchMissingRecovered,
     Error,
     NoChanges,
-    LatestWinsApplied
+    LatestWinsApplied,
 }
 
 enum class FirstSyncMode {
@@ -220,7 +221,7 @@ enum class FirstSyncMode {
     AlreadyGitRepo,
     BlockedNonEmptyRemote,
     UnrelatedHistories,
-    None
+    None,
 }
 
 data class SyncConflictSummary(
@@ -229,13 +230,13 @@ data class SyncConflictSummary(
     val remoteChanged: Boolean,
     val conflictedFiles: List<String> = emptyList(),
     val blockedReason: String,
-    val safeNextSteps: List<String> = emptyList()
+    val safeNextSteps: List<String> = emptyList(),
 )
 
 data class SettingConflictDetail(
     val key: String,
     val localValue: String,
-    val remoteValue: String
+    val remoteValue: String,
 )
 
 data class SyncConflict(
@@ -245,7 +246,7 @@ data class SyncConflict(
     val remoteHash: String,
     val baseHash: String,
     val createdAt: Long,
-    val description: String
+    val description: String,
 )
 
 data class SyncDiagnosticsResult(
@@ -265,7 +266,7 @@ data class SyncDiagnosticsResult(
     val remoteUrlSanitized: String,
     val transport: String,
     val errorCategory: String,
-    val rawError: String?
+    val rawError: String?,
 )
 
 data class SyncResult(
@@ -282,7 +283,7 @@ data class SyncResult(
     val commitHash: String? = null,
     val error: String? = null,
     val errorCategory: String? = null,
-    val firstSyncMode: FirstSyncMode = FirstSyncMode.None
+    val firstSyncMode: FirstSyncMode = FirstSyncMode.None,
 )
 
 data class SyncPlan(
@@ -291,7 +292,7 @@ data class SyncPlan(
     val filesToDeleteLocal: List<String> = emptyList(),
     val filesToDeleteRemote: List<String> = emptyList(),
     val ignoredFiles: List<String> = emptyList(),
-    val conflicts: List<String> = emptyList()
+    val conflicts: List<String> = emptyList(),
 )
 
 data class ActionDescriptor(
@@ -305,7 +306,7 @@ data class ActionDescriptor(
     val undoable: Boolean,
     val platforms: List<String>,
     val inputSchema: JsonElement?,
-    val uiSchema: JsonElement?
+    val uiSchema: JsonElement?,
 )
 
 data class ActionResult(
@@ -313,7 +314,7 @@ data class ActionResult(
     val message: String?,
     val data: JsonElement?,
     val proposedUi: JsonElement?,
-    val requiresConfirmation: Boolean?
+    val requiresConfirmation: Boolean?,
 )
 
 data class WritingStatsSummary(
@@ -324,19 +325,19 @@ data class WritingStatsSummary(
     val totalHumanTypedChars: Long? = null,
     val totalActiveSeconds: Long? = null,
     val totalSessions: Int? = null,
-    val daysCount: Int? = null
+    val daysCount: Int? = null,
 )
 
 typealias WritingWritingStatsSummary = WritingStatsSummary
 
 data class WritingStatsRange(
     val startDate: String? = null,
-    val endDate: String? = null
+    val endDate: String? = null,
 )
 
 data class ProjectWritingStatsSummary(
     val range: WritingStatsRange? = null,
-    val projects: List<ProjectWritingStatsItem>? = emptyList()
+    val projects: List<ProjectWritingStatsItem>? = emptyList(),
 )
 
 data class ProjectWritingStatsItem(
@@ -347,12 +348,12 @@ data class ProjectWritingStatsItem(
     val deletedChars: Long? = null,
     val aiInsertedChars: Long? = null,
     val netDeltaChars: Long? = null,
-    val activeSeconds: Long? = null
+    val activeSeconds: Long? = null,
 )
 
 data class ChapterWritingStatsSummary(
     val range: WritingStatsRange? = null,
-    val chapters: List<ChapterWritingStatsItem>? = emptyList()
+    val chapters: List<ChapterWritingStatsItem>? = emptyList(),
 )
 
 data class ChapterWritingStatsItem(
@@ -362,12 +363,12 @@ data class ChapterWritingStatsItem(
     val deletedChars: Long? = null,
     val aiInsertedChars: Long? = null,
     val netDeltaChars: Long? = null,
-    val activeSeconds: Long? = null
+    val activeSeconds: Long? = null,
 )
 
 data class DeviceWritingStatsSummary(
     val range: WritingStatsRange? = null,
-    val devices: List<DeviceWritingStatsItem>? = emptyList()
+    val devices: List<DeviceWritingStatsItem>? = emptyList(),
 )
 
 data class DeviceWritingStatsItem(
@@ -380,39 +381,43 @@ data class DeviceWritingStatsItem(
     val aiInsertedChars: Long? = null,
     val netDeltaChars: Long? = null,
     val activeSeconds: Long? = null,
-    val sessionsCount: Int? = null
+    val sessionsCount: Int? = null,
 )
 
 data class WritingSpeedCurve(
     val range: WritingStatsRange? = null,
     val bucketMinutes: Int = 0,
-    val buckets: List<WritingSpeedBucket>? = emptyList()
+    val buckets: List<WritingSpeedBucket>? = emptyList(),
 )
 
 data class WritingSpeedBucket(
     val startMs: Long = 0,
     val endMs: Long = 0,
     val charsTyped: Long = 0,
-    val charsPerMinute: Double = 0.0
+    val charsPerMinute: Double = 0.0,
 )
 
 data class ProjectStatsSummary(
     val projectId: String,
-    val wordCount: Long
+    val wordCount: Long,
 )
 
 // ── Layout Policy Models ──
 
 enum class FoldState {
-    None, Flat, HalfOpened
+    None,
+    Flat,
+    HalfOpened,
 }
 
 enum class FoldOrientation {
-    Horizontal, Vertical
+    Horizontal,
+    Vertical,
 }
 
 enum class FoldOcclusion {
-    None, Full
+    None,
+    Full,
 }
 
 data class FoldFeatureInfo(
@@ -423,60 +428,83 @@ data class FoldFeatureInfo(
     val boundsLeftVp: Float = 0f,
     val boundsTopVp: Float = 0f,
     val boundsRightVp: Float = 0f,
-    val boundsBottomVp: Float = 0f
+    val boundsBottomVp: Float = 0f,
 )
 
 enum class Orientation {
-    Unknown, Portrait, Landscape
+    Unknown,
+    Portrait,
+    Landscape,
 }
 
 enum class PointerKind {
-    Unknown, Touch, Stylus, Mouse, Trackpad
+    Unknown,
+    Touch,
+    Stylus,
+    Mouse,
+    Trackpad,
 }
 
 enum class WidthClass {
-    Compact, Medium, Expanded, Large, ExtraLarge
+    Compact,
+    Medium,
+    Expanded,
+    Large,
+    ExtraLarge,
 }
 
 enum class HeightClass {
-    Compact, Medium, Expanded
+    Compact,
+    Medium,
+    Expanded,
 }
 
 enum class ShellMode {
-    SinglePane, SupportingPane, TwoPane, ThreePane
+    SinglePane,
+    SupportingPane,
+    TwoPane,
+    ThreePane,
 }
 
 enum class EditorMode {
-    FullWidth, CenteredPaper
+    FullWidth,
+    CenteredPaper,
 }
 
 enum class NavigationMode {
-    Stack, ListDetail
+    Stack,
+    ListDetail,
 }
 
 enum class NavigationPresentation {
-    BottomBar, NavigationRail, PermanentDrawer
+    BottomBar,
+    NavigationRail,
+    PermanentDrawer,
 }
 
 enum class WorkspacePaneMode {
-    SinglePane, ListDetail, ThreePane
+    SinglePane,
+    ListDetail,
+    ThreePane,
 }
 
 data class VisiblePaneRoles(
     val showProjectList: Boolean = true,
     val showChapterTree: Boolean = true,
     val showEditor: Boolean = true,
-    val showSupporting: Boolean = false
+    val showSupporting: Boolean = false,
 )
 
 data class PaneWidthConstraint(
     val minDp: Float = 0f,
     val preferredDp: Float = 0f,
-    val maxDp: Float = 0f
+    val maxDp: Float = 0f,
 )
 
 enum class AvoidRegionKind {
-    WindowInset, VerticalHinge, HorizontalHinge
+    WindowInset,
+    VerticalHinge,
+    HorizontalHinge,
 }
 
 data class AvoidRegion(
@@ -484,7 +512,7 @@ data class AvoidRegion(
     val topDp: Float = 0f,
     val rightDp: Float = 0f,
     val bottomDp: Float = 0f,
-    val kind: AvoidRegionKind = AvoidRegionKind.WindowInset
+    val kind: AvoidRegionKind = AvoidRegionKind.WindowInset,
 )
 
 data class WindowMetrics(
@@ -495,7 +523,7 @@ data class WindowMetrics(
     val keyboardVisible: Boolean = false,
     val foldFeature: FoldFeatureInfo = FoldFeatureInfo(),
     val orientation: Orientation = Orientation.Portrait,
-    val pointer: PointerKind = PointerKind.Touch
+    val pointer: PointerKind = PointerKind.Touch,
 )
 
 data class LayoutPlan(
@@ -517,25 +545,56 @@ data class LayoutPlan(
     val primaryPanePreferredDp: Float,
     val primaryPaneMaxDp: Float,
     val supportingPaneMode: WorkspacePaneMode? = null,
-    val avoidRegions: List<AvoidRegion> = emptyList()
+    val avoidRegions: List<AvoidRegion> = emptyList(),
 )
 
 // ── Screen Policy 类型（Core screen_policy） ──
 
 enum class ScreenRole {
-    Home, ProjectList, ProjectWorkspace, Writing, StarMap, Stats, Settings, Sync
+    Home,
+    ProjectList,
+    ProjectWorkspace,
+    Writing,
+    StarMap,
+    Stats,
+    Settings,
+    Sync,
 }
 
 enum class ActionRole {
-    Back, Save, CreateProject, CreateVolume, CreateChapter, Delete, Rename, Settings, Sync, Search, Sort
+    Back,
+    Save,
+    CreateProject,
+    CreateVolume,
+    CreateChapter,
+    Delete,
+    Rename,
+    Settings,
+    Sync,
+    Search,
+    Sort,
 }
 
 enum class ActionPlacement {
-    TopLeading, TopTrailing, Floating, BottomBar, ContextMenu, SidePanel, Navigation, ListHeader, ItemTrailing, EmptyState
+    TopLeading,
+    TopTrailing,
+    Floating,
+    BottomBar,
+    ContextMenu,
+    SidePanel,
+    Navigation,
+    ListHeader,
+    ItemTrailing,
+    EmptyState,
 }
 
 enum class PaneRole {
-    PrimaryList, Detail, Editor, Inspector, Drawer, Supporting
+    PrimaryList,
+    Detail,
+    Editor,
+    Inspector,
+    Drawer,
+    Supporting,
 }
 
 data class ActionSlot(
@@ -543,10 +602,10 @@ data class ActionSlot(
     val role: ActionRole,
     val placement: ActionPlacement,
     val visibleIn: List<ShellMode>,
-    val requiresConfirmation: Boolean
+    val requiresConfirmation: Boolean,
 )
 
 data class ScreenPolicy(
     val screenRole: ScreenRole,
-    val actionSlots: List<ActionSlot>
+    val actionSlots: List<ActionSlot>,
 )

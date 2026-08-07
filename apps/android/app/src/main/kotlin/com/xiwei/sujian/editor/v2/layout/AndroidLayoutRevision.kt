@@ -33,7 +33,7 @@ data class AndroidLayoutRevision(
      *  revision. Currently unused by the Android animation pipeline (which manages its
      *  own Bitmap snapshots via [VisualResourceStore]), but preserved for future
      *  kernel-driven snapshot management. */
-    val snapshotHandles: List<Long>
+    val snapshotHandles: List<Long>,
 ) {
     val selectionStartUtf8: Int get() = minOf(selectionAnchorUtf8, selectionHeadUtf8)
     val selectionEndUtf8: Int get() = maxOf(selectionAnchorUtf8, selectionHeadUtf8)
@@ -82,6 +82,6 @@ data class AndroidLayoutRevision(
         /** Zero-based index of this visual line within its paragraph. The first visual line
          *  of each paragraph has [paragraphLocalLineIndex] = 0. Used alongside [paragraphId]
          *  for old/new line alignment in the animation planner. */
-        val paragraphLocalLineIndex: Int = 0
+        val paragraphLocalLineIndex: Int = 0,
     )
 }

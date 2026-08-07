@@ -24,11 +24,12 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class SessionLayerNoMutableStateTest {
-
     private fun createCoordinator(): EditorSessionCoordinator {
-        return EditorSessionCoordinator(com.xiwei.sujian.data.AppServiceBridge(
-            com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595_session_layer")
-        ))
+        return EditorSessionCoordinator(
+            com.xiwei.sujian.data.AppServiceBridge(
+                com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595_session_layer"),
+            ),
+        )
     }
 
     @Test
@@ -48,7 +49,7 @@ class SessionLayerNoMutableStateTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "text", 1L, 1L, lease = EditorInputLease("a", 0UL, 0L))
+            EditorDocumentUpdate.LocalInput("a", "text", 1L, 1L, lease = EditorInputLease("a", 0UL, 0L)),
         )
 
         val snapshot = coordinator.sessionStateFlow.value
@@ -74,7 +75,7 @@ class SessionLayerNoMutableStateTest {
                 selectionAnchorUtf8 = 2,
                 selectionHeadUtf8 = 5,
                 lease = lease,
-            )
+            ),
         )
         val snapshot = coordinator.sessionStateFlow.value
         assertEquals("a", snapshot.targetId)
@@ -94,18 +95,19 @@ class SessionLayerNoMutableStateTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = EditorInputLease("a", 0UL, 0L))
+            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = EditorInputLease("a", 0UL, 0L)),
         )
         val staleLeaseA = EditorInputLease("a", 0UL, 0L)
 
         coordinator.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
-        val handle = PreparedSessionHandle(
-            targetId = "b",
-            sessionId = 5UL,
-            snapshot = TargetSnapshot("textB", 5, 2L, 0, 5),
-            newlyCreated = true,
-            previousRecord = null,
-        )
+        val handle =
+            PreparedSessionHandle(
+                targetId = "b",
+                sessionId = 5UL,
+                snapshot = TargetSnapshot("textB", 5, 2L, 0, 5),
+                newlyCreated = true,
+                previousRecord = null,
+            )
         assertTrue(coordinator.commitPreparedSession(handle))
 
         val snapshot = coordinator.sessionStateFlow.value
@@ -119,14 +121,14 @@ class SessionLayerNoMutableStateTest {
         // 旧 A 的 lease 失效 — 晚到的输入不得修改快照。
         assertFalse(coordinator.isInputLeaseCurrent(staleLeaseA, "a"))
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "late from A", 9L, 9L, lease = staleLeaseA)
+            EditorDocumentUpdate.LocalInput("a", "late from A", 9L, 9L, lease = staleLeaseA),
         )
         assertEquals("旧 A 晚到输入不得写入 B 快照", "textB", coordinator.sessionStateFlow.value.text)
 
         // 新章节的 lease 被接受，输入推进快照。
         val leaseB = coordinator.currentInputLease()!!
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("b", "textB edited", 3L, 12L, lease = leaseB)
+            EditorDocumentUpdate.LocalInput("b", "textB edited", 3L, 12L, lease = leaseB),
         )
         val after = coordinator.sessionStateFlow.value
         assertEquals("textB edited", after.text)
@@ -138,7 +140,7 @@ class SessionLayerNoMutableStateTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "text", 1L, 1L, lease = EditorInputLease("a", 0UL, 0L))
+            EditorDocumentUpdate.LocalInput("a", "text", 1L, 1L, lease = EditorInputLease("a", 0UL, 0L)),
         )
         assertNotNull(coordinator.sessionStateFlow.value.targetId)
 
@@ -155,7 +157,7 @@ class SessionLayerNoMutableStateTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = false)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "text", 1L, 1L, lease = EditorInputLease("a", 0UL, 0L))
+            EditorDocumentUpdate.LocalInput("a", "text", 1L, 1L, lease = EditorInputLease("a", 0UL, 0L)),
         )
         coordinator.detachWindowBinding("w1", "a")
         val snapshot = coordinator.sessionStateFlow.value
@@ -169,9 +171,10 @@ class SessionLayerNoMutableStateTest {
         // 通过 applyMotionPolicy 原子更新。验证它确实可独立更新且不影响 sessionState。
         val coordinator = createCoordinator()
         val initialPolicy = coordinator.motionPolicyFlow.value
-        val newPolicy = com.xiwei.sujian.editor.v2.motion.EditorMotionPolicy(
-            reduceMotion = true,
-        )
+        val newPolicy =
+            com.xiwei.sujian.editor.v2.motion.EditorMotionPolicy(
+                reduceMotion = true,
+            )
         coordinator.applyMotionPolicy(newPolicy)
         assertEquals(newPolicy, coordinator.motionPolicyFlow.value)
         assertEquals(newPolicy, coordinator.getMotionPolicy())

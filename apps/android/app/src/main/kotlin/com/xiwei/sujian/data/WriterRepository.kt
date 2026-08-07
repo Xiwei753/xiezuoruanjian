@@ -13,7 +13,6 @@ class WriterRepository private constructor(context: Context) {
     val stats = appService.statsBridge
     val starMap = appService.starMapBridge
 
-
     companion object {
         @Volatile
         private var instance: WriterRepository? = null

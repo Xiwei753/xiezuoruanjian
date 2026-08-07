@@ -7,8 +7,8 @@ import uniffi.writer_core.PlatformDto
 import uniffi.writer_core.PlatformInitDto
 import uniffi.writer_core.WriterAppService
 import uniffi.writer_core.WriterException
-import uniffi.writer_core.openWorkspaceWithSecureStorage
 import uniffi.writer_core.openWorkspaceWithInit
+import uniffi.writer_core.openWorkspaceWithSecureStorage
 
 class WriterAppServiceHolder(
     workspacePath: String,
@@ -20,21 +20,22 @@ class WriterAppServiceHolder(
     @Volatile
     private var _initError: WriterException? = null
 
-    private val serviceLazy = lazy {
-        try {
-            if (platformInit != null && secureStorageProvider != null) {
-                openWorkspaceWithSecureStorage(workspacePath, platformInit, secureStorageProvider)
-            } else if (platformInit != null) {
-                openWorkspaceWithInit(workspacePath, platformInit)
-            } else {
-                WriterAppService(workspacePath)
+    private val serviceLazy =
+        lazy {
+            try {
+                if (platformInit != null && secureStorageProvider != null) {
+                    openWorkspaceWithSecureStorage(workspacePath, platformInit, secureStorageProvider)
+                } else if (platformInit != null) {
+                    openWorkspaceWithInit(workspacePath, platformInit)
+                } else {
+                    WriterAppService(workspacePath)
+                }
+            } catch (e: WriterException) {
+                DiagnosticsLogger.e(TAG, "Failed to open workspace: ${e.message}", e)
+                _initError = e
+                throw e
             }
-        } catch (e: WriterException) {
-            DiagnosticsLogger.e(TAG, "Failed to open workspace: ${e.message}", e)
-            _initError = e
-            throw e
         }
-    }
     val service: WriterAppService by serviceLazy
 
     val initError: WriterException?
@@ -77,29 +78,42 @@ class WriterAppServiceHolder(
             isConnected: Boolean,
             isMetered: Boolean,
         ): WriterAppServiceHolder {
-            val init = PlatformInitDto(
-                platform = PlatformDto.ANDROID,
-                appDataDir = filesDir,
-                cacheDir = cacheDir,
-                logDir = "$cacheDir/log",
-                noBackupDir = noBackupDir,
-                deviceId = deviceId,
-                appVersion = appVersion,
-                locale = locale,
-                timezone = timezone,
-                isConnected = isConnected,
-                isMetered = isMetered,
-                proxyHost = null,
-                proxyPort = null,
-            )
-            val secureStorage = try {
-                AndroidKeystoreSecureStorage(context)
-            } catch (e: Exception) {
-                DiagnosticsLogger.e(TAG, "Failed to initialize Android Keystore secure storage", e)
-                return WriterAppServiceHolder(workspacePath, init, null, secureStorageError = "keystore_init_failed")
-            }
+            val init =
+                PlatformInitDto(
+                    platform = PlatformDto.ANDROID,
+                    appDataDir = filesDir,
+                    cacheDir = cacheDir,
+                    logDir = "$cacheDir/log",
+                    noBackupDir = noBackupDir,
+                    deviceId = deviceId,
+                    appVersion = appVersion,
+                    locale = locale,
+                    timezone = timezone,
+                    isConnected = isConnected,
+                    isMetered = isMetered,
+                    proxyHost = null,
+                    proxyPort = null,
+                )
+            val secureStorage =
+                try {
+                    AndroidKeystoreSecureStorage(context)
+                } catch (e: Exception) {
+                    DiagnosticsLogger.e(TAG, "Failed to initialize Android Keystore secure storage", e)
+                    return WriterAppServiceHolder(
+                        workspacePath,
+                        init,
+                        null,
+                        secureStorageError = "keystore_init_failed",
+                    )
+                }
             if (secureStorage.migrationError != null) {
-                return WriterAppServiceHolder(workspacePath, init, secureStorage, secureStorageError = "migration_failed:${secureStorage.migrationError}", keystoreStorage = secureStorage)
+                return WriterAppServiceHolder(
+                    workspacePath,
+                    init,
+                    secureStorage,
+                    secureStorageError = "migration_failed:${secureStorage.migrationError}",
+                    keystoreStorage = secureStorage,
+                )
             }
             return WriterAppServiceHolder(workspacePath, init, secureStorage, keystoreStorage = secureStorage)
         }

@@ -26,32 +26,85 @@ import uniffi.writer_core.EditorTransactionCauseDto
  * are synchronous and block the caller.
  */
 class UniFFIEditorKernelBridge(
-    private val appServiceBridge: AppServiceBridge
+    private val appServiceBridge: AppServiceBridge,
 ) : EditorKernelBridge {
-
-    override fun insert(byteOffset: Int, text: String, cause: EditorTransactionCauseDto, expectedRevision: Long): EditorEditResultDto? {
-        return when (val result = appServiceBridge.editorKernelInsert(byteOffset.toUInt(), text, cause, expectedRevision.toULong())) {
+    override fun insert(
+        byteOffset: Int,
+        text: String,
+        cause: EditorTransactionCauseDto,
+        expectedRevision: Long,
+    ): EditorEditResultDto? {
+        return when (
+            val result =
+                appServiceBridge.editorKernelInsert(
+                    byteOffset.toUInt(),
+                    text,
+                    cause,
+                    expectedRevision.toULong(),
+                )
+        ) {
             is BridgeResult.Success -> result.data
             else -> null
         }
     }
 
-    override fun delete(byteStart: Int, byteEndExclusive: Int, cause: EditorTransactionCauseDto, expectedRevision: Long): EditorEditResultDto? {
-        return when (val result = appServiceBridge.editorKernelDelete(byteStart.toUInt(), byteEndExclusive.toUInt(), cause, expectedRevision.toULong())) {
+    override fun delete(
+        byteStart: Int,
+        byteEndExclusive: Int,
+        cause: EditorTransactionCauseDto,
+        expectedRevision: Long,
+    ): EditorEditResultDto? {
+        return when (
+            val result =
+                appServiceBridge.editorKernelDelete(
+                    byteStart.toUInt(),
+                    byteEndExclusive.toUInt(),
+                    cause,
+                    expectedRevision.toULong(),
+                )
+        ) {
             is BridgeResult.Success -> result.data
             else -> null
         }
     }
 
-    override fun replace(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto, expectedRevision: Long): EditorEditResultDto? {
-        return when (val result = appServiceBridge.editorKernelReplace(byteStart.toUInt(), byteEndExclusive.toUInt(), replacementText, originalText, cause, expectedRevision.toULong())) {
+    override fun replace(
+        byteStart: Int,
+        byteEndExclusive: Int,
+        replacementText: String,
+        originalText: String,
+        cause: EditorTransactionCauseDto,
+        expectedRevision: Long,
+    ): EditorEditResultDto? {
+        return when (
+            val result =
+                appServiceBridge.editorKernelReplace(
+                    byteStart.toUInt(),
+                    byteEndExclusive.toUInt(),
+                    replacementText,
+                    originalText,
+                    cause,
+                    expectedRevision.toULong(),
+                )
+        ) {
             is BridgeResult.Success -> result.data
             else -> null
         }
     }
 
-    override fun setSelection(anchorByteOffset: Int, headByteOffset: Int, expectedRevision: Long): EditorEditResultDto? {
-        return when (val result = appServiceBridge.editorKernelSetSelection(anchorByteOffset.toUInt(), headByteOffset.toUInt(), expectedRevision.toULong())) {
+    override fun setSelection(
+        anchorByteOffset: Int,
+        headByteOffset: Int,
+        expectedRevision: Long,
+    ): EditorEditResultDto? {
+        return when (
+            val result =
+                appServiceBridge.editorKernelSetSelection(
+                    anchorByteOffset.toUInt(),
+                    headByteOffset.toUInt(),
+                    expectedRevision.toULong(),
+                )
+        ) {
             is BridgeResult.Success -> result.data
             else -> null
         }
@@ -71,7 +124,10 @@ class UniFFIEditorKernelBridge(
         }
     }
 
-    override fun loadText(text: String, cursorUtf8: Int): EditorEditResultDto? {
+    override fun loadText(
+        text: String,
+        cursorUtf8: Int,
+    ): EditorEditResultDto? {
         return when (val result = appServiceBridge.editorKernelLoadText(text, cursorUtf8.toUInt())) {
             is BridgeResult.Success -> result.data
             else -> null
@@ -88,20 +144,23 @@ class UniFFIEditorKernelBridge(
         compositionBaseRevision: Long,
         compositionGeneration: Long,
         cause: EditorTransactionCauseDto,
-        expectedRevision: Long
+        expectedRevision: Long,
     ): EditorEditResultDto? {
-        return when (val result = appServiceBridge.editorKernelCommitText(
-            byteStart.toUInt(),
-            byteEndExclusive.toUInt(),
-            replacementText,
-            resultingSelectionAnchor.toUInt(),
-            resultingSelectionHead.toUInt(),
-            compositionSessionId.toULong(),
-            compositionBaseRevision.toULong(),
-            compositionGeneration.toULong(),
-            cause,
-            expectedRevision.toULong()
-        )) {
+        return when (
+            val result =
+                appServiceBridge.editorKernelCommitText(
+                    byteStart.toUInt(),
+                    byteEndExclusive.toUInt(),
+                    replacementText,
+                    resultingSelectionAnchor.toUInt(),
+                    resultingSelectionHead.toUInt(),
+                    compositionSessionId.toULong(),
+                    compositionBaseRevision.toULong(),
+                    compositionGeneration.toULong(),
+                    cause,
+                    expectedRevision.toULong(),
+                )
+        ) {
             is BridgeResult.Success -> result.data
             else -> null
         }
@@ -113,16 +172,19 @@ class UniFFIEditorKernelBridge(
         afterByteStart: Int,
         afterByteEndExclusive: Int,
         cause: EditorTransactionCauseDto,
-        expectedRevision: Long
+        expectedRevision: Long,
     ): EditorEditResultDto? {
-        return when (val result = appServiceBridge.editorKernelDeleteSurrounding(
-            beforeByteStart.toUInt(),
-            beforeByteEndExclusive.toUInt(),
-            afterByteStart.toUInt(),
-            afterByteEndExclusive.toUInt(),
-            cause,
-            expectedRevision.toULong()
-        )) {
+        return when (
+            val result =
+                appServiceBridge.editorKernelDeleteSurrounding(
+                    beforeByteStart.toUInt(),
+                    beforeByteEndExclusive.toUInt(),
+                    afterByteStart.toUInt(),
+                    afterByteEndExclusive.toUInt(),
+                    cause,
+                    expectedRevision.toULong(),
+                )
+        ) {
             is BridgeResult.Success -> result.data
             else -> null
         }
@@ -131,13 +193,16 @@ class UniFFIEditorKernelBridge(
     override fun beginComposition(
         replaceStart: Int,
         replaceEndExclusive: Int,
-        expectedRevision: Long
+        expectedRevision: Long,
     ): EditorEditResultDto? {
-        return when (val result = appServiceBridge.editorKernelBeginComposition(
-            replaceStart.toUInt(),
-            replaceEndExclusive.toUInt(),
-            expectedRevision.toULong()
-        )) {
+        return when (
+            val result =
+                appServiceBridge.editorKernelBeginComposition(
+                    replaceStart.toUInt(),
+                    replaceEndExclusive.toUInt(),
+                    expectedRevision.toULong(),
+                )
+        ) {
             is BridgeResult.Success -> result.data
             else -> null
         }
@@ -148,15 +213,18 @@ class UniFFIEditorKernelBridge(
         compositionGeneration: Long,
         newPreeditText: String,
         newPreeditCursorOffset: Int,
-        expectedRevision: Long
+        expectedRevision: Long,
     ): EditorEditResultDto? {
-        return when (val result = appServiceBridge.editorKernelUpdateComposition(
-            compositionSessionId.toULong(),
-            compositionGeneration.toULong(),
-            newPreeditText,
-            newPreeditCursorOffset.toUInt(),
-            expectedRevision.toULong()
-        )) {
+        return when (
+            val result =
+                appServiceBridge.editorKernelUpdateComposition(
+                    compositionSessionId.toULong(),
+                    compositionGeneration.toULong(),
+                    newPreeditText,
+                    newPreeditCursorOffset.toUInt(),
+                    expectedRevision.toULong(),
+                )
+        ) {
             is BridgeResult.Success -> result.data
             else -> null
         }
@@ -165,13 +233,16 @@ class UniFFIEditorKernelBridge(
     override fun finishComposition(
         compositionSessionId: Long,
         compositionGeneration: Long,
-        expectedRevision: Long
+        expectedRevision: Long,
     ): EditorEditResultDto? {
-        return when (val result = appServiceBridge.editorKernelFinishComposition(
-            compositionSessionId.toULong(),
-            compositionGeneration.toULong(),
-            expectedRevision.toULong()
-        )) {
+        return when (
+            val result =
+                appServiceBridge.editorKernelFinishComposition(
+                    compositionSessionId.toULong(),
+                    compositionGeneration.toULong(),
+                    expectedRevision.toULong(),
+                )
+        ) {
             is BridgeResult.Success -> result.data
             else -> null
         }
@@ -180,13 +251,16 @@ class UniFFIEditorKernelBridge(
     override fun cancelComposition(
         compositionSessionId: Long,
         compositionGeneration: Long,
-        expectedRevision: Long
+        expectedRevision: Long,
     ): EditorEditResultDto? {
-        return when (val result = appServiceBridge.editorKernelCancelComposition(
-            compositionSessionId.toULong(),
-            compositionGeneration.toULong(),
-            expectedRevision.toULong()
-        )) {
+        return when (
+            val result =
+                appServiceBridge.editorKernelCancelComposition(
+                    compositionSessionId.toULong(),
+                    compositionGeneration.toULong(),
+                    expectedRevision.toULong(),
+                )
+        ) {
             is BridgeResult.Success -> result.data
             else -> null
         }
@@ -204,14 +278,17 @@ class UniFFIEditorKernelBridge(
         compositionReplaceStart: UInt,
         compositionReplaceEndExclusive: UInt,
         oldPreeditText: String,
-        newPreeditText: String
+        newPreeditText: String,
     ): uniffi.writer_core.EditorVisualIntentDto? {
-        return when (val result = appServiceBridge.editorKernelCompositionUpdateVisualIntent(
-            compositionReplaceStart,
-            compositionReplaceEndExclusive,
-            oldPreeditText,
-            newPreeditText,
-        )) {
+        return when (
+            val result =
+                appServiceBridge.editorKernelCompositionUpdateVisualIntent(
+                    compositionReplaceStart,
+                    compositionReplaceEndExclusive,
+                    oldPreeditText,
+                    newPreeditText,
+                )
+        ) {
             is BridgeResult.Success -> result.data
             else -> null
         }
@@ -224,15 +301,39 @@ class UniFFIEditorKernelBridge(
         }
     }
 
-    override fun replaceAll(search: String, replacement: String, expectedRevision: Long): EditorEditResultDto? {
-        return when (val result = appServiceBridge.editorKernelReplaceAll(search, replacement, expectedRevision.toULong())) {
+    override fun replaceAll(
+        search: String,
+        replacement: String,
+        expectedRevision: Long,
+    ): EditorEditResultDto? {
+        return when (
+            val result =
+                appServiceBridge.editorKernelReplaceAll(
+                    search,
+                    replacement,
+                    expectedRevision.toULong(),
+                )
+        ) {
             is BridgeResult.Success -> result.data
             else -> null
         }
     }
 
-    override fun insertLineBreak(byteOffset: Int, autoIndentPrefix: String, cause: EditorTransactionCauseDto, expectedRevision: Long): EditorEditResultDto? {
-        return when (val result = appServiceBridge.editorKernelInsertLineBreak(byteOffset.toUInt(), autoIndentPrefix, cause, expectedRevision.toULong())) {
+    override fun insertLineBreak(
+        byteOffset: Int,
+        autoIndentPrefix: String,
+        cause: EditorTransactionCauseDto,
+        expectedRevision: Long,
+    ): EditorEditResultDto? {
+        return when (
+            val result =
+                appServiceBridge.editorKernelInsertLineBreak(
+                    byteOffset.toUInt(),
+                    autoIndentPrefix,
+                    cause,
+                    expectedRevision.toULong(),
+                )
+        ) {
             is BridgeResult.Success -> result.data
             else -> null
         }

@@ -17,7 +17,6 @@ import com.xiwei.sujian.support.EditorCommitTextAction
 import com.xiwei.sujian.support.EditorViewAssertions
 import com.xiwei.sujian.support.RestartableMainActivityRule
 import com.xiwei.sujian.support.TestSession
-import com.xiwei.sujian.ui.MainActivity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Rule
@@ -27,18 +26,19 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class ChapterLifecycleTest {
-
     private val activityRule = RestartableMainActivityRule { AndroidTestEnvironment.requireCurrentSession() }
 
-    private val _composeTestRule = AndroidComposeTestRule(
-        activityRule,
-        activityProvider = activityRule.composeActivityProvider
-    ).also { activityRule.setComposeTestRule(it) }
+    private val _composeTestRule =
+        AndroidComposeTestRule(
+            activityRule,
+            activityProvider = activityRule.composeActivityProvider,
+        ).also { activityRule.setComposeTestRule(it) }
 
     @get:Rule
-    val ruleChain: RuleChain = RuleChain
-        .outerRule(AndroidTestEnvironment.TestDependenciesRule())
-        .around(_composeTestRule)
+    val ruleChain: RuleChain =
+        RuleChain
+            .outerRule(AndroidTestEnvironment.TestDependenciesRule())
+            .around(_composeTestRule)
 
     private val composeTestRule get() = _composeTestRule
 
@@ -46,7 +46,7 @@ class ChapterLifecycleTest {
 
     private fun initTestData(): AndroidTestEnvironment.TestProjectData {
         return AndroidTestEnvironment.ensureTestProjectAndVolume(
-            androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
+            androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext,
         )
     }
 
@@ -123,7 +123,9 @@ class ChapterLifecycleTest {
         ComposeWait.waitUntil(composeTestRule, {
             lastTargetId = coordinator.activeTargetId
             coordinator.activeTargetId == targetIdA
-        }, timeoutMs = 10_000, message = { "activeTargetId should be $targetIdA but was $lastTargetId after opening chapter A" })
+        }, timeoutMs = 10_000, message = {
+            "activeTargetId should be $targetIdA but was $lastTargetId after opening chapter A"
+        })
 
         composeTestRule.onNodeWithText("交替章节A").assertIsDisplayed()
 
@@ -140,7 +142,9 @@ class ChapterLifecycleTest {
         ComposeWait.waitUntil(composeTestRule, {
             lastTargetIdB = coordinator.activeTargetId
             coordinator.activeTargetId == targetIdB
-        }, timeoutMs = 10_000, message = { "activeTargetId should be $targetIdB but was $lastTargetIdB after opening chapter B" })
+        }, timeoutMs = 10_000, message = {
+            "activeTargetId should be $targetIdB but was $lastTargetIdB after opening chapter B"
+        })
 
         composeTestRule.onNodeWithText("交替章节B").assertIsDisplayed()
 
@@ -203,7 +207,7 @@ class ChapterLifecycleTest {
         assertEquals(
             "activeTargetId should point to chapter A",
             targetIdA,
-            coordinator.activeTargetId
+            coordinator.activeTargetId,
         )
 
         Espresso.closeSoftKeyboard()
@@ -220,7 +224,7 @@ class ChapterLifecycleTest {
         assertEquals(
             "activeTargetId should point to chapter B",
             targetIdB,
-            coordinator.activeTargetId
+            coordinator.activeTargetId,
         )
     }
 
@@ -229,13 +233,13 @@ class ChapterLifecycleTest {
         volumeId: String,
         chapterId: String,
         expectedTitle: String,
-        expectedContent: String? = null
+        expectedContent: String? = null,
     ) {
         val expectedTargetId = "chapter-body:$projectId:$volumeId:$chapterId"
         ComposeWait.waitForEspressoViewCondition(
             composeTestRule,
             EditorViewAssertions.isEditorReady(),
-            timeoutMs = 15_000
+            timeoutMs = 15_000,
         ) { "Editor did not become ready for chapter $chapterId" }
 
         var lastTargetId: String? = null
@@ -243,7 +247,9 @@ class ChapterLifecycleTest {
             val coordinator = AndroidTestEnvironment.requireCurrentSession().deps.coordinator
             lastTargetId = coordinator.activeTargetId
             coordinator.activeTargetId == expectedTargetId
-        }, timeoutMs = 10_000, message = { "activeTargetId should be $expectedTargetId but was $lastTargetId for chapter $chapterId" })
+        }, timeoutMs = 10_000, message = {
+            "activeTargetId should be $expectedTargetId but was $lastTargetId for chapter $chapterId"
+        })
 
         composeTestRule.onNodeWithText(expectedTitle).assertIsDisplayed()
 
@@ -253,7 +259,10 @@ class ChapterLifecycleTest {
         }
     }
 
-    private fun waitForChapterByTitle(title: String, testData: AndroidTestEnvironment.TestProjectData): String {
+    private fun waitForChapterByTitle(
+        title: String,
+        testData: AndroidTestEnvironment.TestProjectData,
+    ): String {
         val s = AndroidTestEnvironment.requireCurrentSession()
         val repo = s.deps.workspaceRepository
         var chapterId = ""

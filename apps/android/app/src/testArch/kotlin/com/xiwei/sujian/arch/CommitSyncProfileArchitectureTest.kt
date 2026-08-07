@@ -1,7 +1,6 @@
 package com.xiwei.sujian.arch
 
 import com.xiwei.sujian.data.SettingsRepository
-import com.xiwei.sujian.data.SyncProfileGate
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.lang.reflect.Method
@@ -13,39 +12,43 @@ import java.lang.reflect.Method
  * 正式同步、试运行和连接诊断都通过此入口保存配置与凭据。
  */
 class CommitSyncProfileArchitectureTest {
-
     @Test
     fun commitSyncProfile_existsOnSettingsRepository() {
         // suspend 函数在 JVM 上签名带 Continuation 参数：前两个参数必须是 config/secrets。
-        val method: Method? = SettingsRepository::class.java.methods.firstOrNull {
-            it.name == "commitSyncProfile" &&
-            it.parameterTypes.size >= 2 &&
-            it.parameterTypes[0] == com.xiwei.sujian.model.SyncConfig::class.java &&
-            it.parameterTypes[1] == com.xiwei.sujian.model.SyncSecrets::class.java
-        }
-        assertTrue("SettingsRepository must have commitSyncProfile(SyncConfig, SyncSecrets)",
-            method != null)
+        val method: Method? =
+            SettingsRepository::class.java.methods.firstOrNull {
+                it.name == "commitSyncProfile" &&
+                    it.parameterTypes.size >= 2 &&
+                    it.parameterTypes[0] == com.xiwei.sujian.model.SyncConfig::class.java &&
+                    it.parameterTypes[1] == com.xiwei.sujian.model.SyncSecrets::class.java
+            }
+        assertTrue(
+            "SettingsRepository must have commitSyncProfile(SyncConfig, SyncSecrets)",
+            method != null,
+        )
     }
 
     @Test
     fun commitSyncProfile_returnsSettingsSaveResult() {
-        val method: Method? = SettingsRepository::class.java.methods.firstOrNull {
-            it.name == "commitSyncProfile"
-        }
+        val method: Method? =
+            SettingsRepository::class.java.methods.firstOrNull {
+                it.name == "commitSyncProfile"
+            }
         assertTrue("commitSyncProfile must exist", method != null)
         assertTrue(
             "commitSyncProfile must accept (SyncConfig, SyncSecrets)",
             method!!.parameterTypes.size >= 2 &&
                 method.parameterTypes[0] == com.xiwei.sujian.model.SyncConfig::class.java &&
-                method.parameterTypes[1] == com.xiwei.sujian.model.SyncSecrets::class.java
+                method.parameterTypes[1] == com.xiwei.sujian.model.SyncSecrets::class.java,
         )
     }
 
     @Test
     fun saveTransactionConfigAndSecrets_usesCommitSyncProfile_notSeparateSaves() {
-        val method: Method? = SettingsRepository::class.java.methods.firstOrNull {
-            it.name == "commitSyncProfile"
-        }
+        val method: Method? =
+            SettingsRepository::class.java.methods.firstOrNull {
+                it.name == "commitSyncProfile"
+            }
         assertTrue(method != null)
     }
 }

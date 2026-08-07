@@ -1,4 +1,5 @@
 @file:Suppress("StringLiteralDuplication") // 测试固件字符串天然重复
+
 package com.xiwei.sujian.editor.v2.coordinator
 
 import org.junit.Assert.assertEquals
@@ -20,12 +21,13 @@ import org.junit.Test
  * - 关闭非活动 target 不得清掉活动 target 状态（旧实现会把新章节的 Attached
  *   清成 Idle）。
  */
-class EditorSessionStoreContractTest {
-
+class EditorSessionStoreTest {
     private fun createCoordinator(): EditorSessionCoordinator {
-        return EditorSessionCoordinator(com.xiwei.sujian.data.AppServiceBridge(
-            com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595_store")
-        ))
+        return EditorSessionCoordinator(
+            com.xiwei.sujian.data.AppServiceBridge(
+                com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595_store"),
+            ),
+        )
     }
 
     @Test
@@ -56,7 +58,7 @@ class EditorSessionStoreContractTest {
                 transactionId = 5L,
                 selectionAnchorUtf8 = 3,
                 selectionHeadUtf8 = 5,
-            )
+            ),
         )
         // 会话状态保留记录中的 sessionId 派生路径（0UL 表示尚无 Rust session）。
         assertEquals("t1", coordinator.sessionState.targetId)
@@ -70,9 +72,13 @@ class EditorSessionStoreContractTest {
         coordinator.registerTargetMeta("t1", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
             EditorDocumentUpdate.LocalInput(
-                targetId = "t1", text = "你好世界", revision = 3L, transactionId = 7L,
-                selectionAnchorUtf8 = 3, selectionHeadUtf8 = 9,
-            )
+                targetId = "t1",
+                text = "你好世界",
+                revision = 3L,
+                transactionId = 7L,
+                selectionAnchorUtf8 = 3,
+                selectionHeadUtf8 = 9,
+            ),
         )
         val state = coordinator.sessionState
         assertEquals("你好世界", state.text)
@@ -90,7 +96,7 @@ class EditorSessionStoreContractTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("t1", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("t1", "text", 1L, 1L, selectionAnchorUtf8 = 2, selectionHeadUtf8 = 4)
+            EditorDocumentUpdate.LocalInput("t1", "text", 1L, 1L, selectionAnchorUtf8 = 2, selectionHeadUtf8 = 4),
         )
         coordinator.forceEditingState(EditingState.EDITING)
         assertEquals("t1", coordinator.sessionState.targetId)
@@ -111,7 +117,7 @@ class EditorSessionStoreContractTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("t1", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("t1", "text", 1L, 1L, selectionAnchorUtf8 = 2, selectionHeadUtf8 = 4)
+            EditorDocumentUpdate.LocalInput("t1", "text", 1L, 1L, selectionAnchorUtf8 = 2, selectionHeadUtf8 = 4),
         )
         coordinator.closeTarget("t1", SessionCloseReason.WORKSPACE_NAVIGATION)
         val state = coordinator.sessionState
@@ -130,13 +136,14 @@ class EditorSessionStoreContractTest {
         coordinator.applyLocalEdit(EditorDocumentUpdate.LocalInput("t1", "text", 1L, 1L))
         assertEquals("t1", coordinator.sessionState.targetId)
 
-        val handle = PreparedSessionHandle(
-            targetId = "t1",
-            sessionId = 0UL,
-            snapshot = TargetSnapshot("text", 4, 1L, 0, 4),
-            newlyCreated = true,
-            previousRecord = null,
-        )
+        val handle =
+            PreparedSessionHandle(
+                targetId = "t1",
+                sessionId = 0UL,
+                snapshot = TargetSnapshot("text", 4, 1L, 0, 4),
+                newlyCreated = true,
+                previousRecord = null,
+            )
         coordinator.releasePreparedTarget(handle)
         assertFalse(coordinator.isTargetRegistered("t1"))
     }
@@ -146,37 +153,41 @@ class EditorSessionStoreContractTest {
         // #595 一/二：newlyCreated=false（借用的既有 session）→ 恢复事务前记录，
         // 不关闭 session — 回滚不得销毁事务开始前已经存在的 B session 与 Undo 历史。
         val coordinator = createCoordinator()
-        val previous = EditorSessionRecord(
-            targetId = "t1",
-            sessionId = 7UL,
-            persistent = true,
-            documentState = DocumentState(
-                text = "original",
-                revision = 3L,
-                committedVersion = DocumentVersion(contentHash = "hash-original"),
-                sessionBaseVersion = DocumentVersion(contentHash = "hash-original"),
-                lastSavedVersion = DocumentVersion(contentHash = "hash-original"),
-                localDirty = false,
-            ),
-        )
+        val previous =
+            EditorSessionRecord(
+                targetId = "t1",
+                sessionId = 7UL,
+                persistent = true,
+                documentState =
+                    DocumentState(
+                        text = "original",
+                        revision = 3L,
+                        committedVersion = DocumentVersion(contentHash = "hash-original"),
+                        sessionBaseVersion = DocumentVersion(contentHash = "hash-original"),
+                        lastSavedVersion = DocumentVersion(contentHash = "hash-original"),
+                        localDirty = false,
+                    ),
+            )
         // 事务预准备期间记录被写入新 snapshot（模拟 prepare 后的记录状态）。
         coordinator.registerTargetMeta("t1", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyExternalContentFact(
             TargetDocumentFact(
-                "t1", "prepared",
+                "t1",
+                "prepared",
                 DocumentVersion(contentHash = "hash-prepared"),
                 DocumentVersion(),
                 DocumentFactOrigin.REPOSITORY_LOAD,
-            )
+            ),
         )
 
-        val handle = PreparedSessionHandle(
-            targetId = "t1",
-            sessionId = 0UL,
-            snapshot = TargetSnapshot("prepared", 8, 1L, 0, 8),
-            newlyCreated = false,
-            previousRecord = previous,
-        )
+        val handle =
+            PreparedSessionHandle(
+                targetId = "t1",
+                sessionId = 0UL,
+                snapshot = TargetSnapshot("prepared", 8, 1L, 0, 8),
+                newlyCreated = false,
+                previousRecord = previous,
+            )
         coordinator.releasePreparedTarget(handle)
 
         // 借用 session 不关闭：记录恢复为事务前的文档事实（正文/版本/选区）。
@@ -203,11 +214,12 @@ class EditorSessionStoreContractTest {
         coordinator.registerTargetMeta("t1", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyExternalContentFact(
             TargetDocumentFact(
-                "t1", "repo v1",
+                "t1",
+                "repo v1",
                 DocumentVersion(contentHash = "hash-1"),
                 DocumentVersion(),
                 DocumentFactOrigin.REPOSITORY_LOAD,
-            )
+            ),
         )
         assertEquals("hash-1", coordinator.sessionState.committedVersion.contentHash)
 

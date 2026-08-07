@@ -5,9 +5,8 @@ package com.xiwei.sujian.model
  *
  * 这些类型是 `uniffi.writer_core.*Dto` 的 app 层镜像，UI 层不得直接引用 UniFFI 绑定。
  * 映射在 [com.xiwei.sujian.data.ThemeDtoMapper] 中完成，Repository/Store 层负责转换。
- */
-
-/**
+ *
+ *
  * 主题配色方案 — 所有颜色字段为 hex 字符串（如 "#FF0000"）。
  *
  * 对应 UniFFI: `uniffi.writer_core.ThemeColorSchemeDto`

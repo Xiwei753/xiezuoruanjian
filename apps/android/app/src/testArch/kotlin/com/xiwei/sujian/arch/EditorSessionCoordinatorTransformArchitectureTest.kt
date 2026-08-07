@@ -21,10 +21,12 @@ import java.io.File
  * store 记录与 SessionState 一致）。
  */
 class EditorSessionCoordinatorTransformArchitectureTest {
-
     private fun coordinatorSource(): String {
-        val dir = File(System.getProperty("user.dir")!! +
-            "/src/main/kotlin/com/xiwei/sujian/editor/v2/coordinator")
+        val dir =
+            File(
+                System.getProperty("user.dir")!! +
+                    "/src/main/kotlin/com/xiwei/sujian/editor/v2/coordinator",
+            )
         // #597: EditorSessionCoordinator 拆分为多个文件，所有 updateSessionState 调用和
         // pendingRecord 模式分布在拆分文件中，需拼接全部源码进行结构检查。
         return dir.listFiles { file -> file.isFile && file.extension == "kt" }
@@ -63,7 +65,8 @@ class EditorSessionCoordinatorTransformArchitectureTest {
         assertTrue("must find at least one updateSessionState transform", bodies.isNotEmpty())
         for (body in bodies) {
             assertFalse(
-                "updateSessionState transform must not call store.put — write store outside transform via pendingRecord?.let { store.put(it) } (#595 五)",
+                "updateSessionState transform must not call store.put — " +
+                    "write store outside transform via pendingRecord?.let { store.put(it) } (#595 五)",
                 body.contains(Regex("""store\.put\(""")),
             )
         }

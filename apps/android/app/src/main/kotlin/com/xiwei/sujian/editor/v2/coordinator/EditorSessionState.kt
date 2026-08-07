@@ -47,10 +47,13 @@ enum class EditorSessionOrigin {
     LOCAL_INPUT,
     EXTERNAL_REPLACE,
     INITIAL_LOAD,
+
     /** #595 二：同步合并后外部替换。 */
     SYNC_MERGED,
+
     /** #595 二：撤销/恢复后正文变更。 */
     UNDO_RESTORED,
+
     /** #595 二：程序化批量替换后正文变更。 */
     PROGRAMMATIC_REPLACE,
 }

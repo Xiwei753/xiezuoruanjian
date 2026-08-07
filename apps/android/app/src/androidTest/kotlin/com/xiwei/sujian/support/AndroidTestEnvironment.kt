@@ -2,28 +2,30 @@ package com.xiwei.sujian.support
 
 import android.content.Context
 import androidx.test.core.app.ActivityScenario
+import androidx.test.runner.lifecycle.ActivityLifecycleCallback
+import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+import androidx.test.runner.lifecycle.Stage
 import com.xiwei.sujian.data.AppServiceBridge
-import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.data.WriterAppServiceHolder
 import com.xiwei.sujian.editor.v2.coordinator.EditorSessionCoordinator
 import com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost
+import com.xiwei.sujian.editor.v2.visual.AnimationTimeSource
+import com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource
+import com.xiwei.sujian.editor.v2.visual.TransactionIdSource
 import com.xiwei.sujian.runtime.SujianAppDependencies
 import com.xiwei.sujian.ui.MainActivity
-import uniffi.writer_core.PlatformDto
-import uniffi.writer_core.PlatformInitDto
 import org.junit.Assert
 import org.junit.rules.TestRule
-import org.junit.runners.model.Statement
 import org.junit.runner.Description
-import java.util.UUID
+import org.junit.runners.model.Statement
+import uniffi.writer_core.PlatformDto
+import uniffi.writer_core.PlatformInitDto
 import java.io.File
+import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import androidx.test.runner.lifecycle.ActivityLifecycleCallback
-import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
-import androidx.test.runner.lifecycle.Stage
 
 class TestSession private constructor(
     val testRootDir: File,
@@ -31,42 +33,45 @@ class TestSession private constructor(
     val prefsSuffix: String,
     private var depsHolder: TestSujianAppDependencies,
     private val context: Context,
-    private val animationTimeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource,
-    private val transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource,
+    private val animationTimeSource: AnimationTimeSource,
+    private val transactionIdSource: TransactionIdSource,
 ) {
-    private val prefsFileNames = listOf(
-        "sujian_diagnostics_$prefsSuffix",
-        "sujian_device_$prefsSuffix",
-        "writer_stats",
-        "sujian_device",
-        "sujian_experiments",
-        "sujian_diagnostics"
-    )
-    private val dataStoreDirNames = listOf(
-        "workbench_layout_prefs"
-    )
+    private val prefsFileNames =
+        listOf(
+            "sujian_diagnostics_$prefsSuffix",
+            "sujian_device_$prefsSuffix",
+            "writer_stats",
+            "sujian_device",
+            "sujian_experiments",
+            "sujian_diagnostics",
+        )
+    private val dataStoreDirNames =
+        listOf(
+            "workbench_layout_prefs",
+        )
     val deps: TestSujianAppDependencies
         get() = depsHolder
 
     companion object {
         fun create(
             context: Context,
-            animationTimeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource = com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
-            transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource = com.xiwei.sujian.editor.v2.visual.TransactionIdSource(),
+            animationTimeSource: AnimationTimeSource = ChoreographerAnimationTimeSource(),
+            transactionIdSource: TransactionIdSource = TransactionIdSource(),
         ): TestSession {
             val appContext = context.applicationContext
             val paths = TestWorkspaceFactory.createIsolatedWorkspace(appContext)
 
             val prefsSuffix = UUID.randomUUID().toString().take(8)
 
-            val deps = TestSujianAppDependencies(
-                appContext,
-                testRootDir = paths.testRootDir,
-                workspaceDir = paths.workspaceDir,
-                prefsSuffix = prefsSuffix,
-                animationTimeSource = animationTimeSource,
-                transactionIdSource = transactionIdSource,
-            )
+            val deps =
+                TestSujianAppDependencies(
+                    appContext,
+                    testRootDir = paths.testRootDir,
+                    workspaceDir = paths.workspaceDir,
+                    prefsSuffix = prefsSuffix,
+                    animationTimeSource = animationTimeSource,
+                    transactionIdSource = transactionIdSource,
+                )
 
             return TestSession(
                 testRootDir = paths.testRootDir,
@@ -81,14 +86,15 @@ class TestSession private constructor(
     }
 
     fun recreateDeps(): TestSujianAppDependencies {
-        depsHolder = TestSujianAppDependencies(
-            context,
-            testRootDir = testRootDir,
-            workspaceDir = workspaceDir,
-            prefsSuffix = prefsSuffix,
-            animationTimeSource = animationTimeSource,
-            transactionIdSource = transactionIdSource,
-        )
+        depsHolder =
+            TestSujianAppDependencies(
+                context,
+                testRootDir = testRootDir,
+                workspaceDir = workspaceDir,
+                prefsSuffix = prefsSuffix,
+                animationTimeSource = animationTimeSource,
+                transactionIdSource = transactionIdSource,
+            )
         SujianAppDependencies.setTestProvider { _ -> depsHolder }
         return depsHolder
     }
@@ -117,21 +123,26 @@ class TestSession private constructor(
                 val dsDir = File(appContext.filesDir, "datastore/$dsName")
                 if (dsDir.exists()) {
                     val deleted = dsDir.deleteRecursively()
-                    Assert.assertTrue("Failed to delete test DataStore dir: $dsName (path=${dsDir.absolutePath})", deleted || !dsDir.exists())
+                    Assert.assertTrue(
+                        "Failed to delete test DataStore dir: $dsName (path=${dsDir.absolutePath})",
+                        deleted || !dsDir.exists(),
+                    )
                 }
             } catch (t: Throwable) {
                 if (firstException != null) firstException.addSuppressed(t) else firstException = t
             }
         }
         try {
-            TestWorkspaceFactory.deleteWorkspace(TestWorkspaceFactory.TestWorkspacePaths(
-                testRootDir = testRootDir,
-                workspaceDir = workspaceDir,
-                appDataDir = File(testRootDir, "app_data"),
-                cacheDir = File(testRootDir, "cache"),
-                logDir = File(testRootDir, "logs"),
-                noBackupDir = File(testRootDir, "no_backup"),
-            ))
+            TestWorkspaceFactory.deleteWorkspace(
+                TestWorkspaceFactory.TestWorkspacePaths(
+                    testRootDir = testRootDir,
+                    workspaceDir = workspaceDir,
+                    appDataDir = File(testRootDir, "app_data"),
+                    cacheDir = File(testRootDir, "cache"),
+                    logDir = File(testRootDir, "logs"),
+                    noBackupDir = File(testRootDir, "no_backup"),
+                ),
+            )
         } catch (t: Throwable) {
             if (firstException != null) firstException.addSuppressed(t) else firstException = t
         }
@@ -144,8 +155,8 @@ class TestSujianAppDependencies(
     testRootDir: File? = null,
     workspaceDir: File? = null,
     prefsSuffix: String = "",
-    private val animationTimeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource = com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
-    private val transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource = com.xiwei.sujian.editor.v2.visual.TransactionIdSource(),
+    private val animationTimeSource: AnimationTimeSource = ChoreographerAnimationTimeSource(),
+    private val transactionIdSource: TransactionIdSource = TransactionIdSource(),
 ) : SujianAppDependencies {
     private val appContext = context.applicationContext
     private val resolvedTestRoot = testRootDir ?: File(appContext.cacheDir, "test_workspace_${UUID.randomUUID()}")
@@ -164,7 +175,7 @@ class TestSujianAppDependencies(
             throw AssertionError(
                 "TestSujianAppDependencies: workspace dir does not exist — " +
                     "TestWorkspaceFactory.createIsolatedWorkspace() must be called first: " +
-                    testWorkspaceDir.absolutePath
+                    testWorkspaceDir.absolutePath,
             )
         }
         val manifest = File(testWorkspaceDir, "workspace_manifest.json")
@@ -172,37 +183,55 @@ class TestSujianAppDependencies(
             throw AssertionError(
                 "TestSujianAppDependencies: workspace_manifest.json does not exist — " +
                     "TestWorkspaceFactory.initializeWorkspaceViaCore() must have failed silently: " +
-                    manifest.absolutePath
+                    manifest.absolutePath,
             )
         }
     }
 
-    private val testHolder: WriterAppServiceHolder = WriterAppServiceHolder(
-        workspacePath = testWorkspaceDir.absolutePath,
-        platformInit = PlatformInitDto(
-            platform = PlatformDto.ANDROID,
-            appDataDir = testAppDataDir.absolutePath,
-            cacheDir = testCacheDir.absolutePath,
-            logDir = testLogDir.absolutePath,
-            noBackupDir = testNoBackupDir.absolutePath,
-            deviceId = "test-${UUID.randomUUID()}",
-            appVersion = "test",
-            locale = java.util.Locale.getDefault().toLanguageTag(),
-            timezone = java.util.TimeZone.getDefault().id,
-            isConnected = true,
-            isMetered = false,
-            proxyHost = null,
-            proxyPort = null,
-        ),
-    )
+    private val testHolder: WriterAppServiceHolder =
+        WriterAppServiceHolder(
+            workspacePath = testWorkspaceDir.absolutePath,
+            platformInit =
+                PlatformInitDto(
+                    platform = PlatformDto.ANDROID,
+                    appDataDir = testAppDataDir.absolutePath,
+                    cacheDir = testCacheDir.absolutePath,
+                    logDir = testLogDir.absolutePath,
+                    noBackupDir = testNoBackupDir.absolutePath,
+                    deviceId = "test-${UUID.randomUUID()}",
+                    appVersion = "test",
+                    locale = java.util.Locale.getDefault().toLanguageTag(),
+                    timezone = java.util.TimeZone.getDefault().id,
+                    isConnected = true,
+                    isMetered = false,
+                    proxyHost = null,
+                    proxyPort = null,
+                ),
+        )
     override val appServiceBridge: AppServiceBridge = AppServiceBridge(testHolder)
     override val workspaceRepository: WorkspaceRepository = WorkspaceRepository(appContext, appServiceBridge)
     override val settingsRepository: SettingsRepository = SettingsRepository(appContext, appServiceBridge, prefsSuffix)
-    override val syncStatusRepository: com.xiwei.sujian.data.SyncStatusRepository = com.xiwei.sujian.data.SyncStatusRepository(settingsRepository)
-    override val syncCoordinator: com.xiwei.sujian.data.SyncCoordinator = com.xiwei.sujian.data.SyncCoordinator(settingsRepository, syncStatusRepository)
+    override val syncStatusRepository: com.xiwei.sujian.data.SyncStatusRepository =
+        com.xiwei.sujian.data.SyncStatusRepository(
+            settingsRepository,
+        )
+    override val syncCoordinator: com.xiwei.sujian.data.SyncCoordinator =
+        com.xiwei.sujian.data.SyncCoordinator(
+            settingsRepository,
+            syncStatusRepository,
+        )
     private val _sessionCoordinator = lazy { EditorSessionCoordinator(appServiceBridge) }
     val sessionCoordinator: EditorSessionCoordinator get() = _sessionCoordinator.value
-    private val _coordinator = lazy { EditorWindowHost(appContext, _sessionCoordinator.value, appServiceBridge, animationTimeSource, transactionIdSource) }
+    private val _coordinator =
+        lazy {
+            EditorWindowHost(
+                appContext,
+                _sessionCoordinator.value,
+                appServiceBridge,
+                animationTimeSource,
+                transactionIdSource,
+            )
+        }
     val coordinator: EditorWindowHost get() = _coordinator.value
     private var runtimeReleased = false
 
@@ -217,7 +246,7 @@ class TestSujianAppDependencies(
 }
 
 class RestartableMainActivityRule(
-    private val sessionProvider: () -> TestSession
+    private val sessionProvider: () -> TestSession,
 ) : TestRule {
     private var scenario: ActivityScenario<MainActivity>? = null
     private var composeTestRule: androidx.compose.ui.test.junit4.ComposeTestRule? = null
@@ -248,11 +277,12 @@ class RestartableMainActivityRule(
         val sc = scenario
         if (sc != null) {
             val destroyLatch = CountDownLatch(1)
-            val lifecycleCallback = ActivityLifecycleCallback { activity, stage ->
-                if (stage == Stage.DESTROYED && activity is MainActivity) {
-                    destroyLatch.countDown()
+            val lifecycleCallback =
+                ActivityLifecycleCallback { activity, stage ->
+                    if (stage == Stage.DESTROYED && activity is MainActivity) {
+                        destroyLatch.countDown()
+                    }
                 }
-            }
             val lifecycleMonitor = ActivityLifecycleMonitorRegistry.getInstance()
             lifecycleMonitor.addLifecycleCallback(lifecycleCallback)
 
@@ -264,7 +294,7 @@ class RestartableMainActivityRule(
 
             Assert.assertTrue(
                 "Old Activity was not destroyed within 10 seconds after scenario.close()",
-                destroyed
+                destroyed,
             )
         }
 
@@ -278,7 +308,9 @@ class RestartableMainActivityRule(
         val resumeLatch = CountDownLatch(1)
         val maxWaitMs = 10_000L
         val resumeStartMs = System.currentTimeMillis()
-        while (!resumeLatch.await(0, TimeUnit.MILLISECONDS) && (System.currentTimeMillis() - resumeStartMs) < maxWaitMs) {
+        while (!resumeLatch.await(0, TimeUnit.MILLISECONDS) &&
+            (System.currentTimeMillis() - resumeStartMs) < maxWaitMs
+        ) {
             scenario!!.onActivity { activity ->
                 if (activity.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
                     resumeLatch.countDown()
@@ -288,7 +320,7 @@ class RestartableMainActivityRule(
 
         Assert.assertTrue(
             "New Activity did not reach RESUMED state within ${maxWaitMs}ms after cold restart",
-            resumeLatch.await(0, TimeUnit.MILLISECONDS)
+            resumeLatch.await(0, TimeUnit.MILLISECONDS),
         )
 
         composeTestRule?.waitForIdle()
@@ -319,7 +351,10 @@ class RestartableMainActivityRule(
         scenario = null
     }
 
-    override fun apply(base: Statement, description: Description): Statement {
+    override fun apply(
+        base: Statement,
+        description: Description,
+    ): Statement {
         return object : Statement() {
             override fun evaluate() {
                 try {
@@ -344,8 +379,8 @@ object AndroidTestEnvironment {
 
     fun createSession(
         context: Context,
-        animationTimeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource = com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
-        transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource = com.xiwei.sujian.editor.v2.visual.TransactionIdSource(),
+        animationTimeSource: AnimationTimeSource = ChoreographerAnimationTimeSource(),
+        transactionIdSource: TransactionIdSource = TransactionIdSource(),
     ): TestSession {
         val session = TestSession.create(context, animationTimeSource, transactionIdSource)
         currentSession = session
@@ -367,7 +402,10 @@ object AndroidTestEnvironment {
         val volumeTitle: String,
     )
 
-    fun ensureTestProjectAndVolume(context: Context, session: TestSession? = null): TestProjectData {
+    fun ensureTestProjectAndVolume(
+        context: Context,
+        session: TestSession? = null,
+    ): TestProjectData {
         val s = session ?: requireCurrentSession()
         val repo = s.deps.workspaceRepository
         val projects = repo.getProjects()
@@ -385,10 +423,13 @@ object AndroidTestEnvironment {
     }
 
     class TestDependenciesRule(
-        private val animationTimeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource = com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
-        private val transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource = com.xiwei.sujian.editor.v2.visual.TransactionIdSource(),
+        private val animationTimeSource: AnimationTimeSource = ChoreographerAnimationTimeSource(),
+        private val transactionIdSource: TransactionIdSource = TransactionIdSource(),
     ) : TestRule {
-        override fun apply(base: Statement, description: Description): Statement {
+        override fun apply(
+            base: Statement,
+            description: Description,
+        ): Statement {
             return object : Statement() {
                 override fun evaluate() {
                     val instrumentation = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()

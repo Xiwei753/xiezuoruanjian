@@ -4,13 +4,11 @@ import com.google.gson.Gson
 import com.xiwei.sujian.model.StarMapData
 import com.xiwei.sujian.model.StarMapDeepTargetData
 import com.xiwei.sujian.model.StarMapDisplayPolicyData
+import com.xiwei.sujian.model.StarMapEdgeRenderData
 import com.xiwei.sujian.model.StarMapEmbedData
 import com.xiwei.sujian.model.StarMapEmbedPlacementData
 import com.xiwei.sujian.model.StarMapEmbedViewportData
-import com.xiwei.sujian.model.StarMapEdgeRenderData
 import com.xiwei.sujian.model.StarMapEndpointData
-import com.xiwei.sujian.model.StarMapEndpointPathData
-import com.xiwei.sujian.model.StarMapEndpointPathSegmentData
 import com.xiwei.sujian.model.StarMapGraphData
 import com.xiwei.sujian.model.StarMapHyperlinkData
 import com.xiwei.sujian.model.StarMapLayoutKind
@@ -34,94 +32,105 @@ import uniffi.writer_core.StarMapViewportDto
 
 internal val starMapPayloadGson = Gson()
 
-internal fun StarMapMetaDto.toModel(): StarMapMeta = StarMapMeta(
-    starmapId = starmapId,
-    title = title,
-    description = description,
-    projectId = projectId,
-    parentStarmapId = parentStarmapId,
-    isMainForProject = isMainForProject,
-    accentColor = accentColor,
-    createdAt = createdAt.toLong(),
-    updatedAt = updatedAt.toLong(),
-    nodeCount = nodeCount.toInt(),
-    edgeCount = edgeCount.toInt(),
-    linkedChapterCount = linkedChapterCount.toInt(),
-    childStarmapCount = childStarmapCount.toInt()
-)
-
-internal fun StarMapGraphDto.toRawCache(): StarMapRawCache = StarMapRawCache(
-    graph = this,
-    nodes = nodes.associateByTo(mutableMapOf()) { it.id },
-    edges = edges.associateByTo(mutableMapOf()) { it.id },
-    embeds = embeds.associateByTo(mutableMapOf()) { it.instanceId },
-    links = links.associateByTo(mutableMapOf()) { it.linkId },
-    hyperlinks = hyperlinks.associateByTo(mutableMapOf()) { it.hyperlinkId }
-)
-
-internal fun StarMapGraphDto.toModel(cache: StarMapRawCache? = null): StarMapData = StarMapData(
-    graph = StarMapGraphData(
-        schemaVersion = schemaVersion.toInt(),
-        id = id,
+internal fun StarMapMetaDto.toModel(): StarMapMeta =
+    StarMapMeta(
         starmapId = starmapId,
         title = title,
-        nodes = nodes.map { it.toGraphNode() },
-        edges = edges.map { it.toGraphEdge() },
+        description = description,
+        projectId = projectId,
+        parentStarmapId = parentStarmapId,
+        isMainForProject = isMainForProject,
+        accentColor = accentColor,
         createdAt = createdAt.toLong(),
-        updatedAt = updatedAt.toLong()
-    ),
-    layout = cache?.let { c ->
-        val layoutNodes = c.layoutNodes.values.map { it.toModel() }
-        if (layoutNodes.isNotEmpty()) {
-            com.xiwei.sujian.model.StarMapLayoutData(kind = StarMapLayoutKind.Freeform, nodes = layoutNodes)
-        } else null
-    } ?: com.xiwei.sujian.model.StarMapLayoutData(kind = StarMapLayoutKind.Freeform, nodes = emptyList())
-)
+        updatedAt = updatedAt.toLong(),
+        nodeCount = nodeCount.toInt(),
+        edgeCount = edgeCount.toInt(),
+        linkedChapterCount = linkedChapterCount.toInt(),
+        childStarmapCount = childStarmapCount.toInt(),
+    )
 
-internal fun StarMapEdgeRenderDto.toModel(): StarMapEdgeRenderData = StarMapEdgeRenderData(
-    edgeId = edgeId,
-    fromCx = fromCx,
-    fromCy = fromCy,
-    toCx = toCx,
-    toCy = toCy,
-    startX = startX,
-    startY = startY,
-    endX = endX,
-    endY = endY,
-    offsetX = offsetX,
-    offsetY = offsetY,
-    arrowTipX = arrowTipX,
-    arrowTipY = arrowTipY,
-    arrowLeftX = arrowLeftX,
-    arrowLeftY = arrowLeftY,
-    arrowRightX = arrowRightX,
-    arrowRightY = arrowRightY,
-    labelX = labelX,
-    labelY = labelY,
-    hasBidirectional = hasBidirectional
-)
+internal fun StarMapGraphDto.toRawCache(): StarMapRawCache =
+    StarMapRawCache(
+        graph = this,
+        nodes = nodes.associateByTo(mutableMapOf()) { it.id },
+        edges = edges.associateByTo(mutableMapOf()) { it.id },
+        embeds = embeds.associateByTo(mutableMapOf()) { it.instanceId },
+        links = links.associateByTo(mutableMapOf()) { it.linkId },
+        hyperlinks = hyperlinks.associateByTo(mutableMapOf()) { it.hyperlinkId },
+    )
 
-internal fun StarMapViewportDto.toModel(): StarMapViewportData = StarMapViewportData(
-    scale = scale,
-    offsetX = offsetX,
-    offsetY = offsetY,
-    width = width,
-    height = height
-)
+internal fun StarMapGraphDto.toModel(cache: StarMapRawCache? = null): StarMapData =
+    StarMapData(
+        graph =
+            StarMapGraphData(
+                schemaVersion = schemaVersion.toInt(),
+                id = id,
+                starmapId = starmapId,
+                title = title,
+                nodes = nodes.map { it.toGraphNode() },
+                edges = edges.map { it.toGraphEdge() },
+                createdAt = createdAt.toLong(),
+                updatedAt = updatedAt.toLong(),
+            ),
+        layout =
+            cache?.let { c ->
+                val layoutNodes = c.layoutNodes.values.map { it.toModel() }
+                if (layoutNodes.isNotEmpty()) {
+                    com.xiwei.sujian.model.StarMapLayoutData(kind = StarMapLayoutKind.Freeform, nodes = layoutNodes)
+                } else {
+                    null
+                }
+            } ?: com.xiwei.sujian.model.StarMapLayoutData(kind = StarMapLayoutKind.Freeform, nodes = emptyList()),
+    )
 
-internal fun StarMapViewportData.toDto(): StarMapViewportDto = StarMapViewportDto(
-    scale = scale,
-    offsetX = offsetX,
-    offsetY = offsetY,
-    width = width,
-    height = height
-)
+internal fun StarMapEdgeRenderDto.toModel(): StarMapEdgeRenderData =
+    StarMapEdgeRenderData(
+        edgeId = edgeId,
+        fromCx = fromCx,
+        fromCy = fromCy,
+        toCx = toCx,
+        toCy = toCy,
+        startX = startX,
+        startY = startY,
+        endX = endX,
+        endY = endY,
+        offsetX = offsetX,
+        offsetY = offsetY,
+        arrowTipX = arrowTipX,
+        arrowTipY = arrowTipY,
+        arrowLeftX = arrowLeftX,
+        arrowLeftY = arrowLeftY,
+        arrowRightX = arrowRightX,
+        arrowRightY = arrowRightY,
+        labelX = labelX,
+        labelY = labelY,
+        hasBidirectional = hasBidirectional,
+    )
 
-internal fun StarMapLayoutKind.toDto(): StarMapLayoutKindDto = when (this) {
-    StarMapLayoutKind.Freeform -> StarMapLayoutKindDto.FREEFORM
-    StarMapLayoutKind.AutoRadial -> StarMapLayoutKindDto.AUTO_RADIAL
-    StarMapLayoutKind.Custom -> StarMapLayoutKindDto.CUSTOM
-}
+internal fun StarMapViewportDto.toModel(): StarMapViewportData =
+    StarMapViewportData(
+        scale = scale,
+        offsetX = offsetX,
+        offsetY = offsetY,
+        width = width,
+        height = height,
+    )
+
+internal fun StarMapViewportData.toDto(): StarMapViewportDto =
+    StarMapViewportDto(
+        scale = scale,
+        offsetX = offsetX,
+        offsetY = offsetY,
+        width = width,
+        height = height,
+    )
+
+internal fun StarMapLayoutKind.toDto(): StarMapLayoutKindDto =
+    when (this) {
+        StarMapLayoutKind.Freeform -> StarMapLayoutKindDto.FREEFORM
+        StarMapLayoutKind.AutoRadial -> StarMapLayoutKindDto.AUTO_RADIAL
+        StarMapLayoutKind.Custom -> StarMapLayoutKindDto.CUSTOM
+    }
 
 @Suppress("UNCHECKED_CAST")
 internal fun String?.toPayloadMap(): Map<String, Any>? {
@@ -133,101 +142,120 @@ internal fun String?.toPayloadMap(): Map<String, Any>? {
     }
 }
 
-internal fun defaultStarMapDisplayPolicy() = StarMapDisplayPolicyDto(
-    importance = 1f,
-    minVisibleScale = 0f,
-    titleScale = 1f,
-    summaryScale = 1f,
-    detailScale = 1f,
-    maxPreviewChars = 120u,
-    minReadablePx = 12f
-)
-
-internal fun StarMapEmbedDto.toModel(): StarMapEmbedData = StarMapEmbedData(
-    instanceId = instanceId,
-    targetStarmapId = targetStarmapId,
-    label = label,
-    sourceNodeId = sourceNodeId,
-    hostEndpoint = hostEndpoint?.let { StarMapEndpointData(kind = it.kind, nodeId = it.nodeId, anchorId = it.anchorId) },
-    displayPolicy = StarMapDisplayPolicyData(
-        importance = displayPolicy.importance,
-        minVisibleScale = displayPolicy.minVisibleScale,
-        titleScale = displayPolicy.titleScale,
-        summaryScale = displayPolicy.summaryScale,
-        detailScale = displayPolicy.detailScale,
-        maxPreviewChars = displayPolicy.maxPreviewChars.toInt(),
-        minReadablePx = displayPolicy.minReadablePx
-    ),
-    openBehavior = openBehavior.name,
-    provenance = StarMapProvenanceData(
-        source = provenance.source.name,
-        sourceId = provenance.sourceId,
-        generatedBy = provenance.generatedBy,
-        promptId = provenance.promptId,
-        reviewStatus = provenance.reviewStatus.name,
-        createdFromAnchor = provenance.createdFromAnchor
-    ),
-    placement = StarMapEmbedPlacementData(
-        x = placement.x,
-        y = placement.y,
-        width = placement.width,
-        height = placement.height,
-        scale = placement.scale,
-        zIndex = placement.zIndex,
-        collapsed = placement.collapsed
-    ),
-    targetViewport = StarMapEmbedViewportData(
-        scale = targetViewport.scale,
-        offsetX = targetViewport.offsetX,
-        offsetY = targetViewport.offsetY
+internal fun defaultStarMapDisplayPolicy() =
+    StarMapDisplayPolicyDto(
+        importance = 1f,
+        minVisibleScale = 0f,
+        titleScale = 1f,
+        summaryScale = 1f,
+        detailScale = 1f,
+        maxPreviewChars = 120u,
+        minReadablePx = 12f,
     )
-)
 
-internal fun StarMapLinkDto.toModel(): StarMapLinkData = StarMapLinkData(
-    linkId = linkId,
-    source = StarMapEndpointData(
-        kind = source.kind,
-        nodeId = source.nodeId,
-        anchorId = source.anchorId
-    ),
-    target = target.toModel(),
-    label = label
-)
+internal fun StarMapEmbedDto.toModel(): StarMapEmbedData =
+    StarMapEmbedData(
+        instanceId = instanceId,
+        targetStarmapId = targetStarmapId,
+        label = label,
+        sourceNodeId = sourceNodeId,
+        hostEndpoint =
+            hostEndpoint?.let {
+                StarMapEndpointData(
+                    kind = it.kind,
+                    nodeId = it.nodeId,
+                    anchorId = it.anchorId,
+                )
+            },
+        displayPolicy =
+            StarMapDisplayPolicyData(
+                importance = displayPolicy.importance,
+                minVisibleScale = displayPolicy.minVisibleScale,
+                titleScale = displayPolicy.titleScale,
+                summaryScale = displayPolicy.summaryScale,
+                detailScale = displayPolicy.detailScale,
+                maxPreviewChars = displayPolicy.maxPreviewChars.toInt(),
+                minReadablePx = displayPolicy.minReadablePx,
+            ),
+        openBehavior = openBehavior.name,
+        provenance =
+            StarMapProvenanceData(
+                source = provenance.source.name,
+                sourceId = provenance.sourceId,
+                generatedBy = provenance.generatedBy,
+                promptId = provenance.promptId,
+                reviewStatus = provenance.reviewStatus.name,
+                createdFromAnchor = provenance.createdFromAnchor,
+            ),
+        placement =
+            StarMapEmbedPlacementData(
+                x = placement.x,
+                y = placement.y,
+                width = placement.width,
+                height = placement.height,
+                scale = placement.scale,
+                zIndex = placement.zIndex,
+                collapsed = placement.collapsed,
+            ),
+        targetViewport =
+            StarMapEmbedViewportData(
+                scale = targetViewport.scale,
+                offsetX = targetViewport.offsetX,
+                offsetY = targetViewport.offsetY,
+            ),
+    )
 
-internal fun StarMapHyperlinkDto.toModel(): StarMapHyperlinkData = StarMapHyperlinkData(
-    hyperlinkId = hyperlinkId,
-    source = source.toModel(),
-    targetUri = targetUri,
-    label = label,
-    targetStarmapId = targetStarmapId
-)
+internal fun StarMapLinkDto.toModel(): StarMapLinkData =
+    StarMapLinkData(
+        linkId = linkId,
+        source =
+            StarMapEndpointData(
+                kind = source.kind,
+                nodeId = source.nodeId,
+                anchorId = source.anchorId,
+            ),
+        target = target.toModel(),
+        label = label,
+    )
 
-internal fun LoadDiagnosticDto.toModel(): StarMapLoadDiagnostic = StarMapLoadDiagnostic(
-    kind = kind,
-    objectType = objectType,
-    objectId = objectId,
-    detail = detail
-)
+internal fun StarMapHyperlinkDto.toModel(): StarMapHyperlinkData =
+    StarMapHyperlinkData(
+        hyperlinkId = hyperlinkId,
+        source = source.toModel(),
+        targetUri = targetUri,
+        label = label,
+        targetStarmapId = targetStarmapId,
+    )
 
-internal fun uniffi.writer_core.StarMapDeepTargetDto.toModel(): StarMapDeepTargetData = StarMapDeepTargetData(
-    starmapId = starmapId,
-    path = path.map { StarMapPathSegmentData(kind = it.kind, starmapId = it.starmapId) },
-    target = target.toModel()
-)
+internal fun LoadDiagnosticDto.toModel(): StarMapLoadDiagnostic =
+    StarMapLoadDiagnostic(
+        kind = kind,
+        objectType = objectType,
+        objectId = objectId,
+        detail = detail,
+    )
 
-internal fun uniffi.writer_core.StarMapTargetDetailDto.toModel(): StarMapTargetDetailData = StarMapTargetDetailData(
-    kind = kind,
-    nodeId = nodeId,
-    anchorId = anchorId,
-    projectId = projectId,
-    volumeId = volumeId,
-    chapterId = chapterId,
-    rangeStart = rangeStart,
-    rangeEnd = rangeEnd,
-    entityType = entityType,
-    entityId = entityId,
-    uri = uri
-)
+internal fun uniffi.writer_core.StarMapDeepTargetDto.toModel(): StarMapDeepTargetData =
+    StarMapDeepTargetData(
+        starmapId = starmapId,
+        path = path.map { StarMapPathSegmentData(kind = it.kind, starmapId = it.starmapId) },
+        target = target.toModel(),
+    )
+
+internal fun uniffi.writer_core.StarMapTargetDetailDto.toModel(): StarMapTargetDetailData =
+    StarMapTargetDetailData(
+        kind = kind,
+        nodeId = nodeId,
+        anchorId = anchorId,
+        projectId = projectId,
+        volumeId = volumeId,
+        chapterId = chapterId,
+        rangeStart = rangeStart,
+        rangeEnd = rangeEnd,
+        entityType = entityType,
+        entityId = entityId,
+        uri = uri,
+    )
 
 internal fun uniffi.writer_core.StarMapMotionPolicyDto.toModel(): com.xiwei.sujian.model.StarMapMotionPolicyData =
     com.xiwei.sujian.model.StarMapMotionPolicyData(
@@ -238,5 +266,5 @@ internal fun uniffi.writer_core.StarMapMotionPolicyDto.toModel(): com.xiwei.suji
         dragLiftScale = dragLiftScale,
         dragShadowBoost = dragShadowBoost,
         settleDurationMs = settleDurationMs.toInt(),
-        reduceMotion = reduceMotion
+        reduceMotion = reduceMotion,
     )

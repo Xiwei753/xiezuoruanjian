@@ -1,60 +1,67 @@
 package com.xiwei.sujian.data
 
 import android.content.Context
-import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.model.SyncTrigger
 
 class AutoSyncWorker(
     appContext: Context,
-    workerParams: WorkerParameters
+    workerParams: WorkerParameters,
 ) : CoroutineWorker(appContext, workerParams) {
     override suspend fun doWork(): Result {
-        val deps = (applicationContext as? com.xiwei.sujian.runtime.SujianAppDependenciesProvider)
-            ?.dependencies
-            ?: return Result.failure()
+        val deps =
+            (applicationContext as? com.xiwei.sujian.runtime.SujianAppDependenciesProvider)
+                ?.dependencies
+                ?: return Result.failure()
         val settingsRepository = deps.settingsRepository
         // #592 六：一次只读取一份完整不可变快照（generation + config + secrets），
         // 后续整个操作（shouldSync 判定 + runSync）只使用这份 snapshot。
-        val snapshotResult = try {
-            SyncProfileGate.snapshotExclusive { settingsRepository.snapshotSyncProfile() }
-        } catch (e: Exception) {
-            DiagnosticsLogger.w(TAG, "Unable to load sync profile snapshot", e)
-            return Result.retry()
-        }
-        val snapshot = when (snapshotResult) {
-            is SyncProfileReadResult.Found -> snapshotResult.snapshot
-            is SyncProfileReadResult.NotConfigured -> snapshotResult.snapshot
-            is SyncProfileReadResult.Failed -> {
-                DiagnosticsLogger.w(TAG, "Sync profile snapshot failed: ${snapshotResult.message}")
-                // #595 四：按失败类型映射 — 临时网络/IO/原生库故障交给 WorkManager
-                // 退避重试；Fatal/协议/配置损坏是确定性失败，重试没有意义。
-                return if (snapshotResult.kind.isTransientReadFailure()) {
-                    Result.retry()
-                } else {
-                    Result.failure()
+        val snapshotResult =
+            try {
+                SyncProfileGate.snapshotExclusive { settingsRepository.snapshotSyncProfile() }
+            } catch (e: Exception) {
+                DiagnosticsLogger.w(TAG, "Unable to load sync profile snapshot", e)
+                return Result.retry()
+            }
+        val snapshot =
+            when (snapshotResult) {
+                is SyncProfileReadResult.Found -> snapshotResult.snapshot
+                is SyncProfileReadResult.NotConfigured -> snapshotResult.snapshot
+                is SyncProfileReadResult.Failed -> {
+                    DiagnosticsLogger.w(TAG, "Sync profile snapshot failed: ${snapshotResult.message}")
+                    // #595 四：按失败类型映射 — 临时网络/IO/原生库故障交给 WorkManager
+                    // 退避重试；Fatal/协议/配置损坏是确定性失败，重试没有意义。
+                    return if (snapshotResult.kind.isTransientReadFailure()) {
+                        Result.retry()
+                    } else {
+                        Result.failure()
+                    }
                 }
             }
-        }
         if (!AutoSyncScheduler.shouldSync(snapshot.config, snapshot.secrets)) return Result.success()
 
-        val state = try {
-            settingsRepository.loadSyncState()
-        } catch (e: Exception) {
-            DiagnosticsLogger.w(TAG, "Unable to load sync state", e)
-            return Result.retry()
-        }
+        val state =
+            try {
+                settingsRepository.loadSyncState()
+            } catch (e: Exception) {
+                DiagnosticsLogger.w(TAG, "Unable to load sync state", e)
+                return Result.retry()
+            }
 
-        val interval = when {
-            snapshot.config.syncIntervalSeconds != null && snapshot.config.syncIntervalSeconds > 0 -> snapshot.config.syncIntervalSeconds.toLong()
-            else -> DEFAULT_INTERVAL_SECONDS
-        }
-        val elapsed = if (state.lastSyncTime != null && state.lastSyncTime > 0) {
-            (System.currentTimeMillis() / 1000) - state.lastSyncTime
-        } else {
-            null
-        }
+        val interval =
+            when {
+                snapshot.config.syncIntervalSeconds != null && snapshot.config.syncIntervalSeconds > 0 ->
+                    snapshot.config.syncIntervalSeconds.toLong()
+                else -> DEFAULT_INTERVAL_SECONDS
+            }
+        val elapsed =
+            if (state.lastSyncTime != null && state.lastSyncTime > 0) {
+                (System.currentTimeMillis() / 1000) - state.lastSyncTime
+            } else {
+                null
+            }
         if (elapsed != null && elapsed < interval) return Result.success()
 
         val outcome = deps.syncCoordinator.runSync(SyncTrigger.Auto, snapshot)
@@ -64,7 +71,8 @@ class AutoSyncWorker(
                 Result.success()
             }
             is com.xiwei.sujian.data.SyncOutcome.Unconfigured,
-            is com.xiwei.sujian.data.SyncOutcome.Disabled -> {
+            is com.xiwei.sujian.data.SyncOutcome.Disabled,
+            -> {
                 com.xiwei.sujian.diagnostics.DiagnosticsEvents.syncEvent("autosync", "unconfigured")
                 Result.success()
             }

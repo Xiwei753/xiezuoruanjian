@@ -19,22 +19,24 @@ import org.robolectric.annotation.Config
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
-class ExternalResetResultContractTest {
-
+class ExternalResetResultTest {
     private fun createCoordinator(): EditorSessionCoordinator {
-        return EditorSessionCoordinator(com.xiwei.sujian.data.AppServiceBridge(
-            com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595_reset")
-        ))
+        return EditorSessionCoordinator(
+            com.xiwei.sujian.data.AppServiceBridge(
+                com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595_reset"),
+            ),
+        )
     }
 
     @Test
     fun resetPersistentSession_returnsExternalResetResultType() {
         // resetPersistentSession 拆分为扩展函数，编译为 EditorSessionLifecycleOpsKt 静态方法。
         val extClass = Class.forName("com.xiwei.sujian.editor.v2.coordinator.EditorSessionLifecycleOpsKt")
-        val method = extClass.declaredMethods.firstOrNull {
-            it.name == "resetPersistentSession" &&
-            it.returnType == com.xiwei.sujian.editor.v2.coordinator.ExternalResetResult::class.java
-        }
+        val method =
+            extClass.declaredMethods.firstOrNull {
+                it.name == "resetPersistentSession" &&
+                    it.returnType == com.xiwei.sujian.editor.v2.coordinator.ExternalResetResult::class.java
+            }
         assertTrue(
             "resetPersistentSession must return ExternalResetResult — Unit 让调用方无法检测 reset 失败 (#595 五)",
             method != null,

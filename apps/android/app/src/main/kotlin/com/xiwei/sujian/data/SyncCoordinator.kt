@@ -11,9 +11,13 @@ import java.io.IOException
 
 sealed class SyncOutcome {
     data class Completed(val result: SyncResult) : SyncOutcome()
+
     data object Disabled : SyncOutcome()
+
     data object Unconfigured : SyncOutcome()
+
     data object Busy : SyncOutcome()
+
     /**
      * #592 三：携带具体 [SyncFailureKind]，使正式同步、试运行、连接诊断
      * 全部通过 kind.messageKey() 获得同一用户提示映射。
@@ -22,6 +26,7 @@ sealed class SyncOutcome {
         val status: SyncStatus,
         val kind: SyncFailureKind = SyncFailureKind.fromSyncStatus(status),
     ) : SyncOutcome()
+
     data class TerminalFailure(
         val status: SyncStatus,
         val kind: SyncFailureKind = SyncFailureKind.fromSyncStatus(status),
@@ -51,23 +56,28 @@ class SyncCoordinator(
      * BridgeResult.NotLoaded 与 errorCode "NATIVE_NOT_LOADED" 统一进入 NativeUnavailable，
      * 不再分别维护字符串白名单和独立分支。
      */
-    suspend fun runSync(trigger: SyncTrigger, snapshot: SyncProfileSnapshot? = null): SyncOutcome {
+    suspend fun runSync(
+        trigger: SyncTrigger,
+        snapshot: SyncProfileSnapshot? = null,
+    ): SyncOutcome {
         DiagnosticsEvents.syncEvent(trigger.name.lowercase(), "start")
         try {
-            val profile: SyncProfileSnapshot = snapshot ?: run {
-                val result = withContext(Dispatchers.IO) {
-                    SyncProfileGate.snapshotExclusive { settingsRepository.snapshotSyncProfile() }
-                }
-                when (result) {
-                    is SyncProfileReadResult.Found -> result.snapshot
-                    is SyncProfileReadResult.NotConfigured -> result.snapshot
-                    is SyncProfileReadResult.Failed -> {
-                        DiagnosticsLogger.w("SyncCoordinator", "Sync profile snapshot failed: ${result.message}")
-                        syncStatusRepository.notifySyncFailed()
-                        return result.kind.toOutcome()
+            val profile: SyncProfileSnapshot =
+                snapshot ?: run {
+                    val result =
+                        withContext(Dispatchers.IO) {
+                            SyncProfileGate.snapshotExclusive { settingsRepository.snapshotSyncProfile() }
+                        }
+                    when (result) {
+                        is SyncProfileReadResult.Found -> result.snapshot
+                        is SyncProfileReadResult.NotConfigured -> result.snapshot
+                        is SyncProfileReadResult.Failed -> {
+                            DiagnosticsLogger.w("SyncCoordinator", "Sync profile snapshot failed: ${result.message}")
+                            syncStatusRepository.notifySyncFailed()
+                            return result.kind.toOutcome()
+                        }
                     }
                 }
-            }
             val config = profile.config
             if (config.enabled != true) {
                 syncStatusRepository.notifyUnconfigured()
@@ -88,50 +98,72 @@ class SyncCoordinator(
             // #595 三：活动正文 flush 与同步执行必须在同一独占锁内串行 —
             // flush 保存磁盘版本后同步立即以该版本为 base；如果 flush 在锁外，
             // 两个同步触发可交叉 flush/执行，正文版本屏障失效。
-            val exclusiveResult = SyncSession.runExclusive { _ ->
-                val flushOk = WorkspaceDocumentGate.flushActiveDocument()
-                if (!flushOk) {
-                    DiagnosticsLogger.w("SyncCoordinator", "Active document flush failed before sync — aborting (typed DocumentSaveFailed)")
-                    syncStatusRepository.notifySyncFailed()
-                    return@runExclusive BridgeResult.Error(
-                        ResultEnvelope.errorOf("DOCUMENT_FLUSH_FAILED", "Active document could not be persisted before sync"),
-                        SyncFailureKind.DocumentSaveFailed,
-                    )
-                }
-                // #595 三：签发文档身份 lease — 同步前后校验文档是否仍是同一 target/session/epoch。
-                val identityBeforeSync = WorkspaceDocumentGate.activeDocumentIdentity()
-                syncStatusRepository.notifySyncStarted()
-                val overrideOk = withContext(Dispatchers.IO) {
-                    settingsRepository.setSyncSecretsOverrideStrict(profile.secrets)
-                }
-                if (!overrideOk) {
-                    val error = BridgeResult.Error(
-                        ResultEnvelope.errorOf("SYNC_CREDENTIALS_OVERRIDE_FAILED", "Failed to set sync credentials override"),
-                        SyncFailureKind.Fatal,
-                    )
-                    resolveAndPublish(error)
-                    return@runExclusive error
-                }
-                try {
-                    val bridgeResult = withContext(Dispatchers.IO) { settingsRepository.performSync(config) }
-                    // #595 三：校验文档身份 — 同步期间章节切换/关闭导致身份变化时，
-                    // 不应用同步结果，新输入作为下一代 dirty 文档继续保存。
-                    val identityAfterSync = WorkspaceDocumentGate.activeDocumentIdentity()
-                    if (identityBeforeSync != null && identityAfterSync != null && identityBeforeSync != identityAfterSync) {
-                        DiagnosticsLogger.w("SyncCoordinator", "Document identity changed during sync — result not applied: $identityBeforeSync -> $identityAfterSync")
-                        val staleError = BridgeResult.Error(
-                            ResultEnvelope.errorOf("DOCUMENT_IDENTITY_CHANGED", "Active document changed during sync — result not applied"),
+            val exclusiveResult =
+                SyncSession.runExclusive { _ ->
+                    val flushOk = WorkspaceDocumentGate.flushActiveDocument()
+                    if (!flushOk) {
+                        DiagnosticsLogger.w(
+                            "SyncCoordinator",
+                            "Active document flush failed before sync — aborting (typed DocumentSaveFailed)",
+                        )
+                        syncStatusRepository.notifySyncFailed()
+                        return@runExclusive BridgeResult.Error(
+                            ResultEnvelope.errorOf(
+                                "DOCUMENT_FLUSH_FAILED",
+                                "Active document could not be persisted before sync",
+                            ),
                             SyncFailureKind.DocumentSaveFailed,
                         )
-                        resolveAndPublish(staleError)
-                        return@runExclusive staleError
                     }
-                    resolveAndPublish(bridgeResult)
-                    bridgeResult
-                } finally {
-                    withContext(Dispatchers.IO) { settingsRepository.clearSyncSecretsOverride() }
+                    // #595 三：签发文档身份 lease — 同步前后校验文档是否仍是同一 target/session/epoch。
+                    val identityBeforeSync = WorkspaceDocumentGate.activeDocumentIdentity()
+                    syncStatusRepository.notifySyncStarted()
+                    val overrideOk =
+                        withContext(Dispatchers.IO) {
+                            settingsRepository.setSyncSecretsOverrideStrict(profile.secrets)
+                        }
+                    if (!overrideOk) {
+                        val error =
+                            BridgeResult.Error(
+                                ResultEnvelope.errorOf(
+                                    "SYNC_CREDENTIALS_OVERRIDE_FAILED",
+                                    "Failed to set sync credentials override",
+                                ),
+                                SyncFailureKind.Fatal,
+                            )
+                        resolveAndPublish(error)
+                        return@runExclusive error
+                    }
+                    try {
+                        val bridgeResult = withContext(Dispatchers.IO) { settingsRepository.performSync(config) }
+                        // #595 三：校验文档身份 — 同步期间章节切换/关闭导致身份变化时，
+                        // 不应用同步结果，新输入作为下一代 dirty 文档继续保存。
+                        val identityAfterSync = WorkspaceDocumentGate.activeDocumentIdentity()
+                        if (identityBeforeSync != null && identityAfterSync != null &&
+                            identityBeforeSync != identityAfterSync
+                        ) {
+                            DiagnosticsLogger.w(
+                                "SyncCoordinator",
+                                "Document identity changed during sync — result not applied: " +
+                                    "$identityBeforeSync -> $identityAfterSync",
+                            )
+                            val staleError =
+                                BridgeResult.Error(
+                                    ResultEnvelope.errorOf(
+                                        "DOCUMENT_IDENTITY_CHANGED",
+                                        "Active document changed during sync — result not applied",
+                                    ),
+                                    SyncFailureKind.DocumentSaveFailed,
+                                )
+                            resolveAndPublish(staleError)
+                            return@runExclusive staleError
+                        }
+                        resolveAndPublish(bridgeResult)
+                        bridgeResult
+                    } finally {
+                        withContext(Dispatchers.IO) { settingsRepository.clearSyncSecretsOverride() }
+                    }
                 }
-            }
 
             return when (exclusiveResult) {
                 is ExclusiveResult.Busy -> {
@@ -169,32 +201,44 @@ class SyncCoordinator(
      * #592 七：类型化失败直接来自 Bridge 边界（WriterException 变体），
      * 不再维护 Android 字符串错误码表；未知错误默认 Fatal。
      */
-    internal fun classifyFailure(error: BridgeResult.Error): SyncFailureKind =
-        SyncFailureKind.fromBridgeError(error)
+    internal fun classifyFailure(error: BridgeResult.Error): SyncFailureKind = SyncFailureKind.fromBridgeError(error)
 
+    private fun mapToOutcome(result: SyncResult): SyncOutcome =
+        when (result.status) {
+            SyncStatus.Success,
+            SyncStatus.NoChanges,
+            SyncStatus.LatestWinsApplied,
+            SyncStatus.BranchMissingRecovered,
+            -> SyncOutcome.Completed(result)
 
+            SyncStatus.RecoverableError ->
+                SyncOutcome.RetryableFailure(
+                    result.status,
+                    SyncFailureKind.fromSyncStatus(result.status),
+                )
 
-    private fun mapToOutcome(result: SyncResult): SyncOutcome = when (result.status) {
-        SyncStatus.Success,
-        SyncStatus.NoChanges,
-        SyncStatus.LatestWinsApplied,
-        SyncStatus.BranchMissingRecovered -> SyncOutcome.Completed(result)
+            SyncStatus.Error,
+            SyncStatus.Conflict,
+            SyncStatus.PartialConflict,
+            SyncStatus.FatalError,
+            SyncStatus.DirtyRepoBlocked,
+            ->
+                SyncOutcome.TerminalFailure(
+                    result.status,
+                    SyncFailureKind.fromSyncStatus(result.status),
+                )
 
-        SyncStatus.RecoverableError -> SyncOutcome.RetryableFailure(result.status, SyncFailureKind.fromSyncStatus(result.status))
-
-        SyncStatus.Error,
-        SyncStatus.Conflict,
-        SyncStatus.PartialConflict,
-        SyncStatus.FatalError,
-        SyncStatus.DirtyRepoBlocked -> SyncOutcome.TerminalFailure(result.status, SyncFailureKind.fromSyncStatus(result.status))
-
-        SyncStatus.Syncing -> {
-            DiagnosticsLogger.w("SyncCoordinator", "performSync returned Syncing — protocol error, mapping to terminal failure")
-            SyncOutcome.TerminalFailure(SyncStatus.FatalError, SyncFailureKind.Fatal)
+            SyncStatus.Syncing -> {
+                DiagnosticsLogger.w(
+                    "SyncCoordinator",
+                    "performSync returned Syncing — protocol error, mapping to terminal failure",
+                )
+                SyncOutcome.TerminalFailure(SyncStatus.FatalError, SyncFailureKind.Fatal)
+            }
+            SyncStatus.Idle,
+            SyncStatus.ConfiguredNotTested,
+            -> SyncOutcome.Unconfigured
         }
-        SyncStatus.Idle,
-        SyncStatus.ConfiguredNotTested -> SyncOutcome.Unconfigured
-    }
 
     private fun resolveAndPublish(result: BridgeResult<SyncResult>) {
         when (result) {
@@ -209,7 +253,8 @@ class SyncCoordinator(
             SyncStatus.Success,
             SyncStatus.NoChanges,
             SyncStatus.LatestWinsApplied,
-            SyncStatus.BranchMissingRecovered -> {
+            SyncStatus.BranchMissingRecovered,
+            -> {
                 syncStatusRepository.notifySyncSuccess()
             }
             SyncStatus.Conflict,
@@ -217,7 +262,8 @@ class SyncCoordinator(
             SyncStatus.RecoverableError,
             SyncStatus.FatalError,
             SyncStatus.DirtyRepoBlocked,
-            SyncStatus.Error -> {
+            SyncStatus.Error,
+            -> {
                 syncStatusRepository.notifySyncFailed()
             }
             SyncStatus.Syncing -> {
@@ -225,7 +271,8 @@ class SyncCoordinator(
                 syncStatusRepository.notifySyncFailed()
             }
             SyncStatus.Idle,
-            SyncStatus.ConfiguredNotTested -> {
+            SyncStatus.ConfiguredNotTested,
+            -> {
                 syncStatusRepository.notifyUnconfigured()
             }
         }

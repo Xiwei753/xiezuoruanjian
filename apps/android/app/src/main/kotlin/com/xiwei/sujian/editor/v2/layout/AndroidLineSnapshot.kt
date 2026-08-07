@@ -21,7 +21,7 @@ data class LineClusterSnapshot(
      *  On API < 31 the fingerprint uses codepoint types + paint hash, which is less precise;
      *  when either old or new cluster lacks confidence, the pair must use Crossfade instead
      *  of Move to avoid visual glitches from false fingerprint matches. */
-    val shapingIdentityConfident: Boolean = false
+    val shapingIdentityConfident: Boolean = false,
 )
 
 data class AndroidLineSnapshot(
@@ -53,5 +53,5 @@ data class AndroidLineSnapshot(
     /** Exclusive UTF-16 offset of this line's end in the document. */
     val documentUtf16EndExclusive: Int = 0,
     val baseline: Float = 0f,
-    val lineHeight: Float = 0f
+    val lineHeight: Float = 0f,
 )

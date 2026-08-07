@@ -2,13 +2,13 @@ package com.xiwei.sujian.editor.v2.pipeline
 
 import android.graphics.Color
 import android.text.TextPaint
+import com.xiwei.sujian.editor.v2.host.EditorEditSource
+import com.xiwei.sujian.editor.v2.host.EditorKernelBridge
+import com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
+import com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.mirror.EditResult
 import com.xiwei.sujian.editor.v2.mirror.VisualIntent
-import com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor
-import com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
-import com.xiwei.sujian.editor.v2.host.EditorEditSource
-import com.xiwei.sujian.editor.v2.host.EditorKernelBridge
 import com.xiwei.sujian.editor.v2.projection.DisplayTextProjection
 import uniffi.writer_core.EditorTransactionCauseDto
 
@@ -47,7 +47,9 @@ sealed class PipelineOutput {
         val result: EditResult,
         val source: EditorEditSource = EditorEditSource.NORMAL,
     ) : PipelineOutput()
+
     object NeedReload : PipelineOutput()
+
     object StaleOrInvalid : PipelineOutput()
 }
 
@@ -55,20 +57,23 @@ class AndroidEditorPipeline private constructor(
     val editPipeline: EditPipeline,
     private val renderRuntime: AndroidRenderRuntime,
     private val layoutRuntime: AndroidLayoutRuntime,
-    private val visualRuntime: AndroidVisualRuntime
+    private val visualRuntime: AndroidVisualRuntime,
 ) : EditorCommandPort, InputCommandPort {
-
     override val mirror: DisplayTextMirror get() = editPipeline.mirror
     override var kernelBridge: EditorKernelBridge?
         get() = editPipeline.kernelBridge
-        set(value) { editPipeline.setKernelBridge(value) }
+        set(value) {
+            editPipeline.setKernelBridge(value)
+        }
 
     companion object {
         fun create(
             mirror: DisplayTextMirror,
             textPaint: TextPaint,
-            timeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource = com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
-            transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource = com.xiwei.sujian.editor.v2.visual.TransactionIdSource()
+            timeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource =
+                com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
+            transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource =
+                com.xiwei.sujian.editor.v2.visual.TransactionIdSource(),
         ): AndroidEditorPipeline {
             val editPipeline = EditPipeline(mirror)
             val layoutRuntime = AndroidLayoutRuntime(mirror, textPaint)
@@ -92,7 +97,10 @@ class AndroidEditorPipeline private constructor(
         typingAnimationDurationMs = durationMs.coerceAtLeast(1L)
     }
 
-    fun setSmoothCursor(enabled: Boolean, durationMs: Long) {
+    fun setSmoothCursor(
+        enabled: Boolean,
+        durationMs: Long,
+    ) {
         visualRuntime.setSmoothCursor(enabled, durationMs)
     }
 
@@ -114,7 +122,11 @@ class AndroidEditorPipeline private constructor(
 
     fun isAnimationPaused(): Boolean = visualRuntime.isAnimationPaused()
 
-    fun loadText(text: String, cursorUtf8: Int, @Suppress("UNUSED_PARAMETER") applySecret: Boolean = true): LoadTextResult {
+    fun loadText(
+        text: String,
+        cursorUtf8: Int,
+        @Suppress("UNUSED_PARAMETER") applySecret: Boolean = true,
+    ): LoadTextResult {
         val result = editPipeline.loadText(text, cursorUtf8)
         if (result is LoadTextResult.Loaded) {
             resetAfterLoad()
@@ -143,51 +155,82 @@ class AndroidEditorPipeline private constructor(
         layoutRuntime.rebuildDisplayProjection()
     }
 
-    override fun insertText(byteOffset: Int, text: String, cause: EditorTransactionCauseDto): PipelineOutput {
+    override fun insertText(
+        byteOffset: Int,
+        text: String,
+        cause: EditorTransactionCauseDto,
+    ): PipelineOutput {
         if (autoIndentEnabled && text == "\n") {
             val indentPrefix = computeAutoIndentPrefix()
-            val result = editPipeline.insertLineBreak(byteOffset, indentPrefix, cause)
-                ?: return PipelineOutput.StaleOrInvalid
+            val result =
+                editPipeline.insertLineBreak(byteOffset, indentPrefix, cause)
+                    ?: return PipelineOutput.StaleOrInvalid
             return applyEditResult(result)
         }
-        val result = editPipeline.insertText(byteOffset, text, cause)
-            ?: return PipelineOutput.StaleOrInvalid
+        val result =
+            editPipeline.insertText(byteOffset, text, cause)
+                ?: return PipelineOutput.StaleOrInvalid
         return applyEditResult(result)
     }
 
-    override fun deleteRange(byteStart: Int, byteEndExclusive: Int, cause: EditorTransactionCauseDto): PipelineOutput {
-        val result = editPipeline.deleteRange(byteStart, byteEndExclusive, cause)
-            ?: return PipelineOutput.StaleOrInvalid
+    override fun deleteRange(
+        byteStart: Int,
+        byteEndExclusive: Int,
+        cause: EditorTransactionCauseDto,
+    ): PipelineOutput {
+        val result =
+            editPipeline.deleteRange(byteStart, byteEndExclusive, cause)
+                ?: return PipelineOutput.StaleOrInvalid
         return applyEditResult(result)
     }
 
-    override fun replaceRangeTyped(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto, beforePatch: (() -> Unit)?, source: EditorEditSource): PipelineOutput {
-        val result = editPipeline.replaceRange(byteStart, byteEndExclusive, replacementText, originalText, cause)
-            ?: return PipelineOutput.StaleOrInvalid
+    override fun replaceRangeTyped(
+        byteStart: Int,
+        byteEndExclusive: Int,
+        replacementText: String,
+        originalText: String,
+        cause: EditorTransactionCauseDto,
+        beforePatch: (() -> Unit)?,
+        source: EditorEditSource,
+    ): PipelineOutput {
+        val result =
+            editPipeline.replaceRange(byteStart, byteEndExclusive, replacementText, originalText, cause)
+                ?: return PipelineOutput.StaleOrInvalid
         return applyEditResult(result, beforePatch, source)
     }
 
-    override fun setSelectionTyped(anchorByteOffset: Int, headByteOffset: Int, source: EditorEditSource): PipelineOutput {
-        val result = editPipeline.setSelection(anchorByteOffset, headByteOffset)
-            ?: return PipelineOutput.StaleOrInvalid
+    override fun setSelectionTyped(
+        anchorByteOffset: Int,
+        headByteOffset: Int,
+        source: EditorEditSource,
+    ): PipelineOutput {
+        val result =
+            editPipeline.setSelection(anchorByteOffset, headByteOffset)
+                ?: return PipelineOutput.StaleOrInvalid
         return applyEditResult(result, source = source)
     }
 
     fun performUndo(): PipelineOutput {
-        val result = editPipeline.undo()
-            ?: return PipelineOutput.StaleOrInvalid
+        val result =
+            editPipeline.undo()
+                ?: return PipelineOutput.StaleOrInvalid
         return applyEditResult(result, source = EditorEditSource.UNDO)
     }
 
     fun performRedo(): PipelineOutput {
-        val result = editPipeline.redo()
-            ?: return PipelineOutput.StaleOrInvalid
+        val result =
+            editPipeline.redo()
+                ?: return PipelineOutput.StaleOrInvalid
         return applyEditResult(result, source = EditorEditSource.REDO)
     }
 
-    fun replaceAll(searchStr: String, replaceStr: String): PipelineOutput {
-        val result = editPipeline.replaceAll(searchStr, replaceStr)
-            ?: return PipelineOutput.StaleOrInvalid
+    fun replaceAll(
+        searchStr: String,
+        replaceStr: String,
+    ): PipelineOutput {
+        val result =
+            editPipeline.replaceAll(searchStr, replaceStr)
+                ?: return PipelineOutput.StaleOrInvalid
         return applyEditResult(result, source = EditorEditSource.PROGRAMMATIC)
     }
 
@@ -212,96 +255,110 @@ class AndroidEditorPipeline private constructor(
      */
     override fun applyCompositionCommit(
         dto: uniffi.writer_core.EditorEditResultDto,
-        preeditText: String
+        preeditText: String,
     ): PipelineOutput {
         val result = EditResult.fromDto(dto)
         val rustOldAffected = result.visualIntent.oldAffectedByteRanges
         val rustNewAffected = result.visualIntent.newAffectedByteRanges
 
         val committedText = result.displayPatches.firstOrNull()?.insertedText ?: ""
-        val replaceStart = rustOldAffected.firstOrNull()?.first
-            ?: rustNewAffected.firstOrNull()?.first
-            ?: 0
+        val replaceStart =
+            rustOldAffected.firstOrNull()?.first
+                ?: rustNewAffected.firstOrNull()?.first
+                ?: 0
 
         val preeditByteLen = preeditText.toByteArray(Charsets.UTF_8).size
         val committedByteLen = committedText.toByteArray(Charsets.UTF_8).size
 
-        val oldAffected = if (preeditByteLen > 0) {
-            listOf(Pair(replaceStart, replaceStart + preeditByteLen))
-        } else {
-            rustOldAffected
-        }
-        val newAffected = if (committedByteLen > 0) {
-            listOf(Pair(replaceStart, replaceStart + committedByteLen))
-        } else {
-            rustNewAffected
-        }
+        val oldAffected =
+            if (preeditByteLen > 0) {
+                listOf(Pair(replaceStart, replaceStart + preeditByteLen))
+            } else {
+                rustOldAffected
+            }
+        val newAffected =
+            if (committedByteLen > 0) {
+                listOf(Pair(replaceStart, replaceStart + committedByteLen))
+            } else {
+                rustNewAffected
+            }
 
         val isVisualSame = preeditText.isNotEmpty() && preeditText == committedText
         if (isVisualSame) {
-            val suppressedIntent = VisualIntent(
-                cause = result.visualIntent.cause,
-                operationKind = result.visualIntent.operationKind,
-                oldAffectedByteRanges = oldAffected,
-                newAffectedByteRanges = newAffected,
-                animationMode = uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED,
-                durationMs = 0L,
-                coordinatedCursor = CoordinatedCursor(
-                    result.visualIntent.coordinatedCursor.oldByteOffset,
-                    result.visualIntent.coordinatedCursor.newByteOffset,
-                    false
+            val suppressedIntent =
+                VisualIntent(
+                    cause = result.visualIntent.cause,
+                    operationKind = result.visualIntent.operationKind,
+                    oldAffectedByteRanges = oldAffected,
+                    newAffectedByteRanges = newAffected,
+                    animationMode = uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED,
+                    durationMs = 0L,
+                    coordinatedCursor =
+                        CoordinatedCursor(
+                            result.visualIntent.coordinatedCursor.oldByteOffset,
+                            result.visualIntent.coordinatedCursor.newByteOffset,
+                            false,
+                        ),
                 )
-            )
             return applyEditResultWithIntent(result, suppressedIntent)
         }
         if (result.visualIntent.animationMode == uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED &&
-            (oldAffected.isNotEmpty() || newAffected.isNotEmpty())) {
-            val byteCount = maxOf(
-                newAffected.sumOf { it.second - it.first },
-                oldAffected.sumOf { it.second - it.first }
-            )
+            (oldAffected.isNotEmpty() || newAffected.isNotEmpty())
+        ) {
+            val byteCount =
+                maxOf(
+                    newAffected.sumOf { it.second - it.first },
+                    oldAffected.sumOf { it.second - it.first },
+                )
             // Animation mode selection for composition: uses grapheme cluster count (not byte
             // count like Rust's generic heuristic) because the platform knows the exact preedit
             // text and can account for grapheme characteristics. Newlines force LineReflow
             // (multi-line preedit); complex graphemes (combining marks, surrogates) force
             // ClusterAnimation for correct visual matching; short preedit uses GlyphAnimation
             // for per-character fade-in/out; longer preedit uses RunAnimation for efficiency.
-            val animationMode = when {
-                byteCount == 0 -> uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED
-                byteCount <= 24 -> uniffi.writer_core.AnimationModeDto.GLYPH_ANIMATION
-                byteCount <= 96 -> uniffi.writer_core.AnimationModeDto.CLUSTER_ANIMATION
-                else -> uniffi.writer_core.AnimationModeDto.RUN_ANIMATION
-            }
+            val animationMode =
+                when {
+                    byteCount == 0 -> uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED
+                    byteCount <= 24 -> uniffi.writer_core.AnimationModeDto.GLYPH_ANIMATION
+                    byteCount <= 96 -> uniffi.writer_core.AnimationModeDto.CLUSTER_ANIMATION
+                    else -> uniffi.writer_core.AnimationModeDto.RUN_ANIMATION
+                }
             if (animationMode != uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED) {
-                val animatedIntent = VisualIntent(
-                    cause = result.visualIntent.cause,
-                    operationKind = if (preeditText.isEmpty()) {
+                val animatedIntent =
+                    VisualIntent(
+                        cause = result.visualIntent.cause,
+                        operationKind =
+                            if (preeditText.isEmpty()) {
+                                result.visualIntent.operationKind
+                            } else {
+                                uniffi.writer_core.EditorOperationKindDto.COMPOSITION_COMMIT
+                            },
+                        oldAffectedByteRanges = oldAffected,
+                        newAffectedByteRanges = newAffected,
+                        animationMode = animationMode,
+                        durationMs = typingAnimationDurationMs,
+                        coordinatedCursor = CoordinatedCursor(0, 0, true),
+                    )
+                return applyEditResultWithIntent(result, animatedIntent)
+            }
+        }
+        return applyEditResultWithIntent(
+            result,
+            VisualIntent(
+                cause = result.visualIntent.cause,
+                operationKind =
+                    if (preeditText.isEmpty()) {
                         result.visualIntent.operationKind
                     } else {
                         uniffi.writer_core.EditorOperationKindDto.COMPOSITION_COMMIT
                     },
-                    oldAffectedByteRanges = oldAffected,
-                    newAffectedByteRanges = newAffected,
-                    animationMode = animationMode,
-                    durationMs = typingAnimationDurationMs,
-                    coordinatedCursor = CoordinatedCursor(0, 0, true)
-                )
-                return applyEditResultWithIntent(result, animatedIntent)
-            }
-        }
-        return applyEditResultWithIntent(result, VisualIntent(
-            cause = result.visualIntent.cause,
-            operationKind = if (preeditText.isEmpty()) {
-                result.visualIntent.operationKind
-            } else {
-                uniffi.writer_core.EditorOperationKindDto.COMPOSITION_COMMIT
-            },
-            oldAffectedByteRanges = oldAffected,
-            newAffectedByteRanges = newAffected,
-            animationMode = result.visualIntent.animationMode,
-            durationMs = result.visualIntent.durationMs,
-            coordinatedCursor = result.visualIntent.coordinatedCursor
-        ))
+                oldAffectedByteRanges = oldAffected,
+                newAffectedByteRanges = newAffected,
+                animationMode = result.visualIntent.animationMode,
+                durationMs = result.visualIntent.durationMs,
+                coordinatedCursor = result.visualIntent.coordinatedCursor,
+            ),
+        )
     }
 
     /**
@@ -343,7 +400,7 @@ class AndroidEditorPipeline private constructor(
                 editPipeline.applyEditResult(result)
                 layoutRuntime.rebuildDisplayProjection()
             },
-            beforePatch = beforePatch
+            beforePatch = beforePatch,
         )
 
         return PipelineOutput.Edited(result, source)
@@ -360,7 +417,14 @@ class AndroidEditorPipeline private constructor(
             newEndExclusive = newAffected.firstOrNull()?.second ?: 0,
             revision = result.newRevision,
             sessionId = "-",
-            result = if (result.isApplied()) "applied" else if (result.isNoChange()) "no_change" else "other",
+            result =
+                if (result.isApplied()) {
+                    "applied"
+                } else if (result.isNoChange()) {
+                    "no_change"
+                } else {
+                    "other"
+                },
         )
     }
 
@@ -390,7 +454,7 @@ class AndroidEditorPipeline private constructor(
                 editPipeline.applyEditResult(result)
                 layoutRuntime.rebuildDisplayProjection()
             },
-            beforePatch = beforePatch
+            beforePatch = beforePatch,
         )
 
         return PipelineOutput.Edited(result, source)
@@ -407,7 +471,7 @@ class AndroidEditorPipeline private constructor(
      */
     fun applyCompositionUpdate(
         visualIntent: VisualIntent,
-        mirrorUpdate: (() -> Unit)? = null
+        mirrorUpdate: (() -> Unit)? = null,
     ) {
         visualRuntime.prepareAndSubmit(
             visualIntent = visualIntent,
@@ -415,7 +479,7 @@ class AndroidEditorPipeline private constructor(
             mirrorUpdate = {
                 mirrorUpdate?.invoke()
                 layoutRuntime.rebuildDisplayProjection()
-            }
+            },
         )
     }
 
@@ -442,60 +506,72 @@ class AndroidEditorPipeline private constructor(
         replaceEndUtf8: Int,
         newPreeditText: String,
         oldPreeditText: String,
-        mirrorUpdate: (() -> Unit)?
+        mirrorUpdate: (() -> Unit)?,
     ) {
         val oldPreeditByteLen = oldPreeditText.toByteArray(Charsets.UTF_8).size
         val newPreeditByteLen = newPreeditText.toByteArray(Charsets.UTF_8).size
         val isVisualSame = oldPreeditText.isNotEmpty() && oldPreeditText == newPreeditText
-        val oldAffected = buildList {
-            if (oldPreeditByteLen > 0 && !isVisualSame) {
-                add(Pair(replaceStartUtf8, replaceStartUtf8 + oldPreeditByteLen))
-            } else if (oldPreeditByteLen == 0 && replaceStartUtf8 < replaceEndUtf8) {
-                add(Pair(replaceStartUtf8, replaceEndUtf8))
+        val oldAffected =
+            buildList {
+                if (oldPreeditByteLen > 0 && !isVisualSame) {
+                    add(Pair(replaceStartUtf8, replaceStartUtf8 + oldPreeditByteLen))
+                } else if (oldPreeditByteLen == 0 && replaceStartUtf8 < replaceEndUtf8) {
+                    add(Pair(replaceStartUtf8, replaceEndUtf8))
+                }
             }
-        }
-        val newAffected = if (newPreeditText.isEmpty() || isVisualSame) emptyList() else listOf(Pair(replaceStartUtf8, replaceStartUtf8 + newPreeditByteLen))
+        val newAffected =
+            if (newPreeditText.isEmpty() || isVisualSame) {
+                emptyList()
+            } else {
+                listOf(
+                    Pair(replaceStartUtf8, replaceStartUtf8 + newPreeditByteLen),
+                )
+            }
         val combinedText = oldPreeditText + newPreeditText
         // Both old and new preedit text are checked for newline/complex grapheme
         // characteristics because either version could contain them — e.g. an IME
         // candidate that introduces a newline or combining mark. Checking only the
         // new text would miss cases where the old preedit had a newline that is now
         // being removed (which still requires LineReflow for correct reflow animation).
-        val clusterCount = maxOf(
-            newPreeditText.codePointCount(0, newPreeditText.length),
-            oldPreeditText.codePointCount(0, oldPreeditText.length)
-        )
+        val clusterCount =
+            maxOf(
+                newPreeditText.codePointCount(0, newPreeditText.length),
+                oldPreeditText.codePointCount(0, oldPreeditText.length),
+            )
         val containsNewline = combinedText.any { it == '\n' || it == '\r' }
-        val containsComplexGrapheme = combinedText.any { char ->
-            val type = Character.getType(char.code)
-            type == Character.SURROGATE.toInt() ||
-                type == Character.NON_SPACING_MARK.toInt() ||
-                type == Character.COMBINING_SPACING_MARK.toInt() ||
-                Character.isHighSurrogate(char) || Character.isLowSurrogate(char)
-        }
-        val animationMode = when {
-            isVisualSame || clusterCount == 0 -> uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED
-            containsNewline -> uniffi.writer_core.AnimationModeDto.LINE_REFLOW_ANIMATION
-            containsComplexGrapheme -> uniffi.writer_core.AnimationModeDto.CLUSTER_ANIMATION
-            clusterCount <= 8 -> uniffi.writer_core.AnimationModeDto.GLYPH_ANIMATION
-            else -> uniffi.writer_core.AnimationModeDto.RUN_ANIMATION
-        }
-        val visualIntent = VisualIntent(
-            cause = uniffi.writer_core.EditorTransactionCauseDto.IME_COMPOSITION,
-            operationKind = uniffi.writer_core.EditorOperationKindDto.COMPOSITION_UPDATE,
-            oldAffectedByteRanges = oldAffected,
-            newAffectedByteRanges = newAffected,
-            animationMode = animationMode,
-            durationMs = typingAnimationDurationMs,
-            coordinatedCursor = CoordinatedCursor(0, 0, true)
-        )
+        val containsComplexGrapheme =
+            combinedText.any { char ->
+                val type = Character.getType(char.code)
+                type == Character.SURROGATE.toInt() ||
+                    type == Character.NON_SPACING_MARK.toInt() ||
+                    type == Character.COMBINING_SPACING_MARK.toInt() ||
+                    Character.isHighSurrogate(char) || Character.isLowSurrogate(char)
+            }
+        val animationMode =
+            when {
+                isVisualSame || clusterCount == 0 -> uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED
+                containsNewline -> uniffi.writer_core.AnimationModeDto.LINE_REFLOW_ANIMATION
+                containsComplexGrapheme -> uniffi.writer_core.AnimationModeDto.CLUSTER_ANIMATION
+                clusterCount <= 8 -> uniffi.writer_core.AnimationModeDto.GLYPH_ANIMATION
+                else -> uniffi.writer_core.AnimationModeDto.RUN_ANIMATION
+            }
+        val visualIntent =
+            VisualIntent(
+                cause = uniffi.writer_core.EditorTransactionCauseDto.IME_COMPOSITION,
+                operationKind = uniffi.writer_core.EditorOperationKindDto.COMPOSITION_UPDATE,
+                oldAffectedByteRanges = oldAffected,
+                newAffectedByteRanges = newAffected,
+                animationMode = animationMode,
+                durationMs = typingAnimationDurationMs,
+                coordinatedCursor = CoordinatedCursor(0, 0, true),
+            )
         visualRuntime.prepareAndSubmit(
             visualIntent = visualIntent,
             layoutEngine = layoutRuntime.layoutEngine,
             mirrorUpdate = {
                 mirrorUpdate?.invoke()
                 layoutRuntime.rebuildDisplayProjection()
-            }
+            },
         )
     }
 
@@ -517,28 +593,34 @@ class AndroidEditorPipeline private constructor(
         replaceStartUtf8: Int,
         replaceEndUtf8: Int,
         oldPreeditText: String,
-        mirrorUpdate: (() -> Unit)?
+        mirrorUpdate: (() -> Unit)?,
     ) {
         val preeditByteLen = oldPreeditText.toByteArray(Charsets.UTF_8).size
-        val oldAffected = if (preeditByteLen == 0 && replaceStartUtf8 == replaceEndUtf8) emptyList()
-            else if (preeditByteLen > 0) listOf(Pair(replaceStartUtf8, replaceStartUtf8 + preeditByteLen))
-            else listOf(Pair(replaceStartUtf8, replaceEndUtf8))
-        val visualIntent = VisualIntent(
-            cause = uniffi.writer_core.EditorTransactionCauseDto.IME_COMPOSITION,
-            operationKind = uniffi.writer_core.EditorOperationKindDto.COMPOSITION_CANCEL,
-            oldAffectedByteRanges = oldAffected,
-            newAffectedByteRanges = emptyList(),
-            animationMode = uniffi.writer_core.AnimationModeDto.CLUSTER_ANIMATION,
-            durationMs = typingAnimationDurationMs,
-            coordinatedCursor = CoordinatedCursor(0, 0, true)
-        )
+        val oldAffected =
+            if (preeditByteLen == 0 && replaceStartUtf8 == replaceEndUtf8) {
+                emptyList()
+            } else if (preeditByteLen > 0) {
+                listOf(Pair(replaceStartUtf8, replaceStartUtf8 + preeditByteLen))
+            } else {
+                listOf(Pair(replaceStartUtf8, replaceEndUtf8))
+            }
+        val visualIntent =
+            VisualIntent(
+                cause = uniffi.writer_core.EditorTransactionCauseDto.IME_COMPOSITION,
+                operationKind = uniffi.writer_core.EditorOperationKindDto.COMPOSITION_CANCEL,
+                oldAffectedByteRanges = oldAffected,
+                newAffectedByteRanges = emptyList(),
+                animationMode = uniffi.writer_core.AnimationModeDto.CLUSTER_ANIMATION,
+                durationMs = typingAnimationDurationMs,
+                coordinatedCursor = CoordinatedCursor(0, 0, true),
+            )
         visualRuntime.prepareAndSubmit(
             visualIntent = visualIntent,
             layoutEngine = layoutRuntime.layoutEngine,
             mirrorUpdate = {
                 mirrorUpdate?.invoke()
                 layoutRuntime.rebuildDisplayProjection()
-            }
+            },
         )
     }
 
@@ -563,33 +645,73 @@ class AndroidEditorPipeline private constructor(
      * Without animation: background → search highlights → selection → static text
      * → preedit underline → static cursor.
      */
-    fun drawFrame(canvas: android.graphics.Canvas, searchHighlightsUtf16: List<Pair<Int, Int>>, viewportWidth: Int, viewportHeight: Int, scrollX: Float, scrollY: Float) {
+    fun drawFrame(
+        canvas: android.graphics.Canvas,
+        searchHighlightsUtf16: List<Pair<Int, Int>>,
+        viewportWidth: Int,
+        viewportHeight: Int,
+        scrollX: Float,
+        scrollY: Float,
+    ) {
         val frameTimeNanos = visualRuntime.currentTimeNanos()
-        drawFrameWithTime(canvas, searchHighlightsUtf16, viewportWidth, viewportHeight, scrollX, scrollY, frameTimeNanos)
+        drawFrameWithTime(
+            canvas,
+            searchHighlightsUtf16,
+            viewportWidth,
+            viewportHeight,
+            scrollX,
+            scrollY,
+            frameTimeNanos,
+        )
     }
 
-    fun drawFrame(canvas: android.graphics.Canvas, searchHighlightsUtf16: List<Pair<Int, Int>>, viewportWidth: Int, viewportHeight: Int, scrollX: Float, scrollY: Float, frameTimeNanos: Long) {
-        drawFrameWithTime(canvas, searchHighlightsUtf16, viewportWidth, viewportHeight, scrollX, scrollY, frameTimeNanos)
+    fun drawFrame(
+        canvas: android.graphics.Canvas,
+        searchHighlightsUtf16: List<Pair<Int, Int>>,
+        viewportWidth: Int,
+        viewportHeight: Int,
+        scrollX: Float,
+        scrollY: Float,
+        frameTimeNanos: Long,
+    ) {
+        drawFrameWithTime(
+            canvas,
+            searchHighlightsUtf16,
+            viewportWidth,
+            viewportHeight,
+            scrollX,
+            scrollY,
+            frameTimeNanos,
+        )
     }
 
-    private fun drawFrameWithTime(canvas: android.graphics.Canvas, searchHighlightsUtf16: List<Pair<Int, Int>>, viewportWidth: Int, viewportHeight: Int, scrollX: Float, scrollY: Float, frameTimeNanos: Long) {
+    private fun drawFrameWithTime(
+        canvas: android.graphics.Canvas,
+        searchHighlightsUtf16: List<Pair<Int, Int>>,
+        viewportWidth: Int,
+        viewportHeight: Int,
+        scrollX: Float,
+        scrollY: Float,
+        frameTimeNanos: Long,
+    ) {
         val frameTimeMs = frameTimeNanos / 1_000_000
         val projection = layoutRuntime.getCurrentProjection()
         val cursorDisplayUtf16 = projection.realUtf8ToDisplayUtf16(mirror.getCursorUtf8())
         val selStartDisplayUtf16 = projection.realUtf8ToDisplayUtf16(mirror.getSelectionStartUtf8())
         val selEndDisplayUtf16 = projection.realUtf8ToDisplayUtf16(mirror.getSelectionEndUtf8())
-        val frameState = visualRuntime.tick(
-            frameTimeMs,
-            layoutRuntime.getLayout(),
-            layoutRuntime.getCurrentRevision(),
-            searchHighlightsUtf16,
-            viewportWidth, viewportHeight,
-            scrollX, scrollY,
-            cursorVisible, selectionAllowed,
-            cursorDisplayUtf16,
-            selStartDisplayUtf16,
-            selEndDisplayUtf16
-        )
+        val frameState =
+            visualRuntime.tick(
+                frameTimeMs,
+                layoutRuntime.getLayout(),
+                layoutRuntime.getCurrentRevision(),
+                searchHighlightsUtf16,
+                viewportWidth, viewportHeight,
+                scrollX, scrollY,
+                cursorVisible, selectionAllowed,
+                cursorDisplayUtf16,
+                selStartDisplayUtf16,
+                selEndDisplayUtf16,
+            )
         if (frameState != null) {
             renderRuntime.drawFromFrameState(canvas, frameState)
             if (frameState.completeAfterDraw) {
@@ -652,26 +774,46 @@ class AndroidEditorPipeline private constructor(
     }
 
     override fun getText(): String = editPipeline.getText()
+
     override fun getRevision(): Long = editPipeline.getRevision()
+
     override fun getCursorUtf8(): Int = editPipeline.getCursorUtf8()
+
     fun getCursorUtf16(): Int = editPipeline.getCursorUtf16()
-    fun getDisplayCursorUtf16(): Int = layoutRuntime.getCurrentProjection().realUtf8ToDisplayUtf16(mirror.getCursorUtf8())
+
+    fun getDisplayCursorUtf16(): Int =
+        layoutRuntime.getCurrentProjection().realUtf8ToDisplayUtf16(
+            mirror.getCursorUtf8(),
+        )
+
     fun getSelectionStartUtf8(): Int = editPipeline.getSelectionStartUtf8()
+
     fun getSelectionEndUtf8(): Int = editPipeline.getSelectionEndUtf8()
+
     fun getSelectionStartUtf16(): Int = editPipeline.getSelectionStartUtf16()
+
     fun getSelectionEndUtf16(): Int = editPipeline.getSelectionEndUtf16()
+
     fun getLengthUtf16(): Int = editPipeline.getLengthUtf16()
+
     fun getCommittedCursorUtf8(): Int = editPipeline.getCommittedCursorUtf8()
+
     fun getCommittedSelectionStartUtf8(): Int = editPipeline.getCommittedSelectionStartUtf8()
+
     fun getCommittedSelectionEndUtf8(): Int = editPipeline.getCommittedSelectionEndUtf8()
+
     fun getCommittedText(): String = editPipeline.getCommittedText()
 
-    fun setAutoIndent(enabled: Boolean, widthSp: Float) {
+    fun setAutoIndent(
+        enabled: Boolean,
+        widthSp: Float,
+    ) {
         autoIndentEnabled = enabled
         autoIndentWidthSp = widthSp
     }
 
     fun isAutoIndentEnabled(): Boolean = autoIndentEnabled
+
     fun getAutoIndentWidthSp(): Float = autoIndentWidthSp
 
     private fun computeAutoIndentPrefix(): String {
@@ -721,7 +863,10 @@ class AndroidEditorPipeline private constructor(
         return layout.getLineForVertical(y)
     }
 
-    fun getLayoutOffsetForHorizontal(line: Int, x: Float): Int {
+    fun getLayoutOffsetForHorizontal(
+        line: Int,
+        x: Float,
+    ): Int {
         val layout = layoutRuntime.getLayout() ?: return 0
         return layout.getOffsetForHorizontal(line, x)
     }
@@ -750,8 +895,22 @@ class AndroidEditorPipeline private constructor(
         layoutRuntime.setLineSpacingMultiplier(multiplier)
     }
 
-    fun setThemeColors(textColor: Int, cursorColor: Int, selectionColor: Int, preeditColor: Int, bgColor: Int = Color.WHITE, searchHighlightColor: Int = 0) {
-        renderRuntime.setThemeColors(textColor, cursorColor, selectionColor, preeditColor, bgColor, searchHighlightColor)
+    fun setThemeColors(
+        textColor: Int,
+        cursorColor: Int,
+        selectionColor: Int,
+        preeditColor: Int,
+        bgColor: Int = Color.WHITE,
+        searchHighlightColor: Int = 0,
+    ) {
+        renderRuntime.setThemeColors(
+            textColor,
+            cursorColor,
+            selectionColor,
+            preeditColor,
+            bgColor,
+            searchHighlightColor,
+        )
     }
 
     fun utf16ToUtf8(offsetUtf16: Int): Int {
@@ -768,6 +927,7 @@ class AndroidEditorPipeline private constructor(
 
     sealed class LoadTextResult {
         data class Loaded(val result: EditResult) : LoadTextResult()
+
         object Failed : LoadTextResult()
     }
 
@@ -796,32 +956,79 @@ class AndroidEditorPipeline private constructor(
 
     // ── InputCommandPort implementation ──
 
-    override fun commitComposition(byteStart: Int, byteEndExclusive: Int, replacementText: String, resultingSelectionAnchor: Int, resultingSelectionHead: Int, compositionSessionId: Long, compositionBaseRevision: Long, compositionGeneration: Long, cause: EditorTransactionCauseDto): uniffi.writer_core.EditorEditResultDto? {
+    override fun commitComposition(
+        byteStart: Int,
+        byteEndExclusive: Int,
+        replacementText: String,
+        resultingSelectionAnchor: Int,
+        resultingSelectionHead: Int,
+        compositionSessionId: Long,
+        compositionBaseRevision: Long,
+        compositionGeneration: Long,
+        cause: EditorTransactionCauseDto,
+    ): uniffi.writer_core.EditorEditResultDto? {
         val bridge = kernelBridge ?: return null
-        return bridge.commitText(byteStart, byteEndExclusive, replacementText, resultingSelectionAnchor, resultingSelectionHead, compositionSessionId, compositionBaseRevision, compositionGeneration, cause, mirror.getRevision())
+        return bridge.commitText(
+            byteStart, byteEndExclusive, replacementText, resultingSelectionAnchor,
+            resultingSelectionHead, compositionSessionId, compositionBaseRevision,
+            compositionGeneration, cause, mirror.getRevision(),
+        )
     }
 
-    override fun deleteSurrounding(beforeByteStart: Int, beforeByteEndExclusive: Int, afterByteStart: Int, afterByteEndExclusive: Int, cause: EditorTransactionCauseDto): uniffi.writer_core.EditorEditResultDto? {
+    override fun deleteSurrounding(
+        beforeByteStart: Int,
+        beforeByteEndExclusive: Int,
+        afterByteStart: Int,
+        afterByteEndExclusive: Int,
+        cause: EditorTransactionCauseDto,
+    ): uniffi.writer_core.EditorEditResultDto? {
         val bridge = kernelBridge ?: return null
-        return bridge.deleteSurrounding(beforeByteStart, beforeByteEndExclusive, afterByteStart, afterByteEndExclusive, cause, mirror.getRevision())
+        return bridge.deleteSurrounding(
+            beforeByteStart,
+            beforeByteEndExclusive,
+            afterByteStart,
+            afterByteEndExclusive,
+            cause,
+            mirror.getRevision(),
+        )
     }
 
-    override fun beginComposition(replaceStart: Int, replaceEndExclusive: Int): uniffi.writer_core.EditorEditResultDto? {
+    override fun beginComposition(
+        replaceStart: Int,
+        replaceEndExclusive: Int,
+    ): uniffi.writer_core.EditorEditResultDto? {
         val bridge = kernelBridge ?: return null
         return bridge.beginComposition(replaceStart, replaceEndExclusive, mirror.getRevision())
     }
 
-    override fun updateComposition(compositionSessionId: Long, compositionGeneration: Long, newPreeditText: String, newPreeditCursorOffset: Int): uniffi.writer_core.EditorEditResultDto? {
+    override fun updateComposition(
+        compositionSessionId: Long,
+        compositionGeneration: Long,
+        newPreeditText: String,
+        newPreeditCursorOffset: Int,
+    ): uniffi.writer_core.EditorEditResultDto? {
         val bridge = kernelBridge ?: return null
-        return bridge.updateComposition(compositionSessionId, compositionGeneration, newPreeditText, newPreeditCursorOffset, mirror.getRevision())
+        return bridge.updateComposition(
+            compositionSessionId,
+            compositionGeneration,
+            newPreeditText,
+            newPreeditCursorOffset,
+            mirror.getRevision(),
+        )
     }
 
-    override fun finishComposition(compositionSessionId: Long, compositionGeneration: Long): uniffi.writer_core.EditorEditResultDto? {
+    override fun finishComposition(
+        compositionSessionId: Long,
+        compositionGeneration: Long,
+    ): uniffi.writer_core.EditorEditResultDto? {
         val bridge = kernelBridge ?: return null
         return bridge.finishComposition(compositionSessionId, compositionGeneration, mirror.getRevision())
     }
 
-    override fun cancelComposition(compositionSessionId: Long, compositionGeneration: Long): uniffi.writer_core.EditorEditResultDto? {
+    override fun cancelComposition(
+        compositionSessionId: Long,
+        compositionGeneration: Long,
+    ): uniffi.writer_core.EditorEditResultDto? {
         val bridge = kernelBridge ?: return null
         return bridge.cancelComposition(compositionSessionId, compositionGeneration, mirror.getRevision())
     }
@@ -889,7 +1096,21 @@ class AndroidEditorPipeline private constructor(
         visualRuntime.release()
     }
 
-    fun setRendererThemeColors(textColor: Int, cursorColor: Int, selectionColor: Int, preeditColor: Int, bgColor: Int = Color.WHITE, searchHighlightColor: Int = 0) {
-        renderRuntime.setThemeColors(textColor, cursorColor, selectionColor, preeditColor, bgColor, searchHighlightColor)
+    fun setRendererThemeColors(
+        textColor: Int,
+        cursorColor: Int,
+        selectionColor: Int,
+        preeditColor: Int,
+        bgColor: Int = Color.WHITE,
+        searchHighlightColor: Int = 0,
+    ) {
+        renderRuntime.setThemeColors(
+            textColor,
+            cursorColor,
+            selectionColor,
+            preeditColor,
+            bgColor,
+            searchHighlightColor,
+        )
     }
 }

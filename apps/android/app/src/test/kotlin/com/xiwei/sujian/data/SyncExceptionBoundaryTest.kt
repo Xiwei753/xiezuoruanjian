@@ -1,7 +1,5 @@
 package com.xiwei.sujian.data
 
-import com.xiwei.sujian.data.BridgeResult
-import com.xiwei.sujian.data.SyncFailureKind
 import com.xiwei.sujian.model.SyncStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -20,7 +18,6 @@ import org.junit.Test
  * - Syncing status → TerminalFailure(FatalError)
  */
 class SyncExceptionBoundaryTest {
-
     @Test
     fun nativeNotLoaded_object_mapsToNativeUnavailable() {
         // #592 七：NotLoaded 是独立 Bridge 对象，不再用字符串错误码表分类；
@@ -45,27 +42,37 @@ class SyncExceptionBoundaryTest {
 
     @Test
     fun conflictErrors_areConflictKind() {
-        val conflictCodes = listOf(
-            "SYNC_CONFLICT",
-            "SYNC_DOCUMENT_CONFLICT",
-            "SYNC_CHECKOUT_CONFLICT",
-            "SYNC_SETTINGS_CONFLICT",
-            "SYNC_CONFLICT_DETECTED",
-        )
+        val conflictCodes =
+            listOf(
+                "SYNC_CONFLICT",
+                "SYNC_DOCUMENT_CONFLICT",
+                "SYNC_CHECKOUT_CONFLICT",
+                "SYNC_SETTINGS_CONFLICT",
+                "SYNC_CONFLICT_DETECTED",
+            )
         conflictCodes.forEach { code ->
-            assertEquals("$code should be Conflict", SyncFailureKind.Conflict, SyncFailureKind.fromLegacyErrorCode(code))
+            assertEquals(
+                "$code should be Conflict",
+                SyncFailureKind.Conflict,
+                SyncFailureKind.fromLegacyErrorCode(code),
+            )
         }
     }
 
     @Test
     fun protocolErrors_areProtocolKind() {
-        val protocolCodes = listOf(
-            "SYNC_NON_FAST_FORWARD",
-            "SYNC_UNRELATED_HISTORIES",
-            "SYNC_INCOMPLETE_TRANSACTION",
-        )
+        val protocolCodes =
+            listOf(
+                "SYNC_NON_FAST_FORWARD",
+                "SYNC_UNRELATED_HISTORIES",
+                "SYNC_INCOMPLETE_TRANSACTION",
+            )
         protocolCodes.forEach { code ->
-            assertEquals("$code should be Protocol", SyncFailureKind.Protocol, SyncFailureKind.fromLegacyErrorCode(code))
+            assertEquals(
+                "$code should be Protocol",
+                SyncFailureKind.Protocol,
+                SyncFailureKind.fromLegacyErrorCode(code),
+            )
         }
     }
 
@@ -103,16 +110,19 @@ class SyncExceptionBoundaryTest {
     @Test
     fun allSyncOutcomePaths_endInDefiniteState() {
         // #592 三：所有路径必须结束在明确终态
-        val definiteOutcomes = listOf(
-            SyncOutcome.Completed(com.xiwei.sujian.model.SyncResult(status = SyncStatus.Success)),
-            SyncOutcome.Disabled,
-            SyncOutcome.Unconfigured,
-            SyncOutcome.RetryableFailure(SyncStatus.RecoverableError),
-            SyncOutcome.TerminalFailure(SyncStatus.FatalError),
-        )
+        val definiteOutcomes =
+            listOf(
+                SyncOutcome.Completed(com.xiwei.sujian.model.SyncResult(status = SyncStatus.Success)),
+                SyncOutcome.Disabled,
+                SyncOutcome.Unconfigured,
+                SyncOutcome.RetryableFailure(SyncStatus.RecoverableError),
+                SyncOutcome.TerminalFailure(SyncStatus.FatalError),
+            )
         definiteOutcomes.forEach { outcome ->
-            assertTrue("Each outcome must be a definite terminal state",
-                outcome !is SyncOutcome.Busy || outcome == SyncOutcome.Busy)
+            assertTrue(
+                "Each outcome must be a definite terminal state",
+                outcome !is SyncOutcome.Busy || outcome == SyncOutcome.Busy,
+            )
         }
     }
 

@@ -12,13 +12,12 @@ class EditorSessionViewModel : ViewModel() {
     var sessionCoordinator: EditorSessionCoordinator? = null
         private set
 
-    fun getOrCreateSessionCoordinator(
-        appServiceBridge: AppServiceBridge,
-    ): EditorSessionCoordinator {
+    fun getOrCreateSessionCoordinator(appServiceBridge: AppServiceBridge): EditorSessionCoordinator {
         sessionCoordinator?.let { return it }
-        val c = EditorSessionCoordinator(
-            appServiceBridge,
-        )
+        val c =
+            EditorSessionCoordinator(
+                appServiceBridge,
+            )
         sessionCoordinator = c
         return c
     }

@@ -16,13 +16,13 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class SyncSecretsOverrideScopedTest {
-
     @Test
     fun setSyncSecretsOverrideStrict_failsWhenNativeMissing() {
-        val repo = SettingsRepository(
-            androidx.test.core.app.ApplicationProvider.getApplicationContext(),
-            AppServiceBridge(WriterAppServiceHolder("/tmp/sujian_test_workspace_595")),
-        )
+        val repo =
+            SettingsRepository(
+                androidx.test.core.app.ApplicationProvider.getApplicationContext(),
+                AppServiceBridge(WriterAppServiceHolder("/tmp/sujian_test_workspace_595")),
+            )
         assertFalse(
             "Strict override set must fail (not silently succeed) when native is unavailable",
             repo.setSyncSecretsOverrideStrict(com.xiwei.sujian.model.SyncSecrets(token = "token-a")),

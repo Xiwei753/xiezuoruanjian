@@ -13,15 +13,15 @@ import org.junit.Test
  * - TextRange 不可变。
  */
 class ChapterPreviewStateTest {
-
     @Test
     fun chapterPreviewStateIsImmutable() {
-        val state = ChapterPreviewState(
-            text = "preview text",
-            revision = 5L,
-            selection = TextRange(0, 10),
-            searchHighlights = listOf(TextRange(0, 5)),
-        )
+        val state =
+            ChapterPreviewState(
+                text = "preview text",
+                revision = 5L,
+                selection = TextRange(0, 10),
+                searchHighlights = listOf(TextRange(0, 5)),
+            )
         assertEquals("preview text", state.text)
         assertEquals(5L, state.revision)
         assertEquals(TextRange(0, 10), state.selection)

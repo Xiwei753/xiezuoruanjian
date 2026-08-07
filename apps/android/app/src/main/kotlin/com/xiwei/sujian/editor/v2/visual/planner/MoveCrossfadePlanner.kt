@@ -1,14 +1,13 @@
 package com.xiwei.sujian.editor.v2.visual.planner
 
-import com.xiwei.sujian.editor.v2.mirror.VisualIntent
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutRevision
-import com.xiwei.sujian.editor.v2.layout.LineClusterSnapshot
 import com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot
+import com.xiwei.sujian.editor.v2.layout.LineClusterSnapshot
+import com.xiwei.sujian.editor.v2.mirror.VisualIntent
 import com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction
 import com.xiwei.sujian.editor.v2.visual.SliceRole
 
 class MoveCrossfadePlanner {
-
     fun addMoveSlicesForShiftedClustersCrossLine(
         allOldSnapshots: Map<Int, AndroidLineSnapshot>,
         allNewSnapshots: Map<Int, AndroidLineSnapshot>,
@@ -18,7 +17,7 @@ class MoveCrossfadePlanner {
         excludedNewByteRanges: Set<Pair<Int, Int>>,
         excludedOldByteRanges: Set<Pair<Int, Int>>,
         animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
-        offsetMapper: (Int) -> Int?
+        offsetMapper: (Int) -> Int?,
     ) {
         val allOldClusters = mutableListOf<Pair<LineClusterSnapshot, Pair<Int, AndroidLineSnapshot>>>()
         for ((lineIdx, snapshot) in allOldSnapshots) {
@@ -35,48 +34,54 @@ class MoveCrossfadePlanner {
         val newUsed = mutableSetOf<Int>()
         var lastMatchedNewStart = 0
         for ((oldCluster, oldInfo) in allOldClusters) {
-            val isDeleted = visualIntent.oldAffectedByteRanges.any { (start, end) ->
-                oldCluster.documentByteStart < end && oldCluster.documentByteEndExclusive > start
-            }
+            val isDeleted =
+                visualIntent.oldAffectedByteRanges.any { (start, end) ->
+                    oldCluster.documentByteStart < end && oldCluster.documentByteEndExclusive > start
+                }
             if (isDeleted) continue
-            val isAlreadyHandled = excludedOldByteRanges.any { (start, end) ->
-                oldCluster.documentByteStart < end && oldCluster.documentByteEndExclusive > start
-            }
+            val isAlreadyHandled =
+                excludedOldByteRanges.any { (start, end) ->
+                    oldCluster.documentByteStart < end && oldCluster.documentByteEndExclusive > start
+                }
             if (isAlreadyHandled) continue
             val mappedStart = offsetMapper(oldCluster.documentByteStart)
             val mappedEnd = offsetMapper(oldCluster.documentByteEndExclusive)
             var matchedNewIdx: Int? = null
             if (mappedStart != null) {
-                matchedNewIdx = allNewClusters.indices.firstOrNull { i ->
-                    i !in newUsed && allNewClusters[i].first.documentByteStart == mappedStart &&
-                        (mappedEnd == null || allNewClusters[i].first.documentByteEndExclusive == mappedEnd) &&
-                        allNewClusters[i].first.documentByteStart >= lastMatchedNewStart
-                }
+                matchedNewIdx =
+                    allNewClusters.indices.firstOrNull { i ->
+                        i !in newUsed && allNewClusters[i].first.documentByteStart == mappedStart &&
+                            (mappedEnd == null || allNewClusters[i].first.documentByteEndExclusive == mappedEnd) &&
+                            allNewClusters[i].first.documentByteStart >= lastMatchedNewStart
+                    }
             }
             if (matchedNewIdx == null) {
                 val referenceStart = maxOf(mappedStart ?: lastMatchedNewStart, lastMatchedNewStart)
-                val candidates = allNewClusters.indices.filter { i ->
-                    val candidate = allNewClusters[i].first
-                    i !in newUsed &&
-                        candidate.shapingFingerprint == oldCluster.shapingFingerprint &&
-                        candidate.documentByteStart >= referenceStart &&
-                        visualIntent.newAffectedByteRanges.none { (start, end) ->
-                            candidate.documentByteStart < end && candidate.documentByteEndExclusive > start
-                        }
-                }
-                matchedNewIdx = candidates.minByOrNull { i ->
-                    val candidateStart = allNewClusters[i].first.documentByteStart
-                    val target = mappedStart ?: lastMatchedNewStart
-                    kotlin.math.abs(candidateStart - target)
-                }
+                val candidates =
+                    allNewClusters.indices.filter { i ->
+                        val candidate = allNewClusters[i].first
+                        i !in newUsed &&
+                            candidate.shapingFingerprint == oldCluster.shapingFingerprint &&
+                            candidate.documentByteStart >= referenceStart &&
+                            visualIntent.newAffectedByteRanges.none { (start, end) ->
+                                candidate.documentByteStart < end && candidate.documentByteEndExclusive > start
+                            }
+                    }
+                matchedNewIdx =
+                    candidates.minByOrNull { i ->
+                        val candidateStart = allNewClusters[i].first.documentByteStart
+                        val target = mappedStart ?: lastMatchedNewStart
+                        kotlin.math.abs(candidateStart - target)
+                    }
             }
             if (matchedNewIdx != null) {
                 newUsed.add(matchedNewIdx)
                 lastMatchedNewStart = allNewClusters[matchedNewIdx].first.documentByteStart
                 val (newCluster, newInfo) = allNewClusters[matchedNewIdx]
-                val isExcluded = excludedNewByteRanges.any { (start, end) ->
-                    newCluster.documentByteStart < end && newCluster.documentByteEndExclusive > start
-                }
+                val isExcluded =
+                    excludedNewByteRanges.any { (start, end) ->
+                        newCluster.documentByteStart < end && newCluster.documentByteEndExclusive > start
+                    }
                 if (isExcluded) continue
                 val positionChanged = oldCluster.visualRectInDocument != newCluster.visualRectInDocument
                 val fingerprintChanged = oldCluster.shapingFingerprint != newCluster.shapingFingerprint
@@ -85,38 +90,44 @@ class MoveCrossfadePlanner {
                 val newSnapshot = newInfo.second
                 val oldSnapshot = oldInfo.second
                 if (identityConfident && !fingerprintChanged && positionChanged) {
-                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                        role = SliceRole.Move,
-                        snapshot = newSnapshot,
-                        sourceRect = newCluster.sourceRectInLineImage,
-                        destinationRect = newCluster.visualRectInDocument,
-                        startAlpha = 1f,
-                        endAlpha = 1f,
-                        fromDestinationRect = oldCluster.visualRectInDocument,
-                        clusterByteStart = newCluster.documentByteStart,
-                        clusterByteEndExclusive = newCluster.documentByteEndExclusive
-                    ))
+                    animatedSlices.add(
+                        PreparedVisualTransaction.AnimatedSlice(
+                            role = SliceRole.Move,
+                            snapshot = newSnapshot,
+                            sourceRect = newCluster.sourceRectInLineImage,
+                            destinationRect = newCluster.visualRectInDocument,
+                            startAlpha = 1f,
+                            endAlpha = 1f,
+                            fromDestinationRect = oldCluster.visualRectInDocument,
+                            clusterByteStart = newCluster.documentByteStart,
+                            clusterByteEndExclusive = newCluster.documentByteEndExclusive,
+                        ),
+                    )
                 } else {
-                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                        role = SliceRole.CrossfadeOld,
-                        snapshot = oldSnapshot,
-                        sourceRect = oldCluster.sourceRectInLineImage,
-                        destinationRect = oldCluster.visualRectInDocument,
-                        startAlpha = 1f,
-                        endAlpha = 0f,
-                        clusterByteStart = oldCluster.documentByteStart,
-                        clusterByteEndExclusive = oldCluster.documentByteEndExclusive
-                    ))
-                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                        role = SliceRole.CrossfadeNew,
-                        snapshot = newSnapshot,
-                        sourceRect = newCluster.sourceRectInLineImage,
-                        destinationRect = newCluster.visualRectInDocument,
-                        startAlpha = 0f,
-                        endAlpha = 1f,
-                        clusterByteStart = newCluster.documentByteStart,
-                         clusterByteEndExclusive = newCluster.documentByteEndExclusive
-                    ))
+                    animatedSlices.add(
+                        PreparedVisualTransaction.AnimatedSlice(
+                            role = SliceRole.CrossfadeOld,
+                            snapshot = oldSnapshot,
+                            sourceRect = oldCluster.sourceRectInLineImage,
+                            destinationRect = oldCluster.visualRectInDocument,
+                            startAlpha = 1f,
+                            endAlpha = 0f,
+                            clusterByteStart = oldCluster.documentByteStart,
+                            clusterByteEndExclusive = oldCluster.documentByteEndExclusive,
+                        ),
+                    )
+                    animatedSlices.add(
+                        PreparedVisualTransaction.AnimatedSlice(
+                            role = SliceRole.CrossfadeNew,
+                            snapshot = newSnapshot,
+                            sourceRect = newCluster.sourceRectInLineImage,
+                            destinationRect = newCluster.visualRectInDocument,
+                            startAlpha = 0f,
+                            endAlpha = 1f,
+                            clusterByteStart = newCluster.documentByteStart,
+                            clusterByteEndExclusive = newCluster.documentByteEndExclusive,
+                        ),
+                    )
                 }
             }
         }
@@ -133,7 +144,7 @@ class MoveCrossfadePlanner {
         preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         createSnapshotFromRevision: (AndroidLayoutRevision, Int, Boolean) -> AndroidLineSnapshot?,
-        offsetMapper: (Int) -> Int?
+        offsetMapper: (Int) -> Int?,
     ) {
         val affectedOldParagraphIds = mutableSetOf<Int>()
         val affectedNewParagraphIds = mutableSetOf<Int>()
@@ -168,36 +179,40 @@ class MoveCrossfadePlanner {
 
         for ((oldIdx, pair) in allOldClusters.withIndex()) {
             val (oldCluster, oldSnapshot) = pair
-            val isDeleted = visualIntent.oldAffectedByteRanges.any { (start, end) ->
-                oldCluster.documentByteStart < end && oldCluster.documentByteEndExclusive > start
-            }
+            val isDeleted =
+                visualIntent.oldAffectedByteRanges.any { (start, end) ->
+                    oldCluster.documentByteStart < end && oldCluster.documentByteEndExclusive > start
+                }
             if (isDeleted) continue
 
             val mappedStart = offsetMapper(oldCluster.documentByteStart)
             val mappedEnd = offsetMapper(oldCluster.documentByteEndExclusive)
             var matchedNewIdx: Int? = null
             if (mappedStart != null) {
-                matchedNewIdx = allNewClusters.indices.firstOrNull { i ->
-                    i !in newUsed && allNewClusters[i].first.documentByteStart == mappedStart &&
-                        (mappedEnd == null || allNewClusters[i].first.documentByteEndExclusive == mappedEnd) &&
-                        allNewClusters[i].first.documentByteStart >= lastMatchedNewStart
-                }
+                matchedNewIdx =
+                    allNewClusters.indices.firstOrNull { i ->
+                        i !in newUsed && allNewClusters[i].first.documentByteStart == mappedStart &&
+                            (mappedEnd == null || allNewClusters[i].first.documentByteEndExclusive == mappedEnd) &&
+                            allNewClusters[i].first.documentByteStart >= lastMatchedNewStart
+                    }
             }
             if (matchedNewIdx == null) {
                 val referenceStart = maxOf(mappedStart ?: lastMatchedNewStart, lastMatchedNewStart)
-                val candidates = allNewClusters.indices.filter { i ->
-                    val candidate = allNewClusters[i].first
-                    i !in newUsed &&
-                        candidate.shapingFingerprint == oldCluster.shapingFingerprint &&
-                        candidate.documentByteStart >= referenceStart &&
-                        visualIntent.newAffectedByteRanges.none { (start, end) ->
-                            candidate.documentByteStart < end && candidate.documentByteEndExclusive > start
-                        }
-                }
+                val candidates =
+                    allNewClusters.indices.filter { i ->
+                        val candidate = allNewClusters[i].first
+                        i !in newUsed &&
+                            candidate.shapingFingerprint == oldCluster.shapingFingerprint &&
+                            candidate.documentByteStart >= referenceStart &&
+                            visualIntent.newAffectedByteRanges.none { (start, end) ->
+                                candidate.documentByteStart < end && candidate.documentByteEndExclusive > start
+                            }
+                    }
                 val target = mappedStart ?: lastMatchedNewStart
-                matchedNewIdx = candidates.minByOrNull { i ->
-                    kotlin.math.abs(allNewClusters[i].first.documentByteStart - target)
-                }
+                matchedNewIdx =
+                    candidates.minByOrNull { i ->
+                        kotlin.math.abs(allNewClusters[i].first.documentByteStart - target)
+                    }
             }
             if (matchedNewIdx != null) {
                 newUsed.add(matchedNewIdx)
@@ -209,38 +224,44 @@ class MoveCrossfadePlanner {
                 val fingerprintSame = oldCluster.shapingFingerprint == newCluster.shapingFingerprint
                 if (identityConfident && fingerprintSame && !positionChanged) {
                 } else if (identityConfident && fingerprintSame && positionChanged) {
-                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                        role = SliceRole.Move,
-                        snapshot = newSnapshot,
-                        sourceRect = newCluster.sourceRectInLineImage,
-                        destinationRect = newCluster.visualRectInDocument,
-                        startAlpha = 1f,
-                        endAlpha = 1f,
-                        fromDestinationRect = oldCluster.visualRectInDocument,
-                        clusterByteStart = newCluster.documentByteStart,
-                        clusterByteEndExclusive = newCluster.documentByteEndExclusive
-                    ))
+                    animatedSlices.add(
+                        PreparedVisualTransaction.AnimatedSlice(
+                            role = SliceRole.Move,
+                            snapshot = newSnapshot,
+                            sourceRect = newCluster.sourceRectInLineImage,
+                            destinationRect = newCluster.visualRectInDocument,
+                            startAlpha = 1f,
+                            endAlpha = 1f,
+                            fromDestinationRect = oldCluster.visualRectInDocument,
+                            clusterByteStart = newCluster.documentByteStart,
+                            clusterByteEndExclusive = newCluster.documentByteEndExclusive,
+                        ),
+                    )
                 } else {
-                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                        role = SliceRole.CrossfadeOld,
-                        snapshot = oldSnapshot,
-                        sourceRect = oldCluster.sourceRectInLineImage,
-                        destinationRect = oldCluster.visualRectInDocument,
-                        startAlpha = 1f,
-                        endAlpha = 0f,
-                        clusterByteStart = oldCluster.documentByteStart,
-                        clusterByteEndExclusive = oldCluster.documentByteEndExclusive
-                    ))
-                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                        role = SliceRole.CrossfadeNew,
-                        snapshot = newSnapshot,
-                        sourceRect = newCluster.sourceRectInLineImage,
-                        destinationRect = newCluster.visualRectInDocument,
-                        startAlpha = 0f,
-                        endAlpha = 1f,
-                        clusterByteStart = newCluster.documentByteStart,
-                        clusterByteEndExclusive = newCluster.documentByteEndExclusive
-                    ))
+                    animatedSlices.add(
+                        PreparedVisualTransaction.AnimatedSlice(
+                            role = SliceRole.CrossfadeOld,
+                            snapshot = oldSnapshot,
+                            sourceRect = oldCluster.sourceRectInLineImage,
+                            destinationRect = oldCluster.visualRectInDocument,
+                            startAlpha = 1f,
+                            endAlpha = 0f,
+                            clusterByteStart = oldCluster.documentByteStart,
+                            clusterByteEndExclusive = oldCluster.documentByteEndExclusive,
+                        ),
+                    )
+                    animatedSlices.add(
+                        PreparedVisualTransaction.AnimatedSlice(
+                            role = SliceRole.CrossfadeNew,
+                            snapshot = newSnapshot,
+                            sourceRect = newCluster.sourceRectInLineImage,
+                            destinationRect = newCluster.visualRectInDocument,
+                            startAlpha = 0f,
+                            endAlpha = 1f,
+                            clusterByteStart = newCluster.documentByteStart,
+                            clusterByteEndExclusive = newCluster.documentByteEndExclusive,
+                        ),
+                    )
                 }
             }
         }
@@ -248,31 +269,35 @@ class MoveCrossfadePlanner {
         for ((oldIdx, pair) in allOldClusters.withIndex()) {
             if (oldIdx in oldMatched) continue
             val (oldCluster, oldSnapshot) = pair
-            animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                role = SliceRole.Delete,
-                snapshot = oldSnapshot,
-                sourceRect = oldCluster.sourceRectInLineImage,
-                destinationRect = oldCluster.visualRectInDocument,
-                startAlpha = 1f,
-                endAlpha = 0f,
-                clusterByteStart = oldCluster.documentByteStart,
-                clusterByteEndExclusive = oldCluster.documentByteEndExclusive
-            ))
+            animatedSlices.add(
+                PreparedVisualTransaction.AnimatedSlice(
+                    role = SliceRole.Delete,
+                    snapshot = oldSnapshot,
+                    sourceRect = oldCluster.sourceRectInLineImage,
+                    destinationRect = oldCluster.visualRectInDocument,
+                    startAlpha = 1f,
+                    endAlpha = 0f,
+                    clusterByteStart = oldCluster.documentByteStart,
+                    clusterByteEndExclusive = oldCluster.documentByteEndExclusive,
+                ),
+            )
         }
 
         for ((newIdx, pair) in allNewClusters.withIndex()) {
             if (newIdx in newUsed) continue
             val (newCluster, newSnapshot) = pair
-            animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                role = SliceRole.Insert,
-                snapshot = newSnapshot,
-                sourceRect = newCluster.sourceRectInLineImage,
-                destinationRect = newCluster.visualRectInDocument,
-                startAlpha = 0f,
-                endAlpha = 1f,
-                clusterByteStart = newCluster.documentByteStart,
-                clusterByteEndExclusive = newCluster.documentByteEndExclusive
-            ))
+            animatedSlices.add(
+                PreparedVisualTransaction.AnimatedSlice(
+                    role = SliceRole.Insert,
+                    snapshot = newSnapshot,
+                    sourceRect = newCluster.sourceRectInLineImage,
+                    destinationRect = newCluster.visualRectInDocument,
+                    startAlpha = 0f,
+                    endAlpha = 1f,
+                    clusterByteStart = newCluster.documentByteStart,
+                    clusterByteEndExclusive = newCluster.documentByteEndExclusive,
+                ),
+            )
         }
     }
 
@@ -287,7 +312,7 @@ class MoveCrossfadePlanner {
         preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         createSnapshotFromRevision: (AndroidLayoutRevision, Int, Boolean) -> AndroidLineSnapshot?,
-        offsetMapper: (Int) -> Int?
+        offsetMapper: (Int) -> Int?,
     ) {
         val matchedNewLineIndices = mutableSetOf<Int>()
 
@@ -324,7 +349,9 @@ class MoveCrossfadePlanner {
                 for (newLineIdx in affectedNewLineIndices) {
                     if (newLineIdx in matchedNewLineIndices) continue
                     val newLineRange = newRev.lineRanges.getOrNull(newLineIdx) ?: continue
-                    if (oldLineRange.startUtf8 < newLineRange.endUtf8 && oldLineRange.endUtf8 > newLineRange.startUtf8) {
+                    if (oldLineRange.startUtf8 < newLineRange.endUtf8 &&
+                        oldLineRange.endUtf8 > newLineRange.startUtf8
+                    ) {
                         bestNewLineIdx = newLineIdx
                         break
                     }
@@ -335,40 +362,55 @@ class MoveCrossfadePlanner {
                 matchedNewLineIndices.add(bestNewLineIdx)
                 val newLineRange = newRev.lineRanges.getOrNull(bestNewLineIdx) ?: continue
                 val newSnapshot = createSnapshotFromRevision(newRev, bestNewLineIdx, true) ?: continue
-                animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                    role = SliceRole.CrossfadeOld,
-                    snapshot = oldSnapshot,
-                    sourceRect = oldSnapshot.sourceRect,
-                    destinationRect = android.graphics.RectF(
-                        oldLineRange.left, oldLineRange.top,
-                        oldLineRange.right, oldLineRange.bottom
+                animatedSlices.add(
+                    PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.CrossfadeOld,
+                        snapshot = oldSnapshot,
+                        sourceRect = oldSnapshot.sourceRect,
+                        destinationRect =
+                            android.graphics.RectF(
+                                oldLineRange.left,
+                                oldLineRange.top,
+                                oldLineRange.right,
+                                oldLineRange.bottom,
+                            ),
+                        startAlpha = 1f,
+                        endAlpha = 0f,
                     ),
-                    startAlpha = 1f,
-                    endAlpha = 0f
-                ))
-                animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                    role = SliceRole.CrossfadeNew,
-                    snapshot = newSnapshot,
-                    sourceRect = newSnapshot.sourceRect,
-                    destinationRect = android.graphics.RectF(
-                        newLineRange.left, newLineRange.top,
-                        newLineRange.right, newLineRange.bottom
+                )
+                animatedSlices.add(
+                    PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.CrossfadeNew,
+                        snapshot = newSnapshot,
+                        sourceRect = newSnapshot.sourceRect,
+                        destinationRect =
+                            android.graphics.RectF(
+                                newLineRange.left,
+                                newLineRange.top,
+                                newLineRange.right,
+                                newLineRange.bottom,
+                            ),
+                        startAlpha = 0f,
+                        endAlpha = 1f,
                     ),
-                    startAlpha = 0f,
-                    endAlpha = 1f
-                ))
+                )
             } else {
-                animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                    role = SliceRole.Delete,
-                    snapshot = oldSnapshot,
-                    sourceRect = oldSnapshot.sourceRect,
-                    destinationRect = android.graphics.RectF(
-                        oldLineRange.left, oldLineRange.top,
-                        oldLineRange.right, oldLineRange.bottom
+                animatedSlices.add(
+                    PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.Delete,
+                        snapshot = oldSnapshot,
+                        sourceRect = oldSnapshot.sourceRect,
+                        destinationRect =
+                            android.graphics.RectF(
+                                oldLineRange.left,
+                                oldLineRange.top,
+                                oldLineRange.right,
+                                oldLineRange.bottom,
+                            ),
+                        startAlpha = 1f,
+                        endAlpha = 0f,
                     ),
-                    startAlpha = 1f,
-                    endAlpha = 0f
-                ))
+                )
             }
         }
 
@@ -376,17 +418,22 @@ class MoveCrossfadePlanner {
             if (lineIndex in matchedNewLineIndices) continue
             val newLineRange = newRev.lineRanges.getOrNull(lineIndex) ?: continue
             val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, true) ?: continue
-            animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                role = SliceRole.Insert,
-                snapshot = newSnapshot,
-                sourceRect = newSnapshot.sourceRect,
-                destinationRect = android.graphics.RectF(
-                    newLineRange.left, newLineRange.top,
-                    newLineRange.right, newLineRange.bottom
+            animatedSlices.add(
+                PreparedVisualTransaction.AnimatedSlice(
+                    role = SliceRole.Insert,
+                    snapshot = newSnapshot,
+                    sourceRect = newSnapshot.sourceRect,
+                    destinationRect =
+                        android.graphics.RectF(
+                            newLineRange.left,
+                            newLineRange.top,
+                            newLineRange.right,
+                            newLineRange.bottom,
+                        ),
+                    startAlpha = 0f,
+                    endAlpha = 1f,
                 ),
-                startAlpha = 0f,
-                endAlpha = 1f
-            ))
+            )
         }
     }
 }

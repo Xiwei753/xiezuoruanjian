@@ -9,7 +9,10 @@ package com.xiwei.sujian.platform
  */
 interface AnimationDriver {
     /** 驱动一个视觉事务动画 */
-    fun driveAnimation(transaction: Any, skipAnimation: Boolean)
+    fun driveAnimation(
+        transaction: Any,
+        skipAnimation: Boolean,
+    )
 
     /** 报告当前是否应该抑制动画 */
     fun shouldSuppressAnimation(): Boolean
@@ -37,5 +40,5 @@ enum class AnimationSuppressReason {
     ApplyingSettings,
     AnimationDisabled,
     WindowMinimized,
-    WindowHidden
+    WindowHidden,
 }

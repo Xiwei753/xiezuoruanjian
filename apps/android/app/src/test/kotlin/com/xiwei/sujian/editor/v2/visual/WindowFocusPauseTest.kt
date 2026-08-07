@@ -10,7 +10,6 @@ import org.junit.Test
  * 动画从暂停帧继续而非从头开始。
  */
 class WindowFocusPauseTest {
-
     @Test
     fun pausePreservesProgressAndResumeContinues() {
         val timeline = AnimationTimeline(durationMs = 100L, submittedAtMs = 0L)
@@ -51,10 +50,14 @@ class WindowFocusPauseTest {
         assertEquals(0.4f, timeline.progress(40L), 0.01f)
 
         timeline.resume(40L)
-        assertTrue("After resume, progress continues past pause point",
-            timeline.progress(100L) > 0.4f)
-        assertTrue("Eventually reaches completion",
-            timeline.progress(200L) >= 1f)
+        assertTrue(
+            "After resume, progress continues past pause point",
+            timeline.progress(100L) > 0.4f,
+        )
+        assertTrue(
+            "Eventually reaches completion",
+            timeline.progress(200L) >= 1f,
+        )
     }
 
     @Test

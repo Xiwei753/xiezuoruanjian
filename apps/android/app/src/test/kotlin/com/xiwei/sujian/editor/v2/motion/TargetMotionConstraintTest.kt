@@ -16,7 +16,6 @@ import org.junit.Test
  * effectivePolicy = globalPolicy.apply(profileConstraint).effective() 只在一个计算点合成。
  */
 class TargetMotionConstraintTest {
-
     @Test
     fun defaultConstraintAllowsAll() {
         val constraint = TargetMotionConstraint()
@@ -60,7 +59,8 @@ class TargetMotionConstraintTest {
     @Test
     fun constraintComposesWithReduceMotion() {
         val constraint = TargetMotionConstraint(allowText = false)
-        val policy = EditorMotionPolicy(textEnabled = true, cursorEnabled = true, coordinated = true, reduceMotion = true)
+        val policy =
+            EditorMotionPolicy(textEnabled = true, cursorEnabled = true, coordinated = true, reduceMotion = true)
         val effective = policy.effective()
         val result = constraint.apply(effective)
         assertFalse("reduce-motion disables text", result.textEnabled)

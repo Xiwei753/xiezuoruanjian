@@ -7,7 +7,12 @@ import android.graphics.Path
 import android.graphics.RectF
 import android.os.Build
 
-private fun Canvas.clipOutRectCompat(left: Float, top: Float, right: Float, bottom: Float) {
+private fun Canvas.clipOutRectCompat(
+    left: Float,
+    top: Float,
+    right: Float,
+    bottom: Float,
+) {
     if (Build.VERSION.SDK_INT >= 26) {
         clipOutRect(left, top, right, bottom)
     } else {
@@ -17,48 +22,64 @@ private fun Canvas.clipOutRectCompat(left: Float, top: Float, right: Float, bott
 }
 
 class AndroidTextRenderer(
-    private val textPaint: Paint = Paint().apply {
-        color = Color.BLACK
-        isAntiAlias = true
-    }
+    private val textPaint: Paint =
+        Paint().apply {
+            color = Color.BLACK
+            isAntiAlias = true
+        },
 ) {
     private var backgroundColor: Int = Color.WHITE
-    private val backgroundPaint = Paint().apply {
-        color = Color.WHITE
-        style = Paint.Style.FILL
-    }
-    private val cursorPaint = Paint().apply {
-        color = Color.BLACK
-        strokeWidth = 2f
-        isAntiAlias = true
-    }
-    private val selectionPaint = Paint().apply {
-        color = Color.argb(51, 0, 0, 255)
-        style = Paint.Style.FILL
-        isAntiAlias = true
-    }
-    private val preeditUnderlinePaint = Paint().apply {
-        color = Color.BLACK
-        strokeWidth = 2f
-        isAntiAlias = true
-    }
-    private val searchHighlightPaint = Paint().apply {
-        color = Color.argb(40, 255, 200, 0)
-        style = Paint.Style.FILL
-        isAntiAlias = true
-    }
+    private val backgroundPaint =
+        Paint().apply {
+            color = Color.WHITE
+            style = Paint.Style.FILL
+        }
+    private val cursorPaint =
+        Paint().apply {
+            color = Color.BLACK
+            strokeWidth = 2f
+            isAntiAlias = true
+        }
+    private val selectionPaint =
+        Paint().apply {
+            color = Color.argb(51, 0, 0, 255)
+            style = Paint.Style.FILL
+            isAntiAlias = true
+        }
+    private val preeditUnderlinePaint =
+        Paint().apply {
+            color = Color.BLACK
+            strokeWidth = 2f
+            isAntiAlias = true
+        }
+    private val searchHighlightPaint =
+        Paint().apply {
+            color = Color.argb(40, 255, 200, 0)
+            style = Paint.Style.FILL
+            isAntiAlias = true
+        }
 
     fun drawBackground(canvas: Canvas) {
         canvas.drawColor(backgroundColor)
     }
 
-    fun drawSearchHighlights(canvas: Canvas, layout: android.text.Layout, highlights: List<Pair<Int, Int>>, blockShifts: List<com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction.BlockShift> = emptyList(), progress: Float = 1f) {
+    fun drawSearchHighlights(
+        canvas: Canvas,
+        layout: android.text.Layout,
+        highlights: List<Pair<Int, Int>>,
+        blockShifts: List<com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction.BlockShift> = emptyList(),
+        progress: Float = 1f,
+    ) {
         if (highlights.isEmpty()) return
         if (blockShifts.isEmpty() || progress >= 1f) {
             drawSearchHighlightsUnshifted(canvas, layout, highlights)
             return
         }
-        val shiftedLineRanges = blockShifts.flatMap { shift -> shift.startLineIndex until shift.endLineIndexExclusive }.toSet()
+        val shiftedLineRanges =
+            blockShifts.flatMap {
+                    shift ->
+                shift.startLineIndex until shift.endLineIndexExclusive
+            }.toSet()
         val unshiftedHighlights = mutableListOf<Pair<Int, Int>>()
         val shiftedHighlights = mutableListOf<Pair<Int, Int>>()
         for ((startUtf16, endUtf16) in highlights) {
@@ -81,12 +102,17 @@ class AndroidTextRenderer(
         val groupedByDeltaY = blockShifts.groupBy { it.deltaY }
         for ((deltaY, group) in groupedByDeltaY) {
             val currentDeltaY = deltaY * (progress - 1f)
-            val groupLineRange = group.flatMap { shift -> shift.startLineIndex until shift.endLineIndexExclusive }.toSet()
-            val groupShiftedHighlights = shiftedHighlights.filter { (startUtf16, endUtf16) ->
-                val startLine = layout.getLineForOffset(startUtf16)
-                val endLine = layout.getLineForOffset((endUtf16 - 1).coerceAtLeast(startUtf16))
-                (startLine..endLine).any { it in groupLineRange }
-            }
+            val groupLineRange =
+                group.flatMap {
+                        shift ->
+                    shift.startLineIndex until shift.endLineIndexExclusive
+                }.toSet()
+            val groupShiftedHighlights =
+                shiftedHighlights.filter { (startUtf16, endUtf16) ->
+                    val startLine = layout.getLineForOffset(startUtf16)
+                    val endLine = layout.getLineForOffset((endUtf16 - 1).coerceAtLeast(startUtf16))
+                    (startLine..endLine).any { it in groupLineRange }
+                }
             canvas.save()
             canvas.translate(0f, currentDeltaY)
             val clipPath = Path()
@@ -99,7 +125,11 @@ class AndroidTextRenderer(
         }
     }
 
-    private fun drawSearchHighlightsUnshifted(canvas: Canvas, layout: android.text.Layout, highlights: List<Pair<Int, Int>>) {
+    private fun drawSearchHighlightsUnshifted(
+        canvas: Canvas,
+        layout: android.text.Layout,
+        highlights: List<Pair<Int, Int>>,
+    ) {
         val path = Path()
         for ((startUtf16, endUtf16) in highlights) {
             path.reset()
@@ -108,13 +138,24 @@ class AndroidTextRenderer(
         }
     }
 
-    fun drawSelectionHighlight(canvas: Canvas, layout: android.text.Layout, selStart: Int, selEnd: Int, blockShifts: List<com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction.BlockShift> = emptyList(), progress: Float = 1f) {
+    fun drawSelectionHighlight(
+        canvas: Canvas,
+        layout: android.text.Layout,
+        selStart: Int,
+        selEnd: Int,
+        blockShifts: List<com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction.BlockShift> = emptyList(),
+        progress: Float = 1f,
+    ) {
         if (selStart == selEnd) return
         if (blockShifts.isEmpty() || progress >= 1f) {
             drawSelectionHighlightUnshifted(canvas, layout, selStart, selEnd)
             return
         }
-        val shiftedLineRanges = blockShifts.flatMap { shift -> shift.startLineIndex until shift.endLineIndexExclusive }.toSet()
+        val shiftedLineRanges =
+            blockShifts.flatMap {
+                    shift ->
+                shift.startLineIndex until shift.endLineIndexExclusive
+            }.toSet()
         val startLine = layout.getLineForOffset(selStart)
         val endLine = layout.getLineForOffset((selEnd - 1).coerceAtLeast(selStart))
         val anyShifted = (startLine..endLine).any { it in shiftedLineRanges }
@@ -131,7 +172,11 @@ class AndroidTextRenderer(
         val groupedByDeltaY = blockShifts.groupBy { it.deltaY }
         for ((deltaY, group) in groupedByDeltaY) {
             val currentDeltaY = deltaY * (progress - 1f)
-            val groupLineRange = group.flatMap { shift -> shift.startLineIndex until shift.endLineIndexExclusive }.toSet()
+            val groupLineRange =
+                group.flatMap {
+                        shift ->
+                    shift.startLineIndex until shift.endLineIndexExclusive
+                }.toSet()
             val selStartLine = layout.getLineForOffset(selStart)
             val selEndLine = layout.getLineForOffset((selEnd - 1).coerceAtLeast(selStart))
             val overlapsGroup = (selStartLine..selEndLine).any { it in groupLineRange }
@@ -148,13 +193,21 @@ class AndroidTextRenderer(
         }
     }
 
-    private fun drawSelectionHighlightUnshifted(canvas: Canvas, layout: android.text.Layout, selStart: Int, selEnd: Int) {
+    private fun drawSelectionHighlightUnshifted(
+        canvas: Canvas,
+        layout: android.text.Layout,
+        selStart: Int,
+        selEnd: Int,
+    ) {
         val path = Path()
         layout.getSelectionPath(selStart, selEnd, path)
         canvas.drawPath(path, selectionPaint)
     }
 
-    fun drawStaticText(canvas: Canvas, layout: android.text.Layout) {
+    fun drawStaticText(
+        canvas: Canvas,
+        layout: android.text.Layout,
+    ) {
         layout.draw(canvas)
     }
 
@@ -196,7 +249,7 @@ class AndroidTextRenderer(
         layout: android.text.Layout,
         holes: List<android.graphics.RectF>,
         blockShifts: List<com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction.BlockShift> = emptyList(),
-        progress: Float = 1f
+        progress: Float = 1f,
     ) {
         if (holes.isEmpty() && blockShifts.isEmpty()) {
             layout.draw(canvas)
@@ -208,8 +261,10 @@ class AndroidTextRenderer(
         }
         for (shift in blockShifts) {
             canvas.clipOutRectCompat(
-                shift.left, shift.top,
-                shift.right, shift.bottom
+                shift.left,
+                shift.top,
+                shift.right,
+                shift.bottom,
             )
         }
         layout.draw(canvas)
@@ -236,13 +291,24 @@ class AndroidTextRenderer(
         }
     }
 
-    fun drawPreeditUnderline(canvas: Canvas, layout: android.text.Layout, compStart: Int, compEnd: Int, blockShifts: List<com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction.BlockShift> = emptyList(), progress: Float = 1f) {
+    fun drawPreeditUnderline(
+        canvas: Canvas,
+        layout: android.text.Layout,
+        compStart: Int,
+        compEnd: Int,
+        blockShifts: List<com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction.BlockShift> = emptyList(),
+        progress: Float = 1f,
+    ) {
         if (compStart < 0 || compEnd < 0 || compStart >= compEnd) return
         if (blockShifts.isEmpty() || progress >= 1f) {
             drawPreeditUnderlineUnshifted(canvas, layout, compStart, compEnd)
             return
         }
-        val shiftedLineRanges = blockShifts.flatMap { shift -> shift.startLineIndex until shift.endLineIndexExclusive }.toSet()
+        val shiftedLineRanges =
+            blockShifts.flatMap {
+                    shift ->
+                shift.startLineIndex until shift.endLineIndexExclusive
+            }.toSet()
         val startLine = layout.getLineForOffset(compStart)
         val endLine = layout.getLineForOffset((compEnd - 1).coerceAtLeast(compStart))
         val anyShifted = (startLine..endLine).any { it in shiftedLineRanges }
@@ -259,7 +325,11 @@ class AndroidTextRenderer(
         val groupedByDeltaY = blockShifts.groupBy { it.deltaY }
         for ((deltaY, group) in groupedByDeltaY) {
             val currentDeltaY = deltaY * (progress - 1f)
-            val groupLineRange = group.flatMap { shift -> shift.startLineIndex until shift.endLineIndexExclusive }.toSet()
+            val groupLineRange =
+                group.flatMap {
+                        shift ->
+                    shift.startLineIndex until shift.endLineIndexExclusive
+                }.toSet()
             val compStartLine = layout.getLineForOffset(compStart)
             val compEndLine = layout.getLineForOffset((compEnd - 1).coerceAtLeast(compStart))
             val overlapsGroup = (compStartLine..compEndLine).any { it in groupLineRange }
@@ -277,7 +347,12 @@ class AndroidTextRenderer(
     }
 
     @Suppress("DEPRECATION")
-    private fun drawPreeditUnderlineUnshifted(canvas: Canvas, layout: android.text.Layout, compStart: Int, compEnd: Int) {
+    private fun drawPreeditUnderlineUnshifted(
+        canvas: Canvas,
+        layout: android.text.Layout,
+        compStart: Int,
+        compEnd: Int,
+    ) {
         val startLine = layout.getLineForOffset(compStart)
         val endLine = layout.getLineForOffset((compEnd - 1).coerceAtLeast(compStart))
         for (line in startLine..endLine) {
@@ -294,7 +369,13 @@ class AndroidTextRenderer(
         }
     }
 
-    fun drawCursor(canvas: Canvas, cursorUtf16: Int, cursorX: Float, cursorY: Float, cursorHeight: Float) {
+    fun drawCursor(
+        canvas: Canvas,
+        cursorUtf16: Int,
+        cursorX: Float,
+        cursorY: Float,
+        cursorHeight: Float,
+    ) {
         if (cursorUtf16 < 0) return
         canvas.drawRect(cursorX, cursorY, cursorX + 2f, cursorY + cursorHeight, cursorPaint)
     }
@@ -309,7 +390,14 @@ class AndroidTextRenderer(
 
     fun getBackgroundPaint(): Paint = backgroundPaint
 
-    fun setThemeColors(textColor: Int, cursorColor: Int, selectionColor: Int, preeditColor: Int, bgColor: Int = Color.WHITE, searchHighlightColor: Int = 0) {
+    fun setThemeColors(
+        textColor: Int,
+        cursorColor: Int,
+        selectionColor: Int,
+        preeditColor: Int,
+        bgColor: Int = Color.WHITE,
+        searchHighlightColor: Int = 0,
+    ) {
         textPaint.color = textColor
         cursorPaint.color = cursorColor
         selectionPaint.color = selectionColor

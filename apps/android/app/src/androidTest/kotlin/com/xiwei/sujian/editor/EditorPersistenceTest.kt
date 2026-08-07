@@ -16,7 +16,6 @@ import com.xiwei.sujian.support.EditorReplaceRangeAction
 import com.xiwei.sujian.support.EditorViewAssertions
 import com.xiwei.sujian.support.RestartableMainActivityRule
 import com.xiwei.sujian.support.TestSession
-import com.xiwei.sujian.ui.MainActivity
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
@@ -24,18 +23,19 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class EditorPersistenceTest {
-
     private val activityRule = RestartableMainActivityRule { AndroidTestEnvironment.requireCurrentSession() }
 
-    private val _composeTestRule = AndroidComposeTestRule(
-        activityRule,
-        activityProvider = activityRule.composeActivityProvider
-    ).also { activityRule.setComposeTestRule(it) }
+    private val _composeTestRule =
+        AndroidComposeTestRule(
+            activityRule,
+            activityProvider = activityRule.composeActivityProvider,
+        ).also { activityRule.setComposeTestRule(it) }
 
     @get:Rule
-    val ruleChain: RuleChain = RuleChain
-        .outerRule(AndroidTestEnvironment.TestDependenciesRule())
-        .around(_composeTestRule)
+    val ruleChain: RuleChain =
+        RuleChain
+            .outerRule(AndroidTestEnvironment.TestDependenciesRule())
+            .around(_composeTestRule)
 
     private val composeTestRule get() = _composeTestRule
 
@@ -43,7 +43,7 @@ class EditorPersistenceTest {
 
     private fun initTestData(): AndroidTestEnvironment.TestProjectData {
         return AndroidTestEnvironment.ensureTestProjectAndVolume(
-            androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
+            androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext,
         )
     }
 
@@ -62,7 +62,11 @@ class EditorPersistenceTest {
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.WorkspaceVolumeList, timeoutMs = 5_000)
 
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.chapter(testData.volumeId, chapterId), timeoutMs = 15_000)
+        ComposeWait.waitForTag(
+            composeTestRule,
+            SujianSemanticIds.chapter(testData.volumeId, chapterId),
+            timeoutMs = 15_000,
+        )
         composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterId)).performClick()
 
         waitForEditorReady(testData.projectId, testData.volumeId, chapterId)
@@ -144,7 +148,7 @@ class EditorPersistenceTest {
         org.junit.Assert.assertEquals(
             "ASCII text: UTF-8 byte offset should equal UTF-16 offset",
             expectedUtf16InsertOffset,
-            insertByteOffset
+            insertByteOffset,
         )
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -162,16 +166,20 @@ class EditorPersistenceTest {
             expectedUtf16InsertOffset + "XY".length
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
-            .check(EditorViewAssertions.hasSelectionUtf8(
-                expectedCursorUtf8,
-                expectedCursorUtf8
-            ))
+            .check(
+                EditorViewAssertions.hasSelectionUtf8(
+                    expectedCursorUtf8,
+                    expectedCursorUtf8,
+                ),
+            )
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
-            .check(EditorViewAssertions.hasSelectionUtf16(
-                expectedCursorUtf16,
-                expectedCursorUtf16
-            ))
+            .check(
+                EditorViewAssertions.hasSelectionUtf16(
+                    expectedCursorUtf16,
+                    expectedCursorUtf16,
+                ),
+            )
 
         activityRule.restartRuntimeAndActivity()
 
@@ -211,10 +219,12 @@ class EditorPersistenceTest {
             .check(EditorViewAssertions.hasDisplayText(expectedAfterInsert))
 
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
-            .check(EditorViewAssertions.hasSelectionUtf16(
-                expectedUtf16Offset + "中间".length,
-                expectedUtf16Offset + "中间".length
-            ))
+            .check(
+                EditorViewAssertions.hasSelectionUtf16(
+                    expectedUtf16Offset + "中间".length,
+                    expectedUtf16Offset + "中间".length,
+                ),
+            )
 
         val insertEndByteOffset = expectedByteOffset + "中间".toByteArray(Charsets.UTF_8).size
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
@@ -230,7 +240,10 @@ class EditorPersistenceTest {
             .check(EditorViewAssertions.hasDisplayText(expectedAfterInsert))
     }
 
-    private fun openTestChapter(chapterTitle: String, testData: AndroidTestEnvironment.TestProjectData): String {
+    private fun openTestChapter(
+        chapterTitle: String,
+        testData: AndroidTestEnvironment.TestProjectData,
+    ): String {
         navigateToTestVolume(testData)
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.createChapter(testData.volumeId), timeoutMs = 15_000)
@@ -242,7 +255,11 @@ class EditorPersistenceTest {
         composeTestRule.onNodeWithTag(SujianSemanticIds.DialogConfirm).performClick()
 
         val chapterId = waitForChapterByTitle(chapterTitle, testData)
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.chapter(testData.volumeId, chapterId), timeoutMs = 15_000)
+        ComposeWait.waitForTag(
+            composeTestRule,
+            SujianSemanticIds.chapter(testData.volumeId, chapterId),
+            timeoutMs = 15_000,
+        )
         composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterId)).performClick()
 
         waitForEditorReady(testData.projectId, testData.volumeId, chapterId)
@@ -250,19 +267,30 @@ class EditorPersistenceTest {
         return chapterId
     }
 
-    private fun navigateToChapterAfterRestart(testData: AndroidTestEnvironment.TestProjectData, chapterId: String) {
+    private fun navigateToChapterAfterRestart(
+        testData: AndroidTestEnvironment.TestProjectData,
+        chapterId: String,
+    ) {
         navigateToTestVolume(testData)
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.chapter(testData.volumeId, chapterId), timeoutMs = 15_000)
+        ComposeWait.waitForTag(
+            composeTestRule,
+            SujianSemanticIds.chapter(testData.volumeId, chapterId),
+            timeoutMs = 15_000,
+        )
         composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterId)).performClick()
         waitForEditorReady(testData.projectId, testData.volumeId, chapterId)
     }
 
-    private fun waitForEditorReady(projectId: String, volumeId: String, chapterId: String) {
+    private fun waitForEditorReady(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+    ) {
         val expectedTargetId = "chapter-body:$projectId:$volumeId:$chapterId"
         ComposeWait.waitForEspressoViewCondition(
             composeTestRule,
             EditorViewAssertions.isEditorReady(),
-            timeoutMs = 15_000
+            timeoutMs = 15_000,
         ) { "Editor did not become ready for chapter $chapterId" }
 
         var lastTargetId: String? = null
@@ -270,18 +298,23 @@ class EditorPersistenceTest {
             val coordinator = AndroidTestEnvironment.requireCurrentSession().deps.coordinator
             lastTargetId = coordinator.activeTargetId
             coordinator.activeTargetId == expectedTargetId
-        }, timeoutMs = 10_000, message = { "activeTargetId should be $expectedTargetId but was $lastTargetId for chapter $chapterId" })
+        }, timeoutMs = 10_000, message = {
+            "activeTargetId should be $expectedTargetId but was $lastTargetId for chapter $chapterId"
+        })
     }
 
     private fun waitForEditorContent(expectedContent: String) {
         ComposeWait.waitForEspressoViewCondition(
             composeTestRule,
             EditorViewAssertions.hasDisplayText(expectedContent),
-            timeoutMs = 15_000
+            timeoutMs = 15_000,
         ) { "Content mismatch: expected '$expectedContent'" }
     }
 
-    private fun waitForChapterByTitle(title: String, testData: AndroidTestEnvironment.TestProjectData): String {
+    private fun waitForChapterByTitle(
+        title: String,
+        testData: AndroidTestEnvironment.TestProjectData,
+    ): String {
         val s = AndroidTestEnvironment.requireCurrentSession()
         val repo = s.deps.workspaceRepository
         var chapterId = ""

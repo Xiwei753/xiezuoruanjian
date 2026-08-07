@@ -17,7 +17,10 @@ class ExperimentalSettingsRepository(context: Context) {
         return prefs.getBoolean(featureId, feature.defaultEnabled)
     }
 
-    fun setEnabled(featureId: String, enabled: Boolean) {
+    fun setEnabled(
+        featureId: String,
+        enabled: Boolean,
+    ) {
         prefs.edit().putBoolean(featureId, enabled).apply()
     }
 

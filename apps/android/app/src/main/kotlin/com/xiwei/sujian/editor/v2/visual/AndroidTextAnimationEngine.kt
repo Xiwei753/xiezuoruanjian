@@ -22,7 +22,7 @@ class AndroidTextAnimationEngine(
     private val visualPlanner: AndroidVisualPlanner,
     private val resourceStore: VisualResourceStore,
     private val timeSource: AnimationTimeSource = ChoreographerAnimationTimeSource(),
-    private val transactionIdSource: TransactionIdSource = TransactionIdSource()
+    private val transactionIdSource: TransactionIdSource = TransactionIdSource(),
 ) {
     private var activeTransaction: PreparedVisualTransaction? = null
     private var timeline: AnimationTimeline? = null
@@ -40,7 +40,10 @@ class AndroidTextAnimationEngine(
      * 开启时光标使用独立的 [cursorTimeline]，时长由 [smoothCursorDurationMs] 控制
      * （不超过文本事务时长，保证光标与文字同时到达终点）。
      */
-    fun setSmoothCursor(enabled: Boolean, durationMs: Long) {
+    fun setSmoothCursor(
+        enabled: Boolean,
+        durationMs: Long,
+    ) {
         smoothCursorEnabled = enabled
         smoothCursorDurationMs = durationMs
         if (!enabled) {
@@ -112,7 +115,7 @@ class AndroidTextAnimationEngine(
         newRevision: AndroidLayoutRevision?,
         oldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         newSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
-        rebaseFrame: VisualFrameSnapshot? = null
+        rebaseFrame: VisualFrameSnapshot? = null,
     ): PreparedVisualTransaction {
         val transactionKey = transactionIdSource.nextId()
         val owner = SnapshotOwner.OwnedByTransaction(transactionKey)
@@ -151,7 +154,7 @@ class AndroidTextAnimationEngine(
         return visualPlanner.prepare(
             visualIntent, oldRevision, newRevision,
             oldSnapshots, newSnapshots, rebaseFrame, transactionKey, ownedSnapshotIds,
-            snapshotLookup
+            snapshotLookup,
         )
     }
 
@@ -169,18 +172,20 @@ class AndroidTextAnimationEngine(
      */
     fun submit(
         preparedAnimation: PreparedVisualTransaction,
-        submittedAtMs: Long = timeSource.nowNanos() / 1_000_000
+        submittedAtMs: Long = timeSource.nowNanos() / 1_000_000,
     ) {
-        val effectiveCursorTransition = if (!smoothCursorEnabled) {
-            preparedAnimation.cursorTransition?.copy(shouldAnimate = false)
-        } else {
-            preparedAnimation.cursorTransition
-        }
-        val effectiveTransaction = if (effectiveCursorTransition !== preparedAnimation.cursorTransition) {
-            preparedAnimation.copy(cursorTransition = effectiveCursorTransition)
-        } else {
-            preparedAnimation
-        }
+        val effectiveCursorTransition =
+            if (!smoothCursorEnabled) {
+                preparedAnimation.cursorTransition?.copy(shouldAnimate = false)
+            } else {
+                preparedAnimation.cursorTransition
+            }
+        val effectiveTransaction =
+            if (effectiveCursorTransition !== preparedAnimation.cursorTransition) {
+                preparedAnimation.copy(cursorTransition = effectiveCursorTransition)
+            } else {
+                preparedAnimation
+            }
         val oldTransaction = activeTransaction
         val newOwner = SnapshotOwner.OwnedByTransaction(preparedAnimation.transactionId)
 
@@ -213,15 +218,17 @@ class AndroidTextAnimationEngine(
             // inflated preciseOwnedIds and a failed release (owner mismatch) when the new
             // transaction completes.
             val referencedIds = preparedAnimation.referencedSnapshotIds
-            val inheritedIds = oldTransaction.ownedSnapshotIds
-                .intersect(referencedIds)
-                .minus(preparedAnimation.ownedSnapshotIds)
+            val inheritedIds =
+                oldTransaction.ownedSnapshotIds
+                    .intersect(referencedIds)
+                    .minus(preparedAnimation.ownedSnapshotIds)
             for (snapshotId in inheritedIds) {
                 resourceStore.transferOwnership(snapshotId, newOwner)
             }
 
             // Snapshots from the old transaction that are no longer referenced: release now.
-            val unreferencedOldIds = oldTransaction.ownedSnapshotIds - referencedIds - preparedAnimation.ownedSnapshotIds
+            val unreferencedOldIds =
+                oldTransaction.ownedSnapshotIds - referencedIds - preparedAnimation.ownedSnapshotIds
             for (snapshotId in unreferencedOldIds) {
                 resourceStore.release(snapshotId, oldOwner)
             }
@@ -246,20 +253,22 @@ class AndroidTextAnimationEngine(
         }
 
         timeline = AnimationTimeline(preparedAnimation.durationMs, submittedAtMs)
-        cursorTimeline = if (effectiveCursorTransition?.shouldAnimate == true && preparedAnimation.durationMs > 0L) {
-            val cursorDuration = if (coordinatedEnabled) {
-                minOf(smoothCursorDurationMs.coerceAtLeast(1L), preparedAnimation.durationMs)
+        cursorTimeline =
+            if (effectiveCursorTransition?.shouldAnimate == true && preparedAnimation.durationMs > 0L) {
+                val cursorDuration =
+                    if (coordinatedEnabled) {
+                        minOf(smoothCursorDurationMs.coerceAtLeast(1L), preparedAnimation.durationMs)
+                    } else {
+                        smoothCursorDurationMs.coerceAtLeast(1L)
+                    }
+                AnimationTimeline(cursorDuration, submittedAtMs)
             } else {
-                smoothCursorDurationMs.coerceAtLeast(1L)
+                null
             }
-            AnimationTimeline(cursorDuration, submittedAtMs)
-        } else {
-            null
-        }
         com.xiwei.sujian.diagnostics.DiagnosticsEvents.animationStart(
             preparedAnimation.transactionId,
             preparedAnimation.operationKind.name,
-            preparedAnimation.durationMs
+            preparedAnimation.durationMs,
         )
     }
 
@@ -285,7 +294,7 @@ class AndroidTextAnimationEngine(
         layoutEngine: AndroidLayoutEngine,
         mirrorUpdate: (() -> Unit)? = null,
         beforePatch: (() -> Unit)? = null,
-        frameTimeMs: Long? = null
+        frameTimeMs: Long? = null,
     ) {
         val textSuppressed = animationPolicy == TextAnimationPolicy.SYSTEM_SUPPRESSED || reduceMotion
         val effectiveFrameTimeMs = frameTimeMs ?: (timeSource.nowNanos() / 1_000_000)
@@ -321,7 +330,12 @@ class AndroidTextAnimationEngine(
         // This split is essential: capturing old snapshots after mirrorUpdate would
         // produce stale bitmaps (the layout has already changed), and computing
         // BlockShifts with only one revision would miss the Y-delta information.
-        val preliminaryResult = visualPlanner.computeAffectedLineIndicesFromBothRevisions(visualIntent, oldRevision, null)
+        val preliminaryResult =
+            visualPlanner.computeAffectedLineIndicesFromBothRevisions(
+                visualIntent,
+                oldRevision,
+                null,
+            )
         val affectedOldLineIndices = preliminaryResult.oldLineIndices
         val oldSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedOldLineIndices)
         beforePatch?.invoke()
@@ -333,7 +347,12 @@ class AndroidTextAnimationEngine(
         // because they require comparing paragraph Y positions across revisions.
         // New snapshot lines must be captured AFTER mirrorUpdate (the layout reflects
         // the new text state); capturing them before would produce the old layout's bitmaps.
-        val affectedResult = visualPlanner.computeAffectedLineIndicesFromBothRevisions(visualIntent, oldRevision, newRevision)
+        val affectedResult =
+            visualPlanner.computeAffectedLineIndicesFromBothRevisions(
+                visualIntent,
+                oldRevision,
+                newRevision,
+            )
         val affectedNewLineIndices = affectedResult.newLineIndices
         val newSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedNewLineIndices)
         val transaction = prepare(visualIntent, oldRevision, newRevision, oldSnapshots, newSnapshots, rebaseSnapshot)
@@ -362,15 +381,19 @@ class AndroidTextAnimationEngine(
         layoutEngine.requestLayout()
         val newRevision = layoutEngine.getCurrentRevision()
         val cursorDuration = smoothCursorDurationMs.coerceAtLeast(1L)
-        val cursorOnlyIntent = visualIntent.copy(
-            animationMode = uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED,
-            durationMs = cursorDuration,
-        )
+        val cursorOnlyIntent =
+            visualIntent.copy(
+                animationMode = uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED,
+                durationMs = cursorDuration,
+            )
         val transaction = prepare(cursorOnlyIntent, oldRevision, newRevision, emptyMap(), emptyMap(), rebaseSnapshot)
         submit(transaction, frameTimeMs)
     }
 
-    fun registerSnapshots(snapshots: Map<Int, AndroidLineSnapshot>, owner: SnapshotOwner) {
+    fun registerSnapshots(
+        snapshots: Map<Int, AndroidLineSnapshot>,
+        owner: SnapshotOwner,
+    ) {
         for ((_, snapshot) in snapshots) {
             resourceStore.put(snapshot, owner)
         }
@@ -407,7 +430,7 @@ class AndroidTextAnimationEngine(
                 state = TransactionState.Pending,
                 sliceVisualStates = sliceStates,
                 cursorRect = cursorRect,
-                blockShiftStates = blockStates
+                blockShiftStates = blockStates,
             )
         }
         val p = tl.progress(frameTimeMs)
@@ -420,7 +443,7 @@ class AndroidTextAnimationEngine(
             state = state,
             sliceVisualStates = sliceStates,
             cursorRect = cursorRect,
-            blockShiftStates = blockStates
+            blockShiftStates = blockStates,
         )
     }
 
@@ -551,7 +574,7 @@ class AndroidTextAnimationEngine(
         if (textFinished && cursorFinished) {
             com.xiwei.sujian.diagnostics.DiagnosticsEvents.animationComplete(
                 transaction.transactionId,
-                (frameTimeMs - (tl.getFirstVisibleFrameTimeMs() ?: frameTimeMs)).coerceAtLeast(0L)
+                (frameTimeMs - (tl.getFirstVisibleFrameTimeMs() ?: frameTimeMs)).coerceAtLeast(0L),
             )
             completeTransaction(transaction)
             // #595 六：统一终态 — 事务对象与两条 timeline 全部离开引擎。
@@ -579,7 +602,7 @@ class AndroidTextAnimationEngine(
      */
     private fun computeSliceVisualStates(
         transaction: PreparedVisualTransaction,
-        progress: Float
+        progress: Float,
     ): List<SliceVisualState> {
         return transaction.animatedSlices.map { slice ->
             val fromRect = slice.fromDestinationRect ?: slice.destinationRect
@@ -604,7 +627,7 @@ class AndroidTextAnimationEngine(
                 destinationLeft = slice.destinationRect.left,
                 destinationTop = slice.destinationRect.top,
                 destinationRight = slice.destinationRect.right,
-                destinationBottom = slice.destinationRect.bottom
+                destinationBottom = slice.destinationRect.bottom,
             )
         }
     }
@@ -647,7 +670,7 @@ class AndroidTextAnimationEngine(
      */
     private fun computeCurrentCursorRect(
         transaction: PreparedVisualTransaction,
-        progress: Float
+        progress: Float,
     ): android.graphics.RectF? {
         val ct = transaction.cursorTransition ?: return null
         if (!ct.shouldAnimate) return null
@@ -687,7 +710,7 @@ class AndroidTextAnimationEngine(
      */
     private fun computeBlockShiftVisualStates(
         transaction: PreparedVisualTransaction,
-        progress: Float
+        progress: Float,
     ): List<BlockShiftVisualState> {
         return transaction.blockShifts.map { shift ->
             val currentTranslateY = shift.deltaY * (progress - 1f)
@@ -697,7 +720,7 @@ class AndroidTextAnimationEngine(
                 startUtf8 = shift.startUtf8,
                 endUtf8Exclusive = shift.endUtf8Exclusive,
                 currentTranslateY = currentTranslateY,
-                targetTranslateY = 0f
+                targetTranslateY = 0f,
             )
         }
     }
@@ -706,5 +729,5 @@ class AndroidTextAnimationEngine(
 enum class TextAnimationPolicy {
     INHERIT_GLOBAL,
     ENABLED,
-    SYSTEM_SUPPRESSED
+    SYSTEM_SUPPRESSED,
 }

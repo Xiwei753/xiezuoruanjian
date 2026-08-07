@@ -16,7 +16,7 @@ import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
  * and must not be shared across threads. Rebuild after any text mutation.
  */
 class AndroidTextIndexMap private constructor(
-    private val text: String
+    private val text: String,
 ) {
     constructor(mirror: DisplayTextMirror) : this(mirror.getText())
 
@@ -38,7 +38,7 @@ class AndroidTextIndexMap private constructor(
             newCursorPosition: Int,
             replaceStartUtf8: Int,
             replaceEndUtf8: Int,
-            replacementText: String
+            replacementText: String,
         ): Pair<Int, Int> {
             // newCursorPosition follows Android's InputConnection convention:
             // > 0: cursor is after the replacement, 1-indexed from replacement end.
@@ -46,7 +46,10 @@ class AndroidTextIndexMap private constructor(
             val committedBytes = committedText.toByteArray(Charsets.UTF_8)
             val safeStart = replaceStartUtf8.coerceIn(0, committedBytes.size)
             val safeEnd = replaceEndUtf8.coerceIn(safeStart, committedBytes.size)
-            val virtualText = String(committedBytes, 0, safeStart, Charsets.UTF_8) + replacementText + String(committedBytes, safeEnd, committedBytes.size - safeEnd, Charsets.UTF_8)
+            val virtualText =
+                String(committedBytes, 0, safeStart, Charsets.UTF_8) +
+                    replacementText +
+                    String(committedBytes, safeEnd, committedBytes.size - safeEnd, Charsets.UTF_8)
             val virtualIndexMap = fromText(virtualText)
             val replaceStartUtf16 = virtualIndexMap.utf8ToUtf16(safeStart)
             val replacementUtf16Len = countUtf16CodeUnits(replacementText)
@@ -74,6 +77,7 @@ class AndroidTextIndexMap private constructor(
             return count
         }
     }
+
     private val byteBoundaries: IntArray by lazy { buildByteBoundaries() }
     private val utf16Positions: IntArray by lazy { buildUtf16Positions() }
     private val _utf16Length: Int by lazy { countUtf16CodeUnits() }
@@ -102,11 +106,17 @@ class AndroidTextIndexMap private constructor(
         return if (pos >= 0 && pos < byteBoundaries.size) byteBoundaries[pos] else _utf8Length
     }
 
-    fun utf8RangeToUtf16(startByte: Int, endByte: Int): IntRange {
+    fun utf8RangeToUtf16(
+        startByte: Int,
+        endByte: Int,
+    ): IntRange {
         return utf8ToUtf16(startByte)..utf8ToUtf16(endByte)
     }
 
-    fun utf16RangeToUtf8(startUtf16: Int, endUtf16: Int): Pair<Int, Int> {
+    fun utf16RangeToUtf8(
+        startUtf16: Int,
+        endUtf16: Int,
+    ): Pair<Int, Int> {
         return Pair(utf16ToUtf8(startUtf16), utf16ToUtf8(endUtf16))
     }
 

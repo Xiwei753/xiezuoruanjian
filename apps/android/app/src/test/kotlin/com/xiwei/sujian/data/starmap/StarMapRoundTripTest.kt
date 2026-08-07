@@ -6,44 +6,46 @@ import org.junit.Test
 import uniffi.writer_core.*
 
 class StarMapRoundTripTest {
-
     @Test
     fun dtoToModelToDto_contentFullFields_roundTrip() {
-        val originalDto = StarMapNodeDto(
-            id = "n1",
-            title = "Chapter Node",
-            kind = StarMapNodeKindDto.CHAPTER,
-            payload = null,
-            tags = listOf("tag1", "tag2"),
-            content = StarMapNodeContentDto(
-                kind = "chapter",
-                summary = "summary text",
-                body = "body text",
-                projectId = "proj1",
-                volumeId = "vol1",
-                chapterId = "ch1",
-                rangeStart = 10u,
-                rangeEnd = 200u,
-                entityType = "paragraph",
-                entityId = "ent1",
-                uri = "uri1",
-                label = "content label"
-            ),
-            anchors = emptyList(),
-            portal = null,
-            displayPolicy = defaultStarMapDisplayPolicy(),
-            openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
-            provenance = StarMapProvenanceDto(
-                source = StarMapSourceKindDto.HUMAN,
-                sourceId = null,
-                generatedBy = null,
-                promptId = null,
-                reviewStatus = StarMapReviewStatusDto.ACCEPTED,
-                createdFromAnchor = null
-            ),
-            createdAt = 100u,
-            updatedAt = 200u
-        )
+        val originalDto =
+            StarMapNodeDto(
+                id = "n1",
+                title = "Chapter Node",
+                kind = StarMapNodeKindDto.CHAPTER,
+                payload = null,
+                tags = listOf("tag1", "tag2"),
+                content =
+                    StarMapNodeContentDto(
+                        kind = "chapter",
+                        summary = "summary text",
+                        body = "body text",
+                        projectId = "proj1",
+                        volumeId = "vol1",
+                        chapterId = "ch1",
+                        rangeStart = 10u,
+                        rangeEnd = 200u,
+                        entityType = "paragraph",
+                        entityId = "ent1",
+                        uri = "uri1",
+                        label = "content label",
+                    ),
+                anchors = emptyList(),
+                portal = null,
+                displayPolicy = defaultStarMapDisplayPolicy(),
+                openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
+                provenance =
+                    StarMapProvenanceDto(
+                        source = StarMapSourceKindDto.HUMAN,
+                        sourceId = null,
+                        generatedBy = null,
+                        promptId = null,
+                        reviewStatus = StarMapReviewStatusDto.ACCEPTED,
+                        createdFromAnchor = null,
+                    ),
+                createdAt = 100u,
+                updatedAt = 200u,
+            )
 
         val model = originalDto.toGraphNode()
         val roundTrippedDto = model.toDto(null)
@@ -70,40 +72,51 @@ class StarMapRoundTripTest {
 
     @Test
     fun dtoToModelToDto_anchorTargetFullFields_roundTrip() {
-        val originalDto = StarMapNodeDto(
-            id = "n1",
-            title = "Char",
-            kind = StarMapNodeKindDto.CHARACTER,
-            payload = null,
-            tags = emptyList(),
-            content = StarMapNodeContentDto("note", null, null, null, null, null, null, null, null, null, null, null),
-            anchors = listOf(
-                StarMapAnchorDto(
-                    anchorId = "a1",
-                    target = StarMapAnchorTargetDto(
-                        kind = "Chapter",
-                        projectId = "projA",
-                        volumeId = "volA",
-                        chapterId = "chA",
-                        rangeStart = 5u,
-                        rangeEnd = 50u,
-                        entityId = "entA",
-                        entityType = "scene",
-                        starmapId = "smA",
-                        uri = "uriA",
-                        payload = "payloadA"
+        val originalDto =
+            StarMapNodeDto(
+                id = "n1",
+                title = "Char",
+                kind = StarMapNodeKindDto.CHARACTER,
+                payload = null,
+                tags = emptyList(),
+                content = StarMapNodeContentDto("note", null, null, null, null, null, null, null, null, null, null, null),
+                anchors =
+                    listOf(
+                        StarMapAnchorDto(
+                            anchorId = "a1",
+                            target =
+                                StarMapAnchorTargetDto(
+                                    kind = "Chapter",
+                                    projectId = "projA",
+                                    volumeId = "volA",
+                                    chapterId = "chA",
+                                    rangeStart = 5u,
+                                    rangeEnd = 50u,
+                                    entityId = "entA",
+                                    entityType = "scene",
+                                    starmapId = "smA",
+                                    uri = "uriA",
+                                    payload = "payloadA",
+                                ),
+                            label = "anchor label",
+                            role = StarMapAnchorRoleDto.REFERENCE,
+                        ),
                     ),
-                    label = "anchor label",
-                    role = StarMapAnchorRoleDto.REFERENCE
-                )
-            ),
-            portal = null,
-            displayPolicy = defaultStarMapDisplayPolicy(),
-            openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
-            provenance = StarMapProvenanceDto(StarMapSourceKindDto.HUMAN, null, null, null, StarMapReviewStatusDto.ACCEPTED, null),
-            createdAt = 0u,
-            updatedAt = 0u
-        )
+                portal = null,
+                displayPolicy = defaultStarMapDisplayPolicy(),
+                openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
+                provenance =
+                    StarMapProvenanceDto(
+                        StarMapSourceKindDto.HUMAN,
+                        null,
+                        null,
+                        null,
+                        StarMapReviewStatusDto.ACCEPTED,
+                        null,
+                    ),
+                createdAt = 0u,
+                updatedAt = 0u,
+            )
 
         val model = originalDto.toGraphNode()
         val roundTrippedDto = model.toDto(null)
@@ -128,28 +141,30 @@ class StarMapRoundTripTest {
 
     @Test
     fun dtoToModelToDto_provenance_roundTrip() {
-        val originalDto = StarMapNodeDto(
-            id = "n1",
-            title = "AI Node",
-            kind = StarMapNodeKindDto.CONCEPT,
-            payload = null,
-            tags = emptyList(),
-            content = StarMapNodeContentDto("note", null, null, null, null, null, null, null, null, null, null, null),
-            anchors = emptyList(),
-            portal = null,
-            displayPolicy = defaultStarMapDisplayPolicy(),
-            openBehavior = StarMapOpenBehaviorDto.WRITING_MODE,
-            provenance = StarMapProvenanceDto(
-                source = StarMapSourceKindDto.AI,
-                sourceId = "src1",
-                generatedBy = "gen1",
-                promptId = "prompt1",
-                reviewStatus = StarMapReviewStatusDto.NEEDS_REVIEW,
-                createdFromAnchor = "anchor1"
-            ),
-            createdAt = 0u,
-            updatedAt = 0u
-        )
+        val originalDto =
+            StarMapNodeDto(
+                id = "n1",
+                title = "AI Node",
+                kind = StarMapNodeKindDto.CONCEPT,
+                payload = null,
+                tags = emptyList(),
+                content = StarMapNodeContentDto("note", null, null, null, null, null, null, null, null, null, null, null),
+                anchors = emptyList(),
+                portal = null,
+                displayPolicy = defaultStarMapDisplayPolicy(),
+                openBehavior = StarMapOpenBehaviorDto.WRITING_MODE,
+                provenance =
+                    StarMapProvenanceDto(
+                        source = StarMapSourceKindDto.AI,
+                        sourceId = "src1",
+                        generatedBy = "gen1",
+                        promptId = "prompt1",
+                        reviewStatus = StarMapReviewStatusDto.NEEDS_REVIEW,
+                        createdFromAnchor = "anchor1",
+                    ),
+                createdAt = 0u,
+                updatedAt = 0u,
+            )
 
         val model = originalDto.toGraphNode()
         val roundTrippedDto = model.toDto(null)
@@ -165,42 +180,54 @@ class StarMapRoundTripTest {
 
     @Test
     fun dtoToModelToDto_portal_roundTrip() {
-        val originalDto = StarMapNodeDto(
-            id = "n1",
-            title = "Portal",
-            kind = StarMapNodeKindDto.CHARACTER,
-            payload = null,
-            tags = emptyList(),
-            content = StarMapNodeContentDto("note", null, null, null, null, null, null, null, null, null, null, null),
-            anchors = emptyList(),
-            portal = StarMapPortalDto(
-                targetStarmapId = "child_sm",
-                deepTarget = StarMapDeepTargetDto(
-                    starmapId = "child_sm",
-                    path = listOf(StarMapPathSegmentDto(kind = "EnterChild", starmapId = "child1")),
-                    target = StarMapTargetDetailDto(
-                        kind = "Node",
-                        nodeId = "inner1",
-                        anchorId = null,
-                        projectId = null,
-                        volumeId = null,
-                        chapterId = null,
-                        rangeStart = null,
-                        rangeEnd = null,
-                        entityType = null,
-                        entityId = null,
-                        uri = null
-                    )
-                ),
-                mode = StarMapPortalModeDto.ENTER_CHILD,
-                previewPolicy = StarMapPortalPreviewPolicyDto.AUTO
-            ),
-            displayPolicy = defaultStarMapDisplayPolicy(),
-            openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
-            provenance = StarMapProvenanceDto(StarMapSourceKindDto.HUMAN, null, null, null, StarMapReviewStatusDto.ACCEPTED, null),
-            createdAt = 0u,
-            updatedAt = 0u
-        )
+        val originalDto =
+            StarMapNodeDto(
+                id = "n1",
+                title = "Portal",
+                kind = StarMapNodeKindDto.CHARACTER,
+                payload = null,
+                tags = emptyList(),
+                content = StarMapNodeContentDto("note", null, null, null, null, null, null, null, null, null, null, null),
+                anchors = emptyList(),
+                portal =
+                    StarMapPortalDto(
+                        targetStarmapId = "child_sm",
+                        deepTarget =
+                            StarMapDeepTargetDto(
+                                starmapId = "child_sm",
+                                path = listOf(StarMapPathSegmentDto(kind = "EnterChild", starmapId = "child1")),
+                                target =
+                                    StarMapTargetDetailDto(
+                                        kind = "Node",
+                                        nodeId = "inner1",
+                                        anchorId = null,
+                                        projectId = null,
+                                        volumeId = null,
+                                        chapterId = null,
+                                        rangeStart = null,
+                                        rangeEnd = null,
+                                        entityType = null,
+                                        entityId = null,
+                                        uri = null,
+                                    ),
+                            ),
+                        mode = StarMapPortalModeDto.ENTER_CHILD,
+                        previewPolicy = StarMapPortalPreviewPolicyDto.AUTO,
+                    ),
+                displayPolicy = defaultStarMapDisplayPolicy(),
+                openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
+                provenance =
+                    StarMapProvenanceDto(
+                        StarMapSourceKindDto.HUMAN,
+                        null,
+                        null,
+                        null,
+                        StarMapReviewStatusDto.ACCEPTED,
+                        null,
+                    ),
+                createdAt = 0u,
+                updatedAt = 0u,
+            )
 
         val model = originalDto.toGraphNode()
         val roundTrippedDto = model.toDto(null)
@@ -220,85 +247,92 @@ class StarMapRoundTripTest {
 
     @Test
     fun modelToDtoToModel_fullFields_roundTrip() {
-        val originalModel = StarMapGraphNode(
-            id = "n1",
-            title = "Full Node",
-            kind = StarMapNodeKind.Event,
-            payload = null,
-            tags = listOf("t1"),
-            contentKind = "chapter",
-            contentBody = "body",
-            contentSummary = "summary",
-            contentProjectId = "proj1",
-            contentVolumeId = "vol1",
-            contentRangeStart = 10,
-            contentRangeEnd = 200,
-            contentEntityType = "paragraph",
-            contentEntityId = "ent1",
-            contentLabel = "clabel",
-            contentChapterId = "ch1",
-            contentUri = "uri1",
-            anchors = listOf(
-                StarMapAnchorData(
-                    anchorId = "a1",
-                    targetKind = "Chapter",
-                    targetProjectId = "projA",
-                    targetVolumeId = "volA",
-                    targetRangeStart = 5,
-                    targetRangeEnd = 50,
-                    targetEntityType = "scene",
-                    targetPayload = "payloadA",
-                    targetChapterId = "chA",
-                    targetEntityId = "entA",
-                    targetStarmapId = "smA",
-                    targetUri = "uriA",
-                    label = "alabel",
-                    role = "REFERENCE"
-                )
-            ),
-            portal = StarMapPortalData(
-                targetStarmapId = "child_sm",
-                deepTarget = StarMapDeepTargetData(
-                    starmapId = "child_sm",
-                    path = listOf(StarMapPathSegmentData(kind = "EnterChild", starmapId = "child1")),
-                    target = StarMapTargetDetailData(
-                        kind = "Node",
-                        nodeId = "inner1",
-                        anchorId = null,
-                        projectId = null,
-                        volumeId = null,
-                        chapterId = null,
-                        rangeStart = null,
-                        rangeEnd = null,
-                        entityType = null,
-                        entityId = null,
-                        uri = null
-                    )
-                ),
-                mode = "ENTER_CHILD",
-                previewPolicy = "AUTO"
-            ),
-            openBehavior = "WRITING_MODE",
-            displayPolicy = StarMapDisplayPolicyData(
-                importance = 2f,
-                minVisibleScale = 0.1f,
-                titleScale = 1.5f,
-                summaryScale = 1.2f,
-                detailScale = 1.1f,
-                maxPreviewChars = 200,
-                minReadablePx = 14f
-            ),
-            provenance = StarMapProvenanceData(
-                source = "AI",
-                sourceId = "src1",
-                generatedBy = "gen1",
-                promptId = "prompt1",
-                reviewStatus = "NEEDS_REVIEW",
-                createdFromAnchor = "anchor1"
-            ),
-            createdAt = 100,
-            updatedAt = 200
-        )
+        val originalModel =
+            StarMapGraphNode(
+                id = "n1",
+                title = "Full Node",
+                kind = StarMapNodeKind.Event,
+                payload = null,
+                tags = listOf("t1"),
+                contentKind = "chapter",
+                contentBody = "body",
+                contentSummary = "summary",
+                contentProjectId = "proj1",
+                contentVolumeId = "vol1",
+                contentRangeStart = 10,
+                contentRangeEnd = 200,
+                contentEntityType = "paragraph",
+                contentEntityId = "ent1",
+                contentLabel = "clabel",
+                contentChapterId = "ch1",
+                contentUri = "uri1",
+                anchors =
+                    listOf(
+                        StarMapAnchorData(
+                            anchorId = "a1",
+                            targetKind = "Chapter",
+                            targetProjectId = "projA",
+                            targetVolumeId = "volA",
+                            targetRangeStart = 5,
+                            targetRangeEnd = 50,
+                            targetEntityType = "scene",
+                            targetPayload = "payloadA",
+                            targetChapterId = "chA",
+                            targetEntityId = "entA",
+                            targetStarmapId = "smA",
+                            targetUri = "uriA",
+                            label = "alabel",
+                            role = "REFERENCE",
+                        ),
+                    ),
+                portal =
+                    StarMapPortalData(
+                        targetStarmapId = "child_sm",
+                        deepTarget =
+                            StarMapDeepTargetData(
+                                starmapId = "child_sm",
+                                path = listOf(StarMapPathSegmentData(kind = "EnterChild", starmapId = "child1")),
+                                target =
+                                    StarMapTargetDetailData(
+                                        kind = "Node",
+                                        nodeId = "inner1",
+                                        anchorId = null,
+                                        projectId = null,
+                                        volumeId = null,
+                                        chapterId = null,
+                                        rangeStart = null,
+                                        rangeEnd = null,
+                                        entityType = null,
+                                        entityId = null,
+                                        uri = null,
+                                    ),
+                            ),
+                        mode = "ENTER_CHILD",
+                        previewPolicy = "AUTO",
+                    ),
+                openBehavior = "WRITING_MODE",
+                displayPolicy =
+                    StarMapDisplayPolicyData(
+                        importance = 2f,
+                        minVisibleScale = 0.1f,
+                        titleScale = 1.5f,
+                        summaryScale = 1.2f,
+                        detailScale = 1.1f,
+                        maxPreviewChars = 200,
+                        minReadablePx = 14f,
+                    ),
+                provenance =
+                    StarMapProvenanceData(
+                        source = "AI",
+                        sourceId = "src1",
+                        generatedBy = "gen1",
+                        promptId = "prompt1",
+                        reviewStatus = "NEEDS_REVIEW",
+                        createdFromAnchor = "anchor1",
+                    ),
+                createdAt = 100,
+                updatedAt = 200,
+            )
 
         val dto = originalModel.toDto(null)
         val roundTrippedModel = dto.toGraphNode()
@@ -365,69 +399,82 @@ class StarMapRoundTripTest {
 
     @Test
     fun toDto_withBase_overwritesContentAnchorsPortalProvenance() {
-        val baseDto = StarMapNodeDto(
-            id = "old_id",
-            title = "Old Title",
-            kind = StarMapNodeKindDto.NOTE,
-            payload = null,
-            tags = listOf("old_tag"),
-            content = StarMapNodeContentDto("note", "old_summary", "old_body", null, null, null, null, null, null, null, null, null),
-            anchors = listOf(
-                StarMapAnchorDto(
-                    anchorId = "old_a",
-                    target = StarMapAnchorTargetDto("Chapter", null, null, null, null, null, null, null, null, null, null),
-                    label = null,
-                    role = StarMapAnchorRoleDto.SOURCE
-                )
-            ),
-            portal = null,
-            displayPolicy = defaultStarMapDisplayPolicy(),
-            openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
-            provenance = StarMapProvenanceDto(StarMapSourceKindDto.HUMAN, null, null, null, StarMapReviewStatusDto.ACCEPTED, null),
-            createdAt = 0u,
-            updatedAt = 0u
-        )
+        val baseDto =
+            StarMapNodeDto(
+                id = "old_id",
+                title = "Old Title",
+                kind = StarMapNodeKindDto.NOTE,
+                payload = null,
+                tags = listOf("old_tag"),
+                content = StarMapNodeContentDto("note", "old_summary", "old_body", null, null, null, null, null, null, null, null, null),
+                anchors =
+                    listOf(
+                        StarMapAnchorDto(
+                            anchorId = "old_a",
+                            target = StarMapAnchorTargetDto("Chapter", null, null, null, null, null, null, null, null, null, null),
+                            label = null,
+                            role = StarMapAnchorRoleDto.SOURCE,
+                        ),
+                    ),
+                portal = null,
+                displayPolicy = defaultStarMapDisplayPolicy(),
+                openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
+                provenance =
+                    StarMapProvenanceDto(
+                        StarMapSourceKindDto.HUMAN,
+                        null,
+                        null,
+                        null,
+                        StarMapReviewStatusDto.ACCEPTED,
+                        null,
+                    ),
+                createdAt = 0u,
+                updatedAt = 0u,
+            )
 
-        val model = StarMapGraphNode(
-            id = "n1",
-            title = "New Title",
-            kind = StarMapNodeKind.Character,
-            contentKind = "chapter",
-            contentBody = "new body",
-            contentSummary = "new summary",
-            contentProjectId = "proj1",
-            contentVolumeId = "vol1",
-            contentRangeStart = 10,
-            contentRangeEnd = 100,
-            contentEntityType = "paragraph",
-            contentEntityId = "ent1",
-            contentLabel = "new label",
-            contentChapterId = "ch1",
-            anchors = listOf(
-                StarMapAnchorData(
-                    anchorId = "a1",
-                    targetKind = "Chapter",
-                    targetProjectId = "projA",
-                    targetVolumeId = "volA",
-                    targetRangeStart = 5,
-                    targetRangeEnd = 50,
-                    targetEntityType = "scene",
-                    targetPayload = "payloadA",
-                    targetChapterId = "chA",
-                    label = "new anchor",
-                    role = "DESTINATION"
-                )
-            ),
-            provenance = StarMapProvenanceData(
-                source = "AI",
-                sourceId = "src1",
-                generatedBy = null,
-                promptId = null,
-                reviewStatus = "DRAFT",
-                createdFromAnchor = null
-            ),
-            openBehavior = "WRITING_MODE"
-        )
+        val model =
+            StarMapGraphNode(
+                id = "n1",
+                title = "New Title",
+                kind = StarMapNodeKind.Character,
+                contentKind = "chapter",
+                contentBody = "new body",
+                contentSummary = "new summary",
+                contentProjectId = "proj1",
+                contentVolumeId = "vol1",
+                contentRangeStart = 10,
+                contentRangeEnd = 100,
+                contentEntityType = "paragraph",
+                contentEntityId = "ent1",
+                contentLabel = "new label",
+                contentChapterId = "ch1",
+                anchors =
+                    listOf(
+                        StarMapAnchorData(
+                            anchorId = "a1",
+                            targetKind = "Chapter",
+                            targetProjectId = "projA",
+                            targetVolumeId = "volA",
+                            targetRangeStart = 5,
+                            targetRangeEnd = 50,
+                            targetEntityType = "scene",
+                            targetPayload = "payloadA",
+                            targetChapterId = "chA",
+                            label = "new anchor",
+                            role = "DESTINATION",
+                        ),
+                    ),
+                provenance =
+                    StarMapProvenanceData(
+                        source = "AI",
+                        sourceId = "src1",
+                        generatedBy = null,
+                        promptId = null,
+                        reviewStatus = "DRAFT",
+                        createdFromAnchor = null,
+                    ),
+                openBehavior = "WRITING_MODE",
+            )
 
         val resultDto = model.toDto(baseDto)
 

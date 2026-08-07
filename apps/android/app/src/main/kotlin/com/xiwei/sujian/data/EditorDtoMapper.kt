@@ -11,7 +11,6 @@ import com.xiwei.sujian.model.EditorTransactionCause
  * pipeline 层调用这些方法完成转换，editor 子模块不直接接触 UniFFI 绑定。
  */
 object EditorDtoMapper {
-
     fun fromDto(dto: uniffi.writer_core.EditorTransactionCauseDto): EditorTransactionCause =
         when (dto) {
             uniffi.writer_core.EditorTransactionCauseDto.TYPING -> EditorTransactionCause.TYPING

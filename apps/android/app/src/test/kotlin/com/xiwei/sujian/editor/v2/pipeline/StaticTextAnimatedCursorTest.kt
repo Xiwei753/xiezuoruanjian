@@ -14,12 +14,16 @@ import org.junit.Test
  * - 光标轨结束/取消/无过渡/动画关闭时回落静态光标。
  */
 class StaticTextAnimatedCursorTest {
-
-    private fun transition(shouldAnimate: Boolean = true) = PreparedVisualTransaction.CursorTransition(
-        fromX = 10f, fromY = 20f, fromHeight = 30f,
-        toX = 40f, toY = 60f, toHeight = 30f,
-        shouldAnimate = shouldAnimate,
-    )
+    private fun transition(shouldAnimate: Boolean = true) =
+        PreparedVisualTransaction.CursorTransition(
+            fromX = 10f,
+            fromY = 20f,
+            fromHeight = 30f,
+            toX = 40f,
+            toY = 60f,
+            toHeight = 30f,
+            shouldAnimate = shouldAnimate,
+        )
 
     @Test
     fun staticPathDrawsAnimatedCursorMidTransition() {
@@ -73,8 +77,9 @@ class StaticTextAnimatedCursorTest {
     fun tickKeepsCursorTransitionIndependentOfTextTransaction() {
         val withTextFinished = null
         val cursorStillRunning = transition()
-        val renderCursor = cursorStillRunning.shouldAnimate &&
-            withTextFinished == null
+        val renderCursor =
+            cursorStillRunning.shouldAnimate &&
+                withTextFinished == null
         assertTrue(
             "文字事务为 null（文字轨结束）时光标过渡仍须保留",
             renderCursor,

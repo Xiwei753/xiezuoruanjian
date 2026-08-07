@@ -23,7 +23,6 @@ import uniffi.writer_core.EditorTransactionCauseDto
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], shadows = [RecordingInputMethodManagerShadow::class])
 class AndroidInputConnectionCompositionLifecycleTest {
-
     @Test
     fun rapidConsecutiveCommits_noLossNoDuplicates() {
         val h = InputConnectionTestHarness("", 0)
@@ -38,13 +37,17 @@ class AndroidInputConnectionCompositionLifecycleTest {
         assertFalse("Plain commits must not leave composing state", h.adapter.isComposing())
         assertEquals(
             "Every plain commit must use the TYPING cause",
-            listOf(EditorTransactionCauseDto.TYPING, EditorTransactionCauseDto.TYPING, EditorTransactionCauseDto.TYPING),
-            h.commandPort.commitCalls.map { it.cause }
+            listOf(
+                EditorTransactionCauseDto.TYPING,
+                EditorTransactionCauseDto.TYPING,
+                EditorTransactionCauseDto.TYPING,
+            ),
+            h.commandPort.commitCalls.map { it.cause },
         )
         assertEquals(
             "Plain multi-byte inserts must be INSERT operations, never composition commits",
             listOf(EditorOperationKindDto.INSERT, EditorOperationKindDto.INSERT, EditorOperationKindDto.INSERT),
-            h.commandPort.commitCalls.map { it.operationKind }
+            h.commandPort.commitCalls.map { it.operationKind },
         )
         assertEquals("The IME must be notified once per commit", 3, h.imm.updateSelectionCount)
     }
@@ -58,11 +61,13 @@ class AndroidInputConnectionCompositionLifecycleTest {
         assertEquals("ABC", h.mirror.getCommittedText())
         assertEquals(
             "Plain commit must use the TYPING cause",
-            EditorTransactionCauseDto.TYPING, h.commandPort.commitCalls.single().cause
+            EditorTransactionCauseDto.TYPING,
+            h.commandPort.commitCalls.single().cause,
         )
         assertEquals(
             "Plain commit without composition must report INSERT",
-            EditorOperationKindDto.INSERT, h.commandPort.commitCalls.single().operationKind
+            EditorOperationKindDto.INSERT,
+            h.commandPort.commitCalls.single().operationKind,
         )
     }
 
@@ -80,11 +85,13 @@ class AndroidInputConnectionCompositionLifecycleTest {
         assertFalse(h.adapter.isComposing())
         assertEquals(
             "Committing a composition must report COMPOSITION_COMMIT",
-            EditorOperationKindDto.COMPOSITION_COMMIT, h.commandPort.commitCalls.last().operationKind
+            EditorOperationKindDto.COMPOSITION_COMMIT,
+            h.commandPort.commitCalls.last().operationKind,
         )
         assertEquals(
             "Committing a composition must use the TYPING_COMMIT cause",
-            EditorTransactionCauseDto.TYPING_COMMIT, h.commandPort.commitCalls.last().cause
+            EditorTransactionCauseDto.TYPING_COMMIT,
+            h.commandPort.commitCalls.last().cause,
         )
     }
 
@@ -118,10 +125,12 @@ class AndroidInputConnectionCompositionLifecycleTest {
         assertEquals("Final text must be committed", "hello world", h.mirror.getCommittedText())
         assertEquals("Kernel text must match the mirror", "hello world", h.commandPort.getKernelText())
         assertEquals(
-            EditorOperationKindDto.COMPOSITION_COMMIT, h.commandPort.commitCalls.last().operationKind
+            EditorOperationKindDto.COMPOSITION_COMMIT,
+            h.commandPort.commitCalls.last().operationKind,
         )
         assertEquals(
-            EditorTransactionCauseDto.TYPING_COMMIT, h.commandPort.commitCalls.last().cause
+            EditorTransactionCauseDto.TYPING_COMMIT,
+            h.commandPort.commitCalls.last().cause,
         )
     }
 
@@ -209,7 +218,7 @@ class AndroidInputConnectionCompositionLifecycleTest {
         assertEquals(
             "The replay must be a plain replace",
             EditorOperationKindDto.REPLACE,
-            h.commandPort.commitCalls.last().operationKind
+            h.commandPort.commitCalls.last().operationKind,
         )
     }
 
@@ -276,17 +285,17 @@ class AndroidInputConnectionCompositionLifecycleTest {
             listOf(
                 EditorTransactionCauseDto.TYPING,
                 EditorTransactionCauseDto.TYPING_COMMIT,
-                EditorTransactionCauseDto.TYPING
+                EditorTransactionCauseDto.TYPING,
             ),
-            h.commandPort.commitCalls.map { it.cause }
+            h.commandPort.commitCalls.map { it.cause },
         )
         assertEquals(
             listOf(
                 EditorOperationKindDto.INSERT,
                 EditorOperationKindDto.COMPOSITION_COMMIT,
-                EditorOperationKindDto.INSERT
+                EditorOperationKindDto.INSERT,
             ),
-            h.commandPort.commitCalls.map { it.operationKind }
+            h.commandPort.commitCalls.map { it.operationKind },
         )
     }
 
@@ -334,10 +343,12 @@ class AndroidInputConnectionCompositionLifecycleTest {
 
         assertEquals(
             "Commit after cancel must be a plain insert",
-            EditorOperationKindDto.INSERT, h.commandPort.commitCalls.last().operationKind
+            EditorOperationKindDto.INSERT,
+            h.commandPort.commitCalls.last().operationKind,
         )
         assertEquals(
-            EditorTransactionCauseDto.TYPING, h.commandPort.commitCalls.last().cause
+            EditorTransactionCauseDto.TYPING,
+            h.commandPort.commitCalls.last().cause,
         )
         assertEquals("hello world!", h.mirror.getCommittedText())
         assertEquals("No kernel reload may be needed", 0, h.commandPort.reloadCount)
@@ -355,7 +366,8 @@ class AndroidInputConnectionCompositionLifecycleTest {
         assertEquals("hello there", h.commandPort.getKernelText())
         assertEquals(
             "Selection replacement without composition must report REPLACE",
-            EditorOperationKindDto.REPLACE, h.commandPort.commitCalls.last().operationKind
+            EditorOperationKindDto.REPLACE,
+            h.commandPort.commitCalls.last().operationKind,
         )
     }
 }

@@ -26,7 +26,9 @@ fun SaveSettings(
 ) {
     val settings = state.settings
     val dims = LocalSujianDimensions.current
-    var autoSaveDelay by rememberSaveable(settings.autoSaveDelayMs / 1000f) { mutableFloatStateOf(settings.autoSaveDelayMs / 1000f) }
+    var autoSaveDelay by rememberSaveable(settings.autoSaveDelayMs / 1000f) {
+        mutableFloatStateOf(settings.autoSaveDelayMs / 1000f)
+    }
 
     androidx.compose.foundation.layout.Column(
         modifier = modifier.padding(dims.space16),

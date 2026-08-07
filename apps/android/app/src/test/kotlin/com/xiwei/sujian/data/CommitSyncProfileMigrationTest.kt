@@ -21,7 +21,6 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class CommitSyncProfileMigrationTest {
-
     private fun createRepo(preferencesSuffix: String): SettingsRepository {
         return SettingsRepository(
             androidx.test.core.app.ApplicationProvider.getApplicationContext(),
@@ -47,71 +46,79 @@ class CommitSyncProfileMigrationTest {
     }
 
     @Test
-    fun firstCommitFailsWithoutNative_butNeverWritesLiveOrMarker() = runTest {
-        val repo = createRepo("migration_contract_1")
-        storeOf(repo).clear()
-        val result = repo.commitSyncProfile(
-            com.xiwei.sujian.model.SyncConfig(enabled = true),
-            com.xiwei.sujian.model.SyncSecrets(token = "token-new"),
-        )
-        assertTrue("Commit must fail without native (strict reads abort before any write)", result is SettingsSaveResult.Failed)
-        val state = readStoreState(repo)
-        assertTrue(
-            "Failed first commit must not publish the new config to the committed generation store",
-            !state.hasCommittedProfile,
-        )
-        assertEquals(
-            "Failed commit must not advance activeGeneration",
-            0L,
-            state.activeGeneration,
-        )
-    }
+    fun firstCommitFailsWithoutNative_butNeverWritesLiveOrMarker() =
+        runTest {
+            val repo = createRepo("migration_contract_1")
+            storeOf(repo).clear()
+            val result =
+                repo.commitSyncProfile(
+                    com.xiwei.sujian.model.SyncConfig(enabled = true),
+                    com.xiwei.sujian.model.SyncSecrets(token = "token-new"),
+                )
+            assertTrue(
+                "Commit must fail without native (strict reads abort before any write)",
+                result is SettingsSaveResult.Failed,
+            )
+            val state = readStoreState(repo)
+            assertTrue(
+                "Failed first commit must not publish the new config to the committed generation store",
+                !state.hasCommittedProfile,
+            )
+            assertEquals(
+                "Failed commit must not advance activeGeneration",
+                0L,
+                state.activeGeneration,
+            )
+        }
 
     @Test
-    fun snapshotSyncProfile_returnsFailedWhenSecretsReadFails() = runTest {
-        val repo = createRepo("migration_contract_2")
-        val store = storeOf(repo)
-        store.clear()
-        store.commitGeneration(1L, "{\"enabled\":true}")
-        val result = SyncProfileGate.snapshotExclusive { repo.snapshotSyncProfile() }
-        assertTrue(
-            "Secrets read failure must return Failed, not NotConfigured or null",
-            result is SyncProfileReadResult.Failed,
-        )
-        assertEquals(
-            "Native unavailable must be classified as NativeUnavailable, not Fatal",
-            SyncFailureKind.NativeUnavailable,
-            (result as SyncProfileReadResult.Failed).kind,
-        )
-    }
+    fun snapshotSyncProfile_returnsFailedWhenSecretsReadFails() =
+        runTest {
+            val repo = createRepo("migration_contract_2")
+            val store = storeOf(repo)
+            store.clear()
+            store.commitGeneration(1L, "{\"enabled\":true}")
+            val result = SyncProfileGate.snapshotExclusive { repo.snapshotSyncProfile() }
+            assertTrue(
+                "Secrets read failure must return Failed, not NotConfigured or null",
+                result is SyncProfileReadResult.Failed,
+            )
+            assertEquals(
+                "Native unavailable must be classified as NativeUnavailable, not Fatal",
+                SyncFailureKind.NativeUnavailable,
+                (result as SyncProfileReadResult.Failed).kind,
+            )
+        }
 
     @Test
-    fun commitGenerationMarkerIsAtomicInSingleStore() = runTest {
-        val repo = createRepo("migration_contract_3")
-        val store = storeOf(repo)
-        store.clear()
-        store.commitGeneration(5L, "{\"enabled\":true}")
-        val state = store.readState()
-        assertEquals(5L, state.activeGeneration)
-        assertEquals("{\"enabled\":true}", state.committedConfigJson)
-        assertTrue(state.hasCommittedProfile)
-    }
+    fun commitGenerationMarkerIsAtomicInSingleStore() =
+        runTest {
+            val repo = createRepo("migration_contract_3")
+            val store = storeOf(repo)
+            store.clear()
+            store.commitGeneration(5L, "{\"enabled\":true}")
+            val state = store.readState()
+            assertEquals(5L, state.activeGeneration)
+            assertEquals("{\"enabled\":true}", state.committedConfigJson)
+            assertTrue(state.hasCommittedProfile)
+        }
 
     @Test
-    fun snapshotSyncProfile_prefersGenerationStoreOverLegacy() = runTest {
-        val repo = createRepo("migration_contract_4")
-        val store = storeOf(repo)
-        store.clear()
-        store.commitGeneration(2L, "{\"enabled\":true,\"remoteUrl\":\"https://example.com/r.git\"}")
-        val result = SyncProfileGate.snapshotExclusive { repo.snapshotSyncProfile() }
-        assertTrue(
-            "Result must be Failed (secrets read fails without native)",
-            result is SyncProfileReadResult.Failed,
-        )
-        assertEquals(
-            "Config parse success + secrets NotLoaded must classify as NativeUnavailable, not Fatal",
-            SyncFailureKind.NativeUnavailable,
-            (result as SyncProfileReadResult.Failed).kind,
-        )
-    }
+    fun snapshotSyncProfile_prefersGenerationStoreOverLegacy() =
+        runTest {
+            val repo = createRepo("migration_contract_4")
+            val store = storeOf(repo)
+            store.clear()
+            store.commitGeneration(2L, "{\"enabled\":true,\"remoteUrl\":\"https://example.com/r.git\"}")
+            val result = SyncProfileGate.snapshotExclusive { repo.snapshotSyncProfile() }
+            assertTrue(
+                "Result must be Failed (secrets read fails without native)",
+                result is SyncProfileReadResult.Failed,
+            )
+            assertEquals(
+                "Config parse success + secrets NotLoaded must classify as NativeUnavailable, not Fatal",
+                SyncFailureKind.NativeUnavailable,
+                (result as SyncProfileReadResult.Failed).kind,
+            )
+        }
 }

@@ -30,15 +30,18 @@ sealed interface WorkspacePaneKey : Parcelable {
 
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
 internal val WorkspacePaneKey.role: ThreePaneScaffoldRole
-    get() = when (this) {
-        WorkspacePaneKey.ProjectList -> ListDetailPaneScaffoldRole.List
-        is WorkspacePaneKey.ChapterTree -> ListDetailPaneScaffoldRole.Detail
-        is WorkspacePaneKey.Editor -> ListDetailPaneScaffoldRole.Extra
-    }
+    get() =
+        when (this) {
+            WorkspacePaneKey.ProjectList -> ListDetailPaneScaffoldRole.List
+            is WorkspacePaneKey.ChapterTree -> ListDetailPaneScaffoldRole.Detail
+            is WorkspacePaneKey.Editor -> ListDetailPaneScaffoldRole.Extra
+        }
 
 sealed interface WorkspaceLocation {
     data object ProjectList : WorkspaceLocation
+
     data class ChapterTree(val projectId: String) : WorkspaceLocation
+
     data class Editor(
         val projectId: String,
         val volumeId: String,
@@ -47,16 +50,18 @@ sealed interface WorkspaceLocation {
 }
 
 /** 从导航目的地推导工作区位置 — 唯一事实来源是 navigator 的当前 destination。 */
-internal fun deriveWorkspaceLocation(paneKey: WorkspacePaneKey?): WorkspaceLocation = when (paneKey) {
-    null -> WorkspaceLocation.ProjectList
-    WorkspacePaneKey.ProjectList -> WorkspaceLocation.ProjectList
-    is WorkspacePaneKey.ChapterTree -> WorkspaceLocation.ChapterTree(paneKey.projectId)
-    is WorkspacePaneKey.Editor -> WorkspaceLocation.Editor(
-        projectId = paneKey.projectId,
-        volumeId = paneKey.volumeId,
-        chapterId = paneKey.chapterId,
-    )
-}
+internal fun deriveWorkspaceLocation(paneKey: WorkspacePaneKey?): WorkspaceLocation =
+    when (paneKey) {
+        null -> WorkspaceLocation.ProjectList
+        WorkspacePaneKey.ProjectList -> WorkspaceLocation.ProjectList
+        is WorkspacePaneKey.ChapterTree -> WorkspaceLocation.ChapterTree(paneKey.projectId)
+        is WorkspacePaneKey.Editor ->
+            WorkspaceLocation.Editor(
+                projectId = paneKey.projectId,
+                volumeId = paneKey.volumeId,
+                chapterId = paneKey.chapterId,
+            )
+    }
 
 sealed interface SessionRestoreState {
     data object Loading : SessionRestoreState
@@ -64,7 +69,9 @@ sealed interface SessionRestoreState {
     /** 会话恢复目的地 — 唯一用于一次性构建 navigator 初始历史，之后不再从业务字段重建导航。 */
     sealed interface Destination {
         data object ProjectList : Destination
+
         data class ChapterTree(val projectId: String) : Destination
+
         data class Editor(
             val projectId: String,
             val volumeId: String,
@@ -100,7 +107,11 @@ class WorkspaceNavigationState(
         navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, WorkspacePaneKey.ChapterTree(projectId))
     }
 
-    suspend fun navigateToEditor(projectId: String, volumeId: String, chapterId: String) {
+    suspend fun navigateToEditor(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+    ) {
         navigator.navigateTo(
             ListDetailPaneScaffoldRole.Extra,
             WorkspacePaneKey.Editor(projectId, volumeId, chapterId),
@@ -127,37 +138,50 @@ class WorkspaceNavigationState(
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
 internal fun buildInitialHistory(
     destination: SessionRestoreState.Destination,
-): List<androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem<WorkspacePaneKey>> = when (destination) {
-    is SessionRestoreState.Destination.ProjectList -> listOf(
-        androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem(WorkspacePaneKey.ProjectList.role, WorkspacePaneKey.ProjectList),
-    )
-    is SessionRestoreState.Destination.ChapterTree -> listOf(
-        androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem(WorkspacePaneKey.ProjectList.role, WorkspacePaneKey.ProjectList),
-        androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem(
-            WorkspacePaneKey.ChapterTree(destination.projectId).role,
-            WorkspacePaneKey.ChapterTree(destination.projectId),
-        ),
-    )
-    is SessionRestoreState.Destination.Editor -> listOf(
-        androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem(WorkspacePaneKey.ProjectList.role, WorkspacePaneKey.ProjectList),
-        androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem(
-            WorkspacePaneKey.ChapterTree(destination.projectId).role,
-            WorkspacePaneKey.ChapterTree(destination.projectId),
-        ),
-        androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem(
-            WorkspacePaneKey.Editor(
-                destination.projectId,
-                destination.volumeId,
-                destination.chapterId,
-            ).role,
-            WorkspacePaneKey.Editor(
-                destination.projectId,
-                destination.volumeId,
-                destination.chapterId,
-            ),
-        ),
-    )
-}
+): List<androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem<WorkspacePaneKey>> =
+    when (destination) {
+        is SessionRestoreState.Destination.ProjectList ->
+            listOf(
+                androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem(
+                    WorkspacePaneKey.ProjectList.role,
+                    WorkspacePaneKey.ProjectList,
+                ),
+            )
+        is SessionRestoreState.Destination.ChapterTree ->
+            listOf(
+                androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem(
+                    WorkspacePaneKey.ProjectList.role,
+                    WorkspacePaneKey.ProjectList,
+                ),
+                androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem(
+                    WorkspacePaneKey.ChapterTree(destination.projectId).role,
+                    WorkspacePaneKey.ChapterTree(destination.projectId),
+                ),
+            )
+        is SessionRestoreState.Destination.Editor ->
+            listOf(
+                androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem(
+                    WorkspacePaneKey.ProjectList.role,
+                    WorkspacePaneKey.ProjectList,
+                ),
+                androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem(
+                    WorkspacePaneKey.ChapterTree(destination.projectId).role,
+                    WorkspacePaneKey.ChapterTree(destination.projectId),
+                ),
+                androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem(
+                    WorkspacePaneKey.Editor(
+                        destination.projectId,
+                        destination.volumeId,
+                        destination.chapterId,
+                    ).role,
+                    WorkspacePaneKey.Editor(
+                        destination.projectId,
+                        destination.volumeId,
+                        destination.chapterId,
+                    ),
+                ),
+            )
+    }
 
 /**
  * 从已持久化的业务选择推导恢复目的地：正文需要 project+volume+chapter 齐备，
@@ -167,9 +191,10 @@ internal fun deriveRestoreDestination(
     projectId: String?,
     volumeId: String?,
     chapterId: String?,
-): SessionRestoreState.Destination = when {
-    projectId == null -> SessionRestoreState.Destination.ProjectList
-    volumeId != null && chapterId != null ->
-        SessionRestoreState.Destination.Editor(projectId, volumeId, chapterId)
-    else -> SessionRestoreState.Destination.ChapterTree(projectId)
-}
+): SessionRestoreState.Destination =
+    when {
+        projectId == null -> SessionRestoreState.Destination.ProjectList
+        volumeId != null && chapterId != null ->
+            SessionRestoreState.Destination.Editor(projectId, volumeId, chapterId)
+        else -> SessionRestoreState.Destination.ChapterTree(projectId)
+    }

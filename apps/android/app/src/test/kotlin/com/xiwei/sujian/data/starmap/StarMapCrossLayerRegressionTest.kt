@@ -8,81 +8,123 @@ import org.junit.Test
 import uniffi.writer_core.*
 
 class StarMapCrossLayerRegressionTest {
-
-    private fun makeNodeDto(id: String, title: String, kind: StarMapNodeKindDto = StarMapNodeKindDto.CHARACTER) = StarMapNodeDto(
+    private fun makeNodeDto(
+        id: String,
+        title: String,
+        kind: StarMapNodeKindDto = StarMapNodeKindDto.CHARACTER,
+    ) = StarMapNodeDto(
         id = id, title = title, kind = kind,
         payload = null, tags = emptyList(),
         content = StarMapNodeContentDto("empty", null, null, null, null, null, null, null, null, null, null, null),
         anchors = emptyList(), portal = null,
         displayPolicy = defaultStarMapDisplayPolicy(),
         openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
-        provenance = StarMapProvenanceDto(StarMapSourceKindDto.HUMAN, null, null, null, StarMapReviewStatusDto.ACCEPTED, null),
-        createdAt = 0u, updatedAt = 0u
+        provenance =
+            StarMapProvenanceDto(
+                StarMapSourceKindDto.HUMAN,
+                null,
+                null,
+                null,
+                StarMapReviewStatusDto.ACCEPTED,
+                null,
+            ),
+        createdAt = 0u, updatedAt = 0u,
     )
 
-    private fun makeEdgeDto(id: String, from: String, to: String) = StarMapEdgeDto(
+    private fun makeEdgeDto(
+        id: String,
+        from: String,
+        to: String,
+    ) = StarMapEdgeDto(
         id = id, from = from, to = to, kind = StarMapEdgeKindDto.RELATED_TO,
         label = null, payload = null,
         fromTarget = null, toTarget = null,
         fromEndpoint = null, toEndpoint = null,
         fromEndpointPath = null, toEndpointPath = null,
-        createdAt = 0u, updatedAt = 0u
+        createdAt = 0u, updatedAt = 0u,
     )
 
     @Test
     fun progressiveLoading_neverCallsGetStarMapGraph() {
         val cache = StarMapSnapshotCache()
-        val dto1 = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "CurrentViewportObjects",
-            packageRevision = 1u, complete = false, sinceRevision = 0u,
-            nodes = listOf(makeNodeDto("n1", "InView")),
-            edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
-            )),
-            viewport = StarMapViewportDto(1f, 0f, 0f, 800f, 600f),
-            diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto1 =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "CurrentViewportObjects",
+                packageRevision = 1u, complete = false, sinceRevision = 0u,
+                nodes = listOf(makeNodeDto("n1", "InView")),
+                edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                        ),
+                    ),
+                viewport = StarMapViewportDto(1f, 0f, 0f, 800f, 600f),
+                diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
         val rawCache1 = dto1.toRawCache()
         assertNotNull("toRawCache must produce graph for computeEdgeRenders", rawCache1.graph)
         cache.put("sm1", rawCache1)
 
-        val dto2 = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "PrefetchNearbyObjects",
-            packageRevision = 1u, complete = false, sinceRevision = 1u,
-            nodes = listOf(makeNodeDto("n1", "InView"), makeNodeDto("n2", "Nearby")),
-            edges = listOf(makeEdgeDto("e1", "n1", "n2")),
-            embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null),
-                StarMapLayoutNodeDto(nodeId = "n2", x = 200f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
-            )),
-            viewport = null, diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto2 =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "PrefetchNearbyObjects",
+                packageRevision = 1u, complete = false, sinceRevision = 1u,
+                nodes = listOf(makeNodeDto("n1", "InView"), makeNodeDto("n2", "Nearby")),
+                edges = listOf(makeEdgeDto("e1", "n1", "n2")),
+                embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                            StarMapLayoutNodeDto(
+                                nodeId = "n2", x = 200f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                        ),
+                    ),
+                viewport = null, diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
         cache.mergeIncremental("sm1", dto2.toRawCache())
 
-        val dto3 = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
-            packageRevision = 2u, complete = true, sinceRevision = 1u,
-            nodes = listOf(makeNodeDto("n1", "InView"), makeNodeDto("n2", "Nearby"), makeNodeDto("n3", "Far")),
-            edges = listOf(makeEdgeDto("e1", "n1", "n2")),
-            embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null),
-                StarMapLayoutNodeDto(nodeId = "n2", x = 200f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null),
-                StarMapLayoutNodeDto(nodeId = "n3", x = 350f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
-            )),
-            viewport = null, diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto3 =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
+                packageRevision = 2u, complete = true, sinceRevision = 1u,
+                nodes = listOf(makeNodeDto("n1", "InView"), makeNodeDto("n2", "Nearby"), makeNodeDto("n3", "Far")),
+                edges = listOf(makeEdgeDto("e1", "n1", "n2")),
+                embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                            StarMapLayoutNodeDto(
+                                nodeId = "n2", x = 200f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                            StarMapLayoutNodeDto(
+                                nodeId = "n3", x = 350f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                        ),
+                    ),
+                viewport = null, diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
         cache.mergeIncremental("sm1", dto3.toRawCache())
 
         val finalCache = cache.get("sm1")!!
@@ -95,22 +137,31 @@ class StarMapCrossLayerRegressionTest {
 
     @Test
     fun layoutCoordinates_edgeRenderHitTest_consistentAfterSnapshotConversion() {
-        val dto = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
-            packageRevision = 1u, complete = true, sinceRevision = 0u,
-            nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B")),
-            edges = listOf(makeEdgeDto("e1", "n1", "n2")),
-            embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 100f, y = 200f, width = 150f, height = 80f,
-                    radius = 40f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null),
-                StarMapLayoutNodeDto(nodeId = "n2", x = 300f, y = 400f, width = 120f, height = 60f,
-                    radius = 30f, collapsed = true, zIndex = 1, scale = 0.8f, depth = 1f, focusWeight = 0.5f, orbitGroup = "g1")
-            )),
-            viewport = StarMapViewportDto(1.5f, 10f, 20f, 800f, 600f),
-            diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
+                packageRevision = 1u, complete = true, sinceRevision = 0u,
+                nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B")),
+                edges = listOf(makeEdgeDto("e1", "n1", "n2")),
+                embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 100f, y = 200f, width = 150f, height = 80f,
+                                radius = 40f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                            StarMapLayoutNodeDto(
+                                nodeId = "n2", x = 300f, y = 400f, width = 120f, height = 60f,
+                                radius = 30f, collapsed = true, zIndex = 1, scale = 0.8f, depth = 1f, focusWeight = 0.5f, orbitGroup = "g1",
+                            ),
+                        ),
+                    ),
+                viewport = StarMapViewportDto(1.5f, 10f, 20f, 800f, 600f),
+                diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
 
         val rawCache = dto.toRawCache()
         assertNotNull(rawCache.graph)
@@ -139,33 +190,43 @@ class StarMapCrossLayerRegressionTest {
     @Test
     fun incrementalMerge_preservesExistingDataWhenRevisionUnchanged() {
         val cache = StarMapSnapshotCache()
-        val dto1 = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "CurrentViewportObjects",
-            packageRevision = 1u, complete = false, sinceRevision = 0u,
-            nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B")),
-            edges = listOf(makeEdgeDto("e1", "n1", "n2")),
-            embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null),
-                StarMapLayoutNodeDto(nodeId = "n2", x = 200f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
-            )),
-            viewport = null, diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto1 =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "CurrentViewportObjects",
+                packageRevision = 1u, complete = false, sinceRevision = 0u,
+                nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B")),
+                edges = listOf(makeEdgeDto("e1", "n1", "n2")),
+                embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                            StarMapLayoutNodeDto(
+                                nodeId = "n2", x = 200f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                        ),
+                    ),
+                viewport = null, diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
         cache.put("sm1", dto1.toRawCache())
         assertEquals(2, cache.get("sm1")!!.nodes.size)
         assertEquals(1, cache.get("sm1")!!.edges.size)
 
-        val dto2 = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
-            packageRevision = 1u, complete = true, sinceRevision = 1u,
-            nodes = emptyList(), edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, emptyList()),
-            viewport = null, diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto2 =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
+                packageRevision = 1u, complete = true, sinceRevision = 1u,
+                nodes = emptyList(), edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+                layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, emptyList()),
+                viewport = null, diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
         cache.mergeIncremental("sm1", dto2.toRawCache())
 
         val merged = cache.get("sm1")!!
@@ -177,35 +238,51 @@ class StarMapCrossLayerRegressionTest {
     @Test
     fun incrementalMerge_addsNewObjectsFromLaterPhase() {
         val cache = StarMapSnapshotCache()
-        val dto1 = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "CurrentViewportObjects",
-            packageRevision = 1u, complete = false, sinceRevision = 0u,
-            nodes = listOf(makeNodeDto("n1", "InView")),
-            edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
-            )),
-            viewport = null, diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto1 =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "CurrentViewportObjects",
+                packageRevision = 1u, complete = false, sinceRevision = 0u,
+                nodes = listOf(makeNodeDto("n1", "InView")),
+                edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                        ),
+                    ),
+                viewport = null, diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
         cache.put("sm1", dto1.toRawCache())
 
-        val dto2 = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "PrefetchNearbyObjects",
-            packageRevision = 2u, complete = false, sinceRevision = 1u,
-            nodes = listOf(makeNodeDto("n1", "InView"), makeNodeDto("n2", "Nearby")),
-            edges = listOf(makeEdgeDto("e1", "n1", "n2")),
-            embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null),
-                StarMapLayoutNodeDto(nodeId = "n2", x = 200f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
-            )),
-            viewport = null, diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto2 =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "PrefetchNearbyObjects",
+                packageRevision = 2u, complete = false, sinceRevision = 1u,
+                nodes = listOf(makeNodeDto("n1", "InView"), makeNodeDto("n2", "Nearby")),
+                edges = listOf(makeEdgeDto("e1", "n1", "n2")),
+                embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                            StarMapLayoutNodeDto(
+                                nodeId = "n2", x = 200f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                        ),
+                    ),
+                viewport = null, diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
         cache.mergeIncremental("sm1", dto2.toRawCache())
 
         val merged = cache.get("sm1")!!
@@ -220,78 +297,166 @@ class StarMapCrossLayerRegressionTest {
 
     @Test
     fun semanticFields_endpointAnchorPathDeepTarget_preservedThroughFullChain() {
-        val deepTarget = StarMapDeepTargetDto(
-            starmapId = "other",
-            path = listOf(StarMapPathSegmentDto(kind = "EnterChild", starmapId = "child1")),
-            target = StarMapTargetDetailDto(kind = "Node", nodeId = "inner1", anchorId = null,
-                projectId = null, volumeId = null, chapterId = null, rangeStart = null, rangeEnd = null,
-                entityType = null, entityId = null, uri = null)
-        )
-        val dto = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
-            packageRevision = 1u, complete = true, sinceRevision = 0u,
-            nodes = listOf(StarMapNodeDto(
-                id = "n1", title = "Char", kind = StarMapNodeKindDto.CHARACTER,
-                payload = null, tags = listOf("protagonist"),
-                content = StarMapNodeContentDto("empty", null, null, null, null, null, null, null, null, null, null, null),
-                anchors = listOf(StarMapAnchorDto(
-                    anchorId = "a1",
-                    target = StarMapAnchorTargetDto(kind = "Chapter", projectId = null, volumeId = null, chapterId = "ch1",
-                        rangeStart = null, rangeEnd = null, entityId = null, entityType = null, starmapId = null, uri = null, payload = null),
-                    label = "ch_ref",
-                    role = StarMapAnchorRoleDto.SOURCE
-                )),
-                portal = null,
-                displayPolicy = defaultStarMapDisplayPolicy(),
-                openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
-                provenance = StarMapProvenanceDto(StarMapSourceKindDto.HUMAN, null, null, null, StarMapReviewStatusDto.ACCEPTED, null),
-                createdAt = 0u, updatedAt = 0u
-            )),
-            edges = listOf(StarMapEdgeDto(
-                id = "e1", from = "n1", to = "n1", kind = StarMapEdgeKindDto.REFERENCES,
-                label = "ref", payload = null,
-                fromTarget = null, toTarget = null,
-                fromEndpoint = StarMapEdgeEndpointDto(kind = "Node", nodeId = "n1", anchorId = null, target = null),
-                toEndpoint = StarMapEdgeEndpointDto(kind = "DeepTarget", nodeId = null, anchorId = null, target = deepTarget),
-                fromEndpointPath = StarMapEndpointPathDto(
-                    segments = listOf(StarMapEndpointPathSegmentDto(kind = "EnterChildMap", starmapId = "sm_child")),
-                    endpoint = StarMapEdgeEndpointDto(kind = "Node", nodeId = "n_inner", anchorId = null, target = null)
-                ),
-                toEndpointPath = null,
-                createdAt = 0u, updatedAt = 0u
-            )),
-            embeds = listOf(StarMapEmbedDto(
-                instanceId = "emb1", targetStarmapId = "child", label = "child",
-                displayPolicy = defaultStarMapDisplayPolicy(),
-                openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
-                placement = StarMapEmbedPlacementDto(x = 10f, y = 20f, width = 200f, height = 150f, scale = 1f, zIndex = 0, collapsed = false),
-                targetViewport = StarMapEmbedViewportDto(scale = 1f, offsetX = 0f, offsetY = 0f),
-                sourceNodeId = "n1",
-                hostEndpoint = StarMapEndpointDto(kind = "Node", nodeId = "n1", anchorId = null),
-                provenance = StarMapProvenanceDto(StarMapSourceKindDto.HUMAN, null, null, null, StarMapReviewStatusDto.ACCEPTED, null),
-                createdAt = 0u, updatedAt = 0u
-            )),
-            links = listOf(StarMapLinkDto(
-                linkId = "lk1",
-                source = StarMapEndpointDto(kind = "Anchor", nodeId = "n1", anchorId = "a1"),
-                target = deepTarget,
-                label = "link",
-                createdAt = 0u, updatedAt = 0u
-            )),
-            hyperlinks = listOf(StarMapHyperlinkDto(
-                hyperlinkId = "hl1",
-                source = StarMapEndpointPathDto(
-                    segments = listOf(StarMapEndpointPathSegmentDto(kind = "EnterChildMap", starmapId = "child1")),
-                    endpoint = StarMapEdgeEndpointDto(kind = "Node", nodeId = "n1", anchorId = null, target = null)
-                ),
-                targetUri = "https://example.com",
-                label = "hl",
-                targetStarmapId = "tgt",
-                createdAt = 0u, updatedAt = 0u
-            )),
-            layout = null, viewport = null, diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val deepTarget =
+            StarMapDeepTargetDto(
+                starmapId = "other",
+                path = listOf(StarMapPathSegmentDto(kind = "EnterChild", starmapId = "child1")),
+                target =
+                    StarMapTargetDetailDto(
+                        kind = "Node", nodeId = "inner1", anchorId = null,
+                        projectId = null, volumeId = null, chapterId = null, rangeStart = null, rangeEnd = null,
+                        entityType = null, entityId = null, uri = null,
+                    ),
+            )
+        val dto =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
+                packageRevision = 1u, complete = true, sinceRevision = 0u,
+                nodes =
+                    listOf(
+                        StarMapNodeDto(
+                            id = "n1", title = "Char", kind = StarMapNodeKindDto.CHARACTER,
+                            payload = null, tags = listOf("protagonist"),
+                            content = StarMapNodeContentDto("empty", null, null, null, null, null, null, null, null, null, null, null),
+                            anchors =
+                                listOf(
+                                    StarMapAnchorDto(
+                                        anchorId = "a1",
+                                        target =
+                                            StarMapAnchorTargetDto(
+                                                kind = "Chapter", projectId = null, volumeId = null, chapterId = "ch1",
+                                                rangeStart = null, rangeEnd = null, entityId = null, entityType = null, starmapId = null, uri = null, payload = null,
+                                            ),
+                                        label = "ch_ref",
+                                        role = StarMapAnchorRoleDto.SOURCE,
+                                    ),
+                                ),
+                            portal = null,
+                            displayPolicy = defaultStarMapDisplayPolicy(),
+                            openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
+                            provenance =
+                                StarMapProvenanceDto(
+                                    StarMapSourceKindDto.HUMAN,
+                                    null,
+                                    null,
+                                    null,
+                                    StarMapReviewStatusDto.ACCEPTED,
+                                    null,
+                                ),
+                            createdAt = 0u, updatedAt = 0u,
+                        ),
+                    ),
+                edges =
+                    listOf(
+                        StarMapEdgeDto(
+                            id = "e1", from = "n1", to = "n1", kind = StarMapEdgeKindDto.REFERENCES,
+                            label = "ref", payload = null,
+                            fromTarget = null, toTarget = null,
+                            fromEndpoint =
+                                StarMapEdgeEndpointDto(
+                                    kind = "Node",
+                                    nodeId = "n1",
+                                    anchorId = null,
+                                    target = null,
+                                ),
+                            toEndpoint =
+                                StarMapEdgeEndpointDto(
+                                    kind = "DeepTarget",
+                                    nodeId = null,
+                                    anchorId = null,
+                                    target = deepTarget,
+                                ),
+                            fromEndpointPath =
+                                StarMapEndpointPathDto(
+                                    segments =
+                                        listOf(
+                                            StarMapEndpointPathSegmentDto(
+                                                kind = "EnterChildMap",
+                                                starmapId = "sm_child",
+                                            ),
+                                        ),
+                                    endpoint =
+                                        StarMapEdgeEndpointDto(
+                                            kind = "Node",
+                                            nodeId = "n_inner",
+                                            anchorId = null,
+                                            target = null,
+                                        ),
+                                ),
+                            toEndpointPath = null,
+                            createdAt = 0u, updatedAt = 0u,
+                        ),
+                    ),
+                embeds =
+                    listOf(
+                        StarMapEmbedDto(
+                            instanceId = "emb1", targetStarmapId = "child", label = "child",
+                            displayPolicy = defaultStarMapDisplayPolicy(),
+                            openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
+                            placement =
+                                StarMapEmbedPlacementDto(
+                                    x = 10f,
+                                    y = 20f,
+                                    width = 200f,
+                                    height = 150f,
+                                    scale = 1f,
+                                    zIndex = 0,
+                                    collapsed = false,
+                                ),
+                            targetViewport = StarMapEmbedViewportDto(scale = 1f, offsetX = 0f, offsetY = 0f),
+                            sourceNodeId = "n1",
+                            hostEndpoint = StarMapEndpointDto(kind = "Node", nodeId = "n1", anchorId = null),
+                            provenance =
+                                StarMapProvenanceDto(
+                                    StarMapSourceKindDto.HUMAN,
+                                    null,
+                                    null,
+                                    null,
+                                    StarMapReviewStatusDto.ACCEPTED,
+                                    null,
+                                ),
+                            createdAt = 0u, updatedAt = 0u,
+                        ),
+                    ),
+                links =
+                    listOf(
+                        StarMapLinkDto(
+                            linkId = "lk1",
+                            source = StarMapEndpointDto(kind = "Anchor", nodeId = "n1", anchorId = "a1"),
+                            target = deepTarget,
+                            label = "link",
+                            createdAt = 0u,
+                            updatedAt = 0u,
+                        ),
+                    ),
+                hyperlinks =
+                    listOf(
+                        StarMapHyperlinkDto(
+                            hyperlinkId = "hl1",
+                            source =
+                                StarMapEndpointPathDto(
+                                    segments =
+                                        listOf(
+                                            StarMapEndpointPathSegmentDto(kind = "EnterChildMap", starmapId = "child1"),
+                                        ),
+                                    endpoint =
+                                        StarMapEdgeEndpointDto(
+                                            kind = "Node",
+                                            nodeId = "n1",
+                                            anchorId = null,
+                                            target = null,
+                                        ),
+                                ),
+                            targetUri = "https://example.com",
+                            label = "hl",
+                            targetStarmapId = "tgt",
+                            createdAt = 0u,
+                            updatedAt = 0u,
+                        ),
+                    ),
+                layout = null, viewport = null, diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
 
         val result = dto.toSnapshotResult()
 
@@ -338,7 +503,10 @@ class StarMapCrossLayerRegressionTest {
         var showAddNodeDialog = true
         var operationInProgress = false
 
-        fun executeOperation(label: String, result: BridgeResult<*>): Boolean {
+        fun executeOperation(
+            label: String,
+            result: BridgeResult<*>,
+        ): Boolean {
             operationInProgress = true
             return when (result) {
                 is BridgeResult.Success -> {
@@ -359,9 +527,10 @@ class StarMapCrossLayerRegressionTest {
             }
         }
 
-        val failedResult: BridgeResult<StarMapGraphNode> = BridgeResult.Error(
-            ResultEnvelope.errorOf("NATIVE_ERROR", "update failed")
-        )
+        val failedResult: BridgeResult<StarMapGraphNode> =
+            BridgeResult.Error(
+                ResultEnvelope.errorOf("NATIVE_ERROR", "update failed"),
+            )
         val ok = executeOperation("更新节点", failedResult)
         assertFalse(ok)
         assertNotNull(lastError)
@@ -371,9 +540,10 @@ class StarMapCrossLayerRegressionTest {
         assertTrue("dialog stays open on unrelated failure", showAddNodeDialog)
         assertFalse("operationInProgress reset after failure", operationInProgress)
 
-        val successResult: BridgeResult<StarMapGraphNode> = BridgeResult.Success(
-            StarMapGraphNode(id = "n1", title = "Updated", kind = StarMapNodeKind.Character)
-        )
+        val successResult: BridgeResult<StarMapGraphNode> =
+            BridgeResult.Success(
+                StarMapGraphNode(id = "n1", title = "Updated", kind = StarMapNodeKind.Character),
+            )
         val ok2 = executeOperation("更新节点", successResult)
         assertTrue(ok2)
         assertNull(lastError)
@@ -389,9 +559,10 @@ class StarMapCrossLayerRegressionTest {
         var showAddNodeDialog = true
         var lastError: String? = null
 
-        val failedResult: BridgeResult<StarMapGraphNode> = BridgeResult.Error(
-            ResultEnvelope.errorOf("NATIVE_ERROR", "add failed")
-        )
+        val failedResult: BridgeResult<StarMapGraphNode> =
+            BridgeResult.Error(
+                ResultEnvelope.errorOf("NATIVE_ERROR", "add failed"),
+            )
         when (failedResult) {
             is BridgeResult.Error -> lastError = "添加节点失败: ${failedResult.message}"
             else -> {}
@@ -399,9 +570,10 @@ class StarMapCrossLayerRegressionTest {
         assertTrue("add node dialog must stay open on failure", showAddNodeDialog)
         assertNotNull(lastError)
 
-        val successResult: BridgeResult<StarMapGraphNode> = BridgeResult.Success(
-            StarMapGraphNode(id = "n1", title = "New", kind = StarMapNodeKind.Character)
-        )
+        val successResult: BridgeResult<StarMapGraphNode> =
+            BridgeResult.Success(
+                StarMapGraphNode(id = "n1", title = "New", kind = StarMapNodeKind.Character),
+            )
         when (successResult) {
             is BridgeResult.Success -> {
                 lastError = null
@@ -417,18 +589,20 @@ class StarMapCrossLayerRegressionTest {
         var showAddEdgeDialog = true
         var lastError: String? = null
 
-        val failedResult: BridgeResult<StarMapGraphEdge> = BridgeResult.Error(
-            ResultEnvelope.errorOf("NATIVE_ERROR", "add edge failed")
-        )
+        val failedResult: BridgeResult<StarMapGraphEdge> =
+            BridgeResult.Error(
+                ResultEnvelope.errorOf("NATIVE_ERROR", "add edge failed"),
+            )
         when (failedResult) {
             is BridgeResult.Error -> lastError = "添加连线失败: ${failedResult.message}"
             else -> {}
         }
         assertTrue("add edge dialog must stay open on failure", showAddEdgeDialog)
 
-        val successResult: BridgeResult<StarMapGraphEdge> = BridgeResult.Success(
-            StarMapGraphEdge(id = "e1", from = "n1", to = "n2", kind = StarMapEdgeKind.RelatedTo)
-        )
+        val successResult: BridgeResult<StarMapGraphEdge> =
+            BridgeResult.Success(
+                StarMapGraphEdge(id = "e1", from = "n1", to = "n2", kind = StarMapEdgeKind.RelatedTo),
+            )
         when (successResult) {
             is BridgeResult.Success -> {
                 lastError = null
@@ -444,9 +618,10 @@ class StarMapCrossLayerRegressionTest {
         var editingNodeId: String? = "n1"
         var lastError: String? = null
 
-        val failedResult: BridgeResult<StarMapGraphNode> = BridgeResult.Error(
-            ResultEnvelope.errorOf("NATIVE_ERROR", "update failed")
-        )
+        val failedResult: BridgeResult<StarMapGraphNode> =
+            BridgeResult.Error(
+                ResultEnvelope.errorOf("NATIVE_ERROR", "update failed"),
+            )
         when (failedResult) {
             is BridgeResult.Error -> lastError = "更新节点失败: ${failedResult.message}"
             else -> {}
@@ -454,9 +629,10 @@ class StarMapCrossLayerRegressionTest {
         assertEquals("double-tap edit must preserve editingNodeId on failure", "n1", editingNodeId)
         assertNotNull(lastError)
 
-        val successResult: BridgeResult<StarMapGraphNode> = BridgeResult.Success(
-            StarMapGraphNode(id = "n1", title = "Updated", kind = StarMapNodeKind.Character)
-        )
+        val successResult: BridgeResult<StarMapGraphNode> =
+            BridgeResult.Success(
+                StarMapGraphNode(id = "n1", title = "Updated", kind = StarMapNodeKind.Character),
+            )
         when (successResult) {
             is BridgeResult.Success -> {
                 lastError = null
@@ -469,38 +645,41 @@ class StarMapCrossLayerRegressionTest {
 
     @Test
     fun loadPhaseProgression_objectCountsMonotonicallyIncrease() {
-        val dto1 = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "CurrentViewportObjects",
-            packageRevision = 1u, complete = false, sinceRevision = 0u,
-            nodes = listOf(makeNodeDto("n1", "InView")),
-            edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto1 =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "CurrentViewportObjects",
+                packageRevision = 1u, complete = false, sinceRevision = 0u,
+                nodes = listOf(makeNodeDto("n1", "InView")),
+                edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+                layout = null, viewport = null, diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
         val result1 = dto1.toSnapshotResult()
         assertEquals("CurrentViewportObjects", result1.data.loadPhase)
         assertFalse(result1.data.complete)
         val count1 = result1.data.graph.nodes.size
 
-        val dto2 = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "PrefetchNearbyObjects",
-            packageRevision = 1u, complete = false, sinceRevision = 0u,
-            nodes = listOf(makeNodeDto("n1", "InView"), makeNodeDto("n2", "Nearby")),
-            edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto2 =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "PrefetchNearbyObjects",
+                packageRevision = 1u, complete = false, sinceRevision = 0u,
+                nodes = listOf(makeNodeDto("n1", "InView"), makeNodeDto("n2", "Nearby")),
+                edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+                layout = null, viewport = null, diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
         val result2 = dto2.toSnapshotResult()
         assertTrue(result2.data.graph.nodes.size >= count1)
 
-        val dto3 = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
-            packageRevision = 1u, complete = true, sinceRevision = 0u,
-            nodes = listOf(makeNodeDto("n1", "InView"), makeNodeDto("n2", "Nearby"), makeNodeDto("n3", "Far")),
-            edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto3 =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
+                packageRevision = 1u, complete = true, sinceRevision = 0u,
+                nodes = listOf(makeNodeDto("n1", "InView"), makeNodeDto("n2", "Nearby"), makeNodeDto("n3", "Far")),
+                edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+                layout = null, viewport = null, diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
         val result3 = dto3.toSnapshotResult()
         assertTrue(result3.data.complete)
         assertTrue(result3.data.graph.nodes.size >= result2.data.graph.nodes.size)
@@ -508,16 +687,17 @@ class StarMapCrossLayerRegressionTest {
 
     @Test
     fun revisionIncrementalMerge_revisionUnchangedReturnsEmptyObjects() {
-        val dto = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
-            packageRevision = 5u, complete = true, sinceRevision = 5u,
-            nodes = emptyList(), edges = emptyList(), embeds = emptyList(),
-            links = emptyList(), hyperlinks = emptyList(),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, emptyList()),
-            viewport = StarMapViewportDto(1f, 0f, 0f, 800f, 600f),
-            diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
+                packageRevision = 5u, complete = true, sinceRevision = 5u,
+                nodes = emptyList(), edges = emptyList(), embeds = emptyList(),
+                links = emptyList(), hyperlinks = emptyList(),
+                layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, emptyList()),
+                viewport = StarMapViewportDto(1f, 0f, 0f, 800f, 600f),
+                diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
         val result = dto.toSnapshotResult()
         assertEquals(5uL, result.data.packageRevision)
         assertEquals(5uL, result.data.sinceRevision)
@@ -527,15 +707,16 @@ class StarMapCrossLayerRegressionTest {
 
     @Test
     fun revisionIncrementalMerge_revisionAdvancedReturnsAllObjects() {
-        val dto = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
-            packageRevision = 5u, complete = true, sinceRevision = 3u,
-            nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B")),
-            edges = listOf(makeEdgeDto("e1", "n1", "n2")),
-            embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
+                packageRevision = 5u, complete = true, sinceRevision = 3u,
+                nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B")),
+                edges = listOf(makeEdgeDto("e1", "n1", "n2")),
+                embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+                layout = null, viewport = null, diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
         val result = dto.toSnapshotResult()
         assertEquals(5uL, result.data.packageRevision)
         assertEquals(3uL, result.data.sinceRevision)
@@ -545,22 +726,31 @@ class StarMapCrossLayerRegressionTest {
 
     @Test
     fun migrationReopen_preservesDataThroughSnapshot() {
-        val dto = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
-            packageRevision = 2u, complete = true, sinceRevision = 0u,
-            nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B")),
-            edges = listOf(makeEdgeDto("e1", "n1", "n2")),
-            embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 10f, y = 20f, width = 100f, height = 50f,
-                    radius = 25f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null),
-                StarMapLayoutNodeDto(nodeId = "n2", x = 200f, y = 300f, width = 100f, height = 50f,
-                    radius = 25f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
-            )),
-            viewport = StarMapViewportDto(1f, 0f, 0f, 800f, 600f),
-            diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
+                packageRevision = 2u, complete = true, sinceRevision = 0u,
+                nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B")),
+                edges = listOf(makeEdgeDto("e1", "n1", "n2")),
+                embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 10f, y = 20f, width = 100f, height = 50f,
+                                radius = 25f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                            StarMapLayoutNodeDto(
+                                nodeId = "n2", x = 200f, y = 300f, width = 100f, height = 50f,
+                                radius = 25f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                        ),
+                    ),
+                viewport = StarMapViewportDto(1f, 0f, 0f, 800f, 600f),
+                diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
         val result = dto.toSnapshotResult()
         assertEquals(2, result.data.graph.nodes.size)
         assertEquals(1, result.data.graph.edges.size)
@@ -573,24 +763,32 @@ class StarMapCrossLayerRegressionTest {
     @Test
     fun saveFailureRetry_preservesMemoryState() {
         val cache = StarMapSnapshotCache()
-        val dto = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
-            packageRevision = 1u, complete = true, sinceRevision = 0u,
-            nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B")),
-            edges = listOf(makeEdgeDto("e1", "n1", "n2")),
-            embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 100f, y = 200f, width = 150f, height = 80f,
-                    radius = 40f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
-            )),
-            viewport = null, diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
+                packageRevision = 1u, complete = true, sinceRevision = 0u,
+                nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B")),
+                edges = listOf(makeEdgeDto("e1", "n1", "n2")),
+                embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 100f, y = 200f, width = 150f, height = 80f,
+                                radius = 40f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                        ),
+                    ),
+                viewport = null, diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
         cache.put("sm1", dto.toRawCache())
 
-        val saveResult: BridgeResult<Boolean> = BridgeResult.Error(
-            ResultEnvelope.errorOf("IO_ERROR", "disk full")
-        )
+        val saveResult: BridgeResult<Boolean> =
+            BridgeResult.Error(
+                ResultEnvelope.errorOf("IO_ERROR", "disk full"),
+            )
         when (saveResult) {
             is BridgeResult.Error -> assertEquals("IO_ERROR", saveResult.code)
             else -> fail("expected Error")
@@ -607,26 +805,36 @@ class StarMapCrossLayerRegressionTest {
     @Test
     fun flushCloseFailure_preservesMemoryCacheState() {
         val cache = StarMapSnapshotCache()
-        val dto = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
-            packageRevision = 1u, complete = true, sinceRevision = 0u,
-            nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B")),
-            edges = listOf(makeEdgeDto("e1", "n1", "n2")),
-            embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null),
-                StarMapLayoutNodeDto(nodeId = "n2", x = 200f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
-            )),
-            viewport = null, diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
+                packageRevision = 1u, complete = true, sinceRevision = 0u,
+                nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B")),
+                edges = listOf(makeEdgeDto("e1", "n1", "n2")),
+                embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                            StarMapLayoutNodeDto(
+                                nodeId = "n2", x = 200f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                        ),
+                    ),
+                viewport = null, diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
         cache.put("sm1", dto.toRawCache())
 
-        val flushResult: BridgeResult<Boolean> = BridgeResult.Error(
-            ResultEnvelope.errorOf("FLUSH_ERROR", "I/O error")
-        )
+        val flushResult: BridgeResult<Boolean> =
+            BridgeResult.Error(
+                ResultEnvelope.errorOf("FLUSH_ERROR", "I/O error"),
+            )
         when (flushResult) {
             is BridgeResult.Error -> assertEquals("FLUSH_ERROR", flushResult.code)
             else -> fail("expected Error")
@@ -639,9 +847,10 @@ class StarMapCrossLayerRegressionTest {
         assertEquals(2, cached.layoutNodes.size)
         assertNotNull(cached.graph)
 
-        val closeResult: BridgeResult<Boolean> = BridgeResult.Error(
-            ResultEnvelope.errorOf("CLOSE_ERROR", "I/O error")
-        )
+        val closeResult: BridgeResult<Boolean> =
+            BridgeResult.Error(
+                ResultEnvelope.errorOf("CLOSE_ERROR", "I/O error"),
+            )
         when (closeResult) {
             is BridgeResult.Error -> assertEquals("CLOSE_ERROR", closeResult.code)
             else -> fail("expected Error")
@@ -655,21 +864,30 @@ class StarMapCrossLayerRegressionTest {
     @Test
     fun computeEdgeRenders_usesCacheNeverFullLoad() {
         val cache = StarMapSnapshotCache()
-        val dto = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
-            packageRevision = 1u, complete = true, sinceRevision = 0u,
-            nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B")),
-            edges = listOf(makeEdgeDto("e1", "n1", "n2")),
-            embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 0f, y = 0f, width = 100f, height = 50f,
-                    radius = 25f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null),
-                StarMapLayoutNodeDto(nodeId = "n2", x = 200f, y = 0f, width = 100f, height = 50f,
-                    radius = 25f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
-            )),
-            viewport = null, diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
+                packageRevision = 1u, complete = true, sinceRevision = 0u,
+                nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B")),
+                edges = listOf(makeEdgeDto("e1", "n1", "n2")),
+                embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 0f, y = 0f, width = 100f, height = 50f,
+                                radius = 25f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                            StarMapLayoutNodeDto(
+                                nodeId = "n2", x = 200f, y = 0f, width = 100f, height = 50f,
+                                radius = 25f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                        ),
+                    ),
+                viewport = null, diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
         val rawCache = dto.toRawCache()
         cache.put("sm1", rawCache)
 
@@ -686,9 +904,10 @@ class StarMapCrossLayerRegressionTest {
         var lastError: String? = null
 
         operationInProgress = true
-        val failedResult: BridgeResult<StarMapGraphNode> = BridgeResult.Error(
-            ResultEnvelope.errorOf("NATIVE_ERROR", "failed")
-        )
+        val failedResult: BridgeResult<StarMapGraphNode> =
+            BridgeResult.Error(
+                ResultEnvelope.errorOf("NATIVE_ERROR", "failed"),
+            )
         when (failedResult) {
             is BridgeResult.Error -> {
                 lastError = "操作失败: ${failedResult.message}"
@@ -700,9 +919,10 @@ class StarMapCrossLayerRegressionTest {
         assertNotNull(lastError)
 
         operationInProgress = true
-        val successResult: BridgeResult<StarMapGraphNode> = BridgeResult.Success(
-            StarMapGraphNode(id = "n1", title = "OK", kind = StarMapNodeKind.Character)
-        )
+        val successResult: BridgeResult<StarMapGraphNode> =
+            BridgeResult.Success(
+                StarMapGraphNode(id = "n1", title = "OK", kind = StarMapNodeKind.Character),
+            )
         when (successResult) {
             is BridgeResult.Success -> {
                 lastError = null
@@ -717,29 +937,37 @@ class StarMapCrossLayerRegressionTest {
     @Test
     fun cacheBasedResult_incrementalMergeThenToSnapshotResult_returnsFullMergedState() {
         val cache = StarMapSnapshotCache()
-        val dto1 = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "CurrentViewportObjects",
-            packageRevision = 1u, complete = false, sinceRevision = 0u,
-            nodes = listOf(makeNodeDto("n1", "A")),
-            edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
-            )),
-            viewport = StarMapViewportDto(1f, 0f, 0f, 800f, 600f),
-            diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto1 =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "CurrentViewportObjects",
+                packageRevision = 1u, complete = false, sinceRevision = 0u,
+                nodes = listOf(makeNodeDto("n1", "A")),
+                edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                        ),
+                    ),
+                viewport = StarMapViewportDto(1f, 0f, 0f, 800f, 600f),
+                diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
         cache.put("sm1", dto1.toRawCache())
 
-        val dto2 = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "PrefetchNearbyObjects",
-            packageRevision = 1u, complete = false, sinceRevision = 1u,
-            nodes = emptyList(), edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, emptyList()),
-            viewport = null, diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto2 =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "PrefetchNearbyObjects",
+                packageRevision = 1u, complete = false, sinceRevision = 1u,
+                nodes = emptyList(), edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+                layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, emptyList()),
+                viewport = null, diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
         cache.mergeIncremental("sm1", dto2.toRawCache())
 
         val result = cache.get("sm1")!!.toSnapshotResult()
@@ -752,52 +980,100 @@ class StarMapCrossLayerRegressionTest {
 
     @Test
     fun incrementalMerge_embedsLinksHyperlinks_preservedAcrossPhases() {
-        val deepTarget = StarMapDeepTargetDto(
-            starmapId = "other", path = emptyList(),
-            target = StarMapTargetDetailDto(kind = "Node", nodeId = "x", anchorId = null,
-                projectId = null, volumeId = null, chapterId = null, rangeStart = null, rangeEnd = null,
-                entityType = null, entityId = null, uri = null)
-        )
+        val deepTarget =
+            StarMapDeepTargetDto(
+                starmapId = "other",
+                path = emptyList(),
+                target =
+                    StarMapTargetDetailDto(
+                        kind = "Node", nodeId = "x", anchorId = null,
+                        projectId = null, volumeId = null, chapterId = null, rangeStart = null, rangeEnd = null,
+                        entityType = null, entityId = null, uri = null,
+                    ),
+            )
         val cache = StarMapSnapshotCache()
-        val dto1 = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "CurrentViewportObjects",
-            packageRevision = 1u, complete = false, sinceRevision = 0u,
-            nodes = listOf(makeNodeDto("n1", "A")),
-            edges = emptyList(),
-            embeds = listOf(StarMapEmbedDto(
-                instanceId = "emb1", targetStarmapId = "child", label = "first",
-                displayPolicy = defaultStarMapDisplayPolicy(),
-                openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
-                placement = StarMapEmbedPlacementDto(x = 0f, y = 0f, width = 200f, height = 150f, scale = 1f, zIndex = 0, collapsed = false),
-                targetViewport = StarMapEmbedViewportDto(scale = 1f, offsetX = 0f, offsetY = 0f),
-                sourceNodeId = "n1", hostEndpoint = null,
-                provenance = StarMapProvenanceDto(StarMapSourceKindDto.HUMAN, null, null, null, StarMapReviewStatusDto.ACCEPTED, null),
-                createdAt = 0u, updatedAt = 0u
-            )),
-            links = listOf(StarMapLinkDto(
-                linkId = "lk1",
-                source = StarMapEndpointDto(kind = "Node", nodeId = "n1", anchorId = null),
-                target = deepTarget, label = "link1",
-                createdAt = 0u, updatedAt = 0u
-            )),
-            hyperlinks = listOf(StarMapHyperlinkDto(
-                hyperlinkId = "hl1",
-                source = StarMapEndpointPathDto(segments = emptyList(), endpoint = StarMapEdgeEndpointDto(kind = "Node", nodeId = "n1", anchorId = null, target = null)),
-                targetUri = "https://example.com", label = "hl1", targetStarmapId = null,
-                createdAt = 0u, updatedAt = 0u
-            )),
-            layout = null, viewport = null, diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto1 =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "CurrentViewportObjects",
+                packageRevision = 1u, complete = false, sinceRevision = 0u,
+                nodes = listOf(makeNodeDto("n1", "A")),
+                edges = emptyList(),
+                embeds =
+                    listOf(
+                        StarMapEmbedDto(
+                            instanceId = "emb1", targetStarmapId = "child", label = "first",
+                            displayPolicy = defaultStarMapDisplayPolicy(),
+                            openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
+                            placement =
+                                StarMapEmbedPlacementDto(
+                                    x = 0f,
+                                    y = 0f,
+                                    width = 200f,
+                                    height = 150f,
+                                    scale = 1f,
+                                    zIndex = 0,
+                                    collapsed = false,
+                                ),
+                            targetViewport = StarMapEmbedViewportDto(scale = 1f, offsetX = 0f, offsetY = 0f),
+                            sourceNodeId = "n1", hostEndpoint = null,
+                            provenance =
+                                StarMapProvenanceDto(
+                                    StarMapSourceKindDto.HUMAN,
+                                    null,
+                                    null,
+                                    null,
+                                    StarMapReviewStatusDto.ACCEPTED,
+                                    null,
+                                ),
+                            createdAt = 0u, updatedAt = 0u,
+                        ),
+                    ),
+                links =
+                    listOf(
+                        StarMapLinkDto(
+                            linkId = "lk1",
+                            source = StarMapEndpointDto(kind = "Node", nodeId = "n1", anchorId = null),
+                            target = deepTarget,
+                            label = "link1",
+                            createdAt = 0u,
+                            updatedAt = 0u,
+                        ),
+                    ),
+                hyperlinks =
+                    listOf(
+                        StarMapHyperlinkDto(
+                            hyperlinkId = "hl1",
+                            source =
+                                StarMapEndpointPathDto(
+                                    segments = emptyList(),
+                                    endpoint =
+                                        StarMapEdgeEndpointDto(
+                                            kind = "Node",
+                                            nodeId = "n1",
+                                            anchorId = null,
+                                            target = null,
+                                        ),
+                                ),
+                            targetUri = "https://example.com",
+                            label = "hl1",
+                            targetStarmapId = null,
+                            createdAt = 0u,
+                            updatedAt = 0u,
+                        ),
+                    ),
+                layout = null, viewport = null, diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
         cache.put("sm1", dto1.toRawCache())
 
-        val dto2 = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
-            packageRevision = 2u, complete = true, sinceRevision = 1u,
-            nodes = emptyList(), edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto2 =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
+                packageRevision = 2u, complete = true, sinceRevision = 1u,
+                nodes = emptyList(), edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+                layout = null, viewport = null, diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
         cache.mergeIncremental("sm1", dto2.toRawCache())
 
         val result = cache.get("sm1")!!.toSnapshotResult()
@@ -814,27 +1090,37 @@ class StarMapCrossLayerRegressionTest {
     @Test
     fun incrementalMerge_appliesDeletedTombstones() {
         val cache = StarMapSnapshotCache()
-        val dto1 = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "CurrentViewportObjects",
-            packageRevision = 1u, complete = false, sinceRevision = 0u,
-            nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B")),
-            edges = listOf(makeEdgeDto("e1", "n1", "n2")),
-            embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto1 =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "CurrentViewportObjects",
+                packageRevision = 1u, complete = false, sinceRevision = 0u,
+                nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B")),
+                edges = listOf(makeEdgeDto("e1", "n1", "n2")),
+                embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+                layout = null, viewport = null, diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
         cache.put("sm1", dto1.toRawCache())
         assertEquals(2, cache.get("sm1")!!.nodes.size)
 
-        val dto2 = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
-            packageRevision = 2u, complete = true, sinceRevision = 1u,
-            nodes = listOf(makeNodeDto("n1", "A")),
-            edges = emptyList(),
-            embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList(),
-            deletedNodeIds = listOf("n2"), deletedEdgeIds = listOf("e1"), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto2 =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
+                packageRevision = 2u, complete = true, sinceRevision = 1u,
+                nodes = listOf(makeNodeDto("n1", "A")),
+                edges = emptyList(),
+                embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+                layout = null, viewport = null, diagnostics = emptyList(),
+                deletedNodeIds =
+                    listOf(
+                        "n2",
+                    ),
+                deletedEdgeIds =
+                    listOf(
+                        "e1",
+                    ),
+                deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
         cache.mergeIncremental("sm1", dto2.toRawCache())
 
         val merged = cache.get("sm1")!!
@@ -849,63 +1135,94 @@ class StarMapCrossLayerRegressionTest {
     @Test
     fun progressivePhase_returnsObjectsDespiteSameRevision() {
         val cache = StarMapSnapshotCache()
-        val dto1 = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "CurrentViewportObjects",
-            packageRevision = 5u, complete = false, sinceRevision = 0u,
-            nodes = listOf(makeNodeDto("n1", "InView")),
-            edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
-            )),
-            viewport = StarMapViewportDto(1f, 0f, 0f, 800f, 600f),
-            diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto1 =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "CurrentViewportObjects",
+                packageRevision = 5u, complete = false, sinceRevision = 0u,
+                nodes = listOf(makeNodeDto("n1", "InView")),
+                edges = emptyList(), embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                        ),
+                    ),
+                viewport = StarMapViewportDto(1f, 0f, 0f, 800f, 600f),
+                diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
         cache.put("sm1", dto1.toRawCache())
 
-        val dto2 = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "PrefetchNearbyObjects",
-            packageRevision = 5u, complete = false, sinceRevision = 5u,
-            nodes = listOf(makeNodeDto("n1", "InView"), makeNodeDto("n2", "Nearby")),
-            edges = listOf(makeEdgeDto("e1", "n1", "n2")),
-            embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null),
-                StarMapLayoutNodeDto(nodeId = "n2", x = 200f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
-            )),
-            viewport = null, diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto2 =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "PrefetchNearbyObjects",
+                packageRevision = 5u, complete = false, sinceRevision = 5u,
+                nodes = listOf(makeNodeDto("n1", "InView"), makeNodeDto("n2", "Nearby")),
+                edges = listOf(makeEdgeDto("e1", "n1", "n2")),
+                embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                            StarMapLayoutNodeDto(
+                                nodeId = "n2", x = 200f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                        ),
+                    ),
+                viewport = null, diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
         cache.mergeIncremental("sm1", dto2.toRawCache())
 
         val merged = cache.get("sm1")!!
-        assertEquals("progressive phase must add objects even when sinceRevision == packageRevision", 2, merged.nodes.size)
+        assertEquals(
+            "progressive phase must add objects even when sinceRevision == packageRevision",
+            2,
+            merged.nodes.size,
+        )
         assertEquals(1, merged.edges.size)
     }
 
     @Test
     fun incrementalMerge_rebuildsGraphWithoutDeletedObjects() {
         val cache = StarMapSnapshotCache()
-        val dto1 = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "CurrentViewportObjects",
-            packageRevision = 1u, complete = false, sinceRevision = 0u,
-            nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B"), makeNodeDto("n3", "C")),
-            edges = listOf(makeEdgeDto("e1", "n1", "n2"), makeEdgeDto("e2", "n2", "n3")),
-            embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null),
-                StarMapLayoutNodeDto(nodeId = "n2", x = 200f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null),
-                StarMapLayoutNodeDto(nodeId = "n3", x = 350f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
-            )),
-            viewport = null, diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto1 =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "CurrentViewportObjects",
+                packageRevision = 1u, complete = false, sinceRevision = 0u,
+                nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B"), makeNodeDto("n3", "C")),
+                edges = listOf(makeEdgeDto("e1", "n1", "n2"), makeEdgeDto("e2", "n2", "n3")),
+                embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                            StarMapLayoutNodeDto(
+                                nodeId = "n2", x = 200f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                            StarMapLayoutNodeDto(
+                                nodeId = "n3", x = 350f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                        ),
+                    ),
+                viewport = null, diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
         cache.put("sm1", dto1.toRawCache())
         val before = cache.get("sm1")!!
         assertEquals(3, before.nodes.size)
@@ -913,15 +1230,25 @@ class StarMapCrossLayerRegressionTest {
         assertEquals(3, before.graph!!.nodes.size)
         assertEquals(2, before.graph!!.edges.size)
 
-        val dto2 = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
-            packageRevision = 2u, complete = true, sinceRevision = 1u,
-            nodes = listOf(makeNodeDto("n1", "A")),
-            edges = listOf(makeEdgeDto("e1", "n1", "n2")),
-            embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = null, viewport = null, diagnostics = emptyList(),
-            deletedNodeIds = listOf("n2", "n3"), deletedEdgeIds = listOf("e2"), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto2 =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
+                packageRevision = 2u, complete = true, sinceRevision = 1u,
+                nodes = listOf(makeNodeDto("n1", "A")),
+                edges = listOf(makeEdgeDto("e1", "n1", "n2")),
+                embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+                layout = null, viewport = null, diagnostics = emptyList(),
+                deletedNodeIds =
+                    listOf(
+                        "n2",
+                        "n3",
+                    ),
+                deletedEdgeIds =
+                    listOf(
+                        "e2",
+                    ),
+                deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
         cache.mergeIncremental("sm1", dto2.toRawCache())
 
         val after = cache.get("sm1")!!
@@ -941,11 +1268,21 @@ class StarMapCrossLayerRegressionTest {
 
     @Test
     fun starMapData_defaultLoadPhase_isCurrentViewportObjects() {
-        val data = StarMapData(
-            graph = StarMapGraphData(schemaVersion = 1, id = "sm1", starmapId = "sm1", title = "T",
-                nodes = emptyList(), edges = emptyList(), createdAt = 0, updatedAt = 0),
-            layout = StarMapLayoutData(kind = StarMapLayoutKind.Freeform, nodes = emptyList())
-        )
+        val data =
+            StarMapData(
+                graph =
+                    StarMapGraphData(
+                        schemaVersion = 1,
+                        id = "sm1",
+                        starmapId = "sm1",
+                        title = "T",
+                        nodes = emptyList(),
+                        edges = emptyList(),
+                        createdAt = 0,
+                        updatedAt = 0,
+                    ),
+                layout = StarMapLayoutData(kind = StarMapLayoutKind.Freeform, nodes = emptyList()),
+            )
         assertEquals("CurrentViewportObjects", data.loadPhase)
         assertFalse(data.complete)
         assertEquals(0uL, data.packageRevision)
@@ -954,31 +1291,47 @@ class StarMapCrossLayerRegressionTest {
     @Test
     fun crudCacheUpdate_graphRemainsConsistent() {
         val cache = StarMapSnapshotCache()
-        val dto = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
-            packageRevision = 1u, complete = true, sinceRevision = 0u,
-            nodes = listOf(makeNodeDto("n1", "A")),
-            edges = listOf(makeEdgeDto("e1", "n1", "n1")),
-            embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
-            )),
-            viewport = null, diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
+                packageRevision = 1u, complete = true, sinceRevision = 0u,
+                nodes = listOf(makeNodeDto("n1", "A")),
+                edges = listOf(makeEdgeDto("e1", "n1", "n1")),
+                embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                        ),
+                    ),
+                viewport = null, diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
         cache.put("sm1", dto.toRawCache())
 
-        val newNode = StarMapNodeDto(
-            id = "n2", title = "B", kind = StarMapNodeKindDto.EVENT,
-            payload = null, tags = emptyList(),
-            content = StarMapNodeContentDto("empty", null, null, null, null, null, null, null, null, null, null, null),
-            anchors = emptyList(), portal = null,
-            displayPolicy = defaultStarMapDisplayPolicy(),
-            openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
-            provenance = StarMapProvenanceDto(StarMapSourceKindDto.HUMAN, null, null, null, StarMapReviewStatusDto.ACCEPTED, null),
-            createdAt = 0u, updatedAt = 0u
-        )
+        val newNode =
+            StarMapNodeDto(
+                id = "n2", title = "B", kind = StarMapNodeKindDto.EVENT,
+                payload = null, tags = emptyList(),
+                content = StarMapNodeContentDto("empty", null, null, null, null, null, null, null, null, null, null, null),
+                anchors = emptyList(), portal = null,
+                displayPolicy = defaultStarMapDisplayPolicy(),
+                openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
+                provenance =
+                    StarMapProvenanceDto(
+                        StarMapSourceKindDto.HUMAN,
+                        null,
+                        null,
+                        null,
+                        StarMapReviewStatusDto.ACCEPTED,
+                        null,
+                    ),
+                createdAt = 0u, updatedAt = 0u,
+            )
         cache.putNode("sm1", "n2", newNode)
         val afterPut = cache.get("sm1")!!
         assertEquals(2, afterPut.nodes.size)

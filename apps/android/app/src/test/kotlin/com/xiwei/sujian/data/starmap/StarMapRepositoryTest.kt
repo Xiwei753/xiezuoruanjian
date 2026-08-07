@@ -1,23 +1,21 @@
 package com.xiwei.sujian.data.starmap
 
-import com.xiwei.sujian.model.StarMapLayoutKind
-import com.xiwei.sujian.model.StarMapMotionPolicyData
 import com.xiwei.sujian.model.StarMapViewportData
 import org.junit.Assert.*
 import org.junit.Test
 import uniffi.writer_core.*
 
 class StarMapRepositoryTest {
-
     @Test
     fun dtoMapper_metaDto_toModel_preservesFields() {
-        val dto = StarMapMetaDto(
-            starmapId = "sm1", title = "T", description = "D",
-            projectId = "p1", parentStarmapId = null, isMainForProject = true,
-            accentColor = "#FF0000", nodeCount = 5u, edgeCount = 3u,
-            linkedChapterCount = 2u, childStarmapCount = 1u,
-            createdAt = 1000u, updatedAt = 2000u
-        )
+        val dto =
+            StarMapMetaDto(
+                starmapId = "sm1", title = "T", description = "D",
+                projectId = "p1", parentStarmapId = null, isMainForProject = true,
+                accentColor = "#FF0000", nodeCount = 5u, edgeCount = 3u,
+                linkedChapterCount = 2u, childStarmapCount = 1u,
+                createdAt = 1000u, updatedAt = 2000u,
+            )
         val model = dto.toModel()
         assertEquals("sm1", model.starmapId)
         assertEquals("T", model.title)
@@ -43,12 +41,17 @@ class StarMapRepositoryTest {
 
     @Test
     fun dtoMapper_motionPolicyDto_toModel_preservesAllFields() {
-        val dto = StarMapMotionPolicyDto(
-            enabled = true, idleWobbleEnabled = false,
-            idleAmplitudeVp = 3.5f, idlePeriodMs = 5000u,
-            dragLiftScale = 1.1f, dragShadowBoost = 10.0f,
-            settleDurationMs = 300u, reduceMotion = true
-        )
+        val dto =
+            StarMapMotionPolicyDto(
+                enabled = true,
+                idleWobbleEnabled = false,
+                idleAmplitudeVp = 3.5f,
+                idlePeriodMs = 5000u,
+                dragLiftScale = 1.1f,
+                dragShadowBoost = 10.0f,
+                settleDurationMs = 300u,
+                reduceMotion = true,
+            )
         val model = dto.toModel()
         assertTrue(model.enabled)
         assertFalse(model.idleWobbleEnabled)
@@ -69,17 +72,22 @@ class StarMapRepositoryTest {
     @Test
     fun snapshotCache_putAndFlush_isConsistent() {
         val cache = StarMapSnapshotCache()
-        val rawCache = StarMapRawCache(
-            graph = StarMapGraphDto(
-                schemaVersion = 1u, id = "sm1", starmapId = "sm1", title = "T",
-                nodes = emptyList(), edges = emptyList(), embeds = emptyList(), links = emptyList(),
-                hyperlinks = emptyList(),
-                createdAt = 0u, updatedAt = 0u
-            ),
-            nodes = mutableMapOf(), edges = mutableMapOf(),
-            embeds = mutableMapOf(), links = mutableMapOf(), hyperlinks = mutableMapOf(),
-            layoutNodes = mutableMapOf()
-        )
+        val rawCache =
+            StarMapRawCache(
+                graph =
+                    StarMapGraphDto(
+                        schemaVersion = 1u, id = "sm1", starmapId = "sm1", title = "T",
+                        nodes = emptyList(), edges = emptyList(), embeds = emptyList(), links = emptyList(),
+                        hyperlinks = emptyList(),
+                        createdAt = 0u, updatedAt = 0u,
+                    ),
+                nodes = mutableMapOf(),
+                edges = mutableMapOf(),
+                embeds = mutableMapOf(),
+                links = mutableMapOf(),
+                hyperlinks = mutableMapOf(),
+                layoutNodes = mutableMapOf(),
+            )
         cache.put("sm1", rawCache)
         assertNotNull(cache.get("sm1"))
         assertEquals("sm1", cache.get("sm1")!!.graph!!.starmapId)
@@ -103,20 +111,22 @@ class StarMapRepositoryTest {
 
     @Test
     fun repository_listStarmaps_mapsEachDtoToModel() {
-        val dto1 = StarMapMetaDto(
-            starmapId = "sm1", title = "A", description = "",
-            projectId = "", parentStarmapId = null, isMainForProject = false,
-            accentColor = "", nodeCount = 1u, edgeCount = 0u,
-            linkedChapterCount = 0u, childStarmapCount = 0u,
-            createdAt = 0u, updatedAt = 0u
-        )
-        val dto2 = StarMapMetaDto(
-            starmapId = "sm2", title = "B", description = "",
-            projectId = "", parentStarmapId = null, isMainForProject = false,
-            accentColor = "", nodeCount = 2u, edgeCount = 1u,
-            linkedChapterCount = 0u, childStarmapCount = 0u,
-            createdAt = 0u, updatedAt = 0u
-        )
+        val dto1 =
+            StarMapMetaDto(
+                starmapId = "sm1", title = "A", description = "",
+                projectId = "", parentStarmapId = null, isMainForProject = false,
+                accentColor = "", nodeCount = 1u, edgeCount = 0u,
+                linkedChapterCount = 0u, childStarmapCount = 0u,
+                createdAt = 0u, updatedAt = 0u,
+            )
+        val dto2 =
+            StarMapMetaDto(
+                starmapId = "sm2", title = "B", description = "",
+                projectId = "", parentStarmapId = null, isMainForProject = false,
+                accentColor = "", nodeCount = 2u, edgeCount = 1u,
+                linkedChapterCount = 0u, childStarmapCount = 0u,
+                createdAt = 0u, updatedAt = 0u,
+            )
         val dtos = listOf(dto1, dto2)
         val models = dtos.map { it.toModel() }
         assertEquals(2, models.size)
@@ -128,12 +138,17 @@ class StarMapRepositoryTest {
 
     @Test
     fun repository_getMotionPolicy_mapsDtoToModel() {
-        val dto = StarMapMotionPolicyDto(
-            enabled = false, idleWobbleEnabled = true,
-            idleAmplitudeVp = 1f, idlePeriodMs = 3000u,
-            dragLiftScale = 1.0f, dragShadowBoost = 5f,
-            settleDurationMs = 100u, reduceMotion = false
-        )
+        val dto =
+            StarMapMotionPolicyDto(
+                enabled = false,
+                idleWobbleEnabled = true,
+                idleAmplitudeVp = 1f,
+                idlePeriodMs = 3000u,
+                dragLiftScale = 1.0f,
+                dragShadowBoost = 5f,
+                settleDurationMs = 100u,
+                reduceMotion = false,
+            )
         val model = dto.toModel()
         assertFalse(model.enabled)
         assertTrue(model.idleWobbleEnabled)

@@ -6,7 +6,6 @@ import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.model.ThemeColorScheme
 
 object ThemePaletteHelper {
-
     private const val TAG = "ThemePaletteHelper"
 
     fun extractDynamicColorSchemes(context: Context): DynamicColorResult? {
@@ -23,9 +22,7 @@ object ThemePaletteHelper {
         }
     }
 
-    private fun colorSchemeToAppDto(
-        scheme: androidx.compose.material3.ColorScheme
-    ): ThemeColorScheme {
+    private fun colorSchemeToAppDto(scheme: androidx.compose.material3.ColorScheme): ThemeColorScheme {
         return ThemeColorScheme(
             primary = colorToHex(scheme.primary),
             onPrimary = colorToHex(scheme.onPrimary),

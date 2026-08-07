@@ -2,9 +2,19 @@ package com.xiwei.sujian.data
 
 import android.content.Context
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
-import com.xiwei.sujian.model.*
+import com.xiwei.sujian.model.BuiltinTheme
+import com.xiwei.sujian.model.DeviceInfo
 import com.xiwei.sujian.model.LocalSettings
+import com.xiwei.sujian.model.SyncCapabilityData
+import com.xiwei.sujian.model.SyncConfig
+import com.xiwei.sujian.model.SyncDiagnosticsResult
+import com.xiwei.sujian.model.SyncPlan
+import com.xiwei.sujian.model.SyncResult
+import com.xiwei.sujian.model.SyncSecrets
+import com.xiwei.sujian.model.SyncState
 import com.xiwei.sujian.model.SyncableSettings
+import com.xiwei.sujian.model.ThemeColorScheme
+import com.xiwei.sujian.model.ThemePaletteRecord
 
 /**
  * SettingsRepository — 设置仓库层
@@ -26,17 +36,18 @@ import com.xiwei.sujian.model.SyncableSettings
 class SettingsRepository(
     context: Context,
     bridge: AppServiceBridge? = null,
-    preferencesSuffix: String = ""
+    preferencesSuffix: String = "",
 ) {
     private val appContext = context.applicationContext
     private val appBridge = bridge ?: BridgeProvider.getAppServiceBridge(context)
     private val settingsBridge = appBridge.settingsBridge
     private val syncBridge = appBridge.syncBridge
     private val statsBridge = appBridge.statsBridge
-    private val diagPrefs = appContext.getSharedPreferences(
-        if (preferencesSuffix.isNotEmpty()) "sujian_diagnostics_$preferencesSuffix" else "sujian_diagnostics",
-        android.content.Context.MODE_PRIVATE
-    )
+    private val diagPrefs =
+        appContext.getSharedPreferences(
+            if (preferencesSuffix.isNotEmpty()) "sujian_diagnostics_$preferencesSuffix" else "sujian_diagnostics",
+            android.content.Context.MODE_PRIVATE,
+        )
     private val profileStore by lazy { SyncProfileStore(appContext) }
     private val configJson = com.google.gson.Gson()
 
@@ -56,24 +67,31 @@ class SettingsRepository(
     }
 
     fun getLocalSettings(): LocalSettings {
-        val fromCore = when (val result = settingsBridge.getLocalSettings()) {
-            is BridgeResult.Success -> result.data ?: LocalSettings()
-            is BridgeResult.Error -> {
-                warn("Failed to load local settings: ${result.fullEnvelope}")
-                LocalSettings()
+        val fromCore =
+            when (val result = settingsBridge.getLocalSettings()) {
+                is BridgeResult.Success -> result.data ?: LocalSettings()
+                is BridgeResult.Error -> {
+                    warn("Failed to load local settings: ${result.fullEnvelope}")
+                    LocalSettings()
+                }
+                BridgeResult.NotLoaded -> LocalSettings()
             }
-            BridgeResult.NotLoaded -> LocalSettings()
-        }
         return fromCore.copy(
             diagnosticsEnabled = diagPrefs.getBoolean("diagnostics_enabled", true),
             diagnosticsVerbose = diagPrefs.getBoolean("diagnostics_verbose", true),
             useSelfRenderEditorOnAndroid = diagPrefs.getBoolean("use_self_render_editor_on_android", true),
-            experimentalFullscreenMode = diagPrefs.getBoolean("experimental_fullscreen_mode", false)
+            experimentalFullscreenMode = diagPrefs.getBoolean("experimental_fullscreen_mode", false),
         )
     }
 
     fun saveLocalSettings(settings: LocalSettings): SettingsSaveResult {
-        val coreSettings = settings.copy(diagnosticsEnabled = false, diagnosticsVerbose = false, useSelfRenderEditorOnAndroid = false, experimentalFullscreenMode = false)
+        val coreSettings =
+            settings.copy(
+                diagnosticsEnabled = false,
+                diagnosticsVerbose = false,
+                useSelfRenderEditorOnAndroid = false,
+                experimentalFullscreenMode = false,
+            )
         return when (val result = settingsBridge.saveLocalSettings(coreSettings)) {
             is BridgeResult.Success -> {
                 com.xiwei.sujian.diagnostics.DiagnosticsEvents.settingsSaved("local_settings", "ok")
@@ -206,9 +224,11 @@ class SettingsRepository(
                 warn("Legacy sync secrets read failed: ${result.fullEnvelope}")
                 GenerationSecretsReadResult.Failed(kind, result.fullEnvelope)
             }
-            BridgeResult.NotLoaded -> GenerationSecretsReadResult.Failed(
-                SyncFailureKind.NativeUnavailable, "Native library not loaded"
-            )
+            BridgeResult.NotLoaded ->
+                GenerationSecretsReadResult.Failed(
+                    SyncFailureKind.NativeUnavailable,
+                    "Native library not loaded",
+                )
         }
     }
 
@@ -225,42 +245,44 @@ class SettingsRepository(
         // #592 五：读取者只读取 activeGeneration 对应的完整版本。
         // committed_config_json 只随 activeGeneration 原子推进，永远属于活动版本；
         // staged 但未提交的 config（失败/崩溃遗留）不会被当作完整版本。
-        val config = if (state.hasCommittedProfile) {
-            runCatching { configJson.fromJson(state.committedConfigJson, SyncConfig::class.java) }
-                .getOrNull()
-                ?.normalize()
-                ?: return SyncProfileReadResult.Failed(
-                    SyncFailureKind.Fatal, "Committed config JSON parse failed"
+        val config =
+            if (state.hasCommittedProfile) {
+                runCatching { configJson.fromJson(state.committedConfigJson, SyncConfig::class.java) }
+                    .getOrNull()
+                    ?.normalize()
+                    ?: return SyncProfileReadResult.Failed(
+                        SyncFailureKind.Fatal, "Committed config JSON parse failed",
+                    )
+            } else {
+                loadSyncConfigStrict() ?: return SyncProfileReadResult.Failed(
+                    SyncFailureKind.Fatal, "Sync config load failed",
                 )
-        } else {
-            loadSyncConfigStrict() ?: return SyncProfileReadResult.Failed(
-                SyncFailureKind.Fatal, "Sync config load failed"
-            )
-        }
+            }
         // 凭据按 generation 保存在安全存储；legacy（从未提交过）回退 live 槽。
         // #595 五：类型化区分"未配置"与"读取失败" — Failed 不再转换成 SyncSecrets()。
         val generationSecrets = loadSyncSecretsForGeneration(state.activeGeneration)
-        val secrets: SyncSecrets = when (generationSecrets) {
-            is GenerationSecretsReadResult.Found -> generationSecrets.secrets
-            is GenerationSecretsReadResult.NotConfigured -> {
-                if (state.hasCommittedProfile) {
-                    SyncSecrets()
-                } else {
-                    // #595 四：legacy 槽读取失败不得伪装成"未配置" —
-                    // 原生库未加载/安全存储失败必须返回 Failed，设置页据此显示错误。
-                    when (val legacy = loadLegacySyncSecretsTyped()) {
-                        is GenerationSecretsReadResult.Found -> legacy.secrets
-                        is GenerationSecretsReadResult.NotConfigured -> SyncSecrets()
-                        is GenerationSecretsReadResult.Failed -> {
-                            return SyncProfileReadResult.Failed(legacy.kind, legacy.message)
+        val secrets: SyncSecrets =
+            when (generationSecrets) {
+                is GenerationSecretsReadResult.Found -> generationSecrets.secrets
+                is GenerationSecretsReadResult.NotConfigured -> {
+                    if (state.hasCommittedProfile) {
+                        SyncSecrets()
+                    } else {
+                        // #595 四：legacy 槽读取失败不得伪装成"未配置" —
+                        // 原生库未加载/安全存储失败必须返回 Failed，设置页据此显示错误。
+                        when (val legacy = loadLegacySyncSecretsTyped()) {
+                            is GenerationSecretsReadResult.Found -> legacy.secrets
+                            is GenerationSecretsReadResult.NotConfigured -> SyncSecrets()
+                            is GenerationSecretsReadResult.Failed -> {
+                                return SyncProfileReadResult.Failed(legacy.kind, legacy.message)
+                            }
                         }
                     }
                 }
+                is GenerationSecretsReadResult.Failed -> {
+                    return SyncProfileReadResult.Failed(generationSecrets.kind, generationSecrets.message)
+                }
             }
-            is GenerationSecretsReadResult.Failed -> {
-                return SyncProfileReadResult.Failed(generationSecrets.kind, generationSecrets.message)
-            }
-        }
         val snapshot = SyncProfileSnapshot(state.activeGeneration, config, secrets)
         return if (secrets.token?.isNotEmpty() == true) {
             SyncProfileReadResult.Found(snapshot)
@@ -318,7 +340,10 @@ class SettingsRepository(
     }
 
     /** 按 generation 保存凭据到安全存储（#592 五）。 */
-    fun saveSyncSecretsForGeneration(generation: Long, secrets: SyncSecrets): SettingsSaveResult {
+    fun saveSyncSecretsForGeneration(
+        generation: Long,
+        secrets: SyncSecrets,
+    ): SettingsSaveResult {
         return when (val result = appBridge.saveSyncSecretsForGeneration(generation.toULong(), secrets)) {
             is BridgeResult.Success -> SettingsSaveResult.Success
             is BridgeResult.Error -> {
@@ -360,9 +385,11 @@ class SettingsRepository(
                 warn("Failed to load staged sync secrets for generation $generation: ${result.fullEnvelope}")
                 GenerationSecretsReadResult.Failed(kind, result.fullEnvelope)
             }
-            BridgeResult.NotLoaded -> GenerationSecretsReadResult.Failed(
-                SyncFailureKind.NativeUnavailable, "Native library not loaded"
-            )
+            BridgeResult.NotLoaded ->
+                GenerationSecretsReadResult.Failed(
+                    SyncFailureKind.NativeUnavailable,
+                    "Native library not loaded",
+                )
         }
     }
 
@@ -422,86 +449,108 @@ class SettingsRepository(
      *   仅供兼容旧 Core API 使用，不参与权威读取。
      * - 只有 activeGeneration 提交成功后 AutoSyncScheduler 才更新 WorkManager，
      *   且直接使用应用容器中的仓库（本仓库），不新建 SettingsRepository 读半成品。
+     *
+     * 首次提交前完成 legacy → generation 迁移（解决八）：迁移只写
+     * generation-staged 凭据 + 原子 marker，不发布新 config；legacy 内容仍在
+     * live 槽，marker 提交后 generation store 成为权威。
+     * 返回非 null 表示迁移失败（调用方必须中止提交）。
      */
-    suspend fun commitSyncProfile(config: SyncConfig, secrets: SyncSecrets): SettingsSaveResult {
-        val committed = SyncProfileGate.commitExclusive {
-            // 1) 首次提交前完成 legacy → generation 迁移（解决八）。
-            //    迁移只写 generation-staged 凭据 + 原子 marker，不发布新 config；
-            //    legacy 内容仍在 live 槽，marker 提交后 generation store 成为权威。
-            val initialState = profileStore.readState()
-            if (!initialState.hasCommittedProfile) {
-                val legacyConfig = loadSyncConfigStrict()
-                if (legacyConfig == null) {
-                    warn("commitSyncProfile: strict read of legacy config failed — aborting migration before any write")
-                    return@commitExclusive SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_CONFIG, 0L)))
-                }
-                val legacySecrets = loadLegacySyncSecretsTyped()
-                if (legacySecrets is GenerationSecretsReadResult.Failed) {
-                    warn("commitSyncProfile: legacy secrets read failed — aborting migration before any write")
-                    return@commitExclusive SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_SECRETS, 0L)))
-                }
-                val migrationSecrets = if (legacySecrets is GenerationSecretsReadResult.Found) {
-                    legacySecrets.secrets
-                } else {
-                    // #595 四：legacy 明确未配置（读取成功但无 token）→ 迁移空凭据；
-                    // 读取失败已在上面返回，不会把失败伪装成"未配置"。
-                    SyncSecrets()
-                }
-                val migrationGeneration = profileStore.nextGeneration()
-                val migrationResult = saveSyncSecretsForGeneration(migrationGeneration, migrationSecrets)
-                if (migrationResult is SettingsSaveResult.Failed) {
-                    warn("commitSyncProfile: legacy secrets migration to generation $migrationGeneration failed — aborting")
-                    return@commitExclusive migrationResult
-                }
-                profileStore.stageConfig(migrationGeneration, configJson.toJson(legacyConfig.normalize()))
-                profileStore.stageSecrets(migrationGeneration)
-                profileStore.commitGeneration(migrationGeneration, configJson.toJson(legacyConfig.normalize()))
-            }
-
-            val generation = profileStore.nextGeneration()
-            val normalized = config.normalize()
-
-            // 2) stagedConfig(generation=N)：只写 DataStore staging 标记与载荷，
-            //    不触碰 live Core 配置文件（marker 提交前不得发布新 config）。
-            profileStore.stageConfig(generation, configJson.toJson(normalized))
-
-            // 3) stagedSecrets(generation=N)：凭据按 generation 写入安全存储。
-            val secretsResult = saveSyncSecretsForGeneration(generation, secrets)
-            if (secretsResult is SettingsSaveResult.Failed) {
-                // 不写回旧配置（旧 generation 仍由 activeGeneration 标记继续有效）。
-                warn("commitSyncProfile: staged secrets save failed for generation $generation — " +
-                    "active generation unchanged, readers keep using the committed version")
-                return@commitExclusive secretsResult
-            }
-            profileStore.stageSecrets(generation)
-
-            // 4) 原子更新 activeGeneration=N（单一 DataStore updateData，
-            //    committed_config_json 与 activeGeneration 同时推进）。
-            profileStore.commitGeneration(generation, configJson.toJson(normalized))
-
-            // 5) #595 五：提交成功后执行安全清理 — 保留 current + previous 一个
-            //    可回滚版本，删除更旧 generation 的凭据；清理崩溃遗留的
-            //    未提交 staged generation 标记。清理失败只记录类型化错误，
-            //    不回滚已成功的提交（旧凭据只是安全存储中的冗余条目）。
-            val cleanupResult = cleanupStaleGenerationCredentials(generation)
-            if (cleanupResult is SettingsSaveResult.Failed) {
-                warn("commitSyncProfile: generation cleanup reported typed failures: " +
-                    cleanupResult.failures.joinToString { "gen=${it.revision} field=${it.field}" })
-            }
-
-            // 6) 提交成功后镜像到 live 槽（兼容旧 Core API；失败不影响权威读取）。
-            val liveConfigResult = saveSyncConfig(normalized)
-            if (liveConfigResult is SettingsSaveResult.Failed) {
-                warn("commitSyncProfile: live config mirror update failed for generation $generation — " +
-                    "generation store remains authoritative")
-            }
-            val liveSecretsResult = saveSyncSecrets(secrets)
-            if (liveSecretsResult is SettingsSaveResult.Failed) {
-                warn("commitSyncProfile: live secrets mirror update failed for generation $generation — " +
-                    "generation-staged secrets remain valid for readers")
-            }
-            SettingsSaveResult.Success
+    private suspend fun migrateLegacyProfileIfNeeded(): SettingsSaveResult? {
+        val initialState = profileStore.readState()
+        if (initialState.hasCommittedProfile) return null
+        val legacyConfig = loadSyncConfigStrict()
+        if (legacyConfig == null) {
+            warn("commitSyncProfile: strict read of legacy config failed — aborting migration before any write")
+            return SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_CONFIG, 0L)))
         }
+        val legacySecrets = loadLegacySyncSecretsTyped()
+        if (legacySecrets is GenerationSecretsReadResult.Failed) {
+            warn("commitSyncProfile: legacy secrets read failed — aborting migration before any write")
+            return SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_SECRETS, 0L)))
+        }
+        val migrationSecrets =
+            if (legacySecrets is GenerationSecretsReadResult.Found) {
+                legacySecrets.secrets
+            } else {
+                // #595 四：legacy 明确未配置（读取成功但无 token）→ 迁移空凭据；
+                // 读取失败已在上面返回，不会把失败伪装成"未配置"。
+                SyncSecrets()
+            }
+        val migrationGeneration = profileStore.nextGeneration()
+        val migrationResult = saveSyncSecretsForGeneration(migrationGeneration, migrationSecrets)
+        if (migrationResult is SettingsSaveResult.Failed) {
+            warn(
+                "commitSyncProfile: legacy secrets migration to generation " +
+                    "$migrationGeneration failed — aborting",
+            )
+            return migrationResult
+        }
+        profileStore.stageConfig(migrationGeneration, configJson.toJson(legacyConfig.normalize()))
+        profileStore.stageSecrets(migrationGeneration)
+        profileStore.commitGeneration(migrationGeneration, configJson.toJson(legacyConfig.normalize()))
+        return null
+    }
+
+    suspend fun commitSyncProfile(
+        config: SyncConfig,
+        secrets: SyncSecrets,
+    ): SettingsSaveResult {
+        val committed =
+            SyncProfileGate.commitExclusive {
+                migrateLegacyProfileIfNeeded()?.let { return@commitExclusive it }
+
+                val generation = profileStore.nextGeneration()
+                val normalized = config.normalize()
+
+                // 2) stagedConfig(generation=N)：只写 DataStore staging 标记与载荷，
+                //    不触碰 live Core 配置文件（marker 提交前不得发布新 config）。
+                profileStore.stageConfig(generation, configJson.toJson(normalized))
+
+                // 3) stagedSecrets(generation=N)：凭据按 generation 写入安全存储。
+                val secretsResult = saveSyncSecretsForGeneration(generation, secrets)
+                if (secretsResult is SettingsSaveResult.Failed) {
+                    // 不写回旧配置（旧 generation 仍由 activeGeneration 标记继续有效）。
+                    warn(
+                        "commitSyncProfile: staged secrets save failed for generation $generation — " +
+                            "active generation unchanged, readers keep using the committed version",
+                    )
+                    return@commitExclusive secretsResult
+                }
+                profileStore.stageSecrets(generation)
+
+                // 4) 原子更新 activeGeneration=N（单一 DataStore updateData，
+                //    committed_config_json 与 activeGeneration 同时推进）。
+                profileStore.commitGeneration(generation, configJson.toJson(normalized))
+
+                // 5) #595 五：提交成功后执行安全清理 — 保留 current + previous 一个
+                //    可回滚版本，删除更旧 generation 的凭据；清理崩溃遗留的
+                //    未提交 staged generation 标记。清理失败只记录类型化错误，
+                //    不回滚已成功的提交（旧凭据只是安全存储中的冗余条目）。
+                val cleanupResult = cleanupStaleGenerationCredentials(generation)
+                if (cleanupResult is SettingsSaveResult.Failed) {
+                    warn(
+                        "commitSyncProfile: generation cleanup reported typed failures: " +
+                            cleanupResult.failures.joinToString { "gen=${it.revision} field=${it.field}" },
+                    )
+                }
+
+                // 6) 提交成功后镜像到 live 槽（兼容旧 Core API；失败不影响权威读取）。
+                val liveConfigResult = saveSyncConfig(normalized)
+                if (liveConfigResult is SettingsSaveResult.Failed) {
+                    warn(
+                        "commitSyncProfile: live config mirror update failed for generation $generation — " +
+                            "generation store remains authoritative",
+                    )
+                }
+                val liveSecretsResult = saveSyncSecrets(secrets)
+                if (liveSecretsResult is SettingsSaveResult.Failed) {
+                    warn(
+                        "commitSyncProfile: live secrets mirror update failed for generation $generation — " +
+                            "generation-staged secrets remain valid for readers",
+                    )
+                }
+                SettingsSaveResult.Success
+            }
         // 7) 只有提交成功后调度 WorkManager，且必须在 commitExclusive 释放之后：
         //    scheduleFromSettings 会获取 snapshotExclusive，锁内调用会自死锁。
         //    直接使用本仓库（应用容器实例），不新建 SettingsRepository 读半成品。
@@ -562,7 +611,10 @@ class SettingsRepository(
         return syncBridge.performSyncDryRun(config)
     }
 
-    fun performSync(config: SyncConfig, forceSync: Boolean = false): BridgeResult<SyncResult> {
+    fun performSync(
+        config: SyncConfig,
+        forceSync: Boolean = false,
+    ): BridgeResult<SyncResult> {
         return syncBridge.performSync(config, forceSync)
     }
 
@@ -596,7 +648,10 @@ class SettingsRepository(
      * 确保设备信息已写入 app-meta/device/current_device.json。
      * 通过 Core 层 ensure_device_info 实现，不依赖 SharedPreferences。
      */
-    fun ensureDeviceInfo(platform: String, deviceClass: String): Boolean {
+    fun ensureDeviceInfo(
+        platform: String,
+        deviceClass: String,
+    ): Boolean {
         return when (val result = settingsBridge.ensureDeviceInfo(platform, deviceClass)) {
             is BridgeResult.Success -> result.data
             is BridgeResult.Error -> {
@@ -636,7 +691,10 @@ class SettingsRepository(
         }
     }
 
-    fun loadPaletteRecord(deviceId: String, fingerprint: String): com.xiwei.sujian.model.ThemePaletteRecord? {
+    fun loadPaletteRecord(
+        deviceId: String,
+        fingerprint: String,
+    ): com.xiwei.sujian.model.ThemePaletteRecord? {
         return when (val result = settingsBridge.loadPaletteRecord(deviceId, fingerprint)) {
             is BridgeResult.Success -> result.data?.let { ThemeDtoMapper.fromDto(it) }
             is BridgeResult.Error -> {
@@ -647,7 +705,10 @@ class SettingsRepository(
         }
     }
 
-    fun deletePaletteRecord(deviceId: String, fingerprint: String): Boolean {
+    fun deletePaletteRecord(
+        deviceId: String,
+        fingerprint: String,
+    ): Boolean {
         return when (val result = settingsBridge.deletePaletteRecord(deviceId, fingerprint)) {
             is BridgeResult.Success -> result.data
             is BridgeResult.Error -> {
@@ -661,39 +722,42 @@ class SettingsRepository(
     fun saveDynamicColorPaletteToCatalog(
         lightScheme: com.xiwei.sujian.model.ThemeColorScheme,
         darkScheme: com.xiwei.sujian.model.ThemeColorScheme,
-        deviceClass: String? = null
+        deviceClass: String? = null,
     ) {
         try {
             val lightDto = ThemeDtoMapper.toDto(lightScheme)
             val darkDto = ThemeDtoMapper.toDto(darkScheme)
             val deviceInfo = loadDeviceInfo()
             val deviceId = deviceInfo.deviceId.ifEmpty { "legacy" }
-            val effectiveDeviceClass = deviceClass
-                ?: deviceInfo.deviceClass.ifEmpty { detectDeviceClass() }
+            val effectiveDeviceClass =
+                deviceClass
+                    ?: deviceInfo.deviceClass.ifEmpty { detectDeviceClass() }
 
-            val fingerprint = when (val r = settingsBridge.computePaletteFingerprint(lightDto, darkDto)) {
-                is BridgeResult.Success -> r.data
-                is BridgeResult.Error -> {
-                    warn("Failed to compute palette fingerprint: ${r.fullEnvelope}")
-                    return
+            val fingerprint =
+                when (val r = settingsBridge.computePaletteFingerprint(lightDto, darkDto)) {
+                    is BridgeResult.Success -> r.data
+                    is BridgeResult.Error -> {
+                        warn("Failed to compute palette fingerprint: ${r.fullEnvelope}")
+                        return
+                    }
+                    BridgeResult.NotLoaded -> return
                 }
-                BridgeResult.NotLoaded -> return
-            }
             val paletteId = "$deviceId:$fingerprint"
 
-            val record = uniffi.writer_core.ThemePaletteRecordDto(
-                schemaVersion = 1u,
-                paletteId = paletteId,
-                paletteFingerprint = fingerprint,
-                source = "android_dynamic_color",
-                sourcePlatform = "android",
-                sourceDeviceId = deviceId,
-                sourceDeviceClass = effectiveDeviceClass,
-                capturedAtMs = System.currentTimeMillis(),
-                variant = "system_selected",
-                lightScheme = lightDto,
-                darkScheme = darkDto
-            )
+            val record =
+                uniffi.writer_core.ThemePaletteRecordDto(
+                    schemaVersion = 1u,
+                    paletteId = paletteId,
+                    paletteFingerprint = fingerprint,
+                    source = "android_dynamic_color",
+                    sourcePlatform = "android",
+                    sourceDeviceId = deviceId,
+                    sourceDeviceClass = effectiveDeviceClass,
+                    capturedAtMs = System.currentTimeMillis(),
+                    variant = "system_selected",
+                    lightScheme = lightDto,
+                    darkScheme = darkDto,
+                )
 
             when (val saveResult = settingsBridge.savePaletteRecord(record)) {
                 is BridgeResult.Error -> warn("Failed to save palette record: ${saveResult.fullEnvelope}")
@@ -714,14 +778,16 @@ class SettingsRepository(
         }
     }
 
-    fun detectDeviceClassFromFoldFeature(hasFoldFeature: Boolean, smallestWidthDp: Int): String {
+    fun detectDeviceClassFromFoldFeature(
+        hasFoldFeature: Boolean,
+        smallestWidthDp: Int,
+    ): String {
         return when {
             hasFoldFeature -> "foldable"
             smallestWidthDp >= 600 -> "tablet"
             else -> "phone"
         }
     }
-
 
     // ── UI 层安全方法：不暴露 BridgeResult ──
 
@@ -732,10 +798,11 @@ class SettingsRepository(
     fun performSyncDryRunTyped(config: SyncConfig): SyncDryRunOutcome {
         return when (val result = performSyncDryRun(config)) {
             is BridgeResult.Success -> SyncDryRunOutcome.Success(result.data)
-            is BridgeResult.Error -> SyncDryRunOutcome.Error(
-                syncFailureKind = result.syncFailureKind ?: SyncFailureKind.Fatal,
-                message = result.message,
-            )
+            is BridgeResult.Error ->
+                SyncDryRunOutcome.Error(
+                    syncFailureKind = result.syncFailureKind ?: SyncFailureKind.Fatal,
+                    message = result.message,
+                )
             BridgeResult.NotLoaded -> SyncDryRunOutcome.NotLoaded
         }
     }
@@ -746,10 +813,11 @@ class SettingsRepository(
     fun performSyncDiagnosticsTyped(config: SyncConfig): SyncDiagnosticsOutcome {
         return when (val result = performSyncDiagnostics(config)) {
             is BridgeResult.Success -> SyncDiagnosticsOutcome.Success(result.data)
-            is BridgeResult.Error -> SyncDiagnosticsOutcome.Error(
-                syncFailureKind = result.syncFailureKind ?: SyncFailureKind.Fatal,
-                message = result.message,
-            )
+            is BridgeResult.Error ->
+                SyncDiagnosticsOutcome.Error(
+                    syncFailureKind = result.syncFailureKind ?: SyncFailureKind.Fatal,
+                    message = result.message,
+                )
             BridgeResult.NotLoaded -> SyncDiagnosticsOutcome.NotLoaded
         }
     }
@@ -758,13 +826,17 @@ class SettingsRepository(
 /** 试运行结果 — 替代 BridgeResult<SyncPlan> 的 app 层类型。 */
 sealed class SyncDryRunOutcome {
     data class Success(val plan: com.xiwei.sujian.model.SyncPlan) : SyncDryRunOutcome()
+
     data class Error(val syncFailureKind: SyncFailureKind, val message: String) : SyncDryRunOutcome()
+
     data object NotLoaded : SyncDryRunOutcome()
 }
 
 /** 连接诊断结果 — 替代 BridgeResult<SyncDiagnosticsResult> 的 app 层类型。 */
 sealed class SyncDiagnosticsOutcome {
     data class Success(val result: com.xiwei.sujian.model.SyncDiagnosticsResult) : SyncDiagnosticsOutcome()
+
     data class Error(val syncFailureKind: SyncFailureKind, val message: String) : SyncDiagnosticsOutcome()
+
     data object NotLoaded : SyncDiagnosticsOutcome()
 }

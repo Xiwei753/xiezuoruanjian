@@ -14,7 +14,7 @@ interface CursorAnchorAdapter {
         selectionStart: Int,
         selectionEnd: Int,
         textBeforeCursor: String,
-        textAfterCursor: String
+        textAfterCursor: String,
     )
 
     /** 请求系统更新候选框位置 */
@@ -29,5 +29,5 @@ data class NormalizedCursorRect(
     val x: Double,
     val top: Double,
     val bottom: Double,
-    val baselineY: Double
+    val baselineY: Double,
 )

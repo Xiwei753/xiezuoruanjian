@@ -17,14 +17,13 @@ import org.junit.Test
  * 并设置 `isFailOnNoMatchingTests = true` 防止过滤被静默掏空。
  */
 class AiFeatureGateTest {
-
     @Test
     fun flavor_is_ai() {
         // BuildConfig.FLAVOR 由 AGP 按 flavorDimensions "ai" 生成，
         // ai 变体下值为 "ai"，noAi 变体下值为 "noAi"。
         assertTrue(
             "AI flavor 的 BuildConfig.FLAVOR 必须为 'ai'，实际为 ${BuildConfig.FLAVOR}",
-            "ai" == BuildConfig.FLAVOR
+            "ai" == BuildConfig.FLAVOR,
         )
     }
 
@@ -33,7 +32,7 @@ class AiFeatureGateTest {
         // 反向断言：防止 flavor 配置被错误地回退到 noAi。
         assertFalse(
             "AI flavor 不应等于 'noAi'，实际为 ${BuildConfig.FLAVOR}",
-            "noAi" == BuildConfig.FLAVOR
+            "noAi" == BuildConfig.FLAVOR,
         )
     }
 }

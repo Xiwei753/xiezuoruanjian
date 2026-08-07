@@ -1,8 +1,8 @@
 package com.xiwei.sujian.ui
 
-//! # 编辑器内容编辑操作（从 EditorViewModel 拆分）
-//!
-//! 正文变更处理、写作统计上报、字数计算。
+// ! # 编辑器内容编辑操作（从 EditorViewModel 拆分）
+// !
+// ! 正文变更处理、写作统计上报、字数计算。
 
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -13,10 +13,11 @@ fun EditorViewModel.onContentChanged(newContent: String) {
     if (isLoadingChapter) return
     if (inputFrozen) return
 
-    _uiState.value = currentState.copy(
-        content = newContent,
-        saveStatus = SaveStatus.Unsaved
-    )
+    _uiState.value =
+        currentState.copy(
+            content = newContent,
+            saveStatus = SaveStatus.Unsaved,
+        )
 
     // #595 七：空正文不能靠字符串猜测"是否要保存" — 用户把非空正文编辑为空
     // 是类型化 ClearDocument 语义（随后 autosave/requestSave 走 Clear 落盘，
@@ -38,22 +39,27 @@ fun EditorViewModel.onContentChanged(newContent: String) {
     }
 }
 
-fun EditorViewModel.reportWritingEvent(oldText: String, newText: String) {
+fun EditorViewModel.reportWritingEvent(
+    oldText: String,
+    newText: String,
+) {
     val session = currentSession ?: return
 
     val nowMs = System.currentTimeMillis()
     if (statsLastEventMs == 0L || (nowMs - statsLastEventMs) > 5 * 60 * 1000) {
         statsSessionId = java.util.UUID.randomUUID().toString()
     }
-    val durationSeconds = if (statsLastEventMs > 0L) {
-        ((nowMs - statsLastEventMs) / 1000).toUInt()
-    } else {
-        0u
-    }
+    val durationSeconds =
+        if (statsLastEventMs > 0L) {
+            ((nowMs - statsLastEventMs) / 1000).toUInt()
+        } else {
+            0u
+        }
     statsLastEventMs = nowMs
 
     workspaceRepository.processWritingEvent(
-        statsDeviceId, "android", session.projectId, session.volumeId, session.chapterId, oldText, newText, durationSeconds, statsSessionId
+        statsDeviceId, "android", session.projectId, session.volumeId, session.chapterId,
+        oldText, newText, durationSeconds, statsSessionId,
     )
 }
 
@@ -68,19 +74,20 @@ fun EditorViewModel.updateStats(content: String) {
     val currentWordCount = calculateWordCount(content)
     val sessionAdded = currentWordCount - initialWordCount
     val elapsedMinutes = (System.currentTimeMillis() - sessionStartTime) / 60000.0
-    val speed = if (elapsedMinutes > 0 && sessionAdded > 0) {
-        (sessionAdded / elapsedMinutes).toInt()
-    } else {
-        0
-    }
-    _uiState.value = _uiState.value.copy(
-        wordCount = currentWordCount,
-        sessionAdded = sessionAdded,
-        speed = speed
-    )
+    val speed =
+        if (elapsedMinutes > 0 && sessionAdded > 0) {
+            (sessionAdded / elapsedMinutes).toInt()
+        } else {
+            0
+        }
+    _uiState.value =
+        _uiState.value.copy(
+            wordCount = currentWordCount,
+            sessionAdded = sessionAdded,
+            speed = speed,
+        )
 }
 
 fun EditorViewModel.calculateWordCount(text: String): Int {
     return workspaceRepository.calculateWordCount(text)
 }
-

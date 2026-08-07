@@ -4,8 +4,8 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
-import com.xiwei.sujian.test.testime.TestInputMethodService
 import com.xiwei.sujian.test.testime.TestImeCommandService
+import com.xiwei.sujian.test.testime.TestInputMethodService
 
 /**
  * Deterministic command channel for the instrumented IME tests (issue #589).
@@ -27,42 +27,54 @@ import com.xiwei.sujian.test.testime.TestImeCommandService
  * - [setComposingRegion]/[setSelection] take UTF-16 offsets.
  */
 object TestImeCommands {
-
     const val IME_COMPONENT = TestInputMethodService.COMPONENT_ID
 
-    private val imeComponentName = ComponentName.unflattenFromString(TestImeCommandService.COMPONENT_ID)
-        ?: error("Invalid IME command component id: ${TestImeCommandService.COMPONENT_ID}")
+    private val imeComponentName =
+        ComponentName.unflattenFromString(TestImeCommandService.COMPONENT_ID)
+            ?: error("Invalid IME command component id: ${TestImeCommandService.COMPONENT_ID}")
 
-    fun commitText(context: Context, text: String, cursor: Int = 1) {
+    fun commitText(
+        context: Context,
+        text: String,
+        cursor: Int = 1,
+    ) {
         send(
             context,
             TestInputMethodService.COMMAND_COMMIT_TEXT,
             Bundle().apply {
                 putString(TestInputMethodService.EXTRA_TEXT, text)
                 putInt(TestInputMethodService.EXTRA_CURSOR, cursor)
-            }
+            },
         )
     }
 
-    fun setComposingText(context: Context, text: String, cursor: Int = 1) {
+    fun setComposingText(
+        context: Context,
+        text: String,
+        cursor: Int = 1,
+    ) {
         send(
             context,
             TestInputMethodService.COMMAND_SET_COMPOSING_TEXT,
             Bundle().apply {
                 putString(TestInputMethodService.EXTRA_TEXT, text)
                 putInt(TestInputMethodService.EXTRA_CURSOR, cursor)
-            }
+            },
         )
     }
 
-    fun setComposingRegion(context: Context, startUtf16: Int, endUtf16: Int) {
+    fun setComposingRegion(
+        context: Context,
+        startUtf16: Int,
+        endUtf16: Int,
+    ) {
         send(
             context,
             TestInputMethodService.COMMAND_SET_COMPOSING_REGION,
             Bundle().apply {
                 putInt(TestInputMethodService.EXTRA_START, startUtf16)
                 putInt(TestInputMethodService.EXTRA_END, endUtf16)
-            }
+            },
         )
     }
 
@@ -70,18 +82,26 @@ object TestImeCommands {
         send(context, TestInputMethodService.COMMAND_FINISH_COMPOSING_TEXT)
     }
 
-    fun setSelection(context: Context, startUtf16: Int, endUtf16: Int) {
+    fun setSelection(
+        context: Context,
+        startUtf16: Int,
+        endUtf16: Int,
+    ) {
         send(
             context,
             TestInputMethodService.COMMAND_SET_SELECTION,
             Bundle().apply {
                 putInt(TestInputMethodService.EXTRA_START, startUtf16)
                 putInt(TestInputMethodService.EXTRA_END, endUtf16)
-            }
+            },
         )
     }
 
-    private fun send(context: Context, command: String, extras: Bundle = Bundle()) {
+    private fun send(
+        context: Context,
+        command: String,
+        extras: Bundle = Bundle(),
+    ) {
         val intent = Intent().setComponent(imeComponentName)
         intent.putExtra(TestInputMethodService.EXTRA_COMMAND, command)
         intent.putExtras(extras)

@@ -13,15 +13,15 @@ import org.junit.Test
  * - effective() 正确派生。
  */
 class MotionPolicyStateFlowTest {
-
     @Test
     fun effectiveReduceMotionDisablesEverything() {
-        val policy = EditorMotionPolicy(
-            textEnabled = true,
-            cursorEnabled = true,
-            coordinated = true,
-            reduceMotion = true,
-        )
+        val policy =
+            EditorMotionPolicy(
+                textEnabled = true,
+                cursorEnabled = true,
+                coordinated = true,
+                reduceMotion = true,
+            )
         val effective = policy.effective()
         assertFalse(effective.textEnabled)
         assertFalse(effective.cursorEnabled)

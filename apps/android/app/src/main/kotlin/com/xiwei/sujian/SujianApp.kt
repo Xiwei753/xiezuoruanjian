@@ -10,11 +10,10 @@ import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.diagnostics.EditorEventRingBuffer
 import java.io.File
-import java.io.PrintWriter
 import java.io.FileWriter
+import java.io.PrintWriter
 
 class SujianApp : Application(), DefaultLifecycleObserver, com.xiwei.sujian.runtime.SujianAppDependenciesProvider {
-
     private var autoSyncScheduler: AutoSyncScheduler? = null
 
     /**
@@ -51,7 +50,12 @@ class SujianApp : Application(), DefaultLifecycleObserver, com.xiwei.sujian.runt
             try {
                 val crashFile = File(filesDir, "last_crash.txt")
                 val writer = PrintWriter(FileWriter(crashFile, false))
-                writer.println("Crash at ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())}")
+                writer.println(
+                    "Crash at ${java.text.SimpleDateFormat(
+                        "yyyy-MM-dd HH:mm:ss",
+                        java.util.Locale.US,
+                    ).format(java.util.Date())}",
+                )
                 writer.println("Thread: ${thread.name}")
                 writer.println()
                 val redactedTrace = DiagnosticsLogger.redactStackTrace(throwable)
@@ -60,7 +64,8 @@ class SujianApp : Application(), DefaultLifecycleObserver, com.xiwei.sujian.runt
                 writer.close()
                 DiagnosticsLogger.e("SujianApp", "Uncaught exception", throwable)
                 DiagnosticsLogger.flush()
-            } catch (_: Exception) {}
+            } catch (_: Exception) {
+            }
             if (defaultHandler != null) {
                 defaultHandler.uncaughtException(thread, throwable)
             } else {
@@ -83,8 +88,16 @@ class SujianApp : Application(), DefaultLifecycleObserver, com.xiwei.sujian.runt
         autoSyncScheduler?.stop()
         val result = BridgeProvider.getStarmapBridge(this).flushAllStarmapStores()
         when (result) {
-            is BridgeResult.Error -> DiagnosticsLogger.e("SujianApp", "flushAllStarmapStores failed: ${result.fullEnvelope}")
-            BridgeResult.NotLoaded -> DiagnosticsLogger.w("SujianApp", "flushAllStarmapStores skipped: native library not loaded")
+            is BridgeResult.Error ->
+                DiagnosticsLogger.e(
+                    "SujianApp",
+                    "flushAllStarmapStores failed: ${result.fullEnvelope}",
+                )
+            BridgeResult.NotLoaded ->
+                DiagnosticsLogger.w(
+                    "SujianApp",
+                    "flushAllStarmapStores skipped: native library not loaded",
+                )
             is BridgeResult.Success -> {}
         }
     }

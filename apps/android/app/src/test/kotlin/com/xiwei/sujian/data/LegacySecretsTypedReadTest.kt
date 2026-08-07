@@ -17,7 +17,6 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class LegacySecretsTypedReadTest {
-
     private fun createRepo(): SettingsRepository {
         val context = org.robolectric.RuntimeEnvironment.getApplication()
         return SettingsRepository(context)
@@ -35,11 +34,12 @@ class LegacySecretsTypedReadTest {
 
     @Test
     fun snapshotSyncProfile_neverMasksReadFailureAsNotConfigured() {
-        val result = kotlinx.coroutines.runBlocking {
-            SyncProfileGate.snapshotExclusive {
-                createRepo().snapshotSyncProfile()
+        val result =
+            kotlinx.coroutines.runBlocking {
+                SyncProfileGate.snapshotExclusive {
+                    createRepo().snapshotSyncProfile()
+                }
             }
-        }
         assertTrue(
             "读取失败必须返回 SyncProfileReadResult.Failed，不得伪装成 NotConfigured，实际: $result",
             result is SyncProfileReadResult.Failed,

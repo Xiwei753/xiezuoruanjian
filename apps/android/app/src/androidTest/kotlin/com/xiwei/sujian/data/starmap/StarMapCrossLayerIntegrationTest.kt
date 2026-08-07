@@ -3,8 +3,8 @@ package com.xiwei.sujian.data.starmap
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.data.StarMapBridge
-import com.xiwei.sujian.model.StarMapMeta
 import com.xiwei.sujian.model.StarMapGraphNode
+import com.xiwei.sujian.model.StarMapMeta
 import com.xiwei.sujian.model.StarMapNodeKind
 import com.xiwei.sujian.support.AndroidTestEnvironment
 import org.junit.Assert.assertEquals
@@ -18,7 +18,6 @@ import java.util.UUID
 
 @RunWith(AndroidJUnit4::class)
 class StarMapCrossLayerIntegrationTest {
-
     @get:Rule
     val testRule = AndroidTestEnvironment.TestDependenciesRule()
 
@@ -30,17 +29,20 @@ class StarMapCrossLayerIntegrationTest {
         return Triple(countingOps, bridge, repo)
     }
 
-    private fun requireStarmapId(createResult: BridgeResult<StarMapMeta>, operation: String): String {
+    private fun requireStarmapId(
+        createResult: BridgeResult<StarMapMeta>,
+        operation: String,
+    ): String {
         when (createResult) {
             is BridgeResult.Success -> return createResult.data.starmapId
             is BridgeResult.Error -> throw AssertionError(
                 "$operation: createStarmap returned BridgeResult.Error: " +
                     "errorCode=${createResult.code}, message=${createResult.message}, " +
                     "rawError=${createResult.envelope.rawError}, " +
-                    "messageKey=${createResult.envelope.messageKey}"
+                    "messageKey=${createResult.envelope.messageKey}",
             )
             BridgeResult.NotLoaded -> throw AssertionError(
-                "$operation: createStarmap returned NotLoaded — native library not available"
+                "$operation: createStarmap returned NotLoaded — native library not available",
             )
         }
     }
@@ -54,7 +56,8 @@ class StarMapCrossLayerIntegrationTest {
 
         var testException: Throwable? = null
         try {
-            val n1 = StarMapGraphNode(id = UUID.randomUUID().toString(), title = "角色A", kind = StarMapNodeKind.Character)
+            val n1 =
+                StarMapGraphNode(id = UUID.randomUUID().toString(), title = "角色A", kind = StarMapNodeKind.Character)
             val n2 = StarMapGraphNode(id = UUID.randomUUID().toString(), title = "事件B", kind = StarMapNodeKind.Event)
             val n3 = StarMapGraphNode(id = UUID.randomUUID().toString(), title = "地点C", kind = StarMapNodeKind.Location)
             assertTrue("add n1", repo.addStarmapNode(starmapId, n1, 50f, 60f) is BridgeResult.Success)
@@ -82,7 +85,9 @@ class StarMapCrossLayerIntegrationTest {
         } catch (t: Throwable) {
             testException = t
         } finally {
-            try { bridge.closeStarmapStore(starmapId) } catch (cleanup: Throwable) {
+            try {
+                bridge.closeStarmapStore(starmapId)
+            } catch (cleanup: Throwable) {
                 if (testException != null) {
                     testException.addSuppressed(cleanup)
                 } else {
@@ -102,7 +107,8 @@ class StarMapCrossLayerIntegrationTest {
 
         var testException: Throwable? = null
         try {
-            val n1 = StarMapGraphNode(id = UUID.randomUUID().toString(), title = "节点1", kind = StarMapNodeKind.Character)
+            val n1 =
+                StarMapGraphNode(id = UUID.randomUUID().toString(), title = "节点1", kind = StarMapNodeKind.Character)
             val n2 = StarMapGraphNode(id = UUID.randomUUID().toString(), title = "节点2", kind = StarMapNodeKind.Event)
             assertTrue("add n1", repo.addStarmapNode(starmapId, n1, 50f, 60f) is BridgeResult.Success)
             assertTrue("add n2", repo.addStarmapNode(starmapId, n2, 200f, 60f) is BridgeResult.Success)
@@ -125,7 +131,9 @@ class StarMapCrossLayerIntegrationTest {
         } catch (t: Throwable) {
             testException = t
         } finally {
-            try { bridge.closeStarmapStore(starmapId) } catch (cleanup: Throwable) {
+            try {
+                bridge.closeStarmapStore(starmapId)
+            } catch (cleanup: Throwable) {
                 if (testException != null) {
                     testException.addSuppressed(cleanup)
                 } else {
@@ -145,7 +153,8 @@ class StarMapCrossLayerIntegrationTest {
 
         var testException: Throwable? = null
         try {
-            val n1 = StarMapGraphNode(id = UUID.randomUUID().toString(), title = "角色X", kind = StarMapNodeKind.Character)
+            val n1 =
+                StarMapGraphNode(id = UUID.randomUUID().toString(), title = "角色X", kind = StarMapNodeKind.Character)
             val addResult1 = repo.addStarmapNode(starmapId, n1, 100f, 200f)
             assertTrue("add n1 must succeed", addResult1 is BridgeResult.Success)
             val node1Id = (addResult1 as BridgeResult.Success).data.id
@@ -173,7 +182,9 @@ class StarMapCrossLayerIntegrationTest {
         } catch (t: Throwable) {
             testException = t
         } finally {
-            try { bridge.closeStarmapStore(starmapId) } catch (cleanup: Throwable) {
+            try {
+                bridge.closeStarmapStore(starmapId)
+            } catch (cleanup: Throwable) {
                 if (testException != null) {
                     testException.addSuppressed(cleanup)
                 } else {
@@ -193,7 +204,8 @@ class StarMapCrossLayerIntegrationTest {
 
         var testException: Throwable? = null
         try {
-            val n1 = StarMapGraphNode(id = UUID.randomUUID().toString(), title = "视口内节点", kind = StarMapNodeKind.Character)
+            val n1 =
+                StarMapGraphNode(id = UUID.randomUUID().toString(), title = "视口内节点", kind = StarMapNodeKind.Character)
             assertTrue("add n1", repo.addStarmapNode(starmapId, n1, 50f, 60f) is BridgeResult.Success)
 
             val phase1 = repo.getStarmapPhasedSnapshot(starmapId, targetPhase = "CurrentViewportObjects")
@@ -208,9 +220,13 @@ class StarMapCrossLayerIntegrationTest {
             val phase2 = repo.advanceLoadPhase(starmapId, "PrefetchNearbyObjects", phase1Data.packageRevision)
             assertTrue("phase2 must succeed", phase2 is BridgeResult.Success)
             val phase2Data = (phase2 as BridgeResult.Success).data.data
-            assertTrue("phase2 must have at least as many nodes as phase1", phase2Data.graph.nodes.size >= phase1NodeCount)
+            assertTrue(
+                "phase2 must have at least as many nodes as phase1",
+                phase2Data.graph.nodes.size >= phase1NodeCount,
+            )
 
-            val n3 = StarMapGraphNode(id = UUID.randomUUID().toString(), title = "远处节点", kind = StarMapNodeKind.Location)
+            val n3 =
+                StarMapGraphNode(id = UUID.randomUUID().toString(), title = "远处节点", kind = StarMapNodeKind.Location)
             assertTrue("add n3", repo.addStarmapNode(starmapId, n3, 500f, 60f) is BridgeResult.Success)
 
             val phase3 = repo.advanceLoadPhase(starmapId, "BackgroundFullLoad", phase2Data.packageRevision)
@@ -227,7 +243,9 @@ class StarMapCrossLayerIntegrationTest {
         } catch (t: Throwable) {
             testException = t
         } finally {
-            try { bridge.closeStarmapStore(starmapId) } catch (cleanup: Throwable) {
+            try {
+                bridge.closeStarmapStore(starmapId)
+            } catch (cleanup: Throwable) {
                 if (testException != null) {
                     testException.addSuppressed(cleanup)
                 } else {
@@ -247,7 +265,8 @@ class StarMapCrossLayerIntegrationTest {
 
         var testException: Throwable? = null
         try {
-            val node = StarMapGraphNode(id = UUID.randomUUID().toString(), title = "原始标题", kind = StarMapNodeKind.Character)
+            val node =
+                StarMapGraphNode(id = UUID.randomUUID().toString(), title = "原始标题", kind = StarMapNodeKind.Character)
             val addResult = repo.addStarmapNode(starmapId, node, 100f, 100f)
             assertTrue("addStarmapNode must succeed", addResult is BridgeResult.Success)
             val nodeId = (addResult as BridgeResult.Success).data.id
@@ -272,7 +291,9 @@ class StarMapCrossLayerIntegrationTest {
         } catch (t: Throwable) {
             testException = t
         } finally {
-            try { bridge.closeStarmapStore(starmapId) } catch (cleanup: Throwable) {
+            try {
+                bridge.closeStarmapStore(starmapId)
+            } catch (cleanup: Throwable) {
                 if (testException != null) {
                     testException.addSuppressed(cleanup)
                 } else {
@@ -292,7 +313,8 @@ class StarMapCrossLayerIntegrationTest {
 
         var testException: Throwable? = null
         try {
-            val n1 = StarMapGraphNode(id = UUID.randomUUID().toString(), title = "保留节点", kind = StarMapNodeKind.Character)
+            val n1 =
+                StarMapGraphNode(id = UUID.randomUUID().toString(), title = "保留节点", kind = StarMapNodeKind.Character)
             val addResult1 = repo.addStarmapNode(starmapId, n1, 50f, 60f)
             assertTrue("add n1 must succeed", addResult1 is BridgeResult.Success)
             val node1Id = (addResult1 as BridgeResult.Success).data.id
@@ -320,7 +342,9 @@ class StarMapCrossLayerIntegrationTest {
         } catch (t: Throwable) {
             testException = t
         } finally {
-            try { bridge.closeStarmapStore(starmapId) } catch (cleanup: Throwable) {
+            try {
+                bridge.closeStarmapStore(starmapId)
+            } catch (cleanup: Throwable) {
                 if (testException != null) {
                     testException.addSuppressed(cleanup)
                 } else {
@@ -340,7 +364,8 @@ class StarMapCrossLayerIntegrationTest {
 
         var testException: Throwable? = null
         try {
-            val n1 = StarMapGraphNode(id = UUID.randomUUID().toString(), title = "保留节点", kind = StarMapNodeKind.Character)
+            val n1 =
+                StarMapGraphNode(id = UUID.randomUUID().toString(), title = "保留节点", kind = StarMapNodeKind.Character)
             val n2 = StarMapGraphNode(id = UUID.randomUUID().toString(), title = "待删节点", kind = StarMapNodeKind.Event)
             assertTrue("add n1", repo.addStarmapNode(starmapId, n1, 50f, 60f) is BridgeResult.Success)
             assertTrue("add n2", repo.addStarmapNode(starmapId, n2, 200f, 60f) is BridgeResult.Success)
@@ -363,7 +388,9 @@ class StarMapCrossLayerIntegrationTest {
         } catch (t: Throwable) {
             testException = t
         } finally {
-            try { bridge.closeStarmapStore(starmapId) } catch (cleanup: Throwable) {
+            try {
+                bridge.closeStarmapStore(starmapId)
+            } catch (cleanup: Throwable) {
                 if (testException != null) {
                     testException.addSuppressed(cleanup)
                 } else {
@@ -406,7 +433,9 @@ class StarMapCrossLayerIntegrationTest {
         } catch (t: Throwable) {
             testException = t
         } finally {
-            try { bridge.closeStarmapStore(starmapId) } catch (cleanup: Throwable) {
+            try {
+                bridge.closeStarmapStore(starmapId)
+            } catch (cleanup: Throwable) {
                 if (testException != null) {
                     testException.addSuppressed(cleanup)
                 } else {

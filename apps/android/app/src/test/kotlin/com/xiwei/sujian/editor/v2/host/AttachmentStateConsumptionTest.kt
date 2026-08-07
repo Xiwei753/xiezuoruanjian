@@ -18,7 +18,6 @@ import org.junit.Test
  * binding 状态，Attached 时编辑器始终显示，暂停/恢复由 View 内部处理。
  */
 class AttachmentStateConsumptionTest {
-
     @Test
     fun attachedWithMatchingTargetShowsEditor() {
         assertTrue(

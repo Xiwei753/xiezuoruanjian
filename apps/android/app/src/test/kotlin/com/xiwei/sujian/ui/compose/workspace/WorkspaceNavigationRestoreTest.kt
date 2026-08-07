@@ -7,7 +7,6 @@ import org.junit.Test
 
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
 class WorkspaceNavigationRestoreTest {
-
     @Test
     fun initialHistory_noProject_projectListOnly() {
         val chain = buildInitialHistory(SessionRestoreState.Destination.ProjectList)
@@ -39,11 +38,12 @@ class WorkspaceNavigationRestoreTest {
 
     @Test
     fun deriveLocation_consistentWithPaneKey_chainRoundTrip() {
-        val keys = listOf(
-            WorkspacePaneKey.ProjectList,
-            WorkspacePaneKey.ChapterTree("p1"),
-            WorkspacePaneKey.Editor("p1", "v1", "c1"),
-        )
+        val keys =
+            listOf(
+                WorkspacePaneKey.ProjectList,
+                WorkspacePaneKey.ChapterTree("p1"),
+                WorkspacePaneKey.Editor("p1", "v1", "c1"),
+            )
         val locations = keys.map { deriveWorkspaceLocation(it) }
         assertTrue(locations[0] is WorkspaceLocation.ProjectList)
         assertTrue(locations[1] is WorkspaceLocation.ChapterTree)
@@ -52,7 +52,6 @@ class WorkspaceNavigationRestoreTest {
 }
 
 class SessionRestoreStateTest {
-
     @Test
     fun loadingState_isDistinctFromReady() {
         val loading: SessionRestoreState = SessionRestoreState.Loading
@@ -77,7 +76,6 @@ class SessionRestoreStateTest {
 }
 
 class DeriveRestoreDestinationTest {
-
     @Test
     fun noProject_projectList() {
         assertEquals(

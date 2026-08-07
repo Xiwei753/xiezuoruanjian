@@ -3,7 +3,12 @@ package com.xiwei.sujian.data
 import android.content.Context
 import com.xiwei.sujian.R
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
-import com.xiwei.sujian.model.*
+import com.xiwei.sujian.model.ChapterMeta
+import com.xiwei.sujian.model.ChapterSaveReceipt
+import com.xiwei.sujian.model.Project
+import com.xiwei.sujian.model.ProjectStats
+import com.xiwei.sujian.model.RecentEdit
+import com.xiwei.sujian.model.Volume
 
 class WorkspaceRepository(private val context: Context, bridge: AppServiceBridge? = null) {
     private val appBridge = bridge ?: BridgeProvider.getAppServiceBridge(context)
@@ -18,8 +23,13 @@ class WorkspaceRepository(private val context: Context, bridge: AppServiceBridge
     init {
         when (val result = workspaceBridge.createWorkspaceIfNeeded()) {
             is BridgeResult.Error -> {
-                DiagnosticsLogger.e("WorkspaceRepository", context.getString(R.string.repo_workspace_init_failed, result.localizedMessage()))
-                throw RepositoryException(context.getString(R.string.repo_workspace_init_failed, result.localizedMessage()))
+                DiagnosticsLogger.e(
+                    "WorkspaceRepository",
+                    context.getString(R.string.repo_workspace_init_failed, result.localizedMessage()),
+                )
+                throw RepositoryException(
+                    context.getString(R.string.repo_workspace_init_failed, result.localizedMessage()),
+                )
             }
             BridgeResult.NotLoaded -> {
                 DiagnosticsLogger.e("WorkspaceRepository", context.getString(R.string.repo_native_not_loaded_init))
@@ -33,8 +43,13 @@ class WorkspaceRepository(private val context: Context, bridge: AppServiceBridge
     fun getProjects(): List<Project> {
         return when (val result = workspaceBridge.getProjects()) {
             is BridgeResult.Success -> result.data
-            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_get_projects_failed, result.localizedMessage()))
-            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded), SyncFailureKind.NativeUnavailable)
+            is BridgeResult.Error -> throw RepositoryException(
+                context.getString(R.string.repo_get_projects_failed, result.localizedMessage()),
+            )
+            BridgeResult.NotLoaded -> throw RepositoryException(
+                context.getString(R.string.repo_native_not_loaded),
+                SyncFailureKind.NativeUnavailable,
+            )
         }
     }
 
@@ -42,14 +57,21 @@ class WorkspaceRepository(private val context: Context, bridge: AppServiceBridge
         return when (val result = workspaceBridge.getRecentEdits()) {
             is BridgeResult.Success -> result.data
             is BridgeResult.Error -> {
-                DiagnosticsLogger.w("WorkspaceRepository", context.getString(R.string.repo_get_recent_edits_failed, result.localizedMessage()))
+                DiagnosticsLogger.w(
+                    "WorkspaceRepository",
+                    context.getString(R.string.repo_get_recent_edits_failed, result.localizedMessage()),
+                )
                 emptyList()
             }
             BridgeResult.NotLoaded -> emptyList()
         }
     }
 
-    fun recordRecentEdit(projectId: String, volumeId: String, chapterId: String) {
+    fun recordRecentEdit(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+    ) {
         workspaceBridge.recordRecentEdit(projectId, volumeId, chapterId)
     }
 
@@ -57,51 +79,101 @@ class WorkspaceRepository(private val context: Context, bridge: AppServiceBridge
         workspaceBridge.flushRecentEdits()
     }
 
-    fun getChapterContentWithMeta(projectId: String, volumeId: String, chapterId: String): Pair<String, ChapterMeta> {
+    fun getChapterContentWithMeta(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+    ): Pair<String, ChapterMeta> {
         return when (val result = writingBridge.openChapter(projectId, volumeId, chapterId)) {
             is BridgeResult.Success -> Pair(result.data.content, result.data.meta)
-            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_get_chapter_content_failed, result.localizedMessage()))
-            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded), SyncFailureKind.NativeUnavailable)
+            is BridgeResult.Error -> throw RepositoryException(
+                context.getString(R.string.repo_get_chapter_content_failed, result.localizedMessage()),
+            )
+            BridgeResult.NotLoaded -> throw RepositoryException(
+                context.getString(R.string.repo_native_not_loaded),
+                SyncFailureKind.NativeUnavailable,
+            )
         }
     }
 
-    fun updateChapterNote(projectId: String, volumeId: String, chapterId: String, note: String): Boolean {
+    fun updateChapterNote(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+        note: String,
+    ): Boolean {
         return when (val result = writingBridge.updateChapterNote(projectId, volumeId, chapterId, note)) {
             is BridgeResult.Success -> result.data
-            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_update_chapter_note_failed, result.localizedMessage()))
-            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded), SyncFailureKind.NativeUnavailable)
+            is BridgeResult.Error -> throw RepositoryException(
+                context.getString(R.string.repo_update_chapter_note_failed, result.localizedMessage()),
+            )
+            BridgeResult.NotLoaded -> throw RepositoryException(
+                context.getString(R.string.repo_native_not_loaded),
+                SyncFailureKind.NativeUnavailable,
+            )
         }
     }
 
     fun getVolumes(projectId: String): List<Volume> {
         return when (val result = workspaceBridge.getVolumes(projectId)) {
             is BridgeResult.Success -> result.data
-            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_get_volumes_failed, result.localizedMessage()))
-            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded), SyncFailureKind.NativeUnavailable)
+            is BridgeResult.Error -> throw RepositoryException(
+                context.getString(R.string.repo_get_volumes_failed, result.localizedMessage()),
+            )
+            BridgeResult.NotLoaded -> throw RepositoryException(
+                context.getString(R.string.repo_native_not_loaded),
+                SyncFailureKind.NativeUnavailable,
+            )
         }
     }
 
-    fun getChapters(projectId: String, volumeId: String): List<ChapterMeta> {
+    fun getChapters(
+        projectId: String,
+        volumeId: String,
+    ): List<ChapterMeta> {
         return when (val result = workspaceBridge.getChapters(projectId, volumeId)) {
             is BridgeResult.Success -> result.data
-            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_get_chapters_failed, result.localizedMessage()))
-            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded), SyncFailureKind.NativeUnavailable)
+            is BridgeResult.Error -> throw RepositoryException(
+                context.getString(R.string.repo_get_chapters_failed, result.localizedMessage()),
+            )
+            BridgeResult.NotLoaded -> throw RepositoryException(
+                context.getString(R.string.repo_native_not_loaded),
+                SyncFailureKind.NativeUnavailable,
+            )
         }
     }
 
-    fun getChapterContent(projectId: String, volumeId: String, chapterId: String): String {
+    fun getChapterContent(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+    ): String {
         return when (val result = writingBridge.openChapter(projectId, volumeId, chapterId)) {
             is BridgeResult.Success -> result.data.content
-            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_get_chapter_content_failed, result.localizedMessage()))
-            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded), SyncFailureKind.NativeUnavailable)
+            is BridgeResult.Error -> throw RepositoryException(
+                context.getString(R.string.repo_get_chapter_content_failed, result.localizedMessage()),
+            )
+            BridgeResult.NotLoaded -> throw RepositoryException(
+                context.getString(R.string.repo_native_not_loaded),
+                SyncFailureKind.NativeUnavailable,
+            )
         }
     }
 
-    fun saveChapterContent(projectId: String, volumeId: String, chapterId: String, content: String): BridgeResult<ChapterSaveReceipt> {
+    fun saveChapterContent(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+        content: String,
+    ): BridgeResult<ChapterSaveReceipt> {
         return writingBridge.saveChapterContent(projectId, volumeId, chapterId, content)
     }
 
-    fun clearChapterContent(projectId: String, volumeId: String, chapterId: String): BridgeResult<ChapterSaveReceipt> {
+    fun clearChapterContent(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+    ): BridgeResult<ChapterSaveReceipt> {
         return writingBridge.clearChapterContent(projectId, volumeId, chapterId)
     }
 
@@ -116,11 +188,11 @@ class WorkspaceRepository(private val context: Context, bridge: AppServiceBridge
         pastedChars: Int,
         aiInsertedChars: Int,
         durationSeconds: Int,
-        sessionId: String
+        sessionId: String,
     ): BridgeResult<Boolean> {
         return writingBridge.recordWritingEvent(
             deviceId, projectId, volumeId, chapterId,
-            source, insertedChars, deletedChars, pastedChars, aiInsertedChars, durationSeconds, sessionId
+            source, insertedChars, deletedChars, pastedChars, aiInsertedChars, durationSeconds, sessionId,
         )
     }
 
@@ -131,104 +203,202 @@ class WorkspaceRepository(private val context: Context, bridge: AppServiceBridge
     fun getProjectStats(projectId: String): ProjectStats {
         return when (val result = statsBridge.getProjectStats(projectId)) {
             is BridgeResult.Success -> result.data
-            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_get_project_stats_failed, result.localizedMessage()))
-            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded), SyncFailureKind.NativeUnavailable)
+            is BridgeResult.Error -> throw RepositoryException(
+                context.getString(R.string.repo_get_project_stats_failed, result.localizedMessage()),
+            )
+            BridgeResult.NotLoaded -> throw RepositoryException(
+                context.getString(R.string.repo_native_not_loaded),
+                SyncFailureKind.NativeUnavailable,
+            )
         }
     }
 
     fun createProject(title: String): Project {
         return when (val result = workspaceBridge.createProject(title)) {
             is BridgeResult.Success -> result.data
-            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_create_project_failed, result.localizedMessage()))
-            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded), SyncFailureKind.NativeUnavailable)
+            is BridgeResult.Error -> throw RepositoryException(
+                context.getString(R.string.repo_create_project_failed, result.localizedMessage()),
+            )
+            BridgeResult.NotLoaded -> throw RepositoryException(
+                context.getString(R.string.repo_native_not_loaded),
+                SyncFailureKind.NativeUnavailable,
+            )
         }
     }
 
-    fun createVolume(projectId: String, title: String): Volume {
+    fun createVolume(
+        projectId: String,
+        title: String,
+    ): Volume {
         return when (val result = workspaceBridge.createVolume(projectId, title)) {
             is BridgeResult.Success -> result.data
-            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_create_volume_failed, result.localizedMessage()))
-            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded), SyncFailureKind.NativeUnavailable)
+            is BridgeResult.Error -> throw RepositoryException(
+                context.getString(R.string.repo_create_volume_failed, result.localizedMessage()),
+            )
+            BridgeResult.NotLoaded -> throw RepositoryException(
+                context.getString(R.string.repo_native_not_loaded),
+                SyncFailureKind.NativeUnavailable,
+            )
         }
     }
 
-    fun createChapter(projectId: String, volumeId: String, title: String): ChapterMeta {
+    fun createChapter(
+        projectId: String,
+        volumeId: String,
+        title: String,
+    ): ChapterMeta {
         return when (val result = workspaceBridge.createChapter(projectId, volumeId, title)) {
             is BridgeResult.Success -> result.data
-            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_create_chapter_failed, result.localizedMessage()))
-            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded), SyncFailureKind.NativeUnavailable)
+            is BridgeResult.Error -> throw RepositoryException(
+                context.getString(R.string.repo_create_chapter_failed, result.localizedMessage()),
+            )
+            BridgeResult.NotLoaded -> throw RepositoryException(
+                context.getString(R.string.repo_native_not_loaded),
+                SyncFailureKind.NativeUnavailable,
+            )
         }
     }
 
-    fun renameProject(projectId: String, newTitle: String) {
+    fun renameProject(
+        projectId: String,
+        newTitle: String,
+    ) {
         when (val result = workspaceBridge.renameProject(projectId, newTitle)) {
             is BridgeResult.Success -> {}
-            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_rename_project_failed, result.localizedMessage()))
-            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded), SyncFailureKind.NativeUnavailable)
+            is BridgeResult.Error -> throw RepositoryException(
+                context.getString(R.string.repo_rename_project_failed, result.localizedMessage()),
+            )
+            BridgeResult.NotLoaded -> throw RepositoryException(
+                context.getString(R.string.repo_native_not_loaded),
+                SyncFailureKind.NativeUnavailable,
+            )
         }
     }
 
     fun deleteProject(projectId: String) {
         when (val result = workspaceBridge.deleteProject(projectId)) {
             is BridgeResult.Success -> {}
-            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_delete_project_failed, result.localizedMessage()))
-            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded), SyncFailureKind.NativeUnavailable)
+            is BridgeResult.Error -> throw RepositoryException(
+                context.getString(R.string.repo_delete_project_failed, result.localizedMessage()),
+            )
+            BridgeResult.NotLoaded -> throw RepositoryException(
+                context.getString(R.string.repo_native_not_loaded),
+                SyncFailureKind.NativeUnavailable,
+            )
         }
     }
 
     fun reorderProjects(orderedProjectIds: List<String>) {
         when (val result = workspaceBridge.reorderProjects(orderedProjectIds)) {
             is BridgeResult.Success -> {}
-            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_reorder_projects_failed, result.localizedMessage()))
-            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded), SyncFailureKind.NativeUnavailable)
+            is BridgeResult.Error -> throw RepositoryException(
+                context.getString(R.string.repo_reorder_projects_failed, result.localizedMessage()),
+            )
+            BridgeResult.NotLoaded -> throw RepositoryException(
+                context.getString(R.string.repo_native_not_loaded),
+                SyncFailureKind.NativeUnavailable,
+            )
         }
     }
 
-    fun renameVolume(projectId: String, volumeId: String, newTitle: String) {
+    fun renameVolume(
+        projectId: String,
+        volumeId: String,
+        newTitle: String,
+    ) {
         when (val result = workspaceBridge.renameVolume(projectId, volumeId, newTitle)) {
             is BridgeResult.Success -> {}
-            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_rename_volume_failed, result.localizedMessage()))
-            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded), SyncFailureKind.NativeUnavailable)
+            is BridgeResult.Error -> throw RepositoryException(
+                context.getString(R.string.repo_rename_volume_failed, result.localizedMessage()),
+            )
+            BridgeResult.NotLoaded -> throw RepositoryException(
+                context.getString(R.string.repo_native_not_loaded),
+                SyncFailureKind.NativeUnavailable,
+            )
         }
     }
 
-    fun deleteVolume(projectId: String, volumeId: String) {
+    fun deleteVolume(
+        projectId: String,
+        volumeId: String,
+    ) {
         when (val result = workspaceBridge.deleteVolume(projectId, volumeId)) {
             is BridgeResult.Success -> {}
-            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_delete_volume_failed, result.localizedMessage()))
-            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded), SyncFailureKind.NativeUnavailable)
+            is BridgeResult.Error -> throw RepositoryException(
+                context.getString(R.string.repo_delete_volume_failed, result.localizedMessage()),
+            )
+            BridgeResult.NotLoaded -> throw RepositoryException(
+                context.getString(R.string.repo_native_not_loaded),
+                SyncFailureKind.NativeUnavailable,
+            )
         }
     }
 
-    fun reorderVolumes(projectId: String, orderedVolumeIds: List<String>) {
+    fun reorderVolumes(
+        projectId: String,
+        orderedVolumeIds: List<String>,
+    ) {
         when (val result = workspaceBridge.reorderVolumes(projectId, orderedVolumeIds)) {
             is BridgeResult.Success -> {}
-            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_reorder_volumes_failed, result.localizedMessage()))
-            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded), SyncFailureKind.NativeUnavailable)
+            is BridgeResult.Error -> throw RepositoryException(
+                context.getString(R.string.repo_reorder_volumes_failed, result.localizedMessage()),
+            )
+            BridgeResult.NotLoaded -> throw RepositoryException(
+                context.getString(R.string.repo_native_not_loaded),
+                SyncFailureKind.NativeUnavailable,
+            )
         }
     }
 
-    fun renameChapter(projectId: String, volumeId: String, chapterId: String, newTitle: String) {
+    fun renameChapter(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+        newTitle: String,
+    ) {
         when (val result = workspaceBridge.renameChapter(projectId, volumeId, chapterId, newTitle)) {
             is BridgeResult.Success -> {}
-            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_rename_chapter_failed, result.localizedMessage()))
-            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded), SyncFailureKind.NativeUnavailable)
+            is BridgeResult.Error -> throw RepositoryException(
+                context.getString(R.string.repo_rename_chapter_failed, result.localizedMessage()),
+            )
+            BridgeResult.NotLoaded -> throw RepositoryException(
+                context.getString(R.string.repo_native_not_loaded),
+                SyncFailureKind.NativeUnavailable,
+            )
         }
     }
 
-    fun deleteChapter(projectId: String, volumeId: String, chapterId: String) {
+    fun deleteChapter(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+    ) {
         when (val result = workspaceBridge.deleteChapter(projectId, volumeId, chapterId)) {
             is BridgeResult.Success -> {}
-            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_delete_chapter_failed, result.localizedMessage()))
-            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded), SyncFailureKind.NativeUnavailable)
+            is BridgeResult.Error -> throw RepositoryException(
+                context.getString(R.string.repo_delete_chapter_failed, result.localizedMessage()),
+            )
+            BridgeResult.NotLoaded -> throw RepositoryException(
+                context.getString(R.string.repo_native_not_loaded),
+                SyncFailureKind.NativeUnavailable,
+            )
         }
     }
 
-    fun reorderChapters(projectId: String, volumeId: String, orderedChapterIds: List<String>) {
+    fun reorderChapters(
+        projectId: String,
+        volumeId: String,
+        orderedChapterIds: List<String>,
+    ) {
         when (val result = workspaceBridge.reorderChapters(projectId, volumeId, orderedChapterIds)) {
             is BridgeResult.Success -> {}
-            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_reorder_chapters_failed, result.localizedMessage()))
-            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded), SyncFailureKind.NativeUnavailable)
+            is BridgeResult.Error -> throw RepositoryException(
+                context.getString(R.string.repo_reorder_chapters_failed, result.localizedMessage()),
+            )
+            BridgeResult.NotLoaded -> throw RepositoryException(
+                context.getString(R.string.repo_native_not_loaded),
+                SyncFailureKind.NativeUnavailable,
+            )
         }
     }
 
@@ -247,9 +417,11 @@ class WorkspaceRepository(private val context: Context, bridge: AppServiceBridge
         oldText: String,
         newText: String,
         durationSeconds: UInt,
-        sessionId: String
+        sessionId: String,
     ): BridgeResult<Boolean> {
-        return writingBridge.processWritingEvent(deviceId, platform, projectId, volumeId, chapterId, oldText, newText, durationSeconds, sessionId)
+        return writingBridge.processWritingEvent(
+            deviceId, platform, projectId, volumeId, chapterId, oldText, newText,
+            durationSeconds, sessionId,
+        )
     }
-
 }

@@ -14,7 +14,6 @@ import org.junit.Test
  * （target/session/epoch/revision/hash），不只比较 revision 数字。
  */
 class DocumentSaveReceiptTrackerTest {
-
     private fun token(
         targetId: String = "t1",
         coreSessionId: ULong = 1UL,
@@ -87,7 +86,12 @@ class DocumentSaveReceiptTrackerTest {
         val t2 = token(targetId = "t2", coreSessionId = 2UL, rustRevision = 1L, textHash = "hash-1")
         tracker.record(t2)
         assertTrue(tracker.canFlush(t2, committedContentHash = "hash-1"))
-        assertTrue(tracker.canFlush(token(targetId = "t1", rustRevision = 5L, textHash = "hash-5"), committedContentHash = "hash-5"))
+        assertTrue(
+            tracker.canFlush(
+                token(targetId = "t1", rustRevision = 5L, textHash = "hash-5"),
+                committedContentHash = "hash-5",
+            ),
+        )
     }
 
     @Test
@@ -125,7 +129,10 @@ class DocumentSaveReceiptTrackerTest {
         tracker.record(token(coreSessionId = 1UL, rustRevision = 5L, textHash = "hash-5"))
         assertFalse(
             "不同 Rust session 的 revision 数值可以相同，不得跨 session 假成功",
-            tracker.canFlush(token(coreSessionId = 2UL, rustRevision = 5L, textHash = "hash-5"), committedContentHash = "hash-5"),
+            tracker.canFlush(
+                token(coreSessionId = 2UL, rustRevision = 5L, textHash = "hash-5"),
+                committedContentHash = "hash-5",
+            ),
         )
     }
 
@@ -135,7 +142,10 @@ class DocumentSaveReceiptTrackerTest {
         tracker.record(token(inputEpoch = 0L, rustRevision = 5L, textHash = "hash-5"))
         assertFalse(
             "章节切换后旧保存结果不匹配新 epoch",
-            tracker.canFlush(token(inputEpoch = 1L, rustRevision = 5L, textHash = "hash-5"), committedContentHash = "hash-5"),
+            tracker.canFlush(
+                token(inputEpoch = 1L, rustRevision = 5L, textHash = "hash-5"),
+                committedContentHash = "hash-5",
+            ),
         )
     }
 }

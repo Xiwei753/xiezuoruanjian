@@ -8,14 +8,14 @@ import androidx.compose.ui.platform.LocalContext
 import com.xiwei.sujian.designsystem.theme.ColorSource
 import com.xiwei.sujian.designsystem.theme.SujianDarkColorScheme
 import com.xiwei.sujian.designsystem.theme.SujianLightColorScheme
-import com.xiwei.sujian.designsystem.theme.SujianTheme
 import com.xiwei.sujian.designsystem.theme.SujianShapes
+import com.xiwei.sujian.designsystem.theme.SujianTheme
 import com.xiwei.sujian.designsystem.theme.SujianTypography
 import com.xiwei.sujian.designsystem.theme.hexToColor
 
 private fun schemeFromRecord(
     record: com.xiwei.sujian.model.ThemePaletteRecord,
-    isDark: Boolean
+    isDark: Boolean,
 ): androidx.compose.material3.ColorScheme {
     val scheme = if (isDark) record.darkScheme else record.lightScheme
     val base = if (isDark) SujianDarkColorScheme else SujianLightColorScheme
@@ -73,7 +73,7 @@ private fun schemeFromRecord(
 
 private fun schemeFromBuiltin(
     theme: com.xiwei.sujian.model.BuiltinTheme,
-    isDark: Boolean
+    isDark: Boolean,
 ): androidx.compose.material3.ColorScheme {
     val scheme = if (isDark) theme.darkScheme else theme.lightScheme
     val base = if (isDark) SujianDarkColorScheme else SujianLightColorScheme
@@ -132,38 +132,53 @@ private fun schemeFromBuiltin(
 @Composable
 fun SujianTheme(
     uiState: ThemeUiState = ThemeUiState(),
-    content: @Composable () -> Unit
+    content: @Composable () -> Unit,
 ) {
     val systemDark = isSystemInDarkTheme()
-    val isDark = when {
-        uiState.isDark -> true
-        uiState.isLight -> false
-        else -> systemDark
-    }
+    val isDark =
+        when {
+            uiState.isDark -> true
+            uiState.isLight -> false
+            else -> systemDark
+        }
     val context = LocalContext.current
 
-    val colorScheme = remember(uiState, isDark) {
-        when (uiState.resolvedColorSource) {
-            ColorSource.ANDROID_DYNAMIC -> {
-                if (uiState.dynamicColorEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    if (isDark) androidx.compose.material3.dynamicDarkColorScheme(context)
-                    else androidx.compose.material3.dynamicLightColorScheme(context)
-                } else {
-                    if (isDark) SujianDarkColorScheme else SujianLightColorScheme
+    val colorScheme =
+        remember(uiState, isDark) {
+            when (uiState.resolvedColorSource) {
+                ColorSource.ANDROID_DYNAMIC -> {
+                    if (uiState.dynamicColorEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        if (isDark) {
+                            androidx.compose.material3.dynamicDarkColorScheme(context)
+                        } else {
+                            androidx.compose.material3.dynamicLightColorScheme(context)
+                        }
+                    } else {
+                        if (isDark) SujianDarkColorScheme else SujianLightColorScheme
+                    }
+                }
+                ColorSource.SAVED_PALETTE -> {
+                    val record = uiState.selectedPaletteRecord
+                    if (record != null) {
+                        schemeFromRecord(record, isDark)
+                    } else if (isDark) {
+                        SujianDarkColorScheme
+                    } else {
+                        SujianLightColorScheme
+                    }
+                }
+                ColorSource.BUILT_IN -> {
+                    val builtin = uiState.selectedBuiltinTheme
+                    if (builtin != null) {
+                        schemeFromBuiltin(builtin, isDark)
+                    } else if (isDark) {
+                        SujianDarkColorScheme
+                    } else {
+                        SujianLightColorScheme
+                    }
                 }
             }
-            ColorSource.SAVED_PALETTE -> {
-                val record = uiState.selectedPaletteRecord
-                if (record != null) schemeFromRecord(record, isDark)
-                else if (isDark) SujianDarkColorScheme else SujianLightColorScheme
-            }
-            ColorSource.BUILT_IN -> {
-                val builtin = uiState.selectedBuiltinTheme
-                if (builtin != null) schemeFromBuiltin(builtin, isDark)
-                else if (isDark) SujianDarkColorScheme else SujianLightColorScheme
-            }
         }
-    }
 
     SujianTheme(
         colorScheme = colorScheme,

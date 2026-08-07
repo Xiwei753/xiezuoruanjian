@@ -1,55 +1,55 @@
 package com.xiwei.sujian.ui
 
-//! # 编辑器 ViewModel（Android UI 层 - ViewModel）
-//!
-//! 管理编辑器的 UI 状态、自动保存、设置同步、写作统计。
-//!
-//! ## 架构定位
-//!
-//! ```text
-//! EditorActivity → EditorViewModel → WorkspaceRepository → WritingBridge/WorkspaceBridge → Rust Core
-//! ```
-//!
-//! ## 职责边界
-//!
-//! - **做**：UI 状态管理、自动保存调度、设置加载/应用、写作统计上报、
-//!   章节打开事务（latest-wins + 提交前 session 预准备）
-//! - **不做**：文件 I/O（由 Rust Core 负责）、排版格式化（由 SujianEditorView 负责）
-//! - **不直接调用 legacy JNI adapter**：只通过 Repository 和领域 Bridge 间接调用
-//!
-//! ## 关键流程
-//!
-//! 1. **章节加载**：`requestOpenChapter()` → 保存旧章节 → 加载新章节 →
-//!   预准备 Rust session → 一次性提交（数据 + 会话 + 导航）
-//! 2. **自动保存**：`onContentChanged()` → `scheduleAutoSave()` → `performSave()`
-//! 3. **设置同步**：`onSettingsChanged()` → `reloadSettings()` → 更新 `EditorSettingsState`
-//! 4. **写作统计**：`onContentChanged()` → `reportWritingEvent()` → `WorkspaceRepository.processWritingEvent()`
-//!
-//! ## 线程模型
-//!
-//! - UI 操作在 `Dispatchers.Main`
-//! - 文件 I/O 在 `Dispatchers.IO`
-//! - 保存互斥锁 `saveMutex` 防止并发保存冲突
-//!
-//! ## #595 一：章节打开事务
-//!
-//! `requestOpenChapter` 是数据、Rust session、窗口和 Navigator 的同一次提交：
-//! 串行门 → requestId 校验 → 冻结旧章节输入 → 保存/flush A → 加载 B →
-//! 为 B 预准备 Rust session（提交前取得有效 snapshot/bind plan）→
-//! 再次确认 requestId 仍为最新 → 一次性提交 active=B/EditorUiState/EditorSessionState →
-//! 调用方提交业务选择并导航。过期请求在每个可见提交边界回滚临时状态并返回
-//! [ChapterSwitchResult.Stale]；保存/加载/session 预准备失败时 A 的状态、
-//! 输入回调和 Navigator 全部保持不变。
-//!
-//! 输入窗口防护：提交成功返回后 `inputFrozen` 保持 true，直到新章节的
-//! WritingPane 真实附着编辑器后调用 [confirmEditorAttached] 才解除 —
-//! 旧章节 A 的 View 在"提交 → 导航"窗口期内无法把输入写入已切到 B 的 ViewModel。
-//!
-//! ## #595 二：文档版本
-//!
-//! 正文更新事实携带 [com.xiwei.sujian.editor.v2.coordinator.DocumentVersion]
-//! （Repository contentHash + 同步 manifest 锚点），不再使用进程内 contentVersion
-//! 计数器；新旧判断由会话层 reducer 按版本锚点 + localDirty 完成。
+// ! # 编辑器 ViewModel（Android UI 层 - ViewModel）
+// !
+// ! 管理编辑器的 UI 状态、自动保存、设置同步、写作统计。
+// !
+// ! ## 架构定位
+// !
+// ! ```text
+// ! EditorActivity → EditorViewModel → WorkspaceRepository → WritingBridge/WorkspaceBridge → Rust Core
+// ! ```
+// !
+// ! ## 职责边界
+// !
+// ! - **做**：UI 状态管理、自动保存调度、设置加载/应用、写作统计上报、
+// !   章节打开事务（latest-wins + 提交前 session 预准备）
+// ! - **不做**：文件 I/O（由 Rust Core 负责）、排版格式化（由 SujianEditorView 负责）
+// ! - **不直接调用 legacy JNI adapter**：只通过 Repository 和领域 Bridge 间接调用
+// !
+// ! ## 关键流程
+// !
+// ! 1. **章节加载**：`requestOpenChapter()` → 保存旧章节 → 加载新章节 →
+// !   预准备 Rust session → 一次性提交（数据 + 会话 + 导航）
+// ! 2. **自动保存**：`onContentChanged()` → `scheduleAutoSave()` → `performSave()`
+// ! 3. **设置同步**：`onSettingsChanged()` → `reloadSettings()` → 更新 `EditorSettingsState`
+// ! 4. **写作统计**：`onContentChanged()` → `reportWritingEvent()` → `WorkspaceRepository.processWritingEvent()`
+// !
+// ! ## 线程模型
+// !
+// ! - UI 操作在 `Dispatchers.Main`
+// ! - 文件 I/O 在 `Dispatchers.IO`
+// ! - 保存互斥锁 `saveMutex` 防止并发保存冲突
+// !
+// ! ## #595 一：章节打开事务
+// !
+// ! `requestOpenChapter` 是数据、Rust session、窗口和 Navigator 的同一次提交：
+// ! 串行门 → requestId 校验 → 冻结旧章节输入 → 保存/flush A → 加载 B →
+// ! 为 B 预准备 Rust session（提交前取得有效 snapshot/bind plan）→
+// ! 再次确认 requestId 仍为最新 → 一次性提交 active=B/EditorUiState/EditorSessionState →
+// ! 调用方提交业务选择并导航。过期请求在每个可见提交边界回滚临时状态并返回
+// ! [ChapterSwitchResult.Stale]；保存/加载/session 预准备失败时 A 的状态、
+// ! 输入回调和 Navigator 全部保持不变。
+// !
+// ! 输入窗口防护：提交成功返回后 `inputFrozen` 保持 true，直到新章节的
+// ! WritingPane 真实附着编辑器后调用 [confirmEditorAttached] 才解除 —
+// ! 旧章节 A 的 View 在"提交 → 导航"窗口期内无法把输入写入已切到 B 的 ViewModel。
+// !
+// ! ## #595 二：文档版本
+// !
+// ! 正文更新事实携带 [com.xiwei.sujian.editor.v2.coordinator.DocumentVersion]
+// ! （Repository contentHash + 同步 manifest 锚点），不再使用进程内 contentVersion
+// ! 计数器；新旧判断由会话层 reducer 按版本锚点 + localDirty 完成。
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
@@ -57,37 +57,26 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.xiwei.sujian.R
+import com.xiwei.sujian.data.DocumentSaveReceiptTracker
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.data.WorkspaceDocumentGate
 import com.xiwei.sujian.data.WorkspaceRepository
-import com.xiwei.sujian.data.DocumentSaveReceiptTracker
-import com.xiwei.sujian.editor.v2.coordinator.DocumentFactOrigin
-import com.xiwei.sujian.editor.v2.coordinator.DocumentVersion
 import com.xiwei.sujian.editor.v2.coordinator.EditorSessionCoordinator
 import com.xiwei.sujian.editor.v2.coordinator.TargetDocumentFact
-import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
-import com.xiwei.sujian.model.LocalSettings
 import com.xiwei.sujian.runtime.SujianAppDependencies
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
-
 
 class EditorViewModel(
-    application: Application
+    application: Application,
 ) : AndroidViewModel(application) {
-
     // #595 一：依赖注入 — 必须由 SujianApp 进程级容器提供同一组 Repository。
     // 删除 fallback WorkspaceRepository(getApplication())/SettingsRepository(getApplication())
     // （旧实现会为首次打开章节创建独立 Repository，绕过进程级依赖容器）。
@@ -97,11 +86,13 @@ class EditorViewModel(
     internal var _sessionCoordinator: EditorSessionCoordinator? = null
 
     internal val workspaceRepository: WorkspaceRepository
-        get() = _workspaceRepository
-            ?: error("EditorViewModel 未注入 WorkspaceRepository — 必须通过 Factory(SujianAppDependencies) 创建")
+        get() =
+            _workspaceRepository
+                ?: error("EditorViewModel 未注入 WorkspaceRepository — 必须通过 Factory(SujianAppDependencies) 创建")
     internal val settingsRepository: SettingsRepository
-        get() = _settingsRepository
-            ?: error("EditorViewModel 未注入 SettingsRepository — 必须通过 Factory(SujianAppDependencies) 创建")
+        get() =
+            _settingsRepository
+                ?: error("EditorViewModel 未注入 SettingsRepository — 必须通过 Factory(SujianAppDependencies) 创建")
 
     // #595 五：同步观察使用 viewModelScope（随 ViewModel 自动取消），
     // 不再创建独立未管理 CoroutineScope。
@@ -132,17 +123,17 @@ class EditorViewModel(
         // 注册携带 owner token（本 VM 实例）：旧实例 onCleared 只能关闭自己的
         // 注册，不能清掉新实例的 flusher（Activity 重建/生命周期交错防护）。
         if (gateRegistration == null) {
-            gateRegistration = WorkspaceDocumentGate.register(
-            this,
-            flush = { requestSave().await() },
-            documentIdentity = {
-                val lease = _sessionCoordinator?.currentInputLease()
-                if (lease != null) "${lease.targetId}:${lease.sessionId}:${lease.epoch}" else null
-            },
-        )
+            gateRegistration =
+                WorkspaceDocumentGate.register(
+                    this,
+                    flush = { requestSave().await() },
+                    documentIdentity = {
+                        val lease = _sessionCoordinator?.currentInputLease()
+                        if (lease != null) "${lease.targetId}:${lease.sessionId}:${lease.epoch}" else null
+                    },
+                )
         }
     }
-
 
     /**
      * #595 二/三/五：同步完成后检查当前章节磁盘内容是否变更 —
@@ -153,9 +144,8 @@ class EditorViewModel(
      * 其他 target 时不得使用全局 committedVersion）；sourceVersion 使用真实
      * commit/manifest ID（lastSyncedCommit），不再用 lastSyncTime 时间锚点；
      * parentVersion=同步前磁盘版本 — 后续 flush/应用据此判断因果顺序。
+     * internal 暴露 viewModelScope 供 extension functions 使用。
      */
-
-    /** internal 暴露 viewModelScope 供 extension functions 使用。 */
     internal val editorScope: CoroutineScope get() = viewModelScope
 
     internal val _uiState = MutableStateFlow(EditorUiState())
@@ -249,54 +239,48 @@ class EditorViewModel(
      * - [kotlinx.coroutines.CancellationException] 重新抛出并恢复旧状态，
      *   不得当作普通加载失败处理；
      * - Success 返回后 [inputFrozen] 保持 true，直到新 pane 附着编辑器。
-     */
-
-    /**
+     *
+     *
      * 兼容入口 — 由 WritingPane 在直接进入正文（深链/恢复）时调用；
      * 与 [requestOpenChapter] 共用同一串行锁和 requestId 语义。
      */
-    suspend fun switchChapter(projectId: String, volumeId: String, chapterId: String, chapterTitle: String): ChapterSwitchResult =
-        requestOpenChapter(projectId, volumeId, chapterId, chapterTitle)
+    suspend fun switchChapter(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+        chapterTitle: String,
+    ): ChapterSwitchResult = requestOpenChapter(projectId, volumeId, chapterId, chapterTitle)
 
     /**
      * #595 一：判断给定章节是否为 ViewModel 当前已提交章节。
      * 防止切换事务提交后（业务选择/导航尚未落地的一帧内）旧 WritingPane 用
      * 新章节正文对旧 target 执行 beginEdit/外部替换。
-     */
-
-    /**
+     *
+     *
      * #595 一：新章节 pane 真实附着编辑器后解除输入冻结。
      * 只允许当前已提交章节的 target 解除；过期 pane 调用是 no-op。
-     */
-
-
-    /**
+     *
+     *
      * #595 三: 读取 Android 系统无障碍"减少动画"设置（Animator 时长缩放为 0 时启用）。
      * 这是系统级偏好，不属于 Core 编辑器设置；初始值与 Core 默认一致（false）。
-     */
-
-
-    /**
+     *
+     *
      * #595 一：加载章节内容并在成功时一次性提交 loading=false/content/hash，
      * 并发布 RepositoryLoaded 文档事实（真实 hash）。
      * 返回是否加载成功；失败时调用方（switchChapter 事务）负责回退会话指针。
      * #595 一：recordRecentEdit/统计/诊断属于提交完成后的独立操作 —
      * 这里只保留不参与失败判定的统计与诊断；recordRecentEdit 移到提交后。
-     */
-
-    /**
+     *
+     *
      * #595 二/三：同步合并事实已应用到 Rust session 后，同步更新 ViewModel 的
      * 正文/hash/保存状态/字数 — 禁止只更新 Rust session 不更新 ViewModel
      * （否则磁盘/Rust session/ViewModel 三份正文分裂）。
-     */
-
-    /**
+     *
+     *
      * #595 二：同步下载与本地未保存编辑冲突 — 类型化冲突通知，
      * 不覆盖用户输入（reducer 已拒绝直接 reset）。
-     */
-
-
-    /**
+     *
+     *
      * #595 三/七：同步前 flush — 把当前屏幕正文（revision 精确锚定）推入保存队列
      * 并等待持久化屏障：只有该 revision 的正文已得到保存回执才返回 true。
      *
@@ -304,7 +288,6 @@ class EditorViewModel(
      * - 空正文 + 未编辑（全新空章节，磁盘与屏幕一致）→ 直接 flush（回执来自加载）；
      * - 空正文 + 已编辑但未清空 → 防御性失败（磁盘与屏幕不一致）。
      */
-
 
     fun updateChapterNote(newNote: String) {
         val session = currentSession ?: return
@@ -317,12 +300,16 @@ class EditorViewModel(
                 }
             } catch (e: Throwable) {
                 launch(kotlinx.coroutines.Dispatchers.Main) {
-                    emitErrorEvent(getApplication<Application>().getString(R.string.error_update_chapter_note_failed, e.message ?: ""))
+                    emitErrorEvent(
+                        getApplication<Application>().getString(
+                            R.string.error_update_chapter_note_failed,
+                            e.message ?: "",
+                        ),
+                    )
                 }
             }
         }
     }
-
 
     override fun onCleared() {
         super.onCleared()
@@ -337,7 +324,12 @@ class EditorViewModel(
             val content = _uiState.value.content
             if (session != null) {
                 if (content.isNotEmpty()) {
-                    workspaceRepository.saveChapterContent(session.projectId, session.volumeId, session.chapterId, content)
+                    workspaceRepository.saveChapterContent(
+                        session.projectId,
+                        session.volumeId,
+                        session.chapterId,
+                        content,
+                    )
                 } else if (contentExplicitlyCleared) {
                     workspaceRepository.clearChapterContent(session.projectId, session.volumeId, session.chapterId)
                 }
@@ -354,7 +346,6 @@ class EditorViewModel(
         }
     }
 
-
     internal suspend fun emitErrorEvent(message: String) {
         _events.send(EditorEvent.ToastMessage(message))
     }
@@ -362,8 +353,11 @@ class EditorViewModel(
     /**
      * #595 一：章节正文 target ID — 全局唯一命名空间，ViewModel 与窗口层共用。
      */
-    fun chapterTargetId(projectId: String, volumeId: String, chapterId: String): String =
-        "chapter-body:$projectId:$volumeId:$chapterId"
+    fun chapterTargetId(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+    ): String = "chapter-body:$projectId:$volumeId:$chapterId"
 
     /**
      * #595 一：显式 Factory — 从 [SujianAppDependencies]（进程级容器）

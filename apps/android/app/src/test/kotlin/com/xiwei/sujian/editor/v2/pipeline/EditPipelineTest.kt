@@ -8,7 +8,6 @@ import org.junit.Before
 import org.junit.Test
 
 class EditPipelineTest {
-
     private lateinit var mirror: DisplayTextMirror
     private lateinit var pipeline: EditPipeline
 

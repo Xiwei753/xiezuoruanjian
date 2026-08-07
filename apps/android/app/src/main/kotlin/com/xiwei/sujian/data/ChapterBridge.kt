@@ -15,41 +15,88 @@ class ChapterBridge internal constructor(private val holder: WriterAppServiceHol
         private const val TAG = "ChapterBridge"
     }
 
-    fun listChapters(projectId: String, volumeId: String): BridgeResult<List<ChapterMeta>> = holder.wrapResult {
-        holder.service.listChapters(projectId, volumeId).map { it.toModel() }
-    }
+    fun listChapters(
+        projectId: String,
+        volumeId: String,
+    ): BridgeResult<List<ChapterMeta>> =
+        holder.wrapResult {
+            holder.service.listChapters(projectId, volumeId).map { it.toModel() }
+        }
 
-    fun createChapter(projectId: String, volumeId: String, title: String): BridgeResult<ChapterMeta> = holder.wrapResult {
-        holder.service.createChapter(projectId, volumeId, title).toModel()
-    }
+    fun createChapter(
+        projectId: String,
+        volumeId: String,
+        title: String,
+    ): BridgeResult<ChapterMeta> =
+        holder.wrapResult {
+            holder.service.createChapter(projectId, volumeId, title).toModel()
+        }
 
-    fun renameChapter(projectId: String, volumeId: String, chapterId: String, newTitle: String): BridgeResult<Boolean> = holder.wrapResult {
-        holder.service.renameChapter(projectId, volumeId, chapterId, newTitle)
-    }
+    fun renameChapter(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+        newTitle: String,
+    ): BridgeResult<Boolean> =
+        holder.wrapResult {
+            holder.service.renameChapter(projectId, volumeId, chapterId, newTitle)
+        }
 
-    fun deleteChapter(projectId: String, volumeId: String, chapterId: String): BridgeResult<Boolean> = holder.wrapResult {
-        holder.service.deleteChapter(projectId, volumeId, chapterId)
-    }
+    fun deleteChapter(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+    ): BridgeResult<Boolean> =
+        holder.wrapResult {
+            holder.service.deleteChapter(projectId, volumeId, chapterId)
+        }
 
-    fun reorderChapters(projectId: String, volumeId: String, orderedIds: List<String>): BridgeResult<Boolean> = holder.wrapResult {
-        holder.service.reorderChapters(projectId, volumeId, orderedIds)
-    }
+    fun reorderChapters(
+        projectId: String,
+        volumeId: String,
+        orderedIds: List<String>,
+    ): BridgeResult<Boolean> =
+        holder.wrapResult {
+            holder.service.reorderChapters(projectId, volumeId, orderedIds)
+        }
 
-    fun openChapter(projectId: String, volumeId: String, chapterId: String): BridgeResult<ChapterOpenResult> = holder.wrapResult {
-        holder.service.openChapter(projectId, volumeId, chapterId).toModel()
-    }
+    fun openChapter(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+    ): BridgeResult<ChapterOpenResult> =
+        holder.wrapResult {
+            holder.service.openChapter(projectId, volumeId, chapterId).toModel()
+        }
 
-    fun saveChapterContent(projectId: String, volumeId: String, chapterId: String, content: String): BridgeResult<ChapterSaveReceipt> = holder.wrapResult {
-        holder.service.saveChapterContent(projectId, volumeId, chapterId, content).toModel()
-    }
+    fun saveChapterContent(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+        content: String,
+    ): BridgeResult<ChapterSaveReceipt> =
+        holder.wrapResult {
+            holder.service.saveChapterContent(projectId, volumeId, chapterId, content).toModel()
+        }
 
-    fun clearChapterContent(projectId: String, volumeId: String, chapterId: String): BridgeResult<ChapterSaveReceipt> = holder.wrapResult {
-        holder.service.clearChapterContent(projectId, volumeId, chapterId).toModel()
-    }
+    fun clearChapterContent(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+    ): BridgeResult<ChapterSaveReceipt> =
+        holder.wrapResult {
+            holder.service.clearChapterContent(projectId, volumeId, chapterId).toModel()
+        }
 
-    fun updateChapterNote(projectId: String, volumeId: String, chapterId: String, note: String): BridgeResult<Boolean> = holder.wrapResult {
-        holder.service.updateChapterNote(projectId, volumeId, chapterId, note)
-    }
+    fun updateChapterNote(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+        note: String,
+    ): BridgeResult<Boolean> =
+        holder.wrapResult {
+            holder.service.updateChapterNote(projectId, volumeId, chapterId, note)
+        }
 
     fun calculateWordCount(text: String): Int {
         return try {

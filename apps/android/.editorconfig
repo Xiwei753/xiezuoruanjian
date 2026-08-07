@@ -11,6 +11,12 @@ trim_trailing_whitespace = true
 [*.{kt,kts}]
 indent_size = 4
 max_line_length = 120
+# Compose 官方命名约定：Composable 函数使用 PascalCase（与 detekt FunctionNaming
+# ignoreAnnotated=Composable 一致），ktlint function-naming 需忽略 @Composable。
+ktlint_function_naming_ignore_when_annotated_with = Composable
+# Kotlin 惯用 backing-field 模式：internal var _x + public/internal 只读代理
+# （StateFlow 等），与 detekt VariableNaming 的 _ 前缀约定一致。
+ktlint_standard_property-naming = disabled
 
 [*.yml]
 indent_size = 2

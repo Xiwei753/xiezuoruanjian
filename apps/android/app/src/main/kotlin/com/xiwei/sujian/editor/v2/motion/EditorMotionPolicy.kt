@@ -30,9 +30,10 @@ data class EditorMotionPolicy(
     /**
      * reduce-motion 优先级最高：直接返回全静态策略。
      */
-    fun effective(): EditorMotionPolicy = if (reduceMotion) {
-        copy(textEnabled = false, cursorEnabled = false, coordinated = false)
-    } else {
-        this
-    }
+    fun effective(): EditorMotionPolicy =
+        if (reduceMotion) {
+            copy(textEnabled = false, cursorEnabled = false, coordinated = false)
+        } else {
+            this
+        }
 }

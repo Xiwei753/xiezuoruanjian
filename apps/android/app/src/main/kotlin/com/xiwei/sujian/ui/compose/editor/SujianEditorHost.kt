@@ -3,7 +3,6 @@ package com.xiwei.sujian.ui.compose.editor
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import com.xiwei.sujian.editor.v2.host.SujianEditorView
 
 @Composable
 fun SujianEditorHost(
@@ -13,7 +12,9 @@ fun SujianEditorHost(
     chapterTitle: String,
     modifier: Modifier = Modifier,
     /** #595 一：章节切换事务失败回滚回调 — 透传给 [WritingPane]。 */
-    onChapterSwitchFailed: ((oldProjectId: String, oldVolumeId: String?, oldChapterId: String?, oldChapterTitle: String) -> Unit)? = null,
+    onChapterSwitchFailed: (
+        (oldProjectId: String, oldVolumeId: String?, oldChapterId: String?, oldChapterTitle: String) -> Unit
+    )? = null,
 ) {
     WritingPane(
         projectId = projectId,

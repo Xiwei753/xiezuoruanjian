@@ -44,7 +44,7 @@ class EditorFrameComposer {
         viewportWidth: Int,
         viewportHeight: Int,
         scrollX: Float,
-        scrollY: Float
+        scrollY: Float,
     ): ComposedFrame {
         return ComposedFrame(
             layout = layout,
@@ -65,7 +65,7 @@ class EditorFrameComposer {
             viewportHeight = viewportHeight,
             scrollX = scrollX,
             scrollY = scrollY,
-            blockShifts = transaction?.blockShifts ?: emptyList()
+            blockShifts = transaction?.blockShifts ?: emptyList(),
         )
     }
 }
@@ -94,5 +94,5 @@ data class ComposedFrame(
     val viewportHeight: Int,
     val scrollX: Float,
     val scrollY: Float,
-    val blockShifts: List<PreparedVisualTransaction.BlockShift> = emptyList()
+    val blockShifts: List<PreparedVisualTransaction.BlockShift> = emptyList(),
 )

@@ -1,16 +1,16 @@
 package com.xiwei.sujian.editor.v2.layout
 
+import android.os.Build
 import android.text.DynamicLayout
 import android.text.Layout
 import android.text.TextPaint
-import android.os.Build
-import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap
+import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.projection.DisplayTextProjection
 
 class AndroidLayoutEngine(
     private val mirror: DisplayTextMirror,
-    private val textPaint: TextPaint
+    private val textPaint: TextPaint,
 ) {
     private val snapshotBuilder = AndroidLineSnapshotBuilder()
     private var layout: DynamicLayout? = null
@@ -23,7 +23,7 @@ class AndroidLayoutEngine(
     private var currentProjection: DisplayTextProjection? = null
 
     private fun computeConfigFingerprint(): String {
-        return "${width}_${textPaint.textSize}_${textPaint.typeface?.hashCode() ?: 0}_${lineSpacingMultiplier}"
+        return "${width}_${textPaint.textSize}_${textPaint.typeface?.hashCode() ?: 0}_$lineSpacingMultiplier"
     }
 
     fun setWidth(width: Float) {
@@ -37,29 +37,31 @@ class AndroidLayoutEngine(
     }
 
     fun requestLayout() {
-        val effectiveText = displayTextOverride?.let { override ->
-            android.text.SpannableStringBuilder(override)
-        } ?: mirror.getSpannable()
+        val effectiveText =
+            displayTextOverride?.let { override ->
+                android.text.SpannableStringBuilder(override)
+            } ?: mirror.getSpannable()
         if (width <= 0f) return
 
         val currentConfigFp = computeConfigFingerprint()
 
         if (currentConfigFp != lastConfigFingerprint || layout == null) {
-            layout = if (Build.VERSION.SDK_INT >= 28) {
-                DynamicLayout.Builder.obtain(effectiveText, textPaint, width.toInt())
-                    .setAlignment(Layout.Alignment.ALIGN_NORMAL)
-                    .setLineSpacing(0f, lineSpacingMultiplier)
-                    .setIncludePad(false)
-                    .build()
-            } else {
-                @Suppress("DEPRECATION")
-                DynamicLayout(
-                    effectiveText, textPaint, width.toInt(),
-                    Layout.Alignment.ALIGN_NORMAL,
-                    0f, lineSpacingMultiplier,
-                    false
-                )
-            }
+            layout =
+                if (Build.VERSION.SDK_INT >= 28) {
+                    DynamicLayout.Builder.obtain(effectiveText, textPaint, width.toInt())
+                        .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+                        .setLineSpacing(0f, lineSpacingMultiplier)
+                        .setIncludePad(false)
+                        .build()
+                } else {
+                    @Suppress("DEPRECATION")
+                    DynamicLayout(
+                        effectiveText, textPaint, width.toInt(),
+                        Layout.Alignment.ALIGN_NORMAL,
+                        0f, lineSpacingMultiplier,
+                        false,
+                    )
+                }
             lastConfigFingerprint = currentConfigFp
         }
 
@@ -118,8 +120,9 @@ class AndroidLayoutEngine(
     fun getMirror(): DisplayTextMirror = mirror
 
     fun getLineForUtf8(byteOffset: Int): Int {
-        val utf16 = currentProjection?.realUtf8ToDisplayUtf16(byteOffset)
-            ?: AndroidTextIndexMap(mirror).utf8ToUtf16(byteOffset)
+        val utf16 =
+            currentProjection?.realUtf8ToDisplayUtf16(byteOffset)
+                ?: AndroidTextIndexMap(mirror).utf8ToUtf16(byteOffset)
         val l = layout ?: return 0
         return l.getLineForOffset(utf16)
     }
@@ -129,8 +132,9 @@ class AndroidLayoutEngine(
     }
 
     fun getPrimaryHorizontalUtf8(byteOffset: Int): Float {
-        val utf16 = currentProjection?.realUtf8ToDisplayUtf16(byteOffset)
-            ?: AndroidTextIndexMap(mirror).utf8ToUtf16(byteOffset)
+        val utf16 =
+            currentProjection?.realUtf8ToDisplayUtf16(byteOffset)
+                ?: AndroidTextIndexMap(mirror).utf8ToUtf16(byteOffset)
         val l = layout ?: return 0f
         return l.getPrimaryHorizontal(utf16)
     }
@@ -153,8 +157,9 @@ class AndroidLayoutEngine(
             val startUtf8 = projection.displayUtf16ToRealUtf8(lineStartUtf16)
             val endUtf8 = projection.displayUtf16ToRealUtf8(lineEndUtf16)
 
-            val endsWithHardBreak = lineEndUtf16 > 0 && lineEndUtf16 <= layoutText.length &&
-                layoutText[lineEndUtf16 - 1] == '\n'
+            val endsWithHardBreak =
+                lineEndUtf16 > 0 && lineEndUtf16 <= layoutText.length &&
+                    layoutText[lineEndUtf16 - 1] == '\n'
 
             if (i == 0) {
                 currentParagraphId = 0
@@ -166,20 +171,22 @@ class AndroidLayoutEngine(
                 currentParagraphLocalLineIndex++
             }
 
-            lineRanges.add(AndroidLayoutRevision.LineRange(
-                startUtf8 = startUtf8,
-                endUtf8 = endUtf8,
-                startUtf16 = lineStartUtf16,
-                endUtf16 = lineEndUtf16,
-                top = top,
-                bottom = bottom,
-                baseline = baseline,
-                left = left,
-                right = right,
-                endsWithHardBreak = endsWithHardBreak,
-                paragraphId = currentParagraphId,
-                paragraphLocalLineIndex = currentParagraphLocalLineIndex
-            ))
+            lineRanges.add(
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = startUtf8,
+                    endUtf8 = endUtf8,
+                    startUtf16 = lineStartUtf16,
+                    endUtf16 = lineEndUtf16,
+                    top = top,
+                    bottom = bottom,
+                    baseline = baseline,
+                    left = left,
+                    right = right,
+                    endsWithHardBreak = endsWithHardBreak,
+                    paragraphId = currentParagraphId,
+                    paragraphLocalLineIndex = currentParagraphLocalLineIndex,
+                ),
+            )
         }
 
         val fontFingerprint = "${textPaint.textSize}_${textPaint.typeface?.hashCode() ?: 0}"
@@ -222,11 +229,14 @@ class AndroidLayoutEngine(
             selectionHeadDisplayUtf16,
             compStartDisplayUtf16,
             compEndDisplayUtf16,
-            emptyList()
+            emptyList(),
         )
     }
 
-    fun setDisplayTextOverride(override: String, projection: DisplayTextProjection? = null) {
+    fun setDisplayTextOverride(
+        override: String,
+        projection: DisplayTextProjection? = null,
+    ) {
         displayTextOverride = override
         currentProjection = projection
         lastConfigFingerprint = ""

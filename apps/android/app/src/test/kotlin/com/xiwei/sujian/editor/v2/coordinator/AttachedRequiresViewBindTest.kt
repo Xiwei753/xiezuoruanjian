@@ -1,4 +1,5 @@
 @file:Suppress("StringLiteralDuplication") // 测试固件字符串天然重复
+
 package com.xiwei.sujian.editor.v2.coordinator
 
 import org.junit.Assert.assertEquals
@@ -22,14 +23,15 @@ import org.robolectric.annotation.Config
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
-class AttachedRequiresViewBindContractTest {
-
+class AttachedRequiresViewBindTest {
     private fun createCoordinator(): EditorSessionCoordinator {
         // 测试环境无 native：session 创建返回 NotLoaded → prepareSessionForEdit 返回 null，
         // 状态必须回到 Idle（绝不进入没有 View 的 Attached）。
-        return EditorSessionCoordinator(com.xiwei.sujian.data.AppServiceBridge(
-            com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595")
-        ))
+        return EditorSessionCoordinator(
+            com.xiwei.sujian.data.AppServiceBridge(
+                com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595"),
+            ),
+        )
     }
 
     @Test
@@ -82,11 +84,26 @@ class AttachedRequiresViewBindContractTest {
         // 渲染决策：只有 Attaching/Attached（及收尾状态）显示编辑器；
         // Idle/Detaching/Detached 一律显示预览。
         val targetId = "t1"
-        assertTrue(com.xiwei.sujian.editor.v2.compose.shouldShowEditor(WindowBindingState.Attaching("w", targetId, 1UL), targetId))
-        assertTrue(com.xiwei.sujian.editor.v2.compose.shouldShowEditor(WindowBindingState.Attached("w", targetId, 1UL), targetId))
+        assertTrue(
+            com.xiwei.sujian.editor.v2.compose.shouldShowEditor(
+                WindowBindingState.Attaching("w", targetId, 1UL),
+                targetId,
+            ),
+        )
+        assertTrue(
+            com.xiwei.sujian.editor.v2.compose.shouldShowEditor(
+                WindowBindingState.Attached("w", targetId, 1UL),
+                targetId,
+            ),
+        )
         assertFalse(com.xiwei.sujian.editor.v2.compose.shouldShowEditor(WindowBindingState.Idle, targetId))
         assertFalse(com.xiwei.sujian.editor.v2.compose.shouldShowEditor(WindowBindingState.Detaching(null), targetId))
-        assertFalse(com.xiwei.sujian.editor.v2.compose.shouldShowEditor(WindowBindingState.Detached(targetId, 1UL, null), targetId))
+        assertFalse(
+            com.xiwei.sujian.editor.v2.compose.shouldShowEditor(
+                WindowBindingState.Detached(targetId, 1UL, null),
+                targetId,
+            ),
+        )
     }
 
     @Test

@@ -1,7 +1,7 @@
 package com.xiwei.sujian.editor.v2.motion
 
-import com.xiwei.sujian.model.Immutable
 import com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction
+import com.xiwei.sujian.model.Immutable
 
 /**
  * #595 五：视觉事务文字轨和光标轨的明确终态。
@@ -30,14 +30,15 @@ data class VisualTrackState(
     val transactionComplete: Boolean,
 ) {
     companion object {
-        val Idle = VisualTrackState(
-            renderTextTransaction = null,
-            renderCursorTransition = false,
-            textProgress = null,
-            cursorProgress = null,
-            textFinished = true,
-            cursorFinished = true,
-            transactionComplete = true,
-        )
+        val Idle =
+            VisualTrackState(
+                renderTextTransaction = null,
+                renderCursorTransition = false,
+                textProgress = null,
+                cursorProgress = null,
+                textFinished = true,
+                cursorFinished = true,
+                transactionComplete = true,
+            )
     }
 }

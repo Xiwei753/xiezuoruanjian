@@ -25,7 +25,6 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], shadows = [RecordingInputMethodManagerShadow::class])
 class AndroidInputConnectionComposingRegionTest {
-
     @Test
     fun reversedRange_isNormalizedAndEntersComposing() {
         val h = InputConnectionTestHarness("ABXY", 4)
@@ -35,7 +34,11 @@ class AndroidInputConnectionComposingRegionTest {
         assertTrue("Reversed range must be accepted and normalized", result)
         assertTrue("The call must enter composing mode", h.adapter.isComposing())
         assertEquals("Kernel composition must be started once", 1, h.commandPort.beginCompositionCount)
-        assertEquals("Range must be normalized to [0,2) in UTF-8 bytes", Pair(0, 2), h.adapter.getCompositionRangeUtf8())
+        assertEquals(
+            "Range must be normalized to [0,2) in UTF-8 bytes",
+            Pair(0, 2),
+            h.adapter.getCompositionRangeUtf8(),
+        )
         assertEquals("Preedit must be the normalized region text", "AB", h.adapter.getCompositionText())
         assertEquals("Committed text must be untouched by the overlay", "ABXY", h.mirror.getCommittedText())
         assertTrue("Mirror must show the composing overlay", h.mirror.hasComposition())
@@ -77,7 +80,8 @@ class AndroidInputConnectionComposingRegionTest {
 
         assertEquals(
             "setComposingRegion must not produce an extra selection callback",
-            before, h.imm.updateSelectionCount
+            before,
+            h.imm.updateSelectionCount,
         )
     }
 

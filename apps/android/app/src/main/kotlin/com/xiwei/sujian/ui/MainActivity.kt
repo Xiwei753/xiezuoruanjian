@@ -7,7 +7,6 @@ import androidx.activity.enableEdgeToEdge
 import com.xiwei.sujian.ui.compose.SujianApp
 
 class MainActivity : ComponentActivity() {
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 

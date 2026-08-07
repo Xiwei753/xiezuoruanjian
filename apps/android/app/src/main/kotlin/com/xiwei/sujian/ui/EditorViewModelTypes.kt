@@ -9,20 +9,23 @@ enum class SaveStatus {
     Unsaved,
     Saving,
     Saved,
-    SaveFailed
+    SaveFailed,
 }
 
 data class EditorSession(
     val sessionId: String,
     val projectId: String,
     val volumeId: String,
-    val chapterId: String
+    val chapterId: String,
 )
 
 sealed interface ChapterSwitchResult {
     data class Success(val session: EditorSession, val content: String) : ChapterSwitchResult
+
     data class SaveFailed(val current: EditorSession) : ChapterSwitchResult
+
     data class LoadFailed(val requested: ChapterKey) : ChapterSwitchResult
+
     data object Stale : ChapterSwitchResult
 }
 
@@ -64,7 +67,7 @@ data class EditorSettingsState(
     val coordinatedTextCursorAnimationEnabled: Boolean = true,
     val reduceMotion: Boolean = false,
     val autoSaveEnabled: Boolean = true,
-    val autoSaveDelayMs: Long = 1500L
+    val autoSaveDelayMs: Long = 1500L,
 )
 
 data class EditorUiState(
@@ -79,10 +82,11 @@ data class EditorUiState(
     val speed: Int = 0,
     val errorMessage: String? = null,
     val editorEnabled: Boolean = true,
-    val settings: EditorSettingsState = EditorSettingsState()
+    val settings: EditorSettingsState = EditorSettingsState(),
 )
 
 sealed class EditorEvent {
     data class ToastMessage(val message: String) : EditorEvent()
+
     data class ShowSaveFailedDialog(val message: String) : EditorEvent()
 }

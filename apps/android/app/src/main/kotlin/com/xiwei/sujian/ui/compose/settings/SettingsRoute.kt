@@ -1,6 +1,6 @@
 package com.xiwei.sujian.ui.compose.settings
 
-
+import android.annotation.SuppressLint
 import android.os.Parcelable
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
@@ -18,10 +18,6 @@ import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffoldRole
 import androidx.compose.material3.adaptive.navigation.BackNavigationBehavior
 import androidx.compose.material3.adaptive.navigation.ThreePaneScaffoldPredictiveBackHandler
 import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
-import com.xiwei.sujian.data.SyncStatusRepository
-import com.xiwei.sujian.data.WorkspaceDocumentGate
-import com.xiwei.sujian.designsystem.icon.SujianIcons
-import android.annotation.SuppressLint
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -36,23 +32,21 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
-import com.xiwei.sujian.data.SaveField
-import com.xiwei.sujian.data.SaveFailure
 import com.xiwei.sujian.data.SettingsRepository
-import com.xiwei.sujian.data.SettingsSaveResult
+import com.xiwei.sujian.data.SyncCoordinator
 import com.xiwei.sujian.designsystem.component.SujianListItem
+import com.xiwei.sujian.designsystem.icon.SujianIcons
 import com.xiwei.sujian.designsystem.layout.SujianListDetailScaffoldWithNavigator
 import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
+import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.model.LocalSettings
+import com.xiwei.sujian.model.SyncTrigger
 import com.xiwei.sujian.runtime.LocalSujianAppDependencies
 import com.xiwei.sujian.ui.compose.navigation.SettingsSection
-import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -63,15 +57,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.parcelize.Parcelize
-import com.xiwei.sujian.data.ExclusiveResult
-import com.xiwei.sujian.data.SyncCoordinator
-import com.xiwei.sujian.data.SyncOutcome
-import com.xiwei.sujian.data.SyncFailureKind
-import com.xiwei.sujian.data.SyncDryRunOutcome
-import com.xiwei.sujian.data.SyncDiagnosticsOutcome
-import com.xiwei.sujian.data.SyncSession
-import com.xiwei.sujian.model.SyncTrigger
-
 
 class SettingsViewModel(
     internal val settingsRepo: SettingsRepository,
@@ -85,8 +70,10 @@ class SettingsViewModel(
 
     internal sealed interface QueueItem {
         data class Save(val command: SettingsSaveCommand) : QueueItem
+
         data class Transaction(val command: SettingsTransactionCommand) : QueueItem
     }
+
     internal val saveChannel = Channel<QueueItem>(Channel.UNLIMITED)
     internal val _saveFailureEvents = Channel<Int>(Channel.BUFFERED)
     val saveFailureEvents = _saveFailureEvents.receiveAsFlow()
@@ -104,8 +91,11 @@ class SettingsViewModel(
     internal var pendingCommands = PendingCommands()
 
     internal fun hasUnsavedLocal() = localRevision != localPersistedRevision
+
     internal fun hasUnsavedFontSize() = fontSizeRevision != fontSizePersistedRevision
+
     internal fun hasUnsavedSyncConfig() = syncConfigRevision != syncConfigPersistedRevision
+
     internal fun hasUnsavedSyncSecrets() = syncSecretsRevision != syncSecretsPersistedRevision
 
     init {
@@ -139,12 +129,13 @@ class SettingsViewModel(
     }
 
     internal fun mergeCommand(command: SettingsSaveCommand) {
-        pendingCommands = when (command) {
-            is SettingsSaveCommand.Local -> pendingCommands.copy(local = command)
-            is SettingsSaveCommand.FontSize -> pendingCommands.copy(fontSize = command)
-            is SettingsSaveCommand.SyncConfig -> pendingCommands.copy(syncConfig = command)
-            is SettingsSaveCommand.SyncSecrets -> pendingCommands.copy(syncSecrets = command)
-        }
+        pendingCommands =
+            when (command) {
+                is SettingsSaveCommand.Local -> pendingCommands.copy(local = command)
+                is SettingsSaveCommand.FontSize -> pendingCommands.copy(fontSize = command)
+                is SettingsSaveCommand.SyncConfig -> pendingCommands.copy(syncConfig = command)
+                is SettingsSaveCommand.SyncSecrets -> pendingCommands.copy(syncSecrets = command)
+            }
     }
 
     class Factory(
@@ -156,13 +147,11 @@ class SettingsViewModel(
         }
     }
 
-
     /**
      * #595 五：成功保存或重新加载 profile 后，一次性更新 syncConfig、syncSecrets、
      * syncProfileLoadState、syncCapability、secureStorageWarning —
      * 用户修好配置后旧红色错误提示立即消失，不再残留。
      */
-
 
     fun consumeSaveError() {
         _uiState.update { it.copy(saveErrorResId = null) }
@@ -170,75 +159,97 @@ class SettingsViewModel(
 
     fun handleIntent(intent: SettingsIntent) {
         when (intent) {
-            is SettingsIntent.UpdateLocal -> {
-                val newSettings = intent.transform(_uiState.value.settings)
-                _uiState.update { it.copy(settings = newSettings) }
-                val rev = ++localRevision
-                saveChannel.trySend(QueueItem.Save(SettingsSaveCommand.Local(newSettings, rev)))
-            }
-            is SettingsIntent.UpdateFontSize -> {
-                _uiState.update { it.copy(fontSize = intent.fontSize) }
-                val rev = ++fontSizeRevision
-                saveChannel.trySend(QueueItem.Save(SettingsSaveCommand.FontSize(intent.fontSize, rev)))
-            }
-            is SettingsIntent.UpdateSyncConfig -> {
-                _uiState.update { it.copy(syncConfig = intent.config) }
-                val rev = ++syncConfigRevision
-                saveChannel.trySend(QueueItem.Save(SettingsSaveCommand.SyncConfig(intent.config, rev)))
-            }
-            is SettingsIntent.UpdateSyncSecrets -> {
-                _uiState.update { it.copy(syncSecrets = intent.secrets) }
-                val rev = ++syncSecretsRevision
-                saveChannel.trySend(QueueItem.Save(SettingsSaveCommand.SyncSecrets(intent.secrets, rev)))
-            }
+            is SettingsIntent.UpdateLocal -> updateLocalSettings(intent.transform(_uiState.value.settings))
+            is SettingsIntent.UpdateFontSize -> updateFontSize(intent.fontSize)
+            is SettingsIntent.UpdateSyncConfig -> updateSyncConfig(intent.config)
+            is SettingsIntent.UpdateSyncSecrets -> updateSyncSecrets(intent.secrets)
             is SettingsIntent.Refresh -> mergeRefresh()
-            is SettingsIntent.CaptureDynamicColor -> {
-                val repo = settingsRepo
-                viewModelScope.launch {
-                    val records = withContext(Dispatchers.IO) { repo.listPaletteRecords() }
-                    _uiState.update { it.copy(paletteRecords = records) }
-                }
-            }
-            is SettingsIntent.DeletePalette -> {
-                val repo = settingsRepo
-                viewModelScope.launch {
-                    withContext(Dispatchers.IO) { repo.deletePaletteRecord(intent.deviceId, intent.fingerprint) }
-                    val records = withContext(Dispatchers.IO) { repo.listPaletteRecords() }
-                    _uiState.update { it.copy(paletteRecords = records) }
-                }
-            }
-            is SettingsIntent.DryRun -> {
-                val currentConfig = _uiState.value.syncConfig
-                val currentSecrets = _uiState.value.syncSecrets
-                saveChannel.trySend(QueueItem.Transaction(SettingsTransactionCommand.SaveAndRunDryRun(
-                    config = currentConfig,
+            is SettingsIntent.CaptureDynamicColor -> refreshPaletteRecords()
+            is SettingsIntent.DeletePalette -> deletePaletteRecord(intent.deviceId, intent.fingerprint)
+            is SettingsIntent.DryRun -> enqueueDryRun()
+            is SettingsIntent.TestConnection -> enqueueTestConnection()
+            is SettingsIntent.PerformSync -> enqueuePerformSync()
+        }
+    }
+
+    private fun updateLocalSettings(newSettings: LocalSettings) {
+        _uiState.update { it.copy(settings = newSettings) }
+        saveChannel.trySend(QueueItem.Save(SettingsSaveCommand.Local(newSettings, ++localRevision)))
+    }
+
+    private fun updateFontSize(fontSize: Float) {
+        _uiState.update { it.copy(fontSize = fontSize) }
+        saveChannel.trySend(QueueItem.Save(SettingsSaveCommand.FontSize(fontSize, ++fontSizeRevision)))
+    }
+
+    private fun updateSyncConfig(config: com.xiwei.sujian.model.SyncConfig) {
+        _uiState.update { it.copy(syncConfig = config) }
+        saveChannel.trySend(QueueItem.Save(SettingsSaveCommand.SyncConfig(config, ++syncConfigRevision)))
+    }
+
+    private fun updateSyncSecrets(secrets: com.xiwei.sujian.model.SyncSecrets) {
+        _uiState.update { it.copy(syncSecrets = secrets) }
+        saveChannel.trySend(QueueItem.Save(SettingsSaveCommand.SyncSecrets(secrets, ++syncSecretsRevision)))
+    }
+
+    private fun refreshPaletteRecords() {
+        val repo = settingsRepo
+        viewModelScope.launch {
+            val records = withContext(Dispatchers.IO) { repo.listPaletteRecords() }
+            _uiState.update { it.copy(paletteRecords = records) }
+        }
+    }
+
+    private fun deletePaletteRecord(
+        deviceId: String,
+        fingerprint: String,
+    ) {
+        val repo = settingsRepo
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { repo.deletePaletteRecord(deviceId, fingerprint) }
+            val records = withContext(Dispatchers.IO) { repo.listPaletteRecords() }
+            _uiState.update { it.copy(paletteRecords = records) }
+        }
+    }
+
+    private fun enqueueDryRun() {
+        saveChannel.trySend(
+            QueueItem.Transaction(
+                SettingsTransactionCommand.SaveAndRunDryRun(
+                    config = _uiState.value.syncConfig,
                     configRevision = syncConfigRevision,
-                    secrets = currentSecrets,
+                    secrets = _uiState.value.syncSecrets,
                     secretsRevision = syncSecretsRevision,
-                )))
-            }
-            is SettingsIntent.TestConnection -> {
-                val currentConfig = _uiState.value.syncConfig
-                val currentSecrets = _uiState.value.syncSecrets
-                saveChannel.trySend(QueueItem.Transaction(SettingsTransactionCommand.SaveAndRunDiagnostics(
-                    config = currentConfig,
+                ),
+            ),
+        )
+    }
+
+    private fun enqueueTestConnection() {
+        saveChannel.trySend(
+            QueueItem.Transaction(
+                SettingsTransactionCommand.SaveAndRunDiagnostics(
+                    config = _uiState.value.syncConfig,
                     configRevision = syncConfigRevision,
-                    secrets = currentSecrets,
+                    secrets = _uiState.value.syncSecrets,
                     secretsRevision = syncSecretsRevision,
-                )))
-            }
-            is SettingsIntent.PerformSync -> {
-                val currentConfig = _uiState.value.syncConfig
-                val currentSecrets = _uiState.value.syncSecrets
-                saveChannel.trySend(QueueItem.Transaction(SettingsTransactionCommand.SaveAndRunSync(
-                    config = currentConfig,
+                ),
+            ),
+        )
+    }
+
+    private fun enqueuePerformSync() {
+        saveChannel.trySend(
+            QueueItem.Transaction(
+                SettingsTransactionCommand.SaveAndRunSync(
+                    config = _uiState.value.syncConfig,
                     configRevision = syncConfigRevision,
-                    secrets = currentSecrets,
+                    secrets = _uiState.value.syncSecrets,
                     secretsRevision = syncSecretsRevision,
                     trigger = SyncTrigger.SettingsPage,
-                )))
-            }
-        }
+                ),
+            ),
+        )
     }
 }
 
@@ -260,16 +271,47 @@ data class SettingsCategory(
     val group: SettingsGroup,
 )
 
-val settingsCategories = listOf(
-    SettingsCategory(SettingsSection.Appearance, R.string.pref_category_appearance, SujianIcons.Palette, SettingsGroup.Appearance),
-    SettingsCategory(SettingsSection.Editor, R.string.pref_category_editor, SujianIcons.Edit, SettingsGroup.Writing),
-    SettingsCategory(SettingsSection.Save, R.string.pref_category_save, SujianIcons.Save, SettingsGroup.Writing),
-    SettingsCategory(SettingsSection.Sync, R.string.pref_category_sync, SujianIcons.CloudSync, SettingsGroup.DataSync),
-    SettingsCategory(SettingsSection.Ai, R.string.pref_category_ai, SujianIcons.AutoStories, SettingsGroup.Advanced),
-    SettingsCategory(SettingsSection.Diagnostics, R.string.pref_category_diagnostics, SujianIcons.BugReport, SettingsGroup.Advanced),
-    SettingsCategory(SettingsSection.Laboratory, R.string.pref_category_laboratory, SujianIcons.Science, SettingsGroup.Advanced),
-    SettingsCategory(SettingsSection.About, R.string.pref_category_about, SujianIcons.Info, SettingsGroup.About),
-)
+val settingsCategories =
+    listOf(
+        SettingsCategory(
+            SettingsSection.Appearance,
+            R.string.pref_category_appearance,
+            SujianIcons.Palette,
+            SettingsGroup.Appearance,
+        ),
+        SettingsCategory(
+            SettingsSection.Editor,
+            R.string.pref_category_editor,
+            SujianIcons.Edit,
+            SettingsGroup.Writing,
+        ),
+        SettingsCategory(SettingsSection.Save, R.string.pref_category_save, SujianIcons.Save, SettingsGroup.Writing),
+        SettingsCategory(
+            SettingsSection.Sync,
+            R.string.pref_category_sync,
+            SujianIcons.CloudSync,
+            SettingsGroup.DataSync,
+        ),
+        SettingsCategory(
+            SettingsSection.Ai,
+            R.string.pref_category_ai,
+            SujianIcons.AutoStories,
+            SettingsGroup.Advanced,
+        ),
+        SettingsCategory(
+            SettingsSection.Diagnostics,
+            R.string.pref_category_diagnostics,
+            SujianIcons.BugReport,
+            SettingsGroup.Advanced,
+        ),
+        SettingsCategory(
+            SettingsSection.Laboratory,
+            R.string.pref_category_laboratory,
+            SujianIcons.Science,
+            SettingsGroup.Advanced,
+        ),
+        SettingsCategory(SettingsSection.About, R.string.pref_category_about, SujianIcons.Info, SettingsGroup.About),
+    )
 
 @Parcelize
 private data class SettingsSelection(val section: SettingsSection) : Parcelable
@@ -300,11 +342,12 @@ fun SettingsRoute(
 ) {
     val context = LocalContext.current
     val deps = LocalSujianAppDependencies.current
-    val vm: SettingsViewModel = viewModel(factory = SettingsViewModel.Factory(deps.settingsRepository, deps.syncCoordinator))
+    val vm: SettingsViewModel =
+        viewModel(factory = SettingsViewModel.Factory(deps.settingsRepository, deps.syncCoordinator))
     val uiState by vm.uiState.collectAsState()
     val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
 
-       LaunchedEffect(Unit) {
+    LaunchedEffect(Unit) {
         vm.saveFailureEvents.collect { errorResId ->
             snackbarHostState.showSnackbar(context.getString(errorResId))
         }
@@ -422,16 +465,17 @@ fun SettingsListPane(
                     leadingIcon = category.icon,
                     selected = selectedSection == category.section,
                     onClick = { onNavigateToDetail(category.section) },
-                    semanticId = when (category.section) {
-                        SettingsSection.Appearance -> SujianSemanticIds.SettingsNavAppearance
-                        SettingsSection.Editor -> SujianSemanticIds.SettingsNavEditor
-                        SettingsSection.Save -> SujianSemanticIds.SettingsNavSave
-                        SettingsSection.Sync -> SujianSemanticIds.SettingsNavSync
-                        SettingsSection.Ai -> SujianSemanticIds.SettingsNavAi
-                        SettingsSection.Diagnostics -> SujianSemanticIds.SettingsNavDiagnostics
-                        SettingsSection.Laboratory -> SujianSemanticIds.SettingsNavLaboratory
-                        SettingsSection.About -> SujianSemanticIds.SettingsNavAbout
-                    },
+                    semanticId =
+                        when (category.section) {
+                            SettingsSection.Appearance -> SujianSemanticIds.SettingsNavAppearance
+                            SettingsSection.Editor -> SujianSemanticIds.SettingsNavEditor
+                            SettingsSection.Save -> SujianSemanticIds.SettingsNavSave
+                            SettingsSection.Sync -> SujianSemanticIds.SettingsNavSync
+                            SettingsSection.Ai -> SujianSemanticIds.SettingsNavAi
+                            SettingsSection.Diagnostics -> SujianSemanticIds.SettingsNavDiagnostics
+                            SettingsSection.Laboratory -> SujianSemanticIds.SettingsNavLaboratory
+                            SettingsSection.About -> SujianSemanticIds.SettingsNavAbout
+                        },
                     trailingContent = {
                         Icon(
                             imageVector = SujianIcons.KeyboardArrowRight,
@@ -451,16 +495,17 @@ fun SettingsListPane(
  * 与 [settingsCategoryValue] 的“真实当前值”独立展示，不再二选一。
  */
 @Composable
-internal fun settingsCategorySummary(category: SettingsCategory): String? = when (category.section) {
-    SettingsSection.Appearance -> stringResource(id = R.string.pref_summary_appearance)
-    SettingsSection.Editor -> stringResource(id = R.string.pref_summary_editor)
-    SettingsSection.Save -> stringResource(id = R.string.pref_summary_save)
-    SettingsSection.Sync -> stringResource(id = R.string.pref_summary_sync)
-    SettingsSection.Ai -> stringResource(id = R.string.pref_summary_ai)
-    SettingsSection.Diagnostics -> stringResource(id = R.string.pref_summary_diagnostics)
-    SettingsSection.Laboratory -> stringResource(id = R.string.pref_summary_laboratory)
-    SettingsSection.About -> stringResource(id = R.string.pref_summary_about)
-}
+internal fun settingsCategorySummary(category: SettingsCategory): String? =
+    when (category.section) {
+        SettingsSection.Appearance -> stringResource(id = R.string.pref_summary_appearance)
+        SettingsSection.Editor -> stringResource(id = R.string.pref_summary_editor)
+        SettingsSection.Save -> stringResource(id = R.string.pref_summary_save)
+        SettingsSection.Sync -> stringResource(id = R.string.pref_summary_sync)
+        SettingsSection.Ai -> stringResource(id = R.string.pref_summary_ai)
+        SettingsSection.Diagnostics -> stringResource(id = R.string.pref_summary_diagnostics)
+        SettingsSection.Laboratory -> stringResource(id = R.string.pref_summary_laboratory)
+        SettingsSection.About -> stringResource(id = R.string.pref_summary_about)
+    }
 
 /**
  * 设置列表项的真实当前值：全部来自真实 [SettingsUiState]，保存后随状态即时更新；
@@ -470,35 +515,42 @@ internal fun settingsCategorySummary(category: SettingsCategory): String? = when
 @Composable
 internal fun settingsCategoryValue(category: SettingsCategory, state: SettingsUiState): String? =
     when (category.section) {
-        SettingsSection.Appearance -> when (state.settings.appearanceMode) {
-            "light" -> stringResource(id = R.string.theme_light)
-            "dark" -> stringResource(id = R.string.theme_dark)
-            else -> stringResource(id = R.string.theme_system)
-        }
-        SettingsSection.Editor -> stringResource(
-            id = R.string.pref_value_font_size,
-            if (state.fontSize % 1f == 0f) state.fontSize.toInt().toString() else state.fontSize.toString(),
-        )
-        SettingsSection.Save -> if (state.settings.autoSaveEnabled) {
-            stringResource(id = R.string.pref_state_on)
-        } else {
-            stringResource(id = R.string.pref_state_off)
-        }
-        SettingsSection.Sync -> if (state.syncConfig.enabled == true) {
-            stringResource(id = R.string.pref_state_on)
-        } else {
-            stringResource(id = R.string.pref_state_off)
-        }
-        SettingsSection.Ai -> if (state.settings.aiEnabled) {
-            stringResource(id = R.string.pref_state_on)
-        } else {
-            stringResource(id = R.string.pref_state_off)
-        }
-        SettingsSection.Diagnostics -> if (state.settings.diagnosticsEnabled) {
-            stringResource(id = R.string.pref_state_on)
-        } else {
-            stringResource(id = R.string.pref_state_off)
-        }
+        SettingsSection.Appearance ->
+            when (state.settings.appearanceMode) {
+                "light" -> stringResource(id = R.string.theme_light)
+                "dark" -> stringResource(id = R.string.theme_dark)
+                else -> stringResource(id = R.string.theme_system)
+            }
+        SettingsSection.Editor ->
+            stringResource(
+                id = R.string.pref_value_font_size,
+                if (state.fontSize % 1f == 0f) state.fontSize.toInt().toString() else state.fontSize.toString(),
+            )
+        SettingsSection.Save ->
+            if (state.settings.autoSaveEnabled) {
+                stringResource(id = R.string.pref_state_on)
+            } else {
+                stringResource(id = R.string.pref_state_off)
+            }
+        SettingsSection.Sync ->
+            if (state.syncConfig.enabled == true) {
+                stringResource(id = R.string.pref_state_on)
+            } else {
+                stringResource(id = R.string.pref_state_off)
+            }
+        SettingsSection.Ai ->
+            if (state.settings.aiEnabled) {
+                stringResource(id = R.string.pref_state_on)
+            } else {
+                stringResource(id = R.string.pref_state_off)
+            }
+        SettingsSection.Diagnostics ->
+            if (state.settings.diagnosticsEnabled) {
+                stringResource(id = R.string.pref_state_on)
+            } else {
+                stringResource(id = R.string.pref_state_off)
+            }
         SettingsSection.Laboratory,
-        SettingsSection.About -> null
+        SettingsSection.About,
+        -> null
     }

@@ -6,13 +6,12 @@ import com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction
 import com.xiwei.sujian.editor.v2.visual.SliceRole
 
 class SnapshotPlanner {
-
     fun createSnapshotFromRevision(
         revision: AndroidLayoutRevision,
         lineIndex: Int,
         preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
-        isNewRevision: Boolean = false
+        isNewRevision: Boolean = false,
     ): AndroidLineSnapshot? {
         return if (isNewRevision) {
             preCapturedNewSnapshots[lineIndex]
@@ -21,31 +20,27 @@ class SnapshotPlanner {
         }
     }
 
-    fun buildSelectionDecoration(
-        newRev: AndroidLayoutRevision
-    ): PreparedVisualTransaction.SelectionDecoration? {
+    fun buildSelectionDecoration(newRev: AndroidLayoutRevision): PreparedVisualTransaction.SelectionDecoration? {
         if (newRev.selectionStartUtf16 < 0 || newRev.selectionEndUtf16 < 0) return null
         if (newRev.selectionStartUtf16 == newRev.selectionEndUtf16) return null
         return PreparedVisualTransaction.SelectionDecoration(
             startUtf16 = newRev.selectionStartUtf16,
-            endUtf16 = newRev.selectionEndUtf16
+            endUtf16 = newRev.selectionEndUtf16,
         )
     }
 
-    fun buildPreeditDecoration(
-        newRev: AndroidLayoutRevision
-    ): PreparedVisualTransaction.PreeditDecoration? {
+    fun buildPreeditDecoration(newRev: AndroidLayoutRevision): PreparedVisualTransaction.PreeditDecoration? {
         if (newRev.compositionStartUtf16 < 0 || newRev.compositionEndUtf16 < 0) return null
         if (newRev.compositionStartUtf16 == newRev.compositionEndUtf16) return null
         return PreparedVisualTransaction.PreeditDecoration(
             startUtf16 = newRev.compositionStartUtf16,
             endUtf16 = newRev.compositionEndUtf16,
-            underlineColor = 0xFF000000.toInt()
+            underlineColor = 0xFF000000.toInt(),
         )
     }
 
     fun collectExcludedNewByteRanges(
-        animatedSlices: List<PreparedVisualTransaction.AnimatedSlice>
+        animatedSlices: List<PreparedVisualTransaction.AnimatedSlice>,
     ): Set<Pair<Int, Int>> {
         return animatedSlices
             .filter { it.role == SliceRole.Insert || it.role == SliceRole.CrossfadeNew || it.role == SliceRole.Move }
@@ -58,7 +53,7 @@ class SnapshotPlanner {
     }
 
     fun collectExcludedOldByteRanges(
-        animatedSlices: List<PreparedVisualTransaction.AnimatedSlice>
+        animatedSlices: List<PreparedVisualTransaction.AnimatedSlice>,
     ): Set<Pair<Int, Int>> {
         return animatedSlices
             .filter { it.role == SliceRole.Delete || it.role == SliceRole.CrossfadeOld }

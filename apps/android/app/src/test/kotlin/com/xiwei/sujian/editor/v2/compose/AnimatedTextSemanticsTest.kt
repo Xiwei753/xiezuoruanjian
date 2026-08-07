@@ -6,7 +6,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AnimatedTextSemanticsTest {
-
     @Test
     fun insertAtCursor_middleInsert_correctUtf8Offset() {
         val localValue = "你好世界"
@@ -161,7 +160,12 @@ class AnimatedTextSemanticsTest {
         val lowSurrogateIndex = 3
         assertTrue(textWithEmoji[lowSurrogateIndex].isLowSurrogate())
         val clampedPos = lowSurrogateIndex.coerceIn(0, textWithEmoji.length)
-        val safePos = if (clampedPos in 1 until textWithEmoji.length && textWithEmoji[clampedPos].isLowSurrogate()) clampedPos - 1 else clampedPos
+        val safePos =
+            if (clampedPos in 1 until textWithEmoji.length && textWithEmoji[clampedPos].isLowSurrogate()) {
+                clampedPos - 1
+            } else {
+                clampedPos
+            }
         assertEquals(2, safePos)
     }
 
@@ -170,7 +174,12 @@ class AnimatedTextSemanticsTest {
         val text = "a🙂b"
         val emojiLowSurrogateIndex = 2
         val clampedStart = emojiLowSurrogateIndex.coerceIn(0, text.length)
-        val safeStart = if (clampedStart in 1 until text.length && text[clampedStart].isLowSurrogate()) clampedStart - 1 else clampedStart
+        val safeStart =
+            if (clampedStart in 1 until text.length && text[clampedStart].isLowSurrogate()) {
+                clampedStart - 1
+            } else {
+                clampedStart
+            }
         assertEquals(1, safeStart)
     }
 

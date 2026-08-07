@@ -11,14 +11,14 @@ import org.junit.Test
  * - SyncProfileSnapshot 携带 generation/config/secrets。
  */
 class CommitSyncProfileRollbackTest {
-
     @Test
     fun syncProfileSnapshot_carriesGenerationConfigSecrets() {
-        val snapshot = SyncProfileSnapshot(
-            generation = 3L,
-            config = com.xiwei.sujian.model.SyncConfig(enabled = true),
-            secrets = com.xiwei.sujian.model.SyncSecrets(token = "t"),
-        )
+        val snapshot =
+            SyncProfileSnapshot(
+                generation = 3L,
+                config = com.xiwei.sujian.model.SyncConfig(enabled = true),
+                secrets = com.xiwei.sujian.model.SyncSecrets(token = "t"),
+            )
         assertTrue(snapshot.generation == 3L)
         assertTrue(snapshot.config.enabled == true)
         assertTrue(snapshot.secrets.token == "t")

@@ -13,7 +13,6 @@ import org.junit.Test
  * - reduceMotion + cursor off → 纯静态更新。
  */
 class CursorOnlyTransactionTest {
-
     private fun createEngine(): AndroidTextAnimationEngine {
         return AndroidTextAnimationEngine(
             AndroidVisualPlanner(),

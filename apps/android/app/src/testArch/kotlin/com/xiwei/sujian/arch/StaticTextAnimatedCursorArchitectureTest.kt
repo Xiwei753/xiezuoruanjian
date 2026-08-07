@@ -13,15 +13,15 @@ import java.lang.reflect.Field
  * 验证 FrameRenderInput 携带 cursorTransition 字段且与文字事务解耦。
  */
 class StaticTextAnimatedCursorArchitectureTest {
-
     @Test
     fun frameRenderInputCarriesCursorTransitionField() {
-        val field: Field? = FrameRenderInput::class.java.declaredFields.firstOrNull {
-            it.name == "cursorTransition"
-        }
+        val field: Field? =
+            FrameRenderInput::class.java.declaredFields.firstOrNull {
+                it.name == "cursorTransition"
+            }
         assertNotNull(
             "FrameRenderInput 必须携带 cursorTransition 字段 — " +
-            "文字轨结束后静态文字路径依赖它绘制平滑光标",
+                "文字轨结束后静态文字路径依赖它绘制平滑光标",
             field,
         )
         assertTrue(

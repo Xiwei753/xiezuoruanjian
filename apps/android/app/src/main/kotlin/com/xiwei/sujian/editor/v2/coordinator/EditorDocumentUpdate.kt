@@ -31,6 +31,11 @@ sealed interface EditorDocumentUpdate {
     val text: String
     val revision: Long
     val transactionId: Long
+
+    /** 编辑后的真实选区（UTF-8 字节）；-1 表示调用方未携带（保留旧值）。 */
+    val selectionAnchorUtf8: Int
+    val selectionHeadUtf8: Int
+
     /**
      * #595 二：窗口绑定时的输入 lease — 会话层 reducer 只接受仍匹配当前
      * 活动 target/session/epoch 的事件；章节切换提交后旧 View 晚到的
@@ -48,8 +53,8 @@ sealed interface EditorDocumentUpdate {
         /** #595 四：本次编辑后 Rust 的真实选区（UTF-8 字节）。
          *  由 View 从 pipeline mirror 读取，会话层据此更新唯一 SessionState。
          *  -1 表示调用方未携带（保留旧值）。 */
-        val selectionAnchorUtf8: Int = -1,
-        val selectionHeadUtf8: Int = -1,
+        override val selectionAnchorUtf8: Int = -1,
+        override val selectionHeadUtf8: Int = -1,
         override val lease: EditorInputLease = EditorInputLease(targetId, 0UL, 0L),
     ) : EditorDocumentUpdate
 
@@ -69,8 +74,8 @@ sealed interface EditorDocumentUpdate {
         val snapshotId: Long,
         override val revision: Long,
         override val transactionId: Long,
-        val selectionAnchorUtf8: Int = -1,
-        val selectionHeadUtf8: Int = -1,
+        override val selectionAnchorUtf8: Int = -1,
+        override val selectionHeadUtf8: Int = -1,
         override val lease: EditorInputLease = EditorInputLease(targetId, 0UL, 0L),
     ) : EditorDocumentUpdate
 
@@ -90,8 +95,8 @@ sealed interface EditorDocumentUpdate {
         val commandId: Long,
         override val revision: Long,
         override val transactionId: Long,
-        val selectionAnchorUtf8: Int = -1,
-        val selectionHeadUtf8: Int = -1,
+        override val selectionAnchorUtf8: Int = -1,
+        override val selectionHeadUtf8: Int = -1,
         override val lease: EditorInputLease = EditorInputLease(targetId, 0UL, 0L),
     ) : EditorDocumentUpdate
 }
@@ -101,6 +106,7 @@ sealed interface EditorDocumentUpdate {
 enum class DocumentFactOrigin {
     /** Repository 章节加载（真实 fileHash）。 */
     REPOSITORY_LOAD,
+
     /** 同步合并后磁盘正文变更。 */
     SYNC_MERGED,
 }
@@ -142,14 +148,16 @@ enum class EditorOperationKind {
  * CURSOR_ONLY 对应选区移动（SELECTION）；COMPOSITION_* 统一归为 COMPOSITION；
  * LOAD/FORMAT 属于内容替换语义（REPLACE）。
  */
-fun uniffi.writer_core.EditorOperationKindDto.toEditorOperationKind(): EditorOperationKind = when (this) {
-    uniffi.writer_core.EditorOperationKindDto.INSERT -> EditorOperationKind.INSERT
-    uniffi.writer_core.EditorOperationKindDto.DELETE -> EditorOperationKind.DELETE
-    uniffi.writer_core.EditorOperationKindDto.REPLACE -> EditorOperationKind.REPLACE
-    uniffi.writer_core.EditorOperationKindDto.CURSOR_ONLY -> EditorOperationKind.SELECTION
-    uniffi.writer_core.EditorOperationKindDto.COMPOSITION_UPDATE,
-    uniffi.writer_core.EditorOperationKindDto.COMPOSITION_COMMIT,
-    uniffi.writer_core.EditorOperationKindDto.COMPOSITION_CANCEL -> EditorOperationKind.COMPOSITION
-    uniffi.writer_core.EditorOperationKindDto.LOAD -> EditorOperationKind.REPLACE
-    uniffi.writer_core.EditorOperationKindDto.FORMAT -> EditorOperationKind.REPLACE
-}
+fun uniffi.writer_core.EditorOperationKindDto.toEditorOperationKind(): EditorOperationKind =
+    when (this) {
+        uniffi.writer_core.EditorOperationKindDto.INSERT -> EditorOperationKind.INSERT
+        uniffi.writer_core.EditorOperationKindDto.DELETE -> EditorOperationKind.DELETE
+        uniffi.writer_core.EditorOperationKindDto.REPLACE -> EditorOperationKind.REPLACE
+        uniffi.writer_core.EditorOperationKindDto.CURSOR_ONLY -> EditorOperationKind.SELECTION
+        uniffi.writer_core.EditorOperationKindDto.COMPOSITION_UPDATE,
+        uniffi.writer_core.EditorOperationKindDto.COMPOSITION_COMMIT,
+        uniffi.writer_core.EditorOperationKindDto.COMPOSITION_CANCEL,
+        -> EditorOperationKind.COMPOSITION
+        uniffi.writer_core.EditorOperationKindDto.LOAD -> EditorOperationKind.REPLACE
+        uniffi.writer_core.EditorOperationKindDto.FORMAT -> EditorOperationKind.REPLACE
+    }

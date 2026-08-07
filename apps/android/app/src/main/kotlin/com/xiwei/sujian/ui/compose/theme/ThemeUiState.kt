@@ -16,11 +16,12 @@ data class ThemeUiState(
     val systemIsDark: Boolean = false,
 ) {
     val isDark: Boolean
-        get() = when (appearanceMode) {
-            "dark" -> true
-            "light" -> false
-            else -> systemIsDark
-        }
+        get() =
+            when (appearanceMode) {
+                "dark" -> true
+                "light" -> false
+                else -> systemIsDark
+            }
 
     val isLight: Boolean
         get() = appearanceMode == "light"
@@ -29,13 +30,17 @@ data class ThemeUiState(
         get() = appearanceMode != "light" && appearanceMode != "dark"
 
     val resolvedColorSource: ColorSource
-        get() = when (colorSource) {
-            "android_dynamic" -> ColorSource.ANDROID_DYNAMIC
-            "saved_palette" -> {
-                if (selectedPaletteRecord != null) ColorSource.SAVED_PALETTE
-                else ColorSource.BUILT_IN
+        get() =
+            when (colorSource) {
+                "android_dynamic" -> ColorSource.ANDROID_DYNAMIC
+                "saved_palette" -> {
+                    if (selectedPaletteRecord != null) {
+                        ColorSource.SAVED_PALETTE
+                    } else {
+                        ColorSource.BUILT_IN
+                    }
+                }
+                "built_in" -> ColorSource.BUILT_IN
+                else -> ColorSource.BUILT_IN
             }
-            "built_in" -> ColorSource.BUILT_IN
-            else -> ColorSource.BUILT_IN
-        }
 }

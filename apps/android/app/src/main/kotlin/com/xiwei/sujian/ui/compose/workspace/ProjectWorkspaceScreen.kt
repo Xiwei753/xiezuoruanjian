@@ -9,6 +9,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
 import androidx.compose.material3.adaptive.layout.AnimatedPane
 import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffold
+import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -29,9 +30,8 @@ import com.xiwei.sujian.ui.ChapterSwitchResult
 import com.xiwei.sujian.ui.EditorViewModel
 import com.xiwei.sujian.ui.compose.SujianAppState
 import com.xiwei.sujian.ui.compose.editor.SujianEditorHost
-import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
-import kotlinx.coroutines.launch
 import com.xiwei.sujian.ui.requestOpenChapter
+import kotlinx.coroutines.launch
 
 /**
  * 写作工作区 — 「作品」一级入口的唯一内容。
@@ -59,9 +59,15 @@ fun ProjectWorkspaceScreen(
     // #595 一：章节切换事务入口 — 显式 Factory 注入进程级容器依赖 + 会话层协调器。
     // 与 WritingPane 内 viewModel(factory=...) 解析到同一 Activity 级实例。
     val editorHost = LocalEditorWindowHost.current
-    val editorViewModel: EditorViewModel = viewModel(
-        factory = EditorViewModel.Factory(context.applicationContext as android.app.Application, deps, editorHost?.sessionCoordinator),
-    )
+    val editorViewModel: EditorViewModel =
+        viewModel(
+            factory =
+                EditorViewModel.Factory(
+                    context.applicationContext as android.app.Application,
+                    deps,
+                    editorHost?.sessionCoordinator,
+                ),
+        )
     // #595 一：尽早初始化 — 章节树里的 requestOpenChapter 需要在 WritingPane
     // 组合前就具备 Repository 与 session 协调器（提交前预准备 Rust session）。
     LaunchedEffect(Unit) {
@@ -75,20 +81,22 @@ fun ProjectWorkspaceScreen(
 
     // 会话恢复：从已持久化的业务选择一次性构建 navigator 初始历史，
     // 之后只使用 navigator 自己保存/恢复的历史，不再从业务字段反复重建。
-    val initialDestination = remember(
-        appState.currentProjectId,
-        appState.currentVolumeId,
-        appState.currentChapterId,
-    ) {
-        deriveRestoreDestination(
+    val initialDestination =
+        remember(
             appState.currentProjectId,
             appState.currentVolumeId,
             appState.currentChapterId,
-        )
-    }
-    val initialHistory = remember(initialDestination) {
-        buildInitialHistory(initialDestination)
-    }
+        ) {
+            deriveRestoreDestination(
+                appState.currentProjectId,
+                appState.currentVolumeId,
+                appState.currentChapterId,
+            )
+        }
+    val initialHistory =
+        remember(initialDestination) {
+            buildInitialHistory(initialDestination)
+        }
     val navigator = rememberListDetailPaneScaffoldNavigator(initialDestinationHistory = initialHistory)
     val workspaceNavState = remember { WorkspaceNavigationState(navigator) }
 
@@ -162,16 +170,21 @@ fun ProjectWorkspaceScreen(
                             // #595 一：事务成功后才提交业务选择和 Navigator —
                             // 保存/加载失败时 Navigator 完全不变化，不再"先导航再回滚"。
                             coroutineScope.launch {
-                                val result = editorViewModel.requestOpenChapter(
-                                    currentProjectId, volumeId, chapterId, chapterTitle,
-                                )
+                                val result =
+                                    editorViewModel.requestOpenChapter(
+                                        currentProjectId,
+                                        volumeId,
+                                        chapterId,
+                                        chapterTitle,
+                                    )
                                 when (result) {
                                     is ChapterSwitchResult.Success -> {
                                         appState.selectChapter(volumeId, chapterId, chapterTitle)
                                         workspaceNavState.navigateToEditor(currentProjectId, volumeId, chapterId)
                                     }
                                     is ChapterSwitchResult.SaveFailed,
-                                    is ChapterSwitchResult.LoadFailed -> {
+                                    is ChapterSwitchResult.LoadFailed,
+                                    -> {
                                         // 数据失败：停在章节树，旧章节 session/状态保留；
                                         // 错误提示已由 ViewModel 事件（toast）发出。
                                     }
@@ -194,9 +207,10 @@ fun ProjectWorkspaceScreen(
             AnimatedPane {
                 // 正文背景层延伸绘制到状态栏和顶栏下方；文字/光标/手势区域保留明确顶部安全区。
                 Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(MaterialTheme.colorScheme.background),
+                    modifier =
+                        Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.background),
                 ) {
                     if (currentProjectId != null && currentChapterId != null && currentVolumeId != null) {
                         SujianEditorHost(
@@ -204,9 +218,10 @@ fun ProjectWorkspaceScreen(
                             volumeId = currentVolumeId,
                             chapterId = currentChapterId,
                             chapterTitle = currentChapterTitle,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(top = if (isEditor) 0.dp else 0.dp),
+                            modifier =
+                                Modifier
+                                    .fillMaxSize()
+                                    .padding(top = if (isEditor) 0.dp else 0.dp),
                             // #595 一：章节切换保存/加载失败 → 回滚选择到旧章节；
                             // 无旧章节（首次进入失败）→ 清除章节选择并返回章节树。
                             onChapterSwitchFailed = { oldProjectId, oldVolumeId, oldChapterId, oldChapterTitle ->

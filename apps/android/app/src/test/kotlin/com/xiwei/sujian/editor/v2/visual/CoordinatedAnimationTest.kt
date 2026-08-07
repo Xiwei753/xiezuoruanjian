@@ -10,7 +10,6 @@ import org.junit.Test
  * 真正进入 AndroidTextAnimationEngine，不再只是死开关。
  */
 class CoordinatedAnimationTest {
-
     private fun createEngine(): AndroidTextAnimationEngine {
         return AndroidTextAnimationEngine(
             AndroidVisualPlanner(),

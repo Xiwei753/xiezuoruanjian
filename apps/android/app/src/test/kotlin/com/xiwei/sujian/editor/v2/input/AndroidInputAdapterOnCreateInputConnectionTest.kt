@@ -29,7 +29,6 @@ import uniffi.writer_core.EditorTransactionCauseDto
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], shadows = [RecordingInputMethodManagerShadow::class])
 class AndroidInputAdapterOnCreateInputConnectionTest {
-
     @Test
     fun newInputConnection_doesNotDisturbLiveComposition() {
         // A spurious connection creation (Espresso description, probing) must not cancel
@@ -96,12 +95,12 @@ class AndroidInputAdapterOnCreateInputConnectionTest {
         assertEquals(
             "The replay must be a plain replace, not a composition commit",
             uniffi.writer_core.EditorOperationKindDto.REPLACE,
-            h.commandPort.commitCalls.last().operationKind
+            h.commandPort.commitCalls.last().operationKind,
         )
         assertEquals(
             "The replay must use the TYPING cause",
             EditorTransactionCauseDto.TYPING,
-            h.commandPort.commitCalls.last().cause
+            h.commandPort.commitCalls.last().cause,
         )
         assertEquals("No kernel reload may be needed", 0, h.commandPort.reloadCount)
     }
@@ -129,7 +128,7 @@ class AndroidInputAdapterOnCreateInputConnectionTest {
         assertEquals(
             "The replay must be a plain insert",
             uniffi.writer_core.EditorOperationKindDto.INSERT,
-            h.commandPort.commitCalls.last().operationKind
+            h.commandPort.commitCalls.last().operationKind,
         )
     }
 }

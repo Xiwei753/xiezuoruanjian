@@ -1,9 +1,9 @@
 package com.xiwei.sujian.ui
 
-//! # 编辑器章节切换操作（从 EditorViewModel 拆分）
-//!
-//! 章节打开事务（latest-wins + 提交前 session 预准备）、章节加载、
-//! 同步合并检查、外部内容应用。
+// ! # 编辑器章节切换操作（从 EditorViewModel 拆分）
+// !
+// ! 章节打开事务（latest-wins + 提交前 session 预准备）、章节加载、
+// ! 同步合并检查、外部内容应用。
 
 import android.app.Application
 import com.xiwei.sujian.R
@@ -24,8 +24,11 @@ import kotlinx.coroutines.withContext
 /**
  * 判断会话是否匹配指定章节三元组 — 拆分复杂条件，避免 ComplexCondition 抑制。
  */
-private fun EditorSession.matchesChapter(projectId: String, volumeId: String, chapterId: String): Boolean =
-    this.projectId == projectId && this.volumeId == volumeId && this.chapterId == chapterId
+private fun EditorSession.matchesChapter(
+    projectId: String,
+    volumeId: String,
+    chapterId: String,
+): Boolean = this.projectId == projectId && this.volumeId == volumeId && this.chapterId == chapterId
 
 /**
  * 同步合并是否需要应用 — 拆分复杂条件，避免 ComplexCondition 抑制。
@@ -37,51 +40,61 @@ private fun EditorViewModel.isSyncMergeApplicable(
     currentContent: String,
 ): Boolean =
     hash.isNotEmpty() &&
-    hash != currentHash &&
-    content != currentContent &&
-    syncMergeEmitDedup.shouldEmit(hash)
+        hash != currentHash &&
+        content != currentContent &&
+        syncMergeEmitDedup.shouldEmit(hash)
 
 fun EditorViewModel.restartSyncObserver() {
     syncObserverJob?.cancel()
-    syncObserverJob = editorScope.launch(Dispatchers.IO) {
-        val repo = _syncStatusRepository ?: return@launch
-        var lastSynced = false
-        repo.state.collect { state ->
-            val isSynced = state == com.xiwei.sujian.model.SyncIndicatorState.Synced
-            if (isSynced && !lastSynced) {
-                checkSyncMergedChapter()
+    syncObserverJob =
+        editorScope.launch(Dispatchers.IO) {
+            val repo = _syncStatusRepository ?: return@launch
+            var lastSynced = false
+            repo.state.collect { state ->
+                val isSynced = state == com.xiwei.sujian.model.SyncIndicatorState.Synced
+                if (isSynced && !lastSynced) {
+                    checkSyncMergedChapter()
+                }
+                lastSynced = isSynced
             }
-            lastSynced = isSynced
         }
-    }
 }
 
 suspend fun EditorViewModel.checkSyncMergedChapter() {
     val session = currentSession ?: return
     if (inputFrozen || _uiState.value.loading) return
     try {
-        val (content, meta) = withContext(Dispatchers.IO) {
-            workspaceRepository.getChapterContentWithMeta(
-                session.projectId, session.volumeId, session.chapterId
-            )
-        }
+        val (content, meta) =
+            withContext(Dispatchers.IO) {
+                workspaceRepository.getChapterContentWithMeta(
+                    session.projectId,
+                    session.volumeId,
+                    session.chapterId,
+                )
+            }
         val currentHash = _uiState.value.chapterHash
         if (isSyncMergeApplicable(meta.hash, currentHash, content, _uiState.value.content)) {
-            val syncState = try { settingsRepository.loadSyncState() } catch (_: Exception) { null }
+            val syncState =
+                try {
+                    settingsRepository.loadSyncState()
+                } catch (_: Exception) {
+                    null
+                }
             val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
             val baseVersion = _sessionCoordinator?.documentCommittedVersionFor(targetId) ?: DocumentVersion()
             emitDocumentFact(
                 TargetDocumentFact(
                     targetId = targetId,
                     text = content,
-                    sourceVersion = DocumentVersion(
-                        contentHash = meta.hash,
-                        syncCommitId = syncState?.lastSyncedCommit,
-                        parentVersion = baseVersion,
-                    ),
+                    sourceVersion =
+                        DocumentVersion(
+                            contentHash = meta.hash,
+                            syncCommitId = syncState?.lastSyncedCommit,
+                            parentVersion = baseVersion,
+                        ),
                     baseVersion = baseVersion,
                     origin = DocumentFactOrigin.SYNC_MERGED,
-                )
+                ),
             )
         }
     } catch (e: kotlinx.coroutines.CancellationException) {
@@ -91,16 +104,28 @@ suspend fun EditorViewModel.checkSyncMergedChapter() {
     }
 }
 
-suspend fun EditorViewModel.requestOpenChapter(projectId: String, volumeId: String, chapterId: String, chapterTitle: String): ChapterSwitchResult {
-    return when (val gate = chapterSwitchGate.runLatest { isLatest ->
-        switchChapterLocked(isLatest, projectId, volumeId, chapterId, chapterTitle)
-    }) {
+suspend fun EditorViewModel.requestOpenChapter(
+    projectId: String,
+    volumeId: String,
+    chapterId: String,
+    chapterTitle: String,
+): ChapterSwitchResult {
+    return when (
+        val gate =
+            chapterSwitchGate.runLatest { isLatest ->
+                switchChapterLocked(isLatest, projectId, volumeId, chapterId, chapterTitle)
+            }
+    ) {
         is ChapterSwitchGate.Result.Completed -> gate.value
         ChapterSwitchGate.Result.Stale -> ChapterSwitchResult.Stale
     }
 }
 
-fun EditorViewModel.isCurrentChapter(projectId: String, volumeId: String, chapterId: String): Boolean {
+fun EditorViewModel.isCurrentChapter(
+    projectId: String,
+    volumeId: String,
+    chapterId: String,
+): Boolean {
     val s = currentSession ?: return false
     return s.projectId == projectId && s.volumeId == volumeId && s.chapterId == chapterId
 }
@@ -146,65 +171,95 @@ suspend fun EditorViewModel.switchChapterLocked(
             val oldTargetId = chapterTargetId(oldSession.projectId, oldSession.volumeId, oldSession.chapterId)
             // #595 七：保存旧章节也记录保存回执（revision 在保存时从会话层读取）。
             val oldRevision = _sessionCoordinator?.sessionState?.revision ?: 0L
-            val saveOk = if (content.trim().isNotEmpty()) {
-                saveMutex.withLock {
-                    try {
-                        when (val result = workspaceRepository.saveChapterContent(oldSession.projectId, oldSession.volumeId, oldSession.chapterId, content)) {
-                            is com.xiwei.sujian.data.BridgeResult.Success -> {
-                                result.data?.contentHash?.let { hash ->
-                                    saveReceipts.record(buildSaveToken(oldTargetId, oldRevision, hash))
+            val saveOk =
+                if (content.trim().isNotEmpty()) {
+                    saveMutex.withLock {
+                        try {
+                            when (
+                                val result =
+                                    workspaceRepository.saveChapterContent(
+                                        oldSession.projectId,
+                                        oldSession.volumeId,
+                                        oldSession.chapterId,
+                                        content,
+                                    )
+                            ) {
+                                is com.xiwei.sujian.data.BridgeResult.Success -> {
+                                    result.data?.contentHash?.let { hash ->
+                                        saveReceipts.record(buildSaveToken(oldTargetId, oldRevision, hash))
+                                    }
+                                    true
                                 }
-                                true
-                            }
-                            is com.xiwei.sujian.data.BridgeResult.Error -> {
-                                _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
-                                emitErrorEvent(getApplication<Application>().getString(R.string.error_save_failed, result.message))
-                                false
-                            }
-                            com.xiwei.sujian.data.BridgeResult.NotLoaded -> {
-                                _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
-                                emitErrorEvent(getApplication<Application>().getString(R.string.error_save_native_not_loaded))
-                                false
-                            }
-                        }
-                    } catch (e: kotlinx.coroutines.CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
-                        emitErrorEvent(getApplication<Application>().getString(R.string.error_save_exception, e.message ?: ""))
-                        false
-                    }
-                }
-            } else if (contentExplicitlyCleared) {
-                saveMutex.withLock {
-                    try {
-                        when (val result = workspaceRepository.clearChapterContent(oldSession.projectId, oldSession.volumeId, oldSession.chapterId)) {
-                            is com.xiwei.sujian.data.BridgeResult.Success -> {
-                                result.data?.contentHash?.let { hash ->
-                                    saveReceipts.record(buildSaveToken(oldTargetId, oldRevision, hash))
+                                is com.xiwei.sujian.data.BridgeResult.Error -> {
+                                    _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+                                    emitErrorEvent(
+                                        getApplication<Application>().getString(
+                                            R.string.error_save_failed,
+                                            result.message,
+                                        ),
+                                    )
+                                    false
                                 }
-                                true
+                                com.xiwei.sujian.data.BridgeResult.NotLoaded -> {
+                                    _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+                                    emitErrorEvent(
+                                        getApplication<Application>().getString(R.string.error_save_native_not_loaded),
+                                    )
+                                    false
+                                }
                             }
-                            is com.xiwei.sujian.data.BridgeResult.Error -> {
-                                _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
-                                emitErrorEvent(getApplication<Application>().getString(R.string.error_save_failed, result.message))
-                                false
-                            }
-                            com.xiwei.sujian.data.BridgeResult.NotLoaded -> {
-                                _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
-                                false
-                            }
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+                            emitErrorEvent(
+                                getApplication<Application>().getString(R.string.error_save_exception, e.message ?: ""),
+                            )
+                            false
                         }
-                    } catch (e: kotlinx.coroutines.CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
-                        false
                     }
+                } else if (contentExplicitlyCleared) {
+                    saveMutex.withLock {
+                        try {
+                            when (
+                                val result =
+                                    workspaceRepository.clearChapterContent(
+                                        oldSession.projectId,
+                                        oldSession.volumeId,
+                                        oldSession.chapterId,
+                                    )
+                            ) {
+                                is com.xiwei.sujian.data.BridgeResult.Success -> {
+                                    result.data?.contentHash?.let { hash ->
+                                        saveReceipts.record(buildSaveToken(oldTargetId, oldRevision, hash))
+                                    }
+                                    true
+                                }
+                                is com.xiwei.sujian.data.BridgeResult.Error -> {
+                                    _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+                                    emitErrorEvent(
+                                        getApplication<Application>().getString(
+                                            R.string.error_save_failed,
+                                            result.message,
+                                        ),
+                                    )
+                                    false
+                                }
+                                com.xiwei.sujian.data.BridgeResult.NotLoaded -> {
+                                    _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+                                    false
+                                }
+                            }
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+                            false
+                        }
+                    }
+                } else {
+                    true
                 }
-            } else {
-                true
-            }
 
             if (!saveOk) {
                 // #595 一：保存失败返回明确失败结果，且完整恢复旧 EditorUiState。
@@ -227,21 +282,23 @@ suspend fun EditorViewModel.switchChapterLocked(
 
         saveCommandChannel = Channel<SaveCommand>(Channel.UNLIMITED)
 
-        val newSession = EditorSession(
-            sessionId = java.util.UUID.randomUUID().toString(),
-            projectId = projectId,
-            volumeId = volumeId,
-            chapterId = chapterId
-        )
+        val newSession =
+            EditorSession(
+                sessionId = java.util.UUID.randomUUID().toString(),
+                projectId = projectId,
+                volumeId = volumeId,
+                chapterId = chapterId,
+            )
         currentSession = newSession
         // #595 二：章节提交后重置同步合并发射去重。
         syncMergeEmitDedup.reset()
 
-        _uiState.value = _uiState.value.copy(
-            loading = true,
-            chapterTitle = chapterTitle,
-            saveStatus = SaveStatus.Idle
-        )
+        _uiState.value =
+            _uiState.value.copy(
+                loading = true,
+                chapterTitle = chapterTitle,
+                saveStatus = SaveStatus.Idle,
+            )
         contentExplicitlyCleared = false
         startSaveActor()
         reloadSettings()
@@ -346,7 +403,10 @@ fun EditorViewModel.rollbackPreparedSession(handle: com.xiwei.sujian.editor.v2.c
     }
 }
 
-fun EditorViewModel.prepareTargetSession(targetId: String, content: String): com.xiwei.sujian.editor.v2.coordinator.PreparedSessionHandle? {
+fun EditorViewModel.prepareTargetSession(
+    targetId: String,
+    content: String,
+): com.xiwei.sujian.editor.v2.coordinator.PreparedSessionHandle? {
     val coordinator = _sessionCoordinator ?: return null
     if (!coordinator.isTargetRegistered(targetId)) {
         coordinator.registerTargetMeta(targetId, TextEditorProfile.DocumentBody, persistent = true)
@@ -355,24 +415,31 @@ fun EditorViewModel.prepareTargetSession(targetId: String, content: String): com
     return coordinator.prepareTargetSessionForCommit(targetId, content, cursorUtf8)
 }
 
-fun EditorViewModel.initChapter(projectId: String, volumeId: String, chapterId: String, chapterTitle: String) {
+fun EditorViewModel.initChapter(
+    projectId: String,
+    volumeId: String,
+    chapterId: String,
+    chapterTitle: String,
+) {
     val existing = currentSession
     if (existing != null && existing.matchesChapter(projectId, volumeId, chapterId)) {
         return
     }
 
-    currentSession = EditorSession(
-        sessionId = java.util.UUID.randomUUID().toString(),
-        projectId = projectId,
-        volumeId = volumeId,
-        chapterId = chapterId
-    )
+    currentSession =
+        EditorSession(
+            sessionId = java.util.UUID.randomUUID().toString(),
+            projectId = projectId,
+            volumeId = volumeId,
+            chapterId = chapterId,
+        )
     // #595 二：章节提交后重置同步合并发射去重（与 switchChapterLocked 一致）。
     syncMergeEmitDedup.reset()
-    _uiState.value = _uiState.value.copy(
-        loading = true,
-        chapterTitle = chapterTitle
-    )
+    _uiState.value =
+        _uiState.value.copy(
+            loading = true,
+            chapterTitle = chapterTitle,
+        )
     contentExplicitlyCleared = false
     startSaveActor()
     reloadSettings()
@@ -382,43 +449,50 @@ fun EditorViewModel.initChapter(projectId: String, volumeId: String, chapterId: 
 }
 
 fun EditorViewModel.initErrorState(errorMessage: String) {
-    _uiState.value = _uiState.value.copy(
-        loading = false,
-        content = errorMessage,
-        editorEnabled = false,
-        saveStatus = SaveStatus.Idle
-    )
+    _uiState.value =
+        _uiState.value.copy(
+            loading = false,
+            content = errorMessage,
+            editorEnabled = false,
+            saveStatus = SaveStatus.Idle,
+        )
 }
 
 suspend fun EditorViewModel.loadChapter(session: EditorSession): Boolean {
     isLoadingChapter = true
     val sessionId = session.sessionId
     return try {
-        val result = withContext(kotlinx.coroutines.Dispatchers.IO) {
-            workspaceRepository.getChapterContentWithMeta(session.projectId, session.volumeId, session.chapterId)
-        }
+        val result =
+            withContext(kotlinx.coroutines.Dispatchers.IO) {
+                workspaceRepository.getChapterContentWithMeta(session.projectId, session.volumeId, session.chapterId)
+            }
         val content = result.first
         val meta = result.second
 
         com.xiwei.sujian.diagnostics.DiagnosticsEvents.chapterLoad(
-            session.projectId, session.chapterId,
-            content.toByteArray(Charsets.UTF_8).size, "ok"
+            session.projectId,
+            session.chapterId,
+            content.toByteArray(Charsets.UTF_8).size,
+            "ok",
         )
 
         if (currentSession?.sessionId != sessionId) return false
 
-        _uiState.value = _uiState.value.copy(
-            loading = false,
-            content = content,
-            chapterHash = meta.hash,
-            chapterNote = meta.note,
-            editorEnabled = true,
-            saveStatus = SaveStatus.Idle
-        )
+        _uiState.value =
+            _uiState.value.copy(
+                loading = false,
+                content = content,
+                chapterHash = meta.hash,
+                chapterNote = meta.note,
+                editorEnabled = true,
+                saveStatus = SaveStatus.Idle,
+            )
         contentDirty = false
         // #595 七：加载即记录磁盘版本回执（revision 0 — 尚未编辑，屏幕与磁盘一致），
         // 同步前 flush 不把"从未保存"误判为假成功。
-        saveReceipts.record(buildSaveToken(chapterTargetId(session.projectId, session.volumeId, session.chapterId), 0L, meta.hash))
+        saveReceipts.record(
+            buildSaveToken(chapterTargetId(session.projectId, session.volumeId, session.chapterId), 0L, meta.hash),
+        )
         val targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId)
         // #595 四：Android 不自行填写 parentVersion — 磁盘版本可能来自 Git 回退、
         // 外部修改或迟到 IO，不能伪称为上次 committed 的后代。版本因果只能由
@@ -434,7 +508,7 @@ suspend fun EditorViewModel.loadChapter(session: EditorSession): Boolean {
                 sourceVersion = loadedVersion,
                 baseVersion = DocumentVersion(),
                 origin = DocumentFactOrigin.REPOSITORY_LOAD,
-            )
+            ),
         )
         previousText = content
         initialWordCount = calculateWordCount(content)
@@ -444,7 +518,10 @@ suspend fun EditorViewModel.loadChapter(session: EditorSession): Boolean {
         true
     } catch (e: Throwable) {
         com.xiwei.sujian.diagnostics.DiagnosticsEvents.chapterLoad(
-            session.projectId, session.chapterId, 0, "error"
+            session.projectId,
+            session.chapterId,
+            0,
+            "error",
         )
         if (currentSession?.sessionId != sessionId) return false
         if (e is kotlinx.coroutines.CancellationException) {
@@ -453,25 +530,31 @@ suspend fun EditorViewModel.loadChapter(session: EditorSession): Boolean {
             throw e
         }
         isLoadingChapter = false
-        _uiState.value = _uiState.value.copy(
-            loading = false,
-            editorEnabled = false,
-            saveStatus = SaveStatus.Idle
-        )
+        _uiState.value =
+            _uiState.value.copy(
+                loading = false,
+                editorEnabled = false,
+                saveStatus = SaveStatus.Idle,
+            )
         emitErrorEvent(getApplication<Application>().getString(R.string.error_load_chapter_failed, e.message ?: ""))
         false
     }
 }
 
-fun EditorViewModel.applyExternalContentToUi(targetId: String, text: String, fileHash: String) {
+fun EditorViewModel.applyExternalContentToUi(
+    targetId: String,
+    text: String,
+    fileHash: String,
+) {
     val s = currentSession ?: return
     if (targetId != chapterTargetId(s.projectId, s.volumeId, s.chapterId)) return
     val current = _uiState.value
-    _uiState.value = current.copy(
-        content = text,
-        chapterHash = fileHash,
-        saveStatus = SaveStatus.Saved,
-    )
+    _uiState.value =
+        current.copy(
+            content = text,
+            chapterHash = fileHash,
+            saveStatus = SaveStatus.Saved,
+        )
     contentDirty = false
     contentExplicitlyCleared = false
     // #595 七：同步合并内容已由 Core 写入磁盘 — 记录回执（revision 取
@@ -487,4 +570,3 @@ fun EditorViewModel.notifySyncMergeConflict() {
         emitErrorEvent(getApplication<Application>().getString(R.string.error_sync_document_conflict))
     }
 }
-

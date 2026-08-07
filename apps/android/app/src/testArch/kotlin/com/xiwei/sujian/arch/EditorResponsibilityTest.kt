@@ -14,7 +14,6 @@ import org.junit.Test
  * 当前代码库存在既有违规的测试用 @Ignore 标记，并在注释中列出违规文件。
  */
 class EditorResponsibilityTest {
-
     private val sourceRoot = ArchTestSupport.appSourceRoot
 
     // ------------------------------------------------------------------
@@ -27,17 +26,19 @@ class EditorResponsibilityTest {
      */
     @Test
     fun `input does not reference repository or bridge`() {
-        val violations = ArchTestSupport.findViolations(
-            sourceRoot,
-            pathFilter = "/editor/v2/input/",
-            forbiddenReferences = listOf(
-                "com.xiwei.sujian.data",
-                "com.xiwei.sujian.workspace",
+        val violations =
+            ArchTestSupport.findViolations(
+                sourceRoot,
+                pathFilter = "/editor/v2/input/",
+                forbiddenReferences =
+                    listOf(
+                        "com.xiwei.sujian.data",
+                        "com.xiwei.sujian.workspace",
+                    ),
             )
-        )
         assertTrue(
             "editor/v2/input 不应引用 Repository/Bridge/data 层。违规:\n${ArchTestSupport.formatViolations(violations)}",
-            violations.isEmpty()
+            violations.isEmpty(),
         )
     }
 
@@ -46,19 +47,21 @@ class EditorResponsibilityTest {
      */
     @Test
     fun `input does not depend on compose ui or activity`() {
-        val violations = ArchTestSupport.findViolations(
-            sourceRoot,
-            pathFilter = "/editor/v2/input/",
-            forbiddenReferences = listOf(
-                "androidx.compose.ui",
-                "androidx.compose.material3",
-                "androidx.compose.foundation",
-                "androidx.activity",
+        val violations =
+            ArchTestSupport.findViolations(
+                sourceRoot,
+                pathFilter = "/editor/v2/input/",
+                forbiddenReferences =
+                    listOf(
+                        "androidx.compose.ui",
+                        "androidx.compose.material3",
+                        "androidx.compose.foundation",
+                        "androidx.activity",
+                    ),
             )
-        )
         assertTrue(
             "editor/v2/input 不应依赖 Compose UI/Activity。违规:\n${ArchTestSupport.formatViolations(violations)}",
-            violations.isEmpty()
+            violations.isEmpty(),
         )
     }
 
@@ -82,8 +85,10 @@ class EditorResponsibilityTest {
             }
         }
         assertTrue(
-            "editor/v2/input 不应直接引用 UniFFI 绑定（EditorTransactionCauseDto 除外）。违规:\n${ArchTestSupport.formatViolations(violations)}",
-            violations.isEmpty()
+            "editor/v2/input 不应直接引用 UniFFI 绑定（EditorTransactionCauseDto 除外）。违规:\n${ArchTestSupport.formatViolations(
+                violations,
+            )}",
+            violations.isEmpty(),
         )
     }
 
@@ -96,26 +101,30 @@ class EditorResponsibilityTest {
      */
     @Test
     fun `visual and motion do not reference repository or bridge`() {
-        val visualViolations = ArchTestSupport.findViolations(
-            sourceRoot,
-            pathFilter = "/editor/v2/visual/",
-            forbiddenReferences = listOf(
-                "com.xiwei.sujian.data",
-                "com.xiwei.sujian.workspace",
+        val visualViolations =
+            ArchTestSupport.findViolations(
+                sourceRoot,
+                pathFilter = "/editor/v2/visual/",
+                forbiddenReferences =
+                    listOf(
+                        "com.xiwei.sujian.data",
+                        "com.xiwei.sujian.workspace",
+                    ),
             )
-        )
-        val motionViolations = ArchTestSupport.findViolations(
-            sourceRoot,
-            pathFilter = "/editor/v2/motion/",
-            forbiddenReferences = listOf(
-                "com.xiwei.sujian.data",
-                "com.xiwei.sujian.workspace",
+        val motionViolations =
+            ArchTestSupport.findViolations(
+                sourceRoot,
+                pathFilter = "/editor/v2/motion/",
+                forbiddenReferences =
+                    listOf(
+                        "com.xiwei.sujian.data",
+                        "com.xiwei.sujian.workspace",
+                    ),
             )
-        )
         val all = visualViolations + motionViolations
         assertTrue(
             "editor/v2/visual 与 motion 不应引用 Repository/Bridge/data 层。违规:\n${ArchTestSupport.formatViolations(all)}",
-            all.isEmpty()
+            all.isEmpty(),
         )
     }
 
@@ -124,21 +133,28 @@ class EditorResponsibilityTest {
      */
     @Test
     fun `visual and motion do not depend on activity view or input`() {
-        val forbidden = listOf(
-            "androidx.activity",
-            "android.view",
-            "com.xiwei.sujian.editor.v2.input",
-        )
-        val visualViolations = ArchTestSupport.findViolations(
-            sourceRoot, "/editor/v2/visual/", forbidden
-        )
-        val motionViolations = ArchTestSupport.findViolations(
-            sourceRoot, "/editor/v2/motion/", forbidden
-        )
+        val forbidden =
+            listOf(
+                "androidx.activity",
+                "android.view",
+                "com.xiwei.sujian.editor.v2.input",
+            )
+        val visualViolations =
+            ArchTestSupport.findViolations(
+                sourceRoot,
+                "/editor/v2/visual/",
+                forbidden,
+            )
+        val motionViolations =
+            ArchTestSupport.findViolations(
+                sourceRoot,
+                "/editor/v2/motion/",
+                forbidden,
+            )
         val all = visualViolations + motionViolations
         assertTrue(
             "visual/motion 不应依赖 Activity/View/input。违规:\n${ArchTestSupport.formatViolations(all)}",
-            all.isEmpty()
+            all.isEmpty(),
         )
     }
 
@@ -152,10 +168,11 @@ class EditorResponsibilityTest {
     @Test
     fun `visual does not directly reference uniffi bindings`() {
         val visualFiles = ArchTestSupport.collectKotlinFiles(sourceRoot, "/editor/v2/visual/")
-        val allowedFqns = listOf(
-            "uniffi.writer_core.EditorOperationKindDto",
-            "uniffi.writer_core.AnimationModeDto",
-        )
+        val allowedFqns =
+            listOf(
+                "uniffi.writer_core.EditorOperationKindDto",
+                "uniffi.writer_core.AnimationModeDto",
+            )
         val violations = mutableMapOf<java.io.File, List<String>>()
         for (file in visualFiles) {
             val lineViolations = ArchTestSupport.findForbiddenPrefixRefs(file, "uniffi.writer_core", allowedFqns)
@@ -165,7 +182,7 @@ class EditorResponsibilityTest {
         }
         assertTrue(
             "editor/v2/visual 不应直接引用 UniFFI 绑定（DTO 契约类型除外）。违规:\n${ArchTestSupport.formatViolations(violations)}",
-            violations.isEmpty()
+            violations.isEmpty(),
         )
     }
 
@@ -174,14 +191,15 @@ class EditorResponsibilityTest {
      */
     @Test
     fun `motion does not directly reference uniffi bindings`() {
-        val violations = ArchTestSupport.findViolations(
-            sourceRoot,
-            pathFilter = "/editor/v2/motion/",
-            forbiddenReferences = listOf("uniffi.writer_core"),
-        )
+        val violations =
+            ArchTestSupport.findViolations(
+                sourceRoot,
+                pathFilter = "/editor/v2/motion/",
+                forbiddenReferences = listOf("uniffi.writer_core"),
+            )
         assertTrue(
             "editor/v2/motion 不应直接引用 UniFFI 绑定。违规:\n${ArchTestSupport.formatViolations(violations)}",
-            violations.isEmpty()
+            violations.isEmpty(),
         )
     }
 
@@ -200,16 +218,17 @@ class EditorResponsibilityTest {
     fun `motion does not depend on compose ui framework`() {
         val motionFiles = ArchTestSupport.collectKotlinFiles(sourceRoot, "/editor/v2/motion/")
         // 允许 androidx.compose.runtime.Immutable/@Immutable 注解，禁止其他 Compose UI 依赖。
-        val forbidden = listOf(
-            "androidx.compose.ui",
-            "androidx.compose.material3",
-            "androidx.compose.foundation",
-            "androidx.compose.animation",
-        )
+        val forbidden =
+            listOf(
+                "androidx.compose.ui",
+                "androidx.compose.material3",
+                "androidx.compose.foundation",
+                "androidx.compose.animation",
+            )
         val violations = ArchTestSupport.findViolationsIn(motionFiles, forbidden)
         assertTrue(
             "editor/v2/motion 不应依赖 Compose UI 框架。违规:\n${ArchTestSupport.formatViolations(violations)}",
-            violations.isEmpty()
+            violations.isEmpty(),
         )
     }
 
@@ -220,16 +239,17 @@ class EditorResponsibilityTest {
     @Test
     fun `visual does not depend on compose ui framework`() {
         val visualFiles = ArchTestSupport.collectKotlinFiles(sourceRoot, "/editor/v2/visual/")
-        val forbidden = listOf(
-            "androidx.compose.ui",
-            "androidx.compose.material3",
-            "androidx.compose.foundation",
-            "androidx.compose.animation",
-        )
+        val forbidden =
+            listOf(
+                "androidx.compose.ui",
+                "androidx.compose.material3",
+                "androidx.compose.foundation",
+                "androidx.compose.animation",
+            )
         val violations = ArchTestSupport.findViolationsIn(visualFiles, forbidden)
         assertTrue(
             "editor/v2/visual 不应依赖 Compose UI 框架。违规:\n${ArchTestSupport.formatViolations(violations)}",
-            violations.isEmpty()
+            violations.isEmpty(),
         )
     }
 }

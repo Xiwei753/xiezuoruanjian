@@ -22,7 +22,8 @@ class EditableTextTarget(
     val targetId: String,
     profile: TextEditorProfile = TextEditorProfile(),
     isPersistent: Boolean = false,
-    commitPolicy: CommitPolicy = if (isPersistent) CommitPolicy.COMMIT_ON_EVERY_CHANGE else CommitPolicy.COMMIT_ON_CONFIRM
+    commitPolicy: CommitPolicy =
+        if (isPersistent) CommitPolicy.COMMIT_ON_EVERY_CHANGE else CommitPolicy.COMMIT_ON_CONFIRM,
 ) {
     var profile: TextEditorProfile by mutableStateOf(profile)
         private set
@@ -69,7 +70,7 @@ data class Transform2D(
     val translateX: Float = 0f,
     val translateY: Float = 0f,
     val scaleX: Float = 1f,
-    val scaleY: Float = 1f
+    val scaleY: Float = 1f,
 ) {
     companion object {
         val IDENTITY = Transform2D()
@@ -98,5 +99,5 @@ enum class EditingState {
     COMMITTING,
     CANCELLING,
     REBINDING,
-    RELEASED
+    RELEASED,
 }

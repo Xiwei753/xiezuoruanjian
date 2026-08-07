@@ -2,7 +2,6 @@ package com.xiwei.sujian.editor.v2.coordinator
 
 import android.view.Choreographer
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -17,7 +16,6 @@ import org.junit.Test
  * - stop/release 后不再 post。
  */
 class SingleFrameDriveTest {
-
     /** 假 FrameCallbackPoster — 记录 post/remove 调用次数，不依赖真实 Choreographer。 */
     private class FakeFrameCallbackPoster : WindowDisplayFrameClock.FrameCallbackPoster {
         var postedCount = 0
@@ -42,6 +40,7 @@ class SingleFrameDriveTest {
         var lastFrameTimeNanos = -1L
 
         override fun needsFrame(): Boolean = needsFrameProvider()
+
         override fun onFrame(frameTimeNanos: Long) {
             frameCount++
             lastFrameTimeNanos = frameTimeNanos

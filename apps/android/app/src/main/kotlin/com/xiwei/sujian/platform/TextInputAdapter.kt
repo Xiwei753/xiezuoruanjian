@@ -20,8 +20,14 @@ interface TextInputAdapter {
     fun canAcceptPlainTextKey(): Boolean = !isImeComposing()
 
     /** UTF-16 offset → UTF-8 byte offset 转换 */
-    fun utf16ToUtf8Offset(text: String, utf16Offset: Int): Int
+    fun utf16ToUtf8Offset(
+        text: String,
+        utf16Offset: Int,
+    ): Int
 
     /** UTF-8 byte offset → UTF-16 offset 转换 */
-    fun utf8ToUtf16Offset(text: String, utf8Offset: Int): Int
+    fun utf8ToUtf16Offset(
+        text: String,
+        utf8Offset: Int,
+    ): Int
 }

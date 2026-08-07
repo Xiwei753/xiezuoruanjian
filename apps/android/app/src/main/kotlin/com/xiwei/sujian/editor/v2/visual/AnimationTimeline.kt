@@ -23,7 +23,7 @@ package com.xiwei.sujian.editor.v2.visual
  */
 class AnimationTimeline(
     private val durationMs: Long,
-    private val submittedAtMs: Long = Long.MIN_VALUE
+    private val submittedAtMs: Long = Long.MIN_VALUE,
 ) {
     /** Sentinel for "no submission timestamp provided". */
     private val noSubmission: Boolean = submittedAtMs == Long.MIN_VALUE
@@ -151,7 +151,7 @@ data class VisualFrameSnapshot(
      *  transaction's BlockShift starts from the on-screen translateY rather than the full
      *  -deltaY — preventing suffix blocks from jumping back to the old position during
      *  rapid consecutive input. */
-    val blockShiftStates: List<BlockShiftVisualState> = emptyList()
+    val blockShiftStates: List<BlockShiftVisualState> = emptyList(),
 )
 
 data class BlockShiftVisualState(
@@ -171,7 +171,7 @@ data class BlockShiftVisualState(
     val currentTranslateY: Float,
     /** Always 0 — the animation's final state is the new layout with no translation.
      *  Included for API symmetry with [SliceVisualState.destinationLeft/Top/Right/Bottom]. */
-    val targetTranslateY: Float
+    val targetTranslateY: Float,
 )
 
 data class SliceVisualState(
@@ -194,5 +194,5 @@ data class SliceVisualState(
     val destinationLeft: Float = currentLeft,
     val destinationTop: Float = currentTop,
     val destinationRight: Float = currentRight,
-    val destinationBottom: Float = currentBottom
+    val destinationBottom: Float = currentBottom,
 )

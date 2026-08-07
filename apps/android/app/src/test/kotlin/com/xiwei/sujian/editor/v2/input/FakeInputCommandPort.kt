@@ -41,9 +41,8 @@ import uniffi.writer_core.EditorVisualIntentDto
 class FakeInputCommandPort(
     override val mirror: DisplayTextMirror,
     initialText: String = "",
-    initialCursorUtf8: Int = 0
+    initialCursorUtf8: Int = 0,
 ) : InputCommandPort {
-
     data class CommitCall(
         val byteStart: Int,
         val byteEndExclusive: Int,
@@ -51,7 +50,7 @@ class FakeInputCommandPort(
         val cause: EditorTransactionCauseDto,
         val compositionSessionId: Long,
         val compositionGeneration: Long,
-        val operationKind: EditorOperationKindDto
+        val operationKind: EditorOperationKindDto,
     )
 
     private var textBytes: ByteArray = initialText.toByteArray(Charsets.UTF_8)
@@ -104,7 +103,11 @@ class FakeInputCommandPort(
     /** True when the fake still holds a live composition session (kernel-side state). */
     fun hasActiveSession(): Boolean = isSessionActive()
 
-    private fun sessionMatches(id: Long, baseRevision: Long, generation: Long): Boolean {
+    private fun sessionMatches(
+        id: Long,
+        baseRevision: Long,
+        generation: Long,
+    ): Boolean {
         return isSessionActive() &&
             sessionId == id &&
             sessionBaseRevision == baseRevision &&
@@ -136,7 +139,7 @@ class FakeInputCommandPort(
         operationKind: EditorOperationKindDto,
         oldAffected: List<EditorByteRangeDto>,
         newAffected: List<EditorByteRangeDto>,
-        baseRevision: Long
+        baseRevision: Long,
     ): EditorEditResultDto {
         val oldSelectionAnchor = selectionAnchorUtf8
         val oldSelectionHead = selectionHeadUtf8
@@ -148,15 +151,16 @@ class FakeInputCommandPort(
         val selHead = clampToCharBoundary(resultingSelectionHead)
         selectionAnchorUtf8 = selAnchor
         selectionHeadUtf8 = selHead
-        val patch = DisplayPatchDto(
-            baseRevision = baseRevision.toULong(),
-            newRevision = revision.toULong(),
-            replaceByteStart = byteStart.toUInt(),
-            replaceByteEndExclusive = byteEndExclusive.toUInt(),
-            insertedText = replacementText,
-            resultingSelectionStart = selAnchor.toUInt(),
-            resultingSelectionEnd = selHead.toUInt()
-        )
+        val patch =
+            DisplayPatchDto(
+                baseRevision = baseRevision.toULong(),
+                newRevision = revision.toULong(),
+                replaceByteStart = byteStart.toUInt(),
+                replaceByteEndExclusive = byteEndExclusive.toUInt(),
+                insertedText = replacementText,
+                resultingSelectionStart = selAnchor.toUInt(),
+                resultingSelectionEnd = selHead.toUInt(),
+            )
         return EditorEditResultDto(
             outcome = EditorEditOutcomeDto.APPLIED,
             transactionId = nextTransactionId++.toULong(),
@@ -167,20 +171,22 @@ class FakeInputCommandPort(
             oldSelectionEnd = oldSelectionHead.toUInt(),
             newSelectionStart = selAnchor.toUInt(),
             newSelectionEnd = selHead.toUInt(),
-            visualIntent = EditorVisualIntentDto(
-                cause = cause,
-                operationKind = operationKind,
-                oldAffectedByteRanges = oldAffected,
-                newAffectedByteRanges = newAffected,
-                animationMode = AnimationModeDto.SYSTEM_SUPPRESSED,
-                durationMs = 0uL,
-                coordinatedCursor = CoordinatedCursorDto(
-                    oldByteOffset = selectionAnchorUtf8.toUInt(),
-                    newByteOffset = selHead.toUInt(),
-                    shouldAnimate = false
-                )
-            ),
-            compositionSession = null
+            visualIntent =
+                EditorVisualIntentDto(
+                    cause = cause,
+                    operationKind = operationKind,
+                    oldAffectedByteRanges = oldAffected,
+                    newAffectedByteRanges = newAffected,
+                    animationMode = AnimationModeDto.SYSTEM_SUPPRESSED,
+                    durationMs = 0uL,
+                    coordinatedCursor =
+                        CoordinatedCursorDto(
+                            oldByteOffset = selectionAnchorUtf8.toUInt(),
+                            newByteOffset = selHead.toUInt(),
+                            shouldAnimate = false,
+                        ),
+                ),
+            compositionSession = null,
         )
     }
 
@@ -188,7 +194,7 @@ class FakeInputCommandPort(
         outcome: EditorEditOutcomeDto,
         baseRevision: Long,
         operationKind: EditorOperationKindDto,
-        cause: EditorTransactionCauseDto
+        cause: EditorTransactionCauseDto,
     ): EditorEditResultDto {
         return EditorEditResultDto(
             outcome = outcome,
@@ -200,41 +206,64 @@ class FakeInputCommandPort(
             oldSelectionEnd = selectionHeadUtf8.toUInt(),
             newSelectionStart = selectionAnchorUtf8.toUInt(),
             newSelectionEnd = selectionHeadUtf8.toUInt(),
-            visualIntent = EditorVisualIntentDto(
-                cause = cause,
-                operationKind = operationKind,
-                oldAffectedByteRanges = emptyList(),
-                newAffectedByteRanges = emptyList(),
-                animationMode = AnimationModeDto.SYSTEM_SUPPRESSED,
-                durationMs = 0uL,
-                coordinatedCursor = CoordinatedCursorDto(
-                    oldByteOffset = selectionAnchorUtf8.toUInt(),
-                    newByteOffset = selectionHeadUtf8.toUInt(),
-                    shouldAnimate = false
-                )
-            ),
-            compositionSession = null
+            visualIntent =
+                EditorVisualIntentDto(
+                    cause = cause,
+                    operationKind = operationKind,
+                    oldAffectedByteRanges = emptyList(),
+                    newAffectedByteRanges = emptyList(),
+                    animationMode = AnimationModeDto.SYSTEM_SUPPRESSED,
+                    durationMs = 0uL,
+                    coordinatedCursor =
+                        CoordinatedCursorDto(
+                            oldByteOffset = selectionAnchorUtf8.toUInt(),
+                            newByteOffset = selectionHeadUtf8.toUInt(),
+                            shouldAnimate = false,
+                        ),
+                ),
+            compositionSession = null,
         )
     }
 
-    private fun staleResult(): EditorEditResultDto = noopResult(
-        EditorEditOutcomeDto.STALE_REVISION, revision,
-        EditorOperationKindDto.COMPOSITION_UPDATE, EditorTransactionCauseDto.IME_COMPOSITION
-    )
+    private fun staleResult(): EditorEditResultDto =
+        noopResult(
+            EditorEditOutcomeDto.STALE_REVISION,
+            revision,
+            EditorOperationKindDto.COMPOSITION_UPDATE,
+            EditorTransactionCauseDto.IME_COMPOSITION,
+        )
 
-    override fun beginComposition(replaceStart: Int, replaceEndExclusive: Int): EditorEditResultDto? {
+    override fun beginComposition(
+        replaceStart: Int,
+        replaceEndExclusive: Int,
+    ): EditorEditResultDto? {
         beginCompositionCount++
         val baseRevision = revision
         // Kernel contract: a new begin is authoritative — any stale session is dropped.
         clearSession()
         if (replaceStart > replaceEndExclusive) {
-            return noopResult(EditorEditOutcomeDto.INVALID_RANGE, baseRevision, EditorOperationKindDto.COMPOSITION_UPDATE, EditorTransactionCauseDto.IME_COMPOSITION)
+            return noopResult(
+                EditorEditOutcomeDto.INVALID_RANGE,
+                baseRevision,
+                EditorOperationKindDto.COMPOSITION_UPDATE,
+                EditorTransactionCauseDto.IME_COMPOSITION,
+            )
         }
         if (replaceStart > textBytes.size || replaceEndExclusive > textBytes.size) {
-            return noopResult(EditorEditOutcomeDto.INVALID_OFFSET, baseRevision, EditorOperationKindDto.COMPOSITION_UPDATE, EditorTransactionCauseDto.IME_COMPOSITION)
+            return noopResult(
+                EditorEditOutcomeDto.INVALID_OFFSET,
+                baseRevision,
+                EditorOperationKindDto.COMPOSITION_UPDATE,
+                EditorTransactionCauseDto.IME_COMPOSITION,
+            )
         }
         if (!isCharBoundary(replaceStart) || !isCharBoundary(replaceEndExclusive)) {
-            return noopResult(EditorEditOutcomeDto.INVALID_OFFSET, baseRevision, EditorOperationKindDto.COMPOSITION_UPDATE, EditorTransactionCauseDto.IME_COMPOSITION)
+            return noopResult(
+                EditorEditOutcomeDto.INVALID_OFFSET,
+                baseRevision,
+                EditorOperationKindDto.COMPOSITION_UPDATE,
+                EditorTransactionCauseDto.IME_COMPOSITION,
+            )
         }
         sessionId = nextCompositionSessionId++
         sessionBaseRevision = baseRevision
@@ -253,24 +282,27 @@ class FakeInputCommandPort(
             oldSelectionEnd = selectionHeadUtf8.toUInt(),
             newSelectionStart = selectionAnchorUtf8.toUInt(),
             newSelectionEnd = selectionHeadUtf8.toUInt(),
-            visualIntent = EditorVisualIntentDto(
-                cause = EditorTransactionCauseDto.IME_COMPOSITION,
-                operationKind = EditorOperationKindDto.COMPOSITION_UPDATE,
-                oldAffectedByteRanges = emptyList(),
-                newAffectedByteRanges = emptyList(),
-                animationMode = AnimationModeDto.SYSTEM_SUPPRESSED,
-                durationMs = 0uL,
-                coordinatedCursor = CoordinatedCursorDto(
-                    oldByteOffset = selectionAnchorUtf8.toUInt(),
-                    newByteOffset = selectionHeadUtf8.toUInt(),
-                    shouldAnimate = false
-                )
-            ),
-            compositionSession = CompositionSessionDto(
-                sessionId = sessionId.toULong(),
-                baseRevision = sessionBaseRevision.toULong(),
-                generation = sessionGeneration.toULong()
-            )
+            visualIntent =
+                EditorVisualIntentDto(
+                    cause = EditorTransactionCauseDto.IME_COMPOSITION,
+                    operationKind = EditorOperationKindDto.COMPOSITION_UPDATE,
+                    oldAffectedByteRanges = emptyList(),
+                    newAffectedByteRanges = emptyList(),
+                    animationMode = AnimationModeDto.SYSTEM_SUPPRESSED,
+                    durationMs = 0uL,
+                    coordinatedCursor =
+                        CoordinatedCursorDto(
+                            oldByteOffset = selectionAnchorUtf8.toUInt(),
+                            newByteOffset = selectionHeadUtf8.toUInt(),
+                            shouldAnimate = false,
+                        ),
+                ),
+            compositionSession =
+                CompositionSessionDto(
+                    sessionId = sessionId.toULong(),
+                    baseRevision = sessionBaseRevision.toULong(),
+                    generation = sessionGeneration.toULong(),
+                ),
         )
     }
 
@@ -278,7 +310,7 @@ class FakeInputCommandPort(
         compositionSessionId: Long,
         compositionGeneration: Long,
         newPreeditText: String,
-        newPreeditCursorOffset: Int
+        newPreeditCursorOffset: Int,
     ): EditorEditResultDto? {
         val baseRevision = revision
         if (!sessionMatches(compositionSessionId, baseRevision, compositionGeneration)) {
@@ -290,16 +322,22 @@ class FakeInputCommandPort(
         sessionPreeditText = newPreeditText
         sessionPreeditCursorUtf16 = newPreeditCursorOffset
         sessionGeneration++
-        val oldAffected = if (oldPreeditBytes > 0) {
-            listOf(EditorByteRangeDto(sessionReplaceStart.toUInt(), (sessionReplaceStart + oldPreeditBytes).toUInt()))
-        } else {
-            emptyList()
-        }
-        val newAffected = if (newPreeditBytes > 0) {
-            listOf(EditorByteRangeDto(sessionReplaceStart.toUInt(), (sessionReplaceStart + newPreeditBytes).toUInt()))
-        } else {
-            emptyList()
-        }
+        val oldAffected =
+            if (oldPreeditBytes > 0) {
+                listOf(
+                    EditorByteRangeDto(sessionReplaceStart.toUInt(), (sessionReplaceStart + oldPreeditBytes).toUInt()),
+                )
+            } else {
+                emptyList()
+            }
+        val newAffected =
+            if (newPreeditBytes > 0) {
+                listOf(
+                    EditorByteRangeDto(sessionReplaceStart.toUInt(), (sessionReplaceStart + newPreeditBytes).toUInt()),
+                )
+            } else {
+                emptyList()
+            }
         return EditorEditResultDto(
             outcome = EditorEditOutcomeDto.APPLIED,
             transactionId = nextTransactionId++.toULong(),
@@ -310,20 +348,22 @@ class FakeInputCommandPort(
             oldSelectionEnd = selectionHeadUtf8.toUInt(),
             newSelectionStart = selectionAnchorUtf8.toUInt(),
             newSelectionEnd = selectionHeadUtf8.toUInt(),
-            visualIntent = EditorVisualIntentDto(
-                cause = EditorTransactionCauseDto.IME_COMPOSITION,
-                operationKind = EditorOperationKindDto.COMPOSITION_UPDATE,
-                oldAffectedByteRanges = oldAffected,
-                newAffectedByteRanges = newAffected,
-                animationMode = AnimationModeDto.SYSTEM_SUPPRESSED,
-                durationMs = 0uL,
-                coordinatedCursor = CoordinatedCursorDto(
-                    oldByteOffset = selectionAnchorUtf8.toUInt(),
-                    newByteOffset = selectionHeadUtf8.toUInt(),
-                    shouldAnimate = false
-                )
-            ),
-            compositionSession = null
+            visualIntent =
+                EditorVisualIntentDto(
+                    cause = EditorTransactionCauseDto.IME_COMPOSITION,
+                    operationKind = EditorOperationKindDto.COMPOSITION_UPDATE,
+                    oldAffectedByteRanges = oldAffected,
+                    newAffectedByteRanges = newAffected,
+                    animationMode = AnimationModeDto.SYSTEM_SUPPRESSED,
+                    durationMs = 0uL,
+                    coordinatedCursor =
+                        CoordinatedCursorDto(
+                            oldByteOffset = selectionAnchorUtf8.toUInt(),
+                            newByteOffset = selectionHeadUtf8.toUInt(),
+                            shouldAnimate = false,
+                        ),
+                ),
+            compositionSession = null,
         )
     }
 
@@ -336,7 +376,7 @@ class FakeInputCommandPort(
         compositionSessionId: Long,
         compositionBaseRevision: Long,
         compositionGeneration: Long,
-        cause: EditorTransactionCauseDto
+        cause: EditorTransactionCauseDto,
     ): EditorEditResultDto? {
         val baseRevision = revision
         // Kernel contract: a live session must match; a stale session id without a live
@@ -351,7 +391,12 @@ class FakeInputCommandPort(
         val normStart = minOf(byteStart, byteEndExclusive)
         val normEnd = maxOf(byteStart, byteEndExclusive)
         if (isSessionActive() && (normStart != sessionReplaceStart || normEnd != sessionReplaceEndExclusive)) {
-            return noopResult(EditorEditOutcomeDto.INVALID_RANGE, baseRevision, EditorOperationKindDto.COMPOSITION_UPDATE, cause)
+            return noopResult(
+                EditorEditOutcomeDto.INVALID_RANGE,
+                baseRevision,
+                EditorOperationKindDto.COMPOSITION_UPDATE,
+                cause,
+            )
         }
         if (normStart == normEnd && replacementText.isEmpty() && !isSessionActive()) {
             return noopResult(EditorEditOutcomeDto.NO_CHANGE, baseRevision, EditorOperationKindDto.INSERT, cause)
@@ -365,12 +410,13 @@ class FakeInputCommandPort(
         val isCompositionCommit = isSessionActive()
         val preeditByteLen = if (isCompositionCommit) sessionPreeditText.toByteArray(Charsets.UTF_8).size else 0
         clearSession()
-        val operationKind = when {
-            isCompositionCommit -> EditorOperationKindDto.COMPOSITION_COMMIT
-            normStart == normEnd -> EditorOperationKindDto.INSERT
-            replacementText.isEmpty() -> EditorOperationKindDto.DELETE
-            else -> EditorOperationKindDto.REPLACE
-        }
+        val operationKind =
+            when {
+                isCompositionCommit -> EditorOperationKindDto.COMPOSITION_COMMIT
+                normStart == normEnd -> EditorOperationKindDto.INSERT
+                replacementText.isEmpty() -> EditorOperationKindDto.DELETE
+                else -> EditorOperationKindDto.REPLACE
+            }
         commitCalls.add(
             CommitCall(
                 byteStart = normStart,
@@ -379,23 +425,33 @@ class FakeInputCommandPort(
                 cause = cause,
                 compositionSessionId = compositionSessionId,
                 compositionGeneration = compositionGeneration,
-                operationKind = operationKind
-            )
+                operationKind = operationKind,
+            ),
         )
-        val oldAffected = if (preeditByteLen > 0) {
-            listOf(EditorByteRangeDto(normStart.toUInt(), (normStart + preeditByteLen).toUInt()))
-        } else {
-            listOf(EditorByteRangeDto(normStart.toUInt(), normEnd.toUInt()))
-        }
-        val newAffected = listOf(EditorByteRangeDto(normStart.toUInt(), (normStart + replacementText.toByteArray(Charsets.UTF_8).size).toUInt()))
+        val oldAffected =
+            if (preeditByteLen > 0) {
+                listOf(EditorByteRangeDto(normStart.toUInt(), (normStart + preeditByteLen).toUInt()))
+            } else {
+                listOf(EditorByteRangeDto(normStart.toUInt(), normEnd.toUInt()))
+            }
+        val newAffected =
+            listOf(
+                EditorByteRangeDto(
+                    normStart.toUInt(),
+                    (normStart + replacementText.toByteArray(Charsets.UTF_8).size).toUInt(),
+                ),
+            )
         return applyReplacement(
             normStart, normEnd, replacementText,
             resultingSelectionAnchor, resultingSelectionHead,
-            cause, operationKind, oldAffected, newAffected, baseRevision
+            cause, operationKind, oldAffected, newAffected, baseRevision,
         )
     }
 
-    override fun finishComposition(compositionSessionId: Long, compositionGeneration: Long): EditorEditResultDto? {
+    override fun finishComposition(
+        compositionSessionId: Long,
+        compositionGeneration: Long,
+    ): EditorEditResultDto? {
         val baseRevision = revision
         if (!sessionMatches(compositionSessionId, baseRevision, compositionGeneration)) {
             return staleResult()
@@ -405,8 +461,10 @@ class FakeInputCommandPort(
             // Empty preedit: just close the session, no text change.
             clearSession()
             return noopResult(
-                EditorEditOutcomeDto.APPLIED, baseRevision,
-                EditorOperationKindDto.COMPOSITION_COMMIT, EditorTransactionCauseDto.TYPING_COMMIT
+                EditorEditOutcomeDto.APPLIED,
+                baseRevision,
+                EditorOperationKindDto.COMPOSITION_COMMIT,
+                EditorTransactionCauseDto.TYPING_COMMIT,
             )
         }
         val replaceStart = sessionReplaceStart
@@ -436,22 +494,35 @@ class FakeInputCommandPort(
             resultingCursor, resultingCursor,
             EditorTransactionCauseDto.TYPING_COMMIT,
             EditorOperationKindDto.COMPOSITION_COMMIT,
-            oldAffected, newAffected, baseRevision
+            oldAffected, newAffected, baseRevision,
         )
     }
 
-    override fun cancelComposition(compositionSessionId: Long, compositionGeneration: Long): EditorEditResultDto? {
+    override fun cancelComposition(
+        compositionSessionId: Long,
+        compositionGeneration: Long,
+    ): EditorEditResultDto? {
         val baseRevision = revision
         if (!sessionMatches(compositionSessionId, baseRevision, compositionGeneration)) {
             return staleResult()
         }
         cancelCompositionCount++
         val preeditByteLen = sessionPreeditText.toByteArray(Charsets.UTF_8).size
-        val oldAffected = when {
-            preeditByteLen > 0 -> listOf(EditorByteRangeDto(sessionReplaceStart.toUInt(), (sessionReplaceStart + preeditByteLen).toUInt()))
-            sessionReplaceStart != sessionReplaceEndExclusive -> listOf(EditorByteRangeDto(sessionReplaceStart.toUInt(), sessionReplaceEndExclusive.toUInt()))
-            else -> emptyList()
-        }
+        val oldAffected =
+            when {
+                preeditByteLen > 0 ->
+                    listOf(
+                        EditorByteRangeDto(
+                            sessionReplaceStart.toUInt(),
+                            (sessionReplaceStart + preeditByteLen).toUInt(),
+                        ),
+                    )
+                sessionReplaceStart != sessionReplaceEndExclusive ->
+                    listOf(
+                        EditorByteRangeDto(sessionReplaceStart.toUInt(), sessionReplaceEndExclusive.toUInt()),
+                    )
+                else -> emptyList()
+            }
         clearSession()
         return EditorEditResultDto(
             outcome = EditorEditOutcomeDto.APPLIED,
@@ -463,48 +534,68 @@ class FakeInputCommandPort(
             oldSelectionEnd = selectionHeadUtf8.toUInt(),
             newSelectionStart = selectionAnchorUtf8.toUInt(),
             newSelectionEnd = selectionHeadUtf8.toUInt(),
-            visualIntent = EditorVisualIntentDto(
-                cause = EditorTransactionCauseDto.IME_COMPOSITION,
-                operationKind = EditorOperationKindDto.COMPOSITION_CANCEL,
-                oldAffectedByteRanges = oldAffected,
-                newAffectedByteRanges = emptyList(),
-                animationMode = AnimationModeDto.SYSTEM_SUPPRESSED,
-                durationMs = 0uL,
-                coordinatedCursor = CoordinatedCursorDto(
-                    oldByteOffset = selectionAnchorUtf8.toUInt(),
-                    newByteOffset = selectionHeadUtf8.toUInt(),
-                    shouldAnimate = false
-                )
-            ),
-            compositionSession = null
+            visualIntent =
+                EditorVisualIntentDto(
+                    cause = EditorTransactionCauseDto.IME_COMPOSITION,
+                    operationKind = EditorOperationKindDto.COMPOSITION_CANCEL,
+                    oldAffectedByteRanges = oldAffected,
+                    newAffectedByteRanges = emptyList(),
+                    animationMode = AnimationModeDto.SYSTEM_SUPPRESSED,
+                    durationMs = 0uL,
+                    coordinatedCursor =
+                        CoordinatedCursorDto(
+                            oldByteOffset = selectionAnchorUtf8.toUInt(),
+                            newByteOffset = selectionHeadUtf8.toUInt(),
+                            shouldAnimate = false,
+                        ),
+                ),
+            compositionSession = null,
         )
     }
 
-    override fun insertText(byteOffset: Int, text: String, cause: EditorTransactionCauseDto): PipelineOutput {
+    override fun insertText(
+        byteOffset: Int,
+        text: String,
+        cause: EditorTransactionCauseDto,
+    ): PipelineOutput {
         if (byteOffset > textBytes.size || !isCharBoundary(byteOffset)) return PipelineOutput.StaleOrInvalid
         val baseRevision = revision
-        val dto = applyReplacement(
-            byteOffset, byteOffset, text,
-            byteOffset + text.toByteArray(Charsets.UTF_8).size, byteOffset + text.toByteArray(Charsets.UTF_8).size,
-            cause, EditorOperationKindDto.INSERT, emptyList(),
-            listOf(EditorByteRangeDto(byteOffset.toUInt(), (byteOffset + text.toByteArray(Charsets.UTF_8).size).toUInt())),
-            baseRevision
-        )
+        val dto =
+            applyReplacement(
+                byteOffset, byteOffset, text,
+                byteOffset + text.toByteArray(Charsets.UTF_8).size, byteOffset + text.toByteArray(Charsets.UTF_8).size,
+                cause, EditorOperationKindDto.INSERT, emptyList(),
+                listOf(
+                    EditorByteRangeDto(
+                        byteOffset.toUInt(),
+                        (byteOffset + text.toByteArray(Charsets.UTF_8).size).toUInt(),
+                    ),
+                ),
+                baseRevision,
+            )
         mirror.applyEditResult(EditResult.fromDto(dto))
         return PipelineOutput.Edited(EditResult.fromDto(dto))
     }
 
-    override fun deleteRange(byteStart: Int, byteEndExclusive: Int, cause: EditorTransactionCauseDto): PipelineOutput {
+    override fun deleteRange(
+        byteStart: Int,
+        byteEndExclusive: Int,
+        cause: EditorTransactionCauseDto,
+    ): PipelineOutput {
         if (byteStart > byteEndExclusive || byteEndExclusive > textBytes.size ||
-            !isCharBoundary(byteStart) || !isCharBoundary(byteEndExclusive)) return PipelineOutput.StaleOrInvalid
+            !isCharBoundary(byteStart) || !isCharBoundary(byteEndExclusive)
+        ) {
+            return PipelineOutput.StaleOrInvalid
+        }
         val baseRevision = revision
-        val dto = applyReplacement(
-            byteStart, byteEndExclusive, "",
-            byteStart, byteStart,
-            cause, EditorOperationKindDto.DELETE,
-            listOf(EditorByteRangeDto(byteStart.toUInt(), byteEndExclusive.toUInt())), emptyList(),
-            baseRevision
-        )
+        val dto =
+            applyReplacement(
+                byteStart, byteEndExclusive, "",
+                byteStart, byteStart,
+                cause, EditorOperationKindDto.DELETE,
+                listOf(EditorByteRangeDto(byteStart.toUInt(), byteEndExclusive.toUInt())), emptyList(),
+                baseRevision,
+            )
         mirror.applyEditResult(EditResult.fromDto(dto))
         return PipelineOutput.Edited(EditResult.fromDto(dto))
     }
@@ -516,52 +607,72 @@ class FakeInputCommandPort(
         originalText: String,
         cause: EditorTransactionCauseDto,
         beforePatch: (() -> Unit)?,
-        source: com.xiwei.sujian.editor.v2.host.EditorEditSource
+        source: com.xiwei.sujian.editor.v2.host.EditorEditSource,
     ): PipelineOutput {
         if (byteStart > byteEndExclusive || byteEndExclusive > textBytes.size ||
-            !isCharBoundary(byteStart) || !isCharBoundary(byteEndExclusive)) return PipelineOutput.StaleOrInvalid
+            !isCharBoundary(byteStart) || !isCharBoundary(byteEndExclusive)
+        ) {
+            return PipelineOutput.StaleOrInvalid
+        }
         val baseRevision = revision
-        val dto = applyReplacement(
-            byteStart, byteEndExclusive, replacementText,
-            byteStart + replacementText.toByteArray(Charsets.UTF_8).size, byteStart + replacementText.toByteArray(Charsets.UTF_8).size,
-            cause, EditorOperationKindDto.REPLACE,
-            listOf(EditorByteRangeDto(byteStart.toUInt(), byteEndExclusive.toUInt())),
-            listOf(EditorByteRangeDto(byteStart.toUInt(), (byteStart + replacementText.toByteArray(Charsets.UTF_8).size).toUInt())),
-            baseRevision
-        )
+        val dto =
+            applyReplacement(
+                byteStart, byteEndExclusive, replacementText,
+                byteStart + replacementText.toByteArray(Charsets.UTF_8).size,
+                byteStart + replacementText.toByteArray(Charsets.UTF_8).size,
+                cause, EditorOperationKindDto.REPLACE,
+                listOf(EditorByteRangeDto(byteStart.toUInt(), byteEndExclusive.toUInt())),
+                listOf(
+                    EditorByteRangeDto(
+                        byteStart.toUInt(),
+                        (byteStart + replacementText.toByteArray(Charsets.UTF_8).size).toUInt(),
+                    ),
+                ),
+                baseRevision,
+            )
         beforePatch?.invoke()
         mirror.applyEditResult(EditResult.fromDto(dto))
         return PipelineOutput.Edited(EditResult.fromDto(dto))
     }
 
-    override fun setSelectionTyped(anchorByteOffset: Int, headByteOffset: Int, source: com.xiwei.sujian.editor.v2.host.EditorEditSource): PipelineOutput {
+    override fun setSelectionTyped(
+        anchorByteOffset: Int,
+        headByteOffset: Int,
+        source: com.xiwei.sujian.editor.v2.host.EditorEditSource,
+    ): PipelineOutput {
         if (anchorByteOffset > textBytes.size || headByteOffset > textBytes.size ||
-            !isCharBoundary(anchorByteOffset) || !isCharBoundary(headByteOffset)) return PipelineOutput.StaleOrInvalid
-        val dto = EditorEditResultDto(
-            outcome = EditorEditOutcomeDto.NO_CHANGE,
-            transactionId = nextTransactionId++.toULong(),
-            baseRevision = revision.toULong(),
-            newRevision = revision.toULong(),
-            displayPatches = emptyList(),
-            oldSelectionStart = selectionAnchorUtf8.toUInt(),
-            oldSelectionEnd = selectionHeadUtf8.toUInt(),
-            newSelectionStart = anchorByteOffset.toUInt(),
-            newSelectionEnd = headByteOffset.toUInt(),
-            visualIntent = EditorVisualIntentDto(
-                cause = EditorTransactionCauseDto.PROGRAMMATIC,
-                operationKind = EditorOperationKindDto.CURSOR_ONLY,
-                oldAffectedByteRanges = emptyList(),
-                newAffectedByteRanges = emptyList(),
-                animationMode = AnimationModeDto.SYSTEM_SUPPRESSED,
-                durationMs = 0uL,
-                coordinatedCursor = CoordinatedCursorDto(
-                    oldByteOffset = selectionAnchorUtf8.toUInt(),
-                    newByteOffset = headByteOffset.toUInt(),
-                    shouldAnimate = false
-                )
-            ),
-            compositionSession = null
-        )
+            !isCharBoundary(anchorByteOffset) || !isCharBoundary(headByteOffset)
+        ) {
+            return PipelineOutput.StaleOrInvalid
+        }
+        val dto =
+            EditorEditResultDto(
+                outcome = EditorEditOutcomeDto.NO_CHANGE,
+                transactionId = nextTransactionId++.toULong(),
+                baseRevision = revision.toULong(),
+                newRevision = revision.toULong(),
+                displayPatches = emptyList(),
+                oldSelectionStart = selectionAnchorUtf8.toUInt(),
+                oldSelectionEnd = selectionHeadUtf8.toUInt(),
+                newSelectionStart = anchorByteOffset.toUInt(),
+                newSelectionEnd = headByteOffset.toUInt(),
+                visualIntent =
+                    EditorVisualIntentDto(
+                        cause = EditorTransactionCauseDto.PROGRAMMATIC,
+                        operationKind = EditorOperationKindDto.CURSOR_ONLY,
+                        oldAffectedByteRanges = emptyList(),
+                        newAffectedByteRanges = emptyList(),
+                        animationMode = AnimationModeDto.SYSTEM_SUPPRESSED,
+                        durationMs = 0uL,
+                        coordinatedCursor =
+                            CoordinatedCursorDto(
+                                oldByteOffset = selectionAnchorUtf8.toUInt(),
+                                newByteOffset = headByteOffset.toUInt(),
+                                shouldAnimate = false,
+                            ),
+                    ),
+                compositionSession = null,
+            )
         selectionAnchorUtf8 = anchorByteOffset
         selectionHeadUtf8 = headByteOffset
         mirror.applyEditResult(EditResult.fromDto(dto))
@@ -573,18 +684,39 @@ class FakeInputCommandPort(
         beforeByteEndExclusive: Int,
         afterByteStart: Int,
         afterByteEndExclusive: Int,
-        cause: EditorTransactionCauseDto
+        cause: EditorTransactionCauseDto,
     ): EditorEditResultDto? {
         val baseRevision = revision
-        val beforeRange = if (beforeByteStart < beforeByteEndExclusive) Pair(beforeByteStart, beforeByteEndExclusive) else null
-        val afterRange = if (afterByteStart < afterByteEndExclusive) Pair(afterByteStart, afterByteEndExclusive) else null
+        val beforeRange =
+            if (beforeByteStart < beforeByteEndExclusive) {
+                Pair(
+                    beforeByteStart,
+                    beforeByteEndExclusive,
+                )
+            } else {
+                null
+            }
+        val afterRange =
+            if (afterByteStart < afterByteEndExclusive) {
+                Pair(
+                    afterByteStart,
+                    afterByteEndExclusive,
+                )
+            } else {
+                null
+            }
         if (beforeRange == null && afterRange == null) {
             return noopResult(EditorEditOutcomeDto.NO_CHANGE, baseRevision, EditorOperationKindDto.DELETE, cause)
         }
         val ranges = listOfNotNull(beforeRange, afterRange)
         for ((start, end) in ranges) {
             if (start > textBytes.size || end > textBytes.size || !isCharBoundary(start) || !isCharBoundary(end)) {
-                return noopResult(EditorEditOutcomeDto.INVALID_OFFSET, baseRevision, EditorOperationKindDto.DELETE, cause)
+                return noopResult(
+                    EditorEditOutcomeDto.INVALID_OFFSET,
+                    baseRevision,
+                    EditorOperationKindDto.DELETE,
+                    cause,
+                )
             }
         }
         // Kernel contract: one display patch per deleted range, applied in order.
@@ -601,8 +733,8 @@ class FakeInputCommandPort(
                     replaceByteEndExclusive = end.toUInt(),
                     insertedText = "",
                     resultingSelectionStart = start.toUInt(),
-                    resultingSelectionEnd = start.toUInt()
-                )
+                    resultingSelectionEnd = start.toUInt(),
+                ),
             )
         }
         textBytes = bytes
@@ -619,30 +751,39 @@ class FakeInputCommandPort(
             oldSelectionEnd = selectionHeadUtf8.toUInt(),
             newSelectionStart = cursor.toUInt(),
             newSelectionEnd = cursor.toUInt(),
-            visualIntent = EditorVisualIntentDto(
-                cause = cause,
-                operationKind = EditorOperationKindDto.DELETE,
-                oldAffectedByteRanges = ranges.map { EditorByteRangeDto(it.first.toUInt(), it.second.toUInt()) },
-                newAffectedByteRanges = emptyList(),
-                animationMode = AnimationModeDto.SYSTEM_SUPPRESSED,
-                durationMs = 0uL,
-                coordinatedCursor = CoordinatedCursorDto(
-                    oldByteOffset = selectionAnchorUtf8.toUInt(),
-                    newByteOffset = cursor.toUInt(),
-                    shouldAnimate = false
-                )
-            ),
-            compositionSession = null
+            visualIntent =
+                EditorVisualIntentDto(
+                    cause = cause,
+                    operationKind = EditorOperationKindDto.DELETE,
+                    oldAffectedByteRanges = ranges.map { EditorByteRangeDto(it.first.toUInt(), it.second.toUInt()) },
+                    newAffectedByteRanges = emptyList(),
+                    animationMode = AnimationModeDto.SYSTEM_SUPPRESSED,
+                    durationMs = 0uL,
+                    coordinatedCursor =
+                        CoordinatedCursorDto(
+                            oldByteOffset = selectionAnchorUtf8.toUInt(),
+                            newByteOffset = cursor.toUInt(),
+                            shouldAnimate = false,
+                        ),
+                ),
+            compositionSession = null,
         )
     }
 
-    override fun applyEditResult(result: EditResult, beforePatch: (() -> Unit)?, source: com.xiwei.sujian.editor.v2.host.EditorEditSource): PipelineOutput {
+    override fun applyEditResult(
+        result: EditResult,
+        beforePatch: (() -> Unit)?,
+        source: com.xiwei.sujian.editor.v2.host.EditorEditSource,
+    ): PipelineOutput {
         beforePatch?.invoke()
         mirror.applyEditResult(result)
         return PipelineOutput.Edited(result, source)
     }
 
-    override fun applyCompositionCommit(dto: EditorEditResultDto, preeditText: String): PipelineOutput {
+    override fun applyCompositionCommit(
+        dto: EditorEditResultDto,
+        preeditText: String,
+    ): PipelineOutput {
         val result = EditResult.fromDto(dto)
         mirror.applyEditResult(result)
         return PipelineOutput.Edited(result)
@@ -653,7 +794,7 @@ class FakeInputCommandPort(
         replaceEndUtf8: Int,
         newPreeditText: String,
         oldPreeditText: String,
-        mirrorUpdate: (() -> Unit)?
+        mirrorUpdate: (() -> Unit)?,
     ) {
         mirrorUpdate?.invoke()
     }
@@ -662,7 +803,7 @@ class FakeInputCommandPort(
         replaceStartUtf8: Int,
         replaceEndUtf8: Int,
         oldPreeditText: String,
-        mirrorUpdate: (() -> Unit)?
+        mirrorUpdate: (() -> Unit)?,
     ) {
         mirrorUpdate?.invoke()
     }
@@ -677,7 +818,10 @@ class FakeInputCommandPort(
      * successful `bridge.loadText`. The adapter is NOT notified (same as the real flow:
      * `SujianEditorView.loadText` never touches the adapter's composition state).
      */
-    fun simulateExternalReset(newText: String, cursorUtf8: Int) {
+    fun simulateExternalReset(
+        newText: String,
+        cursorUtf8: Int,
+    ) {
         textBytes = newText.toByteArray(Charsets.UTF_8)
         revision++
         selectionAnchorUtf8 = cursorUtf8
@@ -693,7 +837,7 @@ class FakeInputCommandPort(
             selectionHeadUtf8,
             revision,
             selectionAnchorUtf8,
-            selectionHeadUtf8
+            selectionHeadUtf8,
         )
         return true
     }

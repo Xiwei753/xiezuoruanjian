@@ -10,7 +10,6 @@ import org.junit.Test
  * 降级。EditorAnimationSettings 桥接类型已删除，策略字段直接作为唯一事实源。
  */
 class EditorMotionPolicyTest {
-
     @Test
     fun defaultPolicyMatchesCoreDefaults() {
         val policy = EditorMotionPolicy()
@@ -24,12 +23,13 @@ class EditorMotionPolicyTest {
 
     @Test
     fun reduceMotionDegradesAllAnimationToStatic() {
-        val policy = EditorMotionPolicy(
-            textEnabled = true,
-            cursorEnabled = true,
-            coordinated = true,
-            reduceMotion = true,
-        )
+        val policy =
+            EditorMotionPolicy(
+                textEnabled = true,
+                cursorEnabled = true,
+                coordinated = true,
+                reduceMotion = true,
+            )
         val effective = policy.effective()
         assertFalse("reduce-motion disables text", effective.textEnabled)
         assertFalse("reduce-motion disables cursor", effective.cursorEnabled)
@@ -38,26 +38,28 @@ class EditorMotionPolicyTest {
 
     @Test
     fun effectiveIsIdentityWhenReduceMotionFalse() {
-        val policy = EditorMotionPolicy(
-            textEnabled = true,
-            cursorEnabled = false,
-            coordinated = true,
-            reduceMotion = false,
-        )
+        val policy =
+            EditorMotionPolicy(
+                textEnabled = true,
+                cursorEnabled = false,
+                coordinated = true,
+                reduceMotion = false,
+            )
         val effective = policy.effective()
         assertEquals(policy, effective)
     }
 
     @Test
     fun policyIsImmutableDataClassWithAllFields() {
-        val policy = EditorMotionPolicy(
-            textEnabled = true,
-            textDurationMillis = 150L,
-            cursorEnabled = false,
-            cursorDurationMillis = 60L,
-            coordinated = true,
-            reduceMotion = false,
-        )
+        val policy =
+            EditorMotionPolicy(
+                textEnabled = true,
+                textDurationMillis = 150L,
+                cursorEnabled = false,
+                cursorDurationMillis = 60L,
+                coordinated = true,
+                reduceMotion = false,
+            )
         assertEquals(true, policy.textEnabled)
         assertEquals(150L, policy.textDurationMillis)
         assertEquals(false, policy.cursorEnabled)

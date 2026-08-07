@@ -20,12 +20,12 @@ import java.lang.reflect.Method
  * - EditorWindowHost 暴露 beginEdit / releaseWindow 生命周期入口。
  */
 class EditorFrameClockArchitectureTest {
-
     @Test
     fun windowHost_ownsSingleFrameClock() {
-        val field = EditorWindowHost::class.java.declaredFields.firstOrNull {
-            it.name == "windowFrameClock"
-        }
+        val field =
+            EditorWindowHost::class.java.declaredFields.firstOrNull {
+                it.name == "windowFrameClock"
+            }
         assertNotNull(
             "EditorWindowHost must own a single WindowDisplayFrameClock",
             field,
@@ -38,21 +38,23 @@ class EditorFrameClockArchitectureTest {
 
     @Test
     fun sessionCoordinator_doesNotOwnFrameClock() {
-        val hasFrameClock = EditorSessionCoordinator::class.java.declaredFields.any {
-            it.type == WindowDisplayFrameClock::class.java
-        }
+        val hasFrameClock =
+            EditorSessionCoordinator::class.java.declaredFields.any {
+                it.type == WindowDisplayFrameClock::class.java
+            }
         assertTrue(
             "EditorSessionCoordinator must NOT own a WindowDisplayFrameClock " +
-            "(session layer holds only pure data; FrameClock is window-owned)",
+                "(session layer holds only pure data; FrameClock is window-owned)",
             !hasFrameClock,
         )
     }
 
     @Test
     fun beginEditExistsOnWindowHost() {
-        val method: Method? = EditorWindowHost::class.java.methods.firstOrNull {
-            it.name == "beginEdit"
-        }
+        val method: Method? =
+            EditorWindowHost::class.java.methods.firstOrNull {
+                it.name == "beginEdit"
+            }
         assertNotNull(
             "EditorWindowHost must have beginEdit for active editing",
             method,
@@ -61,9 +63,10 @@ class EditorFrameClockArchitectureTest {
 
     @Test
     fun releaseWindowDisconnectsFrameClock() {
-        val method: Method? = EditorWindowHost::class.java.methods.firstOrNull {
-            it.name == "releaseWindow"
-        }
+        val method: Method? =
+            EditorWindowHost::class.java.methods.firstOrNull {
+                it.name == "releaseWindow"
+            }
         assertNotNull(
             "EditorWindowHost must have releaseWindow to disconnect FrameClock on config change",
             method,

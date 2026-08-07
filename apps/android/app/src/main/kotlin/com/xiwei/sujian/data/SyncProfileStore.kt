@@ -67,7 +67,10 @@ class SyncProfileStore(context: Context) {
     }
 
     /** 写 stagedConfig(generation=N) 标记与载荷（config 内容已写入 Core 配置存储）。 */
-    suspend fun stageConfig(generation: Long, configJson: String) {
+    suspend fun stageConfig(
+        generation: Long,
+        configJson: String,
+    ) {
         dataStore.edit { prefs ->
             prefs[PREF_STAGED_CONFIG_GEN] = generation
             prefs[PREF_STAGED_CONFIG_JSON] = configJson
@@ -85,7 +88,10 @@ class SyncProfileStore(context: Context) {
      * 原子提交：单次 updateData 同时推进 activeGeneration 与 committedConfigJson。
      * 失败时旧 generation 继续有效（staged 标记停留在 N，读取者仍读旧 committed 版本）。
      */
-    suspend fun commitGeneration(generation: Long, committedConfigJson: String) {
+    suspend fun commitGeneration(
+        generation: Long,
+        committedConfigJson: String,
+    ) {
         dataStore.edit { prefs ->
             prefs[PREF_ACTIVE] = generation
             prefs[PREF_COMMITTED_CONFIG_JSON] = committedConfigJson
@@ -176,7 +182,9 @@ data class SyncProfileSnapshot(
  */
 sealed interface GenerationSecretsReadResult {
     data class Found(val secrets: SyncSecrets) : GenerationSecretsReadResult
+
     data object NotConfigured : GenerationSecretsReadResult
+
     data class Failed(val kind: SyncFailureKind, val message: String?) : GenerationSecretsReadResult
 }
 
@@ -191,6 +199,8 @@ sealed interface GenerationSecretsReadResult {
  */
 sealed interface SyncProfileReadResult {
     data class Found(val snapshot: SyncProfileSnapshot) : SyncProfileReadResult
+
     data class NotConfigured(val snapshot: SyncProfileSnapshot) : SyncProfileReadResult
+
     data class Failed(val kind: SyncFailureKind, val message: String?) : SyncProfileReadResult
 }

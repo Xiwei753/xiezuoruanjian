@@ -1,12 +1,10 @@
 package com.xiwei.sujian.editor.v2.coordinator
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TextEditorProfileTest {
-
     @Test
     fun secretTokenProfile_hasPasswordInputType() {
         val profile = TextEditorProfile.SecretToken
@@ -63,24 +61,25 @@ class TextEditorProfileTest {
 
     @Test
     fun allProfiles_haveSystemSuppressedOrInheritAnimation() {
-        val profiles = listOf(
-            TextEditorProfile.DocumentBody,
-            TextEditorProfile.ShortTitle,
-            TextEditorProfile.ShortDescription,
-            TextEditorProfile.InlineLabel,
-            TextEditorProfile.CanvasLabel,
-            TextEditorProfile.SearchQuery,
-            TextEditorProfile.LongNote,
-            TextEditorProfile.SecretToken,
-            TextEditorProfile.RepositoryUrl,
-            TextEditorProfile.BranchName,
-            TextEditorProfile.ReplaceQuery
-        )
+        val profiles =
+            listOf(
+                TextEditorProfile.DocumentBody,
+                TextEditorProfile.ShortTitle,
+                TextEditorProfile.ShortDescription,
+                TextEditorProfile.InlineLabel,
+                TextEditorProfile.CanvasLabel,
+                TextEditorProfile.SearchQuery,
+                TextEditorProfile.LongNote,
+                TextEditorProfile.SecretToken,
+                TextEditorProfile.RepositoryUrl,
+                TextEditorProfile.BranchName,
+                TextEditorProfile.ReplaceQuery,
+            )
         for (profile in profiles) {
             assertTrue(
                 "Profile should have INHERIT_GLOBAL or SYSTEM_SUPPRESSED animation, got ${profile.animationPolicy}",
                 profile.animationPolicy == AnimationPolicy.INHERIT_GLOBAL ||
-                    profile.animationPolicy == AnimationPolicy.SYSTEM_SUPPRESSED
+                    profile.animationPolicy == AnimationPolicy.SYSTEM_SUPPRESSED,
             )
         }
     }

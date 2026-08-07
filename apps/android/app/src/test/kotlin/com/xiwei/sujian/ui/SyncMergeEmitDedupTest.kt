@@ -11,7 +11,6 @@ import org.junit.Test
  * 同一 hash 重新发射（重新进入章节时正文由 RepositoryLoaded 装载）。
  */
 class SyncMergeEmitDedupTest {
-
     @Test
     fun firstEmit_isAllowedAndRecorded() {
         val dedup = SyncMergeEmitDedup()

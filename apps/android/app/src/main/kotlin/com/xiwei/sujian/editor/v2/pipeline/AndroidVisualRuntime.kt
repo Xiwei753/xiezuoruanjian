@@ -1,43 +1,45 @@
 package com.xiwei.sujian.editor.v2.pipeline
 
-import com.xiwei.sujian.editor.v2.visual.AndroidTextAnimationEngine
-import com.xiwei.sujian.editor.v2.visual.AndroidVisualPlanner
-import com.xiwei.sujian.editor.v2.visual.VisualResourceStore
-import com.xiwei.sujian.editor.v2.visual.TextAnimationPolicy
-import com.xiwei.sujian.editor.v2.mirror.VisualIntent
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutRevision
+import com.xiwei.sujian.editor.v2.mirror.VisualIntent
+import com.xiwei.sujian.editor.v2.visual.AndroidTextAnimationEngine
+import com.xiwei.sujian.editor.v2.visual.AndroidVisualPlanner
+import com.xiwei.sujian.editor.v2.visual.TextAnimationPolicy
+import com.xiwei.sujian.editor.v2.visual.VisualResourceStore
 
 class AndroidVisualRuntime(
     private val visualPlanner: AndroidVisualPlanner,
     private val animationEngine: AndroidTextAnimationEngine,
-    private val resourceStore: VisualResourceStore
+    private val resourceStore: VisualResourceStore,
 ) {
     constructor(
-        timeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource = com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
-        transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource = com.xiwei.sujian.editor.v2.visual.TransactionIdSource()
+        timeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource =
+            com.xiwei.sujian.editor.v2.visual.ChoreographerAnimationTimeSource(),
+        transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource =
+            com.xiwei.sujian.editor.v2.visual.TransactionIdSource(),
     ) : this(
         AndroidVisualPlanner(),
         VisualResourceStore(),
         timeSource,
-        transactionIdSource
+        transactionIdSource,
     )
 
     constructor(visualPlanner: AndroidVisualPlanner, resourceStore: VisualResourceStore) : this(
         visualPlanner,
         AndroidTextAnimationEngine(visualPlanner, resourceStore),
-        resourceStore
+        resourceStore,
     )
 
     constructor(
         visualPlanner: AndroidVisualPlanner,
         resourceStore: VisualResourceStore,
         timeSource: com.xiwei.sujian.editor.v2.visual.AnimationTimeSource,
-        transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource
+        transactionIdSource: com.xiwei.sujian.editor.v2.visual.TransactionIdSource,
     ) : this(
         visualPlanner,
         AndroidTextAnimationEngine(visualPlanner, resourceStore, timeSource, transactionIdSource),
-        resourceStore
+        resourceStore,
     )
 
     fun prepareAndSubmit(
@@ -45,7 +47,7 @@ class AndroidVisualRuntime(
         layoutEngine: AndroidLayoutEngine,
         mirrorUpdate: (() -> Unit)? = null,
         beforePatch: (() -> Unit)? = null,
-        frameTimeMs: Long? = null
+        frameTimeMs: Long? = null,
     ) {
         animationEngine.prepareAndSubmit(visualIntent, layoutEngine, mirrorUpdate, beforePatch, frameTimeMs)
     }
@@ -86,7 +88,10 @@ class AndroidVisualRuntime(
         animationEngine.setAnimationPolicy(policy)
     }
 
-    fun setSmoothCursor(enabled: Boolean, durationMs: Long) {
+    fun setSmoothCursor(
+        enabled: Boolean,
+        durationMs: Long,
+    ) {
         animationEngine.setSmoothCursor(enabled, durationMs)
     }
 
@@ -121,7 +126,7 @@ class AndroidVisualRuntime(
         selectionAllowed: Boolean,
         cursorUtf16: Int,
         selectionStartUtf16: Int,
-        selectionEndUtf16: Int
+        selectionEndUtf16: Int,
     ): FrameState? {
         if (layout == null) return null
         val transaction = animationEngine.getActiveTransaction()
@@ -138,26 +143,31 @@ class AndroidVisualRuntime(
         // #595 五：cursorTransition 独立于文字切片 — 文字轨结束/抑制（CursorOnly）时
         // 静态文字路径仍能绘制平滑光标；光标轨结束才置 null（回到静态光标）。
         val renderTransaction = if (textFinished) null else transaction
-        val renderCursorTransition = if (cursorFinished) null
-        else transaction?.cursorTransition?.takeIf { it.shouldAnimate }
-        val renderInput = FrameRenderInput(
-            layout = layout,
-            layoutRevision = layoutRevision,
-            transaction = renderTransaction,
-            cursorTransition = renderCursorTransition,
-            timelineProgress = progress,
-            cursorProgress = cursorProgress,
-            searchHighlightsUtf16 = searchHighlightsUtf16,
-            viewportWidth = viewportWidth,
-            viewportHeight = viewportHeight,
-            scrollX = scrollX,
-            scrollY = scrollY,
-            cursorVisible = cursorVisible,
-            selectionAllowed = selectionAllowed,
-            cursorUtf16 = cursorUtf16,
-            selectionStartUtf16 = selectionStartUtf16,
-            selectionEndUtf16 = selectionEndUtf16
-        )
+        val renderCursorTransition =
+            if (cursorFinished) {
+                null
+            } else {
+                transaction?.cursorTransition?.takeIf { it.shouldAnimate }
+            }
+        val renderInput =
+            FrameRenderInput(
+                layout = layout,
+                layoutRevision = layoutRevision,
+                transaction = renderTransaction,
+                cursorTransition = renderCursorTransition,
+                timelineProgress = progress,
+                cursorProgress = cursorProgress,
+                searchHighlightsUtf16 = searchHighlightsUtf16,
+                viewportWidth = viewportWidth,
+                viewportHeight = viewportHeight,
+                scrollX = scrollX,
+                scrollY = scrollY,
+                cursorVisible = cursorVisible,
+                selectionAllowed = selectionAllowed,
+                cursorUtf16 = cursorUtf16,
+                selectionStartUtf16 = selectionStartUtf16,
+                selectionEndUtf16 = selectionEndUtf16,
+            )
         return FrameState(renderInput, completeAfterDraw = transactionComplete)
     }
 

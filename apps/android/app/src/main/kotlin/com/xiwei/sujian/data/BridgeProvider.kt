@@ -28,19 +28,20 @@ object BridgeProvider {
                 val appContext = context.applicationContext
                 val workspacePath = WorkspaceManager.getWorkspaceDir(appContext).absolutePath
                 val (isConnected, isMetered) = detectNetworkState(appContext)
-                val holder = WriterAppServiceHolder.createFromContext(
-                    context = appContext,
-                    workspacePath = workspacePath,
-                    filesDir = appContext.filesDir.absolutePath,
-                    cacheDir = appContext.cacheDir.absolutePath,
-                    noBackupDir = appContext.noBackupFilesDir.absolutePath,
-                    deviceId = resolveDeviceId(appContext),
-                    appVersion = resolveAppVersion(appContext),
-                    locale = Locale.getDefault().toLanguageTag(),
-                    timezone = TimeZone.getDefault().id,
-                    isConnected = isConnected,
-                    isMetered = isMetered,
-                )
+                val holder =
+                    WriterAppServiceHolder.createFromContext(
+                        context = appContext,
+                        workspacePath = workspacePath,
+                        filesDir = appContext.filesDir.absolutePath,
+                        cacheDir = appContext.cacheDir.absolutePath,
+                        noBackupDir = appContext.noBackupFilesDir.absolutePath,
+                        deviceId = resolveDeviceId(appContext),
+                        appVersion = resolveAppVersion(appContext),
+                        locale = Locale.getDefault().toLanguageTag(),
+                        timezone = TimeZone.getDefault().id,
+                        isConnected = isConnected,
+                        isMetered = isMetered,
+                    )
                 val bridge = AppServiceBridge(holder)
                 registerNetworkCallback(appContext, bridge)
                 bridge
@@ -49,36 +50,52 @@ object BridgeProvider {
     }
 
     fun getWorkspaceBridge(context: Context): WorkspaceBridge = WorkspaceBridge(getAppServiceBridge(context))
+
     fun getWritingBridge(context: Context): WritingBridge = WritingBridge(getAppServiceBridge(context))
+
     fun getStatsBridge(context: Context): StatsBridge = getAppServiceBridge(context).statsBridge
+
     fun getStarmapBridge(context: Context): StarMapBridge = getAppServiceBridge(context).starMapBridge
+
     fun getSettingsBridge(context: Context): SettingsBridge = getAppServiceBridge(context).settingsBridge
+
     fun getSyncBridge(context: Context): SyncBridge = getAppServiceBridge(context).syncBridge
+
     fun getActionBridge(context: Context): ActionBridge = ActionBridge(getAppServiceBridge(context))
+
     fun getLayoutPolicyBridge(context: Context): LayoutPolicyBridge = getAppServiceBridge(context).layoutPolicyBridge
+
     fun getAiStatus(context: Context): Boolean = getAppServiceBridge(context).aiAvailable()
 
-    private fun registerNetworkCallback(context: Context, bridge: AppServiceBridge) {
+    private fun registerNetworkCallback(
+        context: Context,
+        bridge: AppServiceBridge,
+    ) {
         if (networkCallbackRegistered) return
-        val cm = context.getSystemService(ConnectivityManager::class.java)
-            ?: run {
-                DiagnosticsLogger.w(TAG, "ConnectivityManager not available, network monitoring disabled")
-                return
-            }
+        val cm =
+            context.getSystemService(ConnectivityManager::class.java)
+                ?: run {
+                    DiagnosticsLogger.w(TAG, "ConnectivityManager not available, network monitoring disabled")
+                    return
+                }
         try {
-            val callback = object : ConnectivityManager.NetworkCallback() {
-                override fun onAvailable(network: Network) {
-                    refreshNetworkState(context, bridge)
-                }
+            val callback =
+                object : ConnectivityManager.NetworkCallback() {
+                    override fun onAvailable(network: Network) {
+                        refreshNetworkState(context, bridge)
+                    }
 
-                override fun onLost(network: Network) {
-                    refreshNetworkState(context, bridge)
-                }
+                    override fun onLost(network: Network) {
+                        refreshNetworkState(context, bridge)
+                    }
 
-                override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
-                    refreshNetworkState(context, bridge)
+                    override fun onCapabilitiesChanged(
+                        network: Network,
+                        networkCapabilities: NetworkCapabilities,
+                    ) {
+                        refreshNetworkState(context, bridge)
+                    }
                 }
-            }
             cm.registerDefaultNetworkCallback(callback)
             networkCallbackRegistered = true
             DiagnosticsLogger.i(TAG, "Default network callback registered")
@@ -87,7 +104,10 @@ object BridgeProvider {
         }
     }
 
-    private fun refreshNetworkState(context: Context, bridge: AppServiceBridge) {
+    private fun refreshNetworkState(
+        context: Context,
+        bridge: AppServiceBridge,
+    ) {
         val (isConnected, isMetered) = detectNetworkState(context)
         try {
             bridge.holder.service.updateNetworkState(isConnected, isMetered, null, null)
@@ -100,12 +120,14 @@ object BridgeProvider {
     }
 
     fun detectNetworkState(context: Context): Pair<Boolean, Boolean> {
-        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-            ?: return Pair(false, false)
+        val cm =
+            context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                ?: return Pair(false, false)
         val network = cm.activeNetwork ?: return Pair(false, false)
         val caps = cm.getNetworkCapabilities(network) ?: return Pair(false, false)
-        val isConnected = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        val isConnected =
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
         val isMetered = !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
         return Pair(isConnected, isMetered)
     }

@@ -16,8 +16,8 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.designsystem.component.SujianSection
 import com.xiwei.sujian.designsystem.component.SujianSlider
 import com.xiwei.sujian.designsystem.component.SujianSwitchRow
-import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
+import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 
 @Composable
 fun EditorSettings(
@@ -28,14 +28,21 @@ fun EditorSettings(
     val settings = state.settings
     val dims = LocalSujianDimensions.current
     var autoIndentWidth by rememberSaveable(settings.autoIndentWidth) { mutableFloatStateOf(settings.autoIndentWidth) }
-    var typingDuration by rememberSaveable(settings.editorTypingAnimationDurationMs.toFloat()) { mutableFloatStateOf(settings.editorTypingAnimationDurationMs.toFloat()) }
-    var cursorDuration by rememberSaveable(settings.editorSmoothCursorDurationMs.toFloat()) { mutableFloatStateOf(settings.editorSmoothCursorDurationMs.toFloat()) }
+    var typingDuration by rememberSaveable(settings.editorTypingAnimationDurationMs.toFloat()) {
+        mutableFloatStateOf(settings.editorTypingAnimationDurationMs.toFloat())
+    }
+    var cursorDuration by rememberSaveable(settings.editorSmoothCursorDurationMs.toFloat()) {
+        mutableFloatStateOf(settings.editorSmoothCursorDurationMs.toFloat())
+    }
 
     androidx.compose.foundation.layout.Column(
         modifier = modifier.padding(dims.space16),
         verticalArrangement = Arrangement.spacedBy(dims.space16),
     ) {
-        SujianSection(title = stringResource(id = R.string.pref_category_editor), semanticId = SujianSemanticIds.SettingsEditorSection) {
+        SujianSection(
+            title = stringResource(id = R.string.pref_category_editor),
+            semanticId = SujianSemanticIds.SettingsEditorSection,
+        ) {
             SujianSwitchRow(
                 title = stringResource(id = R.string.pref_auto_indent),
                 checked = settings.autoIndentEnabled,
@@ -73,7 +80,13 @@ fun EditorSettings(
                 value = typingDuration,
                 onValueChange = { typingDuration = it },
                 onValueChangeFinished = {
-                    onIntent(SettingsIntent.UpdateLocal { it.copy(editorTypingAnimationDurationMs = typingDuration.toInt()) })
+                    onIntent(
+                        SettingsIntent.UpdateLocal {
+                            it.copy(
+                                editorTypingAnimationDurationMs = typingDuration.toInt(),
+                            )
+                        },
+                    )
                 },
                 valueRange = 30f..1000f,
                 steps = 96,
@@ -95,7 +108,9 @@ fun EditorSettings(
                 value = cursorDuration,
                 onValueChange = { cursorDuration = it },
                 onValueChangeFinished = {
-                    onIntent(SettingsIntent.UpdateLocal { it.copy(editorSmoothCursorDurationMs = cursorDuration.toInt()) })
+                    onIntent(
+                        SettingsIntent.UpdateLocal { it.copy(editorSmoothCursorDurationMs = cursorDuration.toInt()) },
+                    )
                 },
                 valueRange = 30f..1000f,
                 steps = 96,

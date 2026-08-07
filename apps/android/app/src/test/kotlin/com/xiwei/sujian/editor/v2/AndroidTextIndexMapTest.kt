@@ -1,11 +1,10 @@
 package com.xiwei.sujian.editor.v2
 
 import com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class AndroidTextIndexMapTest {
-
     @Test
     fun asciiTextUtf8EqualsUtf16() {
         val map = AndroidTextIndexMap.fromText("Hello")
@@ -184,45 +183,70 @@ class AndroidTextIndexMapTest {
     @Test
     fun computeResultingSelectionUtf8_insertChinese_position1() {
         val committedText = "abc"
-        val (anchor, head) = AndroidTextIndexMap.computeResultingSelectionUtf8(
-            committedText, 1, 1, 1, "你"
-        )
+        val (anchor, head) =
+            AndroidTextIndexMap.computeResultingSelectionUtf8(
+                committedText,
+                1,
+                1,
+                1,
+                "你",
+            )
         assertEquals(Pair(4, 4), Pair(anchor, head))
     }
 
     @Test
     fun computeResultingSelectionUtf8_insertChinese_position0() {
         val committedText = "abc"
-        val (anchor, head) = AndroidTextIndexMap.computeResultingSelectionUtf8(
-            committedText, 0, 1, 1, "你"
-        )
+        val (anchor, head) =
+            AndroidTextIndexMap.computeResultingSelectionUtf8(
+                committedText,
+                0,
+                1,
+                1,
+                "你",
+            )
         assertEquals(Pair(1, 1), Pair(anchor, head))
     }
 
     @Test
     fun computeResultingSelectionUtf8_replaceWithEmoji_position1() {
         val committedText = "abc"
-        val (anchor, head) = AndroidTextIndexMap.computeResultingSelectionUtf8(
-            committedText, 1, 0, 1, "😀"
-        )
+        val (anchor, head) =
+            AndroidTextIndexMap.computeResultingSelectionUtf8(
+                committedText,
+                1,
+                0,
+                1,
+                "😀",
+            )
         assertEquals(Pair(4, 4), Pair(anchor, head))
     }
 
     @Test
     fun computeResultingSelectionUtf8_negativePosition() {
         val committedText = "abc"
-        val (anchor, head) = AndroidTextIndexMap.computeResultingSelectionUtf8(
-            committedText, -1, 1, 1, "你"
-        )
+        val (anchor, head) =
+            AndroidTextIndexMap.computeResultingSelectionUtf8(
+                committedText,
+                -1,
+                1,
+                1,
+                "你",
+            )
         assertEquals(Pair(0, 0), Pair(anchor, head))
     }
 
     @Test
     fun computeResultingSelectionUtf8_replaceRangeWithChinese() {
         val committedText = "a你好b"
-        val (anchor, head) = AndroidTextIndexMap.computeResultingSelectionUtf8(
-            committedText, 1, 1, 7, "世界"
-        )
+        val (anchor, head) =
+            AndroidTextIndexMap.computeResultingSelectionUtf8(
+                committedText,
+                1,
+                1,
+                7,
+                "世界",
+            )
         assertEquals(Pair(7, 7), Pair(anchor, head))
     }
 }

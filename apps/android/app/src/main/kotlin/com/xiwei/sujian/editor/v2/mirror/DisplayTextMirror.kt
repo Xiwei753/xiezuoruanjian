@@ -3,14 +3,13 @@ package com.xiwei.sujian.editor.v2.mirror
 import android.text.SpannableStringBuilder
 import android.text.style.UnderlineSpan
 import com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap
-import uniffi.writer_core.EditorEditResultDto
-import uniffi.writer_core.DisplayPatchDto
-import uniffi.writer_core.EditorVisualIntentDto
-import uniffi.writer_core.CoordinatedCursorDto
-import uniffi.writer_core.EditorByteRangeDto
 import uniffi.writer_core.AnimationModeDto
-import uniffi.writer_core.EditorTransactionCauseDto
+import uniffi.writer_core.CoordinatedCursorDto
+import uniffi.writer_core.DisplayPatchDto
+import uniffi.writer_core.EditorEditResultDto
 import uniffi.writer_core.EditorOperationKindDto
+import uniffi.writer_core.EditorTransactionCauseDto
+import uniffi.writer_core.EditorVisualIntentDto
 
 /**
  * A single incremental text patch from the Rust kernel.
@@ -23,21 +22,21 @@ data class DisplayPatch(
     val replaceByteEndExclusive: Int,
     val insertedText: String,
     val resultingSelectionStart: Int,
-    val resultingSelectionEnd: Int
+    val resultingSelectionEnd: Int,
 ) {
     companion object {
-        fun fromDto(dto: DisplayPatchDto): DisplayPatch = DisplayPatch(
-            baseRevision = dto.baseRevision.toLong(),
-            newRevision = dto.newRevision.toLong(),
-            replaceByteStart = dto.replaceByteStart.toInt(),
-            replaceByteEndExclusive = dto.replaceByteEndExclusive.toInt(),
-            insertedText = dto.insertedText,
-            resultingSelectionStart = dto.resultingSelectionStart.toInt(),
-            resultingSelectionEnd = dto.resultingSelectionEnd.toInt()
-        )
+        fun fromDto(dto: DisplayPatchDto): DisplayPatch =
+            DisplayPatch(
+                baseRevision = dto.baseRevision.toLong(),
+                newRevision = dto.newRevision.toLong(),
+                replaceByteStart = dto.replaceByteStart.toInt(),
+                replaceByteEndExclusive = dto.replaceByteEndExclusive.toInt(),
+                insertedText = dto.insertedText,
+                resultingSelectionStart = dto.resultingSelectionStart.toInt(),
+                resultingSelectionEnd = dto.resultingSelectionEnd.toInt(),
+            )
 
-        fun fromDtoList(dtos: List<DisplayPatchDto>): List<DisplayPatch> =
-            dtos.map { fromDto(it) }
+        fun fromDtoList(dtos: List<DisplayPatchDto>): List<DisplayPatch> = dtos.map { fromDto(it) }
     }
 }
 
@@ -61,40 +60,60 @@ data class VisualIntent(
     val newAffectedByteRanges: List<Pair<Int, Int>>,
     val animationMode: AnimationModeDto,
     val durationMs: Long,
-    val coordinatedCursor: CoordinatedCursor
+    val coordinatedCursor: CoordinatedCursor,
 ) {
     companion object {
-        fun fromDto(dto: EditorVisualIntentDto): VisualIntent = VisualIntent(
-            cause = dto.cause,
-            operationKind = dto.operationKind,
-            oldAffectedByteRanges = dto.oldAffectedByteRanges.map { Pair(it.start.toInt(), it.endExclusive.toInt()) },
-            newAffectedByteRanges = dto.newAffectedByteRanges.map { Pair(it.start.toInt(), it.endExclusive.toInt()) },
-            animationMode = dto.animationMode,
-            durationMs = dto.durationMs.toLong(),
-            coordinatedCursor = CoordinatedCursor.fromDto(dto.coordinatedCursor)
-        )
+        fun fromDto(dto: EditorVisualIntentDto): VisualIntent =
+            VisualIntent(
+                cause = dto.cause,
+                operationKind = dto.operationKind,
+                oldAffectedByteRanges =
+                    dto.oldAffectedByteRanges.map {
+                        Pair(
+                            it.start.toInt(),
+                            it.endExclusive.toInt(),
+                        )
+                    },
+                newAffectedByteRanges =
+                    dto.newAffectedByteRanges.map {
+                        Pair(
+                            it.start.toInt(),
+                            it.endExclusive.toInt(),
+                        )
+                    },
+                animationMode = dto.animationMode,
+                durationMs = dto.durationMs.toLong(),
+                coordinatedCursor = CoordinatedCursor.fromDto(dto.coordinatedCursor),
+            )
     }
 
     fun isInsert(): Boolean = operationKind == EditorOperationKindDto.INSERT
+
     fun isDelete(): Boolean = operationKind == EditorOperationKindDto.DELETE
+
     fun isReplace(): Boolean = operationKind == EditorOperationKindDto.REPLACE
+
     fun isCompositionUpdate(): Boolean = operationKind == EditorOperationKindDto.COMPOSITION_UPDATE
+
     fun isCompositionCommit(): Boolean = operationKind == EditorOperationKindDto.COMPOSITION_COMMIT
+
     fun isCompositionCancel(): Boolean = operationKind == EditorOperationKindDto.COMPOSITION_CANCEL
+
     fun isCursorOnly(): Boolean = operationKind == EditorOperationKindDto.CURSOR_ONLY
 }
 
 data class CoordinatedCursor(
     val oldByteOffset: Int,
     val newByteOffset: Int,
-    val shouldAnimate: Boolean
+    val shouldAnimate: Boolean,
 ) {
     companion object {
-        fun fromDto(dto: CoordinatedCursorDto): CoordinatedCursor = CoordinatedCursor(
-            oldByteOffset = dto.oldByteOffset.toInt(),
-            newByteOffset = dto.newByteOffset.toInt(),
-            shouldAnimate = dto.shouldAnimate
-        )
+        fun fromDto(dto: CoordinatedCursorDto): CoordinatedCursor =
+            CoordinatedCursor(
+                oldByteOffset = dto.oldByteOffset.toInt(),
+                newByteOffset = dto.newByteOffset.toInt(),
+                shouldAnimate = dto.shouldAnimate,
+            )
     }
 }
 
@@ -108,26 +127,34 @@ data class EditResult(
     val oldSelectionEnd: Int,
     val newSelectionStart: Int,
     val newSelectionEnd: Int,
-    val visualIntent: VisualIntent
+    val visualIntent: VisualIntent,
 ) {
     companion object {
-        fun fromDto(dto: EditorEditResultDto): EditResult = EditResult(
-            outcome = dto.outcome,
-            transactionId = dto.transactionId.toLong(),
-            baseRevision = dto.baseRevision.toLong(),
-            newRevision = dto.newRevision.toLong(),
-            displayPatches = DisplayPatch.fromDtoList(dto.displayPatches),
-            oldSelectionStart = dto.oldSelectionStart.toInt(),
-            oldSelectionEnd = dto.oldSelectionEnd.toInt(),
-            newSelectionStart = dto.newSelectionStart.toInt(),
-            newSelectionEnd = dto.newSelectionEnd.toInt(),
-            visualIntent = VisualIntent.fromDto(dto.visualIntent)
-        )
+        fun fromDto(dto: EditorEditResultDto): EditResult =
+            EditResult(
+                outcome = dto.outcome,
+                transactionId = dto.transactionId.toLong(),
+                baseRevision = dto.baseRevision.toLong(),
+                newRevision = dto.newRevision.toLong(),
+                displayPatches = DisplayPatch.fromDtoList(dto.displayPatches),
+                oldSelectionStart = dto.oldSelectionStart.toInt(),
+                oldSelectionEnd = dto.oldSelectionEnd.toInt(),
+                newSelectionStart = dto.newSelectionStart.toInt(),
+                newSelectionEnd = dto.newSelectionEnd.toInt(),
+                visualIntent = VisualIntent.fromDto(dto.visualIntent),
+            )
     }
 
-    fun isApplied(): Boolean = outcome == uniffi.writer_core.EditorEditOutcomeDto.APPLIED || outcome == uniffi.writer_core.EditorEditOutcomeDto.APPLIED_WITH_ADJUSTED_SELECTION
+    fun isApplied(): Boolean =
+        outcome == uniffi.writer_core.EditorEditOutcomeDto.APPLIED ||
+            outcome == uniffi.writer_core.EditorEditOutcomeDto.APPLIED_WITH_ADJUSTED_SELECTION
+
     fun isStale(): Boolean = outcome == uniffi.writer_core.EditorEditOutcomeDto.STALE_REVISION
-    fun isInvalid(): Boolean = outcome == uniffi.writer_core.EditorEditOutcomeDto.INVALID_OFFSET || outcome == uniffi.writer_core.EditorEditOutcomeDto.INVALID_RANGE
+
+    fun isInvalid(): Boolean =
+        outcome == uniffi.writer_core.EditorEditOutcomeDto.INVALID_OFFSET ||
+            outcome == uniffi.writer_core.EditorEditOutcomeDto.INVALID_RANGE
+
     fun isNoChange(): Boolean = outcome == uniffi.writer_core.EditorEditOutcomeDto.NO_CHANGE
 }
 
@@ -165,6 +192,7 @@ class DisplayTextMirror {
     private var selectionHeadUtf8: Int = 0
     private var selectionAnchorUtf16: Int = 0
     private var selectionHeadUtf16: Int = 0
+
     /** Committed-text UTF-8 byte offset where the composition replacement starts.
      *  In committed-text coordinates (not virtual/preedit coordinates), matching the
      *  Rust CompositionSession convention. The kernel only knows committed text, so
@@ -172,6 +200,7 @@ class DisplayTextMirror {
      *  The virtual preedit range in the buffer ([compositionStartUtf16]/[compositionEndUtf16])
      *  is in full-buffer coordinates (including the overlay) and must NOT be sent to the kernel. */
     private var compositionReplaceStartUtf8: Int = 0
+
     /** Committed-text UTF-8 byte offset where the composition replacement ends (exclusive).
      *  Same coordinate convention as [compositionReplaceStartUtf8] — committed-text space. */
     private var compositionReplaceEndUtf8: Int = 0
@@ -233,14 +262,18 @@ class DisplayTextMirror {
         val indexMap = AndroidTextIndexMap(this)
         val startUtf16 = indexMap.utf8ToUtf16(compositionReplaceStartUtf8)
         val endUtf16 = compositionStartUtf16
-        return buffer.substring(0, startUtf16) + compositionOriginalText + buffer.substring(compositionEndUtf16.coerceAtMost(buffer.length))
+        return buffer.substring(0, startUtf16) +
+            compositionOriginalText +
+            buffer.substring(compositionEndUtf16.coerceAtMost(buffer.length))
     }
 
     fun getCommittedLengthUtf16(): Int {
         if (!hasActiveComposition) return buffer.length
         val indexMap = AndroidTextIndexMap(this)
         val startUtf16 = indexMap.utf8ToUtf16(compositionReplaceStartUtf8)
-        return startUtf16 + compositionOriginalText.length + (buffer.length - compositionEndUtf16.coerceAtMost(buffer.length))
+        return startUtf16 +
+            compositionOriginalText.length +
+            (buffer.length - compositionEndUtf16.coerceAtMost(buffer.length))
     }
 
     fun applyEditResult(result: EditResult) {
@@ -286,8 +319,9 @@ class DisplayTextMirror {
         for (patch in patches) {
             if (patch.baseRevision != currentRevision) {
                 throw IllegalStateException(
-                    "DisplayTextMirror revision discontinuity: expected baseRevision=$currentRevision, got ${patch.baseRevision}. " +
-                    "Must reload from EditorSession."
+                    "DisplayTextMirror revision discontinuity: expected baseRevision=$currentRevision, " +
+                        "got ${patch.baseRevision}. " +
+                        "Must reload from EditorSession.",
                 )
             }
 
@@ -325,7 +359,11 @@ class DisplayTextMirror {
      * the new preedit is overlaid. Without this, consecutive updateComposition calls would
      * treat the previous preedit as committed text, corrupting [compositionOriginalText].
      */
-    fun updateComposition(replaceStartUtf8: Int, replaceEndUtf8: Int, preeditText: String) {
+    fun updateComposition(
+        replaceStartUtf8: Int,
+        replaceEndUtf8: Int,
+        preeditText: String,
+    ) {
         val indexMap = AndroidTextIndexMap(this)
         removeCompositionOverlay()
 
@@ -353,7 +391,7 @@ class DisplayTextMirror {
             // SPAN_EXCLUSIVE_EXCLUSIVE: the span does not expand when text is inserted at
             // its boundaries. This is correct for the preedit underline because the IME
             // controls the exact range — adjacent insertions should not extend the underline.
-            SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE
+            SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE,
         )
     }
 
@@ -396,7 +434,13 @@ class DisplayTextMirror {
         }
     }
 
-    fun loadFromSnapshot(text: String, cursorUtf8: Int, revision: Long, selectionAnchorUtf8: Int = cursorUtf8, selectionHeadUtf8: Int = cursorUtf8) {
+    fun loadFromSnapshot(
+        text: String,
+        cursorUtf8: Int,
+        revision: Long,
+        selectionAnchorUtf8: Int = cursorUtf8,
+        selectionHeadUtf8: Int = cursorUtf8,
+    ) {
         buffer.clear()
         buffer.append(text)
         this.cursorUtf8 = cursorUtf8
@@ -413,11 +457,17 @@ class DisplayTextMirror {
         this.selectionHeadUtf16 = indexMap.utf8ToUtf16(selectionHeadUtf8)
     }
 
-    fun loadText(text: String, cursorUtf8: Int) {
+    fun loadText(
+        text: String,
+        cursorUtf8: Int,
+    ) {
         loadFromSnapshot(text, cursorUtf8, 0)
     }
 
-    fun setSelectionInternal(anchorUtf8: Int, headUtf8: Int) {
+    fun setSelectionInternal(
+        anchorUtf8: Int,
+        headUtf8: Int,
+    ) {
         val indexMap = AndroidTextIndexMap(this)
         selectionAnchorUtf8 = anchorUtf8
         selectionHeadUtf8 = headUtf8

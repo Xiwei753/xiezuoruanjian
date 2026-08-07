@@ -12,9 +12,9 @@ import com.xiwei.sujian.model.FirstSyncMode
 import com.xiwei.sujian.model.LocalSettings
 import com.xiwei.sujian.model.Project
 import com.xiwei.sujian.model.ProjectStats
-import com.xiwei.sujian.model.RecentEdit
 import com.xiwei.sujian.model.ProjectWritingStatsItem
 import com.xiwei.sujian.model.ProjectWritingStatsSummary
+import com.xiwei.sujian.model.RecentEdit
 import com.xiwei.sujian.model.SyncConfig
 import com.xiwei.sujian.model.SyncConflict
 import com.xiwei.sujian.model.SyncDiagnosticsResult
@@ -41,9 +41,9 @@ import uniffi.writer_core.DeviceStatsSummaryDto
 import uniffi.writer_core.LocalSettingsDto
 import uniffi.writer_core.ProjectDto
 import uniffi.writer_core.ProjectStatsDto
-import uniffi.writer_core.RecentEditDto
 import uniffi.writer_core.ProjectStatsRecordDto
 import uniffi.writer_core.ProjectStatsSummaryDto
+import uniffi.writer_core.RecentEditDto
 import uniffi.writer_core.SpeedCurvePointDto
 import uniffi.writer_core.SpeedCurveSummaryDto
 import uniffi.writer_core.SyncConfigDto
@@ -58,162 +58,173 @@ import uniffi.writer_core.VolumeDto
 import uniffi.writer_core.WriterException
 import uniffi.writer_core.WritingStatsSummaryDto
 
-internal fun WriterException.toWireErrorCode(): String = when (this) {
-    is WriterException.Io -> "IO_ERROR"
-    is WriterException.Json -> "JSON_ERROR"
-    is WriterException.InvalidWorkspace -> "INVALID_WORKSPACE"
-    is WriterException.ProjectNotFound -> "PROJECT_NOT_FOUND"
-    is WriterException.VolumeNotFound -> "VOLUME_NOT_FOUND"
-    is WriterException.ChapterNotFound -> "CHAPTER_NOT_FOUND"
-    is WriterException.EmptyOverwriteBlocked -> "EMPTY_OVERWRITE_BLOCKED"
-    is WriterException.NotImplemented -> "NOT_IMPLEMENTED"
-    is WriterException.RefuseToDeleteWorkspaceRoot -> "REFUSE_DELETE_WORKSPACE_ROOT"
-    is WriterException.InvalidDeleteTarget -> "INVALID_DELETE_TARGET"
-    is WriterException.SyncConflict -> "SYNC_CONFLICT"
-    is WriterException.SyncFailed -> "SYNC_FAILED"
-    is WriterException.RetryableNetwork -> "RETRYABLE_NETWORK"
-    is WriterException.RetryableIo -> "RETRYABLE_IO"
-    is WriterException.Authentication -> "AUTHENTICATION"
-    is WriterException.Conflict -> "CONFLICT"
-    is WriterException.DirtyRepository -> "DIRTY_REPOSITORY"
-    is WriterException.Protocol -> "PROTOCOL"
-    is WriterException.Fatal -> "FATAL"
-    is WriterException.Other -> "OTHER"
-}
+internal fun WriterException.toWireErrorCode(): String =
+    when (this) {
+        is WriterException.Io -> "IO_ERROR"
+        is WriterException.Json -> "JSON_ERROR"
+        is WriterException.InvalidWorkspace -> "INVALID_WORKSPACE"
+        is WriterException.ProjectNotFound -> "PROJECT_NOT_FOUND"
+        is WriterException.VolumeNotFound -> "VOLUME_NOT_FOUND"
+        is WriterException.ChapterNotFound -> "CHAPTER_NOT_FOUND"
+        is WriterException.EmptyOverwriteBlocked -> "EMPTY_OVERWRITE_BLOCKED"
+        is WriterException.NotImplemented -> "NOT_IMPLEMENTED"
+        is WriterException.RefuseToDeleteWorkspaceRoot -> "REFUSE_DELETE_WORKSPACE_ROOT"
+        is WriterException.InvalidDeleteTarget -> "INVALID_DELETE_TARGET"
+        is WriterException.SyncConflict -> "SYNC_CONFLICT"
+        is WriterException.SyncFailed -> "SYNC_FAILED"
+        is WriterException.RetryableNetwork -> "RETRYABLE_NETWORK"
+        is WriterException.RetryableIo -> "RETRYABLE_IO"
+        is WriterException.Authentication -> "AUTHENTICATION"
+        is WriterException.Conflict -> "CONFLICT"
+        is WriterException.DirtyRepository -> "DIRTY_REPOSITORY"
+        is WriterException.Protocol -> "PROTOCOL"
+        is WriterException.Fatal -> "FATAL"
+        is WriterException.Other -> "OTHER"
+    }
 
 /**
  * #592 七：Core/Bridge 边界的类型化失败 — 由 WriterException 变体直接推导，
  * 不维护字符串错误码表。未知错误默认 Fatal，只有明确网络或 IO 失败可重试。
  */
-internal fun WriterException.toSyncFailureKind(): SyncFailureKind? = when (this) {
-    is WriterException.RetryableNetwork -> SyncFailureKind.RetryableNetwork
-    is WriterException.RetryableIo -> SyncFailureKind.RetryableIo
-    is WriterException.Authentication -> SyncFailureKind.Authentication
-    is WriterException.Conflict,
-    is WriterException.SyncConflict -> SyncFailureKind.Conflict
-    is WriterException.DirtyRepository -> SyncFailureKind.DirtyRepository
-    is WriterException.Protocol -> SyncFailureKind.Protocol
-    is WriterException.Fatal -> SyncFailureKind.Fatal
-    // 明确 I/O 失败可重试；其余（Io/Json/Other/旧 SyncFailed 等）视为未知 → null → Fatal。
-    is WriterException.Io -> SyncFailureKind.RetryableIo
-    else -> null
-}
+internal fun WriterException.toSyncFailureKind(): SyncFailureKind? =
+    when (this) {
+        is WriterException.RetryableNetwork -> SyncFailureKind.RetryableNetwork
+        is WriterException.RetryableIo -> SyncFailureKind.RetryableIo
+        is WriterException.Authentication -> SyncFailureKind.Authentication
+        is WriterException.Conflict,
+        is WriterException.SyncConflict,
+        -> SyncFailureKind.Conflict
+        is WriterException.DirtyRepository -> SyncFailureKind.DirtyRepository
+        is WriterException.Protocol -> SyncFailureKind.Protocol
+        is WriterException.Fatal -> SyncFailureKind.Fatal
+        // 明确 I/O 失败可重试；其余（Io/Json/Other/旧 SyncFailed 等）视为未知 → null → Fatal。
+        is WriterException.Io -> SyncFailureKind.RetryableIo
+        else -> null
+    }
 
 internal fun ProjectDto.toModel() = Project(id, title, createdAt, updatedAt)
 
 internal fun RecentEditDto.toModel() = RecentEdit(projectId, volumeId, chapterId, timestamp)
 
-internal fun ProjectStatsDto.toModel() = ProjectStats(
-    totalWordCount = totalWordCount.toInt(),
-    volumeCount = volumeCount.toInt(),
-    chapterCount = chapterCount.toInt()
-)
+internal fun ProjectStatsDto.toModel() =
+    ProjectStats(
+        totalWordCount = totalWordCount.toInt(),
+        volumeCount = volumeCount.toInt(),
+        chapterCount = chapterCount.toInt(),
+    )
 
-internal fun VolumeDto.toModel() = Volume(
-    id = id,
-    title = title,
-    createdAt = createdAt,
-    updatedAt = updatedAt,
-    order = order
-)
+internal fun VolumeDto.toModel() =
+    Volume(
+        id = id,
+        title = title,
+        createdAt = createdAt,
+        updatedAt = updatedAt,
+        order = order,
+    )
 
-internal fun ChapterMetaDto.toModel() = ChapterMeta(
-    id = id,
-    title = title,
-    createdAt = createdAt,
-    updatedAt = updatedAt,
-    order = order,
-    wordCount = wordCount.toInt(),
-    hash = hash,
-    note = note
-)
+internal fun ChapterMetaDto.toModel() =
+    ChapterMeta(
+        id = id,
+        title = title,
+        createdAt = createdAt,
+        updatedAt = updatedAt,
+        order = order,
+        wordCount = wordCount.toInt(),
+        hash = hash,
+        note = note,
+    )
 
 internal fun ChapterContentDto.toModel() = ChapterOpenResult(meta.toModel(), content)
 
-internal fun ChapterSaveReceiptDto.toModel() = ChapterSaveReceipt(
-    chapterRelativePath = chapterRelativePath,
-    contentLen = contentLen.toLong(),
-    contentHash = contentHash,
-    metaHash = metaHash,
-    updatedAt = updatedAt,
-    wordCount = wordCount.toInt()
-)
+internal fun ChapterSaveReceiptDto.toModel() =
+    ChapterSaveReceipt(
+        chapterRelativePath = chapterRelativePath,
+        contentLen = contentLen.toLong(),
+        contentHash = contentHash,
+        metaHash = metaHash,
+        updatedAt = updatedAt,
+        wordCount = wordCount.toInt(),
+    )
 
-internal fun LocalSettingsDto.toModel() = LocalSettings(
-    themeMode = themeMode,
-    appearanceMode = appearanceMode,
-    colorSource = colorSource,
-    dynamicColorEnabled = dynamicColorEnabled,
-    selectedBuiltinThemeId = selectedBuiltinThemeId,
-    selectedPaletteId = selectedPaletteId,
-    locale = locale,
-    autoSaveEnabled = autoSaveEnabled,
-    editorFontSize = editorFontSize,
-    editorLineSpacingMultiplier = editorLineSpacingMultiplier,
-    windowWidth = windowWidth.toDouble(),
-    windowHeight = windowHeight.toDouble(),
-    autoSaveDelayMs = autoSaveDelayMs.toLong(),
-    autoIndentEnabled = autoIndentEnabled,
-    autoIndentWidth = autoIndentWidth,
-    editorTypingAnimationEnabled = editorTypingAnimationEnabled,
-    editorSmoothCursorEnabled = editorSmoothCursorEnabled,
-    editorTypingAnimationDurationMs = editorTypingAnimationDurationMs.toInt(),
-    editorSmoothCursorDurationMs = editorSmoothCursorDurationMs.toInt(),
-    aiEnabled = aiEnabled,
-    statsDeviceId = statsDeviceId,
-    desktopSidebarWidth = desktopSidebarWidth,
-    desktopEditorWidth = desktopEditorWidth,
-    editorCoordinatedTextCursorAnimationEnabled = editorCoordinatedTextCursorAnimationEnabled,
-    diagnosticsEnabled = diagnosticsEnabled,
-    diagnosticsVerbose = diagnosticsVerbose,
-    useSelfRenderEditorOnAndroid = true
-)
+internal fun LocalSettingsDto.toModel() =
+    LocalSettings(
+        themeMode = themeMode,
+        appearanceMode = appearanceMode,
+        colorSource = colorSource,
+        dynamicColorEnabled = dynamicColorEnabled,
+        selectedBuiltinThemeId = selectedBuiltinThemeId,
+        selectedPaletteId = selectedPaletteId,
+        locale = locale,
+        autoSaveEnabled = autoSaveEnabled,
+        editorFontSize = editorFontSize,
+        editorLineSpacingMultiplier = editorLineSpacingMultiplier,
+        windowWidth = windowWidth.toDouble(),
+        windowHeight = windowHeight.toDouble(),
+        autoSaveDelayMs = autoSaveDelayMs.toLong(),
+        autoIndentEnabled = autoIndentEnabled,
+        autoIndentWidth = autoIndentWidth,
+        editorTypingAnimationEnabled = editorTypingAnimationEnabled,
+        editorSmoothCursorEnabled = editorSmoothCursorEnabled,
+        editorTypingAnimationDurationMs = editorTypingAnimationDurationMs.toInt(),
+        editorSmoothCursorDurationMs = editorSmoothCursorDurationMs.toInt(),
+        aiEnabled = aiEnabled,
+        statsDeviceId = statsDeviceId,
+        desktopSidebarWidth = desktopSidebarWidth,
+        desktopEditorWidth = desktopEditorWidth,
+        editorCoordinatedTextCursorAnimationEnabled = editorCoordinatedTextCursorAnimationEnabled,
+        diagnosticsEnabled = diagnosticsEnabled,
+        diagnosticsVerbose = diagnosticsVerbose,
+        useSelfRenderEditorOnAndroid = true,
+    )
 
-internal fun LocalSettings.toDto() = LocalSettingsDto(
-    themeMode = themeMode,
-    appearanceMode = appearanceMode,
-    colorSource = colorSource,
-    dynamicColorEnabled = dynamicColorEnabled,
-    selectedBuiltinThemeId = selectedBuiltinThemeId,
-    selectedPaletteId = selectedPaletteId,
-    locale = locale,
-    autoSaveEnabled = autoSaveEnabled,
-    editorFontSize = editorFontSize,
-    editorLineSpacingMultiplier = editorLineSpacingMultiplier,
-    windowWidth = windowWidth.toFloat(),
-    windowHeight = windowHeight.toFloat(),
-    autoSaveDelayMs = autoSaveDelayMs.toULong(),
-    autoIndentEnabled = autoIndentEnabled,
-    autoIndentWidth = autoIndentWidth,
-    editorTypingAnimationEnabled = editorTypingAnimationEnabled,
-    editorSmoothCursorEnabled = editorSmoothCursorEnabled,
-    editorTypingAnimationDurationMs = editorTypingAnimationDurationMs.toULong(),
-    editorSmoothCursorDurationMs = editorSmoothCursorDurationMs.toULong(),
-    aiEnabled = aiEnabled,
-    statsDeviceId = statsDeviceId,
-    desktopSidebarWidth = desktopSidebarWidth,
-    desktopEditorWidth = desktopEditorWidth,
-    editorCoordinatedTextCursorAnimationEnabled = editorCoordinatedTextCursorAnimationEnabled,
-    diagnosticsEnabled = diagnosticsEnabled,
-    diagnosticsVerbose = diagnosticsVerbose
-)
+internal fun LocalSettings.toDto() =
+    LocalSettingsDto(
+        themeMode = themeMode,
+        appearanceMode = appearanceMode,
+        colorSource = colorSource,
+        dynamicColorEnabled = dynamicColorEnabled,
+        selectedBuiltinThemeId = selectedBuiltinThemeId,
+        selectedPaletteId = selectedPaletteId,
+        locale = locale,
+        autoSaveEnabled = autoSaveEnabled,
+        editorFontSize = editorFontSize,
+        editorLineSpacingMultiplier = editorLineSpacingMultiplier,
+        windowWidth = windowWidth.toFloat(),
+        windowHeight = windowHeight.toFloat(),
+        autoSaveDelayMs = autoSaveDelayMs.toULong(),
+        autoIndentEnabled = autoIndentEnabled,
+        autoIndentWidth = autoIndentWidth,
+        editorTypingAnimationEnabled = editorTypingAnimationEnabled,
+        editorSmoothCursorEnabled = editorSmoothCursorEnabled,
+        editorTypingAnimationDurationMs = editorTypingAnimationDurationMs.toULong(),
+        editorSmoothCursorDurationMs = editorSmoothCursorDurationMs.toULong(),
+        aiEnabled = aiEnabled,
+        statsDeviceId = statsDeviceId,
+        desktopSidebarWidth = desktopSidebarWidth,
+        desktopEditorWidth = desktopEditorWidth,
+        editorCoordinatedTextCursorAnimationEnabled = editorCoordinatedTextCursorAnimationEnabled,
+        diagnosticsEnabled = diagnosticsEnabled,
+        diagnosticsVerbose = diagnosticsVerbose,
+    )
 
 internal fun SyncableSettingsDto.toModel() = SyncableSettings(fontSize, themeMode, monetColor, themePaletteJson)
+
 @Suppress("DEPRECATION")
 internal fun SyncableSettings.toDto() = SyncableSettingsDto(fontSize, themeMode, monetColor, themePaletteJson)
 
-internal fun SyncConfigDto.toModel() = SyncConfig(
-    enabled = enabled,
-    backendType = backendType.toBackendType(),
-    remoteUrl = remoteUrl,
-    transport = transport.toSyncTransport(),
-    branch = branch,
-    autoSync = autoSync,
-    syncIntervalSeconds = syncIntervalSeconds.toInt(),
-    username = username,
-    hasNetworkStatePermission = hasNetworkStatePermission,
-    hasNetworkPermission = hasNetworkPermission
-)
+internal fun SyncConfigDto.toModel() =
+    SyncConfig(
+        enabled = enabled,
+        backendType = backendType.toBackendType(),
+        remoteUrl = remoteUrl,
+        transport = transport.toSyncTransport(),
+        branch = branch,
+        autoSync = autoSync,
+        syncIntervalSeconds = syncIntervalSeconds.toInt(),
+        username = username,
+        hasNetworkStatePermission = hasNetworkStatePermission,
+        hasNetworkPermission = hasNetworkPermission,
+    )
 
 internal fun SyncConfig.toDto(): SyncConfigDto {
     val normalized = normalize()
@@ -227,190 +238,220 @@ internal fun SyncConfig.toDto(): SyncConfigDto {
         syncIntervalSeconds = (normalized.syncIntervalSeconds ?: 300).toUInt(),
         username = normalized.username ?: "",
         hasNetworkPermission = normalized.hasNetworkPermission ?: false,
-        hasNetworkStatePermission = normalized.hasNetworkStatePermission ?: false
+        hasNetworkStatePermission = normalized.hasNetworkStatePermission ?: false,
     )
 }
 
 internal fun SyncSecretsDto.toModel() = SyncSecrets(token, null)
+
 internal fun SyncSecrets.toDto() = SyncSecretsDto(token)
 
-internal fun SyncStateDto.toModel() = SyncState(
-    status = status.toSyncStatus(),
-    remoteUrl = remoteUrl,
-    backendType = backendType,
-    transport = transport,
-    lastSyncedCommit = lastSyncedCommit,
-    lastSyncTime = lastSyncTime,
-    lastError = lastError,
-    conflicts = conflicts?.map { it.toModel() } ?: emptyList()
-)
+internal fun SyncStateDto.toModel() =
+    SyncState(
+        status = status.toSyncStatus(),
+        remoteUrl = remoteUrl,
+        backendType = backendType,
+        transport = transport,
+        lastSyncedCommit = lastSyncedCommit,
+        lastSyncTime = lastSyncTime,
+        lastError = lastError,
+        conflicts = conflicts?.map { it.toModel() } ?: emptyList(),
+    )
 
-internal fun SyncConflictDto.toModel() = SyncConflict(localPath, remotePath, localHash, remoteHash, baseHash, createdAt, description)
+internal fun SyncConflictDto.toModel() =
+    SyncConflict(
+        localPath,
+        remotePath,
+        localHash,
+        remoteHash,
+        baseHash,
+        createdAt,
+        description,
+    )
 
-internal fun SyncDiagnosticsResultDto.toModel() = SyncDiagnosticsResult(
-    success = success,
-    backendType = backendType,
-    hasNetworkPermission = hasNetworkPermission,
-    hasNetworkStatePermission = hasNetworkStatePermission,
-    networkState = networkState,
-    networkOk = networkOk,
-    authOk = authOk,
-    repoOk = repoOk,
-    branchOk = branchOk,
-    networkStatus = networkStatus,
-    authStatus = authStatus,
-    repoStatus = repoStatus,
-    branchStatus = branchStatus,
-    remoteUrlSanitized = remoteUrlSanitized,
-    transport = transport,
-    errorCategory = errorCategory,
-    rawError = rawError
-)
+internal fun SyncDiagnosticsResultDto.toModel() =
+    SyncDiagnosticsResult(
+        success = success,
+        backendType = backendType,
+        hasNetworkPermission = hasNetworkPermission,
+        hasNetworkStatePermission = hasNetworkStatePermission,
+        networkState = networkState,
+        networkOk = networkOk,
+        authOk = authOk,
+        repoOk = repoOk,
+        branchOk = branchOk,
+        networkStatus = networkStatus,
+        authStatus = authStatus,
+        repoStatus = repoStatus,
+        branchStatus = branchStatus,
+        remoteUrlSanitized = remoteUrlSanitized,
+        transport = transport,
+        errorCategory = errorCategory,
+        rawError = rawError,
+    )
 
-internal fun SyncPlanDto.toModel() = SyncPlan(
-    filesToUpload = filesToUpload,
-    filesToDownload = filesToDownload,
-    filesToDeleteLocal = filesToDeleteLocal,
-    filesToDeleteRemote = filesToDeleteRemote,
-    ignoredFiles = ignoredFiles,
-    conflicts = conflicts
-)
+internal fun SyncPlanDto.toModel() =
+    SyncPlan(
+        filesToUpload = filesToUpload,
+        filesToDownload = filesToDownload,
+        filesToDeleteLocal = filesToDeleteLocal,
+        filesToDeleteRemote = filesToDeleteRemote,
+        ignoredFiles = ignoredFiles,
+        conflicts = conflicts,
+    )
 
-internal fun SyncResultDto.toModel() = SyncResult(
-    status = status.toSyncStatus(),
-    uploadedFiles = uploadedFiles,
-    downloadedFiles = downloadedFiles,
-    localDeletes = localDeletes,
-    remoteDeletes = remoteDeletes,
-    overwrittenFiles = overwrittenFiles,
-    ignoredFiles = ignoredFiles,
-    conflicts = conflicts.map { it.toModel() },
-    conflictSummary = null,
-    settingsConflicts = null,
-    commitHash = commitHash,
-    error = error,
-    errorCategory = errorCategory,
-    firstSyncMode = firstSyncMode.toFirstSyncMode()
-)
+internal fun SyncResultDto.toModel() =
+    SyncResult(
+        status = status.toSyncStatus(),
+        uploadedFiles = uploadedFiles,
+        downloadedFiles = downloadedFiles,
+        localDeletes = localDeletes,
+        remoteDeletes = remoteDeletes,
+        overwrittenFiles = overwrittenFiles,
+        ignoredFiles = ignoredFiles,
+        conflicts = conflicts.map { it.toModel() },
+        conflictSummary = null,
+        settingsConflicts = null,
+        commitHash = commitHash,
+        error = error,
+        errorCategory = errorCategory,
+        firstSyncMode = firstSyncMode.toFirstSyncMode(),
+    )
 
-internal fun String?.toBackendType(): BackendType = when (this) {
-    "git" -> BackendType.Git
-    "github_api" -> BackendType.GithubApi
-    else -> BackendType.GithubApi
-}
+internal fun String?.toBackendType(): BackendType =
+    when (this) {
+        "git" -> BackendType.Git
+        "github_api" -> BackendType.GithubApi
+        else -> BackendType.GithubApi
+    }
 
-internal fun BackendType?.toWire(): String = when (this ?: BackendType.GithubApi) {
-    BackendType.Git -> "git"
-    BackendType.GithubApi -> "github_api"
-}
+internal fun BackendType?.toWire(): String =
+    when (this ?: BackendType.GithubApi) {
+        BackendType.Git -> "git"
+        BackendType.GithubApi -> "github_api"
+    }
 
-internal fun String?.toSyncTransport(): SyncTransport = when (this) {
-    "ssh", "ssh_deploy_key" -> SyncTransport.SshKey
-    else -> SyncTransport.HttpsToken
-}
+internal fun String?.toSyncTransport(): SyncTransport =
+    when (this) {
+        "ssh", "ssh_deploy_key" -> SyncTransport.SshKey
+        else -> SyncTransport.HttpsToken
+    }
 
-internal fun SyncTransport?.toWire(): String = when (this ?: SyncTransport.HttpsToken) {
-    SyncTransport.HttpsToken -> "https_token"
-    SyncTransport.SshKey -> "ssh_deploy_key"
-}
+internal fun SyncTransport?.toWire(): String =
+    when (this ?: SyncTransport.HttpsToken) {
+        SyncTransport.HttpsToken -> "https_token"
+        SyncTransport.SshKey -> "ssh_deploy_key"
+    }
 
-internal fun String?.toSyncStatus(): SyncStatus = when (this) {
-    "idle" -> SyncStatus.Idle
-    "syncing" -> SyncStatus.Syncing
-    "success" -> SyncStatus.Success
-    "configured_not_tested" -> SyncStatus.ConfiguredNotTested
-    "conflict" -> SyncStatus.Conflict
-    "partial_conflict" -> SyncStatus.PartialConflict
-    "recoverable_error" -> SyncStatus.RecoverableError
-    "fatal_error" -> SyncStatus.FatalError
-    "dirty_repo_blocked" -> SyncStatus.DirtyRepoBlocked
-    "branch_missing_recovered" -> SyncStatus.BranchMissingRecovered
-    "no_changes" -> SyncStatus.NoChanges
-    "latest_wins_applied" -> SyncStatus.LatestWinsApplied
-    else -> SyncStatus.Error
-}
+internal fun String?.toSyncStatus(): SyncStatus =
+    when (this) {
+        "idle" -> SyncStatus.Idle
+        "syncing" -> SyncStatus.Syncing
+        "success" -> SyncStatus.Success
+        "configured_not_tested" -> SyncStatus.ConfiguredNotTested
+        "conflict" -> SyncStatus.Conflict
+        "partial_conflict" -> SyncStatus.PartialConflict
+        "recoverable_error" -> SyncStatus.RecoverableError
+        "fatal_error" -> SyncStatus.FatalError
+        "dirty_repo_blocked" -> SyncStatus.DirtyRepoBlocked
+        "branch_missing_recovered" -> SyncStatus.BranchMissingRecovered
+        "no_changes" -> SyncStatus.NoChanges
+        "latest_wins_applied" -> SyncStatus.LatestWinsApplied
+        else -> SyncStatus.Error
+    }
 
-internal fun String?.toFirstSyncMode(): FirstSyncMode = when (this) {
-    "not_attempted" -> FirstSyncMode.NotAttempted
-    "clone_into_empty_workspace" -> FirstSyncMode.CloneIntoEmptyWorkspace
-    "init_existing_workspace" -> FirstSyncMode.InitExistingWorkspace
-    "already_git_repo" -> FirstSyncMode.AlreadyGitRepo
-    "blocked_non_empty_remote" -> FirstSyncMode.BlockedNonEmptyRemote
-    "unrelated_histories" -> FirstSyncMode.UnrelatedHistories
-    "none" -> FirstSyncMode.None
-    else -> FirstSyncMode.None
-}
+internal fun String?.toFirstSyncMode(): FirstSyncMode =
+    when (this) {
+        "not_attempted" -> FirstSyncMode.NotAttempted
+        "clone_into_empty_workspace" -> FirstSyncMode.CloneIntoEmptyWorkspace
+        "init_existing_workspace" -> FirstSyncMode.InitExistingWorkspace
+        "already_git_repo" -> FirstSyncMode.AlreadyGitRepo
+        "blocked_non_empty_remote" -> FirstSyncMode.BlockedNonEmptyRemote
+        "unrelated_histories" -> FirstSyncMode.UnrelatedHistories
+        "none" -> FirstSyncMode.None
+        else -> FirstSyncMode.None
+    }
 
-internal fun DateRangeDto.toModel() = WritingStatsRange(
-    startDate = startDate,
-    endDate = endDate
-)
+internal fun DateRangeDto.toModel() =
+    WritingStatsRange(
+        startDate = startDate,
+        endDate = endDate,
+    )
 
-internal fun WritingStatsSummaryDto.toModel() = WritingStatsSummary(
-    range = range.toModel(),
-    totalHumanTypedChars = totalHumanTypedChars.toLong(),
-    totalActiveSeconds = totalActiveSeconds.toLong(),
-    totalSessions = totalSessions.toInt(),
-    daysCount = daysCount.toInt()
-)
+internal fun WritingStatsSummaryDto.toModel() =
+    WritingStatsSummary(
+        range = range.toModel(),
+        totalHumanTypedChars = totalHumanTypedChars.toLong(),
+        totalActiveSeconds = totalActiveSeconds.toLong(),
+        totalSessions = totalSessions.toInt(),
+        daysCount = daysCount.toInt(),
+    )
 
-internal fun ProjectStatsRecordDto.toModel() = ProjectWritingStatsItem(
-    projectId = projectId,
-    humanTypedChars = humanTypedChars.toLong(),
-    pastedChars = pastedChars.toLong(),
-    deletedChars = deletedChars.toLong(),
-    aiInsertedChars = aiInsertedChars.toLong(),
-    netDeltaChars = netDeltaChars,
-    activeSeconds = activeSeconds.toLong()
-)
+internal fun ProjectStatsRecordDto.toModel() =
+    ProjectWritingStatsItem(
+        projectId = projectId,
+        humanTypedChars = humanTypedChars.toLong(),
+        pastedChars = pastedChars.toLong(),
+        deletedChars = deletedChars.toLong(),
+        aiInsertedChars = aiInsertedChars.toLong(),
+        netDeltaChars = netDeltaChars,
+        activeSeconds = activeSeconds.toLong(),
+    )
 
-internal fun ProjectStatsSummaryDto.toModel() = ProjectWritingStatsSummary(
-    range = range.toModel(),
-    projects = projects.map { it.toModel() }
-)
+internal fun ProjectStatsSummaryDto.toModel() =
+    ProjectWritingStatsSummary(
+        range = range.toModel(),
+        projects = projects.map { it.toModel() },
+    )
 
-internal fun ChapterStatsRecordDto.toModel() = ChapterWritingStatsItem(
-    chapterId = chapterId,
-    humanTypedChars = humanTypedChars.toLong(),
-    pastedChars = pastedChars.toLong(),
-    deletedChars = deletedChars.toLong(),
-    aiInsertedChars = aiInsertedChars.toLong(),
-    netDeltaChars = netDeltaChars,
-    activeSeconds = activeSeconds.toLong()
-)
+internal fun ChapterStatsRecordDto.toModel() =
+    ChapterWritingStatsItem(
+        chapterId = chapterId,
+        humanTypedChars = humanTypedChars.toLong(),
+        pastedChars = pastedChars.toLong(),
+        deletedChars = deletedChars.toLong(),
+        aiInsertedChars = aiInsertedChars.toLong(),
+        netDeltaChars = netDeltaChars,
+        activeSeconds = activeSeconds.toLong(),
+    )
 
-internal fun ChapterStatsSummaryDto.toModel() = ChapterWritingStatsSummary(
-    range = range.toModel(),
-    chapters = chapters.map { it.toModel() }
-)
+internal fun ChapterStatsSummaryDto.toModel() =
+    ChapterWritingStatsSummary(
+        range = range.toModel(),
+        chapters = chapters.map { it.toModel() },
+    )
 
-internal fun DeviceStatsRecordDto.toModel() = DeviceWritingStatsItem(
-    deviceId = deviceId,
-    platform = platform.name,
-    deviceClass = deviceClass,
-    humanTypedChars = humanTypedChars.toLong(),
-    pastedChars = pastedChars.toLong(),
-    deletedChars = deletedChars.toLong(),
-    aiInsertedChars = aiInsertedChars.toLong(),
-    netDeltaChars = netDeltaChars,
-    activeSeconds = activeSeconds.toLong(),
-    sessionsCount = sessionsCount.toInt()
-)
+internal fun DeviceStatsRecordDto.toModel() =
+    DeviceWritingStatsItem(
+        deviceId = deviceId,
+        platform = platform.name,
+        deviceClass = deviceClass,
+        humanTypedChars = humanTypedChars.toLong(),
+        pastedChars = pastedChars.toLong(),
+        deletedChars = deletedChars.toLong(),
+        aiInsertedChars = aiInsertedChars.toLong(),
+        netDeltaChars = netDeltaChars,
+        activeSeconds = activeSeconds.toLong(),
+        sessionsCount = sessionsCount.toInt(),
+    )
 
-internal fun DeviceStatsSummaryDto.toModel() = DeviceWritingStatsSummary(
-    range = range.toModel(),
-    devices = devices.map { it.toModel() }
-)
+internal fun DeviceStatsSummaryDto.toModel() =
+    DeviceWritingStatsSummary(
+        range = range.toModel(),
+        devices = devices.map { it.toModel() },
+    )
 
-internal fun SpeedCurvePointDto.toModel() = WritingSpeedBucket(
-    startMs = startMs,
-    endMs = endMs,
-    charsTyped = charsTyped.toLong(),
-    charsPerMinute = charsPerMinute.toDouble()
-)
+internal fun SpeedCurvePointDto.toModel() =
+    WritingSpeedBucket(
+        startMs = startMs,
+        endMs = endMs,
+        charsTyped = charsTyped.toLong(),
+        charsPerMinute = charsPerMinute.toDouble(),
+    )
 
-internal fun SpeedCurveSummaryDto.toModel() = WritingSpeedCurve(
-    range = range.toModel(),
-    bucketMinutes = bucketMinutes.toInt(),
-    buckets = buckets.map { it.toModel() }
-)
+internal fun SpeedCurveSummaryDto.toModel() =
+    WritingSpeedCurve(
+        range = range.toModel(),
+        bucketMinutes = bucketMinutes.toInt(),
+        buckets = buckets.map { it.toModel() },
+    )

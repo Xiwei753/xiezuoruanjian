@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import com.xiwei.sujian.designsystem.icon.SujianIcons
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -20,33 +19,42 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
 import com.xiwei.sujian.designsystem.component.SujianDialog
 import com.xiwei.sujian.designsystem.component.SujianIconButton
 import com.xiwei.sujian.designsystem.component.SujianListItem
-import com.xiwei.sujian.designsystem.component.SujianDangerButton
-import com.xiwei.sujian.designsystem.component.SujianTextButton
+import com.xiwei.sujian.designsystem.icon.SujianIcons
 import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 
 sealed class WorkspaceDialogState {
     data object None : WorkspaceDialogState()
+
     data class CreateVolume(val dummy: Unit = Unit) : WorkspaceDialogState()
+
     data class CreateChapter(val volumeId: String, val volumeTitle: String) : WorkspaceDialogState()
+
     data class RenameVolume(val volume: VolumeUiModel) : WorkspaceDialogState()
+
     data class RenameChapter(val volumeId: String, val chapter: ChapterUiModel) : WorkspaceDialogState()
+
     data class DeleteVolume(val volume: VolumeUiModel) : WorkspaceDialogState()
+
     data class DeleteChapter(val volumeId: String, val chapter: ChapterUiModel) : WorkspaceDialogState()
+
     data class VolumeActions(val volume: VolumeUiModel) : WorkspaceDialogState()
+
     data class ChapterActions(val volumeId: String, val chapter: ChapterUiModel) : WorkspaceDialogState()
 }
 
 sealed class VolumeChapterListItem {
     data class VolumeItem(val volume: VolumeUiModel) : VolumeChapterListItem()
+
     data class ChapterItem(val chapter: ChapterUiModel, val volumeId: String) : VolumeChapterListItem()
+
     data class EmptyChapterHint(val volumeId: String) : VolumeChapterListItem()
 }
 
@@ -57,7 +65,7 @@ fun ChapterTreeContent(
     onSelectChapter: (volumeId: String, chapterId: String, chapterTitle: String) -> Unit,
     showHeader: Boolean = true,
     onBackToProjects: () -> Unit = {},
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     val viewModel: WorkspaceViewModel = viewModel()
     viewModel.initialize(projectId, workspaceRepository)
@@ -65,31 +73,33 @@ fun ChapterTreeContent(
 
     var dialogState by remember { mutableStateOf<WorkspaceDialogState>(WorkspaceDialogState.None) }
 
-    val flatItems = remember(uiState.volumes, uiState.expandedVolumeIds) {
-        val items = mutableListOf<VolumeChapterListItem>()
-        for (volume in uiState.volumes) {
-            items.add(VolumeChapterListItem.VolumeItem(volume))
-            if (volume.isExpanded) {
-                if (volume.chapters.isEmpty()) {
-                    items.add(VolumeChapterListItem.EmptyChapterHint(volume.id))
-                } else {
-                    for (chapter in volume.chapters) {
-                        items.add(VolumeChapterListItem.ChapterItem(chapter, volume.id))
+    val flatItems =
+        remember(uiState.volumes, uiState.expandedVolumeIds) {
+            val items = mutableListOf<VolumeChapterListItem>()
+            for (volume in uiState.volumes) {
+                items.add(VolumeChapterListItem.VolumeItem(volume))
+                if (volume.isExpanded) {
+                    if (volume.chapters.isEmpty()) {
+                        items.add(VolumeChapterListItem.EmptyChapterHint(volume.id))
+                    } else {
+                        for (chapter in volume.chapters) {
+                            items.add(VolumeChapterListItem.ChapterItem(chapter, volume.id))
+                        }
                     }
                 }
             }
+            items
         }
-        items
-    }
 
     Column(modifier = modifier) {
         if (showHeader) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     SujianIconButton(
@@ -97,7 +107,10 @@ fun ChapterTreeContent(
                         icon = SujianIcons.ArrowBack,
                         contentDescription = stringResource(id = R.string.back_to_project_list),
                     )
-                    Text(stringResource(id = R.string.volume_chapter_title), style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        stringResource(id = R.string.volume_chapter_title),
+                        style = MaterialTheme.typography.titleMedium,
+                    )
                 }
                 SujianIconButton(
                     onClick = {
@@ -112,9 +125,14 @@ fun ChapterTreeContent(
 
         uiState.projectStats?.let { stats ->
             Text(
-                stringResource(R.string.volume_chapter_stats, stats.volumeCount, stats.chapterCount, stats.totalWordCount),
+                stringResource(
+                    R.string.volume_chapter_stats,
+                    stats.volumeCount,
+                    stats.chapterCount,
+                    stats.totalWordCount,
+                ),
                 style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
             )
         }
 
@@ -122,12 +140,12 @@ fun ChapterTreeContent(
             Text(
                 stringResource(id = R.string.volume_chapter_empty),
                 style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(16.dp)
+                modifier = Modifier.padding(16.dp),
             )
         } else {
             LazyColumn(
                 modifier = Modifier.testTag(SujianSemanticIds.WorkspaceVolumeList),
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
             ) {
                 items(flatItems, key = { item ->
                     when (item) {
@@ -146,7 +164,7 @@ fun ChapterTreeContent(
                                 },
                                 onMoreActions = {
                                     dialogState = WorkspaceDialogState.VolumeActions(item.volume)
-                                }
+                                },
                             )
                         }
                         is VolumeChapterListItem.ChapterItem -> {
@@ -167,7 +185,7 @@ fun ChapterTreeContent(
                             Text(
                                 stringResource(id = R.string.chapter_list_empty),
                                 style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.padding(start = 48.dp, top = 4.dp, bottom = 4.dp)
+                                modifier = Modifier.padding(start = 48.dp, top = 4.dp, bottom = 4.dp),
                             )
                         }
                     }
@@ -184,7 +202,7 @@ fun ChapterTreeContent(
                     viewModel.createVolume(title)
                     dialogState = WorkspaceDialogState.None
                 },
-                onDismiss = { dialogState = WorkspaceDialogState.None }
+                onDismiss = { dialogState = WorkspaceDialogState.None },
             )
         }
         is WorkspaceDialogState.CreateChapter -> {
@@ -194,7 +212,7 @@ fun ChapterTreeContent(
                     viewModel.createChapter(state.volumeId, title)
                     dialogState = WorkspaceDialogState.None
                 },
-                onDismiss = { dialogState = WorkspaceDialogState.None }
+                onDismiss = { dialogState = WorkspaceDialogState.None },
             )
         }
         is WorkspaceDialogState.VolumeActions -> {
@@ -213,7 +231,7 @@ fun ChapterTreeContent(
                     viewModel.moveVolumeDown(state.volume.id)
                     dialogState = WorkspaceDialogState.None
                 },
-                onDismiss = { dialogState = WorkspaceDialogState.None }
+                onDismiss = { dialogState = WorkspaceDialogState.None },
             )
         }
         is WorkspaceDialogState.RenameVolume -> {
@@ -224,7 +242,7 @@ fun ChapterTreeContent(
                     viewModel.renameVolume(state.volume.id, newTitle)
                     dialogState = WorkspaceDialogState.None
                 },
-                onDismiss = { dialogState = WorkspaceDialogState.None }
+                onDismiss = { dialogState = WorkspaceDialogState.None },
             )
         }
         is WorkspaceDialogState.ChapterActions -> {
@@ -243,7 +261,7 @@ fun ChapterTreeContent(
                     viewModel.moveChapterDown(state.volumeId, state.chapter.id)
                     dialogState = WorkspaceDialogState.None
                 },
-                onDismiss = { dialogState = WorkspaceDialogState.None }
+                onDismiss = { dialogState = WorkspaceDialogState.None },
             )
         }
         is WorkspaceDialogState.RenameChapter -> {
@@ -254,7 +272,7 @@ fun ChapterTreeContent(
                     viewModel.renameChapter(state.volumeId, state.chapter.id, newTitle)
                     dialogState = WorkspaceDialogState.None
                 },
-                onDismiss = { dialogState = WorkspaceDialogState.None }
+                onDismiss = { dialogState = WorkspaceDialogState.None },
             )
         }
         is WorkspaceDialogState.DeleteVolume -> {
@@ -264,7 +282,7 @@ fun ChapterTreeContent(
                     viewModel.deleteVolume(state.volume.id)
                     dialogState = WorkspaceDialogState.None
                 },
-                onDismiss = { dialogState = WorkspaceDialogState.None }
+                onDismiss = { dialogState = WorkspaceDialogState.None },
             )
         }
         is WorkspaceDialogState.DeleteChapter -> {
@@ -274,7 +292,7 @@ fun ChapterTreeContent(
                     viewModel.deleteChapter(state.volumeId, state.chapter.id)
                     dialogState = WorkspaceDialogState.None
                 },
-                onDismiss = { dialogState = WorkspaceDialogState.None }
+                onDismiss = { dialogState = WorkspaceDialogState.None },
             )
         }
     }
@@ -286,7 +304,7 @@ fun VolumeChapterTree(
     workspaceRepository: com.xiwei.sujian.data.WorkspaceRepository,
     onSelectChapter: (volumeId: String, chapterId: String, chapterTitle: String) -> Unit,
     onBackToProjects: () -> Unit = {},
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     ChapterTreeContent(
         projectId = projectId,
@@ -301,7 +319,7 @@ fun VolumeChapterTree(
 @Composable
 private fun CreateVolumeDialog(
     onConfirm: (String) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
 ) {
     var title by remember { mutableStateOf("") }
     SujianDialog(
@@ -309,8 +327,11 @@ private fun CreateVolumeDialog(
         title = stringResource(id = R.string.action_new_volume_short),
         confirmText = stringResource(id = R.string.action_create),
         onConfirm = {
-            if (title.isNotBlank()) onConfirm(title.trim())
-            else onDismiss()
+            if (title.isNotBlank()) {
+                onConfirm(title.trim())
+            } else {
+                onDismiss()
+            }
         },
         dismissText = stringResource(id = R.string.action_cancel),
         onDismiss = onDismiss,
@@ -318,13 +339,14 @@ private fun CreateVolumeDialog(
             OutlinedTextField(
                 value = title,
                 onValueChange = { title = it },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("volume-title:new"),
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .testTag("volume-title:new"),
                 label = { Text(stringResource(id = R.string.hint_volume_title_short)) },
-                singleLine = true
+                singleLine = true,
             )
-        }
+        },
     )
 }
 
@@ -332,7 +354,7 @@ private fun CreateVolumeDialog(
 private fun CreateChapterDialog(
     volumeTitle: String,
     onConfirm: (String) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
 ) {
     var title by remember { mutableStateOf("") }
     SujianDialog(
@@ -340,8 +362,11 @@ private fun CreateChapterDialog(
         title = stringResource(R.string.create_chapter_in_volume, volumeTitle),
         confirmText = stringResource(id = R.string.action_create),
         onConfirm = {
-            if (title.isNotBlank()) onConfirm(title.trim())
-            else onDismiss()
+            if (title.isNotBlank()) {
+                onConfirm(title.trim())
+            } else {
+                onDismiss()
+            }
         },
         dismissText = stringResource(id = R.string.action_cancel),
         onDismiss = onDismiss,
@@ -349,13 +374,14 @@ private fun CreateChapterDialog(
             OutlinedTextField(
                 value = title,
                 onValueChange = { title = it },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag(SujianSemanticIds.ChapterTitleInput),
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .testTag(SujianSemanticIds.ChapterTitleInput),
                 label = { Text(stringResource(id = R.string.hint_chapter_title_short)) },
-                singleLine = true
+                singleLine = true,
             )
-        }
+        },
     )
 }
 
@@ -366,7 +392,7 @@ private fun VolumeActionsDialog(
     onDelete: () -> Unit,
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
 ) {
     SujianDialog(
         onDismissRequest = onDismiss,
@@ -392,7 +418,7 @@ private fun VolumeActionsDialog(
                     onClick = onDelete,
                 )
             }
-        }
+        },
     )
 }
 
@@ -403,7 +429,7 @@ private fun ChapterActionsDialog(
     onDelete: () -> Unit,
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
 ) {
     SujianDialog(
         onDismissRequest = onDismiss,
@@ -429,7 +455,7 @@ private fun ChapterActionsDialog(
                     onClick = onDelete,
                 )
             }
-        }
+        },
     )
 }
 
@@ -438,7 +464,7 @@ private fun RenameDialog(
     title: String,
     initialValue: String,
     onConfirm: (String) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
 ) {
     var newTitle by remember { mutableStateOf(initialValue) }
     SujianDialog(
@@ -455,13 +481,14 @@ private fun RenameDialog(
             OutlinedTextField(
                 value = newTitle,
                 onValueChange = { newTitle = it },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("rename:$initialValue"),
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .testTag("rename:$initialValue"),
                 label = { Text(stringResource(id = R.string.hint_new_title)) },
-                singleLine = true
+                singleLine = true,
             )
-        }
+        },
     )
 }
 
@@ -469,7 +496,7 @@ private fun RenameDialog(
 private fun ConfirmDeleteDialog(
     name: String,
     onConfirm: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
 ) {
     SujianDialog(
         onDismissRequest = onDismiss,
@@ -481,7 +508,7 @@ private fun ConfirmDeleteDialog(
         dangerous = true,
         body = {
             Text(stringResource(R.string.confirm_delete_message, name))
-        }
+        },
     )
 }
 
@@ -491,7 +518,7 @@ fun VolumeRow(
     onToggleExpand: () -> Unit,
     onCreateChapter: () -> Unit,
     onMoreActions: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     SujianListItem(
         headline = volume.title,
@@ -524,11 +551,19 @@ fun ChapterRow(
     onSelect: () -> Unit,
     onMoreActions: () -> Unit,
     volumeId: String = "",
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     SujianListItem(
         headline = chapter.title,
-        supportingText = if (chapter.wordCount > 0) stringResource(R.string.word_count_format, chapter.wordCount) else null,
+        supportingText =
+            if (chapter.wordCount > 0) {
+                stringResource(
+                    R.string.word_count_format,
+                    chapter.wordCount,
+                )
+            } else {
+                null
+            },
         selected = isSelected,
         onClick = onSelect,
         semanticId = if (volumeId.isNotEmpty()) SujianSemanticIds.chapter(volumeId, chapter.id) else null,

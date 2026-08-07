@@ -31,7 +31,6 @@ private const val OLD_SECRETS_DIR = "secrets"
 class AndroidKeystoreSecureStorage(
     private val context: Context,
 ) : SecureStorageProvider {
-
     private val secretsDir = File(context.noBackupFilesDir, SECRETS_DIR)
     private val migrationMarker = File(context.noBackupFilesDir, ".keystore_migration_done")
 
@@ -52,17 +51,20 @@ class AndroidKeystoreSecureStorage(
     }
 
     private fun createKey() {
-        val keyGenerator = KeyGenerator.getInstance(
-            KeyProperties.KEY_ALGORITHM_AES, KEYSTORE_TYPE
-        )
-        val spec = KeyGenParameterSpec.Builder(
-            KEYSTORE_ALIAS,
-            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
-        )
-            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-            .setKeySize(256)
-            .build()
+        val keyGenerator =
+            KeyGenerator.getInstance(
+                KeyProperties.KEY_ALGORITHM_AES,
+                KEYSTORE_TYPE,
+            )
+        val spec =
+            KeyGenParameterSpec.Builder(
+                KEYSTORE_ALIAS,
+                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+            )
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setKeySize(256)
+                .build()
         keyGenerator.init(spec)
         keyGenerator.generateKey()
     }
@@ -70,8 +72,9 @@ class AndroidKeystoreSecureStorage(
     private fun getKey(): SecretKey {
         val keyStore = KeyStore.getInstance(KEYSTORE_TYPE)
         keyStore.load(null)
-        val entry = keyStore.getEntry(KEYSTORE_ALIAS, null)
-            ?: throw KeyStoreException("Keystore entry not found for alias $KEYSTORE_ALIAS")
+        val entry =
+            keyStore.getEntry(KEYSTORE_ALIAS, null)
+                ?: throw KeyStoreException("Keystore entry not found for alias $KEYSTORE_ALIAS")
         return (entry as KeyStore.SecretKeyEntry).secretKey
     }
 
@@ -105,7 +108,10 @@ class AndroidKeystoreSecureStorage(
         }
     }
 
-    override fun setSecret(key: String, value: ByteArray) {
+    override fun setSecret(
+        key: String,
+        value: ByteArray,
+    ) {
         try {
             val secretKey = getKey()
             val cipher = Cipher.getInstance(TRANSFORMATION)
@@ -142,7 +148,10 @@ class AndroidKeystoreSecureStorage(
         }
     }
 
-    private fun atomicWrite(target: File, data: ByteArray) {
+    private fun atomicWrite(
+        target: File,
+        data: ByteArray,
+    ) {
         val tempFile = File(target.parent, "${target.name}.tmp")
         try {
             FileOutputStream(tempFile).use { fos ->
@@ -184,7 +193,10 @@ class AndroidKeystoreSecureStorage(
         }
         migrationError = migrateOldEncKeyInternal()
         if (migrationError != null) {
-            DiagnosticsLogger.e(TAG, "Keystore migration failed (Keystore still usable for new secrets): $migrationError")
+            DiagnosticsLogger.e(
+                TAG,
+                "Keystore migration failed (Keystore still usable for new secrets): $migrationError",
+            )
         }
     }
 
@@ -209,15 +221,19 @@ class AndroidKeystoreSecureStorage(
             return null
         }
 
-        val oldKeyData = try {
-            oldKeyFile.readBytes()
-        } catch (e: Exception) {
-            DiagnosticsLogger.e(TAG, "Failed to read old .enc_key for migration", e)
-            return "Failed to read old .enc_key: ${e.message}"
-        }
+        val oldKeyData =
+            try {
+                oldKeyFile.readBytes()
+            } catch (e: Exception) {
+                DiagnosticsLogger.e(TAG, "Failed to read old .enc_key for migration", e)
+                return "Failed to read old .enc_key: ${e.message}"
+            }
 
         if (oldKeyData.size != 32) {
-            DiagnosticsLogger.e(TAG, "Old .enc_key is not 32 bytes (got ${oldKeyData.size}), cannot migrate secrets. Old data preserved.")
+            DiagnosticsLogger.e(
+                TAG,
+                "Old .enc_key is not 32 bytes (got ${oldKeyData.size}), cannot migrate secrets. Old data preserved.",
+            )
             return "Old .enc_key is not 32 bytes (got ${oldKeyData.size})"
         }
 
@@ -230,7 +246,12 @@ class AndroidKeystoreSecureStorage(
         for (encFile in encFiles) {
             val secretName = encFile.nameWithoutExtension
             try {
-                existingValues[secretName] = try { getSecret(secretName) } catch (_: Exception) { null }
+                existingValues[secretName] =
+                    try {
+                        getSecret(secretName)
+                    } catch (_: Exception) {
+                        null
+                    }
             } catch (_: Exception) {
                 existingValues[secretName] = null
             }
@@ -293,7 +314,11 @@ class AndroidKeystoreSecureStorage(
             oldSecretsDir.deleteRecursively()
             oldKeyFile.delete()
             migrationMarker.createNewFile()
-            DiagnosticsLogger.i(TAG, "Migrated ${migratedNames.size} old secrets to Keystore successfully, ${skippedExisting.size} already existed")
+            DiagnosticsLogger.i(
+                TAG,
+                "Migrated ${migratedNames.size} old secrets to Keystore successfully, " +
+                    "${skippedExisting.size} already existed",
+            )
             return null
         } else {
             for (name in migratedNames) {
@@ -309,7 +334,11 @@ class AndroidKeystoreSecureStorage(
                     DiagnosticsLogger.e(TAG, "Failed to roll back migrated secret $name", e)
                 }
             }
-            DiagnosticsLogger.e(TAG, "Migration failed: $totalFailures total failures, ${migratedNames.size} rolled back, ${skippedExisting.size} preserved. All old data preserved.")
+            DiagnosticsLogger.e(
+                TAG,
+                "Migration failed: $totalFailures total failures, ${migratedNames.size} rolled back, " +
+                    "${skippedExisting.size} preserved. All old data preserved.",
+            )
             return "Migration failed: $totalFailures secrets could not be migrated, ${migratedNames.size} rolled back"
         }
     }

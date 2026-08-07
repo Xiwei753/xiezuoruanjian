@@ -10,7 +10,6 @@ import java.io.File
  * 因此无论是 import 还是直接全限定名使用都能被抓到。
  */
 internal object ArchTestSupport {
-
     /** app 模块主源码根目录（com/xiwei/sujian 包）。 */
     val appSourceRoot: File = locateAppSourceRoot()
 
@@ -29,7 +28,10 @@ internal object ArchTestSupport {
      * @param root 起始目录
      * @param pathFilter 路径包含片段过滤，仅保留路径包含该片段的文件
      */
-    fun collectKotlinFiles(root: File, pathFilter: String? = null): List<File> {
+    fun collectKotlinFiles(
+        root: File,
+        pathFilter: String? = null,
+    ): List<File> {
         if (!root.exists()) return emptyList()
         return root.walkTopDown()
             .filter { it.isFile && it.extension == "kt" }
@@ -44,7 +46,10 @@ internal object ArchTestSupport {
      * 同时匹配 `import xxx.Yyy` 与正文中的 `xxx.Yyy` 全限定名引用。
      * 忽略单行注释（// ...）中的引用，避免注释误报。
      */
-    fun referencesFullyQualified(file: File, fqn: String): Boolean {
+    fun referencesFullyQualified(
+        file: File,
+        fqn: String,
+    ): Boolean {
         if (!file.exists()) return false
         val content = file.readText()
         return content.lineSequence()
@@ -55,7 +60,10 @@ internal object ArchTestSupport {
     /**
      * 判断文件内容是否包含任一指定全限定名引用。
      */
-    fun referencesAny(file: File, fqns: List<String>): List<String> {
+    fun referencesAny(
+        file: File,
+        fqns: List<String>,
+    ): List<String> {
         return fqns.filter { referencesFullyQualified(file, it) }
     }
 
@@ -145,28 +153,30 @@ internal object ArchTestSupport {
 
     private fun locateAppSourceRoot(): File {
         // 单元测试工作目录通常是 app 模块根目录。
-        val candidates = listOf(
-            File("src/main/kotlin/com/xiwei/sujian"),
-            File("app/src/main/kotlin/com/xiwei/sujian"),
-            File("apps/android/app/src/main/kotlin/com/xiwei/sujian"),
-        )
+        val candidates =
+            listOf(
+                File("src/main/kotlin/com/xiwei/sujian"),
+                File("app/src/main/kotlin/com/xiwei/sujian"),
+                File("apps/android/app/src/main/kotlin/com/xiwei/sujian"),
+            )
         return candidates.firstOrNull { it.exists() && it.isDirectory }
             ?: error(
                 "无法定位 app 主源码根目录。尝试的路径: " +
-                    candidates.joinToString(", ") { it.path }
+                    candidates.joinToString(", ") { it.path },
             )
     }
 
     private fun locateDesignSystemSourceRoot(): File {
-        val candidates = listOf(
-            File("../core-designsystem/src/main/kotlin/com/xiwei/sujian/designsystem"),
-            File("core-designsystem/src/main/kotlin/com/xiwei/sujian/designsystem"),
-            File("apps/android/core-designsystem/src/main/kotlin/com/xiwei/sujian/designsystem"),
-        )
+        val candidates =
+            listOf(
+                File("../core-designsystem/src/main/kotlin/com/xiwei/sujian/designsystem"),
+                File("core-designsystem/src/main/kotlin/com/xiwei/sujian/designsystem"),
+                File("apps/android/core-designsystem/src/main/kotlin/com/xiwei/sujian/designsystem"),
+            )
         return candidates.firstOrNull { it.exists() && it.isDirectory }
             ?: error(
                 "无法定位 core-designsystem 主源码根目录。尝试的路径: " +
-                    candidates.joinToString(", ") { it.path }
+                    candidates.joinToString(", ") { it.path },
             )
     }
 
@@ -174,7 +184,10 @@ internal object ArchTestSupport {
      * 从源码根目录向上查找包含 build.gradle.kts 的模块根目录。
      * 相对路径的 parentFile 链在到达空路径后会返回 null，因此用绝对路径向上遍历更稳健。
      */
-    private fun locateModuleRoot(sourceRoot: File, moduleName: String): File {
+    private fun locateModuleRoot(
+        sourceRoot: File,
+        moduleName: String,
+    ): File {
         var current: File? = sourceRoot.absoluteFile
         var depth = 0
         while (current != null && depth < 12) {

@@ -24,7 +24,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.R
 import com.xiwei.sujian.data.StatsRepositoryProvider
 import com.xiwei.sujian.designsystem.component.SujianCard
@@ -37,9 +36,7 @@ import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 
 @Composable
-fun StatsScreen(
-    modifier: Modifier = Modifier
-) {
+fun StatsScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val dims = LocalSujianDimensions.current
     var summary by remember { mutableStateOf<WritingStatsSummary?>(null) }
@@ -62,7 +59,8 @@ fun StatsScreen(
                     is com.xiwei.sujian.data.BridgeResult.Success -> projectItems = result.data.projects ?: emptyList()
                     else -> {}
                 }
-            } catch (_: Exception) { }
+            } catch (_: Exception) {
+            }
         }
         isLoading = false
     }
@@ -76,7 +74,7 @@ fun StatsScreen(
 
     LazyColumn(
         contentPadding = PaddingValues(horizontal = dims.space16, vertical = dims.space8),
-        modifier = modifier.fillMaxSize()
+        modifier = modifier.fillMaxSize(),
     ) {
         item {
             Text(stringResource(id = R.string.stats_recent_30_days), style = MaterialTheme.typography.titleMedium)
@@ -91,19 +89,25 @@ fun StatsScreen(
                     Column(modifier = Modifier.padding(dims.space16)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
+                            horizontalArrangement = Arrangement.SpaceBetween,
                         ) {
                             StatItem(stringResource(id = R.string.stats_total_words_label), "${s.totalWordCount}")
                             StatItem(stringResource(id = R.string.stats_active_days), "${s.activeDays}")
-                            StatItem(stringResource(id = R.string.stats_total_duration), formatDuration(s.totalTimeSeconds, context))
+                            StatItem(
+                                stringResource(id = R.string.stats_total_duration),
+                                formatDuration(s.totalTimeSeconds, context),
+                            )
                         }
                         Spacer(modifier = Modifier.height(dims.space12))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
+                            horizontalArrangement = Arrangement.SpaceBetween,
                         ) {
                             StatItem(stringResource(id = R.string.stats_manual_input), "${s.totalHumanTypedChars ?: 0}")
-                            StatItem(stringResource(id = R.string.stats_active_duration), formatDuration(s.totalActiveSeconds ?: 0L, context))
+                            StatItem(
+                                stringResource(id = R.string.stats_active_duration),
+                                formatDuration(s.totalActiveSeconds ?: 0L, context),
+                            )
                             StatItem(stringResource(id = R.string.stats_session_count), "${s.totalSessions ?: 0}")
                         }
                     }
@@ -122,7 +126,14 @@ fun StatsScreen(
                 ) {
                     Column(modifier = Modifier.padding(dims.space16)) {
                         Text(item.projectTitle ?: "", style = MaterialTheme.typography.titleSmall)
-                        Text(stringResource(R.string.stats_project_item, item.netDeltaChars ?: 0, formatDuration(item.activeSeconds ?: 0, context)), style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            stringResource(
+                                R.string.stats_project_item,
+                                item.netDeltaChars ?: 0,
+                                formatDuration(item.activeSeconds ?: 0, context),
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
                     }
                 }
             }
@@ -139,18 +150,32 @@ fun StatsScreen(
 }
 
 @Composable
-private fun StatItem(label: String, value: String) {
+private fun StatItem(
+    label: String,
+    value: String,
+) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(value, style = MaterialTheme.typography.titleMedium)
         Text(label, style = MaterialTheme.typography.bodySmall)
     }
 }
 
-private fun formatDuration(seconds: Long, context: android.content.Context): String {
+private fun formatDuration(
+    seconds: Long,
+    context: android.content.Context,
+): String {
     if (seconds < 60) return context.getString(R.string.duration_seconds, seconds)
     val minutes = seconds / 60
     if (minutes < 60) return context.getString(R.string.duration_minutes, minutes)
     val hours = minutes / 60
     val remainMinutes = minutes % 60
-    return if (remainMinutes > 0) context.getString(R.string.duration_hours_minutes, hours, remainMinutes) else context.getString(R.string.duration_hours, hours)
+    return if (remainMinutes > 0) {
+        context.getString(
+            R.string.duration_hours_minutes,
+            hours,
+            remainMinutes,
+        )
+    } else {
+        context.getString(R.string.duration_hours, hours)
+    }
 }

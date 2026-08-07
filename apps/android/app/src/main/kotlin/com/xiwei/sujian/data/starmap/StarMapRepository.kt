@@ -23,7 +23,7 @@ import uniffi.writer_core.StarMapNodePatchInputDto
 
 internal class StarMapRepository(
     private val bridge: StarMapBridgeOps,
-    private val cache: StarMapSnapshotCache
+    private val cache: StarMapSnapshotCache,
 ) {
     fun listStarmaps(): BridgeResult<List<StarMapMeta>> {
         return when (val result = bridge.listStarMaps()) {
@@ -33,7 +33,10 @@ internal class StarMapRepository(
         }
     }
 
-    fun createStarmap(title: String, desc: String): BridgeResult<StarMapMeta> {
+    fun createStarmap(
+        title: String,
+        desc: String,
+    ): BridgeResult<StarMapMeta> {
         return when (val result = bridge.createStarMap(title, desc)) {
             is BridgeResult.Success -> BridgeResult.Success(result.data.toModel())
             is BridgeResult.Error -> BridgeResult.Error(result.envelope)
@@ -44,12 +47,13 @@ internal class StarMapRepository(
     fun getStarmapPhasedSnapshot(
         starmapId: String,
         targetPhase: String = "CurrentViewportObjects",
-        sinceRevision: ULong = 0u
+        sinceRevision: ULong = 0u,
     ): BridgeResult<StarMapPhasedSnapshotResult> {
-        val request = PhasedSnapshotRequestDto(
-            targetPhase = targetPhase,
-            sinceRevision = sinceRevision
-        )
+        val request =
+            PhasedSnapshotRequestDto(
+                targetPhase = targetPhase,
+                sinceRevision = sinceRevision,
+            )
         return when (val result = bridge.getStarmapPhasedSnapshot(starmapId, request)) {
             is BridgeResult.Success -> {
                 try {
@@ -67,7 +71,9 @@ internal class StarMapRepository(
                         BridgeResult.Success(result.data.toSnapshotResult())
                     }
                 } catch (e: Exception) {
-                    BridgeResult.Error(ResultEnvelope.errorOf("CONVERSION_ERROR", "Failed to convert phased snapshot: ${e.message}"))
+                    BridgeResult.Error(
+                        ResultEnvelope.errorOf("CONVERSION_ERROR", "Failed to convert phased snapshot: ${e.message}"),
+                    )
                 }
             }
             is BridgeResult.Error -> BridgeResult.Error(result.envelope)
@@ -78,12 +84,17 @@ internal class StarMapRepository(
     fun advanceLoadPhase(
         starmapId: String,
         targetPhase: String,
-        currentRevision: ULong
+        currentRevision: ULong,
     ): BridgeResult<StarMapPhasedSnapshotResult> {
         return getStarmapPhasedSnapshot(starmapId, targetPhase, currentRevision)
     }
 
-    fun addStarmapNode(starmapId: String, node: StarMapGraphNode, x: Float = 0f, y: Float = 0f): BridgeResult<StarMapGraphNode> {
+    fun addStarmapNode(
+        starmapId: String,
+        node: StarMapGraphNode,
+        x: Float = 0f,
+        y: Float = 0f,
+    ): BridgeResult<StarMapGraphNode> {
         val baseNode = cache.get(starmapId)?.nodes?.get(node.id)
         return when (val result = bridge.addStarMapNode(starmapId, node.toDto(baseNode), x, y)) {
             is BridgeResult.Success -> {
@@ -95,14 +106,21 @@ internal class StarMapRepository(
         }
     }
 
-    fun updateStarmapNode(starmapId: String, nodeId: String, title: String? = null, kind: StarMapNodeKind? = null, tags: List<String>? = null): BridgeResult<StarMapGraphNode> {
-        val patch = StarMapNodePatchInputDto(
-            title = title,
-            kind = kind?.toDto(),
-            payload = null,
-            clearPayload = false,
-            tags = tags
-        )
+    fun updateStarmapNode(
+        starmapId: String,
+        nodeId: String,
+        title: String? = null,
+        kind: StarMapNodeKind? = null,
+        tags: List<String>? = null,
+    ): BridgeResult<StarMapGraphNode> {
+        val patch =
+            StarMapNodePatchInputDto(
+                title = title,
+                kind = kind?.toDto(),
+                payload = null,
+                clearPayload = false,
+                tags = tags,
+            )
         return when (val result = bridge.updateStarMapNode(starmapId, nodeId, patch)) {
             is BridgeResult.Success -> {
                 cache.get(starmapId)?.nodes?.put(result.data.id, result.data)
@@ -113,7 +131,10 @@ internal class StarMapRepository(
         }
     }
 
-    fun deleteStarmapNode(starmapId: String, nodeId: String): BridgeResult<Boolean> {
+    fun deleteStarmapNode(
+        starmapId: String,
+        nodeId: String,
+    ): BridgeResult<Boolean> {
         return when (val result = bridge.deleteStarMapNode(starmapId, nodeId)) {
             is BridgeResult.Success -> {
                 cache.removeNode(starmapId, nodeId)
@@ -124,24 +145,31 @@ internal class StarMapRepository(
         }
     }
 
-    fun addStarmapEdge(starmapId: String, from: String, to: String, kind: StarMapEdgeKind = StarMapEdgeKind.RelatedTo, label: String? = null): BridgeResult<StarMapGraphEdge> {
+    fun addStarmapEdge(
+        starmapId: String,
+        from: String,
+        to: String,
+        kind: StarMapEdgeKind = StarMapEdgeKind.RelatedTo,
+        label: String? = null,
+    ): BridgeResult<StarMapGraphEdge> {
         val now = System.currentTimeMillis()
-        val edge = StarMapEdgeDto(
-            id = java.util.UUID.randomUUID().toString(),
-            from = from,
-            to = to,
-            kind = kind.toDto(),
-            label = label,
-            payload = null,
-            fromTarget = null,
-            toTarget = null,
-            fromEndpoint = null,
-            toEndpoint = null,
-            fromEndpointPath = null,
-            toEndpointPath = null,
-            createdAt = now.toULong(),
-            updatedAt = now.toULong()
-        )
+        val edge =
+            StarMapEdgeDto(
+                id = java.util.UUID.randomUUID().toString(),
+                from = from,
+                to = to,
+                kind = kind.toDto(),
+                label = label,
+                payload = null,
+                fromTarget = null,
+                toTarget = null,
+                fromEndpoint = null,
+                toEndpoint = null,
+                fromEndpointPath = null,
+                toEndpointPath = null,
+                createdAt = now.toULong(),
+                updatedAt = now.toULong(),
+            )
         return when (val result = bridge.addStarMapEdge(starmapId, edge)) {
             is BridgeResult.Success -> {
                 cache.get(starmapId)?.edges?.put(result.data.id, result.data)
@@ -152,7 +180,10 @@ internal class StarMapRepository(
         }
     }
 
-    fun deleteStarmapEdge(starmapId: String, edgeId: String): BridgeResult<Boolean> {
+    fun deleteStarmapEdge(
+        starmapId: String,
+        edgeId: String,
+    ): BridgeResult<Boolean> {
         return when (val result = bridge.deleteStarMapEdge(starmapId, edgeId)) {
             is BridgeResult.Success -> {
                 cache.removeEdge(starmapId, edgeId)
@@ -163,12 +194,18 @@ internal class StarMapRepository(
         }
     }
 
-    fun updateStarmapEdge(starmapId: String, edgeId: String, kind: StarMapEdgeKind? = null, label: String? = null): BridgeResult<StarMapGraphEdge> {
-        val patch = StarMapEdgePatchInputDto(
-            kind = kind?.toDto(),
-            label = label,
-            clearLabel = false
-        )
+    fun updateStarmapEdge(
+        starmapId: String,
+        edgeId: String,
+        kind: StarMapEdgeKind? = null,
+        label: String? = null,
+    ): BridgeResult<StarMapGraphEdge> {
+        val patch =
+            StarMapEdgePatchInputDto(
+                kind = kind?.toDto(),
+                label = label,
+                clearLabel = false,
+            )
         return when (val result = bridge.updateStarMapEdge(starmapId, edgeId, patch)) {
             is BridgeResult.Success -> {
                 cache.get(starmapId)?.edges?.put(result.data.id, result.data)
@@ -179,7 +216,10 @@ internal class StarMapRepository(
         }
     }
 
-    fun addStarmapEmbed(starmapId: String, embed: uniffi.writer_core.StarMapEmbedDto): BridgeResult<StarMapEmbedData> {
+    fun addStarmapEmbed(
+        starmapId: String,
+        embed: uniffi.writer_core.StarMapEmbedDto,
+    ): BridgeResult<StarMapEmbedData> {
         return when (val result = bridge.addStarmapEmbed(starmapId, embed)) {
             is BridgeResult.Success -> {
                 cache.putEmbed(starmapId, result.data.instanceId, result.data)
@@ -190,7 +230,11 @@ internal class StarMapRepository(
         }
     }
 
-    fun updateStarmapEmbed(starmapId: String, instanceId: String, patch: uniffi.writer_core.StarMapEmbedPatchInputDto): BridgeResult<StarMapEmbedData> {
+    fun updateStarmapEmbed(
+        starmapId: String,
+        instanceId: String,
+        patch: uniffi.writer_core.StarMapEmbedPatchInputDto,
+    ): BridgeResult<StarMapEmbedData> {
         return when (val result = bridge.updateStarmapEmbed(starmapId, instanceId, patch)) {
             is BridgeResult.Success -> {
                 cache.putEmbed(starmapId, result.data.instanceId, result.data)
@@ -201,7 +245,10 @@ internal class StarMapRepository(
         }
     }
 
-    fun deleteStarmapEmbed(starmapId: String, instanceId: String): BridgeResult<Boolean> {
+    fun deleteStarmapEmbed(
+        starmapId: String,
+        instanceId: String,
+    ): BridgeResult<Boolean> {
         return when (val result = bridge.deleteStarmapEmbed(starmapId, instanceId)) {
             is BridgeResult.Success -> {
                 cache.removeEmbed(starmapId, instanceId)
@@ -212,7 +259,10 @@ internal class StarMapRepository(
         }
     }
 
-    fun addStarmapLink(starmapId: String, link: uniffi.writer_core.StarMapLinkDto): BridgeResult<StarMapLinkData> {
+    fun addStarmapLink(
+        starmapId: String,
+        link: uniffi.writer_core.StarMapLinkDto,
+    ): BridgeResult<StarMapLinkData> {
         return when (val result = bridge.addStarmapLink(starmapId, link)) {
             is BridgeResult.Success -> {
                 cache.putLink(starmapId, result.data.linkId, result.data)
@@ -223,7 +273,11 @@ internal class StarMapRepository(
         }
     }
 
-    fun updateStarmapLink(starmapId: String, linkId: String, patch: uniffi.writer_core.StarMapLinkPatchInputDto): BridgeResult<StarMapLinkData> {
+    fun updateStarmapLink(
+        starmapId: String,
+        linkId: String,
+        patch: uniffi.writer_core.StarMapLinkPatchInputDto,
+    ): BridgeResult<StarMapLinkData> {
         return when (val result = bridge.updateStarmapLink(starmapId, linkId, patch)) {
             is BridgeResult.Success -> {
                 cache.putLink(starmapId, result.data.linkId, result.data)
@@ -234,7 +288,10 @@ internal class StarMapRepository(
         }
     }
 
-    fun deleteStarmapLink(starmapId: String, linkId: String): BridgeResult<Boolean> {
+    fun deleteStarmapLink(
+        starmapId: String,
+        linkId: String,
+    ): BridgeResult<Boolean> {
         return when (val result = bridge.deleteStarmapLink(starmapId, linkId)) {
             is BridgeResult.Success -> {
                 cache.removeLink(starmapId, linkId)
@@ -245,7 +302,10 @@ internal class StarMapRepository(
         }
     }
 
-    fun addStarmapHyperlink(starmapId: String, hl: uniffi.writer_core.StarMapHyperlinkDto): BridgeResult<StarMapHyperlinkData> {
+    fun addStarmapHyperlink(
+        starmapId: String,
+        hl: uniffi.writer_core.StarMapHyperlinkDto,
+    ): BridgeResult<StarMapHyperlinkData> {
         return when (val result = bridge.addStarmapHyperlink(starmapId, hl)) {
             is BridgeResult.Success -> {
                 cache.putHyperlink(starmapId, result.data.hyperlinkId, result.data)
@@ -256,7 +316,11 @@ internal class StarMapRepository(
         }
     }
 
-    fun updateStarmapHyperlink(starmapId: String, hyperlinkId: String, patch: uniffi.writer_core.StarMapHyperlinkPatchInputDto): BridgeResult<StarMapHyperlinkData> {
+    fun updateStarmapHyperlink(
+        starmapId: String,
+        hyperlinkId: String,
+        patch: uniffi.writer_core.StarMapHyperlinkPatchInputDto,
+    ): BridgeResult<StarMapHyperlinkData> {
         return when (val result = bridge.updateStarmapHyperlink(starmapId, hyperlinkId, patch)) {
             is BridgeResult.Success -> {
                 cache.putHyperlink(starmapId, result.data.hyperlinkId, result.data)
@@ -267,7 +331,10 @@ internal class StarMapRepository(
         }
     }
 
-    fun deleteStarmapHyperlink(starmapId: String, hyperlinkId: String): BridgeResult<Boolean> {
+    fun deleteStarmapHyperlink(
+        starmapId: String,
+        hyperlinkId: String,
+    ): BridgeResult<Boolean> {
         return when (val result = bridge.deleteStarmapHyperlink(starmapId, hyperlinkId)) {
             is BridgeResult.Success -> {
                 cache.removeHyperlink(starmapId, hyperlinkId)
@@ -286,10 +353,17 @@ internal class StarMapRepository(
         }
     }
 
-    fun saveStarmapLayout(starmapId: String, layout: StarMapLayoutData): BridgeResult<Boolean> {
-        val rawCache = cache.get(starmapId) ?: return BridgeResult.Error(
-            ResultEnvelope.errorOf("SNAPSHOT_CACHE_NOT_INITIALIZED", "Starmap cache not initialized for $starmapId. Call getStarmapPhasedSnapshot first.")
-        )
+    fun saveStarmapLayout(
+        starmapId: String,
+        layout: StarMapLayoutData,
+    ): BridgeResult<Boolean> {
+        val rawCache =
+            cache.get(starmapId) ?: return BridgeResult.Error(
+                ResultEnvelope.errorOf(
+                    "SNAPSHOT_CACHE_NOT_INITIALIZED",
+                    "Starmap cache not initialized for $starmapId. Call getStarmapPhasedSnapshot first.",
+                ),
+            )
         val dto = layout.toDto(rawCache)
         return when (val result = bridge.saveStarMapLayout(starmapId, dto)) {
             is BridgeResult.Success -> {
@@ -309,17 +383,30 @@ internal class StarMapRepository(
         }
     }
 
-    fun saveStarmapViewport(starmapId: String, viewport: StarMapViewportData): BridgeResult<Boolean> {
+    fun saveStarmapViewport(
+        starmapId: String,
+        viewport: StarMapViewportData,
+    ): BridgeResult<Boolean> {
         return bridge.saveStarMapViewport(starmapId, viewport.toDto())
     }
 
     fun computeEdgeRenders(data: StarMapData): BridgeResult<List<StarMapEdgeRenderData>> {
-        val rawCache = cache.get(data.graph.starmapId) ?: return BridgeResult.Error(
-            ResultEnvelope.errorOf("SNAPSHOT_CACHE_NOT_INITIALIZED", "Starmap snapshot cache not initialized for ${data.graph.starmapId}. Call getStarmapPhasedSnapshot first.")
-        )
-        val graph = rawCache.graph ?: return BridgeResult.Error(
-            ResultEnvelope.errorOf("STAR_MAP_CACHE_MISSING", "Raw starmap graph is not available in snapshot cache. This should not happen after a successful getStarmapPhasedSnapshot call.")
-        )
+        val rawCache =
+            cache.get(data.graph.starmapId) ?: return BridgeResult.Error(
+                ResultEnvelope.errorOf(
+                    "SNAPSHOT_CACHE_NOT_INITIALIZED",
+                    "Starmap snapshot cache not initialized for ${data.graph.starmapId}. " +
+                        "Call getStarmapPhasedSnapshot first.",
+                ),
+            )
+        val graph =
+            rawCache.graph ?: return BridgeResult.Error(
+                ResultEnvelope.errorOf(
+                    "STAR_MAP_CACHE_MISSING",
+                    "Raw starmap graph is not available in snapshot cache. " +
+                        "This should not happen after a successful getStarmapPhasedSnapshot call.",
+                ),
+            )
         return when (val result = bridge.computeStarMapEdgeRenders(graph, data.layout.toDto(rawCache))) {
             is BridgeResult.Success -> BridgeResult.Success(result.data.map { it.toModel() })
             is BridgeResult.Error -> BridgeResult.Error(result.envelope)
@@ -327,10 +414,19 @@ internal class StarMapRepository(
         }
     }
 
-    fun hitTestStarmapNode(data: StarMapData, x: Float, y: Float): BridgeResult<String?> {
-        val rawCache = cache.get(data.graph.starmapId) ?: return BridgeResult.Error(
-            ResultEnvelope.errorOf("SNAPSHOT_CACHE_NOT_INITIALIZED", "Starmap snapshot cache not initialized for ${data.graph.starmapId}. Call getStarmapPhasedSnapshot first.")
-        )
+    fun hitTestStarmapNode(
+        data: StarMapData,
+        x: Float,
+        y: Float,
+    ): BridgeResult<String?> {
+        val rawCache =
+            cache.get(data.graph.starmapId) ?: return BridgeResult.Error(
+                ResultEnvelope.errorOf(
+                    "SNAPSHOT_CACHE_NOT_INITIALIZED",
+                    "Starmap snapshot cache not initialized for ${data.graph.starmapId}. " +
+                        "Call getStarmapPhasedSnapshot first.",
+                ),
+            )
         return bridge.hitTestStarMapNode(data.layout.toDto(rawCache), x, y)
     }
 

@@ -1,21 +1,26 @@
 package com.xiwei.sujian.data
 
-import com.xiwei.sujian.model.*
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
-import uniffi.writer_core.*
+import uniffi.writer_core.ChapterContentDto
+import uniffi.writer_core.ChapterMetaDto
+import uniffi.writer_core.ChapterSaveReceiptDto
+import uniffi.writer_core.ProjectDto
+import uniffi.writer_core.ProjectStatsDto
+import uniffi.writer_core.RecentEditDto
+import uniffi.writer_core.VolumeDto
 
 class BridgeMapperTest {
-
     @Test
     fun projectDto_toModel_mapsAllFields() {
-        val dto = ProjectDto(
-            id = "p1",
-            title = "Test Project",
-            createdAt = "2023-01-01",
-            updatedAt = "2023-01-02"
-        )
+        val dto =
+            ProjectDto(
+                id = "p1",
+                title = "Test Project",
+                createdAt = "2023-01-01",
+                updatedAt = "2023-01-02",
+            )
         val model = dto.toModel()
         assertEquals("p1", model.id)
         assertEquals("Test Project", model.title)
@@ -25,11 +30,12 @@ class BridgeMapperTest {
 
     @Test
     fun projectStatsDto_toModel_mapsAllFields() {
-        val dto = ProjectStatsDto(
-            totalWordCount = 1000U,
-            volumeCount = 5U,
-            chapterCount = 50U
-        )
+        val dto =
+            ProjectStatsDto(
+                totalWordCount = 1000U,
+                volumeCount = 5U,
+                chapterCount = 50U,
+            )
         val model = dto.toModel()
         assertEquals(1000, model.totalWordCount)
         assertEquals(5, model.volumeCount)
@@ -38,13 +44,14 @@ class BridgeMapperTest {
 
     @Test
     fun volumeDto_toModel_mapsAllFields() {
-        val dto = VolumeDto(
-            id = "v1",
-            title = "Test Volume",
-            createdAt = "2023-01-01",
-            updatedAt = "2023-01-02",
-            order = 3
-        )
+        val dto =
+            VolumeDto(
+                id = "v1",
+                title = "Test Volume",
+                createdAt = "2023-01-01",
+                updatedAt = "2023-01-02",
+                order = 3,
+            )
         val model = dto.toModel()
         assertEquals("v1", model.id)
         assertEquals("Test Volume", model.title)
@@ -55,16 +62,17 @@ class BridgeMapperTest {
 
     @Test
     fun chapterMetaDto_toModel_mapsAllFields() {
-        val dto = ChapterMetaDto(
-            id = "ch1",
-            title = "Chapter One",
-            createdAt = "2023-01-01",
-            updatedAt = "2023-01-02",
-            order = 2,
-            wordCount = 500U,
-            hash = "abc123",
-            note = "a note"
-        )
+        val dto =
+            ChapterMetaDto(
+                id = "ch1",
+                title = "Chapter One",
+                createdAt = "2023-01-01",
+                updatedAt = "2023-01-02",
+                order = 2,
+                wordCount = 500U,
+                hash = "abc123",
+                note = "a note",
+            )
         val model = dto.toModel()
         assertEquals("ch1", model.id)
         assertEquals("Chapter One", model.title)
@@ -78,32 +86,34 @@ class BridgeMapperTest {
 
     @Test
     fun chapterMetaDto_toModel_mapsNullNote() {
-        val dto = ChapterMetaDto(
-            id = "ch2",
-            title = "Chapter Two",
-            createdAt = "2023-01-01",
-            updatedAt = "2023-01-02",
-            order = 1,
-            wordCount = 0U,
-            hash = "h",
-            note = null
-        )
+        val dto =
+            ChapterMetaDto(
+                id = "ch2",
+                title = "Chapter Two",
+                createdAt = "2023-01-01",
+                updatedAt = "2023-01-02",
+                order = 1,
+                wordCount = 0U,
+                hash = "h",
+                note = null,
+            )
         val model = dto.toModel()
         assertNull(model.note)
     }
 
     @Test
     fun chapterContentDto_toModel_mapsAllFields() {
-        val metaDto = ChapterMetaDto(
-            id = "ch1",
-            title = "Ch",
-            createdAt = "2023-01-01",
-            updatedAt = "2023-01-02",
-            order = 1,
-            wordCount = 100U,
-            hash = "h1",
-            note = "a note"
-        )
+        val metaDto =
+            ChapterMetaDto(
+                id = "ch1",
+                title = "Ch",
+                createdAt = "2023-01-01",
+                updatedAt = "2023-01-02",
+                order = 1,
+                wordCount = 100U,
+                hash = "h1",
+                note = "a note",
+            )
         val dto = ChapterContentDto(meta = metaDto, content = "Hello world")
         val model = dto.toModel()
         assertEquals("ch1", model.meta.id)
@@ -119,14 +129,15 @@ class BridgeMapperTest {
 
     @Test
     fun chapterSaveReceiptDto_toModel_mapsAllFields() {
-        val dto = ChapterSaveReceiptDto(
-            chapterRelativePath = "projects/p1/volumes/v1/chapters/ch1.md",
-            contentLen = 42U,
-            contentHash = "abc123",
-            metaHash = "def456",
-            updatedAt = "2023-01-02T00:00:00Z",
-            wordCount = 7U
-        )
+        val dto =
+            ChapterSaveReceiptDto(
+                chapterRelativePath = "projects/p1/volumes/v1/chapters/ch1.md",
+                contentLen = 42U,
+                contentHash = "abc123",
+                metaHash = "def456",
+                updatedAt = "2023-01-02T00:00:00Z",
+                wordCount = 7U,
+            )
         val model = dto.toModel()
         assertEquals("projects/p1/volumes/v1/chapters/ch1.md", model.chapterRelativePath)
         assertEquals(42L, model.contentLen)
@@ -138,12 +149,13 @@ class BridgeMapperTest {
 
     @Test
     fun recentEditDto_toModel_mapsAllFields() {
-        val dto = RecentEditDto(
-            projectId = "p1",
-            volumeId = "v1",
-            chapterId = "ch1",
-            timestamp = "2023-01-01T00:00:00Z"
-        )
+        val dto =
+            RecentEditDto(
+                projectId = "p1",
+                volumeId = "v1",
+                chapterId = "ch1",
+                timestamp = "2023-01-01T00:00:00Z",
+            )
         val model = dto.toModel()
         assertEquals("p1", model.projectId)
         assertEquals("v1", model.volumeId)

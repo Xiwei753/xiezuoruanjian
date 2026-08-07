@@ -30,33 +30,33 @@ data class PlatformCapabilities(
 ) {
     companion object {
         /** Android 完整能力 */
-        fun android(): PlatformCapabilities = PlatformCapabilities(
-            supportsImePreedit = true,
-            supportsCursorAnchor = true,
-            supportsReplacementCommit = true,
-            supportsTextAnimation = true,
-            supportsSmoothCursor = true,
-            supportsReflowAnimation = true,
-            supportsClipboard = true,
-            supportsContextMenu = true,
-        )
+        fun android(): PlatformCapabilities =
+            PlatformCapabilities(
+                supportsImePreedit = true,
+                supportsCursorAnchor = true,
+                supportsReplacementCommit = true,
+                supportsTextAnimation = true,
+                supportsSmoothCursor = true,
+                supportsReflowAnimation = true,
+                supportsClipboard = true,
+                supportsContextMenu = true,
+            )
 
         /** Harmony — 动画未实现，能力受限 */
-        fun harmony(): PlatformCapabilities = PlatformCapabilities(
-            supportsImePreedit = false,
-            supportsCursorAnchor = false,
-            supportsReplacementCommit = false,
-            supportsTextAnimation = false,
-            supportsSmoothCursor = false,
-            supportsReflowAnimation = false,
-            supportsClipboard = true,
-            supportsContextMenu = true,
-        )
+        fun harmony(): PlatformCapabilities =
+            PlatformCapabilities(
+                supportsImePreedit = false,
+                supportsCursorAnchor = false,
+                supportsReplacementCommit = false,
+                supportsTextAnimation = false,
+                supportsSmoothCursor = false,
+                supportsReflowAnimation = false,
+                supportsClipboard = true,
+                supportsContextMenu = true,
+            )
     }
 
-    fun hasAnyAnimationSupport(): Boolean =
-        supportsTextAnimation || supportsSmoothCursor || supportsReflowAnimation
+    fun hasAnyAnimationSupport(): Boolean = supportsTextAnimation || supportsSmoothCursor || supportsReflowAnimation
 
-    fun hasAnyImeSupport(): Boolean =
-        supportsImePreedit || supportsCursorAnchor || supportsReplacementCommit
+    fun hasAnyImeSupport(): Boolean = supportsImePreedit || supportsCursorAnchor || supportsReplacementCommit
 }

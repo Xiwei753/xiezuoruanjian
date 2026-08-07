@@ -13,7 +13,6 @@ import org.junit.Test
  * 造成动画闪烁或协同动画短暂关闭。
  */
 class LocalSettingsEditorDefaultsTest {
-
     @Test
     fun typingAnimationEnabledDefaultsToTrue() {
         assertTrue(

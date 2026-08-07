@@ -2,8 +2,8 @@ package com.xiwei.sujian.editor.v2.coordinator
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -30,11 +30,12 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class PreparedSessionTransactionTest {
-
     private fun createCoordinator(): EditorSessionCoordinator {
-        return EditorSessionCoordinator(com.xiwei.sujian.data.AppServiceBridge(
-            com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595_prepared")
-        ))
+        return EditorSessionCoordinator(
+            com.xiwei.sujian.data.AppServiceBridge(
+                com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595_prepared"),
+            ),
+        )
     }
 
     private fun lease(targetId: String): EditorInputLease = EditorInputLease(targetId, 0UL, 0L)
@@ -48,7 +49,7 @@ class PreparedSessionTransactionTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = lease("a"))
+            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = lease("a")),
         )
         coordinator.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
 
@@ -68,19 +69,27 @@ class PreparedSessionTransactionTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = lease("a"))
+            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = lease("a")),
         )
         // 提交前无活动目标 — 没有可签发的 lease（窗口未绑定）。
         val staleLease = lease("a")
         coordinator.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
 
-        val handle = PreparedSessionHandle(
-            targetId = "b",
-            sessionId = 0UL,
-            snapshot = TargetSnapshot(text = "textB", cursorUtf8 = 5, revision = 2L, selectionAnchorUtf8 = 0, selectionHeadUtf8 = 5),
-            newlyCreated = true,
-            previousRecord = null,
-        )
+        val handle =
+            PreparedSessionHandle(
+                targetId = "b",
+                sessionId = 0UL,
+                snapshot =
+                    TargetSnapshot(
+                        text = "textB",
+                        cursorUtf8 = 5,
+                        revision = 2L,
+                        selectionAnchorUtf8 = 0,
+                        selectionHeadUtf8 = 5,
+                    ),
+                newlyCreated = true,
+                previousRecord = null,
+            )
         assertTrue(coordinator.commitPreparedSession(handle))
 
         val state = coordinator.sessionState
@@ -95,7 +104,7 @@ class PreparedSessionTransactionTest {
         // 提交使旧 lease 失效 — 旧 View 晚到的输入不能再进入会话层。
         assertFalse("提交后旧 lease 必须失效", coordinator.isInputLeaseCurrent(staleLease, "a"))
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "late input from stale view", 9L, 9L, lease = staleLease)
+            EditorDocumentUpdate.LocalInput("a", "late input from stale view", 9L, 9L, lease = staleLease),
         )
         assertEquals(
             "旧 A 的晚到输入不得写入 B 的会话",
@@ -106,7 +115,7 @@ class PreparedSessionTransactionTest {
         val leaseB = coordinator.currentInputLease()
         assertNotNull("提交后活动目标可签发新 lease", leaseB)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("b", "textB typed", 3L, 11L, lease = leaseB!!)
+            EditorDocumentUpdate.LocalInput("b", "textB typed", 3L, 11L, lease = leaseB!!),
         )
         assertEquals("textB typed", coordinator.sessionState.text)
     }
@@ -118,13 +127,14 @@ class PreparedSessionTransactionTest {
         // 场景改为复用事务：handle 声称复用 7UL，但记录 sessionId 仍是 0UL。
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
-        val handle = PreparedSessionHandle(
-            targetId = "b",
-            sessionId = 7UL,
-            snapshot = TargetSnapshot("textB", 5, 1L, 0, 5),
-            newlyCreated = false,
-            previousRecord = EditorSessionRecord("b", sessionId = 7UL),
-        )
+        val handle =
+            PreparedSessionHandle(
+                targetId = "b",
+                sessionId = 7UL,
+                snapshot = TargetSnapshot("textB", 5, 1L, 0, 5),
+                newlyCreated = false,
+                previousRecord = EditorSessionRecord("b", sessionId = 7UL),
+            )
         assertFalse("复用事务记录不再指向 handle session 必须拒绝提交", coordinator.commitPreparedSession(handle))
         assertNull(coordinator.sessionState.targetId)
     }
@@ -136,13 +146,14 @@ class PreparedSessionTransactionTest {
         // 新建 session（0UL != 7UL）永远失败，首次打开新章节必然 LoadFailed。
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
-        val handle = PreparedSessionHandle(
-            targetId = "b",
-            sessionId = 7UL,
-            snapshot = TargetSnapshot("textB", 5, 2L, 0, 5),
-            newlyCreated = true,
-            previousRecord = null,
-        )
+        val handle =
+            PreparedSessionHandle(
+                targetId = "b",
+                sessionId = 7UL,
+                snapshot = TargetSnapshot("textB", 5, 2L, 0, 5),
+                newlyCreated = true,
+                previousRecord = null,
+            )
         assertTrue("新建 session 提交必须成功（不要求记录已存在该 sessionId）", coordinator.commitPreparedSession(handle))
         val state = coordinator.sessionState
         assertEquals(7UL, state.sessionId)
@@ -159,13 +170,14 @@ class PreparedSessionTransactionTest {
         // 是 0UL，但记录已是 9UL，句柄失效，拒绝提交。
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
-        val handle = PreparedSessionHandle(
-            targetId = "b",
-            sessionId = 7UL,
-            snapshot = TargetSnapshot("textB", 5, 2L, 0, 5),
-            newlyCreated = true,
-            previousRecord = null,
-        )
+        val handle =
+            PreparedSessionHandle(
+                targetId = "b",
+                sessionId = 7UL,
+                snapshot = TargetSnapshot("textB", 5, 2L, 0, 5),
+                newlyCreated = true,
+                previousRecord = null,
+            )
         // 模拟并发：直接通过复用事务把记录 sessionId 占用为 9UL。
         coordinator.commitPreparedSession(handle.copy(sessionId = 9UL))
         assertFalse("记录已被并发占用为 9UL，原句柄失效必须拒绝", coordinator.commitPreparedSession(handle))
@@ -178,15 +190,17 @@ class PreparedSessionTransactionTest {
         coordinator.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
         // 模拟事务期间记录被替换为另一个 session。
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("b", "replaced", 1L, 1L, lease = lease("b"))
+            EditorDocumentUpdate.LocalInput("b", "replaced", 1L, 1L, lease = lease("b")),
         )
-        val handle = PreparedSessionHandle(
-            targetId = "b",
-            sessionId = 0UL, // 与替换后的记录 sessionId 相同（0UL）— 属于本事务新建
-            snapshot = TargetSnapshot("textB", 5, 1L, 0, 5),
-            newlyCreated = true,
-            previousRecord = null,
-        )
+        val handle =
+            PreparedSessionHandle(
+                targetId = "b",
+                // 与替换后的记录 sessionId 相同（0UL）— 属于本事务新建
+                sessionId = 0UL,
+                snapshot = TargetSnapshot("textB", 5, 1L, 0, 5),
+                newlyCreated = true,
+                previousRecord = null,
+            )
         coordinator.releasePreparedTarget(handle)
         assertFalse("新建 session 回滚后记录必须移除", coordinator.isTargetRegistered("b"))
     }
@@ -196,23 +210,25 @@ class PreparedSessionTransactionTest {
         // prepareTargetSessionForCommit 拆分为扩展函数，编译为 EditorSessionLifecycleOpsKt 静态方法。
         // 扩展函数参数 = 接收者 + 3 个显式参数 = 4。
         val extClass = Class.forName("com.xiwei.sujian.editor.v2.coordinator.EditorSessionLifecycleOpsKt")
-        val method = extClass.declaredMethods.firstOrNull {
-            it.name == "prepareTargetSessionForCommit" &&
-            it.parameterTypes.size == 4 &&
-            it.parameterTypes[0] == EditorSessionCoordinator::class.java
-        }
+        val method =
+            extClass.declaredMethods.firstOrNull {
+                it.name == "prepareTargetSessionForCommit" &&
+                    it.parameterTypes.size == 4 &&
+                    it.parameterTypes[0] == EditorSessionCoordinator::class.java
+            }
         assertNotNull("prepareTargetSessionForCommit(targetId, initialText, initialSelection) 必须存在", method)
     }
 
     @Test
     fun preparedSessionHandle_carriesAbortFacts() {
-        val handle = PreparedSessionHandle(
-            targetId = "b",
-            sessionId = 5UL,
-            snapshot = TargetSnapshot("t", 1, 0L, 0, 1),
-            newlyCreated = true,
-            previousRecord = null,
-        )
+        val handle =
+            PreparedSessionHandle(
+                targetId = "b",
+                sessionId = 5UL,
+                snapshot = TargetSnapshot("t", 1, 0L, 0, 1),
+                newlyCreated = true,
+                previousRecord = null,
+            )
         assertTrue(handle.newlyCreated)
         assertNull(handle.previousRecord)
         assertEquals(5UL, handle.sessionId)

@@ -12,7 +12,6 @@ import org.junit.Test
  * 渲染规则：文字完成后用静态新布局，光标仍可继续动画。
  */
 class VisualTrackStateTest {
-
     @Test
     fun idleStateIsFullyComplete() {
         val idle = VisualTrackState.Idle
@@ -25,15 +24,16 @@ class VisualTrackStateTest {
 
     @Test
     fun textFinishedCursorNotFinishedKeepsCursorAnimating() {
-        val state = VisualTrackState(
-            renderTextTransaction = null,
-            renderCursorTransition = true,
-            textProgress = 1f,
-            cursorProgress = 0.5f,
-            textFinished = true,
-            cursorFinished = false,
-            transactionComplete = false,
-        )
+        val state =
+            VisualTrackState(
+                renderTextTransaction = null,
+                renderCursorTransition = true,
+                textProgress = 1f,
+                cursorProgress = 0.5f,
+                textFinished = true,
+                cursorFinished = false,
+                transactionComplete = false,
+            )
         assertTrue("text finished → no text transaction", state.textFinished)
         assertFalse("cursor not finished → cursor transition active", state.cursorFinished)
         assertFalse("transaction not complete until both finished", state.transactionComplete)
@@ -42,15 +42,16 @@ class VisualTrackStateTest {
 
     @Test
     fun bothFinishedCompletesTransaction() {
-        val state = VisualTrackState(
-            renderTextTransaction = null,
-            renderCursorTransition = false,
-            textProgress = 1f,
-            cursorProgress = 1f,
-            textFinished = true,
-            cursorFinished = true,
-            transactionComplete = true,
-        )
+        val state =
+            VisualTrackState(
+                renderTextTransaction = null,
+                renderCursorTransition = false,
+                textProgress = 1f,
+                cursorProgress = 1f,
+                textFinished = true,
+                cursorFinished = true,
+                transactionComplete = true,
+            )
         assertTrue("text finished", state.textFinished)
         assertTrue("cursor finished", state.cursorFinished)
         assertTrue("transaction complete", state.transactionComplete)

@@ -19,12 +19,12 @@ import java.lang.reflect.Method
  * - EditorAnimationSettings 已删除。
  */
 class MotionPolicyStateFlowArchitectureTest {
-
     @Test
     fun sessionCoordinator_exposesMotionPolicyFlow() {
-        val field = EditorSessionCoordinator::class.java.declaredFields.firstOrNull {
-            it.name == "motionPolicyFlow"
-        }
+        val field =
+            EditorSessionCoordinator::class.java.declaredFields.firstOrNull {
+                it.name == "motionPolicyFlow"
+            }
         assertNotNull(
             "EditorSessionCoordinator must expose motionPolicyFlow: StateFlow<EditorMotionPolicy>",
             field,
@@ -37,9 +37,10 @@ class MotionPolicyStateFlowArchitectureTest {
 
     @Test
     fun windowHost_exposesMotionPolicyFlow() {
-        val getter: Method? = EditorWindowHost::class.java.methods.firstOrNull {
-            it.name == "getMotionPolicyFlow"
-        }
+        val getter: Method? =
+            EditorWindowHost::class.java.methods.firstOrNull {
+                it.name == "getMotionPolicyFlow"
+            }
         assertNotNull(
             "EditorWindowHost must expose motionPolicyFlow getter",
             getter,
@@ -54,11 +55,12 @@ class MotionPolicyStateFlowArchitectureTest {
 
     @Test
     fun windowHost_applyMotionPolicyExists() {
-        val method: Method? = EditorWindowHost::class.java.methods.firstOrNull {
-            it.name == "applyMotionPolicy" &&
-            it.parameterTypes.size == 1 &&
-            it.parameterTypes[0] == EditorMotionPolicy::class.java
-        }
+        val method: Method? =
+            EditorWindowHost::class.java.methods.firstOrNull {
+                it.name == "applyMotionPolicy" &&
+                    it.parameterTypes.size == 1 &&
+                    it.parameterTypes[0] == EditorMotionPolicy::class.java
+            }
         assertNotNull(
             "EditorWindowHost must have applyMotionPolicy(EditorMotionPolicy) for atomic policy application",
             method,
@@ -67,9 +69,10 @@ class MotionPolicyStateFlowArchitectureTest {
 
     @Test
     fun reduceMotionFieldExistsOnMotionPolicy() {
-        val field = EditorMotionPolicy::class.java.declaredFields.firstOrNull {
-            it.name == "reduceMotion"
-        }
+        val field =
+            EditorMotionPolicy::class.java.declaredFields.firstOrNull {
+                it.name == "reduceMotion"
+            }
         assertNotNull(
             "EditorMotionPolicy must have reduceMotion field",
             field,
@@ -78,12 +81,13 @@ class MotionPolicyStateFlowArchitectureTest {
 
     @Test
     fun editorAnimationSettingsTypeIsDeleted() {
-        val deleted = runCatching {
-            Class.forName("com.xiwei.sujian.editor.v2.coordinator.EditorAnimationSettings")
-        }.isFailure
+        val deleted =
+            runCatching {
+                Class.forName("com.xiwei.sujian.editor.v2.coordinator.EditorAnimationSettings")
+            }.isFailure
         assertTrue(
             "EditorAnimationSettings must be deleted after #595 十 — " +
-            "EditorMotionPolicy is the only writable animation state source",
+                "EditorMotionPolicy is the only writable animation state source",
             deleted,
         )
     }

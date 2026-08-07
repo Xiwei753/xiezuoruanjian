@@ -26,6 +26,10 @@ complexity:
     active: true
     threshold: 15
     excludes:
+      # --- 星图 UI（#592 既有实现，星图不在 #597 范围；待星图正式实现时重构）---
+      - "**/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapCanvas.kt"
+      - "**/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt"
+      - "**/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapScreen.kt"
       # --- 数据层：同步/设置逻辑，条件分支密集，待拆分状态机 ---
       - "**/kotlin/com/xiwei/sujian/data/AutoSyncWorker.kt"              # 同步Worker，多分支错误处理
       - "**/kotlin/com/xiwei/sujian/data/SettingsRepository.kt"          # 设置仓储，多条件映射
@@ -53,24 +57,13 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/ui/compose/settings/AppearanceSettings.kt"   # 外观设置多条件
       - "**/kotlin/com/xiwei/sujian/ui/compose/settings/SyncSettings.kt"         # 同步设置多条件
       # --- 测试：契约测试多分支断言 ---
-      - "**/kotlin/com/xiwei/sujian/ui/compose/settings/TransactionBarrierOrderContractTest.kt"
       # --- 统计/主题/工作台/工作区：多条件展示与布局 ---
       - "**/kotlin/com/xiwei/sujian/ui/compose/stats/StatsScreen.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/theme/SujianTheme.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/theme/ThemeController.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/component/DockHost.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/component/DockTabStrip.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/component/FloatingPanelLayer.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/component/PanelLauncherRail.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/component/SujianWorkbench.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/state/WorkbenchLayoutRepository.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/state/WorkbenchReducer.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/state/WorkbenchViewModel.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workspace/ProjectWorkspaceScreen.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workspace/VolumeChapterTree.kt"
       # --- 手机端：多条件布局 ---
-      - "**/kotlin/com/xiwei/sujian/ui/phone/portrait/PhoneTopBar.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/phone/portrait/PhoneWorkspaceHost.kt"
       # --- 设计系统组件：多参数组合 ---
       - "**/kotlin/com/xiwei/sujian/designsystem/component/SujianListItem.kt"
       - "**/kotlin/com/xiwei/sujian/designsystem/component/SujianSlider.kt"
@@ -79,6 +72,10 @@ complexity:
     active: true
     threshold: 15
     excludes:
+      # --- 星图 UI（#592 既有实现，星图不在 #597 范围；待星图正式实现时重构）---
+      - "**/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapCanvas.kt"
+      - "**/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt"
+      - "**/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapScreen.kt"
       # --- 数据层：桥接映射/同步逻辑，多分支错误处理 ---
       - "**/kotlin/com/xiwei/sujian/data/AutoSyncWorker.kt"
       - "**/kotlin/com/xiwei/sujian/data/BridgeMappers.kt"               # 桥接映射多分支
@@ -108,25 +105,25 @@ complexity:
       # --- 统计/主题/工作台 ---
       - "**/kotlin/com/xiwei/sujian/ui/compose/stats/StatsScreen.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/theme/SujianTheme.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/WorkbenchReducerTest.kt" # 测试：多分支断言
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/component/DockHost.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/component/SujianWorkbench.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/state/WorkbenchLayoutRepository.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/state/WorkbenchReducer.kt"
       # --- 工作区/手机端 ---
       - "**/kotlin/com/xiwei/sujian/ui/compose/workspace/ProjectWorkspaceScreen.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workspace/VolumeChapterTree.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/phone/portrait/PhoneTopBar.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/phone/portrait/PhoneWorkspaceHost.kt"
   LongMethod:
     active: true
     threshold: 80
     excludes:
+      # --- 星图 UI（#592 既有实现，星图不在 #597 范围；待星图正式实现时重构）---
+      - "**/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapCanvas.kt"
+      - "**/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt"
+      - "**/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapScreen.kt"
       # --- 数据层：同步逻辑长方法 ---
       - "**/kotlin/com/xiwei/sujian/data/SyncCoordinator.kt"
-      # --- 星图测试：契约测试长方法 ---
+      # --- 编辑器测试替身：模拟完整 IME 协议（既有实现）---
+      - "**/kotlin/com/xiwei/sujian/editor/v2/input/FakeInputCommandPort.kt"
+      # --- 星图测试：契约测试长方法（星图不在 #597 范围）---
+      - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapBridgeRepositoryIntegrationTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapCrossLayerRegressionTest.kt"
-      - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapProgressiveLoadingContractTest.kt"
+      - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapProgressiveLoadingTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapRoundTripTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapSnapshotCache.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapSnapshotConsistencyTest.kt"
@@ -152,23 +149,23 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/ui/compose/settings/SyncSettings.kt"
       # --- 统计/工作台/工作区 ---
       - "**/kotlin/com/xiwei/sujian/ui/compose/stats/StatsScreen.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/component/DockHost.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/component/FloatingPanelLayer.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/component/SujianWorkbench.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/component/WorkbenchPanelFrame.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/state/WorkbenchLayoutRepository.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workspace/ProjectListScreen.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workspace/ProjectWorkspaceScreen.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workspace/VolumeChapterTree.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/phone/portrait/PhoneWorkspaceHost.kt"
   LargeClass:
     active: true
     threshold: 500
     excludes:
       # --- 数据层：设置仓储大类 ---
       - "**/kotlin/com/xiwei/sujian/data/SettingsRepository.kt"
-      # --- 星图测试大类 ---
+      # --- FFI 门面：121 个向后兼容委托函数，签名由 Core 契约决定 ---
+      - "**/kotlin/com/xiwei/sujian/data/AppServiceBridge.kt"
+      # --- 编辑器窗口宿主：窗口生命周期/绑定/输入汇聚，按阶段拆分函数 ---
+      - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/EditorWindowHost.kt"
+      # --- 星图测试大类（星图不在 #597 范围，Issue #597 明确不纳入完成条件）---
+      - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapBridgeRepositoryIntegrationTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapCrossLayerRegressionTest.kt"
+      - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapProgressiveLoadingTest.kt"
       # --- 编辑器：宿主/管线/规划器大类 ---
       - "**/kotlin/com/xiwei/sujian/editor/v2/host/SujianEditorView.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/input/FakeInputCommandPort.kt"
@@ -176,14 +173,16 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/editor/v2/visual/planner/AffectedLayoutPlanner.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/visual/planner/InsertDeletePlanner.kt"
       # --- 工作台Reducer大类 ---
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/WorkbenchReducerTest.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/state/WorkbenchReducer.kt"
   LongParameterList:
     active: true
     functionThreshold: 7
     constructorThreshold: 10
     ignoreDefaultParameters: false
     excludes:
+      # --- 星图 UI（#592 既有实现，星图不在 #597 范围；待星图正式实现时重构）---
+      - "**/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapCanvas.kt"
+      - "**/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt"
+      - "**/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapScreen.kt"
       # --- 设计系统组件：Compose多参数API设计 ---
       - "**/kotlin/com/xiwei/sujian/designsystem/theme/SujianTheme.kt"
       - "**/kotlin/com/xiwei/sujian/designsystem/component/SujianSwitchRow.kt"
@@ -215,12 +214,8 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/editor/v2/visual/planner/InsertDeletePlanner.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/visual/planner/MoveCrossfadePlanner.kt"
       # --- 工作台组件：多面板布局参数 ---
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/component/DockHost.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/component/FloatingPanelLayer.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/component/WorkbenchPanelFrame.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workspace/ProjectWorkspaceScreen.kt"
       # --- 手机端 ---
-      - "**/kotlin/com/xiwei/sujian/ui/phone/portrait/PhoneTopBar.kt"
   NestedBlockDepth:
     active: true
     threshold: 4
@@ -244,7 +239,6 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/editor/v2/host/SujianEditorView.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/input/FakeInputCommandPort.kt"
       # --- 工作台Reducer/工作区：多状态组合条件 ---
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/state/WorkbenchReducer.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workspace/ProjectWorkspaceScreen.kt"
   TooManyFunctions:
     active: true
@@ -272,7 +266,6 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/editor/v2/compose/AnimatedTextSemanticsTest.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/EditorWindowHost.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/TextEditorProfileTest.kt"
-      - "**/kotlin/com/xiwei/sujian/editor/v2/host/SelectionOnlySessionCallbackContractTest.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/host/SujianEditorView.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/input/AndroidInputAdapter.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/input/FakeInputCommandPort.kt"
@@ -285,44 +278,34 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/editor/v2/visual/AndroidTextAnimationEngine.kt"
       # --- UI状态/工作台测试 ---
       - "**/kotlin/com/xiwei/sujian/ui/compose/SujianAppState.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/WorkbenchLayoutRepositoryTest.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/WorkbenchReducerTest.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/WorkbenchViewModelTest.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/state/WorkbenchReducer.kt"
   StringLiteralDuplication:
     active: true
     threshold: 3
     excludes:
+      # --- 星图 UI（#592 既有实现，星图不在 #597 范围；待星图正式实现时重构）---
+      - "**/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapCanvas.kt"
+      - "**/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapRoute.kt"
+      - "**/kotlin/com/xiwei/sujian/ui/compose/starmap/StarMapScreen.kt"
       # --- 架构目录 ---
       - "**/arch/**"
       # --- 数据层：桥接/同步/仓储，协议字符串天然重复 ---
       - "**/kotlin/com/xiwei/sujian/SujianApp.kt"
       - "**/kotlin/com/xiwei/sujian/data/AutoSyncScheduler.kt"
       - "**/kotlin/com/xiwei/sujian/data/AutoSyncWorker.kt"
-      - "**/kotlin/com/xiwei/sujian/data/BridgeMapperContractTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/BridgeMapperTest.kt"
-      - "**/kotlin/com/xiwei/sujian/data/CommitSyncProfileMigrationContractTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/CommitSyncProfileMigrationTest.kt"
-      - "**/kotlin/com/xiwei/sujian/data/SyncProfileGenerationContractTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/SyncProfileGenerationTest.kt"
-      - "**/kotlin/com/xiwei/sujian/data/CommitSyncProfileContractTest.kt"
-      - "**/kotlin/com/xiwei/sujian/data/CommitSyncProfileMigrationContractTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/DocumentSaveReceiptTrackerTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/SettingsRepository.kt"
       - "**/kotlin/com/xiwei/sujian/data/SyncCoordinator.kt"
-      - "**/kotlin/com/xiwei/sujian/data/SyncProfileGenerationContractTest.kt"
-      - "**/kotlin/com/xiwei/sujian/data/SyncSecretsOverrideScopedContractTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/WorkspaceRepository.kt"
       # --- 星图：桥接/缓存/测试，协议键重复 ---
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapBridgeRepositoryIntegrationTest.kt"
-      - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapCacheContractTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapCacheTest.kt"
-      - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapProgressiveLoadingContractTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapProgressiveLoadingTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapCrossLayerRegressionTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapCrudFailureStateTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapLifecycleFailureTest.kt"
-      - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapProgressiveLoadingContractTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapRepository.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapRoundTripTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapSemanticMapperTest.kt"
@@ -335,21 +318,9 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/diagnostics/DiagnosticsTest.kt"
       # --- 编辑器：契约测试断言字符串重复 ---
       - "**/kotlin/com/xiwei/sujian/editor/v2/compose/AnimatedTextSemanticsTest.kt"
-      - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/AttachedRequiresViewBindContractTest.kt"
-      - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/DocumentVersionCausalityContractTest.kt"
-      - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/EditorDocumentUpdateContractTest.kt"
-      - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/EditorDocumentUpdateTypedEventsContractTest.kt"
-      - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/EditorInputLeaseContractTest.kt"
-      - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/EditorSessionStateFlowContractTest.kt"
-      - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/EditorSessionStateSingleSourceContractTest.kt"
-      - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/EditorSessionStoreContractTest.kt"
-      - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/PreparedSessionTransactionContractTest.kt"
-      - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/RepositoryHashGuardContractTest.kt"
-      - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/ResetSnapshotCommitContractTest.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/input/AndroidInputConnectionComposingRegionTest.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/input/AndroidInputConnectionCompositionLifecycleTest.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/layout/AndroidLineSnapshotBuilder.kt"
-      - "**/kotlin/com/xiwei/sujian/editor/v2/pipeline/AttachSnapshotContractTest.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/pipeline/AttachSnapshotTest.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/pipeline/EditPipelineTest.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/projection/DisplayTextProjectionTest.kt"
@@ -360,7 +331,6 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/platform/AndroidKeystoreSecureStorage.kt"
       # --- UI测试/工具 ---
       - "**/kotlin/com/xiwei/sujian/ui/ChapterSwitchGateTest.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/EditorViewModelChapterSwitchContractTest.kt"
       - "**/kotlin/com/xiwei/sujian/ui/EditorViewModelChapterSwitchTest.kt"
       - "**/kotlin/com/xiwei/sujian/ui/ErrorUtil.kt"
       - "**/kotlin/com/xiwei/sujian/ui/ErrorUtilTest.kt"
@@ -371,14 +341,8 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/ui/compose/settings/AppearanceSettings.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/settings/StructuredSyncResultTest.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/theme/ThemeUiState.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/WorkbenchLayoutRepositoryTest.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/WorkbenchReducerTest.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/WorkbenchViewModelTest.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/state/WorkbenchLayoutRepository.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/compose/workbench/state/WorkbenchReducer.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workspace/ProjectWorkspaceScreen.kt"
       - "**/kotlin/com/xiwei/sujian/ui/compose/workspace/WorkspaceViewModel.kt"
-      - "**/kotlin/com/xiwei/sujian/ui/phone/portrait/WorkspaceSessionViewModel.kt"
       # --- 编辑器协调器测试：断言字符串重复 ---
       - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/DocumentOperationLeaseTest.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/PreparedSessionTransactionTest.kt"

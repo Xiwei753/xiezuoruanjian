@@ -15,7 +15,6 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 object DiagnosticsLogger {
-
     private const val TAG = "SujianDiag"
     private const val LOG_PREFIX = "sujian-current"
     private const val MAX_FILE_SIZE = 1024 * 1024L
@@ -31,71 +30,85 @@ object DiagnosticsLogger {
 
     private val timestampFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
 
-    private val REDACT_RULES: List<Pair<Regex, (MatchResult) -> String>> = listOf(
-        Pair(
-            Regex("""(?i)ssh_private_key\s*[:=]\s*[\s\S]*?-----END[^\n]*PRIVATE KEY-----"""),
-            { _ -> "ssh_private_key=[REDACTED]" }
-        ),
-        Pair(
-            Regex("""-----BEGIN[^\n]*PRIVATE KEY-----[\s\S]*?-----END[^\n]*PRIVATE KEY-----"""),
-            { _ -> "[REDACTED_PEM]" }
-        ),
-        Pair(
-            Regex("""(?i)\b(authorization)\s*[:=]\s*Bearer\s+\S+"""),
-            { m ->
-                val key = m.groupValues[1]
-                val rest = m.value.substringAfter(key)
-                val sep = rest.takeWhile { it in setOf(' ', ':', '=', '\t') }
-                "${key}${sep}Bearer [REDACTED]"
-            }
-        ),
-        Pair(
-            Regex("""(?i)\b(token|access_token|refresh_token|authorization|password|passwd|secret|private_key)\s*[:=]\s*(?:"[^"]*"|\S+)"""),
-            { m ->
-                val key = m.groupValues[1]
-                val rest = m.value.substringAfter(key)
-                val sep = rest.takeWhile { it in setOf(' ', ':', '=', '\t') }
-                "$key$sep[REDACTED]"
-            }
-        ),
-        Pair(
-            Regex("""(?i)\b(content|text|body|chapter|chapter_content|chapterContent)\s*[:=]\s*(?:"[^"]*"|[^,}\]\n]+)"""),
-            { m ->
-                val key = m.groupValues[1]
-                val rest = m.value.substringAfter(key)
-                val sep = rest.takeWhile { it in setOf(' ', ':', '=', '\t') }
-                "$key$sep[REDACTED]"
-            }
-        ),
-        Pair(
-            Regex("""(?i)["'](authorization)["']\s*:\s*["']Bearer\s+[^"\\]*(?:\\.[^"\\]*)*["']"""),
-            { m -> "\"${m.groupValues[1]}\": \"Bearer [REDACTED]\"" }
-        ),
-        Pair(
-            Regex("""(?i)["'](token|access_token|refresh_token|authorization|password|passwd|secret|private_key|ssh_private_key)["']\s*:\s*["'][^"\\]*(?:\\.[^"\\]*)*["']"""),
-            { m -> "\"${m.groupValues[1]}\": \"[REDACTED]\"" }
-        ),
-        Pair(
-            Regex("""(?i)["'](content|text|body|chapter|chapter_content|chapterContent)["']\s*:\s*["'][^"\\]*(?:\\.[^"\\]*)*["']"""),
-            { m -> "\"${m.groupValues[1]}\": \"[REDACTED]\"" }
-        ),
-        Pair(
-            Regex("""(?i)Bearer\s+[A-Za-z0-9\-._~+/]+=*"""),
-            { _ -> "Bearer [REDACTED]" }
-        ),
-        Pair(
-            Regex("""ghp_[A-Za-z0-9]{36}"""),
-            { _ -> "[REDACTED]" }
-        ),
-        Pair(
-            Regex("""gho_[A-Za-z0-9]{36}"""),
-            { _ -> "[REDACTED]" }
-        ),
-        Pair(
-            Regex("""github_pat_[A-Za-z0-9_]{82}"""),
-            { _ -> "[REDACTED]" }
+    private val REDACT_RULES: List<Pair<Regex, (MatchResult) -> String>> =
+        listOf(
+            Pair(
+                Regex("""(?i)ssh_private_key\s*[:=]\s*[\s\S]*?-----END[^\n]*PRIVATE KEY-----"""),
+                { _ -> "ssh_private_key=[REDACTED]" },
+            ),
+            Pair(
+                Regex("""-----BEGIN[^\n]*PRIVATE KEY-----[\s\S]*?-----END[^\n]*PRIVATE KEY-----"""),
+                { _ -> "[REDACTED_PEM]" },
+            ),
+            Pair(
+                Regex("""(?i)\b(authorization)\s*[:=]\s*Bearer\s+\S+"""),
+                { m ->
+                    val key = m.groupValues[1]
+                    val rest = m.value.substringAfter(key)
+                    val sep = rest.takeWhile { it in setOf(' ', ':', '=', '\t') }
+                    "${key}${sep}Bearer [REDACTED]"
+                },
+            ),
+            Pair(
+                Regex(
+                    """(?i)\b(token|access_token|refresh_token|authorization|password|passwd|secret|private_key)""" +
+                        """\s*[:=]\s*(?:"[^"]*"|\S+)""",
+                ),
+                { m ->
+                    val key = m.groupValues[1]
+                    val rest = m.value.substringAfter(key)
+                    val sep = rest.takeWhile { it in setOf(' ', ':', '=', '\t') }
+                    "$key$sep[REDACTED]"
+                },
+            ),
+            Pair(
+                Regex(
+                    """(?i)\b(content|text|body|chapter|chapter_content|chapterContent)""" +
+                        """\s*[:=]\s*(?:"[^"]*"|[^,}\]\n]+)""",
+                ),
+                { m ->
+                    val key = m.groupValues[1]
+                    val rest = m.value.substringAfter(key)
+                    val sep = rest.takeWhile { it in setOf(' ', ':', '=', '\t') }
+                    "$key$sep[REDACTED]"
+                },
+            ),
+            Pair(
+                Regex("""(?i)["'](authorization)["']\s*:\s*["']Bearer\s+[^"\\]*(?:\\.[^"\\]*)*["']"""),
+                { m -> "\"${m.groupValues[1]}\": \"Bearer [REDACTED]\"" },
+            ),
+            Pair(
+                Regex(
+                    """(?i)["'](token|access_token|refresh_token|authorization|password|passwd|secret""" +
+                        """|private_key|ssh_private_key)["']""" +
+                        """\s*:\s*["'][^"\\]*(?:\\.[^"\\]*)*["']""",
+                ),
+                { m -> "\"${m.groupValues[1]}\": \"[REDACTED]\"" },
+            ),
+            Pair(
+                Regex(
+                    """(?i)["'](content|text|body|chapter|chapter_content|chapterContent)["']""" +
+                        """\s*:\s*["'][^"\\]*(?:\\.[^"\\]*)*["']""",
+                ),
+                { m -> "\"${m.groupValues[1]}\": \"[REDACTED]\"" },
+            ),
+            Pair(
+                Regex("""(?i)Bearer\s+[A-Za-z0-9\-._~+/]+=*"""),
+                { _ -> "Bearer [REDACTED]" },
+            ),
+            Pair(
+                Regex("""ghp_[A-Za-z0-9]{36}"""),
+                { _ -> "[REDACTED]" },
+            ),
+            Pair(
+                Regex("""gho_[A-Za-z0-9]{36}"""),
+                { _ -> "[REDACTED]" },
+            ),
+            Pair(
+                Regex("""github_pat_[A-Za-z0-9_]{82}"""),
+                { _ -> "[REDACTED]" },
+            ),
         )
-    )
 
     fun redact(message: String): String {
         var result = message
@@ -110,7 +123,11 @@ object DiagnosticsLogger {
         return redact(raw)
     }
 
-    fun init(context: Context, isEnabled: Boolean, isVerbose: Boolean) {
+    fun init(
+        context: Context,
+        isEnabled: Boolean,
+        isVerbose: Boolean,
+    ) {
         contextRef.set(context.applicationContext)
         enabled.set(isEnabled)
         verbose.set(isVerbose)
@@ -125,9 +142,13 @@ object DiagnosticsLogger {
     }
 
     fun isEnabled(): Boolean = enabled.get()
+
     fun isVerbose(): Boolean = verbose.get()
 
-    fun d(tag: String, message: String) {
+    fun d(
+        tag: String,
+        message: String,
+    ) {
         if (!BuildConfig.DEBUG) return
         if (!enabled.get() || !verbose.get()) return
         val redacted = redact(message)
@@ -135,7 +156,10 @@ object DiagnosticsLogger {
         enqueue("DEBUG", tag, redacted)
     }
 
-    fun i(tag: String, message: String) {
+    fun i(
+        tag: String,
+        message: String,
+    ) {
         val redacted = redact(message)
         Log.i(tag, redacted)
         if (enabled.get()) {
@@ -143,7 +167,11 @@ object DiagnosticsLogger {
         }
     }
 
-    fun w(tag: String, message: String, throwable: Throwable? = null) {
+    fun w(
+        tag: String,
+        message: String,
+        throwable: Throwable? = null,
+    ) {
         val redacted = redact(message)
         if (throwable != null) {
             val redactedTrace = redactStackTrace(throwable)
@@ -159,7 +187,11 @@ object DiagnosticsLogger {
         }
     }
 
-    fun e(tag: String, message: String, throwable: Throwable? = null) {
+    fun e(
+        tag: String,
+        message: String,
+        throwable: Throwable? = null,
+    ) {
         val redacted = redact(message)
         if (throwable != null) {
             val redactedTrace = redactStackTrace(throwable)
@@ -175,7 +207,11 @@ object DiagnosticsLogger {
         }
     }
 
-    private fun enqueue(level: String, tag: String, message: String) {
+    private fun enqueue(
+        level: String,
+        tag: String,
+        message: String,
+    ) {
         val ts = timestampFormat.format(Date())
         val line = "$ts $level/$tag: $message"
         buffer.add(line)
@@ -217,9 +253,10 @@ object DiagnosticsLogger {
     }
 
     private fun pruneOldLogs(logDir: File) {
-        val logs = logDir.listFiles { _, name -> name.startsWith(LOG_PREFIX) && name.endsWith(".log") }
-            ?.sortedByDescending { it.lastModified() }
-            ?: return
+        val logs =
+            logDir.listFiles { _, name -> name.startsWith(LOG_PREFIX) && name.endsWith(".log") }
+                ?.sortedByDescending { it.lastModified() }
+                ?: return
         for (i in (MAX_LOG_FILES - 1) until logs.size) {
             logs[i].delete()
         }

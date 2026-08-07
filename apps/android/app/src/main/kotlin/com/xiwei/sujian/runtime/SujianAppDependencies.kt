@@ -30,9 +30,10 @@ interface SujianAppDependencies : AppServiceContainer {
     }
 }
 
-val LocalSujianAppDependencies = compositionLocalOf<SujianAppDependencies> {
-    error("No SujianAppDependencies provided. Wrap with CompositionLocalProvider.")
-}
+val LocalSujianAppDependencies =
+    compositionLocalOf<SujianAppDependencies> {
+        error("No SujianAppDependencies provided. Wrap with CompositionLocalProvider.")
+    }
 
 class DefaultAppServiceContainer(context: Context) : AppServiceContainer {
     private val appContext = context.applicationContext

@@ -6,7 +6,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DisplayTextProjectionTest {
-
     @Test
     fun identityProjectionRealEqualsDisplay() {
         val text = "Hello 世界"
@@ -262,12 +261,13 @@ class DisplayTextProjectionTest {
         var i = 0
         while (i < text.length) {
             val codePoint = text.codePointAt(i)
-            val utf8Len = when {
-                codePoint <= 0x7F -> 1
-                codePoint <= 0x7FF -> 2
-                codePoint <= 0xFFFF -> 3
-                else -> 4
-            }
+            val utf8Len =
+                when {
+                    codePoint <= 0x7F -> 1
+                    codePoint <= 0x7FF -> 2
+                    codePoint <= 0xFFFF -> 3
+                    else -> 4
+                }
             bytePos += utf8Len
             codePointUtf8Boundaries.add(bytePos)
             i += Character.charCount(codePoint)
@@ -288,12 +288,13 @@ class DisplayTextProjectionTest {
         var i = 0
         while (i < text.length) {
             val codePoint = text.codePointAt(i)
-            val utf8Len = when {
-                codePoint <= 0x7F -> 1
-                codePoint <= 0x7FF -> 2
-                codePoint <= 0xFFFF -> 3
-                else -> 4
-            }
+            val utf8Len =
+                when {
+                    codePoint <= 0x7F -> 1
+                    codePoint <= 0x7FF -> 2
+                    codePoint <= 0xFFFF -> 3
+                    else -> 4
+                }
             bytePos += utf8Len
             codePointUtf8Boundaries.add(bytePos)
             i += Character.charCount(codePoint)
@@ -314,12 +315,13 @@ class DisplayTextProjectionTest {
         var i = 0
         while (i < text.length) {
             val codePoint = text.codePointAt(i)
-            val utf8Len = when {
-                codePoint <= 0x7F -> 1
-                codePoint <= 0x7FF -> 2
-                codePoint <= 0xFFFF -> 3
-                else -> 4
-            }
+            val utf8Len =
+                when {
+                    codePoint <= 0x7F -> 1
+                    codePoint <= 0x7FF -> 2
+                    codePoint <= 0xFFFF -> 3
+                    else -> 4
+                }
             bytePos += utf8Len
             codePointUtf8Boundaries.add(bytePos)
             i += Character.charCount(codePoint)
@@ -373,12 +375,13 @@ class DisplayTextProjectionTest {
         var i = 0
         while (i < text.length) {
             val codePoint = text.codePointAt(i)
-            val utf8Len = when {
-                codePoint <= 0x7F -> 1
-                codePoint <= 0x7FF -> 2
-                codePoint <= 0xFFFF -> 3
-                else -> 4
-            }
+            val utf8Len =
+                when {
+                    codePoint <= 0x7F -> 1
+                    codePoint <= 0x7FF -> 2
+                    codePoint <= 0xFFFF -> 3
+                    else -> 4
+                }
             bytePos += utf8Len
             codePointUtf8Boundaries.add(bytePos)
             i += Character.charCount(codePoint)

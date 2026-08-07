@@ -22,11 +22,11 @@ data class FrameRenderInput(
     val selectionAllowed: Boolean,
     val cursorUtf16: Int,
     val selectionStartUtf16: Int,
-    val selectionEndUtf16: Int
+    val selectionEndUtf16: Int,
 )
 
 class FrameState(
     val renderInput: FrameRenderInput,
     val displayStateVersion: Long = 0L,
-    val completeAfterDraw: Boolean = false
+    val completeAfterDraw: Boolean = false,
 )

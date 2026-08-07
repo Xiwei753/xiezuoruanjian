@@ -1,7 +1,7 @@
 package com.xiwei.sujian.editor.v2.visual
 
-import com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutRevision
+import com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot
 import uniffi.writer_core.EditorOperationKindDto
 
 data class PreparedVisualTransaction(
@@ -17,7 +17,7 @@ data class PreparedVisualTransaction(
     val cursorTransition: CursorTransition?,
     val durationMs: Long,
     val blockShifts: List<BlockShift> = emptyList(),
-    val operationKind: EditorOperationKindDto = EditorOperationKindDto.INSERT
+    val operationKind: EditorOperationKindDto = EditorOperationKindDto.INSERT,
 ) {
     data class StaticPatch(
         val newSnapshotId: Long,
@@ -29,7 +29,7 @@ data class PreparedVisualTransaction(
          *  only some clusters are animated and the rest must be redrawn from the snapshot
          *  because the base static draw was clipped out. Each rect is in Bitmap pixel
          *  coordinates relative to the snapshot's [sourceRect] origin. */
-        val visibleSourceRects: List<android.graphics.Rect>
+        val visibleSourceRects: List<android.graphics.Rect>,
     )
 
     /**
@@ -54,18 +54,18 @@ data class PreparedVisualTransaction(
         val endAlpha: Float,
         val fromDestinationRect: android.graphics.RectF? = null,
         val clusterByteStart: Int = -1,
-        val clusterByteEndExclusive: Int = -1
+        val clusterByteEndExclusive: Int = -1,
     )
 
     data class SelectionDecoration(
         val startUtf16: Int,
-        val endUtf16: Int
+        val endUtf16: Int,
     )
 
     data class PreeditDecoration(
         val startUtf16: Int,
         val endUtf16: Int,
-        val underlineColor: Int
+        val underlineColor: Int,
     )
 
     data class CursorTransition(
@@ -75,7 +75,7 @@ data class PreparedVisualTransaction(
         val toX: Float,
         val toY: Float,
         val toHeight: Float,
-        val shouldAnimate: Boolean
+        val shouldAnimate: Boolean,
     )
 
     /**
@@ -126,7 +126,7 @@ data class PreparedVisualTransaction(
          *  downgraded from exact to approximate — this prevents pairing BlockShifts that
          *  cover different document regions after hard-break insertion/deletion, which
          *  would produce incorrect deltaY adjustments and visible jumps in the suffix text. */
-        val endUtf8Exclusive: Int = -1
+        val endUtf8Exclusive: Int = -1,
     )
 }
 
@@ -134,10 +134,20 @@ data class PreparedVisualTransaction(
  *  Move: same shaping, position shift (alpha stays 1).
  *  CrossfadeOld/New: shaping changed, paired fade-out + fade-in. */
 enum class SliceRole {
-    Insert, Delete, Move, CrossfadeOld, CrossfadeNew, Static
+    Insert,
+    Delete,
+    Move,
+    CrossfadeOld,
+    CrossfadeNew,
+    Static,
 }
 
 /** Lifecycle states of a visual transaction. Only Rendering/Paused produce frames. */
 enum class TransactionState {
-    Pending, Prepared, Rendering, Paused, Completed, Cancelled
+    Pending,
+    Prepared,
+    Rendering,
+    Paused,
+    Completed,
+    Cancelled,
 }

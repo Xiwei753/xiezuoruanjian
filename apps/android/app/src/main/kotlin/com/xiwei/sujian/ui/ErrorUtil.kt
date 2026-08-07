@@ -1,10 +1,10 @@
 package com.xiwei.sujian.ui
 
 import android.content.Context
-import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import android.widget.Toast
 import com.xiwei.sujian.R
 import com.xiwei.sujian.data.RepositoryException
+import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 
 /**
  * ErrorUtil — 错误处理工具类
@@ -22,7 +22,11 @@ import com.xiwei.sujian.data.RepositoryException
 object ErrorUtil {
     private const val TAG = "SujianError"
 
-    fun <T> safeRun(context: Context, fallback: T, action: () -> T): T {
+    fun <T> safeRun(
+        context: Context,
+        fallback: T,
+        action: () -> T,
+    ): T {
         return try {
             action()
         } catch (e: RepositoryException) {
@@ -36,7 +40,11 @@ object ErrorUtil {
         }
     }
 
-    suspend fun <T> safeRunSuspend(context: Context, fallback: T, action: suspend () -> T): T {
+    suspend fun <T> safeRunSuspend(
+        context: Context,
+        fallback: T,
+        action: suspend () -> T,
+    ): T {
         return try {
             action()
         } catch (e: RepositoryException) {
@@ -50,7 +58,10 @@ object ErrorUtil {
         }
     }
 
-    fun safeRun(context: Context, action: () -> Unit) {
+    fun safeRun(
+        context: Context,
+        action: () -> Unit,
+    ) {
         try {
             action()
         } catch (e: RepositoryException) {
@@ -62,7 +73,10 @@ object ErrorUtil {
         }
     }
 
-    suspend fun safeRunSuspend(context: Context, action: suspend () -> Unit) {
+    suspend fun safeRunSuspend(
+        context: Context,
+        action: suspend () -> Unit,
+    ) {
         try {
             action()
         } catch (e: RepositoryException) {

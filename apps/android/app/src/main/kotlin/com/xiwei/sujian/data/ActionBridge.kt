@@ -7,7 +7,6 @@ import uniffi.writer_core.ActionDescriptorDto
 import uniffi.writer_core.ActionResultDto
 
 class ActionBridge internal constructor(private val appService: AppServiceBridge) {
-
     fun listRegisteredActions(): BridgeResult<List<ActionDescriptor>> {
         return when (val result = appService.listRegisteredActions()) {
             is BridgeResult.Success -> BridgeResult.Success(result.data.map { it.toModel() })
@@ -16,7 +15,10 @@ class ActionBridge internal constructor(private val appService: AppServiceBridge
         }
     }
 
-    fun executeAction(actionId: String, argsJson: String = "{}"): BridgeResult<ActionResult> {
+    fun executeAction(
+        actionId: String,
+        argsJson: String = "{}",
+    ): BridgeResult<ActionResult> {
         return when (val result = appService.executeAction(actionId, argsJson, "{}")) {
             is BridgeResult.Success -> BridgeResult.Success(result.data.toModel())
             is BridgeResult.Error -> BridgeResult.Error(result.envelope)
@@ -25,27 +27,29 @@ class ActionBridge internal constructor(private val appService: AppServiceBridge
     }
 }
 
-private fun ActionDescriptorDto.toModel(): ActionDescriptor = ActionDescriptor(
-    id = id,
-    title = title,
-    description = description,
-    category = category,
-    kind = kind.name,
-    riskLevel = riskLevel.name,
-    confirmRequired = confirmRequired,
-    undoable = undoable,
-    platforms = platforms,
-    inputSchema = inputSchema?.let { parseJsonElement(it) },
-    uiSchema = uiSchema?.let { parseJsonElement(it) }
-)
+private fun ActionDescriptorDto.toModel(): ActionDescriptor =
+    ActionDescriptor(
+        id = id,
+        title = title,
+        description = description,
+        category = category,
+        kind = kind.name,
+        riskLevel = riskLevel.name,
+        confirmRequired = confirmRequired,
+        undoable = undoable,
+        platforms = platforms,
+        inputSchema = inputSchema?.let { parseJsonElement(it) },
+        uiSchema = uiSchema?.let { parseJsonElement(it) },
+    )
 
-private fun ActionResultDto.toModel(): ActionResult = ActionResult(
-    success = success,
-    message = message,
-    data = data?.let { parseJsonElement(it) },
-    proposedUi = proposedUi?.let { parseJsonElement(it) },
-    requiresConfirmation = requiresConfirmation
-)
+private fun ActionResultDto.toModel(): ActionResult =
+    ActionResult(
+        success = success,
+        message = message,
+        data = data?.let { parseJsonElement(it) },
+        proposedUi = proposedUi?.let { parseJsonElement(it) },
+        requiresConfirmation = requiresConfirmation,
+    )
 
 private fun parseJsonElement(json: String): JsonElement? {
     return try {

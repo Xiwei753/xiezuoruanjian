@@ -12,7 +12,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -20,30 +19,27 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
+import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
+import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.editor.v2.compose.LocalEditorWindowHost
-import com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost
 import com.xiwei.sujian.editor.v2.coordinator.EditableTextTarget
-import com.xiwei.sujian.editor.v2.coordinator.EditingState
 import com.xiwei.sujian.editor.v2.coordinator.ExternalContentDecision
 import com.xiwei.sujian.editor.v2.coordinator.SessionResetSource
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
 import com.xiwei.sujian.editor.v2.coordinator.WindowBindingState
 import com.xiwei.sujian.editor.v2.coordinator.applyExternalContentFact
 import com.xiwei.sujian.editor.v2.coordinator.shouldApplyExternalContent
+import com.xiwei.sujian.runtime.LocalSujianAppDependencies
 import com.xiwei.sujian.ui.EditorViewModel
 import com.xiwei.sujian.ui.SaveStatus
-import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
-import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
-import com.xiwei.sujian.runtime.LocalSujianAppDependencies
 import com.xiwei.sujian.ui.applyExternalContentToUi
 import com.xiwei.sujian.ui.confirmEditorAttached
 import com.xiwei.sujian.ui.isCurrentChapter
@@ -84,33 +80,44 @@ fun WritingPane(
      * 参数是回滚目标（旧章节）；旧章节不存在时传 null（应清除章节选择/回到章节树）。
      * 由工作区宿主把工作区导航回滚到 activeChapterKey，不能只把 loading 改回 false。
      */
-    onChapterSwitchFailed: ((oldProjectId: String, oldVolumeId: String?, oldChapterId: String?, oldChapterTitle: String) -> Unit)? = null,
+    onChapterSwitchFailed: (
+        (oldProjectId: String, oldVolumeId: String?, oldChapterId: String?, oldChapterTitle: String) -> Unit
+    )? = null,
 ) {
     val context = LocalContext.current
     val deps = LocalSujianAppDependencies.current
-    val coordinator = LocalEditorWindowHost.current
-        ?: throw IllegalStateException(
-            "WritingPane requires an EditorWindowHost in the CompositionLocal. " +
-            "Ensure the host Activity or Fragment provides one via CompositionLocalProvider."
-        )
+    val coordinator =
+        LocalEditorWindowHost.current
+            ?: throw IllegalStateException(
+                "WritingPane requires an EditorWindowHost in the CompositionLocal. " +
+                    "Ensure the host Activity or Fragment provides one via CompositionLocalProvider.",
+            )
     // #595 一：显式 Factory 注入进程级容器依赖 + 会话层协调器 —
     // 不再退回 WorkspaceRepository(getApplication()) 创建第二份容器。
-    val viewModel: EditorViewModel = viewModel(
-        factory = EditorViewModel.Factory(
-            context.applicationContext as android.app.Application,
-            deps,
+    val viewModel: EditorViewModel =
+        viewModel(
+            factory =
+                EditorViewModel.Factory(
+                    context.applicationContext as android.app.Application,
+                    deps,
+                    coordinator.sessionCoordinator,
+                ),
+        )
+    LaunchedEffect(Unit) {
+        viewModel.initialize(
+            deps.workspaceRepository,
+            deps.settingsRepository,
+            deps.syncStatusRepository,
             coordinator.sessionCoordinator,
         )
-    )
-    LaunchedEffect(Unit) {
-        viewModel.initialize(deps.workspaceRepository, deps.settingsRepository, deps.syncStatusRepository, coordinator.sessionCoordinator)
     }
 
     val dims = LocalSujianDimensions.current
 
-    val targetId = remember(projectId, volumeId, chapterId) {
-        "chapter-body:$projectId:$volumeId:$chapterId"
-    }
+    val targetId =
+        remember(projectId, volumeId, chapterId) {
+            "chapter-body:$projectId:$volumeId:$chapterId"
+        }
 
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
@@ -126,7 +133,7 @@ fun WritingPane(
                 cursorDurationMillis = s.smoothCursorDurationMs,
                 coordinated = s.coordinatedTextCursorAnimationEnabled,
                 reduceMotion = s.reduceMotion,
-            )
+            ),
         )
     }
 
@@ -134,11 +141,12 @@ fun WritingPane(
     // ON_RESUME 兜底处理进程恢复场景。
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     DisposableEffect(targetId, lifecycleOwner) {
-        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
-                viewModel.reloadSettings()
+        val observer =
+            androidx.lifecycle.LifecycleEventObserver { _, event ->
+                if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                    viewModel.reloadSettings()
+                }
             }
-        }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
@@ -150,7 +158,6 @@ fun WritingPane(
         }
     }
 
-
     var lastProjectId by remember { mutableStateOf("") }
     var lastVolumeId by remember { mutableStateOf("") }
     var lastChapterId by remember { mutableStateOf("") }
@@ -159,9 +166,10 @@ fun WritingPane(
     // session（“新 target 使用旧内容创建 Rust session”）；回滚重组合到旧章节后自然失效。
     var failedSwitchTarget by remember { mutableStateOf<String?>(null) }
 
-    val target = remember(targetId) {
-        EditableTextTarget(targetId = targetId)
-    }
+    val target =
+        remember(targetId) {
+            EditableTextTarget(targetId = targetId)
+        }
 
     val currentViewModel by rememberUpdatedState(viewModel)
 
@@ -194,8 +202,9 @@ fun WritingPane(
     // WORKSPACE_NAVIGATION 关闭。
     // 深链/恢复路径（currentSession 不是本 pane 章节）仍走 switchChapter 事务。
     LaunchedEffect(projectId, volumeId, chapterId) {
-        val sameChapter = lastChapterId.isNotEmpty() &&
-            lastProjectId == projectId && lastVolumeId == volumeId && lastChapterId == chapterId
+        val sameChapter =
+            lastChapterId.isNotEmpty() &&
+                lastProjectId == projectId && lastVolumeId == volumeId && lastChapterId == chapterId
         if (!sameChapter) {
             if (currentViewModel.isCurrentChapter(projectId, volumeId, chapterId)) {
                 // #595 一：宿主已预提交该章节 — 直接进入编辑（旧 target 由
@@ -210,7 +219,8 @@ fun WritingPane(
                         failedSwitchTarget = null
                     }
                     is com.xiwei.sujian.ui.ChapterSwitchResult.SaveFailed,
-                    is com.xiwei.sujian.ui.ChapterSwitchResult.LoadFailed -> {
+                    is com.xiwei.sujian.ui.ChapterSwitchResult.LoadFailed,
+                    -> {
                         // #595 一：保存/加载失败 → 回滚工作区选择到旧章节（activeChapterKey）。
                         failedSwitchTarget = targetId
                         onChapterSwitchFailed?.invoke(
@@ -240,15 +250,21 @@ fun WritingPane(
     // #595 一/二：外部文档事实（RepositoryLoaded/SyncMerged）— 调用方已通过
     // shouldApplyExternalContent 确认版本更新与本地 dirty 状态，此处只执行
     // Core reset 和 UI 同步，不再重复构造事件做检查。
-    fun applyExternalContent(text: String, fileHash: String): com.xiwei.sujian.editor.v2.coordinator.ExternalResetResult {
+    fun applyExternalContent(
+        text: String,
+        fileHash: String,
+    ): com.xiwei.sujian.editor.v2.coordinator.ExternalResetResult {
         // #595 五：返回 reset 结果 — 调用方据此决定是否推进会话事实与 UI。
-        val result = coordinator.resetPersistentSession(
-            targetId,
-            text,
-            text.toByteArray(Charsets.UTF_8).size,
-            SessionResetSource.EXTERNAL
-        )
-        if (result is com.xiwei.sujian.editor.v2.coordinator.ExternalResetResult.Success && coordinator.activeTargetId != targetId) {
+        val result =
+            coordinator.resetPersistentSession(
+                targetId,
+                text,
+                text.toByteArray(Charsets.UTF_8).size,
+                SessionResetSource.EXTERNAL,
+            )
+        if (result is com.xiwei.sujian.editor.v2.coordinator.ExternalResetResult.Success &&
+            coordinator.activeTargetId != targetId
+        ) {
             coordinator.beginEdit(targetId, text.toByteArray(Charsets.UTF_8).size)
         }
         return result
@@ -270,7 +286,11 @@ fun WritingPane(
                         if (fact.origin == com.xiwei.sujian.editor.v2.coordinator.DocumentFactOrigin.SYNC_MERGED) {
                             // #595 三：同步合并同时更新 ViewModel 正文/hash/保存状态/字数 —
                             // 磁盘、Rust session、ViewModel 三方保持一致。
-                            currentViewModel.applyExternalContentToUi(targetId, fact.text, fact.sourceVersion.contentHash)
+                            currentViewModel.applyExternalContentToUi(
+                                targetId,
+                                fact.text,
+                                fact.sourceVersion.contentHash,
+                            )
                         }
                     }
                 }
@@ -287,7 +307,8 @@ fun WritingPane(
                 }
                 ExternalContentDecision.IgnoreReplay,
                 ExternalContentDecision.IgnoreOlder,
-                ExternalContentDecision.IgnoreEmptyVersion -> {
+                ExternalContentDecision.IgnoreEmptyVersion,
+                -> {
                     // 重放/更旧/无版本锚点 — 忽略。
                 }
                 ExternalContentDecision.IgnoreUncomparableConflict -> {
@@ -334,33 +355,36 @@ fun WritingPane(
     Column(modifier = modifier.fillMaxSize()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = dims.space16, vertical = dims.space4),
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
                 chapterTitle,
                 style = MaterialTheme.typography.titleSmall,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
             )
-            val statusSemanticValue = when (uiState.saveStatus) {
-                SaveStatus.Idle -> "idle"
-                SaveStatus.Unsaved -> "unsaved"
-                SaveStatus.Saving -> "saving"
-                SaveStatus.Saved -> "saved"
-                SaveStatus.SaveFailed -> "failed"
-            }
-            val statusText = when (uiState.saveStatus) {
-                SaveStatus.Idle -> ""
-                SaveStatus.Unsaved -> stringResource(id = R.string.status_unsaved)
-                SaveStatus.Saving -> stringResource(id = R.string.status_saving)
-                SaveStatus.Saved -> stringResource(id = R.string.status_saved)
-                SaveStatus.SaveFailed -> stringResource(id = R.string.status_save_failed)
-            }
+            val statusSemanticValue =
+                when (uiState.saveStatus) {
+                    SaveStatus.Idle -> "idle"
+                    SaveStatus.Unsaved -> "unsaved"
+                    SaveStatus.Saving -> "saving"
+                    SaveStatus.Saved -> "saved"
+                    SaveStatus.SaveFailed -> "failed"
+                }
+            val statusText =
+                when (uiState.saveStatus) {
+                    SaveStatus.Idle -> ""
+                    SaveStatus.Unsaved -> stringResource(id = R.string.status_unsaved)
+                    SaveStatus.Saving -> stringResource(id = R.string.status_saving)
+                    SaveStatus.Saved -> stringResource(id = R.string.status_saved)
+                    SaveStatus.SaveFailed -> stringResource(id = R.string.status_save_failed)
+                }
             Text(
                 text = statusText,
                 style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier
-                    .testTag(SujianSemanticIds.EditorSaveStatus)
-                    .semantics { this.stateDescription = statusSemanticValue }
+                modifier =
+                    Modifier
+                        .testTag(SujianSemanticIds.EditorSaveStatus)
+                        .semantics { this.stateDescription = statusSemanticValue },
             )
         }
 
@@ -368,7 +392,7 @@ fun WritingPane(
             Text(
                 stringResource(R.string.word_count_format, uiState.wordCount),
                 style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(horizontal = dims.space16, vertical = dims.space2)
+                modifier = Modifier.padding(horizontal = dims.space16, vertical = dims.space2),
             )
         }
 

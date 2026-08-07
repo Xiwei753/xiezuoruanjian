@@ -2,10 +2,10 @@ package com.xiwei.sujian.editor.v2.layout
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.icu.text.BreakIterator
 import android.text.Layout
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.projection.DisplayTextProjection
-import android.icu.text.BreakIterator
 
 class AndroidLineSnapshotBuilder {
     private var snapshotIdCounter: Long = 0L
@@ -20,7 +20,7 @@ class AndroidLineSnapshotBuilder {
         revision: AndroidLayoutRevision?,
         startIndex: Int,
         endIndex: Int,
-        projection: DisplayTextProjection? = null
+        projection: DisplayTextProjection? = null,
     ): List<AndroidLineSnapshot> {
         if (layout == null || revision == null) return emptyList()
 
@@ -41,7 +41,7 @@ class AndroidLineSnapshotBuilder {
         layout: Layout?,
         lineIndex: Int,
         revision: AndroidLayoutRevision?,
-        projection: DisplayTextProjection? = null
+        projection: DisplayTextProjection? = null,
     ): AndroidLineSnapshot? {
         if (layout == null || revision == null) return null
         if (lineIndex < 0 || lineIndex >= layout.lineCount) return null
@@ -81,16 +81,18 @@ class AndroidLineSnapshotBuilder {
 
         val snapshotId = nextSnapshotId()
 
-        val lineStartRealUtf16 = if (projection != null) {
-            projection.displayUtf16ToRealUtf16(lineRange.startUtf16)
-        } else {
-            lineRange.startUtf16
-        }
-        val lineEndRealUtf16 = if (projection != null) {
-            projection.displayUtf16ToRealUtf16(lineRange.endUtf16)
-        } else {
-            lineRange.endUtf16
-        }
+        val lineStartRealUtf16 =
+            if (projection != null) {
+                projection.displayUtf16ToRealUtf16(lineRange.startUtf16)
+            } else {
+                lineRange.startUtf16
+            }
+        val lineEndRealUtf16 =
+            if (projection != null) {
+                projection.displayUtf16ToRealUtf16(lineRange.endUtf16)
+            } else {
+                lineRange.endUtf16
+            }
 
         return AndroidLineSnapshot(
             snapshotId = snapshotId,
@@ -104,7 +106,7 @@ class AndroidLineSnapshotBuilder {
             documentUtf16Start = lineStartRealUtf16,
             documentUtf16EndExclusive = lineEndRealUtf16,
             baseline = lineRange.baseline,
-            lineHeight = bottom - top
+            lineHeight = bottom - top,
         )
     }
 
@@ -133,7 +135,7 @@ class AndroidLineSnapshotBuilder {
         lineIndex: Int,
         revision: AndroidLayoutRevision?,
         mirror: DisplayTextMirror,
-        projection: DisplayTextProjection? = null
+        projection: DisplayTextProjection? = null,
     ): AndroidLineSnapshot? {
         val snapshot = buildSnapshotForLine(layout, lineIndex, revision, projection) ?: return null
         if (layout == null) return snapshot
@@ -149,7 +151,7 @@ class AndroidLineSnapshotBuilder {
         lineIndex: Int,
         lineRange: AndroidLayoutRevision.LineRange,
         mirror: DisplayTextMirror,
-        projection: DisplayTextProjection? = null
+        projection: DisplayTextProjection? = null,
     ): List<LineClusterSnapshot> {
         val clusters = mutableListOf<LineClusterSnapshot>()
         val text = mirror.getText()
@@ -180,11 +182,12 @@ class AndroidLineSnapshotBuilder {
             val clusterEndUtf8 = effectiveProjection.realUtf16ToRealUtf8(clusterEndRealUtf16)
 
             val x0 = layout.getPrimaryHorizontal(clusterStartDisplayUtf16)
-            val x1 = if (clusterEndDisplayUtf16 < layout.getLineEnd(lineIndex)) {
-                layout.getPrimaryHorizontal(clusterEndDisplayUtf16)
-            } else {
-                layout.getLineRight(lineIndex)
-            }
+            val x1 =
+                if (clusterEndDisplayUtf16 < layout.getLineEnd(lineIndex)) {
+                    layout.getPrimaryHorizontal(clusterEndDisplayUtf16)
+                } else {
+                    layout.getLineRight(lineIndex)
+                }
 
             // RTL normalization: getPrimaryHorizontal(clusterEndUtf16) can be less than
             // getPrimaryHorizontal(clusterStartUtf16) in RTL text. Using min/max ensures
@@ -233,17 +236,25 @@ class AndroidLineSnapshotBuilder {
             val clusterText = lineText.substring(localStart, localEnd)
             val shapingResult = buildShapingFingerprint(clusterText, layout, lineIndex, clusterStartDisplayUtf16)
 
-            clusters.add(LineClusterSnapshot(
-                clusterId = clusterIdCounter++,
-                documentByteStart = clusterStartUtf8,
-                documentByteEndExclusive = clusterEndUtf8,
-                documentUtf16Start = clusterStartRealUtf16,
-                documentUtf16EndExclusive = clusterEndRealUtf16,
-                sourceRectInLineImage = android.graphics.Rect(sourceRectLeft, sourceRectTop, sourceRectRight, sourceRectBottom),
-                visualRectInDocument = android.graphics.RectF(visualLeft, top, visualRight, bottom),
-                shapingFingerprint = shapingResult.first,
-                shapingIdentityConfident = shapingResult.second
-            ))
+            clusters.add(
+                LineClusterSnapshot(
+                    clusterId = clusterIdCounter++,
+                    documentByteStart = clusterStartUtf8,
+                    documentByteEndExclusive = clusterEndUtf8,
+                    documentUtf16Start = clusterStartRealUtf16,
+                    documentUtf16EndExclusive = clusterEndRealUtf16,
+                    sourceRectInLineImage =
+                        android.graphics.Rect(
+                            sourceRectLeft,
+                            sourceRectTop,
+                            sourceRectRight,
+                            sourceRectBottom,
+                        ),
+                    visualRectInDocument = android.graphics.RectF(visualLeft, top, visualRight, bottom),
+                    shapingFingerprint = shapingResult.first,
+                    shapingIdentityConfident = shapingResult.second,
+                ),
+            )
         }
 
         return clusters
@@ -271,7 +282,6 @@ class AndroidLineSnapshotBuilder {
         return ranges
     }
 
-
     /**
      * Build a shaping fingerprint for a grapheme cluster.
      *
@@ -294,7 +304,12 @@ class AndroidLineSnapshotBuilder {
      * planner must not assume visual identity even if fingerprints match — Crossfade is
      * the only safe choice.
      */
-    private fun buildShapingFingerprint(clusterText: String, layout: Layout, lineIndex: Int, clusterStartUtf16: Int): Pair<String, Boolean> {
+    private fun buildShapingFingerprint(
+        clusterText: String,
+        layout: Layout,
+        lineIndex: Int,
+        clusterStartUtf16: Int,
+    ): Pair<String, Boolean> {
         if (clusterText.isEmpty()) return Pair("", true)
         val contextHash = computeContextHash(layout, lineIndex, clusterStartUtf16)
         if (android.os.Build.VERSION.SDK_INT >= 31) {
@@ -303,7 +318,7 @@ class AndroidLineSnapshotBuilder {
         val codePoints = clusterText.codePoints().toArray()
         val typeSummary = codePoints.map { Character.getType(it) }.distinct().sorted().joinToString(",")
         val paintHash = layout.paint.hashCode()
-        return Pair("${codePoints.joinToString(",")}_${typeSummary}_${paintHash}_${contextHash}", false)
+        return Pair("${codePoints.joinToString(",")}_${typeSummary}_${paintHash}_$contextHash", false)
     }
 
     /**
@@ -316,23 +331,41 @@ class AndroidLineSnapshotBuilder {
      * the paragraph direction would cause different bidi runs to share the same
      * direction hash, producing false fingerprint matches and incorrect Move slices.
      */
-    private fun computeContextHash(layout: Layout, lineIndex: Int, clusterStartUtf16: Int): Int {
+    private fun computeContextHash(
+        layout: Layout,
+        lineIndex: Int,
+        clusterStartUtf16: Int,
+    ): Int {
         val lineStart = layout.getLineStart(lineIndex)
         val lineEnd = layout.getLineEnd(lineIndex)
         val text = layout.text
-        val prevCodePoint = if (clusterStartUtf16 > lineStart && clusterStartUtf16 <= text.length) {
-            Character.codePointBefore(text, clusterStartUtf16)
-        } else -1
-        val clusterCharCount = if (clusterStartUtf16 < text.length) Character.charCount(Character.codePointAt(text, clusterStartUtf16)) else 1
+        val prevCodePoint =
+            if (clusterStartUtf16 > lineStart && clusterStartUtf16 <= text.length) {
+                Character.codePointBefore(text, clusterStartUtf16)
+            } else {
+                -1
+            }
+        val clusterCharCount =
+            if (clusterStartUtf16 < text.length) {
+                Character.charCount(
+                    Character.codePointAt(text, clusterStartUtf16),
+                )
+            } else {
+                1
+            }
         val nextOffset = clusterStartUtf16 + clusterCharCount
-        val nextCodePoint = if (nextOffset < lineEnd && nextOffset < text.length) {
-            Character.codePointAt(text, nextOffset)
-        } else -1
-        val bidiDir = if (clusterStartUtf16 < text.length) {
-            if (layout.isRtlCharAt(clusterStartUtf16)) 1 else 0
-        } else {
-            layout.getParagraphDirection(lineIndex)
-        }
+        val nextCodePoint =
+            if (nextOffset < lineEnd && nextOffset < text.length) {
+                Character.codePointAt(text, nextOffset)
+            } else {
+                -1
+            }
+        val bidiDir =
+            if (clusterStartUtf16 < text.length) {
+                if (layout.isRtlCharAt(clusterStartUtf16)) 1 else 0
+            } else {
+                layout.getParagraphDirection(lineIndex)
+            }
         var result = 1
         result = 31 * result + prevCodePoint
         result = 31 * result + nextCodePoint
@@ -360,9 +393,15 @@ class AndroidLineSnapshotBuilder {
      * one glyph AND the context is correctly bounded to the bidi run. Falls back to
      * hash-based fingerprint (confident = false) on any failure.
      */
-    private fun buildShapingFingerprintApi31(clusterText: String, layout: Layout, lineIndex: Int, clusterStartUtf16: Int, contextHash: Int): Pair<String, Boolean> {
+    private fun buildShapingFingerprintApi31(
+        clusterText: String,
+        layout: Layout,
+        lineIndex: Int,
+        clusterStartUtf16: Int,
+        contextHash: Int,
+    ): Pair<String, Boolean> {
         if (android.os.Build.VERSION.SDK_INT < 31) {
-            return Pair("${clusterText.hashCode()}_${contextHash}", false)
+            return Pair("${clusterText.hashCode()}_$contextHash", false)
         }
         try {
             val paint = layout.paint
@@ -373,31 +412,38 @@ class AndroidLineSnapshotBuilder {
 
             val clusterLocalStart = (clusterStartUtf16 - lineStart).coerceIn(0, lineText.length)
             val clusterCount = clusterText.length.coerceIn(0, lineText.length - clusterLocalStart)
-            val isRtl = if (clusterStartUtf16 < text.length) {
-                layout.isRtlCharAt(clusterStartUtf16)
-            } else {
-                layout.getParagraphDirection(lineIndex) == Layout.DIR_RIGHT_TO_LEFT
-            }
+            val isRtl =
+                if (clusterStartUtf16 < text.length) {
+                    layout.isRtlCharAt(clusterStartUtf16)
+                } else {
+                    layout.getParagraphDirection(lineIndex) == Layout.DIR_RIGHT_TO_LEFT
+                }
 
-            val (bidiRunLocalStart, bidiRunLocalEnd) = findBidiRunBounds(
-                layout, lineIndex, clusterStartUtf16, lineStart, lineEnd
-            )
+            val (bidiRunLocalStart, bidiRunLocalEnd) =
+                findBidiRunBounds(
+                    layout,
+                    lineIndex,
+                    clusterStartUtf16,
+                    lineStart,
+                    lineEnd,
+                )
 
-            val positionedGlyphs = android.graphics.text.TextRunShaper.shapeTextRun(
-                lineText,
-                clusterLocalStart,
-                clusterCount,
-                bidiRunLocalStart,
-                bidiRunLocalEnd - bidiRunLocalStart,
-                0f,
-                0f,
-                isRtl,
-                paint
-            )
+            val positionedGlyphs =
+                android.graphics.text.TextRunShaper.shapeTextRun(
+                    lineText,
+                    clusterLocalStart,
+                    clusterCount,
+                    bidiRunLocalStart,
+                    bidiRunLocalEnd - bidiRunLocalStart,
+                    0f,
+                    0f,
+                    isRtl,
+                    paint,
+                )
 
             val glyphCount = positionedGlyphs.glyphCount()
             if (glyphCount == 0) {
-                return Pair("${clusterText.hashCode()}_${contextHash}", false)
+                return Pair("${clusterText.hashCode()}_$contextHash", false)
             }
 
             val sb = StringBuilder()
@@ -413,7 +459,7 @@ class AndroidLineSnapshotBuilder {
             sb.append(contextHash)
             return Pair(sb.toString(), true)
         } catch (_: Exception) {
-            return Pair("${clusterText.hashCode()}_${contextHash}", false)
+            return Pair("${clusterText.hashCode()}_$contextHash", false)
         }
     }
 
@@ -445,14 +491,15 @@ class AndroidLineSnapshotBuilder {
         lineIndex: Int,
         clusterStartUtf16: Int,
         lineStart: Int,
-        lineEnd: Int
+        lineEnd: Int,
     ): Pair<Int, Int> {
         val text = layout.text
-        val isRtl = if (clusterStartUtf16 < text.length) {
-            layout.isRtlCharAt(clusterStartUtf16)
-        } else {
-            layout.getParagraphDirection(lineIndex) == Layout.DIR_RIGHT_TO_LEFT
-        }
+        val isRtl =
+            if (clusterStartUtf16 < text.length) {
+                layout.isRtlCharAt(clusterStartUtf16)
+            } else {
+                layout.getParagraphDirection(lineIndex) == Layout.DIR_RIGHT_TO_LEFT
+            }
         var runStart = clusterStartUtf16
         while (runStart > lineStart) {
             val prev = runStart - 1

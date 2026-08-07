@@ -11,14 +11,15 @@ import org.junit.Test
  * - commitExclusive / snapshotExclusive 保持原返回值。
  */
 class CommitSyncProfileGateTest {
+    @Test
+    fun syncProfileGate_commitExclusive_preservesReturnValue() =
+        kotlinx.coroutines.test.runTest {
+            assertEquals("committed", SyncProfileGate.commitExclusive { "committed" })
+        }
 
     @Test
-    fun syncProfileGate_commitExclusive_preservesReturnValue() = kotlinx.coroutines.test.runTest {
-        assertEquals("committed", SyncProfileGate.commitExclusive { "committed" })
-    }
-
-    @Test
-    fun syncProfileGate_snapshotExclusive_preservesReturnValue() = kotlinx.coroutines.test.runTest {
-        assertEquals(42, SyncProfileGate.snapshotExclusive { 42 })
-    }
+    fun syncProfileGate_snapshotExclusive_preservesReturnValue() =
+        kotlinx.coroutines.test.runTest {
+            assertEquals(42, SyncProfileGate.snapshotExclusive { 42 })
+        }
 }

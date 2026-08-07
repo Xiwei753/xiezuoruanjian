@@ -1,6 +1,6 @@
 package com.xiwei.sujian.ui.compose.settings
 
-//! # 设置保存操作（从 SettingsRoute 拆分）
+// ! # 设置保存操作（从 SettingsRoute 拆分）
 
 import com.xiwei.sujian.R
 import com.xiwei.sujian.data.SaveFailure
@@ -8,8 +8,8 @@ import com.xiwei.sujian.data.SaveField
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.data.SettingsSaveResult
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
@@ -53,8 +53,18 @@ private suspend fun SettingsViewModel.loadInitialSnapshot(repo: SettingsReposito
         SettingsUiState(
             settings = if (localRevision == snapshotLocalRev) settings else current.settings,
             fontSize = if (fontSizeRevision == snapshotFontSizeRev) fontSize else current.fontSize,
-            syncConfig = if (syncConfigRevision == snapshotSyncConfigRev) syncProfileLoadState.confirmedConfig ?: current.syncConfig else current.syncConfig,
-            syncSecrets = if (syncSecretsRevision == snapshotSyncSecretsRev) syncProfileLoadState.confirmedSecrets ?: current.syncSecrets else current.syncSecrets,
+            syncConfig =
+                if (syncConfigRevision == snapshotSyncConfigRev) {
+                    syncProfileLoadState.confirmedConfig ?: current.syncConfig
+                } else {
+                    current.syncConfig
+                },
+            syncSecrets =
+                if (syncSecretsRevision == snapshotSyncSecretsRev) {
+                    syncProfileLoadState.confirmedSecrets ?: current.syncSecrets
+                } else {
+                    current.syncSecrets
+                },
             syncCapability = syncCapability,
             secureStorageWarning = secureStorageWarning,
             builtinThemes = builtinThemes,
@@ -151,9 +161,10 @@ private suspend fun SettingsViewModel.saveSyncProfileField(
     if (syncConfig == null && syncSecrets == null) return false to false
     val draftConfig = syncConfig?.config ?: _uiState.value.syncConfig
     val draftSecrets = syncSecrets?.secrets ?: _uiState.value.syncSecrets
-    val commitResult = withContext(Dispatchers.IO) {
-        repo.commitSyncProfile(draftConfig, draftSecrets)
-    }
+    val commitResult =
+        withContext(Dispatchers.IO) {
+            repo.commitSyncProfile(draftConfig, draftSecrets)
+        }
     var syncConfigSaved = false
     var syncSecretsSaved = false
     when (commitResult) {
@@ -209,12 +220,13 @@ private suspend fun SettingsViewModel.handleSaveOutcome(
 ) {
     if (failures.isNotEmpty()) {
         rollbackFailures(repo, failures)
-        val errorResId = when (failures.first().field) {
-            SaveField.LOCAL_SETTINGS -> R.string.save_local_settings_failed
-            SaveField.FONT_SIZE -> R.string.save_font_size_failed
-            SaveField.SYNC_CONFIG -> R.string.save_sync_config_failed
-            SaveField.SYNC_SECRETS -> R.string.save_sync_secrets_failed
-        }
+        val errorResId =
+            when (failures.first().field) {
+                SaveField.LOCAL_SETTINGS -> R.string.save_local_settings_failed
+                SaveField.FONT_SIZE -> R.string.save_font_size_failed
+                SaveField.SYNC_CONFIG -> R.string.save_sync_config_failed
+                SaveField.SYNC_SECRETS -> R.string.save_sync_secrets_failed
+            }
         _uiState.update { it.copy(saveErrorResId = errorResId) }
         _saveFailureEvents.send(errorResId)
     } else if (hasAnySaveCommand(local, fontSize, syncConfig, syncSecrets)) {
@@ -222,7 +234,10 @@ private suspend fun SettingsViewModel.handleSaveOutcome(
     }
 }
 
-suspend fun SettingsViewModel.rollbackFailures(repo: SettingsRepository, failures: List<SaveFailure>) {
+suspend fun SettingsViewModel.rollbackFailures(
+    repo: SettingsRepository,
+    failures: List<SaveFailure>,
+) {
     for (failure in failures) {
         rollbackIfRevisionMatches(repo, failure)
     }
@@ -230,7 +245,10 @@ suspend fun SettingsViewModel.rollbackFailures(repo: SettingsRepository, failure
 
 // #597 回滚按字段分支检查 revision 后原子恢复，4 分支结构对称；拆分为4个单行方法反而降低可读性 — 待后续重构
 @Suppress("CyclomaticComplexMethod", "CognitiveComplexMethod")
-suspend fun SettingsViewModel.rollbackIfRevisionMatches(repo: SettingsRepository, failure: SaveFailure) {
+suspend fun SettingsViewModel.rollbackIfRevisionMatches(
+    repo: SettingsRepository,
+    failure: SaveFailure,
+) {
     when (failure.field) {
         SaveField.LOCAL_SETTINGS -> {
             if (localRevision != failure.revision) return
@@ -260,7 +278,11 @@ suspend fun SettingsViewModel.rollbackIfRevisionMatches(repo: SettingsRepository
             val profile = withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile() }
             if (syncSecretsRevision != failure.revision) return
             syncSecretsRevision = syncSecretsPersistedRevision
-            _uiState.update { it.copy(syncSecrets = profile.toSyncProfileLoadState().confirmedSecrets ?: it.syncSecrets) }
+            _uiState.update {
+                it.copy(
+                    syncSecrets = profile.toSyncProfileLoadState().confirmedSecrets ?: it.syncSecrets,
+                )
+            }
         }
     }
 }
@@ -287,8 +309,18 @@ fun SettingsViewModel.mergeRefresh() {
             SettingsUiState(
                 settings = if (!hasUnsavedLocal()) settings else current.settings,
                 fontSize = if (!hasUnsavedFontSize()) fontSize else current.fontSize,
-                syncConfig = if (!hasUnsavedSyncConfig()) syncProfileLoadState.confirmedConfig ?: current.syncConfig else current.syncConfig,
-                syncSecrets = if (!hasUnsavedSyncSecrets()) syncProfileLoadState.confirmedSecrets ?: current.syncSecrets else current.syncSecrets,
+                syncConfig =
+                    if (!hasUnsavedSyncConfig()) {
+                        syncProfileLoadState.confirmedConfig ?: current.syncConfig
+                    } else {
+                        current.syncConfig
+                    },
+                syncSecrets =
+                    if (!hasUnsavedSyncSecrets()) {
+                        syncProfileLoadState.confirmedSecrets ?: current.syncSecrets
+                    } else {
+                        current.syncSecrets
+                    },
                 syncCapability = syncCapability,
                 secureStorageWarning = secureStorageWarning,
                 builtinThemes = builtinThemes,
@@ -305,4 +337,3 @@ fun SettingsViewModel.mergeRefresh() {
         }
     }
 }
-

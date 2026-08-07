@@ -1,4 +1,5 @@
 @file:Suppress("StringLiteralDuplication") // 测试固件字符串天然重复
+
 package com.xiwei.sujian.editor.v2.coordinator
 
 import org.junit.Assert.assertEquals
@@ -22,16 +23,20 @@ import org.robolectric.annotation.Config
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
-class EditorInputLeaseContractTest {
-
+class EditorInputLeaseTest {
     private fun createCoordinator(): EditorSessionCoordinator {
-        return EditorSessionCoordinator(com.xiwei.sujian.data.AppServiceBridge(
-            com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595_lease")
-        ))
+        return EditorSessionCoordinator(
+            com.xiwei.sujian.data.AppServiceBridge(
+                com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595_lease"),
+            ),
+        )
     }
 
-    private fun lease(targetId: String, sessionId: ULong = 0UL, epoch: Long = 0L): EditorInputLease =
-        EditorInputLease(targetId, sessionId, epoch)
+    private fun lease(
+        targetId: String,
+        sessionId: ULong = 0UL,
+        epoch: Long = 0L,
+    ): EditorInputLease = EditorInputLease(targetId, sessionId, epoch)
 
     @Test
     fun currentInputLease_nullWithoutActiveTarget() {
@@ -44,13 +49,14 @@ class EditorInputLeaseContractTest {
     fun currentInputLease_matchesActiveTarget() {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
-        val handle = PreparedSessionHandle(
-            targetId = "a",
-            sessionId = 0UL,
-            snapshot = TargetSnapshot("text", 4, 1L, 0, 4),
-            newlyCreated = true,
-            previousRecord = null,
-        )
+        val handle =
+            PreparedSessionHandle(
+                targetId = "a",
+                sessionId = 0UL,
+                snapshot = TargetSnapshot("text", 4, 1L, 0, 4),
+                newlyCreated = true,
+                previousRecord = null,
+            )
         assertTrue(coordinator.commitPreparedSession(handle))
         val lease = coordinator.currentInputLease()
         assertNotNull(lease)
@@ -65,21 +71,22 @@ class EditorInputLeaseContractTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "text", 1L, 1L)
+            EditorDocumentUpdate.LocalInput("a", "text", 1L, 1L),
         )
         assertEquals("text", coordinator.sessionState.text)
         // 一旦进入真实绑定（commitPreparedSession 激活带 session 的状态），
         // 默认 lease 必须被拒绝。
-        val handle = PreparedSessionHandle(
-            targetId = "a",
-            sessionId = 0UL,
-            snapshot = TargetSnapshot("text", 4, 1L, 0, 4),
-            newlyCreated = true,
-            previousRecord = null,
-        )
+        val handle =
+            PreparedSessionHandle(
+                targetId = "a",
+                sessionId = 0UL,
+                snapshot = TargetSnapshot("text", 4, 1L, 0, 4),
+                newlyCreated = true,
+                previousRecord = null,
+            )
         assertTrue(coordinator.commitPreparedSession(handle))
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "stale default lease", 2L, 2L)
+            EditorDocumentUpdate.LocalInput("a", "stale default lease", 2L, 2L),
         )
         assertEquals("绑定后默认 lease（epoch 已失效）必须被拒绝", "text", coordinator.sessionState.text)
     }
@@ -89,27 +96,28 @@ class EditorInputLeaseContractTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = lease("a"))
+            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = lease("a")),
         )
         val staleLease = lease("a")
         coordinator.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
-        val handle = PreparedSessionHandle(
-            targetId = "b",
-            sessionId = 0UL,
-            snapshot = TargetSnapshot("textB", 5, 2L, 0, 5),
-            newlyCreated = true,
-            previousRecord = null,
-        )
+        val handle =
+            PreparedSessionHandle(
+                targetId = "b",
+                sessionId = 0UL,
+                snapshot = TargetSnapshot("textB", 5, 2L, 0, 5),
+                newlyCreated = true,
+                previousRecord = null,
+            )
         assertTrue(coordinator.commitPreparedSession(handle))
         assertFalse(coordinator.isInputLeaseCurrent(staleLease, "a"))
 
         // 旧 A 的撤销/程序化事件同样被拒绝。
         coordinator.applyUndoRestored(
-            EditorDocumentUpdate.UndoRestored("a", "undo text", 1L, 9L, 9L, lease = staleLease)
+            EditorDocumentUpdate.UndoRestored("a", "undo text", 1L, 9L, 9L, lease = staleLease),
         )
         assertEquals("textB", coordinator.sessionState.text)
         coordinator.applyProgrammaticReplace(
-            EditorDocumentUpdate.ProgrammaticReplace("a", "replace text", 1L, 10L, 10L, lease = staleLease)
+            EditorDocumentUpdate.ProgrammaticReplace("a", "replace text", 1L, 10L, 10L, lease = staleLease),
         )
         assertEquals("textB", coordinator.sessionState.text)
     }
@@ -119,13 +127,13 @@ class EditorInputLeaseContractTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = lease("a"))
+            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = lease("a")),
         )
         val staleLease = lease("a")
         coordinator.closeTarget("a", SessionCloseReason.WORKSPACE_NAVIGATION)
         assertFalse("业务关闭后旧 lease 必须失效", coordinator.isInputLeaseCurrent(staleLease, "a"))
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "resurrected", 2L, 2L, lease = staleLease)
+            EditorDocumentUpdate.LocalInput("a", "resurrected", 2L, 2L, lease = staleLease),
         )
         assertNull("关闭后晚到输入不得复活会话状态", coordinator.sessionState.targetId)
     }
@@ -135,7 +143,7 @@ class EditorInputLeaseContractTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = lease("a"))
+            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = lease("a")),
         )
         val staleLease = lease("a")
         coordinator.detachWindowBinding("w1", "a")
@@ -147,22 +155,23 @@ class EditorInputLeaseContractTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = lease("a"))
+            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = lease("a")),
         )
         coordinator.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
-        val handle = PreparedSessionHandle(
-            targetId = "b",
-            sessionId = 0UL,
-            snapshot = TargetSnapshot("textB", 5, 2L, 0, 5),
-            newlyCreated = true,
-            previousRecord = null,
-        )
+        val handle =
+            PreparedSessionHandle(
+                targetId = "b",
+                sessionId = 0UL,
+                snapshot = TargetSnapshot("textB", 5, 2L, 0, 5),
+                newlyCreated = true,
+                previousRecord = null,
+            )
         coordinator.commitPreparedSession(handle)
         val newLease = coordinator.currentInputLease()
         assertNotNull(newLease)
         // 新章节的输入携带新 lease → 接受。
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("b", "textB typed", 3L, 11L, lease = newLease!!)
+            EditorDocumentUpdate.LocalInput("b", "textB typed", 3L, 11L, lease = newLease!!),
         )
         assertEquals("textB typed", coordinator.sessionState.text)
         assertEquals(3L, coordinator.sessionState.revision)
@@ -173,23 +182,24 @@ class EditorInputLeaseContractTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = lease("a"))
+            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = lease("a")),
         )
         coordinator.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
-        val handle = PreparedSessionHandle(
-            targetId = "b",
-            sessionId = 0UL,
-            snapshot = TargetSnapshot("textB", 5, 2L, 0, 5),
-            newlyCreated = true,
-            previousRecord = null,
-        )
+        val handle =
+            PreparedSessionHandle(
+                targetId = "b",
+                sessionId = 0UL,
+                snapshot = TargetSnapshot("textB", 5, 2L, 0, 5),
+                newlyCreated = true,
+                previousRecord = null,
+            )
         coordinator.commitPreparedSession(handle)
         // epoch 是当前值但 target 是 a → 拒绝（当前活动是 b）。
         val current = coordinator.currentInputLease()!!
         val wrongTargetLease = current.copy(targetId = "a")
         assertFalse(coordinator.isInputLeaseCurrent(wrongTargetLease, "a"))
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "cross talk", 4L, 12L, lease = wrongTargetLease)
+            EditorDocumentUpdate.LocalInput("a", "cross talk", 4L, 12L, lease = wrongTargetLease),
         )
         assertEquals("textB", coordinator.sessionState.text)
     }

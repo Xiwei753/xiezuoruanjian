@@ -8,7 +8,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.ui.platform.testTag
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -19,16 +18,17 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.editableText
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.setText
-import androidx.compose.ui.semantics.setSelection
 import androidx.compose.ui.semantics.insertTextAtCursor
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.setSelection
+import androidx.compose.ui.semantics.setText
 import androidx.compose.ui.semantics.textSelectionRange
 import androidx.compose.ui.text.TextRange
-import com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost
 import com.xiwei.sujian.editor.v2.coordinator.EditableTextTarget
 import com.xiwei.sujian.editor.v2.coordinator.EditingState
+import com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
 
 @Composable
@@ -40,13 +40,14 @@ fun AnimatedInlineText(
     modifier: Modifier = Modifier,
     profile: TextEditorProfile = TextEditorProfile.CanvasLabel,
     enabled: Boolean = true,
-    coordinator: EditorWindowHost? = null
+    coordinator: EditorWindowHost? = null,
 ) {
-    val effectiveCoordinator = coordinator ?: LocalEditorWindowHost.current
-        ?: throw IllegalStateException(
-            "AnimatedInlineText($targetId) requires an EditorWindowHost. " +
-            "Ensure the host Activity provides one via CompositionLocalProvider."
-        )
+    val effectiveCoordinator =
+        coordinator ?: LocalEditorWindowHost.current
+            ?: throw IllegalStateException(
+                "AnimatedInlineText($targetId) requires an EditorWindowHost. " +
+                    "Ensure the host Activity provides one via CompositionLocalProvider.",
+            )
 
     var localValue by remember { mutableStateOf(value) }
     var selectionRange by remember { mutableStateOf(TextRange(value.length)) }
@@ -57,9 +58,10 @@ fun AnimatedInlineText(
     val refOnValueChanged by rememberUpdatedState(onValueChange)
     val refOnCommit by rememberUpdatedState(onCommit)
 
-    val target = remember(targetId) {
-        EditableTextTarget(targetId = targetId)
-    }
+    val target =
+        remember(targetId) {
+            EditableTextTarget(targetId = targetId)
+        }
 
     target.onTextChanged = { newText ->
         localValue = newText
@@ -94,91 +96,99 @@ fun AnimatedInlineText(
     }
 
     Box(
-        modifier = modifier
-            .testTag(targetId)
-            .wrapContentSize()
-            .onGloballyPositioned { coordinates ->
-                val position = coordinates.positionInWindow()
-                val size = coordinates.size
-                val rect = Rect(
-                    position.x, position.y,
-                    position.x + size.width, position.y + size.height
+        modifier =
+            modifier
+                .testTag(targetId)
+                .wrapContentSize()
+                .onGloballyPositioned { coordinates ->
+                    val position = coordinates.positionInWindow()
+                    val size = coordinates.size
+                    val rect =
+                        Rect(
+                            position.x,
+                            position.y,
+                            position.x + size.width,
+                            position.y + size.height,
+                        )
+                    effectiveCoordinator.updateTargetGeometry(targetId, rect.toAndroidRect())
+                }
+                .then(
+                    if (enabled) {
+                        Modifier.pointerInput(targetId) {
+                            detectTapGestures {
+                                effectiveCoordinator.updateTargetText(targetId, currentValue)
+                                val cursorUtf8 = currentValue.toByteArray(Charsets.UTF_8).size
+                                effectiveCoordinator.beginEdit(targetId, cursorUtf8)
+                            }
+                        }
+                    } else {
+                        Modifier
+                    },
                 )
-                effectiveCoordinator.updateTargetGeometry(targetId, rect.toAndroidRect())
-            }
-            .then(
-                if (enabled) {
-                    Modifier.pointerInput(targetId) {
-                        detectTapGestures {
-                            effectiveCoordinator.updateTargetText(targetId, currentValue)
-                            val cursorUtf8 = currentValue.toByteArray(Charsets.UTF_8).size
-                            effectiveCoordinator.beginEdit(targetId, cursorUtf8)
+                .then(
+                    if (enabled) {
+                        Modifier.semantics {
+                            editableText = androidx.compose.ui.text.AnnotatedString(localValue)
+                            textSelectionRange = selectionRange
+                            setText {
+                                val newText = it.text
+                                localValue = newText
+                                selectionRange = TextRange(newText.length)
+                                effectiveCoordinator.updateTargetText(targetId, newText)
+                                effectiveCoordinator.beginEdit(targetId, newText.toByteArray(Charsets.UTF_8).size)
+                                refOnValueChanged(newText)
+                                true
+                            }
+                            insertTextAtCursor { annotatedText ->
+                                val insertText = annotatedText.text
+                                val sel = selectionRange
+                                val before = localValue.substring(0, sel.min)
+                                val after = localValue.substring(sel.max)
+                                val newText = before + insertText + after
+                                val newCursor = sel.min + insertText.length
+                                localValue = newText
+                                selectionRange = TextRange(newCursor)
+                                val utf8Offset = localValue.substring(0, newCursor).toByteArray(Charsets.UTF_8).size
+                                effectiveCoordinator.updateTargetText(targetId, newText)
+                                effectiveCoordinator.beginEdit(targetId, utf8Offset)
+                                refOnValueChanged(newText)
+                                true
+                            }
+                            setSelection { selStart, selEnd, _ ->
+                                val safeStart = TextOffsetUtils.safeCharIndex(localValue, selStart)
+                                val safeEnd = TextOffsetUtils.safeCharIndex(localValue, selEnd)
+                                selectionRange = TextRange(safeStart, safeEnd)
+                                val utf8Start = TextOffsetUtils.utf8OffsetForCharIndex(localValue, selStart)
+                                effectiveCoordinator.updateTargetText(targetId, localValue)
+                                effectiveCoordinator.beginEdit(targetId, utf8Start)
+                                true
+                            }
                         }
-                    }
-                } else {
-                    Modifier
-                }
-            )
-            .then(
-                if (enabled) {
-                    Modifier.semantics {
-                        editableText = androidx.compose.ui.text.AnnotatedString(localValue)
-                        textSelectionRange = selectionRange
-                        setText {
-                            val newText = it.text
-                            localValue = newText
-                            selectionRange = TextRange(newText.length)
-                            effectiveCoordinator.updateTargetText(targetId, newText)
-                            effectiveCoordinator.beginEdit(targetId, newText.toByteArray(Charsets.UTF_8).size)
-                            refOnValueChanged(newText)
-                            true
+                    } else {
+                        Modifier.semantics {
+                            editableText = androidx.compose.ui.text.AnnotatedString(localValue)
                         }
-                        insertTextAtCursor { annotatedText ->
-                            val insertText = annotatedText.text
-                            val sel = selectionRange
-                            val before = localValue.substring(0, sel.min)
-                            val after = localValue.substring(sel.max)
-                            val newText = before + insertText + after
-                            val newCursor = sel.min + insertText.length
-                            localValue = newText
-                            selectionRange = TextRange(newCursor)
-                            val utf8Offset = localValue.substring(0, newCursor).toByteArray(Charsets.UTF_8).size
-                            effectiveCoordinator.updateTargetText(targetId, newText)
-                            effectiveCoordinator.beginEdit(targetId, utf8Offset)
-                            refOnValueChanged(newText)
-                            true
-                        }
-                        setSelection { selStart, selEnd, _ ->
-                            val safeStart = TextOffsetUtils.safeCharIndex(localValue, selStart)
-                            val safeEnd = TextOffsetUtils.safeCharIndex(localValue, selEnd)
-                            selectionRange = TextRange(safeStart, safeEnd)
-                            val utf8Start = TextOffsetUtils.utf8OffsetForCharIndex(localValue, selStart)
-                            effectiveCoordinator.updateTargetText(targetId, localValue)
-                            effectiveCoordinator.beginEdit(targetId, utf8Start)
-                            true
-                        }
-                    }
-                } else {
-                    Modifier.semantics {
-                        editableText = androidx.compose.ui.text.AnnotatedString(localValue)
-                    }
-                }
-            )
+                    },
+                ),
     ) {
         Text(
             text = localValue,
             style = MaterialTheme.typography.bodyMedium,
-            color = if (isEditing) {
-                MaterialTheme.colorScheme.onSurface.copy(alpha = 0f)
-            } else {
-                MaterialTheme.colorScheme.onSurface
-            }
+            color =
+                if (isEditing) {
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0f)
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
         )
     }
 }
 
 private fun Rect.toAndroidRect(): android.graphics.Rect {
     return android.graphics.Rect(
-        left.toInt(), top.toInt(), right.toInt(), bottom.toInt()
+        left.toInt(),
+        top.toInt(),
+        right.toInt(),
+        bottom.toInt(),
     )
 }

@@ -90,7 +90,10 @@ fun DiagnosticsSettings(
                 text = stringResource(id = R.string.btn_copy_device_info),
                 onClick = {
                     val deviceInfoJson = DiagnosticsExporter.getDeviceInfoJson(context)
-                    val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    val clipboard =
+                        context.getSystemService(
+                            android.content.Context.CLIPBOARD_SERVICE,
+                        ) as android.content.ClipboardManager
                     @Suppress("HardcodedText")
                     clipboard.setPrimaryClip(android.content.ClipData.newPlainText("device_info", deviceInfoJson))
                     Toast.makeText(context, deviceInfoCopiedText, Toast.LENGTH_SHORT).show()

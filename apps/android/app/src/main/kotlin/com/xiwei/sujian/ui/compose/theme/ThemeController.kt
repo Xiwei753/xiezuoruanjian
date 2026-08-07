@@ -5,7 +5,6 @@ import android.content.res.Configuration
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.remember
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -14,7 +13,6 @@ import com.xiwei.sujian.data.SettingsRepository
 import kotlinx.coroutines.flow.StateFlow
 
 class ThemeController(private val settingsRepository: SettingsRepository) {
-
     private val store: ThemeStore = ThemeStore
 
     val uiState: StateFlow<ThemeUiState>
@@ -51,7 +49,10 @@ class ThemeController(private val settingsRepository: SettingsRepository) {
         store.updateSelectedPaletteId(paletteId)
     }
 
-    fun deletePaletteRecord(deviceId: String, fingerprint: String) {
+    fun deletePaletteRecord(
+        deviceId: String,
+        fingerprint: String,
+    ) {
         store.deletePaletteRecord(deviceId, fingerprint)
     }
 
@@ -65,7 +66,10 @@ class ThemeController(private val settingsRepository: SettingsRepository) {
 }
 
 @Composable
-fun rememberThemeController(context: Context, settingsRepository: SettingsRepository): ThemeController {
+fun rememberThemeController(
+    context: Context,
+    settingsRepository: SettingsRepository,
+): ThemeController {
     val controller = remember { ThemeController(settingsRepository) }
 
     DisposableEffect(Unit) {
@@ -76,19 +80,20 @@ fun rememberThemeController(context: Context, settingsRepository: SettingsReposi
     val lifecycleOwner = LocalLifecycleOwner.current
     val deps = com.xiwei.sujian.runtime.LocalSujianAppDependencies.current
     DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                val syncState = deps.syncStatusRepository.state.value
-                if (syncState == com.xiwei.sujian.model.SyncIndicatorState.Synced) {
-                    ThemeStore.onSyncCompleted()
-                }
-                controller.reload()
-                val uiState = ThemeStore.uiState.value
-                if (uiState.colorSource == "android_dynamic" && uiState.dynamicColorEnabled) {
-                    ThemeStore.captureDynamicColorAndSave(context)
+        val observer =
+            LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_RESUME) {
+                    val syncState = deps.syncStatusRepository.state.value
+                    if (syncState == com.xiwei.sujian.model.SyncIndicatorState.Synced) {
+                        ThemeStore.onSyncCompleted()
+                    }
+                    controller.reload()
+                    val uiState = ThemeStore.uiState.value
+                    if (uiState.colorSource == "android_dynamic" && uiState.dynamicColorEnabled) {
+                        ThemeStore.captureDynamicColorAndSave(context)
+                    }
                 }
             }
-        }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
@@ -109,8 +114,10 @@ fun rememberThemeController(context: Context, settingsRepository: SettingsReposi
 
     val configuration = context.resources?.configuration
     DisposableEffect(configuration) {
-        val isDark = (configuration?.uiMode?.and(Configuration.UI_MODE_NIGHT_MASK)
-            == Configuration.UI_MODE_NIGHT_YES)
+        val isDark = (
+            configuration?.uiMode?.and(Configuration.UI_MODE_NIGHT_MASK)
+                == Configuration.UI_MODE_NIGHT_YES
+        )
         ThemeStore.onSystemDarkModeChanged(isDark)
         val uiState = ThemeStore.uiState.value
         if (uiState.colorSource == "android_dynamic" && uiState.dynamicColorEnabled) {

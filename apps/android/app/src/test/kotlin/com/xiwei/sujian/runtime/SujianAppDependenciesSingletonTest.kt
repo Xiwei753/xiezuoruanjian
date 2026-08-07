@@ -20,7 +20,6 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class SujianAppDependenciesSingletonTest {
-
     private fun app(): SujianApp = RuntimeEnvironment.getApplication() as SujianApp
 
     @Test
@@ -41,9 +40,10 @@ class SujianAppDependenciesSingletonTest {
     fun appContainer_concurrentFirstAccess_createsSingleInstance() {
         val app = app()
         val seen = java.util.Collections.synchronizedList(mutableListOf<com.xiwei.sujian.runtime.AppServiceContainer>())
-        val threads = (1..8).map {
-            Thread { seen.add(app.appContainer) }
-        }
+        val threads =
+            (1..8).map {
+                Thread { seen.add(app.appContainer) }
+            }
         threads.forEach { it.start() }
         threads.forEach { it.join() }
         assertEquals(1, seen.distinct().size)

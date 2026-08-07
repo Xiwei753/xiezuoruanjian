@@ -4,7 +4,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
 
@@ -22,7 +21,6 @@ data class EditorThemeColors(
 )
 
 object EditorThemeAdapter {
-
     @Composable
     fun extractColors(): EditorThemeColors {
         val colorScheme = MaterialTheme.colorScheme
@@ -50,7 +48,10 @@ object EditorThemeAdapter {
         }
     }
 
-    fun applyToView(view: SujianEditorView, colors: EditorThemeColors) {
+    fun applyToView(
+        view: SujianEditorView,
+        colors: EditorThemeColors,
+    ) {
         view.applyThemeColorsFromAdapter(colors)
     }
 }

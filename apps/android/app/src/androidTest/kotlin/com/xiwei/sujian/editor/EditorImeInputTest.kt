@@ -22,9 +22,7 @@ import com.xiwei.sujian.support.AndroidTestEnvironment
 import com.xiwei.sujian.support.ComposeWait
 import com.xiwei.sujian.support.EditorViewAssertions
 import com.xiwei.sujian.support.RestartableMainActivityRule
-import com.xiwei.sujian.support.TestSession
 import com.xiwei.sujian.testime.TestImeCommands
-import com.xiwei.sujian.ui.MainActivity
 import org.hamcrest.Matcher
 import org.junit.Rule
 import org.junit.Test
@@ -60,18 +58,19 @@ import org.junit.runner.RunWith
  */
 @RunWith(AndroidJUnit4::class)
 class EditorImeInputTest {
-
     private val activityRule = RestartableMainActivityRule { AndroidTestEnvironment.requireCurrentSession() }
 
-    private val _composeTestRule = AndroidComposeTestRule(
-        activityRule,
-        activityProvider = activityRule.composeActivityProvider
-    ).also { activityRule.setComposeTestRule(it) }
+    private val _composeTestRule =
+        AndroidComposeTestRule(
+            activityRule,
+            activityProvider = activityRule.composeActivityProvider,
+        ).also { activityRule.setComposeTestRule(it) }
 
     @get:Rule
-    val ruleChain: RuleChain = RuleChain
-        .outerRule(AndroidTestEnvironment.TestDependenciesRule())
-        .around(_composeTestRule)
+    val ruleChain: RuleChain =
+        RuleChain
+            .outerRule(AndroidTestEnvironment.TestDependenciesRule())
+            .around(_composeTestRule)
 
     private val composeTestRule get() = _composeTestRule
 
@@ -104,68 +103,89 @@ class EditorImeInputTest {
 
     private fun tapEditorCenter() {
         Espresso.onView(ViewMatchers.withId(R.id.editor_content))
-            .perform(object : ViewAction {
-                override fun getConstraints(): Matcher<View> = ViewMatchers.isDisplayed()
+            .perform(
+                object : ViewAction {
+                    override fun getConstraints(): Matcher<View> = ViewMatchers.isDisplayed()
 
-                override fun getDescription(): String = "Tap the editor center"
+                    override fun getDescription(): String = "Tap the editor center"
 
-                override fun perform(uiController: UiController, view: View) {
-                    val x = view.width / 2f
-                    val y = view.height / 2f
-                    val downTime = SystemClock.uptimeMillis()
-                    view.dispatchTouchEvent(
-                        MotionEvent.obtain(downTime, downTime, MotionEvent.ACTION_DOWN, x, y, 0)
-                    )
-                    view.dispatchTouchEvent(
-                        MotionEvent.obtain(downTime, downTime + 50, MotionEvent.ACTION_UP, x, y, 0)
-                    )
-                    uiController.loopMainThreadUntilIdle()
-                }
-            })
+                    override fun perform(
+                        uiController: UiController,
+                        view: View,
+                    ) {
+                        val x = view.width / 2f
+                        val y = view.height / 2f
+                        val downTime = SystemClock.uptimeMillis()
+                        view.dispatchTouchEvent(
+                            MotionEvent.obtain(downTime, downTime, MotionEvent.ACTION_DOWN, x, y, 0),
+                        )
+                        view.dispatchTouchEvent(
+                            MotionEvent.obtain(downTime, downTime + 50, MotionEvent.ACTION_UP, x, y, 0),
+                        )
+                        uiController.loopMainThreadUntilIdle()
+                    }
+                },
+            )
     }
 
     private fun waitForTestImeBoundToEditor(timeoutMs: Long = 20_000) {
         var lastDiagnostic = "not polled yet"
-        ComposeWait.waitUntil(composeTestRule, {
-            var bound = false
-            try {
-                activityRule.onActivity { activity ->
-                    val defaultIme = Settings.Secure.getString(
-                        activity.contentResolver,
-                        Settings.Secure.DEFAULT_INPUT_METHOD
-                    ) ?: ""
-                    if (defaultIme != TestImeCommands.IME_COMPONENT) {
-                        lastDiagnostic = "default_input_method=$defaultIme (expected ${TestImeCommands.IME_COMPONENT})"
-                        bound = false
-                        return@onActivity
+        ComposeWait.waitUntil(
+            composeTestRule,
+            {
+                var bound = false
+                try {
+                    activityRule.onActivity { activity ->
+                        val defaultIme =
+                            Settings.Secure.getString(
+                                activity.contentResolver,
+                                Settings.Secure.DEFAULT_INPUT_METHOD,
+                            ) ?: ""
+                        if (defaultIme != TestImeCommands.IME_COMPONENT) {
+                            lastDiagnostic =
+                                "default_input_method=$defaultIme (expected ${TestImeCommands.IME_COMPONENT})"
+                            bound = false
+                            return@onActivity
+                        }
+                        val imm = activity.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+                        val view = activity.findViewById<View>(R.id.editor_content)
+                        val isActive = imm?.isActive(view) == true
+                        lastDiagnostic = "default=$defaultIme isActive=$isActive"
+                        bound = isActive
                     }
-                    val imm = activity.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
-                    val view = activity.findViewById<View>(R.id.editor_content)
-                    val isActive = imm?.isActive(view) == true
-                    lastDiagnostic = "default=$defaultIme isActive=$isActive"
-                    bound = isActive
+                } catch (e: Exception) {
+                    lastDiagnostic = "onActivity failed: ${e.message}"
                 }
-            } catch (e: Exception) {
-                lastDiagnostic = "onActivity failed: ${e.message}"
-            }
-            bound
-        }, timeoutMs, message = { "Test IME (${TestImeCommands.IME_COMPONENT}) did not bind to the editor" },
-            diagnostic = { lastDiagnostic })
+                bound
+            },
+            timeoutMs,
+            message = { "Test IME (${TestImeCommands.IME_COMPONENT}) did not bind to the editor" },
+            diagnostic = { lastDiagnostic },
+        )
     }
 
     // ------------------------------------------------------------------
     // IME command senders
     // ------------------------------------------------------------------
 
-    private fun sendImeCommit(text: String, cursor: Int = 1) {
+    private fun sendImeCommit(
+        text: String,
+        cursor: Int = 1,
+    ) {
         TestImeCommands.commitText(instrumentation.targetContext, text, cursor)
     }
 
-    private fun sendImeSetComposing(text: String, cursor: Int = 1) {
+    private fun sendImeSetComposing(
+        text: String,
+        cursor: Int = 1,
+    ) {
         TestImeCommands.setComposingText(instrumentation.targetContext, text, cursor)
     }
 
-    private fun sendImeSetComposingRegion(startUtf16: Int, endUtf16: Int) {
+    private fun sendImeSetComposingRegion(
+        startUtf16: Int,
+        endUtf16: Int,
+    ) {
         TestImeCommands.setComposingRegion(instrumentation.targetContext, startUtf16, endUtf16)
     }
 
@@ -173,7 +193,10 @@ class EditorImeInputTest {
         TestImeCommands.finishComposingText(instrumentation.targetContext)
     }
 
-    private fun sendImeSetSelection(startUtf16: Int, endUtf16: Int) {
+    private fun sendImeSetSelection(
+        startUtf16: Int,
+        endUtf16: Int,
+    ) {
         TestImeCommands.setSelection(instrumentation.targetContext, startUtf16, endUtf16)
     }
 
@@ -181,47 +204,70 @@ class EditorImeInputTest {
     // Editor UI state polls (real product behavior, no sleeps)
     // ------------------------------------------------------------------
 
-    private fun waitForEditorText(expected: String, timeoutMs: Long = 10_000) {
+    private fun waitForEditorText(
+        expected: String,
+        timeoutMs: Long = 10_000,
+    ) {
         var lastObserved = "not polled yet"
-        ComposeWait.waitUntil(composeTestRule, {
-            var ok = false
-            try {
-                Espresso.onView(ViewMatchers.withId(R.id.editor_content))
-                    .check { view, _ ->
-                        val editorView = view as? SujianEditorView
-                            ?: throw AssertionError("View is not a SujianEditorView: ${view?.javaClass?.simpleName}")
-                        val actual = editorView.getDisplayText()
-                        lastObserved = actual
-                        ok = actual == expected
-                    }
-            } catch (e: Exception) {
-                lastObserved = "editor check failed: ${e.message}"
-            }
-            ok
-        }, timeoutMs, message = { "Editor display text should be '$expected'" },
-            diagnostic = { "last observed: '$lastObserved'" })
+        ComposeWait.waitUntil(
+            composeTestRule,
+            {
+                var ok = false
+                try {
+                    Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+                        .check { view, _ ->
+                            val editorView =
+                                view as? SujianEditorView
+                                    ?: throw AssertionError(
+                                        "View is not a SujianEditorView: ${view?.javaClass?.simpleName}",
+                                    )
+                            val actual = editorView.getDisplayText()
+                            lastObserved = actual
+                            ok = actual == expected
+                        }
+                } catch (e: Exception) {
+                    lastObserved = "editor check failed: ${e.message}"
+                }
+                ok
+            },
+            timeoutMs,
+            message = { "Editor display text should be '$expected'" },
+            diagnostic = { "last observed: '$lastObserved'" },
+        )
     }
 
-    private fun waitForEditorSelection(expectedStart: Int, expectedEnd: Int, timeoutMs: Long = 10_000) {
+    private fun waitForEditorSelection(
+        expectedStart: Int,
+        expectedEnd: Int,
+        timeoutMs: Long = 10_000,
+    ) {
         var lastObserved = "not polled yet"
-        ComposeWait.waitUntil(composeTestRule, {
-            var ok = false
-            try {
-                Espresso.onView(ViewMatchers.withId(R.id.editor_content))
-                    .check { view, _ ->
-                        val editorView = view as? SujianEditorView
-                            ?: throw AssertionError("View is not a SujianEditorView: ${view?.javaClass?.simpleName}")
-                        val start = editorView.getSelectionStart()
-                        val end = editorView.getSelectionEnd()
-                        lastObserved = "($start, $end)"
-                        ok = start == expectedStart && end == expectedEnd
-                    }
-            } catch (e: Exception) {
-                lastObserved = "editor check failed: ${e.message}"
-            }
-            ok
-        }, timeoutMs, message = { "Editor selection should be ($expectedStart, $expectedEnd)" },
-            diagnostic = { "last observed: $lastObserved" })
+        ComposeWait.waitUntil(
+            composeTestRule,
+            {
+                var ok = false
+                try {
+                    Espresso.onView(ViewMatchers.withId(R.id.editor_content))
+                        .check { view, _ ->
+                            val editorView =
+                                view as? SujianEditorView
+                                    ?: throw AssertionError(
+                                        "View is not a SujianEditorView: ${view?.javaClass?.simpleName}",
+                                    )
+                            val start = editorView.getSelectionStart()
+                            val end = editorView.getSelectionEnd()
+                            lastObserved = "($start, $end)"
+                            ok = start == expectedStart && end == expectedEnd
+                        }
+                } catch (e: Exception) {
+                    lastObserved = "editor check failed: ${e.message}"
+                }
+                ok
+            },
+            timeoutMs,
+            message = { "Editor selection should be ($expectedStart, $expectedEnd)" },
+            diagnostic = { "last observed: $lastObserved" },
+        )
     }
 
     private fun waitForEditorEmpty(timeoutMs: Long = 10_000) {
@@ -232,19 +278,32 @@ class EditorImeInputTest {
     // Display-layer composition state polls (via the editor's display mirror)
     // ------------------------------------------------------------------
 
-    private fun waitForCompositionActive(expected: Boolean, timeoutMs: Long = 10_000) {
+    private fun waitForCompositionActive(
+        expected: Boolean,
+        timeoutMs: Long = 10_000,
+    ) {
         waitForMirrorCondition("Editor composition state should be active=$expected", timeoutMs) { mirror ->
             mirror.hasComposition() == expected
         }
     }
 
-    private fun waitForCompositionRangeUtf16(expectedStart: Int, expectedEnd: Int, timeoutMs: Long = 10_000) {
-        waitForMirrorCondition("Editor composition range should be [$expectedStart,$expectedEnd) UTF-16", timeoutMs) { mirror ->
+    private fun waitForCompositionRangeUtf16(
+        expectedStart: Int,
+        expectedEnd: Int,
+        timeoutMs: Long = 10_000,
+    ) {
+        waitForMirrorCondition(
+            "Editor composition range should be [$expectedStart,$expectedEnd) UTF-16",
+            timeoutMs,
+        ) { mirror ->
             mirror.getCompositionRangeUtf16() == Pair(expectedStart, expectedEnd)
         }
     }
 
-    private fun waitForCommittedText(expected: String, timeoutMs: Long = 10_000) {
+    private fun waitForCommittedText(
+        expected: String,
+        timeoutMs: Long = 10_000,
+    ) {
         waitForMirrorCondition("Committed (non-preedit) text should be '$expected'", timeoutMs) { mirror ->
             mirror.getCommittedText() == expected
         }
@@ -253,7 +312,7 @@ class EditorImeInputTest {
     private fun waitForMirrorCondition(
         description: String,
         timeoutMs: Long,
-        check: (com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror) -> Boolean
+        check: (com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror) -> Boolean,
     ) {
         var lastObserved = "not polled yet"
         ComposeWait.waitUntil(composeTestRule, {
@@ -261,8 +320,11 @@ class EditorImeInputTest {
             try {
                 Espresso.onView(ViewMatchers.withId(R.id.editor_content))
                     .check { view, _ ->
-                        val editorView = view as? SujianEditorView
-                            ?: throw AssertionError("View is not a SujianEditorView: ${view?.javaClass?.simpleName}")
+                        val editorView =
+                            view as? SujianEditorView
+                                ?: throw AssertionError(
+                                    "View is not a SujianEditorView: ${view?.javaClass?.simpleName}",
+                                )
                         val mirror = editorView.getPipeline().mirror
                         lastObserved = "hasComposition=${mirror.hasComposition()} " +
                             "range=${mirror.getCompositionRangeUtf16()} " +
@@ -524,7 +586,10 @@ class EditorImeInputTest {
     // Navigation helpers (same flow as the other instrumented tests)
     // ------------------------------------------------------------------
 
-    private fun openTestChapter(chapterTitle: String, testData: AndroidTestEnvironment.TestProjectData): String {
+    private fun openTestChapter(
+        chapterTitle: String,
+        testData: AndroidTestEnvironment.TestProjectData,
+    ): String {
         navigateToTestVolume(testData)
 
         ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.createChapter(testData.volumeId), timeoutMs = 15_000)
@@ -536,7 +601,11 @@ class EditorImeInputTest {
         composeTestRule.onNodeWithTag(SujianSemanticIds.DialogConfirm).performClick()
 
         val chapterId = waitForChapterByTitle(chapterTitle, testData)
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.chapter(testData.volumeId, chapterId), timeoutMs = 15_000)
+        ComposeWait.waitForTag(
+            composeTestRule,
+            SujianSemanticIds.chapter(testData.volumeId, chapterId),
+            timeoutMs = 15_000,
+        )
         composeTestRule.onNodeWithTag(SujianSemanticIds.chapter(testData.volumeId, chapterId)).performClick()
 
         waitForEditorReady(testData.projectId, testData.volumeId, chapterId)
@@ -559,11 +628,15 @@ class EditorImeInputTest {
         composeTestRule.onNodeWithTag(volumeTag).performClick()
     }
 
-    private fun waitForEditorReady(projectId: String, volumeId: String, chapterId: String) {
+    private fun waitForEditorReady(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+    ) {
         ComposeWait.waitForEspressoViewCondition(
             composeTestRule,
             EditorViewAssertions.isEditorReady(),
-            timeoutMs = 15_000
+            timeoutMs = 15_000,
         ) { "Editor did not become ready for chapter $chapterId" }
 
         val expectedTargetId = "chapter-body:$projectId:$volumeId:$chapterId"
@@ -575,7 +648,10 @@ class EditorImeInputTest {
         }, timeoutMs = 10_000, message = { "activeTargetId should be $expectedTargetId but was $lastTargetId" })
     }
 
-    private fun waitForChapterByTitle(title: String, testData: AndroidTestEnvironment.TestProjectData): String {
+    private fun waitForChapterByTitle(
+        title: String,
+        testData: AndroidTestEnvironment.TestProjectData,
+    ): String {
         val s = AndroidTestEnvironment.requireCurrentSession()
         val repo = s.deps.workspaceRepository
         var chapterId = ""

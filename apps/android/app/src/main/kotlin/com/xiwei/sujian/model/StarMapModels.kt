@@ -30,7 +30,7 @@ data class StarMapMeta(
     val nodeCount: Int,
     val edgeCount: Int,
     val linkedChapterCount: Int,
-    val childStarmapCount: Int
+    val childStarmapCount: Int,
 )
 
 enum class StarMapNodeKind {
@@ -46,7 +46,7 @@ enum class StarMapNodeKind {
     Plot,
     Foreshadowing,
     Chapter,
-    Custom
+    Custom,
 }
 
 enum class StarMapEdgeKind {
@@ -62,7 +62,7 @@ enum class StarMapEdgeKind {
     Resolves,
     DependsOn,
     ConflictsWith,
-    Custom
+    Custom,
 }
 
 data class StarMapGraphNode(
@@ -89,14 +89,14 @@ data class StarMapGraphNode(
     val displayPolicy: StarMapDisplayPolicyData? = null,
     val provenance: StarMapProvenanceData? = null,
     val createdAt: Long = 0,
-    val updatedAt: Long = 0
+    val updatedAt: Long = 0,
 )
 
 data class StarMapPortalData(
     val targetStarmapId: String = "",
     val deepTarget: StarMapDeepTargetData? = null,
     val mode: String = "Navigate",
-    val previewPolicy: String = "Inline"
+    val previewPolicy: String = "Inline",
 )
 
 data class StarMapAnchorData(
@@ -113,7 +113,7 @@ data class StarMapAnchorData(
     val targetStarmapId: String? = null,
     val targetUri: String? = null,
     val label: String? = null,
-    val role: String = "Source"
+    val role: String = "Source",
 )
 
 data class StarMapDisplayPolicyData(
@@ -123,7 +123,7 @@ data class StarMapDisplayPolicyData(
     val summaryScale: Float = 1f,
     val detailScale: Float = 1f,
     val maxPreviewChars: Int = 120,
-    val minReadablePx: Float = 12f
+    val minReadablePx: Float = 12f,
 )
 
 data class StarMapProvenanceData(
@@ -132,35 +132,35 @@ data class StarMapProvenanceData(
     val generatedBy: String? = null,
     val promptId: String? = null,
     val reviewStatus: String = "Accepted",
-    val createdFromAnchor: String? = null
+    val createdFromAnchor: String? = null,
 )
 
 data class StarMapEdgeEndpointData(
     val kind: String,
     val nodeId: String? = null,
     val anchorId: String? = null,
-    val deepTarget: StarMapDeepTargetData? = null
+    val deepTarget: StarMapDeepTargetData? = null,
 )
 
 data class StarMapEndpointPathSegmentData(
     val kind: String,
-    val starmapId: String? = null
+    val starmapId: String? = null,
 )
 
 data class StarMapEndpointPathData(
     val segments: List<StarMapEndpointPathSegmentData> = emptyList(),
-    val endpoint: StarMapEdgeEndpointData
+    val endpoint: StarMapEdgeEndpointData,
 )
 
 data class StarMapDeepTargetData(
     val starmapId: String,
     val path: List<StarMapPathSegmentData> = emptyList(),
-    val target: StarMapTargetDetailData
+    val target: StarMapTargetDetailData,
 )
 
 data class StarMapPathSegmentData(
     val kind: String,
-    val starmapId: String? = null
+    val starmapId: String? = null,
 )
 
 data class StarMapTargetDetailData(
@@ -174,13 +174,13 @@ data class StarMapTargetDetailData(
     val rangeEnd: UInt? = null,
     val entityType: String? = null,
     val entityId: String? = null,
-    val uri: String? = null
+    val uri: String? = null,
 )
 
 data class StarMapEndpointData(
     val kind: String,
     val nodeId: String? = null,
-    val anchorId: String? = null
+    val anchorId: String? = null,
 )
 
 data class StarMapGraphEdge(
@@ -197,7 +197,7 @@ data class StarMapGraphEdge(
     val fromEndpointPath: StarMapEndpointPathData? = null,
     val toEndpointPath: StarMapEndpointPathData? = null,
     val createdAt: Long = 0,
-    val updatedAt: Long = 0
+    val updatedAt: Long = 0,
 )
 
 data class StarMapGraphData(
@@ -208,13 +208,13 @@ data class StarMapGraphData(
     val nodes: List<StarMapGraphNode>,
     val edges: List<StarMapGraphEdge>,
     val createdAt: Long,
-    val updatedAt: Long
+    val updatedAt: Long,
 )
 
 enum class StarMapLayoutKind {
     Freeform,
     AutoRadial,
-    Custom
+    Custom,
 }
 
 data class StarMapLayoutNodeData(
@@ -229,12 +229,12 @@ data class StarMapLayoutNodeData(
     val scale: Float = 1f,
     val depth: Float = 0f,
     val focusWeight: Float = 1f,
-    val orbitGroup: String? = null
+    val orbitGroup: String? = null,
 )
 
 data class StarMapLayoutData(
     val kind: StarMapLayoutKind,
-    val nodes: List<StarMapLayoutNodeData>
+    val nodes: List<StarMapLayoutNodeData>,
 )
 
 data class StarMapEdgeRenderData(
@@ -258,7 +258,7 @@ data class StarMapEdgeRenderData(
     val labelX: Float,
     val labelY: Float,
     val label: String? = null,
-    val hasBidirectional: Boolean
+    val hasBidirectional: Boolean,
 )
 
 data class StarMapViewportData(
@@ -266,20 +266,20 @@ data class StarMapViewportData(
     val offsetX: Float = 0f,
     val offsetY: Float = 0f,
     val width: Float = 0f,
-    val height: Float = 0f
+    val height: Float = 0f,
 )
 
 data class StarMapNodePatch(
     val title: String? = null,
     val kind: StarMapNodeKind? = null,
     val payload: Map<String, Any>? = null,
-    val tags: List<String>? = null
+    val tags: List<String>? = null,
 )
 
 data class StarMapEdgePatch(
     val kind: StarMapEdgeKind? = null,
     val label: String? = null,
-    val payload: Map<String, Any>? = null
+    val payload: Map<String, Any>? = null,
 )
 
 data class StarMapData(
@@ -293,7 +293,7 @@ data class StarMapData(
     val loadPhase: String = "CurrentViewportObjects",
     val packageRevision: ULong = 0u,
     val sinceRevision: ULong = 0u,
-    val complete: Boolean = false
+    val complete: Boolean = false,
 )
 
 data class StarMapEmbedData(
@@ -306,7 +306,7 @@ data class StarMapEmbedData(
     val openBehavior: String = "Inspector",
     val provenance: StarMapProvenanceData? = null,
     val placement: StarMapEmbedPlacementData = StarMapEmbedPlacementData(),
-    val targetViewport: StarMapEmbedViewportData = StarMapEmbedViewportData()
+    val targetViewport: StarMapEmbedViewportData = StarMapEmbedViewportData(),
 )
 
 data class StarMapEmbedPlacementData(
@@ -316,20 +316,20 @@ data class StarMapEmbedPlacementData(
     val height: Float = 150f,
     val scale: Float = 1f,
     val zIndex: Int = 0,
-    val collapsed: Boolean = false
+    val collapsed: Boolean = false,
 )
 
 data class StarMapEmbedViewportData(
     val scale: Float = 1f,
     val offsetX: Float = 0f,
-    val offsetY: Float = 0f
+    val offsetY: Float = 0f,
 )
 
 data class StarMapLinkData(
     val linkId: String,
     val source: StarMapEndpointData = StarMapEndpointData(kind = "Node"),
     val target: StarMapDeepTargetData? = null,
-    val label: String? = null
+    val label: String? = null,
 )
 
 data class StarMapHyperlinkData(
@@ -337,19 +337,19 @@ data class StarMapHyperlinkData(
     val source: StarMapEndpointPathData? = null,
     val targetUri: String,
     val label: String? = null,
-    val targetStarmapId: String? = null
+    val targetStarmapId: String? = null,
 )
 
 data class StarMapPhasedSnapshotResult(
     val data: StarMapData,
-    val diagnostics: List<StarMapLoadDiagnostic> = emptyList()
+    val diagnostics: List<StarMapLoadDiagnostic> = emptyList(),
 )
 
 data class StarMapLoadDiagnostic(
     val kind: String,
     val objectType: String,
     val objectId: String,
-    val detail: String? = null
+    val detail: String? = null,
 )
 
 /**
@@ -367,5 +367,5 @@ data class StarMapMotionPolicyData(
     val dragLiftScale: Float = 1.04f,
     val dragShadowBoost: Float = 8.0f,
     val settleDurationMs: Int = 220,
-    val reduceMotion: Boolean = false
+    val reduceMotion: Boolean = false,
 )

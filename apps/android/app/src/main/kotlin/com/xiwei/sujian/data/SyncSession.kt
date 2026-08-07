@@ -5,6 +5,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 sealed class ExclusiveResult<out T> {
     object Busy : ExclusiveResult<Nothing>()
+
     data class Success<out T>(val taskId: Int, val value: T) : ExclusiveResult<T>()
 }
 

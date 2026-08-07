@@ -21,7 +21,6 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class CursorTimelineTerminalTest {
-
     private fun createEngine(): AndroidTextAnimationEngine {
         return AndroidTextAnimationEngine(
             AndroidVisualPlanner(),
@@ -31,7 +30,10 @@ class CursorTimelineTerminalTest {
         )
     }
 
-    private fun cursorOnlyTransaction(transactionId: Long, durationMs: Long): PreparedVisualTransaction {
+    private fun cursorOnlyTransaction(
+        transactionId: Long,
+        durationMs: Long,
+    ): PreparedVisualTransaction {
         return PreparedVisualTransaction(
             transactionId = transactionId,
             oldRevision = null,
@@ -42,11 +44,16 @@ class CursorTimelineTerminalTest {
             referencedSnapshotIds = emptySet(),
             selectionDecoration = null,
             preeditDecoration = null,
-            cursorTransition = PreparedVisualTransaction.CursorTransition(
-                fromX = 0f, fromY = 0f, fromHeight = 20f,
-                toX = 100f, toY = 0f, toHeight = 20f,
-                shouldAnimate = true,
-            ),
+            cursorTransition =
+                PreparedVisualTransaction.CursorTransition(
+                    fromX = 0f,
+                    fromY = 0f,
+                    fromHeight = 20f,
+                    toX = 100f,
+                    toY = 0f,
+                    toHeight = 20f,
+                    shouldAnimate = true,
+                ),
             durationMs = durationMs,
         )
     }
@@ -66,14 +73,14 @@ class CursorTimelineTerminalTest {
         assertTrue("Transaction must complete when both tracks finished", completed)
         assertFalse(
             "After both timelines completed, hasActiveAnimation must be false — " +
-            "otherwise FrameClock reposts forever (#595 七)",
+                "otherwise FrameClock reposts forever (#595 七)",
             engine.hasActiveAnimation(),
         )
         // #595 六：统一终态 — 事务对象必须离开引擎，不能以 emptySet() 副本残留。
         // 残留副本会让下一次 submit 误发 rebase 事件，且引擎无法表达 Completed/Idle。
         assertTrue(
             "After completion the transaction object must leave the engine — " +
-            "activeTransaction must be null (#595 六)",
+                "activeTransaction must be null (#595 六)",
             engine.getActiveTransaction() == null,
         )
     }
@@ -91,7 +98,7 @@ class CursorTimelineTerminalTest {
         assertFalse("Text-only completion must not end the whole transaction", completed)
         assertTrue(
             "Cursor track still running must keep animation active — " +
-            "text finished but cursor continues (#595 六)",
+                "text finished but cursor continues (#595 六)",
             engine.hasActiveAnimation(),
         )
     }

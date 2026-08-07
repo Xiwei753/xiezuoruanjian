@@ -6,7 +6,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SyncCoordinatorInitTest {
-
     @Test
     fun syncOutcome_completedHoldsResult() {
         val result = com.xiwei.sujian.model.SyncResult(status = SyncStatus.Success)
@@ -42,10 +41,23 @@ class SyncCoordinatorInitTest {
 
     @Test
     fun syncOutcome_mapping_matchesIssue592Spec() {
-        val completedStatuses = listOf(SyncStatus.Success, SyncStatus.NoChanges, SyncStatus.LatestWinsApplied, SyncStatus.BranchMissingRecovered)
+        val completedStatuses =
+            listOf(
+                SyncStatus.Success,
+                SyncStatus.NoChanges,
+                SyncStatus.LatestWinsApplied,
+                SyncStatus.BranchMissingRecovered,
+            )
         val retryableStatuses = listOf(SyncStatus.RecoverableError)
-        val terminalStatuses = listOf(SyncStatus.Error, SyncStatus.Conflict, SyncStatus.PartialConflict, SyncStatus.FatalError, SyncStatus.DirtyRepoBlocked)
-        
+        val terminalStatuses =
+            listOf(
+                SyncStatus.Error,
+                SyncStatus.Conflict,
+                SyncStatus.PartialConflict,
+                SyncStatus.FatalError,
+                SyncStatus.DirtyRepoBlocked,
+            )
+
         completedStatuses.forEach { status ->
             val result = com.xiwei.sujian.model.SyncResult(status = status)
             val outcome = SyncOutcome.Completed(result)

@@ -86,6 +86,21 @@ BUILD_SCRIPT_NAMES = {
 
 ALLOWED_EXCEPTIONS: dict[tuple[Path, str], str] = {
     # --- god-file: 既有大型核心文件，共享不可分割的上下文 ---
+    # 以下三项为 Android 平台桥接/管线聚合根：ktlint 1.0.1 全量格式整改后
+    # 行数跨过 800 上限（职责未变）；按平台边界拆分为独立任务，不在 #597 范围。
+    (Path("apps/android/app/src/main/kotlin/com/xiwei/sujian/data/AppServiceBridge.kt"), "god-file"):
+        "FFI 门面类：121 个向后兼容委托函数聚合在唯一 holder 上，签名由 Core 契约决定；"
+        "已按领域拆分为 ProjectBridge/ChapterBridge/SettingsBridge 等子桥，门面只保留委托；"
+        "TODO(#597) 后续把门面委托按领域迁移到扩展函数文件",
+    (Path("apps/android/app/src/main/kotlin/com/xiwei/sujian/editor/v2/host/SujianEditorView.kt"), "god-file"):
+        "编辑器平台宿主：View 生命周期/InputConnection/渲染回调/窗口绑定共享同一视图上下文，"
+        "拆分会破坏平台绑定状态机；已按阶段拆分内部函数；"
+        "TODO(#597) 后续按回调族提取子对象",
+    (Path("apps/android/app/src/main/kotlin/com/xiwei/sujian/editor/v2/pipeline/AndroidEditorPipeline.kt"), "god-file"):
+        "编辑器管线聚合：输入/排版/渲染/提交共享同一帧上下文与运行时状态，"
+        "拆分会破坏帧原子性；已按阶段拆分内部函数；"
+        "TODO(#597) 后续按阶段提取子管线",
+
     (Path("apps/Linux_qt/src/editor/layout.rs"), "god-file"):
         "Qt 编辑器排版核心：行盒/字距/换行/光标命中共享同一排版上下文，"
         "拆分会引入循环依赖；已按渲染阶段切分函数",

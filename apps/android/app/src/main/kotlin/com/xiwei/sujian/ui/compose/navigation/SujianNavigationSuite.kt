@@ -10,11 +10,11 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -28,12 +28,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
-import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
-import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffoldRole
-import androidx.compose.material3.adaptive.navigation.BackNavigationBehavior
-import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.collectAsState
@@ -44,11 +39,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation3.runtime.NavBackStack
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.NavKey
@@ -56,8 +49,6 @@ import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.scene.Scene
 import androidx.navigation3.ui.NavDisplay
 import com.xiwei.sujian.R
-import com.xiwei.sujian.data.SyncCoordinator
-import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.designsystem.component.SujianIconButton
 import com.xiwei.sujian.designsystem.component.SujianSnackbar
 import com.xiwei.sujian.designsystem.component.SujianTopAppBar
@@ -71,15 +62,11 @@ import com.xiwei.sujian.runtime.SujianAppDependencies
 import com.xiwei.sujian.ui.compose.LocalAndroidCapabilities
 import com.xiwei.sujian.ui.compose.SujianAppState
 import com.xiwei.sujian.ui.compose.settings.SettingsRoute
-import com.xiwei.sujian.ui.compose.settings.settingsCategories
 import com.xiwei.sujian.ui.compose.starmap.StarMapScreen
 import com.xiwei.sujian.ui.compose.stats.StatsScreen
 import com.xiwei.sujian.ui.compose.workspace.ProjectWorkspaceScreen
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 enum class SujianDestination(
     val labelResId: Int,
@@ -108,19 +95,21 @@ enum class SujianDestination(
     ),
 }
 
-private fun SujianRoute.toTopDestination(): SujianDestination = when (this) {
-    is SujianRoute.Works -> SujianDestination.Works
-    is SujianRoute.StarMap -> SujianDestination.StarMap
-    is SujianRoute.Stats -> SujianDestination.Stats
-    is SujianRoute.Settings -> SujianDestination.Settings
-}
+private fun SujianRoute.toTopDestination(): SujianDestination =
+    when (this) {
+        is SujianRoute.Works -> SujianDestination.Works
+        is SujianRoute.StarMap -> SujianDestination.StarMap
+        is SujianRoute.Stats -> SujianDestination.Stats
+        is SujianRoute.Settings -> SujianDestination.Settings
+    }
 
-private fun SujianDestination.toRoute(): SujianRoute = when (this) {
-    SujianDestination.Works -> SujianRoute.Works
-    SujianDestination.StarMap -> SujianRoute.StarMap
-    SujianDestination.Stats -> SujianRoute.Stats
-    SujianDestination.Settings -> SujianRoute.Settings
-}
+private fun SujianDestination.toRoute(): SujianRoute =
+    when (this) {
+        SujianDestination.Works -> SujianRoute.Works
+        SujianDestination.StarMap -> SujianRoute.StarMap
+        SujianDestination.Stats -> SujianRoute.Stats
+        SujianDestination.Settings -> SujianRoute.Settings
+    }
 
 @Stable
 class StarMapTopBarState {
@@ -156,32 +145,34 @@ private class SujianTopBarInfo(
     val actions: @Composable () -> Unit,
 )
 
-private fun rememberInitialNavStack(initialDestination: String?): List<SujianRoute> = when (initialDestination) {
-    "settings" -> listOf(SujianRoute.Works, SujianRoute.Settings)
-    "starmap" -> listOf(SujianRoute.Works, SujianRoute.StarMap)
-    "stats" -> listOf(SujianRoute.Works, SujianRoute.Stats)
-    else -> listOf(SujianRoute.Works)
-}
+private fun rememberInitialNavStack(initialDestination: String?): List<SujianRoute> =
+    when (initialDestination) {
+        "settings" -> listOf(SujianRoute.Works, SujianRoute.Settings)
+        "starmap" -> listOf(SujianRoute.Works, SujianRoute.StarMap)
+        "stats" -> listOf(SujianRoute.Works, SujianRoute.Stats)
+        else -> listOf(SujianRoute.Works)
+    }
 
 @Composable
 private fun rememberSujianTopBarTitle(
     currentTopDestination: SujianDestination,
     appState: SujianAppState,
     starMapTopBarState: StarMapTopBarState,
-): String = when (currentTopDestination) {
-    SujianDestination.Works -> {
-        if (appState.currentProjectId != null) {
-            appState.currentProjectTitle.ifEmpty { stringResource(id = R.string.title_projects) }
-        } else {
-            stringResource(id = R.string.title_projects)
+): String =
+    when (currentTopDestination) {
+        SujianDestination.Works -> {
+            if (appState.currentProjectId != null) {
+                appState.currentProjectTitle.ifEmpty { stringResource(id = R.string.title_projects) }
+            } else {
+                stringResource(id = R.string.title_projects)
+            }
         }
+        SujianDestination.StarMap -> {
+            starMapTopBarState.title.ifEmpty { stringResource(id = R.string.title_starmap) }
+        }
+        SujianDestination.Stats -> stringResource(id = R.string.title_stats)
+        SujianDestination.Settings -> stringResource(id = R.string.action_settings)
     }
-    SujianDestination.StarMap -> {
-        starMapTopBarState.title.ifEmpty { stringResource(id = R.string.title_starmap) }
-    }
-    SujianDestination.Stats -> stringResource(id = R.string.title_stats)
-    SujianDestination.Settings -> stringResource(id = R.string.action_settings)
-}
 
 @Composable
 private fun rememberSujianTopBarNavigation(
@@ -190,22 +181,26 @@ private fun rememberSujianTopBarNavigation(
     starMapTopBarState: StarMapTopBarState,
     backStack: NavBackStack<NavKey>,
 ): Pair<ImageVector?, (() -> Unit)?> {
-    val showBack = currentTopDestination != SujianDestination.Works ||
-        (currentTopDestination == SujianDestination.Works && appState.currentProjectId != null) ||
-        (currentTopDestination == SujianDestination.StarMap && starMapTopBarState.onBack != null)
-    val navigationIcon = when {
-        currentTopDestination == SujianDestination.Settings -> SujianIcons.ArrowBack
-        showBack && currentTopDestination != SujianDestination.Works -> SujianIcons.ArrowBack
-        currentTopDestination == SujianDestination.StarMap && starMapTopBarState.onBack != null -> SujianIcons.ArrowBack
-        else -> null
-    }
-    val onNavigationClick: (() -> Unit)? = when {
-        currentTopDestination == SujianDestination.Settings -> {
-            { backStack.removeLastOrNull() }
+    val showBack =
+        currentTopDestination != SujianDestination.Works ||
+            (currentTopDestination == SujianDestination.Works && appState.currentProjectId != null) ||
+            (currentTopDestination == SujianDestination.StarMap && starMapTopBarState.onBack != null)
+    val navigationIcon =
+        when {
+            currentTopDestination == SujianDestination.Settings -> SujianIcons.ArrowBack
+            showBack && currentTopDestination != SujianDestination.Works -> SujianIcons.ArrowBack
+            currentTopDestination == SujianDestination.StarMap && starMapTopBarState.onBack != null ->
+                SujianIcons.ArrowBack
+            else -> null
         }
-        currentTopDestination == SujianDestination.StarMap -> starMapTopBarState.onBack
-        else -> null
-    }
+    val onNavigationClick: (() -> Unit)? =
+        when {
+            currentTopDestination == SujianDestination.Settings -> {
+                { backStack.removeLastOrNull() }
+            }
+            currentTopDestination == SujianDestination.StarMap -> starMapTopBarState.onBack
+            else -> null
+        }
     return navigationIcon to onNavigationClick
 }
 
@@ -215,27 +210,29 @@ private fun rememberSujianTopBarActions(
     syncState: SyncIndicatorState,
     coroutineScope: CoroutineScope,
     deps: SujianAppDependencies,
-): @Composable () -> Unit = {
-    if (currentTopDestination == SujianDestination.StarMap) {
-        starMapTopBarState.actions?.invoke()
+): @Composable () -> Unit =
+    {
+        if (currentTopDestination == SujianDestination.StarMap) {
+            starMapTopBarState.actions?.invoke()
+        }
+        if (currentTopDestination == SujianDestination.Works) {
+            SujianIconButton(
+                onClick = {
+                    coroutineScope.launch {
+                        deps.syncCoordinator.runSync(SyncTrigger.Manual)
+                    }
+                },
+                icon =
+                    when (syncState) {
+                        SyncIndicatorState.Unconfigured -> SujianIcons.CloudOff
+                        SyncIndicatorState.Syncing -> SujianIcons.CloudSync
+                        SyncIndicatorState.Synced -> SujianIcons.CloudDone
+                        SyncIndicatorState.Failed -> SujianIcons.CloudError
+                    },
+                contentDescription = "同步",
+            )
+        }
     }
-    if (currentTopDestination == SujianDestination.Works) {
-        SujianIconButton(
-            onClick = {
-                coroutineScope.launch {
-                    deps.syncCoordinator.runSync(SyncTrigger.Manual)
-                }
-            },
-            icon = when (syncState) {
-                SyncIndicatorState.Unconfigured -> SujianIcons.CloudOff
-                SyncIndicatorState.Syncing -> SujianIcons.CloudSync
-                SyncIndicatorState.Synced -> SujianIcons.CloudDone
-                SyncIndicatorState.Failed -> SujianIcons.CloudError
-            },
-            contentDescription = "同步",
-        )
-    }
-}
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3AdaptiveApi::class)
 @Composable
@@ -261,22 +258,26 @@ private fun SujianNavDisplayContent(
         predictivePopTransitionSpec = navPredictivePopTransition,
         entryProvider = { key: NavKey ->
             when (key) {
-                is SujianRoute -> NavEntry(key) { route ->
-                    when (route) {
-                        is SujianRoute.Works -> ProjectWorkspaceScreen(
-                            appState = appState,
-                        )
-                        is SujianRoute.StarMap -> StarMapScreen(
-                            topBarState = starMapTopBarState,
-                            modifier = Modifier.testTag(SujianSemanticIds.StarMapScreen),
-                        )
-                        is SujianRoute.Stats -> StatsScreen()
-                        is SujianRoute.Settings -> SettingsRoute(
-                            detailSection = settingsDetailSection,
-                            onDetailSectionChange = onSettingsDetailSectionChange,
-                        )
+                is SujianRoute ->
+                    NavEntry(key) { route ->
+                        when (route) {
+                            is SujianRoute.Works ->
+                                ProjectWorkspaceScreen(
+                                    appState = appState,
+                                )
+                            is SujianRoute.StarMap ->
+                                StarMapScreen(
+                                    topBarState = starMapTopBarState,
+                                    modifier = Modifier.testTag(SujianSemanticIds.StarMapScreen),
+                                )
+                            is SujianRoute.Stats -> StatsScreen()
+                            is SujianRoute.Settings ->
+                                SettingsRoute(
+                                    detailSection = settingsDetailSection,
+                                    onDetailSectionChange = onSettingsDetailSectionChange,
+                                )
+                        }
                     }
-                }
                 else -> NavEntry(key) {}
             }
         },
@@ -313,11 +314,12 @@ private fun SujianCompactNavScaffold(
                         onClick = { navigateToTopDestination(backStack, destination) },
                         icon = {
                             Icon(
-                                imageVector = if (currentTopDestination == destination) {
-                                    destination.selectedIcon
-                                } else {
-                                    destination.unselectedIcon
-                                },
+                                imageVector =
+                                    if (currentTopDestination == destination) {
+                                        destination.selectedIcon
+                                    } else {
+                                        destination.unselectedIcon
+                                    },
                                 contentDescription = stringResource(id = destination.labelResId),
                             )
                         },
@@ -336,10 +338,11 @@ private fun SujianCompactNavScaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
     ) { innerPadding ->
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .imePadding(),
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .imePadding(),
         ) {
             navDisplayContent()
         }
@@ -375,10 +378,11 @@ private fun SujianWideNavScaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
     ) { innerPadding ->
         Row(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .imePadding(),
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .imePadding(),
         ) {
             NavigationRail(
                 modifier = Modifier.fillMaxHeight(),
@@ -390,11 +394,12 @@ private fun SujianWideNavScaffold(
                         onClick = { navigateToTopDestination(backStack, destination) },
                         icon = {
                             Icon(
-                                imageVector = if (currentTopDestination == destination) {
-                                    destination.selectedIcon
-                                } else {
-                                    destination.unselectedIcon
-                                },
+                                imageVector =
+                                    if (currentTopDestination == destination) {
+                                        destination.selectedIcon
+                                    } else {
+                                        destination.unselectedIcon
+                                    },
                                 contentDescription = stringResource(id = destination.labelResId),
                             )
                         },
@@ -404,9 +409,10 @@ private fun SujianWideNavScaffold(
                 }
             }
             Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight(),
+                modifier =
+                    Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
             ) {
                 navDisplayContent()
             }
@@ -448,32 +454,61 @@ fun SujianNavigationSuite(
         }
     }
 
-    val topBarNavigation = rememberSujianTopBarNavigation(currentTopDestination, appState, starMapTopBarState, backStack)
-    val topBarInfo = SujianTopBarInfo(
-        title = rememberSujianTopBarTitle(currentTopDestination, appState, starMapTopBarState),
-        navigationIcon = topBarNavigation.first,
-        onNavigationClick = topBarNavigation.second,
-        actions = rememberSujianTopBarActions(currentTopDestination, starMapTopBarState, syncState, coroutineScope, deps),
-    )
+    val topBarNavigation =
+        rememberSujianTopBarNavigation(currentTopDestination, appState, starMapTopBarState, backStack)
+    val topBarInfo =
+        SujianTopBarInfo(
+            title = rememberSujianTopBarTitle(currentTopDestination, appState, starMapTopBarState),
+            navigationIcon = topBarNavigation.first,
+            onNavigationClick = topBarNavigation.second,
+            actions =
+                rememberSujianTopBarActions(
+                    currentTopDestination,
+                    starMapTopBarState,
+                    syncState,
+                    coroutineScope,
+                    deps,
+                ),
+        )
 
     val navDisplayContent: @Composable () -> Unit = {
-        SujianNavDisplayContent(backStack, appState, starMapTopBarState, settingsDetailSection) { settingsDetailSection = it }
+        SujianNavDisplayContent(
+            backStack,
+            appState,
+            starMapTopBarState,
+            settingsDetailSection,
+        ) { settingsDetailSection = it }
     }
 
     if (isCompact) {
-        SujianCompactNavScaffold(modifier, topBarInfo, snackbarHostState, currentTopDestination, backStack, navDisplayContent)
+        SujianCompactNavScaffold(
+            modifier,
+            topBarInfo,
+            snackbarHostState,
+            currentTopDestination,
+            backStack,
+            navDisplayContent,
+        )
     } else {
-        SujianWideNavScaffold(modifier, topBarInfo, snackbarHostState, currentTopDestination, backStack, navDisplayContent)
+        SujianWideNavScaffold(
+            modifier,
+            topBarInfo,
+            snackbarHostState,
+            currentTopDestination,
+            backStack,
+            navDisplayContent,
+        )
     }
 }
 
 private fun navItemModifier(destination: SujianDestination): Modifier {
-    val semanticTag = when (destination) {
-        SujianDestination.Works -> SujianSemanticIds.NavigationWorks
-        SujianDestination.StarMap -> SujianSemanticIds.NavigationStarMap
-        SujianDestination.Stats -> null
-        SujianDestination.Settings -> SujianSemanticIds.NavigationSettings
-    }
+    val semanticTag =
+        when (destination) {
+            SujianDestination.Works -> SujianSemanticIds.NavigationWorks
+            SujianDestination.StarMap -> SujianSemanticIds.NavigationStarMap
+            SujianDestination.Stats -> null
+            SujianDestination.Settings -> SujianSemanticIds.NavigationSettings
+        }
     return if (semanticTag != null) Modifier.testTag(semanticTag) else Modifier
 }
 
@@ -512,22 +547,22 @@ private val navPopTransition: AnimatedContentTransitionScope<Scene<NavKey>>.() -
 
 private val navPredictivePopTransition:
     (AnimatedContentTransitionScope<Scene<NavKey>>, Int) -> ContentTransform = { _, swipeEdge ->
-    when (swipeEdge) {
-        androidx.navigationevent.NavigationEvent.EDGE_LEFT -> {
-            val enter = slideInHorizontally(animationSpec = tween(300)) { fullWidth -> -fullWidth / 3 }
-            val exit = slideOutHorizontally(animationSpec = tween(300)) { fullWidth -> fullWidth / 3 }
-            (fadeIn(animationSpec = tween(300)) + enter) togetherWith
-                (fadeOut(animationSpec = tween(300)) + exit)
+        when (swipeEdge) {
+            androidx.navigationevent.NavigationEvent.EDGE_LEFT -> {
+                val enter = slideInHorizontally(animationSpec = tween(300)) { fullWidth -> -fullWidth / 3 }
+                val exit = slideOutHorizontally(animationSpec = tween(300)) { fullWidth -> fullWidth / 3 }
+                (fadeIn(animationSpec = tween(300)) + enter) togetherWith
+                    (fadeOut(animationSpec = tween(300)) + exit)
+            }
+            androidx.navigationevent.NavigationEvent.EDGE_RIGHT -> {
+                val enter = slideInHorizontally(animationSpec = tween(300)) { fullWidth -> fullWidth / 3 }
+                val exit = slideOutHorizontally(animationSpec = tween(300)) { fullWidth -> -fullWidth / 3 }
+                (fadeIn(animationSpec = tween(300)) + enter) togetherWith
+                    (fadeOut(animationSpec = tween(300)) + exit)
+            }
+            else -> fadeIn(animationSpec = tween(300)) togetherWith fadeOut(animationSpec = tween(300))
         }
-        androidx.navigationevent.NavigationEvent.EDGE_RIGHT -> {
-            val enter = slideInHorizontally(animationSpec = tween(300)) { fullWidth -> fullWidth / 3 }
-            val exit = slideOutHorizontally(animationSpec = tween(300)) { fullWidth -> -fullWidth / 3 }
-            (fadeIn(animationSpec = tween(300)) + enter) togetherWith
-                (fadeOut(animationSpec = tween(300)) + exit)
-        }
-        else -> fadeIn(animationSpec = tween(300)) togetherWith fadeOut(animationSpec = tween(300))
     }
-}
 
 internal fun predictiveBackStateFraction(progress: Float): Float =
     PREDICTIVE_BACK_EASING.transform(progress) * SINGLE_PANE_PROGRESS_RATIO
@@ -536,4 +571,3 @@ private val PREDICTIVE_BACK_EASING: androidx.compose.animation.core.CubicBezierE
     androidx.compose.animation.core.CubicBezierEasing(0.1f, 0.1f, 0f, 1f)
 
 internal const val SINGLE_PANE_PROGRESS_RATIO: Float = 0.1f
-

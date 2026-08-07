@@ -33,11 +33,17 @@ data class EditorSessionRecord(
     fun withDocumentState(transform: (DocumentState) -> DocumentState): EditorSessionRecord =
         copy(documentState = transform(documentState))
 
-    fun withSelection(anchorUtf8: Int, headUtf8: Int): EditorSessionRecord =
-        copy(documentState = documentState.copy(
-            selectionAnchorUtf8 = anchorUtf8,
-            selectionHeadUtf8 = headUtf8,
-        ))
+    fun withSelection(
+        anchorUtf8: Int,
+        headUtf8: Int,
+    ): EditorSessionRecord =
+        copy(
+            documentState =
+                documentState.copy(
+                    selectionAnchorUtf8 = anchorUtf8,
+                    selectionHeadUtf8 = headUtf8,
+                ),
+        )
 }
 
 /**
@@ -62,7 +68,10 @@ class EditorSessionStore {
         records[record.targetId] = record
     }
 
-    fun update(targetId: String, transform: (EditorSessionRecord) -> EditorSessionRecord) {
+    fun update(
+        targetId: String,
+        transform: (EditorSessionRecord) -> EditorSessionRecord,
+    ) {
         val current = records[targetId] ?: return
         records[targetId] = transform(current)
     }

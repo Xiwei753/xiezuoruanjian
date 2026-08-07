@@ -1,12 +1,12 @@
 package com.xiwei.sujian.editor.v2.pipeline
 
+import com.xiwei.sujian.editor.v2.host.EditorKernelBridge
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.mirror.EditResult
-import com.xiwei.sujian.editor.v2.host.EditorKernelBridge
 import uniffi.writer_core.EditorTransactionCauseDto
 
 class EditPipeline(
-    val mirror: DisplayTextMirror
+    val mirror: DisplayTextMirror,
 ) {
     var kernelBridge: EditorKernelBridge? = null
         private set
@@ -15,7 +15,10 @@ class EditPipeline(
         kernelBridge = bridge
     }
 
-    fun loadText(text: String, cursorUtf8: Int): AndroidEditorPipeline.LoadTextResult {
+    fun loadText(
+        text: String,
+        cursorUtf8: Int,
+    ): AndroidEditorPipeline.LoadTextResult {
         val bridge = kernelBridge ?: return AndroidEditorPipeline.LoadTextResult.Failed
         val dto = bridge.loadText(text, cursorUtf8) ?: return AndroidEditorPipeline.LoadTextResult.Failed
         val result = EditResult.fromDto(dto)
@@ -23,37 +26,66 @@ class EditPipeline(
             return AndroidEditorPipeline.LoadTextResult.Failed
         }
         if (result.isApplied() || result.isNoChange()) {
-            mirror.loadFromSnapshot(text, result.newSelectionEnd, result.newRevision, result.newSelectionStart, result.newSelectionEnd)
+            mirror.loadFromSnapshot(
+                text,
+                result.newSelectionEnd,
+                result.newRevision,
+                result.newSelectionStart,
+                result.newSelectionEnd,
+            )
             return AndroidEditorPipeline.LoadTextResult.Loaded(result)
         }
         return AndroidEditorPipeline.LoadTextResult.Failed
     }
 
-    fun insertText(byteOffset: Int, text: String, cause: EditorTransactionCauseDto = EditorTransactionCauseDto.TYPING): EditResult? {
+    fun insertText(
+        byteOffset: Int,
+        text: String,
+        cause: EditorTransactionCauseDto = EditorTransactionCauseDto.TYPING,
+    ): EditResult? {
         val bridge = kernelBridge ?: return null
         val dto = bridge.insert(byteOffset, text, cause, mirror.getRevision()) ?: return null
         return EditResult.fromDto(dto)
     }
 
-    fun insertLineBreak(byteOffset: Int, indentPrefix: String, cause: EditorTransactionCauseDto = EditorTransactionCauseDto.TYPING): EditResult? {
+    fun insertLineBreak(
+        byteOffset: Int,
+        indentPrefix: String,
+        cause: EditorTransactionCauseDto = EditorTransactionCauseDto.TYPING,
+    ): EditResult? {
         val bridge = kernelBridge ?: return null
         val dto = bridge.insertLineBreak(byteOffset, indentPrefix, cause, mirror.getRevision()) ?: return null
         return EditResult.fromDto(dto)
     }
 
-    fun deleteRange(byteStart: Int, byteEndExclusive: Int, cause: EditorTransactionCauseDto = EditorTransactionCauseDto.DELETE): EditResult? {
+    fun deleteRange(
+        byteStart: Int,
+        byteEndExclusive: Int,
+        cause: EditorTransactionCauseDto = EditorTransactionCauseDto.DELETE,
+    ): EditResult? {
         val bridge = kernelBridge ?: return null
         val dto = bridge.delete(byteStart, byteEndExclusive, cause, mirror.getRevision()) ?: return null
         return EditResult.fromDto(dto)
     }
 
-    fun replaceRange(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto = EditorTransactionCauseDto.TYPING): EditResult? {
+    fun replaceRange(
+        byteStart: Int,
+        byteEndExclusive: Int,
+        replacementText: String,
+        originalText: String,
+        cause: EditorTransactionCauseDto = EditorTransactionCauseDto.TYPING,
+    ): EditResult? {
         val bridge = kernelBridge ?: return null
-        val dto = bridge.replace(byteStart, byteEndExclusive, replacementText, originalText, cause, mirror.getRevision()) ?: return null
+        val dto =
+            bridge.replace(byteStart, byteEndExclusive, replacementText, originalText, cause, mirror.getRevision())
+                ?: return null
         return EditResult.fromDto(dto)
     }
 
-    fun setSelection(anchorByteOffset: Int, headByteOffset: Int): EditResult? {
+    fun setSelection(
+        anchorByteOffset: Int,
+        headByteOffset: Int,
+    ): EditResult? {
         val bridge = kernelBridge ?: return null
         val dto = bridge.setSelection(anchorByteOffset, headByteOffset, mirror.getRevision()) ?: return null
         return EditResult.fromDto(dto)
@@ -71,7 +103,10 @@ class EditPipeline(
         return EditResult.fromDto(dto)
     }
 
-    fun replaceAll(searchStr: String, replaceStr: String): EditResult? {
+    fun replaceAll(
+        searchStr: String,
+        replaceStr: String,
+    ): EditResult? {
         val bridge = kernelBridge ?: return null
         val dto = bridge.replaceAll(searchStr, replaceStr, mirror.getRevision()) ?: return null
         return EditResult.fromDto(dto)
@@ -81,7 +116,13 @@ class EditPipeline(
         mirror.applyEditResult(result)
     }
 
-    fun loadFromSnapshot(text: String, cursorUtf8: Int, revision: Long, selStartUtf8: Int, selEndUtf8: Int) {
+    fun loadFromSnapshot(
+        text: String,
+        cursorUtf8: Int,
+        revision: Long,
+        selStartUtf8: Int,
+        selEndUtf8: Int,
+    ) {
         mirror.loadFromSnapshot(text, cursorUtf8, revision, selStartUtf8, selEndUtf8)
     }
 
@@ -96,23 +137,36 @@ class EditPipeline(
             cursorUtf8,
             snapshot.revision.toLong(),
             selAnchorUtf8,
-            selHeadUtf8
+            selHeadUtf8,
         )
         return true
     }
 
     fun getText(): String = mirror.getText()
+
     fun getRevision(): Long = mirror.getRevision()
+
     fun getCursorUtf8(): Int = mirror.getCursorUtf8()
+
     fun getCursorUtf16(): Int = mirror.getCursorUtf16()
+
     fun getSelectionStartUtf8(): Int = mirror.getSelectionStartUtf8()
+
     fun getSelectionEndUtf8(): Int = mirror.getSelectionEndUtf8()
+
     fun getSelectionStartUtf16(): Int = mirror.getSelectionStartUtf16()
+
     fun getSelectionEndUtf16(): Int = mirror.getSelectionEndUtf16()
+
     fun getLengthUtf16(): Int = mirror.getLengthUtf16()
+
     fun getCommittedCursorUtf8(): Int = mirror.getCommittedCursorUtf8()
+
     fun getCommittedSelectionStartUtf8(): Int = mirror.getCommittedSelectionStartUtf8()
+
     fun getCommittedSelectionEndUtf8(): Int = mirror.getCommittedSelectionEndUtf8()
+
     fun getCommittedText(): String = mirror.getCommittedText()
+
     fun getSpannable(): android.text.SpannableStringBuilder = mirror.getSpannable()
 }

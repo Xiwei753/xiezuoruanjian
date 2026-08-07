@@ -10,16 +10,22 @@ import com.xiwei.sujian.model.WritingStatsSummary
  * UI 层通过此 Repository 访问统计数据，不直接引用 BridgeProvider 或 BridgeResult。
  */
 class StatsRepository(
-    private val statsBridge: StatsBridge
+    private val statsBridge: StatsBridge,
 ) {
-    fun getWritingStatsSummary(startDate: String, endDate: String): WritingStatsSummary? {
+    fun getWritingStatsSummary(
+        startDate: String,
+        endDate: String,
+    ): WritingStatsSummary? {
         return when (val result = statsBridge.getWritingStatsSummary(startDate, endDate)) {
             is BridgeResult.Success -> result.data
             else -> null
         }
     }
 
-    fun getWritingStatsByProject(startDate: String, endDate: String): ProjectWritingStatsSummary? {
+    fun getWritingStatsByProject(
+        startDate: String,
+        endDate: String,
+    ): ProjectWritingStatsSummary? {
         return when (val result = statsBridge.getWritingStatsByProject(startDate, endDate)) {
             is BridgeResult.Success -> result.data
             else -> null

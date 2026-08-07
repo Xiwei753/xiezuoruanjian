@@ -18,7 +18,7 @@ sealed class NormalizedTextInputEvent {
     data class PreeditChanged(
         val text: String,
         val cursor: Int,
-        val attributes: List<NormalizedPreeditAttribute>
+        val attributes: List<NormalizedPreeditAttribute>,
     ) : NormalizedTextInputEvent()
 
     /** IME commit 上屏 */
@@ -28,7 +28,7 @@ sealed class NormalizedTextInputEvent {
     data class ImeReplacementCommit(
         val text: String,
         val replaceStart: Int,
-        val replaceLength: Int
+        val replaceLength: Int,
     ) : NormalizedTextInputEvent()
 
     /** IME 取消 */
@@ -37,9 +37,22 @@ sealed class NormalizedTextInputEvent {
 
 /** 归一化按键 */
 enum class NormalizedKey {
-    Backspace, Tab, Enter, Insert, Delete,
-    Left, Up, Right, Down, Home, End, Escape,
-    PageUp, PageDown, Char, Unknown
+    Backspace,
+    Tab,
+    Enter,
+    Insert,
+    Delete,
+    Left,
+    Up,
+    Right,
+    Down,
+    Home,
+    End,
+    Escape,
+    PageUp,
+    PageDown,
+    Char,
+    Unknown,
 }
 
 /** 归一化修饰键 */
@@ -47,14 +60,18 @@ data class NormalizedModifiers(
     val ctrl: Boolean = false,
     val shift: Boolean = false,
     val alt: Boolean = false,
-    val meta: Boolean = false
+    val meta: Boolean = false,
 )
 
 /** 归一化 preedit 属性 */
 sealed class NormalizedPreeditAttribute {
     object Underline : NormalizedPreeditAttribute()
+
     data class TextColor(val color: String) : NormalizedPreeditAttribute()
+
     data class BackgroundColor(val color: String) : NormalizedPreeditAttribute()
+
     object FontUnderline : NormalizedPreeditAttribute()
+
     object Cursor : NormalizedPreeditAttribute()
 }

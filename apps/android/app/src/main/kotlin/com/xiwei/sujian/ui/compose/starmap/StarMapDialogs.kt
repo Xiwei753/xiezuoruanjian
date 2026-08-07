@@ -8,14 +8,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import com.xiwei.sujian.designsystem.component.SujianDialog
-import com.xiwei.sujian.designsystem.component.SujianIconButton
-import com.xiwei.sujian.designsystem.component.SujianTextButton
-import com.xiwei.sujian.designsystem.icon.SujianIcons
-import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
-import com.xiwei.sujian.editor.v2.compose.AnimatedTextArea
-import com.xiwei.sujian.editor.v2.compose.AnimatedTextField
-import com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -25,8 +17,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.R
+import com.xiwei.sujian.designsystem.component.SujianDialog
+import com.xiwei.sujian.designsystem.component.SujianIconButton
+import com.xiwei.sujian.designsystem.component.SujianTextButton
+import com.xiwei.sujian.designsystem.icon.SujianIcons
+import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
+import com.xiwei.sujian.editor.v2.compose.AnimatedTextArea
+import com.xiwei.sujian.editor.v2.compose.AnimatedTextField
+import com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost
 import com.xiwei.sujian.model.StarMapGraphNode
 import com.xiwei.sujian.model.StarMapNodeKind
 
@@ -34,7 +33,7 @@ import com.xiwei.sujian.model.StarMapNodeKind
 internal fun StarMapCreateDialog(
     coordinator: EditorWindowHost,
     onConfirm: (title: String, description: String) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
 ) {
     val dims = LocalSujianDimensions.current
     var title by remember { mutableStateOf("") }
@@ -67,7 +66,7 @@ internal fun StarMapCreateDialog(
                     onValueChange = { title = it },
                     onCommit = { },
                     label = { Text(stringResource(id = R.string.starmap_hint_title)) },
-                    singleLine = true
+                    singleLine = true,
                 )
                 Spacer(modifier = Modifier.height(dims.space8))
                 AnimatedTextArea(
@@ -77,10 +76,10 @@ internal fun StarMapCreateDialog(
                     onCommit = { },
                     label = { Text(stringResource(id = R.string.starmap_hint_description)) },
                     minLines = 2,
-                    maxLines = 3
+                    maxLines = 3,
                 )
             }
-        }
+        },
     )
 }
 
@@ -88,7 +87,7 @@ internal fun StarMapCreateDialog(
 internal fun StarMapAddNodeDialog(
     coordinator: EditorWindowHost,
     onConfirm: (title: String, kind: StarMapNodeKind) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
 ) {
     val dims = LocalSujianDimensions.current
     var nodeTitle by remember { mutableStateOf("") }
@@ -120,7 +119,7 @@ internal fun StarMapAddNodeDialog(
                     onValueChange = { nodeTitle = it },
                     onCommit = { },
                     label = { Text(stringResource(id = R.string.starmap_hint_title)) },
-                    singleLine = true
+                    singleLine = true,
                 )
                 Spacer(modifier = Modifier.height(dims.space8))
                 Row(horizontalArrangement = Arrangement.spacedBy(dims.space4)) {
@@ -132,7 +131,7 @@ internal fun StarMapAddNodeDialog(
                     }
                 }
             }
-        }
+        },
     )
 }
 
@@ -140,7 +139,7 @@ internal fun StarMapAddNodeDialog(
 internal fun StarMapAddEdgeDialog(
     nodes: List<StarMapGraphNode>,
     onConfirm: (fromNodeId: String, toNodeId: String) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
 ) {
     val dims = LocalSujianDimensions.current
     var fromNodeId by remember { mutableStateOf(nodes.firstOrNull()?.id ?: "") }
@@ -165,7 +164,7 @@ internal fun StarMapAddEdgeDialog(
                         SujianTextButton(
                             text = node.title,
                             onClick = { fromNodeId = node.id },
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth(),
                         )
                     }
                 }
@@ -176,12 +175,12 @@ internal fun StarMapAddEdgeDialog(
                         SujianTextButton(
                             text = node.title,
                             onClick = { toNodeId = node.id },
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth(),
                         )
                     }
                 }
             }
-        }
+        },
     )
 }
 
@@ -191,7 +190,7 @@ internal fun NodeEditPanel(
     coordinator: EditorWindowHost,
     onUpdate: (title: String, kind: StarMapNodeKind) -> Unit,
     onDelete: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
 ) {
     val dims = LocalSujianDimensions.current
     var editTitle by remember { mutableStateOf(node.title) }
@@ -224,7 +223,7 @@ internal fun NodeEditPanel(
                     onValueChange = { editTitle = it },
                     onCommit = { },
                     label = { Text(stringResource(id = R.string.starmap_hint_title)) },
-                    singleLine = true
+                    singleLine = true,
                 )
                 Spacer(modifier = Modifier.height(dims.space8))
                 Row(horizontalArrangement = Arrangement.spacedBy(dims.space4)) {
@@ -238,7 +237,7 @@ internal fun NodeEditPanel(
                 Spacer(modifier = Modifier.height(dims.space16))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End
+                    horizontalArrangement = Arrangement.End,
                 ) {
                     SujianIconButton(
                         onClick = onDelete,
@@ -247,6 +246,6 @@ internal fun NodeEditPanel(
                     )
                 }
             }
-        }
+        },
     )
 }

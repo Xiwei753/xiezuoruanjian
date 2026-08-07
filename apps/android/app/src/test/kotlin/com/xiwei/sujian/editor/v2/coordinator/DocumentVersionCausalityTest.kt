@@ -1,4 +1,5 @@
 @file:Suppress("StringLiteralDuplication") // 测试固件字符串天然重复
+
 package com.xiwei.sujian.editor.v2.coordinator
 
 import org.junit.Assert.assertEquals
@@ -22,12 +23,13 @@ import org.robolectric.annotation.Config
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
-class DocumentVersionCausalityContractTest {
-
+class DocumentVersionCausalityTest {
     private fun createCoordinator(): EditorSessionCoordinator {
-        return EditorSessionCoordinator(com.xiwei.sujian.data.AppServiceBridge(
-            com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595_causality")
-        ))
+        return EditorSessionCoordinator(
+            com.xiwei.sujian.data.AppServiceBridge(
+                com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595_causality"),
+            ),
+        )
     }
 
     private fun lease(targetId: String): EditorInputLease = EditorInputLease(targetId, 0UL, 0L)
@@ -37,12 +39,14 @@ class DocumentVersionCausalityContractTest {
         // 章节首次加载：committed 为空 → 直接可应用（即使版本本身不可比较）。
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
-        val first = TargetDocumentFact(
-            "t1", "repo v1",
-            DocumentVersion(contentHash = "hash-1", syncCommitId = "commit-1"),
-            DocumentVersion(),
-            DocumentFactOrigin.REPOSITORY_LOAD,
-        )
+        val first =
+            TargetDocumentFact(
+                "t1",
+                "repo v1",
+                DocumentVersion(contentHash = "hash-1", syncCommitId = "commit-1"),
+                DocumentVersion(),
+                DocumentFactOrigin.REPOSITORY_LOAD,
+            )
         assertEquals(ExternalContentDecision.Apply, coordinator.shouldApplyExternalContent(first))
     }
 
@@ -52,14 +56,22 @@ class DocumentVersionCausalityContractTest {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
         coordinator.applyExternalContentFact(
-            TargetDocumentFact("t1", "v1", DocumentVersion(contentHash = "hash-1"), DocumentVersion(), DocumentFactOrigin.REPOSITORY_LOAD)
+            TargetDocumentFact(
+                "t1",
+                "v1",
+                DocumentVersion(contentHash = "hash-1"),
+                DocumentVersion(),
+                DocumentFactOrigin.REPOSITORY_LOAD,
+            ),
         )
-        val unrelated = TargetDocumentFact(
-            "t1", "v9",
-            DocumentVersion(contentHash = "hash-9", syncCommitId = "commit-9"),
-            DocumentVersion(),
-            DocumentFactOrigin.SYNC_MERGED,
-        )
+        val unrelated =
+            TargetDocumentFact(
+                "t1",
+                "v9",
+                DocumentVersion(contentHash = "hash-9", syncCommitId = "commit-9"),
+                DocumentVersion(),
+                DocumentFactOrigin.SYNC_MERGED,
+            )
         assertEquals(
             ExternalContentDecision.IgnoreUncomparableConflict,
             coordinator.shouldApplyExternalContent(unrelated),
@@ -72,18 +84,26 @@ class DocumentVersionCausalityContractTest {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
         coordinator.applyExternalContentFact(
-            TargetDocumentFact("t1", "saved", DocumentVersion(contentHash = "hash-1"), DocumentVersion(), DocumentFactOrigin.REPOSITORY_LOAD)
-        )
-        val merged = TargetDocumentFact(
-            "t1", "merged",
-            DocumentVersion(
-                contentHash = "hash-2",
-                syncCommitId = "commit-2",
-                parentVersion = DocumentVersion(contentHash = "hash-1"),
+            TargetDocumentFact(
+                "t1",
+                "saved",
+                DocumentVersion(contentHash = "hash-1"),
+                DocumentVersion(),
+                DocumentFactOrigin.REPOSITORY_LOAD,
             ),
-            DocumentVersion(contentHash = "hash-1"),
-            DocumentFactOrigin.SYNC_MERGED,
         )
+        val merged =
+            TargetDocumentFact(
+                "t1",
+                "merged",
+                DocumentVersion(
+                    contentHash = "hash-2",
+                    syncCommitId = "commit-2",
+                    parentVersion = DocumentVersion(contentHash = "hash-1"),
+                ),
+                DocumentVersion(contentHash = "hash-1"),
+                DocumentFactOrigin.SYNC_MERGED,
+            )
         assertEquals(ExternalContentDecision.Apply, coordinator.shouldApplyExternalContent(merged))
     }
 
@@ -93,20 +113,29 @@ class DocumentVersionCausalityContractTest {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
         coordinator.applyExternalContentFact(
-            TargetDocumentFact("t1", "v1", DocumentVersion(contentHash = "hash-1"), DocumentVersion(), DocumentFactOrigin.REPOSITORY_LOAD)
-        )
-        val merged = TargetDocumentFact(
-            "t1", "v3",
-            DocumentVersion(
-                contentHash = "hash-3",
-                parentVersion = DocumentVersion(
-                    contentHash = "hash-2",
-                    parentVersion = DocumentVersion(contentHash = "hash-1"),
-                ),
+            TargetDocumentFact(
+                "t1",
+                "v1",
+                DocumentVersion(contentHash = "hash-1"),
+                DocumentVersion(),
+                DocumentFactOrigin.REPOSITORY_LOAD,
             ),
-            DocumentVersion(),
-            DocumentFactOrigin.SYNC_MERGED,
         )
+        val merged =
+            TargetDocumentFact(
+                "t1",
+                "v3",
+                DocumentVersion(
+                    contentHash = "hash-3",
+                    parentVersion =
+                        DocumentVersion(
+                            contentHash = "hash-2",
+                            parentVersion = DocumentVersion(contentHash = "hash-1"),
+                        ),
+                ),
+                DocumentVersion(),
+                DocumentFactOrigin.SYNC_MERGED,
+            )
         assertEquals(ExternalContentDecision.Apply, coordinator.shouldApplyExternalContent(merged))
     }
 
@@ -118,10 +147,16 @@ class DocumentVersionCausalityContractTest {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
         coordinator.applyExternalContentFact(
-            TargetDocumentFact("t1", "old", DocumentVersion(contentHash = "hash-1"), DocumentVersion(), DocumentFactOrigin.REPOSITORY_LOAD)
+            TargetDocumentFact(
+                "t1",
+                "old",
+                DocumentVersion(contentHash = "hash-1"),
+                DocumentVersion(),
+                DocumentFactOrigin.REPOSITORY_LOAD,
+            ),
         )
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("t1", "edited", 3L, 7L, lease = lease("t1"))
+            EditorDocumentUpdate.LocalInput("t1", "edited", 3L, 7L, lease = lease("t1")),
         )
         assertTrue(coordinator.sessionState.localDirty)
 
@@ -140,10 +175,16 @@ class DocumentVersionCausalityContractTest {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
         coordinator.applyExternalContentFact(
-            TargetDocumentFact("t1", "old", DocumentVersion(contentHash = "hash-1"), DocumentVersion(), DocumentFactOrigin.REPOSITORY_LOAD)
+            TargetDocumentFact(
+                "t1",
+                "old",
+                DocumentVersion(contentHash = "hash-1"),
+                DocumentVersion(),
+                DocumentFactOrigin.REPOSITORY_LOAD,
+            ),
         )
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("t1", "edited", 3L, 7L, lease = lease("t1"))
+            EditorDocumentUpdate.LocalInput("t1", "edited", 3L, 7L, lease = lease("t1")),
         )
         coordinator.markSaved("t1", DocumentVersion())
         assertTrue("空版本保存上报必须被忽略（不推进版本）", coordinator.sessionState.localDirty)
@@ -155,12 +196,14 @@ class DocumentVersionCausalityContractTest {
         // （旧实现保留 fact.baseVersion — 下一次同步仍以过时祖先判断冲突）。
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
-        val fact = TargetDocumentFact(
-            "t1", "merged",
-            DocumentVersion(contentHash = "hash-2", syncCommitId = "commit-2"),
-            DocumentVersion(contentHash = "hash-1"),
-            DocumentFactOrigin.SYNC_MERGED,
-        )
+        val fact =
+            TargetDocumentFact(
+                "t1",
+                "merged",
+                DocumentVersion(contentHash = "hash-2", syncCommitId = "commit-2"),
+                DocumentVersion(contentHash = "hash-1"),
+                DocumentFactOrigin.SYNC_MERGED,
+            )
         coordinator.applyExternalContentFact(fact)
         assertEquals("hash-2", coordinator.sessionState.sessionBaseVersion.contentHash)
         assertEquals("hash-2", coordinator.sessionState.committedVersion.contentHash)
@@ -176,10 +219,22 @@ class DocumentVersionCausalityContractTest {
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
         coordinator.registerTarget(EditableTextTarget("t2", isPersistent = true))
         coordinator.applyExternalContentFact(
-            TargetDocumentFact("t1", "v1", DocumentVersion(contentHash = "hash-a"), DocumentVersion(), DocumentFactOrigin.REPOSITORY_LOAD)
+            TargetDocumentFact(
+                "t1",
+                "v1",
+                DocumentVersion(contentHash = "hash-a"),
+                DocumentVersion(),
+                DocumentFactOrigin.REPOSITORY_LOAD,
+            ),
         )
         coordinator.applyExternalContentFact(
-            TargetDocumentFact("t2", "v2", DocumentVersion(contentHash = "hash-b"), DocumentVersion(), DocumentFactOrigin.REPOSITORY_LOAD)
+            TargetDocumentFact(
+                "t2",
+                "v2",
+                DocumentVersion(contentHash = "hash-b"),
+                DocumentVersion(),
+                DocumentFactOrigin.REPOSITORY_LOAD,
+            ),
         )
         assertEquals("hash-a", coordinator.documentCommittedVersionFor("t1").contentHash)
         assertEquals("hash-b", coordinator.documentCommittedVersionFor("t2").contentHash)
@@ -206,14 +261,23 @@ class DocumentVersionCausalityContractTest {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
         coordinator.applyExternalContentFact(
-            TargetDocumentFact("t1", "v1", DocumentVersion(contentHash = "hash-1"), DocumentVersion(), DocumentFactOrigin.REPOSITORY_LOAD)
+            TargetDocumentFact(
+                "t1",
+                "v1",
+                DocumentVersion(contentHash = "hash-1"),
+                DocumentVersion(),
+                DocumentFactOrigin.REPOSITORY_LOAD,
+            ),
         )
-        val reloaded = TargetDocumentFact(
-            "t1", "v2-disk-changed",
-            DocumentVersion(contentHash = "hash-2"), // 无 parent，不伪称后代
-            DocumentVersion(),
-            DocumentFactOrigin.REPOSITORY_LOAD,
-        )
+        val reloaded =
+            TargetDocumentFact(
+                "t1",
+                "v2-disk-changed",
+                // 无 parent，不伪称后代
+                DocumentVersion(contentHash = "hash-2"),
+                DocumentVersion(),
+                DocumentFactOrigin.REPOSITORY_LOAD,
+            )
         assertEquals(
             "REPOSITORY_LOAD 不可比较时信任磁盘直接 Apply",
             ExternalContentDecision.Apply,
@@ -228,14 +292,23 @@ class DocumentVersionCausalityContractTest {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
         coordinator.applyExternalContentFact(
-            TargetDocumentFact("t1", "v1", DocumentVersion(contentHash = "hash-1"), DocumentVersion(), DocumentFactOrigin.REPOSITORY_LOAD)
+            TargetDocumentFact(
+                "t1",
+                "v1",
+                DocumentVersion(contentHash = "hash-1"),
+                DocumentVersion(),
+                DocumentFactOrigin.REPOSITORY_LOAD,
+            ),
         )
-        val merged = TargetDocumentFact(
-            "t1", "v2-sync",
-            DocumentVersion(contentHash = "hash-2", syncCommitId = "commit-2"), // 无 parent
-            DocumentVersion(),
-            DocumentFactOrigin.SYNC_MERGED,
-        )
+        val merged =
+            TargetDocumentFact(
+                "t1",
+                "v2-sync",
+                // 无 parent
+                DocumentVersion(contentHash = "hash-2", syncCommitId = "commit-2"),
+                DocumentVersion(),
+                DocumentFactOrigin.SYNC_MERGED,
+            )
         assertEquals(
             "SYNC_MERGED 不可比较时必须冲突，不盲目覆盖",
             ExternalContentDecision.IgnoreUncomparableConflict,

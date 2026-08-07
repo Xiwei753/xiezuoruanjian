@@ -6,7 +6,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SecretProjectionAtomicityTest {
-
     @Test
     fun maskedProjectionDisplayMatchesRealLength() {
         val text = "password123"
@@ -114,12 +113,13 @@ class SecretProjectionAtomicityTest {
         val functionType = kotlin.jvm.functions.Function0::class.java
         val sourceType = com.xiwei.sujian.editor.v2.host.EditorEditSource::class.java
         // #595 四：applyEditResult(result, beforePatch, source) — 来源随命令传递。
-        val applyMethod = pipelineClazz.getDeclaredMethod(
-            "applyEditResult",
-            editResultClazz,
-            functionType,
-            sourceType
-        )
+        val applyMethod =
+            pipelineClazz.getDeclaredMethod(
+                "applyEditResult",
+                editResultClazz,
+                functionType,
+                sourceType,
+            )
         assertNotNull(applyMethod)
     }
 
@@ -127,14 +127,15 @@ class SecretProjectionAtomicityTest {
     fun displayTextProjectionHasMaskedWithComposition() {
         val clazz = Class.forName("com.xiwei.sujian.editor.v2.projection.DisplayTextProjection")
         val companion = clazz.declaredClasses.first { it.simpleName == "Companion" }
-        val method = companion.getDeclaredMethod(
-            "maskedWithComposition",
-            String::class.java,
-            Int::class.javaPrimitiveType,
-            Int::class.javaPrimitiveType,
-            String::class.java,
-            String::class.java
-        )
+        val method =
+            companion.getDeclaredMethod(
+                "maskedWithComposition",
+                String::class.java,
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
+                String::class.java,
+                String::class.java,
+            )
         assertNotNull(method)
     }
 

@@ -1,45 +1,47 @@
 package com.xiwei.sujian.data
 
-import com.xiwei.sujian.model.SyncIndicatorState
-import com.xiwei.sujian.data.BridgeResult
-import com.xiwei.sujian.data.SyncFailureKind
 import com.xiwei.sujian.model.SyncStatus
+import com.xiwei.sujian.ui.compose.settings.SettingsTransactionCommand
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
-import com.xiwei.sujian.ui.compose.settings.SettingsTransactionCommand
 import org.junit.Test
 
 class SyncCoordinatorTest {
-
     @Test
-    fun syncSession_runExclusive_blocksConcurrentAccess() = runTest {
-        var firstEntered = false
+    fun syncSession_runExclusive_blocksConcurrentAccess() =
+        runTest {
+            var firstEntered = false
 
-        val result1 = SyncSession.runExclusive {
-            firstEntered = true
-            kotlinx.coroutines.delay(100)
-            "first"
+            val result1 =
+                SyncSession.runExclusive {
+                    firstEntered = true
+                    kotlinx.coroutines.delay(100)
+                    "first"
+                }
+            assertEquals("first", (result1 as ExclusiveResult.Success).value)
+            assertEquals(true, firstEntered)
         }
-        assertEquals("first", (result1 as ExclusiveResult.Success).value)
-        assertEquals(true, firstEntered)
-    }
 
     @Test
-    fun syncSession_runExclusive_returnsBusyWhenLocked() = runTest {
-        assertEquals(ExclusiveResult.Busy::class, ExclusiveResult.Busy::class)
-    }
+    fun syncSession_runExclusive_returnsBusyWhenLocked() =
+        runTest {
+            assertEquals(ExclusiveResult.Busy::class, ExclusiveResult.Busy::class)
+        }
 
     @Test
     fun syncOutcome_sealedClassHierarchy() {
-        val outcomes: List<SyncOutcome> = listOf(
-            SyncOutcome.Completed(com.xiwei.sujian.model.SyncResult(status = com.xiwei.sujian.model.SyncStatus.Success)),
-            SyncOutcome.Disabled,
-            SyncOutcome.Unconfigured,
-            SyncOutcome.Busy,
-            SyncOutcome.RetryableFailure(com.xiwei.sujian.model.SyncStatus.RecoverableError),
-            SyncOutcome.TerminalFailure(com.xiwei.sujian.model.SyncStatus.Conflict),
-        )
+        val outcomes: List<SyncOutcome> =
+            listOf(
+                SyncOutcome.Completed(
+                    com.xiwei.sujian.model.SyncResult(status = com.xiwei.sujian.model.SyncStatus.Success),
+                ),
+                SyncOutcome.Disabled,
+                SyncOutcome.Unconfigured,
+                SyncOutcome.Busy,
+                SyncOutcome.RetryableFailure(com.xiwei.sujian.model.SyncStatus.RecoverableError),
+                SyncOutcome.TerminalFailure(com.xiwei.sujian.model.SyncStatus.Conflict),
+            )
         assertEquals(6, outcomes.distinctBy { it::class }.size)
     }
 
@@ -55,42 +57,57 @@ class SyncCoordinatorTest {
     fun bridgeError_typedKinds_classifyCorrectly() {
         // #592 七：类型化失败直接来自 Bridge 边界（WriterException 变体），
         // 不再通过 Android 字符串错误码表分类。
-        val networkError = BridgeResult.Error(
-            com.xiwei.sujian.data.ResultEnvelope.errorOf("RETRYABLE_NETWORK", "test"),
-            syncFailureKind = SyncFailureKind.RetryableNetwork,
-        )
+        val networkError =
+            BridgeResult.Error(
+                com.xiwei.sujian.data.ResultEnvelope.errorOf("RETRYABLE_NETWORK", "test"),
+                syncFailureKind = SyncFailureKind.RetryableNetwork,
+            )
         assertEquals(SyncFailureKind.RetryableNetwork, SyncFailureKind.fromBridgeError(networkError))
-        val ioError = BridgeResult.Error(
-            com.xiwei.sujian.data.ResultEnvelope.errorOf("RETRYABLE_IO", "test"),
-            syncFailureKind = SyncFailureKind.RetryableIo,
-        )
+        val ioError =
+            BridgeResult.Error(
+                com.xiwei.sujian.data.ResultEnvelope.errorOf("RETRYABLE_IO", "test"),
+                syncFailureKind = SyncFailureKind.RetryableIo,
+            )
         assertEquals(SyncFailureKind.RetryableIo, SyncFailureKind.fromBridgeError(ioError))
     }
 
     @Test
     fun bridgeError_unknownKind_defaultsToFatal() {
         // #592 七：未知错误默认 Fatal，只有明确网络或 IO 失败可以重试。
-        val unknown = BridgeResult.Error(
-            com.xiwei.sujian.data.ResultEnvelope.errorOf("SOME_FUTURE_CODE", "test")
-        )
+        val unknown =
+            BridgeResult.Error(
+                com.xiwei.sujian.data.ResultEnvelope.errorOf("SOME_FUTURE_CODE", "test"),
+            )
         assertEquals(SyncFailureKind.Fatal, SyncFailureKind.fromBridgeError(unknown))
     }
 
     @Test
     fun legacyErrorCode_mappingStillCoversOldCodes() {
         // 遗留映射仅作非 BridgeResult.Error 路径兜底；主路径已类型化。
-        assertEquals(SyncFailureKind.RetryableNetwork,
-            SyncFailureKind.fromLegacyErrorCode("SYNC_NETWORK_UNAVAILABLE"))
-        assertEquals(SyncFailureKind.RetryableIo,
-            SyncFailureKind.fromLegacyErrorCode("IO_ERROR"))
-        assertEquals(SyncFailureKind.NativeUnavailable,
-            SyncFailureKind.fromLegacyErrorCode("NATIVE_NOT_LOADED"))
-        assertEquals(SyncFailureKind.Authentication,
-            SyncFailureKind.fromLegacyErrorCode("SYNC_AUTH_FAILED"))
-        assertEquals(SyncFailureKind.Conflict,
-            SyncFailureKind.fromLegacyErrorCode("SYNC_CONFLICT"))
-        assertEquals(SyncFailureKind.Protocol,
-            SyncFailureKind.fromLegacyErrorCode("SYNC_INCOMPLETE_TRANSACTION"))
+        assertEquals(
+            SyncFailureKind.RetryableNetwork,
+            SyncFailureKind.fromLegacyErrorCode("SYNC_NETWORK_UNAVAILABLE"),
+        )
+        assertEquals(
+            SyncFailureKind.RetryableIo,
+            SyncFailureKind.fromLegacyErrorCode("IO_ERROR"),
+        )
+        assertEquals(
+            SyncFailureKind.NativeUnavailable,
+            SyncFailureKind.fromLegacyErrorCode("NATIVE_NOT_LOADED"),
+        )
+        assertEquals(
+            SyncFailureKind.Authentication,
+            SyncFailureKind.fromLegacyErrorCode("SYNC_AUTH_FAILED"),
+        )
+        assertEquals(
+            SyncFailureKind.Conflict,
+            SyncFailureKind.fromLegacyErrorCode("SYNC_CONFLICT"),
+        )
+        assertEquals(
+            SyncFailureKind.Protocol,
+            SyncFailureKind.fromLegacyErrorCode("SYNC_INCOMPLETE_TRANSACTION"),
+        )
     }
 
     @Test
@@ -120,27 +137,28 @@ class SyncCoordinatorTest {
     @Test
     fun transactionCommandTypes_areDistinct() {
         // #592 一/二：三种事务命令类型必须独立，不允许合并
-        val commands: List<SettingsTransactionCommand> = listOf(
-            SettingsTransactionCommand.SaveAndRunSync(
-                config = com.xiwei.sujian.model.SyncConfig(),
-                configRevision = 1L,
-                secrets = com.xiwei.sujian.model.SyncSecrets(),
-                secretsRevision = 1L,
-                trigger = com.xiwei.sujian.model.SyncTrigger.Manual,
-            ),
-            SettingsTransactionCommand.SaveAndRunDryRun(
-                config = com.xiwei.sujian.model.SyncConfig(),
-                configRevision = 1L,
-                secrets = com.xiwei.sujian.model.SyncSecrets(),
-                secretsRevision = 1L,
-            ),
-            SettingsTransactionCommand.SaveAndRunDiagnostics(
-                config = com.xiwei.sujian.model.SyncConfig(),
-                configRevision = 1L,
-                secrets = com.xiwei.sujian.model.SyncSecrets(),
-                secretsRevision = 1L,
-            ),
-        )
+        val commands: List<SettingsTransactionCommand> =
+            listOf(
+                SettingsTransactionCommand.SaveAndRunSync(
+                    config = com.xiwei.sujian.model.SyncConfig(),
+                    configRevision = 1L,
+                    secrets = com.xiwei.sujian.model.SyncSecrets(),
+                    secretsRevision = 1L,
+                    trigger = com.xiwei.sujian.model.SyncTrigger.Manual,
+                ),
+                SettingsTransactionCommand.SaveAndRunDryRun(
+                    config = com.xiwei.sujian.model.SyncConfig(),
+                    configRevision = 1L,
+                    secrets = com.xiwei.sujian.model.SyncSecrets(),
+                    secretsRevision = 1L,
+                ),
+                SettingsTransactionCommand.SaveAndRunDiagnostics(
+                    config = com.xiwei.sujian.model.SyncConfig(),
+                    configRevision = 1L,
+                    secrets = com.xiwei.sujian.model.SyncSecrets(),
+                    secretsRevision = 1L,
+                ),
+            )
         assertEquals(3, commands.distinctBy { it::class }.size)
     }
 }

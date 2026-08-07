@@ -1,19 +1,19 @@
 package com.xiwei.sujian.editor.v2.pipeline
 
+import android.text.Layout
+import android.text.TextPaint
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutRevision
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.projection.DisplayTextProjection
-import android.text.TextPaint
-import android.text.Layout
 
 class AndroidLayoutRuntime(
     val mirror: DisplayTextMirror,
-    val layoutEngine: AndroidLayoutEngine
+    val layoutEngine: AndroidLayoutEngine,
 ) {
     constructor(mirror: DisplayTextMirror, textPaint: TextPaint) : this(
         mirror,
-        AndroidLayoutEngine(mirror, textPaint)
+        AndroidLayoutEngine(mirror, textPaint),
     )
 
     private var currentProjection: DisplayTextProjection = DisplayTextProjection.identity("")
@@ -24,7 +24,9 @@ class AndroidLayoutRuntime(
     }
 
     fun getLayout(): Layout? = layoutEngine.getLayout()
+
     fun getCurrentRevision(): AndroidLayoutRevision? = layoutEngine.getCurrentRevision()
+
     fun getWidth(): Float = layoutEngine.getWidth()
 
     fun setWidth(width: Float) {
@@ -76,17 +78,18 @@ class AndroidLayoutRuntime(
 
     private fun rebuildProjectionContent() {
         val text = mirror.getText()
-        currentProjection = if (secretDisplayMode) {
-            val compRange = mirror.getCompositionRangeUtf16()
-            if (compRange != null && compRange.first >= 0 && compRange.second > compRange.first) {
-                val compText = mirror.getSpannable().substring(compRange.first, compRange.second)
-                DisplayTextProjection.maskedWithComposition(text, compRange.first, compRange.second, compText)
+        currentProjection =
+            if (secretDisplayMode) {
+                val compRange = mirror.getCompositionRangeUtf16()
+                if (compRange != null && compRange.first >= 0 && compRange.second > compRange.first) {
+                    val compText = mirror.getSpannable().substring(compRange.first, compRange.second)
+                    DisplayTextProjection.maskedWithComposition(text, compRange.first, compRange.second, compText)
+                } else {
+                    DisplayTextProjection.masked(text)
+                }
             } else {
-                DisplayTextProjection.masked(text)
+                DisplayTextProjection.identity(text)
             }
-        } else {
-            DisplayTextProjection.identity(text)
-        }
         if (currentProjection.isMasked) {
             layoutEngine.setDisplayTextOverride(currentProjection.displayText, currentProjection)
         } else {
@@ -94,13 +97,19 @@ class AndroidLayoutRuntime(
         }
     }
 
-    fun captureLineBitmapSnapshots(lineIndices: Set<Int>): Map<Int, com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot> =
+    fun captureLineBitmapSnapshots(
+        lineIndices: Set<Int>,
+    ): Map<Int, com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot> =
         layoutEngine.captureLineBitmapSnapshots(lineIndices)
 
-    fun captureLineBitmapSnapshotsWithClusters(lineIndices: Set<Int>): Map<Int, com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot> =
+    fun captureLineBitmapSnapshotsWithClusters(
+        lineIndices: Set<Int>,
+    ): Map<Int, com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot> =
         layoutEngine.captureLineBitmapSnapshotsWithClusters(lineIndices)
 
     fun getLineForUtf8(byteOffset: Int): Int = layoutEngine.getLineForUtf8(byteOffset)
+
     fun getCursorLine(): Int = layoutEngine.getCursorLine()
+
     fun getPrimaryHorizontalUtf8(byteOffset: Int): Float = layoutEngine.getPrimaryHorizontalUtf8(byteOffset)
 }

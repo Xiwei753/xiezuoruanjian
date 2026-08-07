@@ -1,11 +1,10 @@
 @file:Suppress("StringLiteralDuplication") // 测试固件字符串天然重复
+
 package com.xiwei.sujian.editor.v2.coordinator
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -22,12 +21,13 @@ import org.junit.Test
  * 修复：EditorSessionState 是唯一正文/选区/revision/binding 事实源，
  * 所有生命周期事件同步更新它；targetTexts 并行缓存已删除。
  */
-class EditorSessionStateSingleSourceContractTest {
-
+class EditorSessionStateSingleSourceTest {
     private fun createCoordinator(): EditorSessionCoordinator {
-        return EditorSessionCoordinator(com.xiwei.sujian.data.AppServiceBridge(
-            com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595")
-        ))
+        return EditorSessionCoordinator(
+            com.xiwei.sujian.data.AppServiceBridge(
+                com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595"),
+            ),
+        )
     }
 
     @Test
@@ -41,7 +41,7 @@ class EditorSessionStateSingleSourceContractTest {
                 transactionId = 7L,
                 selectionAnchorUtf8 = 3,
                 selectionHeadUtf8 = 9,
-            )
+            ),
         )
         val state = coordinator.sessionState
         assertEquals("t1", state.targetId)
@@ -58,7 +58,7 @@ class EditorSessionStateSingleSourceContractTest {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = false))
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("t1", "text", 1L, 1L, selectionAnchorUtf8 = 2, selectionHeadUtf8 = 4)
+            EditorDocumentUpdate.LocalInput("t1", "text", 1L, 1L, selectionAnchorUtf8 = 2, selectionHeadUtf8 = 4),
         )
         coordinator.detachWindowBinding("w1", "t1")
         assertEquals(
@@ -74,7 +74,7 @@ class EditorSessionStateSingleSourceContractTest {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("t1", "text", 1L, 1L, selectionAnchorUtf8 = 2, selectionHeadUtf8 = 4)
+            EditorDocumentUpdate.LocalInput("t1", "text", 1L, 1L, selectionAnchorUtf8 = 2, selectionHeadUtf8 = 4),
         )
         coordinator.closeTarget("t1", SessionCloseReason.WORKSPACE_NAVIGATION)
         val state = coordinator.sessionState
@@ -91,13 +91,19 @@ class EditorSessionStateSingleSourceContractTest {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
 
-        val first = TargetDocumentFact(
-            "t1", "repo text v1",
-            DocumentVersion(contentHash = "hash-1"),
-            DocumentVersion(),
-            DocumentFactOrigin.REPOSITORY_LOAD,
+        val first =
+            TargetDocumentFact(
+                "t1",
+                "repo text v1",
+                DocumentVersion(contentHash = "hash-1"),
+                DocumentVersion(),
+                DocumentFactOrigin.REPOSITORY_LOAD,
+            )
+        assertEquals(
+            "New repository version must apply",
+            ExternalContentDecision.Apply,
+            coordinator.shouldApplyExternalContent(first),
         )
-        assertEquals("New repository version must apply", ExternalContentDecision.Apply, coordinator.shouldApplyExternalContent(first))
         coordinator.applyExternalContentFact(first)
 
         var state = coordinator.sessionState
@@ -105,17 +111,27 @@ class EditorSessionStateSingleSourceContractTest {
         assertEquals(EditorSessionOrigin.EXTERNAL_REPLACE, state.origin)
 
         // 同一 sourceVersion 重放：幂等，不 reset。
-        assertEquals("Same version replay must be idempotent", ExternalContentDecision.IgnoreReplay, coordinator.shouldApplyExternalContent(first))
+        assertEquals(
+            "Same version replay must be idempotent",
+            ExternalContentDecision.IgnoreReplay,
+            coordinator.shouldApplyExternalContent(first),
+        )
 
         // 新版本 + 新内容：应用（#595 五：加载事实携带 parentVersion=上次已知版本，
         // 与 committed 构成因果链 → 可比较）。
-        val second = TargetDocumentFact(
-            "t1", "repo text v2",
-            DocumentVersion(contentHash = "hash-2", parentVersion = DocumentVersion(contentHash = "hash-1")),
-            DocumentVersion(contentHash = "hash-1"),
-            DocumentFactOrigin.REPOSITORY_LOAD,
+        val second =
+            TargetDocumentFact(
+                "t1",
+                "repo text v2",
+                DocumentVersion(contentHash = "hash-2", parentVersion = DocumentVersion(contentHash = "hash-1")),
+                DocumentVersion(contentHash = "hash-1"),
+                DocumentFactOrigin.REPOSITORY_LOAD,
+            )
+        assertEquals(
+            "New repository version must apply",
+            ExternalContentDecision.Apply,
+            coordinator.shouldApplyExternalContent(second),
         )
-        assertEquals("New repository version must apply", ExternalContentDecision.Apply, coordinator.shouldApplyExternalContent(second))
         coordinator.applyExternalContentFact(second)
         state = coordinator.sessionState
         assertEquals("hash-2", state.committedVersion.contentHash)
@@ -126,18 +142,28 @@ class EditorSessionStateSingleSourceContractTest {
     fun documentFact_emptyVersionIsRejected() {
         val coordinator = createCoordinator()
         coordinator.registerTarget(EditableTextTarget("t1", isPersistent = true))
-        val noHash = TargetDocumentFact(
-            "t1", "x", DocumentVersion(), DocumentVersion(), DocumentFactOrigin.REPOSITORY_LOAD,
+        val noHash =
+            TargetDocumentFact(
+                "t1",
+                "x",
+                DocumentVersion(),
+                DocumentVersion(),
+                DocumentFactOrigin.REPOSITORY_LOAD,
+            )
+        assertEquals(
+            "Empty version must be rejected",
+            ExternalContentDecision.IgnoreEmptyVersion,
+            coordinator.shouldApplyExternalContent(noHash),
         )
-        assertEquals("Empty version must be rejected", ExternalContentDecision.IgnoreEmptyVersion, coordinator.shouldApplyExternalContent(noHash))
     }
 
     @Test
     fun sessionState_hasNoParallelTargetTextsCache() {
         // targetTexts 并行正文缓存必须已删除：会话层正文唯一来源是 sessionState。
-        val field = EditorSessionCoordinator::class.java.declaredFields.firstOrNull {
-            it.name == "targetTexts"
-        }
+        val field =
+            EditorSessionCoordinator::class.java.declaredFields.firstOrNull {
+                it.name == "targetTexts"
+            }
         assertNull(
             "targetTexts parallel text cache must be removed (#595 四)",
             field,
@@ -147,9 +173,10 @@ class EditorSessionStateSingleSourceContractTest {
     @Test
     fun activeTargetIdFlow_isNotIndependentMutableStateFlow() {
         // #595 三：_activeTargetIdFlow 必须已删除 — activeTargetIdFlow 从 sessionStateFlow 派生。
-        val field = EditorSessionCoordinator::class.java.declaredFields.firstOrNull {
-            it.name == "_activeTargetIdFlow"
-        }
+        val field =
+            EditorSessionCoordinator::class.java.declaredFields.firstOrNull {
+                it.name == "_activeTargetIdFlow"
+            }
         assertNull(
             "_activeTargetIdFlow must be removed — activeTargetIdFlow derives from sessionStateFlow (#595 三)",
             field,
@@ -159,9 +186,10 @@ class EditorSessionStateSingleSourceContractTest {
     @Test
     fun editingStateFlow_isNotIndependentMutableStateFlow() {
         // #595 三：_editingStateFlow 必须已删除 — editingStateFlow 从 sessionStateFlow 派生。
-        val field = EditorSessionCoordinator::class.java.declaredFields.firstOrNull {
-            it.name == "_editingStateFlow"
-        }
+        val field =
+            EditorSessionCoordinator::class.java.declaredFields.firstOrNull {
+                it.name == "_editingStateFlow"
+            }
         assertNull(
             "_editingStateFlow must be removed — editingStateFlow derives from sessionStateFlow (#595 三)",
             field,
@@ -171,9 +199,10 @@ class EditorSessionStateSingleSourceContractTest {
     @Test
     fun windowBindingStateFlow_isNotIndependentMutableStateFlow() {
         // #595 三：_windowBindingStateFlow 必须已删除 — windowBindingStateFlow 从 sessionStateFlow 派生。
-        val field = EditorSessionCoordinator::class.java.declaredFields.firstOrNull {
-            it.name == "_windowBindingStateFlow"
-        }
+        val field =
+            EditorSessionCoordinator::class.java.declaredFields.firstOrNull {
+                it.name == "_windowBindingStateFlow"
+            }
         assertNull(
             "_windowBindingStateFlow must be removed — windowBindingStateFlow derives from sessionStateFlow (#595 三)",
             field,
@@ -183,9 +212,10 @@ class EditorSessionStateSingleSourceContractTest {
     @Test
     fun sessionStateFlow_isOnlyWritableMutableStateFlow() {
         // #595 三：_sessionStateFlow 是会话层唯一可写 MutableStateFlow<EditorSessionState>。
-        val field = EditorSessionCoordinator::class.java.declaredFields.firstOrNull {
-            it.name == "_sessionStateFlow"
-        }
+        val field =
+            EditorSessionCoordinator::class.java.declaredFields.firstOrNull {
+                it.name == "_sessionStateFlow"
+            }
         assertNotNull(
             "_sessionStateFlow must exist as the single writable MutableStateFlow<EditorSessionState>",
             field,
@@ -196,16 +226,18 @@ class EditorSessionStateSingleSourceContractTest {
     fun editorSessionState_containsEditingStateAndActiveTargetId() {
         // #595 三：EditorSessionState 必须包含 editingState 和 activeTargetId 字段，
         // 使 activeTargetIdFlow/editingStateFlow 能从 sessionStateFlow 派生。
-        val editingStateField = EditorSessionState::class.java.declaredFields.firstOrNull {
-            it.name == "editingState"
-        }
+        val editingStateField =
+            EditorSessionState::class.java.declaredFields.firstOrNull {
+                it.name == "editingState"
+            }
         assertNotNull(
             "EditorSessionState must contain editingState field (#595 三)",
             editingStateField,
         )
-        val activeTargetIdField = EditorSessionState::class.java.declaredFields.firstOrNull {
-            it.name == "activeTargetId"
-        }
+        val activeTargetIdField =
+            EditorSessionState::class.java.declaredFields.firstOrNull {
+                it.name == "activeTargetId"
+            }
         assertNotNull(
             "EditorSessionState must contain activeTargetId field (#595 三)",
             activeTargetIdField,
@@ -217,9 +249,10 @@ class EditorSessionStateSingleSourceContractTest {
         // #595 三：updateSessionState 是唯一状态更新入口（reducer）。
         // internal 方法在 JVM 字节码中会被 Kotlin 名称修饰（updateSessionState$module），
         // 用 startsWith 匹配避免绑定修饰后缀。
-        val method = EditorSessionCoordinator::class.java.declaredMethods.firstOrNull {
-            it.name.startsWith("updateSessionState")
-        }
+        val method =
+            EditorSessionCoordinator::class.java.declaredMethods.firstOrNull {
+                it.name.startsWith("updateSessionState")
+            }
         assertNotNull(
             "updateSessionState must exist as the single reducer entry point (#595 三)",
             method,

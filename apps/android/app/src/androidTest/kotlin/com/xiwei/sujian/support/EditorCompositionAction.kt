@@ -11,8 +11,10 @@ import org.hamcrest.Matcher
 import org.junit.Assert
 
 object EditorCompositionAction {
-
-    fun setComposingText(text: String, newCursorPosition: Int = 1): ViewAction {
+    fun setComposingText(
+        text: String,
+        newCursorPosition: Int = 1,
+    ): ViewAction {
         return object : ViewAction {
             override fun getConstraints(): Matcher<View> {
                 return ViewMatchers.withId(R.id.editor_content)
@@ -20,20 +22,24 @@ object EditorCompositionAction {
 
             override fun getDescription(): String = "Set composing text on SujianEditorView"
 
-            override fun perform(uiController: UiController, view: View) {
-                val editorView = view as? SujianEditorView
-                    ?: throw AssertionError(
-                        "EditorCompositionAction: View is not a SujianEditorView, got ${view.javaClass.simpleName}"
-                    )
+            override fun perform(
+                uiController: UiController,
+                view: View,
+            ) {
+                val editorView =
+                    view as? SujianEditorView
+                        ?: throw AssertionError(
+                            "EditorCompositionAction: View is not a SujianEditorView, got ${view.javaClass.simpleName}",
+                        )
 
                 Assert.assertTrue(
                     "EditorCompositionAction: SujianEditorView is not VISIBLE",
-                    editorView.visibility == View.VISIBLE
+                    editorView.visibility == View.VISIBLE,
                 )
 
                 Assert.assertTrue(
                     "EditorCompositionAction: SujianEditorView is not session bound",
-                    editorView.isSessionBound
+                    editorView.isSessionBound,
                 )
 
                 val focusOk = editorView.requestFocus()
@@ -61,11 +67,15 @@ object EditorCompositionAction {
 
             override fun getDescription(): String = "Finish composing text on SujianEditorView"
 
-            override fun perform(uiController: UiController, view: View) {
-                val editorView = view as? SujianEditorView
-                    ?: throw AssertionError(
-                        "EditorCompositionAction: View is not a SujianEditorView, got ${view.javaClass.simpleName}"
-                    )
+            override fun perform(
+                uiController: UiController,
+                view: View,
+            ) {
+                val editorView =
+                    view as? SujianEditorView
+                        ?: throw AssertionError(
+                            "EditorCompositionAction: View is not a SujianEditorView, got ${view.javaClass.simpleName}",
+                        )
 
                 val focusOk = editorView.requestFocus()
                 Assert.assertTrue("requestFocus() returned false", focusOk)
@@ -91,11 +101,15 @@ object EditorCompositionAction {
 
             override fun getDescription(): String = "Commit text via InputConnection on SujianEditorView"
 
-            override fun perform(uiController: UiController, view: View) {
-                val editorView = view as? SujianEditorView
-                    ?: throw AssertionError(
-                        "EditorCompositionAction: View is not a SujianEditorView, got ${view.javaClass.simpleName}"
-                    )
+            override fun perform(
+                uiController: UiController,
+                view: View,
+            ) {
+                val editorView =
+                    view as? SujianEditorView
+                        ?: throw AssertionError(
+                            "EditorCompositionAction: View is not a SujianEditorView, got ${view.javaClass.simpleName}",
+                        )
 
                 val focusOk = editorView.requestFocus()
                 Assert.assertTrue("requestFocus() returned false", focusOk)
@@ -122,11 +136,15 @@ object EditorCompositionAction {
 
             override fun getDescription(): String = "Send delete key to SujianEditorView"
 
-            override fun perform(uiController: UiController, view: View) {
-                val editorView = view as? SujianEditorView
-                    ?: throw AssertionError(
-                        "EditorCompositionAction: View is not a SujianEditorView, got ${view.javaClass.simpleName}"
-                    )
+            override fun perform(
+                uiController: UiController,
+                view: View,
+            ) {
+                val editorView =
+                    view as? SujianEditorView
+                        ?: throw AssertionError(
+                            "EditorCompositionAction: View is not a SujianEditorView, got ${view.javaClass.simpleName}",
+                        )
 
                 val focusOk = editorView.requestFocus()
                 Assert.assertTrue("requestFocus() returned false", focusOk)
@@ -138,10 +156,10 @@ object EditorCompositionAction {
                 Assert.assertNotNull("onCreateInputConnection returned null", ic)
 
                 ic!!.sendKeyEvent(
-                    android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DEL)
+                    android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DEL),
                 )
                 ic.sendKeyEvent(
-                    android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_DEL)
+                    android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_DEL),
                 )
 
                 uiController.loopMainThreadUntilIdle()

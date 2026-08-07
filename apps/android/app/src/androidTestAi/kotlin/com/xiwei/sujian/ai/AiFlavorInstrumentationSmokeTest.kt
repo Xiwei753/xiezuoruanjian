@@ -15,7 +15,6 @@ import org.junit.runner.RunWith
  */
 @RunWith(AndroidJUnit4::class)
 class AiFlavorInstrumentationSmokeTest {
-
     @Test
     fun flavor_is_ai_on_device() {
         assertEquals("ai", BuildConfig.FLAVOR)

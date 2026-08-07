@@ -1,15 +1,14 @@
 package com.xiwei.sujian.editor.v2.coordinator
 
 import android.util.Log
-import androidx.compose.runtime.Immutable
 import com.xiwei.sujian.data.AppServiceBridge
 import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.editor.v2.host.TextEditSessionBridge
+import com.xiwei.sujian.editor.v2.motion.EditorMotionPolicy
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import com.xiwei.sujian.editor.v2.motion.EditorMotionPolicy
 
 /**
  * #592 四：窗口绑定状态机 — 会话层唯一的窗口生命周期事实。
@@ -24,9 +23,8 @@ import com.xiwei.sujian.editor.v2.motion.EditorMotionPolicy
  * Detached 状态下 commit/cancel 不再依赖 target 对象存在：正文已通过
  * onTextChanged 流式保存，业务关闭（[EditorSessionCoordinator.closeTarget]）
  * 直接关闭 Rust session 并回到 Idle。
- */
-
-/**
+ *
+ *
  * #592 一/四：#595 四：会话层协调器 — 只管理 Rust session、正文/选区纯数据快照、
  * Undo/Redo 所属 session、活动目标、窗口绑定状态机与编辑事务。
  *
@@ -44,9 +42,9 @@ import com.xiwei.sujian.editor.v2.motion.EditorMotionPolicy
 class EditorSessionCoordinator(
     internal val appServiceBridge: AppServiceBridge,
 ) : SessionCommandPort {
-
     // ── 纯会话状态 ──
-    /** #595 四：per-target 会话记录存储 — 会话层持久事实的唯一来源。 */
+
+    // #595 四：per-target 会话记录存储 — 会话层持久事实的唯一来源。
     internal val store = EditorSessionStore()
 
     // #595 三：_sessionStateFlow 是会话层唯一可写 MutableStateFlow — 所有状态变化
@@ -67,9 +65,10 @@ class EditorSessionCoordinator(
      * （会话已保留在 store 记录中，由 closeTarget 收口）。
      */
     internal val activeSessionId: ULong?
-        get() = _sessionStateFlow.value.sessionId?.takeIf {
-            _sessionStateFlow.value.activeTargetId != null
-        }
+        get() =
+            _sessionStateFlow.value.sessionId?.takeIf {
+                _sessionStateFlow.value.activeTargetId != null
+            }
 
     internal val _targetDecorationsVersionFlow = MutableStateFlow(0L)
     val targetDecorationsVersionFlow: StateFlow<Long> = _targetDecorationsVersionFlow.asStateFlow()
@@ -154,7 +153,10 @@ class EditorSessionCoordinator(
      * 被清除，晚到事件由 epoch 拒绝（commit/close/detach 都递增 epoch），
      * 不允许旧 View 在切换提交后写入新会话。
      */
-    fun isInputLeaseCurrent(lease: EditorInputLease?, eventTargetId: String? = null): Boolean {
+    fun isInputLeaseCurrent(
+        lease: EditorInputLease?,
+        eventTargetId: String? = null,
+    ): Boolean {
         if (lease == null) return false
         if (lease.epoch != inputLeaseEpoch) return false
         if (eventTargetId != null && lease.targetId != eventTargetId) return false
@@ -202,25 +204,22 @@ class EditorSessionCoordinator(
      * #595 四：sessionId 从 store 记录读取 — 非持久 target 同样有 sessionId。
      * #595 二：必须携带窗口绑定时的 [EditorInputLease] — 旧章节 View 在切换
      * 提交后晚到的输入（epoch/target 不匹配）被拒绝，不得写入新章节会话。
-     */
-
-    /**
+     *
+     *
      * #595 二：撤销/恢复事件已执行后更新 SessionState —
      * revision/transactionId 来自 Rust EditResult，来源标记为 UNDO_RESTORED。
      * 撤销/恢复改变正文但保留在 session 内（Undo 栈就是本地历史），
      * 不改变 localDirty 的既有事实（撤销后正文仍未落盘时保持 dirty）。
      * #595 二：陈旧 lease（章节切换后旧 View 晚到的撤销事件）拒绝。
-     */
-
-    /**
+     *
+     *
+     * ── #595 二：外部文档事实（Repository 加载 / 同步合并）──
+     *
      * #595 二：程序化替换事件已执行后更新 SessionState —
      * revision/transactionId 来自 Rust EditResult，来源标记为 PROGRAMMATIC_REPLACE。
      * #595 二：陈旧 lease（章节切换后旧 View 晚到的程序化结果）拒绝。
-     */
-
-    // ── #595 二：外部文档事实（Repository 加载 / 同步合并）──
-
-    /**
+     *
+     *
      * #595 二：外部文档事实的新旧判断 — 文档版本锚点 + localDirty。
      *
      * 规则（与 Issue #595 解决二/五一致）：
@@ -235,16 +234,14 @@ class EditorSessionCoordinator(
      * - 两侧版本不可比较（无相同 revision 锚点、incoming 父版本链不含
      *   committed）且正文不同 → 不得默认 Apply — 进入重新读取/三方合并/冲突
      *   （旧实现把"不可比较"当作"可应用"，旧 IO 结果最后返回仍可能覆盖本地）。
-     */
-
-    /**
+     *
+     *
      * 版本新旧比较 — 只有同一单调 revision 锚点可比较时才判定"旧"：
      * 两侧都携带非零 [DocumentVersion.repositoryRevision] → 比较之；
      * 否则视为不可比较（不判定"旧"，由 [isComparable] 决定是否可应用）。
      * 时间锚点（lastSyncTime）不得参与因果比较。
-     */
-
-    /**
+     *
+     *
      * #595 二：外部文档事实已应用后记录版本 — 更新 store 记录与活动 SessionState。
      *
      * 只记录版本事实（committedVersion=sourceVersion、localDirty=false），
@@ -256,9 +253,8 @@ class EditorSessionCoordinator(
      * （旧实现保留 fact.baseVersion — 旧 base 会让下一次同步仍以过时祖先判断
      * 冲突）。Repository 加载/同步合并都来自磁盘，磁盘已处于 sourceVersion，
      * 因此 lastSavedVersion 同步推进。
-     */
-
-    /**
+     *
+     *
      * #595 二：保存成功上报 — 由 [com.xiwei.sujian.ui.EditorViewModel] 在保存
      * 成功后调用。保存回执必须作为文档提交原子推进：
      *
@@ -271,21 +267,23 @@ class EditorSessionCoordinator(
      *
      * 正文已落盘，下一次同步以磁盘版本为三方合并基础；同步合并事实携带
      * parentVersion=该版本时即可比较并安全应用。
-     */
-
-    /**
+     *
+     *
+     * ── 纯数据目标元数据（窗口层 registerTarget/updateTargetSpec 镜像）──
+     *
      * #595 五：按 target 从 store 读取 committedVersion — 同步事实的 baseVersion
      * 必须按 target 查询（旧实现读全局 sessionState.committedVersion，活动状态
      * 属于其他 target 时 B 的同步事件会携带 A 的 base）。
-     */
-
-    // ── 纯数据目标元数据（窗口层 registerTarget/updateTargetSpec 镜像）──
-
-    /**
+     *
+     *
      * #595 一/四：注册 target 元数据（无窗口对象，供章节切换事务预准备 session 使用）。
      * 幂等：已注册时更新 profile/persistent，保留 sessionId 与文档事实。
      */
-    fun registerTargetMeta(targetId: String, profile: TextEditorProfile, persistent: Boolean) {
+    fun registerTargetMeta(
+        targetId: String,
+        profile: TextEditorProfile,
+        persistent: Boolean,
+    ) {
         val existing = store.record(targetId)
         if (existing != null) {
             store.update(targetId) { it.copy(profile = profile, persistent = persistent) }
@@ -327,9 +325,8 @@ class EditorSessionCoordinator(
      * 原样保留）；无效/缺失时新建（唯一一次 Core 命令，snapshot 由 create
      * 后的真实内核读取）。snapshot 读取失败视为预准备失败（返回 null，
      * 新建的临时 session 立即关闭，不留下无 snapshot 的孤儿 session）。
-     */
-
-    /**
+     *
+     *
      * #595 一：提交预准备 — 最终 requestId 校验通过后一次性执行 A→B 切换：
      *
      * ```text
@@ -342,9 +339,10 @@ class EditorSessionCoordinator(
      *
      * 窗口层 beginEdit 复用同一 session 并把 windowId 替换为真实窗口。
      * 失败（记录被并发移除或 session 不再匹配）返回 false，调用方必须回滚。
-     */
-
-    /**
+     *
+     *
+     * ── 纯数据投影快照（窗口层读写）──
+     *
      * #595 一：回滚预准备 — Abort 规则：
      *
      * - [PreparedSessionHandle.newlyCreated]=true → 只关闭本事务新建的临时 session
@@ -356,9 +354,10 @@ class EditorSessionCoordinator(
      * 无副作用：准备阶段从未修改全局 EditorSessionState，这里同样不修改。
      */
 
-    // ── 纯数据投影快照（窗口层读写）──
-
-    fun saveProjectionSnapshot(targetId: String, snapshot: ProjectionSnapshot) {
+    fun saveProjectionSnapshot(
+        targetId: String,
+        snapshot: ProjectionSnapshot,
+    ) {
         store.update(targetId) { it.copy(projection = snapshot) }
     }
 
@@ -377,16 +376,14 @@ class EditorSessionCoordinator(
      * 删除章节），配置变化不改变 workspace route，因此不会关闭 session。
      * #595 四：只清理本 target 的窗口状态，不得把其他活动 target 的 binding
      * 状态一并清成 Idle。
-     */
-
-    /**
+     *
+     *
      * #592 二：窗口绑定完成（视图已 bind/attach 成功）。
      * 由 [EditorWindowHost] 在 View 真实绑定成功后调用。
      *
      * #595 三：防御性状态守卫 — Attached 只能从 Attaching 进入。
-     */
-
-    /**
+     *
+     *
      * #592 三：#595 四：业务级关闭 — 由 workspace 导航事件调用（返回章节列表、
      * 切换章节、删除章节）。与窗口解绑 [detachWindowBinding] 分开：关闭会销毁
      * Rust session，解绑只解除窗口引用。
@@ -394,10 +391,8 @@ class EditorSessionCoordinator(
      * 只有关闭的 target 是当前活动/当前 SessionState 的 target 时才重置全局状态；
      * 关闭非活动 target 不得清掉活动 target 的 binding/editing。
      * 关闭同时使该 target 的输入 lease 失效（旧 View 晚到的回调不再被接受）。
-     */
-
-
-    /**
+     *
+     *
      * 准备会话绑定 — 创建/复用 session 并设置活动状态。
      * 返回绑定信息或 null（失败时）。
      *
@@ -422,14 +417,11 @@ class EditorSessionCoordinator(
      * - Attached：persistent 会话保持打开（软重置语义），记录保留，由窗口层继续复用。
      * - Detached/非持久：直接关闭 Rust session 并删除记录（正文已流式保存）。
      * 不依赖 target 对象存在，Detached 状态下也能完整收口。
-     */
-
-    /**
+     *
+     *
      * 取消活动编辑会话 — Detached 状态下同样完整收口（关闭 session，不依赖 target 对象）。
-     */
-
-
-    /**
+     *
+     *
      * #595 一：原子提交候选 session 的真实 snapshot — 一次性更新 store 记录与活动
      * SessionState 的 text/revision/selection，消除 Rust session（新正文）/
      * SessionStore（旧正文）/ViewModel（新正文+hash）三份状态分裂。
@@ -440,16 +432,14 @@ class EditorSessionCoordinator(
      * - snapshot 读取失败时关闭候选 session、不关闭旧 session、不推进 store/state，
      *   返回 [ExternalResetResult.Failed] — 旧 session 的 Undo/Redo/composition/正文
      *   完整保留（旧实现原地 reset 旧 session 后 snapshot 失败，旧 session 已被破坏）。
-     */
-
-    /**
+     *
+     *
+     * ── SessionCommandPort implementation (bridge-level, no View) ──
+     *
      * Detached 状态下外部内容重置后，刷新保留的 snapshot，新窗口附着时读到最新状态。
      * #595 五：返回 reset 后的真实 snapshot 供 [resetPersistentSession] 上报。
+     * 按 sessionId 直接读取真实 snapshot（不依赖持久注册）。
      */
-
-    // ── SessionCommandPort implementation (bridge-level, no View) ──
-
-    /** 按 sessionId 直接读取真实 snapshot（不依赖持久注册）。 */
     internal fun querySnapshotForSession(sessionId: ULong): TargetSnapshot? {
         if (!validateSession(sessionId)) return null
         return when (val result = appServiceBridge.textEditSessionSnapshot(sessionId)) {
@@ -460,7 +450,7 @@ class EditorSessionCoordinator(
                     cursorUtf8 = snap.cursor.toInt(),
                     revision = snap.revision.toLong(),
                     selectionAnchorUtf8 = snap.selectionAnchor.toInt(),
-                    selectionHeadUtf8 = snap.cursor.toInt()
+                    selectionHeadUtf8 = snap.cursor.toInt(),
                 )
             }
             else -> null
@@ -477,39 +467,49 @@ class EditorSessionCoordinator(
      * Bridge 级命令执行（不接触投影/View）— 由窗口层 [EditorWindowHost.applyTargetCommand]
      * 在取得结果后负责应用到活动 View 或非活动投影运行时。
      */
-    fun executeTargetCommand(targetId: String, command: TargetCommand): TargetCommandResult {
-        val sessionId = store.record(targetId)?.sessionId
-            ?: return TargetCommandResult.Failed(TargetCommandError.NO_PERSISTENT_SESSION)
+    fun executeTargetCommand(
+        targetId: String,
+        command: TargetCommand,
+    ): TargetCommandResult {
+        val sessionId =
+            store.record(targetId)?.sessionId
+                ?: return TargetCommandResult.Failed(TargetCommandError.NO_PERSISTENT_SESSION)
         if (sessionId == 0UL || !validateSession(sessionId)) {
             return TargetCommandResult.Failed(TargetCommandError.SESSION_INVALID)
         }
 
-        val snapshotBefore = queryTargetSnapshot(targetId)
-            ?: return TargetCommandResult.Failed(TargetCommandError.SNAPSHOT_UNAVAILABLE)
+        val snapshotBefore =
+            queryTargetSnapshot(targetId)
+                ?: return TargetCommandResult.Failed(TargetCommandError.SNAPSHOT_UNAVAILABLE)
 
         val bridge = TextEditSessionBridge(appServiceBridge, sessionId)
-        val dtoResult = when (command) {
-            is TargetCommand.Replace -> {
-                bridge.replace(
-                    command.byteStart, command.byteEndExclusive,
-                    command.replacementText, command.originalText,
-                    uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
-                    snapshotBefore.revision
-                )
+        val dtoResult =
+            when (command) {
+                is TargetCommand.Replace -> {
+                    bridge.replace(
+                        command.byteStart,
+                        command.byteEndExclusive,
+                        command.replacementText,
+                        command.originalText,
+                        uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC,
+                        snapshotBefore.revision,
+                    )
+                }
+                is TargetCommand.ReplaceAll -> {
+                    bridge.replaceAll(
+                        command.searchText,
+                        command.replacementText,
+                        snapshotBefore.revision,
+                    )
+                }
+                is TargetCommand.SetSelection -> {
+                    bridge.setSelection(
+                        command.anchorUtf8,
+                        command.headUtf8,
+                        snapshotBefore.revision,
+                    )
+                }
             }
-            is TargetCommand.ReplaceAll -> {
-                bridge.replaceAll(
-                    command.searchText, command.replacementText,
-                    snapshotBefore.revision
-                )
-            }
-            is TargetCommand.SetSelection -> {
-                bridge.setSelection(
-                    command.anchorUtf8, command.headUtf8,
-                    snapshotBefore.revision
-                )
-            }
-        }
 
         if (dtoResult == null) {
             return TargetCommandResult.Failed(TargetCommandError.KERNEL_NULL_RESULT)
@@ -520,16 +520,22 @@ class EditorSessionCoordinator(
             return TargetCommandResult.Failed(TargetCommandError.KERNEL_REJECTED)
         }
 
-        val snapshotAfter = queryTargetSnapshot(targetId)
-            ?: return TargetCommandResult.Failed(TargetCommandError.SNAPSHOT_UNAVAILABLE)
+        val snapshotAfter =
+            queryTargetSnapshot(targetId)
+                ?: return TargetCommandResult.Failed(TargetCommandError.SNAPSHOT_UNAVAILABLE)
 
         return TargetCommandResult.Success(snapshotAfter)
     }
 
-    override fun applyTargetCommand(targetId: String, command: TargetCommand): TargetCommandResult =
-        executeTargetCommand(targetId, command)
+    override fun applyTargetCommand(
+        targetId: String,
+        command: TargetCommand,
+    ): TargetCommandResult = executeTargetCommand(targetId, command)
 
-    override fun setTargetDecorations(targetId: String, decorations: TargetDecorations) {
+    override fun setTargetDecorations(
+        targetId: String,
+        decorations: TargetDecorations,
+    ) {
         val existing = store.record(targetId)
         if (existing != null) {
             store.update(targetId) { it.copy(decorations = decorations) }
@@ -543,13 +549,21 @@ class EditorSessionCoordinator(
 
     // ── Session lifecycle ──
 
-    internal fun createSession(targetId: String, text: String, cursorByteOffset: Int, isPersistent: Boolean): ULong? {
-        return when (val result = appServiceBridge.textEditSessionCreate(
-            targetId,
-            text,
-            cursorByteOffset.toUInt(),
-            isPersistent
-        )) {
+    internal fun createSession(
+        targetId: String,
+        text: String,
+        cursorByteOffset: Int,
+        isPersistent: Boolean,
+    ): ULong? {
+        return when (
+            val result =
+                appServiceBridge.textEditSessionCreate(
+                    targetId,
+                    text,
+                    cursorByteOffset.toUInt(),
+                    isPersistent,
+                )
+        ) {
             is BridgeResult.Success -> {
                 val id = result.data
                 if (id == null || id == 0UL) {
@@ -579,7 +593,6 @@ class EditorSessionCoordinator(
         if (sessionId == 0UL) return false
         return appServiceBridge.textEditSessionSnapshot(sessionId) is BridgeResult.Success
     }
-
 
     companion object {
         internal const val TAG = "EditorSessionCoordinator"

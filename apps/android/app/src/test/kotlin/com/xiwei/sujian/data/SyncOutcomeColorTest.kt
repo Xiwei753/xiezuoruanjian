@@ -7,19 +7,25 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class SyncOutcomeColorTest {
-
-    private fun SyncOutcome.expectedIndicator(): SyncIndicatorState = when (this) {
-        is SyncOutcome.Completed -> SyncIndicatorState.Synced
-        is SyncOutcome.Disabled -> SyncIndicatorState.Unconfigured
-        is SyncOutcome.Unconfigured -> SyncIndicatorState.Unconfigured
-        is SyncOutcome.Busy -> SyncIndicatorState.Syncing
-        is SyncOutcome.RetryableFailure -> SyncIndicatorState.Failed
-        is SyncOutcome.TerminalFailure -> SyncIndicatorState.Failed
-    }
+    private fun SyncOutcome.expectedIndicator(): SyncIndicatorState =
+        when (this) {
+            is SyncOutcome.Completed -> SyncIndicatorState.Synced
+            is SyncOutcome.Disabled -> SyncIndicatorState.Unconfigured
+            is SyncOutcome.Unconfigured -> SyncIndicatorState.Unconfigured
+            is SyncOutcome.Busy -> SyncIndicatorState.Syncing
+            is SyncOutcome.RetryableFailure -> SyncIndicatorState.Failed
+            is SyncOutcome.TerminalFailure -> SyncIndicatorState.Failed
+        }
 
     @Test
     fun completedStatuses_mapToSynced() {
-        val statuses = listOf(SyncStatus.Success, SyncStatus.NoChanges, SyncStatus.LatestWinsApplied, SyncStatus.BranchMissingRecovered)
+        val statuses =
+            listOf(
+                SyncStatus.Success,
+                SyncStatus.NoChanges,
+                SyncStatus.LatestWinsApplied,
+                SyncStatus.BranchMissingRecovered,
+            )
         statuses.forEach { status ->
             val outcome = SyncOutcome.Completed(SyncResult(status = status))
             assertEquals("Expected Synced for $status", SyncIndicatorState.Synced, outcome.expectedIndicator())
@@ -52,7 +58,14 @@ class SyncOutcomeColorTest {
 
     @Test
     fun terminalFailure_mapsToFailed() {
-        val statuses = listOf(SyncStatus.Error, SyncStatus.Conflict, SyncStatus.PartialConflict, SyncStatus.FatalError, SyncStatus.DirtyRepoBlocked)
+        val statuses =
+            listOf(
+                SyncStatus.Error,
+                SyncStatus.Conflict,
+                SyncStatus.PartialConflict,
+                SyncStatus.FatalError,
+                SyncStatus.DirtyRepoBlocked,
+            )
         statuses.forEach { status ->
             val outcome = SyncOutcome.TerminalFailure(status)
             assertEquals("Expected Failed for $status", SyncIndicatorState.Failed, outcome.expectedIndicator())
@@ -61,20 +74,22 @@ class SyncOutcomeColorTest {
 
     @Test
     fun autoSyncWorker_mappingContract() {
-        val cases = listOf(
-            SyncOutcome.Completed(SyncResult(status = SyncStatus.Success)) to true,
-            SyncOutcome.Unconfigured to true,
-            SyncOutcome.Disabled to true,
-            SyncOutcome.Busy to false,
-            SyncOutcome.RetryableFailure(SyncStatus.Error) to false,
-            SyncOutcome.TerminalFailure(SyncStatus.Conflict) to false,
-        )
+        val cases =
+            listOf(
+                SyncOutcome.Completed(SyncResult(status = SyncStatus.Success)) to true,
+                SyncOutcome.Unconfigured to true,
+                SyncOutcome.Disabled to true,
+                SyncOutcome.Busy to false,
+                SyncOutcome.RetryableFailure(SyncStatus.Error) to false,
+                SyncOutcome.TerminalFailure(SyncStatus.Conflict) to false,
+            )
         cases.forEach { (outcome, expectSuccess) ->
-            val workerResult = when (outcome) {
-                is SyncOutcome.Completed, is SyncOutcome.Unconfigured, is SyncOutcome.Disabled -> true
-                is SyncOutcome.Busy, is SyncOutcome.RetryableFailure -> false
-                is SyncOutcome.TerminalFailure -> false
-            }
+            val workerResult =
+                when (outcome) {
+                    is SyncOutcome.Completed, is SyncOutcome.Unconfigured, is SyncOutcome.Disabled -> true
+                    is SyncOutcome.Busy, is SyncOutcome.RetryableFailure -> false
+                    is SyncOutcome.TerminalFailure -> false
+                }
             assertEquals("Worker result for $outcome", expectSuccess, workerResult)
         }
     }

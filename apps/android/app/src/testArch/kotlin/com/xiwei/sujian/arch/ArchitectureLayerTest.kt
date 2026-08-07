@@ -2,7 +2,6 @@ package com.xiwei.sujian.arch
 
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.io.File
 
 /**
  * 分层依赖规则约束测试（对应 AGENTS.md 跨平台边界）。
@@ -15,7 +14,6 @@ import java.io.File
  * 以便后续修复时移除 @Ignore 让测试重新生效。
  */
 class ArchitectureLayerTest {
-
     private val sourceRoot = ArchTestSupport.appSourceRoot
 
     // ------------------------------------------------------------------
@@ -36,14 +34,15 @@ class ArchitectureLayerTest {
      */
     @Test
     fun `ui layer does not directly reference uniffi bindings`() {
-        val violations = ArchTestSupport.findViolations(
-            sourceRoot,
-            pathFilter = "/ui/",
-            forbiddenReferences = listOf("uniffi.writer_core"),
-        )
+        val violations =
+            ArchTestSupport.findViolations(
+                sourceRoot,
+                pathFilter = "/ui/",
+                forbiddenReferences = listOf("uniffi.writer_core"),
+            )
         assertTrue(
             "UI 层不应直接引用 UniFFI 绑定。违规:\n${ArchTestSupport.formatViolations(violations)}",
-            violations.isEmpty()
+            violations.isEmpty(),
         )
     }
 
@@ -52,14 +51,15 @@ class ArchitectureLayerTest {
      */
     @Test
     fun `ui layer does not directly reference jna`() {
-        val violations = ArchTestSupport.findViolations(
-            sourceRoot,
-            pathFilter = "/ui/",
-            forbiddenReferences = listOf("com.sun.jna"),
-        )
+        val violations =
+            ArchTestSupport.findViolations(
+                sourceRoot,
+                pathFilter = "/ui/",
+                forbiddenReferences = listOf("com.sun.jna"),
+            )
         assertTrue(
             "UI 层不应直接引用 JNA。违规:\n${ArchTestSupport.formatViolations(violations)}",
-            violations.isEmpty()
+            violations.isEmpty(),
         )
     }
 
@@ -72,45 +72,48 @@ class ArchitectureLayerTest {
      *  - ui/compose/workspace/WorkspaceViewModel.kt
      *  - ui/compose/starmap/StarMapRoute.kt
      *  - ui/compose/stats/StatsScreen.kt
-            "ui/compose/starmap/StarMapViewModel.kt",
+     "ui/compose/starmap/StarMapViewModel.kt",
      *  - ui/compose/settings/SettingsRoute.kt
      */
     @Test
     fun `ui layer does not directly reference concrete bridge classes`() {
         // #597 技术债务：以下文件仍直接引用 BridgeProvider，待创建 Repository 接口后移除。
-        val bridgeProviderWhitelist = listOf(
-            "ui/compose/starmap/StarMapRoute.kt",
-            "ui/compose/stats/StatsScreen.kt",
-            "ui/compose/starmap/StarMapViewModel.kt",
-        )
-        val forbiddenBridgeClasses = listOf(
-            "com.xiwei.sujian.data.BridgeProvider",
-            
-            "com.xiwei.sujian.data.BridgeMappers",
-            "com.xiwei.sujian.data.WorkspaceBridge",
-            "com.xiwei.sujian.data.ChapterBridge",
-            "com.xiwei.sujian.data.ProjectBridge",
-            "com.xiwei.sujian.data.SettingsBridge",
-            "com.xiwei.sujian.data.StatsBridge",
-            "com.xiwei.sujian.data.SyncBridge",
-            "com.xiwei.sujian.data.WritingBridge",
-            "com.xiwei.sujian.data.ActionBridge",
-            "com.xiwei.sujian.data.AppServiceBridge",
-            "com.xiwei.sujian.data.StarMapBridge",
-            "com.xiwei.sujian.data.LayoutPolicyBridge",
-            "com.xiwei.sujian.data.ScreenPolicyBridge",
-        )
-        val allViolations = ArchTestSupport.findViolations(
-            sourceRoot,
-            pathFilter = "/ui/",
-            forbiddenReferences = forbiddenBridgeClasses,
-        )
-        val violations = allViolations.filterKeys { file ->
-            bridgeProviderWhitelist.none { file.path.contains(it) }
-        }
+        val bridgeProviderWhitelist =
+            listOf(
+                "ui/compose/starmap/StarMapRoute.kt",
+                "ui/compose/stats/StatsScreen.kt",
+                "ui/compose/starmap/StarMapViewModel.kt",
+            )
+        val forbiddenBridgeClasses =
+            listOf(
+                "com.xiwei.sujian.data.BridgeProvider",
+                "com.xiwei.sujian.data.BridgeMappers",
+                "com.xiwei.sujian.data.WorkspaceBridge",
+                "com.xiwei.sujian.data.ChapterBridge",
+                "com.xiwei.sujian.data.ProjectBridge",
+                "com.xiwei.sujian.data.SettingsBridge",
+                "com.xiwei.sujian.data.StatsBridge",
+                "com.xiwei.sujian.data.SyncBridge",
+                "com.xiwei.sujian.data.WritingBridge",
+                "com.xiwei.sujian.data.ActionBridge",
+                "com.xiwei.sujian.data.AppServiceBridge",
+                "com.xiwei.sujian.data.StarMapBridge",
+                "com.xiwei.sujian.data.LayoutPolicyBridge",
+                "com.xiwei.sujian.data.ScreenPolicyBridge",
+            )
+        val allViolations =
+            ArchTestSupport.findViolations(
+                sourceRoot,
+                pathFilter = "/ui/",
+                forbiddenReferences = forbiddenBridgeClasses,
+            )
+        val violations =
+            allViolations.filterKeys { file ->
+                bridgeProviderWhitelist.none { file.path.contains(it) }
+            }
         assertTrue(
             "UI 层不应直接引用具体 Bridge 类。违规:\n${ArchTestSupport.formatViolations(violations)}",
-            violations.isEmpty()
+            violations.isEmpty(),
         )
     }
 
@@ -123,19 +126,21 @@ class ArchitectureLayerTest {
      */
     @Test
     fun `bridge repository layer does not depend on compose`() {
-        val violations = ArchTestSupport.findViolations(
-            sourceRoot,
-            pathFilter = "/data/",
-            forbiddenReferences = listOf(
-                "androidx.compose",
-                "androidx.activity",
-                "android.view",
-                "com.xiwei.sujian.ui",
+        val violations =
+            ArchTestSupport.findViolations(
+                sourceRoot,
+                pathFilter = "/data/",
+                forbiddenReferences =
+                    listOf(
+                        "androidx.compose",
+                        "androidx.activity",
+                        "android.view",
+                        "com.xiwei.sujian.ui",
+                    ),
             )
-        )
         assertTrue(
             "Bridge/Repository 层不应依赖 Compose/Activity/View/UI。违规:\n${ArchTestSupport.formatViolations(violations)}",
-            violations.isEmpty()
+            violations.isEmpty(),
         )
     }
 
@@ -144,19 +149,21 @@ class ArchitectureLayerTest {
      */
     @Test
     fun `bridge repository layer does not depend on editor display state`() {
-        val violations = ArchTestSupport.findViolations(
-            sourceRoot,
-            pathFilter = "/data/",
-            forbiddenReferences = listOf(
-                "com.xiwei.sujian.editor.v2.visual",
-                "com.xiwei.sujian.editor.v2.motion",
-                "com.xiwei.sujian.editor.v2.compose",
-                "com.xiwei.sujian.editor.v2.render",
+        val violations =
+            ArchTestSupport.findViolations(
+                sourceRoot,
+                pathFilter = "/data/",
+                forbiddenReferences =
+                    listOf(
+                        "com.xiwei.sujian.editor.v2.visual",
+                        "com.xiwei.sujian.editor.v2.motion",
+                        "com.xiwei.sujian.editor.v2.compose",
+                        "com.xiwei.sujian.editor.v2.render",
+                    ),
             )
-        )
         assertTrue(
             "Bridge/Repository 层不应依赖 editor 显示/动画状态。违规:\n${ArchTestSupport.formatViolations(violations)}",
-            violations.isEmpty()
+            violations.isEmpty(),
         )
     }
 
@@ -165,16 +172,18 @@ class ArchitectureLayerTest {
      */
     @Test
     fun `ui layer does not directly depend on editor input infrastructure`() {
-        val violations = ArchTestSupport.findViolations(
-            sourceRoot,
-            pathFilter = "/ui/",
-            forbiddenReferences = listOf(
-                "com.xiwei.sujian.editor.v2.input",
+        val violations =
+            ArchTestSupport.findViolations(
+                sourceRoot,
+                pathFilter = "/ui/",
+                forbiddenReferences =
+                    listOf(
+                        "com.xiwei.sujian.editor.v2.input",
+                    ),
             )
-        )
         assertTrue(
             "UI 层不应直接依赖 editor/v2/input 基础设施。违规:\n${ArchTestSupport.formatViolations(violations)}",
-            violations.isEmpty()
+            violations.isEmpty(),
         )
     }
 }

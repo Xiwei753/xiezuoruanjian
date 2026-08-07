@@ -79,4 +79,3 @@ object WorkspaceDocumentGate {
      */
     fun activeDocumentIdentity(): String? = holder.get()?.documentIdentity()
 }
-

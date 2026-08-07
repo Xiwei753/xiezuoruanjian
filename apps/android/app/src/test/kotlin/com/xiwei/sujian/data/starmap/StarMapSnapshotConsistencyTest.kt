@@ -6,45 +6,68 @@ import org.junit.Test
 import uniffi.writer_core.*
 
 class StarMapSnapshotConsistencyTest {
-
-    private fun makeNodeDto(id: String, title: String) = StarMapNodeDto(
+    private fun makeNodeDto(
+        id: String,
+        title: String,
+    ) = StarMapNodeDto(
         id = id, title = title, kind = StarMapNodeKindDto.CHARACTER,
         payload = null, tags = emptyList(),
         content = StarMapNodeContentDto("empty", null, null, null, null, null, null, null, null, null, null, null),
         anchors = emptyList(), portal = null,
         displayPolicy = defaultStarMapDisplayPolicy(),
         openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
-        provenance = StarMapProvenanceDto(StarMapSourceKindDto.HUMAN, null, null, null, StarMapReviewStatusDto.ACCEPTED, null),
-        createdAt = 0u, updatedAt = 0u
+        provenance =
+            StarMapProvenanceDto(
+                StarMapSourceKindDto.HUMAN,
+                null,
+                null,
+                null,
+                StarMapReviewStatusDto.ACCEPTED,
+                null,
+            ),
+        createdAt = 0u, updatedAt = 0u,
     )
 
-    private fun makeEdgeDto(id: String, from: String, to: String) = StarMapEdgeDto(
+    private fun makeEdgeDto(
+        id: String,
+        from: String,
+        to: String,
+    ) = StarMapEdgeDto(
         id = id, from = from, to = to, kind = StarMapEdgeKindDto.RELATED_TO,
         label = null, payload = null,
         fromTarget = null, toTarget = null,
         fromEndpoint = null, toEndpoint = null,
         fromEndpointPath = null, toEndpointPath = null,
-        createdAt = 0u, updatedAt = 0u
+        createdAt = 0u, updatedAt = 0u,
     )
 
     @Test
     fun layoutCoordinates_preservedThroughDtoToRawCacheToModel() {
-        val dto = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
-            packageRevision = 1u, complete = true, sinceRevision = 0u,
-            nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B")),
-            edges = listOf(makeEdgeDto("e1", "n1", "n2")),
-            embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 100.0f, y = 200.0f, width = 150.0f, height = 80.0f,
-                    radius = 40.0f, collapsed = false, zIndex = 0, scale = 1.0f, depth = 0.0f, focusWeight = 1.0f, orbitGroup = null),
-                StarMapLayoutNodeDto(nodeId = "n2", x = 300.0f, y = 400.0f, width = 120.0f, height = 60.0f,
-                    radius = 30.0f, collapsed = true, zIndex = 1, scale = 0.8f, depth = 1.0f, focusWeight = 0.5f, orbitGroup = "group1")
-            )),
-            viewport = StarMapViewportDto(scale = 1.5f, offsetX = 10f, offsetY = 20f, width = 800f, height = 600f),
-            diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
+                packageRevision = 1u, complete = true, sinceRevision = 0u,
+                nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B")),
+                edges = listOf(makeEdgeDto("e1", "n1", "n2")),
+                embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 100.0f, y = 200.0f, width = 150.0f, height = 80.0f,
+                                radius = 40.0f, collapsed = false, zIndex = 0, scale = 1.0f, depth = 0.0f, focusWeight = 1.0f, orbitGroup = null,
+                            ),
+                            StarMapLayoutNodeDto(
+                                nodeId = "n2", x = 300.0f, y = 400.0f, width = 120.0f, height = 60.0f,
+                                radius = 30.0f, collapsed = true, zIndex = 1, scale = 0.8f, depth = 1.0f, focusWeight = 0.5f, orbitGroup = "group1",
+                            ),
+                        ),
+                    ),
+                viewport = StarMapViewportDto(scale = 1.5f, offsetX = 10f, offsetY = 20f, width = 800f, height = 600f),
+                diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
 
         val rawCache = dto.toRawCache()
         assertEquals(2, rawCache.layoutNodes.size)
@@ -77,21 +100,30 @@ class StarMapSnapshotConsistencyTest {
 
     @Test
     fun edgeRenderData_availableFromCacheForComputeEdgeRenders() {
-        val dto = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
-            packageRevision = 1u, complete = true, sinceRevision = 0u,
-            nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B")),
-            edges = listOf(makeEdgeDto("e1", "n1", "n2")),
-            embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 0f, y = 0f, width = 100f, height = 50f,
-                    radius = 25f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null),
-                StarMapLayoutNodeDto(nodeId = "n2", x = 200f, y = 0f, width = 100f, height = 50f,
-                    radius = 25f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
-            )),
-            viewport = null, diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
+                packageRevision = 1u, complete = true, sinceRevision = 0u,
+                nodes = listOf(makeNodeDto("n1", "A"), makeNodeDto("n2", "B")),
+                edges = listOf(makeEdgeDto("e1", "n1", "n2")),
+                embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 0f, y = 0f, width = 100f, height = 50f,
+                                radius = 25f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                            StarMapLayoutNodeDto(
+                                nodeId = "n2", x = 200f, y = 0f, width = 100f, height = 50f,
+                                radius = 25f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                        ),
+                    ),
+                viewport = null, diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
 
         val rawCache = dto.toRawCache()
         assertNotNull("graph must be available for computeEdgeRenders", rawCache.graph)
@@ -102,19 +134,26 @@ class StarMapSnapshotConsistencyTest {
 
     @Test
     fun incrementalSnapshot_preservesLayoutAndViewport() {
-        val dto = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
-            packageRevision = 5u, complete = true, sinceRevision = 5u,
-            nodes = emptyList(), edges = emptyList(), embeds = emptyList(),
-            links = emptyList(), hyperlinks = emptyList(),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
-            )),
-            viewport = StarMapViewportDto(2f, 10f, 20f, 800f, 600f),
-            diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
+                packageRevision = 5u, complete = true, sinceRevision = 5u,
+                nodes = emptyList(), edges = emptyList(), embeds = emptyList(),
+                links = emptyList(), hyperlinks = emptyList(),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                        ),
+                    ),
+                viewport = StarMapViewportDto(2f, 10f, 20f, 800f, 600f),
+                diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
 
         val result = dto.toSnapshotResult()
         assertEquals(0, result.data.graph.nodes.size)
@@ -127,78 +166,166 @@ class StarMapSnapshotConsistencyTest {
 
     @Test
     fun semanticFields_preservedThroughFullChain() {
-        val deepTarget = StarMapDeepTargetDto(
-            starmapId = "other",
-            path = listOf(StarMapPathSegmentDto(kind = "EnterChild", starmapId = "child1")),
-            target = StarMapTargetDetailDto(kind = "Node", nodeId = "inner1", anchorId = null,
-                projectId = null, volumeId = null, chapterId = null, rangeStart = null, rangeEnd = null,
-                entityType = null, entityId = null, uri = null)
-        )
-        val dto = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
-            packageRevision = 1u, complete = true, sinceRevision = 0u,
-            nodes = listOf(StarMapNodeDto(
-                id = "n1", title = "Char", kind = StarMapNodeKindDto.CHARACTER,
-                payload = null, tags = listOf("protagonist"),
-                content = StarMapNodeContentDto("empty", null, null, null, null, null, null, null, null, null, null, null),
-                anchors = listOf(StarMapAnchorDto(
-                    anchorId = "a1",
-                    target = StarMapAnchorTargetDto(kind = "Chapter", projectId = null, volumeId = null, chapterId = "ch1",
-                        rangeStart = null, rangeEnd = null, entityId = null, entityType = null, starmapId = null, uri = null, payload = null),
-                    label = "ch_ref",
-                    role = StarMapAnchorRoleDto.SOURCE
-                )),
-                portal = null,
-                displayPolicy = defaultStarMapDisplayPolicy(),
-                openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
-                provenance = StarMapProvenanceDto(StarMapSourceKindDto.HUMAN, null, null, null, StarMapReviewStatusDto.ACCEPTED, null),
-                createdAt = 0u, updatedAt = 0u
-            )),
-            edges = listOf(StarMapEdgeDto(
-                id = "e1", from = "n1", to = "n1", kind = StarMapEdgeKindDto.REFERENCES,
-                label = "ref", payload = null,
-                fromTarget = null, toTarget = null,
-                fromEndpoint = StarMapEdgeEndpointDto(kind = "Node", nodeId = "n1", anchorId = null, target = null),
-                toEndpoint = StarMapEdgeEndpointDto(kind = "DeepTarget", nodeId = null, anchorId = null, target = deepTarget),
-                fromEndpointPath = StarMapEndpointPathDto(
-                    segments = listOf(StarMapEndpointPathSegmentDto(kind = "EnterChildMap", starmapId = "sm_child")),
-                    endpoint = StarMapEdgeEndpointDto(kind = "Node", nodeId = "n_inner", anchorId = null, target = null)
-                ),
-                toEndpointPath = null,
-                createdAt = 0u, updatedAt = 0u
-            )),
-            embeds = listOf(StarMapEmbedDto(
-                instanceId = "emb1", targetStarmapId = "child", label = "child",
-                displayPolicy = defaultStarMapDisplayPolicy(),
-                openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
-                placement = StarMapEmbedPlacementDto(x = 10f, y = 20f, width = 200f, height = 150f, scale = 1f, zIndex = 0, collapsed = false),
-                targetViewport = StarMapEmbedViewportDto(scale = 1f, offsetX = 0f, offsetY = 0f),
-                sourceNodeId = "n1",
-                hostEndpoint = StarMapEndpointDto(kind = "Node", nodeId = "n1", anchorId = null),
-                provenance = StarMapProvenanceDto(StarMapSourceKindDto.HUMAN, null, null, null, StarMapReviewStatusDto.ACCEPTED, null),
-                createdAt = 0u, updatedAt = 0u
-            )),
-            links = listOf(StarMapLinkDto(
-                linkId = "lk1",
-                source = StarMapEndpointDto(kind = "Anchor", nodeId = "n1", anchorId = "a1"),
-                target = deepTarget,
-                label = "link",
-                createdAt = 0u, updatedAt = 0u
-            )),
-            hyperlinks = listOf(StarMapHyperlinkDto(
-                hyperlinkId = "hl1",
-                source = StarMapEndpointPathDto(
-                    segments = listOf(StarMapEndpointPathSegmentDto(kind = "EnterChildMap", starmapId = "child1")),
-                    endpoint = StarMapEdgeEndpointDto(kind = "Node", nodeId = "n1", anchorId = null, target = null)
-                ),
-                targetUri = "https://example.com",
-                label = "hl",
-                targetStarmapId = "tgt",
-                createdAt = 0u, updatedAt = 0u
-            )),
-            layout = null, viewport = null, diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val deepTarget =
+            StarMapDeepTargetDto(
+                starmapId = "other",
+                path = listOf(StarMapPathSegmentDto(kind = "EnterChild", starmapId = "child1")),
+                target =
+                    StarMapTargetDetailDto(
+                        kind = "Node", nodeId = "inner1", anchorId = null,
+                        projectId = null, volumeId = null, chapterId = null, rangeStart = null, rangeEnd = null,
+                        entityType = null, entityId = null, uri = null,
+                    ),
+            )
+        val dto =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
+                packageRevision = 1u, complete = true, sinceRevision = 0u,
+                nodes =
+                    listOf(
+                        StarMapNodeDto(
+                            id = "n1", title = "Char", kind = StarMapNodeKindDto.CHARACTER,
+                            payload = null, tags = listOf("protagonist"),
+                            content = StarMapNodeContentDto("empty", null, null, null, null, null, null, null, null, null, null, null),
+                            anchors =
+                                listOf(
+                                    StarMapAnchorDto(
+                                        anchorId = "a1",
+                                        target =
+                                            StarMapAnchorTargetDto(
+                                                kind = "Chapter", projectId = null, volumeId = null, chapterId = "ch1",
+                                                rangeStart = null, rangeEnd = null, entityId = null, entityType = null, starmapId = null, uri = null, payload = null,
+                                            ),
+                                        label = "ch_ref",
+                                        role = StarMapAnchorRoleDto.SOURCE,
+                                    ),
+                                ),
+                            portal = null,
+                            displayPolicy = defaultStarMapDisplayPolicy(),
+                            openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
+                            provenance =
+                                StarMapProvenanceDto(
+                                    StarMapSourceKindDto.HUMAN,
+                                    null,
+                                    null,
+                                    null,
+                                    StarMapReviewStatusDto.ACCEPTED,
+                                    null,
+                                ),
+                            createdAt = 0u, updatedAt = 0u,
+                        ),
+                    ),
+                edges =
+                    listOf(
+                        StarMapEdgeDto(
+                            id = "e1", from = "n1", to = "n1", kind = StarMapEdgeKindDto.REFERENCES,
+                            label = "ref", payload = null,
+                            fromTarget = null, toTarget = null,
+                            fromEndpoint =
+                                StarMapEdgeEndpointDto(
+                                    kind = "Node",
+                                    nodeId = "n1",
+                                    anchorId = null,
+                                    target = null,
+                                ),
+                            toEndpoint =
+                                StarMapEdgeEndpointDto(
+                                    kind = "DeepTarget",
+                                    nodeId = null,
+                                    anchorId = null,
+                                    target = deepTarget,
+                                ),
+                            fromEndpointPath =
+                                StarMapEndpointPathDto(
+                                    segments =
+                                        listOf(
+                                            StarMapEndpointPathSegmentDto(
+                                                kind = "EnterChildMap",
+                                                starmapId = "sm_child",
+                                            ),
+                                        ),
+                                    endpoint =
+                                        StarMapEdgeEndpointDto(
+                                            kind = "Node",
+                                            nodeId = "n_inner",
+                                            anchorId = null,
+                                            target = null,
+                                        ),
+                                ),
+                            toEndpointPath = null,
+                            createdAt = 0u, updatedAt = 0u,
+                        ),
+                    ),
+                embeds =
+                    listOf(
+                        StarMapEmbedDto(
+                            instanceId = "emb1", targetStarmapId = "child", label = "child",
+                            displayPolicy = defaultStarMapDisplayPolicy(),
+                            openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
+                            placement =
+                                StarMapEmbedPlacementDto(
+                                    x = 10f,
+                                    y = 20f,
+                                    width = 200f,
+                                    height = 150f,
+                                    scale = 1f,
+                                    zIndex = 0,
+                                    collapsed = false,
+                                ),
+                            targetViewport = StarMapEmbedViewportDto(scale = 1f, offsetX = 0f, offsetY = 0f),
+                            sourceNodeId = "n1",
+                            hostEndpoint = StarMapEndpointDto(kind = "Node", nodeId = "n1", anchorId = null),
+                            provenance =
+                                StarMapProvenanceDto(
+                                    StarMapSourceKindDto.HUMAN,
+                                    null,
+                                    null,
+                                    null,
+                                    StarMapReviewStatusDto.ACCEPTED,
+                                    null,
+                                ),
+                            createdAt = 0u, updatedAt = 0u,
+                        ),
+                    ),
+                links =
+                    listOf(
+                        StarMapLinkDto(
+                            linkId = "lk1",
+                            source = StarMapEndpointDto(kind = "Anchor", nodeId = "n1", anchorId = "a1"),
+                            target = deepTarget,
+                            label = "link",
+                            createdAt = 0u,
+                            updatedAt = 0u,
+                        ),
+                    ),
+                hyperlinks =
+                    listOf(
+                        StarMapHyperlinkDto(
+                            hyperlinkId = "hl1",
+                            source =
+                                StarMapEndpointPathDto(
+                                    segments =
+                                        listOf(
+                                            StarMapEndpointPathSegmentDto(kind = "EnterChildMap", starmapId = "child1"),
+                                        ),
+                                    endpoint =
+                                        StarMapEdgeEndpointDto(
+                                            kind = "Node",
+                                            nodeId = "n1",
+                                            anchorId = null,
+                                            target = null,
+                                        ),
+                                ),
+                            targetUri = "https://example.com",
+                            label = "hl",
+                            targetStarmapId = "tgt",
+                            createdAt = 0u,
+                            updatedAt = 0u,
+                        ),
+                    ),
+                layout = null, viewport = null, diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
 
         val result = dto.toSnapshotResult()
 
@@ -247,20 +374,27 @@ class StarMapSnapshotConsistencyTest {
 
     @Test
     fun rawCache_toSnapshotResult_matchesDto_toSnapshotResult() {
-        val dto = StarMapPhasedSnapshotDto(
-            starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
-            packageRevision = 1u, complete = true, sinceRevision = 0u,
-            nodes = listOf(makeNodeDto("n1", "A")),
-            edges = listOf(makeEdgeDto("e1", "n1", "n1")),
-            embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
-            layout = StarMapLayoutDto(StarMapLayoutKindDto.FREEFORM, listOf(
-                StarMapLayoutNodeDto(nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
-                    radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null)
-            )),
-            viewport = StarMapViewportDto(1f, 0f, 0f, 800f, 600f),
-            diagnostics = emptyList(),
-            deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList()
-        )
+        val dto =
+            StarMapPhasedSnapshotDto(
+                starmapId = "sm1", title = "T", loadPhase = "BackgroundFullLoad",
+                packageRevision = 1u, complete = true, sinceRevision = 0u,
+                nodes = listOf(makeNodeDto("n1", "A")),
+                edges = listOf(makeEdgeDto("e1", "n1", "n1")),
+                embeds = emptyList(), links = emptyList(), hyperlinks = emptyList(),
+                layout =
+                    StarMapLayoutDto(
+                        StarMapLayoutKindDto.FREEFORM,
+                        listOf(
+                            StarMapLayoutNodeDto(
+                                nodeId = "n1", x = 50f, y = 60f, width = 100f, height = 80f,
+                                radius = 30f, collapsed = false, zIndex = 0, scale = 1f, depth = 0f, focusWeight = 1f, orbitGroup = null,
+                            ),
+                        ),
+                    ),
+                viewport = StarMapViewportDto(1f, 0f, 0f, 800f, 600f),
+                diagnostics = emptyList(),
+                deletedNodeIds = emptyList(), deletedEdgeIds = emptyList(), deletedEmbedIds = emptyList(), deletedLinkIds = emptyList(), deletedHyperlinkIds = emptyList(),
+            )
         val fromDto = dto.toSnapshotResult()
         val fromCache = dto.toRawCache().toSnapshotResult()
 

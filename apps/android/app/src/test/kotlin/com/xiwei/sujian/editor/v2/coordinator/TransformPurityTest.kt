@@ -25,15 +25,19 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class TransformPurityTest {
-
     private fun createCoordinator(): EditorSessionCoordinator {
-        return EditorSessionCoordinator(com.xiwei.sujian.data.AppServiceBridge(
-            com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595_transform_purity")
-        ))
+        return EditorSessionCoordinator(
+            com.xiwei.sujian.data.AppServiceBridge(
+                com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595_transform_purity"),
+            ),
+        )
     }
 
-    private fun lease(targetId: String, sessionId: ULong = 0UL, epoch: Long = 0L): EditorInputLease =
-        EditorInputLease(targetId, sessionId, epoch)
+    private fun lease(
+        targetId: String,
+        sessionId: ULong = 0UL,
+        epoch: Long = 0L,
+    ): EditorInputLease = EditorInputLease(targetId, sessionId, epoch)
 
     @Test
     fun applyLocalEdit_sessionStateMatchesStoreRecord() {
@@ -50,7 +54,7 @@ class TransformPurityTest {
                 selectionAnchorUtf8 = 2,
                 selectionHeadUtf8 = 5,
                 lease = lease("a"),
-            )
+            ),
         )
         val state = coordinator.sessionState
         assertEquals("a", state.targetId)
@@ -72,7 +76,7 @@ class TransformPurityTest {
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
 
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "first", 1L, 1L, lease = lease("a"))
+            EditorDocumentUpdate.LocalInput("a", "first", 1L, 1L, lease = lease("a")),
         )
         assertEquals("first", coordinator.sessionState.text)
         assertEquals(1L, coordinator.sessionState.revision)
@@ -86,7 +90,7 @@ class TransformPurityTest {
                 selectionAnchorUtf8 = 0,
                 selectionHeadUtf8 = 6,
                 lease = lease("a"),
-            )
+            ),
         )
         assertEquals("second", coordinator.sessionState.text)
         assertEquals(2L, coordinator.sessionState.revision)
@@ -94,7 +98,7 @@ class TransformPurityTest {
 
         // 第三次更新 — 验证不会因为前两次 transform 写 store 而累积错误。
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "third", 3L, 3L, lease = lease("a"))
+            EditorDocumentUpdate.LocalInput("a", "third", 3L, 3L, lease = lease("a")),
         )
         assertEquals("third", coordinator.sessionState.text)
         assertEquals(3L, coordinator.sessionState.revision)
@@ -105,7 +109,7 @@ class TransformPurityTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "original", 1L, 1L, lease = lease("a"))
+            EditorDocumentUpdate.LocalInput("a", "original", 1L, 1L, lease = lease("a")),
         )
 
         coordinator.applyUndoRestored(
@@ -118,7 +122,7 @@ class TransformPurityTest {
                 selectionAnchorUtf8 = 0,
                 selectionHeadUtf8 = 6,
                 lease = lease("a"),
-            )
+            ),
         )
         val state = coordinator.sessionState
         assertEquals("undone", state.text)
@@ -132,7 +136,7 @@ class TransformPurityTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "before replace", 1L, 1L, lease = lease("a"))
+            EditorDocumentUpdate.LocalInput("a", "before replace", 1L, 1L, lease = lease("a")),
         )
 
         coordinator.applyProgrammaticReplace(
@@ -145,7 +149,7 @@ class TransformPurityTest {
                 selectionAnchorUtf8 = 0,
                 selectionHeadUtf8 = 12,
                 lease = lease("a"),
-            )
+            ),
         )
         val state = coordinator.sessionState
         assertEquals("after replace", state.text)
@@ -162,7 +166,7 @@ class TransformPurityTest {
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
         for (i in 1..5) {
             coordinator.applyLocalEdit(
-                EditorDocumentUpdate.LocalInput("a", "text$i", i.toLong(), i.toLong(), lease = lease("a"))
+                EditorDocumentUpdate.LocalInput("a", "text$i", i.toLong(), i.toLong(), lease = lease("a")),
             )
         }
         assertTrue(coordinator.isTargetRegistered("a"))
@@ -179,20 +183,21 @@ class TransformPurityTest {
         coordinator.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
 
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = lease("a"))
+            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = lease("a")),
         )
         // 切到 B（用 commitPreparedSession 模拟章节切换）。
-        val handle = PreparedSessionHandle(
-            targetId = "b",
-            sessionId = 2UL,
-            snapshot = TargetSnapshot("textB", 5, 1L, 0, 5),
-            newlyCreated = true,
-            previousRecord = null,
-        )
+        val handle =
+            PreparedSessionHandle(
+                targetId = "b",
+                sessionId = 2UL,
+                snapshot = TargetSnapshot("textB", 5, 1L, 0, 5),
+                newlyCreated = true,
+                previousRecord = null,
+            )
         assertTrue(coordinator.commitPreparedSession(handle))
         val leaseB = coordinator.currentInputLease()!!
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("b", "textB edited", 2L, 2L, lease = leaseB)
+            EditorDocumentUpdate.LocalInput("b", "textB edited", 2L, 2L, lease = leaseB),
         )
 
         val state = coordinator.sessionState
@@ -217,7 +222,7 @@ class TransformPurityTest {
                 transactionId = 1L,
                 operationKind = EditorOperationKind.INSERT,
                 lease = lease("a"),
-            )
+            ),
         )
         assertTrue(coordinator.sessionState.localDirty)
 
@@ -232,7 +237,7 @@ class TransformPurityTest {
                 selectionAnchorUtf8 = 0,
                 selectionHeadUtf8 = 3,
                 lease = lease("a"),
-            )
+            ),
         )
         assertTrue("选区变更不得清 localDirty", coordinator.sessionState.localDirty)
         assertEquals(3, coordinator.sessionState.selectionHeadUtf8)
@@ -245,19 +250,21 @@ class TransformPurityTest {
         val coordinator = createCoordinator()
         coordinator.registerTargetMeta("a", TextEditorProfile.DocumentBody, persistent = true)
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = lease("a"))
+            EditorDocumentUpdate.LocalInput("a", "textA", 1L, 1L, lease = lease("a")),
         )
         val staleLease = lease("a")
 
         coordinator.registerTargetMeta("b", TextEditorProfile.DocumentBody, persistent = true)
-        assertTrue(coordinator.commitPreparedSession(
-            PreparedSessionHandle("b", 2UL, TargetSnapshot("textB", 5, 2L, 0, 5), true, null)
-        ))
+        assertTrue(
+            coordinator.commitPreparedSession(
+                PreparedSessionHandle("b", 2UL, TargetSnapshot("textB", 5, 2L, 0, 5), true, null),
+            ),
+        )
 
         // 旧 A 的 lease 已失效 — 晚到输入不得修改 B 的 SessionState。
         assertFalse(coordinator.isInputLeaseCurrent(staleLease, "a"))
         coordinator.applyLocalEdit(
-            EditorDocumentUpdate.LocalInput("a", "stale input", 9L, 9L, lease = staleLease)
+            EditorDocumentUpdate.LocalInput("a", "stale input", 9L, 9L, lease = staleLease),
         )
         assertEquals("textB", coordinator.sessionState.text)
         assertEquals("b", coordinator.sessionState.targetId)
