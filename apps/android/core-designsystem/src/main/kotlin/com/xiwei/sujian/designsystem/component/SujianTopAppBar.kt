@@ -13,6 +13,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
@@ -23,9 +24,10 @@ fun SujianTopAppBar(
     title: String,
     modifier: Modifier = Modifier,
     navigationIcon: ImageVector? = null,
-    navigationIconContentDescription: String? = null,
     onNavigationClick: (() -> Unit)? = null,
     actions: @Composable () -> Unit = {},
+    /** 透明背景顶栏（#597：写作区只保留图标层，背景透出正文层）。 */
+    transparent: Boolean = false,
 ) {
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     TopAppBar(
@@ -40,13 +42,12 @@ fun SujianTopAppBar(
                 SujianIconButton(
                     onClick = onNavigationClick,
                     icon = navigationIcon,
-                    contentDescription = navigationIconContentDescription,
                 )
             }
         },
         actions = { actions() },
         colors = TopAppBarDefaults.topAppBarColors(
-            containerColor = MaterialTheme.colorScheme.surface,
+            containerColor = if (transparent) Color.Transparent else MaterialTheme.colorScheme.surface,
             titleContentColor = MaterialTheme.colorScheme.onSurface,
         ),
     )

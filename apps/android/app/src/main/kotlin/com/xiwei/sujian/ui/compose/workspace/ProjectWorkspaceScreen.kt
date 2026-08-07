@@ -9,7 +9,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
 import androidx.compose.material3.adaptive.layout.AnimatedPane
 import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffold
-import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -44,11 +43,16 @@ import kotlinx.coroutines.launch
  *   - extraPane → 正文编辑器（[SujianEditorHost]）
  * - 窄窗口（手机竖屏）依次显示单窗格；宽窗口（平板/横屏/折叠屏）并排展开多窗格。
  * - 窗口变宽只改变排列，不切换到另一套页面。
+ *
+ * [workspaceNavState] 由导航套件层创建并注入（#597：返回历史始终同一份）——
+ * 顶栏返回、系统返回、预测返回和页面返回共用同一个 navigator；
+ * 本组件不再自行创建第二份工作区导航状态。
  */
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
 fun ProjectWorkspaceScreen(
     appState: SujianAppState,
+    workspaceNavState: WorkspaceNavigationState,
     modifier: Modifier = Modifier,
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -79,26 +83,9 @@ fun ProjectWorkspaceScreen(
         )
     }
 
-    // 会话恢复：从已持久化的业务选择一次性构建 navigator 初始历史，
-    // 之后只使用 navigator 自己保存/恢复的历史，不再从业务字段反复重建。
-    val initialDestination =
-        remember(
-            appState.currentProjectId,
-            appState.currentVolumeId,
-            appState.currentChapterId,
-        ) {
-            deriveRestoreDestination(
-                appState.currentProjectId,
-                appState.currentVolumeId,
-                appState.currentChapterId,
-            )
-        }
-    val initialHistory =
-        remember(initialDestination) {
-            buildInitialHistory(initialDestination)
-        }
-    val navigator = rememberListDetailPaneScaffoldNavigator(initialDestinationHistory = initialHistory)
-    val workspaceNavState = remember { WorkspaceNavigationState(navigator) }
+    // #597：工作区 navigator 由导航套件层创建并注入（唯一实例），
+    // 会话恢复的初始历史已经由套件层根据业务选择一次性构建。
+    val navigator = workspaceNavState.navigator
 
     // #592 三：workspace 导航离开正文时业务级关闭章节 session。
     // 配置变化不会改变 workspace route（navigator 历史由 rememberSaveable 保留），

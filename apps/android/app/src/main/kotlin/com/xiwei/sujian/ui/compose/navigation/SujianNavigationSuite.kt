@@ -1,5 +1,6 @@
 package com.xiwei.sujian.ui.compose.navigation
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.core.tween
@@ -28,6 +29,9 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
+import androidx.compose.material3.adaptive.navigation.BackNavigationBehavior
+import androidx.compose.material3.adaptive.navigation.ThreePaneScaffoldPredictiveBackHandler
+import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
@@ -65,6 +69,9 @@ import com.xiwei.sujian.ui.compose.settings.SettingsRoute
 import com.xiwei.sujian.ui.compose.starmap.StarMapScreen
 import com.xiwei.sujian.ui.compose.stats.StatsScreen
 import com.xiwei.sujian.ui.compose.workspace.ProjectWorkspaceScreen
+import com.xiwei.sujian.ui.compose.workspace.WorkspaceNavigationState
+import com.xiwei.sujian.ui.compose.workspace.buildInitialHistory
+import com.xiwei.sujian.ui.compose.workspace.deriveRestoreDestination
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -137,6 +144,15 @@ private class SujianTopBarInfo(
     val navigationIcon: ImageVector?,
     val onNavigationClick: (() -> Unit)?,
     val actions: @Composable () -> Unit,
+    val transparent: Boolean,
+)
+
+/** 顶栏操作所需的环境依赖 — 打包传递，避免函数参数超出门禁阈值。 */
+private data class SujianTopBarEnv(
+    val syncState: SyncIndicatorState,
+    val coroutineScope: CoroutineScope,
+    val deps: SujianAppDependencies,
+    val backStack: NavBackStack<NavKey>,
 )
 
 private fun rememberInitialNavStack(initialDestination: String?): List<SujianRoute> =
@@ -168,22 +184,29 @@ private fun rememberSujianTopBarTitle(
         is SujianRoute.Settings -> stringResource(id = R.string.action_settings)
     }
 
+/** 顶栏返回逻辑 — 先生成唯一的返回动作，再决定是否显示图标（#597 评论问题三）。
+ * 工作区内的返回（正文→章节树→作品列表）统一走 [WorkspaceNavigationState.back]，
+ * 与系统返回、页面返回共用同一个工作区 navigator 历史（返回历史始终同一份）。 */
 @Composable
 private fun rememberSujianTopBarNavigation(
     currentRoute: SujianRoute,
-    appState: SujianAppState,
     starMapTopBarState: StarMapTopBarState,
-    backStack: NavBackStack<NavKey>,
+    env: SujianTopBarEnv,
+    workspaceNavState: WorkspaceNavigationState,
 ): Pair<ImageVector?, (() -> Unit)?> {
     val onNavigationClick: (() -> Unit)? =
         when (currentRoute) {
             is SujianRoute.Settings -> {
-                { backStack.removeLastOrNull() }
+                { env.backStack.removeLastOrNull() }
             }
             is SujianRoute.StarMap -> starMapTopBarState.onBack
             is SujianRoute.Works -> {
-                if (appState.currentProjectId != null) {
-                    { appState.clearProjectSelection() }
+                if (workspaceNavState.canNavigateBack) {
+                    {
+                        env.coroutineScope.launch {
+                            workspaceNavState.back()
+                        }
+                    }
                 } else {
                     null
                 }
@@ -194,46 +217,53 @@ private fun rememberSujianTopBarNavigation(
     return navigationIcon to onNavigationClick
 }
 
+/** 顶栏右侧操作 — 顺序由 [SujianChromePolicy] 决定：
+ * 作品页依次提供 设置、搜索、同步状态；写作区只保留需要的图标层（设置、同步）。 */
 private fun rememberSujianTopBarActions(
     currentRoute: SujianRoute,
+    chrome: SujianChromeSpec,
     starMapTopBarState: StarMapTopBarState,
-    syncState: SyncIndicatorState,
-    coroutineScope: CoroutineScope,
-    deps: SujianAppDependencies,
-    backStack: NavBackStack<NavKey>,
+    env: SujianTopBarEnv,
 ): @Composable () -> Unit =
     {
         if (currentRoute is SujianRoute.StarMap) {
             starMapTopBarState.actions?.invoke()
         }
         if (currentRoute is SujianRoute.Works) {
-            SujianIconButton(
-                onClick = { },
-                icon = SujianIcons.Search,
-                contentDescription = stringResource(id = R.string.cd_search_dev),
-                enabled = false,
-            )
-            SujianIconButton(
-                onClick = { backStack.add(SujianRoute.Settings) },
-                icon = SujianIcons.Settings,
-                contentDescription = stringResource(id = R.string.action_settings),
-                semanticId = SujianSemanticIds.NavigationSettings,
-            )
-            SujianIconButton(
-                onClick = {
-                    coroutineScope.launch {
-                        deps.syncCoordinator.runSync(SyncTrigger.Manual)
-                    }
-                },
-                icon =
-                    when (syncState) {
-                        SyncIndicatorState.Unconfigured -> SujianIcons.CloudOff
-                        SyncIndicatorState.Syncing -> SujianIcons.CloudSync
-                        SyncIndicatorState.Synced -> SujianIcons.CloudDone
-                        SyncIndicatorState.Failed -> SujianIcons.CloudError
-                    },
-                contentDescription = stringResource(id = R.string.cd_sync_manual),
-            )
+            chrome.actions.forEach { action ->
+                when (action) {
+                    SujianChromeAction.Settings ->
+                        SujianIconButton(
+                            onClick = { env.backStack.add(SujianRoute.Settings) },
+                            icon = SujianIcons.Settings,
+                            contentDescription = stringResource(id = R.string.action_settings),
+                            semanticId = SujianSemanticIds.NavigationSettings,
+                        )
+                    SujianChromeAction.Search ->
+                        SujianIconButton(
+                            onClick = { },
+                            icon = SujianIcons.Search,
+                            contentDescription = stringResource(id = R.string.cd_search_dev),
+                            enabled = false,
+                        )
+                    SujianChromeAction.Sync ->
+                        SujianIconButton(
+                            onClick = {
+                                env.coroutineScope.launch {
+                                    env.deps.syncCoordinator.runSync(SyncTrigger.Manual)
+                                }
+                            },
+                            icon =
+                                when (env.syncState) {
+                                    SyncIndicatorState.Unconfigured -> SujianIcons.CloudOff
+                                    SyncIndicatorState.Syncing -> SujianIcons.CloudSync
+                                    SyncIndicatorState.Synced -> SujianIcons.CloudDone
+                                    SyncIndicatorState.Failed -> SujianIcons.CloudError
+                                },
+                            contentDescription = stringResource(id = R.string.cd_sync_manual),
+                        )
+                }
+            }
         }
     }
 
@@ -244,6 +274,7 @@ private fun SujianNavDisplayContent(
     appState: SujianAppState,
     starMapTopBarState: StarMapTopBarState,
     settingsDetailSection: SettingsSection?,
+    workspaceNavState: WorkspaceNavigationState,
     onSettingsDetailSectionChange: (SettingsSection?) -> Unit,
 ) {
     NavDisplay(
@@ -267,6 +298,7 @@ private fun SujianNavDisplayContent(
                             is SujianRoute.Works ->
                                 ProjectWorkspaceScreen(
                                     appState = appState,
+                                    workspaceNavState = workspaceNavState,
                                 )
                             is SujianRoute.StarMap ->
                                 StarMapScreen(
@@ -287,14 +319,44 @@ private fun SujianNavDisplayContent(
     )
 }
 
+/** compact 底栏 — 一级入口只保留 作品/星图/统计（#597 评论问题一）。 */
+@Composable
+private fun SujianCompactBottomBar(
+    currentTopDestination: SujianDestination,
+    backStack: NavBackStack<NavKey>,
+) {
+    NavigationBar(
+        windowInsets = WindowInsets(0.dp),
+    ) {
+        SujianDestination.entries.forEach { destination ->
+            NavigationBarItem(
+                selected = currentTopDestination == destination,
+                onClick = { navigateToTopDestination(backStack, destination) },
+                icon = {
+                    Icon(
+                        imageVector =
+                            if (currentTopDestination == destination) {
+                                destination.selectedIcon
+                            } else {
+                                destination.unselectedIcon
+                            },
+                        contentDescription = stringResource(id = destination.labelResId),
+                    )
+                },
+                label = { Text(text = stringResource(id = destination.labelResId)) },
+                modifier = Modifier.navItemModifier(destination),
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3AdaptiveApi::class)
 @Composable
 private fun SujianCompactNavScaffold(
     modifier: Modifier,
     topBarInfo: SujianTopBarInfo,
     snackbarHostState: SnackbarHostState,
-    currentTopDestination: SujianDestination,
-    backStack: NavBackStack<NavKey>,
+    bottomBar: @Composable () -> Unit,
     navDisplayContent: @Composable () -> Unit,
 ) {
     Scaffold(
@@ -305,33 +367,10 @@ private fun SujianCompactNavScaffold(
                 navigationIcon = topBarInfo.navigationIcon,
                 onNavigationClick = topBarInfo.onNavigationClick,
                 actions = topBarInfo.actions,
+                transparent = topBarInfo.transparent,
             )
         },
-        bottomBar = {
-            NavigationBar(
-                windowInsets = WindowInsets(0.dp),
-            ) {
-                SujianDestination.entries.forEach { destination ->
-                    NavigationBarItem(
-                        selected = currentTopDestination == destination,
-                        onClick = { navigateToTopDestination(backStack, destination) },
-                        icon = {
-                            Icon(
-                                imageVector =
-                                    if (currentTopDestination == destination) {
-                                        destination.selectedIcon
-                                    } else {
-                                        destination.unselectedIcon
-                                    },
-                                contentDescription = stringResource(id = destination.labelResId),
-                            )
-                        },
-                        label = { Text(text = stringResource(id = destination.labelResId)) },
-                        modifier = navItemModifier(destination),
-                    )
-                }
-            }
-        },
+        bottomBar = bottomBar,
         snackbarHost = {
             SnackbarHost(hostState = snackbarHostState) { data ->
                 SujianSnackbar(data = data)
@@ -370,6 +409,7 @@ private fun SujianWideNavScaffold(
                 navigationIcon = topBarInfo.navigationIcon,
                 onNavigationClick = topBarInfo.onNavigationClick,
                 actions = topBarInfo.actions,
+                transparent = topBarInfo.transparent,
             )
         },
         snackbarHost = {
@@ -407,7 +447,7 @@ private fun SujianWideNavScaffold(
                             )
                         },
                         label = { Text(text = stringResource(id = destination.labelResId)) },
-                        modifier = navItemModifier(destination),
+                        modifier = Modifier.navItemModifier(destination),
                     )
                 }
             }
@@ -423,12 +463,110 @@ private fun SujianWideNavScaffold(
     }
 }
 
+/** 工作区 navigator — 在导航套件层创建的唯一实例（#597：返回历史始终同一份）。 */
+@OptIn(ExperimentalMaterial3AdaptiveApi::class)
+@Composable
+private fun rememberSujianWorkspaceNavState(appState: SujianAppState): WorkspaceNavigationState {
+    val initialDestination =
+        remember(
+            appState.currentProjectId,
+            appState.currentVolumeId,
+            appState.currentChapterId,
+        ) {
+            deriveRestoreDestination(
+                appState.currentProjectId,
+                appState.currentVolumeId,
+                appState.currentChapterId,
+            )
+        }
+    val initialHistory = remember(initialDestination) { buildInitialHistory(initialDestination) }
+    val navigator = rememberListDetailPaneScaffoldNavigator(initialDestinationHistory = initialHistory)
+    return remember { WorkspaceNavigationState(navigator) }
+}
+
+/** 工作区返回处理 — 系统返回/预测返回（正文→章节树→作品列表）。
+ * NavDisplay 只在全局栈可弹出（如设置页）时处理返回；Works 根时由这里接管。 */
+@OptIn(ExperimentalMaterial3AdaptiveApi::class)
+@Composable
+private fun SujianWorkspaceBackEffects(
+    currentRoute: SujianRoute,
+    workspaceNavState: WorkspaceNavigationState,
+    coroutineScope: CoroutineScope,
+) {
+    if (currentRoute is SujianRoute.Works) {
+        ThreePaneScaffoldPredictiveBackHandler(
+            navigator = workspaceNavState.navigator,
+            backBehavior = BackNavigationBehavior.PopUntilScaffoldValueChange,
+        )
+        BackHandler(enabled = workspaceNavState.canNavigateBack) {
+            coroutineScope.launch {
+                workspaceNavState.back()
+            }
+        }
+    }
+}
+
+/** 路由副作用 — 导航诊断、星图顶栏状态清理、设置详情默认分类。 */
+@Composable
+private fun SujianRouteEffects(
+    currentRoute: SujianRoute,
+    currentTopDestination: SujianDestination,
+    starMapTopBarState: StarMapTopBarState,
+    settingsDetailSection: SettingsSection?,
+    onSettingsDetailSectionChange: (SettingsSection?) -> Unit,
+) {
+    LaunchedEffect(currentRoute) {
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.navigation(currentTopDestination.name)
+        if (currentRoute !is SujianRoute.StarMap) {
+            starMapTopBarState.clear()
+        }
+        if (currentRoute !is SujianRoute.Settings) {
+            onSettingsDetailSectionChange(null)
+        }
+        if (currentRoute is SujianRoute.Settings && settingsDetailSection == null) {
+            onSettingsDetailSectionChange(SettingsSection.Appearance)
+        }
+    }
+}
+
+/** 顶栏信息 — 标题/返回/操作/透明背景 全部由同一份 [SujianChromeSpec] 决策驱动。 */
+@Composable
+private fun rememberSujianTopBarInfo(
+    currentRoute: SujianRoute,
+    appState: SujianAppState,
+    chrome: SujianChromeSpec,
+    starMapTopBarState: StarMapTopBarState,
+    env: SujianTopBarEnv,
+    workspaceNavState: WorkspaceNavigationState,
+): SujianTopBarInfo {
+    val topBarNavigation =
+        rememberSujianTopBarNavigation(currentRoute, starMapTopBarState, env, workspaceNavState)
+    return SujianTopBarInfo(
+        title =
+            if (chrome.showTitle) {
+                rememberSujianTopBarTitle(currentRoute, appState, starMapTopBarState)
+            } else {
+                ""
+            },
+        navigationIcon = topBarNavigation.first,
+        onNavigationClick = topBarNavigation.second,
+        actions =
+            rememberSujianTopBarActions(
+                currentRoute,
+                chrome,
+                starMapTopBarState,
+                env,
+            ),
+        transparent = chrome.appBarTransparent,
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3AdaptiveApi::class)
 @Composable
 fun SujianNavigationSuite(
     appState: SujianAppState,
-    initialDestination: String? = null,
     modifier: Modifier = Modifier,
+    initialDestination: String? = null,
 ) {
     val capabilities = LocalAndroidCapabilities.current
     val isCompact = capabilities.windowSizeClass == WindowSizeClass.Compact
@@ -444,35 +582,37 @@ fun SujianNavigationSuite(
     val syncState by deps.syncStatusRepository.state.collectAsState()
     val coroutineScope = rememberCoroutineScope()
 
-    LaunchedEffect(currentRoute) {
-        com.xiwei.sujian.diagnostics.DiagnosticsEvents.navigation(currentTopDestination.name)
-        if (currentRoute !is SujianRoute.StarMap) {
-            starMapTopBarState.clear()
-        }
-        if (currentRoute !is SujianRoute.Settings) {
-            settingsDetailSection = null
-        }
-        if (currentRoute is SujianRoute.Settings && settingsDetailSection == null) {
-            settingsDetailSection = SettingsSection.Appearance
-        }
-    }
+    val workspaceNavState = rememberSujianWorkspaceNavState(appState)
 
-    val topBarNavigation =
-        rememberSujianTopBarNavigation(currentRoute, appState, starMapTopBarState, backStack)
+    // #597 评论问题一：写作区隐藏底栏、顶栏透明且不显示标题；
+    // 评论问题三：返回箭头与唯一返回动作来自同一个决策。
+    val chrome =
+        SujianChromePolicy.resolve(
+            route = currentRoute,
+            workspaceLocation = workspaceNavState.currentLocation,
+            canWorkspaceNavigateBack = workspaceNavState.canNavigateBack,
+            starMapHasBack = starMapTopBarState.onBack != null,
+            isCompact = isCompact,
+        )
+
+    SujianWorkspaceBackEffects(currentRoute, workspaceNavState, coroutineScope)
+
+    SujianRouteEffects(
+        currentRoute,
+        currentTopDestination,
+        starMapTopBarState,
+        settingsDetailSection,
+    ) { settingsDetailSection = it }
+
+    val env = SujianTopBarEnv(syncState, coroutineScope, deps, backStack)
     val topBarInfo =
-        SujianTopBarInfo(
-            title = rememberSujianTopBarTitle(currentRoute, appState, starMapTopBarState),
-            navigationIcon = topBarNavigation.first,
-            onNavigationClick = topBarNavigation.second,
-            actions =
-                rememberSujianTopBarActions(
-                    currentRoute,
-                    starMapTopBarState,
-                    syncState,
-                    coroutineScope,
-                    deps,
-                    backStack,
-                ),
+        rememberSujianTopBarInfo(
+            currentRoute,
+            appState,
+            chrome,
+            starMapTopBarState,
+            env,
+            workspaceNavState,
         )
 
     val navDisplayContent: @Composable () -> Unit = {
@@ -481,38 +621,46 @@ fun SujianNavigationSuite(
             appState,
             starMapTopBarState,
             settingsDetailSection,
+            workspaceNavState,
         ) { settingsDetailSection = it }
     }
 
     if (isCompact) {
         SujianCompactNavScaffold(
-            modifier,
-            topBarInfo,
-            snackbarHostState,
-            currentTopDestination,
-            backStack,
-            navDisplayContent,
+            modifier = modifier,
+            topBarInfo = topBarInfo,
+            snackbarHostState = snackbarHostState,
+            // #597 评论问题一：进入正文后隐藏底栏；设置页从顶栏进入，也不再显示底栏。
+            bottomBar =
+                if (chrome.showBottomBar) {
+                    {
+                        SujianCompactBottomBar(currentTopDestination, backStack)
+                    }
+                } else {
+                    {}
+                },
+            navDisplayContent = navDisplayContent,
         )
     } else {
         SujianWideNavScaffold(
-            modifier,
-            topBarInfo,
-            snackbarHostState,
-            currentTopDestination,
-            backStack,
-            navDisplayContent,
+            modifier = modifier,
+            topBarInfo = topBarInfo,
+            snackbarHostState = snackbarHostState,
+            currentTopDestination = currentTopDestination,
+            backStack = backStack,
+            navDisplayContent = navDisplayContent,
         )
     }
 }
 
-private fun navItemModifier(destination: SujianDestination): Modifier {
+private fun Modifier.navItemModifier(destination: SujianDestination): Modifier {
     val semanticTag =
         when (destination) {
             SujianDestination.Works -> SujianSemanticIds.NavigationWorks
             SujianDestination.StarMap -> SujianSemanticIds.NavigationStarMap
             SujianDestination.Stats -> null
         }
-    return if (semanticTag != null) Modifier.testTag(semanticTag) else Modifier
+    return if (semanticTag != null) this.testTag(semanticTag) else this
 }
 
 private fun navigateToTopDestination(

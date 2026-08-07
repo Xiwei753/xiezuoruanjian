@@ -194,6 +194,16 @@ class EditorViewModel(
     internal val saveReceipts = DocumentSaveReceiptTracker()
 
     /**
+     * #597：章节加载纪元 — 每次真实切换事务开始时递增。
+     *
+     * initChapter 遗留入口会后台启动 loadChapter；该背景加载与切换事务
+     * 共享同一个 session（保存失败时事务不替换 currentSession），其迟到的
+     * 失败写入会把事务已提交的 SaveFailed 覆盖成 Idle（满载调度下偶发）。
+     * 事务开始后递增纪元，旧加载写可见状态前校验纪元，迟到写入被拒绝。
+     */
+    internal val chapterLoadEpoch = java.util.concurrent.atomic.AtomicLong(0L)
+
+    /**
      * #595 七：屏幕正文是否自加载/外部应用以来被编辑过 — 未编辑的空章节
      * （磁盘与屏幕一致）允许直接 flush；编辑过的正文必须得到保存回执。
      */

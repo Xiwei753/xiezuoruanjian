@@ -424,6 +424,10 @@ suspend fun EditorViewModel.switchChapterLocked(
         return ChapterSwitchResult.Success(oldSession, _uiState.value.content)
     }
 
+    // #597：真实切换事务开始 — 作废 initChapter 遗留入口启动的后台加载的
+    // 可见状态写入权（迟到失败写入不得覆盖本事务的 SaveFailed/回滚状态）。
+    chapterLoadEpoch.incrementAndGet()
+
     inputFrozen = true
     var preparedHandle: com.xiwei.sujian.editor.v2.coordinator.PreparedSessionHandle? = null
     try {
@@ -544,6 +548,8 @@ fun EditorViewModel.initErrorState(errorMessage: String) {
 suspend fun EditorViewModel.loadChapter(session: EditorSession): Boolean {
     isLoadingChapter = true
     val sessionId = session.sessionId
+    // #597：本加载的纪元 — 切换事务开始后纪元递增，旧加载不得写可见状态。
+    val loadEpoch = chapterLoadEpoch.get()
     return try {
         val result =
             withContext(kotlinx.coroutines.Dispatchers.IO) {
@@ -560,6 +566,7 @@ suspend fun EditorViewModel.loadChapter(session: EditorSession): Boolean {
         )
 
         if (currentSession?.sessionId != sessionId) return false
+        if (chapterLoadEpoch.get() != loadEpoch) return false
 
         _uiState.value =
             _uiState.value.copy(
@@ -613,6 +620,9 @@ suspend fun EditorViewModel.loadChapter(session: EditorSession): Boolean {
             throw e
         }
         isLoadingChapter = false
+        // #597：事务已接管（纪元递增）的迟到背景加载不得写可见状态，
+        // 也不得发射错误事件 — 只复位自己的加载标记。
+        if (chapterLoadEpoch.get() != loadEpoch) return false
         _uiState.value =
             _uiState.value.copy(
                 loading = false,
