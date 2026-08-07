@@ -2,6 +2,7 @@ package com.xiwei.sujian.ui.compose.settings
 
 // ! # 设置同步事务操作（从 SettingsRoute 拆分）
 
+import com.xiwei.sujian.data.ActiveDocumentGate
 import com.xiwei.sujian.data.ExclusiveResult
 import com.xiwei.sujian.data.SettingsSaveResult
 import com.xiwei.sujian.data.SyncDiagnosticsOutcome
@@ -9,7 +10,6 @@ import com.xiwei.sujian.data.SyncDryRunOutcome
 import com.xiwei.sujian.data.SyncFailureKind
 import com.xiwei.sujian.data.SyncOutcome
 import com.xiwei.sujian.data.SyncSession
-import com.xiwei.sujian.data.WorkspaceDocumentGate
 import com.xiwei.sujian.model.SyncConfig
 import com.xiwei.sujian.model.SyncSecrets
 import kotlinx.coroutines.CancellationException
@@ -105,7 +105,7 @@ private suspend fun SettingsViewModel.runExclusiveSyncIo(
     perform: suspend (SyncConfig) -> SyncCommandIoResult,
 ): ExclusiveResult<SyncCommandIoResult> =
     SyncSession.runExclusive { _ ->
-        val flushOk = WorkspaceDocumentGate.flushActiveDocument()
+        val flushOk = ActiveDocumentGate.flushActiveDocument()
         if (!flushOk) {
             return@runExclusive SyncCommandIoResult(
                 true,

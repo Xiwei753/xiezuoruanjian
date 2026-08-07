@@ -29,7 +29,7 @@ import java.util.concurrent.TimeUnit
 
 class TestSession private constructor(
     val testRootDir: File,
-    val workspaceDir: File,
+    val projectsDir: File,
     val prefsSuffix: String,
     private var depsHolder: TestSujianAppDependencies,
     private val context: Context,
@@ -59,7 +59,7 @@ class TestSession private constructor(
             transactionIdSource: TransactionIdSource = TransactionIdSource(),
         ): TestSession {
             val appContext = context.applicationContext
-            val paths = TestWorkspaceFactory.createIsolatedWorkspace(appContext)
+            val paths = TestProjectEnvFactory.createIsolatedProjectEnv(appContext)
 
             val prefsSuffix = UUID.randomUUID().toString().take(8)
 
@@ -67,7 +67,7 @@ class TestSession private constructor(
                 TestSujianAppDependencies(
                     appContext,
                     testRootDir = paths.testRootDir,
-                    workspaceDir = paths.workspaceDir,
+                    projectsDir = paths.projectsDir,
                     prefsSuffix = prefsSuffix,
                     animationTimeSource = animationTimeSource,
                     transactionIdSource = transactionIdSource,
@@ -75,7 +75,7 @@ class TestSession private constructor(
 
             return TestSession(
                 testRootDir = paths.testRootDir,
-                workspaceDir = paths.workspaceDir,
+                projectsDir = paths.projectsDir,
                 prefsSuffix = prefsSuffix,
                 depsHolder = deps,
                 context = appContext,
@@ -90,7 +90,7 @@ class TestSession private constructor(
             TestSujianAppDependencies(
                 context,
                 testRootDir = testRootDir,
-                workspaceDir = workspaceDir,
+                projectsDir = projectsDir,
                 prefsSuffix = prefsSuffix,
                 animationTimeSource = animationTimeSource,
                 transactionIdSource = transactionIdSource,
@@ -133,10 +133,10 @@ class TestSession private constructor(
             }
         }
         try {
-            TestWorkspaceFactory.deleteWorkspace(
-                TestWorkspaceFactory.TestWorkspacePaths(
+            TestProjectEnvFactory.deleteProjectEnv(
+                TestProjectEnvFactory.TestProjectEnvPaths(
                     testRootDir = testRootDir,
-                    workspaceDir = workspaceDir,
+                    projectsDir = projectsDir,
                     appDataDir = File(testRootDir, "app_data"),
                     cacheDir = File(testRootDir, "cache"),
                     logDir = File(testRootDir, "logs"),
@@ -153,14 +153,14 @@ class TestSession private constructor(
 class TestSujianAppDependencies(
     context: Context,
     testRootDir: File? = null,
-    workspaceDir: File? = null,
+    projectsDir: File? = null,
     prefsSuffix: String = "",
     private val animationTimeSource: AnimationTimeSource = ChoreographerAnimationTimeSource(),
     private val transactionIdSource: TransactionIdSource = TransactionIdSource(),
 ) : SujianAppDependencies {
     private val appContext = context.applicationContext
-    private val resolvedTestRoot = testRootDir ?: File(appContext.cacheDir, "test_workspace_${UUID.randomUUID()}")
-    private val testWorkspaceDir = workspaceDir ?: File(resolvedTestRoot, "workspace")
+    private val resolvedTestRoot = testRootDir ?: File(appContext.cacheDir, "test_project_env_${UUID.randomUUID()}")
+    private val testProjectsDir = projectsDir ?: File(resolvedTestRoot, "projects")
     private val testAppDataDir = File(resolvedTestRoot, "app_data")
     private val testCacheDir = File(resolvedTestRoot, "cache")
     private val testLogDir = File(resolvedTestRoot, "logs")
@@ -171,11 +171,11 @@ class TestSujianAppDependencies(
         testCacheDir.mkdirs()
         testLogDir.mkdirs()
         testNoBackupDir.mkdirs()
-        if (!testWorkspaceDir.exists()) {
+        if (!testProjectsDir.exists()) {
             throw AssertionError(
-                "TestSujianAppDependencies: workspace dir does not exist — " +
-                    "TestWorkspaceFactory.createIsolatedWorkspace() must be called first: " +
-                    testWorkspaceDir.absolutePath,
+                "TestSujianAppDependencies: project env dir does not exist — " +
+                    "TestProjectEnvFactory.createIsolatedProjectEnv() must be called first: " +
+                    testProjectsDir.absolutePath,
             )
         }
     }
@@ -183,7 +183,7 @@ class TestSujianAppDependencies(
     private val testHolder: WriterAppServiceHolder =
         WriterAppServiceHolder(
             appDataRoot = testAppDataDir.absolutePath,
-            projectsRoot = testWorkspaceDir.absolutePath,
+            projectsRoot = testProjectsDir.absolutePath,
             platformInit =
                 PlatformInitDto(
                     platform = PlatformDto.ANDROID,

@@ -118,7 +118,7 @@ impl AppBackend {
             }
         };
 
-        let has_workspace = || -> bool { path_obj.is_dir() };
+        let has_directory = || -> bool { path_obj.is_dir() };
 
         let is_git_repo = || -> bool { path_obj.join(".git").exists() };
 
@@ -310,7 +310,7 @@ impl AppBackend {
                     .unwrap_or_default(),
                 },
             }
-        } else if has_workspace() {
+        } else if has_directory() {
             let backend = writer_core::sync::create_sync_backend(&config.backend_type);
             match backend.sync(path_obj, &config, &secrets, true) {
                 Ok(result) => {

@@ -5,22 +5,22 @@ import com.xiwei.sujian.data.WriterAppServiceHolder
 import java.io.File
 import java.util.UUID
 
-object TestWorkspaceFactory {
-    data class TestWorkspacePaths(
+object TestProjectEnvFactory {
+    data class TestProjectEnvPaths(
         val testRootDir: File,
-        val workspaceDir: File,
+        val projectsDir: File,
         val appDataDir: File,
         val cacheDir: File,
         val logDir: File,
         val noBackupDir: File,
     )
 
-    fun createIsolatedWorkspace(appContext: Context): TestWorkspacePaths {
+    fun createIsolatedProjectEnv(appContext: Context): TestProjectEnvPaths {
         val sessionId = UUID.randomUUID().toString()
         val testRootDir = File(appContext.cacheDir, "test_session_$sessionId")
         testRootDir.mkdirs()
 
-        val workspaceDir = File(testRootDir, "workspace")
+        val projectsDir = File(testRootDir, "projects")
         val appDataDir = File(testRootDir, "app_data")
         val cacheDir = File(testRootDir, "cache")
         val logDir = File(testRootDir, "logs")
@@ -31,11 +31,11 @@ object TestWorkspaceFactory {
         logDir.mkdirs()
         noBackupDir.mkdirs()
 
-        initializeWorkspaceViaCore(workspaceDir, appDataDir, cacheDir, logDir, noBackupDir)
+        initializeProjectEnvViaCore(projectsDir, appDataDir, cacheDir, logDir, noBackupDir)
 
-        return TestWorkspacePaths(
+        return TestProjectEnvPaths(
             testRootDir = testRootDir,
-            workspaceDir = workspaceDir,
+            projectsDir = projectsDir,
             appDataDir = appDataDir,
             cacheDir = cacheDir,
             logDir = logDir,
@@ -43,19 +43,19 @@ object TestWorkspaceFactory {
         )
     }
 
-    private fun initializeWorkspaceViaCore(
-        workspaceDir: File,
+    private fun initializeProjectEnvViaCore(
+        projectsDir: File,
         appDataDir: File,
         cacheDir: File,
         logDir: File,
         noBackupDir: File,
     ) {
-        workspaceDir.mkdirs()
-        // 新 Core API：openAppService 自动完成初始化，不再需要显式工作区创建。
+        projectsDir.mkdirs()
+        // 新 Core API：openAppService 自动完成初始化，不再需要显式 project env 创建。
         val initHolder =
             WriterAppServiceHolder(
                 appDataRoot = appDataDir.absolutePath,
-                projectsRoot = workspaceDir.absolutePath,
+                projectsRoot = projectsDir.absolutePath,
             )
         try {
             // 访问 service 触发 lazy 初始化，确保目录结构就绪。
@@ -65,11 +65,11 @@ object TestWorkspaceFactory {
         }
     }
 
-    fun deleteWorkspace(paths: TestWorkspacePaths) {
+    fun deleteProjectEnv(paths: TestProjectEnvPaths) {
         val deleted = paths.testRootDir.deleteRecursively()
         if (!deleted && paths.testRootDir.exists()) {
             throw AssertionError(
-                "TestWorkspaceFactory: Failed to delete test root directory " +
+                "TestProjectEnvFactory: Failed to delete test root directory " +
                     paths.testRootDir.absolutePath,
             )
         }

@@ -31,7 +31,7 @@ import {
 } from '../model/CoreDtos'
 
 export interface IWriterCoreBridge {
-  // Workspace 查询
+  // App State 查询
   listAppSummaries(): Promise<ResultEnvelope<AppSummary[]>>
   getAppState(): Promise<ResultEnvelope<AppSummary>>
 

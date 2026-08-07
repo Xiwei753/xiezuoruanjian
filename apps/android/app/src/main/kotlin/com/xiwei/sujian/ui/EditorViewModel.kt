@@ -58,10 +58,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.xiwei.sujian.R
+import com.xiwei.sujian.data.ActiveDocumentGate
 import com.xiwei.sujian.data.DocumentSaveReceiptTracker
 import com.xiwei.sujian.data.ProjectRepository
 import com.xiwei.sujian.data.SettingsRepository
-import com.xiwei.sujian.data.WorkspaceDocumentGate
 import com.xiwei.sujian.editor.v2.coordinator.EditorSessionCoordinator
 import com.xiwei.sujian.editor.v2.coordinator.TargetDocumentFact
 import com.xiwei.sujian.runtime.SujianAppDependencies
@@ -129,12 +129,12 @@ class EditorViewModel(
         if (sessionCoordinator != null && _sessionCoordinator !== sessionCoordinator) {
             _sessionCoordinator = sessionCoordinator
         }
-        // #595 三/四：同步前统一 flush 活动正文（WorkspaceDocumentGate）。
+        // #595 三/四：同步前统一 flush 活动正文（ActiveDocumentGate）。
         // 注册携带 owner token（本 VM 实例）：旧实例 onCleared 只能关闭自己的
         // 注册，不能清掉新实例的 flusher（Activity 重建/生命周期交错防护）。
         if (gateRegistration == null) {
             gateRegistration =
-                WorkspaceDocumentGate.register(
+                ActiveDocumentGate.register(
                     this,
                     flush = { requestSave().await() },
                     documentIdentity = {
@@ -211,8 +211,8 @@ class EditorViewModel(
     @Volatile
     internal var contentDirty = false
 
-    /** #595 四：WorkspaceDocumentGate 注册句柄 — onCleared 只关闭自己的注册。 */
-    internal var gateRegistration: com.xiwei.sujian.data.WorkspaceDocumentGate.Registration? = null
+    /** #595 四：ActiveDocumentGate 注册句柄 — onCleared 只关闭自己的注册。 */
+    internal var gateRegistration: com.xiwei.sujian.data.ActiveDocumentGate.Registration? = null
 
     internal val statsDeviceId: String by lazy {
         val prefs = application.getSharedPreferences("writer_stats", android.content.Context.MODE_PRIVATE)

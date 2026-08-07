@@ -10,7 +10,7 @@ import java.util.concurrent.atomic.AtomicReference
  *（SujianAppViewModel.currentProjectId），后台同步（AutoSyncWorker）和
  * 设置页同步（SettingsViewModel）在数据层执行，无法直接访问 Compose 状态。
  *
- * 本对象与 WorkspaceDocumentGate 同构：进程级 AtomicReference 桥接，
+ * 本对象与 ActiveDocumentGate 同构：进程级 AtomicReference 桥接，
  * UI 层是唯一写入方（单一事实来源），数据层只读。不复制同步状态机，
  * 不维护第二份业务真相。
  */

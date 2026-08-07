@@ -528,7 +528,7 @@ impl AppBackend {
 
             let prefix = format!("[SujianDebug][qml][module={}][event={}]", m, ev);
             let state = format!(
-                "[workspace_exists={}][proj={}][vol={}][chap={}]",
+                "[data_root_exists={}][proj={}][vol={}][chap={}]",
                 ws_exists, proj, vol, chap
             );
             if lvl_enum == DebugLevel::Warn {
@@ -557,7 +557,7 @@ impl AppBackend {
             let vol = self.selected_volume_id.as_deref().unwrap_or("none");
             let chap = self.selected_chapter_id.as_deref().unwrap_or("none");
             println!(
-                "[SujianDebug][module={}][event={}][workspace_exists={}][proj={}][vol={}][chap={}] {}",
+                "[SujianDebug][module={}][event={}][data_root_exists={}][proj={}][vol={}][chap={}] {}",
                 module, event, ws_exists, proj, vol, chap, message
             );
         }
@@ -572,7 +572,7 @@ impl AppBackend {
             let vol = self.selected_volume_id.as_deref().unwrap_or("none");
             let chap = self.selected_chapter_id.as_deref().unwrap_or("none");
             eprintln!(
-                "[SujianDebug][WARN][module={}][event={}][workspace_exists={}][proj={}][vol={}][chap={}] {}",
+                "[SujianDebug][WARN][module={}][event={}][data_root_exists={}][proj={}][vol={}][chap={}] {}",
                 module, event, ws_exists, proj, vol, chap, message
             );
         }
@@ -587,7 +587,7 @@ impl AppBackend {
             let vol = self.selected_volume_id.as_deref().unwrap_or("none");
             let chap = self.selected_chapter_id.as_deref().unwrap_or("none");
             eprintln!(
-                "[SujianDebug][ERROR][module={}][event={}][workspace_exists={}][proj={}][vol={}][chap={}] {}",
+                "[SujianDebug][ERROR][module={}][event={}][data_root_exists={}][proj={}][vol={}][chap={}] {}",
                 module, event, ws_exists, proj, vol, chap, message
             );
         }

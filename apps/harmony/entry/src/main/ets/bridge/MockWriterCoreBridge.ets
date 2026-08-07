@@ -148,7 +148,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     return result
   }
 
-  // Workspace 查询方法
+  // App State 查询方法
   async listAppSummaries(): Promise<ResultEnvelope<AppSummary[]>> {
     await this.delay(100)
     return this.success([

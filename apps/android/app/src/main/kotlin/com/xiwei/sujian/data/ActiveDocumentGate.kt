@@ -3,7 +3,7 @@ package com.xiwei.sujian.data
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * #595 三/四：工作区文档门 — 同步前统一 flush 活动正文 session 到 Repository。
+ * #595 三/四：活动文档门 — 同步前统一 flush 活动正文 session 到 Repository。
  *
  * 手动同步、自动同步、试运行和连接诊断启动前都必须先让活动编辑器把
  * 未落盘的本地输入保存到磁盘，否则同步下载的新正文可能直接覆盖尚未保存的
@@ -21,7 +21,7 @@ import java.util.concurrent.atomic.AtomicReference
  *
  * 本对象只持有协作回调，不复制同步状态机，不维护第二份业务真相。
  */
-object WorkspaceDocumentGate {
+object ActiveDocumentGate {
     private class Holder(
         val owner: Any,
         val flush: suspend () -> Boolean,

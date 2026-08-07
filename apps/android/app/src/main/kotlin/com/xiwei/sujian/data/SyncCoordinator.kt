@@ -101,7 +101,7 @@ class SyncCoordinator(
             // 两个同步触发可交叉 flush/执行，正文版本屏障失效。
             val exclusiveResult =
                 SyncSession.runExclusive { _ ->
-                    val flushOk = WorkspaceDocumentGate.flushActiveDocument()
+                    val flushOk = ActiveDocumentGate.flushActiveDocument()
                     if (!flushOk) {
                         DiagnosticsLogger.w(
                             "SyncCoordinator",
@@ -117,7 +117,7 @@ class SyncCoordinator(
                         )
                     }
                     // #595 三：签发文档身份 lease — 同步前后校验文档是否仍是同一 target/session/epoch。
-                    val identityBeforeSync = WorkspaceDocumentGate.activeDocumentIdentity()
+                    val identityBeforeSync = ActiveDocumentGate.activeDocumentIdentity()
                     syncStatusRepository.notifySyncStarted()
                     val overrideOk =
                         withContext(Dispatchers.IO) {
@@ -140,7 +140,7 @@ class SyncCoordinator(
                             withContext(Dispatchers.IO) { settingsRepository.performSync(projectId, config) }
                         // #595 三：校验文档身份 — 同步期间章节切换/关闭导致身份变化时，
                         // 不应用同步结果，新输入作为下一代 dirty 文档继续保存。
-                        val identityAfterSync = WorkspaceDocumentGate.activeDocumentIdentity()
+                        val identityAfterSync = ActiveDocumentGate.activeDocumentIdentity()
                         if (identityBeforeSync != null && identityAfterSync != null &&
                             identityBeforeSync != identityAfterSync
                         ) {
