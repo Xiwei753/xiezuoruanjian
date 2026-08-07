@@ -29,6 +29,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
+import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.material3.adaptive.navigation.BackNavigationBehavior
 import androidx.compose.material3.adaptive.navigation.ThreePaneScaffoldPredictiveBackHandler
 import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
@@ -53,6 +54,7 @@ import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.scene.Scene
 import androidx.navigation3.ui.NavDisplay
+import androidx.window.core.layout.WindowSizeClass
 import com.xiwei.sujian.R
 import com.xiwei.sujian.designsystem.component.SujianIconButton
 import com.xiwei.sujian.designsystem.component.SujianSnackbar
@@ -61,10 +63,8 @@ import com.xiwei.sujian.designsystem.icon.SujianIcons
 import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.model.SyncIndicatorState
 import com.xiwei.sujian.model.SyncTrigger
-import com.xiwei.sujian.platform.api.WindowSizeClass
 import com.xiwei.sujian.runtime.LocalSujianAppDependencies
 import com.xiwei.sujian.runtime.SujianAppDependencies
-import com.xiwei.sujian.ui.compose.LocalAndroidCapabilities
 import com.xiwei.sujian.ui.compose.SujianAppState
 import com.xiwei.sujian.ui.compose.settings.SettingsRoute
 import com.xiwei.sujian.ui.compose.starmap.StarMapPlaceholderScreen
@@ -539,8 +539,11 @@ fun SujianNavigationSuite(
     modifier: Modifier = Modifier,
     initialDestination: String? = null,
 ) {
-    val capabilities = LocalAndroidCapabilities.current
-    val isCompact = capabilities.windowSizeClass == WindowSizeClass.Compact
+    val windowSizeClass = currentWindowAdaptiveInfo().windowSizeClass
+    val isCompact =
+        !windowSizeClass.isWidthAtLeastBreakpoint(
+            WindowSizeClass.WIDTH_DP_MEDIUM_LOWER_BOUND,
+        )
     val initialStack = rememberInitialNavStack(initialDestination)
     val backStack = rememberNavBackStack(*initialStack.toTypedArray())
     val currentRoute = backStack.lastOrNull() as? SujianRoute ?: SujianRoute.Works
