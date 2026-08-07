@@ -28,7 +28,11 @@ def load_workflow():
 
 
 def test_gradle_cache_configured(wf, _text):
+    # #597：Rust 专属 job（core-common-test/core-ai-test）不运行 Gradle，
+    # 不需要 setup-gradle；其余 job 必须配置。
     for job_name, job in wf.get("jobs", {}).items():
+        if job_name.startswith("core-"):
+            continue
         steps = job.get("steps", [])
         has_setup_gradle = any(
             "gradle/actions/setup-gradle" in str(s.get("uses", ""))
@@ -219,26 +223,28 @@ def test_emulator_matrix_not_reduced(wf, _text):
 
 
 def _get_upload_paths_for_native_artifact(wf):
-    """Return list of upload paths for the native-no-ai-x86_64 artifact, or None."""
+    """Return list of upload paths for the native-<flavor>-x86_64 artifact, or None."""
     build_job = wf["jobs"]["build"]
     steps = build_job.get("steps", [])
     for s in steps:
         uses = s.get("uses", "")
         with_ = s.get("with", {})
-        if "upload-artifact" in uses and with_.get("name") == "native-no-ai-x86_64":
+        name = with_.get("name", "")
+        if "upload-artifact" in uses and name.startswith("native-") and name.endswith("-x86_64"):
             raw = with_.get("path", "")
             return [p.strip() for p in raw.strip().splitlines() if p.strip()]
     return None
 
 
 def _get_download_path_for_native_artifact(wf):
-    """Return download path for native-no-ai-x86_64 artifact, or None."""
+    """Return download path for native-<flavor>-x86_64 artifact, or None."""
     emulator_job = wf["jobs"]["emulator-test"]
     steps = emulator_job.get("steps", [])
     for s in steps:
         uses = s.get("uses", "")
         with_ = s.get("with", {})
-        if "download-artifact" in uses and with_.get("name") == "native-no-ai-x86_64":
+        name = with_.get("name", "")
+        if "download-artifact" in uses and name.startswith("native-") and name.endswith("-x86_64"):
             return with_.get("path", "")
     return None
 
@@ -315,35 +321,52 @@ def test_emulator_test_download_path_matches_upload_lca(wf, _text):
 
 
 def test_rust_test_has_abi_guard(wf, _text):
+    # #597：测试已移出构建矩阵 — 构建矩阵只负责编译/打包，不再内嵌任何测试步骤。
     build_job = wf["jobs"]["build"]
     steps = build_job.get("steps", [])
     rust_test_steps = [
         s for s in steps if "cargo test" in s.get("run", "")
     ]
-    assert len(rust_test_steps) == 1, (
-        f"Expected exactly 1 Rust test step, found {len(rust_test_steps)}"
+    assert len(rust_test_steps) == 0, (
+        f"Build matrix must not contain Rust test steps, found {len(rust_test_steps)}"
     )
-    condition = rust_test_steps[0].get("if", "")
-    assert condition == "matrix.abi == 'arm64-v8a'", (
-        f"Rust test step if condition must be exactly \"matrix.abi == 'arm64-v8a'\", "
-        f"got: {condition!r}"
+    # 通用测试与 AI 专项测试分别落在独立 job，各恰好一次。
+    common_job = wf["jobs"]["core-common-test"]["steps"]
+    ai_job = wf["jobs"]["core-ai-test"]["steps"]
+    common_steps = [s for s in common_job if "cargo test" in s.get("run", "")]
+    ai_steps = [s for s in ai_job if "cargo test" in s.get("run", "")]
+    assert len(common_steps) == 1, f"Expected exactly 1 common Rust test step, found {len(common_steps)}"
+    assert "cargo test -p writer_core" in common_steps[0]["run"], (
+        "Core common test must run `cargo test -p writer_core`"
+    )
+    assert len(ai_steps) == 1, f"Expected exactly 1 AI Rust test step, found {len(ai_steps)}"
+    assert "--features ai" in ai_steps[0]["run"] and "--test ai_feature" in ai_steps[0]["run"], (
+        "Core AI test must run only the ai_feature target with the ai feature"
     )
 
 
 def test_jvm_unit_test_has_abi_guard(wf, _text):
+    # #597：Android JVM 测试同样在独立 job 中各跑一次，构建矩阵不内嵌测试。
     build_job = wf["jobs"]["build"]
     steps = build_job.get("steps", [])
     jvm_test_steps = [
         s for s in steps
         if "gradlew" in s.get("run", "") and "UnitTest" in s.get("run", "")
     ]
-    assert len(jvm_test_steps) == 1, (
-        f"Expected exactly 1 JVM unit test step, found {len(jvm_test_steps)}"
+    assert len(jvm_test_steps) == 0, (
+        f"Build matrix must not contain JVM unit test steps, found {len(jvm_test_steps)}"
     )
-    condition = jvm_test_steps[0].get("if", "")
-    assert condition == "matrix.abi == 'arm64-v8a'", (
-        f"JVM unit test step if condition must be exactly \"matrix.abi == 'arm64-v8a'\", "
-        f"got: {condition!r}"
+    common_job = wf["jobs"]["android-unit-test"]["steps"]
+    ai_job = wf["jobs"]["android-ai-test"]["steps"]
+    common_steps = [s for s in common_job if "gradlew" in s.get("run", "") and "UnitTest" in s.get("run", "")]
+    ai_steps = [s for s in ai_job if "gradlew" in s.get("run", "") and "UnitTest" in s.get("run", "")]
+    assert len(common_steps) == 1, f"Expected exactly 1 common JVM test step, found {len(common_steps)}"
+    assert "testNoAiDebugUnitTest" in common_steps[0]["run"], (
+        "Android common unit test must run testNoAiDebugUnitTest"
+    )
+    assert len(ai_steps) == 1, f"Expected exactly 1 AI JVM test step, found {len(ai_steps)}"
+    assert "testAiDebugUnitTest" in ai_steps[0]["run"], (
+        "Android AI unit test must run testAiDebugUnitTest"
     )
 
 

@@ -371,4 +371,11 @@ jobs:
             adb logcat -G 16M 2>/dev/null || true
             adb logcat -c 2>/dev/null || true
             ( adb logcat -v threadtime > "$RUNNER_TEMP/sujian-editor-logcat.log" 2>&1 & ) || true
-            cd apps/android && ANDROID_NDK_HOME=$ANDROID_NDK_ROOT ./gradlew connected${FLAVOR_CAP}DebugAndroidTest -x :app:install${FLAVOR_CAP}Debug -x :app:install${FLAVOR_CAP}DebugAndroidTest -x build${FLAVOR_CAP}DebugWriterNative -Psujian.android.abis=x86_64 || ( echo '===== FAILED TEST XMLS ====='; find app/build/outputs/androidTest-results -name '*.xml' -exec grep -l -e '<failure' -e '<error' {} \; -exec cat {} \; 2>/dev/null; echo '===== APP LOGCAT (file) ====='; grep -E 'SujianEditorInput|SujianTestIme|SujianApp|AnimatedTextEditorCoordinator|TestRunner' "$RUNNER_TEMP/sujian-editor-logcat.log" 2>/dev/null | tail -n 600; exit 1 )
+            # #597 每类测试只跑一次：ai 变体只运行 AI 专项仪器测试（androidTestAi），
+            # 通用 androidTest 只由 no-ai 变体执行；APK 矩阵不再重复跑通用测试。
+            if [ "${{ matrix.flavor }}" = "ai" ]; then
+              AI_FILTER="-Pandroid.testInstrumentationRunnerArguments.package=com.xiwei.sujian.ai"
+            else
+              AI_FILTER=""
+            fi
+            cd apps/android && ANDROID_NDK_HOME=$ANDROID_NDK_ROOT ./gradlew connected${FLAVOR_CAP}DebugAndroidTest -x :app:install${FLAVOR_CAP}Debug -x :app:install${FLAVOR_CAP}DebugAndroidTest -x build${FLAVOR_CAP}DebugWriterNative -Psujian.android.abis=x86_64 $AI_FILTER || ( echo '===== FAILED TEST XMLS ====='; find app/build/outputs/androidTest-results -name '*.xml' -exec grep -l -e '<failure' -e '<error' {} \; -exec cat {} \; 2>/dev/null; echo '===== APP LOGCAT (file) ====='; grep -E 'SujianEditorInput|SujianTestIme|SujianApp|AnimatedTextEditorCoordinator|TestRunner' "$RUNNER_TEMP/sujian-editor-logcat.log" 2>/dev/null | tail -n 600; exit 1 )
