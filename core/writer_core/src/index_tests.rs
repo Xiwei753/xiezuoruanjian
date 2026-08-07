@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 use tempfile::tempdir;
 
-fn setup_test_workspace(dir: &Path) {
+fn setup_test_data(dir: &Path) {
     std::fs::create_dir_all(dir.join("projects")).unwrap();
     let projects_dir = dir.join("projects");
     fs::create_dir_all(&projects_dir).unwrap();
@@ -59,7 +59,7 @@ fn setup_test_workspace(dir: &Path) {
 #[test]
 fn test_build_index_and_search() {
     let dir = tempdir().unwrap();
-    setup_test_workspace(dir.path());
+    setup_test_data(dir.path());
 
     let index = SearchIndex::build(dir.path()).unwrap();
     let stats = index.stats();
@@ -73,7 +73,7 @@ fn test_build_index_and_search() {
 #[test]
 fn test_search_case_insensitive() {
     let dir = tempdir().unwrap();
-    setup_test_workspace(dir.path());
+    setup_test_data(dir.path());
 
     let index = SearchIndex::build(dir.path()).unwrap();
     let options = SearchOptions::default();
@@ -86,7 +86,7 @@ fn test_search_case_insensitive() {
 #[test]
 fn test_search_with_context() {
     let dir = tempdir().unwrap();
-    setup_test_workspace(dir.path());
+    setup_test_data(dir.path());
 
     let index = SearchIndex::build(dir.path()).unwrap();
     let options = SearchOptions {
@@ -104,7 +104,7 @@ fn test_search_with_context() {
 #[test]
 fn test_search_max_results() {
     let dir = tempdir().unwrap();
-    setup_test_workspace(dir.path());
+    setup_test_data(dir.path());
 
     let index = SearchIndex::build(dir.path()).unwrap();
     let options = SearchOptions {
@@ -118,7 +118,7 @@ fn test_search_max_results() {
 #[test]
 fn test_search_in_project() {
     let dir = tempdir().unwrap();
-    setup_test_workspace(dir.path());
+    setup_test_data(dir.path());
 
     let index = SearchIndex::build(dir.path()).unwrap();
     let options = SearchOptions::default();
@@ -132,7 +132,7 @@ fn test_search_in_project() {
 #[test]
 fn test_search_empty_query() {
     let dir = tempdir().unwrap();
-    setup_test_workspace(dir.path());
+    setup_test_data(dir.path());
 
     let index = SearchIndex::build(dir.path()).unwrap();
     let options = SearchOptions::default();
@@ -141,7 +141,7 @@ fn test_search_empty_query() {
 }
 
 #[test]
-fn test_empty_workspace() {
+fn test_empty_projects() {
     let dir = tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("projects")).unwrap();
 
@@ -157,7 +157,7 @@ fn test_empty_workspace() {
 #[test]
 fn test_build_missing_projects_dir() {
     let dir = tempdir().unwrap();
-    // Skip creating the workspace, so "projects" dir is missing.
+    // Skip creating the projects dir, so "projects" dir is missing.
     let index = SearchIndex::build(dir.path()).unwrap();
     assert_eq!(index.stats().chapter_count, 0);
 }
@@ -212,7 +212,7 @@ fn test_build_invalid_utf8_chapter() {
 #[test]
 fn test_build_happy_path() {
     let dir = tempdir().unwrap();
-    setup_test_workspace(dir.path());
+    setup_test_data(dir.path());
 
     let index = SearchIndex::build(dir.path()).unwrap();
     let stats = index.stats();

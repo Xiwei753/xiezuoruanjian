@@ -1,7 +1,7 @@
 use crate::starmap::*;
 use tempfile::tempdir;
 
-fn setup_workspace() -> tempfile::TempDir {
+fn setup_temp_dir() -> tempfile::TempDir {
     let dir = tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     dir
@@ -9,19 +9,19 @@ fn setup_workspace() -> tempfile::TempDir {
 
 #[test]
 fn test_starmap_graph_path() {
-    let app_data_root = std::path::Path::new("/dummy/workspace");
+    let app_data_root = std::path::Path::new("/dummy/app_data");
     let starmap_id = "test_starmap_id";
 
     let path = starmap_graph_path(app_data_root, starmap_id);
 
     let expected =
-        std::path::PathBuf::from("/dummy/workspace/starmaps/test_starmap_id/graph.json");
+        std::path::PathBuf::from("/dummy/app_data/starmaps/test_starmap_id/graph.json");
     assert_eq!(path, expected);
 }
 
 #[test]
 fn test_create_and_list_starmaps() {
-    let dir = setup_workspace();
+    let dir = setup_temp_dir();
     let _meta1 = create_starmap(dir.path(), "Star Map 1", "desc1", None).unwrap();
     let _meta2 = create_starmap(dir.path(), "Star Map 2", "desc2", Some("#FF0000")).unwrap();
 
@@ -34,7 +34,7 @@ fn test_create_and_list_starmaps() {
 
 #[test]
 fn test_create_child_starmap() {
-    let dir = setup_workspace();
+    let dir = setup_temp_dir();
     let parent = create_starmap(dir.path(), "Parent", "", None).unwrap();
     let child = create_child_starmap(dir.path(), &parent.starmap_id, "Child 1", "", None).unwrap();
 
@@ -50,7 +50,7 @@ fn test_create_child_starmap() {
 
 #[test]
 fn test_bind_and_get_main_starmap() {
-    let dir = setup_workspace();
+    let dir = setup_temp_dir();
     let sm = create_starmap(dir.path(), "My Map", "", None).unwrap();
 
     bind_starmap_to_project(dir.path(), &sm.starmap_id, "proj1").unwrap();
@@ -63,7 +63,7 @@ fn test_bind_and_get_main_starmap() {
 
 #[test]
 fn test_delete_starmap_no_cascade() {
-    let dir = setup_workspace();
+    let dir = setup_temp_dir();
     let parent = create_starmap(dir.path(), "Parent", "", None).unwrap();
     let child1 = create_child_starmap(dir.path(), &parent.starmap_id, "Child 1", "", None).unwrap();
     let child2 = create_child_starmap(dir.path(), &parent.starmap_id, "Child 2", "", None).unwrap();
@@ -78,7 +78,7 @@ fn test_delete_starmap_no_cascade() {
 
 #[test]
 fn test_rename_starmap() {
-    let dir = setup_workspace();
+    let dir = setup_temp_dir();
     let sm = create_starmap(dir.path(), "Old Name", "", None).unwrap();
     let renamed = rename_starmap(dir.path(), &sm.starmap_id, "New Name").unwrap();
     assert_eq!(renamed.title, "New Name");
@@ -89,7 +89,7 @@ fn test_rename_starmap() {
 
 #[test]
 fn test_unbind_starmap() {
-    let dir = setup_workspace();
+    let dir = setup_temp_dir();
     let sm = create_starmap(dir.path(), "Map", "", None).unwrap();
     bind_starmap_to_project(dir.path(), &sm.starmap_id, "proj1").unwrap();
     set_main_starmap_for_project(dir.path(), &sm.starmap_id, "proj1").unwrap();
@@ -102,7 +102,7 @@ fn test_unbind_starmap() {
 
 #[test]
 fn test_delete_starmap_edge_protection() {
-    let dir = setup_workspace();
+    let dir = setup_temp_dir();
     let parent = create_starmap(dir.path(), "Parent", "", None).unwrap();
     let child = create_starmap(dir.path(), "Child", "", None).unwrap();
 
@@ -264,7 +264,7 @@ fn test_motion_policy_serialization() {
 
 #[test]
 fn test_list_starmaps_for_project_excludes_unbound() {
-    let dir = setup_workspace();
+    let dir = setup_temp_dir();
     let sm_bound = create_starmap(dir.path(), "Bound", "", None).unwrap();
     let _sm_unbound = create_starmap(dir.path(), "Unbound", "", None).unwrap();
     let _sm_other = create_starmap(dir.path(), "Other", "", None).unwrap();

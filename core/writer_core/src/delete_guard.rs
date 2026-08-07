@@ -162,78 +162,78 @@ mod tests {
 
     #[test]
     fn test_validate_delete_target_success() {
-        let workspace = tempdir().unwrap();
-        let target = workspace.path().join("target_dir");
+        let tmp = tempdir().unwrap();
+        let target = tmp.path().join("target_dir");
         fs::create_dir(&target).unwrap();
         let marker = target.join("marker.txt");
         fs::write(&marker, "marker").unwrap();
 
-        let res = validate_delete_target(workspace.path(), &target, "marker.txt");
+        let res = validate_delete_target(tmp.path(), &target, "marker.txt");
         assert!(res.is_ok());
     }
 
     #[test]
     fn test_validate_delete_target_missing_target() {
-        let workspace = tempdir().unwrap();
-        let target = workspace.path().join("target_dir");
+        let tmp = tempdir().unwrap();
+        let target = tmp.path().join("target_dir");
 
-        let res = validate_delete_target(workspace.path(), &target, "marker.txt");
+        let res = validate_delete_target(tmp.path(), &target, "marker.txt");
         assert!(res.is_err());
     }
 
     #[test]
     fn test_validate_delete_target_not_dir() {
-        let workspace = tempdir().unwrap();
-        let target = workspace.path().join("target_file.txt");
+        let tmp = tempdir().unwrap();
+        let target = tmp.path().join("target_file.txt");
         fs::write(&target, "content").unwrap();
 
-        let res = validate_delete_target(workspace.path(), &target, "marker.txt");
+        let res = validate_delete_target(tmp.path(), &target, "marker.txt");
         assert!(res.is_err());
     }
 
     #[test]
-    fn test_validate_delete_target_is_workspace_root() {
-        let workspace = tempdir().unwrap();
-        let marker = workspace.path().join("marker.txt");
+    fn test_validate_delete_target_is_root() {
+        let tmp = tempdir().unwrap();
+        let marker = tmp.path().join("marker.txt");
         fs::write(&marker, "marker").unwrap();
 
-        let res = validate_delete_target(workspace.path(), workspace.path(), "marker.txt");
+        let res = validate_delete_target(tmp.path(), tmp.path(), "marker.txt");
         assert!(res.is_err());
         // Can be more specific to ensure Error::RefuseToDeleteRoot
     }
 
     #[test]
-    fn test_validate_delete_target_outside_workspace() {
-        let workspace = tempdir().unwrap();
+    fn test_validate_delete_target_outside_root() {
+        let tmp = tempdir().unwrap();
         let outside = tempdir().unwrap();
         let target = outside.path().join("target_dir");
         fs::create_dir(&target).unwrap();
         let marker = target.join("marker.txt");
         fs::write(&marker, "marker").unwrap();
 
-        let res = validate_delete_target(workspace.path(), &target, "marker.txt");
+        let res = validate_delete_target(tmp.path(), &target, "marker.txt");
         assert!(res.is_err());
     }
 
     #[test]
     fn test_validate_delete_target_missing_marker() {
-        let workspace = tempdir().unwrap();
-        let target = workspace.path().join("target_dir");
+        let tmp = tempdir().unwrap();
+        let target = tmp.path().join("target_dir");
         fs::create_dir(&target).unwrap();
 
-        let res = validate_delete_target(workspace.path(), &target, "marker.txt");
+        let res = validate_delete_target(tmp.path(), &target, "marker.txt");
         assert!(res.is_err());
     }
 
     #[test]
     fn test_validate_delete_target_marker_not_file() {
-        let workspace = tempdir().unwrap();
-        let target = workspace.path().join("target_dir");
+        let tmp = tempdir().unwrap();
+        let target = tmp.path().join("target_dir");
         fs::create_dir(&target).unwrap();
         let marker = target.join("marker.txt");
         fs::create_dir(&marker).unwrap(); // marker is a directory
 
-        let res = validate_delete_target(workspace.path(), &target, "marker.txt");
+        let res = validate_delete_target(tmp.path(), &target, "marker.txt");
         assert!(res.is_err());
     }
 
@@ -241,24 +241,24 @@ mod tests {
     #[test]
     fn test_validate_delete_target_symlinks() {
         use std::os::unix::fs::symlink;
-        let workspace = tempdir().unwrap();
-        let actual_target = workspace.path().join("actual_target");
+        let tmp = tempdir().unwrap();
+        let actual_target = tmp.path().join("actual_target");
         fs::create_dir(&actual_target).unwrap();
 
-        let symlink_target = workspace.path().join("symlink_target");
+        let symlink_target = tmp.path().join("symlink_target");
         symlink(&actual_target, &symlink_target).unwrap();
 
         // 1. Target is a symlink
-        let res = validate_delete_target(workspace.path(), &symlink_target, "marker.txt");
+        let res = validate_delete_target(tmp.path(), &symlink_target, "marker.txt");
         assert!(res.is_err()); // "Target is a symlink, refusing to delete"
 
         // 2. Marker is a symlink
-        let marker_target = workspace.path().join("real_marker.txt");
+        let marker_target = tmp.path().join("real_marker.txt");
         fs::write(&marker_target, "content").unwrap();
         let marker_symlink = actual_target.join("marker.txt");
         symlink(&marker_target, &marker_symlink).unwrap();
 
-        let res = validate_delete_target(workspace.path(), &actual_target, "marker.txt");
+        let res = validate_delete_target(tmp.path(), &actual_target, "marker.txt");
         assert!(res.is_err()); // "Marker file ... is a symlink"
     }
 
@@ -266,19 +266,19 @@ mod tests {
     #[test]
     fn test_validate_delete_target_symlink_traversal() {
         use std::os::unix::fs::symlink;
-        let workspace = tempdir().unwrap();
+        let tmp = tempdir().unwrap();
         let outside = tempdir().unwrap();
         let outside_target = outside.path().join("outside_target");
         fs::create_dir(&outside_target).unwrap();
         let marker = outside_target.join("marker.txt");
         fs::write(&marker, "marker").unwrap();
 
-        // Create a symlink inside the workspace pointing to the outside target
-        let symlink_target = workspace.path().join("symlinked_target");
+        // Create a symlink inside the root pointing to the outside target
+        let symlink_target = tmp.path().join("symlinked_target");
         symlink(&outside_target, &symlink_target).unwrap();
 
         // Ensure validate_delete_target rejects the symlink
-        let res = validate_delete_target(workspace.path(), &symlink_target, "marker.txt");
+        let res = validate_delete_target(tmp.path(), &symlink_target, "marker.txt");
         assert!(res.is_err());
         match res {
             Err(Error::InvalidDeleteTarget(msg)) => {

@@ -149,8 +149,8 @@ mod tests {
     fn test_normalize_rel_path() {
         use std::path::Path;
 
-        let base = Path::new("workspace/my_project");
-        let path = Path::new("workspace/my_project/volumes/vol1");
+        let base = Path::new("data/my_project");
+        let path = Path::new("data/my_project/volumes/vol1");
 
         let rel = normalize_rel_path(path, base);
         assert_eq!(rel, "volumes/vol1");

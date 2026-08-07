@@ -170,7 +170,7 @@ mod tests_facade {
     use tempfile::tempdir;
 
     #[test]
-    fn test_facade_create_project_updates_workspace_tree() {
+    fn test_facade_create_project_updates_project_tree() {
         let dir = tempdir().unwrap();
         let data_root = dir.path();
 

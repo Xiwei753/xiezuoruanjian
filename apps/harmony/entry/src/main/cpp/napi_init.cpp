@@ -217,7 +217,7 @@ static napi_value NativeIsAiAvailable(napi_env env, napi_callback_info info) {
 }
 
 // ── Module registration ──
-// Init: Merges descriptors from all domains (workspace, project, chapter, settings,
+// Init: Merges descriptors from all domains (app_state, project, chapter, settings,
 //   sync, stats, starmap) plus core lifecycle into a single NAPI module.
 //   Domain descriptor arrays are allocated by each get*Descriptors() function
 //   and must remain valid for the lifetime of the module.

@@ -2,7 +2,7 @@ use super::super::*;
 use super::*;
 use tempfile::TempDir;
 
-fn setup_workspace() -> (TempDir, String) {
+fn setup_temp_dir() -> (TempDir, String) {
     let dir = TempDir::new().unwrap();
     std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
@@ -51,7 +51,7 @@ fn load_full_snapshot(dir: &std::path::Path, sid: &str) -> StarMapPhasedSnapshot
 
 #[test]
 fn phased_snapshot_includes_load_phase_and_revision() {
-    let (dir, sid) = setup_workspace();
+    let (dir, sid) = setup_temp_dir();
     let mut store = StarMapStore::new(dir.path(), &sid);
     store.upsert_node(make_test_node("n1", "A"));
     flush_store(&mut store);
@@ -63,7 +63,7 @@ fn phased_snapshot_includes_load_phase_and_revision() {
 
 #[test]
 fn phased_snapshot_complete_at_background_full_load() {
-    let (dir, sid) = setup_workspace();
+    let (dir, sid) = setup_temp_dir();
     let mut store = StarMapStore::new(dir.path(), &sid);
     store.upsert_node(make_test_node("n1", "A"));
     flush_store(&mut store);
@@ -73,7 +73,7 @@ fn phased_snapshot_complete_at_background_full_load() {
 
 #[test]
 fn phased_snapshot_preserves_layout_after_disk_roundtrip() {
-    let (dir, sid) = setup_workspace();
+    let (dir, sid) = setup_temp_dir();
     let mut store = StarMapStore::new(dir.path(), &sid);
     store.upsert_node(make_test_node("n1", "Node1"));
     store.set_layout(StarMapLayout {
@@ -103,7 +103,7 @@ fn phased_snapshot_preserves_layout_after_disk_roundtrip() {
 
 #[test]
 fn phased_snapshot_preserves_edge_endpoint_semantics() {
-    let (dir, sid) = setup_workspace();
+    let (dir, sid) = setup_temp_dir();
     let mut store = StarMapStore::new(dir.path(), &sid);
     store.upsert_node(make_test_node("n1", "A"));
     store.upsert_node(make_test_node("n2", "B"));
@@ -148,7 +148,7 @@ fn phased_snapshot_preserves_edge_endpoint_semantics() {
 
 #[test]
 fn phased_snapshot_preserves_embed_link_hyperlink() {
-    let (dir, sid) = setup_workspace();
+    let (dir, sid) = setup_temp_dir();
     let mut store = StarMapStore::new(dir.path(), &sid);
     store.upsert_node(make_test_node("n1", "Host"));
     use crate::starmap::semantic::{
@@ -226,7 +226,7 @@ fn phased_snapshot_preserves_embed_link_hyperlink() {
 
 #[test]
 fn phased_snapshot_incremental_by_revision() {
-    let (dir, sid) = setup_workspace();
+    let (dir, sid) = setup_temp_dir();
     let mut store = StarMapStore::new(dir.path(), &sid);
     store.upsert_node(make_test_node("n1", "A"));
     flush_store(&mut store);
@@ -253,7 +253,7 @@ fn phased_snapshot_preserves_node_anchor_semantics() {
         StarMapAnchor, StarMapAnchorRole, StarMapAnchorTarget, StarMapDisplayPolicy,
         StarMapNodeContent, StarMapOpenBehavior, StarMapProvenance,
     };
-    let (dir, sid) = setup_workspace();
+    let (dir, sid) = setup_temp_dir();
     let mut store = StarMapStore::new(dir.path(), &sid);
     store.upsert_node(StarMapNode {
         id: "n1".to_string(),
@@ -292,7 +292,7 @@ fn phased_snapshot_preserves_node_anchor_semantics() {
 #[test]
 fn phased_snapshot_preserves_endpoint_path_semantics() {
     use crate::starmap::semantic::{StarMapDeepTarget, StarMapTargetDetail};
-    let (dir, sid) = setup_workspace();
+    let (dir, sid) = setup_temp_dir();
     let mut store = StarMapStore::new(dir.path(), &sid);
     store.upsert_node(make_test_node("n1", "A"));
     store.upsert_node(make_test_node("n2", "B"));
@@ -352,7 +352,7 @@ fn phased_snapshot_preserves_endpoint_path_semantics() {
 
 #[test]
 fn phased_snapshot_returns_empty_when_revision_unchanged() {
-    let (dir, sid) = setup_workspace();
+    let (dir, sid) = setup_temp_dir();
     let mut store = StarMapStore::new(dir.path(), &sid);
     store.upsert_node(make_test_node("n1", "A"));
     flush_store(&mut store);
@@ -374,7 +374,7 @@ fn phased_snapshot_returns_empty_when_revision_unchanged() {
 
 #[test]
 fn phased_snapshot_returns_objects_when_revision_advanced() {
-    let (dir, sid) = setup_workspace();
+    let (dir, sid) = setup_temp_dir();
     let mut store = StarMapStore::new(dir.path(), &sid);
     store.upsert_node(make_test_node("n1", "A"));
     flush_store(&mut store);
@@ -397,7 +397,7 @@ fn phased_snapshot_returns_objects_when_revision_advanced() {
 
 #[test]
 fn phased_snapshot_since_revision_zero_returns_all() {
-    let (dir, sid) = setup_workspace();
+    let (dir, sid) = setup_temp_dir();
     let mut store = StarMapStore::new(dir.path(), &sid);
     store.upsert_node(make_test_node("n1", "A"));
     flush_store(&mut store);
@@ -413,7 +413,7 @@ fn phased_snapshot_since_revision_zero_returns_all() {
 
 #[test]
 fn phased_snapshot_incremental_preserves_layout_and_viewport() {
-    let (dir, sid) = setup_workspace();
+    let (dir, sid) = setup_temp_dir();
     let mut store = StarMapStore::new(dir.path(), &sid);
     store.upsert_node(make_test_node("n1", "A"));
     store.set_layout(StarMapLayout {
@@ -456,7 +456,7 @@ fn phased_snapshot_incremental_preserves_layout_and_viewport() {
 
 #[test]
 fn phased_snapshot_phases_have_increasing_object_counts() {
-    let (dir, sid) = setup_workspace();
+    let (dir, sid) = setup_temp_dir();
     let mut store = StarMapStore::new(dir.path(), &sid);
     store.upsert_node(make_test_node("n1", "InView"));
     store.upsert_node(make_test_node("n2", "Nearby"));
@@ -518,7 +518,7 @@ fn phased_snapshot_incremental_merge_returns_all_object_types() {
         StarMapDeepTarget, StarMapDisplayPolicy, StarMapOpenBehavior, StarMapProvenance,
         StarMapTargetDetail,
     };
-    let (dir, sid) = setup_workspace();
+    let (dir, sid) = setup_temp_dir();
     let mut store = StarMapStore::new(dir.path(), &sid);
     store.upsert_node(make_test_node("n1", "A"));
     store.upsert_node(make_test_node("n2", "B"));
@@ -603,7 +603,7 @@ fn phased_snapshot_incremental_merge_returns_all_object_types() {
 
 #[test]
 fn phased_snapshot_v1_migration_reopen_preserves_data() {
-    let (dir, sid) = setup_workspace();
+    let (dir, sid) = setup_temp_dir();
     let mut store = StarMapStore::new(dir.path(), &sid);
     store.upsert_node(make_test_node("n1", "Node1"));
     store.upsert_node(make_test_node("n2", "Node2"));
@@ -663,7 +663,7 @@ fn phased_snapshot_v1_migration_reopen_preserves_data() {
 
 #[test]
 fn phased_snapshot_uses_load_phased_not_full_load() {
-    let (dir, sid) = setup_workspace();
+    let (dir, sid) = setup_temp_dir();
     let mut store = StarMapStore::new(dir.path(), &sid);
     store.upsert_node(make_test_node("n1", "A"));
     store.upsert_node(make_test_node("n2", "B"));
@@ -722,7 +722,7 @@ fn phased_snapshot_uses_load_phased_not_full_load() {
 
 #[test]
 fn phased_snapshot_save_failure_preserves_memory_state() {
-    let (dir, sid) = setup_workspace();
+    let (dir, sid) = setup_temp_dir();
     let mut store = StarMapStore::new(dir.path(), &sid);
     store.upsert_node(make_test_node("n1", "A"));
     flush_store(&mut store);
@@ -770,7 +770,7 @@ fn phased_snapshot_save_failure_preserves_memory_state() {
 
 #[test]
 fn phased_snapshot_flush_close_failure_preserves_cache() {
-    let (dir, sid) = setup_workspace();
+    let (dir, sid) = setup_temp_dir();
     let mut store = StarMapStore::new(dir.path(), &sid);
     store.upsert_node(make_test_node("n1", "A"));
     store.upsert_node(make_test_node("n2", "B"));
@@ -848,7 +848,7 @@ fn phased_snapshot_flush_close_failure_preserves_cache() {
 
 #[test]
 fn phased_snapshot_progressive_returns_objects_despite_same_revision() {
-    let (dir, sid) = setup_workspace();
+    let (dir, sid) = setup_temp_dir();
     let mut store = StarMapStore::new(dir.path(), &sid);
     store.upsert_node(make_test_node("n1", "InView"));
     store.upsert_node(make_test_node("n2", "Nearby"));
@@ -924,7 +924,7 @@ fn phased_snapshot_progressive_returns_objects_despite_same_revision() {
 
 #[test]
 fn phased_snapshot_includes_deleted_ids() {
-    let (dir, sid) = setup_workspace();
+    let (dir, sid) = setup_temp_dir();
     let mut store = StarMapStore::new(dir.path(), &sid);
     store.upsert_node(make_test_node("n1", "A"));
     store.upsert_node(make_test_node("n2", "B"));
@@ -953,7 +953,7 @@ fn phased_snapshot_includes_deleted_ids() {
 
 #[test]
 fn deletion_tombstone_revision_binds_to_flush_revision() {
-    let (dir, sid) = setup_workspace();
+    let (dir, sid) = setup_temp_dir();
     let mut store = StarMapStore::new(dir.path(), &sid);
     store.upsert_node(make_test_node("n1", "A"));
     store.upsert_node(make_test_node("n2", "B"));
@@ -982,7 +982,7 @@ fn deletion_tombstone_revision_binds_to_flush_revision() {
 
 #[test]
 fn deletion_tombstone_persists_across_store_close_reopen() {
-    let (dir, sid) = setup_workspace();
+    let (dir, sid) = setup_temp_dir();
     let mut store = StarMapStore::new(dir.path(), &sid);
     store.upsert_node(make_test_node("n1", "A"));
     store.upsert_node(make_test_node("n2", "B"));

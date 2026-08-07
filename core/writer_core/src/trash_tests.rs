@@ -3,7 +3,7 @@ use crate::trash;
 use tempfile::tempdir;
 
 #[test]
-fn test_trash_chapter_not_found_when_no_workspace() {
+fn test_trash_chapter_not_found_when_no_project() {
     let dir = tempdir().unwrap();
     let result = trash::move_chapter_to_trash(dir.path(), "chap1", dir.path());
     assert!(matches!(result, Err(Error::ChapterNotFound)));

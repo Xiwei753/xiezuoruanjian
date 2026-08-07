@@ -133,7 +133,7 @@ mod tests {
         let recent_path = app_data_root.join("recent_edits.json");
         assert!(!recent_path.exists());
 
-        // Flushing when cache has nothing for this workspace shouldn't fail
+        // Flushing when cache has nothing for this app data root shouldn't fail
         flush_recent_edits(app_data_root).unwrap();
 
         // And it shouldn't create the file if it had no data
