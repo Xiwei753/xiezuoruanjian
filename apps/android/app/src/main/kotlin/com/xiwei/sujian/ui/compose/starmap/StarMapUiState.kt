@@ -3,12 +3,12 @@ package com.xiwei.sujian.ui.compose.starmap
 import com.xiwei.sujian.model.StarMapData
 import com.xiwei.sujian.model.StarMapMeta
 
-data class StarMapListUiState(
+internal data class StarMapListUiState(
     val starMaps: List<StarMapMeta> = emptyList(),
     val isLoading: Boolean = true
 )
 
-data class StarMapEditorUiState(
+internal data class StarMapEditorUiState(
     val starMapData: StarMapData? = null,
     val isLoading: Boolean = true,
     val selectedNodeId: String? = null,

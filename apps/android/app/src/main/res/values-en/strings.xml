@@ -5,44 +5,18 @@
     <string name="title_starmap">Star Map</string>
     <string name="title_stats">Statistics</string>
     <string name="action_new_project">New Project</string>
-    <string name="action_new_volume">New Volume</string>
     <string name="action_new_chapter">New Chapter</string>
     <string name="action_settings">Settings</string>
     <string name="action_save">Save</string>
     <string name="action_cancel">Cancel</string>
     <string name="action_create">Create</string>
-    <string name="action_search">Find and Replace</string>
-    <string name="action_search_next">Next</string>
-    <string name="action_replace">Replace</string>
-    <string name="action_replace_all">Replace All</string>
-    <string name="hint_search">Find</string>
-    <string name="hint_replace">Replace with</string>
-    <string name="action_note">Chapter Note</string>
-    <string name="dialog_chapter_note_title">Chapter Note</string>
-    <string name="hint_chapter_note">Write chapter ideas or an outline here...</string>
-
-    <string name="empty_projects">No projects yet. Tap New Project to start.</string>
-    <string name="empty_volumes">No volumes yet. Tap New Volume to start.</string>
-    <string name="empty_chapters">No chapters yet. Tap New Chapter to start.</string>
-
-    <string name="hint_project_title">Project title</string>
-    <string name="hint_volume_title">Volume title</string>
-    <string name="hint_chapter_title">Chapter title</string>
-    <string name="hint_editor_content">Start writing here...</string>
 
     <string name="status_saved">Saved</string>
     <string name="status_unsaved">Unsaved</string>
-    <string name="status_saving">Saving...</string>
+    <string name="status_saving">Saving…</string>
     <string name="status_save_failed">Save failed</string>
 
     <string name="dialog_new_project_title">New Project</string>
-    <string name="dialog_new_volume_title">New Volume</string>
-    <string name="dialog_new_chapter_title">New Chapter</string>
-
-    <string name="dialog_save_failed_title">Save Failed</string>
-    <string name="dialog_save_failed_message">Chapter save failed. Exit without saving?</string>
-    <string name="action_exit">Exit</string>
-    <string name="action_retry">Retry</string>
 
     <string name="pref_category_editor">Editor Settings</string>
     <string name="pref_category_editor_behavior">Animations &amp; Cursor</string>
@@ -68,19 +42,7 @@
     <string name="theme_dark">Dark Mode</string>
 
     <string name="pref_category_about">About</string>
-    <string name="pref_workspace_path">Workspace Path</string>
-    <string name="pref_version_info">Version Info</string>
-    <string name="pref_version_desc">Android Native Client</string>
-
-    <string name="title_editor">Editor</string>
-    <string name="error_missing_chapter_identifiers">Missing chapter parameters. Cannot open editor.</string>
-    <string name="default_volume_title">Volume One</string>
-    <string name="default_chapter_title">New Chapter</string>
-    <string name="default_chapter_name_format">Chapter %1$d</string>
-
-    <string name="stats_word_count">Words: %1$d</string>
-    <string name="stats_session_added">Added: %1$d</string>
-    <string name="stats_speed">Speed: %1$d words/min</string>
+    <string name="pref_workspace_path">Workspace Path: %1$s</string>
 
 
     <!-- Sync Settings -->
@@ -93,57 +55,21 @@
     <string name="pref_https_token">HTTPS Token (PAT)</string>
     <string name="pref_auto_sync">Auto Sync</string>
     <string name="pref_sync_interval">Sync Interval (seconds)</string>
-    <string name="token_configured">Token configured</string>
-    <string name="token_input_active">Token entered and will be used when saving or testing</string>
-    <string name="token_not_configured">Token not configured</string>
     <string name="btn_dry_run">Check Sync Plan</string>
     <string name="btn_test_connection">Test GitHub Connection</string>
     <string name="btn_perform_sync">Sync Now</string>
 
-    <!-- Sync Prompts & Errors -->
-    <string name="sync_success">Sync succeeded.</string>
-    <string name="sync_config_saved">Sync configuration saved.</string>
-    <string name="sync_error_no_token">Missing GitHub token.</string>
-    <string name="sync_error_unrelated">The remote repository is not empty and cannot be merged automatically. Use an empty private GitHub repository.</string>
-    <string name="sync_error_conflict">Conflicting files exist and need manual resolution.</string>
-    <string name="sync_error_save_failed">Failed to save sync state. Check storage permissions.</string>
-    <string name="sync_dry_run_result">Will upload %1$d, download %2$d, delete %3$d remote files, move %4$d local files to trash, and ignore %5$d.</string>
+    <!-- Sync Prompts & Errors -->    <string name="sync_dry_run_result">Will upload %1$d, download %2$d, delete %3$d remote files, move %4$d local files to trash, and ignore %5$d.</string>
 
     <string name="action_ok">OK</string>
-    <string name="sync_error_not_loaded">Native core not loaded</string>
 
 
     <string name="action_rename">Rename</string>
     <string name="action_delete">Delete</string>
     <string name="action_move_up">Move Up</string>
     <string name="action_move_down">Move Down</string>
-    <string name="confirm_delete_project">Confirm Project Deletion</string>
-    <string name="confirm_delete_project_message">Delete project \"%1$s\"? This action cannot be undone.</string>
-    <string name="confirm_delete_volume">Confirm Volume Deletion</string>
-    <string name="confirm_delete_chapter">Confirm Chapter Deletion</string>
-    <string name="warning_delete_volume">Deleting a volume also deletes all chapters inside it.</string>
-    <string name="action_more_project">More project actions</string>
-    <string name="action_more_volume">More volume actions</string>
-    <string name="action_more_chapter">More chapter actions</string>
 
     <!-- Action Registry Debug -->
-    <string name="action_registry_title">Action Registry</string>
-    <string name="action_registry_entry">Action Debug</string>
-    <string name="action_kind_query">Query</string>
-    <string name="action_kind_preview">Preview</string>
-    <string name="action_kind_mutation">Mutation</string>
-    <string name="risk_safe_read">Safe Read</string>
-    <string name="risk_safe_write">Safe Write</string>
-    <string name="risk_content_write">Content Write</string>
-    <string name="risk_dangerous">Dangerous</string>
-    <string name="action_run">Run</string>
-    <string name="action_apply">Apply</string>
-    <string name="action_confirm_title">Confirm Operation</string>
-    <string name="action_confirm_message">Run this operation?</string>
-    <string name="action_blocked_dangerous">Dangerous operation blocked in debug page</string>
-    <string name="action_not_loaded">Core library not loaded</string>
-    <string name="action_result_title">Result</string>
-
     <!-- Error messages (WriterError mapping) -->
     <string name="error_io">File I/O failed. Check workspace permissions and disk status.</string>
     <string name="error_json">Data file format error. Check if workspace files are corrupted.</string>
@@ -157,11 +83,7 @@
     <string name="error_invalid_delete_target">Invalid delete target</string>
     <string name="error_sync_conflict">Sync conflict. Please resolve conflicting files and retry.</string>
     <string name="error_sync_failed">Sync failed. Check your network and configuration.</string>
-    <string name="sync_token_missing">Sync token not set. Please configure sync credentials first.</string>
     <string name="sync_auth_failed">Sync authentication failed. Check your token and repository permissions.</string>
-    <string name="sync_repo_not_found">Sync repository not found or no access permission.</string>
-    <string name="sync_branch_missing">Sync remote branch does not exist.</string>
-    <string name="sync_network_failed">Sync network connection failed. Check network settings.</string>
     <string name="error_other">Operation failed</string>
 
     <!-- ErrorUtil -->
@@ -179,101 +101,19 @@
     <string name="error_update_chapter_note_failed">Failed to update chapter note: %1$s</string>
 
     <!-- EditorFragment -->
-    <string name="error_chapter_deleted_remotely">This chapter was deleted on another device. Returned to list.</string>
-
     <!-- ChapterListActivity -->
-    <string name="stats_total_words">Total words: %1$d</string>
-    <string name="stats_volumes">Volumes: %1$d</string>
-    <string name="stats_chapters">Chapters: %1$d</string>
-    <string name="confirm_delete_volume_message">Delete volume \"%1$s\"?\n%2$s</string>
-    <string name="confirm_delete_chapter_message">Delete chapter \"%1$s\"?</string>
-    <string name="error_open_editor">Cannot open editor: %1$s</string>
-    <string name="word_count_label">Words: %1$d</string>
-
     <!-- DetailChapterAdapter -->
-    <string name="chapter_title_with_count">  %1$s  (%2$d words)</string>
-    <string name="empty_volume_hint">  (Empty volume, tap to create a chapter)</string>
-
     <!-- Settings -->
     <string name="auto_save_delay_seconds">%1$d sec</string>
     <string name="auto_indent_width_chars">%1$s characters</string>
-    <string name="version_info">v%1$s (Build %2$d) Android Native Client</string>
-    <string name="version_info_fallback">Android Native Client</string>
 
     <!-- MainActivity -->
     <string name="unknown_project">Unknown project</string>
-    <string name="continue_writing">Continue writing...</string>
     <string name="recent_edits">Recent Edits</string>
-    <string name="select_chapter_to_edit">Select a chapter to start editing</string>
 
     <!-- StarMapController -->
-    <string name="default_starmap_title">Project Universe</string>
-    <string name="default_starmap_desc">Auto-generated default star map</string>
-    <string name="hint_node_name">Node name</string>
-    <string name="dialog_new_node_title">New Node</string>
-    <string name="node_kind_character">Character</string>
-    <string name="node_kind_location">Location</string>
-    <string name="node_kind_event">Event</string>
-    <string name="node_kind_item">Item</string>
-    <string name="node_kind_concept">Concept</string>
-    <string name="node_kind_chapter">Chapter</string>
-    <string name="node_kind_other">Other</string>
-    <string name="error_create_node_failed">Create failed: %1$s</string>
-
     <!-- ActionRegistryActivity -->
-    <string name="action_load_failed">Load failed: %1$s</string>
-    <string name="action_confirm_required">Confirmation required</string>
-    <string name="action_execute_success">Execution succeeded</string>
-    <string name="action_execute_failed">Execution failed</string>
-    <string name="action_return_data">Return data:\n%1$s</string>
-    <string name="action_error_prefix">Error: %1$s</string>
-
-    <!-- SyncSettingsHelper -->
-    <string name="sync_checking">Checking...</string>
-    <string name="sync_syncing">Syncing...</string>
-    <string name="sync_plan_check_complete">Sync plan check complete: %1$s</string>
-    <string name="diag_status_ok">OK</string>
-    <string name="diag_status_failed">Failed</string>
-    <string name="diag_status_skipped">Skipped</string>
-    <string name="diag_status_failed_detail">Failed (%1$s)</string>
-    <string name="diag_status_unchecked">Unchecked (%1$s)</string>
-    <string name="diag_permission_section">=== Permission Status ===</string>
-    <string name="diag_internet_permission">INTERNET permission: %1$s</string>
-    <string name="diag_permission_granted">Granted</string>
-    <string name="diag_permission_missing">Missing</string>
-    <string name="diag_network_state_permission">Network state permission: %1$s</string>
-    <string name="diag_network_state_granted">Permission granted, network detectable</string>
-    <string name="diag_network_state_unknown">Unknown (missing ACCESS_NETWORK_STATE permission)</string>
-    <string name="diag_network_state_no_internet">No INTERNET permission, cannot connect</string>
-    <string name="diag_title_failed">Diagnostics Failed</string>
-    <string name="diag_network_connection">Network connection: %1$s</string>
-    <string name="diag_auth_status">Authentication: %1$s</string>
-    <string name="diag_repo_access">Repository access: %1$s</string>
-    <string name="diag_branch_exists">Branch exists: %1$s</string>
-    <string name="diag_auto_probe_section">=== Auto Network Probe ===</string>
-    <string name="diag_chosen_mode">Chosen mode: %1$s</string>
-    <string name="diag_unknown_mode">Unknown</string>
-    <string name="diag_raw_error_section">Raw error:\n%1$s</string>
-    <string name="diag_title_success">Diagnostics Succeeded</string>
-    <string name="sync_conflict_title">Sync Conflict</string>
-    <string name="sync_conflict_detected">Conflict detected during sync.\n\n</string>
-    <string name="sync_conflict_files">Conflicting files:</string>
-    <string name="sync_setting_conflicts">Setting conflicts:</string>
-    <string name="sync_setting_conflict_detail">  • Key: %1$s, Local: %2$s, Remote: %3$s</string>
-    <string name="sync_safe_suggestions">Safe suggestions:</string>
-    <string name="sync_suggestion_backup">• Back up the current workspace.</string>
-    <string name="sync_suggestion_merge">• Confirm diagnostics or manually merge, then re-sync.</string>
-    <string name="sync_complete_no_changes">Sync complete: local and remote are already up to date.</string>
-    <string name="sync_success_recovered">Sync succeeded (associated and recovered missing branch)</string>
-    <string name="sync_success_detail">%1$s\nUploaded: %2$d Downloaded: %3$d Local deleted: %4$d Remote deleted: %5$d Overwritten: %6$d</string>
-    <string name="sync_blocked_title">Sync Blocked</string>
-    <string name="sync_blocked_message">Sync blocked: local repository has uncommitted changes that are not safe settings files. Please commit or back up changes before retrying.</string>
-    <string name="sync_recoverable_error_title">Recoverable Error</string>
-    <string name="sync_fatal_error_title">Sync Failed</string>
-    <string name="sync_unknown_error">Unknown sync error</string>
-    <string name="sync_interval_minutes">%1$d min</string>
-    <string name="sync_interval_minutes_effective">%1$d min (effective background interval: 15 min)</string>
-    <string name="sync_block_disabled">Sync is not enabled</string>
+    <!-- SyncSettingsHelper -->    <string name="sync_block_disabled">Sync is not enabled</string>
     <string name="sync_block_remote_url_missing">Remote repository URL not configured</string>
     <string name="sync_block_token_missing">Token not configured</string>
     <string name="sync_block_secure_storage_unavailable">Secure storage unavailable, cannot save sync credentials</string>
@@ -305,19 +145,7 @@
     <string name="repo_reorder_chapters_failed">Failed to reorder chapters: %1$s</string>
 
     <!-- BridgeResult -->
-    <string name="error_parse_json_failed">Failed to parse %1$s JSON: %2$s</string>
-
     <!-- StatsController -->
-    <string name="stats_duration_hours_minutes">%1$dh %2$dm</string>
-    <string name="stats_duration_minutes">%1$d min</string>
-    <string name="stats_summary">Typed: %1$d words\nActive time: %2$s</string>
-    <string name="stats_load_failed">Load failed: %1$s</string>
-    <string name="stats_not_loaded">Not loaded</string>
-    <string name="stats_no_project_data">No project data</string>
-    <string name="stats_unnamed_project">Unnamed</string>
-    <string name="stats_project_line">Project: %1$s</string>
-    <string name="stats_input_chars">Typed: %1$d words</string>
-
     <!-- Diagnostics -->
     <string name="pref_category_diagnostics">Diagnostics &amp; Logs</string>
     <string name="pref_diagnostics_enabled">Enable diagnostic logs</string>
@@ -326,43 +154,25 @@
     <string name="btn_clear_logs">Clear logs</string>
     <string name="btn_copy_device_info">Copy device info</string>
     <string name="share_diagnostics_title">Share diagnostics package</string>
-    <string name="diagnostics_export_success">Diagnostics package generated, sharing…</string>
     <string name="diagnostics_export_failed">Failed to export diagnostics package</string>
     <string name="diagnostics_cleared">Logs cleared</string>
     <string name="diagnostics_device_info_copied">Device info copied</string>
 
     <!-- About -->
-    <string name="about_title">About Sujian Writing</string>
-
     <!-- Laboratory features -->
     <string name="pref_category_laboratory">Laboratory</string>
     <string name="lab_fullscreen_immersive">Immersive Fullscreen</string>
     <string name="lab_fullscreen_immersive_summary">Hide system status/navigation bars. Swiping edges temporarily shows them. May affect notches and gesture areas.</string>
     <string name="about_app_name">Sujian Writing</string>
     <string name="about_author">Author: Xiwei753</string>
-    <string name="about_github">GitHub: &lt;a href="https://github.com/Xiwei753/xiezuoruanjian"&gt;https://github.com/Xiwei753/xiezuoruanjian&lt;/a&gt;</string>
-    <string name="about_gitee">Gitee mirror: &lt;a href="https://gitee.com/wei-xi753/xiezuoruanjian"&gt;https://gitee.com/wei-xi753/xiezuoruanjian&lt;/a&gt;</string>
     <string name="about_license">License: GPLv3</string>
-    <string name="about_mirror_note">GitHub is the primary repository. Gitee is a mirror for easier access in China.</string>
-    <string name="about_version_detail">App version: %1$s\nCore version: %2$s\nPlatform: %3$s</string>
-    <string name="about_version_section">Version Info</string>
-    <string name="about_btn_text">About Sujian Writing</string>
 
-    <!-- Stats page -->
-    <string name="title_writing_stats">Writing Statistics</string>
-    <string name="stats_today_data">Today</string>
-    <string name="stats_week_data">This Week</string>
-    <string name="stats_project_ranking_week">Project Ranking (This Week)</string>
-    <string name="loading">Loading...</string>
+    <!-- Stats page -->    <string name="loading">Loading…</string>
     <string name="save_sync_config_failed">Failed to save sync config</string>
     <string name="save_sync_secrets_failed">Failed to save sync credentials</string>
     <string name="sync_block_not_ready">Sync not ready</string>
     <string name="sync_test_connection_result">Network: %1$s Auth: %2$s Repo: %3$s Branch: %4$s</string>
     <string name="sync_perform_result">Uploaded: %1$d Downloaded: %2$d Remote deleted: %3$d Local moved to trash: %4$d Conflicts: %5$d</string>
-    <string name="dry_run_error">Dry run failed</string>
-    <string name="diagnostics_error">Connection diagnostics failed</string>
-    <string name="sync_error">Sync failed</string>
-    <string name="core_not_loaded">Native Core not loaded</string>
     <string name="unexpected_error">Unexpected error</string>
     <string name="sync_terminal_failure">Sync encountered an unrecoverable error</string>
     <string name="sync_retryable_failure">Sync encountered a temporary error, retryable</string>
@@ -372,10 +182,6 @@
     <string name="sync_dirty_repository">Local uncommitted changes, sync blocked</string>
     <string name="sync_protocol_error">Sync protocol error</string>
     <string name="sync_native_unavailable">Native Core not loaded</string>
-    <string name="sync_document_save_failed">Active document save failed, sync aborted</string>
-    <string name="sync_document_revision_changed">Document changed after save, sync aborted</string>
-    <string name="sync_document_conflict">Document version conflict, manual resolution needed</string>
-    <string name="sync_document_unavailable">Cannot verify active document state, sync aborted</string>
     <string name="sync_fatal">Sync encountered an unrecoverable error</string>
     <string name="sync_unconfigured">Sync not configured</string>
     <string name="sync_disabled">Sync not enabled</string>
@@ -384,18 +190,4 @@
     <string name="save_config_or_secrets_failed">Failed to save sync config or credentials</string>
     <string name="sync_diag_ok">OK</string>
     <string name="sync_diag_fail">Fail</string>
-
-    <string name="workbench_panel_float">Float</string>
-    <string name="workbench_panel_collapse">Collapse</string>
-    <string name="workbench_panel_close">Close</string>
-    <string name="workbench_panel_project_navigator">Project Navigator</string>
-    <string name="workbench_panel_chapter_navigator">Chapter Navigator</string>
-    <string name="workbench_panel_ai_assistant">AI Assistant</string>
-    <string name="workbench_panel_search">Search</string>
-    <string name="workbench_panel_statistics">Statistics</string>
-    <string name="workbench_panel_starmap">Star Map</string>
-    <string name="workbench_panel_document_outline">Document Outline</string>
-    <string name="workbench_panel_character_info">Character Info</string>
-    <string name="workbench_panel_ai_placeholder">AI Assistant coming soon</string>
-    <string name="workbench_panel_search_placeholder">Search coming soon</string>
 </resources>

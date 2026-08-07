@@ -1,4 +1,3 @@
-@file:Suppress("StringLiteralDuplication") // #597 技术债：协议字符串天然重复
 package com.xiwei.sujian.ui.compose.settings
 
 
@@ -22,6 +21,7 @@ import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaf
 import com.xiwei.sujian.data.SyncStatusRepository
 import com.xiwei.sujian.data.WorkspaceDocumentGate
 import com.xiwei.sujian.designsystem.icon.SujianIcons
+import android.annotation.SuppressLint
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -72,188 +72,41 @@ import com.xiwei.sujian.data.SyncDiagnosticsOutcome
 import com.xiwei.sujian.data.SyncSession
 import com.xiwei.sujian.model.SyncTrigger
 
-enum class SyncCommandState { IDLE, RUNNING, SUCCESS, FAILURE }
-
-/**
- * #595 四：设置页同步 profile 加载状态。
- *
- * - [Loading]：初始加载中。
- * - [Ready]：config + secrets 均读取成功且凭据非空。
- * - [Unconfigured]：config 读取成功但未配置 token — 显示空 token 是正常状态。
- * - [Failed]：安全存储读取失败/原生库未加载/配置损坏 — 保留上一次已确认的字段值，
- *   同时显示真实错误，不再通过 toConfigSecretsOrNull() 静默退化为默认值。
- */
-sealed interface SyncProfileLoadState {
-    data object Loading : SyncProfileLoadState
-    data class Ready(
-        val config: com.xiwei.sujian.model.SyncConfig,
-        val secrets: com.xiwei.sujian.model.SyncSecrets,
-    ) : SyncProfileLoadState
-    data class Unconfigured(
-        val config: com.xiwei.sujian.model.SyncConfig,
-        val secrets: com.xiwei.sujian.model.SyncSecrets,
-    ) : SyncProfileLoadState
-    data class Failed(val kind: SyncFailureKind, val message: String?) : SyncProfileLoadState
-}
-
-/** 已确认（非失败）状态下可用的 config — Failed/Loading 返回 null，保留当前 UI 值。 */
-private val SyncProfileLoadState.confirmedConfig: com.xiwei.sujian.model.SyncConfig?
-    get() = when (this) {
-        is SyncProfileLoadState.Ready -> config
-        is SyncProfileLoadState.Unconfigured -> config
-        is SyncProfileLoadState.Failed -> null
-        SyncProfileLoadState.Loading -> null
-    }
-
-/** 已确认（非失败）状态下可用的 secrets — Failed/Loading 返回 null，保留当前 UI 值。 */
-private val SyncProfileLoadState.confirmedSecrets: com.xiwei.sujian.model.SyncSecrets?
-    get() = when (this) {
-        is SyncProfileLoadState.Ready -> secrets
-        is SyncProfileLoadState.Unconfigured -> secrets
-        is SyncProfileLoadState.Failed -> null
-        SyncProfileLoadState.Loading -> null
-    }
-
-/** #595 四：SyncProfileReadResult → 设置页加载状态 — Failed 不再被静默转成 null。 */
-private fun com.xiwei.sujian.data.SyncProfileReadResult.toSyncProfileLoadState(): SyncProfileLoadState = when (this) {
-    is com.xiwei.sujian.data.SyncProfileReadResult.Found ->
-        SyncProfileLoadState.Ready(snapshot.config, snapshot.secrets)
-    is com.xiwei.sujian.data.SyncProfileReadResult.NotConfigured ->
-        SyncProfileLoadState.Unconfigured(snapshot.config, snapshot.secrets)
-    is com.xiwei.sujian.data.SyncProfileReadResult.Failed ->
-        SyncProfileLoadState.Failed(kind, message)
-}
-
-data class SettingsUiState(
-    val settings: LocalSettings = LocalSettings(),
-    val fontSize: Float = 16f,
-    val syncConfig: com.xiwei.sujian.model.SyncConfig = com.xiwei.sujian.model.SyncConfig(),
-    val syncSecrets: com.xiwei.sujian.model.SyncSecrets = com.xiwei.sujian.model.SyncSecrets(),
-    val syncCapability: com.xiwei.sujian.model.SyncCapabilityData = com.xiwei.sujian.model.SyncCapabilityData(),
-    val secureStorageWarning: String? = null,
-    val builtinThemes: List<com.xiwei.sujian.model.BuiltinTheme> = emptyList(),
-    val paletteRecords: List<com.xiwei.sujian.model.ThemePaletteRecord> = emptyList(),
-    val aiAvailable: Boolean = false,
-    val workspacePath: String = "",
-    val versionInfo: String = "",
-    val saveErrorResId: Int? = null,
-    val dryRunState: SyncCommandState = SyncCommandState.IDLE,
-    val testConnectionState: SyncCommandState = SyncCommandState.IDLE,
-    val performSyncState: SyncCommandState = SyncCommandState.IDLE,
-    val structuredSyncResult: StructuredSyncResult? = null,
-    val lastCommandType: SyncCommandType? = null,
-    /** #595 四：同步 profile 加载状态 — Failed 时保留字段值并显示真实错误。 */
-    val syncProfileLoadState: SyncProfileLoadState = SyncProfileLoadState.Loading,
-)
-
-sealed interface SettingsIntent {
-    data class UpdateLocal(val transform: (LocalSettings) -> LocalSettings) : SettingsIntent
-    data class UpdateFontSize(val fontSize: Float) : SettingsIntent
-    data class UpdateSyncConfig(val config: com.xiwei.sujian.model.SyncConfig) : SettingsIntent
-    data class UpdateSyncSecrets(val secrets: com.xiwei.sujian.model.SyncSecrets) : SettingsIntent
-    data object Refresh : SettingsIntent
-    data object CaptureDynamicColor : SettingsIntent
-    data class DeletePalette(val deviceId: String, val fingerprint: String) : SettingsIntent
-    data object DryRun : SettingsIntent
-    data object TestConnection : SettingsIntent
-    data object PerformSync : SettingsIntent
-}
-
-sealed interface SettingsSaveCommand {
-    data class Local(
-        val settings: LocalSettings,
-        val revision: Long,
-    ) : SettingsSaveCommand
-
-    data class FontSize(
-        val fontSize: Float,
-        val revision: Long,
-    ) : SettingsSaveCommand
-
-    data class SyncConfig(
-        val config: com.xiwei.sujian.model.SyncConfig,
-        val revision: Long,
-    ) : SettingsSaveCommand
-
-    data class SyncSecrets(
-        val secrets: com.xiwei.sujian.model.SyncSecrets,
-        val revision: Long,
-    ) : SettingsSaveCommand
-}
-
-sealed interface SettingsTransactionCommand {
-    data class SaveAndRunSync(
-        val config: com.xiwei.sujian.model.SyncConfig,
-        val configRevision: Long,
-        val secrets: com.xiwei.sujian.model.SyncSecrets,
-        val secretsRevision: Long,
-        val trigger: SyncTrigger,
-    ) : SettingsTransactionCommand
-
-    data class SaveAndRunDryRun(
-        val config: com.xiwei.sujian.model.SyncConfig,
-        val configRevision: Long,
-        val secrets: com.xiwei.sujian.model.SyncSecrets,
-        val secretsRevision: Long,
-    ) : SettingsTransactionCommand
-
-    data class SaveAndRunDiagnostics(
-        val config: com.xiwei.sujian.model.SyncConfig,
-        val configRevision: Long,
-        val secrets: com.xiwei.sujian.model.SyncSecrets,
-        val secretsRevision: Long,
-    ) : SettingsTransactionCommand
-}
-
-private data class PendingCommands(
-    val local: SettingsSaveCommand.Local? = null,
-    val fontSize: SettingsSaveCommand.FontSize? = null,
-    val syncConfig: SettingsSaveCommand.SyncConfig? = null,
-    val syncSecrets: SettingsSaveCommand.SyncSecrets? = null,
-)
-
-enum class SyncCommandType { DRY_RUN, TEST_CONNECTION, PERFORM_SYNC }
-
-private data class SyncCommandIoResult(
-    val configSaved: Boolean,
-    val secretsSaved: Boolean,
-    val structuredResult: StructuredSyncResult,
-) {
-    val isSuccess: Boolean get() = structuredResult.statusCode == "ok"
-}
- @Suppress("LargeClass") // #597 技术债：待重构拆分
 
 class SettingsViewModel(
-    private val settingsRepo: SettingsRepository,
-    private val syncCoordinator: com.xiwei.sujian.data.SyncCoordinator,
+    internal val settingsRepo: SettingsRepository,
+    internal val syncCoordinator: com.xiwei.sujian.data.SyncCoordinator,
 ) : ViewModel() {
-    private val _uiState = MutableStateFlow(SettingsUiState())
+    /** internal 暴露 viewModelScope 供 extension functions 使用。 */
+    internal val editorScope: kotlinx.coroutines.CoroutineScope get() = viewModelScope
+
+    internal val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
 
-    private sealed interface QueueItem {
+    internal sealed interface QueueItem {
         data class Save(val command: SettingsSaveCommand) : QueueItem
         data class Transaction(val command: SettingsTransactionCommand) : QueueItem
     }
-    private val saveChannel = Channel<QueueItem>(Channel.UNLIMITED)
-    private val _saveFailureEvents = Channel<Int>(Channel.BUFFERED)
+    internal val saveChannel = Channel<QueueItem>(Channel.UNLIMITED)
+    internal val _saveFailureEvents = Channel<Int>(Channel.BUFFERED)
     val saveFailureEvents = _saveFailureEvents.receiveAsFlow()
 
-    private var localRevision = 0L
-    private var fontSizeRevision = 0L
-    private var syncConfigRevision = 0L
-    private var syncSecretsRevision = 0L
+    internal var localRevision = 0L
+    internal var fontSizeRevision = 0L
+    internal var syncConfigRevision = 0L
+    internal var syncSecretsRevision = 0L
 
-    private var localPersistedRevision = 0L
-    private var fontSizePersistedRevision = 0L
-    private var syncConfigPersistedRevision = 0L
-    private var syncSecretsPersistedRevision = 0L
+    internal var localPersistedRevision = 0L
+    internal var fontSizePersistedRevision = 0L
+    internal var syncConfigPersistedRevision = 0L
+    internal var syncSecretsPersistedRevision = 0L
 
-    private var pendingCommands = PendingCommands()
+    internal var pendingCommands = PendingCommands()
 
-    private fun hasUnsavedLocal() = localRevision != localPersistedRevision
-    private fun hasUnsavedFontSize() = fontSizeRevision != fontSizePersistedRevision
-    private fun hasUnsavedSyncConfig() = syncConfigRevision != syncConfigPersistedRevision
-    private fun hasUnsavedSyncSecrets() = syncSecretsRevision != syncSecretsPersistedRevision
+    internal fun hasUnsavedLocal() = localRevision != localPersistedRevision
+    internal fun hasUnsavedFontSize() = fontSizeRevision != fontSizePersistedRevision
+    internal fun hasUnsavedSyncConfig() = syncConfigRevision != syncConfigPersistedRevision
+    internal fun hasUnsavedSyncSecrets() = syncSecretsRevision != syncSecretsPersistedRevision
 
     init {
         loadInitial()
@@ -285,7 +138,7 @@ class SettingsViewModel(
         }
     }
 
-    private fun mergeCommand(command: SettingsSaveCommand) {
+    internal fun mergeCommand(command: SettingsSaveCommand) {
         pendingCommands = when (command) {
             is SettingsSaveCommand.Local -> pendingCommands.copy(local = command)
             is SettingsSaveCommand.FontSize -> pendingCommands.copy(fontSize = command)
@@ -295,417 +148,12 @@ class SettingsViewModel(
     }
 
     class Factory(
-        private val repo: SettingsRepository,
-        private val coordinator: com.xiwei.sujian.data.SyncCoordinator,
+        internal val repo: SettingsRepository,
+        internal val coordinator: com.xiwei.sujian.data.SyncCoordinator,
     ) : androidx.lifecycle.ViewModelProvider.Factory {
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             return modelClass.cast(SettingsViewModel(repo, coordinator)) as T
         }
-    }
- @Suppress("CognitiveComplexMethod") // #597 技术债：待重构拆分
-
-    private fun loadInitial() {
-        val repo = settingsRepo
-        viewModelScope.launch {
-            val snapshotLocalRev = localRevision
-            val snapshotFontSizeRev = fontSizeRevision
-            val snapshotSyncConfigRev = syncConfigRevision
-            val snapshotSyncSecretsRev = syncSecretsRevision
-
-            val settings = withContext(Dispatchers.IO) { repo.getLocalSettings() }
-            val fontSize = withContext(Dispatchers.IO) { repo.getEffectiveFontSize() }
-            // #595 八：UI 初始化读取活动 generation 的完整 snapshot，不再读 live legacy 槽。
-            val committedProfile = withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile() }
-            // #595 四：类型化加载状态 — Failed 时保留当前字段值，页面显示真实错误。
-            val syncProfileLoadState = committedProfile.toSyncProfileLoadState()
-            val syncCapability = withContext(Dispatchers.IO) { repo.getSyncCapability() }
-            val secureStorageWarning = withContext(Dispatchers.IO) { repo.getSecureStorageWarning() }
-            val builtinThemes = withContext(Dispatchers.IO) { repo.listBuiltinThemes() }
-            val paletteRecords = withContext(Dispatchers.IO) { repo.listPaletteRecords() }
-            val aiAvailable = withContext(Dispatchers.IO) { repo.aiAvailable() }
-            val workspacePath = withContext(Dispatchers.IO) { repo.workspaceDir() }
-
-            _uiState.update { current ->
-                SettingsUiState(
-                    settings = if (localRevision == snapshotLocalRev) settings else current.settings,
-                    fontSize = if (fontSizeRevision == snapshotFontSizeRev) fontSize else current.fontSize,
-                    syncConfig = if (syncConfigRevision == snapshotSyncConfigRev) syncProfileLoadState.confirmedConfig ?: current.syncConfig else current.syncConfig,
-                    syncSecrets = if (syncSecretsRevision == snapshotSyncSecretsRev) syncProfileLoadState.confirmedSecrets ?: current.syncSecrets else current.syncSecrets,
-                    syncCapability = syncCapability,
-                    secureStorageWarning = secureStorageWarning,
-                    builtinThemes = builtinThemes,
-                    paletteRecords = paletteRecords,
-                    aiAvailable = aiAvailable,
-                    workspacePath = workspacePath,
-                    syncProfileLoadState = syncProfileLoadState,
-                )
-            }
-        }
-    }
-
-    private suspend fun flushPending() {
-        val repo = settingsRepo
-        val cmds = pendingCommands
-        @Suppress("ComplexCondition") // #597 技术债：条件过复杂，待拆分
-        if (cmds.local == null && cmds.fontSize == null && cmds.syncConfig == null && cmds.syncSecrets == null) return
-        pendingCommands = PendingCommands()
-        executeSave(repo, cmds.local, cmds.fontSize, cmds.syncConfig, cmds.syncSecrets)
-    }
- @Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod", "LongMethod", "NestedBlockDepth", "ComplexCondition") // #597 技术债：待重构拆分
-
-    private suspend fun executeSave(
-        repo: SettingsRepository,
-        local: SettingsSaveCommand.Local?,
-        fontSize: SettingsSaveCommand.FontSize?,
-        syncConfig: SettingsSaveCommand.SyncConfig?,
-        syncSecrets: SettingsSaveCommand.SyncSecrets?,
-    ) {
-        val failures = mutableListOf<SaveFailure>()
-
-        if (local != null) {
-            val result = withContext(Dispatchers.IO) { repo.saveLocalSettings(local.settings) }
-            when (result) {
-                is SettingsSaveResult.Success -> {
-                    localPersistedRevision = local.revision
-                    com.xiwei.sujian.ui.compose.theme.ThemeStore.reload()
-                }
-                is SettingsSaveResult.Failed -> {
-                    if (localRevision == local.revision) {
-                        failures.add(SaveFailure(SaveField.LOCAL_SETTINGS, local.revision))
-                    }
-                }
-            }
-        }
-
-        if (fontSize != null) {
-            val result = withContext(Dispatchers.IO) { repo.setFontSize(fontSize.fontSize) }
-            when (result) {
-                is SettingsSaveResult.Success -> {
-                    fontSizePersistedRevision = fontSize.revision
-                }
-                is SettingsSaveResult.Failed -> {
-                    if (fontSizeRevision == fontSize.revision) {
-                        failures.add(SaveFailure(SaveField.FONT_SIZE, fontSize.revision))
-                    }
-                }
-            }
-        }
-
-        var syncConfigSaved = false
-        var syncSecretsSaved = false
-
-        // #595 八：同步配置/凭据的普通自动保存不再分别排队
-        // UpdateSyncConfig → saveSyncConfig() / UpdateSyncSecrets → saveSyncSecrets()
-        // （那会绕过 generation 提交协议，造成 live 槽与 committed profile 双真相）。
-        // 捕获同一时刻的完整 SyncProfileDraft：未变更的一方取当前 UI 值（
-        // 上次已提交/已加载值），通过 commitSyncProfile 一次性原子提交。
-        if (syncConfig != null || syncSecrets != null) {
-            val draftConfig = syncConfig?.config ?: _uiState.value.syncConfig
-            val draftSecrets = syncSecrets?.secrets ?: _uiState.value.syncSecrets
-            val commitResult = withContext(Dispatchers.IO) {
-                repo.commitSyncProfile(draftConfig, draftSecrets)
-            }
-            when (commitResult) {
-                is SettingsSaveResult.Success -> {
-                    if (syncConfig != null && syncConfigRevision == syncConfig.revision) {
-                        syncConfigPersistedRevision = syncConfig.revision
-                        syncConfigSaved = true
-                    }
-                    if (syncSecrets != null && syncSecretsRevision == syncSecrets.revision) {
-                        syncSecretsPersistedRevision = syncSecrets.revision
-                        syncSecretsSaved = true
-                    }
-                }
-                is SettingsSaveResult.Failed -> {
-                    for (failure in commitResult.failures) {
-                        when (failure.field) {
-                            SaveField.SYNC_CONFIG -> {
-                                if (syncConfig != null && syncConfigRevision == syncConfig.revision) {
-                                    failures.add(failure)
-                                }
-                            }
-                            SaveField.SYNC_SECRETS -> {
-                                if (syncSecrets != null && syncSecretsRevision == syncSecrets.revision) {
-                                    failures.add(failure)
-                                }
-                            }
-                            else -> { }
-                        }
-                    }
-                }
-            }
-        }
-
-        if (syncConfigSaved || syncSecretsSaved) {
-            // #595 五：成功提交后一次性更新 config/secrets/loadState/capability/warning。
-            refreshSyncProfileState()
-        }
-
-        if (failures.isNotEmpty()) {
-            rollbackFailures(repo, failures)
-            val errorResId = when (failures.first().field) {
-                SaveField.LOCAL_SETTINGS -> R.string.save_local_settings_failed
-                SaveField.FONT_SIZE -> R.string.save_font_size_failed
-                SaveField.SYNC_CONFIG -> R.string.save_sync_config_failed
-                SaveField.SYNC_SECRETS -> R.string.save_sync_secrets_failed
-            }
-            _uiState.update { it.copy(saveErrorResId = errorResId) }
-            _saveFailureEvents.send(errorResId)
-        } else if (local != null || fontSize != null || syncConfig != null || syncSecrets != null) {
-            _uiState.update { it.copy(saveErrorResId = null) }
-        }
-    }
-
-    private suspend fun executeTransaction(command: SettingsTransactionCommand) {
-        when (command) {
-            is SettingsTransactionCommand.SaveAndRunSync -> executeSyncTransaction(command)
-            is SettingsTransactionCommand.SaveAndRunDryRun -> executeDryRunTransaction(command)
-            is SettingsTransactionCommand.SaveAndRunDiagnostics -> executeDiagnosticsTransaction(command)
-        }
-    }
-
-    private suspend fun saveTransactionConfigAndSecrets(
-        config: com.xiwei.sujian.model.SyncConfig,
-        configRevision: Long,
-        secrets: com.xiwei.sujian.model.SyncSecrets,
-        secretsRevision: Long,
-    ): Boolean {
-        val commitResult = withContext(Dispatchers.IO) { settingsRepo.commitSyncProfile(config, secrets) }
-        if (commitResult is SettingsSaveResult.Failed) return false
-        if (syncConfigRevision == configRevision) {
-            syncConfigPersistedRevision = configRevision
-        }
-        if (syncSecretsRevision == secretsRevision) {
-            syncSecretsPersistedRevision = secretsRevision
-        }
-        return true
-    }
- @Suppress("CyclomaticComplexMethod") // #597 技术债：待重构拆分
-
-    private suspend fun executeSyncTransaction(
-        command: SettingsTransactionCommand.SaveAndRunSync,
-    ) {
-        _uiState.update { it.copy(performSyncState = SyncCommandState.RUNNING, structuredSyncResult = null, lastCommandType = SyncCommandType.PERFORM_SYNC) }
-        try {
-            if (!saveTransactionConfigAndSecrets(command.config, command.configRevision, command.secrets, command.secretsRevision)) {
-                _uiState.update { it.copy(performSyncState = SyncCommandState.FAILURE, structuredSyncResult = StructuredSyncResult(statusCode = "error", messageKey = "save_config_or_secrets_failed")) }
-                return
-            }
-            val syncOutcome = syncCoordinator.runSync(command.trigger)
-            val ioResult = when (syncOutcome) {
-                is SyncOutcome.Completed -> {
-                    val sr = syncOutcome.result
-                    val counts = SyncCounts(
-                        uploaded = sr.uploadedFiles.size,
-                        downloaded = sr.downloadedFiles.size,
-                        deletedRemote = sr.remoteDeletes.size,
-                        deletedLocal = sr.localDeletes.size,
-                        conflicts = sr.conflicts.size,
-                        overwritten = sr.overwrittenFiles.size,
-                        ignored = sr.ignoredFiles.size
-                    )
-                    SyncCommandIoResult(true, true, StructuredSyncResult(
-                        statusCode = if (sr.error == null) "ok" else "error",
-                        messageKey = "sync_perform_result",
-                        counts = counts,
-                        sanitizedDiagnostic = if (sr.error != null) "sync_failed" else null
-                    ))
-                }
-                is SyncOutcome.Unconfigured ->
-                    SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_unconfigured"))
-                is SyncOutcome.Disabled ->
-                    SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_disabled"))
-                is SyncOutcome.Busy ->
-                    SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_busy"))
-                is SyncOutcome.RetryableFailure ->
-                    SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = syncOutcome.kind.messageKey()))
-                is SyncOutcome.TerminalFailure ->
-                    SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = syncOutcome.kind.messageKey()))
-                else ->
-                    SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_unknown"))
-            }
-            _uiState.update { current ->
-                if (ioResult.isSuccess) {
-                    current.copy(performSyncState = SyncCommandState.SUCCESS, structuredSyncResult = ioResult.structuredResult, lastCommandType = SyncCommandType.PERFORM_SYNC)
-                } else {
-                    current.copy(performSyncState = SyncCommandState.FAILURE, structuredSyncResult = ioResult.structuredResult, lastCommandType = SyncCommandType.PERFORM_SYNC)
-                }
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            _uiState.update { it.copy(performSyncState = SyncCommandState.FAILURE, structuredSyncResult = StructuredSyncResult(statusCode = "error", messageKey = "unexpected_error", sanitizedDiagnostic = e.message), lastCommandType = SyncCommandType.PERFORM_SYNC) }
-        }
-        try {
-            // #595 五：成功保存并运行后一次性刷新完整同步 profile 状态。
-            refreshSyncProfileState()
-        } catch (_: Exception) { }
-    }
- @Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod") // #597 技术债：待重构拆分
-
-    private suspend fun executeDryRunTransaction(
-        command: SettingsTransactionCommand.SaveAndRunDryRun,
-    ) {
-        _uiState.update { it.copy(dryRunState = SyncCommandState.RUNNING, structuredSyncResult = null, lastCommandType = SyncCommandType.DRY_RUN) }
-        try {
-            if (!saveTransactionConfigAndSecrets(command.config, command.configRevision, command.secrets, command.secretsRevision)) {
-                _uiState.update { it.copy(dryRunState = SyncCommandState.FAILURE, structuredSyncResult = StructuredSyncResult(statusCode = "error", messageKey = "save_config_or_secrets_failed")) }
-                return
-            }
-            val exclusiveResult = SyncSession.runExclusive { _ ->
-                // #595 三：试运行与正式同步共用同一文档事务链 — 启动前先
-                // flush 活动正文到 Repository，失败按类型化错误中止（不得
-                // 以未落盘的本地输入为 base 做试运行）。
-                val flushOk = WorkspaceDocumentGate.flushActiveDocument()
-                if (!flushOk) {
-                    return@runExclusive SyncCommandIoResult(
-                        true, true,
-                        StructuredSyncResult(statusCode = "error", messageKey = "sync_document_save_failed"),
-                    )
-                }
-                withContext(Dispatchers.IO) {
-                    val capability = settingsRepo.getSyncCapability()
-                    if (!capability.canRun) {
-                        return@withContext SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "blocked", messageKey = capability.blockMessageKey ?: "sync_not_ready"))
-                    }
-                    // #595 十：操作作用域凭据 — 锁内设置 override（失败立即终止），
-                    // 结束后清除；不得使用上次正式同步留下的旧 token。
-                    val overrideOk = settingsRepo.setSyncSecretsOverrideStrict(command.secrets)
-                    if (!overrideOk) {
-                        return@withContext SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_credentials_override_failed"))
-                    }
-                    try {
-                        when (val r = settingsRepo.performSyncDryRunTyped(command.config)) {
-                            is SyncDryRunOutcome.Success -> {
-                                val plan = r.plan
-                                val counts = SyncCounts(
-                                    uploaded = plan.filesToUpload.size,
-                                    downloaded = plan.filesToDownload.size,
-                                    deletedRemote = plan.filesToDeleteRemote.size,
-                                    deletedLocal = plan.filesToDeleteLocal.size,
-                                    conflicts = plan.conflicts.size,
-                                    ignored = plan.ignoredFiles.size
-                                )
-                                SyncCommandIoResult(true, true, StructuredSyncResult(
-                                    statusCode = "ok",
-                                    messageKey = "sync_dry_run_result",
-                                    counts = counts
-                                ))
-                            }
-                            is SyncDryRunOutcome.Error -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = r.syncFailureKind.messageKey(), sanitizedDiagnostic = r.message)) 
-                            SyncDryRunOutcome.NotLoaded -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = SyncFailureKind.NativeUnavailable.messageKey(), sanitizedDiagnostic = SyncFailureKind.NativeUnavailable.name))
-                        }
-                    } finally {
-                        settingsRepo.clearSyncSecretsOverride()
-                    }
-                }
-            }
-            when (exclusiveResult) {
-                is ExclusiveResult.Busy -> {
-                    _uiState.update { it.copy(dryRunState = SyncCommandState.FAILURE, structuredSyncResult = StructuredSyncResult(statusCode = "busy", messageKey = "sync_already_running"), lastCommandType = SyncCommandType.DRY_RUN) }
-                }
-                is ExclusiveResult.Success -> {
-                    val ioResult = exclusiveResult.value
-                    _uiState.update { current ->
-                        if (ioResult.isSuccess) {
-                            current.copy(dryRunState = SyncCommandState.SUCCESS, structuredSyncResult = ioResult.structuredResult)
-                        } else {
-                            current.copy(dryRunState = SyncCommandState.FAILURE, structuredSyncResult = ioResult.structuredResult)
-                        }
-                    }
-                }
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            _uiState.update { it.copy(dryRunState = SyncCommandState.FAILURE, structuredSyncResult = StructuredSyncResult(statusCode = "error", messageKey = "unexpected_error", sanitizedDiagnostic = e.message)) }
-        }
-        try {
-            // #595 五：成功保存并试运行后一次性刷新完整同步 profile 状态。
-            refreshSyncProfileState()
-        } catch (_: Exception) { }
-    }
- @Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod") // #597 技术债：待重构拆分
-
-    private suspend fun executeDiagnosticsTransaction(
-        command: SettingsTransactionCommand.SaveAndRunDiagnostics,
-    ) {
-        _uiState.update { it.copy(testConnectionState = SyncCommandState.RUNNING, structuredSyncResult = null, lastCommandType = SyncCommandType.TEST_CONNECTION) }
-        try {
-            if (!saveTransactionConfigAndSecrets(command.config, command.configRevision, command.secrets, command.secretsRevision)) {
-                _uiState.update { it.copy(testConnectionState = SyncCommandState.FAILURE, structuredSyncResult = StructuredSyncResult(statusCode = "error", messageKey = "save_config_or_secrets_failed")) }
-                return
-            }
-            val exclusiveResult = SyncSession.runExclusive { _ ->
-                // #595 三：连接诊断与正式同步共用同一文档事务链 — 启动前先
-                // flush 活动正文到 Repository，失败按类型化错误中止。
-                val flushOk = WorkspaceDocumentGate.flushActiveDocument()
-                if (!flushOk) {
-                    return@runExclusive SyncCommandIoResult(
-                        true, true,
-                        StructuredSyncResult(statusCode = "error", messageKey = "sync_document_save_failed"),
-                    )
-                }
-                withContext(Dispatchers.IO) {
-                    val capability = settingsRepo.getSyncCapability()
-                    if (!capability.canRun) {
-                        return@withContext SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "blocked", messageKey = capability.blockMessageKey ?: "sync_not_ready"))
-                    }
-                    // #595 十：操作作用域凭据 — 锁内设置 override（失败立即终止），
-                    // 结束后清除；不得使用上次正式同步留下的旧 token。
-                    val overrideOk = settingsRepo.setSyncSecretsOverrideStrict(command.secrets)
-                    if (!overrideOk) {
-                        return@withContext SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = "sync_credentials_override_failed"))
-                    }
-                    try {
-                        when (val r = settingsRepo.performSyncDiagnosticsTyped(command.config)) {
-                            is SyncDiagnosticsOutcome.Success -> {
-                                val diag = r.result
-                                SyncCommandIoResult(true, true, StructuredSyncResult(
-                                    statusCode = if (diag.success) "ok" else "fail",
-                                    messageKey = "sync_test_connection_result",
-                                    messageArgs = mapOf(
-                                        "network" to if (diag.networkOk) "ok" else "fail",
-                                        "auth" to if (diag.authOk) "ok" else "fail",
-                                        "repo" to if (diag.repoOk) "ok" else "fail",
-                                        "branch" to if (diag.branchOk) "ok" else "fail"
-                                    ),
-                                    sanitizedDiagnostic = if (!diag.success) "connection_failed" else null
-                                ))
-                            }
-                            is SyncDiagnosticsOutcome.Error -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = r.syncFailureKind.messageKey(), sanitizedDiagnostic = r.message)) 
-                            SyncDiagnosticsOutcome.NotLoaded -> SyncCommandIoResult(true, true, StructuredSyncResult(statusCode = "error", messageKey = SyncFailureKind.NativeUnavailable.messageKey(), sanitizedDiagnostic = SyncFailureKind.NativeUnavailable.name))
-                        }
-                    } finally {
-                        settingsRepo.clearSyncSecretsOverride()
-                    }
-                }
-            }
-            when (exclusiveResult) {
-                is ExclusiveResult.Busy -> {
-                    _uiState.update { it.copy(testConnectionState = SyncCommandState.FAILURE, structuredSyncResult = StructuredSyncResult(statusCode = "busy", messageKey = "sync_already_running"), lastCommandType = SyncCommandType.TEST_CONNECTION) }
-                }
-                is ExclusiveResult.Success -> {
-                    val ioResult = exclusiveResult.value
-                    _uiState.update { current ->
-                        if (ioResult.isSuccess) {
-                            current.copy(testConnectionState = SyncCommandState.SUCCESS, structuredSyncResult = ioResult.structuredResult)
-                        } else {
-                            current.copy(testConnectionState = SyncCommandState.FAILURE, structuredSyncResult = ioResult.structuredResult)
-                        }
-                    }
-                }
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            _uiState.update { it.copy(testConnectionState = SyncCommandState.FAILURE, structuredSyncResult = StructuredSyncResult(statusCode = "error", messageKey = "unexpected_error", sanitizedDiagnostic = e.message)) }
-        }
-        try {
-            val refreshedCapability = withContext(Dispatchers.IO) { settingsRepo.getSyncCapability() }
-            val refreshedWarning = withContext(Dispatchers.IO) { settingsRepo.getSecureStorageWarning() }
-            _uiState.update { it.copy(syncCapability = refreshedCapability, secureStorageWarning = refreshedWarning) }
-        } catch (_: Exception) { }
     }
 
 
@@ -714,72 +162,7 @@ class SettingsViewModel(
      * syncProfileLoadState、syncCapability、secureStorageWarning —
      * 用户修好配置后旧红色错误提示立即消失，不再残留。
      */
-    private suspend fun refreshSyncProfileState() {
-        val repo = settingsRepo
-        val current = _uiState.value
-        val committedProfile = withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile() }
-        val refreshedCapability = withContext(Dispatchers.IO) { repo.getSyncCapability() }
-        val refreshedWarning = withContext(Dispatchers.IO) { repo.getSecureStorageWarning() }
-        _uiState.update {
-            it.copy(
-                syncConfig = if (!hasUnsavedSyncConfig()) {
-                    committedProfile.toSyncProfileLoadState().confirmedConfig ?: it.syncConfig
-                } else {
-                    it.syncConfig
-                },
-                syncSecrets = if (!hasUnsavedSyncSecrets()) {
-                    committedProfile.toSyncProfileLoadState().confirmedSecrets ?: it.syncSecrets
-                } else {
-                    it.syncSecrets
-                },
-                syncProfileLoadState = committedProfile.toSyncProfileLoadState(),
-                syncCapability = refreshedCapability,
-                secureStorageWarning = refreshedWarning,
-            )
-        }
-    }
 
-    private suspend fun rollbackFailures(repo: SettingsRepository, failures: List<SaveFailure>) {
-        for (failure in failures) {
-            rollbackIfRevisionMatches(repo, failure)
-        }
-    }
- @Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod") // #597 技术债：待重构拆分
-
-    private suspend fun rollbackIfRevisionMatches(repo: SettingsRepository, failure: SaveFailure) {
-        when (failure.field) {
-            SaveField.LOCAL_SETTINGS -> {
-                if (localRevision != failure.revision) return
-                val settings = withContext(Dispatchers.IO) { repo.getLocalSettings() }
-                if (localRevision != failure.revision) return
-                localRevision = localPersistedRevision
-                _uiState.update { it.copy(settings = settings) }
-            }
-            SaveField.FONT_SIZE -> {
-                if (fontSizeRevision != failure.revision) return
-                val fontSize = withContext(Dispatchers.IO) { repo.getEffectiveFontSize() }
-                if (fontSizeRevision != failure.revision) return
-                fontSizeRevision = fontSizePersistedRevision
-                _uiState.update { it.copy(fontSize = fontSize) }
-            }
-            SaveField.SYNC_CONFIG -> {
-                if (syncConfigRevision != failure.revision) return
-                // #595 八/五：回滚读取活动 generation 的完整 snapshot，不再读 live 槽；
-                // 类型化处理 — Failed 保留当前 UI 值（不静默退化为默认值/null）。
-                val profile = withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile() }
-                if (syncConfigRevision != failure.revision) return
-                syncConfigRevision = syncConfigPersistedRevision
-                _uiState.update { it.copy(syncConfig = profile.toSyncProfileLoadState().confirmedConfig ?: it.syncConfig) }
-            }
-            SaveField.SYNC_SECRETS -> {
-                if (syncSecretsRevision != failure.revision) return
-                val profile = withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile() }
-                if (syncSecretsRevision != failure.revision) return
-                syncSecretsRevision = syncSecretsPersistedRevision
-                _uiState.update { it.copy(syncSecrets = profile.toSyncProfileLoadState().confirmedSecrets ?: it.syncSecrets) }
-            }
-        }
-    }
 
     fun consumeSaveError() {
         _uiState.update { it.copy(saveErrorResId = null) }
@@ -857,46 +240,6 @@ class SettingsViewModel(
             }
         }
     }
- @Suppress("CognitiveComplexMethod") // #597 技术债：待重构拆分
-
-    private fun mergeRefresh() {
-        val repo = settingsRepo
-        viewModelScope.launch {
-            val current = _uiState.value
-            val settings = withContext(Dispatchers.IO) { repo.getLocalSettings() }
-            val fontSize = withContext(Dispatchers.IO) { repo.getEffectiveFontSize() }
-            // #595 八：刷新读取活动 generation 的完整 snapshot，不再读 live legacy 槽。
-            val committedProfile = withContext(Dispatchers.IO) { repo.loadCommittedSyncProfile() }
-            // #595 四：类型化加载状态 — Failed 时保留字段值，页面显示真实错误。
-            val syncProfileLoadState = committedProfile.toSyncProfileLoadState()
-            val syncCapability = withContext(Dispatchers.IO) { repo.getSyncCapability() }
-            val secureStorageWarning = withContext(Dispatchers.IO) { repo.getSecureStorageWarning() }
-            val builtinThemes = withContext(Dispatchers.IO) { repo.listBuiltinThemes() }
-            val paletteRecords = withContext(Dispatchers.IO) { repo.listPaletteRecords() }
-            val aiAvailable = withContext(Dispatchers.IO) { repo.aiAvailable() }
-            val workspacePath = withContext(Dispatchers.IO) { repo.workspaceDir() }
-            _uiState.update {
-                SettingsUiState(
-                    settings = if (!hasUnsavedLocal()) settings else current.settings,
-                    fontSize = if (!hasUnsavedFontSize()) fontSize else current.fontSize,
-                    syncConfig = if (!hasUnsavedSyncConfig()) syncProfileLoadState.confirmedConfig ?: current.syncConfig else current.syncConfig,
-                    syncSecrets = if (!hasUnsavedSyncSecrets()) syncProfileLoadState.confirmedSecrets ?: current.syncSecrets else current.syncSecrets,
-                    syncCapability = syncCapability,
-                    secureStorageWarning = secureStorageWarning,
-                    builtinThemes = builtinThemes,
-                    paletteRecords = paletteRecords,
-                    aiAvailable = aiAvailable,
-                    workspacePath = workspacePath,
-                    dryRunState = current.dryRunState,
-                    testConnectionState = current.testConnectionState,
-                    performSyncState = current.performSyncState,
-                    structuredSyncResult = current.structuredSyncResult,
-                    lastCommandType = current.lastCommandType,
-                    syncProfileLoadState = syncProfileLoadState,
-                )
-            }
-        }
-    }
 }
 
 /**
@@ -944,8 +287,11 @@ private data class SettingsSelection(val section: SettingsSection) : Parcelable
  * [ThreePaneScaffoldPredictiveBackHandler] 处理；列表→离开设置一级入口的返回
  * 由全局 NavDisplay 统一驱动（Works 常驻栈底，pop 带真实手势进度）。
  */
-@Suppress("CognitiveComplexMethod") // #597 技术债：待重构拆分
 @OptIn(androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi::class)
+// context.getString 在 LaunchedEffect 协程中显示 snackbar，无法用 stringResource（非 Composable 上下文）。
+@SuppressLint("LocalContextGetResourceValueCall")
+// #597 顶层 Composable 聚合多面板状态与回调，复杂度略超标（15）— 待后续重构拆分子 Composable
+@Suppress("CognitiveComplexMethod")
 @Composable
 fun SettingsRoute(
     detailSection: SettingsSection? = null,
@@ -958,8 +304,7 @@ fun SettingsRoute(
     val uiState by vm.uiState.collectAsState()
     val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
 
-    @Suppress("LocalContextGetResourceValueCall")
-    LaunchedEffect(Unit) {
+       LaunchedEffect(Unit) {
         vm.saveFailureEvents.collect { errorResId ->
             snackbarHostState.showSnackbar(context.getString(errorResId))
         }
@@ -1106,7 +451,7 @@ fun SettingsListPane(
  * 与 [settingsCategoryValue] 的“真实当前值”独立展示，不再二选一。
  */
 @Composable
-private fun settingsCategorySummary(category: SettingsCategory): String? = when (category.section) {
+internal fun settingsCategorySummary(category: SettingsCategory): String? = when (category.section) {
     SettingsSection.Appearance -> stringResource(id = R.string.pref_summary_appearance)
     SettingsSection.Editor -> stringResource(id = R.string.pref_summary_editor)
     SettingsSection.Save -> stringResource(id = R.string.pref_summary_save)
@@ -1123,7 +468,7 @@ private fun settingsCategorySummary(category: SettingsCategory): String? = when 
  */
 @Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod") // #597 技术债：待重构拆分
 @Composable
-private fun settingsCategoryValue(category: SettingsCategory, state: SettingsUiState): String? =
+internal fun settingsCategoryValue(category: SettingsCategory, state: SettingsUiState): String? =
     when (category.section) {
         SettingsSection.Appearance -> when (state.settings.appearanceMode) {
             "light" -> stringResource(id = R.string.theme_light)

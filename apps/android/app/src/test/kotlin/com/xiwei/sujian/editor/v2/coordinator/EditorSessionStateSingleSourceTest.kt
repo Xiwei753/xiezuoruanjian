@@ -215,8 +215,10 @@ class EditorSessionStateSingleSourceContractTest {
     @Test
     fun updateSessionState_isSingleReducerEntry() {
         // #595 三：updateSessionState 是唯一状态更新入口（reducer）。
+        // internal 方法在 JVM 字节码中会被 Kotlin 名称修饰（updateSessionState$module），
+        // 用 startsWith 匹配避免绑定修饰后缀。
         val method = EditorSessionCoordinator::class.java.declaredMethods.firstOrNull {
-            it.name == "updateSessionState"
+            it.name.startsWith("updateSessionState")
         }
         assertNotNull(
             "updateSessionState must exist as the single reducer entry point (#595 三)",

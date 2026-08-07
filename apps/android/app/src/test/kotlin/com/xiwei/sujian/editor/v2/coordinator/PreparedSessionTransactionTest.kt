@@ -193,8 +193,13 @@ class PreparedSessionTransactionTest {
 
     @Test
     fun prepareTargetSessionForCommit_existsWithThreeParams() {
-        val method = EditorSessionCoordinator::class.java.methods.firstOrNull {
-            it.name == "prepareTargetSessionForCommit" && it.parameterTypes.size == 3
+        // prepareTargetSessionForCommit 拆分为扩展函数，编译为 EditorSessionLifecycleOpsKt 静态方法。
+        // 扩展函数参数 = 接收者 + 3 个显式参数 = 4。
+        val extClass = Class.forName("com.xiwei.sujian.editor.v2.coordinator.EditorSessionLifecycleOpsKt")
+        val method = extClass.declaredMethods.firstOrNull {
+            it.name == "prepareTargetSessionForCommit" &&
+            it.parameterTypes.size == 4 &&
+            it.parameterTypes[0] == EditorSessionCoordinator::class.java
         }
         assertNotNull("prepareTargetSessionForCommit(targetId, initialText, initialSelection) 必须存在", method)
     }

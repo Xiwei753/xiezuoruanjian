@@ -16,7 +16,11 @@
 #![allow(
     clippy::too_many_arguments,
     clippy::module_inception,
-    clippy::type_complexity, clippy::excessive_nesting, clippy::too_many_lines, clippy::cognitive_complexity, clippy::many_single_char_names
+    clippy::type_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::many_single_char_names
 )]
 #![allow(
     clippy::redundant_closure,

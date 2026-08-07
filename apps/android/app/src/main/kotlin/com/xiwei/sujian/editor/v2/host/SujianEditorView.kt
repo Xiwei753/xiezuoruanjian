@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.text.TextPaint
 import android.util.AttributeSet
 import android.view.KeyEvent
+import android.annotation.SuppressLint
 import android.view.MotionEvent
 import android.view.View
 import android.view.inputmethod.InputConnection
@@ -61,6 +62,8 @@ class SujianEditorView @JvmOverloads constructor(
         invalidate()
     }
     private var searchHighlights: List<Pair<Int, Int>> = emptyList()
+    // 预分配以避免 onDraw 中每帧分配（DrawAllocation）。
+    private val searchHighlightsUtf16Buffer: MutableList<Pair<Int, Int>> = ArrayList()
     private var frameClock: WindowDisplayFrameClock? = null
     private var isRegisteredWithClock: Boolean = false
     @Volatile
@@ -329,13 +332,18 @@ class SujianEditorView @JvmOverloads constructor(
      * self-sustaining frame loop as long as [needsFrame] returns true.
      * When the animation completes, the clock stops naturally.
      */
+    // 已用预分配 ArrayList 减少 onDraw 分配；完全消除需改 drawFrame 接口（List<Pair> → IntArray），
+    // 超出 lint 清理范围。搜索高亮通常少量项，剩余 Pair 分配可忽略。
+    @SuppressLint("DrawAllocation")
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         canvas.save()
         canvas.translate(paddingLeft - scrollX, paddingTop - scrollY)
-        val searchHighlightsUtf16 = searchHighlights.map { (startUtf8, endUtf8) ->
-            Pair(pipeline.utf8ToUtf16(startUtf8), pipeline.utf8ToUtf16(endUtf8))
+        searchHighlightsUtf16Buffer.clear()
+        for ((startUtf8, endUtf8) in searchHighlights) {
+            searchHighlightsUtf16Buffer.add(Pair(pipeline.utf8ToUtf16(startUtf8), pipeline.utf8ToUtf16(endUtf8)))
         }
+        val searchHighlightsUtf16 = searchHighlightsUtf16Buffer
         val frameTimeNanos = pendingFrameTimeNanos
         if (frameTimeNanos != Long.MIN_VALUE) {
             pendingFrameTimeNanos = Long.MIN_VALUE
@@ -396,57 +404,53 @@ class SujianEditorView @JvmOverloads constructor(
         info?.className = android.widget.EditText::class.java.name
         info?.viewIdResourceName = context.packageName + ":id/editor_content"
         info?.isFocusable = true
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.JELLY_BEAN_MR2) {
-            val selStart = pipeline.getSelectionStartUtf16()
-            val selEnd = pipeline.getSelectionEndUtf16()
-            if (selStart >= 0 && selEnd >= 0) {
-                info?.setTextSelection(selStart, selEnd)
-            }
+        val selStart = pipeline.getSelectionStartUtf16()
+        val selEnd = pipeline.getSelectionEndUtf16()
+        if (selStart >= 0 && selEnd >= 0) {
+            info?.setTextSelection(selStart, selEnd)
         }
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-            info?.addAction(
-                android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_TEXT
-            )
-        }
+        info?.addAction(
+            android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_TEXT
+        )
     }
 
     override fun performAccessibilityAction(action: Int, arguments: android.os.Bundle?): Boolean {
         if (action == android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_TEXT) {
             if (!isSessionBound) return false
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-                val text = arguments?.getCharSequence(
-                    android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE
-                )?.toString() ?: return false
-                val currentText = pipeline.getText()
-                val currentByteLen = currentText.toByteArray(Charsets.UTF_8).size
-                replaceRangeTyped(0, currentByteLen, text, currentText, EditorTransactionCauseDto.PROGRAMMATIC)
-                val endByteOffset = text.toByteArray(Charsets.UTF_8).size
-                setSelectionTyped(endByteOffset, endByteOffset)
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.JELLY_BEAN_MR2) {
-                    val event = android.view.accessibility.AccessibilityEvent.obtain(
-                        android.view.accessibility.AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
-                    )
-                    event.text.add(text)
-                    event.fromIndex = 0
-                    event.removedCount = currentText.length
-                    event.addedCount = text.length
-                    event.className = android.widget.EditText::class.java.name
-                    event.packageName = context.packageName
-                    event.setSource(this)
-                    val accessibilityManager = context.getSystemService(
-                        android.content.Context.ACCESSIBILITY_SERVICE
-                    ) as? android.view.accessibility.AccessibilityManager
-                    if (accessibilityManager?.isEnabled == true) {
-                        parent?.requestSendAccessibilityEvent(this, event)
-                    } else {
-                        event.recycle()
-                    }
-                }
-                return true
+            val text = arguments?.getCharSequence(
+                android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE
+            )?.toString() ?: return false
+            val currentText = pipeline.getText()
+            val currentByteLen = currentText.toByteArray(Charsets.UTF_8).size
+            replaceRangeTyped(0, currentByteLen, text, currentText, EditorTransactionCauseDto.PROGRAMMATIC)
+            val endByteOffset = text.toByteArray(Charsets.UTF_8).size
+            setSelectionTyped(endByteOffset, endByteOffset)
+            val event = android.view.accessibility.AccessibilityEvent.obtain(
+                android.view.accessibility.AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
+            )
+            event.text.add(text)
+            event.fromIndex = 0
+            event.removedCount = currentText.length
+            event.addedCount = text.length
+            event.className = android.widget.EditText::class.java.name
+            event.packageName = context.packageName
+            event.setSource(this)
+            val accessibilityManager = context.getSystemService(
+                android.content.Context.ACCESSIBILITY_SERVICE
+            ) as? android.view.accessibility.AccessibilityManager
+            if (accessibilityManager?.isEnabled == true) {
+                parent?.requestSendAccessibilityEvent(this, event)
+            } else {
+                event.recycle()
             }
-            return false
+            return true
         }
         return super.performAccessibilityAction(action, arguments)
+    }
+
+    override fun performClick(): Boolean {
+        super.performClick()
+        return true
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -476,6 +480,7 @@ class SujianEditorView @JvmOverloads constructor(
             MotionEvent.ACTION_UP -> {
                 if (!isDragging) {
                     handleTap(event.x + scrollX - paddingLeft, event.y + scrollY - paddingTop)
+                    performClick()
                 }
                 isDragging = false
                 return true

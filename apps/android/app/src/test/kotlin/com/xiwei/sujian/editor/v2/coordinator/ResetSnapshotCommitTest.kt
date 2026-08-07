@@ -155,6 +155,19 @@ class ResetSnapshotCommitTest {
         )
         // lease 仍 current（target/session/epoch 一致），只是 revision 已前进。
         assertTrue(coordinator.isDocumentOperationLeaseCurrent(leaseAtSave))
+
+        // #597：真正执行保存流程后的最终显示状态检查。
+        // 正文仍是 B（"text edited"），未被 A 的晚到结果覆盖。
+        assertEquals(
+            "保存期间继续输入的 B 必须保留，不得被 A 的晚到回执覆盖",
+            "text edited",
+            coordinator.sessionState.text,
+        )
+        // 页面仍显示未保存 — localDirty 必须为 true（B 尚未落盘）。
+        assertTrue(
+            "保存期间继续输入后 localDirty 必须为 true（页面仍显示未保存）",
+            coordinator.sessionState.localDirty,
+        )
     }
 
     @Test

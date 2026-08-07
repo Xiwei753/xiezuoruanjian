@@ -267,6 +267,7 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/diagnostics/DiagnosticsEvents.kt"
       - "**/kotlin/com/xiwei/sujian/diagnostics/DiagnosticsTest.kt"
       # --- 编辑器：管线/协调器/输入法，函数由协议决定 ---
+      - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/EditorSessionCoordinator.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/AndroidTextIndexMapTest.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/compose/AnimatedTextSemanticsTest.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/coordinator/EditorWindowHost.kt"
@@ -299,6 +300,11 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/data/AutoSyncScheduler.kt"
       - "**/kotlin/com/xiwei/sujian/data/AutoSyncWorker.kt"
       - "**/kotlin/com/xiwei/sujian/data/BridgeMapperContractTest.kt"
+      - "**/kotlin/com/xiwei/sujian/data/BridgeMapperTest.kt"
+      - "**/kotlin/com/xiwei/sujian/data/CommitSyncProfileMigrationContractTest.kt"
+      - "**/kotlin/com/xiwei/sujian/data/CommitSyncProfileMigrationTest.kt"
+      - "**/kotlin/com/xiwei/sujian/data/SyncProfileGenerationContractTest.kt"
+      - "**/kotlin/com/xiwei/sujian/data/SyncProfileGenerationTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/CommitSyncProfileContractTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/CommitSyncProfileMigrationContractTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/DocumentSaveReceiptTrackerTest.kt"
@@ -310,6 +316,9 @@ complexity:
       # --- 星图：桥接/缓存/测试，协议键重复 ---
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapBridgeRepositoryIntegrationTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapCacheContractTest.kt"
+      - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapCacheTest.kt"
+      - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapProgressiveLoadingContractTest.kt"
+      - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapProgressiveLoadingTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapCrossLayerRegressionTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapCrudFailureStateTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapLifecycleFailureTest.kt"
@@ -341,6 +350,7 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/editor/v2/input/AndroidInputConnectionCompositionLifecycleTest.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/layout/AndroidLineSnapshotBuilder.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/pipeline/AttachSnapshotContractTest.kt"
+      - "**/kotlin/com/xiwei/sujian/editor/v2/pipeline/AttachSnapshotTest.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/pipeline/EditPipelineTest.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/projection/DisplayTextProjectionTest.kt"
       - "**/kotlin/com/xiwei/sujian/editor/v2/projection/SecretProjectionAtomicityTest.kt"
@@ -351,6 +361,7 @@ complexity:
       # --- UI测试/工具 ---
       - "**/kotlin/com/xiwei/sujian/ui/ChapterSwitchGateTest.kt"
       - "**/kotlin/com/xiwei/sujian/ui/EditorViewModelChapterSwitchContractTest.kt"
+      - "**/kotlin/com/xiwei/sujian/ui/EditorViewModelChapterSwitchTest.kt"
       - "**/kotlin/com/xiwei/sujian/ui/ErrorUtil.kt"
       - "**/kotlin/com/xiwei/sujian/ui/ErrorUtilTest.kt"
       - "**/kotlin/com/xiwei/sujian/ui/SyncMergeEmitDedupTest.kt"
@@ -492,6 +503,13 @@ naming:
     excludeClassPattern: '$^'
     ignoreAnnotated:
       - 'Composable'
+  # VariableNaming: 允许 `_` 前缀 — Kotlin 惯用 backing field 模式
+  # （internal var/val 暴露给同模块 extension functions，配 public 只读代理）。
+  VariableNaming:
+    active: true
+    variablePattern: '[_a-z][A-Za-z0-9]*'
+    privateVariablePattern: '[_a-z][A-Za-z0-9]*'
+    excludeClassPattern: '$^'
   # --- 以下规则默认启用但对现有代码噪音过大，显式禁用 ---
   EnumNaming:
     active: false          # 现有枚举可能有非标准命名

@@ -2,6 +2,7 @@ package com.xiwei.sujian.ui.compose
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import android.annotation.SuppressLint
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -46,6 +47,8 @@ val LocalAndroidCapabilities = androidx.compose.runtime.compositionLocalOf<Andro
 }
  @Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod", "LongMethod") // #597 技术债：待重构拆分
 
+// LocalConfiguration.smallestScreenWidthDp 无 Compose API 替代，需用 Configuration 检测设备类型。
+@SuppressLint("ConfigurationScreenWidthHeight")
 @Composable
 fun SujianApp(
     initialDestination: String? = null,

@@ -1,13 +1,14 @@
-@file:Suppress("StringLiteralDuplication") // #597 技术债：协议字符串天然重复
-
 package com.xiwei.sujian.ui.compose.starmap
 
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
+import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.material3.adaptive.layout.AnimatedPane
 import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffold
 import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffoldRole
+import androidx.compose.material3.adaptive.layout.calculatePaneScaffoldDirective
 import androidx.compose.material3.adaptive.navigation.BackNavigationBehavior
 import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
+import android.annotation.SuppressLint
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -17,44 +18,54 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalContext
 import com.xiwei.sujian.R
+import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.data.BridgeResult
-import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
+import com.xiwei.sujian.data.starmap.StarMapRepository
+import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.editor.v2.compose.LocalEditorWindowHost
 import com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost
 import com.xiwei.sujian.editor.v2.coordinator.EditableTextTarget
 import com.xiwei.sujian.editor.v2.coordinator.EditingState
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
+import com.xiwei.sujian.model.StarMapData
 import com.xiwei.sujian.model.StarMapGraphNode
 import com.xiwei.sujian.model.StarMapNodeKind
-import com.xiwei.sujian.ui.compose.navigation.StarMapTopBarState
 import com.xiwei.sujian.ui.compose.navigation.predictiveBackStateFraction
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+// #597 诊断事件标签 — 提取为常量避免 StringLiteralDuplication
+private const val DIAG_SOURCE_STARMAP_EDITOR = "starmap_editor"
 
 /**
  * 星图目的地：列表与编辑是同一个目的地内的窗格状态，由同一个 Material3
  * Adaptive 列表—详情 navigator 管理。
  *
- * - 窄窗口自动单栏（列表或编辑全屏），宽窗口自动双栏（列表+编辑并排）；
+ * - 手机/平板都强制单窗格（保持“列表或编辑全屏”的既有产品结构）；
  * - 系统返回手势按 BackEvent.progress 真实 seek 窗格过渡（拖动跟手、
  *   取消回原位、提交完成剩余过渡），顶栏返回调用同一 navigator；
  * - 列表层返回交给全局 NavDisplay（Works 常驻栈底，pop 带真实手势进度）。
- * - 数据读取和操作通过 [StarMapViewModel] 完成，旋转/分屏/折叠后状态不丢。
  */
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
 fun StarMapScreen(
     topBarState: com.xiwei.sujian.ui.compose.navigation.StarMapTopBarState,
-    viewModel: StarMapViewModel,
     modifier: Modifier = Modifier
 ) {
     // 星图列表—编辑窗格共用同一个 Material3 Adaptive 列表—详情 navigator：
-    // 不再强制 maxHorizontalPartitions = 1，宽窗口自动双栏。
-    val navigator = rememberListDetailPaneScaffoldNavigator<String>()
+    // 手机/平板都强制单窗格（保持“列表或编辑全屏”的既有产品结构），系统返回手势
+    // 按 BackEvent.progress 真实 seek 窗格过渡；顶栏返回走同一 navigator。
+    val directive = calculatePaneScaffoldDirective(currentWindowAdaptiveInfo())
+        .copy(maxHorizontalPartitions = 1)
+    val navigator = rememberListDetailPaneScaffoldNavigator<String>(
+        scaffoldDirective = directive,
+    )
     val coroutineScope = rememberCoroutineScope()
     val currentStarmapId = navigator.currentDestination?.contentKey
 
@@ -72,7 +83,7 @@ fun StarMapScreen(
     // 提交后播放剩余过渡（navigateBack 挂起至动画完成），动画结束后才复位编辑态
     // 顶栏（标题/返回/操作），无手势结束跳变。
     androidx.activity.compose.PredictiveBackHandler(enabled = navigator.canNavigateBack()) { progressEvents ->
-        com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack("starmap_editor", "start")
+        com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack(DIAG_SOURCE_STARMAP_EDITOR, "start")
         try {
             progressEvents.collect { event ->
                 if (event.progress != 0f) {
@@ -84,9 +95,9 @@ fun StarMapScreen(
             }
             navigator.navigateBack(BackNavigationBehavior.PopUntilScaffoldValueChange)
             topBarState.clear()
-            com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceBack("starmap_editor")
+            com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceBack(DIAG_SOURCE_STARMAP_EDITOR)
         } catch (e: CancellationException) {
-            com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack("starmap_editor", "cancel")
+            com.xiwei.sujian.diagnostics.DiagnosticsEvents.predictiveBack(DIAG_SOURCE_STARMAP_EDITOR, "cancel")
             withContext(NonCancellable) {
                 navigator.seekBack(BackNavigationBehavior.PopUntilScaffoldValueChange, 0f)
             }
@@ -100,14 +111,12 @@ fun StarMapScreen(
         scaffoldState = navigator.scaffoldState,
         listPane = {
             AnimatedPane {
-                StarMapListPane(
-                    viewModel = viewModel,
+                StarMapListScreen(
                     onSelectStarmap = { starmapId ->
                         coroutineScope.launch {
                             navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, starmapId)
                         }
                     },
-                    modifier = Modifier.testTag(SujianSemanticIds.StarMapList),
                 )
             }
         },
@@ -115,18 +124,16 @@ fun StarMapScreen(
             AnimatedPane {
                 val starmapId = editorStarmapId
                 if (starmapId != null) {
-                    StarMapEditorPane(
+                    StarMapEditorScreen(
                         starmapId = starmapId,
                         topBarState = topBarState,
-                        viewModel = viewModel,
                         onBack = {
                             coroutineScope.launch {
                                 navigator.navigateBack(BackNavigationBehavior.PopUntilScaffoldValueChange)
                                 topBarState.clear()
-                                com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceBack("starmap_editor")
+                                com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceBack(DIAG_SOURCE_STARMAP_EDITOR)
                             }
                         },
-                        modifier = Modifier.testTag(SujianSemanticIds.StarMapEditor),
                     )
                 }
             }
@@ -134,94 +141,308 @@ fun StarMapScreen(
     )
 }
 
-/**
- * 星图列表窗格 — 使用 ViewModel 持有状态。
- */
 @Composable
-private fun StarMapListPane(
-    viewModel: StarMapViewModel,
+private fun StarMapListScreen(
     onSelectStarmap: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    var starMaps by remember { mutableStateOf<List<com.xiwei.sujian.model.StarMapMeta>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+    var showCreateDialog by remember { mutableStateOf(false) }
+
     val coordinator = LocalEditorWindowHost.current
         ?: throw IllegalStateException(
-            "StarMapListPane requires an EditorWindowHost. " +
+            "StarMapListScreen requires an EditorWindowHost. " +
             "Ensure the host Activity provides one via CompositionLocalProvider."
         )
 
+    suspend fun loadStarMaps() {
+        val maps = withContext(Dispatchers.IO) {
+            try {
+                val repository = BridgeProvider.getStarmapBridge(context).repository
+                when (val result = repository.listStarmaps()) {
+                    is BridgeResult.Success -> result.data
+                    else -> emptyList()
+                }
+            } catch (_: Exception) {
+                emptyList()
+            }
+        }
+        starMaps = maps
+        isLoading = false
+    }
+
     LaunchedEffect(Unit) {
-        viewModel.loadStarMaps()
+        loadStarMaps()
     }
 
     StarMapListContent(
-        state = viewModel.listState,
+        state = StarMapListUiState(starMaps = starMaps, isLoading = isLoading),
         onSelectStarmap = onSelectStarmap,
-        onCreateClick = { viewModel.onShowCreateDialog(true) },
+        onCreateClick = { showCreateDialog = true },
         modifier = modifier
     )
 
-    if (viewModel.showCreateDialog) {
+    if (showCreateDialog) {
         StarMapCreateDialog(
             coordinator = coordinator,
             onConfirm = { title, description ->
-                viewModel.createStarmap(title, description)
-                viewModel.onShowCreateDialog(false)
+                coroutineScope.launch {
+                    withContext(Dispatchers.IO) {
+                        try {
+                            val repository = BridgeProvider.getStarmapBridge(context).repository
+                            repository.createStarmap(title, description)
+                        } catch (_: Exception) { }
+                    }
+                    loadStarMaps()
+                }
             },
-            onDismiss = { viewModel.onShowCreateDialog(false) }
+            onDismiss = { showCreateDialog = false }
         )
     }
 }
- @Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod", "LongMethod", "StringLiteralDuplication") // #597 技术债：待重构拆分
 
-/**
- * 星图编辑器窗格 — 使用 ViewModel 持有状态。
- */
+// context.getString 在 coroutineScope.launch/suspend fun 中格式化错误消息和操作标签，
+// 无法用 stringResource（非 Composable 上下文）。
+@SuppressLint("LocalContextGetResourceValueCall")
+// #597 StarMap 编辑屏聚合大量回调/对话框/手势状态，511c0f99 起即如此 — 待后续重构拆分子 Composable
+@Suppress("LongMethod", "CyclomaticComplexMethod", "CognitiveComplexMethod")
 @Composable
-private fun StarMapEditorPane(
+private fun StarMapEditorScreen(
     starmapId: String,
     topBarState: com.xiwei.sujian.ui.compose.navigation.StarMapTopBarState,
-    viewModel: StarMapViewModel,
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    var editorState by remember { mutableStateOf(StarMapEditorUiState()) }
+    var showAddNodeDialog by remember { mutableStateOf(false) }
+    var showAddEdgeDialog by remember { mutableStateOf(false) }
+    var viewportSaveJob by remember { mutableStateOf<Job?>(null) }
+
     val coordinator = LocalEditorWindowHost.current
         ?: throw IllegalStateException(
-            "StarMapEditorPane requires an EditorWindowHost. " +
+            "StarMapCanvasScreen requires an EditorWindowHost. " +
             "Ensure the host Activity provides one via CompositionLocalProvider."
         )
-    val coroutineScope = rememberCoroutineScope()
 
-    LaunchedEffect(starmapId) {
-        viewModel.loadStarMap(starmapId)
+    fun repository(): StarMapRepository = BridgeProvider.getStarmapBridge(context).repository
+
+    suspend fun loadStarMap() {
+        val data = withContext(Dispatchers.IO) {
+            try {
+                val repo = repository()
+                when (val result = repo.getStarmapPhasedSnapshot(starmapId)) {
+                    is BridgeResult.Success -> {
+                        val snapshotResult = result.data
+                        val graphData = snapshotResult.data
+                        val edgeRenders = when (val er = repo.computeEdgeRenders(graphData)) {
+                            is BridgeResult.Success -> er.data
+                            else -> emptyList()
+                        }
+                        graphData.copy(edgeRenders = edgeRenders)
+                    }
+                    else -> null
+                }
+            } catch (_: Exception) { null }
+        }
+        editorState = editorState.copy(starMapData = data, isLoading = false)
     }
 
-    LaunchedEffect(starmapId, viewModel.editorState.starMapData?.loadPhase, viewModel.editorState.starMapData?.complete) {
-        viewModel.advanceLoadPhase(starmapId)
+    suspend fun executeOperation(label: String, block: suspend () -> BridgeResult<*>): Boolean {
+        editorState = editorState.copy(operationInProgress = true)
+        return try {
+            val result = withContext(Dispatchers.IO) { block() }
+            when (result) {
+                is BridgeResult.Success -> {
+                    editorState = editorState.copy(lastError = null, operationInProgress = false)
+                    true
+                }
+                is BridgeResult.Error -> {
+                    editorState = editorState.copy(lastError = context.getString(R.string.starmap_op_failed, label, result.message), operationInProgress = false)
+                    false
+                }
+                BridgeResult.NotLoaded -> {
+                    editorState = editorState.copy(lastError = context.getString(R.string.starmap_op_failed_not_loaded, label), operationInProgress = false)
+                    false
+                }
+            }
+        } catch (e: Exception) {
+            editorState = editorState.copy(lastError = context.getString(R.string.starmap_op_exception, label, e.message), operationInProgress = false)
+            false
+        }
+    }
+
+    LaunchedEffect(starmapId) {
+        loadStarMap()
+    }
+
+    LaunchedEffect(starmapId, editorState.starMapData?.loadPhase, editorState.starMapData?.complete) {
+        val current = editorState.starMapData ?: return@LaunchedEffect
+        if (current.complete) return@LaunchedEffect
+        val nextPhase = when (current.loadPhase) {
+            "CurrentViewportObjects" -> "PrefetchNearbyObjects"
+            "PrefetchNearbyObjects" -> "BackgroundFullLoad"
+            else -> null
+        }
+        if (nextPhase == null) return@LaunchedEffect
+        delay(100)
+        val advanced = withContext(Dispatchers.IO) {
+            try {
+                val repo = repository()
+                when (val result = repo.advanceLoadPhase(starmapId, nextPhase, current.packageRevision)) {
+                    is BridgeResult.Success -> {
+                        val graphData = result.data.data
+                        val edgeRenders = when (val er = repo.computeEdgeRenders(graphData)) {
+                            is BridgeResult.Success -> er.data
+                            else -> current.edgeRenders
+                        }
+                        graphData.copy(edgeRenders = edgeRenders)
+                    }
+                    else -> null
+                }
+            } catch (_: Exception) { null }
+        }
+        if (advanced != null) {
+            editorState = editorState.copy(starMapData = advanced)
+        }
+    }
+
+    suspend fun retryPendingSaves() {
+        if (editorState.hasPendingLayoutSave && editorState.starMapData != null) {
+            withContext(Dispatchers.IO) {
+                try {
+                    val repo = repository()
+                    when (val result = repo.saveStarmapLayout(starmapId, editorState.starMapData!!.layout)) {
+                        is BridgeResult.Success -> {
+                            editorState = editorState.copy(hasPendingLayoutSave = false, layoutSaveError = null)
+                        }
+                        is BridgeResult.Error -> {
+                            editorState = editorState.copy(layoutSaveError = context.getString(R.string.starmap_layout_save_failed, result.message))
+                        }
+                        BridgeResult.NotLoaded -> {
+                            editorState = editorState.copy(layoutSaveError = context.getString(R.string.starmap_layout_save_failed_not_loaded))
+                        }
+                    }
+                } catch (e: Exception) {
+                    editorState = editorState.copy(layoutSaveError = context.getString(R.string.starmap_layout_save_exception, e.message))
+                }
+            }
+        }
+        if (editorState.hasPendingViewportSave && editorState.starMapData != null) {
+            withContext(Dispatchers.IO) {
+                try {
+                    val repo = repository()
+                    when (val result = repo.saveStarmapViewport(starmapId, editorState.starMapData!!.viewport)) {
+                        is BridgeResult.Success -> {
+                            editorState = editorState.copy(hasPendingViewportSave = false, viewportSaveError = null)
+                        }
+                        is BridgeResult.Error -> {
+                            editorState = editorState.copy(viewportSaveError = context.getString(R.string.starmap_viewport_save_failed, result.message))
+                        }
+                        BridgeResult.NotLoaded -> {
+                            editorState = editorState.copy(viewportSaveError = context.getString(R.string.starmap_viewport_save_failed_not_loaded))
+                        }
+                    }
+                } catch (e: Exception) {
+                    editorState = editorState.copy(viewportSaveError = context.getString(R.string.starmap_viewport_save_exception, e.message))
+                }
+            }
+        }
     }
 
     DisposableEffect(starmapId) {
         onDispose {
-            viewModel.flushAndCloseStarmapStore(starmapId)
+            val repo = repository()
+            val flushResult = repo.flushStarmapStore(starmapId)
+            if (flushResult is BridgeResult.Error) {
+                DiagnosticsLogger.e("StarMapScreen", "flushStarmapStore failed on dispose: ${flushResult.message}")
+                return@onDispose
+            }
+            val closeResult = repo.closeStarmapStore(starmapId)
+            if (closeResult is BridgeResult.Error) {
+                DiagnosticsLogger.e("StarMapScreen", "closeStarmapStore failed on dispose: ${closeResult.message}")
+            }
         }
     }
 
     StarMapEditorContent(
-        state = viewModel.editorState,
+        state = editorState,
         topBarState = topBarState,
         onBack = onBack,
-        onAddNodeClick = { viewModel.onShowAddNodeDialog(true) },
-        onAddEdgeClick = { viewModel.onShowAddEdgeDialog(true) },
+        onAddNodeClick = { showAddNodeDialog = true },
+        onAddEdgeClick = { showAddEdgeDialog = true },
         onNodeDrag = { nodeId, x, y ->
-            viewModel.onNodeDrag(starmapId, nodeId, x, y)
+            coroutineScope.launch {
+                val updatedNodes = editorState.starMapData!!.layout.nodes.map {
+                    if (it.nodeId == nodeId) it.copy(x = x, y = y) else it
+                }
+                val updatedLayout = editorState.starMapData!!.layout.copy(nodes = updatedNodes)
+                editorState = editorState.copy(
+                    starMapData = editorState.starMapData!!.copy(layout = updatedLayout),
+                    hasPendingLayoutSave = true, layoutSaveError = null
+                )
+                withContext(Dispatchers.IO) {
+                    try {
+                        val repo = repository()
+                        when (val result = repo.saveStarmapLayout(starmapId, updatedLayout)) {
+                            is BridgeResult.Success -> {
+                                editorState = editorState.copy(hasPendingLayoutSave = false, layoutSaveError = null)
+                            }
+                            is BridgeResult.Error -> {
+                                editorState = editorState.copy(layoutSaveError = context.getString(R.string.starmap_layout_save_failed, result.message))
+                            }
+                            BridgeResult.NotLoaded -> {
+                                editorState = editorState.copy(layoutSaveError = context.getString(R.string.starmap_layout_save_failed_not_loaded))
+                            }
+                        }
+                    } catch (e: Exception) {
+                        editorState = editorState.copy(layoutSaveError = context.getString(R.string.starmap_layout_save_exception, e.message))
+                    }
+                }
+            }
         },
         onViewportChange = { viewport ->
-            viewModel.onViewportChange(starmapId, viewport)
+            viewportSaveJob?.cancel()
+            viewportSaveJob = coroutineScope.launch {
+                delay(500)
+                editorState = editorState.copy(
+                    starMapData = editorState.starMapData?.copy(viewport = viewport),
+                    hasPendingViewportSave = true, viewportSaveError = null
+                )
+                withContext(Dispatchers.IO) {
+                    try {
+                        val repo = repository()
+                        when (val result = repo.saveStarmapViewport(starmapId, viewport)) {
+                            is BridgeResult.Success -> {
+                                editorState = editorState.copy(hasPendingViewportSave = false, viewportSaveError = null)
+                            }
+                            is BridgeResult.Error -> {
+                                editorState = editorState.copy(viewportSaveError = context.getString(R.string.starmap_viewport_save_failed, result.message))
+                            }
+                            BridgeResult.NotLoaded -> {
+                                editorState = editorState.copy(viewportSaveError = context.getString(R.string.starmap_viewport_save_failed_not_loaded))
+                            }
+                        }
+                    } catch (e: Exception) {
+                        editorState = editorState.copy(viewportSaveError = context.getString(R.string.starmap_viewport_save_exception, e.message))
+                    }
+                }
+            }
         },
         onNodeTap = { nodeId ->
-            viewModel.onNodeTap(nodeId)
+            if (editorState.editingNodeId == null) {
+                editorState = editorState.copy(selectedNodeId = nodeId)
+            }
+        },
+        onRetrySaves = {
+            coroutineScope.launch { retryPendingSaves() }
         },
         onNodeDoubleTap = { geometry ->
-            val graphNode = viewModel.editorState.starMapData?.graph?.nodes?.find { it.id == geometry.nodeId }
+            val graphNode = editorState.starMapData?.graph?.nodes?.find { it.id == geometry.nodeId }
             if (graphNode != null) {
                 val targetId = "starmap-node-title:${starmapId}:${geometry.nodeId}"
                 val target = EditableTextTarget(targetId = targetId)
@@ -231,27 +452,27 @@ private fun StarMapEditorPane(
                     target.onCommit = { finalText ->
                         if (finalText.isNotBlank() && finalText.trim() != graphNode.title) {
                             coroutineScope.launch {
-                                val ok = viewModel.executeOperation("update_node") {
-                                    viewModel.repository.updateStarmapNode(starmapId, geometry.nodeId, title = finalText.trim())
-                                }.await()
+                                val ok = executeOperation(context.getString(R.string.starmap_update_node)) {
+                                    repository().updateStarmapNode(starmapId, geometry.nodeId, title = finalText.trim())
+                                }
                                 if (ok) {
-                                    viewModel.stopEditingNode()
+                                    editorState = editorState.copy(editingNodeId = null)
                                     coordinator.detachWindowBinding(coordinator.windowId, targetId)
-                                    viewModel.loadStarMap(starmapId)
+                                    loadStarMap()
                                 }
                             }
                         } else {
-                            viewModel.stopEditingNode()
+                            editorState = editorState.copy(editingNodeId = null)
                             coordinator.detachWindowBinding(coordinator.windowId, targetId)
                         }
                     }
                 target.onCancel = {
-                        viewModel.stopEditingNode()
+                        editorState = editorState.copy(editingNodeId = null)
                         coordinator.detachWindowBinding(coordinator.windowId, targetId)
                     }
                 target.onEditingStateChanged = { state ->
                         if (state == EditingState.IDLE || state == EditingState.RELEASED) {
-                            viewModel.stopEditingNode()
+                            editorState = editorState.copy(editingNodeId = null)
                         }
                     }
                 coordinator.registerTarget(target)
@@ -266,88 +487,85 @@ private fun StarMapEditorPane(
                     )
                 )
                 if (coordinator.beginEdit(targetId, graphNode.title.toByteArray(Charsets.UTF_8).size)) {
-                    viewModel.startEditingNode(geometry.nodeId)
+                    editorState = editorState.copy(editingNodeId = geometry.nodeId)
                 }
             }
-        },
-        onRetrySaves = {
-            viewModel.retryPendingSaves(starmapId)
         },
         modifier = modifier
     )
 
-    viewModel.editorState.selectedNodeId?.let { nodeId ->
-        val graphNode = viewModel.editorState.starMapData?.graph?.nodes?.find { it.id == nodeId }
+    editorState.selectedNodeId?.let { nodeId ->
+        val graphNode = editorState.starMapData?.graph?.nodes?.find { it.id == nodeId }
         if (graphNode != null) {
             NodeEditPanel(
                 node = graphNode,
                 coordinator = coordinator,
                 onUpdate = { newTitle, newKind ->
                     coroutineScope.launch {
-                        val ok = viewModel.executeOperation("update_node") {
-                            viewModel.repository.updateStarmapNode(starmapId, nodeId, title = newTitle, kind = newKind)
-                        }.await()
+                        val ok = executeOperation(context.getString(R.string.starmap_update_node)) {
+                            repository().updateStarmapNode(starmapId, nodeId, title = newTitle, kind = newKind)
+                        }
                         if (ok) {
-                            viewModel.clearNodeSelection()
-                            viewModel.loadStarMap(starmapId)
+                            editorState = editorState.copy(selectedNodeId = null)
+                            loadStarMap()
                         }
                     }
                 },
                 onDelete = {
                     coroutineScope.launch {
-                        val ok = viewModel.executeOperation("delete_node") {
-                            viewModel.repository.deleteStarmapNode(starmapId, nodeId)
-                        }.await()
+                        val ok = executeOperation(context.getString(R.string.starmap_delete_node)) {
+                            repository().deleteStarmapNode(starmapId, nodeId)
+                        }
                         if (ok) {
-                            viewModel.clearNodeSelection()
-                            viewModel.loadStarMap(starmapId)
+                            editorState = editorState.copy(selectedNodeId = null)
+                            loadStarMap()
                         }
                     }
                 },
-                onDismiss = { viewModel.clearNodeSelection() }
+                onDismiss = { editorState = editorState.copy(selectedNodeId = null) }
             )
         }
     }
 
-    if (viewModel.showAddNodeDialog) {
+    if (showAddNodeDialog) {
         StarMapAddNodeDialog(
             coordinator = coordinator,
             onConfirm = { title, kind ->
                 coroutineScope.launch {
-                    val ok = viewModel.executeOperation("add_node") {
+                    val ok = executeOperation(context.getString(R.string.starmap_add_node)) {
                         val nodeId = java.util.UUID.randomUUID().toString()
                         val node = StarMapGraphNode(
                             id = nodeId,
                             title = title,
                             kind = kind
                         )
-                        viewModel.repository.addStarmapNode(starmapId, node)
-                    }.await()
+                        repository().addStarmapNode(starmapId, node)
+                    }
                     if (ok) {
-                        viewModel.onShowAddNodeDialog(false)
-                        viewModel.loadStarMap(starmapId)
+                        showAddNodeDialog = false
+                        loadStarMap()
                     }
                 }
             },
-            onDismiss = { viewModel.onShowAddNodeDialog(false) }
+            onDismiss = { showAddNodeDialog = false }
         )
     }
 
-    if (viewModel.showAddEdgeDialog && viewModel.editorState.starMapData != null) {
+    if (showAddEdgeDialog && editorState.starMapData != null) {
         StarMapAddEdgeDialog(
-            nodes = viewModel.editorState.starMapData!!.graph.nodes,
+            nodes = editorState.starMapData!!.graph.nodes,
             onConfirm = { fromNodeId, toNodeId ->
                 coroutineScope.launch {
-                    val ok = viewModel.executeOperation("add_edge") {
-                        viewModel.repository.addStarmapEdge(starmapId, fromNodeId, toNodeId)
-                    }.await()
+                    val ok = executeOperation(context.getString(R.string.starmap_add_edge)) {
+                        repository().addStarmapEdge(starmapId, fromNodeId, toNodeId)
+                    }
                     if (ok) {
-                        viewModel.onShowAddEdgeDialog(false)
-                        viewModel.loadStarMap(starmapId)
+                        showAddEdgeDialog = false
+                        loadStarMap()
                     }
                 }
             },
-            onDismiss = { viewModel.onShowAddEdgeDialog(false) }
+            onDismiss = { showAddEdgeDialog = false }
         )
     }
 }

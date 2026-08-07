@@ -26,7 +26,6 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import com.xiwei.sujian.ui.phone.portrait.WorkspaceSessionViewModel
 
 interface WorkspaceAppState {
     val projects: List<com.xiwei.sujian.model.Project>
@@ -309,32 +308,4 @@ class SujianAppState(
     override fun createProject(title: String) = viewModel.createProject(title)
     override fun deleteProject(projectId: String) = viewModel.deleteProject(projectId)
     override fun renameProject(projectId: String, newTitle: String) = viewModel.renameProject(projectId, newTitle)
-}
-
-@Stable
-class SujianSessionAppState(
-    val sessionViewModel: WorkspaceSessionViewModel
-) : WorkspaceAppState {
-    override val projects: List<Project> get() = sessionViewModel.projects
-    override val recentEdits: List<RecentEdit> get() = sessionViewModel.recentEdits
-    override val currentProjectId: String? get() = sessionViewModel.currentProjectId
-    override val currentProjectTitle: String get() = sessionViewModel.currentProjectTitle
-    override val currentVolumeId: String? get() = sessionViewModel.currentVolumeId
-    override val currentChapterId: String? get() = sessionViewModel.currentChapterId
-    override val currentChapterTitle: String get() = sessionViewModel.currentChapterTitle
-    val currentLayoutPlan: LayoutPlan? get() = null
-    val foldFeatureInfo: FoldFeatureInfo get() = FoldFeatureInfo()
-    val isLoading: Boolean get() = false
-
-    override fun selectProject(projectId: String, projectTitle: String) = sessionViewModel.selectProject(projectId, projectTitle)
-    override fun selectProject(projectId: String) = sessionViewModel.selectProject(projectId)
-    override fun selectChapter(volumeId: String, chapterId: String, chapterTitle: String) = sessionViewModel.selectChapter(volumeId, chapterId, chapterTitle)
-    override fun selectChapter(volumeId: String, chapterId: String) = sessionViewModel.selectChapter(volumeId, chapterId)
-    override fun clearChapterSelection() = sessionViewModel.clearChapterSelection()
-    override fun clearProjectSelection() = sessionViewModel.clearProjectSelection()
-    override fun refreshProjects() = sessionViewModel.refreshProjects()
-    override fun refreshRecentEdits() = sessionViewModel.refreshRecentEdits()
-    override fun createProject(title: String) = sessionViewModel.createProject(title)
-    override fun deleteProject(projectId: String) = sessionViewModel.deleteProject(projectId)
-    override fun renameProject(projectId: String, newTitle: String) = sessionViewModel.renameProject(projectId, newTitle)
 }

@@ -178,7 +178,7 @@ object DiagnosticsExporter {
             "product" to Build.PRODUCT,
             "sdkVersion" to Build.VERSION.SDK_INT,
             "release" to Build.VERSION.RELEASE,
-            "securityPatch" to (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) Build.VERSION.SECURITY_PATCH else null),
+            "securityPatch" to Build.VERSION.SECURITY_PATCH,
             "screenWidthPx" to displayMetrics.widthPixels,
             "screenHeightPx" to displayMetrics.heightPixels,
             "densityDpi" to displayMetrics.densityDpi,

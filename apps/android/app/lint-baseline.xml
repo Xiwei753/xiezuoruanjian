@@ -13,7 +13,7 @@
         errorLine2="                                        ~~~~~~">
         <location
             file="build/generated/writer-uniffi/noAi/kotlin/uniffi/writer_core/writer_core.kt"
-            line="2852"
+            line="2897"
             column="41"/>
     </issue>
 
@@ -24,7 +24,7 @@
         errorLine2="                                     ~~~~~~~~">
         <location
             file="build/generated/writer-uniffi/noAi/kotlin/uniffi/writer_core/writer_core.kt"
-            line="2855"
+            line="2900"
             column="38"/>
     </issue>
 
@@ -35,7 +35,7 @@
         errorLine2="                                     ~~~~~">
         <location
             file="build/generated/writer-uniffi/noAi/kotlin/uniffi/writer_core/writer_core.kt"
-            line="2861"
+            line="2906"
             column="38"/>
     </issue>
 

@@ -23,9 +23,14 @@ import java.io.File
 class EditorSessionCoordinatorTransformArchitectureTest {
 
     private fun coordinatorSource(): String {
-        val path = System.getProperty("user.dir")!! +
-            "/src/main/kotlin/com/xiwei/sujian/editor/v2/coordinator/EditorSessionCoordinator.kt"
-        return File(path).readText()
+        val dir = File(System.getProperty("user.dir")!! +
+            "/src/main/kotlin/com/xiwei/sujian/editor/v2/coordinator")
+        // #597: EditorSessionCoordinator 拆分为多个文件，所有 updateSessionState 调用和
+        // pendingRecord 模式分布在拆分文件中，需拼接全部源码进行结构检查。
+        return dir.listFiles { file -> file.isFile && file.extension == "kt" }
+            ?.sortedBy { it.name }
+            ?.joinToString("\n") { it.readText() }
+            ?: ""
     }
 
     /**

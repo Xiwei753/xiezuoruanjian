@@ -1,115 +1,68 @@
 package com.xiwei.sujian.ui.compose.workspace
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
+import androidx.compose.material3.adaptive.layout.AnimatedPane
+import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffold
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
-import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.editor.v2.compose.LocalEditorWindowHost
-import com.xiwei.sujian.model.AvoidRegion
-import com.xiwei.sujian.model.AvoidRegionKind
 import com.xiwei.sujian.runtime.LocalSujianAppDependencies
+import com.xiwei.sujian.ui.ChapterSwitchResult
+import com.xiwei.sujian.ui.EditorViewModel
 import com.xiwei.sujian.ui.compose.SujianAppState
 import com.xiwei.sujian.ui.compose.editor.SujianEditorHost
-import com.xiwei.sujian.ui.compose.workbench.component.SujianWorkbench
-import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchAction
-import com.xiwei.sujian.ui.compose.workbench.model.WorkbenchPanelId
-import com.xiwei.sujian.ui.compose.workbench.panel.AiAssistantPanel
-import com.xiwei.sujian.ui.compose.workbench.panel.ChapterNavigatorPanel
-import com.xiwei.sujian.ui.compose.workbench.panel.ProjectNavigatorPanel
-import com.xiwei.sujian.ui.compose.workbench.panel.SearchPanel
-import com.xiwei.sujian.ui.compose.workbench.panel.StarMapPanel
-import com.xiwei.sujian.ui.compose.workbench.panel.StatisticsPanel
-import com.xiwei.sujian.ui.compose.workbench.state.LayoutStorageKey
-import com.xiwei.sujian.ui.compose.workbench.state.WindowWidthBucket
-import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchLayoutRepository
-import com.xiwei.sujian.ui.compose.workbench.state.WorkbenchViewModel
+import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import com.xiwei.sujian.ui.requestOpenChapter
 
 /**
  * 写作工作区 — 「作品」一级入口的唯一内容。
  *
  * 作品、卷、章节和正文是同一个工作区内的不同数据和窗格状态：
  * - 当前选择（project/volume/chapter）由 [SujianAppState] 单状态持有，不创建全局 route。
- * - 手机：作品列表 → 章节树 → 正文 依次为工作区内部窗格，返回只切工作区内部窗格。
- * - 平板/大屏：正文为主窗格，作品/章节导航与辅助面板由 [SujianWorkbench] 组合。
+ * - 三窗格由 [ListDetailPaneScaffold] 自适应排列：
+ *   - listPane → 作品列表（[ProjectListContent]）
+ *   - detailPane → 卷章节树（[ChapterTreeContent]）
+ *   - extraPane → 正文编辑器（[SujianEditorHost]）
+ * - 窄窗口（手机竖屏）依次显示单窗格；宽窗口（平板/横屏/折叠屏）并排展开多窗格。
+ * - 窗口变宽只改变排列，不切换到另一套页面。
  */
+@OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
 fun ProjectWorkspaceScreen(
     appState: SujianAppState,
-    modifier: Modifier = Modifier
-) {
-    val deps = com.xiwei.sujian.runtime.LocalSujianAppDependencies.current
-    val workspaceRepository = deps.workspaceRepository
-
-    val currentProjectId = appState.currentProjectId
-    val currentVolumeId = appState.currentVolumeId
-    val currentChapterId = appState.currentChapterId
-    val currentChapterTitle = appState.currentChapterTitle
-
-
-    // 平板/大屏：未选作品时全窗格作品列表，选中后多窗格工作台。
-    // 手机竖屏由 PhoneWorkspaceHost 独立管理，不经过此路径。
-    if (currentProjectId == null) {
-        ProjectListScreen(
-            appState = appState,
-            onSelectProject = { projectId, projectTitle ->
-                appState.selectProject(projectId, projectTitle)
-            },
-            modifier = modifier
-        )
-    } else {
-        WorkbenchWorkspaceContent(
-            appState = appState,
-            currentProjectId = currentProjectId,
-            currentVolumeId = currentVolumeId,
-            currentChapterId = currentChapterId,
-            currentChapterTitle = currentChapterTitle,
-            workspaceRepository = workspaceRepository,
-            modifier = modifier,
-        )
-    }
-}
-
-@Composable
-private fun WorkbenchWorkspaceContent(
-    appState: SujianAppState,
-    currentProjectId: String,
-    currentVolumeId: String?,
-    currentChapterId: String?,
-    currentChapterTitle: String,
-    workspaceRepository: com.xiwei.sujian.data.WorkspaceRepository,
     modifier: Modifier = Modifier,
 ) {
+    val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
-    val configuration = LocalConfiguration.current
-    val dims = LocalSujianDimensions.current
-    val workbenchVm: WorkbenchViewModel = viewModel()
     val deps = LocalSujianAppDependencies.current
+    val workspaceRepository = deps.workspaceRepository
+
     // #595 一：章节切换事务入口 — 显式 Factory 注入进程级容器依赖 + 会话层协调器。
     // 与 WritingPane 内 viewModel(factory=...) 解析到同一 Activity 级实例。
     val editorHost = LocalEditorWindowHost.current
-    val editorViewModel: com.xiwei.sujian.ui.EditorViewModel = viewModel(
-        factory = com.xiwei.sujian.ui.EditorViewModel.Factory(context.applicationContext as android.app.Application, deps, editorHost?.sessionCoordinator)
+    val editorViewModel: EditorViewModel = viewModel(
+        factory = EditorViewModel.Factory(context.applicationContext as android.app.Application, deps, editorHost?.sessionCoordinator),
     )
-    // #595 一：尽早初始化 — 章节导航面板里的 requestOpenChapter 需要在 WritingPane
+    // #595 一：尽早初始化 — 章节树里的 requestOpenChapter 需要在 WritingPane
     // 组合前就具备 Repository 与 session 协调器（提交前预准备 Rust session）。
     LaunchedEffect(Unit) {
         editorViewModel.initialize(
@@ -119,177 +72,167 @@ private fun WorkbenchWorkspaceContent(
             editorHost?.sessionCoordinator,
         )
     }
-    val coroutineScope = rememberCoroutineScope()
 
-    val widthDp = configuration.screenWidthDp
-    val heightDp = configuration.screenHeightDp
-    val orientation = if (configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) "landscape" else "portrait"
-    val widthBucket = WindowWidthBucket.fromDp(widthDp)
-
-    val deviceId = remember {
-        try {
-            val prefs = context.getSharedPreferences("sujian_device", android.content.Context.MODE_PRIVATE)
-            prefs.getString("device_id", "unknown") ?: "unknown"
-        } catch (_: Exception) { "unknown" }
-    }
-
-    val storageKey = remember(deviceId, orientation, widthBucket) {
-        LayoutStorageKey(
-            deviceId = deviceId,
-            orientation = orientation,
-            windowWidthBucket = widthBucket,
-            windowMode = "standard",
+    // 会话恢复：从已持久化的业务选择一次性构建 navigator 初始历史，
+    // 之后只使用 navigator 自己保存/恢复的历史，不再从业务字段反复重建。
+    val initialDestination = remember(
+        appState.currentProjectId,
+        appState.currentVolumeId,
+        appState.currentChapterId,
+    ) {
+        deriveRestoreDestination(
+            appState.currentProjectId,
+            appState.currentVolumeId,
+            appState.currentChapterId,
         )
     }
+    val initialHistory = remember(initialDestination) {
+        buildInitialHistory(initialDestination)
+    }
+    val navigator = rememberListDetailPaneScaffoldNavigator(initialDestinationHistory = initialHistory)
+    val workspaceNavState = remember { WorkspaceNavigationState(navigator) }
 
-    val previousStorageKey = remember { mutableStateOf<LayoutStorageKey?>(null) }
-    LaunchedEffect(storageKey) {
-        if (previousStorageKey.value == null) {
-            val repo = WorkbenchLayoutRepository(context)
-            workbenchVm.initialize(repo, storageKey)
-        } else if (previousStorageKey.value != storageKey) {
-            workbenchVm.onWindowBucketChanged(storageKey)
+    // #592 三：workspace 导航离开正文时业务级关闭章节 session。
+    // 配置变化不会改变 workspace route（navigator 历史由 rememberSaveable 保留），
+    // 因此不会触发关闭；只有用户真正返回章节列表/作品列表或切换章节才关闭。
+    var lastWorkspaceLocation by remember {
+        mutableStateOf<WorkspaceLocation?>(null)
+    }
+    // 会话业务选择与导航位置的对账：导航位置回退到章节列表时清 chapter 选择，
+    // 回退到作品列表时清 project 选择；进入正文不清除任何选择。
+    LaunchedEffect(workspaceNavState.currentLocation) {
+        val location = workspaceNavState.currentLocation
+        val previous = lastWorkspaceLocation
+        lastWorkspaceLocation = location
+        val previousEditor = previous as? WorkspaceLocation.Editor
+        if (previousEditor != null && location !is WorkspaceLocation.Editor) {
+            editorHost?.closeTarget(
+                "chapter-body:${previousEditor.projectId}:${previousEditor.volumeId}:${previousEditor.chapterId}",
+                com.xiwei.sujian.editor.v2.coordinator.SessionCloseReason.WORKSPACE_NAVIGATION,
+            )
         }
-        previousStorageKey.value = storageKey
+        when (location) {
+            is WorkspaceLocation.ProjectList -> {
+                if (appState.currentProjectId != null) {
+                    appState.clearProjectSelection()
+                    com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceBack("project_list")
+                }
+            }
+            is WorkspaceLocation.ChapterTree -> {
+                if (appState.currentChapterId != null) {
+                    appState.clearChapterSelection()
+                    com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceBack("chapter_tree")
+                }
+            }
+            is WorkspaceLocation.Editor -> { }
+        }
     }
 
-    val layoutState = workbenchVm.layoutState
+    val currentProjectId = appState.currentProjectId
+    val currentVolumeId = appState.currentVolumeId
+    val currentChapterId = appState.currentChapterId
+    val currentChapterTitle = appState.currentChapterTitle
 
-    val avoidRegions = appState.currentLayoutPlan?.avoidRegions ?: emptyList()
-    val windowInsetsPadding = computeWindowInsetPadding(avoidRegions)
-    val editorContentMaxWidthDp = appState.currentLayoutPlan?.editorContentMaxWidthDp ?: 0f
-    val pagePaddingDp = appState.currentLayoutPlan?.pagePaddingDp ?: 0f
+    val isEditor = workspaceNavState.currentLocation is WorkspaceLocation.Editor
 
-    SujianWorkbench(
-        layoutState = layoutState,
-        onAction = { action ->
-            when (action) {
-                is WorkbenchAction.MoveFloatingPanel,
-                is WorkbenchAction.ResizeFloatingPanel,
-                is WorkbenchAction.ResizeDockSplit,
-                is WorkbenchAction.ResizeDockZone -> workbenchVm.dispatchDeferredPersist(action)
-                else -> workbenchVm.dispatch(action)
-            }
-        },
-        onWindowSizeChanged = { maxWidthDp, maxHeightDp ->
-            workbenchVm.onWindowSizeChanged(maxWidthDp, maxHeightDp)
-        },
-        modifier = modifier.fillMaxSize().then(windowInsetsPadding),
-        editorContent = {
-            if (currentVolumeId != null && currentChapterId != null) {
-                val editorModifier = Modifier
-                    .fillMaxSize()
-                    .then(
-                        if (editorContentMaxWidthDp > 0f) Modifier.width(editorContentMaxWidthDp.dp)
-                        else Modifier
-                    )
-                    .then(
-                        if (pagePaddingDp > 0f) Modifier.padding(horizontal = pagePaddingDp.dp)
-                        else Modifier
-                    )
-
-                SujianEditorHost(
-                    projectId = currentProjectId,
-                    volumeId = currentVolumeId,
-                    chapterId = currentChapterId,
-                    chapterTitle = currentChapterTitle,
-                    modifier = editorModifier,
-                    // #595 一：章节切换保存/加载失败 → 回滚选择到旧章节；
-                    // 无旧章节（首次进入失败）→ 清除章节选择（回到章节导航面板）。
-                    onChapterSwitchFailed = { _, oldVolumeId, oldChapterId, oldChapterTitle ->
-                        if (oldVolumeId != null && oldChapterId != null) {
-                            appState.selectChapter(oldVolumeId, oldChapterId, oldChapterTitle)
-                        } else {
-                            appState.clearChapterSelection()
+    ListDetailPaneScaffold(
+        modifier = modifier,
+        directive = navigator.scaffoldDirective,
+        scaffoldState = navigator.scaffoldState,
+        listPane = {
+            AnimatedPane {
+                ProjectListContent(
+                    appState = appState,
+                    onSelectProject = { projectId, projectTitle ->
+                        appState.selectProject(projectId, projectTitle)
+                        coroutineScope.launch {
+                            workspaceNavState.navigateToChapterTree(projectId)
                         }
                     },
                 )
-            } else {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        stringResource(id = R.string.select_chapter_to_write),
-                        modifier = Modifier.padding(dims.space16),
+            }
+        },
+        detailPane = {
+            AnimatedPane {
+                if (currentProjectId != null) {
+                    ChapterTreeContent(
+                        projectId = currentProjectId,
+                        workspaceRepository = workspaceRepository,
+                        onSelectChapter = { volumeId, chapterId, chapterTitle ->
+                            // #595 一：事务成功后才提交业务选择和 Navigator —
+                            // 保存/加载失败时 Navigator 完全不变化，不再"先导航再回滚"。
+                            coroutineScope.launch {
+                                val result = editorViewModel.requestOpenChapter(
+                                    currentProjectId, volumeId, chapterId, chapterTitle,
+                                )
+                                when (result) {
+                                    is ChapterSwitchResult.Success -> {
+                                        appState.selectChapter(volumeId, chapterId, chapterTitle)
+                                        workspaceNavState.navigateToEditor(currentProjectId, volumeId, chapterId)
+                                    }
+                                    is ChapterSwitchResult.SaveFailed,
+                                    is ChapterSwitchResult.LoadFailed -> {
+                                        // 数据失败：停在章节树，旧章节 session/状态保留；
+                                        // 错误提示已由 ViewModel 事件（toast）发出。
+                                    }
+                                    ChapterSwitchResult.Stale -> {
+                                        // 更新的请求正在完成切换，本请求不再动作。
+                                    }
+                                }
+                            }
+                        },
+                        onBackToProjects = {
+                            coroutineScope.launch {
+                                workspaceNavState.back()
+                            }
+                        },
                     )
                 }
             }
         },
-        panelContent = { panelState ->
-            when (panelState.id) {
-                WorkbenchPanelId.ProjectNavigator -> ProjectNavigatorPanel(
-                    appState = appState,
-                    onSelectProject = { projectId, projectTitle ->
-                        appState.selectProject(projectId, projectTitle)
-                        appState.clearChapterSelection()
-                    },
-                )
-                WorkbenchPanelId.ChapterNavigator -> ChapterNavigatorPanel(
-                    projectId = currentProjectId,
-                    workspaceRepository = workspaceRepository,
-                    onSelectChapter = { volumeId, chapterId, chapterTitle ->
-                        // #595 一：事务成功后才提交业务选择 — 失败时选择保持旧章节，
-                        // 不再由 WritingPane 事后回滚（旧路径会留下“先导航再回滚”历史）。
-                        coroutineScope.launch {
-                            val result = editorViewModel.requestOpenChapter(
-                                currentProjectId, volumeId, chapterId, chapterTitle,
-                            )
-                            if (result is com.xiwei.sujian.ui.ChapterSwitchResult.Success) {
-                                appState.selectChapter(volumeId, chapterId, chapterTitle)
-                            }
-                            // SaveFailed/LoadFailed：选择不变、错误 toast 已由 ViewModel 发出；
-                            // Stale：更新的请求正在完成切换。
-                        }
-                    },
-                    onBackToProjects = {
-                        appState.clearProjectSelection()
-                    },
-                )
-                WorkbenchPanelId.AiAssistant -> AiAssistantPanel(
-                    projectId = currentProjectId,
-                    volumeId = currentVolumeId,
-                    chapterId = currentChapterId,
-                )
-                WorkbenchPanelId.Search -> SearchPanel()
-                WorkbenchPanelId.Statistics -> StatisticsPanel()
-                WorkbenchPanelId.StarMap -> StarMapPanel()
-                WorkbenchPanelId.DocumentOutline,
-                WorkbenchPanelId.CharacterInfo -> {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = panelState.id.name,
-                            style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+        extraPane = {
+            AnimatedPane {
+                // 正文背景层延伸绘制到状态栏和顶栏下方；文字/光标/手势区域保留明确顶部安全区。
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.background),
+                ) {
+                    if (currentProjectId != null && currentChapterId != null && currentVolumeId != null) {
+                        SujianEditorHost(
+                            projectId = currentProjectId,
+                            volumeId = currentVolumeId,
+                            chapterId = currentChapterId,
+                            chapterTitle = currentChapterTitle,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(top = if (isEditor) 0.dp else 0.dp),
+                            // #595 一：章节切换保存/加载失败 → 回滚选择到旧章节；
+                            // 无旧章节（首次进入失败）→ 清除章节选择并返回章节树。
+                            onChapterSwitchFailed = { oldProjectId, oldVolumeId, oldChapterId, oldChapterTitle ->
+                                if (oldVolumeId != null && oldChapterId != null) {
+                                    appState.selectChapter(oldVolumeId, oldChapterId, oldChapterTitle)
+                                    coroutineScope.launch {
+                                        workspaceNavState.navigateToEditor(oldProjectId, oldVolumeId, oldChapterId)
+                                    }
+                                } else {
+                                    appState.clearChapterSelection()
+                                    coroutineScope.launch {
+                                        workspaceNavState.back()
+                                    }
+                                }
+                            },
                         )
+                    } else {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(stringResource(id = R.string.select_chapter_to_write))
+                        }
                     }
                 }
             }
         },
-    )
-}
-
-@Composable
-private fun computeWindowInsetPadding(avoidRegions: List<AvoidRegion>): Modifier {
-    val insets = avoidRegions.filter { it.kind == AvoidRegionKind.WindowInset }
-    if (insets.isEmpty()) return Modifier
-    var startDp = 0f
-    var endDp = 0f
-    var topDp = 0f
-    var bottomDp = 0f
-    for (region in insets) {
-        if (region.leftDp > 0f) startDp = maxOf(startDp, region.leftDp)
-        if (region.rightDp > 0f) endDp = maxOf(endDp, region.rightDp)
-        if (region.topDp > 0f) topDp = maxOf(topDp, region.topDp)
-        if (region.bottomDp > 0f) bottomDp = maxOf(bottomDp, region.bottomDp)
-    }
-    if (startDp == 0f && endDp == 0f && topDp == 0f && bottomDp == 0f) return Modifier
-    return Modifier.padding(
-        start = startDp.dp,
-        end = endDp.dp,
-        top = topDp.dp,
-        bottom = bottomDp.dp
     )
 }

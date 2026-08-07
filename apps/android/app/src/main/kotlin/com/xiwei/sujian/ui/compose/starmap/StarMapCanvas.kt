@@ -84,8 +84,9 @@ fun rememberStarMapColors(): StarMapColors {
         )
     }
 }
- @Suppress("CognitiveComplexMethod", "LongMethod", "LongParameterList") // #597 技术债：待重构拆分
 
+// #597 StarMap 渲染 Composable 聚合手势/绘制/编辑多逻辑，511c0f99 起即如此 — 待后续重构拆分子 Composable
+@Suppress("LongMethod", "CognitiveComplexMethod", "LongParameterList")
 @Composable
 fun StarMapCanvas(
     data: StarMapData,
@@ -303,8 +304,9 @@ private fun hitTestNode(
     }
     return null
 }
- @Suppress("CyclomaticComplexMethod", "LongParameterList") // #597 技术债：待重构拆分
 
+// #597 边渲染需按类型/标签/可见性分支绘制，511c0f99 起即如此 — 待后续重构
+@Suppress("CyclomaticComplexMethod", "LongParameterList")
 private fun DrawScope.drawEdgeRender(
     edge: StarMapEdgeRenderData,
     scale: Float,
@@ -368,8 +370,9 @@ private fun DrawScope.drawEdgeRender(
         )
     }
 }
- @Suppress("LongParameterList") // #597 技术债：待重构拆分
 
+// #597 节点渲染需多参数（布局/几何/颜色/状态），511c0f99 起即如此 — 待后续重构提取渲染上下文
+@Suppress("LongParameterList")
 private fun DrawScope.drawNode(
     layoutNode: StarMapLayoutNodeData,
     graphNode: StarMapGraphNode?,

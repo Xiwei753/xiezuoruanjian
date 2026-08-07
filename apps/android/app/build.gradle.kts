@@ -349,7 +349,9 @@ dependencies {
 
 android {
     lint {
-        disable.addAll(listOf("MissingTranslation"))
+        // GradleDependency/AndroidGradlePluginVersion 是版本提示，非代码质量问题；
+        // 依赖升级应是有意决策，不由 lint 驱动。
+        disable.addAll(listOf("MissingTranslation", "GradleDependency", "AndroidGradlePluginVersion"))
         baseline = file("lint-baseline.xml")
     }
 }
@@ -397,12 +399,9 @@ tasks.withType<io.gitlab.arturbosch.detekt.Detekt>().configureEach {
 
 // #597：架构测试与普通单元测试分离。
 // 架构测试已移入 src/testArch/kotlin（testNoAi 源集），不再混在 src/test 中。
-// 普通单元测试：./gradlew testNoAiDebugUnitTest
-// 架构约束测试：./gradlew testNoAiDebugUnitTest --tests "com.xiwei.sujian.arch.*"
-// 注意：testNoAi 源集同时包含 src/test 和 src/testArch，两个目录的测试都会被编译。
-// 如需只跑普通单元测试（排除架构测试），可用：
-//   ./gradlew testNoAiDebugUnitTest --tests "com.xiwei.sujian.ui.*" --tests "com.xiwei.sujian.editor.*"
-
+// 普通单元测试（默认排除架构测试）：./gradlew testNoAiDebugUnitTest
+// 架构约束测试：./gradlew testArchNoAiDebug
+// 每类测试只运行一次 — testNoAiDebugUnitTest 不跑 arch 包，testArchNoAiDebug 只跑 arch 包。
 
 // #597：注册独立的架构测试任务，方便直接运行 ./gradlew testArchNoAiDebug
 tasks.register("testArchNoAiDebug") {
@@ -411,12 +410,17 @@ tasks.register("testArchNoAiDebug") {
     dependsOn("testNoAiDebugUnitTest")
 }
 
-// 当请求 testArchNoAiDebug 时，自动为 testNoAiDebugUnitTest 添加架构测试过滤
+// 根据请求的任务决定 testNoAiDebugUnitTest 的过滤策略：
+// - testArchNoAiDebug → 只运行 com.xiwei.sujian.arch.*
+// - 其他（默认）→ 排除 com.xiwei.sujian.arch.*（架构检查不混入普通测试）
 val isArchTestRequested = gradle.startParameter.taskNames.any { it.contains("testArchNoAiDebug") }
-if (isArchTestRequested) {
-    tasks.matching { it.name == "testNoAiDebugUnitTest" }.configureEach {
-        (this as org.gradle.api.tasks.testing.Test).filter {
+tasks.matching { it.name == "testNoAiDebugUnitTest" }.configureEach {
+    (this as org.gradle.api.tasks.testing.Test).filter {
+        if (isArchTestRequested) {
             includeTestsMatching("com.xiwei.sujian.arch.*")
+            isFailOnNoMatchingTests = true
+        } else {
+            excludeTestsMatching("com.xiwei.sujian.arch.*")
         }
     }
 }

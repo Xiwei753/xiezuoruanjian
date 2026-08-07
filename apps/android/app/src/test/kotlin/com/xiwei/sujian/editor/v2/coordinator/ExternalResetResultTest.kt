@@ -29,7 +29,9 @@ class ExternalResetResultContractTest {
 
     @Test
     fun resetPersistentSession_returnsExternalResetResultType() {
-        val method = EditorSessionCoordinator::class.java.methods.firstOrNull {
+        // resetPersistentSession 拆分为扩展函数，编译为 EditorSessionLifecycleOpsKt 静态方法。
+        val extClass = Class.forName("com.xiwei.sujian.editor.v2.coordinator.EditorSessionLifecycleOpsKt")
+        val method = extClass.declaredMethods.firstOrNull {
             it.name == "resetPersistentSession" &&
             it.returnType == com.xiwei.sujian.editor.v2.coordinator.ExternalResetResult::class.java
         }

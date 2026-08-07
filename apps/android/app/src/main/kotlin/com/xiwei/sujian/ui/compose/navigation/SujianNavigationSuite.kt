@@ -67,27 +67,16 @@ import com.xiwei.sujian.model.SyncIndicatorState
 import com.xiwei.sujian.model.SyncTrigger
 import com.xiwei.sujian.platform.api.WindowSizeClass
 import com.xiwei.sujian.runtime.LocalSujianAppDependencies
+import com.xiwei.sujian.runtime.SujianAppDependencies
 import com.xiwei.sujian.ui.compose.LocalAndroidCapabilities
 import com.xiwei.sujian.ui.compose.SujianAppState
 import com.xiwei.sujian.ui.compose.settings.SettingsRoute
 import com.xiwei.sujian.ui.compose.settings.settingsCategories
 import com.xiwei.sujian.ui.compose.starmap.StarMapScreen
-import com.xiwei.sujian.ui.compose.starmap.StarMapViewModel
 import com.xiwei.sujian.ui.compose.stats.StatsScreen
 import com.xiwei.sujian.ui.compose.workspace.ProjectWorkspaceScreen
-import com.xiwei.sujian.ui.phone.portrait.PhonePortraitStateHolder
-import com.xiwei.sujian.ui.phone.portrait.PhonePortraitEvent
-import com.xiwei.sujian.ui.phone.portrait.PhoneRoot
-import com.xiwei.sujian.ui.phone.portrait.PhoneSettingsRoute
-import com.xiwei.sujian.ui.phone.portrait.PhoneSettingsScreen
-import com.xiwei.sujian.ui.phone.portrait.PhoneUiPreferences
-import com.xiwei.sujian.ui.phone.portrait.PhoneWorkspaceHost
-import com.xiwei.sujian.ui.phone.portrait.PhoneWorkspaceNavigationState
-import com.xiwei.sujian.ui.phone.portrait.WorkspaceLocation
-import com.xiwei.sujian.ui.phone.portrait.WorkspacePaneKey
-import com.xiwei.sujian.ui.phone.portrait.WorkspaceSessionViewModel
-import com.xiwei.sujian.ui.phone.portrait.deriveWorkspaceLocation
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -159,22 +148,272 @@ class StarMapTopBarState {
     }
 }
 
-/**
- * 统一自适应导航 — 手机竖屏和宽屏共用同一份导航历史和目的地。
- *
- * - 窄窗口（Compact）：底部 NavigationBar
- * - 宽窗口（Medium/Expanded）：侧边 NavigationRail
- * - 同一 ViewModel、同一 Repository、同一返回历史
- * - 旋转/分屏/折叠后当前内容和状态不丢
- */
-@Suppress(
-    "LongMethod",
-    "CyclomaticComplexMethod",
-    "CognitiveComplexMethod",
-    // UI 统一重构核心函数：合并 NavigationBar / NavigationRail / NavigationSuiteScaffold
-    // 三套布局的导航项渲染、路由切换、返回栈管理和动画过渡。
-    // 拆分需要更大范围的 UI 架构重构，当前阶段整体抑制。
+@Stable
+private class SujianTopBarInfo(
+    val title: String,
+    val navigationIcon: ImageVector?,
+    val onNavigationClick: (() -> Unit)?,
+    val actions: @Composable () -> Unit,
 )
+
+private fun rememberInitialNavStack(initialDestination: String?): List<SujianRoute> = when (initialDestination) {
+    "settings" -> listOf(SujianRoute.Works, SujianRoute.Settings)
+    "starmap" -> listOf(SujianRoute.Works, SujianRoute.StarMap)
+    "stats" -> listOf(SujianRoute.Works, SujianRoute.Stats)
+    else -> listOf(SujianRoute.Works)
+}
+
+@Composable
+private fun rememberSujianTopBarTitle(
+    currentTopDestination: SujianDestination,
+    appState: SujianAppState,
+    starMapTopBarState: StarMapTopBarState,
+): String = when (currentTopDestination) {
+    SujianDestination.Works -> {
+        if (appState.currentProjectId != null) {
+            appState.currentProjectTitle.ifEmpty { stringResource(id = R.string.title_projects) }
+        } else {
+            stringResource(id = R.string.title_projects)
+        }
+    }
+    SujianDestination.StarMap -> {
+        starMapTopBarState.title.ifEmpty { stringResource(id = R.string.title_starmap) }
+    }
+    SujianDestination.Stats -> stringResource(id = R.string.title_stats)
+    SujianDestination.Settings -> stringResource(id = R.string.action_settings)
+}
+
+@Composable
+private fun rememberSujianTopBarNavigation(
+    currentTopDestination: SujianDestination,
+    appState: SujianAppState,
+    starMapTopBarState: StarMapTopBarState,
+    backStack: NavBackStack<NavKey>,
+): Pair<ImageVector?, (() -> Unit)?> {
+    val showBack = currentTopDestination != SujianDestination.Works ||
+        (currentTopDestination == SujianDestination.Works && appState.currentProjectId != null) ||
+        (currentTopDestination == SujianDestination.StarMap && starMapTopBarState.onBack != null)
+    val navigationIcon = when {
+        currentTopDestination == SujianDestination.Settings -> SujianIcons.ArrowBack
+        showBack && currentTopDestination != SujianDestination.Works -> SujianIcons.ArrowBack
+        currentTopDestination == SujianDestination.StarMap && starMapTopBarState.onBack != null -> SujianIcons.ArrowBack
+        else -> null
+    }
+    val onNavigationClick: (() -> Unit)? = when {
+        currentTopDestination == SujianDestination.Settings -> {
+            { backStack.removeLastOrNull() }
+        }
+        currentTopDestination == SujianDestination.StarMap -> starMapTopBarState.onBack
+        else -> null
+    }
+    return navigationIcon to onNavigationClick
+}
+
+private fun rememberSujianTopBarActions(
+    currentTopDestination: SujianDestination,
+    starMapTopBarState: StarMapTopBarState,
+    syncState: SyncIndicatorState,
+    coroutineScope: CoroutineScope,
+    deps: SujianAppDependencies,
+): @Composable () -> Unit = {
+    if (currentTopDestination == SujianDestination.StarMap) {
+        starMapTopBarState.actions?.invoke()
+    }
+    if (currentTopDestination == SujianDestination.Works) {
+        SujianIconButton(
+            onClick = {
+                coroutineScope.launch {
+                    deps.syncCoordinator.runSync(SyncTrigger.Manual)
+                }
+            },
+            icon = when (syncState) {
+                SyncIndicatorState.Unconfigured -> SujianIcons.CloudOff
+                SyncIndicatorState.Syncing -> SujianIcons.CloudSync
+                SyncIndicatorState.Synced -> SujianIcons.CloudDone
+                SyncIndicatorState.Failed -> SujianIcons.CloudError
+            },
+            contentDescription = "同步",
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3AdaptiveApi::class)
+@Composable
+private fun SujianNavDisplayContent(
+    backStack: NavBackStack<NavKey>,
+    appState: SujianAppState,
+    starMapTopBarState: StarMapTopBarState,
+    settingsDetailSection: SettingsSection?,
+    onSettingsDetailSectionChange: (SettingsSection?) -> Unit,
+) {
+    NavDisplay(
+        backStack = backStack,
+        onBack = {
+            val handled = backStack.size > 1
+            if (handled) {
+                backStack.removeLastOrNull()
+            }
+            com.xiwei.sujian.diagnostics.DiagnosticsEvents.navBack(handled)
+            handled
+        },
+        transitionSpec = navForwardTransition,
+        popTransitionSpec = navPopTransition,
+        predictivePopTransitionSpec = navPredictivePopTransition,
+        entryProvider = { key: NavKey ->
+            when (key) {
+                is SujianRoute -> NavEntry(key) { route ->
+                    when (route) {
+                        is SujianRoute.Works -> ProjectWorkspaceScreen(
+                            appState = appState,
+                        )
+                        is SujianRoute.StarMap -> StarMapScreen(
+                            topBarState = starMapTopBarState,
+                            modifier = Modifier.testTag(SujianSemanticIds.StarMapScreen),
+                        )
+                        is SujianRoute.Stats -> StatsScreen()
+                        is SujianRoute.Settings -> SettingsRoute(
+                            detailSection = settingsDetailSection,
+                            onDetailSectionChange = onSettingsDetailSectionChange,
+                        )
+                    }
+                }
+                else -> NavEntry(key) {}
+            }
+        },
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3AdaptiveApi::class)
+@Composable
+private fun SujianCompactNavScaffold(
+    modifier: Modifier,
+    topBarInfo: SujianTopBarInfo,
+    snackbarHostState: SnackbarHostState,
+    currentTopDestination: SujianDestination,
+    backStack: NavBackStack<NavKey>,
+    navDisplayContent: @Composable () -> Unit,
+) {
+    Scaffold(
+        modifier = modifier.fillMaxSize(),
+        topBar = {
+            SujianTopAppBar(
+                title = topBarInfo.title,
+                navigationIcon = topBarInfo.navigationIcon,
+                onNavigationClick = topBarInfo.onNavigationClick,
+                actions = topBarInfo.actions,
+            )
+        },
+        bottomBar = {
+            NavigationBar(
+                windowInsets = WindowInsets(0.dp),
+            ) {
+                SujianDestination.entries.forEach { destination ->
+                    NavigationBarItem(
+                        selected = currentTopDestination == destination,
+                        onClick = { navigateToTopDestination(backStack, destination) },
+                        icon = {
+                            Icon(
+                                imageVector = if (currentTopDestination == destination) {
+                                    destination.selectedIcon
+                                } else {
+                                    destination.unselectedIcon
+                                },
+                                contentDescription = stringResource(id = destination.labelResId),
+                            )
+                        },
+                        label = { Text(text = stringResource(id = destination.labelResId)) },
+                        modifier = navItemModifier(destination),
+                    )
+                }
+            }
+        },
+        snackbarHost = {
+            SnackbarHost(hostState = snackbarHostState) { data ->
+                SujianSnackbar(data = data)
+            }
+        },
+        containerColor = MaterialTheme.colorScheme.background,
+        contentWindowInsets = WindowInsets.safeDrawing,
+    ) { innerPadding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .imePadding(),
+        ) {
+            navDisplayContent()
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3AdaptiveApi::class)
+@Composable
+private fun SujianWideNavScaffold(
+    modifier: Modifier,
+    topBarInfo: SujianTopBarInfo,
+    snackbarHostState: SnackbarHostState,
+    currentTopDestination: SujianDestination,
+    backStack: NavBackStack<NavKey>,
+    navDisplayContent: @Composable () -> Unit,
+) {
+    Scaffold(
+        modifier = modifier.fillMaxSize(),
+        topBar = {
+            SujianTopAppBar(
+                title = topBarInfo.title,
+                navigationIcon = topBarInfo.navigationIcon,
+                onNavigationClick = topBarInfo.onNavigationClick,
+                actions = topBarInfo.actions,
+            )
+        },
+        snackbarHost = {
+            SnackbarHost(hostState = snackbarHostState) { data ->
+                SujianSnackbar(data = data)
+            }
+        },
+        containerColor = MaterialTheme.colorScheme.background,
+        contentWindowInsets = WindowInsets.safeDrawing,
+    ) { innerPadding ->
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .imePadding(),
+        ) {
+            NavigationRail(
+                modifier = Modifier.fillMaxHeight(),
+                windowInsets = WindowInsets(0.dp),
+            ) {
+                SujianDestination.entries.forEach { destination ->
+                    NavigationRailItem(
+                        selected = currentTopDestination == destination,
+                        onClick = { navigateToTopDestination(backStack, destination) },
+                        icon = {
+                            Icon(
+                                imageVector = if (currentTopDestination == destination) {
+                                    destination.selectedIcon
+                                } else {
+                                    destination.unselectedIcon
+                                },
+                                contentDescription = stringResource(id = destination.labelResId),
+                            )
+                        },
+                        label = { Text(text = stringResource(id = destination.labelResId)) },
+                        modifier = navItemModifier(destination),
+                    )
+                }
+            }
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight(),
+            ) {
+                navDisplayContent()
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3AdaptiveApi::class)
 @Composable
 fun SujianNavigationSuite(
@@ -184,19 +423,12 @@ fun SujianNavigationSuite(
 ) {
     val capabilities = LocalAndroidCapabilities.current
     val isCompact = capabilities.windowSizeClass == WindowSizeClass.Compact
-
-    val initialStack: List<SujianRoute> = when (initialDestination) {
-        "settings" -> listOf(SujianRoute.Works, SujianRoute.Settings)
-        "starmap" -> listOf(SujianRoute.Works, SujianRoute.StarMap)
-        "stats" -> listOf(SujianRoute.Works, SujianRoute.Stats)
-        else -> listOf(SujianRoute.Works)
-    }
+    val initialStack = rememberInitialNavStack(initialDestination)
     val backStack = rememberNavBackStack(*initialStack.toTypedArray())
     val currentRoute = backStack.lastOrNull() as? SujianRoute ?: SujianRoute.Works
     val currentTopDestination = currentRoute.toTopDestination()
     val snackbarHostState = remember { SnackbarHostState() }
     val starMapTopBarState = remember { StarMapTopBarState() }
-    val starMapVm: StarMapViewModel = viewModel(factory = StarMapViewModel.Factory(LocalContext.current))
     var settingsDetailSection by remember { mutableStateOf<SettingsSection?>(null) }
 
     val deps = LocalSujianAppDependencies.current
@@ -216,209 +448,22 @@ fun SujianNavigationSuite(
         }
     }
 
-    val topBarTitle = when (currentTopDestination) {
-        SujianDestination.Works -> {
-            if (appState.currentProjectId != null) {
-                appState.currentProjectTitle.ifEmpty { stringResource(id = R.string.title_projects) }
-            } else {
-                stringResource(id = R.string.title_projects)
-            }
-        }
-        SujianDestination.StarMap -> {
-            starMapTopBarState.title.ifEmpty { stringResource(id = R.string.title_starmap) }
-        }
-        SujianDestination.Stats -> stringResource(id = R.string.title_stats)
-        SujianDestination.Settings -> stringResource(id = R.string.action_settings)
-    }
-
-    val showBack = currentTopDestination != SujianDestination.Works ||
-        (currentTopDestination == SujianDestination.Works && appState.currentProjectId != null) ||
-        (currentTopDestination == SujianDestination.StarMap && starMapTopBarState.onBack != null)
-    val topBarNavigationIcon = when {
-        currentTopDestination == SujianDestination.Settings -> SujianIcons.ArrowBack
-        showBack && currentTopDestination != SujianDestination.Works -> SujianIcons.ArrowBack
-        currentTopDestination == SujianDestination.StarMap && starMapTopBarState.onBack != null -> SujianIcons.ArrowBack
-        else -> null
-    }
-    val topBarOnNavigationClick: (() -> Unit)? = when {
-        currentTopDestination == SujianDestination.Settings -> {
-            { backStack.removeLastOrNull() }
-        }
-        currentTopDestination == SujianDestination.StarMap -> starMapTopBarState.onBack
-        else -> null
-    }
-    val topBarActions: @Composable () -> Unit = {
-        if (currentTopDestination == SujianDestination.StarMap) {
-            starMapTopBarState.actions?.invoke()
-        }
-        if (currentTopDestination == SujianDestination.Works) {
-            SujianIconButton(
-                onClick = {
-                    coroutineScope.launch {
-                        deps.syncCoordinator.runSync(SyncTrigger.Manual)
-                    }
-                },
-                icon = when (syncState) {
-                    SyncIndicatorState.Unconfigured -> SujianIcons.CloudOff
-                    SyncIndicatorState.Syncing -> SujianIcons.CloudSync
-                    SyncIndicatorState.Synced -> SujianIcons.CloudDone
-                    SyncIndicatorState.Failed -> SujianIcons.CloudError
-                },
-                contentDescription = "同步",
-            )
-        }
-    }
+    val topBarNavigation = rememberSujianTopBarNavigation(currentTopDestination, appState, starMapTopBarState, backStack)
+    val topBarInfo = SujianTopBarInfo(
+        title = rememberSujianTopBarTitle(currentTopDestination, appState, starMapTopBarState),
+        navigationIcon = topBarNavigation.first,
+        onNavigationClick = topBarNavigation.second,
+        actions = rememberSujianTopBarActions(currentTopDestination, starMapTopBarState, syncState, coroutineScope, deps),
+    )
 
     val navDisplayContent: @Composable () -> Unit = {
-        NavDisplay(
-            backStack = backStack,
-            onBack = {
-                val handled = backStack.size > 1
-                if (handled) {
-                    backStack.removeLastOrNull()
-                }
-                com.xiwei.sujian.diagnostics.DiagnosticsEvents.navBack(handled)
-                handled
-            },
-            transitionSpec = navForwardTransition,
-            popTransitionSpec = navPopTransition,
-            predictivePopTransitionSpec = navPredictivePopTransition,
-            entryProvider = { key: NavKey ->
-                when (key) {
-                    is SujianRoute -> NavEntry(key) { route ->
-                        when (route) {
-                            is SujianRoute.Works -> ProjectWorkspaceScreen(
-                                appState = appState,
-                            )
-                            is SujianRoute.StarMap -> StarMapScreen(
-                                topBarState = starMapTopBarState,
-                                viewModel = starMapVm,
-                                modifier = Modifier.testTag(SujianSemanticIds.StarMapScreen),
-                            )
-                            is SujianRoute.Stats -> StatsScreen()
-                            is SujianRoute.Settings -> SettingsRoute(
-                                detailSection = settingsDetailSection,
-                                onDetailSectionChange = { settingsDetailSection = it },
-                            )
-                        }
-                    }
-                    else -> NavEntry(key) {}
-                }
-            },
-        )
+        SujianNavDisplayContent(backStack, appState, starMapTopBarState, settingsDetailSection) { settingsDetailSection = it }
     }
 
     if (isCompact) {
-        // 窄窗口：底部 NavigationBar
-        Scaffold(
-            modifier = modifier.fillMaxSize(),
-            topBar = {
-                SujianTopAppBar(
-                    title = topBarTitle,
-                    navigationIcon = topBarNavigationIcon,
-                    onNavigationClick = topBarOnNavigationClick,
-                    actions = topBarActions,
-                )
-            },
-            bottomBar = {
-                NavigationBar(
-                    windowInsets = WindowInsets(0.dp),
-                ) {
-                    SujianDestination.entries.forEach { destination ->
-                        NavigationBarItem(
-                            selected = currentTopDestination == destination,
-                            onClick = { navigateToTopDestination(backStack, destination) },
-                            icon = {
-                                Icon(
-                                    imageVector = if (currentTopDestination == destination) {
-                                        destination.selectedIcon
-                                    } else {
-                                        destination.unselectedIcon
-                                    },
-                                    contentDescription = stringResource(id = destination.labelResId),
-                                )
-                            },
-                            label = { Text(text = stringResource(id = destination.labelResId)) },
-                            modifier = navItemModifier(destination),
-                        )
-                    }
-                }
-            },
-            snackbarHost = {
-                SnackbarHost(hostState = snackbarHostState) { data ->
-                    SujianSnackbar(data = data)
-                }
-            },
-            containerColor = MaterialTheme.colorScheme.background,
-            contentWindowInsets = WindowInsets.safeDrawing,
-        ) { innerPadding ->
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-                    .imePadding(),
-            ) {
-                navDisplayContent()
-            }
-        }
+        SujianCompactNavScaffold(modifier, topBarInfo, snackbarHostState, currentTopDestination, backStack, navDisplayContent)
     } else {
-        // 宽窗口：侧边 NavigationRail
-        Scaffold(
-            modifier = modifier.fillMaxSize(),
-            topBar = {
-                SujianTopAppBar(
-                    title = topBarTitle,
-                    navigationIcon = topBarNavigationIcon,
-                    onNavigationClick = topBarOnNavigationClick,
-                    actions = topBarActions,
-                )
-            },
-            snackbarHost = {
-                SnackbarHost(hostState = snackbarHostState) { data ->
-                    SujianSnackbar(data = data)
-                }
-            },
-            containerColor = MaterialTheme.colorScheme.background,
-            contentWindowInsets = WindowInsets.safeDrawing,
-        ) { innerPadding ->
-            Row(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-                    .imePadding(),
-            ) {
-                NavigationRail(
-                    modifier = Modifier.fillMaxHeight(),
-                    windowInsets = WindowInsets(0.dp),
-                ) {
-                    SujianDestination.entries.forEach { destination ->
-                        NavigationRailItem(
-                            selected = currentTopDestination == destination,
-                            onClick = { navigateToTopDestination(backStack, destination) },
-                            icon = {
-                                Icon(
-                                    imageVector = if (currentTopDestination == destination) {
-                                        destination.selectedIcon
-                                    } else {
-                                        destination.unselectedIcon
-                                    },
-                                    contentDescription = stringResource(id = destination.labelResId),
-                                )
-                            },
-                            label = { Text(text = stringResource(id = destination.labelResId)) },
-                            modifier = navItemModifier(destination),
-                        )
-                    }
-                }
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight(),
-                ) {
-                    navDisplayContent()
-                }
-            }
-        }
+        SujianWideNavScaffold(modifier, topBarInfo, snackbarHostState, currentTopDestination, backStack, navDisplayContent)
     }
 }
 
@@ -492,21 +537,3 @@ private val PREDICTIVE_BACK_EASING: androidx.compose.animation.core.CubicBezierE
 
 internal const val SINGLE_PANE_PROGRESS_RATIO: Float = 0.1f
 
-/**
- * 普通手机竖屏判定 — 同时满足：Compact 宽度、当前高度大于宽度、
- * 无折叠特征（foldPosture None）、设备类别为普通 phone。
- *
- * #597：不再用于分流到不同 suite，仅用于判断导航栏类型。
- * 保留 internal 可见性供测试验证。
- */
-internal fun resolvePhonePortraitPolicy(
-    windowSizeClass: WindowSizeClass,
-    screenWidthDp: Int,
-    screenHeightDp: Int,
-    foldPosture: com.xiwei.sujian.platform.api.FoldPosture,
-    deviceCategory: com.xiwei.sujian.platform.api.DeviceCategory,
-): Boolean =
-    windowSizeClass == WindowSizeClass.Compact &&
-        screenHeightDp > screenWidthDp &&
-        foldPosture == com.xiwei.sujian.platform.api.FoldPosture.None &&
-        deviceCategory == com.xiwei.sujian.platform.api.DeviceCategory.Phone

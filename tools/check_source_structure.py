@@ -134,15 +134,6 @@ ALLOWED_EXCEPTIONS: dict[tuple[Path, str], str] = {
     (Path("apps/Linux_qt/src/sujian_editor_item/rendering.rs"), "god-file"):
         "Qt 编辑器项渲染逻辑：文本/光标/选区/背景共享同一绘制上下文，"
         "拆分会破坏绘制批次合并优化；TODO(#597) 后续按绘制层提取子模块",
-    (Path("apps/android/app/src/main/kotlin/com/xiwei/sujian/ui/EditorViewModel.kt"), "god-file"):
-        "Android 编辑器 ViewModel：编辑会话/输入法/选区/保存共享同一 ViewModel 生命周期，"
-        "拆分需要同步修改 Hilt 注入和多个 UI 组件引用；TODO(#597) 后续按职责提取子 ViewModel",
-    (Path("apps/android/app/src/main/kotlin/com/xiwei/sujian/editor/v2/coordinator/EditorSessionCoordinator.kt"), "god-file"):
-        "编辑器会话协调器：帧驱动/会话绑定/重置/保存共享同一协调状态机，"
-        "拆分会破坏会话原子提交语义；TODO(#597) 后续按协调阶段提取子协调器",
-    (Path("apps/android/app/src/main/kotlin/com/xiwei/sujian/ui/compose/settings/SettingsRoute.kt"), "god-file"):
-        "设置路由：多设置页面共享同一导航和状态管理上下文，"
-        "拆分需要重构 Navigation Compose 路由结构；TODO(#597) 后续按设置子域提取子路由",
 
     # --- production-test-bloat: 既有内嵌测试模块，待后续拆分到独立 _tests.rs ---
     (Path("core/writer_platform_api/src/lib.rs"), "production-test-bloat"):

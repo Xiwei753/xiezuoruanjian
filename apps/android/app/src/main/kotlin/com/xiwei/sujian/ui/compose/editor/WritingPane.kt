@@ -37,11 +37,19 @@ import com.xiwei.sujian.editor.v2.coordinator.ExternalContentDecision
 import com.xiwei.sujian.editor.v2.coordinator.SessionResetSource
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
 import com.xiwei.sujian.editor.v2.coordinator.WindowBindingState
+import com.xiwei.sujian.editor.v2.coordinator.applyExternalContentFact
+import com.xiwei.sujian.editor.v2.coordinator.shouldApplyExternalContent
 import com.xiwei.sujian.ui.EditorViewModel
 import com.xiwei.sujian.ui.SaveStatus
 import com.xiwei.sujian.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.runtime.LocalSujianAppDependencies
+import com.xiwei.sujian.ui.applyExternalContentToUi
+import com.xiwei.sujian.ui.confirmEditorAttached
+import com.xiwei.sujian.ui.isCurrentChapter
+import com.xiwei.sujian.ui.notifySyncMergeConflict
+import com.xiwei.sujian.ui.onContentChanged
+import com.xiwei.sujian.ui.reloadSettings
 
 /**
  * 章节正文编辑面板 — 连接 EditorViewModel 与 EditorWindowHost。
@@ -182,7 +190,7 @@ fun WritingPane(
     // （DisposableEffect onDispose 的 detachWindowBinding）。
     // #595 一：章节切换不业务关闭旧章节的持久 session — 快速连续点击章节时
     // 原章节的 Undo/Redo 历史保留（persistent session 留在 store 的 Detached
-    // 状态）；返回章节列表/作品列表时由 PhoneWorkspaceHost 以
+    // 状态）；返回章节列表/作品列表时由 ProjectWorkspaceScreen 以
     // WORKSPACE_NAVIGATION 关闭。
     // 深链/恢复路径（currentSession 不是本 pane 章节）仍走 switchChapter 事务。
     LaunchedEffect(projectId, volumeId, chapterId) {
