@@ -2,7 +2,7 @@ package com.xiwei.sujian.navigation
 
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.DeviceConfigurationOverride
-import androidx.compose.ui.test.ForcedSize
+import androidx.compose.ui.test.WindowSize
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.v2.AndroidComposeTestRule
@@ -37,7 +37,9 @@ import org.junit.runner.RunWith
  *    同一套 Works/StarMap/Stats，不创建另一套页面结构；
  * 6. 尺寸变化状态保持：紧凑→宽窗口切换后，当前作品/章节/正文状态不被重置。
  *
- * 窗口宽度用 DeviceConfigurationOverride.ForcedSize 明确控制，不用方向猜窗口大小。
+ * 窗口宽度用 DeviceConfigurationOverride.WindowSize 明确控制（与 ForcedSize 不同，它会覆盖
+ * LocalWindowInfo 与 LocalConfiguration，让被测代码 currentWindowAdaptiveInfo() 看到的
+ * 窗口大小真的变成指定尺寸），不用方向猜窗口大小。
  * 尺寸测试只检查布局边界和状态保持，不重复章节新建、保存、输入等功能测试。
  */
 @RunWith(AndroidJUnit4::class)
@@ -140,14 +142,17 @@ class NavigationChromeInstrumentedTest {
     }
 
     // ---- 场景 5：明确窗口尺寸边界 ----
-    // 用 DeviceConfigurationOverride.ForcedSize 直接控制窗口宽度，
+    // 用 DeviceConfigurationOverride.WindowSize 直接控制窗口宽度（覆盖 LocalWindowInfo /
+    // LocalConfiguration，生产代码 currentWindowAdaptiveInfo().windowSizeClass 能读到该宽度），
     // 不用 requestedOrientation 横屏方向猜窗口大小。
+    // 生产代码在 SujianNavigationSuite 用 currentWindowAdaptiveInfo().windowSizeClass
+    // 判断底栏/侧栏，因此测试必须用 WindowSize 而非 ForcedSize。
 
     @Test
     fun width599dpShowsNavigationBar() {
         composeTestRule.setContent {
             DeviceConfigurationOverride(
-                DeviceConfigurationOverride.ForcedSize(DpSize(599.dp, 400.dp)),
+                DeviceConfigurationOverride.WindowSize(DpSize(599.dp, 400.dp)),
             ) {
                 SujianApp()
             }
@@ -161,7 +166,7 @@ class NavigationChromeInstrumentedTest {
     fun width600dpShowsNavigationRail() {
         composeTestRule.setContent {
             DeviceConfigurationOverride(
-                DeviceConfigurationOverride.ForcedSize(DpSize(600.dp, 400.dp)),
+                DeviceConfigurationOverride.WindowSize(DpSize(600.dp, 400.dp)),
             ) {
                 SujianApp()
             }
@@ -179,7 +184,7 @@ class NavigationChromeInstrumentedTest {
     fun width839dpShowsNavigationRail() {
         composeTestRule.setContent {
             DeviceConfigurationOverride(
-                DeviceConfigurationOverride.ForcedSize(DpSize(839.dp, 400.dp)),
+                DeviceConfigurationOverride.WindowSize(DpSize(839.dp, 400.dp)),
             ) {
                 SujianApp()
             }
@@ -193,7 +198,7 @@ class NavigationChromeInstrumentedTest {
     fun width840dpShowsNavigationRailAndReusesSamePages() {
         composeTestRule.setContent {
             DeviceConfigurationOverride(
-                DeviceConfigurationOverride.ForcedSize(DpSize(840.dp, 400.dp)),
+                DeviceConfigurationOverride.WindowSize(DpSize(840.dp, 400.dp)),
             ) {
                 SujianApp()
             }
@@ -220,7 +225,7 @@ class NavigationChromeInstrumentedTest {
 
         composeTestRule.setContent {
             DeviceConfigurationOverride(
-                DeviceConfigurationOverride.ForcedSize(DpSize(windowWidth.value, 800.dp)),
+                DeviceConfigurationOverride.WindowSize(DpSize(windowWidth.value, 800.dp)),
             ) {
                 SujianApp()
             }
@@ -253,11 +258,13 @@ class NavigationChromeInstrumentedTest {
         windowWidth.value = 800.dp
         composeTestRule.waitForIdle()
 
-        // 状态保持：EditorContent 仍然显示，底栏换成 NavigationRail
-        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.NavigationRail, timeoutMs = 15_000)
+        // 状态保持：EditorContent 仍然显示，当前作品/卷/章节没有被重置。
+        // #597 正文一：写作区没有一级导航——窄窗口隐藏 NavigationBar，
+        // 宽窗口同样不重新插入 NavigationRail；窗口变宽只展开同一工作区内容。
+        ComposeWait.waitForTag(composeTestRule, SujianSemanticIds.EditorContent, timeoutMs = 15_000)
         composeTestRule.onNodeWithTag(SujianSemanticIds.EditorContent).assertIsDisplayed()
-        composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationRail).assertIsDisplayed()
         composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationBar).assertDoesNotExist()
+        composeTestRule.onNodeWithTag(SujianSemanticIds.NavigationRail).assertDoesNotExist()
     }
 
     // ---- 复用工作区导航（与 ChapterLifecycleTest 相同的进入路径）----
