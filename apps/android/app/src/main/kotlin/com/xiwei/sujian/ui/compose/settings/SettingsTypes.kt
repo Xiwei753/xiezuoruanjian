@@ -74,7 +74,7 @@ data class SettingsUiState(
     val builtinThemes: List<com.xiwei.sujian.model.BuiltinTheme> = emptyList(),
     val paletteRecords: List<com.xiwei.sujian.model.ThemePaletteRecord> = emptyList(),
     val aiAvailable: Boolean = false,
-    val workspacePath: String = "",
+    val dataRootPath: String = "",
     val versionInfo: String = "",
     val saveErrorResId: Int? = null,
     val dryRunState: SyncCommandState = SyncCommandState.IDLE,

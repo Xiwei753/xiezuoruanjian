@@ -244,7 +244,7 @@ fn redact(message: &str) -> String {
 ///
 /// - Linux: ~/.local/share/sujian/logs/
 /// - Fallback: <workspace>/app-meta/logs/
-pub fn get_log_dir(workspace_path: &Path) -> PathBuf {
+pub fn get_log_dir(app_data_root: &Path) -> PathBuf {
     // 优先使用平台标准目录
     if cfg!(target_os = "linux") {
         if let Ok(xdg_data) = std::env::var("XDG_DATA_HOME") {
@@ -262,7 +262,7 @@ pub fn get_log_dir(workspace_path: &Path) -> PathBuf {
     }
 
     // Fallback: workspace 内
-    workspace_path.join("app-meta/logs")
+    app_data_root.join("app-meta/logs")
 }
 
 /// 确保日志目录存在
@@ -378,11 +378,11 @@ pub fn device_info_json() -> String {
 /// - 没 workspace 或路径不可写：导出到平台标准 AppData 目录
 ///   - Linux: ~/.local/share/sujian/diagnostics
 ///   - Fallback: /tmp/sujian/diagnostics
-pub fn export_diagnostics_pack(workspace_path: &Path, log_dir: &Path) -> Result<PathBuf, String> {
+pub fn export_diagnostics_pack(app_data_root: &Path, log_dir: &Path) -> Result<PathBuf, String> {
     let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
 
     // 确定导出目录：优先 workspace，不可写则用平台标准目录
-    let export_dir = determine_export_dir(workspace_path);
+    let export_dir = determine_export_dir(app_data_root);
     ensure_log_dir(&export_dir)?;
 
     // Clean previous exports
@@ -403,8 +403,8 @@ pub fn export_diagnostics_pack(workspace_path: &Path, log_dir: &Path) -> Result<
     write_device_info(&temp_dir);
 
     // Write settings snapshot (sanitized) — only if workspace exists
-    if !workspace_path.as_os_str().is_empty() && workspace_path.exists() {
-        write_settings_snapshot(workspace_path, &temp_dir);
+    if !app_data_root.as_os_str().is_empty() && app_data_root.exists() {
+        write_settings_snapshot(app_data_root, &temp_dir);
     }
 
     // Zip the temp dir
@@ -419,10 +419,10 @@ pub fn export_diagnostics_pack(workspace_path: &Path, log_dir: &Path) -> Result<
 /// 确定诊断包导出目录
 ///
 /// 优先使用 workspace/app-meta/diagnostics，不可写则回退到平台标准目录
-fn determine_export_dir(workspace_path: &Path) -> PathBuf {
+fn determine_export_dir(app_data_root: &Path) -> PathBuf {
     // 1. 尝试 workspace 路径
-    if !workspace_path.as_os_str().is_empty() {
-        let ws_export = workspace_path.join("app-meta/diagnostics");
+    if !app_data_root.as_os_str().is_empty() {
+        let ws_export = app_data_root.join("app-meta/diagnostics");
         // 尝试创建目录，成功则可用
         if fs::create_dir_all(&ws_export).is_ok() {
             // 验证可写：尝试创建并删除一个临时文件
@@ -480,8 +480,8 @@ fn write_device_info(dest_dir: &Path) {
     let _ = fs::write(dest_dir.join("current_device.json"), json);
 }
 
-fn write_settings_snapshot(workspace_path: &Path, dest_dir: &Path) {
-    let settings_path = workspace_path.join("app-meta/settings/settings.local.json");
+fn write_settings_snapshot(app_data_root: &Path, dest_dir: &Path) {
+    let settings_path = app_data_root.join("app-meta/settings/settings.local.json");
     if let Ok(content) = fs::read_to_string(&settings_path) {
         let redacted = redact(&content);
         let _ = fs::write(dest_dir.join("app_settings_sanitized.json"), redacted);

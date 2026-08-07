@@ -593,27 +593,27 @@ mod tests {
     #[test]
     fn test_save_chapter_does_not_pollute_parent_json() {
         let temp_dir = tempdir().unwrap();
-        let workspace_path = temp_dir.path();
+        let data_root = temp_dir.path();
 
         // Create workspace structure
-        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
+        std::fs::create_dir_all(data_root.join("projects")).unwrap();
 
         // Create project and volume
-        let project = crate::project::create_project(&workspace_path.join("projects"), "TestProject").unwrap();
-        let volumes = crate::volume::list_volumes(&workspace_path.join("projects").join(&project.id)).unwrap();
+        let project = crate::project::create_project(&data_root.join("projects"), "TestProject").unwrap();
+        let volumes = crate::volume::list_volumes(&data_root.join("projects").join(&project.id)).unwrap();
         let volume = &volumes[0]; // create_project auto-creates "第一卷"
 
         // Create a chapter
-        let chapter = create_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, "Ch1").unwrap();
+        let chapter = create_chapter(&data_root.join("projects").join(&project.id), &volume.id, "Ch1").unwrap();
 
         // Record volume.json and project.json content BEFORE saving
-        let vol_json_path = workspace_path
+        let vol_json_path = data_root
             .join("projects")
             .join(&project.id)
             .join("volumes")
             .join(&volume.id)
             .join("volume.json");
-        let proj_json_path = workspace_path
+        let proj_json_path = data_root
             .join("projects")
             .join(&project.id)
             .join("project.json");
@@ -622,7 +622,7 @@ mod tests {
         let proj_content_before = fs::read_to_string(&proj_json_path).unwrap();
 
         // Save chapter content
-        let receipt = save_chapter_verified(&workspace_path.join("projects").join(&project.id),
+        let receipt = save_chapter_verified(&data_root.join("projects").join(&project.id),
             &volume.id,
             &chapter.id,
             "Hello world content",
@@ -634,7 +634,7 @@ mod tests {
         assert!(receipt.word_count > 0);
 
         // Verify chapter.md was written correctly
-        let md_path = workspace_path
+        let md_path = data_root
             .join("projects")
             .join(&project.id)
             .join("volumes")
@@ -646,7 +646,7 @@ mod tests {
         assert_eq!(md_content, "Hello world content");
 
         // Verify chapter.meta.json was updated
-        let meta_path = workspace_path
+        let meta_path = data_root
             .join("projects")
             .join(&project.id)
             .join("volumes")
@@ -678,24 +678,24 @@ mod tests {
     #[test]
     fn test_multiple_saves_do_not_pollute_parent_json() {
         let temp_dir = tempdir().unwrap();
-        let workspace_path = temp_dir.path();
+        let data_root = temp_dir.path();
 
-        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
+        std::fs::create_dir_all(data_root.join("projects")).unwrap();
 
-        let project = crate::project::create_project(&workspace_path.join("projects"), "TestProject2").unwrap();
-        let volumes = crate::volume::list_volumes(&workspace_path.join("projects").join(&project.id)).unwrap();
+        let project = crate::project::create_project(&data_root.join("projects"), "TestProject2").unwrap();
+        let volumes = crate::volume::list_volumes(&data_root.join("projects").join(&project.id)).unwrap();
         let volume = &volumes[0];
 
-        let chapter1 = create_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, "Ch1").unwrap();
-        let chapter2 = create_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, "Ch2").unwrap();
+        let chapter1 = create_chapter(&data_root.join("projects").join(&project.id), &volume.id, "Ch1").unwrap();
+        let chapter2 = create_chapter(&data_root.join("projects").join(&project.id), &volume.id, "Ch2").unwrap();
 
-        let vol_json_path = workspace_path
+        let vol_json_path = data_root
             .join("projects")
             .join(&project.id)
             .join("volumes")
             .join(&volume.id)
             .join("volume.json");
-        let proj_json_path = workspace_path
+        let proj_json_path = data_root
             .join("projects")
             .join(&project.id)
             .join("project.json");
@@ -704,7 +704,7 @@ mod tests {
         let proj_content_before = fs::read_to_string(&proj_json_path).unwrap();
 
         // Save chapter1
-        save_chapter_verified(&workspace_path.join("projects").join(&project.id),
+        save_chapter_verified(&data_root.join("projects").join(&project.id),
             &volume.id,
             &chapter1.id,
             "Content for chapter 1",
@@ -712,7 +712,7 @@ mod tests {
         .unwrap();
 
         // Save chapter2
-        save_chapter_verified(&workspace_path.join("projects").join(&project.id),
+        save_chapter_verified(&data_root.join("projects").join(&project.id),
             &volume.id,
             &chapter2.id,
             "Content for chapter 2",
@@ -729,16 +729,16 @@ mod tests {
     #[test]
     fn test_rename_chapter_success() {
         let temp_dir = tempdir().unwrap();
-        let workspace_path = temp_dir.path();
+        let data_root = temp_dir.path();
 
-        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
-        let project = crate::project::create_project(&workspace_path.join("projects"), "TestProject").unwrap();
-        let volumes = crate::volume::list_volumes(&workspace_path.join("projects").join(&project.id)).unwrap();
+        std::fs::create_dir_all(data_root.join("projects")).unwrap();
+        let project = crate::project::create_project(&data_root.join("projects"), "TestProject").unwrap();
+        let volumes = crate::volume::list_volumes(&data_root.join("projects").join(&project.id)).unwrap();
         let volume = &volumes[0];
 
-        let chapter = create_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, "Old Title").unwrap();
+        let chapter = create_chapter(&data_root.join("projects").join(&project.id), &volume.id, "Old Title").unwrap();
 
-        let meta_path = workspace_path
+        let meta_path = data_root
             .join("projects")
             .join(&project.id)
             .join("volumes")
@@ -751,7 +751,7 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(&meta_path).unwrap()).unwrap();
         assert_eq!(meta_before.title, "Old Title");
 
-        rename_chapter(&workspace_path.join("projects").join(&project.id),
+        rename_chapter(&data_root.join("projects").join(&project.id),
             &volume.id,
             &chapter.id,
             "New Title",
@@ -768,14 +768,14 @@ mod tests {
     #[test]
     fn test_rename_chapter_not_found() {
         let temp_dir = tempdir().unwrap();
-        let workspace_path = temp_dir.path();
+        let data_root = temp_dir.path();
 
-        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
-        let project = crate::project::create_project(&workspace_path.join("projects"), "TestProject").unwrap();
-        let volumes = crate::volume::list_volumes(&workspace_path.join("projects").join(&project.id)).unwrap();
+        std::fs::create_dir_all(data_root.join("projects")).unwrap();
+        let project = crate::project::create_project(&data_root.join("projects"), "TestProject").unwrap();
+        let volumes = crate::volume::list_volumes(&data_root.join("projects").join(&project.id)).unwrap();
         let volume = &volumes[0];
 
-        let result = rename_chapter(&workspace_path.join("projects").join(&project.id),
+        let result = rename_chapter(&data_root.join("projects").join(&project.id),
             &volume.id,
             "nonexistent-chapter-id",
             "New Title",
@@ -788,28 +788,28 @@ mod tests {
     #[test]
     fn test_create_chapter_empty_title_generates_default() {
         let temp_dir = tempdir().unwrap();
-        let workspace_path = temp_dir.path();
+        let data_root = temp_dir.path();
 
-        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
-        let project = crate::project::create_project(&workspace_path.join("projects"), "TestProject").unwrap();
-        let volumes = crate::volume::list_volumes(&workspace_path.join("projects").join(&project.id)).unwrap();
+        std::fs::create_dir_all(data_root.join("projects")).unwrap();
+        let project = crate::project::create_project(&data_root.join("projects"), "TestProject").unwrap();
+        let volumes = crate::volume::list_volumes(&data_root.join("projects").join(&project.id)).unwrap();
         let volume = &volumes[0];
 
         // 空标题应生成"第1章"
-        let chapter1 = create_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, "").unwrap();
+        let chapter1 = create_chapter(&data_root.join("projects").join(&project.id), &volume.id, "").unwrap();
         assert_eq!(chapter1.title, "第1章");
 
         // 纯空格标题也应生成默认标题
-        let chapter2 = create_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, "   ").unwrap();
+        let chapter2 = create_chapter(&data_root.join("projects").join(&project.id), &volume.id, "   ").unwrap();
         assert_eq!(chapter2.title, "第2章");
 
         // 有标题时不应被覆盖
         let chapter3 =
-            create_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, "自定义标题").unwrap();
+            create_chapter(&data_root.join("projects").join(&project.id), &volume.id, "自定义标题").unwrap();
         assert_eq!(chapter3.title, "自定义标题");
 
         // 再创建空标题应生成"第4章"（因为已有3个章节）
-        let chapter4 = create_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, "").unwrap();
+        let chapter4 = create_chapter(&data_root.join("projects").join(&project.id), &volume.id, "").unwrap();
         assert_eq!(chapter4.title, "第4章");
     }
 }

@@ -1122,7 +1122,7 @@ fn execute_lww_sync_attempt(
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
-            let trash_dir = sync_root.join("sync/trash");
+            let trash_dir = sync_root.join("app-meta/sync/trash");
             let _ = std::fs::create_dir_all(&trash_dir);
             let trash_path = trash_dir.join(format!(
                 "{}_{}_{}",

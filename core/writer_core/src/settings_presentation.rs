@@ -475,11 +475,11 @@ pub fn default_settings_presentation() -> SettingsPresentation {
                 platform_visibility: All,
                 items: vec![
                     SettingItemDef {
-                        id: "workspace_path".into(),
-                        title_key: "settings.item.workspace_path".into(),
+                        id: "data_root_path".into(),
+                        title_key: "settings.item.data_root_path".into(),
                         description_key: None,
                         kind: SettingControlKind::TextPlain,
-                        value_key: "workspace_path".into(),
+                        value_key: "data_root_path".into(),
                         order: 1,
                         platform_visibility: All,
                         min_value: None,

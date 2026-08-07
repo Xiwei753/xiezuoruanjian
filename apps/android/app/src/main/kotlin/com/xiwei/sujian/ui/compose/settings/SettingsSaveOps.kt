@@ -48,7 +48,7 @@ private suspend fun SettingsViewModel.loadInitialSnapshot(repo: SettingsReposito
     val builtinThemes = withContext(Dispatchers.IO) { repo.listBuiltinThemes() }
     val paletteRecords = withContext(Dispatchers.IO) { repo.listPaletteRecords() }
     val aiAvailable = withContext(Dispatchers.IO) { repo.aiAvailable() }
-    val workspacePath = withContext(Dispatchers.IO) { repo.projectsDir() }
+    val dataRootPath = withContext(Dispatchers.IO) { repo.dataRootDir() }
 
     _uiState.update { current ->
         SettingsUiState(
@@ -71,7 +71,7 @@ private suspend fun SettingsViewModel.loadInitialSnapshot(repo: SettingsReposito
             builtinThemes = builtinThemes,
             paletteRecords = paletteRecords,
             aiAvailable = aiAvailable,
-            workspacePath = workspacePath,
+            dataRootPath = dataRootPath,
             syncProfileLoadState = syncProfileLoadState,
         )
     }
@@ -325,7 +325,7 @@ fun SettingsViewModel.mergeRefresh() {
         val builtinThemes = withContext(Dispatchers.IO) { repo.listBuiltinThemes() }
         val paletteRecords = withContext(Dispatchers.IO) { repo.listPaletteRecords() }
         val aiAvailable = withContext(Dispatchers.IO) { repo.aiAvailable() }
-        val workspacePath = withContext(Dispatchers.IO) { repo.projectsDir() }
+        val dataRootPath = withContext(Dispatchers.IO) { repo.dataRootDir() }
         _uiState.update {
             SettingsUiState(
                 settings = mergeLoadedLocal(current.settings, settings),
@@ -337,7 +337,7 @@ fun SettingsViewModel.mergeRefresh() {
                 builtinThemes = builtinThemes,
                 paletteRecords = paletteRecords,
                 aiAvailable = aiAvailable,
-                workspacePath = workspacePath,
+                dataRootPath = dataRootPath,
                 dryRunState = current.dryRunState,
                 testConnectionState = current.testConnectionState,
                 performSyncState = current.performSyncState,

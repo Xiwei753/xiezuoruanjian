@@ -605,6 +605,10 @@ class SettingsRepository(
         return AndroidDataRoot.projectsDir().absolutePath
     }
 
+    fun dataRootDir(): String {
+        return AndroidDataRoot.rootDir().absolutePath
+    }
+
     fun performSyncDiagnostics(config: SyncConfig): BridgeResult<SyncDiagnosticsResult> {
         return syncBridge.performSyncDiagnostics(config)
     }

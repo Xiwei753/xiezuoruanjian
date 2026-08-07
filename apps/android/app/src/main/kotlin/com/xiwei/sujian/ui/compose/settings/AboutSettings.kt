@@ -43,7 +43,7 @@ fun AboutSettings(
             )
             Spacer(modifier = Modifier.height(dims.space4))
             Text(
-                text = stringResource(id = R.string.pref_workspace_path, state.workspacePath),
+                text = stringResource(id = R.string.pref_data_root_path, state.dataRootPath),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

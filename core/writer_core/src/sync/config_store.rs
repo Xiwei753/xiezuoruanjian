@@ -223,9 +223,9 @@ impl crate::sync::SyncService {
             uuid::Uuid::new_v4().to_string()
         };
 
-        let state_path = sync_root.join("sync/state.local.json");
+        let state_path = sync_root.join("app-meta/sync/state.local.json");
         if !state_path.exists() {
-            let old_path = sync_root.join("sync/sync_state.json");
+            let old_path = sync_root.join("app-meta/sync/sync_state.json");
             if old_path.exists() {
                 if let Ok(content) = std::fs::read_to_string(&old_path) {
                     if let Ok(mut state) = serde_json::from_str::<SyncState>(&content) {
@@ -261,7 +261,7 @@ impl crate::sync::SyncService {
     /// 写入流程：序列化 → 写入 `.tmp` 临时文件 → rename 为最终文件。
     /// rename 在同一文件系统上是原子操作，保证读端不会看到部分写入的状态。
     pub fn save_sync_state(sync_root: &Path, state: &SyncState) -> crate::Result<()> {
-        let state_path = sync_root.join("sync/state.local.json");
+        let state_path = sync_root.join("app-meta/sync/state.local.json");
         if let Some(parent) = state_path.parent() {
             std::fs::create_dir_all(parent)?;
         }

@@ -376,21 +376,21 @@ mod tests {
     #[test]
     fn test_aggregated_volume_updated_at_with_chapters() {
         let temp_dir = tempdir().unwrap();
-        let workspace_path = temp_dir.path();
+        let data_root = temp_dir.path();
 
-        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
-        let project = crate::project::create_project(&workspace_path.join("projects"), "TestProject").unwrap();
-        let volumes = crate::volume::list_volumes(&workspace_path.join("projects").join(&project.id)).unwrap();
+        std::fs::create_dir_all(data_root.join("projects")).unwrap();
+        let project = crate::project::create_project(&data_root.join("projects"), "TestProject").unwrap();
+        let volumes = crate::volume::list_volumes(&data_root.join("projects").join(&project.id)).unwrap();
         let volume = &volumes[0];
 
         // Create two chapters
         let ch1 =
-            crate::chapter::create_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, "Ch1").unwrap();
+            crate::chapter::create_chapter(&data_root.join("projects").join(&project.id), &volume.id, "Ch1").unwrap();
         let _ch2 =
-            crate::chapter::create_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, "Ch2").unwrap();
+            crate::chapter::create_chapter(&data_root.join("projects").join(&project.id), &volume.id, "Ch2").unwrap();
 
         // Save ch1 with content (updates its updated_at)
-        crate::chapter::save_chapter_verified(&workspace_path.join("projects").join(&project.id),
+        crate::chapter::save_chapter_verified(&data_root.join("projects").join(&project.id),
             &volume.id,
             &ch1.id,
             "Some content",
@@ -399,7 +399,7 @@ mod tests {
 
         // The aggregated updated_at should be the max of all chapter updated_at values
         let aggregated =
-            get_volume_updated_at_aggregated(&workspace_path.join("projects").join(&project.id), &volume.id).unwrap();
+            get_volume_updated_at_aggregated(&data_root.join("projects").join(&project.id), &volume.id).unwrap();
         assert!(
             !aggregated.is_empty(),
             "aggregated updated_at should not be empty"
@@ -407,7 +407,7 @@ mod tests {
 
         // Verify it matches the latest chapter's updated_at
         let chapters =
-            crate::chapter::list_chapters(&workspace_path.join("projects").join(&project.id), &volume.id).unwrap();
+            crate::chapter::list_chapters(&data_root.join("projects").join(&project.id), &volume.id).unwrap();
         let max_updated = chapters
             .iter()
             .map(|c| c.updated_at.as_str())
@@ -420,16 +420,16 @@ mod tests {
     #[test]
     fn test_aggregated_volume_updated_at_no_chapters() {
         let temp_dir = tempdir().unwrap();
-        let workspace_path = temp_dir.path();
+        let data_root = temp_dir.path();
 
-        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
-        let project = crate::project::create_project(&workspace_path.join("projects"), "TestProject").unwrap();
-        let volumes = crate::volume::list_volumes(&workspace_path.join("projects").join(&project.id)).unwrap();
+        std::fs::create_dir_all(data_root.join("projects")).unwrap();
+        let project = crate::project::create_project(&data_root.join("projects"), "TestProject").unwrap();
+        let volumes = crate::volume::list_volumes(&data_root.join("projects").join(&project.id)).unwrap();
         let volume = &volumes[0];
 
         // No chapters created — should fallback to volume's created_at
         let aggregated =
-            get_volume_updated_at_aggregated(&workspace_path.join("projects").join(&project.id), &volume.id).unwrap();
+            get_volume_updated_at_aggregated(&data_root.join("projects").join(&project.id), &volume.id).unwrap();
         assert_eq!(aggregated, volume.created_at);
     }
 
@@ -437,28 +437,28 @@ mod tests {
     #[test]
     fn test_aggregated_project_updated_at_with_chapters() {
         let temp_dir = tempdir().unwrap();
-        let workspace_path = temp_dir.path();
+        let data_root = temp_dir.path();
 
-        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
-        let project = crate::project::create_project(&workspace_path.join("projects"), "TestProject").unwrap();
-        let volumes = crate::volume::list_volumes(&workspace_path.join("projects").join(&project.id)).unwrap();
+        std::fs::create_dir_all(data_root.join("projects")).unwrap();
+        let project = crate::project::create_project(&data_root.join("projects"), "TestProject").unwrap();
+        let volumes = crate::volume::list_volumes(&data_root.join("projects").join(&project.id)).unwrap();
         let volume = &volumes[0];
 
         let ch1 =
-            crate::chapter::create_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, "Ch1").unwrap();
-        crate::chapter::save_chapter_verified(&workspace_path.join("projects").join(&project.id),
+            crate::chapter::create_chapter(&data_root.join("projects").join(&project.id), &volume.id, "Ch1").unwrap();
+        crate::chapter::save_chapter_verified(&data_root.join("projects").join(&project.id),
             &volume.id,
             &ch1.id,
             "Project level content",
         )
         .unwrap();
 
-        let aggregated = get_project_updated_at_aggregated(&workspace_path.join("projects").join(&project.id)).unwrap();
+        let aggregated = get_project_updated_at_aggregated(&data_root.join("projects").join(&project.id)).unwrap();
         assert!(!aggregated.is_empty());
 
         // Verify it matches the latest chapter's updated_at across all volumes
         let chapters =
-            crate::chapter::list_chapters(&workspace_path.join("projects").join(&project.id), &volume.id).unwrap();
+            crate::chapter::list_chapters(&data_root.join("projects").join(&project.id), &volume.id).unwrap();
         let max_updated = chapters
             .iter()
             .map(|c| c.updated_at.as_str())
@@ -471,34 +471,34 @@ mod tests {
     #[test]
     fn test_aggregated_project_updated_at_no_chapters() {
         let temp_dir = tempdir().unwrap();
-        let workspace_path = temp_dir.path();
+        let data_root = temp_dir.path();
 
-        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
-        let project = crate::project::create_project(&workspace_path.join("projects"), "TestProject").unwrap();
+        std::fs::create_dir_all(data_root.join("projects")).unwrap();
+        let project = crate::project::create_project(&data_root.join("projects"), "TestProject").unwrap();
 
         // No chapters — should fallback to project's created_at
-        let aggregated = get_project_updated_at_aggregated(&workspace_path.join("projects").join(&project.id)).unwrap();
+        let aggregated = get_project_updated_at_aggregated(&data_root.join("projects").join(&project.id)).unwrap();
         assert_eq!(aggregated, project.created_at);
     }
 
     #[test]
     fn test_delete_project_success() {
         let temp_dir = tempdir().unwrap();
-        let workspace_path = temp_dir.path();
+        let data_root = temp_dir.path();
 
-        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
+        std::fs::create_dir_all(data_root.join("projects")).unwrap();
         let project =
-            crate::project::create_project(&workspace_path.join("projects"), "TestProjectToDelete").unwrap();
+            crate::project::create_project(&data_root.join("projects"), "TestProjectToDelete").unwrap();
 
-        let project_dir = workspace_path.join("projects").join(&project.id);
+        let project_dir = data_root.join("projects").join(&project.id);
         assert!(project_dir.exists());
 
-        let result = delete_project(&workspace_path.join("projects"), &project.id, workspace_path);
+        let result = delete_project(&data_root.join("projects"), &project.id, data_root);
         assert!(result.is_ok());
 
         assert!(!project_dir.exists());
 
-        let trash_dir = workspace_path.join("sync/trash");
+        let trash_dir = data_root.join("sync/trash");
         assert!(trash_dir.exists());
 
         // Trash should have something
@@ -506,17 +506,17 @@ mod tests {
         assert!(!trash_contents.is_empty());
 
         // Verify we can't find it
-        let list_res = list_projects(&workspace_path.join("projects")).unwrap();
+        let list_res = list_projects(&data_root.join("projects")).unwrap();
         assert!(list_res.iter().find(|p| p.id == project.id).is_none());
     }
 
     #[test]
     fn test_delete_project_not_found() {
         let temp_dir = tempdir().unwrap();
-        let workspace_path = temp_dir.path();
-        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
+        let data_root = temp_dir.path();
+        std::fs::create_dir_all(data_root.join("projects")).unwrap();
 
-        let result = delete_project(&workspace_path.join("projects"), "non_existent_id", workspace_path);
+        let result = delete_project(&data_root.join("projects"), "non_existent_id", data_root);
         assert!(result.is_err());
         match result {
             Err(crate::error::Error::InvalidDeleteTarget(_)) => {}

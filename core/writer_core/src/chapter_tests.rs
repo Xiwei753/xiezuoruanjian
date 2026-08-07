@@ -13,13 +13,13 @@ mod tests {
 
     fn setup_chapter() -> (TempDir, Project, Volume, Chapter) {
         let dir = tempdir().unwrap();
-        let workspace_path = dir.path();
-        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
+        let data_root = dir.path();
+        std::fs::create_dir_all(data_root.join("projects")).unwrap();
 
-        let project = create_project(&workspace_path.join("projects"), "Test Project").unwrap();
-        let volume = create_volume(&workspace_path.join("projects").join(&project.id), "Test Volume").unwrap();
+        let project = create_project(&data_root.join("projects"), "Test Project").unwrap();
+        let volume = create_volume(&data_root.join("projects").join(&project.id), "Test Volume").unwrap();
         let chapter =
-            create_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, "Test Chapter").unwrap();
+            create_chapter(&data_root.join("projects").join(&project.id), &volume.id, "Test Chapter").unwrap();
 
         (dir, project, volume, chapter)
     }
@@ -27,26 +27,26 @@ mod tests {
     #[test]
     fn test_create_read_save_chapter() {
         let dir = tempdir().unwrap();
-        let workspace_path = dir.path();
-        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
+        let data_root = dir.path();
+        std::fs::create_dir_all(data_root.join("projects")).unwrap();
 
-        let project = create_project(&workspace_path.join("projects"), "Test Project").unwrap();
-        let volume = create_volume(&workspace_path.join("projects").join(&project.id), "Test Volume").unwrap();
+        let project = create_project(&data_root.join("projects"), "Test Project").unwrap();
+        let volume = create_volume(&data_root.join("projects").join(&project.id), "Test Volume").unwrap();
 
-        let chapters = list_chapters(&workspace_path.join("projects").join(&project.id), &volume.id).unwrap();
+        let chapters = list_chapters(&data_root.join("projects").join(&project.id), &volume.id).unwrap();
         assert_eq!(chapters.len(), 0);
 
         let chapter =
-            create_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, "Test Chapter").unwrap();
+            create_chapter(&data_root.join("projects").join(&project.id), &volume.id, "Test Chapter").unwrap();
         assert_eq!(chapter.title, "Test Chapter");
 
-        let chapters = list_chapters(&workspace_path.join("projects").join(&project.id), &volume.id).unwrap();
+        let chapters = list_chapters(&data_root.join("projects").join(&project.id), &volume.id).unwrap();
         assert_eq!(chapters.len(), 1);
 
-        let content = read_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, &chapter.id).unwrap();
+        let content = read_chapter(&data_root.join("projects").join(&project.id), &volume.id, &chapter.id).unwrap();
         assert_eq!(content.content, "");
 
-        let receipt = save_chapter_verified(&workspace_path.join("projects").join(&project.id),
+        let receipt = save_chapter_verified(&data_root.join("projects").join(&project.id),
             &volume.id,
             &chapter.id,
             "Hello World!",
@@ -59,7 +59,7 @@ mod tests {
             format!("{:x}", md5::compute("Hello World!".as_bytes()))
         );
 
-        let content = read_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, &chapter.id).unwrap();
+        let content = read_chapter(&data_root.join("projects").join(&project.id), &volume.id, &chapter.id).unwrap();
         assert_eq!(content.content, "Hello World!");
         assert_eq!(content.meta.word_count, 11);
         assert_eq!(content.meta.hash, receipt.content_hash);
@@ -69,49 +69,49 @@ mod tests {
     #[test]
     fn non_empty_chapter_can_save_non_empty_content() {
         let (dir, project, volume, chapter) = setup_chapter();
-        let workspace_path = dir.path();
+        let data_root = dir.path();
 
-        save_chapter_verified(&workspace_path.join("projects").join(&project.id),
+        save_chapter_verified(&data_root.join("projects").join(&project.id),
             &volume.id,
             &chapter.id,
             "First draft",
         )
         .unwrap();
-        save_chapter_verified(&workspace_path.join("projects").join(&project.id),
+        save_chapter_verified(&data_root.join("projects").join(&project.id),
             &volume.id,
             &chapter.id,
             "Second draft",
         )
         .unwrap();
 
-        let content = read_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, &chapter.id).unwrap();
+        let content = read_chapter(&data_root.join("projects").join(&project.id), &volume.id, &chapter.id).unwrap();
         assert_eq!(content.content, "Second draft");
     }
 
     #[test]
     fn empty_chapter_can_save_empty_content() {
         let (dir, project, volume, chapter) = setup_chapter();
-        let workspace_path = dir.path();
+        let data_root = dir.path();
 
-        save_chapter_verified(&workspace_path.join("projects").join(&project.id), &volume.id, &chapter.id, "").unwrap();
+        save_chapter_verified(&data_root.join("projects").join(&project.id), &volume.id, &chapter.id, "").unwrap();
 
-        let content = read_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, &chapter.id).unwrap();
+        let content = read_chapter(&data_root.join("projects").join(&project.id), &volume.id, &chapter.id).unwrap();
         assert_eq!(content.content, "");
     }
 
     #[test]
     fn non_empty_chapter_blocks_empty_overwrite_and_keeps_original() {
         let (dir, project, volume, chapter) = setup_chapter();
-        let workspace_path = dir.path();
+        let data_root = dir.path();
 
-        save_chapter_verified(&workspace_path.join("projects").join(&project.id),
+        save_chapter_verified(&data_root.join("projects").join(&project.id),
             &volume.id,
             &chapter.id,
             "Original content",
         )
         .unwrap();
 
-        let err = save_chapter_verified(&workspace_path.join("projects").join(&project.id), &volume.id, &chapter.id, "")
+        let err = save_chapter_verified(&data_root.join("projects").join(&project.id), &volume.id, &chapter.id, "")
             .unwrap_err();
 
         match err {
@@ -132,10 +132,10 @@ mod tests {
             other => panic!("expected EmptyOverwriteBlocked, got {other:?}"),
         }
 
-        let content = read_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, &chapter.id).unwrap();
+        let content = read_chapter(&data_root.join("projects").join(&project.id), &volume.id, &chapter.id).unwrap();
         assert_eq!(content.content, "Original content");
 
-        let whitespace_err = save_chapter_verified(&workspace_path.join("projects").join(&project.id),
+        let whitespace_err = save_chapter_verified(&data_root.join("projects").join(&project.id),
             &volume.id,
             &chapter.id,
             " \n\t",
@@ -146,40 +146,40 @@ mod tests {
             Error::EmptyOverwriteBlocked { .. }
         ));
 
-        let content = read_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, &chapter.id).unwrap();
+        let content = read_chapter(&data_root.join("projects").join(&project.id), &volume.id, &chapter.id).unwrap();
         assert_eq!(content.content, "Original content");
     }
 
     #[test]
     fn explicit_clear_chapter_content_succeeds() {
         let (dir, project, volume, chapter) = setup_chapter();
-        let workspace_path = dir.path();
+        let data_root = dir.path();
 
-        save_chapter_verified(&workspace_path.join("projects").join(&project.id),
+        save_chapter_verified(&data_root.join("projects").join(&project.id),
             &volume.id,
             &chapter.id,
             "Text to clear",
         )
         .unwrap();
-        clear_chapter_content(&workspace_path.join("projects").join(&project.id), &volume.id, &chapter.id).unwrap();
+        clear_chapter_content(&data_root.join("projects").join(&project.id), &volume.id, &chapter.id).unwrap();
 
-        let content = read_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, &chapter.id).unwrap();
+        let content = read_chapter(&data_root.join("projects").join(&project.id), &volume.id, &chapter.id).unwrap();
         assert_eq!(content.content, "");
     }
 
     #[test]
     fn user_allowed_empty_overwrite_succeeds_and_persists() {
         let (dir, project, volume, chapter) = setup_chapter();
-        let workspace_path = dir.path();
+        let data_root = dir.path();
 
-        save_chapter_verified(&workspace_path.join("projects").join(&project.id),
+        save_chapter_verified(&data_root.join("projects").join(&project.id),
             &volume.id,
             &chapter.id,
             "User text",
         )
         .unwrap();
 
-        let blocked = save_chapter_verified_with_allow_empty_overwrite(&workspace_path.join("projects").join(&project.id),
+        let blocked = save_chapter_verified_with_allow_empty_overwrite(&data_root.join("projects").join(&project.id),
             &volume.id,
             &chapter.id,
             "",
@@ -188,7 +188,7 @@ mod tests {
         .unwrap_err();
         assert!(matches!(blocked, Error::EmptyOverwriteBlocked { .. }));
 
-        save_chapter_verified_with_allow_empty_overwrite(&workspace_path.join("projects").join(&project.id),
+        save_chapter_verified_with_allow_empty_overwrite(&data_root.join("projects").join(&project.id),
             &volume.id,
             &chapter.id,
             "",
@@ -196,22 +196,22 @@ mod tests {
         )
         .unwrap();
 
-        let content = read_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, &chapter.id).unwrap();
+        let content = read_chapter(&data_root.join("projects").join(&project.id), &volume.id, &chapter.id).unwrap();
         assert_eq!(content.content, "");
     }
 
     #[test]
     fn end_to_end_write_save_reopen_verify_hash_and_word_count() {
         let dir = tempdir().unwrap();
-        let workspace_path = dir.path();
-        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
+        let data_root = dir.path();
+        std::fs::create_dir_all(data_root.join("projects")).unwrap();
 
-        let project = create_project(&workspace_path.join("projects"), "My Novel").unwrap();
-        let volume = create_volume(&workspace_path.join("projects").join(&project.id), "Volume 1").unwrap();
-        let chapter = create_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, "Chapter 1").unwrap();
+        let project = create_project(&data_root.join("projects"), "My Novel").unwrap();
+        let volume = create_volume(&data_root.join("projects").join(&project.id), "Volume 1").unwrap();
+        let chapter = create_chapter(&data_root.join("projects").join(&project.id), &volume.id, "Chapter 1").unwrap();
 
         let content = "这是一个测试章节的内容。\n它包含多行中文文本，用于验证字数统计和哈希校验。\n第三行内容，确保换行符被正确处理。";
-        let receipt = save_chapter_verified(&workspace_path.join("projects").join(&project.id),
+        let receipt = save_chapter_verified(&data_root.join("projects").join(&project.id),
             &volume.id,
             &chapter.id,
             content,
@@ -222,7 +222,7 @@ mod tests {
         assert!(receipt.word_count > 0);
         assert!(!receipt.content_hash.is_empty());
 
-        let reopened = read_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, &chapter.id).unwrap();
+        let reopened = read_chapter(&data_root.join("projects").join(&project.id), &volume.id, &chapter.id).unwrap();
         assert_eq!(reopened.content, content);
         assert_eq!(reopened.meta.hash, receipt.content_hash);
         assert_eq!(reopened.meta.word_count, receipt.word_count);
@@ -231,10 +231,10 @@ mod tests {
     #[test]
     fn end_to_end_overwrite_with_new_content_updates_hash() {
         let (dir, project, volume, chapter) = setup_chapter();
-        let workspace_path = dir.path();
+        let data_root = dir.path();
 
         let first_content = "First draft content";
-        let receipt1 = save_chapter_verified(&workspace_path.join("projects").join(&project.id),
+        let receipt1 = save_chapter_verified(&data_root.join("projects").join(&project.id),
             &volume.id,
             &chapter.id,
             first_content,
@@ -242,7 +242,7 @@ mod tests {
         .unwrap();
 
         let second_content = "Second draft with more words and different content";
-        let receipt2 = save_chapter_verified(&workspace_path.join("projects").join(&project.id),
+        let receipt2 = save_chapter_verified(&data_root.join("projects").join(&project.id),
             &volume.id,
             &chapter.id,
             second_content,
@@ -252,7 +252,7 @@ mod tests {
         assert_ne!(receipt1.content_hash, receipt2.content_hash);
         assert_ne!(receipt1.word_count, receipt2.word_count);
 
-        let reopened = read_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, &chapter.id).unwrap();
+        let reopened = read_chapter(&data_root.join("projects").join(&project.id), &volume.id, &chapter.id).unwrap();
         assert_eq!(reopened.content, second_content);
         assert_eq!(reopened.meta.hash, receipt2.content_hash);
     }
@@ -260,9 +260,9 @@ mod tests {
     #[test]
     fn end_to_end_empty_overwrite_blocked_for_non_empty_chapter() {
         let (dir, project, volume, chapter) = setup_chapter();
-        let workspace_path = dir.path();
+        let data_root = dir.path();
 
-        save_chapter_verified(&workspace_path.join("projects").join(&project.id),
+        save_chapter_verified(&data_root.join("projects").join(&project.id),
             &volume.id,
             &chapter.id,
             "Some content",
@@ -270,10 +270,10 @@ mod tests {
         .unwrap();
 
         let result =
-            save_chapter_verified(&workspace_path.join("projects").join(&project.id), &volume.id, &chapter.id, "");
+            save_chapter_verified(&data_root.join("projects").join(&project.id), &volume.id, &chapter.id, "");
         assert!(matches!(result, Err(Error::EmptyOverwriteBlocked { .. })));
 
-        let content = read_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, &chapter.id).unwrap();
+        let content = read_chapter(&data_root.join("projects").join(&project.id), &volume.id, &chapter.id).unwrap();
         assert_eq!(content.content, "Some content");
     }
 
@@ -312,18 +312,18 @@ mod tests {
     #[test]
     fn end_to_end_clear_chapter_content_explicit() {
         let (dir, project, volume, chapter) = setup_chapter();
-        let workspace_path = dir.path();
+        let data_root = dir.path();
 
-        save_chapter_verified(&workspace_path.join("projects").join(&project.id),
+        save_chapter_verified(&data_root.join("projects").join(&project.id),
             &volume.id,
             &chapter.id,
             "Content to be cleared",
         )
         .unwrap();
 
-        clear_chapter_content(&workspace_path.join("projects").join(&project.id), &volume.id, &chapter.id).unwrap();
+        clear_chapter_content(&data_root.join("projects").join(&project.id), &volume.id, &chapter.id).unwrap();
 
-        let content = read_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, &chapter.id).unwrap();
+        let content = read_chapter(&data_root.join("projects").join(&project.id), &volume.id, &chapter.id).unwrap();
         assert_eq!(content.content, "");
         assert_eq!(content.meta.word_count, 0);
     }
@@ -331,14 +331,14 @@ mod tests {
     #[test]
     fn test_delete_chapter_moves_to_trash_and_updates_tombstone() {
         let (dir, project, volume, chapter) = setup_chapter();
-        let workspace_path = dir.path();
+        let data_root = dir.path();
 
         // 1. Verify chapter exists
-        let chapters_before = list_chapters(&workspace_path.join("projects").join(&project.id), &volume.id).unwrap();
+        let chapters_before = list_chapters(&data_root.join("projects").join(&project.id), &volume.id).unwrap();
         assert_eq!(chapters_before.len(), 1);
         assert_eq!(chapters_before[0].id, chapter.id);
 
-        let chapter_dir = workspace_path
+        let chapter_dir = data_root
             .join("projects")
             .join(&project.id)
             .join("volumes")
@@ -348,15 +348,15 @@ mod tests {
         assert!(chapter_dir.exists());
 
         // 2. Perform deletion
-        delete_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, &chapter.id, workspace_path).unwrap();
+        delete_chapter(&data_root.join("projects").join(&project.id), &volume.id, &chapter.id, data_root).unwrap();
 
         // 3. Verify chapter is removed from list and filesystem
-        let chapters_after = list_chapters(&workspace_path.join("projects").join(&project.id), &volume.id).unwrap();
+        let chapters_after = list_chapters(&data_root.join("projects").join(&project.id), &volume.id).unwrap();
         assert!(chapters_after.is_empty());
         assert!(!chapter_dir.exists());
 
         // 4. Verify trash directory contains the deleted chapter
-        let trash_dir = workspace_path.join("sync/trash");
+        let trash_dir = data_root.join("sync/trash");
         assert!(trash_dir.exists());
 
         let trash_entries = std::fs::read_dir(&trash_dir).unwrap();
@@ -374,9 +374,9 @@ mod tests {
         assert!(trash_found, "Deleted chapter not found in trash");
 
         // 5. Verify tombstone in sync state
-        let state = crate::sync::SyncService::load_sync_state(workspace_path).unwrap();
+        let state = crate::sync::SyncService::load_sync_state(data_root).unwrap();
         let rel_chapter_dir = chapter_dir
-            .strip_prefix(workspace_path)
+            .strip_prefix(data_root)
             .unwrap()
             .to_string_lossy()
             .replace("\\", "/");

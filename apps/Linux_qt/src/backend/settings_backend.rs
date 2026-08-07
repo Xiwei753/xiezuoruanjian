@@ -503,9 +503,9 @@ impl SettingsBackend {
 
     fn export_diagnostics_pack(&self) -> QString {
         self.with_app(|app| {
-            let workspace_path = std::path::PathBuf::from(&app.current_data_root);
-            let log_dir = crate::backend::diagnostics::get_log_dir(&workspace_path);
-            match crate::backend::diagnostics::export_diagnostics_pack(&workspace_path, &log_dir) {
+            let app_data_root = std::path::PathBuf::from(&app.current_data_root);
+            let log_dir = crate::backend::diagnostics::get_log_dir(&app_data_root);
+            match crate::backend::diagnostics::export_diagnostics_pack(&app_data_root, &log_dir) {
                 Ok(path) => {
                     let path_str = path.to_string_lossy().to_string();
                     let export_dir = path
