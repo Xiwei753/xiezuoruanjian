@@ -202,6 +202,14 @@ class EditorViewModelChapterSwitchTest {
                     }
                 }
             // 事务进入挂起点（loadChapter 的 withContext(IO)）后取消。
+            // 先轮询到事务已可见开始（loading=true 已提交，随后必在 loadChapter
+            // 的 IO 挂起点等待），再取消 — 避免在调度压力下 launch 尚未起步就
+            // cancelAndJoin，导致取消信号落在 try 之外（#597 满载偶发）。
+            var startedAttempts = 0
+            while (!vm.uiState.value.loading && startedAttempts < 200) {
+                runCurrent()
+                startedAttempts++
+            }
             runCurrent()
             job.cancelAndJoin()
 
