@@ -409,7 +409,7 @@ ktlint {
 // noAi/ai flavor 把 generated/writer-uniffi 加入了 kotlin.srcDirs，必须显式排除。
 // Detekt task 继承自 SourceTask，exclude(vararg) 是标准 Gradle API。
 tasks.withType<io.gitlab.arturbosch.detekt.Detekt>().configureEach {
-    exclude("**/build/**", "**/generated/**")
+    exclude("**/build/**", "**/generated/**", "uniffi/**")
 }
 
 // #597：架构约束不再通过 JUnit/Gradle 单元测试任务运行（正文六）。

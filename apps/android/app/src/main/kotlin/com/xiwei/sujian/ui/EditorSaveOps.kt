@@ -290,7 +290,7 @@ private suspend fun EditorViewModel.saveChapterAttempt(
     }
 }
 
-private suspend fun EditorViewModel.handleSaveSuccess(
+private fun EditorViewModel.handleSaveSuccess(
     result: com.xiwei.sujian.data.BridgeResult.Success<com.xiwei.sujian.model.ChapterSaveReceipt>,
     contentToSave: String,
     session: EditorSession,

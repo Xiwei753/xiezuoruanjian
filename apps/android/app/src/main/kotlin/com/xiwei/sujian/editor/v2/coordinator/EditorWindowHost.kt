@@ -130,9 +130,7 @@ class EditorWindowHost(
         reason: SessionCloseReason,
     ) {
         if (activeTargetId == targetId) {
-            sharedEditorView?.let { view ->
-                view.unbindSession("target_close")
-            }
+            sharedEditorView?.unbindSession("target_close")
         }
         targets.remove(targetId)
         // #595 三：业务关闭同样清除 pendingViewBind，防止 attachView 绑定已关闭的 session。
@@ -422,9 +420,7 @@ class EditorWindowHost(
 
     fun cancelActiveEdit(): Boolean {
         clearActiveCallbacks()
-        sharedEditorView?.let { view ->
-            view.unbindSession("cancel")
-        }
+        sharedEditorView?.unbindSession("cancel")
         val targetId = activeTargetId
         val target = targetId?.let { targets[it] }
         return sessionCoordinator.cancelActiveSession().also { success ->
@@ -689,9 +685,7 @@ class EditorWindowHost(
     fun releaseHost() {
         clearActiveCallbacks()
         if (activeTargetId != null) {
-            sharedEditorView?.let { view ->
-                view.unbindSession("release")
-            }
+            sharedEditorView?.unbindSession("release")
         }
         sharedEditorView?.let { view ->
             view.setFrameClock(null)

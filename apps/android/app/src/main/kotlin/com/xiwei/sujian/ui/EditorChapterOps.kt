@@ -465,7 +465,7 @@ suspend fun EditorViewModel.switchChapterLocked(
     }
 }
 
-suspend fun EditorViewModel.restoreAfterSwitch(
+fun EditorViewModel.restoreAfterSwitch(
     oldSession: EditorSession?,
     oldUiState: EditorUiState,
     oldContentExplicitlyCleared: Boolean,
