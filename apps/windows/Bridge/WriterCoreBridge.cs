@@ -38,7 +38,7 @@ public sealed class WriterCoreBridge
     private static extern int writer_core_init(IntPtr path);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-    private static extern IntPtr writer_core_open_workspace(IntPtr path);
+    private static extern IntPtr writer_core_open_data_root(IntPtr path);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     private static extern IntPtr writer_core_list_projects();
@@ -199,7 +199,7 @@ public sealed class WriterCoreBridge
         var pathPtr = ToUtf8(path);
         try
         {
-            var resultPtr = writer_core_open_workspace(pathPtr);
+            var resultPtr = writer_core_open_data_root(pathPtr);
             var json = PtrToStringAndFree(resultPtr);
             var env = ParseEnvelope(json);
             ThrowIfFailed(env);

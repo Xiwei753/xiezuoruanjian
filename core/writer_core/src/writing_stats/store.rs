@@ -80,7 +80,7 @@ const MAX_BUFFER_SIZE: usize = 100;
 ///
 /// 这减少了高频输入时的磁盘 I/O，同时保证事件不会无限期滞留内存。
 pub struct StatsStore {
-    workspace_path: PathBuf,
+    app_data_root: PathBuf,
     event_buffer: Mutex<Vec<WritingInputEvent>>,
     last_flush_ms: Mutex<i64>,
 }
@@ -241,20 +241,20 @@ pub struct SpeedBucket {
 }
 
 impl StatsStore {
-    pub fn new(workspace_path: &Path) -> Self {
+    pub fn new(app_data_root: &Path) -> Self {
         Self {
-            workspace_path: workspace_path.to_path_buf(),
+            app_data_root: app_data_root.to_path_buf(),
             event_buffer: Mutex::new(Vec::new()),
             last_flush_ms: Mutex::new(0),
         }
     }
 
     fn events_dir(&self) -> PathBuf {
-        self.workspace_path.join("app-meta/stats/events.local")
+        self.app_data_root.join("app-meta/stats/events.local")
     }
 
     fn daily_dir(&self) -> PathBuf {
-        self.workspace_path.join("app-meta/stats/daily")
+        self.app_data_root.join("app-meta/stats/daily")
     }
 
     pub fn record_event(&self, event: WritingInputEvent) -> Result<()> {

@@ -114,9 +114,9 @@ pub struct StatsApi {
 }
 
 impl StatsApi {
-    pub fn new(workspace_path: &Path) -> Self {
+    pub fn new(app_data_root: &Path) -> Self {
         Self {
-            aggregator: StatsAggregator::new(workspace_path),
+            aggregator: StatsAggregator::new(app_data_root),
         }
     }
 

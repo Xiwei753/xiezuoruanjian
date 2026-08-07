@@ -565,7 +565,7 @@ mod tests {
             "projects/v1/chapters/c1.tmp"
         ));
         assert!(SyncService::is_blacklisted_path(
-            "workspace_manifest.json.lock"
+            "app-meta/settings/settings.sync.json.lock"
         ));
         assert!(SyncService::is_blacklisted_path("app-meta/logs/sync.log"));
     }
@@ -1093,7 +1093,8 @@ mod tests {
         .unwrap();
 
         // Also write some valid file to sync
-        std::fs::write(dir.path().join("workspace_manifest.json"), "{}").unwrap();
+        std::fs::create_dir_all(dir.path().join("app-meta/settings")).unwrap();
+        std::fs::write(dir.path().join("app-meta/settings/settings.sync.json"), "{}").unwrap();
 
         let plan = SyncService::build_sync_plan(dir.path()).unwrap();
 
@@ -1119,7 +1120,8 @@ mod tests {
     #[cfg(feature = "git-https")]
     fn test_first_sync_empty_remote_branch_not_found() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("workspace_manifest.json"), "{}").unwrap();
+        std::fs::create_dir_all(dir.path().join("app-meta/settings")).unwrap();
+        std::fs::write(dir.path().join("app-meta/settings/settings.sync.json"), "{}").unwrap();
 
         let config = SyncConfig {
             enabled: true,
@@ -1164,7 +1166,7 @@ mod tests {
                 Ok(None)
             }
             fn status(&self, _: &Path) -> crate::Result<Vec<String>> {
-                Ok(vec!["workspace_manifest.json".to_string()])
+                Ok(vec!["app-meta/settings/settings.sync.json".to_string()])
             }
             fn init_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())

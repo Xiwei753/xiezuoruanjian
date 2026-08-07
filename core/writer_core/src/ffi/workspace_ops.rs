@@ -7,7 +7,7 @@ use super::{c_str_to_rust, err_json, ok_json, with_core, CORE};
 /// # Safety
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
-pub unsafe extern "C" fn writer_core_list_workspaces() -> *mut c_char {
+pub unsafe extern "C" fn writer_core_list_app_summaries() -> *mut c_char {
     match with_core(|core| {
         let projects = core.list_projects().map_err(|e| format!("{}", e))?;
         let recent_edits = core.get_recent_edits().map_err(|e| format!("{}", e))?;
@@ -44,7 +44,7 @@ pub unsafe extern "C" fn writer_core_list_workspaces() -> *mut c_char {
         Ok(vec![summary])
     }) {
         Ok(data) => ok_json(data),
-        Err(e) => err_json("WORKSPACE_ERROR", &e),
+        Err(e) => err_json("APP_STATE_ERROR", &e),
     }
 }
 
@@ -55,7 +55,7 @@ pub unsafe extern "C" fn writer_core_list_workspaces() -> *mut c_char {
 /// 此函数替换全局 `CORE` 单例。替换期间持有 Mutex 锁，保证与 `with_core` 互斥。
 /// 替换后旧 Core 被 drop，所有未保存状态丢失。
 #[no_mangle]
-pub unsafe extern "C" fn writer_core_open_workspace(path: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn writer_core_open_data_root(path: *const c_char) -> *mut c_char {
     let path_str = match c_str_to_rust(path) {
         Ok(s) => s,
         Err(e) => {
@@ -117,7 +117,7 @@ pub unsafe extern "C" fn writer_core_open_workspace(path: *const c_char) -> *mut
 /// # Safety
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
-pub unsafe extern "C" fn writer_core_get_workspace_state() -> *mut c_char {
+pub unsafe extern "C" fn writer_core_get_app_state() -> *mut c_char {
     match with_core(|core| {
         let projects = core.list_projects().map_err(|e| format!("{}", e))?;
         let recent_edits = core.get_recent_edits().map_err(|e| format!("{}", e))?;
@@ -153,7 +153,7 @@ pub unsafe extern "C" fn writer_core_get_workspace_state() -> *mut c_char {
         }))
     }) {
         Ok(data) => ok_json(data),
-        Err(e) => err_json("WORKSPACE_ERROR", &e),
+        Err(e) => err_json("APP_STATE_ERROR", &e),
     }
 }
 

@@ -8,11 +8,11 @@
 // ── Workspace 查询 ──
 
 static napi_value NativeListWorkspaces(napi_env env, napi_callback_info info) {
-    return ReturnJsonString(env, writer_core_list_workspaces());
+    return ReturnJsonString(env, writer_core_list_app_summaries());
 }
 
 static napi_value NativeGetWorkspaceState(napi_env env, napi_callback_info info) {
-    return ReturnJsonString(env, writer_core_get_workspace_state());
+    return ReturnJsonString(env, writer_core_get_app_state());
 }
 
 static napi_value NativeResolveChapterLocation(napi_env env, napi_callback_info info) {

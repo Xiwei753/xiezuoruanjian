@@ -54,7 +54,7 @@ pub struct TransactionEntry {
 /// 生命周期：`new` → `add_file`×N → `commit`。
 /// `Drop` 只在 `committed == true` 时清理事务目录；未提交的事务留给 `recover_pending_transactions`。
 pub struct SaveTransaction {
-    workspace_path: PathBuf,
+    project_root: PathBuf,
     transaction_id: String,
     tx_dir: PathBuf,
     entries: Vec<TransactionEntry>,
@@ -62,11 +62,11 @@ pub struct SaveTransaction {
 }
 
 impl SaveTransaction {
-    pub fn new(workspace_path: &Path) -> Self {
+    pub fn new(project_root: &Path) -> Self {
         let transaction_id = Uuid::new_v4().to_string();
-        let tx_dir = workspace_path.join(TRANSACTIONS_DIR).join(&transaction_id);
+        let tx_dir = project_root.join(TRANSACTIONS_DIR).join(&transaction_id);
         Self {
-            workspace_path: workspace_path.to_path_buf(),
+            project_root: project_root.to_path_buf(),
             transaction_id,
             tx_dir,
             entries: Vec::new(),
@@ -120,7 +120,7 @@ impl SaveTransaction {
         let mut created_dirs = std::collections::HashSet::new();
         for entry in &self.entries {
             let staging_path = self.tx_dir.join(&entry.staging_filename);
-            let target_path = self.workspace_path.join(&entry.target_relative);
+            let target_path = self.project_root.join(&entry.target_relative);
             if let Some(parent) = target_path.parent() {
                 if !created_dirs.contains(parent) {
                     fs::create_dir_all(parent)?;
@@ -173,8 +173,8 @@ impl Drop for SaveTransaction {
     clippy::cast_lossless,
     deprecated
 )]
-pub fn recover_pending_transactions(workspace_path: &Path) -> Vec<TransactionRecovery> {
-    let tx_base = workspace_path.join(TRANSACTIONS_DIR);
+pub fn recover_pending_transactions(project_root: &Path) -> Vec<TransactionRecovery> {
+    let tx_base = project_root.join(TRANSACTIONS_DIR);
     if !tx_base.exists() {
         return Vec::new();
     }
@@ -228,7 +228,7 @@ pub fn recover_pending_transactions(workspace_path: &Path) -> Vec<TransactionRec
         for tx_entry in &manifest.entries {
             let staging_path = tx_dir.join(&tx_entry.staging_filename);
             if staging_path.exists() {
-                let target_path = workspace_path.join(&tx_entry.target_relative);
+                let target_path = project_root.join(&tx_entry.target_relative);
                 if let Some(parent) = target_path.parent() {
                     if !created_dirs.contains(parent) && fs::create_dir_all(parent).is_ok() {
                         created_dirs.insert(parent.to_path_buf());

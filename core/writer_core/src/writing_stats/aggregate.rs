@@ -18,9 +18,9 @@ pub struct StatsAggregator {
 }
 
 impl StatsAggregator {
-    pub fn new(workspace_path: &Path) -> Self {
+    pub fn new(app_data_root: &Path) -> Self {
         Self {
-            store: StatsStore::new(workspace_path),
+            store: StatsStore::new(app_data_root),
         }
     }
 

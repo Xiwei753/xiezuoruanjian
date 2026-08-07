@@ -101,7 +101,6 @@ impl crate::sync::SyncService {
     /// 白名单定义工作区中应参与同步的内容路径。黑名单优先——先排除黑名单再检查白名单。
     ///
     /// 同步语义按路径类型不同：
-    /// - `workspace_manifest.json`：工作区元数据，全量覆盖
     /// - `settings.sync.json`：跨设备设置，语义合并（非三路比较）
     /// - `chapter.md`：章节正文，LWW 或三路比较
     /// - `characters/` / `outline/` / `graphs/`：结构化内容，全量同步
@@ -113,9 +112,6 @@ impl crate::sync::SyncService {
             return false;
         }
 
-        if rel_path == "workspace_manifest.json" {
-            return true;
-        }
         if rel_path == "app-meta/settings/settings.sync.json" {
             return true;
         }
