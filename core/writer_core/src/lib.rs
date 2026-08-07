@@ -64,7 +64,6 @@ pub mod chapter;
 pub mod editor;
 pub mod error;
 pub mod history;
-pub mod index;
 pub mod platform_interaction;
 
 #[cfg(feature = "harmony-ffi")]
@@ -95,8 +94,6 @@ pub mod dto_contract_tests;
 pub mod facade;
 #[cfg(test)]
 pub mod fixture_tests;
-#[cfg(test)]
-pub mod index_tests;
 #[cfg(test)]
 pub mod project_tests;
 #[cfg(test)]

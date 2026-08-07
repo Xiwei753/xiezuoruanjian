@@ -1,14 +1,9 @@
 use crate::error::Result;
-use crate::index;
 use crate::trash;
 
 impl super::WriterCore {
     pub fn move_chapter_to_trash(&self, chapter_id: &str) -> Result<()> {
         trash::move_chapter_to_trash(&self.projects_root, chapter_id, &self.app_data_root)
-    }
-
-    pub fn update_index(&self) -> Result<()> {
-        index::update_index()
     }
 
     pub fn ai_available(&self) -> bool {
