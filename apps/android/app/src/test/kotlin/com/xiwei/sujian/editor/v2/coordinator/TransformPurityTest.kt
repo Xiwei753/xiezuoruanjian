@@ -28,7 +28,10 @@ class TransformPurityTest {
     private fun createCoordinator(): EditorSessionCoordinator {
         return EditorSessionCoordinator(
             com.xiwei.sujian.data.AppServiceBridge(
-                com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595_transform_purity"),
+                com.xiwei.sujian.data.WriterAppServiceHolder(
+                    "/tmp/sujian_test_workspace_595_transform_purity",
+                    "/tmp/sujian_test_workspace_595_transform_purity",
+                ),
             ),
         )
     }

@@ -13,29 +13,8 @@ export interface RecentEdit {
 }
 
 export interface WorkspaceSummary {
-  path: string
-  isValid: boolean
   projects: Project[]
   recentEdits: RecentEdit[]
-}
-
-export interface WorkspaceDiagnostics {
-  hasWorkspace: boolean
-  workspacePath: string
-  coreInitialized: boolean
-  pathExists: boolean
-  isDir: boolean
-  manifestPath: string
-  manifestExists: boolean
-  projectsPath: string
-  projectsDirExists: boolean
-  appMetaExists: boolean
-  writable: boolean
-  writableError: string
-  validateWorkspace: boolean
-  treeCount: number
-  lastWorkspacePath: string
-  createProjectAvailable: boolean
 }
 
 // ─── Project DTOs ───

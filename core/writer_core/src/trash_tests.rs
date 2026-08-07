@@ -5,14 +5,14 @@ use tempfile::tempdir;
 #[test]
 fn test_trash_chapter_not_found_when_no_workspace() {
     let dir = tempdir().unwrap();
-    let result = trash::move_chapter_to_trash(dir.path(), "chap1");
+    let result = trash::move_chapter_to_trash(dir.path(), "chap1", dir.path());
     assert!(matches!(result, Err(Error::ChapterNotFound)));
 }
 
 #[test]
 fn test_trash_chapter_not_found_for_nonexistent_chapter() {
     let dir = tempdir().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
-    let result = trash::move_chapter_to_trash(dir.path(), "nonexistent_chapter");
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+    let result = trash::move_chapter_to_trash(dir.path(), "nonexistent_chapter", dir.path());
     assert!(matches!(result, Err(Error::ChapterNotFound)));
 }

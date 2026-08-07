@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -12,7 +11,8 @@ use crate::facade::WriterCore;
 pub type ApiResult<T> = Result<T, WriterError>;
 
 pub struct WriterCoreApi {
-    pub(crate) workspace_path: PathBuf,
+    pub(crate) app_data_root: PathBuf,
+    pub(crate) projects_root: PathBuf,
     pub(crate) sync_transport: Option<writer_platform_api::SyncTransportFactory>,
     pub(crate) secure_storage: Option<std::sync::Arc<dyn writer_platform_api::SecureStorage>>,
     secrets_override: std::sync::Mutex<Option<crate::sync::SyncSecrets>>,
@@ -20,10 +20,11 @@ pub struct WriterCoreApi {
 }
 
 impl WriterCoreApi {
-    pub fn new<P: AsRef<Path>>(workspace_path: P) -> Self {
-        let core = WriterCore::new(&workspace_path);
+    pub fn new<P1: AsRef<Path>, P2: AsRef<Path>>(app_data_root: P1, projects_root: P2) -> Self {
+        let core = WriterCore::new(&app_data_root, &projects_root);
         Self {
-            workspace_path: workspace_path.as_ref().to_path_buf(),
+            app_data_root: app_data_root.as_ref().to_path_buf(),
+            projects_root: projects_root.as_ref().to_path_buf(),
             sync_transport: None,
             secure_storage: None,
             secrets_override: std::sync::Mutex::new(None),
@@ -31,14 +32,16 @@ impl WriterCoreApi {
         }
     }
 
-    pub fn with_sync_transport<P: AsRef<Path>>(
-        workspace_path: P,
+    pub fn with_sync_transport<P1: AsRef<Path>, P2: AsRef<Path>>(
+        app_data_root: P1,
+        projects_root: P2,
         transport_factory: writer_platform_api::SyncTransportFactory,
     ) -> Self {
-        let mut core = WriterCore::new(&workspace_path);
+        let mut core = WriterCore::new(&app_data_root, &projects_root);
         core.sync_transport = Some(transport_factory.clone());
         Self {
-            workspace_path: workspace_path.as_ref().to_path_buf(),
+            app_data_root: app_data_root.as_ref().to_path_buf(),
+            projects_root: projects_root.as_ref().to_path_buf(),
             sync_transport: Some(transport_factory),
             secure_storage: None,
             secrets_override: std::sync::Mutex::new(None),
@@ -46,19 +49,21 @@ impl WriterCoreApi {
         }
     }
 
-    pub fn with_platform_services<P: AsRef<Path>>(
-        workspace_path: P,
+    pub fn with_platform_services<P1: AsRef<Path>, P2: AsRef<Path>>(
+        app_data_root: P1,
+        projects_root: P2,
         sync_transport_factory: Option<writer_platform_api::SyncTransportFactory>,
         secure_storage: Option<std::sync::Arc<dyn writer_platform_api::SecureStorage>>,
     ) -> Self {
-        let mut core = WriterCore::new(&workspace_path);
+        let mut core = WriterCore::new(&app_data_root, &projects_root);
         core.sync_transport = sync_transport_factory.clone();
         // #592 五：secure storage 必须注入 facade，load/save_sync_secrets 与
         // 按 generation 保存的凭据才能真正写入平台 Keystore；此前只挂在
         // WriterCoreApi 上，facade 侧永远走文件路径。
         core.secure_storage = secure_storage.clone();
         Self {
-            workspace_path: workspace_path.as_ref().to_path_buf(),
+            app_data_root: app_data_root.as_ref().to_path_buf(),
+            projects_root: projects_root.as_ref().to_path_buf(),
             sync_transport: sync_transport_factory,
             secure_storage,
             secrets_override: std::sync::Mutex::new(None),
@@ -128,49 +133,6 @@ impl WriterCoreApi {
         }
         Ok(value as u32)
     }
-
-    /// 探测工作区路径是否可写——创建临时文件后删除，验证文件系统权限。
-    /// 返回 (可写, 原因描述)。用于同步前检查和诊断。
-    ///
-    /// 使用 `create_new(true)` 保证原子性创建——不会覆盖已有文件。
-    /// 测试文件名包含 PID 和纳秒时间戳，确保多进程/多线程场景下不冲突。
-    fn probe_workspace_writable(path: &Path, is_dir: bool) -> (bool, String) {
-        if !is_dir {
-            return (
-                false,
-                "path does not exist or is not a directory".to_string(),
-            );
-        }
-
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or_default();
-        let test_file = path.join(format!(
-            ".writer_write_test_{}_{}",
-            std::process::id(),
-            nonce
-        ));
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&test_file)
-        {
-            Ok(mut file) => {
-                if let Err(error) = file.write_all(b"test") {
-                    let _ = std::fs::remove_file(&test_file);
-                    return (false, error.to_string());
-                }
-                drop(file);
-                let remove_result = std::fs::remove_file(&test_file);
-                if let Err(error) = remove_result {
-                    return (false, error.to_string());
-                }
-                (true, String::new())
-            }
-            Err(error) => (false, error.to_string()),
-        }
-    }
 }
 
 mod action_ops;
@@ -191,8 +153,8 @@ mod tests {
     #[test]
     fn record_writing_event_returns_true_on_success() {
         let temp_dir = tempdir().unwrap();
-        crate::workspace::create_workspace(temp_dir.path()).unwrap();
-        let api = WriterCoreApi::new(temp_dir.path());
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
 
         let result = api
             .record_writing_event(
@@ -216,8 +178,8 @@ mod tests {
     #[test]
     fn process_writing_event_returns_true_on_success() {
         let temp_dir = tempdir().unwrap();
-        crate::workspace::create_workspace(temp_dir.path()).unwrap();
-        let api = WriterCoreApi::new(temp_dir.path());
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
 
         let result = api
             .process_writing_event(
@@ -239,8 +201,8 @@ mod tests {
     #[test]
     fn flush_writing_stats_returns_true_on_success() {
         let temp_dir = tempdir().unwrap();
-        crate::workspace::create_workspace(temp_dir.path()).unwrap();
-        let api = WriterCoreApi::new(temp_dir.path());
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
 
         assert!(api.flush_writing_stats().unwrap());
     }
@@ -248,52 +210,17 @@ mod tests {
     #[test]
     fn flush_recent_edits_returns_true_on_success() {
         let temp_dir = tempdir().unwrap();
-        crate::workspace::create_workspace(temp_dir.path()).unwrap();
-        let api = WriterCoreApi::new(temp_dir.path());
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
 
         assert!(api.flush_recent_edits().unwrap());
     }
 
     #[test]
-    fn workspace_diagnostics_reports_core_owned_state() {
-        let temp_dir = tempdir().unwrap();
-        crate::workspace::create_workspace(temp_dir.path()).unwrap();
-        let api = WriterCoreApi::new(temp_dir.path());
-
-        let diagnostics = api.get_workspace_diagnostics(true, 3).unwrap();
-
-        assert!(diagnostics.has_workspace);
-        assert!(diagnostics.path_exists);
-        assert!(diagnostics.is_dir);
-        assert!(diagnostics.manifest_exists);
-        assert!(diagnostics.projects_dir_exists);
-        assert!(diagnostics.writable);
-        assert!(diagnostics.validate_workspace);
-        assert_eq!(diagnostics.tree_count, 3);
-        assert!(diagnostics.create_project_available);
-    }
-
-    #[test]
-    fn workspace_diagnostics_envelope_uses_camel_case_fields() {
-        let temp_dir = tempdir().unwrap();
-        crate::workspace::create_workspace(temp_dir.path()).unwrap();
-        let api = WriterCoreApi::new(temp_dir.path());
-
-        let result = api.get_workspace_diagnostics(true, 0);
-        let json = ResultEnvelope::from_api_result(result).to_json_string();
-        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(value["success"], true);
-        assert_eq!(value["data"]["pathExists"], true);
-        assert_eq!(value["data"]["createProjectAvailable"], true);
-        assert!(value["data"].get("path_exists").is_none());
-    }
-
-    #[test]
     fn record_writing_event_for_platform_returns_true_on_success() {
         let temp_dir = tempdir().unwrap();
-        crate::workspace::create_workspace(temp_dir.path()).unwrap();
-        let api = WriterCoreApi::new(temp_dir.path());
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
 
         let result = api
             .record_writing_event_for_platform(
@@ -318,8 +245,8 @@ mod tests {
     #[test]
     fn record_writing_event_rejects_negative_counter() {
         let temp_dir = tempdir().unwrap();
-        crate::workspace::create_workspace(temp_dir.path()).unwrap();
-        let api = WriterCoreApi::new(temp_dir.path());
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
 
         let err = api
             .record_writing_event(
@@ -348,9 +275,10 @@ mod tests {
     #[test]
     fn process_writing_event_propagates_core_error() {
         let temp_dir = tempdir().unwrap();
-        let workspace_file = temp_dir.path().join("not_a_directory");
-        File::create(&workspace_file).unwrap();
-        let api = WriterCoreApi::new(&workspace_file);
+        let not_a_dir = temp_dir.path().join("not_a_directory");
+        File::create(&not_a_dir).unwrap();
+        // Use the file as app_data_root - writing stats will fail because it's not a directory
+        let api = WriterCoreApi::new(&not_a_dir, temp_dir.path().join("projects"));
 
         let err = api
             .process_writing_event(
@@ -371,7 +299,7 @@ mod tests {
 
     #[test]
     fn compute_starmap_edge_renders_uses_core_geometry() {
-        let api = WriterCoreApi::new("");
+        let api = WriterCoreApi::new("", "");
         let graph = StarMapGraphDto {
             schema_version: 1,
             id: "graph".to_string(),
@@ -444,7 +372,7 @@ mod tests {
 
     #[test]
     fn hit_test_starmap_node_returns_top_z_node() {
-        let api = WriterCoreApi::new("");
+        let api = WriterCoreApi::new("", "");
         let layout = StarMapLayoutDto {
             kind: StarMapLayoutKindDto::Freeform,
             nodes: vec![
@@ -487,8 +415,8 @@ mod tests {
     #[test]
     fn save_chapter_content_envelope_returns_success_with_changed_entities() {
         let temp_dir = tempdir().unwrap();
-        crate::workspace::create_workspace(temp_dir.path()).unwrap();
-        let api = WriterCoreApi::new(temp_dir.path());
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
         let project = api.create_project("Test").unwrap();
         let volume = api.create_volume(&project.id, "Vol 1").unwrap();
         let chapter = api.create_chapter(&project.id, &volume.id, "Ch 1").unwrap();
@@ -519,8 +447,8 @@ mod tests {
     #[test]
     fn create_project_volume_chapter_envelope_returns_changed_entities() {
         let temp_dir = tempdir().unwrap();
-        crate::workspace::create_workspace(temp_dir.path()).unwrap();
-        let api = WriterCoreApi::new(temp_dir.path());
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
 
         let project = api.create_project("Test").unwrap();
         let project_id = project.id.clone();
@@ -583,8 +511,8 @@ mod tests {
     #[test]
     fn project_volume_chapter_mutation_envelopes_return_changed_entities() {
         let temp_dir = tempdir().unwrap();
-        crate::workspace::create_workspace(temp_dir.path()).unwrap();
-        let api = WriterCoreApi::new(temp_dir.path());
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
         let project = api.create_project("Test").unwrap();
         let volume = api.create_volume(&project.id, "Vol 1").unwrap();
         let chapter = api.create_chapter(&project.id, &volume.id, "Ch 1").unwrap();
@@ -747,8 +675,8 @@ mod tests {
     #[test]
     fn delete_chapter_envelope_returns_success_with_changed_entities() {
         let temp_dir = tempdir().unwrap();
-        crate::workspace::create_workspace(temp_dir.path()).unwrap();
-        let api = WriterCoreApi::new(temp_dir.path());
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
         let project = api.create_project("Test").unwrap();
         let volume = api.create_volume(&project.id, "Vol 1").unwrap();
         let chapter = api.create_chapter(&project.id, &volume.id, "Ch 1").unwrap();
@@ -777,8 +705,8 @@ mod tests {
     #[test]
     fn delete_project_envelope_returns_success_with_changed_entities() {
         let temp_dir = tempdir().unwrap();
-        crate::workspace::create_workspace(temp_dir.path()).unwrap();
-        let api = WriterCoreApi::new(temp_dir.path());
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
         let project = api.create_project("Test").unwrap();
 
         let result = api.delete_project(&project.id);
@@ -804,8 +732,8 @@ mod tests {
     #[test]
     fn save_sync_config_envelope_returns_success_with_changed_entities() {
         let temp_dir = tempdir().unwrap();
-        crate::workspace::create_workspace(temp_dir.path()).unwrap();
-        let api = WriterCoreApi::new(temp_dir.path());
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
 
         let config = crate::api::types::SyncConfigDto {
             enabled: true,
@@ -843,8 +771,8 @@ mod tests {
     #[test]
     fn end_to_end_api_chapter_write_reopen_verify() {
         let temp_dir = tempdir().unwrap();
-        crate::workspace::create_workspace(temp_dir.path()).unwrap();
-        let api = WriterCoreApi::new(temp_dir.path());
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
         let project = api.create_project("E2E Test").unwrap();
         let volume = api.create_volume(&project.id, "Vol 1").unwrap();
         let chapter = api.create_chapter(&project.id, &volume.id, "Ch 1").unwrap();
@@ -869,8 +797,8 @@ mod tests {
     #[test]
     fn api_save_chapter_content_with_options_allow_empty_true() {
         let temp_dir = tempdir().unwrap();
-        crate::workspace::create_workspace(temp_dir.path()).unwrap();
-        let api = WriterCoreApi::new(temp_dir.path());
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
         let project = api.create_project("E2E Test").unwrap();
         let volume = api.create_volume(&project.id, "Vol 1").unwrap();
         let chapter = api.create_chapter(&project.id, &volume.id, "Ch 1").unwrap();
@@ -895,8 +823,8 @@ mod tests {
     #[test]
     fn api_save_chapter_content_with_options_allow_empty_false() {
         let temp_dir = tempdir().unwrap();
-        crate::workspace::create_workspace(temp_dir.path()).unwrap();
-        let api = WriterCoreApi::new(temp_dir.path());
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
         let project = api.create_project("E2E Test").unwrap();
         let volume = api.create_volume(&project.id, "Vol 1").unwrap();
         let chapter = api.create_chapter(&project.id, &volume.id, "Ch 1").unwrap();

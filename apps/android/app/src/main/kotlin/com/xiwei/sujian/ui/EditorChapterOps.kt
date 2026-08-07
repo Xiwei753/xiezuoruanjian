@@ -66,7 +66,7 @@ suspend fun EditorViewModel.checkSyncMergedChapter() {
     try {
         val (content, meta) =
             withContext(Dispatchers.IO) {
-                workspaceRepository.getChapterContentWithMeta(
+                projectRepository.getChapterContentWithMeta(
                     session.projectId,
                     session.volumeId,
                     session.chapterId,
@@ -202,7 +202,7 @@ private suspend fun EditorViewModel.clearChapterContentForSwitch(
         try {
             when (
                 val result =
-                    workspaceRepository.clearChapterContent(
+                    projectRepository.clearChapterContent(
                         session.projectId,
                         session.volumeId,
                         session.chapterId,
@@ -387,7 +387,7 @@ private suspend fun EditorViewModel.switchCommit(
     editorScope.launch {
         try {
             withContext(Dispatchers.IO) {
-                workspaceRepository.recordRecentEdit(ctx.projectId, ctx.volumeId, ctx.chapterId)
+                projectRepository.recordRecentEdit(ctx.projectId, ctx.volumeId, ctx.chapterId)
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
@@ -553,7 +553,7 @@ suspend fun EditorViewModel.loadChapter(session: EditorSession): Boolean {
     return try {
         val result =
             withContext(kotlinx.coroutines.Dispatchers.IO) {
-                workspaceRepository.getChapterContentWithMeta(session.projectId, session.volumeId, session.chapterId)
+                projectRepository.getChapterContentWithMeta(session.projectId, session.volumeId, session.chapterId)
             }
         val content = result.first
         val meta = result.second

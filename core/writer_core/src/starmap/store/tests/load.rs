@@ -17,7 +17,7 @@ fn store_new_has_zero_counts() {
 #[test]
 fn load_full_returns_diagnostics_for_missing_files() {
     let dir = TempDir::new().unwrap();
-    let starmap_dir = dir.path().join("app-meta").join("starmaps").join("test-id");
+    let starmap_dir = dir.path().join("starmaps").join("test-id");
     std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("edges")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("child_starmaps")).unwrap();
@@ -54,7 +54,7 @@ fn load_full_returns_diagnostics_for_missing_files() {
 #[test]
 fn load_full_returns_diagnostics_for_missing_link() {
     let dir = TempDir::new().unwrap();
-    let starmap_dir = dir.path().join("app-meta").join("starmaps").join("test-id");
+    let starmap_dir = dir.path().join("starmaps").join("test-id");
     std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("edges")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("child_starmaps")).unwrap();
@@ -96,7 +96,7 @@ fn load_full_returns_diagnostics_for_missing_link() {
 #[test]
 fn load_full_detects_dangling_edge_reference() {
     let dir = TempDir::new().unwrap();
-    let starmap_dir = dir.path().join("app-meta").join("starmaps").join("test-id");
+    let starmap_dir = dir.path().join("starmaps").join("test-id");
     std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("edges")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("child_starmaps")).unwrap();
@@ -160,7 +160,7 @@ fn load_full_detects_dangling_edge_reference() {
 #[test]
 fn load_full_detects_orphan_object_on_disk() {
     let dir = TempDir::new().unwrap();
-    let starmap_dir = dir.path().join("app-meta").join("starmaps").join("test-id");
+    let starmap_dir = dir.path().join("starmaps").join("test-id");
     std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("edges")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("child_starmaps")).unwrap();
@@ -205,7 +205,7 @@ fn load_full_detects_orphan_object_on_disk() {
 #[test]
 fn load_full_detects_unsupported_version() {
     let dir = TempDir::new().unwrap();
-    let starmap_dir = dir.path().join("app-meta").join("starmaps").join("test-id");
+    let starmap_dir = dir.path().join("starmaps").join("test-id");
     std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("edges")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("child_starmaps")).unwrap();
@@ -246,7 +246,7 @@ fn load_full_detects_unsupported_version() {
 #[test]
 fn load_phased_graph_meta_only() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -262,7 +262,7 @@ fn load_phased_graph_meta_only() {
 #[test]
 fn load_phased_to_current_viewport_objects() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -306,7 +306,7 @@ fn load_phased_to_current_viewport_objects() {
 #[test]
 fn load_phased_viewport_objects_with_layout() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -345,7 +345,7 @@ fn load_phased_viewport_objects_with_layout() {
 #[test]
 fn load_phased_full_equivalent_to_load_full() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -384,7 +384,7 @@ fn load_phase_sequence() {
 #[test]
 fn ensure_loaded_skips_repeated_load() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -424,7 +424,7 @@ fn ensure_loaded_skips_repeated_load() {
 #[test]
 fn load_phased_viewport_only_loads_layout_nodes() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -463,7 +463,7 @@ fn load_phased_viewport_only_loads_layout_nodes() {
 #[test]
 fn prefetch_nearby_loads_adjacent_nodes() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -519,7 +519,7 @@ fn prefetch_nearby_loads_adjacent_nodes() {
 #[test]
 fn load_full_preserves_pending_deletes() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -538,7 +538,7 @@ fn load_full_preserves_pending_deletes() {
 #[test]
 fn load_phased_preserves_pending_deletes() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -558,7 +558,7 @@ fn load_phased_preserves_pending_deletes() {
 #[test]
 fn ensure_loaded_uses_phased_loading() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -599,7 +599,7 @@ fn ensure_loaded_uses_phased_loading() {
 #[test]
 fn ensure_fully_loaded_reaches_background_phase() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -617,7 +617,7 @@ fn ensure_fully_loaded_reaches_background_phase() {
 #[test]
 fn save_starmap_graph_corrupt_existing_returns_error() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -626,7 +626,6 @@ fn save_starmap_graph_corrupt_existing_returns_error() {
 
     let graph_json = dir
         .path()
-        .join("app-meta")
         .join("starmaps")
         .join(&meta.starmap_id)
         .join("graph.json");
@@ -641,12 +640,11 @@ fn save_starmap_graph_corrupt_existing_returns_error() {
 #[test]
 fn save_starmap_graph_new_store_no_graph_json_succeeds() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let graph_json = dir
         .path()
-        .join("app-meta")
         .join("starmaps")
         .join(&meta.starmap_id)
         .join("graph.json");
@@ -658,7 +656,7 @@ fn save_starmap_graph_new_store_no_graph_json_succeeds() {
 #[test]
 fn viewport_culling_excludes_offscreen_nodes() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -715,7 +713,7 @@ fn viewport_culling_excludes_offscreen_nodes() {
 #[test]
 fn bucket_directory_structure_on_save() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -725,7 +723,6 @@ fn bucket_directory_structure_on_save() {
     let bucket = package_storage::bucket_for_id("n1");
     let node_path = dir
         .path()
-        .join("app-meta")
         .join("starmaps")
         .join(&meta.starmap_id)
         .join("nodes")
@@ -736,7 +733,7 @@ fn bucket_directory_structure_on_save() {
 #[test]
 fn viewport_saved_to_session_path() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -759,7 +756,6 @@ fn viewport_saved_to_session_path() {
 
     let pkg_viewport = dir
         .path()
-        .join("app-meta")
         .join("starmaps")
         .join(&meta.starmap_id)
         .join("viewport.json");
@@ -768,7 +764,7 @@ fn viewport_saved_to_session_path() {
 #[test]
 fn prefetch_nearby_does_not_load_all_objects() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -810,7 +806,7 @@ fn prefetch_nearby_does_not_load_all_objects() {
 #[test]
 fn ensure_loaded_preserves_dirty_after_crud() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -833,7 +829,7 @@ fn ensure_loaded_preserves_dirty_after_crud() {
 #[test]
 fn ensure_object_loaded_for_edge_embed_link_hyperlink() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -871,7 +867,7 @@ fn ensure_object_loaded_for_edge_embed_link_hyperlink() {
 #[test]
 fn list_links_with_diagnostics_returns_missing_diagnostic() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -906,7 +902,7 @@ fn list_links_with_diagnostics_returns_missing_diagnostic() {
 #[test]
 fn prefetch_only_loads_adjacent_edges() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -987,7 +983,7 @@ fn edge_relation_index_preserves_endpoint_fields() {
         StarMapEdge, StarMapEdgeEndpoint, StarMapEdgeKind, StarMapEndpointPath,
     };
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -1049,7 +1045,7 @@ fn embed_host_index_preserves_host_endpoint() {
     use crate::starmap::semantic::{StarMapDisplayPolicy, StarMapOpenBehavior, StarMapProvenance};
     use crate::starmap::types::{StarMapEmbed, StarMapEndpoint};
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -1093,7 +1089,7 @@ fn list_links_with_diagnostics_returns_corrupt_for_bad_file() {
     use crate::starmap::semantic::{StarMapDeepTarget, StarMapTargetDetail};
     use crate::starmap::types::{StarMapEndpoint, StarMapLink};
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let link = StarMapLink {
@@ -1121,7 +1117,6 @@ fn list_links_with_diagnostics_returns_corrupt_for_bad_file() {
 
     let starmap_dir = dir
         .path()
-        .join("app-meta")
         .join("starmaps")
         .join(&meta.starmap_id);
     let bucket = package_storage::bucket_for_id("l1");
@@ -1162,7 +1157,7 @@ fn list_links_with_diagnostics_returns_corrupt_for_bad_file() {
 #[test]
 fn prefetch_nearby_objects_no_infinite_recursion_when_no2_index() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "NoIndex", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);

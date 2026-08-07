@@ -192,7 +192,7 @@ mod tests {
     #[test]
     fn test_load_sync_secrets() {
         let temp_dir = tempdir().unwrap();
-        let api = WriterCoreApi::new(temp_dir.path());
+        let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
 
         // Test loading when no secrets exist (should return default/empty struct)
         let loaded_empty = api.load_sync_secrets().unwrap();
@@ -212,8 +212,8 @@ mod tests {
     #[test]
     fn save_sync_config_returns_true_on_success() {
         let temp_dir = tempdir().unwrap();
-        crate::workspace::create_workspace(temp_dir.path()).unwrap();
-        let api = WriterCoreApi::new(temp_dir.path());
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
 
         let config = SyncConfigDto {
             enabled: true,

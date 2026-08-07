@@ -24,7 +24,9 @@ class CommitSyncProfileMigrationTest {
     private fun createRepo(preferencesSuffix: String): SettingsRepository {
         return SettingsRepository(
             androidx.test.core.app.ApplicationProvider.getApplicationContext(),
-            AppServiceBridge(WriterAppServiceHolder("/tmp/sujian_test_workspace_595")),
+            AppServiceBridge(
+                WriterAppServiceHolder("/tmp/sujian_test_workspace_595", "/tmp/sujian_test_workspace_595"),
+            ),
             preferencesSuffix = preferencesSuffix,
         )
     }

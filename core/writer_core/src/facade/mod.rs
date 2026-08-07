@@ -31,7 +31,7 @@ mod service_ops;
 mod settings_ops;
 mod starmap_ops;
 mod sync_ops;
-mod workspace_ops;
+mod recent_edits_ops;
 mod writing_stats_ops;
 
 use std::collections::HashMap;
@@ -53,7 +53,8 @@ use crate::writing_stats::api::StatsApi;
 /// 无状态：每次 API 调用通过 `core()` 创建临时 `WriterCore` 实例，
 /// 不持有可变状态。`stats_api` 使用 `OnceLock` 懒初始化，首次访问后复用。
 pub struct WriterCore {
-    pub(crate) workspace_path: PathBuf,
+    pub(crate) app_data_root: PathBuf,
+    pub(crate) projects_root: PathBuf,
     pub(crate) stats_api: OnceLock<StatsApi>,
     pub(crate) sync_transport: Option<writer_platform_api::SyncTransportFactory>,
     pub(crate) secure_storage: Option<Arc<dyn writer_platform_api::SecureStorage>>,
@@ -69,9 +70,10 @@ pub struct ChapterOpenResult {
 }
 
 impl WriterCore {
-    pub fn new<P: AsRef<Path>>(workspace_path: P) -> Self {
+    pub fn new<P1: AsRef<Path>, P2: AsRef<Path>>(app_data_root: P1, projects_root: P2) -> Self {
         Self {
-            workspace_path: workspace_path.as_ref().to_path_buf(),
+            app_data_root: app_data_root.as_ref().to_path_buf(),
+            projects_root: projects_root.as_ref().to_path_buf(),
             stats_api: OnceLock::new(),
             sync_transport: None,
             secure_storage: None,
@@ -83,11 +85,20 @@ impl WriterCore {
 
     pub(crate) fn get_stats_api(&self) -> &StatsApi {
         self.stats_api
-            .get_or_init(|| StatsApi::new(&self.workspace_path))
+            .get_or_init(|| StatsApi::new(&self.app_data_root))
     }
 
-    pub fn workspace_path(&self) -> &Path {
-        &self.workspace_path
+    pub fn app_data_root(&self) -> &Path {
+        &self.app_data_root
+    }
+
+    pub fn projects_root(&self) -> &Path {
+        &self.projects_root
+    }
+
+    /// 计算指定作品的根目录路径。
+    pub(crate) fn project_root(&self, project_id: &str) -> PathBuf {
+        self.projects_root.join(project_id)
     }
 }
 
@@ -105,10 +116,10 @@ mod tests {
     #[test]
     fn test_facade_basic_flow() {
         let temp_dir = tempdir().unwrap();
-        let core = WriterCore::new(temp_dir.path());
+        let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
 
-        assert!(core.create_workspace().is_ok());
-        assert!(core.validate_workspace().unwrap());
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+        
 
         let project = core.create_project("My Project").unwrap();
         let projects = core.list_projects().unwrap();
@@ -138,8 +149,8 @@ mod tests {
     #[test]
     fn test_facade_open_save_receipt_and_error_code() {
         let temp_dir = tempdir().unwrap();
-        let core = WriterCore::new(temp_dir.path());
-        core.create_workspace().unwrap();
+        let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
 
         let project = core.create_project("My Project").unwrap();
         let volume = core.create_volume(&project.id, "Vol 1").unwrap();
@@ -179,8 +190,8 @@ mod tests {
     #[test]
     fn test_facade_settings_flow() {
         let temp_dir = tempdir().unwrap();
-        let core = WriterCore::new(temp_dir.path());
-        core.create_workspace().unwrap();
+        let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
 
         let mut local_settings = core.load_local_settings().unwrap();
         local_settings.window_width = 1000.0;
@@ -216,7 +227,7 @@ mod tests {
     #[test]
     fn test_facade_not_implemented() {
         let temp_dir = tempdir().unwrap();
-        let core = WriterCore::new(temp_dir.path());
+        let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
 
         assert!(core.move_chapter_to_trash("c1").is_err());
     }
@@ -224,8 +235,8 @@ mod tests {
     #[test]
     fn test_facade_sync_config_flow() {
         let temp_dir = tempdir().unwrap();
-        let core = WriterCore::new(temp_dir.path());
-        core.create_workspace().unwrap();
+        let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
 
         let config = core.load_sync_config().unwrap();
         assert!(!config.enabled);
@@ -261,8 +272,8 @@ mod tests {
     fn test_facade_generation_secrets_save_load_delete() {
         // #595 五：generation 凭据生命周期 — save → load → delete。
         let temp_dir = tempdir().unwrap();
-        let core = WriterCore::new(temp_dir.path());
-        core.create_workspace().unwrap();
+        let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
 
         let secrets = crate::sync::SyncSecrets {
             token: Some("generation_token_7".to_string()),
@@ -293,8 +304,8 @@ mod tests {
     #[test]
     fn test_load_sync_config_migrates_git_backend_for_github_https_remote() {
         let temp_dir = tempdir().unwrap();
-        let core = WriterCore::new(temp_dir.path());
-        core.create_workspace().unwrap();
+        let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
 
         let config_path = temp_dir.path().join("app-meta/sync/sync_config.json");
         std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
@@ -323,8 +334,8 @@ mod tests {
     #[test]
     fn test_facade_perform_sync_dry_run() {
         let temp_dir = tempdir().unwrap();
-        let core = WriterCore::new(temp_dir.path());
-        core.create_workspace().unwrap();
+        let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
 
         let config = core.load_sync_config().unwrap();
         let plan = core.perform_sync_dry_run(&config).unwrap();
@@ -334,8 +345,8 @@ mod tests {
     #[test]
     fn test_execute_action_args_parsing() {
         let temp_dir = tempdir().unwrap();
-        let core = WriterCore::new(temp_dir.path());
-        core.create_workspace().unwrap();
+        let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
 
         let result_empty = core
             .execute_action("settings.editor.font_size.set", "", "")

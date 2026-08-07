@@ -4,7 +4,7 @@ use std::path::Path;
 use tempfile::tempdir;
 
 fn setup_test_workspace(dir: &Path) {
-    crate::workspace::create_workspace(dir).unwrap();
+    std::fs::create_dir_all(dir.join("projects")).unwrap();
     let projects_dir = dir.join("projects");
     fs::create_dir_all(&projects_dir).unwrap();
 
@@ -143,7 +143,7 @@ fn test_search_empty_query() {
 #[test]
 fn test_empty_workspace() {
     let dir = tempdir().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
 
     let index = SearchIndex::build(dir.path()).unwrap();
     let stats = index.stats();

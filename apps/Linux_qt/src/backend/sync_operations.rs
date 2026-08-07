@@ -63,7 +63,7 @@ impl AppBackend {
             if !pending_path.is_empty() {
                 self.current_pending_github_init_path.clear();
                 self.pending_github_init_path_changed();
-                self.internal_open_workspace(&pending_path, false);
+                self.internal_open_data_root(&pending_path);
                 self.load_sync_config();
                 return;
             }
@@ -119,13 +119,14 @@ impl AppBackend {
     }
 
     pub(crate) fn perform_sync_dry_run(&mut self) -> QString {
-        let workspace_path = self.current_workspace.clone();
+        let data_root = self.current_data_root.clone();
+        let projects_root = self.current_projects_root.clone();
 
         let op_id = uuid::Uuid::new_v4().to_string();
         self.current_sync_operation_id = op_id.clone();
         self.current_sync_operation_kind = "dry_run".to_string();
 
-        if workspace_path.is_empty() {
+        if data_root.is_empty() {
             let state = writer_core::api::SyncOperationStateDto {
                 operation_id: op_id.clone(),
                 operation_kind: "dry_run".to_string(),
@@ -209,7 +210,7 @@ impl AppBackend {
         thread::spawn(move || {
             // SAFETY: AssertUnwindSafe is needed because catch_unwind requires UnwindSafe; the closure only accesses owned data (workspace_path, config copies) and the result is consumed immediately; no shared mutable state is left in an inconsistent state on panic.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let api = crate::backend::app_backend::create_core_api(&workspace_path);
+                let api = crate::backend::app_backend::create_core_api(&data_root, &projects_root);
                 let mut config = match api.load_sync_config() {
                     Ok(c) => c,
                     Err(e) => {
@@ -392,8 +393,9 @@ impl AppBackend {
                 trigger, masked_url, self.current_sync_branch, token_present
             ),
         );
-        let workspace_path = self.current_workspace.clone();
-        if workspace_path.is_empty() {
+        let data_root = self.current_data_root.clone();
+        let projects_root = self.current_projects_root.clone();
+        if data_root.is_empty() {
             let state = writer_core::api::SyncOperationStateDto {
                 operation_id: op_id.clone(),
                 operation_kind: "sync".to_string(),
@@ -491,7 +493,7 @@ impl AppBackend {
         thread::spawn(move || {
             // SAFETY: AssertUnwindSafe is needed because catch_unwind requires UnwindSafe; the closure only accesses owned data (workspace_path, config copies) and the result is consumed immediately; no shared mutable state is left in an inconsistent state on panic.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let api = crate::backend::app_backend::create_core_api(&workspace_path);
+                let api = crate::backend::app_backend::create_core_api(&data_root, &projects_root);
                 let mut config = match api.load_sync_config() {
                     Ok(c) => c,
                     Err(e) => {

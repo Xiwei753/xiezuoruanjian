@@ -2,16 +2,18 @@ package com.xiwei.sujian.data
 
 import android.content.Context
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.platform.AndroidDataRoot
 import com.xiwei.sujian.platform.AndroidKeystoreSecureStorage
 import uniffi.writer_core.PlatformDto
 import uniffi.writer_core.PlatformInitDto
 import uniffi.writer_core.WriterAppService
 import uniffi.writer_core.WriterException
-import uniffi.writer_core.openWorkspaceWithInit
-import uniffi.writer_core.openWorkspaceWithSecureStorage
+import uniffi.writer_core.openAppServiceWithInit
+import uniffi.writer_core.openAppServiceWithSecureStorage
 
 class WriterAppServiceHolder(
-    workspacePath: String,
+    appDataRoot: String,
+    projectsRoot: String,
     platformInit: PlatformInitDto? = null,
     secureStorageProvider: uniffi.writer_core.SecureStorageProvider? = null,
     val secureStorageError: String? = null,
@@ -24,14 +26,14 @@ class WriterAppServiceHolder(
         lazy {
             try {
                 if (platformInit != null && secureStorageProvider != null) {
-                    openWorkspaceWithSecureStorage(workspacePath, platformInit, secureStorageProvider)
+                    openAppServiceWithSecureStorage(appDataRoot, projectsRoot, platformInit, secureStorageProvider)
                 } else if (platformInit != null) {
-                    openWorkspaceWithInit(workspacePath, platformInit)
+                    openAppServiceWithInit(appDataRoot, projectsRoot, platformInit)
                 } else {
-                    WriterAppService(workspacePath)
+                    WriterAppService(appDataRoot, projectsRoot)
                 }
             } catch (e: WriterException) {
-                DiagnosticsLogger.e(TAG, "Failed to open workspace: ${e.message}", e)
+                DiagnosticsLogger.e(TAG, "Failed to open app service: ${e.message}", e)
                 _initError = e
                 throw e
             }
@@ -67,8 +69,6 @@ class WriterAppServiceHolder(
 
         fun createFromContext(
             context: Context,
-            workspacePath: String,
-            filesDir: String,
             cacheDir: String,
             noBackupDir: String,
             deviceId: String,
@@ -78,12 +78,14 @@ class WriterAppServiceHolder(
             isConnected: Boolean,
             isMetered: Boolean,
         ): WriterAppServiceHolder {
+            val appDataRoot = AndroidDataRoot.rootDir().absolutePath
+            val projectsRoot = AndroidDataRoot.projectsDir().absolutePath
             val init =
                 PlatformInitDto(
                     platform = PlatformDto.ANDROID,
-                    appDataDir = filesDir,
+                    appDataDir = appDataRoot,
                     cacheDir = cacheDir,
-                    logDir = "$cacheDir/log",
+                    logDir = AndroidDataRoot.logsDir().absolutePath,
                     noBackupDir = noBackupDir,
                     deviceId = deviceId,
                     appVersion = appVersion,
@@ -100,7 +102,8 @@ class WriterAppServiceHolder(
                 } catch (e: Exception) {
                     DiagnosticsLogger.e(TAG, "Failed to initialize Android Keystore secure storage", e)
                     return WriterAppServiceHolder(
-                        workspacePath,
+                        appDataRoot,
+                        projectsRoot,
                         init,
                         null,
                         secureStorageError = "keystore_init_failed",
@@ -108,14 +111,21 @@ class WriterAppServiceHolder(
                 }
             if (secureStorage.migrationError != null) {
                 return WriterAppServiceHolder(
-                    workspacePath,
+                    appDataRoot,
+                    projectsRoot,
                     init,
                     secureStorage,
                     secureStorageError = "migration_failed:${secureStorage.migrationError}",
                     keystoreStorage = secureStorage,
                 )
             }
-            return WriterAppServiceHolder(workspacePath, init, secureStorage, keystoreStorage = secureStorage)
+            return WriterAppServiceHolder(
+                appDataRoot,
+                projectsRoot,
+                init,
+                secureStorage,
+                keystoreStorage = secureStorage,
+            )
         }
     }
 

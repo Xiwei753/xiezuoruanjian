@@ -407,7 +407,7 @@ impl AppBackend {
     // AppBackend::sync_can_run
     pub(crate) fn sync_can_run(&self) -> bool {
         self.current_has_workspace
-            && !self.current_workspace.is_empty()
+            && !self.current_data_root.is_empty()
             && !self.current_sync_remote_url.is_empty()
             && !self.current_sync_token.is_empty()
             && self.current_sync_enabled
@@ -415,7 +415,7 @@ impl AppBackend {
 
     // AppBackend::sync_block_reason
     pub(crate) fn sync_block_reason(&self) -> QString {
-        if !self.current_has_workspace || self.current_workspace.is_empty() {
+        if !self.current_has_workspace || self.current_data_root.is_empty() {
             return "sync.block.no_workspace".into();
         }
 
@@ -447,13 +447,14 @@ impl AppBackend {
     // AppBackend::perform_sync_diagnostics
     pub(crate) fn perform_sync_diagnostics(&mut self) -> QString {
         self.debug_log("sync", "perform_sync_diagnostics_start", "");
-        let workspace_path = self.current_workspace.clone();
+        let data_root = self.current_data_root.clone();
+        let projects_root = self.current_projects_root.clone();
 
         let op_id = uuid::Uuid::new_v4().to_string();
         self.current_sync_operation_id = op_id.clone();
         self.current_sync_operation_kind = "diagnose".to_string();
 
-        if workspace_path.is_empty() {
+        if data_root.is_empty() {
             let state = writer_core::api::SyncOperationStateDto {
                 operation_id: op_id.clone(),
                 operation_kind: "diagnose".to_string(),
@@ -497,7 +498,7 @@ impl AppBackend {
         thread::spawn(move || {
             // SAFETY: AssertUnwindSafe is needed because catch_unwind requires UnwindSafe; the closure only accesses owned data (workspace_path, config copies) and the result is consumed immediately; no shared mutable state is left in an inconsistent state on panic.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let api = crate::backend::app_backend::create_core_api(&workspace_path);
+                let api = crate::backend::app_backend::create_core_api(&data_root, &projects_root);
                 let mut config = match api.load_sync_config() {
                     Ok(c) => c,
                     Err(e) => {

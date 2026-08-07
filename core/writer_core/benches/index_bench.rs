@@ -5,7 +5,7 @@ use tempfile::tempdir;
 use writer_core::index::{SearchIndex, SearchOptions};
 
 fn setup_large_workspace(dir: &std::path::Path) {
-    writer_core::workspace::create_workspace(dir).unwrap();
+    std::fs::create_dir_all(dir.join("projects")).unwrap();
     let projects_dir = dir.join("projects");
     fs::create_dir_all(&projects_dir).unwrap();
 

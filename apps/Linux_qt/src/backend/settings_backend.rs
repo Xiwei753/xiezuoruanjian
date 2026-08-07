@@ -503,7 +503,7 @@ impl SettingsBackend {
 
     fn export_diagnostics_pack(&self) -> QString {
         self.with_app(|app| {
-            let workspace_path = std::path::PathBuf::from(&app.current_workspace);
+            let workspace_path = std::path::PathBuf::from(&app.current_data_root);
             let log_dir = crate::backend::diagnostics::get_log_dir(&workspace_path);
             match crate::backend::diagnostics::export_diagnostics_pack(&workspace_path, &log_dir) {
                 Ok(path) => {
@@ -556,7 +556,7 @@ impl SettingsBackend {
     fn clear_logs(&self) -> QString {
         self.with_app(|app| {
             let log_dir = crate::backend::diagnostics::get_log_dir(&std::path::PathBuf::from(
-                &app.current_workspace,
+                &app.current_data_root,
             ));
             match crate::backend::diagnostics::clear_logs(&log_dir) {
                 Ok(()) => "ok".into(),
@@ -576,7 +576,7 @@ impl SettingsBackend {
     fn open_log_directory(&self) -> QString {
         self.with_app(|app| {
             let log_dir = crate::backend::diagnostics::get_log_dir(&std::path::PathBuf::from(
-                &app.current_workspace,
+                &app.current_data_root,
             ));
             match crate::backend::diagnostics::open_log_directory(&log_dir) {
                 Ok(()) => "ok".into(),

@@ -94,13 +94,18 @@ pub(crate) fn current_network_state() -> writer_platform_api::NetworkState {
     writer_platform_linux::get_cached_network_state()
 }
 
-pub(crate) fn create_core_api(path: &str) -> WriterCoreApi {
+pub(crate) fn create_core_api(app_data_root: &str, projects_root: &str) -> WriterCoreApi {
     let sync_transport = LINUX_SYNC_TRANSPORT_FACTORY.get().cloned();
     let secure_storage = LINUX_SECURE_STORAGE.get().cloned();
     if sync_transport.is_some() || secure_storage.is_some() {
-        WriterCoreApi::with_platform_services(path, sync_transport, secure_storage)
+        WriterCoreApi::with_platform_services(
+            app_data_root,
+            projects_root,
+            sync_transport,
+            secure_storage,
+        )
     } else {
-        WriterCoreApi::new(path)
+        WriterCoreApi::new(app_data_root, projects_root)
     }
 }
 
@@ -284,7 +289,8 @@ pub struct AppBackend {
     log_qml:
         qt_method!(fn(&self, level: QString, module: QString, event: QString, message: QString)),
 
-    current_workspace: String,
+    current_data_root: String,
+    current_projects_root: String,
     current_has_workspace: bool,
     current_save_status: String,
     current_word_count: i32,
@@ -483,8 +489,11 @@ impl AppBackend {
     }
 
     pub(crate) fn core_api(&self) -> Option<WriterCoreApi> {
-        if self.current_has_workspace && !self.current_workspace.is_empty() {
-            Some(create_core_api(&self.current_workspace))
+        if self.current_has_workspace && !self.current_data_root.is_empty() {
+            Some(create_core_api(
+                &self.current_data_root,
+                &self.current_projects_root,
+            ))
         } else {
             None
         }
@@ -759,7 +768,7 @@ impl AppBackend {
     }
 
     fn workspace_path(&self) -> QString {
-        self.current_workspace.clone().into()
+        self.current_data_root.clone().into()
     }
 
     // --- StarMap methods ---
@@ -798,10 +807,9 @@ mod tests {
         let ws_path = dir.path().to_str().ok_or("Invalid path")?.to_string();
 
         let mut backend = AppBackend::default();
-        backend.current_workspace = ws_path.clone();
+        backend.current_data_root = ws_path.clone();
+        backend.current_projects_root = ws_path.clone();
         backend.current_has_workspace = true;
-
-        WriterCoreApi::new(&ws_path).create_workspace_if_needed()?;
 
         // Create 3 projects
         for i in 1..=3 {
@@ -822,7 +830,8 @@ mod tests {
     fn test_create_project_failure() -> Result<(), Box<dyn std::error::Error>> {
         use qmetaobject::QJsonValue;
         let mut backend = AppBackend::default();
-        backend.current_workspace = "/invalid/path/that/does/not/exist".to_string();
+        backend.current_data_root = "/invalid/path/that/does/not/exist".to_string();
+        backend.current_projects_root = "/invalid/path/that/does/not/exist".to_string();
         backend.current_has_workspace = true;
 
         // Let's pretend the tree has some items
@@ -847,7 +856,8 @@ mod tests {
     #[test]
     fn test_create_project_empty_title() -> Result<(), Box<dyn std::error::Error>> {
         let mut backend = AppBackend::default();
-        backend.current_workspace = "/tmp".to_string();
+        backend.current_data_root = "/tmp".to_string();
+        backend.current_projects_root = "/tmp".to_string();
         backend.current_has_workspace = true;
 
         let res_json = backend.create_project_json("   ".into(), "".into());
@@ -862,8 +872,12 @@ mod tests {
 
     #[test]
     fn test_handle_sync_outcome_success_pending_path() {
+        use tempfile::tempdir;
+        let dir = tempdir().expect("tempdir creation failed");
+        let path_str = dir.path().to_string_lossy().to_string();
+
         let mut backend = AppBackend::default();
-        backend.current_pending_github_init_path = "/tmp/test_workspace".to_string();
+        backend.current_pending_github_init_path = path_str.clone();
         backend.current_has_workspace = false;
 
         let outcome = SyncTaskOutcome {
@@ -873,11 +887,12 @@ mod tests {
         };
         backend.handle_sync_outcome(outcome);
 
-        // After sync success with pending path, internal_open_workspace is called.
-        // If the path is invalid, load_sync_config sets status to "no_workspace"
-        // (not "success") because core is not initialized.
-        assert_eq!(backend.current_sync_status, "no_workspace");
+        // After sync success with pending path, internal_open_data_root is called.
+        // The data root is opened successfully; pending path is cleared.
+        // load_sync_config sets status to "not_configured" (no sync config present).
+        assert_eq!(backend.current_sync_status, "not_configured");
         assert_eq!(backend.current_pending_github_init_path, "");
+        assert!(backend.current_has_workspace);
     }
 
     #[test]
@@ -916,7 +931,8 @@ mod tests {
         let mut backend = AppBackend::default();
         backend.current_sync_remote_url = "".to_string();
         backend.current_sync_token = "".to_string();
-        backend.current_workspace = "some_path".to_string();
+        backend.current_data_root = "some_path".to_string();
+        backend.current_projects_root = "some_path".to_string();
 
         backend.perform_sync_dry_run();
 
@@ -932,7 +948,7 @@ mod workspace_flow_tests {
     use super::*;
 
     #[test]
-    fn test_workspace_creation_flow_updates_state() {
+    fn test_data_root_open_flow_updates_state() {
         use tempfile::tempdir;
         let mut app = AppBackend::default();
         assert!(!app.has_workspace());
@@ -940,30 +956,31 @@ mod workspace_flow_tests {
         let dir = tempdir().expect("tempdir creation failed");
         let path_str = dir.path().to_string_lossy().to_string();
 
-        // Test creating a new workspace
-        app.internal_open_workspace(&path_str, true);
+        // Test opening a data root directory
+        app.internal_open_data_root(&path_str);
 
         assert!(
             app.has_workspace(),
-            "AppBackend must have workspace after creation"
+            "AppBackend must have data root after opening"
         );
         assert_eq!(app.workspace_path().to_string(), path_str);
 
-        let manifest_path = dir.path().join("workspace_manifest.json");
-        assert!(manifest_path.exists(), "Workspace manifest must be created");
+        // projects subdirectory must be created
+        let projects_path = dir.path().join("projects");
+        assert!(projects_path.exists(), "projects subdirectory must be created");
 
         // Close workspace
         app.close_workspace();
         assert!(
             !app.has_workspace(),
-            "AppBackend must not have workspace after closing"
+            "AppBackend must not have data root after closing"
         );
 
-        // Reopen existing workspace
-        app.internal_open_workspace(&path_str, false);
+        // Reopen existing data root
+        app.internal_open_data_root(&path_str);
         assert!(
             app.has_workspace(),
-            "AppBackend must have workspace after opening existing"
+            "AppBackend must have data root after reopening"
         );
     }
 }

@@ -1,27 +1,14 @@
 // ── Workspace & Location NAPI handlers ──
 // Included by napi_init.cpp — expects ReturnJsonString and writer_core_bridge.h to be available.
+//
+// 新 Core API 边界：平台自己提供 app_data_root 与 projects_root，
+// 通过 nativeInit 注入；Core 不再创建/验证/打开 workspace。
+// 此文件仅保留查询类入口（list/get state/resolve location）。
 
-// ── Workspace ──
-
-static napi_value NativeValidateWorkspace(napi_env env, napi_callback_info info) {
-    return ReturnJsonString(env, writer_core_validate_workspace());
-}
+// ── Workspace 查询 ──
 
 static napi_value NativeListWorkspaces(napi_env env, napi_callback_info info) {
     return ReturnJsonString(env, writer_core_list_workspaces());
-}
-
-static napi_value NativeOpenWorkspace(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char path[2048] = {0};
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], path, sizeof(path), nullptr);
-    }
-
-    return ReturnJsonString(env, writer_core_open_workspace(path));
 }
 
 static napi_value NativeGetWorkspaceState(napi_env env, napi_callback_info info) {
@@ -58,9 +45,7 @@ static napi_value NativeResolveVolumeLocation(napi_env env, napi_callback_info i
 
 napi_property_descriptor* getWorkspaceDescriptors(size_t* count) {
     static napi_property_descriptor desc[] = {
-        {"nativeValidateWorkspace", nullptr, NativeValidateWorkspace, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeListWorkspaces", nullptr, NativeListWorkspaces, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeOpenWorkspace", nullptr, NativeOpenWorkspace, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetWorkspaceState", nullptr, NativeGetWorkspaceState, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeResolveChapterLocation", nullptr, NativeResolveChapterLocation, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeResolveVolumeLocation", nullptr, NativeResolveVolumeLocation, nullptr, nullptr, nullptr, napi_default, nullptr},

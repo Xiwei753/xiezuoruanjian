@@ -3,8 +3,8 @@ package com.xiwei.sujian.ui
 import com.xiwei.sujian.data.AppServiceBridge
 import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.data.ChapterContentSavePort
+import com.xiwei.sujian.data.ProjectRepository
 import com.xiwei.sujian.data.SettingsRepository
-import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.data.WriterAppServiceHolder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -59,8 +59,11 @@ class EditorViewModelStaleLoadTest {
     private fun createVm(): EditorViewModel {
         val app = RuntimeEnvironment.getApplication()
         // 无 native 库时所有桥接调用返回 NotLoaded，不会抛 UnsatisfiedLinkError。
-        val bridge = AppServiceBridge(WriterAppServiceHolder("/tmp/sujian_test_workspace_597_stale"))
-        val repo = WorkspaceRepository(app, bridge)
+        val bridge =
+            AppServiceBridge(
+                WriterAppServiceHolder("/tmp/sujian_test_workspace_597_stale", "/tmp/sujian_test_workspace_597_stale"),
+            )
+        val repo = ProjectRepository(app, bridge)
         val vm = EditorViewModel(app)
         vm.initialize(repo, SettingsRepository(app, bridge))
         return vm

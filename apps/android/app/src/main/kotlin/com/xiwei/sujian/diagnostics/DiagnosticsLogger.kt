@@ -3,6 +3,7 @@ package com.xiwei.sujian.diagnostics
 import android.content.Context
 import android.util.Log
 import com.xiwei.sujian.BuildConfig
+import com.xiwei.sujian.platform.AndroidDataRoot
 import java.io.File
 import java.io.FileWriter
 import java.io.PrintWriter
@@ -222,8 +223,8 @@ object DiagnosticsLogger {
 
     fun flush() {
         synchronized(lock) {
-            val ctx = contextRef.get() ?: return
-            val logDir = File(ctx.filesDir, "logs")
+            contextRef.get() ?: return
+            val logDir = AndroidDataRoot.logsDir()
             if (!logDir.exists()) logDir.mkdirs()
             val currentFile = File(logDir, "$LOG_PREFIX.log")
             try {
@@ -263,8 +264,8 @@ object DiagnosticsLogger {
     }
 
     fun getLogFiles(): List<File> {
-        val ctx = contextRef.get() ?: return emptyList()
-        val logDir = File(ctx.filesDir, "logs")
+        contextRef.get() ?: return emptyList()
+        val logDir = AndroidDataRoot.logsDir()
         if (!logDir.exists()) return emptyList()
         return logDir.listFiles { _, name -> name.startsWith(LOG_PREFIX) && name.endsWith(".log") }
             ?.toList() ?: emptyList()
@@ -272,21 +273,21 @@ object DiagnosticsLogger {
 
     fun clearLogs() {
         synchronized(lock) {
-            val ctx = contextRef.get() ?: return
-            val logDir = File(ctx.filesDir, "logs")
+            contextRef.get() ?: return
+            val logDir = AndroidDataRoot.logsDir()
             if (logDir.exists()) {
                 logDir.listFiles()?.forEach { it.delete() }
             }
             buffer.clear()
             bufferCount.set(0)
-            val crashFile = File(ctx.filesDir, "last_crash.txt")
+            val crashFile = File(AndroidDataRoot.logsDir(), "last_crash.txt")
             if (crashFile.exists()) crashFile.delete()
         }
     }
 
     fun getCrashFile(): File? {
-        val ctx = contextRef.get() ?: return null
-        val f = File(ctx.filesDir, "last_crash.txt")
+        contextRef.get() ?: return null
+        val f = File(AndroidDataRoot.logsDir(), "last_crash.txt")
         return if (f.exists()) f else null
     }
 }

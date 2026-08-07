@@ -33,7 +33,10 @@ class PreparedSessionTransactionTest {
     private fun createCoordinator(): EditorSessionCoordinator {
         return EditorSessionCoordinator(
             com.xiwei.sujian.data.AppServiceBridge(
-                com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595_prepared"),
+                com.xiwei.sujian.data.WriterAppServiceHolder(
+                    "/tmp/sujian_test_workspace_595_prepared",
+                    "/tmp/sujian_test_workspace_595_prepared",
+                ),
             ),
         )
     }

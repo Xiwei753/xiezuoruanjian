@@ -1,21 +1,9 @@
 namespace writer_core {
     [Throws=WriterError]
-    boolean init_workspace(string path);
+    WriterAppService open_app_service(string app_data_root, string projects_root);
 
     [Throws=WriterError]
-    WriterAppService open_workspace(string path);
-
-    [Throws=WriterError]
-    WriterAppService open_workspace_with_init(string path, PlatformInitDto init);
-
-    [Throws=WriterError]
-    boolean repair_workspace(string path);
-
-    [Throws=WriterError]
-    ProjectDto create_project_in_workspace(string workspace, string title);
-
-    [Throws=WriterError]
-    WorkspaceSummaryDto load_workspace_summary(string path);
+    WriterAppService open_app_service_with_init(string app_data_root, string projects_root, PlatformInitDto init);
 };
 
 dictionary AiActionResponse {
@@ -371,13 +359,6 @@ dictionary PlatformInitDto {
     boolean is_metered;
     string? proxy_host;
     u16? proxy_port;
-};
-
-dictionary WorkspaceSummaryDto {
-    string path;
-    boolean is_valid;
-    sequence<ProjectDto> projects;
-    sequence<RecentEditDto> recent_edits;
 };
 
 dictionary DateRangeDto {
@@ -970,18 +951,12 @@ dictionary ActionResultDto {
 };
 
 interface WriterAppService {
-    constructor(string workspace_path);
+    constructor(string app_data_root, string projects_root);
 
     [Throws=WriterError]
     sequence<ProjectDto> list_projects();
 
-    [Throws=WriterError]
-    boolean create_workspace_if_needed();
-
-    [Throws=WriterError]
-    boolean validate_workspace();
-
-    [Throws=WriterError]
+        [Throws=WriterError]
     sequence<RecentEditDto> get_recent_edits();
 
     [Throws=WriterError]

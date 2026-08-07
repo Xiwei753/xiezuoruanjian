@@ -118,11 +118,7 @@ impl AppBackend {
             }
         };
 
-        let has_workspace = || -> bool {
-            crate::backend::app_backend::create_core_api(path)
-                .validate_workspace()
-                .unwrap_or(false)
-        };
+        let has_workspace = || -> bool { path_obj.is_dir() };
 
         let is_git_repo = || -> bool { path_obj.join(".git").exists() };
 
@@ -159,72 +155,71 @@ impl AppBackend {
             match backend.sync(path_obj, &config, &secrets, true) {
                 Ok(result) => {
                     if result.status == writer_core::sync::SyncStatus::Success {
-                        let api = crate::backend::app_backend::create_core_api(path);
-                        if !api.validate_workspace().unwrap_or(false) {
-                            if let Err(e) = api.create_workspace_if_needed() {
-                                return SyncTaskOutcome {
-                                    operation_id: operation_id.to_string(),
-                                    sync_status: "error".to_string(),
-                                    action_result: serde_json::to_string(
-                                        &writer_core::api::SyncOperationStateDto {
-                                            operation_id: operation_id.to_string(),
-                                            operation_kind: "github_init".to_string(),
-                                            status_code: "error".to_string(),
-                                            phase_key: None,
-                                            summary_key: Some(
-                                                "sync.result.clone_success_init_failed".to_string(),
-                                            ),
-                                            summary_args: [(
-                                                "error".to_string(),
-                                                mask_sync_error(&e.to_string()),
-                                            )]
-                                            .into_iter()
-                                            .collect(),
-                                            counts:
-                                                writer_core::api::SyncOperationCountsDto::default(),
-                                            raw_error: Some(mask_sync_error(&e.to_string())),
-                                        },
-                                    )
-                                    .unwrap_or_default(),
-                                };
-                            }
-                            let push_backend =
-                                writer_core::sync::create_sync_backend(&config.backend_type);
-                            let push_result = push_backend.sync(path_obj, &config, &secrets, true);
-                            let save_first = match &push_result {
-                                Ok(r) if r.status != writer_core::sync::SyncStatus::Success => true,
-                                Err(_) => true,
-                                _ => false,
+                        // Core 已删除 workspace 概念。clone 成功后只需确保 projects 子目录存在。
+                        let projects_dir = path_obj.join("projects");
+                        if let Err(e) = std::fs::create_dir_all(&projects_dir) {
+                            return SyncTaskOutcome {
+                                operation_id: operation_id.to_string(),
+                                sync_status: "error".to_string(),
+                                action_result: serde_json::to_string(
+                                    &writer_core::api::SyncOperationStateDto {
+                                        operation_id: operation_id.to_string(),
+                                        operation_kind: "github_init".to_string(),
+                                        status_code: "error".to_string(),
+                                        phase_key: None,
+                                        summary_key: Some(
+                                            "sync.result.clone_success_init_failed".to_string(),
+                                        ),
+                                        summary_args: [(
+                                            "error".to_string(),
+                                            mask_sync_error(&e.to_string()),
+                                        )]
+                                        .into_iter()
+                                        .collect(),
+                                        counts:
+                                            writer_core::api::SyncOperationCountsDto::default(),
+                                        raw_error: Some(mask_sync_error(&e.to_string())),
+                                    },
+                                )
+                                .unwrap_or_default(),
                             };
-                            if save_first {
-                                let save_outcome = save_sync_configs(path, cfg_ref, sec_ref).err();
-                                match push_result {
-                                    Ok(push_res) => {
-                                        let category = push_res.error_category.clone();
-                                        let err = push_res.error.unwrap_or_default();
-                                        if let Some(se) = save_outcome {
-                                            return SyncTaskOutcome {
-                                                operation_id: operation_id.to_string(), sync_status: "error".to_string(),
-                                                action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto { operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), status_code: "error".to_string(), phase_key: None, summary_key: Some("sync.result.push_failed_save_config_failed".to_string()), summary_args: [("push_error".to_string(), mask_sync_error(&err)), ("save_error".to_string(), se)].into_iter().collect(), counts: writer_core::api::SyncOperationCountsDto::default(), raw_error: Some(mask_sync_error(&err)) }).unwrap_or_default(),
-                                            };
-                                        }
+                        }
+                        let push_backend =
+                            writer_core::sync::create_sync_backend(&config.backend_type);
+                        let push_result = push_backend.sync(path_obj, &config, &secrets, true);
+                        let save_first = match &push_result {
+                            Ok(r) if r.status != writer_core::sync::SyncStatus::Success => true,
+                            Err(_) => true,
+                            _ => false,
+                        };
+                        if save_first {
+                            let save_outcome = save_sync_configs(path, cfg_ref, sec_ref).err();
+                            match push_result {
+                                Ok(push_res) => {
+                                    let category = push_res.error_category.clone();
+                                    let err = push_res.error.unwrap_or_default();
+                                    if let Some(se) = save_outcome {
                                         return SyncTaskOutcome {
-                                            operation_id: operation_id.to_string(), sync_status: sync_error_category_from_code(category.as_deref(), &err),
-                                            action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto { operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), status_code: sync_error_category_from_code(category.as_deref(), &err), phase_key: None, summary_key: Some("sync.result.push_failed".to_string()), summary_args: [("error".to_string(), mask_sync_error(&err))].into_iter().collect(), counts: writer_core::api::SyncOperationCountsDto::default(), raw_error: Some(mask_sync_error(&err)) }).unwrap_or_default(),
+                                            operation_id: operation_id.to_string(), sync_status: "error".to_string(),
+                                            action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto { operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), status_code: "error".to_string(), phase_key: None, summary_key: Some("sync.result.push_failed_save_config_failed".to_string()), summary_args: [("push_error".to_string(), mask_sync_error(&err)), ("save_error".to_string(), se)].into_iter().collect(), counts: writer_core::api::SyncOperationCountsDto::default(), raw_error: Some(mask_sync_error(&err)) }).unwrap_or_default(),
                                         };
                                     }
-                                    Err(e) => {
-                                        if let Some(se) = save_outcome {
-                                            return SyncTaskOutcome {
-                                                operation_id: operation_id.to_string(), sync_status: "error".to_string(),
-                                                action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto { operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), status_code: "error".to_string(), phase_key: None, summary_key: Some("sync.result.push_failed_save_config_failed".to_string()), summary_args: [("push_error".to_string(), mask_sync_error(&e.to_string())), ("save_error".to_string(), se)].into_iter().collect(), counts: writer_core::api::SyncOperationCountsDto::default(), raw_error: Some(mask_sync_error(&e.to_string())) }).unwrap_or_default(),
-                                            };
-                                        }
+                                    return SyncTaskOutcome {
+                                        operation_id: operation_id.to_string(), sync_status: sync_error_category_from_code(category.as_deref(), &err),
+                                        action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto { operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), status_code: sync_error_category_from_code(category.as_deref(), &err), phase_key: None, summary_key: Some("sync.result.push_failed".to_string()), summary_args: [("error".to_string(), mask_sync_error(&err))].into_iter().collect(), counts: writer_core::api::SyncOperationCountsDto::default(), raw_error: Some(mask_sync_error(&err)) }).unwrap_or_default(),
+                                    };
+                                }
+                                Err(e) => {
+                                    if let Some(se) = save_outcome {
                                         return SyncTaskOutcome {
-                                            operation_id: operation_id.to_string(), sync_status: sync_error_category_from_code(None,&e.to_string()),
-                                            action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto { operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), status_code: sync_error_category_from_code(None,&e.to_string()), phase_key: None, summary_key: Some("sync.result.push_failed".to_string()), summary_args: [("error".to_string(), mask_sync_error(&e.to_string()))].into_iter().collect(), counts: writer_core::api::SyncOperationCountsDto::default(), raw_error: Some(mask_sync_error(&e.to_string())) }).unwrap_or_default(),
+                                            operation_id: operation_id.to_string(), sync_status: "error".to_string(),
+                                            action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto { operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), status_code: "error".to_string(), phase_key: None, summary_key: Some("sync.result.push_failed_save_config_failed".to_string()), summary_args: [("push_error".to_string(), mask_sync_error(&e.to_string())), ("save_error".to_string(), se)].into_iter().collect(), counts: writer_core::api::SyncOperationCountsDto::default(), raw_error: Some(mask_sync_error(&e.to_string())) }).unwrap_or_default(),
                                         };
                                     }
+                                    return SyncTaskOutcome {
+                                        operation_id: operation_id.to_string(), sync_status: sync_error_category_from_code(None,&e.to_string()),
+                                        action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto { operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), status_code: sync_error_category_from_code(None,&e.to_string()), phase_key: None, summary_key: Some("sync.result.push_failed".to_string()), summary_args: [("error".to_string(), mask_sync_error(&e.to_string()))].into_iter().collect(), counts: writer_core::api::SyncOperationCountsDto::default(), raw_error: Some(mask_sync_error(&e.to_string())) }).unwrap_or_default(),
+                                    };
                                 }
                             }
                         }

@@ -5,7 +5,7 @@ import com.xiwei.sujian.model.RecentEdit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-class WorkspaceUseCase(private val repository: WorkspaceRepository) {
+class ProjectUseCase(private val repository: ProjectRepository) {
     suspend fun getProjects(): List<Project> =
         withContext(Dispatchers.IO) {
             repository.getProjects()

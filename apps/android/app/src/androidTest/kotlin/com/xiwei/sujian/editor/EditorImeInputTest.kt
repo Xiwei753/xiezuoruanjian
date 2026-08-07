@@ -653,7 +653,7 @@ class EditorImeInputTest {
         testData: AndroidTestEnvironment.TestProjectData,
     ): String {
         val s = AndroidTestEnvironment.requireCurrentSession()
-        val repo = s.deps.workspaceRepository
+        val repo = s.deps.projectRepository
         var chapterId = ""
         ComposeWait.waitUntil(composeTestRule, {
             val chapters = repo.getChapters(testData.projectId, testData.volumeId)

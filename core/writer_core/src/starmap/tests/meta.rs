@@ -3,7 +3,7 @@ use tempfile::tempdir;
 
 fn setup_workspace() -> tempfile::TempDir {
     let dir = tempdir().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     dir
 }
 
@@ -15,7 +15,7 @@ fn test_starmap_graph_path() {
     let path = starmap_graph_path(workspace, starmap_id);
 
     let expected =
-        std::path::PathBuf::from("/dummy/workspace/app-meta/starmaps/test_starmap_id/graph.json");
+        std::path::PathBuf::from("/dummy/workspace/starmaps/test_starmap_id/graph.json");
     assert_eq!(path, expected);
 }
 

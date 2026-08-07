@@ -3466,7 +3466,7 @@ mod tests {
     fn test_perform_lww_sync_debounce_skips_when_not_forced() {
         // 测试自动同步（force_sync=false）在 min_interval 内被 debounce 跳过
         let dir = tempfile::tempdir().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
 
         // 先执行一次同步（force_sync=true 绕过 debounce）
         let config = SyncConfig {
@@ -3504,7 +3504,7 @@ mod tests {
     fn test_perform_lww_sync_force_sync_bypasses_debounce() {
         // 测试手动同步（force_sync=true）绕过 debounce
         let dir = tempfile::tempdir().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
 
         let config = SyncConfig {
             enabled: true,
@@ -3552,7 +3552,7 @@ mod tests {
     fn test_pending_take_remote_bypasses_debounce() {
         // 冲突解决后（pending_take_remote 非空），即使 force_sync=false 也应绕过 debounce
         let dir = tempfile::tempdir().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
 
         let config = SyncConfig {
             enabled: true,

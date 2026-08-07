@@ -130,7 +130,6 @@ pub(crate) fn c_str_to_rust(s: *const c_char) -> Result<String, i32> {
 ///  -1  = null pointer
 ///  -2  = invalid UTF-8
 ///  -3  = mutex poisoned
-///  -4  = create_workspace failed
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_init(path: *const c_char) -> i32 {
     let _ = LAST_ERROR.get_or_init(|| Mutex::new(String::new()));
@@ -141,12 +140,9 @@ pub unsafe extern "C" fn writer_core_init(path: *const c_char) -> i32 {
             return e;
         }
     };
-    let core = WriterCore::new(&c_str);
-    if let Err(e) = core.create_workspace() {
-        let msg = format!("create_workspace failed: {}", e);
-        set_last_error(&msg);
-        return -4;
-    }
+    let projects_root = std::path::Path::new(&c_str).join("projects");
+    std::fs::create_dir_all(&projects_root).ok();
+    let core = WriterCore::new(std::path::Path::new(&c_str), projects_root);
     let m = CORE.get_or_init(|| Mutex::new(None));
     if let Ok(mut guard) = m.lock() {
         *guard = Some(core);

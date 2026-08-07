@@ -1,18 +1,18 @@
 impl super::WriterCore {
     pub fn scan_sync_files(&self) -> crate::error::Result<Vec<crate::sync::SyncFileEntry>> {
-        crate::sync::SyncService::scan_workspace_for_sync(&self.workspace_path)
+        crate::sync::SyncService::scan_workspace_for_sync(&self.projects_root)
     }
 
     pub fn build_sync_plan_from_workspace(&self) -> crate::error::Result<crate::sync::SyncPlan> {
-        crate::sync::SyncService::build_sync_plan_from_workspace(&self.workspace_path)
+        crate::sync::SyncService::build_sync_plan_from_workspace(&self.projects_root)
     }
 
     pub fn load_sync_state(&self) -> crate::error::Result<crate::sync::SyncState> {
-        crate::sync::SyncService::load_sync_state(&self.workspace_path)
+        crate::sync::SyncService::load_sync_state(&self.app_data_root)
     }
 
     pub fn save_sync_state(&self, state: &crate::sync::SyncState) -> crate::error::Result<()> {
-        crate::sync::SyncService::save_sync_state(&self.workspace_path, state)
+        crate::sync::SyncService::save_sync_state(&self.app_data_root, state)
     }
 
     pub fn record_sync_conflict(
@@ -21,26 +21,26 @@ impl super::WriterCore {
         local_content: Option<&str>,
     ) -> crate::error::Result<()> {
         crate::sync::SyncService::record_sync_conflict(
-            &self.workspace_path,
+            &self.app_data_root,
             conflict,
             local_content,
         )
     }
 
     pub fn resolve_conflict_keep_local(&self, path: &str) -> crate::error::Result<()> {
-        crate::sync::SyncService::resolve_conflict_keep_local(&self.workspace_path, path)
+        crate::sync::SyncService::resolve_conflict_keep_local(&self.app_data_root, path)
     }
 
     pub fn resolve_conflict_take_remote(&self, path: &str) -> crate::error::Result<()> {
-        crate::sync::SyncService::resolve_conflict_take_remote(&self.workspace_path, path)
+        crate::sync::SyncService::resolve_conflict_take_remote(&self.app_data_root, path)
     }
 
     pub fn resolve_conflict_mark_merged(&self, path: &str) -> crate::error::Result<()> {
-        crate::sync::SyncService::resolve_conflict_mark_merged(&self.workspace_path, path)
+        crate::sync::SyncService::resolve_conflict_mark_merged(&self.app_data_root, path)
     }
 
     pub fn get_sync_ignored_paths(&self) -> crate::error::Result<Vec<String>> {
-        crate::sync::SyncService::get_sync_ignored_paths(&self.workspace_path)
+        crate::sync::SyncService::get_sync_ignored_paths(&self.app_data_root)
     }
 
     pub fn perform_sync_diagnostics(
@@ -69,7 +69,7 @@ impl super::WriterCore {
         &self,
         config: &crate::sync::SyncConfig,
     ) -> crate::error::Result<crate::sync::SyncPlan> {
-        crate::sync::SyncService::perform_sync_dry_run(&self.workspace_path, config)
+        crate::sync::SyncService::perform_sync_dry_run(&self.projects_root, config)
     }
 
     pub fn perform_sync(
@@ -92,7 +92,7 @@ impl super::WriterCore {
         } else {
             crate::sync::create_sync_backend(&backend_type)
         };
-        let result = backend.sync(&self.workspace_path, config, &secrets, force_sync)?;
+        let result = backend.sync(&self.projects_root, config, &secrets, force_sync)?;
         let mut result = result;
         if matches!(
             result.status,
@@ -135,8 +135,8 @@ impl super::WriterCore {
                 if !token.is_empty() {
                     let _ = storage.set_secret("sync_token", token.as_bytes());
                     let secrets_path = self
-                        .workspace_path
-                        .join("app-meta/sync/sync_secrets.local.json");
+                        .app_data_root
+                        .join("sync/sync_secrets.local.json");
                     let _ = std::fs::remove_file(&secrets_path);
                 }
             }
@@ -176,8 +176,8 @@ impl super::WriterCore {
             return Ok(());
         }
         // 无 secure storage（测试/桌面直连）：按 generation 落文件，与 live 槽同构。
-        let secrets_path = self.workspace_path.join(format!(
-            "app-meta/sync/sync_secrets_g{}.local.json",
+        let secrets_path = self.app_data_root.join(format!(
+            "sync/sync_secrets_g{}.local.json",
             generation
         ));
         if let Some(parent) = secrets_path.parent() {
@@ -220,8 +220,8 @@ impl super::WriterCore {
             }
             return Ok(None);
         }
-        let secrets_path = self.workspace_path.join(format!(
-            "app-meta/sync/sync_secrets_g{}.local.json",
+        let secrets_path = self.app_data_root.join(format!(
+            "sync/sync_secrets_g{}.local.json",
             generation
         ));
         if !secrets_path.exists() {
@@ -245,8 +245,8 @@ impl super::WriterCore {
             return Ok(());
         }
         // 无 secure storage（测试/桌面直连）：删除按 generation 落的文件。
-        let secrets_path = self.workspace_path.join(format!(
-            "app-meta/sync/sync_secrets_g{}.local.json",
+        let secrets_path = self.app_data_root.join(format!(
+            "sync/sync_secrets_g{}.local.json",
             generation
         ));
         if secrets_path.exists() {
@@ -257,8 +257,8 @@ impl super::WriterCore {
 
     fn load_sync_secrets_from_file(&self) -> crate::error::Result<crate::sync::SyncSecrets> {
         let secrets_path = self
-            .workspace_path
-            .join("app-meta/sync/sync_secrets.local.json");
+            .app_data_root
+            .join("sync/sync_secrets.local.json");
         if !secrets_path.exists() {
             return Ok(crate::sync::SyncSecrets::default());
         }
@@ -292,8 +292,8 @@ impl super::WriterCore {
         secrets: &crate::sync::SyncSecrets,
     ) -> crate::error::Result<()> {
         let secrets_path = self
-            .workspace_path
-            .join("app-meta/sync/sync_secrets.local.json");
+            .app_data_root
+            .join("sync/sync_secrets.local.json");
         if let Some(parent) = secrets_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -315,7 +315,7 @@ impl super::WriterCore {
     }
 
     pub fn load_sync_config(&self) -> crate::error::Result<crate::sync::SyncConfig> {
-        let config_path = self.workspace_path.join("app-meta/sync/sync_config.json");
+        let config_path = self.app_data_root.join("sync/sync_config.json");
         if !config_path.exists() {
             return Ok(crate::sync::SyncConfig {
                 enabled: false,
@@ -350,7 +350,7 @@ impl super::WriterCore {
     }
 
     pub fn save_sync_config(&self, config: &crate::sync::SyncConfig) -> crate::error::Result<()> {
-        let config_path = self.workspace_path.join("app-meta/sync/sync_config.json");
+        let config_path = self.app_data_root.join("sync/sync_config.json");
         if let Some(parent) = config_path.parent() {
             std::fs::create_dir_all(parent)?;
         }

@@ -5,30 +5,34 @@ use crate::volume::{self, Volume};
 
 impl super::WriterCore {
     pub fn list_projects(&self) -> Result<Vec<Project>> {
-        project::list_projects(&self.workspace_path)
+        project::list_projects(&self.projects_root)
     }
 
     pub fn create_project(&self, title: &str) -> Result<Project> {
-        project::create_project(&self.workspace_path, title)
+        project::create_project(&self.projects_root, title)
     }
 
     pub fn list_volumes(&self, project_id: &str) -> Result<Vec<Volume>> {
-        volume::list_volumes(&self.workspace_path, project_id)
+        let project_root = self.project_root(project_id);
+        volume::list_volumes(&project_root)
     }
 
     pub fn create_volume(&self, project_id: &str, title: &str) -> Result<Volume> {
-        volume::create_volume(&self.workspace_path, project_id, title)
+        let project_root = self.project_root(project_id);
+        volume::create_volume(&project_root, title)
     }
 
     pub fn list_valid_chapter_ids(
         &self,
         project_id: &str,
     ) -> Result<std::collections::HashSet<String>> {
-        chapter::list_valid_chapter_ids(&self.workspace_path, project_id)
+        let project_root = self.project_root(project_id);
+        chapter::list_valid_chapter_ids(&project_root)
     }
 
     pub fn list_chapters(&self, project_id: &str, volume_id: &str) -> Result<Vec<Chapter>> {
-        chapter::list_chapters(&self.workspace_path, project_id, volume_id)
+        let project_root = self.project_root(project_id);
+        chapter::list_chapters(&project_root, volume_id)
     }
 
     pub fn calculate_word_count(&self, text: &str) -> u32 {
@@ -41,11 +45,13 @@ impl super::WriterCore {
         volume_id: &str,
         title: &str,
     ) -> Result<Chapter> {
-        chapter::create_chapter(&self.workspace_path, project_id, volume_id, title)
+        let project_root = self.project_root(project_id);
+        chapter::create_chapter(&project_root, volume_id, title)
     }
 
     pub fn get_project_stats(&self, project_id: &str) -> Result<crate::project::ProjectStats> {
-        crate::project::get_project_stats(&self.workspace_path, project_id)
+        let project_root = self.project_root(project_id);
+        crate::project::get_project_stats(&project_root)
     }
 
     pub fn read_chapter(
@@ -54,7 +60,8 @@ impl super::WriterCore {
         volume_id: &str,
         chapter_id: &str,
     ) -> Result<ChapterContent> {
-        chapter::read_chapter(&self.workspace_path, project_id, volume_id, chapter_id)
+        let project_root = self.project_root(project_id);
+        chapter::read_chapter(&project_root, volume_id, chapter_id)
     }
 
     pub fn open_chapter(
@@ -77,13 +84,8 @@ impl super::WriterCore {
         chapter_id: &str,
         content: &str,
     ) -> Result<()> {
-        chapter::save_chapter(
-            &self.workspace_path,
-            project_id,
-            volume_id,
-            chapter_id,
-            content,
-        )
+        let project_root = self.project_root(project_id);
+        chapter::save_chapter(&project_root, volume_id, chapter_id, content)
     }
 
     pub fn clear_chapter_content(
@@ -92,7 +94,8 @@ impl super::WriterCore {
         volume_id: &str,
         chapter_id: &str,
     ) -> Result<()> {
-        chapter::clear_chapter_content(&self.workspace_path, project_id, volume_id, chapter_id)
+        let project_root = self.project_root(project_id);
+        chapter::clear_chapter_content(&project_root, volume_id, chapter_id)
     }
 
     pub fn clear_chapter_content_verified(
@@ -101,12 +104,8 @@ impl super::WriterCore {
         volume_id: &str,
         chapter_id: &str,
     ) -> Result<ChapterSaveReceipt> {
-        chapter::clear_chapter_content_verified(
-            &self.workspace_path,
-            project_id,
-            volume_id,
-            chapter_id,
-        )
+        let project_root = self.project_root(project_id);
+        chapter::clear_chapter_content_verified(&project_root, volume_id, chapter_id)
     }
 
     pub fn write_chapter_verified(
@@ -116,13 +115,8 @@ impl super::WriterCore {
         chapter_id: &str,
         content: &str,
     ) -> Result<ChapterSaveReceipt> {
-        chapter::save_chapter_verified(
-            &self.workspace_path,
-            project_id,
-            volume_id,
-            chapter_id,
-            content,
-        )
+        let project_root = self.project_root(project_id);
+        chapter::save_chapter_verified(&project_root, volume_id, chapter_id, content)
     }
 
     pub fn write_chapter_verified_with_allow_empty_overwrite(
@@ -133,9 +127,9 @@ impl super::WriterCore {
         content: &str,
         allow_empty_overwrite: bool,
     ) -> Result<ChapterSaveReceipt> {
+        let project_root = self.project_root(project_id);
         chapter::save_chapter_verified_with_allow_empty_overwrite(
-            &self.workspace_path,
-            project_id,
+            &project_root,
             volume_id,
             chapter_id,
             content,
@@ -150,25 +144,20 @@ impl super::WriterCore {
         chapter_id: &str,
         note: &str,
     ) -> Result<()> {
-        chapter::update_chapter_note(
-            &self.workspace_path,
-            project_id,
-            volume_id,
-            chapter_id,
-            note,
-        )
+        let project_root = self.project_root(project_id);
+        chapter::update_chapter_note(&project_root, volume_id, chapter_id, note)
     }
 
     pub fn rename_project(&self, project_id: &str, new_title: &str) -> crate::error::Result<()> {
-        crate::project::rename_project(&self.workspace_path, project_id, new_title)
+        crate::project::rename_project(&self.projects_root, project_id, new_title)
     }
 
     pub fn delete_project(&self, project_id: &str) -> crate::error::Result<()> {
-        crate::project::delete_project(&self.workspace_path, project_id)
+        crate::project::delete_project(&self.projects_root, project_id, &self.app_data_root)
     }
 
     pub fn reorder_projects(&self, ordered_ids: &[String]) -> crate::error::Result<()> {
-        crate::project::reorder_projects(&self.workspace_path, ordered_ids)
+        crate::project::reorder_projects(&self.projects_root, ordered_ids)
     }
 
     pub fn rename_volume(
@@ -177,11 +166,13 @@ impl super::WriterCore {
         volume_id: &str,
         new_title: &str,
     ) -> crate::error::Result<()> {
-        crate::volume::rename_volume(&self.workspace_path, project_id, volume_id, new_title)
+        let project_root = self.project_root(project_id);
+        crate::volume::rename_volume(&project_root, volume_id, new_title)
     }
 
     pub fn delete_volume(&self, project_id: &str, volume_id: &str) -> crate::error::Result<()> {
-        crate::volume::delete_volume(&self.workspace_path, project_id, volume_id)
+        let project_root = self.project_root(project_id);
+        crate::volume::delete_volume(&project_root, volume_id, &self.app_data_root)
     }
 
     pub fn reorder_volumes(
@@ -189,7 +180,8 @@ impl super::WriterCore {
         project_id: &str,
         ordered_ids: &[String],
     ) -> crate::error::Result<()> {
-        crate::volume::reorder_volumes(&self.workspace_path, project_id, ordered_ids)
+        let project_root = self.project_root(project_id);
+        crate::volume::reorder_volumes(&project_root, ordered_ids)
     }
 
     pub fn rename_chapter(
@@ -199,13 +191,8 @@ impl super::WriterCore {
         chapter_id: &str,
         new_title: &str,
     ) -> crate::error::Result<()> {
-        crate::chapter::rename_chapter(
-            &self.workspace_path,
-            project_id,
-            volume_id,
-            chapter_id,
-            new_title,
-        )
+        let project_root = self.project_root(project_id);
+        crate::chapter::rename_chapter(&project_root, volume_id, chapter_id, new_title)
     }
 
     pub fn delete_chapter(
@@ -214,7 +201,8 @@ impl super::WriterCore {
         volume_id: &str,
         chapter_id: &str,
     ) -> crate::error::Result<()> {
-        crate::chapter::delete_chapter(&self.workspace_path, project_id, volume_id, chapter_id)
+        let project_root = self.project_root(project_id);
+        crate::chapter::delete_chapter(&project_root, volume_id, chapter_id, &self.app_data_root)
     }
 
     pub fn reorder_chapters(
@@ -223,7 +211,8 @@ impl super::WriterCore {
         volume_id: &str,
         ordered_ids: &[String],
     ) -> crate::error::Result<()> {
-        crate::chapter::reorder_chapters(&self.workspace_path, project_id, volume_id, ordered_ids)
+        let project_root = self.project_root(project_id);
+        crate::chapter::reorder_chapters(&project_root, volume_id, ordered_ids)
     }
 
     /// 从子章节聚合获取 volume 的最近更新时间。
@@ -232,11 +221,8 @@ impl super::WriterCore {
         project_id: &str,
         volume_id: &str,
     ) -> crate::error::Result<String> {
-        crate::project::get_volume_updated_at_aggregated(
-            &self.workspace_path,
-            project_id,
-            volume_id,
-        )
+        let project_root = self.project_root(project_id);
+        crate::project::get_volume_updated_at_aggregated(&project_root, volume_id)
     }
 
     /// 从子章节聚合获取 project 的最近更新时间。
@@ -244,6 +230,7 @@ impl super::WriterCore {
         &self,
         project_id: &str,
     ) -> crate::error::Result<String> {
-        crate::project::get_project_updated_at_aggregated(&self.workspace_path, project_id)
+        let project_root = self.project_root(project_id);
+        crate::project::get_project_updated_at_aggregated(&project_root)
     }
 }

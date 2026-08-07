@@ -6,8 +6,8 @@ import androidx.test.runner.lifecycle.ActivityLifecycleCallback
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
 import com.xiwei.sujian.data.AppServiceBridge
+import com.xiwei.sujian.data.ProjectRepository
 import com.xiwei.sujian.data.SettingsRepository
-import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.data.WriterAppServiceHolder
 import com.xiwei.sujian.editor.v2.coordinator.EditorSessionCoordinator
 import com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost
@@ -178,19 +178,12 @@ class TestSujianAppDependencies(
                     testWorkspaceDir.absolutePath,
             )
         }
-        val manifest = File(testWorkspaceDir, "workspace_manifest.json")
-        if (!manifest.exists()) {
-            throw AssertionError(
-                "TestSujianAppDependencies: workspace_manifest.json does not exist — " +
-                    "TestWorkspaceFactory.initializeWorkspaceViaCore() must have failed silently: " +
-                    manifest.absolutePath,
-            )
-        }
     }
 
     private val testHolder: WriterAppServiceHolder =
         WriterAppServiceHolder(
-            workspacePath = testWorkspaceDir.absolutePath,
+            appDataRoot = testAppDataDir.absolutePath,
+            projectsRoot = testWorkspaceDir.absolutePath,
             platformInit =
                 PlatformInitDto(
                     platform = PlatformDto.ANDROID,
@@ -209,7 +202,7 @@ class TestSujianAppDependencies(
                 ),
         )
     override val appServiceBridge: AppServiceBridge = AppServiceBridge(testHolder)
-    override val workspaceRepository: WorkspaceRepository = WorkspaceRepository(appContext, appServiceBridge)
+    override val projectRepository: ProjectRepository = ProjectRepository(appContext, appServiceBridge)
     override val settingsRepository: SettingsRepository = SettingsRepository(appContext, appServiceBridge, prefsSuffix)
     override val syncStatusRepository: com.xiwei.sujian.data.SyncStatusRepository =
         com.xiwei.sujian.data.SyncStatusRepository(
@@ -409,7 +402,7 @@ object AndroidTestEnvironment {
         session: TestSession? = null,
     ): TestProjectData {
         val s = session ?: requireCurrentSession()
-        val repo = s.deps.workspaceRepository
+        val repo = s.deps.projectRepository
         val projects = repo.getProjects()
         val existing = projects.firstOrNull { it.title == "自动化测试作品" }
         if (existing != null) {

@@ -27,11 +27,11 @@ char*  writer_core_resolve_layout(const char* metrics_json);
 // writer_core_resolve_screen_policy: Input/output are JSON strings (ResultEnvelope<ScreenPolicyDto>).
 char*  writer_core_resolve_screen_policy(const char* screen_role_json, const char* shell_mode_json);
 
-// ── Workspace ──
+// ── Workspace 查询 ──
+// 新 Core API 边界：平台通过 writer_core_init 注入 app_data_root 与 projects_root，
+// Core 不再创建/验证/打开 workspace。此处仅保留查询类 C ABI。
 // All return ResultEnvelope JSON. Path arguments are UTF-8 strings.
-char*  writer_core_validate_workspace(void);
 char*  writer_core_list_workspaces(void);
-char*  writer_core_open_workspace(const char* path);
 char*  writer_core_get_workspace_state(void);
 char*  writer_core_resolve_chapter_location(const char* chapter_id);
 char*  writer_core_resolve_volume_location(const char* volume_id);

@@ -503,8 +503,8 @@ pub struct SyncableSettings {
     pub theme_palette: ThemePalette,
 }
 
-pub fn load_local_settings(workspace_path: &Path) -> Result<LocalSettings> {
-    let path = workspace_path.join("app-meta/settings/settings.local.json");
+pub fn load_local_settings(config_dir: &Path) -> Result<LocalSettings> {
+    let path = config_dir.join("settings.local.json");
     if !path.exists() {
         return Ok(LocalSettings::default());
     }
@@ -514,14 +514,14 @@ pub fn load_local_settings(workspace_path: &Path) -> Result<LocalSettings> {
     Ok(settings)
 }
 
-pub fn save_local_settings(workspace_path: &Path, settings: &LocalSettings) -> Result<()> {
-    let path = workspace_path.join("app-meta/settings/settings.local.json");
+pub fn save_local_settings(config_dir: &Path, settings: &LocalSettings) -> Result<()> {
+    let path = config_dir.join("settings.local.json");
     let content = serde_json::to_string_pretty(settings)?;
     crate::storage::atomic_write_string(&path, &content)
 }
 
-pub fn load_syncable_settings(workspace_path: &Path) -> Result<SyncableSettings> {
-    let path = workspace_path.join("app-meta/settings/settings.sync.json");
+pub fn load_syncable_settings(config_dir: &Path) -> Result<SyncableSettings> {
+    let path = config_dir.join("settings.sync.json");
     if !path.exists() {
         return Ok(SyncableSettings::default());
     }
@@ -529,8 +529,8 @@ pub fn load_syncable_settings(workspace_path: &Path) -> Result<SyncableSettings>
     Ok(serde_json::from_str(&content)?)
 }
 
-pub fn save_syncable_settings(workspace_path: &Path, settings: &SyncableSettings) -> Result<()> {
-    let path = workspace_path.join("app-meta/settings/settings.sync.json");
+pub fn save_syncable_settings(config_dir: &Path, settings: &SyncableSettings) -> Result<()> {
+    let path = config_dir.join("settings.sync.json");
     let content = serde_json::to_string_pretty(settings)?;
     crate::storage::atomic_write_string(&path, &content)
 }
@@ -551,8 +551,8 @@ pub struct DeviceInfo {
     pub platform: String,
 }
 
-pub fn load_device_info(workspace_path: &Path) -> Result<DeviceInfo> {
-    let path = workspace_path.join("app-meta/device/current_device.json");
+pub fn load_device_info(config_dir: &Path) -> Result<DeviceInfo> {
+    let path = config_dir.join("device/current_device.json");
     if !path.exists() {
         return Ok(DeviceInfo::default());
     }
@@ -560,8 +560,8 @@ pub fn load_device_info(workspace_path: &Path) -> Result<DeviceInfo> {
     Ok(serde_json::from_str(&content)?)
 }
 
-pub fn save_device_info(workspace_path: &Path, info: &DeviceInfo) -> Result<()> {
-    let path = workspace_path.join("app-meta/device/current_device.json");
+pub fn save_device_info(config_dir: &Path, info: &DeviceInfo) -> Result<()> {
+    let path = config_dir.join("device/current_device.json");
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -573,12 +573,12 @@ pub fn save_device_info(workspace_path: &Path, info: &DeviceInfo) -> Result<()> 
 /// 仅在字段为空时填充，已有值不会被覆盖。
 /// 当 `preferred_device_id` 为 `Some` 时优先使用平台注入值，避免随机生成。
 pub fn ensure_device_info(
-    workspace_path: &Path,
+    config_dir: &Path,
     platform: &str,
     device_class: &str,
     preferred_device_id: Option<&str>,
 ) -> Result<DeviceInfo> {
-    let mut info = load_device_info(workspace_path).unwrap_or_default();
+    let mut info = load_device_info(config_dir).unwrap_or_default();
     let mut changed = false;
     if info.device_id.is_empty() {
         info.device_id = preferred_device_id
@@ -596,7 +596,7 @@ pub fn ensure_device_info(
         changed = true;
     }
     if changed {
-        save_device_info(workspace_path, &info)?;
+        save_device_info(config_dir, &info)?;
     }
     Ok(info)
 }
@@ -605,14 +605,14 @@ pub fn ensure_device_info(
 /// Primary source: SyncableSettings.font_size
 /// Fallback: LocalSettings.editor_font_size (when syncable <= 0)
 /// Final default: 16.0
-pub fn get_effective_font_size(workspace_path: &Path) -> f64 {
-    let syncable = load_syncable_settings(workspace_path);
+pub fn get_effective_font_size(config_dir: &Path) -> f64 {
+    let syncable = load_syncable_settings(config_dir);
     if let Ok(s) = syncable {
         if s.font_size > 0.0 {
             return s.font_size;
         }
     }
-    let local = load_local_settings(workspace_path);
+    let local = load_local_settings(config_dir);
     if let Ok(s) = local {
         if s.editor_font_size > 0.0 {
             return f64::from(s.editor_font_size);
@@ -623,17 +623,17 @@ pub fn get_effective_font_size(workspace_path: &Path) -> f64 {
 
 /// Sets the editor font size in SyncableSettings.
 /// Does NOT modify LocalSettings.editor_font_size (preserved for backward compatibility).
-pub fn set_editor_font_size(workspace_path: &Path, font_size: f64) -> Result<()> {
-    let mut syncable = load_syncable_settings(workspace_path).unwrap_or_default();
+pub fn set_editor_font_size(config_dir: &Path, font_size: f64) -> Result<()> {
+    let mut syncable = load_syncable_settings(config_dir).unwrap_or_default();
     syncable.font_size = font_size;
-    save_syncable_settings(workspace_path, &syncable)
+    save_syncable_settings(config_dir, &syncable)
 }
 
 // ── Palette catalog operations ──
 
 /// Base directory for palette catalog.
-fn palettes_base_dir(workspace_path: &Path) -> std::path::PathBuf {
-    workspace_path.join("app-meta/themes/palettes")
+fn palettes_base_dir(config_dir: &Path) -> std::path::PathBuf {
+    config_dir.join("themes/palettes")
 }
 
 /// Compute a stable fingerprint for a pair of color schemes.
@@ -662,8 +662,8 @@ pub fn compute_palette_fingerprint(light: &ThemeColorScheme, dark: &ThemeColorSc
 /// Save a palette record to the catalog.
 /// Path: `app-meta/themes/palettes/<device_id>/<fingerprint>.json`
 /// If the file already exists, it is not overwritten (immutable).
-pub fn save_palette_record(workspace_path: &Path, record: &ThemePaletteRecord) -> Result<()> {
-    let dir = palettes_base_dir(workspace_path).join(&record.source_device_id);
+pub fn save_palette_record(config_dir: &Path, record: &ThemePaletteRecord) -> Result<()> {
+    let dir = palettes_base_dir(config_dir).join(&record.source_device_id);
     fs::create_dir_all(&dir)?;
     let path = dir.join(format!("{}.json", record.palette_fingerprint));
     if path.exists() {
@@ -675,11 +675,11 @@ pub fn save_palette_record(workspace_path: &Path, record: &ThemePaletteRecord) -
 
 /// Load a specific palette record by device_id and fingerprint.
 pub fn load_palette_record(
-    workspace_path: &Path,
+    config_dir: &Path,
     device_id: &str,
     fingerprint: &str,
 ) -> Result<ThemePaletteRecord> {
-    let path = palettes_base_dir(workspace_path)
+    let path = palettes_base_dir(config_dir)
         .join(device_id)
         .join(format!("{}.json", fingerprint));
     let content = fs::read_to_string(&path)?;
@@ -695,8 +695,8 @@ pub fn load_palette_record(
     clippy::too_many_arguments,
     clippy::type_complexity
 )]
-pub fn list_palette_records(workspace_path: &Path) -> Result<Vec<ThemePaletteRecord>> {
-    let base = palettes_base_dir(workspace_path);
+pub fn list_palette_records(config_dir: &Path) -> Result<Vec<ThemePaletteRecord>> {
+    let base = palettes_base_dir(config_dir);
     if !base.exists() {
         return Ok(Vec::new());
     }
@@ -725,11 +725,11 @@ pub fn list_palette_records(workspace_path: &Path) -> Result<Vec<ThemePaletteRec
 
 /// Delete a specific palette record.
 pub fn delete_palette_record(
-    workspace_path: &Path,
+    config_dir: &Path,
     device_id: &str,
     fingerprint: &str,
 ) -> Result<()> {
-    let path = palettes_base_dir(workspace_path)
+    let path = palettes_base_dir(config_dir)
         .join(device_id)
         .join(format!("{}.json", fingerprint));
     if path.exists() {
@@ -881,14 +881,14 @@ pub fn legacy_palette_to_record(palette: &ThemePalette) -> ThemePaletteRecord {
 /// Does nothing if the legacy palette is empty/default.
 /// Returns true if migration was performed.
 #[allow(deprecated)]
-pub fn migrate_legacy_theme_palette(workspace_path: &Path) -> Result<bool> {
-    let syncable = load_syncable_settings(workspace_path)?;
+pub fn migrate_legacy_theme_palette(config_dir: &Path) -> Result<bool> {
+    let syncable = load_syncable_settings(config_dir)?;
     if syncable.theme_palette.source.is_empty() && syncable.theme_palette.light_primary.is_empty() {
         return Ok(false);
     }
     let record = legacy_palette_to_record(&syncable.theme_palette);
-    save_palette_record(workspace_path, &record)?;
-    let mut local = load_local_settings(workspace_path)?;
+    save_palette_record(config_dir, &record)?;
+    let mut local = load_local_settings(config_dir)?;
     let need_palette_update = local.selected_palette_id.is_empty();
     if need_palette_update {
         local.selected_palette_id = record.palette_id.clone();
@@ -901,7 +901,7 @@ pub fn migrate_legacy_theme_palette(workspace_path: &Path) -> Result<bool> {
         local.appearance_mode = syncable.theme_mode.clone();
     }
     if need_palette_update || need_appearance_update {
-        save_local_settings(workspace_path, &local)?;
+        save_local_settings(config_dir, &local)?;
     }
     Ok(true)
 }
@@ -1472,7 +1472,7 @@ mod tests {
         };
         save_device_info(temp_dir.path(), &info).unwrap();
 
-        let path = temp_dir.path().join("app-meta/device/current_device.json");
+        let path = temp_dir.path().join("device/current_device.json");
         let content = fs::read_to_string(&path).unwrap();
         let loaded: DeviceInfo = serde_json::from_str(&content).unwrap();
         assert_eq!(loaded.device_id, "uuid-456");

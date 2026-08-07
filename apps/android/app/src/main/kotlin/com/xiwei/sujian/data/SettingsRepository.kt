@@ -16,6 +16,7 @@ import com.xiwei.sujian.model.SyncState
 import com.xiwei.sujian.model.SyncableSettings
 import com.xiwei.sujian.model.ThemeColorScheme
 import com.xiwei.sujian.model.ThemePaletteRecord
+import com.xiwei.sujian.platform.AndroidDataRoot
 
 /**
  * SettingsRepository — 设置仓库层
@@ -600,8 +601,8 @@ class SettingsRepository(
         return BridgeProvider.getAiStatus(appContext)
     }
 
-    fun workspaceDir(): String {
-        return WorkspaceManager.getWorkspaceDir(appContext).absolutePath
+    fun projectsDir(): String {
+        return AndroidDataRoot.projectsDir().absolutePath
     }
 
     fun performSyncDiagnostics(config: SyncConfig): BridgeResult<SyncDiagnosticsResult> {

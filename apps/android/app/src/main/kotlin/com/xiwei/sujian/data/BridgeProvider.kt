@@ -26,13 +26,10 @@ object BridgeProvider {
         return appServiceInstance ?: synchronized(this) {
             appServiceInstance ?: run {
                 val appContext = context.applicationContext
-                val workspacePath = WorkspaceManager.getWorkspaceDir(appContext).absolutePath
                 val (isConnected, isMetered) = detectNetworkState(appContext)
                 val holder =
                     WriterAppServiceHolder.createFromContext(
                         context = appContext,
-                        workspacePath = workspacePath,
-                        filesDir = appContext.filesDir.absolutePath,
                         cacheDir = appContext.cacheDir.absolutePath,
                         noBackupDir = appContext.noBackupFilesDir.absolutePath,
                         deviceId = resolveDeviceId(appContext),
@@ -48,8 +45,6 @@ object BridgeProvider {
             }
         }
     }
-
-    fun getWorkspaceBridge(context: Context): WorkspaceBridge = WorkspaceBridge(getAppServiceBridge(context))
 
     fun getWritingBridge(context: Context): WritingBridge = WritingBridge(getAppServiceBridge(context))
 

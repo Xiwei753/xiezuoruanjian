@@ -54,7 +54,7 @@ impl super::WriterCore {
 
         match action_id {
             "settings.editor.font_size.get" => {
-                let font_size = crate::settings::get_effective_font_size(&self.workspace_path);
+                let font_size = crate::settings::get_effective_font_size(&self.app_data_root);
                 Ok(ActionResult {
                     success: true,
                     message: None,
@@ -74,7 +74,7 @@ impl super::WriterCore {
                             requires_confirmation: None,
                         });
                     }
-                    crate::settings::set_editor_font_size(&self.workspace_path, font_size)?;
+                    crate::settings::set_editor_font_size(&self.app_data_root, font_size)?;
                     Ok(ActionResult {
                         success: true,
                         message: Some("Font size updated".to_string()),

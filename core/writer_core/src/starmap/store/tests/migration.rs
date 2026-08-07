@@ -5,7 +5,7 @@ use tempfile::TempDir;
 #[test]
 fn migration_json_recorded_on_v1_load() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -23,7 +23,7 @@ fn migration_json_recorded_on_v1_load() {
 #[test]
 fn merge_memory_ids_updates_edge_endpoint_in_index() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -74,7 +74,7 @@ fn merge_memory_ids_updates_edge_endpoint_in_index() {
 #[test]
 fn merge_memory_ids_updates_embed_host_in_index() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -121,7 +121,7 @@ fn merge_memory_ids_updates_embed_host_in_index() {
 #[test]
 fn migrate_flat_to_bucket_records_migration() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -159,7 +159,7 @@ fn migrate_flat_to_bucket_records_migration() {
 #[test]
 fn merge_memory_ids_removes_deleted_ids() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -188,7 +188,7 @@ fn merge_memory_ids_removes_deleted_ids() {
 #[test]
 fn merge_memory_ids_skips_deleted_edge_in_index() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);

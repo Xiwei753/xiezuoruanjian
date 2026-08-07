@@ -1,16 +1,19 @@
 // =============================================================================
-// workspace_backend.rs — 工作区领域 QObject 后端适配层
+// workspace_backend.rs — 平台数据目录管理 + 作品目录打开/发现 QObject 后端适配层
 // =============================================================================
 //
 // 引用了什么：
 // - super::*：引入 AppBackend 核心后端的全部方法与结构体。
-// - crate::backend::AppRef：用于安全访问全局 AppBackend 指针以读取/更新工作区状态。
+// - crate::backend::AppRef：用于安全访问全局 AppBackend 指针以读取/更新数据根状态。
 //
 // 干什么的：
 // - 实现 WorkspaceBackend 结构体，作为 QML 中 "workspaceBackend" 对象的桥梁。
-// - 提供工作区的全生命周期交互，包含自动恢复上次工作区、唤起 RFD 文件夹框选择路径新建/打开工作区等。
-// - 支持从 GitHub 克隆（init_workspace_from_github & execute_github_init）拉取已有工作区至本地，并在异步线程中进行安全性操作。
-// - 负责向上层 QML 主页提供当前工作区路径（workspace_path）和是否已加载工作区（has_workspace）属性，以驱动界面渲染。
+// - 平台数据目录管理：Linux 允许用户自己选择素笺数据根目录；选择结果由 Linux 平台层保存，
+//   然后把目录信息注入 Core 的两路径 API (app_data_root, projects_root)。
+// - 作品目录打开/发现：基于数据根目录发现并打开作品。
+// - 支持从 GitHub 克隆（init_workspace_from_github & execute_github_init）拉取已有数据至本地。
+// - 负责向上层 QML 主页提供当前数据根路径（workspace_path）和是否已加载（has_workspace）属性。
+//   QML 仍把作品首页叫"工作区"，这只是 UI 命名；底层不再调用 Core workspace API。
 //
 // 被什么引用：
 // - 被 apps/Linux_qt/src/backend/mod.rs 引用，用于实例化工作区后端并绑定为 QML 全局上下文属性。
@@ -150,7 +153,7 @@ impl WorkspaceBackend {
             "workspace_backend_create_workspace_called",
             &format!("path={}", path_str),
         );
-        let result = self.with_app_mut(|app| app.internal_open_workspace(&path_str, true));
+        let result = self.with_app_mut(|app| app.internal_open_data_root(&path_str));
         if result.is_ok() {
             self.emit_workspace_changed();
         }
@@ -169,7 +172,7 @@ impl WorkspaceBackend {
             "workspace_backend_open_workspace_called",
             &format!("path={}", path_str),
         );
-        let result = self.with_app_mut(|app| app.internal_open_workspace(&path_str, false));
+        let result = self.with_app_mut(|app| app.internal_open_data_root(&path_str));
         if result.is_ok() {
             self.emit_workspace_changed();
         }
@@ -182,9 +185,8 @@ impl WorkspaceBackend {
         }
     }
     fn clear_last_workspace(&mut self) {
-        if self.with_app_mut(|app| app.clear_last_workspace()).is_ok() {
-            self.workspace_state_changed();
-        }
+        // last_workspace_path 已从 AppConfig 删除；此方法保留为 QML UI 命名，不再有副作用。
+        self.workspace_state_changed();
     }
     fn switch_workspace(&mut self) {
         if self.with_app_mut(|app| app.switch_workspace()).is_ok() {
@@ -225,8 +227,14 @@ impl WorkspaceBackend {
         }
     }
     fn get_workspace_diagnostics(&self) -> QString {
-        self.with_app(|app| app.get_workspace_diagnostics())
-            .unwrap_or_else(|_| backend_link_broken_json())
+        // Core 已删除 get_workspace_diagnostics API。
+        // 保留 QML 方法签名以避免破坏 QML；返回空诊断信封。
+        crate::backend::json_utils::envelope_ok_json(serde_json::json!({
+            "hasWorkspace": self.snap().has_workspace,
+            "treeCount": 0u64,
+            "issues": []
+        }))
+        .into()
     }
     fn open_workspace_dir(&mut self) {
         if self.with_app_mut(|app| app.open_workspace_dir()).is_err() {
@@ -276,7 +284,7 @@ impl WorkspaceBackend {
 
 impl AppBackend {
     // Included inside impl AppBackend from app_backend.rs.
-    // Deprecated compatibility methods for this Linux backend domain.
+    // 平台数据目录管理 + 作品目录打开/发现方法。
 
     // AppBackend::has_workspace
     pub(crate) fn has_workspace(&self) -> bool {
@@ -288,140 +296,55 @@ impl AppBackend {
         self.current_pending_github_init_path.clone().into()
     }
 
-    // AppBackend::get_workspace_diagnostics
-    pub(crate) fn get_workspace_diagnostics(&self) -> QString {
-        let api = crate::backend::app_backend::create_core_api(&self.current_workspace);
-        match api
-            .get_workspace_diagnostics(self.current_has_workspace, self.cached_tree.len() as u64)
-        {
-            Ok(diagnostics) => crate::backend::json_utils::envelope_ok_json(diagnostics),
-            Err(e) => crate::backend::json_utils::envelope_error_json(e),
-        }
-        .into()
-    }
-
     // AppBackend::try_restore_last_workspace
+    //
+    // last_workspace_path 已从 AppConfig 删除。Linux 平台层不再自动恢复上次数据根；
+    // 用户需要手动选择数据根目录。此处只加载应用级主题等设置。
     pub(crate) fn try_restore_last_workspace(&mut self) {
         self.debug_log("workspace", "try_restore_last_workspace_start", "");
-        if let Some(raw_path) = writer_core::app_config::get_last_workspace_path() {
-            let path = normalize_workspace_path(&raw_path);
-            self.debug_log(
-                "workspace",
-                "try_restore_last_workspace_path_found",
-                &format!("path={}", path),
-            );
-            let api = crate::backend::app_backend::create_core_api(&path);
-            let val_res = api.validate_workspace().unwrap_or(false);
-            self.debug_log(
-                "workspace",
-                "try_restore_last_workspace_validate",
-                &format!("path={}, is_valid={}", path, val_res),
-            );
-            if val_res {
-                self.current_workspace = path.clone();
-                self.current_has_workspace = true;
-                self.current_save_status = "已保存".to_string();
-                self.save_status_changed();
-                self.reload_tree();
-                self.load_sync_config();
-                self.load_local_settings();
-                // 写入 current_device.json 设备信息（与 internal_open_workspace 一致）
-                if let Err(e) = api.ensure_device_info("desktop", "desktop") {
-                    self.debug_log("workspace", "ensure_device_info_failed", &format!("{}", e));
-                }
-                self.ai_available_changed();
-                self.workspace_opened();
-                self.workspace_content_changed();
-                self.workspace_state_changed();
-
-                if let Err(e) = api.search_service_rebuild(None) {
-                    self.debug_log(
-                        "workspace",
-                        "search_index_rebuild_failed",
-                        &format!("{}", e),
-                    );
-                }
-                self.debug_log(
-                    "workspace",
-                    "try_restore_last_workspace_success",
-                    &format!("path={}", path),
-                );
-                return;
-            }
-            // Restore failed: clear the invalid lastWorkspacePath to avoid being stuck
-            self.debug_warn(
-                "workspace",
-                "try_restore_last_workspace_failed_clearing",
-                &format!("path={}", path),
-            );
-            let _ = writer_core::app_config::clear_last_workspace_path();
-        } else {
-            self.debug_log("workspace", "try_restore_last_workspace_no_path", "");
-        }
-        // No valid workspace to restore
+        self.debug_log(
+            "workspace",
+            "try_restore_last_workspace_no_saved_path",
+            "last_workspace_path removed; waiting for user selection",
+        );
+        // No saved data root to restore
         self.current_has_workspace = false;
         self.current_sync_status = "no_workspace".to_string();
         self.sync_status_changed();
         self.workspace_state_changed();
-        // Load app-level theme mode even without workspace
+        // Load app-level theme mode even without data root
         self.load_app_theme_mode();
         self.ai_available_changed();
     }
 
-    // AppBackend::internal_open_workspace
-    pub(crate) fn internal_open_workspace(&mut self, path: &str, initialize: bool) -> QString {
-        let canonical_path = normalize_workspace_path(path);
+    // AppBackend::internal_open_data_root
+    //
+    // 打开用户选择的数据根目录。设置 app_data_root = path, projects_root = path/projects。
+    // 不再调用 Core workspace API (validate_workspace / create_workspace_if_needed)。
+    pub(crate) fn internal_open_data_root(&mut self, path: &str) -> QString {
+        let canonical_path = normalize_data_root_path(path);
         let path = canonical_path.as_str();
         self.debug_log(
             "workspace",
-            "internal_open_workspace_start",
-            &format!("path={}, initialize={}", path, initialize),
-        );
-        let api = crate::backend::app_backend::create_core_api(path);
-        let is_valid = api.validate_workspace().unwrap_or(false);
-        self.debug_log(
-            "workspace",
-            "internal_open_workspace_validate",
-            &format!("path={}, is_valid={}", path, is_valid),
+            "internal_open_data_root_start",
+            &format!("path={}", path),
         );
 
-        if !is_valid && !initialize {
-            let err_msg = "不是有效工作区。请选择其他目录，或使用「新建工作区」初始化该目录。";
-            self.set_error(err_msg);
-            self.debug_error("workspace", "internal_open_workspace_failed", err_msg);
+        // 确保 projects 子目录存在
+        let projects_root = std::path::Path::new(path).join("projects");
+        let projects_root_str = projects_root.to_string_lossy().to_string();
+        if let Err(e) = std::fs::create_dir_all(&projects_root) {
+            let err_msg = format!("无法创建作品目录: {}", e);
+            self.set_error(&err_msg);
+            self.debug_error("workspace", "internal_open_data_root_failed", &err_msg);
             return crate::backend::json_utils::envelope_error_json(
-                writer_core::api::WriterError::InvalidWorkspace,
+                writer_core::api::WriterError::Other(err_msg),
             )
             .into();
         }
 
-        if !is_valid && initialize {
-            self.debug_log("workspace", "internal_open_workspace_creating", path);
-            if let Err(e) = api.create_workspace_if_needed() {
-                let err_msg = format!("无法创建工作区: {}", e);
-                self.set_error(&err_msg);
-                self.debug_error("workspace", "internal_open_workspace_failed", &err_msg);
-                return crate::backend::json_utils::envelope_error_json(e).into();
-            }
-        }
-
-        let val_res = api.validate_workspace().unwrap_or(false);
-        self.debug_log(
-            "workspace",
-            "internal_open_workspace_revalidate",
-            &format!("path={}, is_valid={}", path, val_res),
-        );
-        if !val_res {
-            let err_msg = "工作区验证失败";
-            self.set_error(err_msg);
-            self.debug_error("workspace", "internal_open_workspace_failed", err_msg);
-            return crate::backend::json_utils::envelope_error_json(
-                writer_core::api::WriterError::InvalidWorkspace,
-            )
-            .into();
-        }
-
-        self.current_workspace = path.to_string();
+        self.current_data_root = path.to_string();
+        self.current_projects_root = projects_root_str.clone();
         self.current_has_workspace = true;
         self.current_save_status = "已保存".to_string();
         self.save_status_changed();
@@ -430,6 +353,7 @@ impl AppBackend {
         self.load_local_settings();
 
         // 写入 current_device.json 设备信息
+        let api = crate::backend::app_backend::create_core_api(path, &projects_root_str);
         if let Err(e) = api.ensure_device_info("desktop", "desktop") {
             self.debug_log("workspace", "ensure_device_info_failed", &format!("{}", e));
         }
@@ -438,11 +362,10 @@ impl AppBackend {
         self.workspace_content_changed();
         self.workspace_state_changed();
 
-        let _ = writer_core::app_config::set_last_workspace_path(path);
         self.debug_log(
             "workspace",
-            "internal_open_workspace_success",
-            &format!("path={}", path),
+            "internal_open_data_root_success",
+            &format!("path={}, projects_root={}", path, projects_root_str),
         );
 
         workspace_success_json("OK")
@@ -452,7 +375,7 @@ impl AppBackend {
     pub(crate) fn create_new_workspace(&mut self) -> QString {
         self.debug_log("workspace", "create_new_workspace_clicked", "");
         if let Some(path) = FileDialog::new().pick_folder() {
-            self.internal_open_workspace(&path.to_string_lossy(), true)
+            self.internal_open_data_root(&path.to_string_lossy())
         } else {
             self.debug_log("workspace", "create_new_workspace_cancelled", "");
             workspace_success_json("CANCELLED")
@@ -463,7 +386,7 @@ impl AppBackend {
     pub(crate) fn open_existing_workspace(&mut self) -> QString {
         self.debug_log("workspace", "open_existing_workspace_clicked", "");
         if let Some(path) = FileDialog::new().pick_folder() {
-            self.internal_open_workspace(&path.to_string_lossy(), false)
+            self.internal_open_data_root(&path.to_string_lossy())
         } else {
             self.debug_log("workspace", "open_existing_workspace_cancelled", "");
             workspace_success_json("CANCELLED")
@@ -475,8 +398,9 @@ impl AppBackend {
         self.debug_log("workspace", "close_workspace_start", "");
         self.flush_writing_stats();
         self.flush_recent_edits();
-        // Clear workspace state
-        self.current_workspace = "".to_string();
+        // Clear data root state
+        self.current_data_root = "".to_string();
+        self.current_projects_root = "".to_string();
         self.current_has_workspace = false;
         // Clear selection state
         self.selected_project_id = None;
@@ -497,15 +421,9 @@ impl AppBackend {
         self.debug_log("workspace", "close_workspace_success", "");
     }
 
-    // AppBackend::clear_last_workspace
-    pub(crate) fn clear_last_workspace(&mut self) {
-        let _ = writer_core::app_config::clear_last_workspace_path();
-    }
-
     // AppBackend::switch_workspace
     pub(crate) fn switch_workspace(&mut self) {
         self.close_workspace();
-        self.clear_last_workspace();
     }
 
     // AppBackend::init_workspace_from_github
@@ -518,7 +436,7 @@ impl AppBackend {
 
     // AppBackend::open_workspace_dir
     pub(crate) fn open_workspace_dir(&mut self) {
-        let path = self.current_workspace.clone();
+        let path = self.current_data_root.clone();
         if !path.is_empty() {
             if let Err(e) = crate::platform_utils::open_directory(&path) {
                 self.debug_warn("workspace", "open_workspace_dir_failed", &e);
@@ -527,11 +445,9 @@ impl AppBackend {
     }
 }
 
-/// Normalize a workspace path: canonicalize if possible, otherwise try to
+/// Normalize a data root path: canonicalize if possible, otherwise try to
 /// fix missing leading `/` (e.g. `home/xiwei/...` → `/home/xiwei/...`).
-/// If the path is clearly invalid after repair attempts, return it as-is
-/// (validate_workspace will reject it).
-fn normalize_workspace_path(raw: &str) -> String {
+fn normalize_data_root_path(raw: &str) -> String {
     let path = std::path::Path::new(raw);
     if let Ok(canon) = path.canonicalize() {
         return canon.to_string_lossy().to_string();
@@ -542,8 +458,6 @@ fn normalize_workspace_path(raw: &str) -> String {
         if std::path::Path::new(&fixed).canonicalize().is_ok() {
             return fixed;
         }
-        // Even if canonicalize still fails on the fixed path, return the
-        // fixed version — validate_workspace will reject it if truly invalid.
         return fixed;
     }
     // Path already starts with / or has no / — return as-is

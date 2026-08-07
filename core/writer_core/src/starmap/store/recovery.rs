@@ -40,7 +40,6 @@ impl StarMapStore {
 
     pub(super) fn starmap_dir(&self) -> PathBuf {
         self.workspace
-            .join("app-meta")
             .join("starmaps")
             .join(&self.starmap_id)
     }

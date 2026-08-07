@@ -25,7 +25,10 @@ class EditorSessionStateSingleSourceTest {
     private fun createCoordinator(): EditorSessionCoordinator {
         return EditorSessionCoordinator(
             com.xiwei.sujian.data.AppServiceBridge(
-                com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595"),
+                com.xiwei.sujian.data.WriterAppServiceHolder(
+                    "/tmp/sujian_test_workspace_595",
+                    "/tmp/sujian_test_workspace_595",
+                ),
             ),
         )
     }

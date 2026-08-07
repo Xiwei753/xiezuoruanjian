@@ -31,7 +31,7 @@ class ComposeDepsSingletonTest {
         assertSame(containerFromApp.syncStatusRepository, depsFromApp.syncStatusRepository)
         assertSame(containerFromApp.syncCoordinator, depsFromApp.syncCoordinator)
         assertSame(containerFromApp.settingsRepository, depsFromApp.settingsRepository)
-        assertSame(containerFromApp.workspaceRepository, depsFromApp.workspaceRepository)
+        assertSame(containerFromApp.projectRepository, depsFromApp.projectRepository)
     }
 
     @Test

@@ -18,10 +18,9 @@ import uniffi.writer_core.ShellModeDto
  * 新代码应直接使用领域 Bridge，不再依赖此门面类。
  */
 class AppServiceBridge(val holder: WriterAppServiceHolder) {
-    constructor(workspacePath: String) : this(WriterAppServiceHolder(workspacePath))
-
     // ── 领域 Bridge ──
     val projectBridge: ProjectBridge by lazy { ProjectBridge(holder) }
+    val recentEditsBridge: RecentEditsBridge by lazy { RecentEditsBridge(holder) }
     val chapterBridge: ChapterBridge by lazy { ChapterBridge(holder) }
     val settingsBridge: SettingsBridge by lazy { SettingsBridge(holder) }
     val syncBridge: SyncBridge by lazy { SyncBridge(holder) }
@@ -40,24 +39,19 @@ class AppServiceBridge(val holder: WriterAppServiceHolder) {
 
     fun listProjects() = projectBridge.listProjects()
 
-    fun getRecentEdits() = projectBridge.getRecentEdits()
+    fun getRecentEdits() = recentEditsBridge.getRecentEdits()
 
     fun recordRecentEdit(
         projectId: String,
         volumeId: String,
         chapterId: String,
-    ) = projectBridge.recordRecentEdit(
+    ) = recentEditsBridge.recordRecentEdit(
         projectId,
         volumeId,
         chapterId,
     )
 
-    fun flushRecentEdits() = projectBridge.flushRecentEdits()
-
-    fun validateWorkspace(): BridgeResult<Boolean> = holder.wrapResult { holder.service.validateWorkspace() }
-
-    fun createWorkspaceIfNeeded(): BridgeResult<Boolean> =
-        holder.wrapResult { holder.service.createWorkspaceIfNeeded() }
+    fun flushRecentEdits() = recentEditsBridge.flushRecentEdits()
 
     fun createProject(title: String) = projectBridge.createProject(title)
 

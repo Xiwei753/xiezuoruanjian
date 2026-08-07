@@ -92,12 +92,14 @@ struct Index {
     this.errorMessage = ''
 
     try {
+      // 新 Core API 边界：平台自己提供数据根目录，Core 不再 openWorkspace。
+      // workspacePath 由平台管理，projects/recentEdits 通过 getWorkspaceState 查询。
       const workspacePath = getWorkspacePath()
-      const workspaceResult = await this.bridge.openWorkspace(workspacePath)
+      this.workspacePath = workspacePath
+      const workspaceResult = await this.bridge.getWorkspaceState()
       const statsResult = await this.bridge.getWritingStats()
 
       if (workspaceResult.success && workspaceResult.data) {
-        this.workspacePath = workspaceResult.data.path
         this.projects = workspaceResult.data.projects
         this.recentEdits = workspaceResult.data.recentEdits
       } else {

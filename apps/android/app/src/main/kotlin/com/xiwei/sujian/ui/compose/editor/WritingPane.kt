@@ -264,7 +264,7 @@ private fun WritingPaneEditorAttach(
 }
 
 /** #595 一：显式 Factory 注入进程级容器依赖 + 会话层协调器 — 不再退回
- * WorkspaceRepository(getApplication()) 创建第二份容器。 */
+ * ProjectRepository(getApplication()) 创建第二份容器。 */
 @Composable
 private fun rememberWritingPaneViewModel(
     context: android.content.Context,
@@ -282,7 +282,7 @@ private fun rememberWritingPaneViewModel(
         )
     LaunchedEffect(Unit) {
         viewModel.initialize(
-            deps.workspaceRepository,
+            deps.projectRepository,
             deps.settingsRepository,
             deps.syncStatusRepository,
             coordinator.sessionCoordinator,

@@ -3,14 +3,13 @@ mod tests {
     use crate::settings::{
         load_local_settings, load_syncable_settings, save_local_settings, save_syncable_settings,
     };
-    use crate::workspace::create_workspace;
-    use tempfile::tempdir;
+        use tempfile::tempdir;
 
     #[test]
     fn test_settings() {
         let dir = tempdir().unwrap();
         let workspace_path = dir.path();
-        create_workspace(workspace_path).unwrap();
+        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
 
         let mut local = load_local_settings(workspace_path).unwrap();
         assert_eq!(local.theme_mode.as_deref(), Some("system"));

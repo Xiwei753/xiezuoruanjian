@@ -16,13 +16,13 @@ pub fn extract_chapter_entries(
     project_id: Option<&str>,
 ) -> Result<Vec<IndexEntry>> {
     let mut entries = Vec::new();
-    let projects_dir = workspace.join("projects");
+    let projects_dir = workspace;
 
     if !projects_dir.exists() {
         return Ok(entries);
     }
 
-    let projects = scan_dirs(&projects_dir)?;
+    let projects = scan_dirs(projects_dir)?;
     for (pid, project_path) in projects {
         if let Some(filter_id) = project_id {
             if pid != filter_id {
@@ -97,7 +97,7 @@ pub fn extract_starmap_entries(
     project_id: Option<&str>,
 ) -> Result<Vec<IndexEntry>> {
     let mut entries = Vec::new();
-    let starmaps_dir = workspace.join("app-meta").join("starmaps");
+    let starmaps_dir = workspace.join("starmaps");
 
     if !starmaps_dir.exists() {
         return Ok(entries);
@@ -242,7 +242,7 @@ pub fn extract_starmap_entries(
 
 pub fn extract_setting_entries(workspace: &Path) -> Result<Vec<IndexEntry>> {
     let mut entries = Vec::new();
-    let settings_dir = workspace.join("app-meta").join("settings");
+    let settings_dir = workspace.join("settings");
 
     if !settings_dir.exists() {
         return Ok(entries);

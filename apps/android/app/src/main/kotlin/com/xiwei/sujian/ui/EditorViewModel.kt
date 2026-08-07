@@ -7,7 +7,7 @@ package com.xiwei.sujian.ui
 // ! ## 架构定位
 // !
 // ! ```text
-// ! EditorActivity → EditorViewModel → WorkspaceRepository → WritingBridge/WorkspaceBridge → Rust Core
+// ! EditorActivity → EditorViewModel → ProjectRepository → WritingBridge/ProjectBridge/ChapterBridge → Rust Core
 // ! ```
 // !
 // ! ## 职责边界
@@ -23,7 +23,7 @@ package com.xiwei.sujian.ui
 // !   预准备 Rust session → 一次性提交（数据 + 会话 + 导航）
 // ! 2. **自动保存**：`onContentChanged()` → `scheduleAutoSave()` → `performSave()`
 // ! 3. **设置同步**：`onSettingsChanged()` → `reloadSettings()` → 更新 `EditorSettingsState`
-// ! 4. **写作统计**：`onContentChanged()` → `reportWritingEvent()` → `WorkspaceRepository.processWritingEvent()`
+// ! 4. **写作统计**：`onContentChanged()` → `reportWritingEvent()` → `ProjectRepository.processWritingEvent()`
 // !
 // ! ## 线程模型
 // !
@@ -59,9 +59,9 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.xiwei.sujian.R
 import com.xiwei.sujian.data.DocumentSaveReceiptTracker
+import com.xiwei.sujian.data.ProjectRepository
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.data.WorkspaceDocumentGate
-import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.editor.v2.coordinator.EditorSessionCoordinator
 import com.xiwei.sujian.editor.v2.coordinator.TargetDocumentFact
 import com.xiwei.sujian.runtime.SujianAppDependencies
@@ -79,26 +79,26 @@ class EditorViewModel(
     application: Application,
 ) : AndroidViewModel(application) {
     // #595 一：依赖注入 — 必须由 SujianApp 进程级容器提供同一组 Repository。
-    // 删除 fallback WorkspaceRepository(getApplication())/SettingsRepository(getApplication())
+    // 删除 fallback ProjectRepository(getApplication())/SettingsRepository(getApplication())
     // （旧实现会为首次打开章节创建独立 Repository，绕过进程级依赖容器）。
-    internal var _workspaceRepository: WorkspaceRepository? = null
+    internal var _projectRepository: ProjectRepository? = null
     internal var _settingsRepository: SettingsRepository? = null
     internal var _syncStatusRepository: com.xiwei.sujian.data.SyncStatusRepository? = null
     internal var _sessionCoordinator: EditorSessionCoordinator? = null
 
-    internal val workspaceRepository: WorkspaceRepository
+    internal val projectRepository: ProjectRepository
         get() =
-            _workspaceRepository
-                ?: error("EditorViewModel 未注入 WorkspaceRepository — 必须通过 Factory(SujianAppDependencies) 创建")
+            _projectRepository
+                ?: error("EditorViewModel 未注入 ProjectRepository — 必须通过 Factory(SujianAppDependencies) 创建")
 
     /**
-     * #597：章节正文保存端口 — 默认走进程级容器注入的 [workspaceRepository]；
+     * #597：章节正文保存端口 — 默认走进程级容器注入的 [projectRepository]；
      * 测试可替换为可控假实现以驱动真实保存流程（保存期间继续输入不被晚到回执覆盖）。
      */
     internal var chapterSavePort: com.xiwei.sujian.data.ChapterContentSavePort? = null
 
     internal val effectiveChapterSavePort: com.xiwei.sujian.data.ChapterContentSavePort
-        get() = chapterSavePort ?: workspaceRepository
+        get() = chapterSavePort ?: projectRepository
     internal val settingsRepository: SettingsRepository
         get() =
             _settingsRepository
@@ -115,12 +115,12 @@ class EditorViewModel(
      * 有效 snapshot/bind plan，导航后编辑器立即可用）。
      */
     fun initialize(
-        workspaceRepo: WorkspaceRepository,
+        projectRepo: ProjectRepository,
         settingsRepo: SettingsRepository,
         syncStatusRepo: com.xiwei.sujian.data.SyncStatusRepository? = null,
         sessionCoordinator: EditorSessionCoordinator? = null,
     ) {
-        if (_workspaceRepository == null) _workspaceRepository = workspaceRepo
+        if (_projectRepository == null) _projectRepository = projectRepo
         if (_settingsRepository == null) _settingsRepository = settingsRepo
         if (syncStatusRepo != null && _syncStatusRepository !== syncStatusRepo) {
             _syncStatusRepository = syncStatusRepo
@@ -314,7 +314,7 @@ class EditorViewModel(
 
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
-                workspaceRepository.updateChapterNote(session.projectId, session.volumeId, session.chapterId, newNote)
+                projectRepository.updateChapterNote(session.projectId, session.volumeId, session.chapterId, newNote)
                 launch(kotlinx.coroutines.Dispatchers.Main) {
                     _uiState.value = _uiState.value.copy(chapterNote = newNote)
                 }
@@ -348,25 +348,25 @@ class EditorViewModel(
                 // 生命周期语义（不延迟进程退出，不依赖仍会被取消的 viewModelScope）。
                 kotlinx.coroutines.runBlocking {
                     if (content.isNotEmpty()) {
-                        workspaceRepository.saveChapterContent(
+                        projectRepository.saveChapterContent(
                             session.projectId,
                             session.volumeId,
                             session.chapterId,
                             content,
                         )
                     } else if (contentExplicitlyCleared) {
-                        workspaceRepository.clearChapterContent(session.projectId, session.volumeId, session.chapterId)
+                        projectRepository.clearChapterContent(session.projectId, session.volumeId, session.chapterId)
                     }
                 }
             }
         } catch (_: Exception) {
         }
         try {
-            workspaceRepository.flushWritingStats()
+            projectRepository.flushWritingStats()
         } catch (_: Exception) {
         }
         try {
-            workspaceRepository.flushRecentEdits()
+            projectRepository.flushRecentEdits()
         } catch (_: Exception) {
         }
     }
@@ -397,7 +397,7 @@ class EditorViewModel(
             @Suppress("UNCHECKED_CAST")
             val vm = EditorViewModel(application)
             vm.initialize(
-                deps.workspaceRepository,
+                deps.projectRepository,
                 deps.settingsRepository,
                 deps.syncStatusRepository,
                 sessionCoordinator,

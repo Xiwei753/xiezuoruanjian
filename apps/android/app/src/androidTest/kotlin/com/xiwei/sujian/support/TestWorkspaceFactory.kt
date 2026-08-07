@@ -1,7 +1,6 @@
 package com.xiwei.sujian.support
 
 import android.content.Context
-import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.data.WriterAppServiceHolder
 import java.io.File
 import java.util.UUID
@@ -52,23 +51,15 @@ object TestWorkspaceFactory {
         noBackupDir: File,
     ) {
         workspaceDir.mkdirs()
+        // 新 Core API：openAppService 自动完成初始化，不再需要显式工作区创建。
         val initHolder =
             WriterAppServiceHolder(
-                workspacePath = workspaceDir.absolutePath,
+                appDataRoot = appDataDir.absolutePath,
+                projectsRoot = workspaceDir.absolutePath,
             )
         try {
-            val result = initHolder.wrapResult { initHolder.service.createWorkspaceIfNeeded() }
-            when (result) {
-                is BridgeResult.Success -> {}
-                is BridgeResult.Error -> throw AssertionError(
-                    "TestWorkspaceFactory: createWorkspaceIfNeeded failed: " +
-                        "errorCode=${result.code}, message=${result.message}, " +
-                        "rawError=${result.envelope.rawError}",
-                )
-                BridgeResult.NotLoaded -> throw AssertionError(
-                    "TestWorkspaceFactory: native library not loaded during workspace initialization",
-                )
-            }
+            // 访问 service 触发 lazy 初始化，确保目录结构就绪。
+            initHolder.service
         } finally {
             initHolder.close()
         }

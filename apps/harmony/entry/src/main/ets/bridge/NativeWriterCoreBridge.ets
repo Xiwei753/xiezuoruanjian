@@ -107,14 +107,6 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     return this.workspaceBridge.listWorkspaces()
   }
 
-  async openWorkspace(path: string): Promise<ResultEnvelope<WorkspaceSummary>> {
-    return this.workspaceBridge.openWorkspace(path)
-  }
-
-  async validateWorkspace(path: string): Promise<ResultEnvelope<boolean>> {
-    return this.workspaceBridge.validateWorkspace(path)
-  }
-
   async getWorkspaceState(): Promise<ResultEnvelope<WorkspaceSummary>> {
     return this.workspaceBridge.getWorkspaceState()
   }
@@ -335,15 +327,6 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
         changedEntities: [] as ChangedEntity[]
       }
       return result
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
-  }
-
-  async isWorkspaceValid(): Promise<ResultEnvelope<boolean>> {
-    try {
-      const jsonStr: string = this.core.getNativeModule().nativeValidateWorkspace() as string
-      return this.core.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }

@@ -1,8 +1,8 @@
 package com.xiwei.sujian.ui
 
 import com.xiwei.sujian.data.AppServiceBridge
+import com.xiwei.sujian.data.ProjectRepository
 import com.xiwei.sujian.data.SettingsRepository
-import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.data.WriterAppServiceHolder
 import com.xiwei.sujian.editor.v2.coordinator.EditorSessionCoordinator
 import kotlinx.coroutines.Dispatchers
@@ -50,7 +50,9 @@ class EditorViewModelInjectionTest {
     val mainDispatcherRule = MainDispatcherRule()
 
     private fun createBridge(): AppServiceBridge {
-        return AppServiceBridge(WriterAppServiceHolder("/tmp/sujian_test_workspace_595_inject"))
+        return AppServiceBridge(
+            WriterAppServiceHolder("/tmp/sujian_test_workspace_595_inject", "/tmp/sujian_test_workspace_595_inject"),
+        )
     }
 
     @Test
@@ -60,7 +62,7 @@ class EditorViewModelInjectionTest {
         val deps =
             object : com.xiwei.sujian.runtime.SujianAppDependencies {
                 override val appServiceBridge: AppServiceBridge = bridge
-                override val workspaceRepository: WorkspaceRepository = WorkspaceRepository(app, bridge)
+                override val projectRepository: ProjectRepository = ProjectRepository(app, bridge)
                 override val settingsRepository: SettingsRepository = SettingsRepository(app, bridge)
                 override val syncStatusRepository: com.xiwei.sujian.data.SyncStatusRepository =
                     com.xiwei.sujian.data.SyncStatusRepository(settingsRepository)
@@ -85,11 +87,11 @@ class EditorViewModelInjectionTest {
         val vm = EditorViewModel(app)
         // 未 initialize 时访问 Repository getter 必须抛错
         // （不允许 fallback 创建第二份容器）。
-        // internal getter 在 JVM 字节码中会被 Kotlin 名称修饰（getWorkspaceRepository$module）。
+        // internal getter 在 JVM 字节码中会被 Kotlin 名称修饰（getProjectRepository$module）。
         val getter =
             EditorViewModel::class.java.declaredMethods.firstOrNull {
-                it.name.startsWith("getWorkspaceRepository")
-            } ?: throw NoSuchMethodException("getWorkspaceRepository not found")
+                it.name.startsWith("getProjectRepository")
+            } ?: throw NoSuchMethodException("getProjectRepository not found")
         getter.isAccessible = true
         val threw =
             try {
@@ -110,7 +112,7 @@ class EditorViewModelInjectionTest {
         val bridge = createBridge()
         val vm = EditorViewModel(app)
         vm.initialize(
-            WorkspaceRepository(app, bridge),
+            ProjectRepository(app, bridge),
             SettingsRepository(app, bridge),
         )
         vm.initChapter("p", "v", "a", "A")
@@ -134,7 +136,7 @@ class EditorViewModelInjectionTest {
         val app = RuntimeEnvironment.getApplication()
         val bridge = createBridge()
         val vm = EditorViewModel(app)
-        vm.initialize(WorkspaceRepository(app, bridge), SettingsRepository(app, bridge))
+        vm.initialize(ProjectRepository(app, bridge), SettingsRepository(app, bridge))
         vm.initChapter("p", "v", "a", "A")
         assertTrue(vm.isCurrentChapter("p", "v", "a"))
         assertFalse(vm.isCurrentChapter("p", "v", "b"))

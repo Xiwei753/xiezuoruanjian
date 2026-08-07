@@ -11,7 +11,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub(crate) fn starmap_pkg_dir(workspace: &Path, starmap_id: &str) -> PathBuf {
-    workspace.join("app-meta").join("starmaps").join(starmap_id)
+    workspace.join("starmaps").join(starmap_id)
 }
 
 pub(crate) fn bucket_for_id(id: &str) -> &str {
@@ -331,12 +331,11 @@ pub fn load_viewport(workspace: &Path, starmap_id: &str) -> Option<StarMapViewpo
 mod tests {
     use super::*;
     use crate::starmap::create_starmap;
-    use crate::workspace::create_workspace;
-    use tempfile::tempdir;
+        use tempfile::tempdir;
 
     fn setup_workspace() -> tempfile::TempDir {
         let dir = tempdir().unwrap();
-        create_workspace(dir.path()).unwrap();
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
         dir
     }
 

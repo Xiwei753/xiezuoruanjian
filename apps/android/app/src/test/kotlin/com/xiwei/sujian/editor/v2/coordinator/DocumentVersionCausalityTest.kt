@@ -27,7 +27,10 @@ class DocumentVersionCausalityTest {
     private fun createCoordinator(): EditorSessionCoordinator {
         return EditorSessionCoordinator(
             com.xiwei.sujian.data.AppServiceBridge(
-                com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595_causality"),
+                com.xiwei.sujian.data.WriterAppServiceHolder(
+                    "/tmp/sujian_test_workspace_595_causality",
+                    "/tmp/sujian_test_workspace_595_causality",
+                ),
             ),
         )
     }

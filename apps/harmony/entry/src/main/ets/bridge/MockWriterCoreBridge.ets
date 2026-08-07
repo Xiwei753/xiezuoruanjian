@@ -49,7 +49,6 @@ import {
 import { resolveLayoutFromMetrics } from '../common/LayoutPolicyHelper'
 
 export class MockWriterCoreBridge implements IWriterCoreBridge {
-  private currentWorkspacePath: string = '/mock/workspace'
   private mockProjects: Project[] = []
 
   private mockVolumes: Map<string, Volume[]> = new Map<string, Volume[]>()
@@ -149,38 +148,24 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     return result
   }
 
-  // Workspace methods
+  // Workspace 查询方法
   async listWorkspaces(): Promise<ResultEnvelope<WorkspaceSummary[]>> {
     await this.delay(100)
     return this.success([
       {
-        path: '/mock/workspace',
-        isValid: true,
         projects: this.mockProjects,
         recentEdits: [] as RecentEdit[]
       } as WorkspaceSummary
     ] as WorkspaceSummary[])
   }
 
-  async openWorkspace(path: string): Promise<ResultEnvelope<WorkspaceSummary>> {
+  async getWorkspaceState(): Promise<ResultEnvelope<WorkspaceSummary>> {
     await this.delay(200)
-    this.currentWorkspacePath = path
     const summary: WorkspaceSummary = {
-      path,
-      isValid: true,
       projects: this.mockProjects,
       recentEdits: [] as RecentEdit[]
     }
     return this.success(summary)
-  }
-
-  async validateWorkspace(path: string): Promise<ResultEnvelope<boolean>> {
-    await this.delay(100)
-    return this.success(true)
-  }
-
-  async getWorkspaceState(): Promise<ResultEnvelope<WorkspaceSummary>> {
-    return this.openWorkspace(this.currentWorkspacePath)
   }
 
   // Project methods
@@ -862,10 +847,6 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
   // Native Status methods
   async getNativeLoadStatus(): Promise<ResultEnvelope<string>> {
     return this.success('mock')
-  }
-
-  async isWorkspaceValid(): Promise<ResultEnvelope<boolean>> {
-    return this.success(true)
   }
 
   async isAiAvailable(): Promise<ResultEnvelope<boolean>> {

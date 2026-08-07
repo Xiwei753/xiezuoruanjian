@@ -29,7 +29,10 @@ class AttachedRequiresViewBindTest {
         // 状态必须回到 Idle（绝不进入没有 View 的 Attached）。
         return EditorSessionCoordinator(
             com.xiwei.sujian.data.AppServiceBridge(
-                com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595"),
+                com.xiwei.sujian.data.WriterAppServiceHolder(
+                    "/tmp/sujian_test_workspace_595",
+                    "/tmp/sujian_test_workspace_595",
+                ),
             ),
         )
     }

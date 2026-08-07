@@ -4,8 +4,8 @@ use tempfile::tempdir;
 #[test]
 fn test_get_sync_capability_scenarios() {
     let temp_dir = tempdir().unwrap();
-    crate::workspace::create_workspace(temp_dir.path()).unwrap();
-    let api = WriterCoreApi::new(temp_dir.path());
+    std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+    let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
 
     // 场景 1: 同步未启用
     let mut config = api.load_sync_config().unwrap();
@@ -66,8 +66,8 @@ fn test_get_sync_capability_scenarios() {
 #[test]
 fn test_get_sync_capability_remote_url_missing() {
     let temp_dir = tempdir().unwrap();
-    crate::workspace::create_workspace(temp_dir.path()).unwrap();
-    let api = WriterCoreApi::new(temp_dir.path());
+    std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+    let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
 
     let mut config = api.load_sync_config().unwrap();
     config.enabled = true;

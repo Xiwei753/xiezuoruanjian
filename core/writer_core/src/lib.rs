@@ -80,7 +80,7 @@ pub mod storage;
 pub mod sync;
 pub mod trash;
 pub mod volume;
-pub mod workspace;
+pub mod recent_edits;
 pub mod writing_stats;
 
 pub use api::*;
@@ -112,53 +112,23 @@ pub mod workspace_tests;
 #[cfg(test)]
 pub mod writing_stats_tests;
 
-use std::path::Path;
 
-pub fn init_workspace(path: String) -> std::result::Result<bool, WriterError> {
-    let p = Path::new(&path);
-    crate::workspace::create_workspace(p).map_err(WriterError::from)?;
-
-    Ok(true)
-}
-
-pub fn open_workspace(
-    path: String,
+pub fn open_app_service(
+    app_data_root: String,
+    projects_root: String,
 ) -> std::result::Result<std::sync::Arc<WriterAppService>, WriterError> {
-    let p = Path::new(&path);
-    if !crate::workspace::validate_workspace(p).map_err(WriterError::from)? {
-        return Err(WriterError::InvalidWorkspace);
-    }
-    let service = std::sync::Arc::new(WriterAppService::new(path));
+    let service = std::sync::Arc::new(WriterAppService::new(app_data_root, projects_root));
     if let Err(e) = service.rebuild_search_index(None) {
-        log::warn!("Failed to rebuild search index on open_workspace: {e}");
+        log::warn!("Failed to rebuild search index on open_app_service: {e}");
     }
     Ok(service)
 }
 
-pub fn open_workspace_with_platform_services(
-    path: String,
-    services: writer_platform_api::PlatformServices,
-) -> std::result::Result<std::sync::Arc<WriterAppService>, WriterError> {
-    let p = Path::new(&path);
-    if !crate::workspace::validate_workspace(p).map_err(WriterError::from)? {
-        return Err(WriterError::InvalidWorkspace);
-    }
-    let service = std::sync::Arc::new(WriterAppService::with_platform_services(path, services));
-    if let Err(e) = service.rebuild_search_index(None) {
-        log::warn!("Failed to rebuild search index on open_workspace_with_platform_services: {e}");
-    }
-    Ok(service)
-}
-
-pub fn open_workspace_with_init(
-    path: String,
+pub fn open_app_service_with_init(
+    app_data_root: String,
+    projects_root: String,
     init: crate::api::types::PlatformInitDto,
 ) -> std::result::Result<std::sync::Arc<WriterAppService>, WriterError> {
-    let p = Path::new(&path);
-    if !crate::workspace::validate_workspace(p).map_err(WriterError::from)? {
-        return Err(WriterError::InvalidWorkspace);
-    }
-
     let platform_init: writer_platform_api::PlatformInit = init.clone().into();
     let network_state: writer_platform_api::NetworkState = init.into();
 
@@ -179,56 +149,15 @@ pub fn open_workspace_with_init(
         }
     };
 
-    let service = std::sync::Arc::new(WriterAppService::with_platform_services(path, services));
+    let service = std::sync::Arc::new(WriterAppService::with_platform_services(
+        app_data_root,
+        projects_root,
+        services,
+    ));
     if let Err(e) = service.rebuild_search_index(None) {
-        log::warn!("Failed to rebuild search index on open_workspace_with_init: {e}");
+        log::warn!("Failed to rebuild search index on open_app_service_with_init: {e}");
     }
     Ok(service)
-}
-
-pub fn repair_workspace(path: String) -> std::result::Result<bool, WriterError> {
-    let p = Path::new(&path);
-    crate::workspace::create_workspace(p).map_err(WriterError::from)?;
-    Ok(true)
-}
-
-pub fn create_project_in_workspace(
-    workspace: String,
-    title: String,
-) -> std::result::Result<ProjectDto, WriterError> {
-    let p = Path::new(&workspace);
-    let project = crate::project::create_project(p, &title).map_err(WriterError::from)?;
-    Ok(project.into())
-}
-
-pub fn load_workspace_summary(
-    path: String,
-) -> std::result::Result<WorkspaceSummaryDto, WriterError> {
-    let p = Path::new(&path);
-    let is_valid = crate::workspace::validate_workspace(p).unwrap_or(false);
-
-    let projects = if is_valid {
-        crate::project::list_projects(p)
-            .map(|v| v.into_iter().map(Into::into).collect())
-            .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-
-    let recent_edits = if is_valid {
-        crate::workspace::get_recent_edits(p)
-            .map(|v| v.into_iter().map(Into::into).collect())
-            .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-
-    Ok(WorkspaceSummaryDto {
-        path,
-        is_valid,
-        projects,
-        recent_edits,
-    })
 }
 
 uniffi::include_scaffolding!("api");
@@ -290,16 +219,12 @@ impl writer_platform_api::SecureStorage for CallbackSecureStorage {
 }
 
 #[::uniffi::export]
-pub fn open_workspace_with_secure_storage(
-    path: String,
+pub fn open_app_service_with_secure_storage(
+    app_data_root: String,
+    projects_root: String,
     init: crate::api::types::PlatformInitDto,
     secure_storage: Option<Box<dyn SecureStorageProvider>>,
 ) -> std::result::Result<std::sync::Arc<WriterAppService>, WriterError> {
-    let p = Path::new(&path);
-    if !crate::workspace::validate_workspace(p).map_err(WriterError::from)? {
-        return Err(WriterError::InvalidWorkspace);
-    }
-
     let platform_init: writer_platform_api::PlatformInit = init.clone().into();
     let network_state: writer_platform_api::NetworkState = init.into();
 
@@ -327,9 +252,13 @@ pub fn open_workspace_with_secure_storage(
         }
     };
 
-    let service = std::sync::Arc::new(WriterAppService::with_platform_services(path, services));
+    let service = std::sync::Arc::new(WriterAppService::with_platform_services(
+        app_data_root,
+        projects_root,
+        services,
+    ));
     if let Err(e) = service.rebuild_search_index(None) {
-        log::warn!("Failed to rebuild search index on open_workspace_with_secure_storage: {e}");
+        log::warn!("Failed to rebuild search index on open_app_service_with_secure_storage: {e}");
     }
     Ok(service)
 }

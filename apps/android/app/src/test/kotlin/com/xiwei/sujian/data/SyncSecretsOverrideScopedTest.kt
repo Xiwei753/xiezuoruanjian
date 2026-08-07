@@ -21,7 +21,9 @@ class SyncSecretsOverrideScopedTest {
         val repo =
             SettingsRepository(
                 androidx.test.core.app.ApplicationProvider.getApplicationContext(),
-                AppServiceBridge(WriterAppServiceHolder("/tmp/sujian_test_workspace_595")),
+                AppServiceBridge(
+                    WriterAppServiceHolder("/tmp/sujian_test_workspace_595", "/tmp/sujian_test_workspace_595"),
+                ),
             )
         assertFalse(
             "Strict override set must fail (not silently succeed) when native is unavailable",

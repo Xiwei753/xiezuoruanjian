@@ -22,7 +22,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.xiwei.sujian.data.WorkspaceUseCase
+import com.xiwei.sujian.data.ProjectUseCase
 import com.xiwei.sujian.editor.v2.compose.LocalEditorWindowHost
 import com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost
 import com.xiwei.sujian.model.Orientation
@@ -125,8 +125,8 @@ private fun SujianAppInitialization(
     context: android.content.Context,
 ) {
     LaunchedEffect(Unit) {
-        val workspaceUC = WorkspaceUseCase(deps.workspaceRepository)
-        vm.initialize(deps.workspaceRepository, workspaceUC, deps.settingsRepository, context)
+        val projectUC = ProjectUseCase(deps.projectRepository)
+        vm.initialize(deps.projectRepository, projectUC, deps.settingsRepository, context)
     }
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     LaunchedEffect(lifecycleOwner) {

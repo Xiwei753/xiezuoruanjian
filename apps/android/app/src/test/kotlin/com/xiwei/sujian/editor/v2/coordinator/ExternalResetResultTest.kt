@@ -23,7 +23,10 @@ class ExternalResetResultTest {
     private fun createCoordinator(): EditorSessionCoordinator {
         return EditorSessionCoordinator(
             com.xiwei.sujian.data.AppServiceBridge(
-                com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595_reset"),
+                com.xiwei.sujian.data.WriterAppServiceHolder(
+                    "/tmp/sujian_test_workspace_595_reset",
+                    "/tmp/sujian_test_workspace_595_reset",
+                ),
             ),
         )
     }

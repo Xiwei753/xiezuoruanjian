@@ -21,7 +21,10 @@ class RepositoryHashGuardTest {
     private fun createCoordinator(): EditorSessionCoordinator {
         return EditorSessionCoordinator(
             com.xiwei.sujian.data.AppServiceBridge(
-                com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595_hashguard"),
+                com.xiwei.sujian.data.WriterAppServiceHolder(
+                    "/tmp/sujian_test_workspace_595_hashguard",
+                    "/tmp/sujian_test_workspace_595_hashguard",
+                ),
             ),
         )
     }

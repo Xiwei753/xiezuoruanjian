@@ -23,7 +23,7 @@ fn remove_node_marks_deleted() {
 #[test]
 fn link_save_reload_update_delete_round_trip() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -69,7 +69,7 @@ fn link_save_reload_update_delete_round_trip() {
 #[test]
 fn upsert_edge_existing_marks_dirty_graph_meta() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -140,7 +140,7 @@ fn upsert_edge_existing_marks_dirty_graph_meta() {
 #[test]
 fn update_edge_endpoint_marks_dirty_graph_meta() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -209,7 +209,7 @@ fn update_edge_endpoint_marks_dirty_graph_meta() {
 #[test]
 fn update_embed_host_marks_dirty_graph_meta() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -271,12 +271,11 @@ fn update_embed_host_marks_dirty_graph_meta() {
 #[test]
 fn delete_also_removes_flat_path() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let starmap_dir = dir
         .path()
-        .join("app-meta")
         .join("starmaps")
         .join(&meta.starmap_id);
     let nodes_dir = starmap_dir.join("nodes");
@@ -298,7 +297,7 @@ fn update_edge_endpoint_marks_dirty_and_updates_index() {
         StarMapEdge, StarMapEdgeEndpoint, StarMapEdgeKind, StarMapEdgePatch,
     };
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -359,7 +358,7 @@ fn update_embed_host_endpoint_marks_dirty_and_updates_index() {
     use crate::starmap::semantic::{StarMapDisplayPolicy, StarMapOpenBehavior, StarMapProvenance};
     use crate::starmap::types::{StarMapEmbed, StarMapEmbedPatch, StarMapEndpoint};
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -416,7 +415,7 @@ fn update_embed_host_endpoint_marks_dirty_and_updates_index() {
 #[test]
 fn add_link_updates_graph_meta_link_ids() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -454,7 +453,7 @@ fn add_link_updates_graph_meta_link_ids() {
 #[test]
 fn delete_link_updates_graph_meta_link_ids() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -500,7 +499,7 @@ fn delete_link_updates_graph_meta_link_ids() {
 #[test]
 fn hyperlink_add_update_delete_round_trip() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -580,7 +579,7 @@ fn hyperlink_add_update_delete_round_trip() {
 #[test]
 fn delete_node_cascades_to_links_and_hyperlinks() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);

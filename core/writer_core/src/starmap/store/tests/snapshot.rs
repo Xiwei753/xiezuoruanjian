@@ -4,7 +4,7 @@ use tempfile::TempDir;
 
 fn setup_workspace() -> (TempDir, String) {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
     (dir, meta.starmap_id)
 }
@@ -729,7 +729,6 @@ fn phased_snapshot_save_failure_preserves_memory_state() {
 
     let graph_json = dir
         .path()
-        .join("app-meta")
         .join("starmaps")
         .join(&sid)
         .join("graph.json");

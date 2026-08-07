@@ -48,7 +48,7 @@ private suspend fun SettingsViewModel.loadInitialSnapshot(repo: SettingsReposito
     val builtinThemes = withContext(Dispatchers.IO) { repo.listBuiltinThemes() }
     val paletteRecords = withContext(Dispatchers.IO) { repo.listPaletteRecords() }
     val aiAvailable = withContext(Dispatchers.IO) { repo.aiAvailable() }
-    val workspacePath = withContext(Dispatchers.IO) { repo.workspaceDir() }
+    val workspacePath = withContext(Dispatchers.IO) { repo.projectsDir() }
 
     _uiState.update { current ->
         SettingsUiState(
@@ -325,7 +325,7 @@ fun SettingsViewModel.mergeRefresh() {
         val builtinThemes = withContext(Dispatchers.IO) { repo.listBuiltinThemes() }
         val paletteRecords = withContext(Dispatchers.IO) { repo.listPaletteRecords() }
         val aiAvailable = withContext(Dispatchers.IO) { repo.aiAvailable() }
-        val workspacePath = withContext(Dispatchers.IO) { repo.workspaceDir() }
+        val workspacePath = withContext(Dispatchers.IO) { repo.projectsDir() }
         _uiState.update {
             SettingsUiState(
                 settings = mergeLoadedLocal(current.settings, settings),

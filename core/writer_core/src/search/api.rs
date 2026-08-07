@@ -8,10 +8,11 @@ mod tests {
     use tempfile::TempDir;
 
     fn rebuild_index(
-        workspace: &std::path::Path,
+        app_data_root: &std::path::Path,
+        projects_root: &std::path::Path,
         project_id: Option<&str>,
     ) -> crate::error::Result<SearchIndexStatus> {
-        let entries = crate::search::rebuild::rebuild_index(workspace, project_id)?;
+        let entries = crate::search::rebuild::rebuild_index(app_data_root, projects_root, project_id)?;
         let mut service = SearchIndexService::new();
         service.rebuild_from_entries(entries);
         Ok(service.status())
@@ -30,7 +31,7 @@ mod tests {
     #[test]
     fn search_empty_query_returns_nothing() {
         let dir = TempDir::new().unwrap();
-        let _ = rebuild_index(dir.path(), None);
+        let _ = rebuild_index(dir.path(), &dir.path().join("projects"), None);
         let mut service = SearchIndexService::new();
         let results = search_with_service(&mut service, "", SearchScope::All, 10, None);
         assert!(results.is_empty());
@@ -39,7 +40,7 @@ mod tests {
     #[test]
     fn search_nonexistent_query_returns_nothing() {
         let dir = TempDir::new().unwrap();
-        let _ = rebuild_index(dir.path(), None);
+        let _ = rebuild_index(dir.path(), &dir.path().join("projects"), None);
         let mut service = SearchIndexService::new();
         let results = search_with_service(&mut service, "nonexistent", SearchScope::All, 10, None);
         assert!(results.is_empty());
@@ -319,7 +320,7 @@ mod tests {
     fn extract_starmap_link_entries() {
         use crate::search::extractor::extract_starmap_entries;
         let dir = TempDir::new().unwrap();
-        let starmaps_root = dir.path().join("app-meta").join("starmaps");
+        let starmaps_root = dir.path().join("starmaps");
         let starmap_dir = starmaps_root.join("sm1");
         std::fs::create_dir_all(starmap_dir.join("links")).unwrap();
         std::fs::write(
@@ -615,7 +616,7 @@ mod tests {
     fn rebuild_extractor_uses_structured_node_content() {
         use crate::search::extractor::extract_starmap_entries;
         let dir = TempDir::new().unwrap();
-        let starmaps_root = dir.path().join("app-meta").join("starmaps");
+        let starmaps_root = dir.path().join("starmaps");
         let starmap_dir = starmaps_root.join("sm1");
         std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
         std::fs::write(
@@ -658,8 +659,8 @@ mod tests {
     #[test]
     fn cross_entry_create_project_then_search() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let project = api.create_project("MyProject").unwrap();
         let results = api.search_service_search("MyProject", SearchScope::ProjectTitle, 10, None);
         assert_eq!(results.len(), 1);
@@ -673,8 +674,8 @@ mod tests {
     #[test]
     fn cross_entry_rename_project_then_search() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let project = api.create_project("OldName").unwrap();
         api.rename_project(&project.id, "NewName").unwrap();
         let old_results = api.search_service_search("OldName", SearchScope::ProjectTitle, 10, None);
@@ -687,8 +688,8 @@ mod tests {
     #[test]
     fn cross_entry_delete_project_removes_index() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let project = api.create_project("ToDelete").unwrap();
         let before = api.search_service_search("ToDelete", SearchScope::ProjectTitle, 10, None);
         assert_eq!(before.len(), 1);
@@ -700,8 +701,8 @@ mod tests {
     #[test]
     fn cross_entry_create_volume_then_search() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let project = api.create_project("P1").unwrap();
         let volume = api.create_volume(&project.id, "MyVolume").unwrap();
         let results = api.search_service_search("MyVolume", SearchScope::VolumeTitle, 10, None);
@@ -716,8 +717,8 @@ mod tests {
     #[test]
     fn cross_entry_create_chapter_then_search() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let project = api.create_project("P1").unwrap();
         let volume = api.create_volume(&project.id, "V1").unwrap();
         let chapter = api
@@ -735,8 +736,8 @@ mod tests {
     #[test]
     fn cross_entry_save_chapter_content_searchable() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let project = api.create_project("P1").unwrap();
         let volume = api.create_volume(&project.id, "V1").unwrap();
         let chapter = api.create_chapter(&project.id, &volume.id, "Ch1").unwrap();
@@ -750,8 +751,8 @@ mod tests {
     #[test]
     fn cross_entry_clear_chapter_content_removes_body_index() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let project = api.create_project("P1").unwrap();
         let volume = api.create_volume(&project.id, "V1").unwrap();
         let chapter = api.create_chapter(&project.id, &volume.id, "Ch1").unwrap();
@@ -768,8 +769,8 @@ mod tests {
     #[test]
     fn cross_entry_rename_chapter_updates_search() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let project = api.create_project("P1").unwrap();
         let volume = api.create_volume(&project.id, "V1").unwrap();
         let chapter = api
@@ -788,8 +789,8 @@ mod tests {
     #[test]
     fn cross_entry_create_starmap_then_search() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let meta = api.create_starmap("MyStarMap", "desc", None).unwrap();
         let results = api.search_service_search("MyStarMap", SearchScope::StarmapTitle, 10, None);
         assert_eq!(results.len(), 1);
@@ -803,8 +804,8 @@ mod tests {
     #[test]
     fn cross_entry_rebuild_matches_incremental() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let project = api.create_project("RebuildP").unwrap();
         let volume = api.create_volume(&project.id, "V1").unwrap();
         let chapter = api
@@ -836,8 +837,8 @@ mod tests {
     #[test]
     fn cross_entry_starmap_project_id_in_incremental() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let project = api.create_project("P1").unwrap();
         let meta = api.create_starmap("BoundMap", "desc", None).unwrap();
         api.bind_starmap_to_project(&meta.starmap_id, &project.id)
@@ -877,7 +878,7 @@ mod tests {
     fn cross_entry_rebuild_reads_camel_case_project_id() {
         use crate::search::extractor::extract_starmap_entries;
         let dir = TempDir::new().unwrap();
-        let starmaps_root = dir.path().join("app-meta").join("starmaps");
+        let starmaps_root = dir.path().join("starmaps");
         let starmap_dir = starmaps_root.join("sm1");
         std::fs::create_dir_all(&starmap_dir).unwrap();
         std::fs::write(
@@ -902,8 +903,8 @@ mod tests {
     #[test]
     fn cross_entry_delete_project_cascades_to_volumes_chapters_starmaps() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let project = api.create_project("CascadeProject").unwrap();
         let volume = api.create_volume(&project.id, "CascadeVol").unwrap();
         let chapter = api
@@ -959,8 +960,8 @@ mod tests {
     #[test]
     fn cross_entry_delete_volume_cascades_to_chapters() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let project = api.create_project("P1").unwrap();
         let volume = api.create_volume(&project.id, "VolWithChapters").unwrap();
         let chapter = api
@@ -992,8 +993,8 @@ mod tests {
     #[test]
     fn cross_entry_create_starmap_json_then_search() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let _json = api.create_starmap_json("JsonMap", "desc").unwrap();
         let results = api.search_service_search("JsonMap", SearchScope::StarmapTitle, 10, None);
         assert_eq!(results.len(), 1);
@@ -1003,8 +1004,8 @@ mod tests {
     #[test]
     fn cross_entry_import_or_replace_starmap_package_removes_old_node_index() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let meta = api.create_starmap("GraphMap", "desc", None).unwrap();
 
         let node_a = crate::api::types::StarMapNodeDto {
@@ -1120,8 +1121,8 @@ mod tests {
     #[test]
     fn cross_entry_rebuild_after_incremental_matches() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let project = api.create_project("RebuildP2").unwrap();
         let volume = api.create_volume(&project.id, "V1").unwrap();
         let chapter = api
@@ -1157,8 +1158,8 @@ mod tests {
     #[test]
     fn cross_entry_rebuild_starmap_matches_incremental() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let project = api.create_project("P1").unwrap();
         let meta = api.create_starmap("RebuildStarMap", "desc", None).unwrap();
         api.bind_starmap_to_project(&meta.starmap_id, &project.id)
@@ -1213,8 +1214,8 @@ mod tests {
     #[test]
     fn cross_entry_rename_chapter_syncs_body_note_title() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let project = api.create_project("P1").unwrap();
         let volume = api.create_volume(&project.id, "V1").unwrap();
         let chapter = api
@@ -1246,8 +1247,8 @@ mod tests {
     #[test]
     fn cross_entry_bind_starmap_updates_child_project_id() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let project = api.create_project("P1").unwrap();
         let meta = api.create_starmap("UnboundMap", "desc", None).unwrap();
 
@@ -1291,8 +1292,8 @@ mod tests {
     #[test]
     fn cross_entry_unbind_starmap_clears_child_project_id() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let project = api.create_project("P1").unwrap();
         let meta = api.create_starmap("BoundMap", "desc", None).unwrap();
         api.bind_starmap_to_project(&meta.starmap_id, &project.id)
@@ -1339,8 +1340,8 @@ mod tests {
     fn cross_entry_rebuild_hyperlink_uses_target_uri() {
         use crate::search::extractor::extract_starmap_entries;
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let meta = api.create_starmap("HLMap", "desc", None).unwrap();
 
         let hl = crate::starmap::types::StarMapHyperlink {
@@ -1357,7 +1358,6 @@ mod tests {
         };
         let starmap_dir = dir
             .path()
-            .join("app-meta")
             .join("starmaps")
             .join(&meta.starmap_id)
             .join("hyperlinks");
@@ -1381,8 +1381,8 @@ mod tests {
     #[test]
     fn cross_entry_import_or_replace_starmap_package_removes_old_edge_index() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let meta = api.create_starmap("EdgeMap", "desc", None).unwrap();
 
         let node_a = crate::api::types::StarMapNodeDto {
@@ -1511,8 +1511,8 @@ mod tests {
     #[test]
     fn create_project_indexes_default_volume() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let _project = api.create_project("VolIndexProject").unwrap();
         let results = api.search_service_search("第一卷", SearchScope::VolumeTitle, 10, None);
         assert_eq!(
@@ -1525,8 +1525,8 @@ mod tests {
     #[test]
     fn delete_project_preserves_unbound_starmap_index() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let _project = api.create_project("P1").unwrap();
         let unbound_meta = api.create_starmap("UnboundMap", "desc", None).unwrap();
         assert!(unbound_meta.project_id.is_none());
@@ -1547,8 +1547,8 @@ mod tests {
     #[test]
     fn delete_project_determines_starmap_list_before_deletion() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let project = api.create_project("OrderP").unwrap();
         let meta = api.create_starmap("BoundMap", "desc", None).unwrap();
         api.bind_starmap_to_project(&meta.starmap_id, &project.id)
@@ -1578,8 +1578,8 @@ mod tests {
     #[test]
     fn delete_project_unbinds_starmap_and_updates_child_indices() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let project = api.create_project("ProjWithMap").unwrap();
         let meta = api.create_starmap("MapWithNodes", "desc", None).unwrap();
         api.bind_starmap_to_project(&meta.starmap_id, &project.id)
@@ -1639,8 +1639,8 @@ mod tests {
     #[test]
     fn bind_unbind_updates_embed_and_hyperlink_project_id() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let project = api.create_project("P1").unwrap();
         let meta = api.create_starmap("EmbedHLMap", "desc", None).unwrap();
 
@@ -1743,8 +1743,8 @@ mod tests {
     #[test]
     fn project_rebuild_preserves_other_project_indices() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let project_a = api.create_project("ProjectA").unwrap();
         let project_b = api.create_project("ProjectB").unwrap();
 
@@ -1775,8 +1775,8 @@ mod tests {
     #[test]
     fn delete_project_cascades_to_embed_and_hyperlink_indices() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let project = api.create_project("CascadeP").unwrap();
         let meta = api.create_starmap("CascadeMap", "desc", None).unwrap();
         api.bind_starmap_to_project(&meta.starmap_id, &project.id)
@@ -1876,7 +1876,7 @@ mod tests {
     fn rebuild_extracts_starmap_embeds() {
         use crate::search::extractor::extract_starmap_entries;
         let dir = TempDir::new().unwrap();
-        let starmaps_root = dir.path().join("app-meta").join("starmaps");
+        let starmaps_root = dir.path().join("starmaps");
         let starmap_dir = starmaps_root.join("sm1");
         std::fs::create_dir_all(starmap_dir.join("child_starmaps")).unwrap();
         std::fs::write(
@@ -1984,8 +1984,8 @@ mod tests {
     #[test]
     fn project_rebuild_removes_stale_starmap_indices_from_previously_bound() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let project_a = api.create_project("ProjectA").unwrap();
 
         let meta = api.create_starmap("StaleMap", "", None).unwrap();
@@ -2081,8 +2081,8 @@ mod tests {
     #[test]
     fn starmap_embed_scope_mapping_in_api() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let result = api.global_search_json("test", "starmapEmbed", 10, None);
         assert!(result.is_ok(), "starmapEmbed scope should be recognized");
     }
@@ -2090,8 +2090,8 @@ mod tests {
     #[test]
     fn import_or_replace_rejects_revision_mismatch() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let meta = api.create_starmap("RevMap", "desc", None).unwrap();
 
         let graph = crate::api::types::StarMapGraphDto {
@@ -2116,30 +2116,30 @@ mod tests {
     }
 
     #[test]
-    fn open_workspace_rebuilds_search_index() {
+    fn open_app_service_rebuilds_search_index() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
 
         let path_str = dir.path().to_string_lossy().to_string();
-        let svc = crate::open_workspace(path_str).unwrap();
+        let svc = crate::open_app_service(path_str.clone(), path_str).unwrap();
 
         let status_json = svc.get_search_index_status().unwrap();
         let status: serde_json::Value = serde_json::from_str(&status_json).unwrap();
         assert_eq!(
             status["isRebuilding"], false,
-            "rebuild must complete before open_workspace returns"
+            "rebuild must complete before open_app_service returns"
         );
         assert!(
             status["lastRebuildAt"].as_u64().unwrap() > 0,
-            "last_rebuild_at must be non-zero after open_workspace"
+            "last_rebuild_at must be non-zero after open_app_service"
         );
     }
 
     #[test]
     fn cross_entry_import_or_replace_starmap_package_updates_hyperlink_index() {
         let dir = TempDir::new().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path());
+        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
+        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
         let meta = api.create_starmap("HlMap", "desc", None).unwrap();
 
         let endpoint_path = crate::api::types::StarMapEndpointPathDto {

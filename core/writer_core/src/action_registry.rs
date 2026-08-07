@@ -601,8 +601,8 @@ mod tests {
     #[test]
     fn test_execute_font_size() {
         let temp_dir = tempdir().unwrap();
-        let core = WriterCore::new(temp_dir.path());
-        core.create_workspace().unwrap();
+        let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
 
         let result = core
             .execute_action("settings.editor.font_size.set", r#"{"fontSize": 20.0}"#, "")
@@ -632,15 +632,15 @@ mod tests {
     #[test]
     fn test_execute_unknown_action() {
         let temp_dir = tempdir().unwrap();
-        let core = WriterCore::new(temp_dir.path());
+        let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
         assert!(core.execute_action("unknown.action", "", "").is_err());
     }
 
     #[test]
     fn test_font_size_reads_syncable_settings() {
         let temp_dir = tempdir().unwrap();
-        let core = WriterCore::new(temp_dir.path());
-        core.create_workspace().unwrap();
+        let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
 
         let mut syncable = core.load_syncable_settings().unwrap();
         syncable.font_size = 24.0;
@@ -658,8 +658,8 @@ mod tests {
     #[test]
     fn test_font_size_fallback_to_local_when_syncable_zero() {
         let temp_dir = tempdir().unwrap();
-        let core = WriterCore::new(temp_dir.path());
-        core.create_workspace().unwrap();
+        let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
 
         let mut local = core.load_local_settings().unwrap();
         local.editor_font_size = 18.0;
@@ -677,8 +677,8 @@ mod tests {
     #[test]
     fn test_font_size_set_writes_syncable_settings() {
         let temp_dir = tempdir().unwrap();
-        let core = WriterCore::new(temp_dir.path());
-        core.create_workspace().unwrap();
+        let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
 
         core.execute_action("settings.editor.font_size.set", r#"{"fontSize": 22.0}"#, "")
             .unwrap();
@@ -693,8 +693,8 @@ mod tests {
     #[test]
     fn test_font_size_set_does_not_overwrite_local() {
         let temp_dir = tempdir().unwrap();
-        let core = WriterCore::new(temp_dir.path());
-        core.create_workspace().unwrap();
+        let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
 
         let mut local = core.load_local_settings().unwrap();
         local.editor_font_size = 14.0;
@@ -713,8 +713,8 @@ mod tests {
     #[test]
     fn test_font_size_set_returns_source_syncable() {
         let temp_dir = tempdir().unwrap();
-        let core = WriterCore::new(temp_dir.path());
-        core.create_workspace().unwrap();
+        let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
 
         let result = core
             .execute_action("settings.editor.font_size.set", r#"{"fontSize": 16.0}"#, "")
@@ -731,8 +731,8 @@ fn test_execute_invalid_json() {
     use crate::facade::WriterCore;
     use tempfile::tempdir;
     let temp_dir = tempdir().unwrap();
-    let core = WriterCore::new(temp_dir.path());
-    core.create_workspace().unwrap();
+    let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+    std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
 
     let result = core
         .execute_action("settings.editor.font_size.set", "{invalid json}", "")

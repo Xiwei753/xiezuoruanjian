@@ -119,7 +119,7 @@ impl WriterCoreApi {
 
         // 读取 current_device.json 获取 platform 和 device_class
         let (platform, device_class) =
-            if let Ok(info) = crate::settings::load_device_info(&self.workspace_path) {
+            if let Ok(info) = crate::settings::load_device_info(&self.app_data_root) {
                 let p = if info.platform.is_empty() {
                     crate::writing_stats::Platform::Desktop
                 } else {
@@ -186,7 +186,7 @@ impl WriterCoreApi {
         let duration_seconds = Self::non_negative_counter("duration_seconds", duration_seconds)?;
 
         // 优先从 current_device.json 读取 device_class
-        let device_class = if let Ok(info) = crate::settings::load_device_info(&self.workspace_path)
+        let device_class = if let Ok(info) = crate::settings::load_device_info(&self.app_data_root)
         {
             if info.device_class.is_empty() {
                 crate::writing_stats::Platform::from_str_name(platform)

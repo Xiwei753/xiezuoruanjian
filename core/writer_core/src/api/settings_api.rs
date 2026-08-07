@@ -55,14 +55,14 @@ impl WriterCoreApi {
     }
 
     pub fn load_device_info(&self) -> ApiResult<DeviceInfoDto> {
-        crate::settings::load_device_info(&self.workspace_path)
+        crate::settings::load_device_info(&self.app_data_root)
             .map(Into::into)
             .map_err(Into::into)
     }
 
     pub fn save_palette_record(&self, record: ThemePaletteRecordDto) -> ApiResult<bool> {
         let r: crate::settings::ThemePaletteRecord = record.into();
-        crate::settings::save_palette_record(&self.workspace_path, &r)
+        crate::settings::save_palette_record(&self.app_data_root, &r)
             .map(|_| true)
             .map_err(Into::into)
     }
@@ -72,25 +72,25 @@ impl WriterCoreApi {
         device_id: &str,
         fingerprint: &str,
     ) -> ApiResult<ThemePaletteRecordDto> {
-        crate::settings::load_palette_record(&self.workspace_path, device_id, fingerprint)
+        crate::settings::load_palette_record(&self.app_data_root, device_id, fingerprint)
             .map(Into::into)
             .map_err(Into::into)
     }
 
     pub fn list_palette_records(&self) -> ApiResult<Vec<ThemePaletteRecordDto>> {
-        crate::settings::list_palette_records(&self.workspace_path)
+        crate::settings::list_palette_records(&self.app_data_root)
             .map(|v| v.into_iter().map(Into::into).collect())
             .map_err(Into::into)
     }
 
     pub fn delete_palette_record(&self, device_id: &str, fingerprint: &str) -> ApiResult<bool> {
-        crate::settings::delete_palette_record(&self.workspace_path, device_id, fingerprint)
+        crate::settings::delete_palette_record(&self.app_data_root, device_id, fingerprint)
             .map(|_| true)
             .map_err(Into::into)
     }
 
     pub fn migrate_legacy_theme_palette(&self) -> ApiResult<bool> {
-        crate::settings::migrate_legacy_theme_palette(&self.workspace_path).map_err(Into::into)
+        crate::settings::migrate_legacy_theme_palette(&self.app_data_root).map_err(Into::into)
     }
 
     pub fn compute_palette_fingerprint(

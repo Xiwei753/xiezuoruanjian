@@ -2,24 +2,13 @@ use std::os::raw::c_char;
 
 use super::{c_str_to_rust, err_json, ok_json, with_core, CORE};
 
-/// # Safety
-/// Returns a caller-owned C string. Free with `writer_core_free_string`.
-#[no_mangle]
-pub unsafe extern "C" fn writer_core_validate_workspace() -> *mut c_char {
-    match with_core(|core| core.validate_workspace().map_err(|e| format!("{}", e))) {
-        Ok(is_valid) => ok_json(is_valid),
-        Err(e) => err_json("WORKSPACE_INVALID", &e),
-    }
-}
-
-/// List all known workspaces. Currently returns the single active workspace.
+/// List all known projects with stats and recent edits.
 ///
 /// # Safety
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_list_workspaces() -> *mut c_char {
     match with_core(|core| {
-        let is_valid = core.validate_workspace().map_err(|e| format!("{}", e))?;
         let projects = core.list_projects().map_err(|e| format!("{}", e))?;
         let recent_edits = core.get_recent_edits().map_err(|e| format!("{}", e))?;
         let project_jsons: Vec<serde_json::Value> = projects
@@ -49,8 +38,6 @@ pub unsafe extern "C" fn writer_core_list_workspaces() -> *mut c_char {
             })
             .collect();
         let summary = serde_json::json!({
-            "path": core.workspace_path().to_string_lossy().to_string(),
-            "isValid": is_valid,
             "projects": project_jsons,
             "recentEdits": recent_jsons
         });
@@ -61,7 +48,7 @@ pub unsafe extern "C" fn writer_core_list_workspaces() -> *mut c_char {
     }
 }
 
-/// Open (re-initialize) a workspace at the given path.
+/// Open (re-initialize) the core at the given path.
 ///
 /// ## 全局状态替换
 ///
@@ -80,15 +67,10 @@ pub unsafe extern "C" fn writer_core_open_workspace(path: *const c_char) -> *mut
     };
 
     // Re-initialize the core with the new path
-    let new_core = crate::facade::WriterCore::new(&path_str);
-    if let Err(e) = new_core.create_workspace() {
-        return err_json(
-            "WORKSPACE_ERROR",
-            &format!("create_workspace failed: {}", e),
-        );
-    }
+    let projects_root = std::path::Path::new(&path_str).join("projects");
+    std::fs::create_dir_all(&projects_root).ok();
+    let new_core = crate::facade::WriterCore::new(std::path::Path::new(&path_str), projects_root);
 
-    let is_valid = new_core.validate_workspace().unwrap_or(false);
     let projects = new_core.list_projects().unwrap_or_default();
     let recent_edits = new_core.get_recent_edits().unwrap_or_default();
 
@@ -124,21 +106,19 @@ pub unsafe extern "C" fn writer_core_open_workspace(path: *const c_char) -> *mut
 
     let summary = serde_json::json!({
         "path": path_str,
-        "isValid": is_valid,
         "projects": project_jsons,
         "recentEdits": recent_jsons
     });
     ok_json(summary)
 }
 
-/// Get the current workspace state (path, validity, projects, recent edits).
+/// Get the current app state (projects, recent edits).
 ///
 /// # Safety
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_get_workspace_state() -> *mut c_char {
     match with_core(|core| {
-        let is_valid = core.validate_workspace().map_err(|e| format!("{}", e))?;
         let projects = core.list_projects().map_err(|e| format!("{}", e))?;
         let recent_edits = core.get_recent_edits().map_err(|e| format!("{}", e))?;
         let project_jsons: Vec<serde_json::Value> = projects
@@ -168,8 +148,6 @@ pub unsafe extern "C" fn writer_core_get_workspace_state() -> *mut c_char {
             })
             .collect();
         Ok(serde_json::json!({
-            "path": core.workspace_path().to_string_lossy().to_string(),
-            "isValid": is_valid,
             "projects": project_jsons,
             "recentEdits": recent_jsons
         }))
@@ -181,11 +159,6 @@ pub unsafe extern "C" fn writer_core_get_workspace_state() -> *mut c_char {
 
 /// Resolve the project and volume that contain a given chapter.
 /// This replaces the ArkTS-side tree traversal in NativeWriterCoreBridge.
-///
-/// ## 性能特征
-///
-/// 当前实现为线性扫描所有项目/卷目录。工作区规模有限时（数十项目、数百卷）可接受。
-/// 若需要支持更大规模，应建立 chapter_id → (project_id, volume_id) 的反向索引。
 ///
 /// # Safety
 /// `chapter_id` must be a valid null-terminated UTF-8 C string.
@@ -216,9 +189,7 @@ pub unsafe extern "C" fn writer_core_resolve_chapter_location(
             let volumes = core.list_volumes(&p.id).map_err(|e| format!("{}", e))?;
             for v in &volumes {
                 let target_chap_dir = core
-                    .workspace_path
-                    .join("projects")
-                    .join(&p.id)
+                    .project_root(&p.id)
                     .join("volumes")
                     .join(&v.id)
                     .join("chapters")
@@ -242,8 +213,6 @@ pub unsafe extern "C" fn writer_core_resolve_chapter_location(
 /// Resolve the project that contains a given volume.
 /// This replaces the ArkTS-side tree traversal for volumeId -> projectId.
 ///
-/// 与 `writer_core_resolve_chapter_location` 同理，当前为线性扫描。
-///
 /// # Safety
 /// `volume_id` must be a valid null-terminated UTF-8 C string.
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
@@ -264,9 +233,7 @@ pub unsafe extern "C" fn writer_core_resolve_volume_location(
         let projects = core.list_projects().map_err(|e| format!("{}", e))?;
         for p in &projects {
             let target_vol_dir = core
-                .workspace_path
-                .join("projects")
-                .join(&p.id)
+                .project_root(&p.id)
                 .join("volumes")
                 .join(&vid);
             if target_vol_dir.exists() {

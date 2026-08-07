@@ -289,7 +289,7 @@ class NavigationChromeInstrumentedTest {
         testData: AndroidTestEnvironment.TestProjectData,
     ): String {
         val s = AndroidTestEnvironment.requireCurrentSession()
-        val repo = s.deps.workspaceRepository
+        val repo = s.deps.projectRepository
         var chapterId = ""
         ComposeWait.waitUntil(
             composeTestRule,

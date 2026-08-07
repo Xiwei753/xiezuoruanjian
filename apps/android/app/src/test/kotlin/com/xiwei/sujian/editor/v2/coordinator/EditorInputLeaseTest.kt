@@ -27,7 +27,10 @@ class EditorInputLeaseTest {
     private fun createCoordinator(): EditorSessionCoordinator {
         return EditorSessionCoordinator(
             com.xiwei.sujian.data.AppServiceBridge(
-                com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595_lease"),
+                com.xiwei.sujian.data.WriterAppServiceHolder(
+                    "/tmp/sujian_test_workspace_595_lease",
+                    "/tmp/sujian_test_workspace_595_lease",
+                ),
             ),
         )
     }

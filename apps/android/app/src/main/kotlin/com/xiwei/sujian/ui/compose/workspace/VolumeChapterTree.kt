@@ -61,14 +61,14 @@ sealed class VolumeChapterListItem {
 @Composable
 fun ChapterTreeContent(
     projectId: String,
-    workspaceRepository: com.xiwei.sujian.data.WorkspaceRepository,
+    projectRepository: com.xiwei.sujian.data.ProjectRepository,
     onSelectChapter: (volumeId: String, chapterId: String, chapterTitle: String) -> Unit,
     modifier: Modifier = Modifier,
     showHeader: Boolean = true,
     onBackToProjects: () -> Unit = {},
 ) {
     val viewModel: WorkspaceViewModel = viewModel()
-    viewModel.initialize(projectId, workspaceRepository)
+    viewModel.initialize(projectId, projectRepository)
     val uiState by viewModel.uiState.collectAsState()
 
     var dialogState by remember { mutableStateOf<WorkspaceDialogState>(WorkspaceDialogState.None) }
@@ -301,14 +301,14 @@ fun ChapterTreeContent(
 @Composable
 fun VolumeChapterTree(
     projectId: String,
-    workspaceRepository: com.xiwei.sujian.data.WorkspaceRepository,
+    projectRepository: com.xiwei.sujian.data.ProjectRepository,
     onSelectChapter: (volumeId: String, chapterId: String, chapterTitle: String) -> Unit,
     modifier: Modifier = Modifier,
     onBackToProjects: () -> Unit = {},
 ) {
     ChapterTreeContent(
         projectId = projectId,
-        workspaceRepository = workspaceRepository,
+        projectRepository = projectRepository,
         onSelectChapter = onSelectChapter,
         showHeader = true,
         onBackToProjects = onBackToProjects,

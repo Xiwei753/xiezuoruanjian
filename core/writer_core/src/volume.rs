@@ -51,11 +51,8 @@ pub struct Volume {
 ///
 /// 使用 `rayon` 并行读取各卷的 `volume.json`，解析失败的卷静默跳过。
 /// 结果按 `order` 字段升序排列。
-pub fn list_volumes(workspace_path: &Path, project_id: &str) -> Result<Vec<Volume>> {
-    let volumes_dir = workspace_path
-        .join("projects")
-        .join(project_id)
-        .join("volumes");
+pub fn list_volumes(project_root: &Path) -> Result<Vec<Volume>> {
+    let volumes_dir = project_root.join("volumes");
     if !volumes_dir.exists() {
         return Ok(Vec::new());
     }
@@ -95,8 +92,8 @@ pub fn list_volumes(workspace_path: &Path, project_id: &str) -> Result<Vec<Volum
 ///
 /// `order` 字段取当前项目下最大 order + 1，保证新卷排在最后。
 /// 同时创建 `chapters/` 子目录和 `volume.json` 元数据文件。
-pub fn create_volume(workspace_path: &Path, project_id: &str, title: &str) -> Result<Volume> {
-    let volumes = list_volumes(workspace_path, project_id)?;
+pub fn create_volume(project_root: &Path, title: &str) -> Result<Volume> {
+    let volumes = list_volumes(project_root)?;
     let order = volumes
         .iter()
         .map(|v| v.order)
@@ -114,9 +111,7 @@ pub fn create_volume(workspace_path: &Path, project_id: &str, title: &str) -> Re
         order,
     };
 
-    let volume_dir = workspace_path
-        .join("projects")
-        .join(project_id)
+    let volume_dir = project_root
         .join("volumes")
         .join(&id);
     fs::create_dir_all(&volume_dir)?;
@@ -130,14 +125,11 @@ pub fn create_volume(workspace_path: &Path, project_id: &str, title: &str) -> Re
 }
 
 pub fn rename_volume(
-    workspace_path: &Path,
-    project_id: &str,
+    project_root: &Path,
     volume_id: &str,
     new_title: &str,
 ) -> Result<()> {
-    let volume_dir = workspace_path
-        .join("projects")
-        .join(project_id)
+    let volume_dir = project_root
         .join("volumes")
         .join(volume_id);
     let meta_path = volume_dir.join("volume.json");
@@ -163,18 +155,15 @@ pub fn rename_volume(
 /// 经过 `delete_guard` 双重验证后，将卷目录移入 `app-meta/sync/trash/`，
 /// 命名格式为 `{timestamp}_{uuid}_{volume_id}`，确保唯一且可溯源。
 /// 同时生成 tombstone 记录供同步使用。
-pub fn delete_volume(workspace_path: &Path, project_id: &str, volume_id: &str) -> Result<()> {
-    let project_id = crate::delete_guard::validate_id_segment(project_id)?;
+pub fn delete_volume(project_root: &Path, volume_id: &str, app_data_root: &Path) -> Result<()> {
     let volume_id = crate::delete_guard::validate_id_segment(volume_id)?;
-    let volume_dir = workspace_path
-        .join("projects")
-        .join(project_id)
+    let volume_dir = project_root
         .join("volumes")
         .join(volume_id);
     let target_canon =
-        crate::delete_guard::validate_delete_target(workspace_path, &volume_dir, "volume.json")?;
+        crate::delete_guard::validate_delete_target(project_root, &volume_dir, "volume.json")?;
 
-    let trash_dir = workspace_path.join("app-meta/sync/trash");
+    let trash_dir = app_data_root.join("sync/trash");
     let _ = fs::create_dir_all(&trash_dir);
     let trash_path = trash_dir.join(format!(
         "{}_{}_{}",
@@ -185,9 +174,9 @@ pub fn delete_volume(workspace_path: &Path, project_id: &str, volume_id: &str) -
     fs::rename(&target_canon, &trash_path)?;
 
     // Also update tombstone
-    if let Ok(mut state) = crate::sync::SyncService::load_sync_state(workspace_path) {
-        let rel_volume_dir = normalize_rel_path(&volume_dir, workspace_path);
-        let rel_trash_path = normalize_rel_path(&trash_path, workspace_path);
+    if let Ok(mut state) = crate::sync::SyncService::load_sync_state(app_data_root) {
+        let rel_volume_dir = normalize_rel_path(&volume_dir, project_root);
+        let rel_trash_path = normalize_rel_path(&trash_path, app_data_root);
 
         crate::trash::generate_tombstones(
             &mut state,
@@ -195,7 +184,7 @@ pub fn delete_volume(workspace_path: &Path, project_id: &str, volume_id: &str) -
             &rel_volume_dir,
             &rel_trash_path,
         );
-        let _ = crate::sync::SyncService::save_sync_state(workspace_path, &state);
+        let _ = crate::sync::SyncService::save_sync_state(app_data_root, &state);
     }
     Ok(())
 }
@@ -206,11 +195,10 @@ pub fn delete_volume(workspace_path: &Path, project_id: &str, volume_id: &str) -
 /// 否则返回错误。每个卷的 `order` 字段被设置为该 ID 在列表中的索引。
 #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
 pub fn reorder_volumes(
-    workspace_path: &Path,
-    project_id: &str,
+    project_root: &Path,
     ordered_ids: &[String],
 ) -> Result<()> {
-    let volumes = list_volumes(workspace_path, project_id)?;
+    let volumes = list_volumes(project_root)?;
     let existing_ids: std::collections::HashSet<_> = volumes.iter().map(|v| v.id.clone()).collect();
     let new_ids: std::collections::HashSet<_> = ordered_ids.iter().cloned().collect();
 
@@ -224,9 +212,7 @@ pub fn reorder_volumes(
     }
 
     for (index, id) in ordered_ids.iter().enumerate() {
-        let volume_dir = workspace_path
-            .join("projects")
-            .join(project_id)
+        let volume_dir = project_root
             .join("volumes")
             .join(id);
         let meta_path = volume_dir.join("volume.json");

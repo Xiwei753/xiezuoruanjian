@@ -169,7 +169,7 @@ complexity:
       # --- 数据层桥接：FFI桥接函数参数由Core契约决定 ---
       - "**/kotlin/com/xiwei/sujian/data/AppServiceBridge.kt"
       - "**/kotlin/com/xiwei/sujian/data/StatsBridge.kt"
-      - "**/kotlin/com/xiwei/sujian/data/WorkspaceRepository.kt"
+      - "**/kotlin/com/xiwei/sujian/data/ProjectRepository.kt"
       - "**/kotlin/com/xiwei/sujian/data/WriterAppServiceHolder.kt"
       - "**/kotlin/com/xiwei/sujian/data/WritingBridge.kt"
       # --- 诊断事件：多字段事件数据类 ---
@@ -227,8 +227,7 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/data/LayoutPolicyBridge.kt"
       - "**/kotlin/com/xiwei/sujian/data/SettingsRepository.kt"
       - "**/kotlin/com/xiwei/sujian/data/StarMapBridge.kt"
-      - "**/kotlin/com/xiwei/sujian/data/WorkspaceBridge.kt"
-      - "**/kotlin/com/xiwei/sujian/data/WorkspaceRepository.kt"
+      - "**/kotlin/com/xiwei/sujian/data/ProjectRepository.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapBridgeOps.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapRepository.kt"
       # --- 诊断事件：多字段事件枚举 ---
@@ -266,7 +265,7 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/data/DocumentSaveReceiptTrackerTest.kt"
       - "**/kotlin/com/xiwei/sujian/data/SettingsRepository.kt"
       - "**/kotlin/com/xiwei/sujian/data/SyncCoordinator.kt"
-      - "**/kotlin/com/xiwei/sujian/data/WorkspaceRepository.kt"
+      - "**/kotlin/com/xiwei/sujian/data/ProjectRepository.kt"
       # --- 星图：桥接/缓存/测试，协议键重复 ---
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapRepository.kt"
       - "**/kotlin/com/xiwei/sujian/data/starmap/StarMapSnapshotCache.kt"

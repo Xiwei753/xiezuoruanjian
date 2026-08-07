@@ -84,7 +84,7 @@ pub(crate) fn now_epoch() -> u64 {
 }
 
 fn starmaps_dir(workspace: &Path) -> std::path::PathBuf {
-    workspace.join("app-meta").join("starmaps")
+    workspace.join("starmaps")
 }
 
 fn index_path(workspace: &Path) -> std::path::PathBuf {

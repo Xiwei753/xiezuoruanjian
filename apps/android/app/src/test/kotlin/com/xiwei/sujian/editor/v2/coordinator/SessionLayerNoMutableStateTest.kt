@@ -27,7 +27,10 @@ class SessionLayerNoMutableStateTest {
     private fun createCoordinator(): EditorSessionCoordinator {
         return EditorSessionCoordinator(
             com.xiwei.sujian.data.AppServiceBridge(
-                com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595_session_layer"),
+                com.xiwei.sujian.data.WriterAppServiceHolder(
+                    "/tmp/sujian_test_workspace_595_session_layer",
+                    "/tmp/sujian_test_workspace_595_session_layer",
+                ),
             ),
         )
     }

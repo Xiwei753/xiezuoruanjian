@@ -241,7 +241,12 @@ pub fn save_sync_configs(
     config: &SyncConfig,
     secrets: &SyncSecrets,
 ) -> Result<(), String> {
-    let api = crate::backend::app_backend::create_core_api(path);
+    // path 同时作为 app_data_root；projects_root 为 path/projects
+    let projects_root = std::path::Path::new(path)
+        .join("projects")
+        .to_string_lossy()
+        .to_string();
+    let api = crate::backend::app_backend::create_core_api(path, &projects_root);
     let config_result = api.save_sync_config(config.clone().into());
     let config_envelope = match config_result {
         Ok(data) => writer_core::api::ResultEnvelope::success_with_changes(

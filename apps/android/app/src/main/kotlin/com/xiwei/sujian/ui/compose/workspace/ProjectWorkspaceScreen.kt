@@ -58,7 +58,7 @@ fun ProjectWorkspaceScreen(
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
     val deps = LocalSujianAppDependencies.current
-    val workspaceRepository = deps.workspaceRepository
+    val projectRepository = deps.projectRepository
 
     // #595 一：章节切换事务入口 — 显式 Factory 注入进程级容器依赖 + 会话层协调器。
     // 与 WritingPane 内 viewModel(factory=...) 解析到同一 Activity 级实例。
@@ -76,7 +76,7 @@ fun ProjectWorkspaceScreen(
     // 组合前就具备 Repository 与 session 协调器（提交前预准备 Rust session）。
     LaunchedEffect(Unit) {
         editorViewModel.initialize(
-            deps.workspaceRepository,
+            deps.projectRepository,
             deps.settingsRepository,
             deps.syncStatusRepository,
             editorHost?.sessionCoordinator,
@@ -152,7 +152,7 @@ fun ProjectWorkspaceScreen(
                 if (currentProjectId != null) {
                     ChapterTreeContent(
                         projectId = currentProjectId,
-                        workspaceRepository = workspaceRepository,
+                        projectRepository = projectRepository,
                         onSelectChapter = { volumeId, chapterId, chapterTitle ->
                             // #595 一：事务成功后才提交业务选择和 Navigator —
                             // 保存/加载失败时 Navigator 完全不变化，不再"先导航再回滚"。

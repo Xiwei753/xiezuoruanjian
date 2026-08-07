@@ -2,13 +2,12 @@ package com.xiwei.sujian.data
 
 import com.xiwei.sujian.model.Project
 import com.xiwei.sujian.model.ProjectStats
-import com.xiwei.sujian.model.RecentEdit
 import com.xiwei.sujian.model.Volume
 
 /**
  * 项目/卷 领域 Bridge。
  *
- * 从 AppServiceBridge 拆出，负责项目、卷、最近编辑相关操作。
+ * 从 AppServiceBridge 拆出，负责项目、卷的 CRUD 与排序操作。
  */
 class ProjectBridge internal constructor(private val holder: WriterAppServiceHolder) {
     fun listProjects(): BridgeResult<List<Project>> =
@@ -42,25 +41,6 @@ class ProjectBridge internal constructor(private val holder: WriterAppServiceHol
     fun reorderProjects(orderedIds: List<String>): BridgeResult<Boolean> =
         holder.wrapResult {
             holder.service.reorderProjects(orderedIds)
-        }
-
-    fun getRecentEdits(): BridgeResult<List<RecentEdit>> =
-        holder.wrapResult {
-            holder.service.getRecentEdits().map { it.toModel() }
-        }
-
-    fun recordRecentEdit(
-        projectId: String,
-        volumeId: String,
-        chapterId: String,
-    ): BridgeResult<Boolean> =
-        holder.wrapResult {
-            holder.service.recordRecentEdit(projectId, volumeId, chapterId)
-        }
-
-    fun flushRecentEdits(): BridgeResult<Boolean> =
-        holder.wrapResult {
-            holder.service.flushRecentEdits()
         }
 
     fun listVolumes(projectId: String): BridgeResult<List<Volume>> =

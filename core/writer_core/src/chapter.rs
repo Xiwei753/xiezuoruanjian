@@ -79,14 +79,10 @@ pub struct ChapterSaveReceipt {
     clippy::type_complexity
 )]
 pub fn list_valid_chapter_ids(
-    workspace_path: &Path,
-    project_id: &str,
+    project_root: &Path,
 ) -> Result<std::collections::HashSet<String>> {
     let mut chapter_ids = std::collections::HashSet::new();
-    let volumes_dir = workspace_path
-        .join("projects")
-        .join(project_id)
-        .join("volumes");
+    let volumes_dir = project_root.join("volumes");
 
     if !volumes_dir.exists() {
         return Ok(chapter_ids);
@@ -126,13 +122,10 @@ pub fn list_valid_chapter_ids(
     clippy::type_complexity
 )]
 pub fn list_chapters(
-    workspace_path: &Path,
-    project_id: &str,
+    project_root: &Path,
     volume_id: &str,
 ) -> Result<Vec<Chapter>> {
-    let chapters_dir = workspace_path
-        .join("projects")
-        .join(project_id)
+    let chapters_dir = project_root
         .join("volumes")
         .join(volume_id)
         .join("chapters");
@@ -184,12 +177,11 @@ pub fn calculate_word_count(text: &str) -> u32 {
 /// 创建章节。`order` 自动递增（当前最大 order + 1）。
 /// 空标题时自动生成"第N章"格式。创建后原子写入 meta 和空正文文件。
 pub fn create_chapter(
-    workspace_path: &Path,
-    project_id: &str,
+    project_root: &Path,
     volume_id: &str,
     title: &str,
 ) -> Result<Chapter> {
-    let chapters = list_chapters(workspace_path, project_id, volume_id)?;
+    let chapters = list_chapters(project_root, volume_id)?;
     let order = chapters
         .iter()
         .map(|c| c.order)
@@ -217,9 +209,7 @@ pub fn create_chapter(
         note: None,
     };
 
-    let chapter_dir = workspace_path
-        .join("projects")
-        .join(project_id)
+    let chapter_dir = project_root
         .join("volumes")
         .join(volume_id)
         .join("chapters")
@@ -238,14 +228,11 @@ pub fn create_chapter(
 
 /// 读取章节内容（元数据 + 正文）。meta 或 md 文件不存在时返回 ChapterNotFound。
 pub fn read_chapter(
-    workspace_path: &Path,
-    project_id: &str,
+    project_root: &Path,
     volume_id: &str,
     chapter_id: &str,
 ) -> Result<ChapterContent> {
-    let chapter_dir = workspace_path
-        .join("projects")
-        .join(project_id)
+    let chapter_dir = project_root
         .join("volumes")
         .join(volume_id)
         .join("chapters")
@@ -266,26 +253,23 @@ pub fn read_chapter(
 
 /// 保存章节正文（带空内容覆盖保护）。成功时丢弃回执。
 pub fn save_chapter(
-    workspace_path: &Path,
-    project_id: &str,
+    project_root: &Path,
     volume_id: &str,
     chapter_id: &str,
     content: &str,
 ) -> Result<()> {
-    save_chapter_verified(workspace_path, project_id, volume_id, chapter_id, content).map(|_| ())
+    save_chapter_verified(project_root, volume_id, chapter_id, content).map(|_| ())
 }
 
 /// 保存章节正文并返回验证回执（默认拒绝空内容覆盖非空章节）。
 pub fn save_chapter_verified(
-    workspace_path: &Path,
-    project_id: &str,
+    project_root: &Path,
     volume_id: &str,
     chapter_id: &str,
     content: &str,
 ) -> Result<ChapterSaveReceipt> {
     save_chapter_verified_with_options(
-        workspace_path,
-        project_id,
+        project_root,
         volume_id,
         chapter_id,
         content,
@@ -295,16 +279,14 @@ pub fn save_chapter_verified(
 
 /// 保存章节正文（可控制是否允许空内容覆盖）。
 pub fn save_chapter_verified_with_allow_empty_overwrite(
-    workspace_path: &Path,
-    project_id: &str,
+    project_root: &Path,
     volume_id: &str,
     chapter_id: &str,
     content: &str,
     allow_empty_overwrite: bool,
 ) -> Result<ChapterSaveReceipt> {
     save_chapter_verified_with_options(
-        workspace_path,
-        project_id,
+        project_root,
         volume_id,
         chapter_id,
         content,
@@ -314,22 +296,20 @@ pub fn save_chapter_verified_with_allow_empty_overwrite(
 
 /// 清空章节正文（成功时丢弃回执）。等效于 `save_chapter_verified_with_options(_, "", true)`。
 pub fn clear_chapter_content(
-    workspace_path: &Path,
-    project_id: &str,
+    project_root: &Path,
     volume_id: &str,
     chapter_id: &str,
 ) -> Result<()> {
-    clear_chapter_content_verified(workspace_path, project_id, volume_id, chapter_id).map(|_| ())
+    clear_chapter_content_verified(project_root, volume_id, chapter_id).map(|_| ())
 }
 
 /// 清空章节正文并返回验证回执。
 pub fn clear_chapter_content_verified(
-    workspace_path: &Path,
-    project_id: &str,
+    project_root: &Path,
     volume_id: &str,
     chapter_id: &str,
 ) -> Result<ChapterSaveReceipt> {
-    save_chapter_verified_with_options(workspace_path, project_id, volume_id, chapter_id, "", true)
+    save_chapter_verified_with_options(project_root, volume_id, chapter_id, "", true)
 }
 
 /// 章节保存的核心实现。
@@ -345,16 +325,13 @@ pub fn clear_chapter_content_verified(
 /// 2. 写入后重新读取文件并计算 hash，与预期 hash 比对
 /// 3. 验证失败返回错误，但文件已被事务提交（无法自动回滚）
 fn save_chapter_verified_with_options(
-    workspace_path: &Path,
-    project_id: &str,
+    project_root: &Path,
     volume_id: &str,
     chapter_id: &str,
     content: &str,
     allow_empty_overwrite: bool,
 ) -> Result<ChapterSaveReceipt> {
-    let chapter_dir = workspace_path
-        .join("projects")
-        .join(project_id)
+    let chapter_dir = project_root
         .join("volumes")
         .join(volume_id)
         .join("chapters")
@@ -401,15 +378,15 @@ fn save_chapter_verified_with_options(
     let updated_meta_str = serde_json::to_string_pretty(&meta)?;
 
     // Transactional write: all files staged first, then atomic rename
-    let mut tx = crate::storage::transaction::SaveTransaction::new(workspace_path);
+    let mut tx = crate::storage::transaction::SaveTransaction::new(project_root);
 
     let md_relative = md_path
-        .strip_prefix(workspace_path)
+        .strip_prefix(project_root)
         .unwrap_or(&md_path)
         .to_string_lossy()
         .replace('\\', "/");
     let meta_relative = meta_path
-        .strip_prefix(workspace_path)
+        .strip_prefix(project_root)
         .unwrap_or(&meta_path)
         .to_string_lossy()
         .replace('\\', "/");
@@ -429,7 +406,7 @@ fn save_chapter_verified_with_options(
     }
 
     let chapter_relative_path = md_path
-        .strip_prefix(workspace_path)
+        .strip_prefix(project_root)
         .unwrap_or(&md_path)
         .to_string_lossy()
         .replace('\\', "/");
@@ -445,15 +422,12 @@ fn save_chapter_verified_with_options(
 }
 
 pub fn update_chapter_note(
-    workspace_path: &Path,
-    project_id: &str,
+    project_root: &Path,
     volume_id: &str,
     chapter_id: &str,
     note: &str,
 ) -> Result<()> {
-    let chapter_dir = workspace_path
-        .join("projects")
-        .join(project_id)
+    let chapter_dir = project_root
         .join("volumes")
         .join(volume_id)
         .join("chapters")
@@ -477,15 +451,12 @@ pub fn update_chapter_note(
 }
 
 pub fn rename_chapter(
-    workspace_path: &Path,
-    project_id: &str,
+    project_root: &Path,
     volume_id: &str,
     chapter_id: &str,
     new_title: &str,
 ) -> Result<()> {
-    let chapter_dir = workspace_path
-        .join("projects")
-        .join(project_id)
+    let chapter_dir = project_root
         .join("volumes")
         .join(volume_id)
         .join("chapters")
@@ -512,28 +483,25 @@ pub fn rename_chapter(
 /// 并记录 tombstone（30 天后可清理）。删除后同步状态中保留墓碑记录，
 /// 确保下次同步时远端能感知到本地删除。
 pub fn delete_chapter(
-    workspace_path: &Path,
-    project_id: &str,
+    project_root: &Path,
     volume_id: &str,
     chapter_id: &str,
+    app_data_root: &Path,
 ) -> Result<()> {
-    let project_id = crate::delete_guard::validate_id_segment(project_id)?;
     let volume_id = crate::delete_guard::validate_id_segment(volume_id)?;
     let chapter_id = crate::delete_guard::validate_id_segment(chapter_id)?;
-    let chapter_dir = workspace_path
-        .join("projects")
-        .join(project_id)
+    let chapter_dir = project_root
         .join("volumes")
         .join(volume_id)
         .join("chapters")
         .join(chapter_id);
     let target_canon = crate::delete_guard::validate_delete_target(
-        workspace_path,
+        project_root,
         &chapter_dir,
         "chapter.meta.json",
     )?;
 
-    let trash_dir = workspace_path.join("app-meta/sync/trash");
+    let trash_dir = app_data_root.join("sync/trash");
     let _ = fs::create_dir_all(&trash_dir);
     let trash_path = trash_dir.join(format!(
         "{}_{}_{}",
@@ -544,14 +512,14 @@ pub fn delete_chapter(
     fs::rename(&target_canon, &trash_path)?;
 
     // Also update tombstone
-    if let Ok(mut state) = crate::sync::SyncService::load_sync_state(workspace_path) {
+    if let Ok(mut state) = crate::sync::SyncService::load_sync_state(app_data_root) {
         let rel_chapter_dir = chapter_dir
-            .strip_prefix(workspace_path)
+            .strip_prefix(project_root)
             .unwrap_or(&chapter_dir)
             .to_string_lossy()
             .replace("\\", "/");
         let rel_trash_path = trash_path
-            .strip_prefix(workspace_path)
+            .strip_prefix(app_data_root)
             .unwrap_or(&trash_path)
             .to_string_lossy()
             .replace("\\", "/");
@@ -564,19 +532,18 @@ pub fn delete_chapter(
             &rel_chapter_dir,
             &rel_trash_path,
         );
-        let _ = crate::sync::SyncService::save_sync_state(workspace_path, &state);
+        let _ = crate::sync::SyncService::save_sync_state(app_data_root, &state);
     }
     Ok(())
 }
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
 pub fn reorder_chapters(
-    workspace_path: &Path,
-    project_id: &str,
+    project_root: &Path,
     volume_id: &str,
     ordered_ids: &[String],
 ) -> Result<()> {
-    let chapters = list_chapters(workspace_path, project_id, volume_id)?;
+    let chapters = list_chapters(project_root, volume_id)?;
     let existing_ids: std::collections::HashSet<_> =
         chapters.iter().map(|c| c.id.clone()).collect();
     let new_ids: std::collections::HashSet<_> = ordered_ids.iter().cloned().collect();
@@ -591,9 +558,7 @@ pub fn reorder_chapters(
     }
 
     let now_str = Utc::now().to_rfc3339();
-    let base_chapters_dir = workspace_path
-        .join("projects")
-        .join(project_id)
+    let base_chapters_dir = project_root
         .join("volumes")
         .join(volume_id)
         .join("chapters");
@@ -631,15 +596,15 @@ mod tests {
         let workspace_path = temp_dir.path();
 
         // Create workspace structure
-        crate::workspace::create_workspace(workspace_path).unwrap();
+        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
 
         // Create project and volume
-        let project = crate::project::create_project(workspace_path, "TestProject").unwrap();
-        let volumes = crate::volume::list_volumes(workspace_path, &project.id).unwrap();
+        let project = crate::project::create_project(&workspace_path.join("projects"), "TestProject").unwrap();
+        let volumes = crate::volume::list_volumes(&workspace_path.join("projects").join(&project.id)).unwrap();
         let volume = &volumes[0]; // create_project auto-creates "第一卷"
 
         // Create a chapter
-        let chapter = create_chapter(workspace_path, &project.id, &volume.id, "Ch1").unwrap();
+        let chapter = create_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, "Ch1").unwrap();
 
         // Record volume.json and project.json content BEFORE saving
         let vol_json_path = workspace_path
@@ -657,9 +622,7 @@ mod tests {
         let proj_content_before = fs::read_to_string(&proj_json_path).unwrap();
 
         // Save chapter content
-        let receipt = save_chapter_verified(
-            workspace_path,
-            &project.id,
+        let receipt = save_chapter_verified(&workspace_path.join("projects").join(&project.id),
             &volume.id,
             &chapter.id,
             "Hello world content",
@@ -717,14 +680,14 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let workspace_path = temp_dir.path();
 
-        crate::workspace::create_workspace(workspace_path).unwrap();
+        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
 
-        let project = crate::project::create_project(workspace_path, "TestProject2").unwrap();
-        let volumes = crate::volume::list_volumes(workspace_path, &project.id).unwrap();
+        let project = crate::project::create_project(&workspace_path.join("projects"), "TestProject2").unwrap();
+        let volumes = crate::volume::list_volumes(&workspace_path.join("projects").join(&project.id)).unwrap();
         let volume = &volumes[0];
 
-        let chapter1 = create_chapter(workspace_path, &project.id, &volume.id, "Ch1").unwrap();
-        let chapter2 = create_chapter(workspace_path, &project.id, &volume.id, "Ch2").unwrap();
+        let chapter1 = create_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, "Ch1").unwrap();
+        let chapter2 = create_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, "Ch2").unwrap();
 
         let vol_json_path = workspace_path
             .join("projects")
@@ -741,9 +704,7 @@ mod tests {
         let proj_content_before = fs::read_to_string(&proj_json_path).unwrap();
 
         // Save chapter1
-        save_chapter_verified(
-            workspace_path,
-            &project.id,
+        save_chapter_verified(&workspace_path.join("projects").join(&project.id),
             &volume.id,
             &chapter1.id,
             "Content for chapter 1",
@@ -751,9 +712,7 @@ mod tests {
         .unwrap();
 
         // Save chapter2
-        save_chapter_verified(
-            workspace_path,
-            &project.id,
+        save_chapter_verified(&workspace_path.join("projects").join(&project.id),
             &volume.id,
             &chapter2.id,
             "Content for chapter 2",
@@ -772,12 +731,12 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let workspace_path = temp_dir.path();
 
-        crate::workspace::create_workspace(workspace_path).unwrap();
-        let project = crate::project::create_project(workspace_path, "TestProject").unwrap();
-        let volumes = crate::volume::list_volumes(workspace_path, &project.id).unwrap();
+        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
+        let project = crate::project::create_project(&workspace_path.join("projects"), "TestProject").unwrap();
+        let volumes = crate::volume::list_volumes(&workspace_path.join("projects").join(&project.id)).unwrap();
         let volume = &volumes[0];
 
-        let chapter = create_chapter(workspace_path, &project.id, &volume.id, "Old Title").unwrap();
+        let chapter = create_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, "Old Title").unwrap();
 
         let meta_path = workspace_path
             .join("projects")
@@ -792,9 +751,7 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(&meta_path).unwrap()).unwrap();
         assert_eq!(meta_before.title, "Old Title");
 
-        rename_chapter(
-            workspace_path,
-            &project.id,
+        rename_chapter(&workspace_path.join("projects").join(&project.id),
             &volume.id,
             &chapter.id,
             "New Title",
@@ -813,14 +770,12 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let workspace_path = temp_dir.path();
 
-        crate::workspace::create_workspace(workspace_path).unwrap();
-        let project = crate::project::create_project(workspace_path, "TestProject").unwrap();
-        let volumes = crate::volume::list_volumes(workspace_path, &project.id).unwrap();
+        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
+        let project = crate::project::create_project(&workspace_path.join("projects"), "TestProject").unwrap();
+        let volumes = crate::volume::list_volumes(&workspace_path.join("projects").join(&project.id)).unwrap();
         let volume = &volumes[0];
 
-        let result = rename_chapter(
-            workspace_path,
-            &project.id,
+        let result = rename_chapter(&workspace_path.join("projects").join(&project.id),
             &volume.id,
             "nonexistent-chapter-id",
             "New Title",
@@ -835,26 +790,26 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let workspace_path = temp_dir.path();
 
-        crate::workspace::create_workspace(workspace_path).unwrap();
-        let project = crate::project::create_project(workspace_path, "TestProject").unwrap();
-        let volumes = crate::volume::list_volumes(workspace_path, &project.id).unwrap();
+        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
+        let project = crate::project::create_project(&workspace_path.join("projects"), "TestProject").unwrap();
+        let volumes = crate::volume::list_volumes(&workspace_path.join("projects").join(&project.id)).unwrap();
         let volume = &volumes[0];
 
         // 空标题应生成"第1章"
-        let chapter1 = create_chapter(workspace_path, &project.id, &volume.id, "").unwrap();
+        let chapter1 = create_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, "").unwrap();
         assert_eq!(chapter1.title, "第1章");
 
         // 纯空格标题也应生成默认标题
-        let chapter2 = create_chapter(workspace_path, &project.id, &volume.id, "   ").unwrap();
+        let chapter2 = create_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, "   ").unwrap();
         assert_eq!(chapter2.title, "第2章");
 
         // 有标题时不应被覆盖
         let chapter3 =
-            create_chapter(workspace_path, &project.id, &volume.id, "自定义标题").unwrap();
+            create_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, "自定义标题").unwrap();
         assert_eq!(chapter3.title, "自定义标题");
 
         // 再创建空标题应生成"第4章"（因为已有3个章节）
-        let chapter4 = create_chapter(workspace_path, &project.id, &volume.id, "").unwrap();
+        let chapter4 = create_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, "").unwrap();
         assert_eq!(chapter4.title, "第4章");
     }
 }

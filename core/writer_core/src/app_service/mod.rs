@@ -54,9 +54,9 @@ pub struct WriterAppService {
 }
 
 impl WriterAppService {
-    pub fn new(workspace_path: String) -> Self {
+    pub fn new(app_data_root: String, projects_root: String) -> Self {
         Self {
-            api: WriterCoreApi::new(workspace_path),
+            api: WriterCoreApi::new(app_data_root, projects_root),
             editor_session: Mutex::new(EditorSession {
                 kernel: crate::editor::EditorKernel::new(),
                 chapter_id: None,
@@ -69,11 +69,12 @@ impl WriterAppService {
     }
 
     pub fn with_platform_init(
-        workspace_path: String,
+        app_data_root: String,
+        projects_root: String,
         init: writer_platform_api::PlatformInit,
     ) -> Self {
         Self {
-            api: WriterCoreApi::new(workspace_path),
+            api: WriterCoreApi::new(app_data_root, projects_root),
             editor_session: Mutex::new(EditorSession {
                 kernel: crate::editor::EditorKernel::new(),
                 chapter_id: None,
@@ -86,13 +87,15 @@ impl WriterAppService {
     }
 
     pub fn with_platform_services(
-        workspace_path: String,
+        app_data_root: String,
+        projects_root: String,
         services: writer_platform_api::PlatformServices,
     ) -> Self {
         let secure_storage_arc: Option<std::sync::Arc<dyn writer_platform_api::SecureStorage>> =
             services.secure_storage.map(std::sync::Arc::from);
         let api = WriterCoreApi::with_platform_services(
-            &workspace_path,
+            &app_data_root,
+            &projects_root,
             services.sync_transport_factory,
             secure_storage_arc,
         );
@@ -145,8 +148,9 @@ impl WriterAppService {
         &mut self,
         factory: writer_platform_api::SyncTransportFactory,
     ) {
-        let workspace_path = self.api.workspace_path.clone();
-        self.api = WriterCoreApi::with_sync_transport(workspace_path, factory);
+        let app_data_root = self.api.app_data_root.clone();
+        let projects_root = self.api.projects_root.clone();
+        self.api = WriterCoreApi::with_sync_transport(app_data_root, projects_root, factory);
     }
 
     pub fn sync_transport_factory(&self) -> Option<&writer_platform_api::SyncTransportFactory> {
@@ -262,7 +266,7 @@ mod tests {
     #[test]
     fn editor_kernel_load_text_rejects_invalid_offset() {
         let dir = tempfile::TempDir::new().unwrap();
-        let svc = WriterAppService::new(dir.path().to_string_lossy().to_string());
+        let svc = WriterAppService::new(dir.path().to_string_lossy().to_string(), dir.path().join("projects").to_string_lossy().to_string());
         let result = svc.editor_kernel_load_text("你好".to_string(), 4);
         assert_eq!(
             result.outcome,
@@ -273,7 +277,7 @@ mod tests {
     #[test]
     fn editor_kernel_load_text_accepts_valid_offset() {
         let dir = tempfile::TempDir::new().unwrap();
-        let svc = WriterAppService::new(dir.path().to_string_lossy().to_string());
+        let svc = WriterAppService::new(dir.path().to_string_lossy().to_string(), dir.path().join("projects").to_string_lossy().to_string());
         let result = svc.editor_kernel_load_text("你好".to_string(), 3);
         assert_eq!(result.outcome, crate::api::EditorEditOutcomeDto::Applied);
     }
@@ -281,7 +285,7 @@ mod tests {
     #[test]
     fn text_edit_session_load_text_rejects_invalid_offset() {
         let dir = tempfile::TempDir::new().unwrap();
-        let svc = WriterAppService::new(dir.path().to_string_lossy().to_string());
+        let svc = WriterAppService::new(dir.path().to_string_lossy().to_string(), dir.path().join("projects").to_string_lossy().to_string());
         let session_id = svc
             .text_edit_session_create("test".to_string(), String::new(), 0, 0)
             .unwrap();
@@ -295,7 +299,7 @@ mod tests {
     #[test]
     fn text_edit_session_reset_rejects_invalid_offset() {
         let dir = tempfile::TempDir::new().unwrap();
-        let svc = WriterAppService::new(dir.path().to_string_lossy().to_string());
+        let svc = WriterAppService::new(dir.path().to_string_lossy().to_string(), dir.path().join("projects").to_string_lossy().to_string());
         let session_id = svc
             .text_edit_session_create("test".to_string(), String::new(), 0, 0)
             .unwrap();
@@ -306,7 +310,7 @@ mod tests {
     #[test]
     fn editor_kernel_update_composition_accepts_preedit_utf16_cursor_offset() {
         let dir = tempfile::TempDir::new().unwrap();
-        let svc = WriterAppService::new(dir.path().to_string_lossy().to_string());
+        let svc = WriterAppService::new(dir.path().to_string_lossy().to_string(), dir.path().join("projects").to_string_lossy().to_string());
         let load = svc.editor_kernel_load_text(String::new(), 0);
         assert_eq!(load.outcome, crate::api::EditorEditOutcomeDto::Applied);
         let begin = svc.editor_kernel_begin_composition(0, 0, load.new_revision);
@@ -324,7 +328,7 @@ mod tests {
     #[test]
     fn editor_kernel_update_composition_rejects_cursor_beyond_preedit() {
         let dir = tempfile::TempDir::new().unwrap();
-        let svc = WriterAppService::new(dir.path().to_string_lossy().to_string());
+        let svc = WriterAppService::new(dir.path().to_string_lossy().to_string(), dir.path().join("projects").to_string_lossy().to_string());
         let load = svc.editor_kernel_load_text(String::new(), 0);
         assert_eq!(load.outcome, crate::api::EditorEditOutcomeDto::Applied);
         let begin = svc.editor_kernel_begin_composition(0, 0, load.new_revision);
@@ -347,7 +351,7 @@ mod tests {
         // #595 十：set → has_override=true；clear → has_override=false。
         // 清除后 refresh_secrets_override 才会从磁盘重新填充，陈旧凭据不会泄漏。
         let dir = tempfile::TempDir::new().unwrap();
-        let svc = WriterAppService::new(dir.path().to_string_lossy().to_string());
+        let svc = WriterAppService::new(dir.path().to_string_lossy().to_string(), dir.path().join("projects").to_string_lossy().to_string());
         let secrets = crate::api::SyncSecretsDto {
             token: Some("token-a".to_string()),
         };

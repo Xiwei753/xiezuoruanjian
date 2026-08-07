@@ -15,15 +15,14 @@ use std::path::Path;
 /// 将章节移动到回收站。
 ///
 /// 委托给 `chapter::delete_chapter`，将章节目录移动到 `app-meta/sync/trash/`。
-pub fn move_chapter_to_trash(workspace_path: &Path, chapter_id: &str) -> Result<()> {
+pub fn move_chapter_to_trash(projects_root: &Path, chapter_id: &str, app_data_root: &Path) -> Result<()> {
     // 查找 chapter 所属的 project_id 和 volume_id
     // 遍历 projects 目录查找包含该 chapter 的 volume
-    let projects_dir = workspace_path.join("projects");
-    if !projects_dir.exists() {
+    if !projects_root.exists() {
         return Err(crate::error::Error::ChapterNotFound);
     }
 
-    for project_entry in std::fs::read_dir(&projects_dir)?.filter_map(|e| e.ok()) {
+    for project_entry in std::fs::read_dir(projects_root)?.filter_map(|e| e.ok()) {
         let volumes_dir = project_entry.path().join("volumes");
 
         let volumes = match std::fs::read_dir(&volumes_dir) {
@@ -40,11 +39,12 @@ pub fn move_chapter_to_trash(workspace_path: &Path, chapter_id: &str) -> Result<
             {
                 let project_id = project_entry.file_name().to_string_lossy().into_owned();
                 let volume_id = volume_entry.file_name().to_string_lossy().into_owned();
+                let project_root = projects_root.join(&project_id);
                 return crate::chapter::delete_chapter(
-                    workspace_path,
-                    &project_id,
+                    &project_root,
                     &volume_id,
                     chapter_id,
+                    app_data_root,
                 );
             }
         }

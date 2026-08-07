@@ -35,7 +35,10 @@ class ResetSnapshotCommitTest {
     private fun createCoordinator(): EditorSessionCoordinator {
         return EditorSessionCoordinator(
             com.xiwei.sujian.data.AppServiceBridge(
-                com.xiwei.sujian.data.WriterAppServiceHolder("/tmp/sujian_test_workspace_595_reset_commit"),
+                com.xiwei.sujian.data.WriterAppServiceHolder(
+                    "/tmp/sujian_test_workspace_595_reset_commit",
+                    "/tmp/sujian_test_workspace_595_reset_commit",
+                ),
             ),
         )
     }

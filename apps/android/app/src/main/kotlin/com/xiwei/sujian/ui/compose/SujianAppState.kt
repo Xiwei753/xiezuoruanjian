@@ -9,8 +9,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.window.layout.FoldingFeature
 import com.xiwei.sujian.data.LayoutPolicyRepositoryProvider
+import com.xiwei.sujian.data.ProjectUseCase
 import com.xiwei.sujian.data.SettingsRepository
-import com.xiwei.sujian.data.WorkspaceUseCase
 import com.xiwei.sujian.model.FoldFeatureInfo
 import com.xiwei.sujian.model.FoldOcclusion
 import com.xiwei.sujian.model.FoldOrientation
@@ -105,17 +105,17 @@ class SujianAppViewModel(
     var isLoading by androidx.compose.runtime.mutableStateOf(false)
         private set
 
-    private var workspaceUseCase: WorkspaceUseCase? = null
+    private var projectUseCase: ProjectUseCase? = null
     private var settingsRepository: SettingsRepository? = null
     private var appContext: android.content.Context? = null
 
     fun initialize(
-        workspaceRepo: com.xiwei.sujian.data.WorkspaceRepository,
-        workspaceUC: WorkspaceUseCase,
+        projectRepo: com.xiwei.sujian.data.ProjectRepository,
+        projectUC: ProjectUseCase,
         settingsRepo: SettingsRepository,
         context: android.content.Context,
     ) {
-        workspaceUseCase = workspaceUC
+        projectUseCase = projectUC
         settingsRepository = settingsRepo
         appContext = context.applicationContext
         refreshProjects()
@@ -146,7 +146,7 @@ class SujianAppViewModel(
                 val title =
                     withContext(Dispatchers.IO) {
                         try {
-                            workspaceUseCase?.getProjectTitle(projectId) ?: ""
+                            projectUseCase?.getProjectTitle(projectId) ?: ""
                         } catch (_: Exception) {
                             ""
                         }
@@ -184,7 +184,7 @@ class SujianAppViewModel(
             val title =
                 withContext(Dispatchers.IO) {
                     try {
-                        workspaceUseCase?.getChapterTitle(chapterId) ?: ""
+                        projectUseCase?.getChapterTitle(chapterId) ?: ""
                     } catch (_: Exception) {
                         ""
                     }
@@ -273,7 +273,7 @@ class SujianAppViewModel(
             projects =
                 withContext(Dispatchers.IO) {
                     try {
-                        workspaceUseCase?.getProjects() ?: emptyList()
+                        projectUseCase?.getProjects() ?: emptyList()
                     } catch (_: Exception) {
                         emptyList()
                     }
@@ -286,7 +286,7 @@ class SujianAppViewModel(
             recentEdits =
                 withContext(Dispatchers.IO) {
                     try {
-                        workspaceUseCase?.getRecentEdits(5) ?: emptyList()
+                        projectUseCase?.getRecentEdits(5) ?: emptyList()
                     } catch (_: Exception) {
                         emptyList()
                     }
@@ -298,7 +298,7 @@ class SujianAppViewModel(
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 try {
-                    workspaceUseCase?.createProject(title)
+                    projectUseCase?.createProject(title)
                 } catch (_: Exception) {
                 }
             }
@@ -310,7 +310,7 @@ class SujianAppViewModel(
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 try {
-                    workspaceUseCase?.deleteProject(projectId)
+                    projectUseCase?.deleteProject(projectId)
                 } catch (_: Exception) {
                 }
             }
@@ -325,7 +325,7 @@ class SujianAppViewModel(
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 try {
-                    workspaceUseCase?.renameProject(projectId, newTitle)
+                    projectUseCase?.renameProject(projectId, newTitle)
                 } catch (_: Exception) {
                 }
             }

@@ -3,8 +3,8 @@ package com.xiwei.sujian.ui
 import com.xiwei.sujian.data.AppServiceBridge
 import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.data.ChapterContentSavePort
+import com.xiwei.sujian.data.ProjectRepository
 import com.xiwei.sujian.data.SettingsRepository
-import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.data.WriterAppServiceHolder
 import com.xiwei.sujian.editor.v2.coordinator.EditorDocumentUpdate
 import com.xiwei.sujian.editor.v2.coordinator.EditorSessionCoordinator
@@ -84,10 +84,16 @@ class EditorSaveFlowTest {
 
     @Before
     fun setUp() {
-        bridge = AppServiceBridge(WriterAppServiceHolder("/tmp/sujian_test_workspace_597_save_flow"))
+        bridge =
+            AppServiceBridge(
+                WriterAppServiceHolder(
+                    "/tmp/sujian_test_workspace_597_save_flow",
+                    "/tmp/sujian_test_workspace_597_save_flow",
+                ),
+            )
         coordinator = EditorSessionCoordinator(bridge)
         val app = RuntimeEnvironment.getApplication()
-        val repo = WorkspaceRepository(app, bridge)
+        val repo = ProjectRepository(app, bridge)
         vm = EditorViewModel(app)
         vm.initialize(repo, SettingsRepository(app, bridge), sessionCoordinator = coordinator)
         savePort = ControllableSavePort()

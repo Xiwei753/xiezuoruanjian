@@ -5,7 +5,7 @@ use tempfile::TempDir;
 #[test]
 fn flush_increments_package_revision() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -17,7 +17,7 @@ fn flush_increments_package_revision() {
 #[test]
 fn flush_persists_recovery_log_to_disk() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -32,7 +32,6 @@ fn flush_persists_recovery_log_to_disk() {
 
     let recovery_path = dir
         .path()
-        .join("app-meta")
         .join("starmaps")
         .join(&meta.starmap_id)
         .join("metadata")
@@ -71,7 +70,7 @@ fn drain_save_queue_clears() {
 #[test]
 fn flush_save_queue_handles_delete_entries() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -95,7 +94,7 @@ fn flush_save_queue_handles_delete_entries() {
 #[test]
 fn flush_delete_failure_retains_deleted_ids() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -104,7 +103,6 @@ fn flush_delete_failure_retains_deleted_ids() {
 
     let node_path = dir
         .path()
-        .join("app-meta")
         .join("starmaps")
         .join(&meta.starmap_id)
         .join("nodes")
@@ -134,7 +132,7 @@ fn save_queue_delete_variants_exist() {
 #[test]
 fn flush_save_queue_increments_package_revision() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -148,7 +146,7 @@ fn flush_save_queue_increments_package_revision() {
 #[test]
 fn flush_delete_failure_returns_error_and_retains_id() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -157,7 +155,6 @@ fn flush_delete_failure_returns_error_and_retains_id() {
 
     let node_path = dir
         .path()
-        .join("app-meta")
         .join("starmaps")
         .join(&meta.starmap_id)
         .join("nodes")
@@ -180,7 +177,7 @@ fn flush_delete_failure_returns_error_and_retains_id() {
 #[test]
 fn flush_delete_succeeds_clears_deleted_ids() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -198,7 +195,7 @@ fn flush_delete_succeeds_clears_deleted_ids() {
 #[test]
 fn flush_save_queue_returns_error_on_write_failure() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -208,7 +205,6 @@ fn flush_save_queue_returns_error_on_write_failure() {
 
     let nodes_bucket_dir = dir
         .path()
-        .join("app-meta")
         .join("starmaps")
         .join(&meta.starmap_id)
         .join("nodes")
@@ -237,7 +233,7 @@ fn flush_save_queue_returns_error_on_write_failure() {
 #[test]
 fn deferred_save_merges_consecutive_operations() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -258,7 +254,6 @@ fn deferred_save_merges_consecutive_operations() {
 
     let node_file_1 = dir
         .path()
-        .join("app-meta")
         .join("starmaps")
         .join(&meta.starmap_id)
         .join("nodes")
@@ -266,7 +261,6 @@ fn deferred_save_merges_consecutive_operations() {
         .join("n1.json");
     let node_file_3 = dir
         .path()
-        .join("app-meta")
         .join("starmaps")
         .join(&meta.starmap_id)
         .join("nodes")
@@ -285,7 +279,7 @@ fn deferred_save_merges_consecutive_operations() {
 #[test]
 fn deferred_save_with_delete_merges_into_single_flush() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -308,7 +302,6 @@ fn deferred_save_with_delete_merges_into_single_flush() {
 
     let node_file_1 = dir
         .path()
-        .join("app-meta")
         .join("starmaps")
         .join(&meta.starmap_id)
         .join("nodes")
@@ -316,7 +309,6 @@ fn deferred_save_with_delete_merges_into_single_flush() {
         .join("n1.json");
     let node_file_3 = dir
         .path()
-        .join("app-meta")
         .join("starmaps")
         .join(&meta.starmap_id)
         .join("nodes")
@@ -330,7 +322,7 @@ fn deferred_save_with_delete_merges_into_single_flush() {
 #[test]
 fn layout_flush_only_on_explicit_save() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -371,7 +363,7 @@ fn layout_flush_only_on_explicit_save() {
 #[test]
 fn flush_package_revision_memory_matches_disk() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -391,7 +383,7 @@ fn flush_package_revision_memory_matches_disk() {
 #[test]
 fn flush_stats_uses_graph_meta_counts() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -454,7 +446,7 @@ fn flush_stats_uses_graph_meta_counts() {
 #[test]
 fn link_flush_save_queue_persists_via_save_queue() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
@@ -475,7 +467,7 @@ fn link_flush_save_queue_persists_via_save_queue() {
 #[test]
 fn delete_link_flush_save_queue_persists_via_save_queue() {
     let dir = TempDir::new().unwrap();
-    crate::workspace::create_workspace(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
 
     let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);

@@ -31,10 +31,8 @@ import {
 } from '../model/CoreDtos'
 
 export interface IWriterCoreBridge {
-  // Workspace
+  // Workspace 查询
   listWorkspaces(): Promise<ResultEnvelope<WorkspaceSummary[]>>
-  openWorkspace(path: string): Promise<ResultEnvelope<WorkspaceSummary>>
-  validateWorkspace(path: string): Promise<ResultEnvelope<boolean>>
   getWorkspaceState(): Promise<ResultEnvelope<WorkspaceSummary>>
 
   // Project
@@ -111,7 +109,6 @@ export interface IWriterCoreBridge {
 
   // Native Status
   getNativeLoadStatus(): Promise<ResultEnvelope<string>>
-  isWorkspaceValid(): Promise<ResultEnvelope<boolean>>
   isAiAvailable(): Promise<ResultEnvelope<boolean>>
 
   // Editor Animation

@@ -4,7 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
-import com.xiwei.sujian.data.WorkspaceRepository
+import com.xiwei.sujian.data.ProjectRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -33,22 +33,22 @@ class WorkspaceViewModel(
     val uiState: StateFlow<VolumeChapterUiState> = _uiState.asStateFlow()
 
     private var currentProjectId: String? = savedStateHandle["currentProjectId"]
-    private var workspaceRepository: WorkspaceRepository? = null
+    private var projectRepository: ProjectRepository? = null
     private var isInitialized: Boolean = false
 
     fun initialize(
         projectId: String,
-        workspaceRepo: WorkspaceRepository,
+        projectRepo: ProjectRepository,
     ) {
         val projectChanged = currentProjectId != projectId
-        val repoChanged = workspaceRepository !== workspaceRepo
+        val repoChanged = projectRepository !== projectRepo
         val needsReload =
             !isInitialized || projectChanged || repoChanged ||
                 _uiState.value.volumes.isEmpty()
 
         currentProjectId = projectId
         savedStateHandle["currentProjectId"] = projectId
-        workspaceRepository = workspaceRepo
+        projectRepository = projectRepo
 
         if (needsReload) {
             isInitialized = true
@@ -59,7 +59,7 @@ class WorkspaceViewModel(
 
     fun loadVolumes() {
         val pid = currentProjectId ?: return
-        val repo = workspaceRepository ?: return
+        val repo = projectRepository ?: return
         _uiState.value = _uiState.value.copy(isLoading = true)
         viewModelScope.launch {
             val volumes =
@@ -123,7 +123,7 @@ class WorkspaceViewModel(
 
     fun createVolume(title: String) {
         val pid = currentProjectId ?: return
-        val repo = workspaceRepository ?: return
+        val repo = projectRepository ?: return
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 try {
@@ -140,7 +140,7 @@ class WorkspaceViewModel(
         title: String,
     ) {
         val pid = currentProjectId ?: return
-        val repo = workspaceRepository ?: return
+        val repo = projectRepository ?: return
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 try {
@@ -160,7 +160,7 @@ class WorkspaceViewModel(
         newTitle: String,
     ) {
         val pid = currentProjectId ?: return
-        val repo = workspaceRepository ?: return
+        val repo = projectRepository ?: return
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 try {
@@ -174,7 +174,7 @@ class WorkspaceViewModel(
 
     fun deleteVolume(volumeId: String) {
         val pid = currentProjectId ?: return
-        val repo = workspaceRepository ?: return
+        val repo = projectRepository ?: return
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 try {
@@ -192,7 +192,7 @@ class WorkspaceViewModel(
         newTitle: String,
     ) {
         val pid = currentProjectId ?: return
-        val repo = workspaceRepository ?: return
+        val repo = projectRepository ?: return
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 try {
@@ -209,7 +209,7 @@ class WorkspaceViewModel(
         chapterId: String,
     ) {
         val pid = currentProjectId ?: return
-        val repo = workspaceRepository ?: return
+        val repo = projectRepository ?: return
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 try {
@@ -223,7 +223,7 @@ class WorkspaceViewModel(
 
     fun moveVolumeUp(volumeId: String) {
         val pid = currentProjectId ?: return
-        val repo = workspaceRepository ?: return
+        val repo = projectRepository ?: return
         val currentVolumes = _uiState.value.volumes
         val currentIndex = currentVolumes.indexOfFirst { it.id == volumeId }
         if (currentIndex <= 0) return
@@ -243,7 +243,7 @@ class WorkspaceViewModel(
 
     fun moveVolumeDown(volumeId: String) {
         val pid = currentProjectId ?: return
-        val repo = workspaceRepository ?: return
+        val repo = projectRepository ?: return
         val currentVolumes = _uiState.value.volumes
         val currentIndex = currentVolumes.indexOfFirst { it.id == volumeId }
         if (currentIndex < 0 || currentIndex >= currentVolumes.size - 1) return
@@ -266,7 +266,7 @@ class WorkspaceViewModel(
         chapterId: String,
     ) {
         val pid = currentProjectId ?: return
-        val repo = workspaceRepository ?: return
+        val repo = projectRepository ?: return
         val volume = _uiState.value.volumes.find { it.id == volumeId } ?: return
         val currentIndex = volume.chapters.indexOfFirst { it.id == chapterId }
         if (currentIndex <= 0) return
@@ -289,7 +289,7 @@ class WorkspaceViewModel(
         chapterId: String,
     ) {
         val pid = currentProjectId ?: return
-        val repo = workspaceRepository ?: return
+        val repo = projectRepository ?: return
         val volume = _uiState.value.volumes.find { it.id == volumeId } ?: return
         val currentIndex = volume.chapters.indexOfFirst { it.id == chapterId }
         if (currentIndex < 0 || currentIndex >= volume.chapters.size - 1) return
@@ -308,7 +308,7 @@ class WorkspaceViewModel(
     }
 
     private fun loadProjectStats(projectId: String) {
-        val repo = workspaceRepository ?: return
+        val repo = projectRepository ?: return
         viewModelScope.launch {
             val stats =
                 withContext(Dispatchers.IO) {

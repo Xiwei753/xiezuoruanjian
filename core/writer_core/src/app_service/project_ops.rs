@@ -5,14 +5,6 @@ impl super::WriterAppService {
         self.api.list_projects()
     }
 
-    pub fn create_workspace_if_needed(&self) -> Result<bool, WriterError> {
-        self.api.create_workspace_if_needed()
-    }
-
-    pub fn validate_workspace(&self) -> Result<bool, WriterError> {
-        self.api.validate_workspace()
-    }
-
     pub fn get_recent_edits(&self) -> Result<Vec<RecentEditDto>, WriterError> {
         self.api.get_recent_edits()
     }

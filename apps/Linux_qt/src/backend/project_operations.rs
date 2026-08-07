@@ -193,7 +193,7 @@ impl AppBackend {
         let tree_json = self.build_tree_model_json();
         let state = serde_json::json!({
             "hasWorkspace": self.current_has_workspace,
-            "workspacePath": self.current_workspace,
+            "workspacePath": self.current_data_root,
             "saveStatus": self.current_save_status,
             "selected": {
                 "projectId": self.selected_project_id.clone().unwrap_or_default(),
@@ -215,7 +215,7 @@ impl AppBackend {
     fn current_app_state_value(&self) -> serde_json::Value {
         serde_json::json!({
             "hasWorkspace": self.current_has_workspace,
-            "workspacePath": self.current_workspace,
+            "workspacePath": self.current_data_root,
             "saveStatus": self.current_save_status,
             "selected": {
                 "projectId": self.selected_project_id.clone().unwrap_or_default(),
@@ -288,7 +288,7 @@ impl AppBackend {
             );
         }
 
-        if !self.current_has_workspace || self.current_workspace.is_empty() {
+        if !self.current_has_workspace || self.current_data_root.is_empty() {
             return self.mutation_error_json(
                 "error.invalid_workspace".to_string(),
                 "未打开工作区，无法创建作品。请先新建或打开一个工作区。".to_string(),

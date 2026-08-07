@@ -578,8 +578,8 @@ fn test_char_count_uses_unicode_scalar() {
 #[test]
 fn test_facade_record_writing_event() {
     let temp_dir = tempdir().unwrap();
-    crate::workspace::create_workspace(temp_dir.path()).unwrap();
-    let core = crate::facade::WriterCore::new(temp_dir.path());
+    std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+    let core = crate::facade::WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
 
     core.record_writing_event(
         "dev-1",
@@ -660,8 +660,8 @@ fn test_sync_whitelist_daily_stats() {
 #[test]
 fn test_load_chapter_does_not_produce_input_events() {
     let temp_dir = tempdir().unwrap();
-    crate::workspace::create_workspace(temp_dir.path()).unwrap();
-    let core = crate::facade::WriterCore::new(temp_dir.path());
+    std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+    let core = crate::facade::WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
 
     let project = core.create_project("Test").unwrap();
     let volume = core.create_volume(&project.id, "Vol").unwrap();

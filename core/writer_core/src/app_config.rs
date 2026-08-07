@@ -28,8 +28,6 @@ use writer_platform_api::ConfigStore;
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
     #[serde(default)]
-    pub last_workspace_path: Option<String>,
-    #[serde(default)]
     pub last_route: Option<String>,
     #[serde(default)]
     pub last_project_id: Option<String>,
@@ -85,22 +83,6 @@ pub fn save_app_config(config: &AppConfig) -> Result<(), String> {
         return result;
     }
     Err("No default ConfigStore configured".to_string())
-}
-
-pub fn set_last_workspace_path(path: &str) -> Result<(), String> {
-    let mut config = load_app_config();
-    config.last_workspace_path = Some(path.to_string());
-    save_app_config(&config)
-}
-
-pub fn get_last_workspace_path() -> Option<String> {
-    load_app_config().last_workspace_path
-}
-
-pub fn clear_last_workspace_path() -> Result<(), String> {
-    let mut config = load_app_config();
-    config.last_workspace_path = None;
-    save_app_config(&config)
 }
 
 pub fn save_last_navigation_state(
@@ -163,7 +145,7 @@ mod tests {
         assert!(store.load().unwrap().is_none());
 
         let config = AppConfig {
-            last_workspace_path: Some("/tmp/test_workspace".to_string()),
+            last_route: Some("home".to_string()),
             ..Default::default()
         };
         let content = serde_json::to_string_pretty(&config).unwrap();
@@ -171,10 +153,7 @@ mod tests {
 
         let loaded_bytes = store.load().unwrap().unwrap();
         let loaded: AppConfig = serde_json::from_slice(&loaded_bytes).unwrap();
-        assert_eq!(
-            loaded.last_workspace_path,
-            Some("/tmp/test_workspace".to_string())
-        );
+        assert_eq!(loaded.last_route, Some("home".to_string()));
     }
 
     #[test]
@@ -183,7 +162,6 @@ mod tests {
         let store = FileConfigStore::new(dir.path().to_path_buf());
 
         let config1 = AppConfig {
-            last_workspace_path: Some("/old/path".to_string()),
             last_route: Some("home".to_string()),
             ..Default::default()
         };
@@ -191,7 +169,7 @@ mod tests {
         store.save(content1.as_bytes()).unwrap();
 
         let config2 = AppConfig {
-            last_workspace_path: Some("/new/path".to_string()),
+            last_route: Some("editor".to_string()),
             ..Default::default()
         };
         let content2 = serde_json::to_string_pretty(&config2).unwrap();
@@ -199,8 +177,7 @@ mod tests {
 
         let loaded_bytes = store.load().unwrap().unwrap();
         let loaded: AppConfig = serde_json::from_slice(&loaded_bytes).unwrap();
-        assert_eq!(loaded.last_workspace_path, Some("/new/path".to_string()));
-        assert_eq!(loaded.last_route, None);
+        assert_eq!(loaded.last_route, Some("editor".to_string()));
     }
 
     #[test]
@@ -225,7 +202,7 @@ mod tests {
         let store = FileConfigStore::new(nested.clone());
 
         let config = AppConfig {
-            last_workspace_path: Some("/test".to_string()),
+            last_route: Some("test".to_string()),
             ..Default::default()
         };
         let content = serde_json::to_string_pretty(&config).unwrap();
@@ -236,10 +213,10 @@ mod tests {
     }
 
     #[test]
-    fn test_app_config_workspace_path_roundtrip() {
+    fn test_app_config_route_roundtrip() {
         with_test_store(|store| {
             let config = AppConfig {
-                last_workspace_path: Some("/home/user/my_workspace".to_string()),
+                last_route: Some("editor".to_string()),
                 ..Default::default()
             };
             let content = serde_json::to_string_pretty(&config).unwrap();
@@ -247,25 +224,22 @@ mod tests {
 
             let loaded_bytes = store.load().unwrap().unwrap();
             let loaded: AppConfig = serde_json::from_slice(&loaded_bytes).unwrap();
-            assert_eq!(
-                loaded.last_workspace_path,
-                Some("/home/user/my_workspace".to_string())
-            );
+            assert_eq!(loaded.last_route, Some("editor".to_string()));
         });
     }
 
     #[test]
-    fn test_app_config_clear_workspace_path() {
+    fn test_app_config_clear_route() {
         with_test_store(|store| {
             let config = AppConfig {
-                last_workspace_path: Some("/some/path".to_string()),
+                last_route: Some("home".to_string()),
                 ..Default::default()
             };
             let content = serde_json::to_string_pretty(&config).unwrap();
             store.save(content.as_bytes()).unwrap();
 
             let config2 = AppConfig {
-                last_workspace_path: None,
+                last_route: None,
                 ..Default::default()
             };
             let content2 = serde_json::to_string_pretty(&config2).unwrap();
@@ -273,7 +247,7 @@ mod tests {
 
             let loaded_bytes = store.load().unwrap().unwrap();
             let loaded: AppConfig = serde_json::from_slice(&loaded_bytes).unwrap();
-            assert_eq!(loaded.last_workspace_path, None);
+            assert_eq!(loaded.last_route, None);
         });
     }
 
@@ -286,7 +260,6 @@ mod tests {
                 last_volume_id: Some("vol-001".to_string()),
                 last_chapter_id: Some("chap-001".to_string()),
                 last_starmap_id: Some("star-001".to_string()),
-                ..Default::default()
             };
             let content = serde_json::to_string_pretty(&config).unwrap();
             store.save(content.as_bytes()).unwrap();
@@ -331,7 +304,6 @@ mod tests {
                 last_volume_id: Some("vol-001".to_string()),
                 last_chapter_id: Some("chap-001".to_string()),
                 last_starmap_id: Some("star-001".to_string()),
-                ..Default::default()
             };
             let content = serde_json::to_string_pretty(&config).unwrap();
             store.save(content.as_bytes()).unwrap();
@@ -368,6 +340,6 @@ mod tests {
             .ok()
             .and_then(|bytes| serde_json::from_slice::<AppConfig>(&bytes).ok())
             .unwrap_or_default();
-        assert_eq!(loaded.last_workspace_path, None);
+        assert_eq!(loaded.last_route, None);
     }
 }

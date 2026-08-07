@@ -309,7 +309,7 @@ impl crate::sync::SyncService {
         clippy::type_complexity
     )]
     fn remove_conflict_from_json(workspace_path: &Path, path: &str) {
-        let conflicts_path = workspace_path.join("app-meta/sync/conflicts.json");
+        let conflicts_path = workspace_path.join("sync/conflicts.json");
         if !conflicts_path.exists() {
             return;
         }
@@ -352,7 +352,7 @@ impl crate::sync::SyncService {
             std::fs::write(&conflict_file_path, content)?;
         }
 
-        let conflicts_path = workspace_path.join("app-meta/sync/conflicts.json");
+        let conflicts_path = workspace_path.join("sync/conflicts.json");
         if let Some(parent) = conflicts_path.parent() {
             std::fs::create_dir_all(parent)?;
         }

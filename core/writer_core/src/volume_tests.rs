@@ -5,24 +5,23 @@ mod tests {
         create_volume, delete_volume, list_volumes, normalize_rel_path, rename_volume,
         reorder_volumes,
     };
-    use crate::workspace::create_workspace;
-    use tempfile::tempdir;
+        use tempfile::tempdir;
 
     #[test]
     fn test_create_and_list_volume() {
         let dir = tempdir().unwrap();
         let workspace_path = dir.path();
-        create_workspace(workspace_path).unwrap();
+        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
 
-        let project = create_project(workspace_path, "Test Project").unwrap();
+        let project = create_project(&workspace_path.join("projects"), "Test Project").unwrap();
 
-        let volumes = list_volumes(workspace_path, &project.id).unwrap();
+        let volumes = list_volumes(&workspace_path.join("projects").join(&project.id)).unwrap();
         assert_eq!(volumes.len(), 1);
 
-        let volume = create_volume(workspace_path, &project.id, "Test Volume").unwrap();
+        let volume = create_volume(&workspace_path.join("projects").join(&project.id), "Test Volume").unwrap();
         assert_eq!(volume.title, "Test Volume");
 
-        let volumes = list_volumes(workspace_path, &project.id).unwrap();
+        let volumes = list_volumes(&workspace_path.join("projects").join(&project.id)).unwrap();
         assert_eq!(volumes.len(), 2);
     }
 
@@ -30,14 +29,14 @@ mod tests {
     fn test_rename_volume_success() {
         let dir = tempdir().unwrap();
         let workspace_path = dir.path();
-        create_workspace(workspace_path).unwrap();
+        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
 
-        let project = create_project(workspace_path, "Test Project").unwrap();
-        let volume = create_volume(workspace_path, &project.id, "Old Title").unwrap();
+        let project = create_project(&workspace_path.join("projects"), "Test Project").unwrap();
+        let volume = create_volume(&workspace_path.join("projects").join(&project.id), "Old Title").unwrap();
 
-        rename_volume(workspace_path, &project.id, &volume.id, "New Title").unwrap();
+        rename_volume(&workspace_path.join("projects").join(&project.id), &volume.id, "New Title").unwrap();
 
-        let volumes = list_volumes(workspace_path, &project.id).unwrap();
+        let volumes = list_volumes(&workspace_path.join("projects").join(&project.id)).unwrap();
         let updated_volume = volumes.iter().find(|v| v.id == volume.id).unwrap();
         assert_eq!(updated_volume.title, "New Title");
     }
@@ -46,13 +45,11 @@ mod tests {
     fn test_rename_volume_not_found() {
         let dir = tempdir().unwrap();
         let workspace_path = dir.path();
-        create_workspace(workspace_path).unwrap();
+        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
 
-        let project = create_project(workspace_path, "Test Project").unwrap();
+        let project = create_project(&workspace_path.join("projects"), "Test Project").unwrap();
 
-        let result = rename_volume(
-            workspace_path,
-            &project.id,
+        let result = rename_volume(&workspace_path.join("projects").join(&project.id),
             "non-existent-volume-id",
             "New Title",
         );
@@ -66,18 +63,18 @@ mod tests {
     fn test_reorder_volumes_mismatch_error() {
         let dir = tempdir().unwrap();
         let workspace_path = dir.path();
-        create_workspace(workspace_path).unwrap();
+        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
 
-        let project = create_project(workspace_path, "Test Project").unwrap();
+        let project = create_project(&workspace_path.join("projects"), "Test Project").unwrap();
 
-        let volume1 = create_volume(workspace_path, &project.id, "Volume 1").unwrap();
-        let _volume2 = create_volume(workspace_path, &project.id, "Volume 2").unwrap();
+        let volume1 = create_volume(&workspace_path.join("projects").join(&project.id), "Volume 1").unwrap();
+        let _volume2 = create_volume(&workspace_path.join("projects").join(&project.id), "Volume 2").unwrap();
 
-        let volumes = list_volumes(workspace_path, &project.id).unwrap();
+        let volumes = list_volumes(&workspace_path.join("projects").join(&project.id)).unwrap();
         assert!(volumes.len() >= 2);
 
         let ordered_ids = vec![volume1.id.clone()];
-        let result = reorder_volumes(workspace_path, &project.id, &ordered_ids);
+        let result = reorder_volumes(&workspace_path.join("projects").join(&project.id), &ordered_ids);
         match result {
             Err(crate::error::Error::Other(msg)) => {
                 assert_eq!(msg, "Invalid ordered_ids for reorder")
@@ -87,7 +84,7 @@ mod tests {
 
         let mut extra_ids = volumes.iter().map(|v| v.id.clone()).collect::<Vec<_>>();
         extra_ids.push("non-existent-id".to_string());
-        let result = reorder_volumes(workspace_path, &project.id, &extra_ids);
+        let result = reorder_volumes(&workspace_path.join("projects").join(&project.id), &extra_ids);
         match result {
             Err(crate::error::Error::Other(msg)) => {
                 assert_eq!(msg, "Invalid ordered_ids for reorder")
@@ -100,22 +97,22 @@ mod tests {
     fn test_reorder_volumes_success() {
         let dir = tempdir().unwrap();
         let workspace_path = dir.path();
-        create_workspace(workspace_path).unwrap();
+        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
 
-        let project = create_project(workspace_path, "Test Project").unwrap();
+        let project = create_project(&workspace_path.join("projects"), "Test Project").unwrap();
 
-        let _volume1 = create_volume(workspace_path, &project.id, "Volume 1").unwrap();
-        let _volume2 = create_volume(workspace_path, &project.id, "Volume 2").unwrap();
+        let _volume1 = create_volume(&workspace_path.join("projects").join(&project.id), "Volume 1").unwrap();
+        let _volume2 = create_volume(&workspace_path.join("projects").join(&project.id), "Volume 2").unwrap();
 
-        let volumes = list_volumes(workspace_path, &project.id).unwrap();
+        let volumes = list_volumes(&workspace_path.join("projects").join(&project.id)).unwrap();
         let mut ordered_ids = volumes.iter().map(|v| v.id.clone()).collect::<Vec<_>>();
 
         ordered_ids.reverse();
 
-        let result = reorder_volumes(workspace_path, &project.id, &ordered_ids);
+        let result = reorder_volumes(&workspace_path.join("projects").join(&project.id), &ordered_ids);
         assert!(result.is_ok());
 
-        let new_volumes = list_volumes(workspace_path, &project.id).unwrap();
+        let new_volumes = list_volumes(&workspace_path.join("projects").join(&project.id)).unwrap();
         let new_ids = new_volumes.iter().map(|v| v.id.clone()).collect::<Vec<_>>();
         assert_eq!(new_ids, ordered_ids);
 
@@ -128,20 +125,20 @@ mod tests {
     fn test_delete_volume() {
         let dir = tempdir().unwrap();
         let workspace_path = dir.path();
-        create_workspace(workspace_path).unwrap();
+        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
 
-        let project = create_project(workspace_path, "Test Project").unwrap();
-        let volume = create_volume(workspace_path, &project.id, "Test Volume").unwrap();
+        let project = create_project(&workspace_path.join("projects"), "Test Project").unwrap();
+        let volume = create_volume(&workspace_path.join("projects").join(&project.id), "Test Volume").unwrap();
 
-        let volumes_before = list_volumes(workspace_path, &project.id).unwrap();
+        let volumes_before = list_volumes(&workspace_path.join("projects").join(&project.id)).unwrap();
         let count_before = volumes_before.len();
 
-        delete_volume(workspace_path, &project.id, &volume.id).unwrap();
+        delete_volume(&workspace_path.join("projects").join(&project.id), &volume.id, workspace_path).unwrap();
 
-        let volumes_after = list_volumes(workspace_path, &project.id).unwrap();
+        let volumes_after = list_volumes(&workspace_path.join("projects").join(&project.id)).unwrap();
         assert_eq!(volumes_after.len(), count_before - 1);
 
-        let trash_dir = workspace_path.join("app-meta/sync/trash");
+        let trash_dir = workspace_path.join("sync/trash");
         assert!(std::fs::read_dir(trash_dir).unwrap().count() > 0);
 
         let state = crate::sync::SyncService::load_sync_state(workspace_path).unwrap();

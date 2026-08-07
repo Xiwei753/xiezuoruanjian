@@ -6,8 +6,9 @@ use writer_core::api::WriterCoreApi;
 #[test]
 fn save_empty_requires_explicit_user_clear_flag() {
     let dir = tempdir().unwrap();
-    let api = WriterCoreApi::new(dir.path());
-    api.create_workspace_if_needed().unwrap();
+    let projects_root = dir.path().join("projects");
+    std::fs::create_dir_all(&projects_root).unwrap();
+    let api = WriterCoreApi::new(dir.path(), &projects_root);
 
     let project = api.create_project("Test Project").unwrap();
     let volume = api.create_volume(&project.id, "Test Volume").unwrap();

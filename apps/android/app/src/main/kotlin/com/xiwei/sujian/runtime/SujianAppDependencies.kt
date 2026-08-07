@@ -4,14 +4,14 @@ import android.content.Context
 import androidx.compose.runtime.compositionLocalOf
 import com.xiwei.sujian.data.AppServiceBridge
 import com.xiwei.sujian.data.BridgeProvider
+import com.xiwei.sujian.data.ProjectRepository
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.data.SyncCoordinator
 import com.xiwei.sujian.data.SyncStatusRepository
-import com.xiwei.sujian.data.WorkspaceRepository
 
 interface AppServiceContainer {
     val appServiceBridge: AppServiceBridge
-    val workspaceRepository: WorkspaceRepository
+    val projectRepository: ProjectRepository
     val settingsRepository: SettingsRepository
     val syncStatusRepository: SyncStatusRepository
     val syncCoordinator: SyncCoordinator
@@ -39,7 +39,7 @@ val LocalSujianAppDependencies =
 class DefaultAppServiceContainer(context: Context) : AppServiceContainer {
     private val appContext = context.applicationContext
     override val appServiceBridge: AppServiceBridge = BridgeProvider.getAppServiceBridge(appContext)
-    override val workspaceRepository: WorkspaceRepository = WorkspaceRepository(appContext, appServiceBridge)
+    override val projectRepository: ProjectRepository = ProjectRepository(appContext, appServiceBridge)
     override val settingsRepository: SettingsRepository = SettingsRepository(appContext, appServiceBridge)
     override val syncStatusRepository: SyncStatusRepository = SyncStatusRepository(settingsRepository)
     override val syncCoordinator: SyncCoordinator = SyncCoordinator(settingsRepository, syncStatusRepository)

@@ -4,25 +4,25 @@ use crate::starmap::store::{SaveQueueEntry, StarMapStore};
 
 impl super::WriterCore {
     pub fn list_starmaps(&self) -> Result<Vec<crate::starmap::StarMapMeta>> {
-        crate::starmap::list_starmaps(&self.workspace_path)
+        crate::starmap::list_starmaps(&self.app_data_root)
     }
 
     pub fn list_starmaps_for_project(
         &self,
         project_id: &str,
     ) -> Result<Vec<crate::starmap::StarMapMeta>> {
-        crate::starmap::list_starmaps_for_project(&self.workspace_path, project_id)
+        crate::starmap::list_starmaps_for_project(&self.app_data_root, project_id)
     }
 
     pub fn list_starmaps_bound_to_project(
         &self,
         project_id: &str,
     ) -> Result<Vec<crate::starmap::StarMapMeta>> {
-        crate::starmap::list_starmaps_bound_to_project(&self.workspace_path, project_id)
+        crate::starmap::list_starmaps_bound_to_project(&self.app_data_root, project_id)
     }
 
     pub fn get_starmap(&self, starmap_id: &str) -> Result<crate::starmap::StarMapMeta> {
-        crate::starmap::get_starmap(&self.workspace_path, starmap_id)
+        crate::starmap::get_starmap(&self.app_data_root, starmap_id)
     }
 
     pub fn create_starmap(
@@ -31,7 +31,7 @@ impl super::WriterCore {
         description: &str,
         accent_color: Option<&str>,
     ) -> Result<crate::starmap::StarMapMeta> {
-        crate::starmap::create_starmap(&self.workspace_path, title, description, accent_color)
+        crate::starmap::create_starmap(&self.app_data_root, title, description, accent_color)
     }
 
     pub fn create_child_starmap(
@@ -42,7 +42,7 @@ impl super::WriterCore {
         accent_color: Option<&str>,
     ) -> Result<crate::starmap::StarMapMeta> {
         crate::starmap::create_child_starmap(
-            &self.workspace_path,
+            &self.app_data_root,
             parent_id,
             title,
             description,
@@ -55,7 +55,7 @@ impl super::WriterCore {
         starmap_id: &str,
         new_title: &str,
     ) -> Result<crate::starmap::StarMapMeta> {
-        crate::starmap::rename_starmap(&self.workspace_path, starmap_id, new_title)
+        crate::starmap::rename_starmap(&self.app_data_root, starmap_id, new_title)
     }
 
     #[allow(
@@ -84,26 +84,26 @@ impl super::WriterCore {
                 .unwrap_or_else(|e| e.into_inner());
             stores.remove(starmap_id);
         }
-        crate::starmap::delete_starmap(&self.workspace_path, starmap_id)
+        crate::starmap::delete_starmap(&self.app_data_root, starmap_id)
     }
 
     pub fn bind_starmap_to_project(&self, starmap_id: &str, project_id: &str) -> Result<()> {
-        crate::starmap::bind_starmap_to_project(&self.workspace_path, starmap_id, project_id)
+        crate::starmap::bind_starmap_to_project(&self.app_data_root, starmap_id, project_id)
     }
 
     pub fn set_main_starmap_for_project(&self, starmap_id: &str, project_id: &str) -> Result<()> {
-        crate::starmap::set_main_starmap_for_project(&self.workspace_path, starmap_id, project_id)
+        crate::starmap::set_main_starmap_for_project(&self.app_data_root, starmap_id, project_id)
     }
 
     pub fn get_main_starmap_for_project(
         &self,
         project_id: &str,
     ) -> Result<Option<crate::starmap::StarMapMeta>> {
-        crate::starmap::get_main_starmap_for_project(&self.workspace_path, project_id)
+        crate::starmap::get_main_starmap_for_project(&self.app_data_root, project_id)
     }
 
     pub fn unbind_starmap_from_project(&self, starmap_id: &str) -> Result<()> {
-        crate::starmap::unbind_starmap_from_project(&self.workspace_path, starmap_id)
+        crate::starmap::unbind_starmap_from_project(&self.app_data_root, starmap_id)
     }
 
     pub fn get_starmap_graph(
@@ -116,7 +116,7 @@ impl super::WriterCore {
             .unwrap_or_else(|e| e.into_inner());
         let store = stores
             .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
         store.ensure_loaded()?;
         Ok(store.to_starmap_graph())
     }
@@ -127,7 +127,7 @@ impl super::WriterCore {
         graph: &crate::starmap::types::StarMapGraph,
         base_package_revision: u64,
     ) -> Result<()> {
-        validation::validate_graph(&self.workspace_path, graph)?;
+        validation::validate_graph(&self.app_data_root, graph)?;
 
         let mut stores = self
             .starmap_stores
@@ -135,7 +135,7 @@ impl super::WriterCore {
             .unwrap_or_else(|e| e.into_inner());
         let store = stores
             .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
 
         store.ensure_fully_loaded()?;
 
@@ -239,7 +239,7 @@ impl super::WriterCore {
             .unwrap_or_else(|e| e.into_inner());
         let store = stores
             .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
         let _ = store.ensure_loaded();
         store.package_revision()
     }
@@ -257,7 +257,7 @@ impl super::WriterCore {
             .unwrap_or_else(|e| e.into_inner());
         let store = stores
             .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
         store.ensure_loaded()?;
         let result = store.add_node(node, default_x, default_y);
         store.enqueue_save(SaveQueueEntry::Node);
@@ -278,7 +278,7 @@ impl super::WriterCore {
             .unwrap_or_else(|e| e.into_inner());
         let store = stores
             .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
         store.ensure_loaded()?;
         store.ensure_object_loaded(node_id)?;
         let result = store.update_node(node_id, &patch)?;
@@ -294,7 +294,7 @@ impl super::WriterCore {
             .unwrap_or_else(|e| e.into_inner());
         let store = stores
             .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
         store.ensure_loaded()?;
         store.ensure_object_loaded(node_id)?;
         store.delete_node(node_id)?;
@@ -319,7 +319,7 @@ impl super::WriterCore {
             .unwrap_or_else(|e| e.into_inner());
         let store = stores
             .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
         store.ensure_loaded()?;
         let result = store.add_edge(edge)?;
         store.enqueue_save(SaveQueueEntry::Edge);
@@ -339,7 +339,7 @@ impl super::WriterCore {
             .unwrap_or_else(|e| e.into_inner());
         let store = stores
             .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
         store.ensure_loaded()?;
         store.ensure_edge_loaded(edge_id)?;
         let result = store.update_edge(edge_id, &patch)?;
@@ -355,7 +355,7 @@ impl super::WriterCore {
             .unwrap_or_else(|e| e.into_inner());
         let store = stores
             .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
         store.ensure_loaded()?;
         store.ensure_edge_loaded(edge_id)?;
         store.delete_edge(edge_id)?;
@@ -374,7 +374,7 @@ impl super::WriterCore {
             .unwrap_or_else(|e| e.into_inner());
         let store = stores
             .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
         store.ensure_loaded()?;
         Ok(store.get_layout().cloned().unwrap_or_default())
     }
@@ -392,7 +392,7 @@ impl super::WriterCore {
             .unwrap_or_else(|e| e.into_inner());
         let store = stores
             .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
         store.ensure_loaded()?;
         store.set_layout(layout.clone());
         store.enqueue_save(SaveQueueEntry::Layout);
@@ -411,7 +411,7 @@ impl super::WriterCore {
             .unwrap_or_else(|e| e.into_inner());
         let store = stores
             .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
         store.ensure_loaded()?;
         Ok(store.get_viewport().cloned().unwrap_or_default())
     }
@@ -429,7 +429,7 @@ impl super::WriterCore {
             .unwrap_or_else(|e| e.into_inner());
         let store = stores
             .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
         store.ensure_loaded()?;
         store.set_viewport(viewport.clone());
         store.flush_viewport()?;
@@ -447,7 +447,7 @@ impl super::WriterCore {
             .unwrap_or_else(|e| e.into_inner());
         let store = stores
             .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
         store.ensure_loaded()?;
         let result = store.add_embed(embed)?;
         store.enqueue_save(SaveQueueEntry::Embed);
@@ -467,7 +467,7 @@ impl super::WriterCore {
             .unwrap_or_else(|e| e.into_inner());
         let store = stores
             .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
         store.ensure_loaded()?;
         store.ensure_embed_loaded(instance_id)?;
         let result = store.update_embed(instance_id, &patch)?;
@@ -483,7 +483,7 @@ impl super::WriterCore {
             .unwrap_or_else(|e| e.into_inner());
         let store = stores
             .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
         store.ensure_loaded()?;
         store.ensure_embed_loaded(instance_id)?;
         store.delete_embed(instance_id)?;
@@ -503,7 +503,7 @@ impl super::WriterCore {
             .unwrap_or_else(|e| e.into_inner());
         let store = stores
             .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
         store.ensure_loaded()?;
         let result = store.add_link(link)?;
         store.enqueue_save(SaveQueueEntry::Link);
@@ -523,7 +523,7 @@ impl super::WriterCore {
             .unwrap_or_else(|e| e.into_inner());
         let store = stores
             .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
         store.ensure_loaded()?;
         store.ensure_link_loaded(link_id)?;
         let result = store.update_link(link_id, &patch)?;
@@ -539,7 +539,7 @@ impl super::WriterCore {
             .unwrap_or_else(|e| e.into_inner());
         let store = stores
             .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
         store.ensure_loaded()?;
         store.ensure_link_loaded(link_id)?;
         store.delete_link(link_id)?;
@@ -559,7 +559,7 @@ impl super::WriterCore {
             .unwrap_or_else(|e| e.into_inner());
         let store = stores
             .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
         store.ensure_fully_loaded()?;
         Ok(store.list_hyperlinks_with_diagnostics())
     }
@@ -575,7 +575,7 @@ impl super::WriterCore {
             .unwrap_or_else(|e| e.into_inner());
         let store = stores
             .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
         store.ensure_loaded()?;
         let result = store.add_hyperlink(hl)?;
         store.enqueue_save(SaveQueueEntry::Hyperlink);
@@ -596,7 +596,7 @@ impl super::WriterCore {
             .unwrap_or_else(|e| e.into_inner());
         let store = stores
             .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
         store.ensure_loaded()?;
         store.ensure_hyperlink_loaded(hyperlink_id)?;
         let result = store.update_hyperlink(hyperlink_id, label, target_uri)?;
@@ -612,7 +612,7 @@ impl super::WriterCore {
             .unwrap_or_else(|e| e.into_inner());
         let store = stores
             .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
         store.ensure_loaded()?;
         store.ensure_hyperlink_loaded(hyperlink_id)?;
         store.delete_hyperlink(hyperlink_id)?;
@@ -632,7 +632,7 @@ impl super::WriterCore {
             .unwrap_or_else(|e| e.into_inner());
         let store = stores
             .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
         store.ensure_fully_loaded()?;
         Ok(store.list_links_with_diagnostics())
     }
@@ -648,7 +648,7 @@ impl super::WriterCore {
             .unwrap_or_else(|e| e.into_inner());
         let store = stores
             .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.workspace_path, starmap_id));
+            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
         store.get_phased_snapshot(request)
     }
 
@@ -656,11 +656,11 @@ impl super::WriterCore {
         &self,
         target_starmap_id: &str,
     ) -> Result<Vec<crate::starmap::StarMapReference>> {
-        crate::starmap::find_starmap_references(&self.workspace_path, target_starmap_id)
+        crate::starmap::find_starmap_references(&self.app_data_root, target_starmap_id)
     }
 
     pub fn get_motion_policy(&self) -> Result<crate::starmap::types::StarMapMotionPolicyDto> {
-        crate::starmap::get_motion_policy(&self.workspace_path)
+        crate::starmap::get_motion_policy(&self.app_data_root)
     }
 
     pub fn close_starmap_store(&self, starmap_id: &str) -> Result<()> {

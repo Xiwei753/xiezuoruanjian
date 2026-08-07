@@ -179,7 +179,7 @@ suspend fun EditorViewModel.clearChapterContentInternal(
 ): Boolean {
     return saveMutex.withLock {
         try {
-            val result = workspaceRepository.clearChapterContent(session.projectId, session.volumeId, session.chapterId)
+            val result = projectRepository.clearChapterContent(session.projectId, session.volumeId, session.chapterId)
             when (result) {
                 is com.xiwei.sujian.data.BridgeResult.Success -> {
                     val savedHash = result.data?.contentHash ?: ""

@@ -9,6 +9,7 @@ import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.diagnostics.EditorEventRingBuffer
+import com.xiwei.sujian.platform.AndroidDataRoot
 import java.io.File
 import java.io.FileWriter
 import java.io.PrintWriter
@@ -48,7 +49,8 @@ class SujianApp : Application(), DefaultLifecycleObserver, com.xiwei.sujian.runt
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             try {
-                val crashFile = File(filesDir, "last_crash.txt")
+                val crashFile = File(AndroidDataRoot.logsDir(), "last_crash.txt")
+                crashFile.parentFile?.mkdirs()
                 val writer = PrintWriter(FileWriter(crashFile, false))
                 writer.println(
                     "Crash at ${java.text.SimpleDateFormat(

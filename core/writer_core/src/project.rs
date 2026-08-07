@@ -43,8 +43,8 @@ pub struct Project {
     clippy::too_many_arguments,
     clippy::type_complexity
 )]
-pub fn list_projects(workspace_path: &Path) -> Result<Vec<Project>> {
-    let projects_dir = workspace_path.join("projects");
+pub fn list_projects(projects_root: &Path) -> Result<Vec<Project>> {
+    let projects_dir = projects_root;
     if !projects_dir.exists() {
         return Ok(Vec::new());
     }
@@ -96,17 +96,14 @@ struct ChapterWordCount {
     clippy::too_many_arguments,
     clippy::type_complexity
 )]
-pub fn get_project_stats(workspace_path: &Path, project_id: &str) -> Result<ProjectStats> {
+pub fn get_project_stats(project_root: &Path) -> Result<ProjectStats> {
     let mut stats = ProjectStats {
         total_word_count: 0,
         volume_count: 0,
         chapter_count: 0,
     };
 
-    let volumes_dir = workspace_path
-        .join("projects")
-        .join(project_id)
-        .join("volumes");
+    let volumes_dir = project_root.join("volumes");
 
     if !volumes_dir.exists() {
         return Ok(stats);
@@ -151,8 +148,8 @@ pub fn get_project_stats(workspace_path: &Path, project_id: &str) -> Result<Proj
 ///
 /// `order` 字段取现有项目最大 order + 1，保证新项目排在最后。
 /// 自动调用 `volume::create_volume` 创建默认卷，保持产品一致性。
-pub fn create_project(workspace_path: &Path, title: &str) -> Result<Project> {
-    let projects = list_projects(workspace_path)?;
+pub fn create_project(projects_root: &Path, title: &str) -> Result<Project> {
+    let projects = list_projects(projects_root)?;
     let order = projects
         .iter()
         .map(|p| p.order)
@@ -170,7 +167,7 @@ pub fn create_project(workspace_path: &Path, title: &str) -> Result<Project> {
         order,
     };
 
-    let project_dir = workspace_path.join("projects").join(&id);
+    let project_dir = projects_root.join(&id);
     fs::create_dir_all(&project_dir)?;
     fs::create_dir_all(project_dir.join("volumes"))?;
     fs::create_dir_all(project_dir.join("characters"))?;
@@ -180,7 +177,7 @@ pub fn create_project(workspace_path: &Path, title: &str) -> Result<Project> {
     crate::storage::atomic_write_string(&meta_path, &content)?;
 
     // Create a default volume to maintain consistency with product requirements
-    let _ = crate::volume::create_volume(workspace_path, &id, "第一卷")?;
+    let _ = crate::volume::create_volume(&project_dir, "第一卷")?;
 
     Ok(project)
 }
@@ -189,8 +186,8 @@ pub fn create_project(workspace_path: &Path, title: &str) -> Result<Project> {
 ///
 /// 同一工作区内不允许重名（title 唯一性检查）。
 /// 如果新标题已被其他项目使用，返回 `Error::Other`。
-pub fn rename_project(workspace_path: &Path, project_id: &str, new_title: &str) -> Result<()> {
-    let projects = list_projects(workspace_path)?;
+pub fn rename_project(projects_root: &Path, project_id: &str, new_title: &str) -> Result<()> {
+    let projects = list_projects(projects_root)?;
     if projects
         .iter()
         .any(|p| p.title == new_title && p.id != project_id)
@@ -200,7 +197,7 @@ pub fn rename_project(workspace_path: &Path, project_id: &str, new_title: &str) 
         ));
     }
 
-    let project_dir = workspace_path.join("projects").join(project_id);
+    let project_dir = projects_root.join(project_id);
     let meta_path = project_dir.join("project.json");
 
     if !meta_path.exists() {
@@ -219,13 +216,13 @@ pub fn rename_project(workspace_path: &Path, project_id: &str, new_title: &str) 
     Ok(())
 }
 
-pub fn delete_project(workspace_path: &Path, project_id: &str) -> Result<()> {
+pub fn delete_project(projects_root: &Path, project_id: &str, app_data_root: &Path) -> Result<()> {
     let project_id = crate::delete_guard::validate_id_segment(project_id)?;
-    let project_dir = workspace_path.join("projects").join(project_id);
+    let project_dir = projects_root.join(project_id);
     let target_canon =
-        crate::delete_guard::validate_delete_target(workspace_path, &project_dir, "project.json")?;
+        crate::delete_guard::validate_delete_target(projects_root, &project_dir, "project.json")?;
 
-    let trash_dir = workspace_path.join("app-meta/sync/trash");
+    let trash_dir = app_data_root.join("sync/trash");
     let _ = fs::create_dir_all(&trash_dir);
     let trash_path = trash_dir.join(format!(
         "{}_{}_{}",
@@ -236,14 +233,14 @@ pub fn delete_project(workspace_path: &Path, project_id: &str) -> Result<()> {
     fs::rename(&target_canon, &trash_path)?;
 
     // Also update tombstone
-    if let Ok(mut state) = crate::sync::SyncService::load_sync_state(workspace_path) {
+    if let Ok(mut state) = crate::sync::SyncService::load_sync_state(app_data_root) {
         let rel_project_dir = project_dir
-            .strip_prefix(workspace_path)
+            .strip_prefix(projects_root)
             .unwrap_or(&project_dir)
             .to_string_lossy()
             .replace("\\", "/");
         let rel_trash_path = trash_path
-            .strip_prefix(workspace_path)
+            .strip_prefix(app_data_root)
             .unwrap_or(&trash_path)
             .to_string_lossy()
             .replace("\\", "/");
@@ -254,7 +251,7 @@ pub fn delete_project(workspace_path: &Path, project_id: &str) -> Result<()> {
             &rel_project_dir,
             &rel_trash_path,
         );
-        let _ = crate::sync::SyncService::save_sync_state(workspace_path, &state);
+        let _ = crate::sync::SyncService::save_sync_state(app_data_root, &state);
     }
     Ok(())
 }
@@ -264,20 +261,17 @@ pub fn delete_project(workspace_path: &Path, project_id: &str) -> Result<()> {
 /// 遍历该 volume 下所有 chapter.meta.json，取最大的 updated_at。
 /// 如果没有子章节，返回 volume.json 的 created_at 作为 fallback。
 pub fn get_volume_updated_at_aggregated(
-    workspace_path: &Path,
-    project_id: &str,
+    project_root: &Path,
     volume_id: &str,
 ) -> Result<String> {
-    let chapters = crate::chapter::list_chapters(workspace_path, project_id, volume_id)?;
+    let chapters = crate::chapter::list_chapters(project_root, volume_id)?;
 
     if let Some(max_updated) = chapters.iter().map(|c| c.updated_at.as_str()).max() {
         return Ok(max_updated.to_string());
     }
 
     // Fallback: no chapters, use volume.json created_at
-    let volume_dir = workspace_path
-        .join("projects")
-        .join(project_id)
+    let volume_dir = project_root
         .join("volumes")
         .join(volume_id);
     let meta_path = volume_dir.join("volume.json");
@@ -296,15 +290,14 @@ pub fn get_volume_updated_at_aggregated(
 /// 遍历该 project 下所有 volume 下所有 chapter.meta.json，取最大的 updated_at。
 /// 如果没有子章节，返回 project.json 的 created_at 作为 fallback。
 pub fn get_project_updated_at_aggregated(
-    workspace_path: &Path,
-    project_id: &str,
+    project_root: &Path,
 ) -> Result<String> {
-    let volumes = crate::volume::list_volumes(workspace_path, project_id)?;
+    let volumes = crate::volume::list_volumes(project_root)?;
 
     let mut max_updated: Option<String> = None;
 
     for vol in &volumes {
-        let chapters = crate::chapter::list_chapters(workspace_path, project_id, &vol.id)?;
+        let chapters = crate::chapter::list_chapters(project_root, &vol.id)?;
         for ch in &chapters {
             match &max_updated {
                 Some(current) if ch.updated_at.as_str() > current.as_str() => {
@@ -323,7 +316,7 @@ pub fn get_project_updated_at_aggregated(
     }
 
     // Fallback: no chapters in any volume, use project.json created_at
-    let project_dir = workspace_path.join("projects").join(project_id);
+    let project_dir = project_root;
     let meta_path = project_dir.join("project.json");
     if meta_path.exists() {
         let raw = fs::read_to_string(&meta_path)?;
@@ -336,8 +329,8 @@ pub fn get_project_updated_at_aggregated(
 }
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-pub fn reorder_projects(workspace_path: &Path, ordered_ids: &[String]) -> Result<()> {
-    let mut projects = list_projects(workspace_path)?;
+pub fn reorder_projects(projects_root: &Path, ordered_ids: &[String]) -> Result<()> {
+    let mut projects = list_projects(projects_root)?;
     let mut projects_map = std::collections::HashMap::new();
     for p in projects.drain(..) {
         projects_map.insert(p.id.clone(), p);
@@ -362,7 +355,7 @@ pub fn reorder_projects(workspace_path: &Path, ordered_ids: &[String]) -> Result
             if meta.order != index as i32 {
                 meta.order = index as i32;
                 meta.updated_at = now.clone();
-                let project_dir = workspace_path.join("projects").join(id);
+                let project_dir = projects_root.join(id);
                 let meta_path = project_dir.join("project.json");
                 let updated_meta_str = serde_json::to_string_pretty(&meta)?;
                 crate::storage::atomic_write_string(&meta_path, &updated_meta_str)?;
@@ -385,21 +378,19 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let workspace_path = temp_dir.path();
 
-        crate::workspace::create_workspace(workspace_path).unwrap();
-        let project = crate::project::create_project(workspace_path, "TestProject").unwrap();
-        let volumes = crate::volume::list_volumes(workspace_path, &project.id).unwrap();
+        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
+        let project = crate::project::create_project(&workspace_path.join("projects"), "TestProject").unwrap();
+        let volumes = crate::volume::list_volumes(&workspace_path.join("projects").join(&project.id)).unwrap();
         let volume = &volumes[0];
 
         // Create two chapters
         let ch1 =
-            crate::chapter::create_chapter(workspace_path, &project.id, &volume.id, "Ch1").unwrap();
+            crate::chapter::create_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, "Ch1").unwrap();
         let _ch2 =
-            crate::chapter::create_chapter(workspace_path, &project.id, &volume.id, "Ch2").unwrap();
+            crate::chapter::create_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, "Ch2").unwrap();
 
         // Save ch1 with content (updates its updated_at)
-        crate::chapter::save_chapter_verified(
-            workspace_path,
-            &project.id,
+        crate::chapter::save_chapter_verified(&workspace_path.join("projects").join(&project.id),
             &volume.id,
             &ch1.id,
             "Some content",
@@ -408,7 +399,7 @@ mod tests {
 
         // The aggregated updated_at should be the max of all chapter updated_at values
         let aggregated =
-            get_volume_updated_at_aggregated(workspace_path, &project.id, &volume.id).unwrap();
+            get_volume_updated_at_aggregated(&workspace_path.join("projects").join(&project.id), &volume.id).unwrap();
         assert!(
             !aggregated.is_empty(),
             "aggregated updated_at should not be empty"
@@ -416,7 +407,7 @@ mod tests {
 
         // Verify it matches the latest chapter's updated_at
         let chapters =
-            crate::chapter::list_chapters(workspace_path, &project.id, &volume.id).unwrap();
+            crate::chapter::list_chapters(&workspace_path.join("projects").join(&project.id), &volume.id).unwrap();
         let max_updated = chapters
             .iter()
             .map(|c| c.updated_at.as_str())
@@ -431,14 +422,14 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let workspace_path = temp_dir.path();
 
-        crate::workspace::create_workspace(workspace_path).unwrap();
-        let project = crate::project::create_project(workspace_path, "TestProject").unwrap();
-        let volumes = crate::volume::list_volumes(workspace_path, &project.id).unwrap();
+        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
+        let project = crate::project::create_project(&workspace_path.join("projects"), "TestProject").unwrap();
+        let volumes = crate::volume::list_volumes(&workspace_path.join("projects").join(&project.id)).unwrap();
         let volume = &volumes[0];
 
         // No chapters created — should fallback to volume's created_at
         let aggregated =
-            get_volume_updated_at_aggregated(workspace_path, &project.id, &volume.id).unwrap();
+            get_volume_updated_at_aggregated(&workspace_path.join("projects").join(&project.id), &volume.id).unwrap();
         assert_eq!(aggregated, volume.created_at);
     }
 
@@ -448,28 +439,26 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let workspace_path = temp_dir.path();
 
-        crate::workspace::create_workspace(workspace_path).unwrap();
-        let project = crate::project::create_project(workspace_path, "TestProject").unwrap();
-        let volumes = crate::volume::list_volumes(workspace_path, &project.id).unwrap();
+        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
+        let project = crate::project::create_project(&workspace_path.join("projects"), "TestProject").unwrap();
+        let volumes = crate::volume::list_volumes(&workspace_path.join("projects").join(&project.id)).unwrap();
         let volume = &volumes[0];
 
         let ch1 =
-            crate::chapter::create_chapter(workspace_path, &project.id, &volume.id, "Ch1").unwrap();
-        crate::chapter::save_chapter_verified(
-            workspace_path,
-            &project.id,
+            crate::chapter::create_chapter(&workspace_path.join("projects").join(&project.id), &volume.id, "Ch1").unwrap();
+        crate::chapter::save_chapter_verified(&workspace_path.join("projects").join(&project.id),
             &volume.id,
             &ch1.id,
             "Project level content",
         )
         .unwrap();
 
-        let aggregated = get_project_updated_at_aggregated(workspace_path, &project.id).unwrap();
+        let aggregated = get_project_updated_at_aggregated(&workspace_path.join("projects").join(&project.id)).unwrap();
         assert!(!aggregated.is_empty());
 
         // Verify it matches the latest chapter's updated_at across all volumes
         let chapters =
-            crate::chapter::list_chapters(workspace_path, &project.id, &volume.id).unwrap();
+            crate::chapter::list_chapters(&workspace_path.join("projects").join(&project.id), &volume.id).unwrap();
         let max_updated = chapters
             .iter()
             .map(|c| c.updated_at.as_str())
@@ -484,11 +473,11 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let workspace_path = temp_dir.path();
 
-        crate::workspace::create_workspace(workspace_path).unwrap();
-        let project = crate::project::create_project(workspace_path, "TestProject").unwrap();
+        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
+        let project = crate::project::create_project(&workspace_path.join("projects"), "TestProject").unwrap();
 
         // No chapters — should fallback to project's created_at
-        let aggregated = get_project_updated_at_aggregated(workspace_path, &project.id).unwrap();
+        let aggregated = get_project_updated_at_aggregated(&workspace_path.join("projects").join(&project.id)).unwrap();
         assert_eq!(aggregated, project.created_at);
     }
 
@@ -497,19 +486,19 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let workspace_path = temp_dir.path();
 
-        crate::workspace::create_workspace(workspace_path).unwrap();
+        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
         let project =
-            crate::project::create_project(workspace_path, "TestProjectToDelete").unwrap();
+            crate::project::create_project(&workspace_path.join("projects"), "TestProjectToDelete").unwrap();
 
         let project_dir = workspace_path.join("projects").join(&project.id);
         assert!(project_dir.exists());
 
-        let result = delete_project(workspace_path, &project.id);
+        let result = delete_project(&workspace_path.join("projects"), &project.id, workspace_path);
         assert!(result.is_ok());
 
         assert!(!project_dir.exists());
 
-        let trash_dir = workspace_path.join("app-meta/sync/trash");
+        let trash_dir = workspace_path.join("sync/trash");
         assert!(trash_dir.exists());
 
         // Trash should have something
@@ -517,7 +506,7 @@ mod tests {
         assert!(!trash_contents.is_empty());
 
         // Verify we can't find it
-        let list_res = list_projects(workspace_path).unwrap();
+        let list_res = list_projects(&workspace_path.join("projects")).unwrap();
         assert!(list_res.iter().find(|p| p.id == project.id).is_none());
     }
 
@@ -525,9 +514,9 @@ mod tests {
     fn test_delete_project_not_found() {
         let temp_dir = tempdir().unwrap();
         let workspace_path = temp_dir.path();
-        crate::workspace::create_workspace(workspace_path).unwrap();
+        std::fs::create_dir_all(workspace_path.join("projects")).unwrap();
 
-        let result = delete_project(workspace_path, "non_existent_id");
+        let result = delete_project(&workspace_path.join("projects"), "non_existent_id", workspace_path);
         assert!(result.is_err());
         match result {
             Err(crate::error::Error::InvalidDeleteTarget(_)) => {}
