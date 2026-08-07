@@ -89,6 +89,15 @@ class EditorViewModel(
         get() =
             _workspaceRepository
                 ?: error("EditorViewModel 未注入 WorkspaceRepository — 必须通过 Factory(SujianAppDependencies) 创建")
+
+    /**
+     * #597：章节正文保存端口 — 默认走进程级容器注入的 [workspaceRepository]；
+     * 测试可替换为可控假实现以驱动真实保存流程（保存期间继续输入不被晚到回执覆盖）。
+     */
+    internal var chapterSavePort: com.xiwei.sujian.data.ChapterContentSavePort? = null
+
+    internal val effectiveChapterSavePort: com.xiwei.sujian.data.ChapterContentSavePort
+        get() = chapterSavePort ?: workspaceRepository
     internal val settingsRepository: SettingsRepository
         get() =
             _settingsRepository
@@ -323,15 +332,20 @@ class EditorViewModel(
             val session = currentSession
             val content = _uiState.value.content
             if (session != null) {
-                if (content.isNotEmpty()) {
-                    workspaceRepository.saveChapterContent(
-                        session.projectId,
-                        session.volumeId,
-                        session.chapterId,
-                        content,
-                    )
-                } else if (contentExplicitlyCleared) {
-                    workspaceRepository.clearChapterContent(session.projectId, session.volumeId, session.chapterId)
+                // 保存端口为 suspend 契约（测试可控假实现需要挂起点）；
+                // onCleared 的兜底保存是同步桥接调用，用 runBlocking 保持原有
+                // 生命周期语义（不延迟进程退出，不依赖仍会被取消的 viewModelScope）。
+                kotlinx.coroutines.runBlocking {
+                    if (content.isNotEmpty()) {
+                        workspaceRepository.saveChapterContent(
+                            session.projectId,
+                            session.volumeId,
+                            session.chapterId,
+                            content,
+                        )
+                    } else if (contentExplicitlyCleared) {
+                        workspaceRepository.clearChapterContent(session.projectId, session.volumeId, session.chapterId)
+                    }
                 }
             }
         } catch (_: Exception) {

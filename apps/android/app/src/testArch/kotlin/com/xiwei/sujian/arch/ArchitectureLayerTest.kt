@@ -77,13 +77,6 @@ class ArchitectureLayerTest {
      */
     @Test
     fun `ui layer does not directly reference concrete bridge classes`() {
-        // #597 技术债务：以下文件仍直接引用 BridgeProvider，待创建 Repository 接口后移除。
-        val bridgeProviderWhitelist =
-            listOf(
-                "ui/compose/starmap/StarMapRoute.kt",
-                "ui/compose/stats/StatsScreen.kt",
-                "ui/compose/starmap/StarMapViewModel.kt",
-            )
         val forbiddenBridgeClasses =
             listOf(
                 "com.xiwei.sujian.data.BridgeProvider",
@@ -107,10 +100,7 @@ class ArchitectureLayerTest {
                 pathFilter = "/ui/",
                 forbiddenReferences = forbiddenBridgeClasses,
             )
-        val violations =
-            allViolations.filterKeys { file ->
-                bridgeProviderWhitelist.none { file.path.contains(it) }
-            }
+        val violations = allViolations
         assertTrue(
             "UI 层不应直接引用具体 Bridge 类。违规:\n${ArchTestSupport.formatViolations(violations)}",
             violations.isEmpty(),

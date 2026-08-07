@@ -10,7 +10,7 @@ import com.xiwei.sujian.model.ProjectStats
 import com.xiwei.sujian.model.RecentEdit
 import com.xiwei.sujian.model.Volume
 
-class WorkspaceRepository(private val context: Context, bridge: AppServiceBridge? = null) {
+class WorkspaceRepository(private val context: Context, bridge: AppServiceBridge? = null) : ChapterContentSavePort {
     private val appBridge = bridge ?: BridgeProvider.getAppServiceBridge(context)
     private val workspaceBridge = WorkspaceBridge(appBridge)
     private val writingBridge = WritingBridge(appBridge)
@@ -160,7 +160,7 @@ class WorkspaceRepository(private val context: Context, bridge: AppServiceBridge
         }
     }
 
-    fun saveChapterContent(
+    override suspend fun saveChapterContent(
         projectId: String,
         volumeId: String,
         chapterId: String,

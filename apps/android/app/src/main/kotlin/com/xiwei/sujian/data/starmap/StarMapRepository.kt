@@ -21,7 +21,7 @@ import uniffi.writer_core.StarMapEdgeDto
 import uniffi.writer_core.StarMapEdgePatchInputDto
 import uniffi.writer_core.StarMapNodePatchInputDto
 
-internal class StarMapRepository(
+class StarMapRepository internal constructor(
     private val bridge: StarMapBridgeOps,
     private val cache: StarMapSnapshotCache,
 ) {

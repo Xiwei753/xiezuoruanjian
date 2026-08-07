@@ -19,8 +19,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import com.xiwei.sujian.R
-import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.data.BridgeResult
+import com.xiwei.sujian.runtime.LocalSujianAppDependencies
 import com.xiwei.sujian.data.starmap.StarMapRepository
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.editor.v2.compose.LocalEditorWindowHost
@@ -155,11 +155,13 @@ private fun StarMapListScreen(
                     "Ensure the host Activity provides one via CompositionLocalProvider.",
             )
 
+    val starmapRepository = LocalSujianAppDependencies.current.starmapRepository
+
     suspend fun loadStarMaps() {
         val maps =
             withContext(Dispatchers.IO) {
                 try {
-                    val repository = BridgeProvider.getStarmapBridge(context).repository
+                    val repository = starmapRepository
                     when (val result = repository.listStarmaps()) {
                         is BridgeResult.Success -> result.data
                         else -> emptyList()
@@ -190,8 +192,7 @@ private fun StarMapListScreen(
                 coroutineScope.launch {
                     withContext(Dispatchers.IO) {
                         try {
-                            val repository = BridgeProvider.getStarmapBridge(context).repository
-                            repository.createStarmap(title, description)
+                            starmapRepository.createStarmap(title, description)
                         } catch (_: Exception) {
                         }
                     }
@@ -224,7 +225,9 @@ private fun StarMapEditorScreen(
                     "Ensure the host Activity provides one via CompositionLocalProvider.",
             )
 
-    fun repository(): StarMapRepository = BridgeProvider.getStarmapBridge(context).repository
+    val starmapRepository = LocalSujianAppDependencies.current.starmapRepository
+
+    fun repository(): StarMapRepository = starmapRepository
 
     suspend fun loadStarMap() {
         val data =

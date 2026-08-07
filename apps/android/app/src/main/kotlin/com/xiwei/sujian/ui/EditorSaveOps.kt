@@ -265,7 +265,7 @@ private suspend fun EditorViewModel.saveChapterAttempt(
     _uiState.value = currentState.copy(saveStatus = SaveStatus.Saving)
     return try {
         val result =
-            workspaceRepository.saveChapterContent(
+            effectiveChapterSavePort.saveChapterContent(
                 session.projectId,
                 session.volumeId,
                 session.chapterId,

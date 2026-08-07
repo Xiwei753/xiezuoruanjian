@@ -15,6 +15,7 @@ interface AppServiceContainer {
     val settingsRepository: SettingsRepository
     val syncStatusRepository: SyncStatusRepository
     val syncCoordinator: SyncCoordinator
+    val starmapRepository: com.xiwei.sujian.data.starmap.StarMapRepository
 }
 
 interface SujianAppDependencies : AppServiceContainer {
@@ -42,6 +43,8 @@ class DefaultAppServiceContainer(context: Context) : AppServiceContainer {
     override val settingsRepository: SettingsRepository = SettingsRepository(appContext, appServiceBridge)
     override val syncStatusRepository: SyncStatusRepository = SyncStatusRepository(settingsRepository)
     override val syncCoordinator: SyncCoordinator = SyncCoordinator(settingsRepository, syncStatusRepository)
+    override val starmapRepository: com.xiwei.sujian.data.starmap.StarMapRepository =
+        BridgeProvider.getStarmapBridge(appContext).repository
 }
 
 class DefaultSujianAppDependencies(
