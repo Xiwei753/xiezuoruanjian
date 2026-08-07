@@ -1065,7 +1065,7 @@ interface WriterAppService {
     void delete_sync_secrets_for_generation(u64 generation);
 
     [Throws=WriterError]
-    SyncStateDto load_sync_state();
+    SyncStateDto load_sync_state(string project_id);
 
     [Throws=WriterError]
     SyncCapabilityDto get_sync_capability();
@@ -1074,19 +1074,19 @@ interface WriterAppService {
     SyncDiagnosticsResultDto perform_sync_diagnostics(SyncConfigDto config);
 
     [Throws=WriterError]
-    SyncPlanDto perform_sync_dry_run(SyncConfigDto config);
+    SyncPlanDto perform_sync_dry_run(string project_id, SyncConfigDto config);
 
     [Throws=WriterError]
-    SyncResultDto perform_sync(SyncConfigDto config, boolean force_sync);
+    SyncResultDto perform_sync(string project_id, SyncConfigDto config, boolean force_sync);
 
     [Throws=WriterError]
-    boolean resolve_conflict_keep_local(string path);
+    boolean resolve_conflict_keep_local(string project_id, string path);
 
     [Throws=WriterError]
-    boolean resolve_conflict_take_remote(string path);
+    boolean resolve_conflict_take_remote(string project_id, string path);
 
     [Throws=WriterError]
-    boolean resolve_conflict_mark_merged(string path);
+    boolean resolve_conflict_mark_merged(string project_id, string path);
 
     [Throws=WriterError]
     WritingStatsSummaryDto get_writing_stats_summary(string start_date, string end_date);

@@ -71,9 +71,9 @@ class SyncBridge internal constructor(private val holder: WriterAppServiceHolder
             holder.service.deleteSyncSecretsForGeneration(generation)
         }
 
-    fun loadSyncState(): BridgeResult<SyncState> =
+    fun loadSyncState(projectId: String): BridgeResult<SyncState> =
         holder.wrapResult {
-            holder.service.loadSyncState().toModel()
+            holder.service.loadSyncState(projectId).toModel()
         }
 
     fun getSyncCapability(): BridgeResult<SyncCapabilityData> =
@@ -92,16 +92,20 @@ class SyncBridge internal constructor(private val holder: WriterAppServiceHolder
             holder.service.performSyncDiagnostics(config.toDto()).toModel()
         }
 
-    fun performSyncDryRun(config: SyncConfig): BridgeResult<SyncPlan> =
+    fun performSyncDryRun(
+        projectId: String,
+        config: SyncConfig,
+    ): BridgeResult<SyncPlan> =
         holder.wrapResult {
-            holder.service.performSyncDryRun(config.toDto()).toModel()
+            holder.service.performSyncDryRun(projectId, config.toDto()).toModel()
         }
 
     fun performSync(
+        projectId: String,
         config: SyncConfig,
         forceSync: Boolean = false,
     ): BridgeResult<SyncResult> =
         holder.wrapResult {
-            holder.service.performSync(config.toDto(), forceSync).toModel()
+            holder.service.performSync(projectId, config.toDto(), forceSync).toModel()
         }
 }

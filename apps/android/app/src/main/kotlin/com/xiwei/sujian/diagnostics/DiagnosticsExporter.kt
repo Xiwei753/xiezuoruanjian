@@ -159,16 +159,26 @@ object DiagnosticsExporter {
     ) {
         try {
             val repo = SettingsRepository(context)
-            val syncState = repo.loadSyncState()
+            // #600：sync 已改为 per-project — 诊断导出当前活动作品的同步状态。
+            val projectId = com.xiwei.sujian.data.ActiveProjectGate.currentProjectId()
             val sanitized =
-                mapOf(
-                    "status" to syncState.status.name,
-                    "backendType" to syncState.backendType,
-                    "transport" to syncState.transport,
-                    "lastSyncTime" to syncState.lastSyncTime,
-                    "lastError" to syncState.lastError?.let { DiagnosticsLogger.redact(it) },
-                    "conflictCount" to (syncState.conflicts?.size ?: 0),
-                )
+                if (projectId != null) {
+                    val syncState = repo.loadSyncState(projectId)
+                    mapOf(
+                        "projectId" to projectId,
+                        "status" to syncState.status.name,
+                        "backendType" to syncState.backendType,
+                        "transport" to syncState.transport,
+                        "lastSyncTime" to syncState.lastSyncTime,
+                        "lastError" to syncState.lastError?.let { DiagnosticsLogger.redact(it) },
+                        "conflictCount" to (syncState.conflicts?.size ?: 0),
+                    )
+                } else {
+                    mapOf(
+                        "projectId" to null,
+                        "status" to "no_active_project",
+                    )
+                }
             val gson = GsonBuilder().setPrettyPrinting().create()
             val json = DiagnosticsLogger.redact(gson.toJson(sanitized))
             File(destDir, "sync_state_sanitized.json").writeText(json)

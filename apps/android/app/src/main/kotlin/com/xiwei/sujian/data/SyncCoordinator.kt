@@ -58,6 +58,7 @@ class SyncCoordinator(
      */
     suspend fun runSync(
         trigger: SyncTrigger,
+        projectId: String,
         snapshot: SyncProfileSnapshot? = null,
     ): SyncOutcome {
         DiagnosticsEvents.syncEvent(trigger.name.lowercase(), "start")
@@ -135,7 +136,8 @@ class SyncCoordinator(
                         return@runExclusive error
                     }
                     try {
-                        val bridgeResult = withContext(Dispatchers.IO) { settingsRepository.performSync(config) }
+                        val bridgeResult =
+                            withContext(Dispatchers.IO) { settingsRepository.performSync(projectId, config) }
                         // #595 三：校验文档身份 — 同步期间章节切换/关闭导致身份变化时，
                         // 不应用同步结果，新输入作为下一代 dirty 文档继续保存。
                         val identityAfterSync = WorkspaceDocumentGate.activeDocumentIdentity()

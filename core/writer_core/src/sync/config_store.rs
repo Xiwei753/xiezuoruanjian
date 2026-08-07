@@ -196,8 +196,8 @@ impl crate::sync::SyncService {
     /// 查找顺序：`state.local.json` → 旧格式 `sync_state.json`（自动迁移后删除）→ 创建默认状态。
     /// 迁移时若 `device_id` 为空则生成新 UUID，保证每台设备有唯一标识。
     /// `device_id` 用于 LWW 同步中区分不同设备的写入。
-    pub fn load_sync_state(workspace_path: &Path) -> crate::Result<SyncState> {
-        Self::load_sync_state_with_preferred_device_id(workspace_path, None)
+    pub fn load_sync_state(sync_root: &Path) -> crate::Result<SyncState> {
+        Self::load_sync_state_with_preferred_device_id(sync_root, None)
     }
 
     /// 加载同步状态，优先使用平台注入的 device_id。
@@ -212,7 +212,7 @@ impl crate::sync::SyncService {
         clippy::type_complexity
     )]
     pub fn load_sync_state_with_preferred_device_id(
-        workspace_path: &Path,
+        sync_root: &Path,
         preferred_device_id: Option<&str>,
     ) -> crate::Result<SyncState> {
         let resolve_device_id = |existing: &str| -> String {
@@ -227,14 +227,14 @@ impl crate::sync::SyncService {
             uuid::Uuid::new_v4().to_string()
         };
 
-        let state_path = workspace_path.join("sync/state.local.json");
+        let state_path = sync_root.join("sync/state.local.json");
         if !state_path.exists() {
-            let old_path = workspace_path.join("sync/sync_state.json");
+            let old_path = sync_root.join("sync/sync_state.json");
             if old_path.exists() {
                 if let Ok(content) = std::fs::read_to_string(&old_path) {
                     if let Ok(mut state) = serde_json::from_str::<SyncState>(&content) {
                         state.device_id = resolve_device_id(&state.device_id);
-                        let _ = Self::save_sync_state(workspace_path, &state);
+                        let _ = Self::save_sync_state(sync_root, &state);
                         let _ = std::fs::remove_file(old_path);
                         return Ok(state);
                     }
@@ -253,7 +253,7 @@ impl crate::sync::SyncService {
         let new_device_id = resolve_device_id(&state.device_id);
         if new_device_id != state.device_id {
             state.device_id = new_device_id;
-            let _ = Self::save_sync_state(workspace_path, &state);
+            let _ = Self::save_sync_state(sync_root, &state);
         }
         Ok(state)
     }
@@ -264,8 +264,8 @@ impl crate::sync::SyncService {
     ///
     /// 写入流程：序列化 → 写入 `.tmp` 临时文件 → rename 为最终文件。
     /// rename 在同一文件系统上是原子操作，保证读端不会看到部分写入的状态。
-    pub fn save_sync_state(workspace_path: &Path, state: &SyncState) -> crate::Result<()> {
-        let state_path = workspace_path.join("sync/state.local.json");
+    pub fn save_sync_state(sync_root: &Path, state: &SyncState) -> crate::Result<()> {
+        let state_path = sync_root.join("sync/state.local.json");
         if let Some(parent) = state_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -282,8 +282,8 @@ impl crate::sync::SyncService {
 }
 
 impl crate::sync::SyncService {
-    pub fn get_sync_ignored_paths(workspace_path: &Path) -> crate::Result<Vec<String>> {
-        let plan = Self::build_sync_plan_from_workspace(workspace_path)?;
+    pub fn get_sync_ignored_paths(sync_root: &Path) -> crate::Result<Vec<String>> {
+        let plan = Self::build_sync_plan(sync_root)?;
         Ok(plan.ignored_files)
     }
 }

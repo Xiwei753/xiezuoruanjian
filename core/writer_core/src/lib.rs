@@ -30,7 +30,7 @@
 //! |------|------|------|
 //! | `facade` | Core 内部统一入口，聚合所有子模块 | 不直接作为平台稳定边界 |
 //! | `api` | 跨平台稳定 API 层，提供 DTO / Error / Service | `writer_uniffi` 和平台适配层的底座 |
-//! | `workspace` | 工作区创建、验证、最近编辑 | 不处理项目内容 |
+//! | `recent_edits` | 最近编辑记录（首页"继续写作"入口） | 不处理项目内容 |
 //! | `project` | 作品 CRUD、统计、排序、删除 | 删除走 `delete_guard` |
 //! | `volume` | 卷 CRUD、排序、删除 | 删除走 `delete_guard` |
 //! | `chapter` | 章节 CRUD、内容读写、验证保存 | 正文永远是纯文本 |
@@ -108,7 +108,7 @@ pub mod trash_tests;
 #[cfg(test)]
 pub mod volume_tests;
 #[cfg(test)]
-pub mod workspace_tests;
+pub mod recent_edits_tests;
 #[cfg(test)]
 pub mod writing_stats_tests;
 

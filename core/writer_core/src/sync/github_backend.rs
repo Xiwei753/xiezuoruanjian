@@ -243,27 +243,27 @@ impl SyncBackend for GitHubApiBackend {
 
     fn pull(
         &self,
-        workspace_path: &Path,
+        sync_root: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
         force_sync: bool,
     ) -> crate::Result<SyncResult> {
-        self.sync(workspace_path, config, secrets, force_sync)
+        self.sync(sync_root, config, secrets, force_sync)
     }
 
     fn push(
         &self,
-        workspace_path: &Path,
+        sync_root: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
         force_sync: bool,
     ) -> crate::Result<SyncResult> {
-        self.sync(workspace_path, config, secrets, force_sync)
+        self.sync(sync_root, config, secrets, force_sync)
     }
 
     fn sync(
         &self,
-        workspace_path: &Path,
+        sync_root: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
         force_sync: bool,
@@ -276,7 +276,7 @@ impl SyncBackend for GitHubApiBackend {
         let transport = self.ensure_transport()?;
         // SAFETY: AssertUnwindSafe needed for catch_unwind at sync boundary; the closure only calls perform_lww_sync with borrowed data; on panic, the error is caught and returned as a SyncResult::Error.
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            SyncService::perform_lww_sync(workspace_path, config, secrets, force_sync, transport)
+            SyncService::perform_lww_sync(sync_root, config, secrets, force_sync, transport)
         })) {
             Ok(result) => result,
             Err(err) => {

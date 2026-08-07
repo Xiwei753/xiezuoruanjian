@@ -533,7 +533,7 @@ struct Index {
           .borderRadius(DesignTokens.cardRadius)
         }
         .onClick(() => {
-          router.pushUrl({ url: 'pages/SettingsPage' })
+          router.pushUrl({ url: 'pages/SettingsPage', params: { projectId: this.projects.length > 0 ? this.projects[0].id : '' } })
         })
 
         GridCol({ span: 1 }) {
@@ -555,7 +555,7 @@ struct Index {
           .borderRadius(DesignTokens.cardRadius)
         }
         .onClick(() => {
-          router.pushUrl({ url: 'pages/SettingsPage' })
+          router.pushUrl({ url: 'pages/SettingsPage', params: { projectId: this.projects.length > 0 ? this.projects[0].id : '' } })
         })
       }
       .width('100%')

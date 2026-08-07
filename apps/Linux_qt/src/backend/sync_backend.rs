@@ -308,7 +308,7 @@ impl AppBackend {
 
     // AppBackend::refresh_sync_status_from_config
     pub(crate) fn refresh_sync_status_from_config(&mut self) {
-        if !self.current_has_workspace {
+        if !self.current_has_data_root {
             self.current_sync_status = "no_workspace".to_string();
             self.sync_status_changed();
             return;
@@ -406,7 +406,7 @@ impl AppBackend {
 
     // AppBackend::sync_can_run
     pub(crate) fn sync_can_run(&self) -> bool {
-        self.current_has_workspace
+        self.current_has_data_root
             && !self.current_data_root.is_empty()
             && !self.current_sync_remote_url.is_empty()
             && !self.current_sync_token.is_empty()
@@ -415,7 +415,7 @@ impl AppBackend {
 
     // AppBackend::sync_block_reason
     pub(crate) fn sync_block_reason(&self) -> QString {
-        if !self.current_has_workspace || self.current_data_root.is_empty() {
+        if !self.current_has_data_root || self.current_data_root.is_empty() {
             return "sync.block.no_workspace".into();
         }
 
@@ -496,8 +496,11 @@ impl AppBackend {
 
         let op_id_capture = op_id.clone();
         thread::spawn(move || {
-            // SAFETY: AssertUnwindSafe is needed because catch_unwind requires UnwindSafe; the closure only accesses owned data (workspace_path, config copies) and the result is consumed immediately; no shared mutable state is left in an inconsistent state on panic.
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // SAFETY: catch_unwind requires the closure to be UnwindSafe. The closure only captures
+            // owned String data (data_root, projects_root, op_id_capture, project_id_capture) which
+            // auto-implement UnwindSafe. No shared mutable state or borrows are captured, so the
+            // closure is UnwindSafe by auto-impl without needing AssertUnwindSafe.
+            let result = std::panic::catch_unwind(|| {
                 let api = crate::backend::app_backend::create_core_api(&data_root, &projects_root);
                 let mut config = match api.load_sync_config() {
                     Ok(c) => c,
@@ -568,7 +571,7 @@ impl AppBackend {
                         }
                     }
                 }
-            }));
+            });
 
             match result {
                 Ok(outcome) => callback(outcome),

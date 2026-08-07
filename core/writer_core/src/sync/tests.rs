@@ -118,14 +118,14 @@ mod tests {
 
     #[cfg(feature = "github-api")]
     fn lww_sync(
-        workspace_path: &Path,
+        sync_root: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
         force_sync: bool,
     ) -> crate::Result<crate::sync::SyncResult> {
         let transport = TestHttpTransport::new()
             .map_err(|e| crate::Error::SyncNetworkUnavailable { reason: e.message })?;
-        SyncService::perform_lww_sync(workspace_path, config, secrets, force_sync, &transport)
+        SyncService::perform_lww_sync(sync_root, config, secrets, force_sync, &transport)
     }
     #[test]
     #[cfg(feature = "github-api")]
@@ -1095,7 +1095,7 @@ mod tests {
         // Also write some valid file to sync
         std::fs::write(dir.path().join("workspace_manifest.json"), "{}").unwrap();
 
-        let plan = SyncService::build_sync_plan_from_workspace(dir.path()).unwrap();
+        let plan = SyncService::build_sync_plan(dir.path()).unwrap();
 
         // Ensure plan does not include the blacklisted items
         for file in plan.files_to_upload {

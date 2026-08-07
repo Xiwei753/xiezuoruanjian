@@ -49,21 +49,21 @@ pub trait SyncBackend {
     ) -> crate::Result<SyncDiagnosticsResult>;
     fn pull(
         &self,
-        workspace_path: &Path,
+        sync_root: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
         force_sync: bool,
     ) -> crate::Result<SyncResult>;
     fn push(
         &self,
-        workspace_path: &Path,
+        sync_root: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
         force_sync: bool,
     ) -> crate::Result<SyncResult>;
     fn sync(
         &self,
-        workspace_path: &Path,
+        sync_root: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
         force_sync: bool,
@@ -97,7 +97,7 @@ impl SyncBackend for UnavailableGitBackend {
     }
     fn pull(
         &self,
-        _workspace_path: &Path,
+        _sync_root: &Path,
         _config: &SyncConfig,
         _secrets: &SyncSecrets,
         _force_sync: bool,
@@ -108,7 +108,7 @@ impl SyncBackend for UnavailableGitBackend {
     }
     fn push(
         &self,
-        _workspace_path: &Path,
+        _sync_root: &Path,
         _config: &SyncConfig,
         _secrets: &SyncSecrets,
         _force_sync: bool,
@@ -119,7 +119,7 @@ impl SyncBackend for UnavailableGitBackend {
     }
     fn sync(
         &self,
-        _workspace_path: &Path,
+        _sync_root: &Path,
         _config: &SyncConfig,
         _secrets: &SyncSecrets,
         _force_sync: bool,
@@ -141,36 +141,36 @@ impl SyncBackend for GitSyncBackend {
     }
     fn pull(
         &self,
-        workspace_path: &Path,
+        sync_root: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
         _force_sync: bool,
     ) -> crate::Result<SyncResult> {
         use crate::sync::git_backend::Git2Backend;
         let backend = Git2Backend;
-        SyncService::perform_sync(workspace_path, config, secrets, &backend)
+        SyncService::perform_sync(sync_root, config, secrets, &backend)
     }
     fn push(
         &self,
-        workspace_path: &Path,
+        sync_root: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
         _force_sync: bool,
     ) -> crate::Result<SyncResult> {
         use crate::sync::git_backend::Git2Backend;
         let backend = Git2Backend;
-        SyncService::perform_sync(workspace_path, config, secrets, &backend)
+        SyncService::perform_sync(sync_root, config, secrets, &backend)
     }
     fn sync(
         &self,
-        workspace_path: &Path,
+        sync_root: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
         _force_sync: bool,
     ) -> crate::Result<SyncResult> {
         use crate::sync::git_backend::Git2Backend;
         let backend = Git2Backend;
-        SyncService::perform_sync(workspace_path, config, secrets, &backend)
+        SyncService::perform_sync(sync_root, config, secrets, &backend)
     }
 }
 
@@ -193,7 +193,7 @@ impl SyncBackend for UnavailableGithubApiBackend {
     }
     fn pull(
         &self,
-        _workspace_path: &Path,
+        _sync_root: &Path,
         _config: &SyncConfig,
         _secrets: &SyncSecrets,
         _force_sync: bool,
@@ -204,7 +204,7 @@ impl SyncBackend for UnavailableGithubApiBackend {
     }
     fn push(
         &self,
-        _workspace_path: &Path,
+        _sync_root: &Path,
         _config: &SyncConfig,
         _secrets: &SyncSecrets,
         _force_sync: bool,
@@ -215,7 +215,7 @@ impl SyncBackend for UnavailableGithubApiBackend {
     }
     fn sync(
         &self,
-        _workspace_path: &Path,
+        _sync_root: &Path,
         _config: &SyncConfig,
         _secrets: &SyncSecrets,
         _force_sync: bool,

@@ -657,6 +657,10 @@
       "value": "同步冲突，请手动处理冲突文件后重试"
     },
     {
+      "name": "error_sync_no_project",
+      "value": "请先选择一个项目再进行同步"
+    },
+    {
       "name": "error_sync_failed_message",
       "value": "同步失败，请检查网络和配置"
     },

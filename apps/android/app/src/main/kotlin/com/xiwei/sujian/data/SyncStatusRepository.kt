@@ -30,7 +30,11 @@ class SyncStatusRepository(
         _state.value = SyncIndicatorState.Unconfigured
     }
 
-    suspend fun refreshState() {
+    suspend fun refreshState(projectId: String?) {
+        if (projectId == null) {
+            _state.value = SyncIndicatorState.Unconfigured
+            return
+        }
         val indicatorState =
             try {
                 withContext(Dispatchers.IO) {
@@ -40,7 +44,7 @@ class SyncStatusRepository(
                         config.enabled != true -> SyncIndicatorState.Unconfigured
                         !capability.canRun -> SyncIndicatorState.Unconfigured
                         else -> {
-                            val syncState = settingsRepository.loadSyncState()
+                            val syncState = settingsRepository.loadSyncState(projectId)
                             when (syncState.status) {
                                 SyncStatus.Syncing -> SyncIndicatorState.Syncing
                                 SyncStatus.Success,

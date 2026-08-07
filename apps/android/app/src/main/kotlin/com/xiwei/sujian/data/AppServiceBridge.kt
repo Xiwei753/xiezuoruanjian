@@ -223,18 +223,22 @@ class AppServiceBridge(val holder: WriterAppServiceHolder) {
     /** #595 五：删除指定 generation 的安全存储凭据（旧版本清理）。 */
     fun deleteSyncSecretsForGeneration(generation: ULong) = syncBridge.deleteSyncSecretsForGeneration(generation)
 
-    fun loadSyncState() = syncBridge.loadSyncState()
+    fun loadSyncState(projectId: String) = syncBridge.loadSyncState(projectId)
 
     fun getSyncCapability() = syncBridge.getSyncCapability()
 
     fun performSyncDiagnostics(config: SyncConfig) = syncBridge.performSyncDiagnostics(config)
 
-    fun performSyncDryRun(config: SyncConfig) = syncBridge.performSyncDryRun(config)
+    fun performSyncDryRun(
+        projectId: String,
+        config: SyncConfig,
+    ) = syncBridge.performSyncDryRun(projectId, config)
 
     fun performSync(
+        projectId: String,
         config: SyncConfig,
         forceSync: Boolean = false,
-    ) = syncBridge.performSync(config, forceSync)
+    ) = syncBridge.performSync(projectId, config, forceSync)
 
     fun getWritingStatsSummary(
         startDate: String,

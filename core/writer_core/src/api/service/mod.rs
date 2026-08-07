@@ -140,7 +140,7 @@ mod editor_ops;
 mod project_ops;
 mod search_ops;
 mod starmap_ops;
-mod workspace_ops;
+mod recent_edits_ops;
 mod writing_stats_ops;
 
 #[cfg(test)]

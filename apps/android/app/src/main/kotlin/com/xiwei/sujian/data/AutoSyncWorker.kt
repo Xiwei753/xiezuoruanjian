@@ -42,9 +42,13 @@ class AutoSyncWorker(
             }
         if (!AutoSyncScheduler.shouldSync(snapshot.config, snapshot.secrets)) return Result.success()
 
+        // #600：sync 已改为 per-project — 后台自动同步针对当前活动作品。
+        // 无活动作品时无需同步（用户未打开任何作品）。
+        val projectId = ActiveProjectGate.currentProjectId() ?: return Result.success()
+
         val state =
             try {
-                settingsRepository.loadSyncState()
+                settingsRepository.loadSyncState(projectId)
             } catch (e: Exception) {
                 DiagnosticsLogger.w(TAG, "Unable to load sync state", e)
                 return Result.retry()
@@ -64,7 +68,7 @@ class AutoSyncWorker(
             }
         if (elapsed != null && elapsed < interval) return Result.success()
 
-        val outcome = deps.syncCoordinator.runSync(SyncTrigger.Auto, snapshot)
+        val outcome = deps.syncCoordinator.runSync(SyncTrigger.Auto, projectId, snapshot)
         return when (outcome) {
             is com.xiwei.sujian.data.SyncOutcome.Completed -> {
                 com.xiwei.sujian.diagnostics.DiagnosticsEvents.syncEvent("autosync", "completed")

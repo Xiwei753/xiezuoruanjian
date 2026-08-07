@@ -22,7 +22,7 @@
 use crate::sync::github_api_client::{
     github_delete_content_serial, github_get_content, github_put_content_serial,
 };
-use crate::sync::scanner::scan_workspace_for_sync;
+use crate::sync::scanner::scan_for_sync;
 use crate::sync::types::{
     FirstSyncMode, ManifestFileRecord, SyncConfig, SyncConflict, SyncKind, SyncManifest,
     SyncResult, SyncSecrets, SyncState, SyncStatus,
@@ -57,11 +57,11 @@ fn sync_download_pool(task_count: usize) -> crate::Result<rayon::ThreadPool> {
 /// 文件名格式：`{原文件名}.remote-conflict-{时间戳}`，保存在原文件同目录下。
 /// 此备份供用户手动对比本地与远端内容，不参与自动合并逻辑。
 fn save_conflict_copy(
-    workspace_path: &Path,
+    sync_root: &Path,
     path: &str,
     remote_content: &[u8],
 ) -> crate::Result<String> {
-    let full_path = workspace_path.join(path);
+    let full_path = sync_root.join(path);
     let filename = full_path
         .file_name()
         .unwrap_or_default()
@@ -331,7 +331,7 @@ enum ThreeWayResult {
     clippy::type_complexity
 )]
 pub(crate) fn perform_lww_sync(
-    workspace_path: &Path,
+    sync_root: &Path,
     config: &SyncConfig,
     secrets: &SyncSecrets,
     force_sync: bool,
@@ -339,7 +339,7 @@ pub(crate) fn perform_lww_sync(
 ) -> crate::Result<SyncResult> {
     log::debug!(
         "[sync] backend_type=github_api sync_mode=lww_manifest entry=perform_lww_sync workspace={}",
-        workspace_path.display()
+        sync_root.display()
     );
     let mut result = SyncResult::success();
     result.status = SyncStatus::Idle;
@@ -368,10 +368,10 @@ pub(crate) fn perform_lww_sync(
         ));
     }
 
-    let mut state = crate::sync::SyncService::load_sync_state(workspace_path)?;
+    let mut state = crate::sync::SyncService::load_sync_state(sync_root)?;
     if state.device_id.is_empty() {
         state.device_id = uuid::Uuid::new_v4().to_string();
-        crate::sync::SyncService::save_sync_state(workspace_path, &state)?;
+        crate::sync::SyncService::save_sync_state(sync_root, &state)?;
     }
 
     // P1-4: Core-level debounce. Even if clients call sync too often,
@@ -411,7 +411,7 @@ pub(crate) fn perform_lww_sync(
     let mut attempt = 0;
     loop {
         match execute_lww_sync_attempt(
-            workspace_path,
+            sync_root,
             config,
             &token,
             &api_base,
@@ -479,7 +479,7 @@ pub(crate) fn perform_lww_sync(
     clippy::type_complexity
 )]
 fn execute_lww_sync_attempt(
-    workspace_path: &Path,
+    sync_root: &Path,
     config: &SyncConfig,
     token: &str,
     api_base: &str,
@@ -650,7 +650,7 @@ fn execute_lww_sync_attempt(
     }
 
     log::debug!("[sync] github_api step=正在比较本地和远端");
-    let local_entries = scan_workspace_for_sync(workspace_path)?;
+    let local_entries = scan_for_sync(sync_root)?;
     let now_ms = chrono::Utc::now().timestamp_millis();
     let mut local_records = std::collections::HashMap::new();
 
@@ -678,7 +678,7 @@ fn execute_lww_sync_attempt(
                         .unwrap_or(0);
                 } else {
                     // 哈希已变，取文件系统修改时间
-                    let modified_ms = std::fs::metadata(workspace_path.join(&path))
+                    let modified_ms = std::fs::metadata(sync_root.join(&path))
                         .and_then(|m| m.modified())
                         .and_then(|t| {
                             t.duration_since(std::time::SystemTime::UNIX_EPOCH)
@@ -690,7 +690,7 @@ fn execute_lww_sync_attempt(
                 }
             } else {
                 // 新文件，取文件系统修改时间
-                let modified_ms = std::fs::metadata(workspace_path.join(&path))
+                let modified_ms = std::fs::metadata(sync_root.join(&path))
                     .and_then(|m| m.modified())
                     .and_then(|t| {
                         t.duration_since(std::time::SystemTime::UNIX_EPOCH)
@@ -725,7 +725,7 @@ fn execute_lww_sync_attempt(
             if !SyncService::is_whitelisted_path(path) || SyncService::is_blacklisted_path(path) {
                 continue;
             }
-            if !workspace_path.join(path).exists() {
+            if !sync_root.join(path).exists() {
                 let mut updated_at_ms = now_ms;
                 if let Some(tombstone) = state.tombstones.iter().find(|t| t.original_path == *path)
                 {
@@ -815,7 +815,7 @@ fn execute_lww_sync_attempt(
                         return Ok((path.clone(), None));
                     };
 
-                    let full_path = workspace_path.join(path);
+                    let full_path = sync_root.join(path);
                     if let Some(parent) = full_path.parent() {
                         std::fs::create_dir_all(parent).map_err(|e| {
                             crate::Error::Io(std::io::Error::other(format!(
@@ -988,7 +988,7 @@ fn execute_lww_sync_attempt(
                                     &path,
                                 )? {
                                     let conflict_filename =
-                                        save_conflict_copy(workspace_path, &path, &remote_content)?;
+                                        save_conflict_copy(sync_root, &path, &remote_content)?;
 
                                     Some(SyncConflict {
                                         local_path: path.clone(),
@@ -1115,14 +1115,14 @@ fn execute_lww_sync_attempt(
         //
         // 不变量：远端删除操作只在本地文件与远端记录一致（三路 NoConflict/RemoteChanged，
         // 或 LWW 远端获胜）时执行。冲突路径不会进入 to_delete_local。
-        let full_path = workspace_path.join(path);
+        let full_path = sync_root.join(path);
         if full_path.exists() {
             let filename = full_path
                 .file_name()
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
-            let trash_dir = workspace_path.join("sync/trash");
+            let trash_dir = sync_root.join("sync/trash");
             let _ = std::fs::create_dir_all(&trash_dir);
             let trash_path = trash_dir.join(format!(
                 "{}_{}_{}",
@@ -1155,7 +1155,7 @@ fn execute_lww_sync_attempt(
                         body_preview: String::new(),
                     });
                 };
-                let full_path = workspace_path.join(path);
+                let full_path = sync_root.join(path);
                 if let Some(parent) = full_path.parent() {
                     std::fs::create_dir_all(parent).map_err(|e| {
                         crate::Error::Io(std::io::Error::other(format!("{}: {}", path, e)))
@@ -1187,7 +1187,7 @@ fn execute_lww_sync_attempt(
     };
 
     let manifest_json = serde_json::to_string_pretty(&sync_manifest).unwrap_or_default();
-    let full_manifest_path = workspace_path.join(SYNC_MANIFEST_PATH);
+    let full_manifest_path = sync_root.join(SYNC_MANIFEST_PATH);
     if let Some(parent) = full_manifest_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| crate::Error::Io(std::io::Error::other(format!("manifest dir: {}", e))))?;
@@ -1199,7 +1199,7 @@ fn execute_lww_sync_attempt(
     // 上传串行执行（GitHub API 要求 serial PUT 以避免 SHA 冲突），
     // 每个 PUT 需要携带远端文件的当前 SHA（若存在），实现幂等的 create-or-update。
     for path in &to_upload {
-        let full_path = workspace_path.join(path);
+        let full_path = sync_root.join(path);
         if !full_path.exists() {
             continue;
         }
@@ -1239,14 +1239,14 @@ fn execute_lww_sync_attempt(
     )?;
 
     for conflict in &doc_conflicts {
-        let _ = SyncService::record_sync_conflict(workspace_path, conflict.clone(), None);
+        let _ = SyncService::record_sync_conflict(sync_root, conflict.clone(), None);
     }
 
     state.last_sync_time = Some(chrono::Utc::now().timestamp());
     state.last_synced_commit = None;
     state.last_error = None;
 
-    let post_local_entries = scan_workspace_for_sync(workspace_path)?;
+    let post_local_entries = scan_for_sync(sync_root)?;
 
     // ── 同步后重建 known_files ──
     // 同步完成后重新扫描本地文件，用当前文件哈希更新 known_files。
@@ -1287,7 +1287,7 @@ fn execute_lww_sync_attempt(
 
             let matched_rec = merged_manifest_files.get(&entry.relative_path);
             let t = matched_rec.map(|r| r.updated_at_ms).unwrap_or_else(|| {
-                std::fs::metadata(workspace_path.join(&entry.relative_path))
+                std::fs::metadata(sync_root.join(&entry.relative_path))
                     .and_then(|m| m.modified())
                     .and_then(|time| {
                         time.duration_since(std::time::SystemTime::UNIX_EPOCH)
@@ -1318,7 +1318,7 @@ fn execute_lww_sync_attempt(
         .tombstones
         .retain(|t| t.purge_after > chrono::Utc::now().timestamp());
 
-    crate::sync::SyncService::save_sync_state(workspace_path, state)?;
+    crate::sync::SyncService::save_sync_state(sync_root, state)?;
 
     let has_doc_conflicts = !doc_conflicts.is_empty();
     let has_changes = !to_upload.is_empty()

@@ -88,10 +88,12 @@ export interface IWriterCoreBridge {
   listBuiltinThemes(): Promise<ResultEnvelope<BuiltinThemeDto[]>>
 
   // Sync
+  // loadSyncConfig/saveSyncConfig/syncDiagnostics are global (not per-project).
+  // syncDryRun/performSync are per-project: projectId selects the sync root.
   loadSyncConfig(): Promise<ResultEnvelope<SyncConfig>>
   saveSyncConfig(config: SyncConfig): Promise<ResultEnvelope<boolean>>
-  syncDryRun(): Promise<ResultEnvelope<SyncResult>>
-  performSync(): Promise<ResultEnvelope<SyncResult>>
+  syncDryRun(projectId: string): Promise<ResultEnvelope<SyncResult>>
+  performSync(projectId: string): Promise<ResultEnvelope<SyncResult>>
   syncDiagnostics(): Promise<ResultEnvelope<SyncDiagnosticsResult>>
 
   // Stats

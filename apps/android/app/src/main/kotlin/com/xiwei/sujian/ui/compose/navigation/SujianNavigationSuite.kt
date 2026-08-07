@@ -191,6 +191,7 @@ private fun rememberSujianTopBarNavigation(
 /** 顶栏右侧操作 — 顺序由 [SujianChromePolicy] 决定：
  * 作品页依次提供 同步状态、搜索、设置（视觉从右往左为 设置/搜索/同步）；
  * 写作区只保留需要的图标层（同步、设置）。 */
+
 private fun rememberSujianTopBarActions(
     currentRoute: SujianRoute,
     chrome: SujianChromeSpec,
@@ -217,11 +218,7 @@ private fun rememberSujianTopBarActions(
                         )
                     SujianChromeAction.Sync ->
                         SujianIconButton(
-                            onClick = {
-                                env.coroutineScope.launch {
-                                    env.deps.syncCoordinator.runSync(SyncTrigger.Manual)
-                                }
-                            },
+                            onClick = rememberSujianManualSyncOnClick(env),
                             icon =
                                 when (env.syncState) {
                                     SyncIndicatorState.Unconfigured -> SujianIcons.CloudOff
@@ -233,6 +230,18 @@ private fun rememberSujianTopBarActions(
                             semanticId = SujianSemanticIds.NavigationSync,
                         )
                 }
+            }
+        }
+    }
+
+/** #600：手动同步 onClick — 提取为独立函数降低 rememberSujianTopBarActions 认知复杂度。 */
+private fun rememberSujianManualSyncOnClick(env: SujianTopBarEnv): () -> Unit =
+    {
+        env.coroutineScope.launch {
+            // sync 已改为 per-project — 手动同步针对当前活动作品。
+            val pid = com.xiwei.sujian.data.ActiveProjectGate.currentProjectId()
+            if (pid != null) {
+                env.deps.syncCoordinator.runSync(SyncTrigger.Manual, pid)
             }
         }
     }

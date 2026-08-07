@@ -63,30 +63,47 @@ impl super::WriterAppService {
         self.api.perform_sync_diagnostics(config)
     }
 
-    pub fn perform_sync_dry_run(&self, config: SyncConfigDto) -> Result<SyncPlanDto, WriterError> {
+    pub fn perform_sync_dry_run(
+        &self,
+        project_id: String,
+        config: SyncConfigDto,
+    ) -> Result<SyncPlanDto, WriterError> {
         self.refresh_secrets_override();
-        self.api.perform_sync_dry_run(config)
+        self.api.perform_sync_dry_run(&project_id, config)
     }
 
     pub fn perform_sync(
         &self,
+        project_id: String,
         config: SyncConfigDto,
         force_sync: bool,
     ) -> Result<SyncResultDto, WriterError> {
         self.refresh_secrets_override();
-        self.api.perform_sync(config, force_sync)
+        self.api.perform_sync(&project_id, config, force_sync)
     }
 
-    pub fn resolve_conflict_keep_local(&self, path: String) -> Result<bool, WriterError> {
-        self.api.resolve_conflict_keep_local(&path)
+    pub fn resolve_conflict_keep_local(
+        &self,
+        project_id: String,
+        path: String,
+    ) -> Result<bool, WriterError> {
+        self.api.resolve_conflict_keep_local(&project_id, &path)
     }
 
-    pub fn resolve_conflict_take_remote(&self, path: String) -> Result<bool, WriterError> {
-        self.api.resolve_conflict_take_remote(&path)
+    pub fn resolve_conflict_take_remote(
+        &self,
+        project_id: String,
+        path: String,
+    ) -> Result<bool, WriterError> {
+        self.api.resolve_conflict_take_remote(&project_id, &path)
     }
 
-    pub fn resolve_conflict_mark_merged(&self, path: String) -> Result<bool, WriterError> {
-        self.api.resolve_conflict_mark_merged(&path)
+    pub fn resolve_conflict_mark_merged(
+        &self,
+        project_id: String,
+        path: String,
+    ) -> Result<bool, WriterError> {
+        self.api.resolve_conflict_mark_merged(&project_id, &path)
     }
 
     pub fn load_sync_token_from_secure_storage(&self) -> Option<String> {

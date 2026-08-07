@@ -283,12 +283,12 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     return this.syncBridge.saveSyncConfig(config)
   }
 
-  async syncDryRun(): Promise<ResultEnvelope<SyncResult>> {
-    return this.syncBridge.syncDryRun()
+  async syncDryRun(projectId: string): Promise<ResultEnvelope<SyncResult>> {
+    return this.syncBridge.syncDryRun(projectId)
   }
 
-  async performSync(): Promise<ResultEnvelope<SyncResult>> {
-    return this.syncBridge.performSync()
+  async performSync(projectId: string): Promise<ResultEnvelope<SyncResult>> {
+    return this.syncBridge.performSync(projectId)
   }
 
   async syncDiagnostics(): Promise<ResultEnvelope<SyncDiagnosticsResult>> {

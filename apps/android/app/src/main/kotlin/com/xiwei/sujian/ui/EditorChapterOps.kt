@@ -76,7 +76,7 @@ suspend fun EditorViewModel.checkSyncMergedChapter() {
         if (isSyncMergeApplicable(meta.hash, currentHash, content, _uiState.value.content)) {
             val syncState =
                 try {
-                    settingsRepository.loadSyncState()
+                    settingsRepository.loadSyncState(session.projectId)
                 } catch (_: Exception) {
                     null
                 }

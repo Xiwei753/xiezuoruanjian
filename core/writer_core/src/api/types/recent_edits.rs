@@ -17,4 +17,3 @@ impl From<crate::recent_edits::RecentEdit> for RecentEditDto {
         }
     }
 }
-

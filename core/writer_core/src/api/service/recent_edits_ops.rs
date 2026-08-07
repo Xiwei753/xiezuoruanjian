@@ -1,13 +1,6 @@
 use super::*;
 
 impl WriterCoreApi {
-    pub fn list_projects(&self) -> ApiResult<Vec<ProjectDto>> {
-        self.core()
-            .list_projects()
-            .map(|v| v.into_iter().map(Into::into).collect())
-            .map_err(Into::into)
-    }
-
     pub fn get_recent_edits(&self) -> ApiResult<Vec<RecentEditDto>> {
         self.core()
             .get_recent_edits()

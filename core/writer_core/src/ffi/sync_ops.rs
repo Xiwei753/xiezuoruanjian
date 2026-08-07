@@ -80,13 +80,23 @@ pub unsafe extern "C" fn writer_core_save_sync_config(config_json: *const c_char
 }
 
 /// # Safety
+/// `project_id` must be a valid null-terminated UTF-8 C string.
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
-pub unsafe extern "C" fn writer_core_sync_dry_run() -> *mut c_char {
+pub unsafe extern "C" fn writer_core_sync_dry_run(project_id: *const c_char) -> *mut c_char {
+    let pid = match c_str_to_rust(project_id) {
+        Ok(s) => s,
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid project_id: error {}", e),
+            )
+        }
+    };
     match with_core(|core| {
         let config = core.load_sync_config().map_err(|e| format!("{}", e))?;
         let plan = core
-            .perform_sync_dry_run(&config)
+            .perform_sync_dry_run(&pid, &config)
             .map_err(|e| format!("{}", e))?;
         Ok(serde_json::to_value(&plan).unwrap_or_default())
     }) {
@@ -112,13 +122,23 @@ pub unsafe extern "C" fn writer_core_sync_diagnostics() -> *mut c_char {
 }
 
 /// # Safety
+/// `project_id` must be a valid null-terminated UTF-8 C string.
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
-pub unsafe extern "C" fn writer_core_perform_sync() -> *mut c_char {
+pub unsafe extern "C" fn writer_core_perform_sync(project_id: *const c_char) -> *mut c_char {
+    let pid = match c_str_to_rust(project_id) {
+        Ok(s) => s,
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid project_id: error {}", e),
+            )
+        }
+    };
     match with_core(|core| {
         let config = core.load_sync_config().map_err(|e| format!("{}", e))?;
         let result = core
-            .perform_sync(&config, false)
+            .perform_sync(&pid, &config, false)
             .map_err(|e| format!("{}", e))?;
         Ok(serde_json::to_value(&result).unwrap_or_default())
     }) {

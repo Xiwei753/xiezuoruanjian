@@ -337,8 +337,9 @@ mod tests {
         let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
         std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
 
+        let project = core.create_project("Test Project").unwrap();
         let config = core.load_sync_config().unwrap();
-        let plan = core.perform_sync_dry_run(&config).unwrap();
+        let plan = core.perform_sync_dry_run(&project.id, &config).unwrap();
         assert!(plan.files_to_upload.is_empty());
     }
 

@@ -308,8 +308,8 @@ impl crate::sync::SyncService {
         clippy::too_many_arguments,
         clippy::type_complexity
     )]
-    fn remove_conflict_from_json(workspace_path: &Path, path: &str) {
-        let conflicts_path = workspace_path.join("sync/conflicts.json");
+    fn remove_conflict_from_json(sync_root: &Path, path: &str) {
+        let conflicts_path = sync_root.join("sync/conflicts.json");
         if !conflicts_path.exists() {
             return;
         }
@@ -337,12 +337,12 @@ impl crate::sync::SyncService {
     /// 备份文件仅用于用户手动对比，不参与自动合并或同步逻辑。
     /// 写入使用 atomic rename（先写 .tmp 再 rename），避免半写状态。
     pub fn record_sync_conflict(
-        workspace_path: &Path,
+        sync_root: &Path,
         conflict: SyncConflict,
         local_content: Option<&str>,
     ) -> crate::Result<()> {
         if let Some(content) = local_content {
-            let conflict_file_path = workspace_path.join(format!(
+            let conflict_file_path = sync_root.join(format!(
                 "{}.conflict.{}",
                 conflict.local_path, conflict.created_at
             ));
@@ -352,7 +352,7 @@ impl crate::sync::SyncService {
             std::fs::write(&conflict_file_path, content)?;
         }
 
-        let conflicts_path = workspace_path.join("sync/conflicts.json");
+        let conflicts_path = sync_root.join("sync/conflicts.json");
         if let Some(parent) = conflicts_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -388,8 +388,8 @@ impl crate::sync::SyncService {
     /// 导致下次同步下载远端版本覆盖本地——与"保留本地"的意图相反。
     /// 设为 remote_hash 后，三路比较看到 base=remote_hash, local≠base, remote=base
     /// → LocalChanged → 上传本地版本，符合预期。
-    pub fn resolve_conflict_keep_local(workspace_path: &Path, path: &str) -> crate::Result<()> {
-        let mut state = Self::load_sync_state(workspace_path)?;
+    pub fn resolve_conflict_keep_local(sync_root: &Path, path: &str) -> crate::Result<()> {
+        let mut state = Self::load_sync_state(sync_root)?;
         if !state.conflicted_files.remove(path) {
             return Err(crate::Error::Other(format!(
                 "resolve_conflict_keep_local: path '{}' is not in conflicted_files",
@@ -414,7 +414,7 @@ impl crate::sync::SyncService {
             }
         } else {
             // Fallback: if no conflict record, use the current local file hash.
-            let full_path = workspace_path.join(path);
+            let full_path = sync_root.join(path);
             if full_path.exists() {
                 let content = std::fs::read(&full_path)?;
                 let hash = format!("{:x}", md5::compute(&content));
@@ -425,8 +425,8 @@ impl crate::sync::SyncService {
         state
             .conflicts
             .retain(|c| c.local_path != path && c.remote_path != path);
-        Self::remove_conflict_from_json(workspace_path, path);
-        Self::save_sync_state(workspace_path, &state)?;
+        Self::remove_conflict_from_json(sync_root, path);
+        Self::save_sync_state(sync_root, &state)?;
         Ok(())
     }
 
@@ -440,8 +440,8 @@ impl crate::sync::SyncService {
     /// 不变量：不直接下载远端内容（可能在本函数调用时网络不可用），
     /// 而是标记为 pending_take_remote，下次 perform_sync 时在正常三路比较之前
     /// 强制下载。这保证"采用远端"意图不会因网络临时故障而丢失。
-    pub fn resolve_conflict_take_remote(workspace_path: &Path, path: &str) -> crate::Result<()> {
-        let mut state = Self::load_sync_state(workspace_path)?;
+    pub fn resolve_conflict_take_remote(sync_root: &Path, path: &str) -> crate::Result<()> {
+        let mut state = Self::load_sync_state(sync_root)?;
         if !state.conflicted_files.remove(path) {
             return Err(crate::Error::Other(format!(
                 "resolve_conflict_take_remote: path '{}' is not in conflicted_files",
@@ -455,8 +455,8 @@ impl crate::sync::SyncService {
         state
             .conflicts
             .retain(|c| c.local_path != path && c.remote_path != path);
-        Self::remove_conflict_from_json(workspace_path, path);
-        Self::save_sync_state(workspace_path, &state)?;
+        Self::remove_conflict_from_json(sync_root, path);
+        Self::save_sync_state(sync_root, &state)?;
         Ok(())
     }
 
@@ -466,8 +466,8 @@ impl crate::sync::SyncService {
     /// `known_files` to the remote hash so the next sync sees
     /// base=remote_hash, local≠base, remote=base → LocalChanged → uploads
     /// the merged version.
-    pub fn resolve_conflict_mark_merged(workspace_path: &Path, path: &str) -> crate::Result<()> {
-        let mut state = Self::load_sync_state(workspace_path)?;
+    pub fn resolve_conflict_mark_merged(sync_root: &Path, path: &str) -> crate::Result<()> {
+        let mut state = Self::load_sync_state(sync_root)?;
         if !state.conflicted_files.remove(path) {
             return Err(crate::Error::Other(format!(
                 "resolve_conflict_mark_merged: path '{}' is not in conflicted_files",
@@ -490,7 +490,7 @@ impl crate::sync::SyncService {
             }
         } else {
             // Fallback: if no conflict record, use the current local file hash.
-            let full_path = workspace_path.join(path);
+            let full_path = sync_root.join(path);
             if full_path.exists() {
                 let content = std::fs::read(&full_path)?;
                 let hash = format!("{:x}", md5::compute(&content));
@@ -501,8 +501,8 @@ impl crate::sync::SyncService {
         state
             .conflicts
             .retain(|c| c.local_path != path && c.remote_path != path);
-        Self::remove_conflict_from_json(workspace_path, path);
-        Self::save_sync_state(workspace_path, &state)?;
+        Self::remove_conflict_from_json(sync_root, path);
+        Self::save_sync_state(sync_root, &state)?;
         Ok(())
     }
 }

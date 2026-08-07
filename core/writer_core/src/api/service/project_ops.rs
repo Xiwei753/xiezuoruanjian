@@ -1,6 +1,13 @@
 use super::*;
 
 impl WriterCoreApi {
+    pub fn list_projects(&self) -> ApiResult<Vec<ProjectDto>> {
+        self.core()
+            .list_projects()
+            .map(|v| v.into_iter().map(Into::into).collect())
+            .map_err(Into::into)
+    }
+
     pub fn create_project(&self, title: &str) -> ApiResult<ProjectDto> {
         let project: ProjectDto = self
             .core()

@@ -1,46 +1,75 @@
 impl super::WriterCore {
-    pub fn scan_sync_files(&self) -> crate::error::Result<Vec<crate::sync::SyncFileEntry>> {
-        crate::sync::SyncService::scan_workspace_for_sync(&self.projects_root)
+    pub fn scan_sync_files(
+        &self,
+        project_id: &str,
+    ) -> crate::error::Result<Vec<crate::sync::SyncFileEntry>> {
+        crate::sync::SyncService::scan_for_sync(&self.project_root(project_id))
     }
 
-    pub fn build_sync_plan_from_workspace(&self) -> crate::error::Result<crate::sync::SyncPlan> {
-        crate::sync::SyncService::build_sync_plan_from_workspace(&self.projects_root)
+    pub fn build_sync_plan(
+        &self,
+        project_id: &str,
+    ) -> crate::error::Result<crate::sync::SyncPlan> {
+        crate::sync::SyncService::build_sync_plan(&self.project_root(project_id))
     }
 
-    pub fn load_sync_state(&self) -> crate::error::Result<crate::sync::SyncState> {
-        crate::sync::SyncService::load_sync_state(&self.app_data_root)
+    pub fn load_sync_state(
+        &self,
+        project_id: &str,
+    ) -> crate::error::Result<crate::sync::SyncState> {
+        crate::sync::SyncService::load_sync_state(&self.project_root(project_id))
     }
 
-    pub fn save_sync_state(&self, state: &crate::sync::SyncState) -> crate::error::Result<()> {
-        crate::sync::SyncService::save_sync_state(&self.app_data_root, state)
+    pub fn save_sync_state(
+        &self,
+        project_id: &str,
+        state: &crate::sync::SyncState,
+    ) -> crate::error::Result<()> {
+        crate::sync::SyncService::save_sync_state(&self.project_root(project_id), state)
     }
 
     pub fn record_sync_conflict(
         &self,
+        project_id: &str,
         conflict: crate::sync::SyncConflict,
         local_content: Option<&str>,
     ) -> crate::error::Result<()> {
         crate::sync::SyncService::record_sync_conflict(
-            &self.app_data_root,
+            &self.project_root(project_id),
             conflict,
             local_content,
         )
     }
 
-    pub fn resolve_conflict_keep_local(&self, path: &str) -> crate::error::Result<()> {
-        crate::sync::SyncService::resolve_conflict_keep_local(&self.app_data_root, path)
+    pub fn resolve_conflict_keep_local(
+        &self,
+        project_id: &str,
+        path: &str,
+    ) -> crate::error::Result<()> {
+        crate::sync::SyncService::resolve_conflict_keep_local(&self.project_root(project_id), path)
     }
 
-    pub fn resolve_conflict_take_remote(&self, path: &str) -> crate::error::Result<()> {
-        crate::sync::SyncService::resolve_conflict_take_remote(&self.app_data_root, path)
+    pub fn resolve_conflict_take_remote(
+        &self,
+        project_id: &str,
+        path: &str,
+    ) -> crate::error::Result<()> {
+        crate::sync::SyncService::resolve_conflict_take_remote(&self.project_root(project_id), path)
     }
 
-    pub fn resolve_conflict_mark_merged(&self, path: &str) -> crate::error::Result<()> {
-        crate::sync::SyncService::resolve_conflict_mark_merged(&self.app_data_root, path)
+    pub fn resolve_conflict_mark_merged(
+        &self,
+        project_id: &str,
+        path: &str,
+    ) -> crate::error::Result<()> {
+        crate::sync::SyncService::resolve_conflict_mark_merged(&self.project_root(project_id), path)
     }
 
-    pub fn get_sync_ignored_paths(&self) -> crate::error::Result<Vec<String>> {
-        crate::sync::SyncService::get_sync_ignored_paths(&self.app_data_root)
+    pub fn get_sync_ignored_paths(
+        &self,
+        project_id: &str,
+    ) -> crate::error::Result<Vec<String>> {
+        crate::sync::SyncService::get_sync_ignored_paths(&self.project_root(project_id))
     }
 
     pub fn perform_sync_diagnostics(
@@ -67,13 +96,15 @@ impl super::WriterCore {
 
     pub fn perform_sync_dry_run(
         &self,
+        project_id: &str,
         config: &crate::sync::SyncConfig,
     ) -> crate::error::Result<crate::sync::SyncPlan> {
-        crate::sync::SyncService::perform_sync_dry_run(&self.projects_root, config)
+        crate::sync::SyncService::perform_sync_dry_run(&self.project_root(project_id), config)
     }
 
     pub fn perform_sync(
         &self,
+        project_id: &str,
         config: &crate::sync::SyncConfig,
         force_sync: bool,
     ) -> crate::error::Result<crate::sync::SyncResult> {
@@ -92,7 +123,7 @@ impl super::WriterCore {
         } else {
             crate::sync::create_sync_backend(&backend_type)
         };
-        let result = backend.sync(&self.projects_root, config, &secrets, force_sync)?;
+        let result = backend.sync(&self.project_root(project_id), config, &secrets, force_sync)?;
         let mut result = result;
         if matches!(
             result.status,

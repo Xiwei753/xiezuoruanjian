@@ -722,7 +722,8 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     return this.success(result)
   }
 
-  async syncDryRun(): Promise<ResultEnvelope<SyncResult>> {
+  // per-project sync: projectId selects the sync root (mock ignores it).
+  async syncDryRun(projectId: string): Promise<ResultEnvelope<SyncResult>> {
     await this.delay(300)
     const result: SyncResult = {
       status: 'dry-run',
@@ -738,11 +739,11 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     return this.success(result)
   }
 
-  async performSync(): Promise<ResultEnvelope<SyncResult>> {
+  async performSync(projectId: string): Promise<ResultEnvelope<SyncResult>> {
     await this.delay(1000)
     const result: SyncResult = {
       status: 'success',
-      uploadedFiles: ['projects/proj-001/volumes/vol-001/chapters/ch-001.md'] as string[],
+      uploadedFiles: [`projects/${projectId}/volumes/vol-001/chapters/ch-001.md`] as string[],
       downloadedFiles: [] as string[],
       localDeletes: [] as string[],
       remoteDeletes: [] as string[],

@@ -131,7 +131,7 @@ private fun SujianAppInitialization(
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     LaunchedEffect(lifecycleOwner) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-            deps.syncStatusRepository.refreshState()
+            deps.syncStatusRepository.refreshState(vm.currentProjectId)
             vm.refreshProjects()
             vm.refreshRecentEdits()
         }

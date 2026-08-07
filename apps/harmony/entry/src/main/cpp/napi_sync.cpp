@@ -2,7 +2,8 @@
 // Included by napi_init.cpp — expects ReturnJsonString and writer_core_bridge.h to be available.
 // All handlers return ResultEnvelope JSON via ReturnJsonString (which frees the core-allocated char*).
 // NativeSaveSyncConfig takes a SyncConfigDto JSON as its first argument.
-// Other sync handlers take no arguments; core loads config from workspace state.
+// NativeSyncDryRun / NativePerformSync take a project_id string as first argument (per-project sync).
+// NativeLoadSyncConfig / NativeSaveSyncConfig / NativeSyncDiagnostics are global (no project_id).
 
 static napi_value NativeLoadSyncConfig(napi_env env, napi_callback_info info) {
     return ReturnJsonString(env, writer_core_load_sync_config());
@@ -30,7 +31,16 @@ static napi_value NativeSaveSyncConfig(napi_env env, napi_callback_info info) {
 }
 
 static napi_value NativeSyncDryRun(napi_env env, napi_callback_info info) {
-    return ReturnJsonString(env, writer_core_sync_dry_run());
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    char project_id[256] = {0};
+    if (argc >= 1) {
+        napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
+    }
+
+    return ReturnJsonString(env, writer_core_sync_dry_run(project_id));
 }
 
 static napi_value NativeSyncDiagnostics(napi_env env, napi_callback_info info) {
@@ -38,7 +48,16 @@ static napi_value NativeSyncDiagnostics(napi_env env, napi_callback_info info) {
 }
 
 static napi_value NativePerformSync(napi_env env, napi_callback_info info) {
-    return ReturnJsonString(env, writer_core_perform_sync());
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    char project_id[256] = {0};
+    if (argc >= 1) {
+        napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
+    }
+
+    return ReturnJsonString(env, writer_core_perform_sync(project_id));
 }
 
 // ── Sync property descriptors ──

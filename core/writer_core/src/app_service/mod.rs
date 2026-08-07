@@ -262,6 +262,7 @@ impl WriterAppService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn editor_kernel_load_text_rejects_invalid_offset() {
@@ -344,6 +345,53 @@ mod tests {
             result.outcome,
             crate::api::EditorEditOutcomeDto::InvalidOffset
         );
+    }
+
+    #[test]
+    fn test_global_app_service_apis() {
+        let dir = tempdir().unwrap();
+        let path_str = dir.path().to_string_lossy().into_owned();
+        let projects_root = dir.path().join("projects");
+        std::fs::create_dir_all(&projects_root).unwrap();
+
+        let projects = crate::project::list_projects(&projects_root).unwrap();
+        assert_eq!(projects.len(), 0);
+
+        // Manually create a project for the rest of the test
+        crate::project::create_project(&projects_root, "测试作品").unwrap();
+        let projects = crate::project::list_projects(&projects_root).unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].title, "测试作品");
+
+        // open_app_service should succeed and return WriterAppService
+        let projects_root_str = dir.path().join("projects").to_string_lossy().to_string();
+        let service = crate::open_app_service(path_str.clone(), projects_root_str).unwrap();
+        let service_projects = service.list_projects().unwrap();
+        assert_eq!(service_projects.len(), 1);
+    }
+
+    #[test]
+    fn test_create_chapter_in_project() {
+        let dir = tempdir().unwrap();
+        let path_str = dir.path().to_string_lossy().into_owned();
+        let projects_root = dir.path().join("projects");
+        std::fs::create_dir_all(&projects_root).unwrap();
+
+        let project = crate::project::create_project(&projects_root, "测试作品").unwrap();
+
+        let projects_root_str = dir.path().join("projects").to_string_lossy().to_string();
+        let service = crate::open_app_service(path_str.clone(), projects_root_str).unwrap();
+        let chapter = service
+            .create_chapter_in_project(project.id.clone(), "新章：起锚".to_string())
+            .unwrap();
+        assert_eq!(chapter.title, "新章：起锚");
+
+        let volumes = service.list_volumes(project.id.clone()).unwrap();
+        let chapters = service
+            .list_chapters(project.id.clone(), volumes[0].id.clone())
+            .unwrap();
+        assert_eq!(chapters.len(), 1);
+        assert_eq!(chapters[0].title, "新章：起锚");
     }
 
     #[test]

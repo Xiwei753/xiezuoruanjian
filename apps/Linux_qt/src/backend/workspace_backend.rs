@@ -288,7 +288,7 @@ impl AppBackend {
 
     // AppBackend::has_workspace
     pub(crate) fn has_workspace(&self) -> bool {
-        self.current_has_workspace
+        self.current_has_data_root
     }
 
     // AppBackend::pending_github_init_path
@@ -308,7 +308,7 @@ impl AppBackend {
             "last_workspace_path removed; waiting for user selection",
         );
         // No saved data root to restore
-        self.current_has_workspace = false;
+        self.current_has_data_root = false;
         self.current_sync_status = "no_workspace".to_string();
         self.sync_status_changed();
         self.workspace_state_changed();
@@ -345,7 +345,7 @@ impl AppBackend {
 
         self.current_data_root = path.to_string();
         self.current_projects_root = projects_root_str.clone();
-        self.current_has_workspace = true;
+        self.current_has_data_root = true;
         self.current_save_status = "已保存".to_string();
         self.save_status_changed();
         self.reload_tree();
@@ -401,7 +401,7 @@ impl AppBackend {
         // Clear data root state
         self.current_data_root = "".to_string();
         self.current_projects_root = "".to_string();
-        self.current_has_workspace = false;
+        self.current_has_data_root = false;
         // Clear selection state
         self.selected_project_id = None;
         self.selected_volume_id = None;

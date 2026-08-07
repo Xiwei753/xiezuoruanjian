@@ -167,8 +167,8 @@ class SettingsRepository(
         return saveSyncableSettings(syncable.copy(fontSize = fontSize.toDouble()))
     }
 
-    fun loadSyncState(): SyncState {
-        return when (val result = syncBridge.loadSyncState()) {
+    fun loadSyncState(projectId: String): SyncState {
+        return when (val result = syncBridge.loadSyncState(projectId)) {
             is BridgeResult.Success -> result.data
             is BridgeResult.Error -> {
                 warn("Failed to load sync state: ${result.fullEnvelope}")
@@ -609,15 +609,19 @@ class SettingsRepository(
         return syncBridge.performSyncDiagnostics(config)
     }
 
-    fun performSyncDryRun(config: SyncConfig): BridgeResult<SyncPlan> {
-        return syncBridge.performSyncDryRun(config)
+    fun performSyncDryRun(
+        projectId: String,
+        config: SyncConfig,
+    ): BridgeResult<SyncPlan> {
+        return syncBridge.performSyncDryRun(projectId, config)
     }
 
     fun performSync(
+        projectId: String,
         config: SyncConfig,
         forceSync: Boolean = false,
     ): BridgeResult<SyncResult> {
-        return syncBridge.performSync(config, forceSync)
+        return syncBridge.performSync(projectId, config, forceSync)
     }
 
     fun getSyncCapability(): SyncCapabilityData {
@@ -797,8 +801,11 @@ class SettingsRepository(
      * UI 层安全的试运行方法 — 返回 [SyncDryRunOutcome] 而非 BridgeResult。
      * UI 层不应直接引用 BridgeResult（架构分层规则）。
      */
-    fun performSyncDryRunTyped(config: SyncConfig): SyncDryRunOutcome {
-        return when (val result = performSyncDryRun(config)) {
+    fun performSyncDryRunTyped(
+        projectId: String,
+        config: SyncConfig,
+    ): SyncDryRunOutcome {
+        return when (val result = performSyncDryRun(projectId, config)) {
             is BridgeResult.Success -> SyncDryRunOutcome.Success(result.data)
             is BridgeResult.Error ->
                 SyncDryRunOutcome.Error(

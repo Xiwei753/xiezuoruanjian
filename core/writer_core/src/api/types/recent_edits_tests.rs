@@ -1,4 +1,4 @@
-use super::workspace::*;
+use super::recent_edits::*;
 use crate::recent_edits::RecentEdit;
 use serde_json::json;
 

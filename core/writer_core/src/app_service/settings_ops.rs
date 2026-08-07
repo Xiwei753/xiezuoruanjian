@@ -39,8 +39,8 @@ impl super::WriterAppService {
         self.api.save_sync_secrets(secrets)
     }
 
-    pub fn load_sync_state(&self) -> Result<SyncStateDto, WriterError> {
-        self.api.load_sync_state()
+    pub fn load_sync_state(&self, project_id: String) -> Result<SyncStateDto, WriterError> {
+        self.api.load_sync_state(&project_id)
     }
 
     pub fn get_sync_capability(&self) -> Result<SyncCapabilityDto, WriterError> {

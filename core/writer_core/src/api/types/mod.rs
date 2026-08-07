@@ -16,7 +16,7 @@ mod starmap;
 mod stats;
 mod sync;
 mod volume;
-mod workspace;
+mod recent_edits;
 
 #[cfg(test)]
 mod action_tests;
@@ -27,7 +27,7 @@ mod stats_tests;
 #[cfg(test)]
 mod volume_tests;
 #[cfg(test)]
-mod workspace_tests;
+mod recent_edits_tests;
 
 pub use action::*;
 pub use editor::*;
@@ -40,4 +40,4 @@ pub use starmap::*;
 pub use stats::*;
 pub use sync::*;
 pub use volume::*;
-pub use workspace::*;
+pub use recent_edits::*;

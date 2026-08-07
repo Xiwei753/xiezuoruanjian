@@ -83,9 +83,10 @@ impl WriterCoreApi {
     }
 
     /// 加载同步状态（上次同步时间、远端 commit 等）。
-    pub fn load_sync_state(&self) -> ApiResult<SyncStateDto> {
+    /// sync state 存储在 project_root/sync/ 下，每个作品独立维护同步状态。
+    pub fn load_sync_state(&self, project_id: &str) -> ApiResult<SyncStateDto> {
         self.core()
-            .load_sync_state()
+            .load_sync_state(project_id)
             .map(Into::into)
             .map_err(Into::into)
     }
@@ -102,45 +103,55 @@ impl WriterCoreApi {
     }
 
     /// 干运行——计算同步计划但不实际执行文件传输。
-    pub fn perform_sync_dry_run(&self, config: SyncConfigDto) -> ApiResult<SyncPlanDto> {
+    /// 每个作品目录是独立的 Git 仓库，sync 针对单个作品执行。
+    pub fn perform_sync_dry_run(
+        &self,
+        project_id: &str,
+        config: SyncConfigDto,
+    ) -> ApiResult<SyncPlanDto> {
         self.core()
-            .perform_sync_dry_run(&config.into())
+            .perform_sync_dry_run(project_id, &config.into())
             .map(Into::into)
             .map_err(Into::into)
     }
 
     /// 执行同步。`force_sync=true` 跳过部分安全检查（如脏仓库保护）。
+    /// 每个作品目录是独立的 Git 仓库，sync 针对单个作品执行。
     pub fn perform_sync(
         &self,
+        project_id: &str,
         config: SyncConfigDto,
         force_sync: bool,
     ) -> ApiResult<SyncResultDto> {
         self.core()
-            .perform_sync(&config.into(), force_sync)
+            .perform_sync(project_id, &config.into(), force_sync)
             .map(Into::into)
             .map_err(Into::into)
     }
 
     /// 冲突解决：保留本地版本，丢弃远端变更。
-    pub fn resolve_conflict_keep_local(&self, path: &str) -> ApiResult<bool> {
+    /// 冲突状态存储在 project_root/sync/ 下，需指定作品。
+    pub fn resolve_conflict_keep_local(&self, project_id: &str, path: &str) -> ApiResult<bool> {
         self.core()
-            .resolve_conflict_keep_local(path)
+            .resolve_conflict_keep_local(project_id, path)
             .map(|_| true)
             .map_err(Into::into)
     }
 
     /// 冲突解决：采用远端版本，覆盖本地。
-    pub fn resolve_conflict_take_remote(&self, path: &str) -> ApiResult<bool> {
+    /// 冲突状态存储在 project_root/sync/ 下，需指定作品。
+    pub fn resolve_conflict_take_remote(&self, project_id: &str, path: &str) -> ApiResult<bool> {
         self.core()
-            .resolve_conflict_take_remote(path)
+            .resolve_conflict_take_remote(project_id, path)
             .map(|_| true)
             .map_err(Into::into)
     }
 
     /// 冲突解决：标记为已合并（用户已手动处理）。
-    pub fn resolve_conflict_mark_merged(&self, path: &str) -> ApiResult<bool> {
+    /// 冲突状态存储在 project_root/sync/ 下，需指定作品。
+    pub fn resolve_conflict_mark_merged(&self, project_id: &str, path: &str) -> ApiResult<bool> {
         self.core()
-            .resolve_conflict_mark_merged(path)
+            .resolve_conflict_mark_merged(project_id, path)
             .map(|_| true)
             .map_err(Into::into)
     }

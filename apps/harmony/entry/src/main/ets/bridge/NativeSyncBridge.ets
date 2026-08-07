@@ -22,16 +22,17 @@ export class NativeSyncBridge {
     } catch (e) { return nativeError<boolean>(e) }
   }
 
-  async syncDryRun(): Promise<ResultEnvelope<SyncResult>> {
+  // per-project: project_id selects the sync root.
+  async syncDryRun(projectId: string): Promise<ResultEnvelope<SyncResult>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeSyncDryRun()
+      const jsonStr: string = this.core.getNativeModule().nativeSyncDryRun(projectId)
       return this.core.parseEnvelope<SyncResult>(jsonStr)
     } catch (e) { return nativeError<SyncResult>(e) }
   }
 
-  async performSync(): Promise<ResultEnvelope<SyncResult>> {
+  async performSync(projectId: string): Promise<ResultEnvelope<SyncResult>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativePerformSync()
+      const jsonStr: string = this.core.getNativeModule().nativePerformSync(projectId)
       return this.core.parseEnvelope<SyncResult>(jsonStr)
     } catch (e) { return nativeError<SyncResult>(e) }
   }

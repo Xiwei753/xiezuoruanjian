@@ -118,6 +118,8 @@ class SujianAppViewModel(
         projectUseCase = projectUC
         settingsRepository = settingsRepo
         appContext = context.applicationContext
+        // #600：从 SavedState 恢复当前作品 id 到进程级 gate（进程重启后同步层仍能读到）。
+        com.xiwei.sujian.data.ActiveProjectGate.setCurrentProjectId(currentProjectId)
         refreshProjects()
         refreshRecentEdits()
     }
@@ -130,12 +132,14 @@ class SujianAppViewModel(
         currentProjectTitle = projectTitle
         savedStateHandle["currentProjectId"] = projectId
         savedStateHandle["currentProjectTitle"] = projectTitle
+        com.xiwei.sujian.data.ActiveProjectGate.setCurrentProjectId(projectId)
         com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceSelection("project", projectId)
     }
 
     fun selectProject(projectId: String) {
         currentProjectId = projectId
         savedStateHandle["currentProjectId"] = projectId
+        com.xiwei.sujian.data.ActiveProjectGate.setCurrentProjectId(projectId)
         com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceSelection("project", projectId)
         val cachedProject = projects.find { it.id == projectId }
         if (cachedProject != null) {
@@ -215,6 +219,7 @@ class SujianAppViewModel(
         savedStateHandle.remove<String>("currentVolumeId")
         savedStateHandle.remove<String>("currentChapterId")
         savedStateHandle["currentChapterTitle"] = ""
+        com.xiwei.sujian.data.ActiveProjectGate.setCurrentProjectId(null)
         com.xiwei.sujian.diagnostics.DiagnosticsEvents.workspaceClear("project")
     }
 

@@ -23,6 +23,11 @@ interface SettingsSelectOption {
   icon: string
 }
 
+interface SettingsPageParams {
+  // per-project sync: projectId selects the sync root. Empty = no project selected.
+  projectId?: string
+}
+
 @Entry
 @Component
 struct SettingsPage {
@@ -59,6 +64,7 @@ struct SettingsPage {
   @State syncMessage: string = ''
   @State syncDiagnostics: SyncDiagnosticsResult | null = null
   @State isDiagnosing: boolean = false
+  @State projectId: string = ''
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
   @State adaptiveState: AdaptiveState = getAdaptiveState()
 
@@ -69,6 +75,11 @@ struct SettingsPage {
 
   aboutToAppear() {
     const self = this
+    // 读取路由参数中的 projectId（per-project sync）
+    const params = router.getParams() as SettingsPageParams
+    if (params && params.projectId) {
+      this.projectId = params.projectId
+    }
     this.themeObserver = new ThemeObserverImpl((theme: ThemeConfig) => {
       self.themeConfig = theme
     })
@@ -179,11 +190,15 @@ struct SettingsPage {
   }
 
   async performSync() {
+    if (!this.projectId || this.projectId.length === 0) {
+      this.syncMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_sync_no_project').id)
+      return
+    }
     this.isSyncing = true
     this.syncMessage = ''
 
     try {
-      const result = await this.bridge.performSync()
+      const result = await this.bridge.performSync(this.projectId)
       if (result.success && result.data) {
         const syncResult = result.data
         if (syncResult.status === 'Conflict' || syncResult.status === 'PartialConflict') {
@@ -750,13 +765,13 @@ struct SettingsPage {
         .width('100%')
         .margin({ bottom: 16 })
 
-        // Sync actions
+        // Sync actions (per-project: disabled when no projectId selected)
         Row() {
           Button($r('app.string.sync_section'))
             .fontSize(14)
             .height(36)
             .backgroundColor(this.themeConfig.colors.primary)
-            .enabled(!this.isSyncing)
+            .enabled(!this.isSyncing && this.projectId.length > 0)
             .onClick(() => this.performSync())
 
           Button($r('app.string.diagnose'))

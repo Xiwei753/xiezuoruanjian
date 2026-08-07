@@ -173,13 +173,13 @@ impl SyncService {
 impl SyncService {
     /// 干运行——构建同步计划但不执行文件传输。config.enabled=false 时返回空计划。
     pub fn perform_sync_dry_run(
-        workspace_path: &Path,
+        sync_root: &Path,
         config: &SyncConfig,
     ) -> crate::Result<SyncPlan> {
         if !config.enabled {
             return Ok(SyncPlan::new());
         }
-        scanner::build_sync_plan_from_workspace(workspace_path)
+        scanner::build_sync_plan(sync_root)
     }
 }
 
@@ -189,13 +189,13 @@ impl SyncService {
     /// `force_sync=true` 跳过脏仓库保护等安全检查。
     /// `transport` 提供平台 HTTP 客户端实现，Core 不直接依赖 reqwest。
     pub fn perform_lww_sync(
-        workspace_path: &Path,
+        sync_root: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
         force_sync: bool,
         transport: &dyn writer_platform_api::SyncTransport,
     ) -> crate::Result<SyncResult> {
-        lww::perform_lww_sync(workspace_path, config, secrets, force_sync, transport)
+        lww::perform_lww_sync(sync_root, config, secrets, force_sync, transport)
     }
 }
 
@@ -213,7 +213,7 @@ enum PullOutcome {
 #[cfg(feature = "git-https")]
 fn handle_pull_error(
     e: crate::Error,
-    workspace_path: &Path,
+    sync_root: &Path,
     result: &SyncResult,
     first_sync_mode: FirstSyncMode,
 ) -> PullOutcome {
@@ -255,7 +255,7 @@ fn handle_pull_error(
             PullOutcome::Return(res)
         }
         crate::Error::SyncConflictDetected => {
-            handle_merge_conflict(workspace_path, result, first_sync_mode)
+            handle_merge_conflict(sync_root, result, first_sync_mode)
         }
         crate::Error::SyncUnrelatedHistories { .. } => PullOutcome::Return(SyncResult::error(
             classify_error(&e),
@@ -294,7 +294,7 @@ fn handle_pull_error(
     clippy::type_complexity
 )]
 fn handle_merge_conflict(
-    workspace_path: &Path,
+    sync_root: &Path,
     result: &SyncResult,
     _first_sync_mode: FirstSyncMode,
 ) -> PullOutcome {
@@ -302,7 +302,7 @@ fn handle_merge_conflict(
     result.status = SyncStatus::Conflict;
     result.error = Some("Sync Conflict: automatic merge failed".to_string());
 
-    let repo = match git2::Repository::open(workspace_path) {
+    let repo = match git2::Repository::open(sync_root) {
         Ok(r) => r,
         Err(e) => {
             let err = crate::Error::Io(std::io::Error::other(e.to_string()));
@@ -390,7 +390,7 @@ fn handle_merge_conflict(
                 && SyncService::is_whitelisted_path(&sync_conflict.local_path)
             {
                 if let Err(e) = SyncService::record_sync_conflict(
-                    workspace_path,
+                    sync_root,
                     sync_conflict.clone(),
                     local_content.as_deref(),
                 ) {
@@ -467,7 +467,7 @@ impl SyncService {
         clippy::type_complexity
     )]
     pub fn perform_sync(
-        workspace_path: &Path,
+        sync_root: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
         backend: &dyn GitBackend,
@@ -530,9 +530,9 @@ impl SyncService {
             }
         };
 
-        let has_repo = backend.has_repo(workspace_path);
+        let has_repo = backend.has_repo(sync_root);
         if !has_repo {
-            let is_empty_or_git_only = match backend.is_worktree_empty_or_git_only(workspace_path) {
+            let is_empty_or_git_only = match backend.is_worktree_empty_or_git_only(sync_root) {
                 Ok(val) => val,
                 Err(e) => {
                     return Ok(SyncResult::error(
@@ -547,7 +547,7 @@ impl SyncService {
             if is_empty_or_git_only {
                 result.first_sync_mode = FirstSyncMode::CloneIntoEmptyWorkspace;
                 if let Err(e) = backend
-                    .clone_repo(&sanitized_url, workspace_path, auth.as_ref())
+                    .clone_repo(&sanitized_url, sync_root, auth.as_ref())
                     .map_err(map_git_error)
                 {
                     return Ok(SyncResult::error(
@@ -559,12 +559,12 @@ impl SyncService {
                 }
             } else {
                 result.first_sync_mode = FirstSyncMode::InitExistingWorkspace;
-                if let Err(e) = backend.init_repo(workspace_path) {
+                if let Err(e) = backend.init_repo(sync_root) {
                     result.status = SyncStatus::Error(e.to_string());
                     result.error = Some(e.to_string());
                     return Ok(result);
                 }
-                if let Err(e) = backend.ensure_remote(workspace_path, &sanitized_url) {
+                if let Err(e) = backend.ensure_remote(sync_root, &sanitized_url) {
                     result.status = SyncStatus::Error(e.to_string());
                     result.error = Some(e.to_string());
                     return Ok(result);
@@ -572,12 +572,12 @@ impl SyncService {
             }
         } else {
             result.first_sync_mode = FirstSyncMode::AlreadyGitRepo;
-            if let Err(e) = backend.open_repo(workspace_path) {
+            if let Err(e) = backend.open_repo(sync_root) {
                 result.status = SyncStatus::Error(e.to_string());
                 result.error = Some(e.to_string());
                 return Ok(result);
             }
-            if let Err(e) = backend.ensure_remote(workspace_path, &sanitized_url) {
+            if let Err(e) = backend.ensure_remote(sync_root, &sanitized_url) {
                 result.status = SyncStatus::Error(e.to_string());
                 result.error = Some(e.to_string());
                 return Ok(result);
@@ -585,7 +585,7 @@ impl SyncService {
         }
 
         let mut branch_recovered = false;
-        if let Ok(repo) = git2::Repository::open(workspace_path) {
+        if let Ok(repo) = git2::Repository::open(sync_root) {
             let branch_ref_name = format!("refs/heads/{}", config.branch);
             let branch_exists = repo.find_reference(&branch_ref_name).is_ok();
             let head_commit = repo.head().ok().and_then(|r| r.peel_to_commit().ok());
@@ -603,7 +603,7 @@ impl SyncService {
             }
         }
 
-        if let Ok(status_list) = backend.status(workspace_path) {
+        if let Ok(status_list) = backend.status(sync_root) {
             let mut dirty_non_whitelisted = Vec::new();
             for p in &status_list {
                 if !SyncService::is_blacklisted_path(p) && !SyncService::is_whitelisted_path(p) {
@@ -620,7 +620,7 @@ impl SyncService {
             }
         }
 
-        if let Ok(status_list) = backend.status(workspace_path) {
+        if let Ok(status_list) = backend.status(sync_root) {
             let mut paths_to_stage = Vec::new();
             for p in &status_list {
                 if SyncService::is_whitelisted_path(p) && !SyncService::is_blacklisted_path(p) {
@@ -628,7 +628,7 @@ impl SyncService {
                 }
             }
             if !paths_to_stage.is_empty() {
-                if let Err(e) = backend.stage_paths(workspace_path, &paths_to_stage) {
+                if let Err(e) = backend.stage_paths(sync_root, &paths_to_stage) {
                     return Ok(SyncResult::error(
                         classify_error(&e),
                         result.first_sync_mode,
@@ -636,7 +636,7 @@ impl SyncService {
                         None,
                     ));
                 }
-                if let Err(e) = backend.commit(workspace_path, "Auto sync local changes") {
+                if let Err(e) = backend.commit(sync_root, "Auto sync local changes") {
                     return Ok(SyncResult::error(
                         classify_error(&e),
                         result.first_sync_mode,
@@ -648,11 +648,11 @@ impl SyncService {
         }
 
         let pull_failed = backend
-            .pull(workspace_path, &config.branch, auth.as_ref())
+            .pull(sync_root, &config.branch, auth.as_ref())
             .map_err(map_git_error)
             .err();
         if let Some(e) = pull_failed {
-            match handle_pull_error(e, workspace_path, &result, result.first_sync_mode.clone()) {
+            match handle_pull_error(e, sync_root, &result, result.first_sync_mode.clone()) {
                 PullOutcome::Continue => {}
                 PullOutcome::Return(res) => return Ok(res),
             }
@@ -661,14 +661,14 @@ impl SyncService {
         // ── Process pending_take_remote ──
         // For each path in pending_take_remote, force-checkout the file from the
         // remote branch so the local file matches the remote version.
-        let mut state_for_pending = Self::load_sync_state(workspace_path).unwrap_or_default();
+        let mut state_for_pending = Self::load_sync_state(sync_root).unwrap_or_default();
         if !state_for_pending.pending_take_remote.is_empty() {
             log::debug!(
                 "[sync] processing pending_take_remote count={}",
                 state_for_pending.pending_take_remote.len()
             );
             let mut succeeded: std::collections::HashSet<String> = std::collections::HashSet::new();
-            if let Ok(repo) = git2::Repository::open(workspace_path) {
+            if let Ok(repo) = git2::Repository::open(sync_root) {
                 let remote_branch_ref = format!("refs/remotes/origin/{}", config.branch);
                 if let Ok(remote_commit) = repo
                     .find_reference(&remote_branch_ref)
@@ -679,7 +679,7 @@ impl SyncService {
                         if let Ok(ref tree) = remote_tree {
                             if let Ok(entry) = tree.get_path(std::path::Path::new(path)) {
                                 if let Ok(blob) = repo.find_blob(entry.id()) {
-                                    let full_path = workspace_path.join(path);
+                                    let full_path = sync_root.join(path);
                                     if let Some(parent) = full_path.parent() {
                                         let _ = std::fs::create_dir_all(parent);
                                     }
@@ -740,10 +740,10 @@ impl SyncService {
             state_for_pending
                 .pending_take_remote
                 .retain(|p| !succeeded.contains(p));
-            let _ = Self::save_sync_state(workspace_path, &state_for_pending);
+            let _ = Self::save_sync_state(sync_root, &state_for_pending);
         }
 
-        let plan = match scanner::build_sync_plan_from_workspace(workspace_path) {
+        let plan = match scanner::build_sync_plan(sync_root) {
             Ok(p) => p,
             Err(e) => {
                 return Ok(SyncResult::error(
@@ -759,7 +759,7 @@ impl SyncService {
 
         let paths_to_stage: Vec<&str> = plan.files_to_upload.iter().map(|s| s.as_str()).collect();
         if !paths_to_stage.is_empty() {
-            if let Err(e) = backend.stage_paths(workspace_path, &paths_to_stage) {
+            if let Err(e) = backend.stage_paths(sync_root, &paths_to_stage) {
                 return Ok(SyncResult::error(
                     classify_error(&e),
                     result.first_sync_mode,
@@ -769,7 +769,7 @@ impl SyncService {
             }
         }
 
-        let changed_files = backend.status(workspace_path).unwrap_or_default();
+        let changed_files = backend.status(sync_root).unwrap_or_default();
         let mut actual_staged = Vec::new();
         for file in changed_files {
             if paths_to_stage.contains(&file.as_str()) {
@@ -778,7 +778,7 @@ impl SyncService {
         }
 
         if !actual_staged.is_empty() {
-            match backend.commit(workspace_path, "Auto sync") {
+            match backend.commit(sync_root, "Auto sync") {
                 Ok(Some(hash)) => {
                     result.commit_hash = Some(hash.clone());
                     result.uploaded_files = actual_staged;
@@ -795,7 +795,7 @@ impl SyncService {
             }
 
             if let Err(e) = backend
-                .push(workspace_path, &config.branch, auth.as_ref())
+                .push(sync_root, &config.branch, auth.as_ref())
                 .map_err(map_git_error)
             {
                 return Ok(SyncResult::error(
@@ -807,7 +807,7 @@ impl SyncService {
             }
         }
 
-        let mut state = Self::load_sync_state(workspace_path).unwrap_or_default();
+        let mut state = Self::load_sync_state(sync_root).unwrap_or_default();
         state.remote_url = Some(config.remote_url.clone());
         state.transport = Some(config.transport.clone());
         state.last_sync_time = Some({
@@ -823,7 +823,7 @@ impl SyncService {
         }
         state.last_error = result.error.clone();
 
-        if let Err(e) = Self::save_sync_state(workspace_path, &state) {
+        if let Err(e) = Self::save_sync_state(sync_root, &state) {
             result.status = classify_error(&e);
             result.error = Some(format!("Failed to save sync state: {}", e));
             return Ok(result);
@@ -847,15 +847,15 @@ impl SyncService {
     }
 
     /// 扫描工作区中所有可同步文件。
-    pub fn scan_workspace_for_sync(
-        workspace_path: &Path,
+    pub fn scan_for_sync(
+        sync_root: &Path,
     ) -> crate::Result<Vec<crate::sync::types::SyncFileEntry>> {
-        scanner::scan_workspace_for_sync(workspace_path)
+        scanner::scan_for_sync(sync_root)
     }
 
     /// 从工作区构建同步计划（上传/下载/删除/冲突文件列表）。
-    pub fn build_sync_plan_from_workspace(workspace_path: &Path) -> crate::Result<SyncPlan> {
-        scanner::build_sync_plan_from_workspace(workspace_path)
+    pub fn build_sync_plan(sync_root: &Path) -> crate::Result<SyncPlan> {
+        scanner::build_sync_plan(sync_root)
     }
 
     /// 占位同步方法——当前返回 NotImplemented，实际同步通过 perform_lww_sync 执行。

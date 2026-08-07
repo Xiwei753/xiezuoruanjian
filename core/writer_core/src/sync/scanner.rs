@@ -24,17 +24,17 @@ use std::path::Path;
 ///
 /// `.git/` 目录被排除。`modified_time` 使用 Unix epoch 秒；
 /// 文件 hash 为空字符串表示计算失败（扫描不因单个文件失败而中断）。
-pub(crate) fn scan_workspace_for_sync(workspace_path: &Path) -> crate::Result<Vec<SyncFileEntry>> {
+pub(crate) fn scan_for_sync(sync_root: &Path) -> crate::Result<Vec<SyncFileEntry>> {
     let mut entries = Vec::new();
 
-    for entry in walkdir::WalkDir::new(workspace_path)
+    for entry in walkdir::WalkDir::new(sync_root)
         .into_iter()
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file())
     {
         let absolute_path = entry.path().to_path_buf();
 
-        let rel_path = match absolute_path.strip_prefix(workspace_path) {
+        let rel_path = match absolute_path.strip_prefix(sync_root) {
             Ok(p) => p.to_string_lossy().replace("\\", "/"),
             Err(_) => continue,
         };
@@ -85,11 +85,11 @@ pub(crate) fn scan_workspace_for_sync(workspace_path: &Path) -> crate::Result<Ve
     clippy::too_many_arguments,
     clippy::type_complexity
 )]
-pub(crate) fn build_sync_plan_from_workspace(workspace_path: &Path) -> crate::Result<SyncPlan> {
+pub(crate) fn build_sync_plan(sync_root: &Path) -> crate::Result<SyncPlan> {
     let mut plan = SyncPlan::new();
 
-    let entries = scan_workspace_for_sync(workspace_path)?;
-    let state = SyncService::load_sync_state(workspace_path).unwrap_or_default();
+    let entries = scan_for_sync(sync_root)?;
+    let state = SyncService::load_sync_state(sync_root).unwrap_or_default();
     let is_first_sync = state.known_files.is_empty();
 
     let mut local_files = std::collections::HashSet::new();

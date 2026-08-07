@@ -187,7 +187,19 @@ suspend fun SettingsViewModel.executeSyncTransaction(command: SettingsTransactio
                 }
             }
         },
-    ) { _, _ -> syncCoordinator.runSync(command.trigger).toIoResult() }
+    ) { _, _ ->
+        // #600：sync 已改为 per-project — 设置页同步针对当前活动作品。
+        val projectId = com.xiwei.sujian.data.ActiveProjectGate.currentProjectId()
+        if (projectId != null) {
+            syncCoordinator.runSync(command.trigger, projectId).toIoResult()
+        } else {
+            SyncCommandIoResult(
+                true,
+                true,
+                StructuredSyncResult(statusCode = SYNC_STATUS_ERROR, messageKey = "sync_no_active_project"),
+            )
+        }
+    }
 }
 
 suspend fun SettingsViewModel.executeDryRunTransaction(command: SettingsTransactionCommand.SaveAndRunDryRun) {
@@ -217,9 +229,19 @@ suspend fun SettingsViewModel.executeDryRunTransaction(command: SettingsTransact
             }
         },
     ) { config, secrets ->
-        runExclusiveSyncIo(config, secrets) {
-            settingsRepo.performSyncDryRunTyped(it).toIoResult()
-        }.toIoResult()
+        // #600：sync 已改为 per-project — 试运行针对当前活动作品。
+        val projectId = com.xiwei.sujian.data.ActiveProjectGate.currentProjectId()
+        if (projectId != null) {
+            runExclusiveSyncIo(config, secrets) {
+                settingsRepo.performSyncDryRunTyped(projectId, it).toIoResult()
+            }.toIoResult()
+        } else {
+            SyncCommandIoResult(
+                true,
+                true,
+                StructuredSyncResult(statusCode = SYNC_STATUS_ERROR, messageKey = "sync_no_active_project"),
+            )
+        }
     }
 }
 

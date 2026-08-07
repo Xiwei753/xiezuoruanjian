@@ -58,7 +58,7 @@ pub fn move_chapter_to_trash(projects_root: &Path, chapter_id: &str, app_data_ro
 /// 遍历 trash 目录下所有文件，为每个文件生成一条 `Tombstone`：
 /// - `original_path`：文件在工作区中的原始相对路径（正斜杠，Git/远端约定）
 /// - `trash_path`：文件在 trash 目录中的相对路径
-/// - `purge_after`：30 天后可清理（`scanner::build_sync_plan_from_workspace` 据此清理）
+/// - `purge_after`：30 天后可清理（`scanner::build_sync_plan` 据此清理）
 /// - `original_hash`：从 `known_files` 中查找，缺失则为空字符串
 pub(crate) fn generate_tombstones(
     state: &mut crate::sync::SyncState,

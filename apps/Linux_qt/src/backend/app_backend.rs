@@ -291,7 +291,7 @@ pub struct AppBackend {
 
     current_data_root: String,
     current_projects_root: String,
-    current_has_workspace: bool,
+    current_has_data_root: bool,
     current_save_status: String,
     current_word_count: i32,
     current_error_message: String,
@@ -450,13 +450,13 @@ impl AppBackend {
         s.setting_typing_animation_duration_ms = self.current_setting_typing_animation_duration_ms;
         s.setting_coordinated_text_cursor_animation_enabled =
             self.current_setting_coordinated_text_cursor_animation_enabled;
-        s.has_workspace = self.current_has_workspace;
+        s.has_workspace = self.current_has_data_root;
         s.sync_enabled = self.current_sync_enabled;
         s.sync_auto_sync = self.current_sync_auto_sync;
         s.sync_interval = self.current_sync_interval;
         s.has_sync_token = !self.current_sync_token.is_empty();
         s.sync_in_progress = self.current_sync_in_progress;
-        s.sync_can_run = self.current_has_workspace
+        s.sync_can_run = self.current_has_data_root
             && self.current_sync_enabled
             && !self.current_sync_in_progress;
         s.ai_available = cfg!(feature = "ai");
@@ -489,7 +489,7 @@ impl AppBackend {
     }
 
     pub(crate) fn core_api(&self) -> Option<WriterCoreApi> {
-        if self.current_has_workspace && !self.current_data_root.is_empty() {
+        if self.current_has_data_root && !self.current_data_root.is_empty() {
             Some(create_core_api(
                 &self.current_data_root,
                 &self.current_projects_root,
@@ -521,7 +521,7 @@ impl AppBackend {
             _ => DebugLevel::Info,
         };
         if debug_level_enabled(&m, lvl_enum) {
-            let ws_exists = self.current_has_workspace;
+            let ws_exists = self.current_has_data_root;
             let proj = self.selected_project_id.as_deref().unwrap_or("none");
             let vol = self.selected_volume_id.as_deref().unwrap_or("none");
             let chap = self.selected_chapter_id.as_deref().unwrap_or("none");
@@ -552,7 +552,7 @@ impl AppBackend {
 
     fn debug_log(&self, module: &str, event: &str, message: &str) {
         if debug_level_enabled(module, DebugLevel::Info) {
-            let ws_exists = self.current_has_workspace;
+            let ws_exists = self.current_has_data_root;
             let proj = self.selected_project_id.as_deref().unwrap_or("none");
             let vol = self.selected_volume_id.as_deref().unwrap_or("none");
             let chap = self.selected_chapter_id.as_deref().unwrap_or("none");
@@ -567,7 +567,7 @@ impl AppBackend {
 
     fn debug_warn(&self, module: &str, event: &str, message: &str) {
         if debug_level_enabled(module, DebugLevel::Warn) {
-            let ws_exists = self.current_has_workspace;
+            let ws_exists = self.current_has_data_root;
             let proj = self.selected_project_id.as_deref().unwrap_or("none");
             let vol = self.selected_volume_id.as_deref().unwrap_or("none");
             let chap = self.selected_chapter_id.as_deref().unwrap_or("none");
@@ -582,7 +582,7 @@ impl AppBackend {
 
     fn debug_error(&self, module: &str, event: &str, message: &str) {
         if debug_level_enabled(module, DebugLevel::Error) {
-            let ws_exists = self.current_has_workspace;
+            let ws_exists = self.current_has_data_root;
             let proj = self.selected_project_id.as_deref().unwrap_or("none");
             let vol = self.selected_volume_id.as_deref().unwrap_or("none");
             let chap = self.selected_chapter_id.as_deref().unwrap_or("none");
@@ -809,7 +809,7 @@ mod tests {
         let mut backend = AppBackend::default();
         backend.current_data_root = ws_path.clone();
         backend.current_projects_root = ws_path.clone();
-        backend.current_has_workspace = true;
+        backend.current_has_data_root = true;
 
         // Create 3 projects
         for i in 1..=3 {
@@ -832,7 +832,7 @@ mod tests {
         let mut backend = AppBackend::default();
         backend.current_data_root = "/invalid/path/that/does/not/exist".to_string();
         backend.current_projects_root = "/invalid/path/that/does/not/exist".to_string();
-        backend.current_has_workspace = true;
+        backend.current_has_data_root = true;
 
         // Let's pretend the tree has some items
         let test_tree = serde_json::json!([
@@ -858,7 +858,7 @@ mod tests {
         let mut backend = AppBackend::default();
         backend.current_data_root = "/tmp".to_string();
         backend.current_projects_root = "/tmp".to_string();
-        backend.current_has_workspace = true;
+        backend.current_has_data_root = true;
 
         let res_json = backend.create_project_json("   ".into(), "".into());
         let res: serde_json::Value = serde_json::from_str(&res_json.to_string())?;
@@ -878,7 +878,7 @@ mod tests {
 
         let mut backend = AppBackend::default();
         backend.current_pending_github_init_path = path_str.clone();
-        backend.current_has_workspace = false;
+        backend.current_has_data_root = false;
 
         let outcome = SyncTaskOutcome {
             operation_id: "".to_string(),
@@ -892,13 +892,13 @@ mod tests {
         // load_sync_config sets status to "not_configured" (no sync config present).
         assert_eq!(backend.current_sync_status, "not_configured");
         assert_eq!(backend.current_pending_github_init_path, "");
-        assert!(backend.current_has_workspace);
+        assert!(backend.current_has_data_root);
     }
 
     #[test]
     fn test_handle_sync_outcome_conflict_reloads_tree() {
         let mut backend = AppBackend::default();
-        backend.current_has_workspace = true;
+        backend.current_has_data_root = true;
 
         let outcome = SyncTaskOutcome {
             operation_id: "".to_string(),
@@ -913,7 +913,7 @@ mod tests {
     #[test]
     fn test_handle_sync_outcome_error_does_not_clear_tree() {
         let mut backend = AppBackend::default();
-        backend.current_has_workspace = true;
+        backend.current_has_data_root = true;
 
         let outcome = SyncTaskOutcome {
             operation_id: "".to_string(),
@@ -923,7 +923,7 @@ mod tests {
         backend.handle_sync_outcome(outcome);
 
         assert_eq!(backend.current_sync_status, "error");
-        assert_eq!(backend.current_has_workspace, true);
+        assert_eq!(backend.current_has_data_root, true);
     }
 
     #[test]
@@ -933,6 +933,8 @@ mod tests {
         backend.current_sync_token = "".to_string();
         backend.current_data_root = "some_path".to_string();
         backend.current_projects_root = "some_path".to_string();
+        // per-project sync：需选中作品才会进入 config 校验分支
+        backend.selected_project_id = Some("test_project".to_string());
 
         backend.perform_sync_dry_run();
 
@@ -940,6 +942,20 @@ mod tests {
         assert!(backend
             .current_sync_operation_state
             .contains("sync.block.remote_url_missing"));
+    }
+
+    #[test]
+    fn test_sync_dry_run_no_project_selected_returns_error() {
+        let mut backend = AppBackend::default();
+        backend.current_data_root = "some_path".to_string();
+        backend.current_projects_root = "some_path".to_string();
+        // selected_project_id 为 None，per-project sync 应拒绝
+        backend.perform_sync_dry_run();
+
+        assert_eq!(backend.current_sync_status, "error");
+        assert!(backend
+            .current_sync_operation_state
+            .contains("sync.block.no_project_selected"));
     }
 }
 

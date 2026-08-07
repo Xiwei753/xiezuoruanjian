@@ -438,6 +438,7 @@ object AndroidTestEnvironment {
                         testFailed = t
                     } finally {
                         SujianAppDependencies.setTestProvider(null)
+                        com.xiwei.sujian.data.ActiveProjectGate.setCurrentProjectId(null)
                         try {
                             releaseSession()
                         } catch (cleanup: Throwable) {
