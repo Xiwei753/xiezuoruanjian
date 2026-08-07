@@ -17,8 +17,6 @@ pub enum WriterError {
     Io(String),
     #[error("JSON parsing error: {0}")]
     Json(String),
-    #[error("Workspace not found or invalid")]
-    InvalidWorkspace,
     #[error("Project not found")]
     ProjectNotFound,
     #[error("Volume not found")]
@@ -36,8 +34,8 @@ pub enum WriterError {
     },
     #[error("Not implemented")]
     NotImplemented,
-    #[error("Refuse to delete workspace root")]
-    RefuseToDeleteWorkspaceRoot,
+    #[error("Refuse to delete root")]
+    RefuseToDeleteRoot,
     #[error("Invalid delete target: {0}")]
     InvalidDeleteTarget(String),
     /// 同步冲突——包含冲突详情描述，需用户干预解决
@@ -79,13 +77,12 @@ impl WriterError {
         match self {
             WriterError::Io(_) => "IO_ERROR",
             WriterError::Json(_) => "JSON_ERROR",
-            WriterError::InvalidWorkspace => "INVALID_WORKSPACE",
             WriterError::ProjectNotFound => "PROJECT_NOT_FOUND",
             WriterError::VolumeNotFound => "VOLUME_NOT_FOUND",
             WriterError::ChapterNotFound => "CHAPTER_NOT_FOUND",
             WriterError::EmptyOverwriteBlocked { .. } => "EMPTY_OVERWRITE_BLOCKED",
             WriterError::NotImplemented => "NOT_IMPLEMENTED",
-            WriterError::RefuseToDeleteWorkspaceRoot => "REFUSE_DELETE_WORKSPACE_ROOT",
+            WriterError::RefuseToDeleteRoot => "REFUSE_DELETE_ROOT",
             WriterError::InvalidDeleteTarget(_) => "INVALID_DELETE_TARGET",
             WriterError::SyncConflict(_) => "SYNC_CONFLICT",
             WriterError::SyncFailed(_) => "SYNC_FAILED",
@@ -107,13 +104,12 @@ impl WriterError {
         match self {
             WriterError::Io(_) => "error.io",
             WriterError::Json(_) => "error.json",
-            WriterError::InvalidWorkspace => "error.invalid_workspace",
             WriterError::ProjectNotFound => "error.project_not_found",
             WriterError::VolumeNotFound => "error.volume_not_found",
             WriterError::ChapterNotFound => "error.chapter_not_found",
             WriterError::EmptyOverwriteBlocked { .. } => "error.empty_overwrite_blocked",
             WriterError::NotImplemented => "error.not_implemented",
-            WriterError::RefuseToDeleteWorkspaceRoot => "error.refuse_delete_workspace_root",
+            WriterError::RefuseToDeleteRoot => "error.refuse_delete_root",
             WriterError::InvalidDeleteTarget(_) => "error.invalid_delete_target",
             WriterError::SyncConflict(_) => "error.sync_conflict",
             WriterError::SyncFailed(_) => "error.sync_failed",
@@ -203,7 +199,6 @@ impl From<crate::error::Error> for WriterError {
         match e {
             Error::Io(e) => WriterError::Io(e.to_string()),
             Error::Json(e) => WriterError::Json(e.to_string()),
-            Error::InvalidWorkspace => WriterError::InvalidWorkspace,
             Error::ProjectNotFound => WriterError::ProjectNotFound,
             Error::VolumeNotFound => WriterError::VolumeNotFound,
             Error::ChapterNotFound => WriterError::ChapterNotFound,
@@ -219,7 +214,7 @@ impl From<crate::error::Error> for WriterError {
                 reason,
             },
             Error::NotImplemented => WriterError::NotImplemented,
-            Error::RefuseToDeleteWorkspaceRoot => WriterError::RefuseToDeleteWorkspaceRoot,
+            Error::RefuseToDeleteRoot => WriterError::RefuseToDeleteRoot,
             Error::InvalidDeleteTarget(s) => WriterError::InvalidDeleteTarget(s),
             Error::SyncAuthFailed { reason } => WriterError::Authentication(reason),
             Error::SyncNetworkUnavailable { reason } => WriterError::RetryableNetwork(reason),

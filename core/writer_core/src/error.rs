@@ -34,9 +34,6 @@ pub enum Error {
     /// JSON 序列化/反序列化错误。不可恢复（数据格式损坏）。
     #[error("JSON parsing error: {0}")]
     Json(#[from] serde_json::Error),
-    /// 工作区路径无效或不存在。
-    #[error("Workspace not found or invalid")]
-    InvalidWorkspace,
     /// 项目 ID 未找到。
     #[error("Project not found")]
     ProjectNotFound,
@@ -58,9 +55,9 @@ pub enum Error {
     /// 功能未实现。
     #[error("Not implemented")]
     NotImplemented,
-    /// 拒绝删除工作区根目录。
-    #[error("Refuse to delete workspace root")]
-    RefuseToDeleteWorkspaceRoot,
+    /// 拒绝删除根目录。
+    #[error("Refuse to delete root")]
+    RefuseToDeleteRoot,
     /// 删除目标无效（非项目/卷/章节路径）。
     #[error("Invalid delete target: {0}")]
     InvalidDeleteTarget(String),
@@ -146,13 +143,12 @@ impl Error {
         match self {
             Error::Io(_) => "IO_ERROR",
             Error::Json(_) => "JSON_ERROR",
-            Error::InvalidWorkspace => "INVALID_WORKSPACE",
             Error::ProjectNotFound => "PROJECT_NOT_FOUND",
             Error::VolumeNotFound => "VOLUME_NOT_FOUND",
             Error::ChapterNotFound => "CHAPTER_NOT_FOUND",
             Error::EmptyOverwriteBlocked { .. } => "EMPTY_OVERWRITE_BLOCKED",
             Error::NotImplemented => "NOT_IMPLEMENTED",
-            Error::RefuseToDeleteWorkspaceRoot => "REFUSE_DELETE_WORKSPACE_ROOT",
+            Error::RefuseToDeleteRoot => "REFUSE_DELETE_ROOT",
             Error::InvalidDeleteTarget(_) => "INVALID_DELETE_TARGET",
             Error::SyncAuthFailed { .. } => "SYNC_AUTH_FAILED",
             Error::SyncNetworkUnavailable { .. } => "SYNC_NETWORK_UNAVAILABLE",
@@ -180,13 +176,12 @@ impl Error {
         match self {
             Error::Io(_) => true,
             Error::Json(_) => false,
-            Error::InvalidWorkspace => false,
             Error::ProjectNotFound => false,
             Error::VolumeNotFound => false,
             Error::ChapterNotFound => false,
             Error::EmptyOverwriteBlocked { .. } => false,
             Error::NotImplemented => false,
-            Error::RefuseToDeleteWorkspaceRoot => false,
+            Error::RefuseToDeleteRoot => false,
             Error::InvalidDeleteTarget(_) => false,
             Error::SyncAuthFailed { .. } => false,
             Error::SyncNetworkUnavailable { .. } => true,

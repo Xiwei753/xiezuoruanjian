@@ -290,7 +290,7 @@ impl AppBackend {
 
         if !self.current_has_data_root || self.current_data_root.is_empty() {
             return self.mutation_error_json(
-                "error.invalid_workspace".to_string(),
+                "error.core_error".to_string(),
                 "未打开工作区，无法创建作品。请先新建或打开一个工作区。".to_string(),
             );
         }
@@ -334,7 +334,7 @@ impl AppBackend {
             })
         } else {
             self.mutation_error_json(
-                "error.invalid_workspace".to_string(),
+                "error.core_error".to_string(),
                 "核心模块未初始化".to_string(),
             )
         }
@@ -386,7 +386,7 @@ impl AppBackend {
             })
         } else {
             self.mutation_error_json(
-                "error.invalid_workspace".to_string(),
+                "error.core_error".to_string(),
                 "核心模块未初始化".to_string(),
             )
         }
@@ -443,7 +443,7 @@ impl AppBackend {
             })
         } else {
             self.mutation_error_json(
-                "error.invalid_workspace".to_string(),
+                "error.core_error".to_string(),
                 "核心模块未初始化".to_string(),
             )
         }
@@ -490,7 +490,7 @@ impl AppBackend {
             })
         } else {
             self.mutation_error_json(
-                "error.invalid_workspace".to_string(),
+                "error.core_error".to_string(),
                 "核心模块未初始化".to_string(),
             )
         }
@@ -541,7 +541,7 @@ impl AppBackend {
             })
         } else {
             self.mutation_error_json(
-                "error.invalid_workspace".to_string(),
+                "error.core_error".to_string(),
                 "核心模块未初始化".to_string(),
             )
         }
@@ -593,7 +593,7 @@ impl AppBackend {
             })
         } else {
             self.mutation_error_json(
-                "error.invalid_workspace".to_string(),
+                "error.core_error".to_string(),
                 "核心模块未初始化".to_string(),
             )
         }
@@ -629,7 +629,7 @@ impl AppBackend {
         title: QString,
     ) -> Result<VolumeDto, WriterError> {
         let Some(api) = self.core_api() else {
-            return Err(WriterError::InvalidWorkspace);
+            return Err(WriterError::Other("core api not available".to_string()));
         };
         let project_id_str = project_id.to_string();
         let vol = api.create_volume(&project_id_str, &title.to_string())?;
@@ -649,7 +649,7 @@ impl AppBackend {
         title: QString,
     ) -> Result<ChapterMetaDto, WriterError> {
         let Some(api) = self.core_api() else {
-            return Err(WriterError::InvalidWorkspace);
+            return Err(WriterError::Other("core api not available".to_string()));
         };
         let project_id_str = project_id.to_string();
         let volume_id_str = volume_id.to_string();
@@ -686,14 +686,14 @@ impl AppBackend {
                 app.trigger_projects_reloaded();
             })
         } else {
-            let raw_error = WriterError::InvalidWorkspace.to_string();
+            let raw_error = WriterError::Other("core api not available".to_string()).to_string();
             self.mutation_error_json("error.core_error".to_string(), raw_error)
         }
     }
 
     pub(crate) fn delete_project(&mut self, project_id: QString) -> Result<bool, WriterError> {
         let Some(api) = self.core_api() else {
-            return Err(WriterError::InvalidWorkspace);
+            return Err(WriterError::Other("core api not available".to_string()));
         };
         let project_id_str = project_id.to_string();
         api.delete_project(&project_id_str)?;
@@ -754,7 +754,7 @@ impl AppBackend {
                 app.trigger_projects_reloaded();
             })
         } else {
-            let raw_error = WriterError::InvalidWorkspace.to_string();
+            let raw_error = WriterError::Other("core api not available".to_string()).to_string();
             self.mutation_error_json("error.core_error".to_string(), raw_error)
         }
     }
@@ -765,7 +765,7 @@ impl AppBackend {
         volume_id: QString,
     ) -> Result<bool, WriterError> {
         let Some(api) = self.core_api() else {
-            return Err(WriterError::InvalidWorkspace);
+            return Err(WriterError::Other("core api not available".to_string()));
         };
         let project_id_str = project_id.to_string();
         let volume_id_str = volume_id.to_string();
@@ -828,7 +828,7 @@ impl AppBackend {
                 app.trigger_projects_reloaded();
             })
         } else {
-            let raw_error = WriterError::InvalidWorkspace.to_string();
+            let raw_error = WriterError::Other("core api not available".to_string()).to_string();
             self.mutation_error_json("error.core_error".to_string(), raw_error)
         }
     }
@@ -840,7 +840,7 @@ impl AppBackend {
         chapter_id: QString,
     ) -> Result<bool, WriterError> {
         let Some(api) = self.core_api() else {
-            return Err(WriterError::InvalidWorkspace);
+            return Err(WriterError::Other("core api not available".to_string()));
         };
         let project_id_str = project_id.to_string();
         let volume_id_str = volume_id.to_string();

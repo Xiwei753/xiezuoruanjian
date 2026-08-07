@@ -12,11 +12,11 @@ use crate::error::Result;
     clippy::type_complexity
 )]
 pub fn extract_chapter_entries(
-    workspace: &Path,
+    projects_root: &Path,
     project_id: Option<&str>,
 ) -> Result<Vec<IndexEntry>> {
     let mut entries = Vec::new();
-    let projects_dir = workspace;
+    let projects_dir = projects_root;
 
     if !projects_dir.exists() {
         return Ok(entries);
@@ -93,11 +93,11 @@ pub fn extract_chapter_entries(
     clippy::type_complexity
 )]
 pub fn extract_starmap_entries(
-    workspace: &Path,
+    app_data_root: &Path,
     project_id: Option<&str>,
 ) -> Result<Vec<IndexEntry>> {
     let mut entries = Vec::new();
-    let starmaps_dir = workspace.join("starmaps");
+    let starmaps_dir = app_data_root.join("starmaps");
 
     if !starmaps_dir.exists() {
         return Ok(entries);
@@ -240,9 +240,9 @@ pub fn extract_starmap_entries(
     Ok(entries)
 }
 
-pub fn extract_setting_entries(workspace: &Path) -> Result<Vec<IndexEntry>> {
+pub fn extract_setting_entries(app_data_root: &Path) -> Result<Vec<IndexEntry>> {
     let mut entries = Vec::new();
-    let settings_dir = workspace.join("settings");
+    let settings_dir = app_data_root.join("settings");
 
     if !settings_dir.exists() {
         return Ok(entries);

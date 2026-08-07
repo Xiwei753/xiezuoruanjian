@@ -6,7 +6,7 @@
 //!
 //! 1. **ID 段验证**：防止路径穿越攻击（`..`、`/`、`\`）
 //! 2. **符号链接检查**：拒绝删除符号链接指向的目标
-//! 3. **根目录保护**：绝对不允许删除工作区根目录
+//! 3. **根目录保护**：绝对不允许删除根目录
 //! 4. **标记文件验证**：确认目标是正确的业务目录（通过 marker file）
 //!
 //! ## 调用方
@@ -39,7 +39,7 @@ pub fn validate_id_segment(id: &str) -> Result<&str> {
 ///
 /// 检查项：
 /// 1. 目标路径存在且是目录（非符号链接）
-/// 2. 目标不在工作区根目录
+/// 2. 目标不在根目录
 /// 3. 目标在根目录内部（防止 `..` 逃逸）——通过 `canonicalize` 比较
 /// 4. 目标包含预期的标记文件（如 `project.json`），且标记文件不是符号链接
 ///
@@ -52,7 +52,7 @@ pub fn validate_delete_target(
 ) -> Result<PathBuf> {
     // Canonicalize root path to prevent .. escaping
     let root_canon = root_path.canonicalize().map_err(|e| {
-        Error::InvalidDeleteTarget(format!("Failed to canonicalize workspace: {}", e))
+        Error::InvalidDeleteTarget(format!("Failed to canonicalize root: {}", e))
     })?;
 
     // Prevent deleting if the target itself is a symlink
@@ -78,12 +78,12 @@ pub fn validate_delete_target(
         .map_err(|e| Error::InvalidDeleteTarget(format!("Failed to canonicalize target: {}", e)))?;
 
     if target_canon == root_canon {
-        return Err(Error::RefuseToDeleteWorkspaceRoot);
+        return Err(Error::RefuseToDeleteRoot);
     }
 
     if !target_canon.starts_with(&root_canon) {
         return Err(Error::InvalidDeleteTarget(
-            "Target is outside the workspace".to_string(),
+            "Target is outside the root".to_string(),
         ));
     }
 
@@ -199,7 +199,7 @@ mod tests {
 
         let res = validate_delete_target(workspace.path(), workspace.path(), "marker.txt");
         assert!(res.is_err());
-        // Can be more specific to ensure Error::RefuseToDeleteWorkspaceRoot
+        // Can be more specific to ensure Error::RefuseToDeleteRoot
     }
 
     #[test]

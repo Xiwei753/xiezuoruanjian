@@ -212,8 +212,8 @@ enum class SyncStatus {
 
 enum class FirstSyncMode {
     NotAttempted,
-    CloneIntoEmptyWorkspace,
-    InitExistingWorkspace,
+    CloneIntoEmptyProject,
+    InitExistingProject,
     AlreadyGitRepo,
     BlockedNonEmptyRemote,
     UnrelatedHistories,

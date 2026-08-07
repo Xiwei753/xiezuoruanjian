@@ -264,7 +264,7 @@ fn handle_pull_error(
             None,
         )),
         crate::Error::SyncRemoteBranchNotFound { .. } => {
-            if first_sync_mode != FirstSyncMode::InitExistingWorkspace
+            if first_sync_mode != FirstSyncMode::InitExistingProject
                 && first_sync_mode != FirstSyncMode::AlreadyGitRepo
             {
                 return PullOutcome::Return(SyncResult::error(
@@ -545,20 +545,20 @@ impl SyncService {
             };
 
             if is_empty_or_git_only {
-                result.first_sync_mode = FirstSyncMode::CloneIntoEmptyWorkspace;
+                result.first_sync_mode = FirstSyncMode::CloneIntoEmptyProject;
                 if let Err(e) = backend
                     .clone_repo(&sanitized_url, sync_root, auth.as_ref())
                     .map_err(map_git_error)
                 {
                     return Ok(SyncResult::error(
                         SyncStatus::Error(e.to_string()),
-                        FirstSyncMode::CloneIntoEmptyWorkspace,
+                        FirstSyncMode::CloneIntoEmptyProject,
                         e.to_string(),
                         None,
                     ));
                 }
             } else {
-                result.first_sync_mode = FirstSyncMode::InitExistingWorkspace;
+                result.first_sync_mode = FirstSyncMode::InitExistingProject;
                 if let Err(e) = backend.init_repo(sync_root) {
                     result.status = SyncStatus::Error(e.to_string());
                     result.error = Some(e.to_string());

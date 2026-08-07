@@ -175,10 +175,10 @@ pub enum SyncProtocol {
     SshDeployKey,
 }
 
-/// 首次同步模式 — 记录工作区与远端仓库的初始关系。
+/// 首次同步模式 — 记录项目与远端仓库的初始关系。
 ///
-/// - CloneIntoEmptyWorkspace：远端有内容，本地为空，直接 clone。
-/// - InitExistingWorkspace：本地已有内容，远端为空，push 本地内容。
+/// - CloneIntoEmptyProject：远端有内容，本地为空，直接 clone。
+/// - InitExistingProject：本地已有内容，远端为空，push 本地内容。
 /// - AlreadyGitRepo：本地已是 git 仓库，直接 fetch+merge。
 /// - BlockedNonEmptyRemote：双方都有内容且无共同祖先，需用户决策。
 /// - UnrelatedHistories：git merge 时遇到 unrelated histories。
@@ -187,8 +187,8 @@ pub enum SyncProtocol {
 pub enum FirstSyncMode {
     #[default]
     NotAttempted,
-    CloneIntoEmptyWorkspace,
-    InitExistingWorkspace,
+    CloneIntoEmptyProject,
+    InitExistingProject,
     AlreadyGitRepo,
     BlockedNonEmptyRemote,
     UnrelatedHistories,

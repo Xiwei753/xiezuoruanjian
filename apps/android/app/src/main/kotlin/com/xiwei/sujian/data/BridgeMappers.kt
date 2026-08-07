@@ -62,13 +62,12 @@ internal fun WriterException.toWireErrorCode(): String =
     when (this) {
         is WriterException.Io -> "IO_ERROR"
         is WriterException.Json -> "JSON_ERROR"
-        is WriterException.InvalidWorkspace -> "INVALID_WORKSPACE"
         is WriterException.ProjectNotFound -> "PROJECT_NOT_FOUND"
         is WriterException.VolumeNotFound -> "VOLUME_NOT_FOUND"
         is WriterException.ChapterNotFound -> "CHAPTER_NOT_FOUND"
         is WriterException.EmptyOverwriteBlocked -> "EMPTY_OVERWRITE_BLOCKED"
         is WriterException.NotImplemented -> "NOT_IMPLEMENTED"
-        is WriterException.RefuseToDeleteWorkspaceRoot -> "REFUSE_DELETE_WORKSPACE_ROOT"
+        is WriterException.RefuseToDeleteRoot -> "REFUSE_DELETE_ROOT"
         is WriterException.InvalidDeleteTarget -> "INVALID_DELETE_TARGET"
         is WriterException.SyncConflict -> "SYNC_CONFLICT"
         is WriterException.SyncFailed -> "SYNC_FAILED"
@@ -363,8 +362,8 @@ internal fun String?.toSyncStatus(): SyncStatus =
 internal fun String?.toFirstSyncMode(): FirstSyncMode =
     when (this) {
         "not_attempted" -> FirstSyncMode.NotAttempted
-        "clone_into_empty_workspace" -> FirstSyncMode.CloneIntoEmptyWorkspace
-        "init_existing_workspace" -> FirstSyncMode.InitExistingWorkspace
+        "clone_into_empty_project" -> FirstSyncMode.CloneIntoEmptyProject
+        "init_existing_project" -> FirstSyncMode.InitExistingProject
         "already_git_repo" -> FirstSyncMode.AlreadyGitRepo
         "blocked_non_empty_remote" -> FirstSyncMode.BlockedNonEmptyRemote
         "unrelated_histories" -> FirstSyncMode.UnrelatedHistories

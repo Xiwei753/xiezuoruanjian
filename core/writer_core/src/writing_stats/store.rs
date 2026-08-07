@@ -684,7 +684,7 @@ mod tests {
     use std::collections::HashMap;
 
     fn create_mock_store() -> StatsStore {
-        StatsStore::new(Path::new("/tmp/mock_workspace"))
+        StatsStore::new(Path::new("/tmp/mock_projects_root"))
     }
 
     fn create_mock_event() -> WritingInputEvent {

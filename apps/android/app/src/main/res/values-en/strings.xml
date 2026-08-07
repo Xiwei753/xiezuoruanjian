@@ -75,13 +75,12 @@
     <!-- Error messages (WriterError mapping) -->
     <string name="error_io">File I/O failed. Check workspace permissions and disk status.</string>
     <string name="error_json">Data file format error. Check if workspace files are corrupted.</string>
-    <string name="error_invalid_workspace">Not a valid workspace</string>
     <string name="error_project_not_found">Project not found or has been deleted</string>
     <string name="error_volume_not_found">Volume not found or has been deleted</string>
     <string name="error_chapter_not_found">Chapter not found or has been deleted</string>
     <string name="error_empty_overwrite_blocked">Empty content overwrite of existing chapter blocked</string>
     <string name="error_not_implemented">Feature not yet implemented</string>
-    <string name="error_refuse_delete_workspace_root">Refused to delete workspace root directory</string>
+    <string name="error_refuse_delete_root">Refused to delete root directory</string>
     <string name="error_invalid_delete_target">Invalid delete target</string>
     <string name="error_sync_conflict">Sync conflict. Please resolve conflicting files and retry.</string>
     <string name="error_sync_failed">Sync failed. Check your network and configuration.</string>
@@ -124,10 +123,8 @@
     <string name="sync_migration_warning">Legacy credential migration failed, please re-enter sync token</string>
     <string name="sync_already_running">Sync is already running, please try again later</string>
 
-    <!-- WorkspaceRepository Exception messages -->
-    <string name="repo_workspace_init_failed">Workspace initialization failed: %1$s</string>
+    <!-- ProjectRepository Exception messages -->
     <string name="repo_native_not_loaded">Native library not loaded</string>
-    <string name="repo_native_not_loaded_init">Native library not loaded, cannot initialize workspace</string>
     <string name="repo_get_projects_failed">Failed to get project list: %1$s</string>
     <string name="repo_get_recent_edits_failed">Failed to get recent edits: %1$s</string>
     <string name="repo_get_chapter_content_failed">Failed to get chapter content: %1$s</string>

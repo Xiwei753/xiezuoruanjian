@@ -1867,10 +1867,6 @@
         <translation>数据文件格式异常，请检查工作区文件是否损坏</translation>
     </message>
     <message>
-        <source>error.invalid_workspace</source>
-        <translation>不是有效的工作区</translation>
-    </message>
-    <message>
         <source>error.project_not_found</source>
         <translation>作品不存在或已被删除</translation>
     </message>
@@ -1891,8 +1887,8 @@
         <translation>该功能尚未实现</translation>
     </message>
     <message>
-        <source>error.refuse_delete_workspace_root</source>
-        <translation>拒绝删除工作区根目录</translation>
+        <source>error.refuse_delete_root</source>
+        <translation>拒绝删除根目录</translation>
     </message>
     <message>
         <source>error.invalid_delete_target</source>

@@ -22,8 +22,6 @@ export class MessageKeyMapper {
         return context.resourceManager.getStringSync($r('app.string.error_io').id)
       case 'error.json':
         return context.resourceManager.getStringSync($r('app.string.error_json').id)
-      case 'error.invalid_workspace':
-        return context.resourceManager.getStringSync($r('app.string.error_invalid_workspace').id)
       case 'error.project_not_found':
         return context.resourceManager.getStringSync($r('app.string.error_project_not_found').id)
       case 'error.volume_not_found':
@@ -34,8 +32,8 @@ export class MessageKeyMapper {
         return context.resourceManager.getStringSync($r('app.string.error_empty_overwrite_blocked').id)
       case 'error.not_implemented':
         return context.resourceManager.getStringSync($r('app.string.error_not_implemented').id)
-      case 'error.refuse_delete_workspace_root':
-        return context.resourceManager.getStringSync($r('app.string.error_refuse_delete_workspace_root').id)
+      case 'error.refuse_delete_root':
+        return context.resourceManager.getStringSync($r('app.string.error_refuse_delete_root').id)
       case 'error.invalid_delete_target':
         return context.resourceManager.getStringSync($r('app.string.error_invalid_delete_target').id)
       case 'error.sync_conflict':

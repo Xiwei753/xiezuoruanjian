@@ -328,8 +328,8 @@ fn sync_status_to_wire(status: &crate::sync::SyncStatus) -> String {
 fn first_sync_mode_to_wire(mode: &crate::sync::FirstSyncMode) -> String {
     match mode {
         crate::sync::FirstSyncMode::NotAttempted => "not_attempted",
-        crate::sync::FirstSyncMode::CloneIntoEmptyWorkspace => "clone_into_empty_workspace",
-        crate::sync::FirstSyncMode::InitExistingWorkspace => "init_existing_workspace",
+        crate::sync::FirstSyncMode::CloneIntoEmptyProject => "clone_into_empty_project",
+        crate::sync::FirstSyncMode::InitExistingProject => "init_existing_project",
         crate::sync::FirstSyncMode::AlreadyGitRepo => "already_git_repo",
         crate::sync::FirstSyncMode::BlockedNonEmptyRemote => "blocked_non_empty_remote",
         crate::sync::FirstSyncMode::UnrelatedHistories => "unrelated_histories",

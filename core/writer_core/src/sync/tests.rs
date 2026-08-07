@@ -878,7 +878,7 @@ mod tests {
     #[test]
     #[cfg(feature = "github-api")]
     #[cfg(feature = "git-https")]
-    fn test_first_sync_mode_clone_into_empty_workspace() {
+    fn test_first_sync_mode_clone_into_empty_project() {
         let dir = tempfile::tempdir().unwrap();
         let config = SyncConfig {
             enabled: true,
@@ -938,13 +938,13 @@ mod tests {
         }
 
         let res = SyncService::perform_sync(dir.path(), &config, &secrets, &MockBackend).unwrap();
-        assert_eq!(res.first_sync_mode, FirstSyncMode::CloneIntoEmptyWorkspace);
+        assert_eq!(res.first_sync_mode, FirstSyncMode::CloneIntoEmptyProject);
     }
 
     #[test]
     #[cfg(feature = "github-api")]
     #[cfg(feature = "git-https")]
-    fn test_first_sync_mode_init_existing_workspace() {
+    fn test_first_sync_mode_init_existing_project() {
         let dir = tempfile::tempdir().unwrap();
         let config = SyncConfig {
             enabled: true,
@@ -1004,7 +1004,7 @@ mod tests {
         }
 
         let res = SyncService::perform_sync(dir.path(), &config, &secrets, &MockBackend).unwrap();
-        assert_eq!(res.first_sync_mode, FirstSyncMode::InitExistingWorkspace);
+        assert_eq!(res.first_sync_mode, FirstSyncMode::InitExistingProject);
     }
 
     #[test]
@@ -1185,7 +1185,7 @@ mod tests {
         let res = SyncService::perform_sync(dir.path(), &config, &secrets, &MockEmptyRemoteBackend)
             .unwrap();
         assert_eq!(res.status, SyncStatus::Success);
-        assert_eq!(res.first_sync_mode, FirstSyncMode::InitExistingWorkspace);
+        assert_eq!(res.first_sync_mode, FirstSyncMode::InitExistingProject);
     }
 
     #[test]

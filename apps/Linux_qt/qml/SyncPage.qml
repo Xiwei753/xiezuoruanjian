@@ -75,13 +75,12 @@ Item {
         case "sync.status.already_running": msg = qsTr("同步正在运行中"); break;
         case "error.io": msg = qsTr("文件读写失败"); break;
         case "error.json": msg = qsTr("数据格式异常"); break;
-        case "error.invalid_workspace": msg = qsTr("不是有效的工作区"); break;
         case "error.project_not_found": msg = qsTr("作品不存在"); break;
         case "error.volume_not_found": msg = qsTr("卷不存在"); break;
         case "error.chapter_not_found": msg = qsTr("章节不存在"); break;
         case "error.empty_overwrite_blocked": msg = qsTr("已阻止空内容覆盖"); break;
         case "error.not_implemented": msg = qsTr("功能尚未实现"); break;
-        case "error.refuse_delete_workspace_root": msg = qsTr("拒绝删除工作区根目录"); break;
+        case "error.refuse_delete_root": msg = qsTr("拒绝删除根目录"); break;
         case "error.invalid_delete_target": msg = qsTr("删除目标无效"); break;
         case "error.sync_conflict": msg = qsTr("同步冲突，请手动处理冲突文件后重试"); break;
         case "error.sync_failed": msg = qsTr("同步失败，请检查网络和配置"); break;

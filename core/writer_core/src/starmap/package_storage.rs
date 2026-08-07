@@ -333,7 +333,7 @@ mod tests {
     use crate::starmap::create_starmap;
         use tempfile::tempdir;
 
-    fn setup_workspace() -> tempfile::TempDir {
+    fn setup_project_root() -> tempfile::TempDir {
         let dir = tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("projects")).unwrap();
         dir
@@ -341,7 +341,7 @@ mod tests {
 
     #[test]
     fn test_single_node_save_and_delete() {
-        let dir = setup_workspace();
+        let dir = setup_project_root();
         let meta = create_starmap(dir.path(), "Test", "", None).unwrap();
         let now = crate::starmap::now_epoch();
         let node = StarMapNode {
@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn test_single_edge_save_and_delete() {
-        let dir = setup_workspace();
+        let dir = setup_project_root();
         let meta = create_starmap(dir.path(), "Test", "", None).unwrap();
         let now = crate::starmap::now_epoch();
         let edge = StarMapEdge {
@@ -396,7 +396,7 @@ mod tests {
 
     #[test]
     fn test_single_link_save_and_delete() {
-        let dir = setup_workspace();
+        let dir = setup_project_root();
         let meta = create_starmap(dir.path(), "Test", "", None).unwrap();
         let now = crate::starmap::now_epoch();
         let link = StarMapLink {
@@ -420,7 +420,7 @@ mod tests {
 
     #[test]
     fn test_layout_sharded_save_and_load() {
-        let dir = setup_workspace();
+        let dir = setup_project_root();
         let meta = create_starmap(dir.path(), "Test", "", None).unwrap();
         let layout = StarMapLayout {
             kind: StarMapLayoutKind::Freeform,
@@ -471,7 +471,7 @@ mod tests {
 
     #[test]
     fn test_layout_sharded_bucket_distribution() {
-        let dir = setup_workspace();
+        let dir = setup_project_root();
         let meta = create_starmap(dir.path(), "Test", "", None).unwrap();
         let layout = StarMapLayout {
             kind: StarMapLayoutKind::AutoRadial,
@@ -521,7 +521,7 @@ mod tests {
 
     #[test]
     fn test_layout_legacy_fallback() {
-        let dir = setup_workspace();
+        let dir = setup_project_root();
         let meta = create_starmap(dir.path(), "Test", "", None).unwrap();
         let pkg_dir = starmap_pkg_dir(dir.path(), &meta.starmap_id);
 
@@ -555,7 +555,7 @@ mod tests {
 
     #[test]
     fn test_layout_sharded_removes_empty_buckets() {
-        let dir = setup_workspace();
+        let dir = setup_project_root();
         let meta = create_starmap(dir.path(), "Test", "", None).unwrap();
         let pkg_dir = starmap_pkg_dir(dir.path(), &meta.starmap_id);
 
