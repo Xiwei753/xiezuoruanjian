@@ -149,7 +149,7 @@ private suspend fun EditorViewModel.saveChapterContentForSwitch(
         try {
             when (
                 val result =
-                    workspaceRepository.saveChapterContent(
+                    effectiveChapterSavePort.saveChapterContent(
                         session.projectId,
                         session.volumeId,
                         session.chapterId,

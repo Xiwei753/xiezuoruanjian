@@ -189,6 +189,32 @@ class EditorViewModelChapterSwitchTest {
                 Thread.sleep(5)
                 attempts++
             }
+            // 旧章节有非空正文 → 切换事务的“保存旧章节”阶段会调用保存端口。
+            // initChapter 事务后 inputFrozen 保持 true（等待编辑器附着），
+            // 测试环境无编辑器 — 显式确认附着以解除冻结，模拟真实附着。
+            vm.confirmEditorAttached(vm.chapterTargetId("p", "v", "a"))
+            vm.onContentChanged("正文A")
+
+            // #597：可控保存端口 — 保存 A 时挂起，为取消制造确定性挂起点
+            // （loadChapter 的 withContext(IO) 在无 native 时几乎立即返回，
+            // 直接取消会落在已完成的 job 上，满载调度下偶发）。
+            val saveGate = kotlinx.coroutines.CompletableDeferred<Unit>()
+            var saveCalls = 0
+            vm.chapterSavePort =
+                object : com.xiwei.sujian.data.ChapterContentSavePort {
+                    override suspend fun saveChapterContent(
+                        projectId: String,
+                        volumeId: String,
+                        chapterId: String,
+                        content: String,
+                    ): com.xiwei.sujian.data.BridgeResult<com.xiwei.sujian.model.ChapterSaveReceipt> {
+                        saveCalls++
+                        saveGate.await()
+                        return com.xiwei.sujian.data.BridgeResult.Success(
+                            com.xiwei.sujian.model.ChapterSaveReceipt("c", 0L, "h", "m", "t", 0),
+                        )
+                    }
+                }
 
             var cancellationSeen = false
             val job =
@@ -201,17 +227,17 @@ class EditorViewModelChapterSwitchTest {
                         throw e
                     }
                 }
-            // 事务进入挂起点（loadChapter 的 withContext(IO)）后取消。
-            // 先轮询到事务已可见开始（loading=true 已提交，随后必在 loadChapter
-            // 的 IO 挂起点等待），再取消 — 避免在调度压力下 launch 尚未起步就
-            // cancelAndJoin，导致取消信号落在 try 之外（#597 满载偶发）。
-            var startedAttempts = 0
-            while (!vm.uiState.value.loading && startedAttempts < 200) {
+            // 事务进入保存 A 的挂起点后取消。
+            var spin = 0
+            while (saveCalls < 1 && spin < 200) {
                 runCurrent()
-                startedAttempts++
+                spin++
             }
-            runCurrent()
+            assertTrue("切换事务必须调用保存端口（进入保存挂起点）", saveCalls >= 1)
             job.cancelAndJoin()
+            // 放行保存端口，避免事务协程悬挂泄漏。
+            saveGate.complete(Unit)
+            runCurrent()
 
             assertTrue(
                 "取消必须重新抛出 CancellationException — 不得吞掉并当加载失败处理",
@@ -219,7 +245,7 @@ class EditorViewModelChapterSwitchTest {
             )
             // 取消后旧状态完整恢复：标题、正文、loading、saveStatus 全部回到切换前。
             assertEquals("取消后标题必须恢复旧章节", "A", vm.uiState.value.chapterTitle)
-            assertEquals("取消后正文必须保留旧章节内容", "", vm.uiState.value.content)
+            assertEquals("取消后正文必须保留旧章节内容", "正文A", vm.uiState.value.content)
             assertFalse("取消后 loading 必须恢复 false", vm.uiState.value.loading)
             // 取消后 inputFrozen 必须释放：后续输入能正常进入状态（否则输入被冻结）。
             vm.onContentChanged("取消后的新输入")
