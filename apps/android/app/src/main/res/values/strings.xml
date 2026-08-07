@@ -7,7 +7,6 @@
     <string name="action_new_project">新建作品</string>
     <string name="action_new_chapter">新建章节</string>
     <string name="action_settings">设置</string>
-    <string name="action_save">保存</string>
     <string name="action_cancel">取消</string>
     <string name="action_create">创建</string>
 
@@ -71,6 +70,7 @@
     <string name="pref_ai_enabled">启用 AI</string>
     <string name="pref_enable_sync">启用同步</string>
     <string name="cd_sync_manual">同步</string>
+    <string name="cd_search_dev">搜索功能开发中</string>
     <string name="pref_github_repo">GitHub 仓库地址 (HTTPS)</string>
     <string name="pref_branch">分支 (默认 main)</string>
     <string name="pref_https_token">HTTPS Token (PAT)</string>
@@ -141,7 +141,6 @@
     <string name="error_auto_save_failed">自动保存失败: %1$s</string>
     <string name="error_save_native_not_loaded">保存失败: Native库未加载</string>
     <string name="error_save_exception">保存异常: %1$s</string>
-    <string name="error_auto_save_exception">自动保存异常: %1$s</string>
     <string name="error_update_chapter_note_failed">更新章节备注失败: %1$s</string>
 
     <!-- EditorFragment -->
@@ -233,31 +232,7 @@
     <string name="pref_hint_saved_palette">已保存的设备配色</string>
     <string name="pref_color_source_builtin">素笺默认</string>
     <string name="word_count_format">%1$d字</string>
-    <string name="starmap_empty">暂无星图</string>
-    <string name="starmap_empty_hint">点击右下角按钮创建新星图</string>
-    <string name="starmap_node_edge_count">%1$d 节点 · %2$d 连线</string>
-    <string name="starmap_create_new">新建星图</string>
-    <string name="starmap_hint_title">标题</string>
-    <string name="starmap_hint_description">描述（可选）</string>
-    <string name="starmap_add_edge">添加连线</string>
-    <string name="starmap_add_node">添加节点</string>
-    <string name="starmap_load_failed">加载失败</string>
-    <string name="starmap_action_add">添加</string>
-    <string name="starmap_from_node">起始节点</string>
-    <string name="starmap_to_node">目标节点</string>
-    <string name="starmap_edit_node">编辑节点</string>
-    <string name="starmap_delete_node">删除节点</string>
-    <string name="starmap_update_node">更新节点</string>
-    <string name="starmap_retry_save">重试保存</string>
-    <string name="starmap_op_failed">%1$s失败: %2$s</string>
-    <string name="starmap_op_failed_not_loaded">%1$s失败: 未加载</string>
-    <string name="starmap_op_exception">%1$s异常: %2$s</string>
-    <string name="starmap_layout_save_failed">布局保存失败: %1$s</string>
-    <string name="starmap_layout_save_failed_not_loaded">布局保存失败: 未加载</string>
-    <string name="starmap_layout_save_exception">布局保存异常: %1$s</string>
-    <string name="starmap_viewport_save_failed">视口保存失败: %1$s</string>
-    <string name="starmap_viewport_save_failed_not_loaded">视口保存失败: 未加载</string>
-    <string name="starmap_viewport_save_exception">视口保存异常: %1$s</string>
+    <string name="starmap_not_implemented">星图功能开发中</string>
     <string name="stats_recent_30_days">近 30 天写作统计</string>
     <string name="stats_total_words_label">总字数</string>
     <string name="stats_active_days">活跃天数</string>

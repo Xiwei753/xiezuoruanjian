@@ -88,11 +88,6 @@ enum class SujianDestination(
         selectedIcon = SujianIcons.BarChart,
         unselectedIcon = SujianIcons.BarChartOutlined,
     ),
-    Settings(
-        labelResId = R.string.action_settings,
-        selectedIcon = SujianIcons.Settings,
-        unselectedIcon = SujianIcons.SettingsOutlined,
-    ),
 }
 
 private fun SujianRoute.toTopDestination(): SujianDestination =
@@ -100,7 +95,7 @@ private fun SujianRoute.toTopDestination(): SujianDestination =
         is SujianRoute.Works -> SujianDestination.Works
         is SujianRoute.StarMap -> SujianDestination.StarMap
         is SujianRoute.Stats -> SujianDestination.Stats
-        is SujianRoute.Settings -> SujianDestination.Settings
+        is SujianRoute.Settings -> SujianDestination.Works
     }
 
 private fun SujianDestination.toRoute(): SujianRoute =
@@ -108,7 +103,6 @@ private fun SujianDestination.toRoute(): SujianRoute =
         SujianDestination.Works -> SujianRoute.Works
         SujianDestination.StarMap -> SujianRoute.StarMap
         SujianDestination.Stats -> SujianRoute.Stats
-        SujianDestination.Settings -> SujianRoute.Settings
     }
 
 @Stable
@@ -155,67 +149,76 @@ private fun rememberInitialNavStack(initialDestination: String?): List<SujianRou
 
 @Composable
 private fun rememberSujianTopBarTitle(
-    currentTopDestination: SujianDestination,
+    currentRoute: SujianRoute,
     appState: SujianAppState,
     starMapTopBarState: StarMapTopBarState,
 ): String =
-    when (currentTopDestination) {
-        SujianDestination.Works -> {
+    when (currentRoute) {
+        is SujianRoute.Works -> {
             if (appState.currentProjectId != null) {
                 appState.currentProjectTitle.ifEmpty { stringResource(id = R.string.title_projects) }
             } else {
                 stringResource(id = R.string.title_projects)
             }
         }
-        SujianDestination.StarMap -> {
+        is SujianRoute.StarMap -> {
             starMapTopBarState.title.ifEmpty { stringResource(id = R.string.title_starmap) }
         }
-        SujianDestination.Stats -> stringResource(id = R.string.title_stats)
-        SujianDestination.Settings -> stringResource(id = R.string.action_settings)
+        is SujianRoute.Stats -> stringResource(id = R.string.title_stats)
+        is SujianRoute.Settings -> stringResource(id = R.string.action_settings)
     }
 
 @Composable
 private fun rememberSujianTopBarNavigation(
-    currentTopDestination: SujianDestination,
+    currentRoute: SujianRoute,
     appState: SujianAppState,
     starMapTopBarState: StarMapTopBarState,
     backStack: NavBackStack<NavKey>,
 ): Pair<ImageVector?, (() -> Unit)?> {
-    val showBack =
-        currentTopDestination != SujianDestination.Works ||
-            (currentTopDestination == SujianDestination.Works && appState.currentProjectId != null) ||
-            (currentTopDestination == SujianDestination.StarMap && starMapTopBarState.onBack != null)
-    val navigationIcon =
-        when {
-            currentTopDestination == SujianDestination.Settings -> SujianIcons.ArrowBack
-            showBack && currentTopDestination != SujianDestination.Works -> SujianIcons.ArrowBack
-            currentTopDestination == SujianDestination.StarMap && starMapTopBarState.onBack != null ->
-                SujianIcons.ArrowBack
-            else -> null
-        }
     val onNavigationClick: (() -> Unit)? =
-        when {
-            currentTopDestination == SujianDestination.Settings -> {
+        when (currentRoute) {
+            is SujianRoute.Settings -> {
                 { backStack.removeLastOrNull() }
             }
-            currentTopDestination == SujianDestination.StarMap -> starMapTopBarState.onBack
-            else -> null
+            is SujianRoute.StarMap -> starMapTopBarState.onBack
+            is SujianRoute.Works -> {
+                if (appState.currentProjectId != null) {
+                    { appState.clearProjectSelection() }
+                } else {
+                    null
+                }
+            }
+            is SujianRoute.Stats -> null
         }
+    val navigationIcon = if (onNavigationClick != null) SujianIcons.ArrowBack else null
     return navigationIcon to onNavigationClick
 }
 
 private fun rememberSujianTopBarActions(
-    currentTopDestination: SujianDestination,
+    currentRoute: SujianRoute,
     starMapTopBarState: StarMapTopBarState,
     syncState: SyncIndicatorState,
     coroutineScope: CoroutineScope,
     deps: SujianAppDependencies,
+    backStack: NavBackStack<NavKey>,
 ): @Composable () -> Unit =
     {
-        if (currentTopDestination == SujianDestination.StarMap) {
+        if (currentRoute is SujianRoute.StarMap) {
             starMapTopBarState.actions?.invoke()
         }
-        if (currentTopDestination == SujianDestination.Works) {
+        if (currentRoute is SujianRoute.Works) {
+            SujianIconButton(
+                onClick = { },
+                icon = SujianIcons.Search,
+                contentDescription = stringResource(id = R.string.cd_search_dev),
+                enabled = false,
+            )
+            SujianIconButton(
+                onClick = { backStack.add(SujianRoute.Settings) },
+                icon = SujianIcons.Settings,
+                contentDescription = stringResource(id = R.string.action_settings),
+                semanticId = SujianSemanticIds.NavigationSettings,
+            )
             SujianIconButton(
                 onClick = {
                     coroutineScope.launch {
@@ -441,33 +444,34 @@ fun SujianNavigationSuite(
     val syncState by deps.syncStatusRepository.state.collectAsState()
     val coroutineScope = rememberCoroutineScope()
 
-    LaunchedEffect(currentTopDestination) {
+    LaunchedEffect(currentRoute) {
         com.xiwei.sujian.diagnostics.DiagnosticsEvents.navigation(currentTopDestination.name)
-        if (currentTopDestination != SujianDestination.StarMap) {
+        if (currentRoute !is SujianRoute.StarMap) {
             starMapTopBarState.clear()
         }
-        if (currentTopDestination != SujianDestination.Settings) {
+        if (currentRoute !is SujianRoute.Settings) {
             settingsDetailSection = null
         }
-        if (currentTopDestination == SujianDestination.Settings && settingsDetailSection == null) {
+        if (currentRoute is SujianRoute.Settings && settingsDetailSection == null) {
             settingsDetailSection = SettingsSection.Appearance
         }
     }
 
     val topBarNavigation =
-        rememberSujianTopBarNavigation(currentTopDestination, appState, starMapTopBarState, backStack)
+        rememberSujianTopBarNavigation(currentRoute, appState, starMapTopBarState, backStack)
     val topBarInfo =
         SujianTopBarInfo(
-            title = rememberSujianTopBarTitle(currentTopDestination, appState, starMapTopBarState),
+            title = rememberSujianTopBarTitle(currentRoute, appState, starMapTopBarState),
             navigationIcon = topBarNavigation.first,
             onNavigationClick = topBarNavigation.second,
             actions =
                 rememberSujianTopBarActions(
-                    currentTopDestination,
+                    currentRoute,
                     starMapTopBarState,
                     syncState,
                     coroutineScope,
                     deps,
+                    backStack,
                 ),
         )
 
@@ -507,7 +511,6 @@ private fun navItemModifier(destination: SujianDestination): Modifier {
             SujianDestination.Works -> SujianSemanticIds.NavigationWorks
             SujianDestination.StarMap -> SujianSemanticIds.NavigationStarMap
             SujianDestination.Stats -> null
-            SujianDestination.Settings -> SujianSemanticIds.NavigationSettings
         }
     return if (semanticTag != null) Modifier.testTag(semanticTag) else Modifier
 }

@@ -7,7 +7,6 @@
     <string name="action_new_project">New Project</string>
     <string name="action_new_chapter">New Chapter</string>
     <string name="action_settings">Settings</string>
-    <string name="action_save">Save</string>
     <string name="action_cancel">Cancel</string>
     <string name="action_create">Create</string>
 
@@ -97,7 +96,6 @@
     <string name="error_auto_save_failed">Auto save failed: %1$s</string>
     <string name="error_save_native_not_loaded">Save failed: Native library not loaded</string>
     <string name="error_save_exception">Save exception: %1$s</string>
-    <string name="error_auto_save_exception">Auto save exception: %1$s</string>
     <string name="error_update_chapter_note_failed">Failed to update chapter note: %1$s</string>
 
     <!-- EditorFragment -->
@@ -190,4 +188,5 @@
     <string name="save_config_or_secrets_failed">Failed to save sync config or credentials</string>
     <string name="sync_diag_ok">OK</string>
     <string name="sync_diag_fail">Fail</string>
+    <string name="starmap_not_implemented">Star Map is under development</string>
 </resources>
