@@ -829,3 +829,95 @@ fn test_settings_auto_indent_contract() {
     assert_eq!(json["autoIndentEnabled"], true);
     assert_eq!(json["autoIndentWidth"], 4.0);
 }
+
+#[test]
+fn test_local_settings_dto_contract() {
+    let settings = crate::settings::LocalSettings {
+        theme_mode: Some("light".to_string()),
+        appearance_mode: "system".to_string(),
+        color_source: "dynamic".to_string(),
+        dynamic_color_enabled: true,
+        selected_builtin_theme_id: "default".to_string(),
+        selected_palette_id: "palette1".to_string(),
+        locale: Some("en-US".to_string()),
+        auto_save_enabled: true,
+        editor_font_size: 16.0,
+        editor_line_spacing_multiplier: 1.5,
+        window_width: 800.0,
+        window_height: 600.0,
+        auto_save_delay_ms: 1000,
+        auto_indent_enabled: true,
+        auto_indent_width: 4.0,
+        editor_typing_animation_enabled: true,
+        editor_smooth_cursor_enabled: true,
+        editor_typing_animation_duration_ms: 200,
+        editor_smooth_cursor_duration_ms: 150,
+        ai_enabled: true,
+        stats_device_id: Some("device1".to_string()),
+        desktop_sidebar_width: 250.0,
+        desktop_editor_width: 500.0,
+        editor_coordinated_text_cursor_animation_enabled: true,
+        diagnostics_enabled: true,
+        diagnostics_verbose: false,
+    };
+
+    let dto: crate::api::types::LocalSettingsDto = settings.into();
+    let json = serde_json::to_value(&dto).unwrap();
+
+    assert_eq!(json["theme_mode"], "light");
+    assert_eq!(json["appearance_mode"], "system");
+    assert_eq!(json["color_source"], "dynamic");
+    assert_eq!(json["dynamic_color_enabled"], true);
+    assert_eq!(json["selected_builtin_theme_id"], "default");
+    assert_eq!(json["selected_palette_id"], "palette1");
+    assert_eq!(json["locale"], "en-US");
+    assert_eq!(json["auto_save_enabled"], true);
+    assert_eq!(json["editor_font_size"], 16.0);
+    assert_eq!(json["editor_line_spacing_multiplier"], 1.5);
+    assert_eq!(json["window_width"], 800.0);
+    assert_eq!(json["window_height"], 600.0);
+    assert_eq!(json["auto_save_delay_ms"], 1000);
+    assert_eq!(json["auto_indent_enabled"], true);
+    assert_eq!(json["auto_indent_width"], 4.0);
+    assert_eq!(json["editor_typing_animation_enabled"], true);
+    assert_eq!(json["editor_smooth_cursor_enabled"], true);
+    assert_eq!(json["editor_typing_animation_duration_ms"], 200);
+    assert_eq!(json["editor_smooth_cursor_duration_ms"], 150);
+    assert_eq!(json["ai_enabled"], true);
+    assert_eq!(json["stats_device_id"], "device1");
+    assert_eq!(json["desktop_sidebar_width"], 250.0);
+    assert_eq!(json["desktop_editor_width"], 500.0);
+    assert_eq!(json["editor_coordinated_text_cursor_animation_enabled"], true);
+    assert_eq!(json["diagnostics_enabled"], true);
+    assert_eq!(json["diagnostics_verbose"], false);
+}
+
+#[test]
+fn test_sync_config_dto_contract() {
+    let config = crate::sync::SyncConfig {
+        enabled: true,
+        backend_type: crate::sync::BackendType::GithubApi,
+        remote_url: "https://github.com/test/repo".to_string(),
+        transport: crate::sync::SyncProtocol::HttpsToken,
+        branch: "main".to_string(),
+        auto_sync: true,
+        sync_interval_seconds: 600,
+        username: "testuser".to_string(),
+        has_network_permission: true,
+        has_network_state_permission: true,
+    };
+
+    let dto: crate::api::types::SyncConfigDto = config.into();
+    let json = serde_json::to_value(&dto).unwrap();
+
+    assert_eq!(json["enabled"], true);
+    assert_eq!(json["backend_type"], "github_api");
+    assert_eq!(json["remote_url"], "https://github.com/test/repo");
+    assert_eq!(json["transport"], "https_token");
+    assert_eq!(json["branch"], "main");
+    assert_eq!(json["auto_sync"], true);
+    assert_eq!(json["sync_interval_seconds"], 600);
+    assert_eq!(json["username"], "testuser");
+    assert_eq!(json["has_network_permission"], true);
+    assert_eq!(json["has_network_state_permission"], true);
+}
