@@ -1,5 +1,6 @@
 package com.xiwei.sujian.ui.compose.starmap
 
+import android.annotation.SuppressLint
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.material3.adaptive.layout.AnimatedPane
@@ -20,7 +21,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import com.xiwei.sujian.R
 import com.xiwei.sujian.data.BridgeResult
-import com.xiwei.sujian.runtime.LocalSujianAppDependencies
 import com.xiwei.sujian.data.starmap.StarMapRepository
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.editor.v2.compose.LocalEditorWindowHost
@@ -28,6 +28,7 @@ import com.xiwei.sujian.editor.v2.coordinator.EditableTextTarget
 import com.xiwei.sujian.editor.v2.coordinator.EditingState
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
 import com.xiwei.sujian.model.StarMapGraphNode
+import com.xiwei.sujian.runtime.LocalSujianAppDependencies
 import com.xiwei.sujian.ui.compose.navigation.predictiveBackStateFraction
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -204,6 +205,9 @@ private fun StarMapListScreen(
     }
 }
 
+// context.getString 在 coroutineScope.launch/suspend fun 中格式化错误消息和操作标签，
+// 无法用 stringResource（非 Composable 上下文）。
+@SuppressLint("LocalContextGetResourceValueCall")
 @Composable
 private fun StarMapEditorScreen(
     starmapId: String,

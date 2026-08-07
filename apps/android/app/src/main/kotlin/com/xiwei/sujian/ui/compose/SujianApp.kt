@@ -87,7 +87,7 @@ private fun rememberSujianWindowHost(
 }
 
 @Composable
-private fun rememberCapabilityProviderEffects(capabilityProvider: AospCapabilityProvider) {
+private fun SujianAppCapabilityEffects(capabilityProvider: AospCapabilityProvider) {
     DisposableEffect(capabilityProvider) {
         capabilityProvider.registerInputDeviceListener()
         onDispose {
@@ -97,7 +97,7 @@ private fun rememberCapabilityProviderEffects(capabilityProvider: AospCapability
 }
 
 @Composable
-private fun rememberActivityLifecycleEvents(activityRef: androidx.activity.ComponentActivity?) {
+private fun SujianAppActivityLifecycleEvents(activityRef: androidx.activity.ComponentActivity?) {
     DisposableEffect(activityRef) {
         val act = activityRef ?: return@DisposableEffect onDispose { }
         val observer =
@@ -119,7 +119,7 @@ private fun rememberActivityLifecycleEvents(activityRef: androidx.activity.Compo
 }
 
 @Composable
-private fun rememberSujianAppInitialization(
+private fun SujianAppInitialization(
     deps: SujianAppDependencies,
     vm: SujianAppViewModel,
     context: android.content.Context,
@@ -157,8 +157,10 @@ private fun rememberFoldFeatureCollection(
     return foldingFeatures
 }
 
+// LocalConfiguration.smallestScreenWidthDp 无 Compose API 替代，需用 Configuration 检测设备类型。
+@SuppressLint("ConfigurationScreenWidthHeight")
 @Composable
-private fun rememberAdaptiveWindowSync(
+private fun SujianAppAdaptiveWindowSync(
     capabilityProvider: AospCapabilityProvider,
     foldingFeatures: List<androidx.window.layout.FoldingFeature>,
     vm: SujianAppViewModel,
@@ -180,8 +182,10 @@ private fun rememberAdaptiveWindowSync(
     }
 }
 
+// LocalConfiguration.smallestScreenWidthDp 无 Compose API 替代，需用 Configuration 检测设备类型。
+@SuppressLint("ConfigurationScreenWidthHeight")
 @Composable
-private fun rememberLayoutResolution(
+private fun SujianAppLayoutResolution(
     capabilities: AndroidCapabilities,
     vm: SujianAppViewModel,
 ) {
@@ -230,14 +234,14 @@ fun SujianApp(initialDestination: String? = null) {
 
     val capabilityProvider = remember { AospCapabilityProvider(context.applicationContext) }
     val capabilities by capabilityProvider.capabilities.collectAsState()
-    rememberCapabilityProviderEffects(capabilityProvider)
+    SujianAppCapabilityEffects(capabilityProvider)
 
-    rememberActivityLifecycleEvents(activityRef)
-    rememberSujianAppInitialization(deps, vm, context)
+    SujianAppActivityLifecycleEvents(activityRef)
+    SujianAppInitialization(deps, vm, context)
 
     val foldingFeatures = rememberFoldFeatureCollection(activityRef)
-    rememberAdaptiveWindowSync(capabilityProvider, foldingFeatures, vm, deps)
-    rememberLayoutResolution(capabilities, vm)
+    SujianAppAdaptiveWindowSync(capabilityProvider, foldingFeatures, vm, deps)
+    SujianAppLayoutResolution(capabilities, vm)
 
     val uiState by themeController.uiState.collectAsState()
 

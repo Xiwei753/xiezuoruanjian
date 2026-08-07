@@ -182,6 +182,10 @@ jobs:
           export ANDROID_NDK_HOME=$ANDROID_NDK_ROOT
           ./tools/build_android.sh --no-ai --abi x86_64 --skip-gradle
 
+      # testArchNoAiDebug 是独立架构测试任务：内部对 testNoAiDebugUnitTest 施加
+      # includeTestsMatching("com.xiwei.sujian.arch.*") + isFailOnNoMatchingTests，
+      # 与普通测试互斥（普通运行显式排除 arch 包）。不要用 --tests 命令行过滤 —
+      # 会与脚本内的 exclude arch 过滤器叠加成空集。
       - name: Run architecture constraint tests
         working-directory: apps/android
-        run: ./gradlew testNoAiDebugUnitTest --tests "com.xiwei.sujian.arch.*" -x buildNoAiDebugWriterNative
+        run: ./gradlew testArchNoAiDebug -x buildNoAiDebugWriterNative

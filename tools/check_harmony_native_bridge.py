@@ -436,7 +436,9 @@ def check_c_header_vs_rust_ffi(harmony_root: str, core_root: str) -> List[Tuple[
         for rs_file in Path(ffi_dir).rglob("*.rs"):
             rs_content = rs_file.read_text(encoding="utf-8", errors="replace")
             for m in re.finditer(
-                r"#\[no_mangle\]\s*pub\s+unsafe\s+extern\s+\"C\"\s+fn\s+(writer_core_\w+)",
+                # #[no_mangle] 与函数之间可能隔着属性块（如 #597 起的 clippy #[allow]）
+                # 或说明注释，不影响导出事实，正则需容忍这些中间行。
+                r"#\[no_mangle\]\s*(?:(?:#\[[^\]]*\]|//[^\n]*\n\s*)\s*)*pub\s+unsafe\s+extern\s+\"C\"\s+fn\s+(writer_core_\w+)",
                 rs_content,
             ):
                 rust_funcs.add(m.group(1))

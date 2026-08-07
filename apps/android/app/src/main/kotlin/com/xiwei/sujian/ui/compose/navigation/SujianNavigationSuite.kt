@@ -229,7 +229,7 @@ private fun rememberSujianTopBarActions(
                         SyncIndicatorState.Synced -> SujianIcons.CloudDone
                         SyncIndicatorState.Failed -> SujianIcons.CloudError
                     },
-                contentDescription = "同步",
+                contentDescription = stringResource(id = R.string.cd_sync_manual),
             )
         }
     }

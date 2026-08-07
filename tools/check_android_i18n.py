@@ -50,6 +50,10 @@ LOG_CALL_RE = re.compile(r"\bLog\.[dewiv]\s*\(")
 # warn() 调用正则（DiagnosticsLogger.warn，与 Log 同理属于诊断日志）
 WARN_CALL_RE = re.compile(r"\bwarn\s*\(")
 
+# error() 调用正则（kotlin error(...) 抛 IllegalStateException，是编程错误诊断，
+# 与 warn()/Log 同理 — 永远不是 UI 文案，不需要进 strings.xml）
+ERROR_CALL_RE = re.compile(r"\berror\s*\(")
+
 # 注释行正则（行首空白后以 // 或 /* 或 * 开头）
 COMMENT_LINE_RE = re.compile(r"^\s*(//|/\*|\*)")
 
@@ -125,6 +129,9 @@ def check_kotlin_file(filepath: Path, verbose: bool = False) -> list[tuple[int, 
 
         # 跳过 warn() 调用行（DiagnosticsLogger.warn 诊断日志，允许中文）
         if WARN_CALL_RE.search(line):
+            continue
+        # 跳过 error() 调用行（编程错误诊断，允许中文）
+        if ERROR_CALL_RE.search(line):
             continue
 
         # 跳过行级豁免标记（行末 // i18n-exempt）

@@ -96,8 +96,8 @@ fun WritingPane(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
     // 生产动画链：设置状态 → Editor Host → 输入事务 → 动画协调器 → 真实 VSync 渲染。
-    rememberMotionPolicySync(coordinator, uiState.settings, chapterId)
-    rememberSettingsReload(viewModel, targetId)
+    WritingPaneMotionPolicySync(coordinator, uiState.settings, chapterId)
+    WritingPaneSettingsReload(viewModel, targetId)
 
     // #595 一：章节切换收口 — 宿主已用 requestOpenChapter 预提交章节
     // （保存/加载/session 预准备成功后才导航）；pane 只负责旧 target 的窗口解绑
@@ -130,7 +130,7 @@ fun WritingPane(
 
     // #595 二：按 target 分区的最新文档事实流（带 replay）— 新 collector 立即
     // 拿到当前文档事实，同 sourceVersion 重放由 reducer 幂等忽略。
-    rememberExternalContentFlow(
+    WritingPaneExternalContentFlow(
         viewModel,
         coordinator,
         targetId,
@@ -138,7 +138,7 @@ fun WritingPane(
         chapterState.failedSwitchTarget,
     )
 
-    rememberEditorAttachSync(
+    WritingPaneEditorAttachSync(
         currentViewModel = currentViewModel,
         coordinator = coordinator,
         targetId = targetId,
@@ -199,20 +199,20 @@ private data class EditorAttachInputs(
 
 /** 本地输入正文同步 + 编辑器附着（beginEdit / confirmEditorAttached）。 */
 @Composable
-private fun rememberEditorAttachSync(
+private fun WritingPaneEditorAttachSync(
     currentViewModel: EditorViewModel,
     coordinator: com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost,
     targetId: String,
     inputs: EditorAttachInputs,
 ) {
-    rememberTargetTextSync(currentViewModel, coordinator, targetId, inputs)
-    rememberEditorAttach(currentViewModel, coordinator, targetId, inputs)
+    WritingPaneTargetTextSync(currentViewModel, coordinator, targetId, inputs)
+    WritingPaneEditorAttach(currentViewModel, coordinator, targetId, inputs)
 }
 
 /** #595 二：本地输入的 target 正文同步 — onLocalEdit 先更新 sessionStateFlow，
  * 后通知 ViewModel 更新 uiState.content，sessionState.text 已与之一致。 */
 @Composable
-private fun rememberTargetTextSync(
+private fun WritingPaneTargetTextSync(
     currentViewModel: EditorViewModel,
     coordinator: com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost,
     targetId: String,
@@ -231,7 +231,7 @@ private fun rememberTargetTextSync(
 
 /** #595 一：编辑器附着 — 切换失败/未提交章节禁止 beginEdit；附着后解除输入冻结。 */
 @Composable
-private fun rememberEditorAttach(
+private fun WritingPaneEditorAttach(
     currentViewModel: EditorViewModel,
     coordinator: com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost,
     targetId: String,
@@ -293,7 +293,7 @@ private fun rememberWritingPaneViewModel(
 
 /** 生产动画链：设置状态 → Editor Host → 输入事务 → 动画协调器 → 真实 VSync 渲染。 */
 @Composable
-private fun rememberMotionPolicySync(
+private fun WritingPaneMotionPolicySync(
     coordinator: com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost,
     settings: EditorSettingsState,
     chapterId: String,
@@ -316,7 +316,7 @@ private fun rememberMotionPolicySync(
 /** 设置变更通过 CoreSettingsEvents.editorSettingsChanged SharedFlow 推送，
  * ON_RESUME 兜底处理进程恢复场景。 */
 @Composable
-private fun rememberSettingsReload(
+private fun WritingPaneSettingsReload(
     viewModel: EditorViewModel,
     targetId: String,
 ) {
@@ -424,7 +424,7 @@ private data class ChapterSwitchSyncState(val failedSwitchTarget: String?)
  * Core reset 和 UI 同步，不再重复构造事件做检查。
  */
 @Composable
-private fun rememberExternalContentFlow(
+private fun WritingPaneExternalContentFlow(
     viewModel: EditorViewModel,
     coordinator: com.xiwei.sujian.editor.v2.coordinator.EditorWindowHost,
     targetId: String,

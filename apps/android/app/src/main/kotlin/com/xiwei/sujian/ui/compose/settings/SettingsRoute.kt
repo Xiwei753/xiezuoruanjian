@@ -385,7 +385,11 @@ fun SettingsRoute(
  *
  * 收集设置保存失败事件并在底部 snackbar 展示（协程上下文用
  * context.getString，非 Composable 上下文无法用 stringResource）。
+ *
+ * context.getString 在协程 collect 回调中解析错误文案，无法用 stringResource，
+ * 因此本函数带单规则 SuppressLint。
  */
+@SuppressLint("LocalContextGetResourceValueCall")
 @Composable
 private fun rememberSettingsSnackbarHost(vm: SettingsViewModel): androidx.compose.material3.SnackbarHostState {
     val context = LocalContext.current
