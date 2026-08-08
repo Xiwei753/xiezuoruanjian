@@ -4,14 +4,10 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import androidx.window.layout.FoldingFeature
 import androidx.window.layout.WindowInfoTracker
-import androidx.window.layout.WindowLayoutInfo
 import com.xiwei.sujian.platform.api.FoldOrientation
 import com.xiwei.sujian.platform.api.FoldPosture
 import com.xiwei.sujian.platform.api.OcclusionType
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 data class AospFoldFeatureInfo(
@@ -29,8 +25,6 @@ class WindowFoldFeatureCollector(
     private val activity: androidx.activity.ComponentActivity
 ) {
     private val windowInfoTracker = WindowInfoTracker.getOrCreate(activity)
-    private val _windowLayoutInfo = MutableStateFlow(WindowLayoutInfo(emptyList()))
-    val windowLayoutInfo: StateFlow<WindowLayoutInfo> = _windowLayoutInfo.asStateFlow()
 
     private var collectJob: Job? = null
 
@@ -39,7 +33,6 @@ class WindowFoldFeatureCollector(
         collectJob = activity.lifecycleScope.launch {
             windowInfoTracker.windowLayoutInfo(activity)
                 .collect { info ->
-                    _windowLayoutInfo.value = info
                     val features = info.displayFeatures
                         .filterIsInstance<FoldingFeature>()
                     onFoldFeaturesChanged(features)
