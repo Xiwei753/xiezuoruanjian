@@ -23,11 +23,11 @@ mod tests {
     #[cfg(feature = "github-api")]
     use crate::sync::types::SyncManifest;
     use crate::sync::types::SyncProtocol;
-    #[cfg(feature = "github-api")]
+    #[cfg(any(feature = "github-api", feature = "git-https"))]
     use crate::sync::types::SyncSecrets;
     #[cfg(feature = "github-api")]
     use crate::sync::types::SyncState;
-    #[cfg(feature = "github-api")]
+    #[cfg(any(feature = "github-api", feature = "git-https"))]
     use crate::sync::types::SyncStatus;
     #[cfg(feature = "github-api")]
     use base64::Engine;
